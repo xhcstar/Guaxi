@@ -1,0 +1,276 @@
+<template>
+  <div class="guaxi-content">
+    <n-space vertical size="large">
+      <n-layout has-sider>
+        <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
+          :collapsed-width="0" bordered content-style="padding: 0px;">
+          <GuaxiSidebarErrorView />
+          <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+        </n-layout-sider>
+
+        <GuaxiCenterErrorView />
+
+        <n-layout has-sider sider-placement="right">
+          <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
+            :collapsed-width="0" bordered content-style="padding: 0px;">
+            <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
+              <GuaxiRightContentErrorView />
+            </div>
+          </n-layout-sider>
+        </n-layout>
+      </n-layout>
+    </n-space>
+  </div>
+</template>
+
+
+<script setup>
+import { ref, computed, onMounted, onBeforeUnmount } from "vue"
+import { useSiderStore } from '../../stores/useSiderStore'
+import GuaxiSidebarErrorView from "./GuaxiSidebarErrorView.vue"
+import GuaxiCenterErrorView from "./GuaxiCenterErrorView.vue"
+import GuaxiRightContentErrorView from "./GuaxiRightContentErrorView.vue"
+
+
+const leftSiderbarWidth = ref(350); // 默认宽度
+const leftSidebarresizing = ref(false);
+const leftSidebarStartX = ref(0);
+const leftSidebarStartWidth = ref(0);
+const rightSiderbarWidth = ref(650); // 默认宽度
+const rightSidebarresizing = ref(false);
+const rightSidebarStartX = ref(0);
+const rightSidebarStartWidth = ref(0);
+const siderStore = useSiderStore();
+const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
+const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
+
+const toggleLeftSider = () => {
+  siderStore.toggleLeftSider()
+};
+
+const toggleRightSider = () => {
+  siderStore.toggleRightSider()
+};
+
+const onMouseDownLeftSidebar = (event) => {
+  leftSidebarresizing.value = true;
+  leftSidebarStartX.value = event.clientX;
+  leftSidebarStartWidth.value = leftSiderbarWidth.value;
+  // Attach mousemove and mouseup listeners
+  document.addEventListener("mousemove", onMouseMoveLeftSidebar);
+  document.addEventListener("mouseup", onMouseUpLeftSidebar);
+};
+
+const onMouseMoveLeftSidebar = (event) => {
+  if (!leftSidebarresizing.value) return;
+  const delta = event.clientX - leftSidebarStartX.value;
+  leftSiderbarWidth.value = Math.max(250, leftSidebarStartWidth.value + delta); // 设置最小宽度为200px
+};
+
+const onMouseUpLeftSidebar = () => {
+  leftSidebarresizing.value = false;
+  // Remove mousemove and mouseup listeners
+  document.removeEventListener("mousemove", onMouseMoveLeftSidebar);
+  document.removeEventListener("mouseup", onMouseUpLeftSidebar);
+};
+
+const onMouseDownRightSidebar = (event) => {
+  console.log("onMouseDownRightSidebar");
+  rightSidebarresizing.value = true;
+  rightSidebarStartX.value = event.clientX;
+  rightSidebarStartWidth.value = rightSiderbarWidth.value;
+
+  // Attach mousemove and mouseup listeners
+  document.addEventListener("mousemove", onMouseMoveRightSidebar);
+  document.addEventListener("mouseup", onMouseUpRightSidebar);
+};
+
+const onMouseMoveRightSidebar = (event) => {
+  if (!rightSidebarresizing.value) return;
+  const delta = rightSidebarStartX.value - event.clientX;
+  rightSiderbarWidth.value = Math.max(250, rightSidebarStartWidth.value + delta); // 设置最小宽度为200px
+};
+
+const onMouseUpRightSidebar = () => {
+  rightSidebarresizing.value = false;
+  // Remove mousemove and mouseup listeners
+  document.removeEventListener("mousemove", onMouseMoveRightSidebar);
+  document.removeEventListener("mouseup", onMouseUpRightSidebar);
+};
+
+// Cleanup listeners when the component is unmounted
+onBeforeUnmount(() => {
+  document.removeEventListener("mousemove", onMouseMoveLeftSidebar);
+  document.removeEventListener("mouseup", onMouseUpLeftSidebar);
+  document.removeEventListener("mousemove", onMouseMoveRightSidebar);
+  document.removeEventListener("mouseup", onMouseUpRightSidebar);
+});
+
+</script>
+
+
+<style scoped>
+.n-layout-sider {
+  background: rgba(178, 192, 175, 0.3);
+}
+
+.n-layout-content {
+  background: rgba(193, 174, 174, 0.4);
+}
+
+.guaxi-content {
+  flex-grow: 1;
+  padding: 0px;
+}
+
+.sider-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100%;
+  cursor: ew-resize;
+  background-color: #aab4ae;
+}
+
+.sider-resize-handle-right {
+  position: relative;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  cursor: ew-resize;
+  background-color: #aab4ae;
+}
+</style>
+
+
+<!-- <script>
+import { defineComponent, ref, computed, onMounted, onBeforeUnmount, watch } from "vue"
+import { useSiderStore } from '../stores/useSiderStore'
+import GuaxicoSidebar from "./GuaxicoSidebar.vue"
+import GuaxiSidbarTree from "./GuaxiSidbarTree.vue"
+import GuaxiRightContentErrorView from "./GuaxiRightContentErrorView.vue"
+
+export default defineComponent({
+  components: {
+
+  },
+
+  props: {
+    isLeftSiderCollapsed: {
+      type: Boolean,
+      required: true,
+    },
+    isRightSiderCollapsed: {
+      type: Boolean,
+      required: true,
+    },
+  },
+
+  setup() {
+    const leftSiderbarWidth = ref(350); // 默认宽度
+    const leftSidebarresizing = ref(false);
+    const leftSidebarStartX = ref(0);
+    const leftSidebarStartWidth = ref(0);
+    const rightSiderbarWidth = ref(650); // 默认宽度
+    const rightSidebarresizing = ref(false);
+    const rightSidebarStartX = ref(0);
+    const rightSidebarStartWidth = ref(0);
+
+    const siderStore = useSiderStore();
+    const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
+    const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
+
+    
+  // 监听props的变化
+  watch(
+    () => props.isLeftSiderCollapsed,
+    (newVal) => {
+      console.log('左侧边栏折叠状态变化:', newVal);
+    }
+  );
+  
+  watch(
+    () => props.isRightSiderCollapsed,
+    (newVal) => {
+      console.log('右侧边栏折叠状态变化:', newVal);
+    }
+  );
+  
+    const toggleLeftSider = () => {
+      siderStore.toggleLeftSider()
+    };
+
+    const toggleRightSider = () => {
+      siderStore.toggleRightSider()
+    };
+
+    const onMouseDownLeftSidebar = (event) => {
+      leftSidebarresizing.value = true;
+      leftSidebarStartX.value = event.clientX;
+      leftSidebarStartWidth.value = leftSiderbarWidth.value;
+
+      // Attach mousemove and mouseup listeners
+      document.addEventListener("mousemove", onMouseMoveLeftSidebar);
+      document.addEventListener("mouseup", onMouseUpLeftSidebar);
+    };
+
+    const onMouseMoveLeftSidebar = (event) => {
+      if (!leftSidebarresizing.value) return;
+      const delta = event.clientX - leftSidebarStartX.value;
+      leftSiderbarWidth.value = Math.max(250, leftSidebarStartWidth.value + delta); // 设置最小宽度为200px
+    };
+
+    const onMouseUpLeftSidebar = () => {
+      leftSidebarresizing.value = false;
+      // Remove mousemove and mouseup listeners
+      document.removeEventListener("mousemove", onMouseMoveLeftSidebar);
+      document.removeEventListener("mouseup", onMouseUpLeftSidebar);
+    };
+
+    const onMouseDownRightSidebar = (event) => {
+      console.log("onMouseDownRightSidebar");
+      rightSidebarresizing.value = true;
+      rightSidebarStartX.value = event.clientX;
+      rightSidebarStartWidth.value = rightSiderbarWidth.value;
+
+      // Attach mousemove and mouseup listeners
+      document.addEventListener("mousemove", onMouseMoveRightSidebar);
+      document.addEventListener("mouseup", onMouseUpRightSidebar);
+    };
+
+    const onMouseMoveRightSidebar = (event) => {
+      if (!rightSidebarresizing.value) return;
+      const delta = rightSidebarStartX.value - event.clientX;
+      rightSiderbarWidth.value = Math.max(250, rightSidebarStartWidth.value + delta); // 设置最小宽度为200px
+    };
+
+    const onMouseUpRightSidebar = () => {
+      rightSidebarresizing.value = false;
+      // Remove mousemove and mouseup listeners
+      document.removeEventListener("mousemove", onMouseMoveRightSidebar);
+      document.removeEventListener("mouseup", onMouseUpRightSidebar);
+    };
+
+    // Cleanup listeners when the component is unmounted
+    onBeforeUnmount(() => {
+      document.removeEventListener("mousemove", onMouseMoveLeftSidebar);
+      document.removeEventListener("mouseup", onMouseUpLeftSidebar);
+      document.removeEventListener("mousemove", onMouseMoveRightSidebar);
+      document.removeEventListener("mouseup", onMouseUpRightSidebar);
+    });
+
+    return {
+      isLeftSiderCollapsed,
+      isRightSiderCollapsed,
+      leftSiderbarWidth,
+      rightSiderbarWidth,
+      toggleLeftSider,
+      toggleRightSider,
+      onMouseDownLeftSidebar,
+      onMouseDownRightSidebar,
+    };
+  },
+});
+</script> -->
