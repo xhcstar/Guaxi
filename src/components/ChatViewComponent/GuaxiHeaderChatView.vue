@@ -11,7 +11,10 @@
             </g>
           </svg>
         </n-icon>
-        <div style="font-weight: bold; font-size: 16px;">Guaxi</div>
+
+        <div style="font-weight: bold; font-size: 16px; padding-right: 260px;">Guaxi</div>
+        <ChatModelSelector />
+
       </div>
       <!-- 右侧占位内容 -->
       <div style="gap: 8px; padding-right: 9px;">
@@ -57,10 +60,12 @@
 <script setup>
 import { computed } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
+import ChatModelSelector from "./ChatModelSelector.vue"
+
 
 const siderStore = useSiderStore();
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
+// const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
+// const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider()

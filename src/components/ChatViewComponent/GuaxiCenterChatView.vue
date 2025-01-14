@@ -1,23 +1,25 @@
 <template>
   <div class="chat-container">
     <div class="chat-header">
-      <n-avatar :src="activeChat?.avatar" size="medium" round />
+      <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
       <span class="chat-title">{{ activeChat?.name || "未选择会话" }}</span>
     </div>
 
     <div class="message-list" ref="messageContainer">
-      <div v-for="(message, index) in activeChatMessages" :key="message.id" class="message-item"
+      <div v-for="(message, index) in activeChatMessages.topic" :key="message.msgid" class="message-item"
         :class="message.sender === 'me' ? 'message-right' : 'message-left'">
-        <n-avatar :src="message.avatar" size="medium" round />
+        <n-avatar v-if="message.sender === 'me'" :src="activeChat.MeAvatar" size="medium" round />
+        <n-avatar v-else :src="activeChat.ModelAvatar" size="medium" round />
         <div class="message-bubble">
           <div class="message-content">{{ message.content }}</div>
         </div>
       </div>
+
     </div>
 
     <div class="input-area">
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
-        <n-input type="textarea" placeholder="请输入消息..." v-model:value="messageInput" @keypress.enter="sendMessage"
+        <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keypress.enter="sendMessage"
         style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;"/>
         <n-button @click="sendMessage" type="primary"
           style="position: absolute; right: 20px; bottom: 20px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
@@ -37,11 +39,11 @@ const messageInput = ref(""); // 用户输入的消息
 
 // 当前激活的聊天会话
 const activeChat = computed(() =>
-  chatStore.chatSessions.find((chat) => chat.id === chatStore.activeChatId)
+  chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel)
 );
 
 // 当前会话的消息记录
-const activeChatMessages = computed(() => activeChat.value?.messages || []);
+const activeChatMessages = computed(() => activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []);
 
 // 滚动到最新消息
 const messageContainer = ref(null);
@@ -58,12 +60,11 @@ const sendMessage = () => {
   if (!messageInput.value.trim() || !activeChat.value) return;
 
   // 更新当前会话的消息记录
-  chatStore.updateChatSession(activeChat.value.id, messageInput.value, Date.now());
-  activeChat.value.messages.push({
-    id: Date.now(),
+  // chatStore.updateChatSession(activeChat.value.id, messageInput.value);
+  activeChatMessages.value.topic.push({
+    msgid: activeChatMessages.value.topic.length + 1,
     sender: "me",
-    content: messageInput.value.trim(),
-    avatar: "https://i.pravatar.cc/100?img=26",
+    content: messageInput.value.trim()
   });
 
   messageInput.value = ""; // 清空输入框
@@ -127,7 +128,7 @@ const stopResize = () => {
 .chat-header {
   display: flex;
   align-items: center;
-  padding: 10px 15px;
+  padding: 7px 15px;
   border-bottom: 1px solid #ddd;
   background-color: #f8f9fa;
 }

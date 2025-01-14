@@ -17,20 +17,22 @@
     </div>
 
     <div class="chat-list">
-      <div v-for="chat in chatSessions" :key="chat.id" class="chat-item" :class="{ active: chat.id === activeChatId }"
-        @click="selectChat(chat.id)">
-        <n-avatar :src="chat.avatar" size="medium" round />
+      <div v-for="curtopic in activedModel.MessagesList" :key="curtopic.topicid" class="chat-item"
+        :class="{ active: activedModel.id === chatStore.selectedModel }"
+        @click="selectChat(curtopic.topicid)">
+        <n-avatar :src="activedModel.ModelAvatar" size="medium" round />
         <div class="chat-info">
           <div class="chat-title">
-            {{ chat.name }}
-            <span class="chat-timestamp">{{ formatTimestamp(chat.lastMessageTime) }}</span>
+            {{ activedModel.name }}
+            <!-- <span class="chat-timestamp">{{ formatTimestamp(curmodel.MessagesList.at(0)) }}</span> -->
           </div>
           <div class="chat-last-message">
-            {{ chat.lastMessage }}
+            {{ curtopic.topic.at(0).content }}
           </div>
         </div>
       </div>
     </div>
+
   </div>
 </template>
 
@@ -40,13 +42,10 @@ import { useChatStore } from "../../stores/chatStore";
 import { NAvatar, NButton } from "naive-ui";
 
 const chatStore = useChatStore();
-const chatSessions = computed(() => chatStore.chatSessions); // 从状态管理中获取会话列表
-const activeChatId = ref(chatStore.activeChatId); // 当前选中的聊天会话 ID
+const activedModel = computed(() => chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel));
 
-// 选择聊天会话
 const selectChat = (id) => {
-  chatStore.setActiveChat(id); // 在状态管理中设置当前会话
-  activeChatId.value = id;
+  chatStore.setModelTopic(id);
 };
 
 // 格式化时间戳

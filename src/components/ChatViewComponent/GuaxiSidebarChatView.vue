@@ -71,9 +71,9 @@
 
 <script setup>
 import GuaxiSidbarListChatView from "./GuaxiSidbarListChatView.vue"
-    const navigateTo = (path) => {
-      window.location.hash = path; // 修改 hash，实现导航
-    };
+const navigateTo = (path) => {
+  window.location.hash = path; // 修改 hash，实现导航
+};
 
 </script>
 
