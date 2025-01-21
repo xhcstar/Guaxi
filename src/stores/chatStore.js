@@ -87,7 +87,7 @@ export const useChatStore = defineStore("chatStore", {
               {
                 msgid: 3,
                 sender: "DeepSeek",
-                content: "你为什叫瓜西？",
+                content: "# 示例标题\n\n这是一个包含 **Markdown**、数学公式和代码块的大段文本。以下是几种类型的内容：\n\n## 1. Markdown 格式\nMarkdown 格式可以使用很多常见的语法。比如：\n- **加粗**，*斜体*，~~删除线~~\n- 列表：\n  - 第一项\n  - 第二项\n  - 第三项\n- 链接：[Google](https://www.google.com)\n\n### 代码块（不转义引号）\n以下是一个示例代码块，它展示了如何显示引号并保持格式不变：\n\n```javascript\nconst message = \"Hello, world!\";\nconsole.log(message);  // 输出: Hello, world!\n```\n\n## 2. 数学公式\nMarkdown 也支持数学公式。你可以使用 `$$` 来写块级公式，或者使用 `$` 来写行内公式。\n\n### 行内公式\n行内公式示例：$E = mc^2$\n\n### 块级公式\n块级公式示例：\n\n$$ a^2 + b^2 = c^2 $$\n\n## 3. 带有代码块的示例\n```python\ndef greet(name):\n    return f\"Hello, {name}!\"\n\nprint(greet('Alice'))\n```\n\n## 4. 包含引号的文本\n这里是一个包含 `\"` 和 `'` 引号的文本。例如：\n- 双引号：`\"这是一个带有双引号的示例\"`\n- 单引号：`'这是一个带有单引号的示例'`\n",
               },
               {
                 msgid: 4,

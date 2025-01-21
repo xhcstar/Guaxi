@@ -11,7 +11,8 @@
         <n-avatar v-if="message.sender === 'me'" :src="activeChat.MeAvatar" size="medium" round />
         <n-avatar v-else :src="activeChat.ModelAvatar" size="medium" round />
         <div class="message-bubble">
-          <div class="message-content">{{ message.content }}</div>
+          <!-- <div class="message-content">{{ message.content }}</div> -->
+          <div class="message-content" v-html="renderMarkdown(message.content)"></div>
         </div>
       </div>
 
@@ -19,18 +20,24 @@
 
     <div class="input-area">
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
-        <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keypress.enter="sendMessage"
-        style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;"/>
-        <n-button @click="sendMessage" type="primary"
-          style="position: absolute; right: 20px; bottom: 20px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
-          发送
-        </n-button>
+      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keypress.enter="sendMessage"
+        style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;" />
+      <n-button @click="sendMessage" type="primary"
+        style="position: absolute; right: 20px; bottom: 20px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
+        发送
+      </n-button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, computed, onMounted} from 'vue'
+import { ref, nextTick, computed, onMounted } from 'vue'
+import { marked } from 'marked';
+import katex from 'katex'; // 导入 KaTeX 库
+import 'katex/dist/katex.min.css'; // 导入 KaTeX 样式
+import Prism from 'prismjs';
+import 'prismjs/components/prism-python.min.js';  // 引入 Python 支持
+import 'prismjs/themes/prism.css';  // 引入 Prism 默认样式
 import { useChatStore } from "../../stores/chatStore";
 
 
@@ -112,6 +119,60 @@ const stopResize = () => {
   document.body.style.userSelect = '';
 };
 
+function renderMarkdown(content) {
+  nextTick(() => {
+    Prism.highlightAll();
+  });
+  // 先将 Markdown 转换为 HTML
+  let html = marked(content);
+
+  // 渲染数学公式
+  html = renderMath(html);
+
+  // 渲染代码块
+  html = renderCodeBlocks(html);
+
+  return html;
+}
+
+// 渲染 LaTeX 数学公式
+function renderMath(html) {
+  // 渲染内联数学公式（$...$）和块级数学公式（$$...$$）
+  const mathElements = html.match(/(\$\$.*?\$\$|\$.*?\$)/g);
+  if (mathElements) {
+    mathElements.forEach((element) => {
+      html = html.replace(element, (match) => {
+        if (match.startsWith('$$')) {
+          return `<div class="katex-display">${katex.renderToString(match.slice(2, -2))}</div>`;
+        } else {
+          return `<span class="katex-inline">${katex.renderToString(match.slice(1, -1))}</span>`;
+        }
+      });
+    });
+  }
+  return html;
+}
+
+const renderCodeBlocks = (content) => {
+  const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
+
+  codeBlocks.forEach((block) => {
+    const language = block.match(/```(\w+)\n/);  // 获取语言类型
+    if (language && language[1]) {
+      const lang = language[1].toLowerCase();
+      if (Prism.languages[lang]) {
+        block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
+          const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
+          return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
+        });
+      }
+    }
+  });
+
+  return content.replace(/```[\s\S]+?```/g, (block) => {
+    return `<pre class="code-block">${block}</pre>`;
+  });
+};
 </script>
 
 <style scoped>
@@ -195,5 +256,31 @@ const stopResize = () => {
   height: 1px;
   cursor: ns-resize;
   background-color: #aab4ae;
+}
+
+.katex-display {
+  display: block;
+  margin: 10px 0;
+}
+
+.katex-inline {
+  font-size: 1.2em;
+  margin-left: 5px;
+  margin-right: 5px;
+}
+
+/* 代码块滚动区域样式 */
+.code-block {
+  background-color: #2d2d2d;
+  color: #f8f8f2;
+  padding: 16px;
+  border-radius: 4px;
+  overflow-x: auto;
+  max-height: 300px;
+  white-space: pre-wrap;
+  /* 保持代码格式 */
+  word-wrap: break-word;
+  font-family: 'Courier New', monospace;
+  margin-top: 10px;
 }
 </style>
