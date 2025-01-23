@@ -11,7 +11,6 @@
         <n-avatar v-if="message.sender === 'me'" :src="activeChat.MeAvatar" size="medium" round />
         <n-avatar v-else :src="activeChat.ModelAvatar" size="medium" round />
         <div class="message-bubble">
-          <!-- <div class="message-content">{{ message.content }}</div> -->
           <div class="message-content" v-html="renderMarkdown(message.content)"></div>
         </div>
       </div>
@@ -20,11 +19,15 @@
 
     <div class="input-area">
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
-      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keypress.enter="sendMessage"
+      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keydown="handleKeydown"
         style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;" />
-      <n-button @click="sendMessage" type="primary"
+      <n-button @click="sendMessage" color="#dbe7e4"
         style="position: absolute; right: 20px; bottom: 20px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
-        发送
+        <template #icon>
+        <n-icon>
+          <svg t="1737646310254" class="icon" viewBox="0 0 1178 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="5954" width="48" height="48"><path d="M1145.732473 24.529036A96.502796 96.502796 0 0 0 1047.167948 6.302655L62.5449 378.38417a96.762677 96.762677 0 0 0-8.229592 177.44733l153.746105 75.175158a32.918368 32.918368 0 0 1 8.229592 5.804029c15.974071 41.130635 79.05606 202.292036 107.123301 260.540222a120.758435 120.758435 0 0 0 64.520002 59.530271c-1.611268-0.155929-3.465091-0.485113-5.318915-0.814297a88.359831 88.359831 0 0 0 14.518733 4.192761 96.190937 96.190937 0 0 0 87.59751-26.455973l57.260636-57.260636a32.485232 32.485232 0 0 1 38.722396-5.318915l246.662532 140.024344a97.143838 97.143838 0 0 0 47.748959 12.751536 97.022559 97.022559 0 0 0 94.042581-73.56389l205.999684-830.478457a95.671174 95.671174 0 0 0-29.453277-95.290014z m-868.005397 592.3747L805.56445 314.903695l-297.997861 305.222576a48.112794 48.112794 0 0 0-10.811085 17.325457c-0.155929 0.329184-0.155929 0.485113-0.329184 0.814297-0.641042 1.940451-59.53027 175.680134-94.371764 254.233756a58.404116 58.404116 0 0 1-20.651945-22.748325c-25.814931-54.211355-85.986243-207.628277-103.727511-252.795743z" fill="#6EC2B0" p-id="5955"></path></svg>
+        </n-icon>
+      </template>
       </n-button>
     </div>
   </div>
@@ -39,6 +42,7 @@ import Prism from 'prismjs';
 import 'prismjs/components/prism-python.min.js';  // 引入 Python 支持
 import 'prismjs/themes/prism.css';  // 引入 Prism 默认样式
 import { useChatStore } from "../../stores/chatStore";
+import { invoke } from '@tauri-apps/api/core';
 
 
 const chatStore = useChatStore();
@@ -62,20 +66,57 @@ const scrollToBottom = () => {
   });
 };
 
+const askDeepSeek = async (question) => {
+  try {
+    const request = {
+      "modelid": 1,
+      "question": question,
+      "topicid": 1,
+    };
+    console.log('Request:', request);
+    const response = await invoke('get_chat_answer', { request });
+    console.log('Response:', response);
+    return response.answer;
+  } catch (error) {
+    console.error('Error calling API:', error);
+  }
+};
+
 // 发送消息
-const sendMessage = () => {
+const sendMessage = async () => {
   if (!messageInput.value.trim() || !activeChat.value) return;
 
-  // 更新当前会话的消息记录
-  // chatStore.updateChatSession(activeChat.value.id, messageInput.value);
+  let question = messageInput.value.trim();
   activeChatMessages.value.topic.push({
     msgid: activeChatMessages.value.topic.length + 1,
     sender: "me",
-    content: messageInput.value.trim()
+    content: question,
   });
 
   messageInput.value = ""; // 清空输入框
   scrollToBottom(); // 滚动到底部
+
+  // 更新当前会话的消息记录
+  try {
+    let answer = await askDeepSeek(question); // 等待 Promise 解析
+    console.log('answer:', answer);
+    chatStore.updateChatSession(answer);
+  } catch (error) {
+    console.error('Error during askDeepSeek:', error);
+  }
+  scrollToBottom(); // 滚动到底部
+};
+
+const handleKeydown = (event) => {
+  if (event.key === 'Enter') {
+    if (event.shiftKey) {
+      // Shift + Enter 换行，什么都不做
+      return;
+    }
+    // 阻止默认行为并发送消息
+    event.preventDefault();
+    sendMessage();
+  }
 };
 
 // 初次加载后滚动到底部
@@ -103,10 +144,15 @@ const startResize = (e) => {
 
 const onMouseMove = (e) => {
   const diff = startY - e.clientY;
+  if (diff < 0) {
+    diff = 0;
+  }
   const newHeight = startHeight + diff;
+  console.log('newHeight:', newHeight);
   if (newHeight > 85) { // 限制最小高度
     const inputArea = document.querySelector('.input-area');
     inputArea.style.height = newHeight + 'px'; // 修改 height
+    // inputArea.style.height = `${Math.max(180, newHeight)}px`
   }
 };
 
@@ -135,21 +181,29 @@ function renderMarkdown(content) {
   return html;
 }
 
-// 渲染 LaTeX 数学公式
 function renderMath(html) {
-  // 渲染内联数学公式（$...$）和块级数学公式（$$...$$）
-  const mathElements = html.match(/(\$\$.*?\$\$|\$.*?\$)/g);
-  if (mathElements) {
-    mathElements.forEach((element) => {
-      html = html.replace(element, (match) => {
-        if (match.startsWith('$$')) {
-          return `<div class="katex-display">${katex.renderToString(match.slice(2, -2))}</div>`;
-        } else {
-          return `<span class="katex-inline">${katex.renderToString(match.slice(1, -1))}</span>`;
-        }
-      });
-    });
-  }
+  // 匹配 LaTeX 表达式，包括以下情况：
+  // 1. $$...$$ 块级公式
+  // 2. $...$ 内联公式
+  // 3. [ ... ] 标记的公式
+  // 4. (\ ... \) 标记的公式
+  const latexRegex = /\$\$(.+?)\$\$|\$(.+?)\$|\[(.+?)\]|\(\s*\\(.+?)\s*\)/g;
+
+  html = html.replace(latexRegex, (match, blockMath, inlineMath, bracketMath, parenMath) => {
+    let mathContent = blockMath || inlineMath || bracketMath || parenMath;
+    try {
+      // 根据类型选择块级或内联渲染
+      if (blockMath) {
+        return `<div class="katex-display">${katex.renderToString(mathContent)}</div>`;
+      } else {
+        return `<span class="katex-inline">${katex.renderToString(mathContent)}</span>`;
+      }
+    } catch (e) {
+      console.error("KaTeX 渲染错误：", e);
+      return match; // 如果渲染失败，返回原始文本
+    }
+  });
+
   return html;
 }
 
@@ -203,7 +257,8 @@ const renderCodeBlocks = (content) => {
 
 .message-list {
   flex-grow: 1;
-  overflow-y: auto;
+  max-height: calc(100% - 150px - 80px); /* 限制消息区域的最大高度 */
+  overflow-y: auto; /* 超出时显示滚动条 */
   padding: 15px;
   background-color: #ffffff;
 }
@@ -236,7 +291,7 @@ const renderCodeBlocks = (content) => {
 }
 
 .message-right .message-bubble {
-  background-color: #007aff;
+  background-color: #5acaa5;
   color: white;
   border-top-right-radius: 0;
 }
@@ -247,13 +302,14 @@ const renderCodeBlocks = (content) => {
   border-top: 1px solid #ddd;
   position: relative;
   padding-bottom: 2px;
-  height: 260px;
+  height: 150px; /* 固定输入区域的高度 */
+  min-height: 80px; /* 设置最小高度 */
 }
 
 .chat-input-height-handle {
   position: relative;
   width: 100%;
-  height: 1px;
+  height: 2px;
   cursor: ns-resize;
   background-color: #aab4ae;
 }

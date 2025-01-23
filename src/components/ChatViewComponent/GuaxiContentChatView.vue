@@ -27,6 +27,7 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiSidebarChatView from "./GuaxiSidebarChatView.vue"
 import GuaxiCenterChatView from "./GuaxiCenterChatView.vue"
 import GuaxiRightContentChatView from "./GuaxiRightContentChatView.vue"
+import { invoke } from '@tauri-apps/api/core';
 
 
 const leftSiderbarWidth = ref(350); // 默认宽度
