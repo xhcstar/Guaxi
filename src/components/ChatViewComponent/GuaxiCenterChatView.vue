@@ -174,12 +174,15 @@ function renderMarkdown(content) {
   nextTick(() => {
     Prism.highlightAll();
   });
+
+  console.log('content:', content);
   // 先将 Markdown 转换为 HTML
   let html = marked(content);
 
+  console.log('htmlmark:', html);
   // 渲染数学公式
   html = renderMath(html);
-
+  console.log('htmlmath:', html);
   // 渲染代码块
   html = renderCodeBlocks(html);
 
@@ -286,9 +289,9 @@ const renderCodeBlocks = (content) => {
 
 .message-bubble {
   max-width: 70%;
-  padding: 12px;
+  padding: 8px;
   border-radius: 20px;
-  margin: 0 8px;
+  margin: 0 5px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 

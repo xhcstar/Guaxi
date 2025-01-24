@@ -98,14 +98,7 @@ export const useChatStore = defineStore("chatStore", {
               {
                 msgid: 5,
                 sender: "DeepSeek",
-                content: `1. 高斯定律（Gauss's Law for Electricity）  
-                        [ \nabla \cdot \mathbf{E} = \frac{\rho}{\epsilon_0} ]
-                        物理意义：电场 **\mathbf{E}** 的散度与电荷密度 **\rho** 成正比。  
-                        解释：电荷是电场的源，电场线从正电荷发出，终止于负电荷。
-                        2. 高斯磁定律（Gauss's Law for Magnetism）  
-                        [ \nabla \cdot \mathbf{B} = 0 ]
-                        物理意义：磁场 **\mathbf{B}** 的散度为零。  
-                        解释：磁场是无源的，不存在磁单极子，磁场线是闭合的。`,
+                content: `"麦克斯韦方程组（Maxwell's Equations）是描述电磁场行为的一组基本方程，由19世纪物理学家詹姆斯·克拉克·麦克斯韦（James Clerk Maxwell）提出。这组方程统一了电学和磁学，并预言了电磁波的存在，为现代电磁学奠定了基础。麦克斯韦方程组包括四个方程，通常以微分形式或积分形式表示。\n\n### 麦克斯韦方程组的微分形式\n1. **高斯定律（Gauss's Law for Electricity）**  \n   \\[\n   \\nabla \\cdot \\mathbf{E} = \\frac{\\rho}{\\varepsilon_0}\n   \\]  \n   描述电场 \\(\\mathbf{E}\\) 与电荷密度 \\(\\rho\\) 的关系，表明电场是由电荷产生的。\n\n2. **高斯磁定律（Gauss's Law for Magnetism）**  \n   \\[\n   \\nabla \\cdot \\mathbf{B} = 0\n   \\]  \n   描述磁场 \\(\\mathbf{B}\\) 的性质，表明磁场是无源的，即不存在磁单极子。\n\n3. **法拉第电磁感应定律（Faraday's Law of Induction）**  \n   \\[\n   \\nabla \\times \\mathbf{E} = -\\frac{\\partial \\mathbf{B}}{\\partial t}\n   \\]  \n   描述变化的磁场如何产生电场。\n\n4. **安培-麦克斯韦定律（Ampère's Law with Maxwell's Addition）**  \n   \\[\n   \\nabla \\times \\mathbf{B} = \\mu_0 \\mathbf{J} + \\mu_0 \\varepsilon_0 \\frac{\\partial \\mathbf{E}}{\\partial t}\n   \\]  \n   描述电流 \\(\\mathbf{J}\\) 和变化的电场如何产生磁场。\n\n### 麦克斯韦方程组的积分形式\n1. **高斯定律**  \n   \\[\n   \\oint_{\\partial V} \\mathbf{E} \\cdot d\\mathbf{A} = \\frac{Q_{\\text{enc}}}{\\varepsilon_0}\n   \\]  \n   电场通过闭合曲面的通量等于该曲面内包围的总电荷除以真空电容率 \\(\\varepsilon_0\\)。\n\n2. **高斯磁定律**  \n   \\[\n   \\oint_{\\partial V} \\mathbf{B} \\cdot d\\mathbf{A} = 0\n   \\]  \n   磁场通过任何闭合曲面的通量为零。\n\n3. **法拉第电磁感应定律**  \n   \\[\n   \\oint_{\\partial S} \\mathbf{E} \\cdot d\\mathbf{l} = -\\frac{d}{dt} \\int_S \\mathbf{B} \\cdot d\\mathbf{A}\n   \\]  \n   电场沿闭合路径的环流等于通过该路径包围曲面的磁通量的变化率的负值。\n\n4. **安培-麦克斯韦定律**  \n   \\[\n   \\oint_{\\partial S} \\mathbf{B} \\cdot d\\mathbf{l} = \\mu_0 I_{\\text{enc}} + \\mu_0 \\varepsilon_0 \\frac{d}{dt} \\int_S \\mathbf{E} \\cdot d\\mathbf{A}\n   \\]  \n   磁场沿闭合路径的环流等于通过该路径包围曲面的电流加上电场通量的变化率。\n\n### 物理意义\n- 麦克斯韦方程组揭示了电场和磁场的 相互联系，表明变化的电场可以产生磁场，变化的磁场可以产生电场。\n- 这组方程预言了电磁波的存在，并表明光是一种电磁波。\n- 麦克斯韦方程组是经典电磁学的核心，也是现代物理学和工程学的基础。\n\n### 符号说明\n- \\(\\mathbf{E}\\)：电场强度（单位：V/m）\n- \\(\\mathbf{B}\\)：磁感应强度（单位：T）\n- \\(\\rho\\)：电荷密度（单位：C/m³）\n- \\(\\mathbf{J}\\)：电流密度（单位：A/m²）\n- \\(\\varepsilon_0\\)：真空电容率（单位：F/m）\n- \\(\\mu_0\\)：真空磁导率（单位：H/m）\n- \\(Q_{\\text{enc}}\\)：闭合曲面内包围的总电荷\n- \\(I_{\\text{enc}}\\)：闭合路径内包围的总电流\n\n麦克斯韦方程组是物理学中最伟大的成就之一，它不仅统一了电学和磁学，还为后来的相对论和量子力学的发展提供了重要启示。"`,
               },
             ],
           },

@@ -7,6 +7,7 @@ use serde_json::json;
 use tauri::command;
 use reqwest::{Client, Error};
 use futures_util::StreamExt;
+use regex::Regex;
 
 #[derive(Deserialize)]
 struct ChatRequest {
@@ -70,8 +71,33 @@ async fn get_answer_from_deepseek(question: &str) -> Result<String, Error> {
     }
 
     let data = String::from_utf8(full_data).expect("Failed to convert bytes to string");
+    println!("Data: {}", data);
 
-    let chat_response: DeepSeekResponse = serde_json::from_str(&data).expect("Failed to parse JSON");
+    // let test_content = r#"{
+    //     "choices": [
+    //         {
+    //             "message": {
+    //                 "content": "麦克斯韦方程组（Maxwell's Equations）是描述电磁场行为的一组基本方程，由19世纪物理学家詹姆斯·克拉克·麦克斯韦（James Clerk Maxwell）提出。这组方程统一了电学和磁学，并预言了电磁波的存在，为现代电磁学奠定了基础。麦克斯韦方程组包括四个方程，通常以微分形式或积分形式表示。\n\n### 麦克斯韦方程组的微分形式\n1. **高斯定律（Gauss's Law for Electricity）**  \n   \\[\n   \\nabla \\cdot \\mathbf{E} = \\frac{\\rho}{\\varepsilon_0}\n   \\]  \n   描述电场 \\(\\mathbf{E}\\) 与电荷密度 \\(\\rho\\) 的关系，表明电场是由电荷产生的。\n\n2. **高斯磁定律（Gauss's Law for Magnetism）**  \n   \\[\n   \\nabla \\cdot \\mathbf{B} = 0\n   \\]  \n   描述磁场 \\(\\mathbf{B}\\) 的性质，表明磁场是无源的，即不存在磁单极子。\n\n3. **法拉第电磁感应定律（Faraday's Law of Induction）**  \n   \\[\n   \\nabla \\times \\mathbf{E} = -\\frac{\\partial \\mathbf{B}}{\\partial t}\n   \\]  \n   描述变化的磁场如何产生电场。\n\n4. **安培-麦克斯韦定律（Ampère's Law with Maxwell's Addition）**  \n   \\[\n   \\nabla \\times \\mathbf{B} = \\mu_0 \\mathbf{J} + \\mu_0 \\varepsilon_0 \\frac{\\partial \\mathbf{E}}{\\partial t}\n   \\]  \n   描述电流 \\(\\mathbf{J}\\) 和变化的电场如何产生磁场。\n\n### 麦克斯韦方程组的积分形式\n1. **高斯定律**  \n   \\[\n   \\oint_{\\partial V} \\mathbf{E} \\cdot d\\mathbf{A} = \\frac{Q_{\\text{enc}}}{\\varepsilon_0}\n   \\]  \n   电场通过闭合曲面的通量等于该曲面内包围的总电荷除以真空电容率 \\(\\varepsilon_0\\)。\n\n2. **高斯磁定律**  \n   \\[\n   \\oint_{\\partial V} \\mathbf{B} \\cdot d\\mathbf{A} = 0\n   \\]  \n   磁场通过任何闭合曲面的通量为零。\n\n3. **法拉第电磁感应定律**  \n   \\[\n   \\oint_{\\partial S} \\mathbf{E} \\cdot d\\mathbf{l} = -\\frac{d}{dt} \\int_S \\mathbf{B} \\cdot d\\mathbf{A}\n   \\]  \n   电场沿闭合路径的环流等于通过该路径包围曲面的磁通量的变化率的负值。\n\n4. **安培-麦克斯韦定律**  \n   \\[\n   \\oint_{\\partial S} \\mathbf{B} \\cdot d\\mathbf{l} = \\mu_0 I_{\\text{enc}} + \\mu_0 \\varepsilon_0 \\frac{d}{dt} \\int_S \\mathbf{E} \\cdot d\\mathbf{A}\n   \\]  \n   磁场沿闭合路径的环流等于通过该路径包围曲面的电流加上电场通量的变化率。\n\n..."
+    //             }
+    //         }
+    //     ]
+    // }"#;
+    
+    let mut chat_response: DeepSeekResponse = serde_json::from_str(&data).expect("Failed to parse JSON");
+    // let mut chat_response: DeepSeekResponse = serde_json::from_str(&test_content).expect("Failed to parse JSON");
+
+    // 替换 `\[` 和 `\]` 及相关换行符
+    let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+    // 替换 \( 和 \) 及相关换行符
+    let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+
+    // 对 content 进行替换
+    if let Some(message) = chat_response.choices.get_mut(0).map(|choice| &mut choice.message) {
+        message.content = re_block.replace_all(&message.content, "$$").to_string();
+        message.content = re_inline.replace_all(&message.content, "$").to_string();
+    }
+
+    println!("Answer: {}", chat_response.choices[0].message.content);
 
     Ok(chat_response
         .choices
