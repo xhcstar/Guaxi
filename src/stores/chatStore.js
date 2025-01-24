@@ -6,8 +6,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 0,
         name: "ChatGPT",
-        ModelAvatar: "https://i.pravatar.cc/100?img=26",
-        MeAvatar: "https://i.pravatar.cc/100?img=4",
+        ModelAvatar: "./src/assets/chatgpt.png",
+        MeAvatar: "./src/assets/me.png",
         MessagesList: [
           //Messages1
           {
@@ -67,8 +67,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 1,
         name: "DeepSeek",
-        ModelAvatar: "https://i.pravatar.cc/100?img=2",
-        MeAvatar: "https://i.pravatar.cc/100?img=4",
+        ModelAvatar: "./src/assets/deepseek.png",
+        MeAvatar: "./src/assets/me.png",
         MessagesList: [
           //Messages1
           {
@@ -141,8 +141,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 2,
         name: "Qwen",
-        ModelAvatar: "https://i.pravatar.cc/100?img=5",
-        MeAvatar: "https://i.pravatar.cc/100?img=4",
+        ModelAvatar: "./src/assets/qwen.png",
+        MeAvatar: "./src/assets/me.png",
         MessagesList: [
           //Messages1
           {
@@ -176,8 +176,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 3,
         name: "Kimi",
-        ModelAvatar: "https://i.pravatar.cc/100?img=6",
-        MeAvatar: "https://i.pravatar.cc/100?img=4",
+        ModelAvatar: "./src/assets/kimi.png",
+        MeAvatar: "./src/assets/me.png",
         MessagesList: [
           //Messages1
           {
@@ -211,8 +211,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 4,
         name: "豆包",
-        ModelAvatar: "https://i.pravatar.cc/100?img=7",
-        MeAvatar: "https://i.pravatar.cc/100?img=4",
+        ModelAvatar: "./src/assets/doubao.png",
+        MeAvatar: "./src/assets/me.png",
         MessagesList: [
           //Messages1
           {
@@ -246,8 +246,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 10,
         name: "Local-Qwen",
-        ModelAvatar: "https://i.pravatar.cc/100?img=8",
-        MeAvatar: "https://i.pravatar.cc/100?img=4",
+        ModelAvatar: "./src/assets/qwen.png",
+        MeAvatar: "./src/assets/me.png",
         MessagesList: [
           //Messages1
           {
@@ -281,8 +281,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 11,
         name: "Local-LLAMA",
-        ModelAvatar: "https://i.pravatar.cc/100?img=9",
-        MeAvatar: "https://i.pravatar.cc/100?img=4",
+        ModelAvatar: "./src/assets/ollama.png",
+        MeAvatar: "./src/assets/me.png",
         MessagesList: [
           //Messages1
           {

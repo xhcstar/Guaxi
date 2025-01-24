@@ -71,7 +71,7 @@ async fn get_answer_from_deepseek(question: &str) -> Result<String, Error> {
 
     let data = String::from_utf8(full_data).expect("Failed to convert bytes to string");
 
-    let chat_response: DeepSeekResponse = serde_json::from_str(&data).expect("Failed to parse JSON");;
+    let chat_response: DeepSeekResponse = serde_json::from_str(&data).expect("Failed to parse JSON");
 
     Ok(chat_response
         .choices
