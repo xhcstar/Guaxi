@@ -44,7 +44,33 @@ import { marked } from 'marked';
 import katex from 'katex'; // 导入 KaTeX 库
 import 'katex/dist/katex.min.css'; // 导入 KaTeX 样式
 import Prism from 'prismjs';
+
 import 'prismjs/components/prism-python.min.js';  // 引入 Python 支持
+import 'prismjs/components/prism-c.min.js'
+import 'prismjs/components/prism-cpp.min.js'
+import 'prismjs/components/prism-markdown.min.js'
+import 'prismjs/components/prism-rust.min.js'
+
+import 'prismjs/components/prism-bash.min.js'
+import 'prismjs/components/prism-lua.min.js'
+import 'prismjs/components/prism-java.min.js'
+import 'prismjs/components/prism-powershell.min.js'
+import 'prismjs/components/prism-git.min.js'
+import 'prismjs/components/prism-toml.min.js'
+import 'prismjs/components/prism-yaml.min.js'
+import 'prismjs/components/prism-sql.min.js'
+import 'prismjs/components/prism-qml.min.js'
+
+import 'prismjs/components/prism-perl.min.js'
+import 'prismjs/components/prism-diff.min.js'
+import 'prismjs/components/prism-css.min.js'
+import 'prismjs/components/prism-csharp.min.js'
+import 'prismjs/components/prism-go.min.js'
+import 'prismjs/components/prism-log.min.js'
+import 'prismjs/components/prism-latex.min.js'
+import 'prismjs/components/prism-json.min.js'
+import 'prismjs/components/prism-asciidoc.min.js'
+import 'prismjs/components/prism-cmake.min.js'
 import 'prismjs/themes/prism.css';  // 引入 Prism 默认样式
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
