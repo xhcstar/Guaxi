@@ -56,7 +56,9 @@ export default defineComponent({
 
     // 处理模型选择变化
     const handleModelChange = (key: string) => {
+      console.log('key', key);
       const selectModelId = parseInt(key.split('-')[1], 10);
+      console.log('selectModelId', selectModelId);
       chatStore.setChatModel(selectModelId);
     };
 

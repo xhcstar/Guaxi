@@ -100,14 +100,15 @@ const scrollToBottom = () => {
 const askDeepSeek = async (question) => {
   try {
     const request = {
-      "modelid": 1,
+      "modelid": chatStore.selectedModel,
       "question": question,
-      "topicid": 1,
+      "topicid": chatStore.selectedTopic,
+      "sessionid": chatStore.sendChatSessionId,
     };
     console.log('Request:', request);
     const response = await invoke('get_chat_answer', { request });
     console.log('Response:', response);
-    return response.answer;
+    return response;
   } catch (error) {
     console.error('Error calling API:', error);
   }
