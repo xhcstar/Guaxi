@@ -341,7 +341,7 @@ pub async fn get_answer_from_local_deepseek_stream(app: AppHandle, question: &st
         "session_id": session_id
     });
 
-    info!("get_answer_from_local_deepseek: request_body: {:?}", request_body);
+    info!("get_answer_from_local_deepseek_stream: request_body: {:?}", request_body);
 
     // 禁用系统代理
     let client = ClientBuilder::new()
@@ -370,8 +370,8 @@ pub async fn get_answer_from_local_deepseek_stream(app: AppHandle, question: &st
                 let chunk_str = String::from_utf8_lossy(&data).to_string();
                 let answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
                 app.emit("modle-streaming-respond-output", &answer_content).map_err(|e| e.to_string())?;
-                info!("get_answer_from_local_deepseek: Streaming data: {:?}", answer_content);
-                info!("get_answer_from_local_deepseek: emit event modle-streaming-respond-output");
+                debug!("get_answer_from_local_deepseek_stream: Streaming data: {:?}", answer_content);
+                debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
             },
             Err(e) => {
                 return Err(format!("Error while reading stream: {}", e));

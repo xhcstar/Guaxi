@@ -18,8 +18,7 @@
 
     <div class="chat-list">
       <div v-for="curtopic in activedModel.MessagesList" :key="curtopic.topicid" class="chat-item"
-        :class="{ active: activedModel.id === chatStore.selectedModel }"
-        @click="selectChat(curtopic.topicid)">
+        :class="{ active: activedModel.id === chatStore.selectedModel }" @click="selectChat(curtopic.topicid)">
         <n-avatar :src="activedModel.ModelAvatar" size="medium" round />
         <div class="chat-info">
           <div class="chat-title">
@@ -57,19 +56,7 @@ const formatTimestamp = (timestamp) => {
 
 // 新建聊天逻辑（可自定义实现）
 const handleAddChat = () => {
-  chatStore.addChatSession({
-    id: "3",
-    name: "鸟蛋",
-    avatar: "https://i.pravatar.cc/100?img=5",
-    lastMessage: "最近怎么样？",
-    lastMessageTime: Date.now() - 60000,
-    messages: [
-      { id: "m2", sender: "bot", avatar: "https://i.pravatar.cc/100?img=5", content: "你好，有什么可以帮忙的吗？" },
-      { id: "m2", sender: "me", avatar: "https://i.pravatar.cc/100?img=4", content: "我叫瓜西" },
-      { id: "m2", sender: "bot", avatar: "https://i.pravatar.cc/100?img=5", content: "你为什叫瓜西？" },
-      { id: "m2", sender: "me", avatar: "https://i.pravatar.cc/100?img=4", content: "你管！" },
-    ],
-  },);
+  chatStore.addChatSession()
 };
 </script>
 
