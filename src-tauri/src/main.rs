@@ -28,6 +28,7 @@ async fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::chatview::get_chat_answer,
+            commands::chatview::get_chat_answer_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

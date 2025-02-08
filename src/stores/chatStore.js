@@ -401,6 +401,35 @@ export const useChatStore = defineStore("chatStore", {
       });
     },
 
+    collectChatSessionStream(answer) {
+      console.log("answer", answer);
+      console.log("this.selectedModel", this.selectedModel);
+      console.log("this.selectedTopic", this.selectedTopic);
+      this.SelectModelchatSessions.find((session) => {
+        console.log("session", session);
+        if (session.id === this.selectedModel) {
+          session.MessagesList.find((topicitem) => {
+            if (topicitem.topicid === this.selectedTopic) {
+              console.log("topicitem", topicitem);
+              const latestTopic = topicitem.topic[topicitem.topic.length - 1]; // 获取最后一个消息条目
+              // 检查是否已经有内容
+              if (latestTopic && latestTopic.sender !== "me") {
+                latestTopic.content += `${answer}`;
+                answer = "";
+              } else {
+                // 如果没有消息条目，就创建一个新的
+                topicitem.topic.push({
+                  msgid: topicitem.topic.length,
+                  sender: session.name,
+                  content: answer,
+                });
+              }
+            }
+          });
+        }
+      });
+    },
+
     addChatSession(newSession) {
       this.SelectModelchatSessions.push(newSession);
     },

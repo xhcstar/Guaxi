@@ -7,6 +7,7 @@ use chrono::Utc;
 use rand::Rng;
 use std::convert::TryFrom;
 use tracing::{error, info, debug};
+use tauri::{AppHandle, Emitter};
 // use std::error::Error;
 
 
@@ -302,9 +303,147 @@ pub async fn get_answer_from_local_deepseek(question: &str, sessionid: &str) -> 
     Ok(chatrsp)
 }
 
+pub async fn get_answer_from_chatgpt_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    Ok(())
+}
+pub async fn get_answer_from_deepseek_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub async fn get_answer_from_kimi_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub async fn get_answer_from_doubao_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub async fn get_answer_from_qwen_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub async fn get_answer_from_local_qwen_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub async fn get_answer_from_local_deepseek_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    let url = "http://localhost:11434/api/chat";
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
+    let request_body = json!({
+        "model": "deepseek-r1:8b",
+        "messages": [{"role": "user", "content": question}],
+        "stream": true,  // 启用流式传输
+        "session_id": session_id
+    });
+
+    info!("get_answer_from_local_deepseek: request_body: {:?}", request_body);
+
+    // 禁用系统代理
+    let client = ClientBuilder::new()
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(url)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Error calling DeepSeek API: {:?}", response.status()));
+    }
+
+    let mut stream = response.bytes_stream();
+
+    // 流式输出数据
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(data) => {
+                // 发送流式数据到前端
+                let chunk_str = String::from_utf8_lossy(&data).to_string();
+                let answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
+                app.emit("modle-streaming-respond-output", &answer_content).map_err(|e| e.to_string())?;
+                info!("get_answer_from_local_deepseek: Streaming data: {:?}", answer_content);
+                info!("get_answer_from_local_deepseek: emit event modle-streaming-respond-output");
+            },
+            Err(e) => {
+                return Err(format!("Error while reading stream: {}", e));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn get_answer_from_local_qwen(question: &str, sessionid: &str) -> Result<ChatResponse, String> {
     info!("get_answer_from_local_qwen: Received request: {} {}", question, sessionid);
     Err("Function not implemented yet".to_string())
+}
+
+#[tauri::command]
+pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Result<(), String> {
+    info!("Enter get_chat_answer_stream");
+    let model = ChatModel::try_from(request.modelid)
+    .map_err(|e| format!("Invalid model ID: {}", e))?;
+    info!("Received request: model_id:{} question:{} session_id:{}", request.modelid, request.question, request.sessionid);
+
+    match model {
+        ChatModel::CHATGPT => match get_answer_from_chatgpt_stream(app, &request.question, &request.sessionid).await {
+            Ok(()) => {
+                info!("get_chat_answer_stream CHATGPT: respond stream successfully");
+                Ok(())
+            },
+            Err(err) => Err(format!("Error calling ChatGPT API: {}", err)),
+        },
+        ChatModel::DEEPSEEK => match get_answer_from_deepseek_stream(app, &request.question, &request.sessionid).await {
+            Ok(()) => {
+                info!("get_chat_answer_stream DEEPSEEK: respond stream successfully");
+                Ok(())
+            },
+            Err(err) => Err(format!("Error calling DeepSeek API: {}", err)),
+        },
+        ChatModel::KIMI => match get_answer_from_kimi_stream(app, &request.question, &request.sessionid).await {
+            Ok(()) => {
+                info!("get_chat_answer_stream KIMI: respond stream successfully");
+                Ok(())
+            },
+            Err(err) => Err(format!("Error calling Kimi API: {}", err)),
+        },
+        ChatModel::QWEN => match get_answer_from_qwen_stream(app, &request.question, &request.sessionid).await {
+            Ok(()) => {
+                info!("get_chat_answer_stream QWEN: respond stream successfully");
+                Ok(())
+            },
+            Err(err) => Err(format!("Error calling Qwen API: {}", err)),
+        },
+        ChatModel::DOUBAO => match get_answer_from_doubao_stream(app, &request.question, &request.sessionid).await {
+            Ok(()) => {
+                info!("get_chat_answer_stream DOUBAO: respond stream successfully");
+                Ok(())
+            },
+            Err(err) => Err(format!("Error calling Doubao API: {}", err)),
+        },
+        ChatModel::LOCALQWEN => match get_answer_from_local_qwen_stream(app, &request.question, &request.sessionid).await {
+            Ok(()) => {
+                info!("get_chat_answer_stream LOCALQWEN: respond stream successfully");
+                Ok(())
+            },
+            Err(err) => Err(format!("Error calling Local Qwen API: {}", err)),
+        },
+        ChatModel::LOCALDEEPSEEK => match get_answer_from_local_deepseek_stream(app, &request.question, &request.sessionid).await {
+            Ok(()) => {
+                info!("get_chat_answer_stream LOCALDEEPSEEK: respond stream successfully");
+                Ok(())
+            },
+            Err(err) => Err(format!("Error calling Local Model API: {}", err)),
+        }
+    }
 }
 
 #[tauri::command]
@@ -362,7 +501,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
                 info!("get_chat_answer LOCALDEEPSEEK: respond ChatResponse  {} {}", answer.answer, answer.sessionid);
                 Ok(answer)
             },
-            Err(err) => Err(format!("Error calling Local DeepSeek API: {}", err)),
+            Err(err) => Err(format!("Error calling Local Model API: {}", err)),
         }
     }
 }

@@ -74,6 +74,7 @@ import 'prismjs/components/prism-cmake.min.js'
 import 'prismjs/themes/prism.css';  // 引入 Prism 默认样式
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 
 const chatStore = useChatStore();
@@ -106,7 +107,8 @@ const askDeepSeek = async (question) => {
       "sessionid": chatStore.sendChatSessionId,
     };
     console.log('Request:', request);
-    const response = await invoke('get_chat_answer', { request });
+    // const response = await invoke('get_chat_answer', { request });
+    const response = await invoke('get_chat_answer_stream', { request });
     console.log('Response:', response);
     return response;
   } catch (error) {
@@ -132,7 +134,7 @@ const sendMessage = async () => {
   try {
     let answer = await askDeepSeek(question); // 等待 Promise 解析
     console.log('answer:', answer);
-    chatStore.updateChatSession(answer);
+    // chatStore.updateChatSession(answer);
   } catch (error) {
     console.error('Error during askDeepSeek:', error);
   }
@@ -153,6 +155,13 @@ const handleKeydown = (event) => {
 
 // 初次加载后滚动到底部
 onMounted(() => {
+  listen("modle-streaming-respond-output", (event) => {
+  const message = event.payload;
+
+  console.log('get modle-streaming-respond-output:', event);
+  console.log('message:', message);
+  chatStore.collectChatSessionStream(message);
+  });
   scrollToBottom();
 });
 
