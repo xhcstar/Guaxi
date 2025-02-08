@@ -106,7 +106,7 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 5,
         name: "Local-Qwen",
-        ModelAvatar: "./src/assets/qwen.png",
+        ModelAvatar: "./src/assets/local_qwen.png",
         MeAvatar: "./src/assets/me.png",
         MessagesList: [
           {
@@ -126,7 +126,7 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 6,
         name: "Local-DeepSeek",
-        ModelAvatar: "./src/assets/ollama.png",
+        ModelAvatar: "./src/assets/local_deepseek.png",
         MeAvatar: "./src/assets/me.png",
         MessagesList: [
           {
@@ -241,7 +241,7 @@ export const useChatStore = defineStore("chatStore", {
                 msgid: 0,
                 sender: session.name,
                 chatSessionId: "",
-                content: "您好，我是`${session.name}`,有什么可以帮忙的吗？",
+                content: `您好，我是${session.name}, 有什么可以帮忙的吗？`,
               },
             ],
           });

@@ -156,11 +156,11 @@ const handleKeydown = (event) => {
 // 初次加载后滚动到底部
 onMounted(() => {
   listen("modle-streaming-respond-output", (event) => {
-  const message = event.payload;
+    const message = event.payload;
 
-  console.log('get modle-streaming-respond-output:', event);
-  console.log('message:', message);
-  chatStore.collectChatSessionStream(message);
+    console.log('get modle-streaming-respond-output:', event);
+    console.log('message:', message);
+    chatStore.collectChatSessionStream(message);
   });
   scrollToBottom();
 });

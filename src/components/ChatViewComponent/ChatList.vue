@@ -17,12 +17,13 @@
     </div>
 
     <div class="chat-list">
-      <div v-for="curtopic in activedModel.MessagesList" :key="curtopic.topicid" class="chat-item"
-        :class="{ active: activedModel.id === chatStore.selectedModel }" @click="selectChat(curtopic.topicid)">
-        <n-avatar :src="activedModel.ModelAvatar" size="medium" round />
+      <div v-for="curtopic in activeChat.MessagesList" :key="curtopic.topicid" class="chat-item"
+        :class="{ active: activeChat.id === chatStore.selectedModel }" @click="selectChat(curtopic.topicid)"
+        @contextmenu="showContextMenu($event, curtopic)">
+        <n-avatar :src="activeChat.ModelAvatar" size="medium" round />
         <div class="chat-info">
           <div class="chat-title">
-            {{ activedModel.name }}
+            {{ activeChat.name }}
             <!-- <span class="chat-timestamp">{{ formatTimestamp(curmodel.MessagesList.at(0)) }}</span> -->
           </div>
           <div class="chat-last-message">
@@ -32,16 +33,28 @@
       </div>
     </div>
 
+    <!-- 右键菜单 -->
+    <div v-if="showMenu" class="context-menu" :style="{ top: menuTop, left: menuLeft }">
+      <div class="menu-item" @click="deleteChatItem">删除会话</div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue"
 import { useChatStore } from "../../stores/chatStore";
 import { NAvatar, NButton } from "naive-ui";
 
 const chatStore = useChatStore();
-const activedModel = computed(() => chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel));
+const activeChat = computed(() => chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel));
+
+// 当前会话的消息记录
+const activeChatMessages = computed(() => activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []);
+
+const showMenu = ref(false);
+const menuTop = ref(0);
+const menuLeft = ref(0);
+const selectedChat = ref(null);
 
 const selectChat = (id) => {
   chatStore.setModelTopic(id);
@@ -58,6 +71,43 @@ const formatTimestamp = (timestamp) => {
 const handleAddChat = () => {
   chatStore.addChatSession()
 };
+
+// 显示右键菜单
+const showContextMenu = (event, chat) => {
+  event.preventDefault();
+  selectedChat.value = chat;
+  showMenu.value = true;
+  menuTop.value = event.clientY + "px";
+  menuLeft.value = event.clientX + "px";
+};
+
+// 删除聊天条目
+const deleteChatItem = () => {
+  if (activeChatMessages.value) {
+    activeChat.value.MessagesList = activeChat.value.MessagesList.filter(
+      (chat) => chat !== activeChatMessages.value
+    );
+  }
+  showMenu.value = false; // 隐藏菜单
+};
+
+// 监听全局点击事件，点击其他地方关闭菜单
+const closeContextMenu = (event) => {
+  if (!event.target.closest(".context-menu")) {
+    showMenu.value = false;
+  }
+};
+
+// 组件挂载时添加监听
+onMounted(() => {
+  document.addEventListener("click", closeContextMenu);
+});
+
+// 组件卸载时移除监听
+onUnmounted(() => {
+  document.removeEventListener("click", closeContextMenu);
+});
+
 </script>
 
 <style scoped>
@@ -131,5 +181,26 @@ const handleAddChat = () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 右键菜单 */
+.context-menu {
+  position: absolute;
+  background: white;
+  border: 1px solid #ccc;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  padding: 5px 0;
+  z-index: 1000;
+}
+
+.menu-item {
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.menu-item:hover {
+  background: #f2f2f2;
 }
 </style>
