@@ -307,10 +307,193 @@ pub async fn get_answer_from_chatgpt_stream(app: AppHandle, question: &str, sess
     Ok(())
 }
 pub async fn get_answer_from_deepseek_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    let api_key = "REDACTED_DEEPSEEK_API_KEY";
+    let url = "https://api.deepseek.com/chat/completions";
+    let session_id;
+
+    info!("get_answer_from_deepseek_stream: Received request: {:?} {}", question, sessionid);
+
+    if sessionid.is_empty() {
+        session_id = generate_session_id();
+        info!("get_answer_from_deepseek_stream: sessionid is empty, generating a new one.");
+    } else {
+        session_id = sessionid.to_string();
+        info!("get_answer_from_deepseek_stream: session_id: {}", session_id);
+    }
+
+    let request_body = json!({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": question}],
+        "stream": true,
+    });
+
+    info!("get_answer_from_deepseek_stream: request_body: {:?} ", request_body);
+
+    let client = Client::new();
+    let response = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&request_body)
+        .send()
+        .await.map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Error calling DeepSeek API: {:?}", response.status()));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    // 流式输出数据
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(data) => {
+                let chunk_str = String::from_utf8_lossy(&data).to_string();
+                let mut answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
+
+                buffer.push_str(&answer_content);
+                debug!("get_answer_from_local_deepseek_stream: origin buffer: {:?}", buffer);
+                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
+                    continue;
+                }
+                debug!("get_answer_from_local_deepseek_stream: buffer: {:?}", buffer);
+                // 替换 `\[` 和 `\]` 及相关换行符
+                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+                // 替换 \( 和 \) 及相关换行符
+                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+                // 对 content 进行替换
+                if !buffer.is_empty() {
+                    buffer = re_block.replace_all(&buffer, "$$").to_string();
+                    buffer = re_inline.replace_all(&buffer, "$").to_string();
+                }
+
+                app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+                info!("get_answer_from_local_deepseek_stream: Streaming data: {:?}", buffer);
+                debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
+
+                buffer.clear();
+            },
+            Err(e) => {
+                return Err(format!("Error while reading stream: {}", e));
+            }
+        }
+    }
+
+    // 流结束后，处理剩余的缓冲区数据
+    if !buffer.is_empty() {
+        // 替换 `\[` 和 `\]` 及相关换行符
+        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+        // 替换 \( 和 \) 及相关换行符
+        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+        
+        buffer = re_block.replace_all(&buffer, "$$").to_string();
+        buffer = re_inline.replace_all(&buffer, "$").to_string();
+
+        // 触发事件处理剩余数据
+        app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+        debug!("get_answer_from_local_deepseek_stream: Emitting remaining buffered data: {}", buffer);
+        debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
+    }
+
     Ok(())
 }
 
 pub async fn get_answer_from_kimi_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    let api_key = "REDACTED_MOONSHOT_API_KEY";
+    let url = "https://api.moonshot.cn/v1/chat/completions";
+    let session_id;
+
+    info!("get_answer_from_kimi_stream: Received request: {:?} {}", question, sessionid);
+
+    if sessionid.is_empty() {
+        session_id = generate_session_id();
+        info!("get_answer_from_kimi_stream: sessionid is empty, generating a new one.");
+    } else {
+        session_id = sessionid.to_string();
+        info!("get_answer_from_kimi_stream: session_id: {}", session_id);
+    }
+
+    let request_body = json!({
+        "model": "moonshot-v1-8k",
+        "messages": [{"role": "user", "content": question}],
+        "temperature": 0.3
+    });
+
+    info!("get_answer_from_kimi_stream: request_body: {:?} ", request_body);
+
+    let client = Client::new();
+    let response = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&request_body)
+        .send()
+        .await.map_err(|e| e.to_string())?;
+
+    info!("Construct response");
+
+    if !response.status().is_success() {
+        info!("Error calling kimi API:");
+        return Err(format!("Error calling kimi API: {:?}", response.status()));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    info!("get_answer_from_kimi_stream: Receive Streaming data");
+    // 流式输出数据
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(data) => {
+                let chunk_str = String::from_utf8_lossy(&data).to_string();
+                info!("get_answer_from_kimi_stream: data chunk_str: {:?}", data);
+                let mut answer_content: DeepSeekResponse =
+                serde_json::from_str(&chunk_str).expect("Failed to parse JSON");
+        
+                info!("get_chat_answer: chat_response {} ", answer_content.choices[0].message.content);
+                buffer.push_str(&answer_content.choices[0].message.content);
+                info!("get_answer_from_kimi_stream: origin buffer: {:?}", buffer);
+                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
+                    continue;
+                }
+                info!("get_answer_from_kimi_stream: buffer: {:?}", buffer);
+                // 替换 `\[` 和 `\]` 及相关换行符
+                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+                // 替换 \( 和 \) 及相关换行符
+                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+                // 对 content 进行替换
+                if !buffer.is_empty() {
+                    buffer = re_block.replace_all(&buffer, "$$").to_string();
+                    buffer = re_inline.replace_all(&buffer, "$").to_string();
+                }
+
+                app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+                info!("get_answer_from_kimi_stream: Streaming data: {:?}", buffer);
+                info!("get_answer_from_kimi_stream: emit event modle-streaming-respond-output");
+
+                buffer.clear();
+            },
+            Err(e) => {
+                return Err(format!("Error while reading stream: {}", e));
+            }
+        }
+    }
+
+    // 流结束后，处理剩余的缓冲区数据
+    if !buffer.is_empty() {
+        // 替换 `\[` 和 `\]` 及相关换行符
+        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+        // 替换 \( 和 \) 及相关换行符
+        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+        
+        buffer = re_block.replace_all(&buffer, "$$").to_string();
+        buffer = re_inline.replace_all(&buffer, "$").to_string();
+
+        // 触发事件处理剩余数据
+        app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+        info!("get_answer_from_kimi_stream: Emitting remaining buffered data: {}", buffer);
+        info!("get_answer_from_kimi_stream: emit event modle-streaming-respond-output");
+    }
+
     Ok(())
 }
 
@@ -323,6 +506,93 @@ pub async fn get_answer_from_qwen_stream(app: AppHandle, question: &str, session
 }
 
 pub async fn get_answer_from_local_qwen_stream(app: AppHandle, question: &str, sessionid: &str) -> Result<(), String> {
+    let url = "http://localhost:11434/api/chat";
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
+    let request_body = json!({
+        "model": "qwen2.5:latest",
+        "messages": [{"role": "user", "content": question}],
+        "stream": true,  // 启用流式传输
+    });
+
+    info!("get_answer_from_local_qwen_stream: request_body: {:?}", request_body);
+
+    // 禁用系统代理
+    let client = ClientBuilder::new()
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(url)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Error calling DeepSeek API: {:?}", response.status()));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    // 流式输出数据
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(data) => {
+                let chunk_str = String::from_utf8_lossy(&data).to_string();
+                let mut answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
+
+                buffer.push_str(&answer_content);
+                debug!("get_answer_from_local_qwen_stream: origin buffer: {:?}", buffer);
+                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
+                    continue;
+                }
+                debug!("get_answer_from_local_qwen_stream: buffer: {:?}", buffer);
+                // 替换 `\[` 和 `\]` 及相关换行符
+                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+                // 替换 \( 和 \) 及相关换行符
+                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+                // 对 content 进行替换
+                if !buffer.is_empty() {
+                    buffer = re_block.replace_all(&buffer, "$$").to_string();
+                    buffer = re_inline.replace_all(&buffer, "$").to_string();
+                }
+
+                // info!("Answer replaced for math symble: {}", buffer);
+                app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+                debug!("get_answer_from_local_qwen_stream: Streaming data: {:?}", buffer);
+                debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
+
+                buffer.clear();
+            },
+            Err(e) => {
+                return Err(format!("Error while reading stream: {}", e));
+            }
+        }
+    }
+
+    // 流结束后，处理剩余的缓冲区数据
+    if !buffer.is_empty() {
+        // 替换 `\[` 和 `\]` 及相关换行符
+        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+        // 替换 \( 和 \) 及相关换行符
+        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+        
+        buffer = re_block.replace_all(&buffer, "$$").to_string();
+        buffer = re_inline.replace_all(&buffer, "$").to_string();
+
+        // 触发事件处理剩余数据
+        app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+        debug!("get_answer_from_local_qwen_stream: Emitting remaining buffered data: {}", buffer);
+        debug!("get_answer_from_local_qwen_stream: emit event modle-streaming-respond-output");
+    }
+
     Ok(())
 }
 
@@ -338,7 +608,6 @@ pub async fn get_answer_from_local_deepseek_stream(app: AppHandle, question: &st
         "model": "deepseek-r1:8b",
         "messages": [{"role": "user", "content": question}],
         "stream": true,  // 启用流式传输
-        "session_id": session_id
     });
 
     info!("get_answer_from_local_deepseek_stream: request_body: {:?}", request_body);
@@ -361,23 +630,59 @@ pub async fn get_answer_from_local_deepseek_stream(app: AppHandle, question: &st
     }
 
     let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
 
     // 流式输出数据
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(data) => {
-                // 发送流式数据到前端
                 let chunk_str = String::from_utf8_lossy(&data).to_string();
-                let answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
-                app.emit("modle-streaming-respond-output", &answer_content).map_err(|e| e.to_string())?;
-                debug!("get_answer_from_local_deepseek_stream: Streaming data: {:?}", answer_content);
+                let mut answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
+
+                buffer.push_str(&answer_content);
+                debug!("get_answer_from_local_deepseek_stream: origin buffer: {:?}", buffer);
+                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
+                    continue;
+                }
+                debug!("get_answer_from_local_deepseek_stream: buffer: {:?}", buffer);
+                // 替换 `\[` 和 `\]` 及相关换行符
+                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+                // 替换 \( 和 \) 及相关换行符
+                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+                // 对 content 进行替换
+                if !buffer.is_empty() {
+                    buffer = re_block.replace_all(&buffer, "$$").to_string();
+                    buffer = re_inline.replace_all(&buffer, "$").to_string();
+                }
+
+                app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+                info!("get_answer_from_local_deepseek_stream: Streaming data: {:?}", buffer);
                 debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
+
+                buffer.clear();
             },
             Err(e) => {
                 return Err(format!("Error while reading stream: {}", e));
             }
         }
     }
+
+    // 流结束后，处理剩余的缓冲区数据
+    if !buffer.is_empty() {
+        // 替换 `\[` 和 `\]` 及相关换行符
+        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+        // 替换 \( 和 \) 及相关换行符
+        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+        
+        buffer = re_block.replace_all(&buffer, "$$").to_string();
+        buffer = re_inline.replace_all(&buffer, "$").to_string();
+
+        // 触发事件处理剩余数据
+        app.emit("modle-streaming-respond-output", &buffer).map_err(|e| e.to_string())?;
+        debug!("get_answer_from_local_deepseek_stream: Emitting remaining buffered data: {}", buffer);
+        debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
+    }
+
     Ok(())
 }
 

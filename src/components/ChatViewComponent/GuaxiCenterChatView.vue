@@ -22,7 +22,7 @@
       <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keydown="handleKeydown"
         style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;" />
       <n-button @click="sendMessage" color="#dbe7e4"
-        style="position: absolute; right: 20px; bottom: 20px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
+        style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
           <n-icon>
             <svg t="1737646310254" class="icon" viewBox="0 0 1178 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
@@ -301,7 +301,7 @@ const renderCodeBlocks = (content) => {
 
 .message-list {
   flex-grow: 1;
-  max-height: calc(100% - 150px - 80px);
+  max-height: calc(100% - 80px - 80px);
   /* 限制消息区域的最大高度 */
   overflow-y: auto;
   /* 超出时显示滚动条 */
@@ -348,7 +348,7 @@ const renderCodeBlocks = (content) => {
   border-top: 1px solid #ddd;
   position: relative;
   padding-bottom: 2px;
-  height: 150px;
+  height: 80px;
   /* 固定输入区域的高度 */
   min-height: 80px;
   /* 设置最小高度 */
