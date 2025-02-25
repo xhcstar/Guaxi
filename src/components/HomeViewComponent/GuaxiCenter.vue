@@ -1,9 +1,12 @@
 <template>
   <div class="text-aera">
+    <PDFReader />
   </div>
 </template>
 
 <script setup>
+
+import PDFReader from '../PDFReaderComponent/PDFReader.vue';
 
 </script>
 
