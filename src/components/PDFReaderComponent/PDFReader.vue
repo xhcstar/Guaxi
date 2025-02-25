@@ -86,7 +86,8 @@ const splitIntoSentences = (items) => {
     let currentSentence = '';
 
     items.forEach(item => {
-        const word = item.str.trim();
+        // const word = item.str.trim();
+        const word = item.str;
         currentSentence += word;
 
         // 如果当前词是 URL、电子邮件或 IP 地址，跳过此点符号，并继续追加到当前句子
@@ -117,9 +118,9 @@ const splitIntoSentences = (items) => {
 
 const formatText = (text) => {
     // 替换多个连续空格为单个空格
-    text = text.replace(/\s+/g, ' ');
+    // text = text.replace(/\s+/g, ' ');
     // 在每个句子结束后加上换行
-    text = text.replace(/([。！？.!?])/g, '$1<br />');
+    // text = text.replace(/([。！？.!?])/g, '$1<br />');
     return text;
 };
 
@@ -190,10 +191,10 @@ onMounted(() => {
 
 .header {
     flex: 0 0 auto;
-    top: 18px;
+    top: 16px;
     /* width: 95%; */
-    padding: 10px;
-    display: flex;
+    padding: 2px, 10px;
+    display: flex; 
     justify-content: space-between;
     align-items: center;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
@@ -211,7 +212,7 @@ onMounted(() => {
 }
 
 .download-btn {
-    padding: 5px 15px;
+    padding: 5px 5px;
     background-color: #4CAF50;
     color: white;
     border: none;
@@ -270,7 +271,7 @@ onMounted(() => {
 }
 
 .pdf-item:hover {
-    box-shadow: 0 0 10px rgba(0, 0, 255, 0.5); /* 蓝色光效 */
+    box-shadow: 0 0 10px rgba(7, 197, 86, 0.5); /* 蓝色光效 */
     transform: scale(1.02); /* 轻微放大效果 */
 }
 
@@ -283,8 +284,8 @@ onMounted(() => {
 .number {
     position: absolute;
     top: -5px;
-    right: -5px;
-    background-color: rgba(255, 0, 0, 0.6);
+    left: -5px;
+    background-color: rgba(14, 152, 231, 0.6);
     color: white;
     padding: 2px 6px;
     font-size: 12px;
