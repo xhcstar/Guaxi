@@ -37,7 +37,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '../../node_modules/pdfjs-dist/build/pdf.worker.mjs';
 
-const pdfUrl = '/rfc5246.pdf'; // PDF 文件路径
+const pdfUrl = '/book.pdf'; // PDF 文件路径
 const currentPage = ref(1); // 当前页
 const totalPages = ref(0);   // 总页数
 const targetPage = ref(1);   // 跳转目标页

@@ -12,6 +12,9 @@
         </svg>
       </n-icon>
       <div style="font-weight: bold; font-size: 16px;">Guaxi</div>
+
+      <OpenFile />
+
     </div>
     <!-- 右侧占位内容 -->
     <div style="gap: 8px; padding-right: 9px;">
@@ -57,6 +60,7 @@
 <script setup>
 import { computed } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
+import OpenFile from "./OpenFile.vue";
 
 const siderStore = useSiderStore();
 const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
