@@ -41,21 +41,28 @@ const fileProcessStore = useFileProcessStore();
 const contentList = fileProcessStore.openedCurentfileContent;
 
 const currentPage = ref(1); // 当前页
-const totalPages = ref(0);   // 总页数
+const totalPages = ref(100);   // 总页数
 const targetPage = ref(1);   // 跳转目标页
 const pdfContent = ref([]);  // 存储 PDF 中的句子内容
 const markdownContent = ref(''); // 存储 Markdown 内容
 
 // 加载并渲染 PDF 内容
-const loadPdfContent = async () => {
+const loadPdfContent = async (contentList) => {
     // totalPages.value = pdf.numPages;
+
+    if (!contentList || contentList.length === 0) {
+        console.error("contentList is empty or undefined");
+        return;
+    }
+
     // 渲染当前页
-    console.log("contentList[1].content",contentList[1].content)
-    await renderPage(contentList[1].content);
+    console.log("contentList[0].content", contentList[0].content)
+    await renderPage(contentList[0].content);
 };
 
 // 渲染某一页
 const renderPage = async (currentPageContent) => {
+    console.log("renderPage currentPageContent", currentPageContent)
     // 提取文本内容
     const textContent = currentPageContent;
 
@@ -65,14 +72,14 @@ const renderPage = async (currentPageContent) => {
     // 将分割后的句子添加到 pdfContent 中
     pdfContent.value = sentences.map((sentence, index) => ({
         text: sentence,
-        id: `page-${pageNum}-sentence-${index}`,
+        id: `page-sentence-${index}`,
         position: { x: 0, y: 0 },  // 可以使用位置来进一步控制显示
         isHovered: false,
     }));
 };
 
 const splitIntoSentences = (content) => {
-    console.log("splitIntoSentences content",content)
+    console.log("splitIntoSentences content", content)
     const sentenceEndRegex = /[。！？.!?]/; // 中文、英文的句号、问号、感叹号等
     const urlRegex = /(?:https?|ftp):\/\/[^\s]+/; // 匹配 URL
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/; // 匹配电子邮件
@@ -112,11 +119,56 @@ const formatText = (text) => {
     return text;
 };
 
+const getCurrentPageContent = async (pageNumber, fileProcessStore) => {
+    fileProcessStore.curentPage = pageNumber;
+
+    // 从文件路径中提取文件扩展名
+    console.log("getCurrentPageContent fileProcessStore.selectedFile", fileProcessStore.openedCurentfileContent[0].fileName)
+    const fileExtension = fileProcessStore.openedCurentfileContent[0].fileName.split('.').pop().toLowerCase()
+    console.log("getCurrentPageContent fileExtension", fileExtension)
+    // 根据文件扩展名设置 filetype
+    let filetype;
+    switch (fileExtension) {
+        case 'pdf':
+            filetype = 'pdf';
+            break;
+        case 'md':
+            filetype = 'md';
+            break;
+        case 'txt':
+            filetype = 'txt';
+            break;
+        case 'docx':
+            filetype = 'doc';
+            break;
+        default:
+            filetype = 'unknown';
+            break;
+    }
+
+    try {
+        const request = {
+            filetype: filetype,
+            filepath: fileProcessStore.selectedFile,
+            curpage: fileProcessStore.curentPage,
+            lastpage: fileProcessStore.lastPage,
+        };
+        console.log('getCurrentPageContent request:', request);
+        const response = await invoke('openfile', { request: request });
+        fileProcessStore.getCurentOpenedFileContent(response, 0);
+        console.log('Response:', response);
+        return response;
+    } catch (error) {
+        console.error('Error calling openfile API:', error);
+    }
+};
 // 上一页
 const prevPage = () => {
     if (currentPage.value > 1) {
         currentPage.value -= 1;
-        loadPdfContent();
+        console.log("prevPage currentPage.value", currentPage.value)
+        getCurrentPageContent(currentPage.value, fileProcessStore);
+        loadPdfContent(contentList);
     }
 };
 
@@ -124,15 +176,21 @@ const prevPage = () => {
 const nextPage = () => {
     if (currentPage.value < totalPages.value) {
         currentPage.value += 1;
-        loadPdfContent();
+        console.log("nextPage currentPage.value", currentPage.value)
+        getCurrentPageContent(currentPage.value, fileProcessStore);
+        loadPdfContent(contentList);
     }
 };
 
 // 跳转到指定页面
 const jumpToPage = () => {
+    console.log("jumpToPage targetPage.value", targetPage.value)
+    console.log("jumpToPage totalPages.value", totalPages.value)
     if (targetPage.value >= 1 && targetPage.value <= totalPages.value) {
+        console.log("2jumpToPage targetPage.value", targetPage.value)
         currentPage.value = targetPage.value;
-        loadPdfContent();
+        getCurrentPageContent(currentPage.value, fileProcessStore);
+        loadPdfContent(contentList);
     }
 };
 
@@ -164,7 +222,7 @@ const downloadMarkdown = () => {
 
 // 页面加载时调用
 onMounted(() => {
-    loadPdfContent();
+    loadPdfContent(contentList);
 });
 </script>
 
@@ -173,8 +231,10 @@ onMounted(() => {
     position: relative;
     display: flex;
     flex-direction: column;
-    max-height: 95vh; /* 最大高度为视口的80%，你可以根据需要调整 */
-    overflow-y: auto; /* 当内容超出时触发滚动 */
+    max-height: 95vh;
+    /* 最大高度为视口的80%，你可以根据需要调整 */
+    overflow-y: auto;
+    /* 当内容超出时触发滚动 */
 }
 
 .header {
@@ -182,7 +242,7 @@ onMounted(() => {
     top: 16px;
     /* width: 95%; */
     padding: 2px, 10px;
-    display: flex; 
+    display: flex;
     justify-content: space-between;
     align-items: center;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
@@ -216,7 +276,8 @@ onMounted(() => {
     align-items: center;
     justify-content: center;
     margin-top: 0;
-    flex-grow: 1; /* 让翻页区域伸展，占据剩余空间 */
+    flex-grow: 1;
+    /* 让翻页区域伸展，占据剩余空间 */
 }
 
 .pagination button {
@@ -231,41 +292,58 @@ onMounted(() => {
 
 .pdf-container {
     flex: 1 1 auto;
-    flex-wrap: wrap; /* 自动换行 */
-    gap: 5px;  /* 控制句子之间的间距 */
+    flex-wrap: wrap;
+    /* 自动换行 */
+    gap: 5px;
+    /* 控制句子之间的间距 */
     padding: 10px;
     margin-top: 60px;
-    max-width: 900px; /* 限制容器的最大宽度 */
-    margin: 0 auto; /* 居中显示 */
-    justify-content: flex-start; /* 左对齐 */
-    height: auto; /* 让容器根据内容高度自动调整 */
+    max-width: 900px;
+    /* 限制容器的最大宽度 */
+    margin: 0 auto;
+    /* 居中显示 */
+    justify-content: flex-start;
+    /* 左对齐 */
+    height: auto;
+    /* 让容器根据内容高度自动调整 */
 }
 
 .pdf-item {
-    display: inline-block; /* 每个句子保持在一行 */
-    word-wrap: break-word; /* 自动换行 */
+    display: inline-block;
+    /* 每个句子保持在一行 */
+    word-wrap: break-word;
+    /* 自动换行 */
     padding: 5px;
     background-color: #f9f9f9;
     border-radius: 4px;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
     cursor: pointer;
-    min-width: 150px; /* 设置最小宽度，避免过小 */
-    max-width: 100%; /* 确保句子在容器内自适应 */
-    white-space: normal; /* 允许自动换行 */
-    overflow: hidden; /* 隐藏溢出的文本 */
-    line-height: 1.6; /* 行高设置为1.6 */
+    min-width: 150px;
+    /* 设置最小宽度，避免过小 */
+    max-width: 100%;
+    /* 确保句子在容器内自适应 */
+    white-space: normal;
+    /* 允许自动换行 */
+    overflow: hidden;
+    /* 隐藏溢出的文本 */
+    line-height: 1.6;
+    /* 行高设置为1.6 */
     font-size: 14px;
-    transition: box-shadow 0.3s ease, transform 0.3s ease; /* 添加过渡效果 */
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+    /* 添加过渡效果 */
 }
 
 .pdf-item:hover {
-    box-shadow: 0 0 10px rgba(7, 197, 86, 0.5); /* 蓝色光效 */
-    transform: scale(1.02); /* 轻微放大效果 */
+    box-shadow: 0 0 10px rgba(7, 197, 86, 0.5);
+    /* 蓝色光效 */
+    transform: scale(1.02);
+    /* 轻微放大效果 */
 }
 
 .text-content {
     display: inline-block;
-    word-break: break-word; /* 保证长单词能够换行 */
+    word-break: break-word;
+    /* 保证长单词能够换行 */
     text-align: left;
 }
 
@@ -286,7 +364,6 @@ onMounted(() => {
 .pdf-item:hover .number {
     display: inline-block;
 }
-
 </style>
 
 

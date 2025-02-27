@@ -9,7 +9,7 @@ export const useFileProcessStore = defineStore("fileProcessStore", {
       { id: "3", type: "md" },
     ],
     fileTypeIcon: [],
-    openedCurentfileContent: [{ active: 0, fileName: "", fileType: "", content: "" }],
+    openedCurentfileContent: [],
     selectedFile: "",
     curentPage: 1,
     lastPage: 0,
@@ -21,14 +21,14 @@ export const useFileProcessStore = defineStore("fileProcessStore", {
       this.lastPage = 0;
       console.log("selectedFile:", this.selectedFile);
     },
-
     getCurentOpenedFileContent(response, active) {
       this.openedCurentfileContent.push({
         active: active,
-        fileName: response.fileName,
-        fileType: response.fileType,
+        fileName: this.selectedFile,
+        fileType: response.filetype,
         content: response.content,
       });
+      console.log("openedCurentfileContent:", this.openedCurentfileContent);
     },
   },
 });
