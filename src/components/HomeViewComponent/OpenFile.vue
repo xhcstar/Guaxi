@@ -15,14 +15,13 @@
 </template>
 
 <script setup lang="ts">
-import type { DropdownOption } from 'naive-ui'
+// import type { DropdownOption } from 'naive-ui'
 import { ref, computed } from 'vue'
 import { useFileProcessStore } from '../../stores/fileProcessStore'
 import { open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core';
 
 
-
-const selectedFile = ref(null);
 const fileProcessStore = useFileProcessStore();
 const supportFileTypeList = fileProcessStore.supportFileType;
 
@@ -57,7 +56,45 @@ const handleFileSelect = async () => {
 
         // 打印所选择的文件路径
         if (filePath) {
-            selectedFile.value = filePath;
+            fileProcessStore.setSelectedFile(filePath);
+
+            // 从文件路径中提取文件扩展名
+            const fileExtension = filePath.split('.').pop().toLowerCase();
+
+            // 根据文件扩展名设置 filetype
+            let filetype;
+            switch (fileExtension) {
+                case 'pdf':
+                    filetype = 'pdf';
+                    break;
+                case 'md':
+                    filetype = 'md';
+                    break;
+                case 'txt':
+                    filetype = 'txt';
+                    break;
+                case 'docx':
+                    filetype = 'doc';
+                    break;
+                default:
+                    filetype = 'unknown';
+                    break;
+            }
+
+            try {
+                const openfile_request = {
+                    filetype: filetype,
+                    filepath: fileProcessStore.selectedFile,
+                    curpage: fileProcessStore.curentPage,
+                    lastpage: fileProcessStore.lastPage,
+                };
+                console.log('openfile_request:', openfile_request);
+                const response = await invoke('openfile', { request: openfile_request });
+                fileProcessStore.getCurentOpenedFileContent(response, 0);
+                console.log('Response:', response);
+            } catch (error) {
+                console.error('Error calling openfile API:', error);
+            }
         } else {
             console.log('未选择文件');
         }
@@ -65,4 +102,5 @@ const handleFileSelect = async () => {
         console.error('打开文件选择框时发生错误:', error);
     }
 };
+
 </script>

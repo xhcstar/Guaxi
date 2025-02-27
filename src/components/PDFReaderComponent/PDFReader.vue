@@ -33,11 +33,13 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import * as pdfjsLib from 'pdfjs-dist';
+import { useFileProcessStore } from '../../stores/fileProcessStore'
+import { invoke } from '@tauri-apps/api/core';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = '../../node_modules/pdfjs-dist/build/pdf.worker.mjs';
 
-const pdfUrl = '/book.pdf'; // PDF 文件路径
+const fileProcessStore = useFileProcessStore();
+const contentList = fileProcessStore.openedCurentfileContent;
+
 const currentPage = ref(1); // 当前页
 const totalPages = ref(0);   // 总页数
 const targetPage = ref(1);   // 跳转目标页
@@ -46,26 +48,19 @@ const markdownContent = ref(''); // 存储 Markdown 内容
 
 // 加载并渲染 PDF 内容
 const loadPdfContent = async () => {
-    const loadingTask = pdfjsLib.getDocument(pdfUrl);
-    const pdf = await loadingTask.promise;
-    totalPages.value = pdf.numPages;
-
+    // totalPages.value = pdf.numPages;
     // 渲染当前页
-    await renderPage(currentPage.value, pdf);
+    console.log("contentList[1].content",contentList[1].content)
+    await renderPage(contentList[1].content);
 };
 
 // 渲染某一页
-const renderPage = async (pageNum, pdf) => {
-    const page = await pdf.getPage(pageNum);
-    const scale = 1.5;
-    const viewport = page.getViewport({ scale });
-
+const renderPage = async (currentPageContent) => {
     // 提取文本内容
-    const textContent = await page.getTextContent();
-    const items = textContent.items;
+    const textContent = currentPageContent;
 
     // 将文本按句子分割
-    let sentences = splitIntoSentences(items);
+    let sentences = splitIntoSentences(textContent);
 
     // 将分割后的句子添加到 pdfContent 中
     pdfContent.value = sentences.map((sentence, index) => ({
@@ -76,8 +71,9 @@ const renderPage = async (pageNum, pdf) => {
     }));
 };
 
-const splitIntoSentences = (items) => {
-    const sentenceEndRegex = /[。！？.!?]/;  // 中文、英文的句号、问号、感叹号等
+const splitIntoSentences = (content) => {
+    console.log("splitIntoSentences content",content)
+    const sentenceEndRegex = /[。！？.!?]/; // 中文、英文的句号、问号、感叹号等
     const urlRegex = /(?:https?|ftp):\/\/[^\s]+/; // 匹配 URL
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/; // 匹配电子邮件
     const ipRegex = /(\d{1,3}\.){3}\d{1,3}/; // 匹配 IP 地址（简单的 IPv4 格式）
@@ -85,36 +81,28 @@ const splitIntoSentences = (items) => {
     let sentences = [];
     let currentSentence = '';
 
-    items.forEach(item => {
-        // const word = item.str.trim();
-        const word = item.str;
-        currentSentence += word;
+    // 按字符遍历内容
+    for (let i = 0; i < content.length; i++) {
+        const char = content[i];
+        currentSentence += char;
 
-        // 如果当前词是 URL、电子邮件或 IP 地址，跳过此点符号，并继续追加到当前句子
-        if (urlRegex.test(word) || emailRegex.test(word) || ipRegex.test(word)) {
-            currentSentence += ' ';  // 保持句子的连续性
-            return;
-        }
-
-        // 判断是否遇到句子结束标点符号，并且不在 URL、电子邮件或 IP 地址之后
-        if (sentenceEndRegex.test(currentSentence.charAt(currentSentence.length - 1))) {
-            // 如果当前句子以句号结尾且不是 URL 或电子邮件的一部分，认为句子结束
+        // 如果当前字符是句子结束符号
+        if (sentenceEndRegex.test(char)) {
+            // 检查当前句子是否包含 URL、电子邮件或 IP 地址
             if (!urlRegex.test(currentSentence) && !emailRegex.test(currentSentence) && !ipRegex.test(currentSentence)) {
-                sentences.push(currentSentence);
-                currentSentence = '';  // 清空缓存，准备下一句
+                sentences.push(currentSentence.trim()); // 将句子添加到结果中
+                currentSentence = ''; // 清空当前句子
             }
         }
-    });
+    }
 
-    // 如果最后有剩余文本，处理最后一句
+    // 处理最后一句（如果没有句子结束符号）
     if (currentSentence.trim()) {
-        sentences.push(currentSentence);
+        sentences.push(currentSentence.trim());
     }
 
     return sentences;
 };
-
-
 
 const formatText = (text) => {
     // 替换多个连续空格为单个空格
@@ -299,5 +287,155 @@ onMounted(() => {
     display: inline-block;
 }
 
-
 </style>
+
+
+
+<!-- <script setup>
+import { ref, onMounted } from 'vue';
+import * as pdfjsLib from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = '../../node_modules/pdfjs-dist/build/pdf.worker.mjs';
+
+const pdfUrl = '/book.pdf'; // PDF 文件路径
+const currentPage = ref(1); // 当前页
+const totalPages = ref(0);   // 总页数
+const targetPage = ref(1);   // 跳转目标页
+const pdfContent = ref([]);  // 存储 PDF 中的句子内容
+const markdownContent = ref(''); // 存储 Markdown 内容
+
+// 加载并渲染 PDF 内容
+const loadPdfContent = async () => {
+    const loadingTask = pdfjsLib.getDocument(pdfUrl);
+    const pdf = await loadingTask.promise;
+    totalPages.value = pdf.numPages;
+
+    // 渲染当前页
+    await renderPage(currentPage.value, pdf);
+};
+
+// 渲染某一页
+const renderPage = async (pageNum, pdf) => {
+    const page = await pdf.getPage(pageNum);
+    const scale = 1.5;
+    const viewport = page.getViewport({ scale });
+
+    // 提取文本内容
+    const textContent = await page.getTextContent();
+    const items = textContent.items;
+
+    // 将文本按句子分割
+    let sentences = splitIntoSentences(items);
+
+    // 将分割后的句子添加到 pdfContent 中
+    pdfContent.value = sentences.map((sentence, index) => ({
+        text: sentence,
+        id: `page-${pageNum}-sentence-${index}`,
+        position: { x: 0, y: 0 },  // 可以使用位置来进一步控制显示
+        isHovered: false,
+    }));
+};
+
+const splitIntoSentences = (items) => {
+    const sentenceEndRegex = /[。！？.!?]/;  // 中文、英文的句号、问号、感叹号等
+    const urlRegex = /(?:https?|ftp):\/\/[^\s]+/; // 匹配 URL
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/; // 匹配电子邮件
+    const ipRegex = /(\d{1,3}\.){3}\d{1,3}/; // 匹配 IP 地址（简单的 IPv4 格式）
+
+    let sentences = [];
+    let currentSentence = '';
+
+    items.forEach(item => {
+        // const word = item.str.trim();
+        const word = item.str;
+        currentSentence += word;
+
+        // 如果当前词是 URL、电子邮件或 IP 地址，跳过此点符号，并继续追加到当前句子
+        if (urlRegex.test(word) || emailRegex.test(word) || ipRegex.test(word)) {
+            currentSentence += ' ';  // 保持句子的连续性
+            return;
+        }
+
+        // 判断是否遇到句子结束标点符号，并且不在 URL、电子邮件或 IP 地址之后
+        if (sentenceEndRegex.test(currentSentence.charAt(currentSentence.length - 1))) {
+            // 如果当前句子以句号结尾且不是 URL 或电子邮件的一部分，认为句子结束
+            if (!urlRegex.test(currentSentence) && !emailRegex.test(currentSentence) && !ipRegex.test(currentSentence)) {
+                sentences.push(currentSentence);
+                currentSentence = '';  // 清空缓存，准备下一句
+            }
+        }
+    });
+
+    // 如果最后有剩余文本，处理最后一句
+    if (currentSentence.trim()) {
+        sentences.push(currentSentence);
+    }
+
+    return sentences;
+};
+
+
+
+const formatText = (text) => {
+    // 替换多个连续空格为单个空格
+    // text = text.replace(/\s+/g, ' ');
+    // 在每个句子结束后加上换行
+    // text = text.replace(/([。！？.!?])/g, '$1<br />');
+    return text;
+};
+
+// 上一页
+const prevPage = () => {
+    if (currentPage.value > 1) {
+        currentPage.value -= 1;
+        loadPdfContent();
+    }
+};
+
+// 下一页
+const nextPage = () => {
+    if (currentPage.value < totalPages.value) {
+        currentPage.value += 1;
+        loadPdfContent();
+    }
+};
+
+// 跳转到指定页面
+const jumpToPage = () => {
+    if (targetPage.value >= 1 && targetPage.value <= totalPages.value) {
+        currentPage.value = targetPage.value;
+        loadPdfContent();
+    }
+};
+
+// 显示编号
+const showNumber = (item) => {
+    item.isHovered = true;
+};
+
+// 隐藏编号
+const hideNumber = (item) => {
+    item.isHovered = false;
+};
+
+// 添加内容到 Markdown
+const addToMarkdown = (item) => {
+    markdownContent.value += `\n## ${item.id}\n${item.text}\n`;
+};
+
+// 下载 Markdown 文件
+const downloadMarkdown = () => {
+    const blob = new Blob([markdownContent.value], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'pdf-content.md';
+    link.click();
+    URL.revokeObjectURL(url);
+};
+
+// 页面加载时调用
+onMounted(() => {
+    loadPdfContent();
+});
+</script> -->
