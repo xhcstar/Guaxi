@@ -32,31 +32,43 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { useFileProcessStore } from '../../stores/fileProcessStore'
 import { invoke } from '@tauri-apps/api/core';
 
 
 const fileProcessStore = useFileProcessStore();
-const contentList = fileProcessStore.openedCurentfileContent;
+const contentList = computed(() => fileProcessStore.openedCurentfileContent);
 
 const currentPage = ref(1); // 当前页
-const totalPages = ref(100);   // 总页数
+const totalPages = ref(0);   // 总页数
 const targetPage = ref(1);   // 跳转目标页
 const pdfContent = ref([]);  // 存储 PDF 中的句子内容
 const markdownContent = ref(''); // 存储 Markdown 内容
 
+watch(
+    () => fileProcessStore.openedCurentfileContent,
+    (newContent) => {
+        if (newContent && newContent.length > 0) {
+            console.log("WWW>>> loadPdfContent contentList", contentList.value)
+            loadPdfContent(newContent);
+        }
+    },
+    { deep: true } // 深度监听
+);
 // 加载并渲染 PDF 内容
 const loadPdfContent = async (contentList) => {
-    // totalPages.value = pdf.numPages;
-
+    console.log("loadPdfContent contentList", contentList)
     if (!contentList || contentList.length === 0) {
         console.error("contentList is empty or undefined");
         return;
+    } else {
+        console.log(">>>>>contentList[0]", contentList[0]);
+        totalPages.value = contentList[0].totalPages;
     }
 
     // 渲染当前页
-    console.log("contentList[0].content", contentList[0].content)
+    console.log("@@@>>> contentList[0].content", contentList[0].content)
     await renderPage(contentList[0].content);
 };
 
@@ -123,9 +135,10 @@ const getCurrentPageContent = async (pageNumber, fileProcessStore) => {
     fileProcessStore.curentPage = pageNumber;
 
     // 从文件路径中提取文件扩展名
-    console.log("getCurrentPageContent fileProcessStore.selectedFile", fileProcessStore.openedCurentfileContent[0].fileName)
-    const fileExtension = fileProcessStore.openedCurentfileContent[0].fileName.split('.').pop().toLowerCase()
-    console.log("getCurrentPageContent fileExtension", fileExtension)
+    console.log("getCurrentPageContent fileProcessStore.selectedFile", fileProcessStore.openedCurentfileContent[0].fileName);
+    const fileExtension = fileProcessStore.openedCurentfileContent[0].fileName.split('.').pop().toLowerCase();
+    console.log("getCurrentPageContent fileExtension", fileExtension);
+
     // 根据文件扩展名设置 filetype
     let filetype;
     switch (fileExtension) {
@@ -154,43 +167,95 @@ const getCurrentPageContent = async (pageNumber, fileProcessStore) => {
             lastpage: fileProcessStore.lastPage,
         };
         console.log('getCurrentPageContent request:', request);
+
+        // 调用后端 API 并等待结果
         const response = await invoke('openfile', { request: request });
+
+        // 更新 store 中的数据
         fileProcessStore.getCurentOpenedFileContent(response, 0);
-        console.log('Response:', response);
+        console.log('getCurrentPageContent Response:', response);
+
+        // 返回响应结果
         return response;
     } catch (error) {
         console.error('Error calling openfile API:', error);
+        throw error; // 抛出错误，以便调用方可以处理
     }
 };
 // 上一页
-const prevPage = () => {
+const prevPage = async () => {
+    console.log("111prevPage currentPage.value", currentPage.value);
     if (currentPage.value > 1) {
         currentPage.value -= 1;
-        console.log("prevPage currentPage.value", currentPage.value)
-        getCurrentPageContent(currentPage.value, fileProcessStore);
-        loadPdfContent(contentList);
+        console.log("prevPage currentPage.value", currentPage.value);
+
+        // 等待 getCurrentPageContent 完成
+        await getCurrentPageContent(currentPage.value, fileProcessStore);
+
+        // 确保 contentList 已更新后再调用 loadPdfContent
+        if (contentList.value && contentList.value.length > 0) {
+            loadPdfContent(contentList.value);
+        }
     }
 };
 
 // 下一页
-const nextPage = () => {
+const nextPage = async () => {
+    console.log("111nextPage currentPage.value", currentPage.value);
+
+    // 确保 contentList 存在且不为空
+    if (!contentList.value || contentList.value.length === 0) {
+        console.error("contentList is empty or undefined");
+        return;
+    }
+
+    // 获取总页数
+    totalPages.value = contentList.value[0].totalPages;
+
     if (currentPage.value < totalPages.value) {
         currentPage.value += 1;
-        console.log("nextPage currentPage.value", currentPage.value)
-        getCurrentPageContent(currentPage.value, fileProcessStore);
-        loadPdfContent(contentList);
+        console.log("nextPage currentPage.value", currentPage.value);
+
+        // 等待 getCurrentPageContent 完成
+        await getCurrentPageContent(currentPage.value, fileProcessStore);
+
+        // 确保 contentList 已更新后再调用 loadPdfContent
+        if (contentList.value && contentList.value.length > 0) {
+            loadPdfContent(contentList.value);
+        }
     }
 };
 
 // 跳转到指定页面
-const jumpToPage = () => {
-    console.log("jumpToPage targetPage.value", targetPage.value)
-    console.log("jumpToPage totalPages.value", totalPages.value)
-    if (targetPage.value >= 1 && targetPage.value <= totalPages.value) {
-        console.log("2jumpToPage targetPage.value", targetPage.value)
-        currentPage.value = targetPage.value;
-        getCurrentPageContent(currentPage.value, fileProcessStore);
-        loadPdfContent(contentList);
+const jumpToPage = async () => {
+    try {
+        // 确保 contentList 存在且不为空
+        if (!contentList.value || contentList.value.length === 0) {
+            console.error("contentList is empty or undefined");
+            return;
+        }
+
+        // 获取总页数
+        totalPages.value = contentList.value[0].totalPages;
+        console.log(`jumpToPage targetPage.value: ${targetPage.value}, totalPages.value: ${totalPages.value}`);
+
+        // 检查目标页码是否有效
+        if (targetPage.value >= 1 && targetPage.value <= totalPages.value) {
+            console.log("2jumpToPage targetPage.value", targetPage.value);
+            currentPage.value = targetPage.value;
+
+            // 等待 getCurrentPageContent 完成
+            console.log("Calling getCurrentPageContent...");
+            await getCurrentPageContent(currentPage.value, fileProcessStore);
+            console.log("getCurrentPageContent completed.");
+
+            // 确保 contentList 已更新后再调用 loadPdfContent
+            if (contentList.value && contentList.value.length > 0) {
+                loadPdfContent(contentList.value);
+            }
+        }
+    } catch (error) {
+        console.error("Error in jumpToPage:", error);
     }
 };
 
@@ -222,7 +287,7 @@ const downloadMarkdown = () => {
 
 // 页面加载时调用
 onMounted(() => {
-    loadPdfContent(contentList);
+    loadPdfContent(contentList.value);
 });
 </script>
 

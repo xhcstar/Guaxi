@@ -21,14 +21,43 @@ export const useFileProcessStore = defineStore("fileProcessStore", {
       this.lastPage = 0;
       console.log("selectedFile:", this.selectedFile);
     },
+
     getCurentOpenedFileContent(response, active) {
-      this.openedCurentfileContent.push({
-        active: active,
-        fileName: this.selectedFile,
-        fileType: response.filetype,
-        content: response.content,
+      console.log("SSS>>> getCurentOpenedFileContent response", response);
+
+      // 查找是否已经存在对应的页面
+      let pageFound = false;
+      this.openedCurentfileContent.forEach((page, index) => {
+        if (page.active === active) {
+          // 更新已存在的页面
+          this.openedCurentfileContent[index] = {
+            active,
+            fileName: this.selectedFile,
+            fileType: response.filetype,
+            content: response.content,
+            totalPages: response.totalpages,
+          };
+          pageFound = true;
+          console.log("pageFound:", this.openedCurentfileContent[index]);
+        }
       });
-      console.log("openedCurentfileContent:", this.openedCurentfileContent);
+
+      if (!pageFound) {
+        // 如果未找到对应的页面，添加新页面
+        this.openedCurentfileContent.push({
+          active,
+          fileName: this.selectedFile,
+          fileType: response.filetype,
+          content: response.content,
+          totalPages: response.totalpages,
+        });
+        console.log("pageFound:", this.openedCurentfileContent);
+      }
+
+      console.log(
+        "openedCurentfileContent after update:",
+        this.openedCurentfileContent
+      );
     },
   },
 });
