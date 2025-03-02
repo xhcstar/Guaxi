@@ -1,4 +1,4 @@
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 from operator import itemgetter
 from itertools import groupby
 
@@ -20,7 +20,7 @@ def extract_pdf_page(filepath: str, curpage: int) -> tuple[str, int]:
         # 检查是否已经缓存了该文件
         if filepath not in pdf_cache:
             # 打开 PDF 文件并缓存
-            pdf_cache[filepath] = fitz.open(filepath)
+            pdf_cache[filepath] = pymupdf.open(filepath)
         
         # 获取缓存的文档
         doc = pdf_cache[filepath]
@@ -44,6 +44,9 @@ def extract_pdf_page(filepath: str, curpage: int) -> tuple[str, int]:
             line_text = ' '.join(word[4] for word in line)  # 取出每个单词的文本部分（word[4]是文本）
             content += line_text + "\n"
 
+        print(content)
+        with open('D:/MyProject/Guaxi/Guaxi/log/pdftext.txt', 'w', encoding='utf-8') as pdf_file:
+            pdf_file.write(content)
         return (content, totalpage)
     except Exception as e:
         raise RuntimeError(f"Failed to extract PDF content: {e}")

@@ -14,8 +14,8 @@ import PDFReader from '../PDFReaderComponent/PDFReader.vue';
 
 .text-aera {
   flex-grow: 1;
-  padding: 2px;
-  margin-top: 2px;
+  padding: 0px;
+  margin-top: 0px;
   width: 100%;
 }
 

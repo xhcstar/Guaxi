@@ -68,7 +68,7 @@ fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
         })?;
 
         // 打印当前的 sys.path
-        info!("Current sys.path: {:?}", sys_path);
+        // info!("Current sys.path: {:?}", sys_path);
 
         // 将脚本目录添加到 sys.path
         sys_path.append(scripts_dir_str).map_err(|e| {
@@ -77,7 +77,7 @@ fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
         })?;
 
         // 打印更新后的 sys.path
-        info!("Updated sys.path: {:?}", sys_path);
+        // info!("Updated sys.path: {:?}", sys_path);
 
         // 导入 pdf_extractor 模块
         let pdf_extractor = PyModule::import(py, "pdf_extractor").map_err(|e| {
@@ -144,7 +144,7 @@ fn handle_md(filepath: String, curpage: u32) -> Result<(String, u32), String> {
         })?;
 
         // 打印当前的 sys.path
-        info!("Current sys.path: {:?}", sys_path);
+        // info!("Current sys.path: {:?}", sys_path);
 
         // 将脚本目录添加到 sys.path
         sys_path.append(scripts_dir_str).map_err(|e| {
@@ -220,7 +220,7 @@ fn handle_txt(filepath: String, curpage: u32) -> Result<(String, u32), String> {
         })?;
 
         // 打印当前的 sys.path
-        info!("Current sys.path: {:?}", sys_path);
+        // info!("Current sys.path: {:?}", sys_path);
 
         // 将脚本目录添加到 sys.path
         sys_path.append(scripts_dir_str).map_err(|e| {
@@ -229,7 +229,7 @@ fn handle_txt(filepath: String, curpage: u32) -> Result<(String, u32), String> {
         })?;
 
         // 打印更新后的 sys.path
-        info!("Updated sys.path: {:?}", sys_path);
+        // info!("Updated sys.path: {:?}", sys_path);
 
         // 导入 pdf_extractor 模块
         let pdf_extractor = PyModule::import(py, "pdf_extractor").map_err(|e| {
@@ -305,7 +305,7 @@ fn handle_docx(filepath: String, curpage: u32) -> Result<(String, u32), String> 
         })?;
 
         // 打印更新后的 sys.path
-        info!("Updated sys.path: {:?}", sys_path);
+        // info!("Updated sys.path: {:?}", sys_path);
 
         // 导入 pdf_extractor 模块
         let pdf_extractor = PyModule::import(py, "pdf_extractor").map_err(|e| {
