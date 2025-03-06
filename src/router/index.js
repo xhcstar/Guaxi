@@ -5,6 +5,8 @@ import GuaxiStatisicsPage from '../views/GuaxiStatisicsPage.vue'
 import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
+import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
+import { path } from '@tauri-apps/api'
 
 
 export const routes = [
@@ -17,6 +19,11 @@ export const routes = [
     path: '/chat',
     name: 'chat',
     component: GuaxiChatPage,
+  },
+  {
+    path: '/repository',
+    name: 'repository',
+    component: GuaxiRepoPage,
   },
   {
     path: '/statistics',

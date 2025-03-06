@@ -100,11 +100,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .n-layout-sider {
-  background: rgba(178, 192, 175, 0.3);
+  background: rgba(239, 243, 239, 0.3);
 }
 
 .n-layout-content {
-  background: rgba(193, 174, 174, 0.4);
+  background: rgba(239, 243, 239, 0.3);
 }
 
 .guaxi-content {
@@ -129,7 +129,7 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 100%;
   cursor: ew-resize;
-  background-color: #aab4ae;
+  background-color: #f8fdfa;
 }
 
 .sider-resize-handle-right {
@@ -139,7 +139,7 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 100%;
   cursor: ew-resize;
-  background-color: #aab4ae;
+  background-color: #f8fdfa;
 }
 </style>
 

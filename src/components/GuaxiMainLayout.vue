@@ -14,11 +14,13 @@ import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
 import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
+import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import NotFound from '../views/NotFound.vue'
 
 const routes = {
   '/': GuaxiHomePage,
   '/chat': GuaxiChatPage,
+  '/repository': GuaxiRepoPage,
   '/statistics': GuaxiStatisticsPage,
   '/application': GuaxiApplicationPage,
   '/search': GuaxiSearchPage,
