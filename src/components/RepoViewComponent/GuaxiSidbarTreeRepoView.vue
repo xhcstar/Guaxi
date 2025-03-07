@@ -1,11 +1,14 @@
 <template>
-  <div class="tree-column">
-    <RepoList />
-  </div>
+    <n-message-provider>
+      <div class="tree-column">
+        <RepoList />
+      </div>
+    </n-message-provider>
 </template>
 
 <script setup>
 import RepoList from "./RepoList.vue";
+import { NMessageProvider } from 'naive-ui'
 
 </script>
 

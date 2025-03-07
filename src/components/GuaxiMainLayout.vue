@@ -1,7 +1,9 @@
 <template>
-  <div class="app-layout">
-    <component :is="currentView" />
-  </div>
+  <n-config-provider>
+    <div class="app-layout">
+      <component :is="currentView" />
+    </div>
+  </n-config-provider>
 </template>
 
 
@@ -16,6 +18,7 @@ import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import NotFound from '../views/NotFound.vue'
+import { NConfigProvider } from 'naive-ui'
 
 const routes = {
   '/': GuaxiHomePage,
