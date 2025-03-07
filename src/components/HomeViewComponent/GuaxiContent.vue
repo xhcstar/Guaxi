@@ -1,23 +1,23 @@
 <template>
   <div class="guaxi-content">
-      <n-layout has-sider>
-        <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
+    <n-layout has-sider>
+      <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
+        :collapsed-width="0" bordered content-style="padding: 0px;">
+        <GuaxiSidebar />
+        <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+      </n-layout-sider>
+
+      <GuaxiCenter />
+
+      <n-layout has-sider sider-placement="right">
+        <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
           :collapsed-width="0" bordered content-style="padding: 0px;">
-          <GuaxiSidebar />
-          <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+          <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
+            <GuaxiRightContent />
+          </div>
         </n-layout-sider>
-
-        <GuaxiCenter />
-
-        <n-layout has-sider sider-placement="right">
-          <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-            :collapsed-width="0" bordered content-style="padding: 0px;">
-            <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
-              <GuaxiRightContent />
-            </div>
-          </n-layout-sider>
-        </n-layout>
       </n-layout>
+    </n-layout>
   </div>
 </template>
 

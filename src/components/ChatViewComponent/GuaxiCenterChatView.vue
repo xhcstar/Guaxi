@@ -333,11 +333,15 @@ const renderCodeBlocks = (content) => {
 
 .message-left .message-bubble {
   background-color: #f0f0f0;
+  font-size: 16px;
+  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; /* 使用等宽字体 */
   border-top-left-radius: 0;
 }
 
 .message-right .message-bubble {
   background-color: #5acaa5;
+  font-size: 16px;
+  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; /* 使用等宽字体 */
   color: white;
   border-top-right-radius: 0;
 }
@@ -352,6 +356,8 @@ const renderCodeBlocks = (content) => {
   /* 固定输入区域的高度 */
   min-height: 80px;
   /* 设置最小高度 */
+  font-size: 16px;
+  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; /* 使用等宽字体 */
 }
 
 .chat-input-height-handle {
