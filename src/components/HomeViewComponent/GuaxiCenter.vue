@@ -1,12 +1,13 @@
 <template>
   <div class="text-aera">
-    <PDFReader />
+    <!-- <PDFReader /> -->
+    <GuaxiEditor/>
   </div>
 </template>
 
 <script setup>
 
-import PDFReader from '../PDFReaderComponent/PDFReader.vue';
+import GuaxiEditor from './GuaxiEditor.vue';
 
 </script>
 

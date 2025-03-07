@@ -1,11 +1,13 @@
 <template>
   <div class="tree-column">
-    <TreeView />
+    <!-- <TreeView /> -->
+     <GuaxiFileTree/>
   </div>
 </template>
 
 <script setup>
-import TreeView from "./TreeView.vue";
+// import TreeView from "./TreeView.vue";
+import GuaxiFileTree from './GuaxiFileTree.vue';
 
 </script>
 

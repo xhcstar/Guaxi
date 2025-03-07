@@ -30,7 +30,10 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::chatview::get_chat_answer,
             commands::chatview::get_chat_answer_stream,
-            commands::fileview::openfile,
+            commands::docprocess::openfile,
+            commands::fileprocess::get_file_tree,
+            commands::fileprocess::read_file_content,
+            commands::fileprocess::write_file_content,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

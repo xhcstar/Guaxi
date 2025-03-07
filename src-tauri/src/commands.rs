@@ -1,4 +1,6 @@
 pub mod chatview;
-pub mod fileview;
+pub mod docprocess;
 pub mod serverview;
 pub mod statisticview;
+pub mod repoview;
+pub mod fileprocess;
