@@ -1,6 +1,6 @@
 <template>
     <n-tree :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
-        :expand-on-click="true" @update:selected-keys="handleSelect" @update:expanded-keys="handleExpand" />
+        :expand-on-click="true" @update:selected-keys="handleSelect" />
 </template>
 
 <script setup>

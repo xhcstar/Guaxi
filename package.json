@@ -26,6 +26,7 @@
     "@vue/tsconfig": "^0.7.0",
     "katex": "^0.16.21",
     "marked": "^15.0.6",
+    "mermaid": "^11.4.1",
     "naive-ui": "^2.40.4",
     "pdfjs-dist": "^4.10.38",
     "pinia": "^2.3.0",

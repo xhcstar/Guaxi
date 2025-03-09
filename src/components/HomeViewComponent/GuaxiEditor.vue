@@ -29,7 +29,8 @@
 
 <script setup>
 import { NInput, NAlert } from 'naive-ui'
-import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted, nextTick} from 'vue'
+import mermaid from 'mermaid'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { EyeOutline, PencilOutline } from '@vicons/ionicons5'
 
@@ -66,66 +67,92 @@ import 'prismjs/components/prism-asciidoc.min.js'
 import 'prismjs/components/prism-cmake.min.js'
 import 'prismjs/themes/prism.css';  // 引入 Prism 默认样式
 
-function renderMath(html) {
-  // 匹配 LaTeX 表达式，包括以下情况：
-  // 1. $$...$$ 块级公式
-  // 2. $...$ 内联公式
-  const latexRegex = /\$\$(.+?)\$\$|\$(.+?)\$/g;
+// 配置 marked
+marked.setOptions({
+  baseUrl: 'file:///D:/Mine/I/Note/', // 如果需要相对路径，可以设置 baseUrl
+  sanitize: false, // 如果不需要 sanitize，可以禁用
+});
 
-  html = html.replace(latexRegex, (match, blockMath, inlineMath, bracketMath, parenMath) => {
-    let mathContent = blockMath || inlineMath || bracketMath || parenMath;
+// 渲染数学公式
+function renderMath(html) {
+  const latexRegex = /\$\$(.+?)\$\$|\$(.+?)\$/g;
+  return html.replace(latexRegex, (match, blockMath, inlineMath) => {
+    let mathContent = blockMath || inlineMath;
     try {
-      // 根据类型选择块级或内联渲染
       if (blockMath) {
-        return `<div class="katex-display">${katex.renderToString(mathContent)}</div>`;
+        return `<div class="katex-display">${katex.renderToString(mathContent, { throwOnError: false })}</div>`;
       } else {
-        return `<span class="katex-inline">${katex.renderToString(mathContent)}</span>`;
+        return `<span class="katex-inline">${katex.renderToString(mathContent, { throwOnError: false })}</span>`;
       }
     } catch (e) {
       console.error("KaTeX 渲染错误：", e);
       return match; // 如果渲染失败，返回原始文本
     }
   });
-
-  return html;
 }
 
 const renderCodeBlocks = (content) => {
-  const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
+ const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
 
-  codeBlocks.forEach((block) => {
-    const language = block.match(/```(\w+)\n/);  // 获取语言类型
-    if (language && language[1]) {
-      const lang = language[1].toLowerCase();
-      if (Prism.languages[lang]) {
-        block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
-          const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
-          return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
-        });
-      }
-    }
-  });
+ codeBlocks.forEach((block) => {
+   const language = block.match(/```(\w+)\n/);  // 获取语言类型
+   if (language && language[1]) {
+     const lang = language[1].toLowerCase();
+     if (Prism.languages[lang]) {
+       block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
+         const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
+         return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
+       });
+     }
+   }
+ });
 
-  return content.replace(/```[\s\S]+?```/g, (block) => {
-    return `<pre class="code-block">${block}</pre>`;
-  });
+ return content.replace(/```[\s\S]+?```/g, (block) => {
+   return `<pre class="code-block">${block}</pre>`;
+ });
 };
 
-function renderMarkdown(content) {
+function renderMermaid(content) {
+  const mermaidRegex = /```mermaid([\s\S]+?)```/g;
+  return content.replace(mermaidRegex, (match, diagram) => {
+    const mermaidId = `mermaid-${Math.random().toString(36).substring(2, 9)}`;
+    nextTick(() => {
+      mermaid.render(mermaidId, diagram, (svgCode) => {
+        const target = document.getElementById(mermaidId);
+        if (target) {
+          target.innerHTML = svgCode;
+        }
+      });
+    });
+    console.log('渲染 Mermaid 图表:', match, diagram);
+    return `<div id="${mermaidId}" class="mermaid">${diagram}</div>`;
+  });
+}
+
+const renderMarkdown = (content) => {
   if (!content) {
     console.warn('Markdown 内容为空或未定义')
     return ''
   }
-  console.log('content:', content);
-  // 先将 Markdown 转换为 HTML
-  let html = marked(content);
+  // console.log('Markdown 内容:', content)
 
-  console.log('htmlmark:', html);
+  // 渲染 Mermaid 图表
+  let html = renderMermaid(content);
+
+  html = marked(html);
+
   // 渲染数学公式
   html = renderMath(html);
-  console.log('htmlmath:', html);
+
   // 渲染代码块
   html = renderCodeBlocks(html);
+
+  nextTick(() => {
+    Prism.highlightAll();
+    mermaid.run();
+  });
+
+  // console.log('渲染后的 Markdown 内容:', html)
 
   return html;
 }
@@ -154,14 +181,15 @@ const rawContent = ref(selectedFile.value?.content || '')
 
 // 渲染后的文件内容
 const renderedContent = computed(() => {
+  console.log('渲染文件内容:', rawContent.value)
   return renderMarkdown(rawContent.value)
 })
 
 // 监听选中的文件变化
 watch(selectedFile, (newFile) => {
-  // console.log('选中的文件发生变化，新文件:', newFile)
+  console.log('选中的文件发生变化，新文件:', newFile)
   rawContent.value = newFile?.content || ''
-  // console.log('更新文件内容:', rawContent.value)
+  console.log('更新文件内容:', rawContent.value)
 })
 
 // 保存文件内容
@@ -187,6 +215,7 @@ const handleKeyDown = (event) => {
 // 组件挂载时添加事件监听
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
+  mermaid.initialize({ startOnLoad: true });
 })
 
 // 组件卸载时移除事件监听
@@ -278,5 +307,13 @@ onUnmounted(() => {
   word-wrap: break-word;
   font-family: 'Courier New', monospace;
   margin-top: 10px;
+}
+
+/* Mermaid 图表样式 */
+.mermaid {
+  background-color: #f9f9f9;
+  padding: 10px;
+  border-radius: 5px;
+  margin: 10px 0;
 }
 </style>

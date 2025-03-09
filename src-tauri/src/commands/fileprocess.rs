@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tauri::command;
+use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileNode {
@@ -36,6 +37,7 @@ pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
         };
 
         nodes.push(node);
+        info!("{:?}", nodes);
     }
 
     Ok(nodes)
