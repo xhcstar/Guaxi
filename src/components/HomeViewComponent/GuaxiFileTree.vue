@@ -19,7 +19,8 @@ const fileTree = ref([])
 onMounted(async () => {
     // console.log('初始化：开始获取文件树数据')
     try {
-        await fileTreeStore.fetchFileTree('D:\\OpenSource\\ripgrep')
+      await fileTreeStore.fetchFileTree('E:\\Record\\source\\ripgrep')
+        // await fileTreeStore.fetchFileTree('D:\\OpenSource\\ripgrep')
         // await fileTreeStore.fetchFileTree('D:\\Mine\\I\\Note')
         fileTree.value = fileTreeStore.fileTree
         // console.log('初始化：文件树数据加载成功', fileTree.value)

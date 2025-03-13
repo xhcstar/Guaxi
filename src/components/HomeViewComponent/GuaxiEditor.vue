@@ -1,10 +1,8 @@
 <template>
   <div class="editor-container">
-    <!-- 切换按钮 -->
+    <!-- 工具栏 -->
     <div class="toolbar">
-      <!-- 其他按钮可以放在这里 -->
-      <div class="toolbar-spacer"></div> <!-- 占位符，用于将切换按钮推到最右边 -->
-      <!-- 切换按钮 -->
+      <div class="toolbar-spacer"></div>
       <div class="mode-toggle" @click="toggleMode">
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
@@ -15,57 +13,29 @@
       </div>
     </div>
 
-    <!-- 编辑模式 -->
-    <n-input v-if="selectedFile && mode === 'edit'" v-model:value="rawContent" type="textarea"
-      :autosize="{ minRows: 10 }" placeholder="编辑文件内容" class="editor" />
+    <!-- 编辑器 -->
+    <div v-show="selectedFile && mode === 'edit'" ref="editorContainer" class="editor"></div>
 
     <!-- 阅读模式 -->
-    <div v-else-if="selectedFile && mode === 'preview'" v-html="renderedContent" class="editor"></div>
+    <div v-show="selectedFile && mode === 'preview'" v-html="renderedContent" class="preview"></div>
 
     <!-- 未选中文件时的提示 -->
-    <n-alert v-else type="info" class="info-message">请从左侧选择一个文件进行编辑。</n-alert>
+    <!-- <n-alert v-else type="info" class="info-message">请从左侧选择一个文件进行编辑。</n-alert> -->
   </div>
 </template>
 
 <script setup>
-import { NInput, NAlert } from 'naive-ui'
-import { computed, ref, watch, onMounted, onUnmounted, nextTick} from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { NAlert, NTooltip, NIcon } from 'naive-ui'
+import { EyeOutline, PencilOutline } from '@vicons/ionicons5'
+import * as monaco from 'monaco-editor'
+import { marked } from 'marked'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
+import Prism from 'prismjs'
+import 'prismjs/themes/prism.css'
 import mermaid from 'mermaid'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
-import { EyeOutline, PencilOutline } from '@vicons/ionicons5'
-
-import { marked } from 'marked';
-import katex from 'katex'; // 导入 KaTeX 库
-import 'katex/dist/katex.min.css'; // 导入 KaTeX 样式
-import Prism from 'prismjs';
-
-import 'prismjs/components/prism-python.min.js';  // 引入 Python 支持
-import 'prismjs/components/prism-c.min.js'
-import 'prismjs/components/prism-cpp.min.js'
-import 'prismjs/components/prism-markdown.min.js'
-import 'prismjs/components/prism-rust.min.js'
-
-import 'prismjs/components/prism-bash.min.js'
-import 'prismjs/components/prism-lua.min.js'
-import 'prismjs/components/prism-java.min.js'
-import 'prismjs/components/prism-powershell.min.js'
-import 'prismjs/components/prism-git.min.js'
-import 'prismjs/components/prism-toml.min.js'
-import 'prismjs/components/prism-yaml.min.js'
-import 'prismjs/components/prism-sql.min.js'
-import 'prismjs/components/prism-qml.min.js'
-
-import 'prismjs/components/prism-perl.min.js'
-import 'prismjs/components/prism-diff.min.js'
-import 'prismjs/components/prism-css.min.js'
-import 'prismjs/components/prism-csharp.min.js'
-import 'prismjs/components/prism-go.min.js'
-import 'prismjs/components/prism-log.min.js'
-import 'prismjs/components/prism-latex.min.js'
-import 'prismjs/components/prism-json.min.js'
-import 'prismjs/components/prism-asciidoc.min.js'
-import 'prismjs/components/prism-cmake.min.js'
-import 'prismjs/themes/prism.css';  // 引入 Prism 默认样式
 
 // 配置 marked
 marked.setOptions({
@@ -92,41 +62,45 @@ function renderMath(html) {
 }
 
 const renderCodeBlocks = (content) => {
- const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
+  const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
 
- codeBlocks.forEach((block) => {
-   const language = block.match(/```(\w+)\n/);  // 获取语言类型
-   if (language && language[1]) {
-     const lang = language[1].toLowerCase();
-     if (Prism.languages[lang]) {
-       block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
-         const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
-         return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
-       });
-     }
-   }
- });
+  codeBlocks.forEach((block) => {
+    const language = block.match(/```(\w+)\n/);  // 获取语言类型
+    if (language && language[1]) {
+      const lang = language[1].toLowerCase();
+      if (Prism.languages[lang]) {
+        block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
+          const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
+          return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
+        });
+      }
+    }
+  });
 
- return content.replace(/```[\s\S]+?```/g, (block) => {
-   return `<pre class="code-block">${block}</pre>`;
- });
+  return content.replace(/```[\s\S]+?```/g, (block) => {
+    return `<pre class="code-block">${block}</pre>`;
+  });
 };
 
-function renderMermaid(content) {
-  const mermaidRegex = /```mermaid([\s\S]+?)```/g;
+const renderMermaid = (content) => {
+  const mermaidRegex = /```mermaid([\s\S]+?)```/g
   return content.replace(mermaidRegex, (match, diagram) => {
-    const mermaidId = `mermaid-${Math.random().toString(36).substring(2, 9)}`;
+    const mermaidId = `mermaid-${Math.random().toString(36).substring(2, 9)}`
     nextTick(() => {
-      mermaid.render(mermaidId, diagram, (svgCode) => {
-        const target = document.getElementById(mermaidId);
-        if (target) {
-          target.innerHTML = svgCode;
-        }
-      });
-    });
-    console.log('渲染 Mermaid 图表:', match, diagram);
-    return `<div id="${mermaidId}" class="mermaid">${diagram}</div>`;
-  });
+      const target = document.getElementById(mermaidId)
+      if (target) {
+        target.style.width = '100%' // 确保容器宽度占满父容器
+        target.style.height = 'auto' // 高度自适应
+        mermaid.render(mermaidId, diagram, (svgCode) => {
+          // 移除或调整 viewBox 和 max-width
+          svgCode = svgCode.replace(/viewBox="[^"]+"/, 'viewBox="0 0 100 100"')
+          svgCode = svgCode.replace(/style="[^"]+"/, 'style="width: 100%; height: auto;"')
+          target.innerHTML = svgCode
+        })
+      }
+    })
+    return `<div id="${mermaidId}" class="mermaid">${diagram}</div>`
+  })
 }
 
 const renderMarkdown = (content) => {
@@ -159,101 +133,159 @@ const renderMarkdown = (content) => {
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
-// console.log('GuaxiEditor 组件初始化完成')
-
-// 模式状态：'edit' 或 'preview'
 const mode = ref('edit')
-
-// 切换模式
 const toggleMode = () => {
+  // console.log('切换模式，当前模式：', mode.value)
   mode.value = mode.value === 'edit' ? 'preview' : 'edit'
+  if (mode.value === 'edit') {
+    nextTick(() => {
+      if (!editorContainer.value) {
+        console.error('编辑器 DOM 元素不存在，无法更新编辑器内容')
+        return
+      }
+      if (editor) {
+        // console.log('切换到编辑模式，更新编辑器内容：', rawContent.value)
+        editor.setValue(rawContent.value)
+      } else {
+        initEditor()
+      }
+    })
+  }
 }
 
-// 当前选中的文件
-const selectedFile = computed(() => {
-  // console.log('获取当前选中的文件:', fileTreeStore.selectedFile)
-  return fileTreeStore.selectedFile
-})
+const selectedFile = computed(() => fileTreeStore.selectedFile)
+const editorContainer = ref(null)
+let editor = null
 
-// 原始文件内容
+// 定义 rawContent 变量
 const rawContent = ref(selectedFile.value?.content || '')
-// console.log('初始化文件内容:', rawContent.value)
 
-// 渲染后的文件内容
-const renderedContent = computed(() => {
-  console.log('渲染文件内容:', rawContent.value)
-  return renderMarkdown(rawContent.value)
-})
+const initEditor = () => {
+  if (!editorContainer.value) {
+    console.error('编辑器 DOM 元素不存在，无法初始化编辑器')
+    return
+  }
+  if (!editor) {
+    console.log('初始化编辑器，初始内容：', rawContent.value)
+    editor = monaco.editor.create(editorContainer.value, {
+      value: rawContent.value,
+      language: 'markdown',
+      theme: 'vs',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      lineNumbers: 'on',
+      scrollBeyondLastLine: false,
+      fontSize: 17, // 设置编辑模式的默认字体大小
+    })
+
+    // 监听编辑器内容变化，同步到 rawContent
+    editor.onDidChangeModelContent(() => {
+      // console.log('编辑器内容变化，更新 rawContent：', editor.getValue())
+      rawContent.value = editor.getValue()
+    })
+
+    // console.log('编辑器实例已创建：', editor)
+  }
+}
+
+// 更新编辑器内容
+const updateEditorContent = (content) => {
+  if (editor) {
+    // console.log('更新编辑器内容：', content)
+    editor.setValue(content || '')
+    rawContent.value = content || '' // 同步更新 rawContent
+  }
+}
 
 // 监听选中的文件变化
 watch(selectedFile, (newFile) => {
-  console.log('选中的文件发生变化，新文件:', newFile)
-  rawContent.value = newFile?.content || ''
-  console.log('更新文件内容:', rawContent.value)
+  if (newFile) {
+    // console.log('选中的文件发生变化，新文件内容：', newFile.content)
+    rawContent.value = newFile.content || '' // 更新 rawContent
+    if (editor) {
+      // console.log('编辑器已存在，更新编辑器内容：', newFile.content)
+      updateEditorContent(newFile.content)
+    } else {
+      nextTick(() => {
+        // console.log('初始化编辑器并更新内容：', newFile.content)
+        initEditor()
+        updateEditorContent(newFile.content)
+      })
+    }
+  }
 })
 
 // 保存文件内容
 const saveContent = () => {
-  // console.log('开始保存文件内容')
-  if (selectedFile.value) {
-    // console.log('保存文件路径:', selectedFile.value.path)
-    // console.log('保存文件内容:', rawContent.value)
-    fileTreeStore.updateFileContent(selectedFile.value.path, rawContent.value)
-    // console.log('保存文件内容成功')
+  if (selectedFile.value && editor) {
+    const content = editor.getValue()
+    fileTreeStore.updateFileContent(selectedFile.value.path, content)
+    alert('文件保存成功')
   } else {
-    console.warn('未选中任何文件，无法保存')
+    alert('未选中任何文件，无法保存')
   }
 }
+
 // 监听快捷键 Ctrl + S
 const handleKeyDown = (event) => {
   if (event.ctrlKey && event.key === 's') {
-    event.preventDefault() // 阻止默认保存行为
+    event.preventDefault()
     saveContent()
   }
 }
 
-// 组件挂载时添加事件监听
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
-  mermaid.initialize({ startOnLoad: true });
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default', // 使用默认主题
+    flowchart: {
+      useMaxWidth: false, // 禁用最大宽度限制
+      htmlLabels: true, // 使用 HTML 标签
+    },
+  })
 })
 
-// 组件卸载时移除事件监听
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown)
+  if (editor) {
+    editor.dispose()
+    editor = null
+  }
 })
+
+// 定义并导出 renderedContent
+const renderedContent = computed(() => {
+  if (!selectedFile.value || !mode.value) return ''
+  return renderMarkdown(rawContent.value) // 使用 rawContent 渲染 Markdown
+})
+
 </script>
+
 
 <style scoped>
 .editor-container {
   display: flex;
   flex-direction: column;
-  height: 99%;
-  /* 占满父组件高度 */
-  padding: 0px;
-  /* 添加内边距 */
+  height: 100%;
+  padding: 0;
 }
 
-/* 工具栏样式 */
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end; /* 将内容推到最右边 */
+  justify-content: flex-end;
   padding: 0px;
   background-color: #f8f8f8;
-  /* border-bottom: 0px solid #ddd; */
 }
 
-/* 工具栏占位符 */
 .toolbar-spacer {
-  flex-grow: 1; /* 占据剩余空间 */
+  flex-grow: 1;
 }
 
-/* 切换按钮样式 */
 .mode-toggle {
   cursor: pointer;
   padding: 2px;
-  margin-right: 8px;
   border-radius: 4px;
   transition: background-color 0.3s ease;
 }
@@ -264,23 +296,77 @@ onUnmounted(() => {
 
 .editor {
   flex: 1;
-  /* 占满剩余空间 */
   width: 100%;
-  /* 占满父组件宽度 */
-  font-size: 17px;
-  /* 调大默认字体大小 */
-  font-family: 'JetBrainsMono Nerd Font', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  /* 使用等宽字体 */
-  line-height: 1.6;
-  /* 设置行高 */
-  padding: 8px; /*添加内边距*/
+  height: calc(100% - 30px);
+  /* 减去工具栏高度 */
+}
+
+.preview {
+  flex: 1;
+  /* width: 100%; */
+  height: calc(100% - 30px);
+  /* 减去工具栏高度 */
+  padding: 8px;
+  font-size: 17px; /* 设置阅读模式的默认字体大小 */
+  line-height: 1.6; /* 可选：设置行高，提升阅读体验 */
   overflow-y: auto;
-  /* 超过高度时触发滚动 */
 }
 
 .info-message {
-  margin-top: 8px;
-  /* 添加外边距 */
+  margin-top: 16px;
+}
+
+.code-block {
+  background-color: #282a36; /* 代码块背景色 */
+  color: #f8f8f2; /* 代码文本颜色 */
+  padding: 12px; /* 内边距 */
+  border-radius: 6px; /* 圆角 */
+  overflow-x: auto; /* 水平滚动 */
+  max-width: fit-content; /* 宽度自适应代码行宽 */
+  margin: 12px 0; /* 外边距 */
+  font-family: monospace; /* 使用等宽字体 */
+  font-size: 14px; /* 字体大小 */
+}
+
+.code-block code {
+  background-color: transparent !important; /* 去除 code 标签的背景色 */
+  color: inherit !important; /* 继承父元素颜色 */
+}
+
+/* 语法高亮主题 */
+.token.keyword {
+  color: #ff79c6; /* 关键字颜色 */
+}
+
+.token.string {
+  color: #50fa7b; /* 字符串颜色 */
+}
+
+.token.comment {
+  color: #6272a4; /* 注释颜色 */
+}
+
+.token.function {
+  color: #8be9fd; /* 函数颜色 */
+}
+
+.token.number {
+  color: #bd93f9; /* 数字颜色 */
+}
+
+.token.operator {
+  color: #ff79c6; /* 操作符颜色 */
+}
+
+.token.punctuation {
+  color: #f8f8f2; /* 标点符号颜色 */
+}
+
+.mermaid {
+  width: 100%; /* 确保 Mermaid 图表占满父容器宽度 */
+  height: auto; /* 高度自适应 */
+  margin: 12px 0; /* 外边距 */
+  overflow: visible !important; /* 确保内容不会被裁剪 */
 }
 
 .katex-display {
@@ -292,28 +378,5 @@ onUnmounted(() => {
   font-size: 1.2em;
   margin-left: 5px;
   margin-right: 5px;
-}
-
-/* 代码块滚动区域样式 */
-.code-block {
-  background-color: #2d2d2d;
-  color: #f8f8f2;
-  padding: 16px;
-  border-radius: 4px;
-  overflow-x: auto;
-  max-height: 300px;
-  white-space: pre-wrap;
-  /* 保持代码格式 */
-  word-wrap: break-word;
-  font-family: 'Courier New', monospace;
-  margin-top: 10px;
-}
-
-/* Mermaid 图表样式 */
-.mermaid {
-  background-color: #f9f9f9;
-  padding: 10px;
-  border-radius: 5px;
-  margin: 10px 0;
 }
 </style>
