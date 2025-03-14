@@ -1,10 +1,25 @@
 <template>
-  <n-tree :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
-    :expand-on-click="true" @update:selected-keys="handleSelect" />
+ <!-- 文件树 -->
+ <n-tree
+    :data="fileTree"
+    key-field="id"
+    :render-label="renderLabel"
+    :render-prefix="renderPrefix"
+    :expand-on-click="true"
+    @update:selected-keys="handleSelect"
+    :node-props="RightClickMenu"
+  />
 
   <!-- 右键菜单 -->
-  <n-dropdown v-model:show="isContextMenuVisible" :options="contextMenuOptions" placement="bottom-start"
-    :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect" />
+  <n-dropdown
+    v-model:show="isContextMenuVisible"
+    :options="contextMenuOptions"
+    placement="bottom-start"
+    :x="contextMenuPosition.x"
+    :y="contextMenuPosition.y"
+    @select="handleContextMenuSelect"
+    @clickoutside="handleClickoutside"
+  />
 </template>
 
 <script setup>
@@ -45,20 +60,24 @@ const contextMenuOptions = ref([
   },
 ])
 
-
 // 初始化时获取文件树数据
 onMounted(async () => {
+  await loadFileTree()
+})
+
+// 加载文件树数据
+const loadFileTree = async () => {
   // console.log('初始化：开始获取文件树数据')
   try {
-    await fileTreeStore.fetchFileTree('E:\\Record\\source\\ripgrep')
-    // await fileTreeStore.fetchFileTree('D:\\OpenSource\\ripgrep')
+    // await fileTreeStore.fetchFileTree('E:\\Record\\source\\ripgrep')
+    await fileTreeStore.fetchFileTree('D:\\OpenSource\\ripgrep')
     // await fileTreeStore.fetchFileTree('D:\\Mine\\I\\Note')
     fileTree.value = fileTreeStore.fileTree
     // console.log('初始化：文件树数据加载成功', fileTree.value)
   } catch (error) {
     console.error('初始化：获取文件树数据失败', error)
   }
-})
+}
 
 // 渲染文件树节点
 const renderLabel = ({ option }) => {
@@ -160,19 +179,14 @@ const findNodeById = (tree, id) => {
 }
 
 // 处理右键点击事件
-const handleContextMenu = (e) => {
-  e.preventDefault() // 阻止默认右键菜单
-
-  // 获取当前点击的节点
-  const target = e.target.closest('.n-tree-node')
-  if (target) {
-    const nodeId = target.dataset.key
-    const node = findNodeById(fileTree.value, nodeId)
-    if (node) {
-      selectedNode.value = node
-      isContextMenuVisible.value = true
-      contextMenuPosition.value = { x: e.clientX, y: e.clientY }
-    }
+const RightClickMenu = ({ option }) => {
+  return {
+    onContextmenu: (e) => {
+      e.preventDefault() // 阻止默认右键菜单
+      selectedNode.value = option // 设置当前右键点击的节点
+      isContextMenuVisible.value = true // 显示右键菜单
+      contextMenuPosition.value = { x: e.clientX, y: e.clientY } // 设置菜单位置
+    },
   }
 }
 
@@ -197,6 +211,11 @@ const handleContextMenuSelect = (key) => {
   }
 }
 
+// 处理点击外部关闭菜单
+const handleClickoutside = () => {
+  isContextMenuVisible.value = false
+}
+
 // 添加文件或目录
 const addNode = async (parentId, isDirectory = false) => {
   const parentNode = findNodeById(fileTree.value, parentId)
@@ -216,7 +235,7 @@ const addNode = async (parentId, isDirectory = false) => {
       } else {
         await invoke('create_file', { path: newNode.id })
       }
-      console.log(`添加${isDirectory ? '目录' : '文件'}成功:`, newNode)
+      await loadFileTree() // 重新加载文件树
     }
   } else {
     alert('只能在目录下添加文件或目录')
@@ -233,7 +252,7 @@ const deleteNode = async (nodeId) => {
         parentNode.children = parentNode.children.filter((child) => child.id !== nodeId)
         // 调用 Tauri 后端 API 删除文件或目录
         await invoke('delete_path', { path: nodeId })
-        console.log('删除成功:', node)
+        await loadFileTree() // 重新加载文件树
       }
     }
   }
@@ -252,7 +271,7 @@ const renameNode = async (nodeId) => {
         node.id = `${parentNode.id}/${newName}`
         // 调用 Tauri 后端 API 重命名文件或目录
         await invoke('rename_path', { oldPath: oldId, newPath: node.id })
-        console.log('重命名成功:', node)
+        await loadFileTree() // 重新加载文件树
       }
     }
   }
