@@ -34,6 +34,10 @@ async fn main() {
             commands::fileprocess::get_file_tree,
             commands::fileprocess::read_file_content,
             commands::fileprocess::write_file_content,
+            commands::fileprocess::create_directory,
+            commands::fileprocess::create_file,
+            commands::fileprocess::delete_path,
+            commands::fileprocess::rename_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

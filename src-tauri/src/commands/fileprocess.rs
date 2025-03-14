@@ -52,3 +52,27 @@ pub fn read_file_content(path: String) -> Result<String, String> {
 pub fn write_file_content(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn create_directory(path: String) -> Result<(), String> {
+    fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_file(path: String) -> Result<(), String> {
+    fs::File::create(&path).map_err(|e| e.to_string()).map(|_| ())
+}
+
+#[tauri::command]
+pub fn delete_path(path: String) -> Result<(), String> {
+    if fs::metadata(&path).map_err(|e| e.to_string())?.is_dir() {
+        fs::remove_dir_all(&path).map_err(|e| e.to_string())
+    } else {
+        fs::remove_file(&path).map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+pub fn rename_path(old_path: String, new_path: String) -> Result<(), String> {
+    fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+}
