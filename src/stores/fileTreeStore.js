@@ -5,6 +5,9 @@ export const useFileTreeStore = defineStore('fileTreeStore', {
   state: () => ({
     fileTree: [],
     selectedFile: null,
+    repopathlist: [
+      "D:\\OpenSource\\ripgrep"
+    ],
   }),
   actions: {
     // 获取文件树数据

@@ -37,7 +37,7 @@ pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
         };
 
         nodes.push(node);
-        info!("{:?}", nodes);
+        // info!("{:?}", nodes);
     }
 
     Ok(nodes)
@@ -74,5 +74,12 @@ pub fn delete_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn rename_path(old_path: String, new_path: String) -> Result<(), String> {
+    info!("rename_path: {} -> {}", old_path, new_path);
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn move_path(source_path: String, destination_path: String) -> Result<(), String> {
+    info!("move_path: {} -> {}", source_path, destination_path);
+    std::fs::rename(source_path, destination_path).map_err(|e| e.to_string())
 }
