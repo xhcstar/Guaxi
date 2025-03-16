@@ -37,12 +37,6 @@ import 'prismjs/themes/prism.css'
 import mermaid from 'mermaid'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 
-// 配置 marked
-marked.setOptions({
-  baseUrl: 'file:///D:/Mine/I/Note/', // 如果需要相对路径，可以设置 baseUrl
-  sanitize: false, // 如果不需要 sanitize，可以禁用
-});
-
 // 渲染数学公式
 function renderMath(html) {
   const latexRegex = /\$\$(.+?)\$\$|\$(.+?)\$/g;
@@ -121,6 +115,20 @@ const renderMarkdown = (content) => {
   // 渲染代码块
   html = renderCodeBlocks(html);
 
+  // 添加表格样式
+  html = html.replace(
+    /<table>/g,
+    '<table style="border-collapse: collapse; width: 100%;">'
+  );
+  html = html.replace(
+    /<th>/g,
+    '<th style="border: 1px solid black; padding: 8px; background: linear-gradient(to right, #7e807f, #7e806f); color: white; font-weight: bold; border-radius: 4px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); transition: background-color 0.3s ease;">'
+  );
+  html = html.replace(
+    /<td>/g,
+    '<td style="border: 1px solid black; padding: 8px; background-color: #f9f9f9; color: #333;">'
+  );
+
   nextTick(() => {
     Prism.highlightAll();
     mermaid.run();
@@ -175,7 +183,9 @@ const initEditor = () => {
       minimap: { enabled: false },
       lineNumbers: 'on',
       scrollBeyondLastLine: false,
-      fontSize: 17, // 设置编辑模式的默认字体大小
+      fontSize: 18, // 设置编辑模式的默认字体大小
+      fontFamily: "'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'", // 字体配置
+      fontLigatures: true, // 启用连字（仅对支持连字的字体有效）
     })
 
     // 监听编辑器内容变化，同步到 rawContent
@@ -307,8 +317,11 @@ const renderedContent = computed(() => {
   height: calc(100% - 30px);
   /* 减去工具栏高度 */
   padding: 8px;
-  font-size: 17px; /* 设置阅读模式的默认字体大小 */
-  line-height: 1.6; /* 可选：设置行高，提升阅读体验 */
+  font-size: 17px;
+  /* 设置阅读模式的默认字体大小 */
+  font-family: 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; /* 使用等宽字体 */
+  line-height: 1.6;
+  /* 可选：设置行高，提升阅读体验 */
   overflow-y: auto;
 }
 
@@ -317,56 +330,78 @@ const renderedContent = computed(() => {
 }
 
 .code-block {
-  background-color: #282a36; /* 代码块背景色 */
-  color: #f8f8f2; /* 代码文本颜色 */
-  padding: 12px; /* 内边距 */
-  border-radius: 6px; /* 圆角 */
-  overflow-x: auto; /* 水平滚动 */
-  max-width: fit-content; /* 宽度自适应代码行宽 */
-  margin: 12px 0; /* 外边距 */
-  font-family: monospace; /* 使用等宽字体 */
-  font-size: 14px; /* 字体大小 */
+  background-color: #282a36;
+  /* 代码块背景色 */
+  color: #f8f8f2;
+  /* 代码文本颜色 */
+  padding: 12px;
+  /* 内边距 */
+  border-radius: 6px;
+  /* 圆角 */
+  overflow-x: auto;
+  /* 水平滚动 */
+  max-width: fit-content;
+  /* 宽度自适应代码行宽 */
+  margin: 12px 0;
+  /* 外边距 */
+  font-family: monospace;
+  /* 使用等宽字体 */
+  font-size: 14px;
+  /* 字体大小 */
 }
 
 .code-block code {
-  background-color: transparent !important; /* 去除 code 标签的背景色 */
-  color: inherit !important; /* 继承父元素颜色 */
+  background-color: transparent !important;
+  /* 去除 code 标签的背景色 */
+  color: inherit !important;
+  /* 继承父元素颜色 */
 }
 
 /* 语法高亮主题 */
 .token.keyword {
-  color: #ff79c6; /* 关键字颜色 */
+  color: #ff79c6;
+  /* 关键字颜色 */
 }
 
 .token.string {
-  color: #50fa7b; /* 字符串颜色 */
+  color: #50fa7b;
+  /* 字符串颜色 */
 }
 
 .token.comment {
-  color: #6272a4; /* 注释颜色 */
+  color: #6272a4;
+  /* 注释颜色 */
 }
 
 .token.function {
-  color: #8be9fd; /* 函数颜色 */
+  color: #8be9fd;
+  /* 函数颜色 */
 }
 
 .token.number {
-  color: #bd93f9; /* 数字颜色 */
+  color: #bd93f9;
+  /* 数字颜色 */
 }
 
 .token.operator {
-  color: #ff79c6; /* 操作符颜色 */
+  color: #ff79c6;
+  /* 操作符颜色 */
 }
 
 .token.punctuation {
-  color: #f8f8f2; /* 标点符号颜色 */
+  color: #f8f8f2;
+  /* 标点符号颜色 */
 }
 
 .mermaid {
-  width: 100%; /* 确保 Mermaid 图表占满父容器宽度 */
-  height: auto; /* 高度自适应 */
-  margin: 12px 0; /* 外边距 */
-  overflow: visible !important; /* 确保内容不会被裁剪 */
+  width: 100%;
+  /* 确保 Mermaid 图表占满父容器宽度 */
+  height: auto;
+  /* 高度自适应 */
+  margin: 12px 0;
+  /* 外边距 */
+  overflow: visible !important;
+  /* 确保内容不会被裁剪 */
 }
 
 .katex-display {
@@ -378,5 +413,9 @@ const renderedContent = computed(() => {
   font-size: 1.2em;
   margin-left: 5px;
   margin-right: 5px;
+}
+
+th:hover {
+  background-color: #7e807f !important;
 }
 </style>
