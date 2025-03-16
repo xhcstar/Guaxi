@@ -7,7 +7,7 @@
           <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
         </n-layout-sider>
 
-        <GuaxiCenterSettingView />
+        <GuaxiSettingContent />
 
         <n-layout has-sider sider-placement="right">
           <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
@@ -26,7 +26,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from "vue"
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiSidebarSettingView from "./GuaxiSidebarSettingView.vue"
-import GuaxiCenterSettingView from "./GuaxiCenterSettingView.vue"
+import GuaxiSettingContent from "./GuaxiSettingContent.vue"
 import GuaxiRightContentSettingView from "./GuaxiRightContentSettingView.vue"
 
 

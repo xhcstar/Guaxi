@@ -12,9 +12,11 @@ pub struct FileNode {
     children: Option<Vec<FileNode>>,
 }
 
-#[command]
+#[tauri::command]
 pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
     let dir = Path::new(&path);
+    info!("get_file_tree: {}", path);
+    info!("get_file_tree: {:?}", dir);
     if !dir.is_dir() {
         return Err("路径不是目录".to_string());
     }
@@ -43,12 +45,12 @@ pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
     Ok(nodes)
 }
 
-#[command]
+#[tauri::command]
 pub fn read_file_content(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
-#[command]
+#[tauri::command]
 pub fn write_file_content(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }

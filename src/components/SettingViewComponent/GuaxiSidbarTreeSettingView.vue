@@ -1,11 +1,11 @@
 <template>
   <div class="tree-column">
-    <TreeViewSettingView />
+    <SidebarList />
   </div>
 </template>
 
 <script setup>
-import TreeViewSettingView from "./TreeViewSettingView.vue";
+import SidebarList from "./SidebarList.vue";
 
 </script>
 

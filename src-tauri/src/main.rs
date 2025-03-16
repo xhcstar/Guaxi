@@ -25,6 +25,10 @@ async fn main() {
     // 示例日志输出
     info!("Project started!");
 
+    // 在启动时加载配置文件
+    let config = commands::settingview::load_config();
+    info!("Loaded config: {:?}", config);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -39,6 +43,16 @@ async fn main() {
             commands::fileprocess::delete_path,
             commands::fileprocess::rename_path,
             commands::fileprocess::move_path,
+            commands::settingview::get_active_repo_path,
+            commands::settingview::set_active_repo_path,
+            commands::settingview::get_server_config,
+            commands::settingview::set_server_config,
+            commands::settingview::get_database_config,
+            commands::settingview::set_database_config,
+            commands::settingview::get_appearance_config,
+            commands::settingview::set_appearance_config,
+            commands::settingview::set_repopathlist,
+            commands::settingview::get_repopathlist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

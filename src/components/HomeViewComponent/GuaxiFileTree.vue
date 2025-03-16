@@ -1,8 +1,10 @@
 <template>
-  <!-- 文件树 -->
-  <n-tree :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
-    :expand-on-click="true" :show-line="true" @update:selected-keys="handleSelect" :node-props="RightClickMenu"
-    :on-update:expanded-keys="expandedKeys" />
+  <div @contextmenu="handleTreeContextMenu" style="width: 100%; height: 100%; position: relative;">
+    <!-- 文件树 -->
+    <n-tree :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
+      :expand-on-click="true" :show-line="true" @update:selected-keys="handleSelect" :node-props="RightClickMenu"
+      :on-update:expanded-keys="expandedKeys" />
+  </div>
 
   <!-- 右键菜单 -->
   <n-dropdown v-model:show="isContextMenuVisible" :options="contextMenuOptions" placement="bottom-start"
@@ -64,15 +66,27 @@ const contextMenuOptions = ref([
 // 初始化时获取文件树数据
 onMounted(async () => {
   await loadFileTree()
+  const treeElement = document.querySelector('.n-tree'); // 获取文件树元素
+  if (treeElement) {
+    treeElement.addEventListener('contextmenu', (e) => {
+      console.log('Tree contextmenu event triggered'); // 添加日志
+      handleTreeContextMenu(e);
+    });
+  }
 })
 
 // 加载文件树数据
 const loadFileTree = async () => {
   // console.log('初始化：开始获取文件树数据')
   try {
-    // await fileTreeStore.fetchFileTree('E:\\Record\\source\\ripgrep')
-    await fileTreeStore.fetchFileTree('D:\\OpenSource\\ripgrep')
-    // await fileTreeStore.fetchFileTree('D:\\Mine\\I\\Note')
+    try {
+      // 获取当前仓库路径
+      fileTreeStore.activeRepoPath = await invoke('get_active_repo_path')
+      console.log('初始化：获取当前仓库路径成功', fileTreeStore.activeRepoPath)
+    } catch (error) {
+      console.error('获取当前仓库路径失败', error)
+    }
+    await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath)
     fileTree.value = fileTreeStore.fileTree
     // 对文件树数据进行排序
     fileTree.value = sortFileTree(fileTreeStore.fileTree)
@@ -178,41 +192,65 @@ const findNodeById = (tree, id) => {
   return null
 }
 
+// 处理文件树容器的右键点击事件
+const handleTreeContextMenu = (e) => {
+  console.log('文件树容器的右键点击事件触发，当前位置:', e.clientX, e.clientY)
+  e.preventDefault(); // 阻止默认右键菜单
+
+  // 判断是否点击在空白区域
+  const treeContainer = e.currentTarget;
+  const treeElement = treeContainer.querySelector('.n-tree'); // 获取文件树元素
+  const isClickOnBlank = !treeElement.contains(e.target); // 判断是否点击在空白区域
+
+  if (isClickOnBlank) {
+    // 如果是空白区域，显示右键菜单
+    isContextMenuVisible.value = true;
+    contextMenuPosition.value = { x: e.clientX, y: e.clientY };
+    selectedNode.value = null; // 设置当前选中的节点为 null（表示顶层目录）
+  }
+};
+
 // 处理右键点击事件
 const RightClickMenu = ({ option }) => {
   return {
     onContextmenu: (e) => {
-      e.preventDefault() // 阻止默认右键菜单
-      selectedNode.value = option // 设置当前右键点击的节点
-      isContextMenuVisible.value = true // 显示右键菜单
-      contextMenuPosition.value = { x: e.clientX, y: e.clientY } // 设置菜单位置
+      e.preventDefault(); // 阻止默认右键菜单
+      selectedNode.value = option; // 设置当前右键点击的节点
+      isContextMenuVisible.value = true; // 显示右键菜单
+      contextMenuPosition.value = { x: e.clientX, y: e.clientY }; // 设置菜单位置
     },
-  }
-}
+  };
+};
 
 // 处理右键菜单选择
 const handleContextMenuSelect = (key) => {
-  isContextMenuVisible.value = false
+  isContextMenuVisible.value = false;
   switch (key) {
     case 'addFile':
-      addNode(selectedNode.value.id, false)
-      break
+      addNode(selectedNode.value ? selectedNode.value.id : null, false);
+      break;
     case 'addFolder':
-      addNode(selectedNode.value.id, true)
-      break
+      addNode(selectedNode.value ? selectedNode.value.id : null, true);
+      break;
     case 'rename':
-      renameNode(selectedNode.value.id)
-      break
+      if (selectedNode.value) {
+        renameNode(selectedNode.value.id);
+      }
+      break;
     case 'delete':
-      deleteNode(selectedNode.value.id)
-      break
+      if (selectedNode.value) {
+        deleteNode(selectedNode.value.id);
+      }
+      break;
     case 'move':
-      moveNode(selectedNode.value)
-      break
+      if (selectedNode.value) {
+        moveNode(selectedNode.value);
+      }
+      break;
     default:
-      break
+      break;
   }
-}
+};
 
 // 处理点击外部关闭菜单
 const handleClickoutside = () => {
@@ -226,36 +264,56 @@ const editName = ref('')
 
 // 添加文件或目录
 const addNode = async (parentId, isDirectory = false) => {
-  const parentNode = findNodeById(fileTree.value, parentId)
-  console.log('添加文件或目录，父节点:', parentNode)
+  let parentNode;
+
+  if (parentId === null || parentId === undefined) {
+    // 如果是顶层目录，直接将根节点作为父节点
+    parentNode = {
+      id: fileTreeStore.activeRepoPath, // 顶层目录的路径
+      name: fileTreeStore.activeRepoPath, // 顶层目录的名称
+      is_directory: true, // 顶层目录是一个目录
+      children: fileTree.value, // 顶层目录的子节点
+    };
+  } else {
+    // 否则查找父节点
+    parentNode = findNodeById(fileTree.value, parentId);
+  }
+
   if (parentNode && parentNode.is_directory) {
     // 创建一个新节点
     const newNode = {
-      id: `${parentId}\\New${isDirectory ? 'Folder' : 'File'}`,
-      name: `New${isDirectory ? 'Folder' : 'File'}`,
+      id: `${parentNode.id}/${isDirectory ? 'NewFolder' : 'NewFile'}`,
+      name: isDirectory ? 'NewFolder' : 'NewFile',
       is_directory: isDirectory,
       children: isDirectory ? [] : undefined,
+    };
+
+    // 将新节点添加到父节点的 children 中
+    if (parentNode.children) {
+      parentNode.children.push(newNode);
+    } else {
+      parentNode.children = [newNode];
     }
-    parentNode.children.push(newNode)
 
     // 对父节点的 children 进行排序
     parentNode.children.sort((a, b) => {
-      if (a.is_directory === b.is_directory) return 0 // 如果类型相同，保持原顺序
-      return a.is_directory ? 1 : -1 // 目录排在后，文件排在前
-    })
-    console.log('添加文件或目录成功:', newNode)
+      if (a.is_directory === b.is_directory) return 0; // 如果类型相同，保持原顺序
+      return a.is_directory ? 1 : -1; // 目录排在后，文件排在前
+    });
+
+    console.log('添加文件或目录成功:', newNode);
 
     // 设置新节点为编辑状态
-    startEditing(newNode)
+    startEditing(newNode);
 
     // 保持父节点展开状态
-    if (!expandedKeys.value.includes(parentId)) {
-      expandedKeys.value.push(parentId)
+    if (!expandedKeys.value.includes(parentNode.id)) {
+      expandedKeys.value.push(parentNode.id);
     }
   } else {
-    alert('只能在目录下添加文件或目录')
+    alert('只能在目录下添加文件或目录');
   }
-}
+};
 
 // 删除文件或目录
 const deleteNode = async (nodeId) => {
@@ -267,6 +325,10 @@ const deleteNode = async (nodeId) => {
         parentNode.children = parentNode.children.filter((child) => child.id !== nodeId)
         // 调用 Tauri 后端 API 删除文件或目录
         await invoke('delete_path', { path: nodeId })
+        await refreshDirectory(nodeId);
+      } else {
+        await invoke('delete_path', { path: nodeId })
+        await refreshDirectory(fileTreeStore.activeRepoPath);
       }
     }
   }
@@ -299,65 +361,72 @@ const findParentNode = (tree, id) => {
 
 // 开始编辑节点
 const startEditing = (node) => {
-  editingNode.value = node
-  editName.value = node.name
+  editingNode.value = node;
+  editName.value = node.name;
 
-  // 聚焦到输入框
+  // 延迟执行，确保输入框已经渲染
   setTimeout(() => {
-    const input = document.querySelector('.editable-input')
+    const input = document.querySelector('.editable-input');
     if (input) {
-      input.focus()
-      input.select()
+      input.focus();
+      input.select();
+    } else {
+      console.warn('Input element not found');
     }
-  }, 0)
-}
+  }, 0);
+};
 
-// 处理输入框的 blur 事件
 const handleBlur = async () => {
+  console.log('handleBlur triggered'); // 添加日志
   if (editingNode.value) {
-    const oldId = editingNode.value.id
-    const parentNode = findParentNode(fileTree.value, oldId)
+    const oldId = editingNode.value.id;
+    const parentNode = findParentNode(fileTree.value, oldId);
 
     if (editName.value.trim()) {
       // 更新节点名称
-      editingNode.value.name = editName.value
-      const newId = `${parentNode.id}\\${editName.value}`
-      editingNode.value.id = newId
+      editingNode.value.name = editName.value;
+      const newId = `${parentNode ? parentNode.id : fileTreeStore.activeRepoPath}/${editName.value}`;
+      editingNode.value.id = newId;
 
       // 调用 Tauri 后端 API 创建文件或目录
       if (editingNode.value.is_directory) {
-        await invoke('create_directory', { path: newId })
+        await invoke('create_directory', { path: newId });
       } else {
-        await invoke('create_file', { path: newId })
+        await invoke('create_file', { path: newId });
       }
 
       // 如果是重命名，删除旧文件
       if (oldId !== newId) {
-        await invoke('delete_path', { path: oldId })
+        await invoke('delete_path', { path: oldId });
       }
     } else {
       // 如果名称为空，则删除节点
-      parentNode.children = parentNode.children.filter(
-        (child) => child.id !== oldId
-      )
+      if (parentNode) {
+        parentNode.children = parentNode.children.filter(
+          (child) => child.id !== oldId
+        );
+      } else {
+        // 如果是顶层目录，直接更新文件树
+        fileTree.value = fileTree.value.filter((child) => child.id !== oldId);
+      }
     }
 
     // 结束编辑状态
-    editingNode.value = null
-    editName.value = ''
+    editingNode.value = null;
+    editName.value = '';
   }
-}
-
+};
 // 处理输入框的 keydown 事件
 const handleKeydown = (e) => {
+  console.log('handleKeydown triggered'); // 添加日志
   if (e.key === 'Enter') {
-    handleBlur()
+    handleBlur(); // 按下 Enter 键时结束编辑
   } else if (e.key === 'Escape') {
     // 取消编辑
-    editingNode.value = null
-    editName.value = ''
+    editingNode.value = null;
+    editName.value = '';
   }
-}
+};
 
 const moveNode = async (node) => {
   const targetDirectoryPath = await selectTargetPath();
@@ -420,7 +489,8 @@ const refreshDirectory = async (directoryId) => {
   console.log('文件树:', fileTree.value);
 
   // 如果 directoryId 是根目录，刷新整个文件树
-  if (directoryId === 'D:\\OpenSource\\ripgrep') {
+  const parentNode = findParentNode(fileTree.value, directoryId);
+  if (parentNode === null) {
     await loadFileTree();
     console.log('刷新整个文件树');
   } else if (fileTree.value.some(node => node.id === directoryId)) {
