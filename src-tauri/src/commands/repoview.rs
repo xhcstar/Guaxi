@@ -1,9 +1,11 @@
 use rusqlite::{params, Connection, Result};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::env;
 use std::fs;
 
-#[derive(Serialize)]
+pub mod sql_constants;
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ImportedFile {
     id: i32,
     original_filesize: i32,
@@ -38,7 +40,7 @@ pub struct ImportedFile {
     container_change_time: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Note {
     id: i32,
     title: String,
@@ -68,142 +70,90 @@ pub fn init_db() -> Result<Connection> {
         fs::create_dir_all(&repo_dir).expect("无法创建 repos 目录");
     }
 
-    // 创建 SQLite 数据库
+    // 数据库文件路径
     let db_path = repo_dir.join("repos.db");
-    let conn = Connection::open(db_path)?;
 
-    // 创建 imported_files 表
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS imported_files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            original_filesize INTEGER,
-            title TEXT NOT NULL,
-            create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            original_filepath TEXT NOT NULL,
-            original_filename TEXT NOT NULL,
-            original_filetype TEXT NOT NULL,
-            library TEXT,
-            description TEXT,
-            html_filename TEXT,
-            html_filepath TEXT,
-            html_change_time TIMESTAMP,
-            markdown_filename TEXT,
-            markdown_filepath TEXT,
-            markdown_change_time TIMESTAMP,
-            pdf_filename TEXT,
-            pdf_filepath TEXT,
-            pdf_change_time TIMESTAMP,
-            word_filename TEXT,
-            word_filepath TEXT,
-            word_change_time TIMESTAMP,
-            epub_filename TEXT,
-            epub_filepath TEXT,
-            epub_change_time TIMESTAMP,
-            txt_filename TEXT,
-            txt_filepath TEXT,
-            txt_change_time TIMESTAMP,
-            container_filename TEXT,
-            container_filepath TEXT,
-            container_change_time TIMESTAMP
-        )",
-        [],
-    )?;
-
-    // 创建 notes 表
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS notes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT,
-            note_type TEXT,
-            create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            library TEXT,
-            filename TEXT,
-            from_filename TEXT,
-            parent_note INTEGER,
-            FOREIGN KEY(parent_note) REFERENCES notes(id)
-        )",
-        [],
-    )?;
-
-    // 创建 tags 表
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS tags (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        )",
-        [],
-    )?;
-
-    // 创建 note_tags 表
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS note_tags (
-            note_id INTEGER,
-            tag_id INTEGER,
-            PRIMARY KEY (note_id, tag_id),
-            FOREIGN KEY(note_id) REFERENCES notes(id),
-            FOREIGN KEY(tag_id) REFERENCES tags(id)
-        )",
-        [],
-    )?;
+    // 打开或创建数据库
+    let conn = Connection::open(&db_path)?;
 
     Ok(conn)
 }
+/// 动态创建表
+pub fn create_table(conn: &Connection, table_name: &str, schema: &str) -> Result<()> {
+    let query = format!("CREATE TABLE IF NOT EXISTS {} ({})", table_name, schema);
+    conn.execute(&query, [])?;
+    Ok(())
+}
+/// 判断表是否存在
+pub fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    let query = format!(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='{}'",
+        table_name
+    );
+    let mut stmt = conn.prepare(&query)?;
+    let exists = stmt.exists([])?;
+    Ok(exists)
+}
 
 #[tauri::command]
-pub fn add_imported_file(
-    original_filesize: i32,
-    title: String,
-    original_filepath: String,
-    original_filename: String,
-    original_filetype: String,
-    library: String,
-    description: String,
-    tags: Vec<String>,
-    html_filename: String,
-    html_filepath: String,
-    html_change_time: String,
-    markdown_filename: String,
-    markdown_filepath: String,
-    markdown_change_time: String,
-    pdf_filename: String,
-    pdf_filepath: String,
-    pdf_change_time: String,
-    word_filename: String,
-    word_filepath: String,
-    word_change_time: String,
-    epub_filename: String,
-    epub_filepath: String,
-    epub_change_time: String,
-    txt_filename: String,
-    txt_filepath: String,
-    txt_change_time: String,
-    container_filename: String,
-    container_filepath: String,
-    container_change_time: String,
-) -> Result<i32, String> {
+pub fn add_imported_file(table_name: &str, file: ImportedFile) -> Result<i32, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
 
-    // 插入导入文件
-    conn.execute(
-        "INSERT INTO imported_files (
-            original_filesize, title, original_filepath, original_filename, original_filetype,
-            library, description, tags, html_filename, html_filepath, html_change_time,
-            markdown_filename, markdown_filepath, markdown_change_time, pdf_filename, pdf_filepath,
-            pdf_change_time, word_filename, word_filepath, word_change_time, epub_filename,
-            epub_filepath, epub_change_time, txt_filename, txt_filepath, txt_change_time,
-            container_filename, container_filepath, container_change_time
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
-        params![
-            original_filesize, title, original_filepath, original_filename, original_filetype,
-            library, description, tags.join(","), html_filename, html_filepath, html_change_time,
-            markdown_filename, markdown_filepath, markdown_change_time, pdf_filename, pdf_filepath,
-            pdf_change_time, word_filename, word_filepath, word_change_time, epub_filename,
-            epub_filepath, epub_change_time, txt_filename, txt_filepath, txt_change_time,
-            container_filename, container_filepath, container_change_time
-        ],
-    ).map_err(|e| e.to_string())?;
+    // 如果表不存在，则创建表
+    if !table_exists(&conn, table_name).map_err(|e| e.to_string())? {
+        create_table(&conn, table_name, sql_constants::CREATE_TABLE_IMPORTED_FILES)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 动态生成 SQL 语句
+    let sql = format!(
+        r#"
+            INSERT INTO {} (
+                original_filesize, title, original_filepath, original_filename, original_filetype,
+                library, description, html_filename, html_filepath, html_change_time,
+                markdown_filename, markdown_filepath, markdown_change_time, pdf_filename, pdf_filepath,
+                pdf_change_time, word_filename, word_filepath, word_change_time, epub_filename,
+                epub_filepath, epub_change_time, txt_filename, txt_filepath, txt_change_time,
+                container_filename, container_filepath, container_change_time
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
+        "#,
+        table_name
+    );
+
+    // 准备并执行 SQL 语句
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    stmt.execute(params![
+        file.original_filesize,
+        file.title,
+        file.original_filepath,
+        file.original_filename,
+        file.original_filetype,
+        file.library,
+        file.description,
+        file.tags.join(","),
+        file.html_filename,
+        file.html_filepath,
+        file.html_change_time,
+        file.markdown_filename,
+        file.markdown_filepath,
+        file.markdown_change_time,
+        file.pdf_filename,
+        file.pdf_filepath,
+        file.pdf_change_time,
+        file.word_filename,
+        file.word_filepath,
+        file.word_change_time,
+        file.epub_filename,
+        file.epub_filepath,
+        file.epub_change_time,
+        file.txt_filename,
+        file.txt_filepath,
+        file.txt_change_time,
+        file.container_filename,
+        file.container_filepath,
+        file.container_change_time,
+    ])
+    .map_err(|e| e.to_string())?;
 
     // 获取插入的文件 ID
     let file_id = conn.last_insert_rowid() as i32;
@@ -211,16 +161,23 @@ pub fn add_imported_file(
 }
 
 #[tauri::command]
-pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
+pub fn get_imported_files(table_name: &str) -> Result<Vec<ImportedFile>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare(
-        "SELECT id, original_filesize, title, create_time, original_filepath, original_filename,
-         original_filetype, library, description, tags, html_filename, html_filepath, html_change_time,
-         markdown_filename, markdown_filepath, markdown_change_time, pdf_filename, pdf_filepath,
-         pdf_change_time, word_filename, word_filepath, word_change_time, epub_filename, epub_filepath,
-         epub_change_time, txt_filename, txt_filepath, txt_change_time, container_filename,
-         container_filepath, container_change_time FROM imported_files"
-    ).map_err(|e| e.to_string())?;
+
+    // 动态生成 SQL 语句
+    let sql = format!(
+        r#"
+            SELECT id, original_filesize, title, create_time, original_filepath, original_filename,
+            original_filetype, library, description, tags, html_filename, html_filepath, html_change_time,
+            markdown_filename, markdown_filepath, markdown_change_time, pdf_filename, pdf_filepath,
+            pdf_change_time, word_filename, word_filepath, word_change_time, epub_filename, epub_filepath,
+            epub_change_time, txt_filename, txt_filepath, txt_change_time, container_filename,
+            container_filepath, container_change_time FROM {}
+        "#,
+        table_name
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
 
     let imported_files = stmt
         .query_map([], |row| {
@@ -272,136 +229,130 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
 }
 
 #[tauri::command]
-pub fn delete_imported_file(id: i32) -> Result<(), String> {
+pub fn delete_imported_file(table_name: &str, id: i32) -> Result<(), String> {
     let conn = init_db().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM imported_files WHERE id = ?1", params![id])
+
+    // 动态生成 SQL 语句
+    let sql = format!(
+        r#"
+            DELETE FROM {} WHERE id = ?1
+        "#,
+        table_name
+    );
+
+    conn.execute(&sql, params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn update_imported_file(
-    id: i32,
-    original_filesize: i32,
-    title: String,
-    original_filepath: String,
-    original_filename: String,
-    original_filetype: String,
-    library: String,
-    description: String,
-    tags: Vec<String>,
-    html_filename: String,
-    html_filepath: String,
-    html_change_time: String,
-    markdown_filename: String,
-    markdown_filepath: String,
-    markdown_change_time: String,
-    pdf_filename: String,
-    pdf_filepath: String,
-    pdf_change_time: String,
-    word_filename: String,
-    word_filepath: String,
-    word_change_time: String,
-    epub_filename: String,
-    epub_filepath: String,
-    epub_change_time: String,
-    txt_filename: String,
-    txt_filepath: String,
-    txt_change_time: String,
-    container_filename: String,
-    container_filepath: String,
-    container_change_time: String,
-) -> Result<(), String> {
+pub fn update_imported_file(table_name: &str, file: ImportedFile) -> Result<(), String> {
     let conn = init_db().map_err(|e| e.to_string())?;
 
+    // 动态生成 SQL 语句
+    let sql = format!(
+        r#"
+            UPDATE {} SET
+            original_filesize = ?1, title = ?2, original_filepath = ?3, original_filename = ?4,
+            original_filetype = ?5, library = ?6, description = ?7, tags = ?8, html_filename = ?9,
+            html_filepath = ?10, html_change_time = ?11, markdown_filename = ?12, markdown_filepath = ?13,
+            markdown_change_time = ?14, pdf_filename = ?15, pdf_filepath = ?16, pdf_change_time = ?17,
+            word_filename = ?18, word_filepath = ?19, word_change_time = ?20, epub_filename = ?21,
+            epub_filepath = ?22, epub_change_time = ?23, txt_filename = ?24, txt_filepath = ?25,
+            txt_change_time = ?26, container_filename = ?27, container_filepath = ?28,
+            container_change_time = ?29 WHERE id = ?30
+        "#,
+        table_name
+    );
+
     conn.execute(
-        "UPDATE imported_files SET
-         original_filesize = ?1, title = ?2, original_filepath = ?3, original_filename = ?4,
-         original_filetype = ?5, library = ?6, description = ?7, tags = ?8, html_filename = ?9,
-         html_filepath = ?10, html_change_time = ?11, markdown_filename = ?12, markdown_filepath = ?13,
-         markdown_change_time = ?14, pdf_filename = ?15, pdf_filepath = ?16, pdf_change_time = ?17,
-         word_filename = ?18, word_filepath = ?19, word_change_time = ?20, epub_filename = ?21,
-         epub_filepath = ?22, epub_change_time = ?23, txt_filename = ?24, txt_filepath = ?25,
-         txt_change_time = ?26, container_filename = ?27, container_filepath = ?28,
-         container_change_time = ?29 WHERE id = ?30",
+        &sql,
         params![
-            original_filesize, title, original_filepath, original_filename, original_filetype,
-            library, description, tags.join(","), html_filename, html_filepath, html_change_time,
-            markdown_filename, markdown_filepath, markdown_change_time, pdf_filename, pdf_filepath,
-            pdf_change_time, word_filename, word_filepath, word_change_time, epub_filename,
-            epub_filepath, epub_change_time, txt_filename, txt_filepath, txt_change_time,
-            container_filename, container_filepath, container_change_time, id
+            file.original_filesize,
+            file.title,
+            file.original_filepath,
+            file.original_filename,
+            file.original_filetype,
+            file.library,
+            file.description,
+            file.tags.join(","),
+            file.html_filename,
+            file.html_filepath,
+            file.html_change_time,
+            file.markdown_filename,
+            file.markdown_filepath,
+            file.markdown_change_time,
+            file.pdf_filename,
+            file.pdf_filepath,
+            file.pdf_change_time,
+            file.word_filename,
+            file.word_filepath,
+            file.word_change_time,
+            file.epub_filename,
+            file.epub_filepath,
+            file.epub_change_time,
+            file.txt_filename,
+            file.txt_filepath,
+            file.txt_change_time,
+            file.container_filename,
+            file.container_filepath,
+            file.container_change_time,
+            file.id,
         ],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
 #[tauri::command]
-pub fn add_note(
-    title: String,
-    description: String,
-    note_type: String,
-    library: String,
-    filename: String,
-    from_filename: String,
-    parent_note: Option<i32>,
-    tags: Vec<String>,
-    link_to_notes: Vec<i32>,
-    link_to_files: Vec<i32>,
-) -> Result<i32, String> {
+pub fn add_note(note: Note) -> Result<i32, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
 
     // 插入笔记
     conn.execute(
-        "INSERT INTO notes (title, description, note_type, library, filename, from_filename, parent_note)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![title, description, note_type, library, filename, from_filename, parent_note],
-    ).map_err(|e| e.to_string())?;
+        sql_constants::INSERT_NOTE,
+        params![
+            note.title,
+            note.description,
+            note.note_type,
+            note.library,
+            note.filename,
+            note.from_filename,
+            note.parent_note
+        ],
+    )
+    .map_err(|e| e.to_string())?;
 
     // 获取插入的笔记 ID
     let note_id = conn.last_insert_rowid() as i32;
 
     // 插入标签
-    for tag in tags {
+    for tag in note.tags {
         // 插入标签（如果不存在）
-        conn.execute(
-            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
-            params![tag],
-        )
-        .map_err(|e| e.to_string())?;
+        conn.execute(sql_constants::INSERT_TAG, params![tag])
+            .map_err(|e| e.to_string())?;
 
         // 获取标签 ID
         let tag_id: i32 = conn
-            .query_row("SELECT id FROM tags WHERE name = ?1", params![tag], |row| {
-                row.get(0)
-            })
+            .query_row(sql_constants::SELECT_TAG_ID, params![tag], |row| row.get(0))
             .map_err(|e| e.to_string())?;
 
         // 关联笔记和标签
-        conn.execute(
-            "INSERT INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
-            params![note_id, tag_id],
-        )
-        .map_err(|e| e.to_string())?;
+        conn.execute(sql_constants::INSERT_NOTE_TAG, params![note_id, tag_id])
+            .map_err(|e| e.to_string())?;
     }
 
     // 插入笔记链接
-    for linked_note_id in link_to_notes {
-        conn.execute(
-            "INSERT INTO note_links (note_id, linked_note_id) VALUES (?1, ?2)",
-            params![note_id, linked_note_id],
-        )
-        .map_err(|e| e.to_string())?;
+    for linked_note_id in note.link_to_notes {
+        conn.execute(sql_constants::INSERT_NOTE_LINK, params![note_id, linked_note_id])
+            .map_err(|e| e.to_string())?;
     }
 
     // 插入文件链接
-    for linked_file_id in link_to_files {
-        conn.execute(
-            "INSERT INTO file_links (note_id, linked_file_id) VALUES (?1, ?2)",
-            params![note_id, linked_file_id],
-        )
-        .map_err(|e| e.to_string())?;
+    for linked_file_id in note.link_to_files {
+        conn.execute(sql_constants::INSERT_FILE_LINK, params![note_id, linked_file_id])
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(note_id)
@@ -412,9 +363,9 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
 
     // 查询所有笔记
-    let mut stmt = conn.prepare(
-        "SELECT id, title, description, note_type, create_time, update_time, library, filename, from_filename, parent_note FROM notes"
-    ).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(sql_constants::SELECT_NOTES)
+        .map_err(|e| e.to_string())?;
 
     let notes = stmt
         .query_map([], |row| {
@@ -443,11 +394,7 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
 
         // 查询笔记的标签
         let mut stmt = conn
-            .prepare(
-                "SELECT tags.name FROM tags
-             JOIN note_tags ON tags.id = note_tags.tag_id
-             WHERE note_tags.note_id = ?1",
-            )
+            .prepare(sql_constants::SELECT_TAGS_BY_NOTE)
             .map_err(|e| e.to_string())?;
 
         let tags = stmt
@@ -460,7 +407,7 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
 
         // 查询笔记的子笔记
         let mut stmt = conn
-            .prepare("SELECT id FROM notes WHERE parent_note = ?1")
+            .prepare(sql_constants::SELECT_CHILD_NOTES)
             .map_err(|e| e.to_string())?;
 
         let child_notes = stmt
@@ -473,7 +420,7 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
 
         // 查询笔记的链接笔记
         let mut stmt = conn
-            .prepare("SELECT linked_note_id FROM note_links WHERE note_id = ?1")
+            .prepare(sql_constants::SELECT_LINKED_NOTES)
             .map_err(|e| e.to_string())?;
 
         let link_to_notes = stmt
@@ -486,7 +433,7 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
 
         // 查询笔记的链接文件
         let mut stmt = conn
-            .prepare("SELECT linked_file_id FROM file_links WHERE note_id = ?1")
+            .prepare(sql_constants::SELECT_LINKED_FILES)
             .map_err(|e| e.to_string())?;
 
         let link_to_files = stmt
@@ -508,74 +455,62 @@ pub fn delete_note(id: i32) -> Result<(), String> {
     let conn = init_db().map_err(|e| e.to_string())?;
 
     // 删除笔记的标签关联
-    conn.execute("DELETE FROM note_tags WHERE note_id = ?1", params![id])
+    conn.execute(sql_constants::DELETE_NOTE_TAGS, params![id])
         .map_err(|e| e.to_string())?;
 
     // 删除笔记的链接笔记
-    conn.execute(
-        "DELETE FROM note_links WHERE note_id = ?1 OR linked_note_id = ?1",
-        params![id],
-    )
-    .map_err(|e| e.to_string())?;
+    conn.execute(sql_constants::DELETE_NOTE_LINKS, params![id])
+        .map_err(|e| e.to_string())?;
 
     // 删除笔记的链接文件
-    conn.execute("DELETE FROM file_links WHERE note_id = ?1", params![id])
+    conn.execute(sql_constants::DELETE_FILE_LINKS, params![id])
         .map_err(|e| e.to_string())?;
 
     // 删除笔记
-    conn.execute("DELETE FROM notes WHERE id = ?1", params![id])
+    conn.execute(sql_constants::DELETE_NOTE, params![id])
         .map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
 #[tauri::command]
-pub fn update_note(
-    id: i32,
-    title: String,
-    description: String,
-    note_type: String,
-    library: String,
-    filename: String,
-    from_filename: String,
-    parent_note: Option<i32>,
-    tags: Vec<String>,
-) -> Result<(), String> {
+pub fn update_note(note: Note) -> Result<(), String> {
     let conn = init_db().map_err(|e| e.to_string())?;
 
     // 更新笔记
     conn.execute(
-        "UPDATE notes SET title = ?1, description = ?2, note_type = ?3, library = ?4, filename = ?5, from_filename = ?6, parent_note = ?7
-         WHERE id = ?8",
-        params![title, description, note_type, library, filename, from_filename, parent_note, id],
-    ).map_err(|e| e.to_string())?;
+        sql_constants::UPDATE_NOTE,
+        params![
+            note.title,
+            note.description,
+            note.note_type,
+            note.library,
+            note.filename,
+            note.from_filename,
+            note.parent_note,
+            note.id
+        ],
+    )
+    .map_err(|e| e.to_string())?;
 
     // 删除旧的标签关联
-    conn.execute("DELETE FROM note_tags WHERE note_id = ?1", params![id])
+    conn.execute(sql_constants::DELETE_NOTE_TAGS, params![note.id])
         .map_err(|e| e.to_string())?;
 
     // 插入新的标签
-    for tag in tags {
+    for tag in note.tags {
         // 插入标签（如果不存在）
-        conn.execute(
-            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
-            params![tag],
-        )
-        .map_err(|e| e.to_string())?;
+        conn.execute(sql_constants::INSERT_TAG, params![tag])
+            .map_err(|e| e.to_string())?;
 
         // 获取标签 ID
         let tag_id: i32 = conn
-            .query_row("SELECT id FROM tags WHERE name = ?1", params![tag], |row| {
-                row.get(0)
-            })
+            .query_row(sql_constants::SELECT_TAG_ID, params![tag], |row| row.get(0))
             .map_err(|e| e.to_string())?;
 
         // 关联笔记和标签
-        conn.execute(
-            "INSERT INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
-            params![id, tag_id],
-        )
-        .map_err(|e| e.to_string())?;
+        conn.execute(sql_constants::INSERT_NOTE_TAG, params![note.id, tag_id])
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())

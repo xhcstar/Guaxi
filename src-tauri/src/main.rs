@@ -16,6 +16,10 @@ async fn app_init() {
         Ok(_) => println!("Database initialized successfully."),
         Err(e) => eprintln!("Failed to initialize database: {}", e),
     }
+    match commands::settingview::init_library_config() {
+        Ok(_) => println!("Library config initialized successfully."),
+        Err(e) => eprintln!("Failed to initialize library config: {}", e),
+    }
 }
 
 #[tokio::main]

@@ -82,6 +82,22 @@ impl Default for AppConfig {
     }
 }
 
+pub fn init_library_config() -> Result<(), String>{
+    // 获取当前程序所在路径
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+
+    let libraries_dir = exe_dir.join("Libraries");
+    if !libraries_dir.exists() {
+        fs::create_dir_all(&libraries_dir).expect("无法创建 Libraries 目录");
+    }
+    // info!("init libraries successfully libraries_patch: {:?}", libraries_dir);
+    Ok(())
+}
+
 pub fn get_config_path() -> PathBuf {
     let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
     let exe_dir = exe_path
