@@ -5,10 +5,24 @@ use std::path::PathBuf;
 use tracing::info;
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct Library {
+    library_id: i32,
+    library_path: String,
+    library_name: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LibraryConfig {
+    libraries_repo_path: String,
+    library: Vec<Library>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AppConfig {
     server: ServerConfig,
     database: DatabaseConfig,
     appearance: AppearanceConfig,
+    libraries_repo_config: LibraryConfig,
     active_repo_path: Option<String>,
     repopathlist: Vec<String>, // 新增字段
 }
@@ -34,19 +48,33 @@ pub struct AppearanceConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
+        // 获取当前程序所在路径
+        let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+        let exe_dir = exe_path
+            .parent()
+            .expect("无法获取可执行文件所在目录")
+            .to_path_buf();
+
+        // 设置 libraries_repo_path 为当前程序所在路径下的 Libraries 目录
+        let libraries_repo_path = exe_dir.join("Libraries").to_string_lossy().to_string();
+
         AppConfig {
             server: ServerConfig {
                 host: "127.0.0.1".to_string(),
                 port: 8080,
             },
             database: DatabaseConfig {
-                url: "postgres://localhost:5432/mydb".to_string(),
+                url: "http://localhost".to_string(),
                 username: "admin".to_string(),
                 password: "password".to_string(),
             },
             appearance: AppearanceConfig {
                 theme: "light".to_string(),
                 font_size: 14,
+            },
+            libraries_repo_config: LibraryConfig {
+                libraries_repo_path: libraries_repo_path,
+                library: vec![],
             },
             active_repo_path: None,
             repopathlist: Vec::new(), // 默认值为空列表
@@ -75,8 +103,11 @@ pub fn load_config() -> AppConfig {
     if !config_path.exists() {
         // 如果配置文件不存在，创建默认配置
         let default_config = AppConfig::default();
-        fs::write(&config_path, serde_json::to_string(&default_config).unwrap())
-            .expect("无法写入默认配置文件");
+        fs::write(
+            &config_path,
+            serde_json::to_string(&default_config).unwrap(),
+        )
+        .expect("无法写入默认配置文件");
         return default_config;
     }
 
@@ -87,8 +118,7 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(config: &AppConfig) {
     let config_path = get_config_path();
-    fs::write(&config_path, serde_json::to_string(config).unwrap())
-        .expect("无法写入配置文件");
+    fs::write(&config_path, serde_json::to_string(config).unwrap()).expect("无法写入配置文件");
 }
 
 #[tauri::command]
@@ -126,7 +156,11 @@ pub fn get_database_config() -> DatabaseConfig {
 #[tauri::command]
 pub fn set_database_config(url: String, username: String, password: String) {
     let mut config = load_config();
-    config.database = DatabaseConfig { url, username, password };
+    config.database = DatabaseConfig {
+        url,
+        username,
+        password,
+    };
     save_config(&config);
 }
 
@@ -140,6 +174,22 @@ pub fn get_appearance_config() -> AppearanceConfig {
 pub fn set_appearance_config(theme: String, font_size: u8) {
     let mut config = load_config();
     config.appearance = AppearanceConfig { theme, font_size };
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_libraries_repo_config() -> LibraryConfig {
+    let config = load_config();
+    config.libraries_repo_config
+}
+
+#[tauri::command]
+pub fn set_libraries_repo_config(libraries_repo_path: String, library: Vec<Library>) {
+    let mut config = load_config();
+    config.libraries_repo_config = LibraryConfig {
+        libraries_repo_path,
+        library,
+    };
     save_config(&config);
 }
 

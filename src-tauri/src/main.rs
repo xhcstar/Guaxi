@@ -8,6 +8,16 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod commands;
 
+async fn app_init() {
+    // 在启动时加载配置文件
+    let config = commands::settingview::load_config();
+    info!("Loaded config: {:?}", config);
+    match commands::repoview::init_db() {
+        Ok(_) => println!("Database initialized successfully."),
+        Err(e) => eprintln!("Failed to initialize database: {}", e),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // 初始化日志订阅器，输出到终端和文件
@@ -24,10 +34,7 @@ async fn main() {
 
     // 示例日志输出
     info!("Project started!");
-
-    // 在启动时加载配置文件
-    let config = commands::settingview::load_config();
-    info!("Loaded config: {:?}", config);
+    app_init().await;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -53,6 +60,16 @@ async fn main() {
             commands::settingview::set_appearance_config,
             commands::settingview::set_repopathlist,
             commands::settingview::get_repopathlist,
+            commands::settingview::get_libraries_repo_config,
+            commands::settingview::set_libraries_repo_config,
+            commands::repoview::get_imported_files,
+            commands::repoview::add_imported_file,
+            commands::repoview::delete_imported_file,
+            commands::repoview::update_imported_file,
+            commands::repoview::get_notes,
+            commands::repoview::add_note,
+            commands::repoview::delete_note,
+            commands::repoview::update_note,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
