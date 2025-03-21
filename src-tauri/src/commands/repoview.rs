@@ -1,7 +1,9 @@
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, Result as RusqliteResult};
 use serde::{Serialize, Deserialize};
+use tracing::info;
 use std::env;
 use std::fs;
+use std::path::PathBuf;
 
 pub mod sql_constants;
 
@@ -58,34 +60,37 @@ pub struct Note {
     link_to_files: Vec<i32>,
 }
 
-pub fn init_db() -> Result<Connection> {
-    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+pub fn create_db_file() -> Result<PathBuf, String> {
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
     let exe_dir = exe_path
         .parent()
-        .expect("无法获取可执行文件所在目录")
+        .ok_or("无法获取可执行文件所在目录".to_string())?
         .to_path_buf();
 
     let repo_dir = exe_dir.join("repos");
     if !repo_dir.exists() {
-        fs::create_dir_all(&repo_dir).expect("无法创建 repos 目录");
+        fs::create_dir_all(&repo_dir).map_err(|e| e.to_string())?;
     }
-
     // 数据库文件路径
     let db_path = repo_dir.join("repos.db");
+    Ok(db_path)
+}
+
+pub fn init_db() -> RusqliteResult<Connection> {
+    let db_path = create_db_file().map_err(|e| rusqlite::Error::InvalidPath(e.into()))?;
 
     // 打开或创建数据库
     let conn = Connection::open(&db_path)?;
-
     Ok(conn)
 }
 /// 动态创建表
-pub fn create_table(conn: &Connection, table_name: &str, schema: &str) -> Result<()> {
+pub fn create_table(conn: &Connection, table_name: &str, schema: &str) -> Result<(), rusqlite::Error> {
     let query = format!("CREATE TABLE IF NOT EXISTS {} ({})", table_name, schema);
     conn.execute(&query, [])?;
     Ok(())
 }
 /// 判断表是否存在
-pub fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+pub fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, rusqlite::Error> {
     let query = format!(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='{}'",
         table_name
