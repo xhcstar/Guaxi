@@ -25,6 +25,7 @@ pub struct AppConfig {
     libraries_repo_config: LibraryConfig,
     active_repo_path: Option<String>,
     repopathlist: Vec<String>, // 新增字段
+    libraries_root: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -78,6 +79,7 @@ impl Default for AppConfig {
             },
             active_repo_path: None,
             repopathlist: Vec::new(), // 默认值为空列表
+            libraries_root: "".to_string(),
         }
     }
 }
@@ -220,5 +222,18 @@ pub fn get_repopathlist() -> Vec<String> {
 pub fn set_repopathlist(paths: Vec<String>) {
     let mut config = load_config();
     config.repopathlist = paths;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_libraries_root() -> String {
+    let config = load_config();
+    config.libraries_root
+}
+
+#[tauri::command]
+pub fn set_libraries_root(path: String) {
+    let mut config = load_config();
+    config.libraries_root = path;
     save_config(&config);
 }

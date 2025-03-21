@@ -19,13 +19,13 @@ function renderIcon(icon: Component) {
 // 菜单选项
 const menuOptions: MenuOption[] = [
   {
-    label: '数据库 1',
-    key: 'db1',
+    label: '文件数据库',
+    key: 'importFileDB',
     icon: renderIcon(ServerOutline)
   },
   {
-    label: '数据库 2',
-    key: 'db2',
+    label: '笔记数据库',
+    key: 'NotesDb',
     icon: renderIcon(ServerOutline)
   },
   {

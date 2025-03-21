@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub mod sql_constants;
+pub mod repofileproc;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ImportedFile {

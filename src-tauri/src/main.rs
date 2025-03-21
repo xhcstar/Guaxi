@@ -66,6 +66,8 @@ async fn main() {
             commands::settingview::get_repopathlist,
             commands::settingview::get_libraries_repo_config,
             commands::settingview::set_libraries_repo_config,
+            commands::settingview::get_libraries_root,
+            commands::settingview::set_libraries_root,
             commands::repoview::get_imported_files,
             commands::repoview::add_imported_file,
             commands::repoview::delete_imported_file,
@@ -74,6 +76,9 @@ async fn main() {
             commands::repoview::add_note,
             commands::repoview::delete_note,
             commands::repoview::update_note,
+            commands::repoview::repofileproc::get_file_info,
+            commands::repoview::repofileproc::add_repo_import_file,
+
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

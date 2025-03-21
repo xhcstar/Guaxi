@@ -4,14 +4,15 @@ export const repoStore = defineStore("repoStore", {
   state: () => ({
     files: [], // 存储文件数据
     notes: [], // 存储笔记数据
-    currentDatabase: "db1", // 默认选中的数据库
+    currentDatabase: "importFileDB", // 默认选中的数据库
+    librariesRoot: "",
   }),
   actions: {
     // 根据 key 获取文件或笔记数据
     async fetchFiles(key) {
       // 模拟不同数据库的数据
       const data = {
-        db1: [
+        importFileDB: [
           {
             id: 1,
             title: "文件1.pdf",
@@ -26,7 +27,7 @@ export const repoStore = defineStore("repoStore", {
             markdown_file_name: "file1.md",
           },
         ],
-        db2: [
+        NotesDb: [
           {
             id: 1,
             title: "笔记1",
@@ -69,11 +70,21 @@ export const repoStore = defineStore("repoStore", {
         ],
       };
 
-      if (this.currentDatabase === "db2") {
+      if (this.currentDatabase === "NotesDb") {
         this.notes = data[this.currentDatabase] || []; // 加载笔记数据
       } else {
         this.files = data[this.currentDatabase] || []; // 加载文件数据
       }
+    },
+
+    // 添加导入的文件
+    addImportedFile(file) {
+      this.files.push(file);
+    },
+
+    // 添加导入的笔记
+    addImportedNote(note) {
+      this.notes.push(note);
     },
   },
 });
