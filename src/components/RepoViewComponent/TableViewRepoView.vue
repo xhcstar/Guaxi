@@ -9,14 +9,22 @@
       </n-space>
       <n-tooltip trigger="hover">
         <template #trigger>
-          <n-icon :component="FolderAdd20Regular" :size="20" class="import-icon" @click="showAddFileModal" />
+          <n-button text class="add-path-button" @click="showAddFileModal">
+            <n-icon :component="FolderAdd20Regular" :size="24" />
+          </n-button>
         </template>
         导入新的文件
       </n-tooltip>
     </n-space>
-    <n-data-table ref="table" :columns="columns" :data="currentData" :pagination="pagination" class="data-table"
-      :row-props="rowProps" />
+
+    <n-data-table ref="table" :columns="columns" :data="currentData" :header-height="28" virtual-scroll
+      :max-height="500" :scroll-x="1500" :pagination="pagination" :single-line="false" class="data-table"
+      :row-props="rowProps" :multiple="true" :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
   </n-space>
+
+  <!-- 右键菜单 -->
+  <n-dropdown placement="bottom-start" trigger="manual" :x="x" :y="y" :options="contextMenuOptions" :show="showDropdown"
+    :on-clickoutside="onClickoutside" @select="handleContextMenuSelect" class="custom-dropdown" />
 
   <!-- 添加文件对话框 -->
   <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog">
@@ -69,8 +77,8 @@
   </n-modal>
 </template>
 
-<script setup>
-import { ref, onMounted, computed, h } from 'vue'
+<script setup lang="ts">
+import { ref, onMounted, computed, h, nextTick } from 'vue'
 import { repoStore } from '../../stores/repoStore'
 import {
   FolderAdd20Regular,
@@ -79,8 +87,9 @@ import {
   Edit20Regular,
   Share20Regular,
   ArrowMove24Regular,
-} from '@vicons/fluent';
-import { NIcon } from 'naive-ui'
+} from '@vicons/fluent'
+import { NIcon, NButton, NDropdown, NGradientText } from 'naive-ui'
+import ShowOrEdit from './ShowOrEdit.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -89,6 +98,11 @@ const store = repoStore()
 
 // 添加文件对话框状态
 const isAddFileModalVisible = ref(false)
+const checkedRowKeysRef = ref()
+// 表格实例
+const tableRef = ref(null)
+// 分页配置
+const pagination = ref({ pageSize: 10 })
 
 // 用于 importFileDB 库的表单
 const newFileForm = ref({
@@ -125,7 +139,6 @@ const currentForm = computed(() => {
 
 // 打开文件浏览器并获取文件信息
 const openFileBrowser = async () => {
-  console.log('library:', store.library) //@@@@@@@@@@@
   try {
     const filePath = await open({
       filters: [{ name: 'All Files', extensions: ['*'] }],
@@ -152,8 +165,8 @@ const showAddFileModal = () => {
 const addFile = async () => {
   try {
     if (!currentForm.value.library || !currentForm.value.filePath) {
-      console.error('Library or file path is missing');
-      return;
+      console.error('Library or file path is missing')
+      return
     }
     // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
     await invoke('add_repo_import_file', {
@@ -235,153 +248,519 @@ const resetForm = () => {
 
 // 根据当前数据库类型选择数据
 const currentData = computed(() => {
-  return store.currentDatabase === 'NotesDb' ? store.notes : store.files;
+  return store.currentDatabase === 'NotesDb' ? store.notes : store.files
 })
 
-// 操作列渲染函数
-const renderActions = (row) => {
-  return h('div', { class: 'action-icons' }, [
-    h(NIcon, {
-      component: Open20Regular,
-      size: 20,
-      class: 'action-icon',
-      onClick: () => handleOpen(row),
-    }),
-    h(NIcon, {
-      component: Delete20Regular,
-      size: 20,
-      class: 'action-icon',
-      onClick: () => handleDelete(row),
-    }),
-    h(NIcon, {
-      component: Edit20Regular,
-      size: 20,
-      class: 'action-icon',
-      onClick: () => handleEdit(row),
-    }),
-    h(NIcon, {
-      component: Share20Regular,
-      size: 20,
-      class: 'action-icon',
-      onClick: () => handleShare(row),
-    }),
-    h(NIcon, {
-      component: ArrowMove24Regular,
-      size: 20,
-      class: 'action-icon',
-      onClick: () => handleMove(row),
-    }),
-  ]);
-};
+// 右键菜单状态
+const showDropdown = ref(false)
+const x = ref(0)
+const y = ref(0)
+const selectedRow = ref(null)
+
+// 右键菜单选项
+const contextMenuOptions = [
+  {
+    label: '打开',
+    key: 'open',
+    icon: () => h(NIcon, { component: Open20Regular, size: 16 }),
+  },
+  {
+    label: '编辑',
+    key: 'edit',
+    icon: () => h(NIcon, { component: Edit20Regular, size: 16 }),
+  },
+  {
+    label: '分享',
+    key: 'share',
+    icon: () => h(NIcon, { component: Share20Regular, size: 16 }),
+  },
+  {
+    label: '删除',
+    key: 'delete',
+    icon: () => h(NIcon, { component: Delete20Regular, size: 16 }),
+  },
+  {
+    label: '移动',
+    key: 'move',
+    icon: () => h(NIcon, { component: ArrowMove24Regular, size: 16 }),
+  },
+]
+
+// 处理右键菜单点击
+const handleContextMenuSelect = (key) => {
+  if (!selectedRow.value) return
+
+  switch (key) {
+    case 'open':
+      handleOpen(selectedRow.value)
+      break
+    case 'edit':
+      handleEdit(selectedRow.value)
+      break
+    case 'share':
+      handleShare(selectedRow.value)
+      break
+    case 'delete':
+      handleDelete(selectedRow.value)
+      break
+    case 'move':
+      handleMove(selectedRow.value)
+      break
+  }
+
+  showDropdown.value = false
+}
+
+// 处理点击外部关闭菜单
+const onClickoutside = () => {
+  showDropdown.value = false
+}
+
+// 行属性配置：右键点击触发菜单
+const rowProps = (row) => {
+  return {
+    onContextmenu: (e) => {
+      e.preventDefault()
+      selectedRow.value = row
+      showDropdown.value = false
+      nextTick(() => {
+        showDropdown.value = true
+        x.value = e.clientX
+        y.value = e.clientY
+      })
+    },
+    // onClick: () => {
+    //   handleEdit(row)
+    // },
+  }
+}
+
+// 方法：打开文件
+const handleOpen = (row) => {
+  console.log('打开', row)
+}
+
+// 方法：删除文件
+const handleDelete = (row) => {
+  console.log('删除', row)
+}
+
+// 方法：编辑文件
+const handleEdit = (row) => {
+  console.log('编辑', row)
+}
+
+// 方法：分享文件
+const handleShare = (row) => {
+  console.log('分享', row)
+}
+
+// 方法：移动文件
+const handleMove = (row) => {
+  console.log('移动', row)
+}
 
 // 表格列配置
 const columns = computed(() => {
-  const baseColumns = store.currentDatabase === 'NotesDb' ? [
-    {
-      title: '笔记标题',
-      key: 'title',
-      defaultSortOrder: 'ascend',
-      sorter: 'default',
-    },
-    {
-      title: '笔记描述',
-      key: 'description',
-    },
-    {
-      title: '笔记类型',
-      key: 'type',
-    },
-    {
-      title: '笔记标签',
-      key: 'tags',
-    },
-    {
-      title: '创建时间',
-      key: 'create_time',
-    },
-    {
-      title: '修改时间',
-      key: 'update_time',
-    },
-    {
-      title: '所属库',
-      key: 'library',
-    },
-    {
-      title: '所属文件',
-      key: 'file',
-    },
-    {
-      title: '父级笔记',
-      key: 'parent_note',
-    },
-    {
-      title: '子级笔记',
-      key: 'child_notes',
-    },
-  ] : [
-    {
-      title: '标题',
-      key: 'title',
-      defaultSortOrder: 'ascend',
-      sorter: 'default',
-    },
-    {
-      title: '文件类型',
-      key: 'type',
-    },
-    {
-      title: '入库时间',
-      key: 'create_time',
-    },
-    {
-      title: '文件大小（字节）',
-      key: 'size',
-    },
-    {
-      title: '所属库',
-      key: 'library',
-      filterOptions: [
-        { label: 'Library1', value: 'Library1' },
-        { label: 'Library2', value: 'Library2' },
-      ],
-      filter(value, row) {
-        return row.library === value;
+  return store.currentDatabase === 'NotesDb'
+    ? [
+      {
+        type: 'selection',
       },
-    },
-    {
-      title: '文件描述',
-      key: 'description',
-    },
-    {
-      title: '文件标签',
-      key: 'tags',
-    },
-    {
-      title: 'HTML 文件名',
-      key: 'html_file_name',
-    },
-    {
-      title: 'Markdown 文件名',
-      key: 'markdown_file_name',
-    },
-  ];
-
-  // 添加操作列
-  baseColumns.push({
-    title: '操作',
-    key: 'actions',
-    render: renderActions,
-  });
-
-  return baseColumns;
-});
-
-// 表格实例
-const tableRef = ref(null)
-
-// 分页配置
-const pagination = ref({ pageSize: 10 })
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '笔记标题'),
+        key: 'title',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.title,
+            onUpdateValue(v) {
+              row.title = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '笔记描述'),
+        key: 'description',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.description,
+            onUpdateValue(v) {
+              row.description = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '笔记文件名'),
+        key: 'file',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.file,
+            onUpdateValue(v) {
+              row.file = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '笔记类型'),
+        key: 'type',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.type,
+            onUpdateValue(v) {
+              row.type = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '笔记标签'),
+        key: 'tags',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.tags,
+            onUpdateValue(v) {
+              row.tags = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '所属库'),
+        key: 'library',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.library,
+            onUpdateValue(v) {
+              row.library = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '创建时间'),
+        key: 'create_time',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.create_time,
+            onUpdateValue(v) {
+              row.create_time = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '修改时间'),
+        key: 'update_time',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.update_time,
+            onUpdateValue(v) {
+              row.update_time = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '父级笔记'),
+        key: 'parent_note',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.parent_note,
+            onUpdateValue(v) {
+              row.parent_note = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '子级笔记'),
+        key: 'child_notes',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.child_notes,
+            onUpdateValue(v) {
+              row.child_notes = v
+            },
+          })
+        },
+      },
+    ]
+    : [
+      {
+        type: 'selection',
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '文件名'),
+        key: 'title',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.title,
+            onUpdateValue(v) {
+              row.title = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '文件描述'),
+        key: 'description',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.description,
+            onUpdateValue(v) {
+              row.description = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '文件标签'),
+        key: 'tags',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.tags,
+            onUpdateValue(v) {
+              row.tags = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '文件类型'),
+        key: 'type',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.type,
+            onUpdateValue(v) {
+              row.type = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '入库时间'),
+        key: 'create_time',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.create_time,
+            onUpdateValue(v) {
+              row.create_time = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '文件大小'),
+        key: 'size',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.size,
+            onUpdateValue(v) {
+              row.size = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '所属库'),
+        key: 'library',
+        resizable: true,
+        filterOptions: [
+          { label: 'Library1', value: 'Library1' },
+          { label: 'Library2', value: 'Library2' },
+        ],
+        filter(value, row) {
+          return row.library === value
+        },
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.library,
+            onUpdateValue(v) {
+              row.library = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, 'HTML文件名'),
+        key: 'html_file_name',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.html_file_name,
+            onUpdateValue(v) {
+              row.html_file_name = v
+            },
+          })
+        },
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, 'Markdown文件名'),
+        key: 'markdown_file_name',
+        resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.markdown_file_name,
+            onUpdateValue(v) {
+              row.markdown_file_name = v
+            },
+          })
+        },
+      },
+    ]
+})
 
 // 方法：按标题排序
 const sortTitle = () => {
@@ -391,7 +770,7 @@ const sortTitle = () => {
 // 方法：过滤所属库
 const filterLibrary = () => {
   tableRef.value.filter({
-    library: ['Library1']
+    library: ['Library1'],
   })
 }
 
@@ -405,29 +784,16 @@ const clearSorter = () => {
   tableRef.value.sort(null)
 }
 
-// 方法：打开文件
-const handleOpen = (row) => {
-  console.log('打开', row);
-}
 
-// 方法：删除文件
-const handleDelete = (row) => {
-  console.log('删除', row);
-}
+// 选中的行
+const checkedRowKeys = ref([])
+// 定义 row-key 函数
+const rowKey = (row) => row.id
 
-// 方法：编辑文件
-const handleEdit = (row) => {
-  console.log('编辑', row);
-}
-
-// 方法：分享文件
-const handleShare = (row) => {
-  console.log('分享', row);
-}
-
-// 方法：移动文件
-const handleMove = (row) => {
-  console.log('移动', row);
+// 处理选中行
+const handleCheckboxUpdate = (rowKeys) => {
+  checkedRowKeys.value = rowKeys
+  console.log('选中的行 keys:', rowKeys)
 }
 
 // 组件挂载时获取默认数据
@@ -435,14 +801,6 @@ onMounted(async () => {
   await store.fetchFiles('importFileDB') // 默认加载数据库 1 的数据
 })
 
-// 行属性配置：添加悬停效果
-const rowProps = (row) => {
-  return {
-    onMouseenter: () => (row.hovered = true),
-    onMouseleave: () => (row.hovered = false),
-    class: row.hovered ? 'hovered-row' : '',
-  };
-};
 </script>
 
 <style scoped>
@@ -459,16 +817,10 @@ const rowProps = (row) => {
   gap: 8px;
 }
 
-.action-button {
-  background-color: #f0f0f0;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  padding: 8px 12px;
-}
-
-.import-icon {
-  margin-left: 8px;
-  cursor: pointer;
+.add-path-button {
+  position: absolute;
+  top: 20px;
+  right: 20px;
 }
 
 .data-table {
@@ -477,29 +829,36 @@ const rowProps = (row) => {
   overflow: hidden;
 }
 
-.action-icons {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.action-icon {
-  cursor: pointer;
-  color: #666;
-  transition: color 0.2s, transform 0.2s;
-}
-
-.action-icon:hover {
-  color: #007bff;
-  transform: scale(1.2);
-}
-
-.action-icon:active {
-  transform: scale(0.9);
-}
-
 /* 行悬停效果 */
 .hovered-row {
-  background-color: #f9f9f9;
+  background-color: #e8f5e9;
+  /* 淡绿色 */
+}
+
+/* 右键菜单样式 */
+.custom-dropdown .n-dropdown-menu {
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  padding: 8px 0;
+}
+
+.custom-dropdown .n-dropdown-option {
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #333;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.custom-dropdown .n-dropdown-option:hover {
+  background-color: #e8f5e9;
+  /* 淡绿色 */
+}
+
+.custom-dropdown .n-dropdown-option .n-icon {
+  color: #666;
 }
 </style>

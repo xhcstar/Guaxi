@@ -86,5 +86,9 @@ export const repoStore = defineStore("repoStore", {
     addImportedNote(note) {
       this.notes.push(note);
     },
+
+    set_librariesRoot(path) {
+      this.librariesRoot = path;
+    },
   },
 });

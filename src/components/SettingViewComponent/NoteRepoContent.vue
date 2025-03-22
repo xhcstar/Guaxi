@@ -43,7 +43,7 @@
     <!-- 添加新的笔记库路径 -->
     <n-tooltip trigger="hover">
       <template #trigger>
-        <n-button type="primary" text class="add-path-button" @click="handleOpenFileBrowser">
+        <n-button text class="add-path-button" @click="handleOpenFileBrowser">
           <n-icon :component="FolderAdd20Regular" :size="24" />
         </n-button>
       </template>
@@ -98,7 +98,7 @@
     <!-- 添加按钮 -->
     <n-tooltip trigger="hover">
       <template #trigger>
-        <n-button type="primary" text class="add-path-button" @click="handleOpenFileBrowserForLibraryRoot">
+        <n-button text class="add-path-button" @click="handleOpenFileBrowserForLibraryRoot">
           <n-icon :component="FolderAdd20Regular" :size="24" />
         </n-button>
       </template>
@@ -135,7 +135,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 
 const fileTreeStore = useFileTreeStore();
-const repostore = repoStore()
+const store = repoStore();
 const newRepoPath = ref('');
 const showAddPathModal = ref(false);
 const activeRepoPath = ref(null);
@@ -157,7 +157,7 @@ const handleOpenFileBrowserForLibraryRoot = async () => {
       const normalizedPath = selectedPath.replace(/\\/g, '/');
       await invoke('set_libraries_root', { path: normalizedPath }); // 设置文件库根目录
       librariesRoot.value = normalizedPath; // 更新页面显示
-      repostore.librariesRoot = normalizedPath;
+      store.set_librariesRoot(normalizedPath);
       console.log('文件库根目录已更新为:', repostore.librariesRoot);
     }
   } catch (error) {
