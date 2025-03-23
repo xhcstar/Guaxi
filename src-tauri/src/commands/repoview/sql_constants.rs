@@ -1,15 +1,14 @@
 // 创建表的 SQL 语句
 pub const CREATE_TABLE_IMPORTED_FILES: &str = "
-        CREATE TABLE IF NOT EXISTS imported_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            original_filesize INTEGER,
-            title TEXT NOT NULL,
+            original_filesize TEXT,
             create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             original_filepath TEXT NOT NULL,
             original_filename TEXT NOT NULL,
             original_filetype TEXT NOT NULL,
             library TEXT,
             description TEXT,
+            tags TEXT,
             html_filename TEXT,
             html_filepath TEXT,
             html_change_time TIMESTAMP,
@@ -31,13 +30,10 @@ pub const CREATE_TABLE_IMPORTED_FILES: &str = "
             container_filename TEXT,
             container_filepath TEXT,
             container_change_time TIMESTAMP
-        )
     ";
 
 pub const CREATE_TABLE_NOTES: &str = "
-        CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
             description TEXT,
             note_type TEXT,
             create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -47,7 +43,6 @@ pub const CREATE_TABLE_NOTES: &str = "
             from_filename TEXT,
             parent_note INTEGER,
             FOREIGN KEY(parent_note) REFERENCES notes(id)
-        )
     ";
 
 pub const CREATE_TABLE_TAGS: &str = "
@@ -117,12 +112,12 @@ pub const DELETE_NOTE_TAG: &str = "
     ";
 
 pub const INSERT_NOTE: &str = "
-        INSERT INTO notes (title, description, note_type, library, filename, from_filename, parent_note)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        INSERT INTO notes (description, note_type, library, filename, from_filename, parent_note)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
     ";
 
 pub const SELECT_NOTES: &str = "
-        SELECT id, title, description, note_type, create_time, update_time, library, filename, from_filename, parent_note
+        SELECT id, description, note_type, create_time, update_time, library, filename, from_filename, parent_note
         FROM notes
     ";
 
