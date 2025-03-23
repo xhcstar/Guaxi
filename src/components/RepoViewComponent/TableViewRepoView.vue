@@ -1,12 +1,15 @@
 <template>
   <n-space vertical :size="12" class="container">
+    <!-- 工具栏 -->
     <n-space justify="space-between" align="center" class="toolbar">
+      <!-- 左侧按钮组 -->
       <n-space class="actions">
         <n-button @click="sortTitle" class="action-button">按标题排序（升序）</n-button>
-        <n-button @click="filterLibrary" class="action-button">过滤所属库（Library1）</n-button>
+        <n-button @click="filterLibrary" class="action-button">过滤所属库(Library1)</n-button>
         <n-button @click="clearFilters" class="action-button">清除过滤器</n-button>
         <n-button @click="clearSorter" class="action-button">清除排序</n-button>
       </n-space>
+      <!-- 右侧添加按钮 -->
       <n-tooltip trigger="hover">
         <template #trigger>
           <n-button text class="add-path-button" @click="showAddFileModal">
@@ -28,48 +31,35 @@
 
   <!-- 添加文件对话框 -->
   <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog">
+    <!-- 动态生成表单 -->
     <n-form :model="currentForm" label-placement="left" label-width="auto">
-      <n-form-item label="标题">
-        <n-input v-model:value="currentForm.title" placeholder="请输入标题" />
-      </n-form-item>
-      <n-form-item label="描述">
-        <n-input v-model:value="currentForm.description" placeholder="请输入描述" />
-      </n-form-item>
-      <n-form-item label="标签">
-        <n-input v-model:value="currentForm.tags" placeholder="请输入标签" />
-      </n-form-item>
-      <n-form-item label="所属库">
-        <n-input v-model:value="currentForm.library" placeholder="请输入所属库" />
-      </n-form-item>
-      <n-form-item label="文件路径">
-        <n-input v-model:value="currentForm.filePath" placeholder="请输入文件路径">
-          <template #suffix>
-            <n-icon :component="FolderAdd20Regular" @click="openFileBrowser" />
-          </template>
-        </n-input>
-      </n-form-item>
-      <n-form-item label="文件名">
-        <n-input v-model:value="currentForm.fileName" disabled />
-      </n-form-item>
-      <n-form-item label="文件类型">
-        <n-input v-model:value="currentForm.fileType" disabled />
-      </n-form-item>
-      <n-form-item label="创建时间">
-        <n-input v-model:value="currentForm.createTime" disabled />
-      </n-form-item>
-      <n-form-item v-if="store.currentDatabase === 'importFileDB'" label="文件大小">
-        <n-input v-model:value="currentForm.fileSize" disabled />
-      </n-form-item>
-      <n-form-item v-if="store.currentDatabase === 'NotesDb'" label="更新时间">
-        <n-input v-model:value="currentForm.updateTime" placeholder="请输入更新时间" />
-      </n-form-item>
-      <n-form-item v-if="store.currentDatabase === 'NotesDb'" label="父笔记">
-        <n-input v-model:value="currentForm.parentNote" placeholder="请输入父笔记 ID" />
-      </n-form-item>
-      <n-form-item v-if="store.currentDatabase === 'NotesDb'" label="子笔记">
-        <n-input v-model:value="currentForm.childNotes" placeholder="请输入子笔记 ID 列表" />
+      <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title">
+        <!-- 根据列类型渲染不同的输入组件 -->
+        <template v-if="column.key === 'filePath'">
+          <n-input v-model:value="currentForm[column.key]" placeholder="请输入文件路径">
+            <template #suffix>
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <n-button text class="FolderAdd20Regular" @click="openFileBrowser">
+                    <n-icon :component="FolderAdd20Regular" :size="20" />
+                  </n-button>
+                </template>
+                选择导入文件
+              </n-tooltip>
+            </template>
+          </n-input>
+        </template>
+        <template v-else-if="column.key === 'importFileCreateTime' || column.key === 'noteFileCreateTime' || column.key === 'noteFileUpdateTime'
+          || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'fromImportedFileLibrary'
+          || column.key === 'fromImportedFile' || column.key === 'importFileSize'">
+          <n-input v-model:value="currentForm[column.key]" :placeholder="`${column.title}`" disabled />
+        </template>
+        <template v-else>
+          <n-input v-model:value="currentForm[column.key]" :placeholder="`请输入${column.title}`" />
+        </template>
       </n-form-item>
     </n-form>
+
     <template #action>
       <n-button @click="addFile">提交</n-button>
       <n-button @click="isAddFileModalVisible = false">取消</n-button>
@@ -88,7 +78,7 @@ import {
   Share20Regular,
   ArrowMove24Regular,
 } from '@vicons/fluent'
-import { NIcon, NButton, NDropdown, NGradientText } from 'naive-ui'
+import { NIcon, NButton, NDropdown } from 'naive-ui'
 import ShowOrEdit from './ShowOrEdit.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
@@ -98,43 +88,68 @@ const store = repoStore()
 
 // 添加文件对话框状态
 const isAddFileModalVisible = ref(false)
-const checkedRowKeysRef = ref()
 // 表格实例
 const tableRef = ref(null)
 // 分页配置
-const pagination = ref({ pageSize: 10 })
+const pagination = ref({ pageSize: 15 })
 
 // 用于 importFileDB 库的表单
 const newFileForm = ref({
-  title: '',
+  filePath: '',
+  importFileName: '',
   description: '',
   tags: '',
+  type: '',
   library: '', // 所属库名字
-  filePath: '',
-  fileName: '',
-  fileType: '',
-  createTime: '',
-  fileSize: '',
+  importFileCreateTime: '',
+  importFileSize: 0,
+  convetToHtmlFilename: '',
+  importFileSize: '',
 })
 
 // 用于 NotesDb 库的表单
 const newNoteForm = ref({
-  title: '',
-  description: '',
-  tags: '',
-  library: '', // 所属库名字
   filePath: '',
-  fileName: '',
-  fileType: '',
-  createTime: '',
-  updateTime: '', // 笔记特有的字段
-  parentNote: null, // 笔记特有的字段
-  childNotes: [], // 笔记特有的字段
+  description: '',
+  noteFileName: '',
+  tags: '', // 所属库名字
+  fromImportedFile: '',
+  fromImportedFileLibrary: '',
+  noteFileType: '',
+  noteFileCreateTime: '',
+  noteFileUpdateTime: '', // 笔记特有的字段
 })
 
 // 当前表单（根据数据库类型动态切换）
 const currentForm = computed(() => {
-  return store.currentDatabase === 'importFileDB' ? newFileForm : newNoteForm
+  return store.currentDatabase === 'importFileDB' ? newFileForm.value : newNoteForm.value
+})
+
+// 动态生成表单列配置
+const formColumns = computed(() => {
+  const columns = store.currentDatabase === 'importFileDB'
+    ? [
+      { key: 'filePath', title: '文件路径' },
+      { key: 'importFileName', title: '文件名' },
+      { key: 'description', title: '文件描述' },
+      { key: 'library', title: '所属库' },
+      { key: 'tags', title: '文件标签' },
+      { key: 'type', title: '文件类型' },
+      { key: 'importFileCreateTime', title: '入库时间' },
+      { key: 'importFileSize', title: '文件大小' },
+    ]
+    : [
+      { key: 'filePath', title: '文件路径' },
+      { key: 'description', title: '笔记描述' },
+      { key: 'noteFileName', title: '笔记文件名' },
+      { key: 'tags', title: '笔记标签' },
+      { key: 'noteFileType', title: '笔记文件类型' },
+      { key: 'fromImportedFile', title: '笔记归属导入文件' },
+      { key: 'fromImportedFileLibrary', title: '导入文件所属库' },
+      { key: 'noteFileCreateTime', title: '笔记创建时间' },
+      { key: 'noteFileUpdateTime', title: '笔记修改时间' },
+    ]
+  return columns
 })
 
 // 打开文件浏览器并获取文件信息
@@ -144,12 +159,24 @@ const openFileBrowser = async () => {
       filters: [{ name: 'All Files', extensions: ['*'] }],
     })
     if (filePath) {
+      // 更新文件路径
       currentForm.value.filePath = filePath
+
+      // 调用后台接口获取文件信息
       const fileInfo = await invoke('get_file_info', { filePath })
-      currentForm.value.fileName = fileInfo.file_name
-      currentForm.value.fileType = fileInfo.file_type
-      currentForm.value.createTime = fileInfo.create_time
-      currentForm.value.fileSize = fileInfo.file_size
+      console.log('File Info:', fileInfo)
+
+      // 根据当前数据库类型更新表单数据
+      if (store.currentDatabase === 'importFileDB') {
+        currentForm.value.importFileName = fileInfo.file_name
+        currentForm.value.type = fileInfo.file_type
+        currentForm.value.importFileCreateTime = fileInfo.create_time
+        currentForm.value.importFileSize = fileInfo.file_size
+      } else if (store.currentDatabase === 'NotesDb') {
+        currentForm.value.noteFileName = fileInfo.file_name
+        currentForm.value.noteFileType = fileInfo.file_type
+        currentForm.value.noteFileCreateTime = fileInfo.create_time
+      }
     }
   } catch (error) {
     console.error('Error opening file browser:', error)
@@ -164,46 +191,47 @@ const showAddFileModal = () => {
 // 添加文件或笔记
 const addFile = async () => {
   try {
-    if (!currentForm.value.library || !currentForm.value.filePath) {
-      console.error('Library or file path is missing')
-      return
-    }
-    // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
-    await invoke('add_repo_import_file', {
-      library: currentForm.value.library,
-      filePath: currentForm.value.filePath,
-    })
-
-    // 根据当前数据库类型调用不同的接口
     if (store.currentDatabase === 'importFileDB') {
+      if (!currentForm.value.library || !currentForm.value.importFileName) {
+        console.error('Library or importFileName path is missing: ', currentForm.value)
+        return
+      }
+
+      // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
+      await invoke('add_repo_import_file', {
+        library: currentForm.value.library,
+        filePath: currentForm.value.filePath,
+      })
+
       // 添加导入的文件
       store.addImportedFile({
-        id: store.files.length + 1, // 自动生成 ID
-        title: currentForm.value.title,
-        type: currentForm.value.fileType,
-        create_time: currentForm.value.createTime,
-        size: parseInt(currentForm.value.fileSize), // 假设文件大小是数字
-        path: currentForm.value.filePath,
-        library: currentForm.value.library,
+        id: store.files.length + 1,
+        importFileName: currentForm.value.importFileName,
         description: currentForm.value.description,
         tags: currentForm.value.tags,
-        html_file_name: `${currentForm.value.fileName}.html`,
-        markdown_file_name: `${currentForm.value.fileName}.md`,
+        type: currentForm.value.type,
+        library: currentForm.value.library,
+        importFileCreateTime: currentForm.value.importFileCreateTime,
+        importFileSize: currentForm.value.importFileSize,
+        convetToHtmlFilename: `${currentForm.value.importFileName}.html`,
+        convetToMarkdownFilename: `${currentForm.value.importFileName}.md`,
       })
     } else if (store.currentDatabase === 'NotesDb') {
+      if (!currentForm.value.fromImportedFileLibrary || !currentForm.value.noteFileName) {
+        console.error('Library or noteFileName path is missing: ', currentForm.value)
+        return
+      }
+
       // 添加导入的笔记
       store.addImportedNote({
-        id: store.notes.length + 1, // 自动生成 ID
-        title: currentForm.value.title,
+        id: store.notes.length + 1,
         description: currentForm.value.description,
-        type: 'markdown', // 假设笔记类型为 markdown
+        noteFileName: `${currentForm.value.noteFileName}.md`,
+        type: 'markdown',
         tags: currentForm.value.tags,
-        create_time: currentForm.value.createTime,
-        update_time: currentForm.value.updateTime || currentForm.value.createTime, // 默认与创建时间相同
-        library: currentForm.value.library,
-        file: `${currentForm.value.fileName}.md`,
-        parent_note: currentForm.value.parentNote,
-        child_notes: currentForm.value.childNotes,
+        fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
+        noteFileCreateTime: currentForm.value.noteFileCreateTime,
+        noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
       })
     }
 
@@ -219,29 +247,26 @@ const addFile = async () => {
 const resetForm = () => {
   if (store.currentDatabase === 'importFileDB') {
     newFileForm.value = {
-      title: '',
+      importFileName: '',
       description: '',
       tags: '',
-      library: '',
-      filePath: '',
-      fileName: '',
-      fileType: '',
-      createTime: '',
-      fileSize: '',
+      type: '',
+      library: '', // 所属库名字
+      importFileCreateTime: '',
+      importFileSize: 0,
+      convetToHtmlFilename: '',
+      importFileSize: '',
     }
   } else {
     newNoteForm.value = {
-      title: '',
       description: '',
-      tags: '',
-      library: '',
-      filePath: '',
-      fileName: '',
-      fileType: '',
-      createTime: '',
-      updateTime: '',
-      parentNote: null,
-      childNotes: [],
+      noteFileName: '',
+      tags: '', // 所属库名字
+      fromImportedFile: '',
+      fromImportedFileLibrary: '',
+      noteFileType: '',
+      noteFileCreateTime: '',
+      noteFileUpdateTime: '', // 笔记特有的字段
     }
   }
 }
@@ -329,9 +354,6 @@ const rowProps = (row) => {
         y.value = e.clientY
       })
     },
-    // onClick: () => {
-    //   handleEdit(row)
-    // },
   }
 }
 
@@ -375,26 +397,6 @@ const columns = computed(() => {
               fontWeight: 'bold', // 加粗
               color: '#000000', // 字体颜色
             }
-          }, '笔记标题'),
-        key: 'title',
-        resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.title,
-            onUpdateValue(v) {
-              row.title = v
-            },
-          })
-        },
-      },
-      {
-        title: () => h('span',
-          {
-            style: {
-              fontSize: '17px', // 调整字号
-              fontWeight: 'bold', // 加粗
-              color: '#000000', // 字体颜色
-            }
           }, '笔记描述'),
         key: 'description',
         resizable: true,
@@ -416,33 +418,13 @@ const columns = computed(() => {
               color: '#000000', // 字体颜色
             }
           }, '笔记文件名'),
-        key: 'file',
+        key: 'noteFileName',
         resizable: true,
         render(row) {
           return h(ShowOrEdit, {
-            value: row.file,
+            value: row.noteFileName,
             onUpdateValue(v) {
-              row.file = v
-            },
-          })
-        },
-      },
-      {
-        title: () => h('span',
-          {
-            style: {
-              fontSize: '17px', // 调整字号
-              fontWeight: 'bold', // 加粗
-              color: '#000000', // 字体颜色
-            }
-          }, '笔记类型'),
-        key: 'type',
-        resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.type,
-            onUpdateValue(v) {
-              row.type = v
+              row.noteFileName = v
             },
           })
         },
@@ -475,14 +457,26 @@ const columns = computed(() => {
               fontWeight: 'bold', // 加粗
               color: '#000000', // 字体颜色
             }
-          }, '所属库'),
-        key: 'library',
+          }, '笔记归属导入文件'),
+        key: 'fromImportedFile',
+        resizable: true,
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '导入文件所属库'),
+        key: 'fromImportedFileLibrary',
         resizable: true,
         render(row) {
           return h(ShowOrEdit, {
-            value: row.library,
+            value: row.fromImportedFileLibrary,
             onUpdateValue(v) {
-              row.library = v
+              row.fromImportedFileLibrary = v
             },
           })
         },
@@ -495,17 +489,10 @@ const columns = computed(() => {
               fontWeight: 'bold', // 加粗
               color: '#000000', // 字体颜色
             }
-          }, '创建时间'),
-        key: 'create_time',
+          }, '笔记文件类型'),
+        key: 'noteFileType',
         resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.create_time,
-            onUpdateValue(v) {
-              row.create_time = v
-            },
-          })
-        },
+        width: 130,
       },
       {
         title: () => h('span',
@@ -515,17 +502,9 @@ const columns = computed(() => {
               fontWeight: 'bold', // 加粗
               color: '#000000', // 字体颜色
             }
-          }, '修改时间'),
-        key: 'update_time',
+          }, '笔记创建时间'),
+        key: 'noteFileCreateTime',
         resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.update_time,
-            onUpdateValue(v) {
-              row.update_time = v
-            },
-          })
-        },
       },
       {
         title: () => h('span',
@@ -535,37 +514,9 @@ const columns = computed(() => {
               fontWeight: 'bold', // 加粗
               color: '#000000', // 字体颜色
             }
-          }, '父级笔记'),
-        key: 'parent_note',
+          }, '笔记修改时间'),
+        key: 'noteFileUpdateTime',
         resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.parent_note,
-            onUpdateValue(v) {
-              row.parent_note = v
-            },
-          })
-        },
-      },
-      {
-        title: () => h('span',
-          {
-            style: {
-              fontSize: '17px', // 调整字号
-              fontWeight: 'bold', // 加粗
-              color: '#000000', // 字体颜色
-            }
-          }, '子级笔记'),
-        key: 'child_notes',
-        resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.child_notes,
-            onUpdateValue(v) {
-              row.child_notes = v
-            },
-          })
-        },
       },
     ]
     : [
@@ -581,13 +532,13 @@ const columns = computed(() => {
               color: '#000000', // 字体颜色
             }
           }, '文件名'),
-        key: 'title',
+        key: 'importFileName',
         resizable: true,
         render(row) {
           return h(ShowOrEdit, {
-            value: row.title,
+            value: row.importFileName,
             onUpdateValue(v) {
-              row.title = v
+              row.importFileName = v
             },
           })
         },
@@ -643,54 +594,7 @@ const columns = computed(() => {
           }, '文件类型'),
         key: 'type',
         resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.type,
-            onUpdateValue(v) {
-              row.type = v
-            },
-          })
-        },
-      },
-      {
-        title: () => h('span',
-          {
-            style: {
-              fontSize: '17px', // 调整字号
-              fontWeight: 'bold', // 加粗
-              color: '#000000', // 字体颜色
-            }
-          }, '入库时间'),
-        key: 'create_time',
-        resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.create_time,
-            onUpdateValue(v) {
-              row.create_time = v
-            },
-          })
-        },
-      },
-      {
-        title: () => h('span',
-          {
-            style: {
-              fontSize: '17px', // 调整字号
-              fontWeight: 'bold', // 加粗
-              color: '#000000', // 字体颜色
-            }
-          }, '文件大小'),
-        key: 'size',
-        resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.size,
-            onUpdateValue(v) {
-              row.size = v
-            },
-          })
-        },
+        width: 100,
       },
       {
         title: () => h('span',
@@ -727,17 +631,36 @@ const columns = computed(() => {
               fontWeight: 'bold', // 加粗
               color: '#000000', // 字体颜色
             }
-          }, 'HTML文件名'),
-        key: 'html_file_name',
+          }, '入库时间'),
+        key: 'importFileCreateTime',
         resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.html_file_name,
-            onUpdateValue(v) {
-              row.html_file_name = v
-            },
-          })
-        },
+        width: '170',
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, '文件大小'),
+        key: 'importFileSize',
+        resizable: true,
+        width: 100,
+      },
+      {
+        title: () => h('span',
+          {
+            style: {
+              fontSize: '17px', // 调整字号
+              fontWeight: 'bold', // 加粗
+              color: '#000000', // 字体颜色
+            }
+          }, 'HTML文件名'),
+        key: 'convetToHtmlFilename',
+        resizable: true,
+        width: '180',
       },
       {
         title: () => h('span',
@@ -748,16 +671,9 @@ const columns = computed(() => {
               color: '#000000', // 字体颜色
             }
           }, 'Markdown文件名'),
-        key: 'markdown_file_name',
+        key: 'convetToMarkdownFilename',
         resizable: true,
-        render(row) {
-          return h(ShowOrEdit, {
-            value: row.markdown_file_name,
-            onUpdateValue(v) {
-              row.markdown_file_name = v
-            },
-          })
-        },
+        width: '180',
       },
     ]
 })
@@ -805,22 +721,45 @@ onMounted(async () => {
 
 <style scoped>
 .container {
+  width: 100%;
   padding: 16px;
+  box-sizing: border-box;
+  /* 确保内边距不影响宽度 */
 }
 
 .toolbar {
-  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  overflow-x: auto;
+  /* 允许水平滚动 */
 }
 
 .actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  /* 允许按钮换行 */
 }
 
 .add-path-button {
-  position: absolute;
-  top: 20px;
-  right: 20px;
+  margin-left: auto;
+  white-space: nowrap;
+  /* 防止按钮文本换行 */
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .actions {
+    flex-direction: column;
+    /* 小屏幕时按钮堆叠显示 */
+  }
+
+  .add-path-button {
+    margin-left: 0;
+    /* 小屏幕时取消自动左边距 */
+  }
 }
 
 .data-table {

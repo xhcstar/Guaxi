@@ -154,11 +154,11 @@ const handleOpenFileBrowserForLibraryRoot = async () => {
 
     if (selectedPath) {
       // 将路径统一转换为 Linux 系统的正斜杠模式
-      const normalizedPath = selectedPath.replace(/\\/g, '/');
-      await invoke('set_libraries_root', { path: normalizedPath }); // 设置文件库根目录
-      librariesRoot.value = normalizedPath; // 更新页面显示
-      store.set_librariesRoot(normalizedPath);
-      console.log('文件库根目录已更新为:', repostore.librariesRoot);
+      // const normalizedPath = selectedPath.replace(/\\/g, '/');
+      await invoke('set_libraries_root', { path: selectedPath }); // 设置文件库根目录
+      librariesRoot.value = selectedPath; // 更新页面显示
+      store.set_librariesRoot(selectedPath);
+      console.log('文件库根目录已更新为:', store.librariesRoot);
     }
   } catch (error) {
     console.error('打开文件浏览器失败:', error);

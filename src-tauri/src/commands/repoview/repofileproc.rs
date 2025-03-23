@@ -1,5 +1,5 @@
 use std::fs;
-use chrono::{DateTime, Local, TimeZone};
+use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
 use tracing::info;
 use super::super::settingview::get_libraries_root;
@@ -23,10 +23,8 @@ pub fn get_file_info(file_path: String) -> Result<FileInfo, String> {
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string();
     let file_type = path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_string();
 
-    // 使用 chrono 格式化时间
-    let create_time = DateTime::<Local>::from(metadata.created().map_err(|e| e.to_string())?)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    // 使用 chrono 获取当前系统时间并格式化
+    let create_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let file_size = metadata.len();
 
@@ -59,6 +57,7 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<String
         info!("create_dir Library directory: {}", library_dir.display());
     }
 
+    info!("library_dir: {}", library_dir.display());
     // 获取文件名
     let file_name = Path::new(&file_path)
         .file_name()
