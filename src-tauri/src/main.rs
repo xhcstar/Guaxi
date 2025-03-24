@@ -12,7 +12,7 @@ async fn app_init() {
     // 在启动时加载配置文件
     let config = commands::settingview::load_config();
     info!("Loaded config: {:?}", config);
-    match commands::repoview::create_db_file() {
+    match commands::repoview::setup_db() {
         Ok(_) => println!("Database initialized successfully."),
         Err(e) => eprintln!("Failed to initialize database: {}", e),
     }

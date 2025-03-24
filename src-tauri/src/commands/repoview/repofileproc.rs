@@ -18,7 +18,7 @@ pub struct ImportNoteInfo {
     create_time: String,
     update_time: String,
     library: String,
-    filename: String,
+    note_file_name: String,
     from_filename: String,
 }
 
@@ -152,7 +152,7 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
         create_time,
         update_time,
         library, // 直接返回传入的库名称，例如 "qw"
-        filename: note_file_name,
+        note_file_name: note_file_name,
         from_filename: file_name.to_string(),
     };
 

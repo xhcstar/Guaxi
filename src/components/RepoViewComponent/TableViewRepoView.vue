@@ -190,68 +190,38 @@ const showAddFileModal = () => {
   isAddFileModalVisible.value = true
 }
 
-// 提取创建 importfileList 的逻辑
 const createImportFileList = (form) => {
-  const currentTime = new Date().toISOString();
   return {
-    original_filesize: form.importFileSize,
-    create_time: form.importFileCreateTime,
-    original_filepath: form.filePath,
-    original_filename: form.importFileName,
-    original_filetype: form.type,
-    library: form.library,
+    import_file_name: form.importFileName,
     description: form.description,
+    library: form.library,
     tags: form.tags.split(','),
-    html_filename: `${form.importFileName}.html`,
-    html_filepath: `path/to/html/${form.importFileName}.html`,
-    html_change_time: currentTime,
-    markdown_filename: `${form.importFileName}.md`,
-    markdown_filepath: `path/to/markdown/${form.importFileName}.md`,
-    markdown_change_time: currentTime,
-    pdf_filename: `${form.importFileName}.pdf`,
-    pdf_filepath: `path/to/pdf/${form.importFileName}.pdf`,
-    pdf_change_time: currentTime,
-    word_filename: `${form.importFileName}.docx`,
-    word_filepath: `path/to/word/${form.importFileName}.docx`,
-    word_change_time: currentTime,
-    epub_filename: `${form.importFileName}.epub`,
-    epub_filepath: `path/to/epub/${form.importFileName}.epub`,
-    epub_change_time: currentTime,
-    txt_filename: `${form.importFileName}.txt`,
-    txt_filepath: `path/to/txt/${form.importFileName}.txt`,
-    txt_change_time: currentTime,
-    container_filename: `${form.importFileName}.zip`,
-    container_filepath: `path/to/container/${form.importFileName}.zip`,
-    container_change_time: currentTime,
+    file_type: form.type,
+    import_file_create_time: form.importFileCreateTime,
+    import_file_size: form.importFileSize,
   };
 };
 
 // 提取创建 importNoteList 的逻辑
-const createImportNoteList = (form, addedNoteInfo = null) => {
-  const createTime = addedNoteInfo ? addedNoteInfo.create_time : form.noteFileCreateTime;
-  const updateTime = addedNoteInfo ? (addedNoteInfo.update_time || addedNoteInfo.create_time) : (form.noteFileUpdateTime || form.noteFileCreateTime);
+const createImportNoteList = (addedNoteInfo) => {
   return {
-    description: addedNoteInfo ? `${form.filePath}的笔记` : form.description,
-    note_type: 'markdown',
-    create_time: createTime,
-    update_time: updateTime,
-    library: addedNoteInfo ? addedNoteInfo.library : form.fromImportedFileLibrary,
-    filename: addedNoteInfo ? addedNoteInfo.filename : `${form.noteFileName}.md`,
-    from_filename: addedNoteInfo ? addedNoteInfo.from_filename : form.fromImportedFile,
-    parent_note: form.parent_note || null,
-    tags: form.tags.split(','),
-    child_notes: [],
-    link_to_notes: [],
-    link_to_files: [],
+    description: `${addedNoteInfo.from_filename}的笔记`,
+    note_file_name: addedNoteInfo.note_file_name,
+    tags: [],
+    note_file_type: 'markdown',
+    from_imported_file: addedNoteInfo.from_filename,
+    from_imported_file_library: addedNoteInfo.library,
+    note_file_create_time: addedNoteInfo.create_time,
+    note_file_update_time: addedNoteInfo.update_time,
   };
 };
 
 // 提取添加文件到数据库的逻辑
-const addFileToDatabase = async (tableName, fileInfo) => {
+const addFileToDatabase = async (fileInfo) => {
   try {
+    console.log('Adding info into table imported_files database:', fileInfo);
     const fileId = await invoke('add_imported_file', {
-      tableName,
-      importedFileInfo: fileInfo,
+      file: fileInfo,
     });
     console.log('File info successfully added to database, id: ', fileId);
     return fileId;
@@ -262,10 +232,10 @@ const addFileToDatabase = async (tableName, fileInfo) => {
 };
 
 // 提取添加笔记到数据库的逻辑
-const addNoteToDatabase = async (tableName, noteInfo) => {
+const addNoteToDatabase = async (noteInfo) => {
   try {
+    console.log('Adding info into table notes database:', noteInfo);
     const noteId = await invoke('add_note', {
-      tableName,
       note: noteInfo,
     });
     console.log('Note info successfully added to database, id: ', noteId);
@@ -276,7 +246,6 @@ const addNoteToDatabase = async (tableName, noteInfo) => {
   }
 };
 
-// 添加文件或笔记的主逻辑
 const addFile = async () => {
   try {
     if (store.currentDatabase === 'importFileDB') {
@@ -296,7 +265,7 @@ const addFile = async () => {
       console.log('importfileList:', importfileList);
 
       // 将 importfileList 写入数据库
-      const fileId = await addFileToDatabase('imported_files', importfileList);
+      const fileId = await addFileToDatabase(importfileList);
 
       // 添加导入的文件到 store
       store.addImportedFile({
@@ -308,16 +277,14 @@ const addFile = async () => {
         library: currentForm.value.library,
         importFileCreateTime: currentForm.value.importFileCreateTime,
         importFileSize: currentForm.value.importFileSize,
-        convetToHtmlFilename: `${currentForm.value.importFileName}.html`,
-        convetToMarkdownFilename: `${currentForm.value.importFileName}.md`,
       });
 
       // 创建 importNoteList
-      const importNoteList = createImportNoteList(currentForm.value, addedNoteInfo);
+      const importNoteList = createImportNoteList(addedNoteInfo);
       console.log('importNoteList:', importNoteList);
 
       // 将 importNoteList 写入数据库
-      const noteId = await addNoteToDatabase('notes', importNoteList);
+      const noteId = await addNoteToDatabase(importNoteList);
 
       // 添加导入的笔记到 store
       store.addImportedNote({
@@ -357,7 +324,7 @@ const addFile = async () => {
   } catch (error) {
     console.error('Error adding file:', error);
   }
-}
+};
 
 // 清空表单
 const resetForm = () => {
@@ -480,15 +447,65 @@ const handleOpen = (row) => {
   console.log('打开', row)
 }
 
-// 方法：删除文件
-const handleDelete = (row) => {
-  console.log('删除', row)
-}
+const handleDelete = async (row) => {
+  try {
+    if (store.currentDatabase === 'importFileDB') {
+      // 调用删除导入文件的接口
+      await invoke('delete_imported_file', { id: row.id });
+      console.log('删除导入文件成功', row);
+    } else {
+      // 调用删除笔记的接口
+      await invoke('delete_note', { id: row.id });
+      console.log('删除笔记成功', row);
+    }
 
-// 方法：编辑文件
-const handleEdit = (row) => {
-  console.log('编辑', row)
-}
+    // 刷新数据
+    await store.fetchFiles(store.currentDatabase);
+  } catch (error) {
+    console.error('删除失败:', error);
+  }
+};
+
+// 方法：编辑文件或笔记
+const handleEdit = async (row) => {
+  try {
+    if (store.currentDatabase === 'importFileDB') {
+      // 调用更新导入文件的接口
+      const updatedFile = {
+        id: row.id,
+        import_file_name: row.importFileName,
+        description: row.description,
+        library: row.library,
+        file_type: row.type,
+        import_file_create_time: row.importFileCreateTime,
+        import_file_size: row.importFileSize,
+        tags: row.tags.split(','), // 将字符串转换为数组
+      };
+      await invoke('update_imported_file', { id: row.id, file: updatedFile });
+      console.log('更新导入文件成功', row);
+    } else {
+      // 调用更新笔记的接口
+      const updatedNote = {
+        id: row.id,
+        description: row.description,
+        note_file_name: row.noteFileName,
+        note_file_type: row.type,
+        from_imported_file: row.fromImportedFile,
+        from_imported_file_library: row.fromImportedFileLibrary,
+        note_file_create_time: row.noteFileCreateTime,
+        note_file_update_time: row.noteFileUpdateTime,
+        tags: row.tags.split(','), // 将字符串转换为数组
+      };
+      await invoke('update_note', { id: row.id, note: updatedNote });
+      console.log('更新笔记成功', row);
+    }
+
+    // 刷新数据
+    await store.fetchFiles(store.currentDatabase);
+  } catch (error) {
+    console.error('编辑失败:', error);
+  }
+};
 
 // 方法：分享文件
 const handleShare = (row) => {
