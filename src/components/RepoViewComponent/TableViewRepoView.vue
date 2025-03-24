@@ -49,9 +49,9 @@
             </template>
           </n-input>
         </template>
-        <template v-else-if="column.key === 'importFileCreateTime' || column.key === 'noteFileCreateTime' || column.key === 'noteFileUpdateTime'
-          || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'fromImportedFileLibrary'
-          || column.key === 'fromImportedFile' || column.key === 'importFileSize'">
+        <template
+          v-else-if="column.key === 'importFileCreateTime' || column.key === 'noteFileCreateTime' || column.key === 'noteFileUpdateTime'
+            || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'importFileSize'">
           <n-input v-model:value="currentForm[column.key]" :placeholder="`${column.title}`" disabled />
         </template>
         <template v-else>
@@ -203,17 +203,30 @@ const createImportFileList = (form) => {
 };
 
 // 提取创建 importNoteList 的逻辑
-const createImportNoteList = (addedNoteInfo) => {
-  return {
-    description: `${addedNoteInfo.from_filename}的笔记`,
-    note_file_name: addedNoteInfo.note_file_name,
-    tags: [],
-    note_file_type: 'markdown',
-    from_imported_file: addedNoteInfo.from_filename,
-    from_imported_file_library: addedNoteInfo.library,
-    note_file_create_time: addedNoteInfo.create_time,
-    note_file_update_time: addedNoteInfo.update_time,
-  };
+const createImportNoteList = (addedNoteInfo, currentForm) => {
+  if (store.currentDatabase === 'NotesDb') {
+    return {
+      description: currentForm.description,
+      note_file_name: currentForm.noteFileName,
+      tags: currentForm.tags.split(','),
+      note_file_type: currentForm.noteFileType,
+      from_imported_file: currentForm.fromImportedFile,
+      from_imported_file_library: currentForm.fromImportedFileLibrary,
+      note_file_create_time: currentForm.noteFileCreateTime,
+      note_file_update_time: currentForm.noteFileCreateTime,
+    }
+  } else {
+    return {
+      description: `${addedNoteInfo.from_filename}的笔记`,
+      note_file_name: addedNoteInfo.note_file_name,
+      tags: [],
+      note_file_type: 'markdown',
+      from_imported_file: addedNoteInfo.from_filename,
+      from_imported_file_library: addedNoteInfo.library,
+      note_file_create_time: addedNoteInfo.create_time,
+      note_file_update_time: addedNoteInfo.update_time,
+    };
+  }
 };
 
 // 提取添加文件到数据库的逻辑
@@ -280,7 +293,7 @@ const addFile = async () => {
       });
 
       // 创建 importNoteList
-      const importNoteList = createImportNoteList(addedNoteInfo);
+      const importNoteList = createImportNoteList(addedNoteInfo, currentForm.value);
       console.log('importNoteList:', importNoteList);
 
       // 将 importNoteList 写入数据库
@@ -299,11 +312,11 @@ const addFile = async () => {
       });
     } else if (store.currentDatabase === 'NotesDb') {
       // 创建 importNoteList
-      const importNoteList = createImportNoteList(currentForm.value);
+      const importNoteList = createImportNoteList(null ,currentForm.value);
       console.log('importNoteList:', importNoteList);
 
       // 将 importNoteList 写入数据库
-      const noteId = await addNoteToDatabase('notes', importNoteList);
+      const noteId = await addNoteToDatabase(importNoteList);
 
       // 添加导入的笔记到 store
       store.addImportedNote({

@@ -171,7 +171,7 @@ pub const CREATE_TABLES_NOTES: &str = "
 
 pub const CREATE_TABLES_NOTE_TAGS: &str = "
         -- 笔记标签表
-        CREATE TABLE note_tags (
+        CREATE TABLE notes_tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE
         );
@@ -179,7 +179,7 @@ pub const CREATE_TABLES_NOTE_TAGS: &str = "
 
 pub const CREATE_TABLES_NOTE_TAGS_RELATIONS: &str = "
         -- 笔记与标签的关联表
-        CREATE TABLE note_tag_relations (
+        CREATE TABLE notes_tags_relations (
             note_id INTEGER NOT NULL,
             tag_id INTEGER NOT NULL,
             FOREIGN KEY(note_id) REFERENCES notes(id),
@@ -189,7 +189,7 @@ pub const CREATE_TABLES_NOTE_TAGS_RELATIONS: &str = "
         ";
 pub const CREATE_TABLES_NOTE_LINKS: &str = "
         -- 笔记链接表
-        CREATE TABLE note_links (
+        CREATE TABLE notes_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_note_id INTEGER NOT NULL,
             target_note_id INTEGER NOT NULL,
