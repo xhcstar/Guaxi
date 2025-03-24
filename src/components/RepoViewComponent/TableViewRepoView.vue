@@ -190,129 +190,172 @@ const showAddFileModal = () => {
   isAddFileModalVisible.value = true
 }
 
-// 添加文件或笔记
+// 提取创建 importfileList 的逻辑
+const createImportFileList = (form) => {
+  const currentTime = new Date().toISOString();
+  return {
+    original_filesize: form.importFileSize,
+    create_time: form.importFileCreateTime,
+    original_filepath: form.filePath,
+    original_filename: form.importFileName,
+    original_filetype: form.type,
+    library: form.library,
+    description: form.description,
+    tags: form.tags.split(','),
+    html_filename: `${form.importFileName}.html`,
+    html_filepath: `path/to/html/${form.importFileName}.html`,
+    html_change_time: currentTime,
+    markdown_filename: `${form.importFileName}.md`,
+    markdown_filepath: `path/to/markdown/${form.importFileName}.md`,
+    markdown_change_time: currentTime,
+    pdf_filename: `${form.importFileName}.pdf`,
+    pdf_filepath: `path/to/pdf/${form.importFileName}.pdf`,
+    pdf_change_time: currentTime,
+    word_filename: `${form.importFileName}.docx`,
+    word_filepath: `path/to/word/${form.importFileName}.docx`,
+    word_change_time: currentTime,
+    epub_filename: `${form.importFileName}.epub`,
+    epub_filepath: `path/to/epub/${form.importFileName}.epub`,
+    epub_change_time: currentTime,
+    txt_filename: `${form.importFileName}.txt`,
+    txt_filepath: `path/to/txt/${form.importFileName}.txt`,
+    txt_change_time: currentTime,
+    container_filename: `${form.importFileName}.zip`,
+    container_filepath: `path/to/container/${form.importFileName}.zip`,
+    container_change_time: currentTime,
+  };
+};
+
+// 提取创建 importNoteList 的逻辑
+const createImportNoteList = (form, addedNoteInfo = null) => {
+  const createTime = addedNoteInfo ? addedNoteInfo.create_time : form.noteFileCreateTime;
+  const updateTime = addedNoteInfo ? (addedNoteInfo.update_time || addedNoteInfo.create_time) : (form.noteFileUpdateTime || form.noteFileCreateTime);
+  return {
+    description: addedNoteInfo ? `${form.filePath}的笔记` : form.description,
+    note_type: 'markdown',
+    create_time: createTime,
+    update_time: updateTime,
+    library: addedNoteInfo ? addedNoteInfo.library : form.fromImportedFileLibrary,
+    filename: addedNoteInfo ? addedNoteInfo.filename : `${form.noteFileName}.md`,
+    from_filename: addedNoteInfo ? addedNoteInfo.from_filename : form.fromImportedFile,
+    parent_note: form.parent_note || null,
+    tags: form.tags.split(','),
+    child_notes: [],
+    link_to_notes: [],
+    link_to_files: [],
+  };
+};
+
+// 提取添加文件到数据库的逻辑
+const addFileToDatabase = async (tableName, fileInfo) => {
+  try {
+    const fileId = await invoke('add_imported_file', {
+      tableName,
+      importedFileInfo: fileInfo,
+    });
+    console.log('File info successfully added to database, id: ', fileId);
+    return fileId;
+  } catch (error) {
+    console.error('Error adding info into table imported_files database:', error);
+    throw error;
+  }
+};
+
+// 提取添加笔记到数据库的逻辑
+const addNoteToDatabase = async (tableName, noteInfo) => {
+  try {
+    const noteId = await invoke('add_note', {
+      tableName,
+      note: noteInfo,
+    });
+    console.log('Note info successfully added to database, id: ', noteId);
+    return noteId;
+  } catch (error) {
+    console.error('Error adding info into table notes database:', error);
+    throw error;
+  }
+};
+
+// 添加文件或笔记的主逻辑
 const addFile = async () => {
   try {
     if (store.currentDatabase === 'importFileDB') {
       if (!currentForm.value.library || !currentForm.value.importFileName) {
-        console.error('Library or importFileName path is missing: ', currentForm.value)
-        return
+        console.error('Library or importFileName path is missing: ', currentForm.value);
+        return;
       }
 
       // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
-      await invoke('add_repo_import_file', {
+      const addedNoteInfo = await invoke('add_repo_import_file', {
         library: currentForm.value.library,
         filePath: currentForm.value.filePath,
-      })
+      });
 
-      const importfileList = {
-        original_filesize: currentForm.value.importFileSize,
-        create_time: currentForm.value.importFileCreateTime,
-        original_filepath: currentForm.value.filePath,
-        original_filename: currentForm.value.importFileName,
-        original_filetype: currentForm.value.type,
+      // 创建 importfileList
+      const importfileList = createImportFileList(currentForm.value);
+      console.log('importfileList:', importfileList);
+
+      // 将 importfileList 写入数据库
+      const fileId = await addFileToDatabase('imported_files', importfileList);
+
+      // 添加导入的文件到 store
+      store.addImportedFile({
+        id: fileId,
+        importFileName: currentForm.value.importFileName,
+        description: currentForm.value.description,
+        tags: currentForm.value.tags,
+        type: currentForm.value.type,
         library: currentForm.value.library,
+        importFileCreateTime: currentForm.value.importFileCreateTime,
+        importFileSize: currentForm.value.importFileSize,
+        convetToHtmlFilename: `${currentForm.value.importFileName}.html`,
+        convetToMarkdownFilename: `${currentForm.value.importFileName}.md`,
+      });
+
+      // 创建 importNoteList
+      const importNoteList = createImportNoteList(currentForm.value, addedNoteInfo);
+      console.log('importNoteList:', importNoteList);
+
+      // 将 importNoteList 写入数据库
+      const noteId = await addNoteToDatabase('notes', importNoteList);
+
+      // 添加导入的笔记到 store
+      store.addImportedNote({
+        id: noteId,
         description: currentForm.value.description,
-        tags: currentForm.value.tags.split(','), // 将字符串转换为数组
-        html_filename: `${currentForm.value.importFileName}.html`,
-        html_filepath: `path/to/html/${currentForm.value.importFileName}.html`,
-        html_change_time: new Date().toISOString(),
-        markdown_filename: `${currentForm.value.importFileName}.md`,
-        markdown_filepath: `path/to/markdown/${currentForm.value.importFileName}.md`,
-        markdown_change_time: new Date().toISOString(),
-        pdf_filename: `${currentForm.value.importFileName}.pdf`,
-        pdf_filepath: `path/to/pdf/${currentForm.value.importFileName}.pdf`,
-        pdf_change_time: new Date().toISOString(),
-        word_filename: `${currentForm.value.importFileName}.docx`,
-        word_filepath: `path/to/word/${currentForm.value.importFileName}.docx`,
-        word_change_time: new Date().toISOString(),
-        epub_filename: `${currentForm.value.importFileName}.epub`,
-        epub_filepath: `path/to/epub/${currentForm.value.importFileName}.epub`,
-        epub_change_time: new Date().toISOString(),
-        txt_filename: `${currentForm.value.importFileName}.txt`,
-        txt_filepath: `path/to/txt/${currentForm.value.importFileName}.txt`,
-        txt_change_time: new Date().toISOString(),
-        container_filename: `${currentForm.value.importFileName}.zip`,
-        container_filepath: `path/to/container/${currentForm.value.importFileName}.zip`,
-        container_change_time: new Date().toISOString(),
-      };
-
-      console.log('importfileList:', importfileList); // 调试日志
-      // 调用 Tauri 后端接口，将 importfileList 写入数据库
-      try {
-        const fileId = await invoke('add_imported_file', {
-          tableName: 'imported_files', // 确保参数名与后端一致
-          importedFileInfo: importfileList, // 确保参数名与后端一致
-        });
-        console.log('File info successfully added to database, id: ', fileId);
-
-        // 添加导入的文件
-        store.addImportedFile({
-          id: fileId,
-          importFileName: currentForm.value.importFileName,
-          description: currentForm.value.description,
-          tags: currentForm.value.tags,
-          type: currentForm.value.type,
-          library: currentForm.value.library,
-          importFileCreateTime: currentForm.value.importFileCreateTime,
-          importFileSize: currentForm.value.importFileSize,
-          convetToHtmlFilename: `${currentForm.value.importFileName}.html`,
-          convetToMarkdownFilename: `${currentForm.value.importFileName}.md`,
-        })
-      } catch (error) {
-        console.error('Error adding info into table imported_files database:', error);
-      }
-
+        noteFileName: `${currentForm.value.noteFileName}.md`,
+        type: 'markdown',
+        tags: currentForm.value.tags,
+        fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
+        noteFileCreateTime: currentForm.value.noteFileCreateTime,
+        noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
+      });
     } else if (store.currentDatabase === 'NotesDb') {
-      // if (!currentForm.value.fromImportedFileLibrary || !currentForm.value.noteFileName) {
-      //   console.error('Library or noteFileName path is missing: ', currentForm.value)
-      //   return
-      // }
+      // 创建 importNoteList
+      const importNoteList = createImportNoteList(currentForm.value);
+      console.log('importNoteList:', importNoteList);
 
-      const importNoteList = {
+      // 将 importNoteList 写入数据库
+      const noteId = await addNoteToDatabase('notes', importNoteList);
+
+      // 添加导入的笔记到 store
+      store.addImportedNote({
+        id: noteId,
         description: currentForm.value.description,
-        note_type: 'markdown', // 默认笔记类型
-        create_time: currentForm.value.noteFileCreateTime,
-        update_time: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
-        library: currentForm.value.fromImportedFileLibrary,
-        filename: `${currentForm.value.noteFileName}.md`,
-        from_filename: currentForm.value.fromImportedFile,
-        parent_note: currentForm.value.parent_note || null, // 父笔记 ID
-        tags: currentForm.value.tags.split(','), // 将字符串转换为数组
-        child_notes: [], // 子笔记的 ID 列表
-        link_to_notes: [], // 链接笔记的 ID 列表
-        link_to_files: [], // 链接文件的 ID 列表
-      };
-
-      console.log('importNoteList:', importNoteList); // 调试日志
-      // 调用 Tauri 后端接口，将 importNoteList 写入数据库
-      try {
-        const noteId = await invoke('add_note', {
-          tableName: 'notes', // 确保参数名与后端一致
-          note: importNoteList, // 确保参数名与后端一致
-        });
-        console.log('Note info successfully added to database, id: ', noteId);
-        // 添加导入的笔记
-        store.addImportedNote({
-          id: noteId,
-          description: currentForm.value.description,
-          noteFileName: `${currentForm.value.noteFileName}.md`,
-          type: 'markdown',
-          tags: currentForm.value.tags,
-          fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
-          noteFileCreateTime: currentForm.value.noteFileCreateTime,
-          noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
-        })
-      } catch (error) {
-        console.error('Error adding info into table notes database:', error);
-      }
+        noteFileName: `${currentForm.value.noteFileName}.md`,
+        type: 'markdown',
+        tags: currentForm.value.tags,
+        fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
+        noteFileCreateTime: currentForm.value.noteFileCreateTime,
+        noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
+      });
     }
 
     // 关闭对话框并清空表单
-    isAddFileModalVisible.value = false
-    resetForm()
+    isAddFileModalVisible.value = false;
+    resetForm();
   } catch (error) {
-    console.error('Error adding file:', error)
+    console.error('Error adding file:', error);
   }
 }
 
