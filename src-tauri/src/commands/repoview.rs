@@ -313,7 +313,10 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
                 |row| row.get(0),
             )
             .or_else(|_| {
-                tx.execute("INSERT INTO imported_files_tags (name) VALUES (?)", params![tag])?;
+                tx.execute(
+                    "INSERT INTO imported_files_tags (name) VALUES (?)",
+                    params![tag],
+                )?;
                 Ok(tx.last_insert_rowid())
             })
             .map_err(|e: rusqlite::Error| e.to_string())?;
@@ -376,7 +379,10 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
                 |row| row.get(0),
             )
             .or_else(|_| {
-                tx.execute("INSERT INTO imported_files_tags (name) VALUES (?)", params![tag])?;
+                tx.execute(
+                    "INSERT INTO imported_files_tags (name) VALUES (?)",
+                    params![tag],
+                )?;
                 Ok(tx.last_insert_rowid())
             })
             .map_err(|e: rusqlite::Error| e.to_string())?;
@@ -486,7 +492,6 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
     // 获取新插入笔记的 note_id
     let note_id = tx.last_insert_rowid() as i32;
     info!("Inserted note with ID: {}", note_id);
-
 
     // 插入标签并关联到 notes_tags_relations
     for tag in &note.tags {

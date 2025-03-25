@@ -32,7 +32,7 @@
   <!-- 添加文件对话框 -->
   <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog">
     <!-- 动态生成表单 -->
-    <n-form :model="currentForm" label-placement="left" label-width="auto">
+    <n-form :model="currentForm" :rules="formRules" label-placement="left" label-width="auto">
       <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title">
         <!-- 根据列类型渲染不同的输入组件 -->
         <template v-if="column.key === 'filePath'">
@@ -127,6 +127,57 @@ const currentForm = computed(() => {
   return store.currentDatabase === 'importFileDB' ? newFileForm.value : newNoteForm.value
 })
 
+// 自定义校验函数：检查文件路径是否合法
+const validateFilePath = (rule, value) => {
+  if (!value || value.trim() === '') {
+    return new Error('文件路径不能为空');
+  }
+  if (!value.startsWith('/')) {
+    return new Error('文件路径必须以 / 开头');
+  }
+  return true; // 校验通过
+};
+
+// 自定义校验函数：检查标签是否合法
+const validateTags = (rule, value) => {
+  console.log('validateTags', value)
+  if (!value || value.trim() === '') {
+    return new Error('标签不能为空');
+  }
+  if (value.split(',').length > 5) {
+    return new Error('标签数量不能超过 5 个');
+  }
+  return true; // 校验通过
+};
+
+// 表单校验规则
+const formRules = {
+  filePath: [
+    { required: true, message: '文件路径不能为空', trigger: 'blur' },
+    { validator: validateFilePath, trigger: 'blur' }, // 使用自定义校验函数
+  ],
+  tags: [
+    { required: true, message: '标签不能为空', trigger: 'blur' },
+    { validator: validateTags, trigger: 'blur' }, // 使用自定义校验函数
+  ],
+  description: [
+    { required: true, message: '描述不能为空', trigger: 'blur' },
+    { max: 100, message: '描述不能超过100个字符', trigger: 'blur' },
+  ],
+  library: [
+    { required: true, message: '所属库不能为空', trigger: 'blur' },
+  ],
+  type: [
+    { required: true, message: '文件类型不能为空', trigger: 'blur' },
+  ],
+  importFileCreateTime: [
+    { required: true, message: '入库时间不能为空', trigger: 'blur' },
+  ],
+  importFileSize: [
+    { required: true, message: '文件大小不能为空', trigger: 'blur' },
+  ],
+};
+
 // 动态生成表单列配置
 const formColumns = computed(() => {
   const columns = store.currentDatabase === 'importFileDB'
@@ -219,8 +270,8 @@ const createImportNoteList = (addedNoteInfo, currentForm) => {
     return {
       description: `${addedNoteInfo.from_filename}的笔记`,
       note_file_name: addedNoteInfo.note_file_name,
-      tags: [],
-      note_file_type: 'markdown',
+      tags: currentForm.tags.split(','),
+      note_file_type: 'md',
       from_imported_file: addedNoteInfo.from_filename,
       from_imported_file_library: addedNoteInfo.library,
       note_file_create_time: addedNoteInfo.create_time,
@@ -304,7 +355,7 @@ const addFile = async () => {
         id: noteId,
         description: currentForm.value.description,
         noteFileName: `${currentForm.value.noteFileName}.md`,
-        type: 'markdown',
+        type: 'md',
         tags: currentForm.value.tags,
         fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
         noteFileCreateTime: currentForm.value.noteFileCreateTime,
@@ -312,7 +363,7 @@ const addFile = async () => {
       });
     } else if (store.currentDatabase === 'NotesDb') {
       // 创建 importNoteList
-      const importNoteList = createImportNoteList(null ,currentForm.value);
+      const importNoteList = createImportNoteList(null, currentForm.value);
       console.log('importNoteList:', importNoteList);
 
       // 将 importNoteList 写入数据库
@@ -323,8 +374,9 @@ const addFile = async () => {
         id: noteId,
         description: currentForm.value.description,
         noteFileName: `${currentForm.value.noteFileName}.md`,
-        type: 'markdown',
+        type: 'md',
         tags: currentForm.value.tags,
+        fromImportedFile: currentForm.value.fromImportedFile,
         fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
         noteFileCreateTime: currentForm.value.noteFileCreateTime,
         noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
@@ -336,6 +388,71 @@ const addFile = async () => {
     resetForm();
   } catch (error) {
     console.error('Error adding file:', error);
+  }
+};
+
+// 更新导入文件
+const updateImportedFile = async (row) => {
+  try {
+    // 将 tags 字段转换为数组
+    const tags = typeof row.tags === 'string' ? row.tags.split(',') : row.tags;
+
+    // 确保 file 是一个对象
+    const file = {
+      import_file_name: row.importFileName,
+      description: row.description,
+      library: row.library,
+      file_type: row.type,
+      import_file_create_time: row.importFileCreateTime,
+      import_file_size: row.importFileSize,
+      tags: tags, // 传递转换后的 tags 数组
+    };
+
+    // 打印日志：row.id 和 file
+    console.log('row.id:', row.id);
+    console.log('file:', JSON.stringify(file, null, 2));
+
+    // 调用后端接口
+    await invoke('update_imported_file', {
+      id: row.id,
+      file: file, // 传递正确的 file 对象
+    });
+    console.log('更新导入文件成功:', row);
+  } catch (error) {
+    console.error('更新导入文件失败:', error);
+  }
+};
+
+// 更新笔记
+const updateNote = async (row) => {
+  try {
+    // 将 tags 字段转换为数组
+    const tags = typeof row.tags === 'string' ? row.tags.split(',') : row.tags;
+
+    // 确保 note 是一个对象
+    const note = {
+      description: row.description,
+      note_file_name: row.noteFileName,
+      note_file_type: row.noteFileType,
+      from_imported_file: row.fromImportedFile,
+      from_imported_file_library: row.fromImportedFileLibrary,
+      note_file_create_time: row.noteFileCreateTime,
+      note_file_update_time: row.noteFileUpdateTime,
+      tags: tags, // 传递转换后的 tags 数组
+    };
+
+    // 打印日志：row.id 和 note
+    console.log('row.id:', row.id);
+    console.log('note:', JSON.stringify(note, null, 2));
+
+    // 调用后端接口
+    await invoke('update_note', {
+      id: row.id,
+      note: note, // 传递正确的 note 对象
+    });
+    console.log('更新笔记成功:', row);
+  } catch (error) {
+    console.error('更新笔记失败:', error);
   }
 };
 
@@ -352,6 +469,7 @@ const resetForm = () => {
       importFileCreateTime: '',
       importFileSize: 0,
       convetToHtmlFilename: '',
+      convetToMarkdownFilename: "",
       importFileSize: '',
     }
   } else {
@@ -455,6 +573,17 @@ const rowProps = (row) => {
   }
 }
 
+const validateRow = (row) => {
+  if (!row.importFileName || row.importFileName.trim() === '') {
+    return '文件名不能为空';
+  }
+  if (!row.description || row.description.trim() === '') {
+    return '描述不能为空';
+  }
+  // 其他校验规则...
+  return null; // 校验通过
+};
+
 // 方法：打开文件
 const handleOpen = (row) => {
   console.log('打开', row)
@@ -551,8 +680,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.description,
-            onUpdateValue(v) {
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, description: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
               row.description = v
+              await updateNote(row); // 调用更新笔记的接口
             },
           })
         },
@@ -571,8 +706,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.noteFileName,
-            onUpdateValue(v) {
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, noteFileName: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
               row.noteFileName = v
+              await updateNote(row); // 调用更新笔记的接口
             },
           })
         },
@@ -591,8 +732,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.tags,
-            onUpdateValue(v) {
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, tags: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
               row.tags = v
+              await updateNote(row); // 调用更新笔记的接口
             },
           })
         },
@@ -623,8 +770,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.fromImportedFileLibrary,
-            onUpdateValue(v) {
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, fromImportedFileLibrary: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
               row.fromImportedFileLibrary = v
+              await updateNote(row); // 调用更新笔记的接口
             },
           })
         },
@@ -685,8 +838,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.importFileName,
-            onUpdateValue(v) {
-              row.importFileName = v
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, importFileName: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
+              row.importFileName = v; // 更新前端表格数据
+              await updateImportedFile(row); // 调用更新导入文件的接口
             },
           })
         },
@@ -705,8 +864,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.description,
-            onUpdateValue(v) {
-              row.description = v
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, description: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
+              row.description = v; // 更新前端表格数据
+              await updateImportedFile(row); // 调用更新导入文件的接口
             },
           })
         },
@@ -725,8 +890,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.tags,
-            onUpdateValue(v) {
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, tags: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
               row.tags = v
+              await updateImportedFile(row); // 调用更新导入文件的接口
             },
           })
         },
@@ -765,8 +936,14 @@ const columns = computed(() => {
         render(row) {
           return h(ShowOrEdit, {
             value: row.library,
-            onUpdateValue(v) {
+            onUpdateValue: async (v) => {
+              const error = validateRow({ ...row, library: v });
+              if (error) {
+                window.$message.error(error);
+                return;
+              }
               row.library = v
+              await updateImportedFile(row); // 调用更新导入文件的接口
             },
           })
         },
