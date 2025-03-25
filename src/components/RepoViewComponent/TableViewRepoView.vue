@@ -877,7 +877,7 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, description: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.description = v
@@ -903,7 +903,7 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, noteFileName: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.noteFileName = v
@@ -929,12 +929,14 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, tags: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.tags = v
               await updateNote(row); // 调用更新笔记的接口
             },
+            enableAutoComplete: true, // 启用自动补全
+            searchType: 'noteTags', // 指定搜索类型
           })
         },
       },
@@ -967,12 +969,14 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, fromImportedFileLibrary: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.fromImportedFileLibrary = v
               await updateNote(row); // 调用更新笔记的接口
             },
+            enableAutoComplete: true, // 启用自动补全
+            searchType: 'importedFileLibraries', // 指定搜索类型
           })
         },
       },
@@ -1035,7 +1039,7 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, importFileName: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.importFileName = v; // 更新前端表格数据
@@ -1061,7 +1065,7 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, description: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.description = v; // 更新前端表格数据
@@ -1087,12 +1091,14 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, tags: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.tags = v
               await updateImportedFile(row); // 调用更新导入文件的接口
             },
+            enableAutoComplete: true, // 启用自动补全
+            searchType: 'importedFileTags', // 指定搜索类型
           })
         },
       },
@@ -1133,12 +1139,14 @@ const columns = computed(() => {
             onUpdateValue: async (v) => {
               const error = validateRow({ ...row, library: v });
               if (error) {
-                window.$message.error(error);
+                message.error(error); // 使用 useMessage 的消息组件
                 return;
               }
               row.library = v
               await updateImportedFile(row); // 调用更新导入文件的接口
             },
+            enableAutoComplete: true, // 启用自动补全
+            searchType: 'libraries', // 指定搜索类型
           })
         },
       },
@@ -1195,7 +1203,7 @@ const columns = computed(() => {
         width: '180',
       },
     ]
-})
+});
 
 // 方法：按标题排序
 const sortTitle = () => {
