@@ -198,7 +198,7 @@ const validateFilePath = async (rule, value) => {
 
   console.log('osPlatform', osPlatform);
   // 根据系统类型选择匹配方式
-  if (osPlatform === 'win32') {
+  if (osPlatform === 'windows') {
     if (!windowsPathRegex.test(value)) {
       return new Error('Windows 文件路径不合法，请检查路径格式');
     }
@@ -206,7 +206,7 @@ const validateFilePath = async (rule, value) => {
     if (!linuxPathRegex.test(value)) {
       return new Error('Linux 文件路径不合法，请检查路径格式');
     }
-  } else if (osPlatform === 'darwin') {
+  } else if (osPlatform === 'macos') {
     if (!macPathRegex.test(value)) {
       return new Error('macOS 文件路径不合法，请检查路径格式');
     }
@@ -330,6 +330,74 @@ const validateForm = async () => {
   // 校验笔记的导入文件（如果是 NotesDb）
   if (store.currentDatabase === 'NotesDb' && (!form.fromImportedFile || form.fromImportedFile.trim() === '')) {
     currentForm.value.fromImportedFile = "NoImportFileAssocNote"; // 设置默认值
+  }
+
+  // 校验通过
+  return null;
+};
+
+// 校验table cell
+const validateTableCell = (row) => {
+  console.log('validateTableCell', row);
+
+  // 校验标签
+  if (!row.tags || typeof row.tags !== 'string' || row.tags.trim() === '') {
+    row.tags = "default"; // 设置默认值
+  } else {
+    const tags = row.tags.split(',').map(tag => tag.trim());
+    if (tags.some(tag => !tag)) {
+      return '多个标签没有以逗号分隔';
+    }
+  }
+
+  // 校验描述
+  if (!row.description || row.description.trim() === '') {
+    return '描述不能为空';
+  }
+  if (row.description.length > 240) {
+    return '描述不能超过 240 个字符';
+  }
+
+  // 校验所属库
+  if (store.currentDatabase === 'importFileDB') {
+    if (!row.library || (typeof row.library === 'string' && row.library.trim() === '')) {
+      row.library = 'default'; // 设置默认值
+      return '所属库不能为空';
+    }
+  }
+
+  // 校验入库时间
+  if (store.currentDatabase === 'importFileDB') {
+    if (!row.importFileCreateTime || row.importFileCreateTime.trim() === '') {
+      return '入库时间不能为空';
+    }
+  }
+
+  // 校验文件大小
+  if (store.currentDatabase === 'importFileDB') {
+    if (!row.importFileSize || row.importFileSize <= 0) {
+      return '文件大小不能为空';
+    }
+  }
+
+  // 校验笔记文件名（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!row.noteFileName || row.noteFileName.trim() === '')) {
+    return '笔记文件名不能为空';
+  }
+
+  // 校验笔记创建时间（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!row.noteFileCreateTime || row.noteFileCreateTime.trim() === '')) {
+    return '笔记创建时间不能为空';
+  }
+
+  // 校验笔记的导入文件所属库（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!row.fromImportedFileLibrary || row.fromImportedFileLibrary.trim() === '')) {
+    row.fromImportedFileLibrary = "NoImportFileAssocNoteLib"; // 设置默认值
+  }
+
+  // 校验笔记的导入文件（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!row.fromImportedFile || row.fromImportedFile.trim() === '')) {
+    row.fromImportedFile = "NoImportFileAssocNote"; // 设置默认值
   }
 
   // 校验通过
@@ -767,17 +835,6 @@ const rowProps = (row) => {
   }
 }
 
-const validateRow = (row) => {
-  if (!row.importFileName || row.importFileName.trim() === '') {
-    return '文件名不能为空';
-  }
-  if (!row.description || row.description.trim() === '') {
-    return '描述不能为空';
-  }
-  // 其他校验规则...
-  return null; // 校验通过
-};
-
 // 方法：打开文件
 const handleOpen = (row) => {
   console.log('打开', row)
@@ -875,7 +932,8 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.description,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, description: v });
+              console.log('更新笔记描述', v)
+              const error = validateTableCell({ ...row, description: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;
@@ -901,7 +959,7 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.noteFileName,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, noteFileName: v });
+              const error = validateTableCell({ ...row, noteFileName: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;
@@ -927,7 +985,8 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.tags,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, tags: v });
+              console.log('更新笔记标签', v)
+              const error = validateTableCell({ ...row, tags: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;
@@ -967,7 +1026,7 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.fromImportedFileLibrary,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, fromImportedFileLibrary: v });
+              const error = validateTableCell({ ...row, fromImportedFileLibrary: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;
@@ -1037,7 +1096,7 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.importFileName,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, importFileName: v });
+              const error = validateTableCell({ ...row, importFileName: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;
@@ -1063,7 +1122,7 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.description,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, description: v });
+              const error = validateTableCell({ ...row, description: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;
@@ -1089,7 +1148,7 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.tags,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, tags: v });
+              const error = validateTagscell({ ...row, tags: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;
@@ -1137,7 +1196,7 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.library,
             onUpdateValue: async (v) => {
-              const error = validateRow({ ...row, library: v });
+              const error = validateTableCell({ ...row, library: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;

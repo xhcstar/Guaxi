@@ -15,7 +15,7 @@
       clearable
     />
     <!-- 否则使用 n-input -->
-    <n-input
+    <!-- <n-input
       v-else-if="isEdit"
       ref="inputRef"
       v-model:value="inputValue"
@@ -24,7 +24,7 @@
       @change="handleChange"
       @blur="handleChange"
       @keyup.enter="handleChange"
-    />
+    /> -->
     <span v-else>{{ value }}</span>
   </div>
 </template>
@@ -75,32 +75,11 @@ const handleUpdateValue = (v) => {
   inputValue.value = v;
 };
 
-// 防抖函数
-const debounce = (fn, delay) => {
-  let timer;
-  return (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      fn.apply(this, args);
-    }, delay);
-  };
+const handleChange = () => {
+  console.log(`handleChange 被调用，输入值: ${inputValue.value}`);
+  props.onUpdateValue(inputValue.value); // 调用父组件的回调函数
+  isEdit.value = false;
 };
-
-// 处理编辑完成
-const handleChange = debounce(() => {
-  console.log('handleChange 被调用');
-  if (props.onUpdateValue) {
-    try {
-      props.onUpdateValue(inputValue.value); // 调用父组件的回调函数
-    } catch (error) {
-      console.error('更新数据失败:', error);
-    }
-  }
-  if (isEdit.value) { // 确保 isEdit 只更新一次
-    console.log('isEdit: false');
-    isEdit.value = false; // 关闭编辑模式
-  }
-}, 100); // 设置防抖时间为 100ms
 
 // 处理搜索
 const handleSearch = async (query) => {
@@ -130,8 +109,17 @@ const handleSearch = async (query) => {
         console.error('未知的搜索类型:', props.searchType);
         return;
     }
-    console.log(`handleSearch 返回结果:`, result);
-    options.value = result;
+    
+    if (!result) {
+      console.error('搜索结果为空');
+      return;
+    } else if (result.length === 0) {
+      console.log('搜索结果为空');
+    } else {
+      console.log(`handleSearch 返回结果:`, result);
+      options.value = result;
+    }
+    
   } catch (error) {
     console.error('搜索失败:', error);
   } finally {
