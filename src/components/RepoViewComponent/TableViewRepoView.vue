@@ -29,16 +29,14 @@
   <n-dropdown placement="bottom-start" trigger="manual" :x="x" :y="y" :options="contextMenuOptions" :show="showDropdown"
     :on-clickoutside="onClickoutside" @select="handleContextMenuSelect" class="custom-dropdown" />
 
-  <!-- 添加文件对话框 -->
   <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog" :mask-closable="false" :closable="false">
-    <!-- 动态生成表单 -->
     <n-form :model="currentForm" :rules="rules" label-placement="left" label-width="auto" label-align="right"
       size="medium" class="custom-form">
       <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title" :path="column.key"
         :label-style="{ fontWeight: 'bold', color: '#333', fontSize: '15px' }">
         <!-- 根据列类型渲染不同的输入组件 -->
         <template v-if="column.key === 'filePath'">
-          <n-input v-model:value="currentForm[column.key]" :round="true" placeholder="请输入文件路径"
+          <n-input v-model:value="currentForm[column.key]"  placeholder="请输入文件路径"
             :input-style="{ borderRadius: '8px' }">
             <template #suffix>
               <n-tooltip trigger="hover">
@@ -55,11 +53,39 @@
         <template
           v-else-if="column.key === 'importFileCreateTime' || column.key === 'noteFileCreateTime' || column.key === 'noteFileUpdateTime'
             || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'importFileSize'">
-          <n-input v-model:value="currentForm[column.key]" :round="true" :placeholder="`${column.title}`" disabled
+          <n-input v-model:value="currentForm[column.key]"  :placeholder="`${column.title}`" disabled
             :input-style="{ borderRadius: '8px' }" />
         </template>
+        <!-- 笔记标签 -->
+        <template v-else-if="column.key === 'noteTags'">
+          <n-auto-complete v-model:value="currentForm[column.key]" :options="noteTagOptions" :loading="isNoteTagLoading"
+            placeholder="请输入笔记标签" clearable :input-style="{ borderRadius: '8px' }" />
+        </template>
+        <!-- 导入文件标签 -->
+        <template v-else-if="column.key === 'importedFileTags'">
+          <n-auto-complete v-model:value="currentForm[column.key]" :options="importedFileTagOptions"
+            :loading="isImportedFileTagLoading" placeholder="请输入导入文件标签" clearable
+            :input-style="{ borderRadius: '8px' }" />
+        </template>
+        <!-- 导入文件 -->
+        <template v-else-if="column.key === 'fromImportedFile'">
+          <n-auto-complete v-model:value="currentForm[column.key]" :options="importedFileOptions"
+            :loading="isImportedFileLoading" placeholder="请输入导入文件" clearable :input-style="{ borderRadius: '8px' }" />
+        </template>
+        <!-- 所属库 -->
+        <template v-else-if="column.key === 'library'">
+          <n-auto-complete v-model:value="currentForm[column.key]" :options="libraryOptions" :loading="isLibraryLoading"
+            placeholder="请输入所属库" clearable :input-style="{ borderRadius: '8px' }" />
+        </template>
+        <!-- 导入文件所属库 -->
+        <template v-else-if="column.key === 'fromImportedFileLibrary'">
+          <n-auto-complete v-model:value="currentForm[column.key]" :options="importedFileLibraryOptions"
+            :loading="isImportedFileLibraryLoading" placeholder="请输入导入文件所属库" clearable
+            :input-style="{ borderRadius: '8px' }" />
+        </template>
+        <!-- 默认输入框 -->
         <template v-else>
-          <n-input v-model:value="currentForm[column.key]" :round="true"
+          <n-input v-model:value="currentForm[column.key]" 
             :placeholder="column.key === 'tags' ? `如有多个标签请以逗号隔开` : `请输入${column.title}`"
             :input-style="{ borderRadius: '8px' }" />
         </template>
@@ -82,7 +108,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, h, nextTick } from 'vue'
+import { ref, onMounted, computed, h, nextTick, watch } from 'vue'
 import { repoStore } from '../../stores/repoStore'
 import {
   FolderAdd20Regular,
@@ -94,6 +120,13 @@ import {
 } from '@vicons/fluent'
 import { NIcon, NButton, NDropdown, useMessage } from 'naive-ui'
 import ShowOrEdit from './ShowOrEdit.vue'
+import {
+  useNoteTagsSearch,
+  useImportedFileTagsSearch,
+  useImportedFileLibrarySearch,
+  useImportedFilesSearch,
+  useLibrariesSearch,
+} from './SearchUtils/useSearch'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
@@ -1197,6 +1230,58 @@ const handleCheckboxUpdate = (rowKeys) => {
   console.log('选中的行 keys:', rowKeys)
 }
 
+// 引入搜索逻辑
+const {
+  noteTagOptions,
+  isNoteTagLoading,
+  handleNoteTagSearch,
+} = useNoteTagsSearch();
+
+const {
+  importedFileTagOptions,
+  isImportedFileTagLoading,
+  handleImportedFileTagSearch,
+} = useImportedFileTagsSearch();
+
+const {
+  importedFileOptions,
+  isImportedFileLoading,
+  handleImportedFileSearch,
+} = useImportedFilesSearch();
+
+const {
+  libraryOptions,
+  isLibraryLoading,
+  handleLibrarySearch,
+} = useLibrariesSearch();
+
+const {
+  importedFileLibraryOptions,
+  isImportedFileLibraryLoading,
+  handleImportedFileLibrarySearch,
+} = useImportedFileLibrarySearch();
+
+// 监听输入值变化并触发搜索
+watch(() => currentForm.value.noteTags, (newValue) => {
+  handleNoteTagSearch(newValue);
+});
+
+watch(() => currentForm.value.importedFileTags, (newValue) => {
+  handleImportedFileTagSearch(newValue);
+});
+
+watch(() => currentForm.value.fromImportedFile, (newValue) => {
+  handleImportedFileSearch(newValue);
+});
+
+watch(() => currentForm.value.library, (newValue) => {
+  handleLibrarySearch(newValue);
+});
+
+watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
+  handleImportedFileLibrarySearch(newValue);
+});
+
 // 组件挂载时获取默认数据
 onMounted(async () => {
   await store.fetchFiles('importFileDB') // 默认加载数据库 1 的数据
@@ -1296,5 +1381,10 @@ onMounted(async () => {
 
 .custom-form .n-input {
   width: 100%;
+}
+
+.n-auto-complete {
+  width: 100%;
+  /* 确保宽度足够 */
 }
 </style>

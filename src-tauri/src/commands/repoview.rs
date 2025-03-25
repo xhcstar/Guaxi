@@ -600,3 +600,82 @@ pub fn delete_note(id: i32) -> Result<(), String> {
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn search_notes_tags(query: String) -> Result<Vec<String>, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+
+    // 查询 notes_tags 表
+    let mut stmt = conn
+        .prepare("SELECT name FROM notes_tags WHERE name LIKE ?")
+        .map_err(|e| e.to_string())?;
+    let tags = stmt
+        .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(tags)
+}
+
+#[tauri::command]
+pub fn search_imported_files_tags(query: String) -> Result<Vec<String>, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+
+    // 查询 imported_files_tags 表
+    let mut stmt = conn
+        .prepare("SELECT name FROM imported_files_tags WHERE name LIKE ?")
+        .map_err(|e| e.to_string())?;
+    let tags = stmt
+        .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(tags)
+}
+
+#[tauri::command]
+pub fn search_imported_files(query: String) -> Result<Vec<String>, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT original_filename FROM imported_files WHERE original_filename LIKE ?")
+        .map_err(|e| e.to_string())?;
+    let files = stmt
+        .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(files)
+}
+
+#[tauri::command]
+pub fn search_libraries(query: String) -> Result<Vec<String>, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT library FROM imported_files WHERE library LIKE ?")
+        .map_err(|e| e.to_string())?;
+    let libraries = stmt
+        .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(libraries)
+}
+
+#[tauri::command]
+pub fn search_imported_file_libraries(query: String) -> Result<Vec<String>, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+
+    // 查询 imported_files 表中的 library 字段
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT library FROM imported_files WHERE library LIKE ?")
+        .map_err(|e| e.to_string())?;
+    let libraries = stmt
+        .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(libraries)
+}

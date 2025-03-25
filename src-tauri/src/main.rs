@@ -77,6 +77,11 @@ async fn main() {
             commands::repoview::add_note,
             commands::repoview::delete_note,
             commands::repoview::update_note,
+            commands::repoview::search_notes_tags,
+            commands::repoview::search_imported_files_tags,
+            commands::repoview::search_imported_files,
+            commands::repoview::search_libraries,
+            commands::repoview::search_imported_file_libraries,
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
         ])
