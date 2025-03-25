@@ -30,17 +30,20 @@
     :on-clickoutside="onClickoutside" @select="handleContextMenuSelect" class="custom-dropdown" />
 
   <!-- 添加文件对话框 -->
-  <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog">
+  <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog" :mask-closable="false" :closable="false">
     <!-- 动态生成表单 -->
-    <n-form :model="currentForm" :rules="formRules" label-placement="left" label-width="auto">
-      <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title">
+    <n-form :model="currentForm" :rules="rules" label-placement="left" label-width="auto" label-align="right"
+      size="medium" class="custom-form">
+      <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title" :path="column.key"
+        :label-style="{ fontWeight: 'bold', color: '#333', fontSize: '15px' }">
         <!-- 根据列类型渲染不同的输入组件 -->
         <template v-if="column.key === 'filePath'">
-          <n-input v-model:value="currentForm[column.key]" placeholder="请输入文件路径">
+          <n-input v-model:value="currentForm[column.key]" :round="true" placeholder="请输入文件路径"
+            :input-style="{ borderRadius: '8px' }">
             <template #suffix>
               <n-tooltip trigger="hover">
                 <template #trigger>
-                  <n-button text class="FolderAdd20Regular" @click="openFileBrowser">
+                  <n-button text class="FolderAdd20Regular" @click="openFileBrowser" :style="{ color: '#409EFF' }">
                     <n-icon :component="FolderAdd20Regular" :size="20" />
                   </n-button>
                 </template>
@@ -52,17 +55,28 @@
         <template
           v-else-if="column.key === 'importFileCreateTime' || column.key === 'noteFileCreateTime' || column.key === 'noteFileUpdateTime'
             || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'importFileSize'">
-          <n-input v-model:value="currentForm[column.key]" :placeholder="`${column.title}`" disabled />
+          <n-input v-model:value="currentForm[column.key]" :round="true" :placeholder="`${column.title}`" disabled
+            :input-style="{ borderRadius: '8px' }" />
         </template>
         <template v-else>
-          <n-input v-model:value="currentForm[column.key]" :placeholder="`请输入${column.title}`" />
+          <n-input v-model:value="currentForm[column.key]" :round="true"
+            :placeholder="column.key === 'tags' ? `如有多个标签请以逗号隔开` : `请输入${column.title}`"
+            :input-style="{ borderRadius: '8px' }" />
         </template>
       </n-form-item>
     </n-form>
 
+    <!-- 对话框操作按钮 -->
     <template #action>
-      <n-button @click="addFile">提交</n-button>
-      <n-button @click="isAddFileModalVisible = false">取消</n-button>
+      <n-space justify="end">
+        <n-button type="primary" @click="addFile" :style="{ backgroundColor: '#409EFF', borderColor: '#409EFF' }">
+          提交
+        </n-button>
+        <n-button @click="isAddFileModalVisible = false"
+          :style="{ backgroundColor: '#F56C6C', borderColor: '#F56C6C', color: '#FFF' }">
+          取消
+        </n-button>
+      </n-space>
     </template>
   </n-modal>
 </template>
@@ -78,14 +92,17 @@ import {
   Share20Regular,
   ArrowMove24Regular,
 } from '@vicons/fluent'
-import { NIcon, NButton, NDropdown } from 'naive-ui'
+import { NIcon, NButton, NDropdown, useMessage } from 'naive-ui'
 import ShowOrEdit from './ShowOrEdit.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
+import { platform } from '@tauri-apps/plugin-os';
 
 // 引入 Pinia store
 const store = repoStore()
 
+// 获取 message 实例
+const message = useMessage();
 // 添加文件对话框状态
 const isAddFileModalVisible = ref(false)
 // 表格实例
@@ -127,54 +144,191 @@ const currentForm = computed(() => {
   return store.currentDatabase === 'importFileDB' ? newFileForm.value : newNoteForm.value
 })
 
-// 自定义校验函数：检查文件路径是否合法
-const validateFilePath = (rule, value) => {
+// 自定义校验函数：检查文件路径是否合法（根据系统类型动态选择匹配方式）
+const validateFilePath = async (rule, value) => {
+  console.log('validateFilePath', value); // 添加日志
+
+  // 检查是否为空
   if (!value || value.trim() === '') {
     return new Error('文件路径不能为空');
   }
-  if (!value.startsWith('/')) {
-    return new Error('文件路径必须以 / 开头');
+
+  // 获取当前操作系统类型
+  const osPlatform = await platform();
+
+  // Windows 路径正则表达式
+  const windowsPathRegex = /^([a-zA-Z]:\\|\\\\)([^\\/:*?"<>|\r\n]+\\?)*$/;
+  // Linux 路径正则表达式
+  const linuxPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
+  // macOS 路径正则表达式（与 Linux 相同）
+  const macPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
+
+  console.log('osPlatform', osPlatform);
+  // 根据系统类型选择匹配方式
+  if (osPlatform === 'win32') {
+    if (!windowsPathRegex.test(value)) {
+      return new Error('Windows 文件路径不合法，请检查路径格式');
+    }
+  } else if (osPlatform === 'linux') {
+    if (!linuxPathRegex.test(value)) {
+      return new Error('Linux 文件路径不合法，请检查路径格式');
+    }
+  } else if (osPlatform === 'darwin') {
+    if (!macPathRegex.test(value)) {
+      return new Error('macOS 文件路径不合法，请检查路径格式');
+    }
+  } else {
+    return new Error('不支持的操作系统');
   }
+
   return true; // 校验通过
 };
 
-// 自定义校验函数：检查标签是否合法
+// 自定义校验函数：检查标签是否合法（单个字符串或以逗号分隔的字符串）
 const validateTags = (rule, value) => {
-  console.log('validateTags', value)
+  console.log('validateTags', value); // 添加日志
+
+  // 检查是否为空
   if (!value || value.trim() === '') {
     return new Error('标签不能为空');
   }
-  if (value.split(',').length > 5) {
-    return new Error('标签数量不能超过 5 个');
+
+  // 检查是否为单个字符串或以逗号分隔的字符串
+  const tags = value.split(',').map(tag => tag.trim());
+  if (tags.some(tag => !tag)) {
+    return new Error('标签不能为空或以多个逗号分隔');
   }
+
   return true; // 校验通过
 };
 
+// 校验表单
+const validateForm = async () => {
+  const form = currentForm.value;
+
+  // 校验文件路径
+  if (!form.filePath || form.filePath.trim() === '') {
+    return '文件路径不能为空';
+  }
+
+  // 获取当前操作系统类型
+  const osPlatform = await platform();
+
+  console.log('osPlatform', osPlatform);
+  // Windows 路径正则表达式
+  const windowsPathRegex = /^([a-zA-Z]:\\|\\\\)([^\\/:*?"<>|\r\n]+\\?)*$/;
+  // Linux 路径正则表达式
+  const linuxPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
+  // macOS 路径正则表达式（与 Linux 相同）
+  const macPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
+
+  // 根据系统类型选择匹配方式
+  if (osPlatform === 'windows') {
+    if (!windowsPathRegex.test(form.filePath)) {
+      return 'Windows 文件路径不合法，请检查路径格式';
+    }
+  } else if (osPlatform === 'linux') {
+    if (!linuxPathRegex.test(form.filePath)) {
+      return 'Linux 文件路径不合法，请检查路径格式';
+    }
+  } else if (osPlatform === 'macos') {
+    if (!macPathRegex.test(form.filePath)) {
+      return 'macOS 文件路径不合法，请检查路径格式';
+    }
+  } else {
+    return '不支持的操作系统';
+  }
+
+  // 校验标签
+  if (!form.tags || typeof form.tags !== 'string' || form.tags.trim() === '') {
+    currentForm.value.tags = "default"; // 设置默认值
+  } else {
+    const tags = form.tags.split(',').map(tag => tag.trim());
+    if (tags.some(tag => !tag)) {
+      return '多个标签没有以逗号分隔';
+    }
+  }
+
+  // 校验描述
+  if (!form.description || form.description.trim() === '') {
+    return '描述不能为空';
+  }
+  if (form.description.length > 240) {
+    return '描述不能超过 240 个字符';
+  }
+
+  // 校验所属库
+  if (store.currentDatabase === 'importFileDB') {
+    if (!form.library || (typeof form.library === 'string' && form.library.trim() === '')) {
+      currentForm.value.library = 'default'; // 设置默认值
+      return '所属库不能为空';
+    }
+  }
+
+  // 校验入库时间
+  if (store.currentDatabase === 'importFileDB') {
+    if (!form.importFileCreateTime || form.importFileCreateTime.trim() === '') {
+      return '入库时间不能为空';
+    }
+  }
+
+  // 校验文件大小
+  if (store.currentDatabase === 'importFileDB') {
+    if (!form.importFileSize || form.importFileSize <= 0) {
+      return '文件大小不能为空';
+    }
+  }
+
+  // 校验笔记文件名（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!form.noteFileName || form.noteFileName.trim() === '')) {
+    return '笔记文件名不能为空';
+  }
+
+  // 校验笔记创建时间（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!form.noteFileCreateTime || form.noteFileCreateTime.trim() === '')) {
+    return '笔记创建时间不能为空';
+  }
+
+  // 校验笔记的导入文件所属库（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!form.fromImportedFileLibrary || form.fromImportedFileLibrary.trim() === '')) {
+    currentForm.value.fromImportedFileLibrary = "NoImportFileAssocNoteLib"; // 设置默认值
+  }
+
+  // 校验笔记的导入文件（如果是 NotesDb）
+  if (store.currentDatabase === 'NotesDb' && (!form.fromImportedFile || form.fromImportedFile.trim() === '')) {
+    currentForm.value.fromImportedFile = "NoImportFileAssocNote"; // 设置默认值
+  }
+
+  // 校验通过
+  return null;
+};
+
 // 表单校验规则
-const formRules = {
+const rules = {
   filePath: [
-    { required: true, message: '文件路径不能为空', trigger: 'blur' },
-    { validator: validateFilePath, trigger: 'blur' }, // 使用自定义校验函数
+    { validator: validateFilePath, required: true, message: '文件路径不能为空', trigger: ['input', 'blur'] },
   ],
   tags: [
-    { required: true, message: '标签不能为空', trigger: 'blur' },
-    { validator: validateTags, trigger: 'blur' }, // 使用自定义校验函数
+    { validator: validateTags, required: true, max: 1, message: '标签不能为空', trigger: ['input', 'blur'] },
   ],
   description: [
-    { required: true, message: '描述不能为空', trigger: 'blur' },
-    { max: 100, message: '描述不能超过100个字符', trigger: 'blur' },
+    { required: true, message: '描述不能为空', trigger: ['input', 'blur'] },
+    { max: 240, message: '描述不能超过240个字符', trigger: ['input', 'blur'] },
   ],
   library: [
-    { required: true, message: '所属库不能为空', trigger: 'blur' },
-  ],
-  type: [
-    { required: true, message: '文件类型不能为空', trigger: 'blur' },
+    { required: true, message: '所属库不能为空', trigger: ['input', 'blur'] },
   ],
   importFileCreateTime: [
-    { required: true, message: '入库时间不能为空', trigger: 'blur' },
+    { required: true, message: '入库时间不能为空', trigger: ['input', 'blur'] },
   ],
   importFileSize: [
-    { required: true, message: '文件大小不能为空', trigger: 'blur' },
+    { required: true, message: '文件大小不能为空', trigger: ['input', 'blur'] },
+  ],
+  noteFileName: [
+    { required: true, message: '笔记文件名不能为空', trigger: ['input', 'blur'] },
+  ],
+  noteFileCreateTime: [
+    { required: true, message: '笔记创建时间不能为空', trigger: ['input', 'blur'] },
   ],
 };
 
@@ -312,9 +466,16 @@ const addNoteToDatabase = async (noteInfo) => {
 
 const addFile = async () => {
   try {
+    // 校验表单
+    const validationError = await validateForm(); // 等待 validateForm 的结果
+    if (validationError) {
+      message.error(validationError); // 确保 validationError 是字符串
+      return; // 终止添加
+    }
+
     if (store.currentDatabase === 'importFileDB') {
       if (!currentForm.value.library || !currentForm.value.importFileName) {
-        console.error('Library or importFileName path is missing: ', currentForm.value);
+        message.error('Library or importFileName path is missing: ', currentForm.value);
         return;
       }
 
@@ -1025,7 +1186,6 @@ const clearSorter = () => {
   tableRef.value.sort(null)
 }
 
-
 // 选中的行
 const checkedRowKeys = ref([])
 // 定义 row-key 函数
@@ -1124,5 +1284,17 @@ onMounted(async () => {
 
 .custom-dropdown .n-dropdown-option .n-icon {
   color: #666;
+}
+
+.custom-form {
+  padding: 16px;
+}
+
+.custom-form .n-form-item {
+  margin-bottom: 16px;
+}
+
+.custom-form .n-input {
+  width: 100%;
 }
 </style>

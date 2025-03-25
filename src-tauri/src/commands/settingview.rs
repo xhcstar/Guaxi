@@ -84,7 +84,7 @@ impl Default for AppConfig {
     }
 }
 
-pub fn init_library_config() -> Result<(), String>{
+pub fn init_library_config() -> Result<(), String> {
     // 获取当前程序所在路径
     let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
     let exe_dir = exe_path

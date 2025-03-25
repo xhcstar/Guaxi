@@ -1,9 +1,9 @@
-use std::fs;
+use super::super::settingview::get_libraries_root;
 use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::info;
-use serde::{Serialize, Deserialize};
-use super::super::settingview::get_libraries_root;
 
 #[derive(serde::Serialize)]
 pub struct FileInfo {
@@ -30,8 +30,16 @@ pub fn get_file_info(file_path: String) -> Result<FileInfo, String> {
     }
 
     let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string();
-    let file_type = path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_string();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_string();
+    let file_type = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_string();
 
     // 使用 chrono 获取当前系统时间并格式化
     let create_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -48,7 +56,10 @@ pub fn get_file_info(file_path: String) -> Result<FileInfo, String> {
 
 #[tauri::command]
 pub fn add_repo_import_file(library: String, file_path: String) -> Result<ImportNoteInfo, String> {
-    info!("add_repo_import_file: library: {} file_path: {}", library, file_path);
+    info!(
+        "add_repo_import_file: library: {} file_path: {}",
+        library, file_path
+    );
     // 获取配置的文件库路径
     let current_dir = get_libraries_root();
     info!("current_dir: {}", current_dir);
@@ -138,7 +149,11 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
     info!("create_time: {}", create_time);
 
     // 在 notes 目录下创建文件，文件名为“去掉后缀的文件名-note-当前时间.md”
-    let note_file_name = format!("{}-note-{}.md", file_stem, Local::now().format("%Y_%m_%d_%H_%M_%S"));
+    let note_file_name = format!(
+        "{}-note-{}.md",
+        file_stem,
+        Local::now().format("%Y_%m_%d_%H_%M_%S")
+    );
     let note_file_path = notes_dir.join(&note_file_name);
     fs::File::create(&note_file_path).map_err(|e| e.to_string())?;
     info!("Created note file: {}", note_file_path.display());

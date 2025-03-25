@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 use tauri::command;
 use tracing::info;
 
@@ -31,11 +31,7 @@ pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
             id: path.to_string_lossy().to_string(),
             name: path.file_name().unwrap().to_string_lossy().to_string(),
             is_directory,
-            children: if is_directory {
-                Some(Vec::new())
-            } else {
-                None
-            },
+            children: if is_directory { Some(Vec::new()) } else { None },
         };
 
         nodes.push(node);
@@ -62,7 +58,9 @@ pub fn create_directory(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn create_file(path: String) -> Result<(), String> {
-    fs::File::create(&path).map_err(|e| e.to_string()).map(|_| ())
+    fs::File::create(&path)
+        .map_err(|e| e.to_string())
+        .map(|_| ())
 }
 
 #[tauri::command]

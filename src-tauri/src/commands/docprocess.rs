@@ -1,8 +1,8 @@
 use pyo3::prelude::*;
 use pyo3::types::PyList; // 导入 PyList 类型
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
 use std::path::Path;
+use tracing::{error, info};
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -47,7 +47,9 @@ fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
 
         // 构建脚本目录的绝对路径
         let scripts_dir = current_dir.join("scripts");
-        let scripts_dir_str = scripts_dir.to_str().ok_or("Failed to convert path to string")?;
+        let scripts_dir_str = scripts_dir
+            .to_str()
+            .ok_or("Failed to convert path to string")?;
 
         // 导入 sys 模块
         let sys = PyModule::import(py, "sys").map_err(|e| {
@@ -123,7 +125,9 @@ fn handle_md(filepath: String, curpage: u32) -> Result<(String, u32), String> {
 
         // 构建脚本目录的绝对路径
         let scripts_dir = current_dir.join("scripts");
-        let scripts_dir_str = scripts_dir.to_str().ok_or("Failed to convert path to string")?;
+        let scripts_dir_str = scripts_dir
+            .to_str()
+            .ok_or("Failed to convert path to string")?;
 
         // 导入 sys 模块
         let sys = PyModule::import(py, "sys").map_err(|e| {
@@ -199,7 +203,9 @@ fn handle_txt(filepath: String, curpage: u32) -> Result<(String, u32), String> {
 
         // 构建脚本目录的绝对路径
         let scripts_dir = current_dir.join("scripts");
-        let scripts_dir_str = scripts_dir.to_str().ok_or("Failed to convert path to string")?;
+        let scripts_dir_str = scripts_dir
+            .to_str()
+            .ok_or("Failed to convert path to string")?;
 
         // 导入 sys 模块
         let sys = PyModule::import(py, "sys").map_err(|e| {
@@ -275,7 +281,9 @@ fn handle_docx(filepath: String, curpage: u32) -> Result<(String, u32), String> 
 
         // 构建脚本目录的绝对路径
         let scripts_dir = current_dir.join("scripts");
-        let scripts_dir_str = scripts_dir.to_str().ok_or("Failed to convert path to string")?;
+        let scripts_dir_str = scripts_dir
+            .to_str()
+            .ok_or("Failed to convert path to string")?;
 
         // 导入 sys 模块
         let sys = PyModule::import(py, "sys").map_err(|e| {

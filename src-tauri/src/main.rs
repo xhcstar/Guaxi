@@ -41,6 +41,7 @@ async fn main() {
     app_init().await;
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::chatview::get_chat_answer,
@@ -78,7 +79,6 @@ async fn main() {
             commands::repoview::update_note,
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
-
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -34,3 +34,4 @@ tracing-appender = "0.2.3"
 tauri-plugin-dialog = "2"
 pyo3 = "0.23.5"
 rusqlite = { version = "0.34.0", features = ["bundled"] }
+tauri-plugin-os = "2"
