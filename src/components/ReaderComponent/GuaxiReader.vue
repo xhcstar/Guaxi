@@ -40,7 +40,7 @@ const readerComponent = computed(() => {
 	const { fileType, fileData } = props
 
 	// 首先检查明确的文件类型
-	switch (fileType.toLowerCase()) {
+	switch (fileType) {
 		case 'pdf':
 			return GuaxiPDFReader
 		case 'md':

@@ -130,7 +130,8 @@ import {
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
-import { Window } from '@tauri-apps/api/window';
+// import { Window } from '@tauri-apps/api/window';
+// import { Webview } from "@tauri-apps/api/webview"
 
 // 引入 Pinia store
 const store = repoStore()
@@ -854,31 +855,30 @@ const handleOpen = async (row) => {
     return
   }
 
-  // 3. 准备窗口参数
+  // // 3. 准备窗口参数
   const windowLabel = `reader-${row.id}-${Date.now()}` // 唯一窗口标识
   const windowTitle = `${rowFileName || '未命名文件'}.${fileType}`
   
-  // try {
-  //   // 4. 调用 Rust 命令创建窗口
-  //   await invoke('create_reader_window', {
-  //     label: windowLabel,
-  //     title: windowTitle,
-  //     fileData: {
-  //       type: fileType,
-  //       name: rowFileName,
-  //       path: row.path,       // 文件路径（根据实际情况调整）
-  //       content: row.content, // 文件内容（可选）
-  //       source: store.currentDatabase // 来源数据库
-  //     }
-  //   })
+  try {
+    // 4. 调用 Rust 命令创建窗口
+    await invoke('create_reader_window', {
+      label: windowLabel,
+      title: windowTitle,
+      fileData: {
+        type: fileType,
+        name: rowFileName,
+        path: row.path,       // 文件路径（根据实际情况调整）
+        content: row.content, // 文件内容（可选）
+        source: store.currentDatabase // 来源数据库
+      }
+    })
 
-  //   console.log('窗口创建成功:', windowLabel)
-  // } catch (error) {
-  //   console.error('创建窗口失败:', error)
-  //   alert(`无法打开文件: ${error.message || '未知错误'}`)
-  // }
+    console.log('窗口创建成功:', windowLabel)
+  } catch (error) {
+    console.error('创建窗口失败:', error)
+    alert(`无法打开文件: ${error.message || '未知错误'}`)
+  }
 
-  return new Window('/home');
 }
 
 // 文件类型映射函数

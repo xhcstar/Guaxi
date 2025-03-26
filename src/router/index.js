@@ -7,11 +7,17 @@ import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
+import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 
 
 export const routes = [
   {
     path: '/',
+    name: 'main',
+    component: GuaxiMainLayout,
+  },
+  {
+    path: '/home',
     name: 'home',
     component: GuaxiHomePage,
   },
@@ -49,6 +55,10 @@ export const routes = [
     path: '/reader',
     name: 'reader',
     component: GuaxiReader,
+    props: (route) => ({
+      fileType: route.query.fileType,
+      fileName: route.query.fileName
+    })
   },
 ];
 
