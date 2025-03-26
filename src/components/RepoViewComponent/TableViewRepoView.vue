@@ -130,6 +130,7 @@ import {
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
+import { Window } from '@tauri-apps/api/window';
 
 // 引入 Pinia store
 const store = repoStore()
@@ -836,8 +837,65 @@ const rowProps = (row) => {
 }
 
 // 方法：打开文件
-const handleOpen = (row) => {
-  console.log('打开', row)
+const handleOpen = async (row) => {
+  // 1. 确定文件类型和文件名
+  const rowFileType = store.currentDatabase === 'importFileDB' 
+    ? row.type?.toLowerCase() || ''
+    : row.noteFileType?.toLowerCase() || ''
+
+  const rowFileName = store.currentDatabase === 'importFileDB' 
+    ? row.importFileName || ''
+    : row.noteFileName || ''
+
+  // 2. 映射文件类型
+  const fileType = mapFileType(rowFileType)
+  if (!fileType) {
+    console.warn('未知文件类型:', rowFileType, row)
+    return
+  }
+
+  // 3. 准备窗口参数
+  const windowLabel = `reader-${row.id}-${Date.now()}` // 唯一窗口标识
+  const windowTitle = `${rowFileName || '未命名文件'}.${fileType}`
+  
+  // try {
+  //   // 4. 调用 Rust 命令创建窗口
+  //   await invoke('create_reader_window', {
+  //     label: windowLabel,
+  //     title: windowTitle,
+  //     fileData: {
+  //       type: fileType,
+  //       name: rowFileName,
+  //       path: row.path,       // 文件路径（根据实际情况调整）
+  //       content: row.content, // 文件内容（可选）
+  //       source: store.currentDatabase // 来源数据库
+  //     }
+  //   })
+
+  //   console.log('窗口创建成功:', windowLabel)
+  // } catch (error) {
+  //   console.error('创建窗口失败:', error)
+  //   alert(`无法打开文件: ${error.message || '未知错误'}`)
+  // }
+
+  return new Window('/home');
+}
+
+// 文件类型映射函数
+function mapFileType(rawType) {
+  const typeMap = {
+    'pdf': 'pdf',
+    'md': 'markdown',
+    'markdown': 'markdown',
+    'html': 'html',
+    'htm': 'html',
+    'epub': 'epub',
+    'doc': 'word',
+    'docx': 'word',
+    'word': 'word',
+    'txt': 'txt'
+  }
+  return typeMap[rawType] || null
 }
 
 const handleDelete = async (row) => {

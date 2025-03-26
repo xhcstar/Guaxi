@@ -10,6 +10,18 @@
     "opener:default",
     "dialog:default",
     "os:default",
-    "os:default"
+    "core:window:allow-start-dragging",
+    "core:window:allow-create",
+    "core:window:allow-close",
+    "core:window:allow-maximize",
+    "core:window:allow-minimize",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-available-monitors",
+    "core:window:allow-is-maximizable",
+    "core:window:allow-is-minimized",
+    "core:window:allow-set-fullscreen",
+    "core:webview:allow-create-webview-window",
+    "core:webview:allow-webview-show"
   ]
 }

@@ -84,6 +84,7 @@ async fn main() {
             commands::repoview::search_imported_file_libraries,
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
+            commands::gauxireader::create_reader_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

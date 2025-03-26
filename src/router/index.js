@@ -1,12 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import GuaxiHomePage from '../views/GuaxiHomePage.vue'
 import GuaxiChatPage from '../views/GuaxiChatPage.vue'
-import GuaxiStatisicsPage from '../views/GuaxiStatisicsPage.vue'
+import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
 import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
-import { path } from '@tauri-apps/api'
+import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 
 
 export const routes = [
@@ -28,7 +28,7 @@ export const routes = [
   {
     path: '/statistics',
     name: 'statistics',
-    component: GuaxiStatisicsPage,
+    component: GuaxiStatisticsPage,
   },
   {
     path: '/application',
@@ -44,6 +44,11 @@ export const routes = [
     path: '/setting',
     name: 'setting',
     component: GuaxiSettingPage,
+  },
+  {
+    path: '/reader',
+    name: 'reader',
+    component: GuaxiReader,
   },
 ];
 

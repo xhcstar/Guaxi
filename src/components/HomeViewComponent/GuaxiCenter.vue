@@ -1,6 +1,5 @@
 <template>
   <div class="text-aera">
-    <!-- <PDFReader /> -->
     <GuaxiEditor/>
   </div>
 </template>
