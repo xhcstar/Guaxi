@@ -1010,6 +1010,22 @@ const columns = computed(() => {
           }, '笔记归属导入文件'),
         key: 'fromImportedFile',
         resizable: true,
+        render(row) {
+          return h(ShowOrEdit, {
+            value: row.fromImportedFile,
+            onUpdateValue: async (v) => {
+              const error = validateTableCell({ ...row, fromImportedFile: v });
+              if (error) {
+                message.error(error); // 使用 useMessage 的消息组件
+                return;
+              }
+              row.fromImportedFile = v
+              await updateNote(row); // 调用更新笔记的接口
+            },
+            enableAutoComplete: true, // 启用自动补全
+            searchType: 'fromImportedFile', // 指定搜索类型
+          })
+        },
       },
       {
         title: () => h('span',
@@ -1148,7 +1164,7 @@ const columns = computed(() => {
           return h(ShowOrEdit, {
             value: row.tags,
             onUpdateValue: async (v) => {
-              const error = validateTagscell({ ...row, tags: v });
+              const error = validateTableCell({ ...row, tags: v });
               if (error) {
                 message.error(error); // 使用 useMessage 的消息组件
                 return;

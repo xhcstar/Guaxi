@@ -106,7 +106,7 @@ const handleSearch = async (query) => {
         result = await invoke('search_imported_file_libraries', { query });
         break;
       default:
-        console.error('未知的搜索类型:', props.searchType);
+        // console.error('未知的搜索类型:', props.searchType);
         return;
     }
     
