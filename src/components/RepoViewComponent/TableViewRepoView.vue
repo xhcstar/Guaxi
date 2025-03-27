@@ -56,12 +56,12 @@
             :input-style="{ borderRadius: '8px' }" />
         </template>
         <!-- 笔记标签 -->
-        <template v-else-if="column.key === 'noteTags'">
+        <template v-else-if="column.key === 'tags'">
           <n-auto-complete v-model:value="currentForm[column.key]" :options="noteTagOptions" :loading="isNoteTagLoading"
             placeholder="请输入笔记标签" clearable :input-style="{ borderRadius: '8px' }" />
         </template>
         <!-- 导入文件标签 -->
-        <template v-else-if="column.key === 'importedFileTags'">
+        <template v-else-if="column.key === 'tags'">
           <n-auto-complete v-model:value="currentForm[column.key]" :options="importedFileTagOptions"
             :loading="isImportedFileTagLoading" placeholder="请输入导入文件标签" clearable
             :input-style="{ borderRadius: '8px' }" />

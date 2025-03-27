@@ -1,10 +1,7 @@
 <template>
 	<div class="guaxi-reader">
-		<component :is="readerComponent" v-if="readerComponent" :fileType="fileType" :fileData="{
-			fileName: fileName,
-			fileName: fileName,
-			fileName: fileName
-		}" @close="emit('close')" />
+		<component :is="readerComponent" v-if="readerComponent" :filePath="filePath" :fileType="fileType" 
+			:fileName="fileName" @close=" emit('close')" />
 		<div v-else class="unknown-type">
 			不支持的文件类型: {{ fileType }}
 			<p>文件名: {{ fileData?.name || '未知' }}</p>
@@ -20,16 +17,17 @@ import GuaxiHtmlReader from './GuaxiHtmlReader.vue'
 import GuaxiEpubReader from './GuaxiEpubReader.vue'
 import GuaxiWordReader from './GauxiWordReader.vue'
 import GuaxiTextReader from './GuaxiTextReader.vue'
+// import { Base64 } from 'js-base64'
 
 const props = defineProps({
+	filePath: {
+		type: String,
+		required: true,
+	},
 	fileType: {
 		type: String,
 		required: true,
 		validator: (value) => ['pdf', 'md', 'html', 'epub', 'doc', 'txt'].includes(value)
-	},
-	filePath: {
-		type: String,
-		required: true,
 	},
 	fileName: {
 		type: String,
@@ -37,10 +35,22 @@ const props = defineProps({
 	}
 })
 
+// Base64 解码文件路径
+// const decodedFilePath = computed (() => {
+//   try {
+//     // 先URL解码，再Base64解码
+//     const urlDecoded = decodeURIComponent(props.filePath)
+// 	console.log('urlDecoded', urlDecoded)
+//     return Base64.decode(urlDecoded)
+//   } catch (error) {
+//     console.error('路径解码失败:', error)
+//     return null
+//   }
+// })
+
 // 更严格的组件选择逻辑
 const readerComponent = computed(() => {
 	const { fileType, filePath, fileName } = props
-
 	console.log('readerComponent', fileType, filePath, fileName)
 
 	if (!fileType || !fileName) {
