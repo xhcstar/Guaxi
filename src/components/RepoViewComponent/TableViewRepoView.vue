@@ -36,8 +36,7 @@
         :label-style="{ fontWeight: 'bold', color: '#333', fontSize: '15px' }">
         <!-- 根据列类型渲染不同的输入组件 -->
         <template v-if="column.key === 'filePath'">
-          <n-input v-model:value="currentForm[column.key]"  placeholder="请输入文件路径"
-            :input-style="{ borderRadius: '8px' }">
+          <n-input v-model:value="currentForm[column.key]" placeholder="请输入文件路径" :input-style="{ borderRadius: '8px' }">
             <template #suffix>
               <n-tooltip trigger="hover">
                 <template #trigger>
@@ -53,7 +52,7 @@
         <template
           v-else-if="column.key === 'importFileCreateTime' || column.key === 'noteFileCreateTime' || column.key === 'noteFileUpdateTime'
             || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'importFileSize'">
-          <n-input v-model:value="currentForm[column.key]"  :placeholder="`${column.title}`" disabled
+          <n-input v-model:value="currentForm[column.key]" :placeholder="`${column.title}`" disabled
             :input-style="{ borderRadius: '8px' }" />
         </template>
         <!-- 笔记标签 -->
@@ -85,7 +84,7 @@
         </template>
         <!-- 默认输入框 -->
         <template v-else>
-          <n-input v-model:value="currentForm[column.key]" 
+          <n-input v-model:value="currentForm[column.key]"
             :placeholder="column.key === 'tags' ? `如有多个标签请以逗号隔开` : `请输入${column.title}`"
             :input-style="{ borderRadius: '8px' }" />
         </template>
@@ -130,6 +129,7 @@ import {
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
+import { Library, Settings } from '@vicons/ionicons5'
 // import { Window } from '@tauri-apps/api/window';
 // import { Webview } from "@tauri-apps/api/webview"
 
@@ -840,11 +840,11 @@ const rowProps = (row) => {
 // 方法：打开文件
 const handleOpen = async (row) => {
   // 1. 确定文件类型和文件名
-  const rowFileType = store.currentDatabase === 'importFileDB' 
+  const rowFileType = store.currentDatabase === 'importFileDB'
     ? row.type?.toLowerCase() || ''
     : row.noteFileType?.toLowerCase() || ''
 
-  const rowFileName = store.currentDatabase === 'importFileDB' 
+  const rowFileName = store.currentDatabase === 'importFileDB'
     ? row.importFileName || ''
     : row.noteFileName || ''
 
@@ -855,30 +855,65 @@ const handleOpen = async (row) => {
     return
   }
 
-  // // 3. 准备窗口参数
+  // 获取不带后缀的文件名
+  const baseFileName = rowFileName.includes('.') 
+    ? rowFileName.substring(0, rowFileName.lastIndexOf('.'))
+    : rowFileName
+
+  // 3. 准备窗口参数
   const windowLabel = `reader-${row.id}-${Date.now()}` // 唯一窗口标识
-  const windowTitle = `${rowFileName || '未命名文件'}.${fileType}`
-  
+  const windowTitle = `${rowFileName || '未命名文件'}` // 使用不带后缀的文件名
+
+  const osPlatform = await platform()
+  let ReadFilePath = ''
+
+  console.log('store.librariesRoot:', store.librariesRoot)
+
+  if (store.currentDatabase === 'importFileDB') {
+    if (osPlatform === 'windows') {
+      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\${rowFileType}\\${rowFileName}`
+    } else if (osPlatform === 'linux') {
+      ReadFilePath = `${store.librariesRoot}/Libraries/${row.fromImportedFileLibrary}/${baseFileName}/notes/${rowFileName}`
+    } else {
+      console.error('未知的操作系统平台:', osPlatform)
+    }
+  } else if (store.currentDatabase === 'NotesDb') {
+    if (osPlatform === 'windows') {
+      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${row.type}\\${rowFileName}`
+    } else if (osPlatform === 'linux') {
+      ReadFilePath = `${store.librariesRoot}/Library/${row.library}/${row.type}/${rowFileName}`
+    } else {
+      console.error('未知的操作系统平台:', osPlatform)
+    }
+  } else {
+    console.error('未知的数据库类型:', store.currentDatabase)
+  }
+
   try {
     // 4. 调用 Rust 命令创建窗口
     await invoke('create_reader_window', {
       label: windowLabel,
       title: windowTitle,
       fileData: {
-        type: fileType,
-        name: rowFileName,
-        path: row.path,       // 文件路径（根据实际情况调整）
-        content: row.content, // 文件内容（可选）
-        source: store.currentDatabase // 来源数据库
+        file_type: fileType,
+        file_name: rowFileName,
+        file_path: ReadFilePath,
       }
     })
 
-    console.log('窗口创建成功:', windowLabel)
+    console.log('窗口创建参数:', {
+      label: windowLabel,
+      title: windowTitle,
+      fileData: {
+        type: fileType,
+        name: rowFileName,
+        path: ReadFilePath,
+      }
+    })
   } catch (error) {
     console.error('创建窗口失败:', error)
     alert(`无法打开文件: ${error.message || '未知错误'}`)
   }
-
 }
 
 // 文件类型映射函数

@@ -10,5 +10,9 @@ export const useSettingsStore = defineStore('settings', {
     setSelectedMenu(menu) {
       this.selectedMenu = menu;
     },
+
+    set_librariesRoot_settings(path) {
+      this.librariesRoot = path;
+    },
   },
 });

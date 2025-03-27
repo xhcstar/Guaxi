@@ -1,6 +1,10 @@
 <template>
 	<div class="guaxi-reader">
-		<component :is="readerComponent" v-if="readerComponent" :file="fileData" @close="emit('close')" />
+		<component :is="readerComponent" v-if="readerComponent" :fileType="fileType" :fileData="{
+			fileName: fileName,
+			fileName: fileName,
+			fileName: fileName
+		}" @close="emit('close')" />
 		<div v-else class="unknown-type">
 			不支持的文件类型: {{ fileType }}
 			<p>文件名: {{ fileData?.name || '未知' }}</p>
@@ -20,71 +24,48 @@ import GuaxiTextReader from './GuaxiTextReader.vue'
 const props = defineProps({
 	fileType: {
 		type: String,
-		required: true
-	},
-	fileData: {
-		type: Object,
 		required: true,
-		validator: (value) => {
-			// 验证 fileData 至少包含 name 或 path 属性
-			return value.name !== undefined || value.path !== undefined
-		}
+		validator: (value) => ['pdf', 'md', 'html', 'epub', 'doc', 'txt'].includes(value)
+	},
+	filePath: {
+		type: String,
+		required: true,
+	},
+	fileName: {
+		type: String,
+		required: true,
 	}
+})
+
+// 更严格的组件选择逻辑
+const readerComponent = computed(() => {
+	const { fileType, filePath, fileName } = props
+
+	console.log('readerComponent', fileType, filePath, fileName)
+
+	if (!fileType || !fileName) {
+		console.error('Missing required props')
+		return null
+	}
+
+	const typeMap = {
+		pdf: GuaxiPDFReader,
+		md: GuaxiMarkdownReader,
+		markdown: GuaxiMarkdownReader,
+		html: GuaxiHtmlReader,
+		htm: GuaxiHtmlReader,
+		epub: GuaxiEpubReader,
+		doc: GuaxiWordReader,
+		docx: GuaxiWordReader,
+		word: GuaxiWordReader,
+		txt: GuaxiTextReader
+	}
+
+	return typeMap[fileType] || null
 })
 
 const emit = defineEmits(['close'])
 
-// 根据文件类型和扩展名决定使用哪个阅读器组件
-const readerComponent = computed(() => {
-	console.log('readerComponent', props.fileType, props.fileData)
-	const { fileType, fileData } = props
-
-	// 首先检查明确的文件类型
-	switch (fileType) {
-		case 'pdf':
-			return GuaxiPDFReader
-		case 'md':
-		case 'markdown':
-			return GuaxiMarkdownReader
-		case 'html':
-		case 'htm':
-			return GuaxiHtmlReader
-		case 'epub':
-			return GuaxiEpubReader
-		case 'doc':
-		case 'docx':
-		case 'word':
-			return GuaxiWordReader
-		case 'txt':
-			return GuaxiTextReader
-	}
-
-	// 如果文件类型不明确，尝试从文件名中提取扩展名
-	if (fileData?.name) {
-		const fileName = fileData.name.toLowerCase()
-		const extension = fileName.split('.').pop()
-
-		switch (extension) {
-			case 'pdf':
-				return GuaxiPDFReader
-			case 'md':
-				return GuaxiMarkdownReader
-			case 'html':
-			case 'htm':
-				return GuaxiHtmlReader
-			case 'epub':
-				return GuaxiEpubReader
-			case 'doc':
-			case 'docx':
-				return GuaxiWordReader
-			case 'txt':
-				return GuaxiTextReader
-		}
-	}
-
-	// 如果还是无法确定，返回 null 显示不支持的消息
-	return null
-})
 </script>
 
 <style scoped>

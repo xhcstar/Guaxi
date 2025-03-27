@@ -97,6 +97,22 @@ const targetPage = ref(1);   // 跳转目标页
 const pdfContent = ref([]);  // 存储 PDF 中的句子内容
 const markdownContent = ref(''); // 存储 Markdown 内容
 
+const props = defineProps({
+	fileType: {
+		type: String,
+		required: true,
+		validator: (value) => ['pdf', 'md', 'html', 'epub', 'doc', 'txt'].includes(value)
+	},
+	filePath: {
+		type: String,
+		required: true,
+	},
+	fileName: {
+		type: String,
+		required: true,
+	}
+})
+
 watch(
     () => fileProcessStore.openedCurentfileContent,
     (newContent) => {
@@ -340,9 +356,73 @@ const downloadMarkdown = () => {
     URL.revokeObjectURL(url);
 };
 
+const openFileSelectedNewWindows = async (filePath) => {
+	console.log('openFileSelectedNewWindows', filePath);
+	if (filePath) {
+		fileProcessStore.setSelectedFile(filePath);
+
+		// 从文件路径中提取文件扩展名
+		const fileExtension = filePath.split('.').pop().toLowerCase();
+
+		// 根据文件扩展名设置 filetype
+		let filetype;
+		switch (fileExtension) {
+			case 'pdf':
+				filetype = 'pdf';
+				break;
+			case 'md':
+				filetype = 'md';
+				break;
+			case 'txt':
+				filetype = 'txt';
+				break;
+			case 'docx':
+				filetype = 'doc';
+				break;
+			case 'doc':
+				filetype = 'doc';
+				break;
+			case 'html':
+				filetype = 'html';
+				break;
+			case 'epub':
+				filetype = 'epub';
+				break;
+			default:
+				filetype = 'unknown';
+				break;
+		}
+
+		try {
+			const openfile_request = {
+				filetype: filetype,
+				filepath: fileProcessStore.selectedFile,
+				curpage: fileProcessStore.curentPage,
+				lastpage: fileProcessStore.lastPage,
+			};
+			console.log('openfile_request:', openfile_request);
+			const response = await invoke('openfile', { request: openfile_request });
+			fileProcessStore.getCurentOpenedFileContent(response, 0);
+			console.log('Response:', response);
+		} catch (error) {
+			console.error('Error calling openfile API:', error);
+		}
+	} else {
+		console.log('未选择文件');
+	}
+}
+
 // 页面加载时调用
 onMounted(() => {
-    loadPdfContent(contentList.value);
+    if (props.filePath) {
+    openFileSelectedNewWindows(props.filePath)
+  } else {
+    console.error('filePath is undefined', props.filePath)
+  }
+  
+  if (contentList.value) {
+    loadPdfContent(contentList.value)
+  }
 });
 </script>
 
