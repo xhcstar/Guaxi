@@ -22,7 +22,7 @@ export const repoStore = defineStore("repoStore", {
             description: note.description,
             noteFileName: note.note_file_name,
             noteFileType: note.note_file_type,
-            tags: note.tags.join(","), // 将 tags 数组转换为字符串
+            notesTags: note.tags.join(","), // 将 tags 数组转换为字符串
             fromImportedFile: note.from_imported_file,
             fromImportedFileLibrary: note.from_imported_file_library,
             noteFileCreateTime: note.note_file_create_time,
@@ -38,7 +38,7 @@ export const repoStore = defineStore("repoStore", {
             id: file.id,
             importFileName: file.import_file_name,
             description: file.description,
-            tags: file.tags.join(","), // 将 tags 数组转换为字符串
+            importedFiletags: file.tags.join(","), // 将 tags 数组转换为字符串
             type: file.file_type,
             library: file.library,
             importFileCreateTime: file.import_file_create_time,
