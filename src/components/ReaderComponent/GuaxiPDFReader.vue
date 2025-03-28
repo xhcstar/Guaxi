@@ -18,9 +18,15 @@
 				</button>
 			</div>
 
-			<button class="export-notes" @click="exportNotes">
-				<i class="icon-download"></i> 导出笔记
-			</button>
+			<div class="right-controls">
+				<button class="toggle-notes" @click="toggleNotesPanel">
+					<i :class="showNotes ? 'icon-notes-active' : 'icon-notes'"></i>
+					{{ showNotes ? '隐藏笔记' : '显示笔记' }}
+				</button>
+				<button class="export-notes" @click="exportNotes">
+					<i class="icon-download"></i> 导出笔记
+				</button>
+			</div>
 		</div>
 
 		<!-- 主内容区 -->
@@ -108,11 +114,6 @@
 			</div>
 			<div class="notes-content">
 				<textarea v-model="notesContent" placeholder="点击PDF内容添加到笔记..." class="notes-textarea"></textarea>
-			</div>
-			<div class="notes-footer">
-				<button @click="exportNotes" class="export-btn">
-					<i class="icon-download"></i> 导出笔记
-				</button>
 			</div>
 		</div>
 
@@ -339,8 +340,39 @@ watch(() => props.filePath, (newPath) => {
 	overflow: hidden;
 }
 
+.right-controls {
+	display: flex;
+	gap: 10px;
+}
+
+/* 笔记开关按钮样式 */
+.toggle-notes {
+	padding: 6px 12px;
+	background-color: #3498db;
+	color: white;
+	border: none;
+	border-radius: 4px;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.toggle-notes:hover {
+	background-color: #2980b9;
+}
+
+.icon-notes::before {
+	content: "📝";
+	margin-right: 5px;
+}
+
+.icon-notes-active::before {
+	content: "📖";
+	margin-right: 5px;
+}
+
 .pdf-controls {
 	display: flex;
+	/* height: 60px; 固定控制栏高度 */
 	justify-content: space-between;
 	align-items: center;
 	padding: 12px 20px;
@@ -417,9 +449,11 @@ button:disabled {
 }
 
 .thumbnail-container img {
-	max-width: 100%;
+	max-width: 180px;
+	/* 增大默认缩略图大小 */
 	cursor: pointer;
 	box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+	transform: scale(1.05);
 }
 
 .large-thumbnail {
@@ -429,10 +463,15 @@ button:disabled {
 	transform: translateY(-50%);
 	z-index: 100;
 	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+	max-width: 60vw;
+	/* 增大最大宽度 */
+	max-height: 80vh;
 }
 
 .large-thumbnail img {
-	max-height: 80vh;
+	max-width: 100%;
+	max-height: 70vh;
+	/* 增大高度 */
 }
 
 .thumbnail-page-number {
@@ -618,6 +657,8 @@ button:disabled {
 	top: 0;
 	bottom: 0;
 	width: 400px;
+	top: 0px;
+	/* 与控制栏高度一致 */
 	background-color: white;
 	box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
 	transition: right 0.3s ease;
@@ -631,17 +672,21 @@ button:disabled {
 }
 
 .notes-header {
-	padding: 15px;
+	padding: 15px 20px;
+	height: 22px;
 	background-color: #2c3e50;
 	color: white;
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
+	flex-shrink: 0;
+	/* 防止header被压缩 */
 }
 
 .notes-header h3 {
 	margin: 0;
 	font-size: 18px;
+	font-weight: 500;
 }
 
 .close-btn {
@@ -651,42 +696,56 @@ button:disabled {
 	font-size: 20px;
 	cursor: pointer;
 	padding: 5px;
+	transition: transform 0.2s;
+}
+
+.close-btn:hover {
+	transform: scale(1.1);
 }
 
 .notes-content {
 	flex: 1;
-	padding: 15px;
+	/* 占据剩余空间 */
+	padding: 0;
+	/* 移除内边距 */
 	display: flex;
+	overflow: hidden;
+	/* 防止内容溢出 */
 }
 
 .notes-textarea {
 	width: 100%;
 	height: 100%;
-	border: 1px solid #ddd;
-	border-radius: 4px;
-	padding: 10px;
-	font-family: inherit;
+	border: none;
+	resize: none;
+	padding: 20px;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 	font-size: 14px;
 	line-height: 1.6;
-	resize: none;
+	color: #333;
+	background-color: #f9f9f9;
 }
 
-.notes-footer {
-	padding: 10px 15px;
-	border-top: 1px solid #eee;
-	text-align: right;
+.notes-textarea:focus {
+	outline: none;
+	background-color: #fff;
 }
 
-.export-btn {
-	padding: 8px 15px;
-	background-color: #27ae60;
-	color: white;
-	border: none;
+/* 滚动条样式 */
+.notes-textarea::-webkit-scrollbar {
+	width: 8px;
+}
+
+.notes-textarea::-webkit-scrollbar-track {
+	background: #f1f1f1;
+}
+
+.notes-textarea::-webkit-scrollbar-thumb {
+	background: #c1c1c1;
 	border-radius: 4px;
-	cursor: pointer;
 }
 
-.export-btn:hover {
-	background-color: #219653;
+.notes-textarea::-webkit-scrollbar-thumb:hover {
+	background: #a8a8a8;
 }
 </style>
