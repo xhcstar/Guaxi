@@ -45,7 +45,7 @@ def extract_pdf_page(filepath: str, curpage: int) -> tuple[str, int]:
             content += line_text + "\n"
 
         print(content)
-        with open('D:/MyProject/Guaxi/Guaxi/log/pdftext.txt', 'w', encoding='utf-8') as pdf_file:
+        with open('E:/Record/source/Vue/log/pdftext.txt', 'w', encoding='utf-8') as pdf_file:
             pdf_file.write(content)
         return (content, totalpage)
     except Exception as e:

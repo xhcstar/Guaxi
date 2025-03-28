@@ -56,12 +56,12 @@
             :input-style="{ borderRadius: '8px' }" />
         </template>
         <!-- 笔记标签 -->
-        <template v-else-if="column.key === 'tags'">
+        <template v-else-if="column.key === 'notesTags'">
           <n-auto-complete v-model:value="currentForm[column.key]" :options="noteTagOptions" :loading="isNoteTagLoading"
             placeholder="请输入笔记标签" clearable :input-style="{ borderRadius: '8px' }" />
         </template>
         <!-- 导入文件标签 -->
-        <template v-else-if="column.key === 'tags'">
+        <template v-else-if="column.key === 'importedFileTags'">
           <n-auto-complete v-model:value="currentForm[column.key]" :options="importedFileTagOptions"
             :loading="isImportedFileTagLoading" placeholder="请输入导入文件标签" clearable
             :input-style="{ borderRadius: '8px' }" />
@@ -412,7 +412,7 @@ const rules = {
     { validator: validateFilePath, required: true, message: '文件路径不能为空', trigger: ['input', 'blur'] },
   ],
   tags: [
-    { validator: validateTags, required: true, max: 1, message: '标签不能为空', trigger: ['input', 'blur'] },
+    { validator: validateTags, required: true, message: '标签不能为空', trigger: ['input', 'blur'] },
   ],
   description: [
     { required: true, message: '描述不能为空', trigger: ['input', 'blur'] },
@@ -443,7 +443,7 @@ const formColumns = computed(() => {
       { key: 'importFileName', title: '文件名' },
       { key: 'description', title: '文件描述' },
       { key: 'library', title: '所属库' },
-      { key: 'tags', title: '文件标签' },
+      { key: 'notesTags', title: '文件标签' },
       { key: 'type', title: '文件类型' },
       { key: 'importFileCreateTime', title: '入库时间' },
       { key: 'importFileSize', title: '文件大小' },
@@ -452,7 +452,7 @@ const formColumns = computed(() => {
       { key: 'filePath', title: '文件路径' },
       { key: 'description', title: '笔记描述' },
       { key: 'noteFileName', title: '笔记文件名' },
-      { key: 'tags', title: '笔记标签' },
+      { key: 'importedFileTags', title: '笔记标签' },
       { key: 'noteFileType', title: '笔记文件类型' },
       { key: 'fromImportedFile', title: '笔记归属导入文件' },
       { key: 'fromImportedFileLibrary', title: '导入文件所属库' },
@@ -1438,12 +1438,13 @@ const {
 } = useImportedFileLibrarySearch();
 
 // 监听输入值变化并触发搜索
-watch(() => currentForm.value.noteTags, (newValue) => {
-  handleNoteTagSearch(newValue);
-});
-
-watch(() => currentForm.value.importedFileTags, (newValue) => {
-  handleImportedFileTagSearch(newValue);
+watch(() => currentForm.value.tags, (newValue) => {
+  if (store.currentDatabase === 'importFileDB') {
+    handleImportedFileTagSearch(newValue);
+  } else if (store.currentDatabase === 'noteDB') {
+    handleNoteTagSearch(newValue);
+  } else {
+  }
 });
 
 watch(() => currentForm.value.fromImportedFile, (newValue) => {
@@ -1460,6 +1461,7 @@ watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
 
 // 组件挂载时获取默认数据
 onMounted(async () => {
+  store.get_librariesRoot()
   await store.fetchFiles('importFileDB') // 默认加载数据库 1 的数据
 })
 

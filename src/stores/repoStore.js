@@ -68,5 +68,14 @@ export const repoStore = defineStore("repoStore", {
       this.librariesRoot = path;
       console.log("set_librariesRoot", this.librariesRoot);
     },
+
+    async get_librariesRoot() {
+      try {
+        this.librariesRoot = await invoke('get_libraries_root')
+        console.log('初始化：获取当librariesRoot路径成功', this.librariesRoot)
+      } catch (error) {
+        console.error('获取当librariesRoot仓库路径失败', error)
+      }
+    },
   },
 });

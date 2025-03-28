@@ -12,9 +12,6 @@
         </svg>
       </n-icon>
       <div style="font-weight: bold; font-size: 16px;">Guaxi</div>
-
-      <OpenFile />
-
     </div>
     <!-- 右侧占位内容 -->
     <div style="gap: 8px; padding-right: 9px;">
