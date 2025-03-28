@@ -1,52 +1,140 @@
-import pymupdf  # PyMuPDF
-from operator import itemgetter
-from itertools import groupby
+import fitz  # PyMuPDF
+from pdf2image import convert_from_path
+import pandas as pd
+from PIL import Image, ImageDraw
+import base64
+from io import BytesIO
+import json
 
-# 缓存打开的 PDF 文档
-pdf_cache = {}
-
-def extract_pdf_page(filepath: str, curpage: int) -> tuple[str, int]:
+def extract_pdf_page(pdf_path: str, page_num: int) -> tuple:
     """
-    提取 PDF 文件中指定页的内容，并返回总页数。
-
-    Args:
-        filepath (str): PDF 文件路径。
-        curpage (int): 当前页码（从 1 开始）。
-
-    Returns:
-        tuple[str, int]: 提取的页面内容和总页数。
+    提取PDF指定页面的内容，分类处理文本、图像和表格
+    
+    参数:
+        pdf_path: PDF文件路径
+        page_num: 要提取的页码(1-based)
+    
+    返回:
+        tuple: (页面内容的JSON字符串, 总页数)
     """
     try:
-        # 检查是否已经缓存了该文件
-        if filepath not in pdf_cache:
-            # 打开 PDF 文件并缓存
-            pdf_cache[filepath] = pymupdf.open(filepath)
+        doc = fitz.open(pdf_path)
+        total_pages = len(doc)
         
-        # 获取缓存的文档
-        doc = pdf_cache[filepath]
-        totalpage = doc.page_count
-
-        # 加载指定页面（页码从 0 开始）
-        page = doc.load_page(curpage - 1)
-
-        # 获取该页的所有单词（以单词为单位的坐标）
-        text_words = page.get_text_words()
-
-        # 按照 y1 (垂直位置) 和 x0 (水平位置) 排序
-        sorted_words = sorted(text_words, key=itemgetter(3, 0))
-
-        # 使用 groupby 按 y1 进行分组
-        lines = groupby(sorted_words, key=itemgetter(3))
-
-        # 遍历每一行，并输出每行的文本
-        content = ""
-        for y, line in lines:
-            line_text = ' '.join(word[4] for word in line)  # 取出每个单词的文本部分（word[4]是文本）
-            content += line_text + "\n"
-
-        print(content)
-        with open('E:/Record/source/Vue/log/pdftext.txt', 'w', encoding='utf-8') as pdf_file:
-            pdf_file.write(content)
-        return (content, totalpage)
+        if page_num < 1 or page_num > total_pages:
+            return (json.dumps({"error": f"Invalid page number {page_num}. Valid range is 1-{total_pages}"}), total_pages)
+        
+        page = doc.load_page(page_num - 1)
+        
+        # 获取页面缩略图
+        thumbnail = get_page_thumbnail(pdf_path, page_num)
+        
+        # 提取内容元素
+        elements = extract_page_elements(page)
+        
+        return (json.dumps({
+            "page_number": page_num,
+            "total_pages": total_pages,
+            "thumbnail": thumbnail,
+            "elements": elements
+        }), total_pages)
+        
     except Exception as e:
-        raise RuntimeError(f"Failed to extract PDF content: {e}")
+        return (json.dumps({"error": str(e)}), 0)
+
+def get_page_thumbnail(pdf_path: str, page_num: int) -> str:
+    """生成页面缩略图"""
+    images = convert_from_path(pdf_path, first_page=page_num, last_page=page_num)
+    if not images:
+        return ""
+    
+    img_bytes = BytesIO()
+    images[0].save(img_bytes, format='PNG')
+    return base64.b64encode(img_bytes.getvalue()).decode('utf-8')
+
+def extract_page_elements(page) -> list:
+    """提取页面中的所有元素并分类处理"""
+    elements = []
+    
+    # 1. 提取文本块（按段落）
+    text_blocks = page.get_text("blocks")
+    for block in text_blocks:
+        if block[6] == 0:  # 文本块类型
+            text = block[4].strip()
+            if text:
+                elements.append({
+                    "type": "text",
+                    "content": text,
+                    "bbox": block[:4]
+                })
+    
+    # 2. 提取图像
+    for img in page.get_images():
+        xref = img[0]
+        base_image = page.parent.extract_image(xref)
+        elements.append({
+            "type": "image",
+            "content": base64.b64encode(base_image["image"]).decode('utf-8'),
+            "bbox": [0, 0, base_image["width"], base_image["height"]]  # 简化位置
+        })
+    
+    # 3. 提取表格并转换为图像
+    tables = page.find_tables()
+    if tables.tables:
+        for table in tables.tables:
+            df = table.to_pandas()
+            table_image = dataframe_to_image(df)
+            
+            img_bytes = BytesIO()
+            table_image.save(img_bytes, format="PNG")
+            img_str = base64.b64encode(img_bytes.getvalue()).decode('utf-8')
+            
+            elements.append({
+                "type": "table",
+                "content": img_str,
+                "bbox": list(table.bbox),
+                "data": df.to_dict(orient="records")
+            })
+    
+    # 按大致阅读顺序排序（从上到下）
+    elements.sort(key=lambda x: x["bbox"][1])
+    
+    return elements
+
+def dataframe_to_image(df):
+    """将DataFrame转换为美观的图像"""
+    # 计算列宽
+    col_widths = []
+    for col in df.columns:
+        max_len = max(df[col].astype(str).apply(len).max(), len(col))
+        col_widths.append(min(200, max(80, max_len * 8)))
+    
+    # 计算图像大小
+    cell_height = 40
+    img_width = sum(col_widths)
+    img_height = cell_height * (len(df) + 1)  # +1 for header
+    
+    # 创建图像
+    img = Image.new('RGB', (img_width, img_height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    
+    # 绘制表头
+    x_pos = 0
+    for i, col in enumerate(df.columns):
+        draw.rectangle([x_pos, 0, x_pos + col_widths[i], cell_height], 
+                      fill=(240, 240, 240), outline=(200, 200, 200))
+        draw.text((x_pos + 10, 10), str(col), fill=(0, 0, 0))
+        x_pos += col_widths[i]
+    
+    # 绘制表格内容
+    for j in range(len(df)):
+        x_pos = 0
+        y_pos = (j + 1) * cell_height
+        for i, col in enumerate(df.columns):
+            draw.rectangle([x_pos, y_pos, x_pos + col_widths[i], y_pos + cell_height], 
+                         fill=(255, 255, 255), outline=(200, 200, 200))
+            cell_value = str(df.iloc[j, i])
+            draw.text((x_pos + 10, y_pos + 10), cell_value, fill=(0, 0, 0))
+            x_pos += col_widths[i]
+    
+    return img

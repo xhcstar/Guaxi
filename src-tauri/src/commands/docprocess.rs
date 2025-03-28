@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
-    filetype: String, // 文件类型：pdf, md, docx, txt
+    filetype: String,
     filepath: String,
     curpage: u32,
     lastpage: u32,
@@ -14,25 +14,21 @@ pub struct OpenFileRequest {
 
 #[derive(Serialize, Debug)]
 pub struct OpenFileResponse {
-    filetype: String, // 文件类型：pdf, md, docx, txt
+    success: bool,  // 明确添加success字段
+    filetype: String,
     content: String,
     curpage: u32,
     lastpage: u32,
     totalpages: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,  // 可选错误信息
 }
 
-// pub struct FileProcessorRespond {
-//     content: String,
-//     totalpages: u32,
-// }
-
-/// 初始化 Python 解释器
 fn initialize_python() -> Result<(), String> {
     pyo3::prepare_freethreaded_python();
     Ok(())
 }
 
-/// 处理 PDF 文件
 fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
     // 初始化 Python 解释器
     initialize_python()?;
@@ -70,7 +66,7 @@ fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
         })?;
 
         // 打印当前的 sys.path
-        // info!("Current sys.path: {:?}", sys_path);
+        info!("Current sys.path: {:?}", sys_path);
 
         // 将脚本目录添加到 sys.path
         sys_path.append(scripts_dir_str).map_err(|e| {
@@ -79,7 +75,7 @@ fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
         })?;
 
         // 打印更新后的 sys.path
-        // info!("Updated sys.path: {:?}", sys_path);
+        info!("Updated sys.path: {:?}", sys_path);
 
         // 导入 pdf_extractor 模块
         let pdf_extractor = PyModule::import(py, "pdf_extractor").map_err(|e| {
@@ -105,6 +101,7 @@ fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
                 format!("Failed to extract content and totalpage: {:?}", e)
             })?;
 
+            info!("Extracted content: {}", result.0);
         Ok(result)
     })
 }
@@ -343,25 +340,38 @@ fn handle_docx(filepath: String, curpage: u32) -> Result<(String, u32), String> 
     })
 }
 
+
 #[tauri::command]
-pub async fn openfile(request: OpenFileRequest) -> Result<OpenFileResponse, String> {
+pub async fn reader_open_file(request: OpenFileRequest) -> Result<OpenFileResponse, String> {
     info!("Open file request: {:?}", request);
 
-    // 根据文件类型调用对应的处理函数
-    let file_processor_respond = match request.filetype.as_str() {
+    let (content, totalpages) = match request.filetype.as_str() {
         "pdf" => handle_pdf(request.filepath, request.curpage)?,
-        "md" => handle_md(request.filepath, request.curpage)?,
-        "txt" => handle_txt(request.filepath, request.curpage)?,
-        "docx" => handle_docx(request.filepath, request.curpage)?,
         _ => return Err(format!("Unsupported file type: {}", request.filetype)),
     };
 
-    // 返回响应
+    // 检查Python返回的内容是否包含错误
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+        if parsed.get("error").is_some() {
+            return Ok(OpenFileResponse {
+                success: false,
+                filetype: request.filetype,
+                content,
+                curpage: request.curpage,
+                lastpage: request.lastpage,
+                totalpages,
+                error: parsed["error"].as_str().map(|s| s.to_string()),
+            });
+        }
+    }
+
     Ok(OpenFileResponse {
+        success: true,
         filetype: request.filetype,
-        content: file_processor_respond.0,
+        content,
         curpage: request.curpage,
         lastpage: request.lastpage,
-        totalpages: file_processor_respond.1,
+        totalpages,
+        error: None,
     })
 }
