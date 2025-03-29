@@ -903,15 +903,15 @@ const handleOpen = async (row) => {
     if (osPlatform === 'windows') {
       ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\${rowFileType}\\${rowFileName}`
     } else if (osPlatform === 'linux') {
-      ReadFilePath = `${store.librariesRoot}/Libraries/${row.fromImportedFileLibrary}/${baseFileName}/notes/${rowFileName}`
+      ReadFilePath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/${rowFileType}/${rowFileName}`
     } else {
       console.error('未知的操作系统平台:', osPlatform)
     }
   } else if (store.currentDatabase === 'NotesDb') {
     if (osPlatform === 'windows') {
-      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${row.type}\\${rowFileName}`
+      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\notes\\${rowFileName}`
     } else if (osPlatform === 'linux') {
-      ReadFilePath = `${store.librariesRoot}/Library/${row.library}/${row.type}/${rowFileName}`
+      ReadFilePath = `${store.librariesRoot}/Library/${row.library}/${baseFileName}/notes/${rowFileName}`
     } else {
       console.error('未知的操作系统平台:', osPlatform)
     }
