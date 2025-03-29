@@ -38,7 +38,7 @@ export const repoStore = defineStore("repoStore", {
             id: file.id,
             importFileName: file.import_file_name,
             description: file.description,
-            importedFiletags: file.tags.join(","), // 将 tags 数组转换为字符串
+            importedFileTags: file.tags.join(","), // 将 tags 数组转换为字符串
             type: file.file_type,
             library: file.library,
             importFileCreateTime: file.import_file_create_time,

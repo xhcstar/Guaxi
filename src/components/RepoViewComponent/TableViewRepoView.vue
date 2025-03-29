@@ -151,7 +151,7 @@ const newFileForm = ref({
   filePath: '',
   importFileName: '',
   description: '',
-  tags: '',
+  importedFileTags: '',
   type: '',
   library: '', // 所属库名字
   importFileCreateTime: '',
@@ -240,6 +240,7 @@ const validateTags = (rule, value) => {
 // 校验表单
 const validateForm = async () => {
   const form = currentForm.value;
+  console.log('>>>>>>>>>>>> validateForm', currentForm.value);
 
   // 校验文件路径
   if (!form.filePath || form.filePath.trim() === '') {
@@ -276,7 +277,9 @@ const validateForm = async () => {
 
   // 校验标签
   if (store.currentDatabase === 'importFileDB') {
-    if (!form.importedFileTags || typeof form.importedFileTags !== 'string' || form.importedFileTags.trim() === '') {
+    if (!form.importedFileTags || form.importedFileTags.trim() === '') {
+      console.log('>>>>>>>>>>>>> form', form.importedFileTags);
+      console.log('>>>>>>>>>>>>> form.importedFileTags', form.importedFileTags);
       currentForm.value.importedFileTags = "default"; // 设置默认值
     } else {
       const tags = form.importedFileTags.split(',').map(tag => tag.trim());
@@ -285,7 +288,8 @@ const validateForm = async () => {
       }
     }
   } else if (store.currentDatabase === 'NotesDb') {
-    if (!form.notesTags || typeof form.notesTags !== 'string' || form.notesTags.trim() === '') {
+    if (!form.notesTags || form.notesTags.trim() === '') {
+      console.log('form.notesTags', form.notesTags);
       currentForm.value.notesTags = "default"; // 设置默认值
     } else {
       const tags = form.notesTags.split(',').map(tag => tag.trim());
@@ -358,7 +362,8 @@ const validateTableCell = (row) => {
 
   // 校验标签
   if (store.currentDatabase === 'importFileDB') {
-    if (!row.importedFileTags || typeof row.importedFileTags !== 'string' || row.importedFileTags.trim() === '') {
+    if (!row.importedFileTags || row.importedFileTags.trim() === '') {
+      console.log('row.importedFileTags', row.importedFileTags);
       row.importedFileTags = "default"; // 设置默认值
     } else {
       const tags = row.importedFileTags.split(',').map(tag => tag.trim());
@@ -367,7 +372,8 @@ const validateTableCell = (row) => {
       }
     }
   } else if (store.currentDatabase === 'NotesDb') {
-    if (!row.notesTags || typeof row.notesTags !== 'string' || row.notesTags.trim() === '') {
+    if (!row.notesTags || row.notesTags.trim() === '') {
+      console.log('row.notesTags', row.notesTags);
       row.notesTags = "default"; // 设置默认值
     } else {
       const tags = row.notesTags.split(',').map(tag => tag.trim());
@@ -473,7 +479,7 @@ const formColumns = computed(() => {
       { key: 'importFileName', title: '文件名' },
       { key: 'description', title: '文件描述' },
       { key: 'library', title: '所属库' },
-      { key: 'notesTags', title: '文件标签' },
+      { key: 'importedFileTags', title: '文件标签' },
       { key: 'type', title: '文件类型' },
       { key: 'importFileCreateTime', title: '入库时间' },
       { key: 'importFileSize', title: '文件大小' },
@@ -482,7 +488,7 @@ const formColumns = computed(() => {
       { key: 'filePath', title: '文件路径' },
       { key: 'description', title: '笔记描述' },
       { key: 'noteFileName', title: '笔记文件名' },
-      { key: 'importedFileTags', title: '笔记标签' },
+      { key: 'notesTags', title: '笔记标签' },
       { key: 'noteFileType', title: '笔记文件类型' },
       { key: 'fromImportedFile', title: '笔记归属导入文件' },
       { key: 'fromImportedFileLibrary', title: '导入文件所属库' },
@@ -557,7 +563,7 @@ const createImportNoteList = (addedNoteInfo, currentForm) => {
     return {
       description: `${addedNoteInfo.from_filename}的笔记`,
       note_file_name: addedNoteInfo.note_file_name,
-      tags: currentForm.notesTags.split(','),
+      tags: currentForm.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
       note_file_type: 'md',
       from_imported_file: addedNoteInfo.from_filename,
       from_imported_file_library: addedNoteInfo.library,
@@ -699,7 +705,7 @@ const updateImportedFile = async (row) => {
       file_type: row.type,
       import_file_create_time: row.importFileCreateTime,
       import_file_size: row.importFileSize,
-      importedFileTags: importedFileTags, // 传递转换后的 tags 数组
+      tags: importedFileTags, // 传递转换后的 tags 数组
     };
 
     // 打印日志：row.id 和 file
@@ -732,7 +738,7 @@ const updateNote = async (row) => {
       from_imported_file_library: row.fromImportedFileLibrary,
       note_file_create_time: row.noteFileCreateTime,
       note_file_update_time: row.noteFileUpdateTime,
-      notesTags: notesTags, // 传递转换后的 tags 数组
+      tags: notesTags, // 传递转换后的 tags 数组
     };
 
     // 打印日志：row.id 和 note
@@ -995,7 +1001,7 @@ const handleEdit = async (row) => {
         file_type: row.type,
         import_file_create_time: row.importFileCreateTime,
         import_file_size: row.importFileSize,
-        importedFileTags: row.importedFileTags.split(','), // 将字符串转换为数组
+        tags: row.importedFileTags.split(','), // 将字符串转换为数组
       };
       await invoke('update_imported_file', { id: row.id, file: updatedFile });
       console.log('更新导入文件成功', row);
@@ -1010,7 +1016,7 @@ const handleEdit = async (row) => {
         from_imported_file_library: row.fromImportedFileLibrary,
         note_file_create_time: row.noteFileCreateTime,
         note_file_update_time: row.noteFileUpdateTime,
-        notesTags: row.notesTags.split(','), // 将字符串转换为数组
+        tags: row.notesTags.split(','), // 将字符串转换为数组
       };
       await invoke('update_note', { id: row.id, note: updatedNote });
       console.log('更新笔记成功', row);
