@@ -25,3 +25,10 @@ dist-ssr
 
 #Python
 *.pyc
+
+# Binarie
+*.exe
+*.pdb
+*.dll
+*.so
+*.dylib
