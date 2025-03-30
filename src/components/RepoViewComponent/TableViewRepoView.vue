@@ -20,14 +20,30 @@
       </n-tooltip>
     </n-space>
 
+  </n-space>
+
+  <div class="main-content">
     <n-data-table ref="table" :columns="columns" :data="currentData" :header-height="28" virtual-scroll
       :max-height="500" :scroll-x="1500" :pagination="pagination" :single-line="false" class="data-table"
       :row-props="rowProps" :multiple="true" :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
-  </n-space>
+    
+      <!-- 进度条容器 - 固定在底部 -->
+    <div class="progress-container-wrapper">
+      <div class="progress-container">
+        <n-card v-for="(progress, index) in progresses" :key="index">
+            <n-text strong>{{ progress.fileName }}</n-text>
+            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'" status="info" />
+            <n-text depth="3">{{ progress.message }}</n-text>
+        </n-card>
+      </div>
+    </div>
 
-  <!-- 右键菜单 -->
+      <!-- 右键菜单 -->
   <n-dropdown placement="bottom-start" trigger="manual" :x="x" :y="y" :options="contextMenuOptions" :show="showDropdown"
     :on-clickoutside="onClickoutside" @select="handleContextMenuSelect" class="custom-dropdown" />
+    
+  </div>
+
 
   <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog" :mask-closable="false" :closable="false">
     <n-form :model="currentForm" :rules="rules" label-placement="left" label-width="auto" label-align="right"
@@ -51,7 +67,7 @@
         </template>
         <template
           v-else-if="column.key === 'importFileCreateTime' || column.key === 'noteFileCreateTime' || column.key === 'noteFileUpdateTime'
-            || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'importFileSize'">
+    || column.key === 'noteFileType' || column.key === 'importFileName' || column.key === 'type' || column.key === 'importFileSize'">
           <n-input v-model:value="currentForm[column.key]" :placeholder="`${column.title}`" disabled
             :input-style="{ borderRadius: '8px' }" />
         </template>
@@ -130,6 +146,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
 import { Library, Settings } from '@vicons/ionicons5'
+import { listen } from '@tauri-apps/api/event';
 // import { Window } from '@tauri-apps/api/window';
 // import { Webview } from "@tauri-apps/api/webview"
 
@@ -178,6 +195,58 @@ const newNoteForm = ref({
 const currentForm = computed(() => {
   return store.currentDatabase === 'importFileDB' ? newFileForm.value : newNoteForm.value
 })
+
+// 进度条相关状态
+const progresses = ref([])
+const startProgressListener = async (filePath: string) => {
+  const fileName = filePath.split(/[\\/]/).pop() || '未知文件'
+
+  const newProgress = {
+    show: true,
+    current: 0,
+    total: 100,
+    message: '开始转换...',
+    fileName,
+  }
+
+  progresses.value.push(newProgress)
+  const progressIndex = progresses.value.length - 1
+
+  const unlisten = await listen('conversion_progress', (event) => {
+    // 使用Vue的响应式更新方式
+    progresses.value[progressIndex] = {
+      ...progresses.value[progressIndex],
+      current: event.payload.current,
+      message: event.payload.message
+    }
+    console.log('conversion_progress', event.payload.current, event.payload.message)
+
+    // 转换完成后移除进度条
+    if (event.payload.current >= 100) {
+      setTimeout(() => {
+        progresses.value = progresses.value.filter((_, i) => i !== progressIndex)
+      }, 1000)
+    }
+    })
+
+  return unlisten
+}
+
+const convertFile = async (inputPath, outputDir) => {
+  try {
+    await invoke('convert_to_markdown', {
+      request: {
+        input_path: inputPath,
+        output_dir: outputDir
+      }
+    }, {
+      target: 'main'
+    })
+  } catch (error) {
+    console.error('Conversion failed:', error)
+    throw error
+  }
+}
 
 // 自定义校验函数：检查文件路径是否合法（根据系统类型动态选择匹配方式）
 const validateFilePath = async (rule, value) => {
@@ -661,6 +730,27 @@ const addFile = async () => {
         noteFileCreateTime: currentForm.value.noteFileCreateTime,
         noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
       });
+
+      try {
+        // 开始监听进度事件
+        const unlisten = await startProgressListener(currentForm.value.filePath)
+
+        // 立即关闭表单对话框
+        isAddFileModalVisible.value = false
+
+        // 开始转换流程
+        const outputDir = `${store.librariesRoot}\\Libraries\\${currentForm.value.library}\\${currentForm.value.importFileName.replace(/\.[^/.]+$/, "")}\\markdown`
+        await convertFile(currentForm.value.filePath, outputDir)
+
+        // 转换完成后刷新数据
+        await store.fetchFiles('importFileDB')
+        resetForm()
+
+        // 转换完成后取消监听
+        unlisten()
+      } catch (error) {
+        message.error(`添加文件失败: ${error}`)
+      }
     } else if (store.currentDatabase === 'NotesDb') {
       // 创建 importNoteList
       const importNoteList = createImportNoteList(null, currentForm.value);
@@ -892,7 +982,7 @@ const handleOpen = async (row) => {
   }
 
   // 获取不带后缀的文件名
-  const baseFileName = rowFileName.includes('.') 
+  const baseFileName = rowFileName.includes('.')
     ? rowFileName.substring(0, rowFileName.lastIndexOf('.'))
     : rowFileName
 
@@ -1599,5 +1689,34 @@ onMounted(async () => {
 .n-auto-complete {
   width: 100%;
   /* 确保宽度足够 */
+}
+
+.progress-container {
+  position: fixed;
+  bottom: 0px;
+  right: 20px;
+  width: 350px;
+  max-height: 50vh;
+  overflow-y: auto;
+  z-index: 1000;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px 0 rgba(56, 54, 54, 0.884);
+  padding: 0px;
+}
+
+.progress-container .n-card {
+  margin-bottom: 12px;
+}
+
+:deep(.n-progress .n-progress-graph-line-fill) {
+  background-color: #409EFF !important;
+}
+
+:deep(.n-progress .n-progress-content) {
+  position: absolute;
+  right: 5%;
+  top: 50%;
+  transform: translateY(-50%);
 }
 </style>

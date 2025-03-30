@@ -47,6 +47,7 @@ async fn main() {
             commands::chatview::get_chat_answer,
             commands::chatview::get_chat_answer_stream,
             commands::docprocess::reader_open_file,
+            commands::docprocess::convert_to_markdown,
             commands::fileprocess::get_file_tree,
             commands::fileprocess::read_file_content,
             commands::fileprocess::write_file_content,
