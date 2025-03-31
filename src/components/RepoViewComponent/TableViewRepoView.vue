@@ -19,31 +19,29 @@
         导入新的文件
       </n-tooltip>
     </n-space>
-
   </n-space>
 
   <div class="main-content">
     <n-data-table ref="table" :columns="columns" :data="currentData" :header-height="28" virtual-scroll
       :max-height="500" :scroll-x="1500" :pagination="pagination" :single-line="false" class="data-table"
       :row-props="rowProps" :multiple="true" :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
-    
-      <!-- 进度条容器 - 固定在底部 -->
+
+    <!-- 进度条容器 - 固定在底部 -->
     <div class="progress-container-wrapper">
       <div class="progress-container">
         <n-card v-for="(progress, index) in progresses" :key="index">
-            <n-text strong>{{ progress.fileName }}</n-text>
-            <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'" status="info" />
-            <n-text depth="3">{{ progress.message }}</n-text>
+          <n-text strong>{{ progress.fileName }}</n-text>
+          <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'" status="info" />
+          <n-text depth="3">{{ progress.message }}</n-text>
         </n-card>
       </div>
     </div>
 
-      <!-- 右键菜单 -->
-  <n-dropdown placement="bottom-start" trigger="manual" :x="x" :y="y" :options="contextMenuOptions" :show="showDropdown"
-    :on-clickoutside="onClickoutside" @select="handleContextMenuSelect" class="custom-dropdown" />
-    
+    <!-- 右键菜单 -->
+    <n-dropdown placement="bottom-start" trigger="manual" :x="x" :y="y" :options="contextMenuOptions"
+      :show="showDropdown" :on-clickoutside="onClickoutside" @select="handleContextMenuSelect"
+      class="custom-dropdown" />
   </div>
-
 
   <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog" :mask-closable="false" :closable="false">
     <n-form :model="currentForm" :rules="rules" label-placement="left" label-width="auto" label-align="right"
@@ -227,7 +225,7 @@ const startProgressListener = async (filePath: string) => {
         progresses.value = progresses.value.filter((_, i) => i !== progressIndex)
       }, 1000)
     }
-    })
+  })
 
   return unlisten
 }
@@ -612,6 +610,7 @@ const createImportFileList = (form) => {
     file_type: form.type,
     import_file_create_time: form.importFileCreateTime,
     import_file_size: form.importFileSize,
+    converted_markdown_filename: `${form.importFileName.replace(/\.[^/.]+$/, '')}.md`,
   };
 };
 
@@ -672,6 +671,28 @@ const addNoteToDatabase = async (noteInfo) => {
   }
 };
 
+// 构建文件路径
+const buildConvertOutputFilePath = async (fileName, library) => {
+  const fileNameWithoutExt = fileName.replace(/\.[^/.]+$/, "");
+  const osPlatform = await platform(); // 使用Tauri API获取操作系统类型
+  
+  const basePath = osPlatform === 'windows' 
+    ? `${store.librariesRoot}\\Libraries\\${library}\\${fileNameWithoutExt}\\markdown`
+    : `${store.librariesRoot}/Libraries/${library}/${fileNameWithoutExt}/markdown`;
+    
+  const fullPath = osPlatform === 'windows'
+    ? `${basePath}\\${fileNameWithoutExt}.md`
+    : `${basePath}/${fileNameWithoutExt}.md`;
+
+  console.log('basePath:', basePath);
+  console.log('fullPath:', fullPath);
+    
+  return {
+    outputDir: basePath,
+    fileToCheck: fullPath
+  };
+};
+
 const addFile = async () => {
   try {
     // 校验表单
@@ -710,6 +731,7 @@ const addFile = async () => {
         library: currentForm.value.library,
         importFileCreateTime: currentForm.value.importFileCreateTime,
         importFileSize: currentForm.value.importFileSize,
+        convetToMarkdownFilename: `${currentForm.value.importFileName.replace(/\.[^/.]+$/, "")}.md`,
       });
 
       // 创建 importNoteList
@@ -732,6 +754,26 @@ const addFile = async () => {
       });
 
       try {
+        // 构建输出目录路径
+        const { outputDir, fileToCheck } = await buildConvertOutputFilePath(
+          currentForm.value.importFileName, 
+          currentForm.value.library
+        );
+
+        // 检查文件是否已转换
+        const isConverted = await invoke('check_file_converted', {
+          outputDir: fileToCheck
+        });
+
+        if (!isConverted && (!currentForm.value.convetToMarkdownFilename || 
+                            currentForm.value.convetToMarkdownFilename.trim() === '')) {
+          message.success('已存在转换文件，无需转换');
+          // 关闭对话框并清空表单
+          isAddFileModalVisible.value = false;
+          resetForm();
+          return;
+        }
+
         // 开始监听进度事件
         const unlisten = await startProgressListener(currentForm.value.filePath)
 
@@ -739,7 +781,6 @@ const addFile = async () => {
         isAddFileModalVisible.value = false
 
         // 开始转换流程
-        const outputDir = `${store.librariesRoot}\\Libraries\\${currentForm.value.library}\\${currentForm.value.importFileName.replace(/\.[^/.]+$/, "")}\\markdown`
         await convertFile(currentForm.value.filePath, outputDir)
 
         // 转换完成后刷新数据

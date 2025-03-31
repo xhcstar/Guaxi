@@ -40,6 +40,16 @@ struct ConversionProgress {
     message: String,
 }
 
+
+#[tauri::command]
+pub async fn check_file_converted(
+    output_dir: String,  // 只需要传入output_dir参数
+) -> Result<bool, String> {
+    // 检查输出文件是否存在
+    info!("Checking if file is converted: {}", output_dir);
+    Ok(Path::new(&output_dir).exists())
+}
+
 #[tauri::command]
 pub async fn convert_to_markdown(
     request: ConvertFileRequest,

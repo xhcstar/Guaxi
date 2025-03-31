@@ -43,8 +43,8 @@ export const repoStore = defineStore("repoStore", {
             library: file.library,
             importFileCreateTime: file.import_file_create_time,
             importFileSize: file.import_file_size,
-            convetToHtmlFilename: `${file.import_file_name}.html`,
-            convetToMarkdownFilename: `${file.import_file_name}.md`,
+            convetToHtmlFilename: '',
+            convetToMarkdownFilename: file.converted_markdown_filename,
           }));
         }
       } catch (error) {

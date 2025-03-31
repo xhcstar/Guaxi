@@ -29,6 +29,7 @@ pub struct ImportedFile {
     file_type: String,
     import_file_create_time: String,
     import_file_size: String,
+    converted_markdown_filename: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -40,6 +41,7 @@ pub struct ImportedFileInput {
     file_type: String,
     import_file_create_time: String,
     import_file_size: String,
+    converted_markdown_filename: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -237,7 +239,7 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
     // 查询 imported_files 记录
     let mut stmt = conn
         .prepare(
-            "SELECT id, original_filename, description, library, original_filetype, create_time, original_filesize FROM imported_files",
+            "SELECT id, original_filename, description, library, original_filetype, create_time, original_filesize, markdown_filename FROM imported_files",
         )
         .map_err(|e| e.to_string())?;
     let files = stmt
@@ -251,6 +253,7 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
                 file_type: row.get(4)?,
                 import_file_create_time: row.get(5)?,
                 import_file_size: row.get(6)?,
+                converted_markdown_filename: row.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -286,14 +289,16 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
 
     // 插入 imported_files 记录
     tx.execute(
-        "INSERT INTO imported_files (original_filename, description, library, original_filetype, create_time, original_filesize) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO imported_files (original_filename, description, library, original_filetype, create_time, original_filesize, markdown_filename) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)",
         params![
             file.import_file_name,
             file.description,
             file.library,
             file.file_type,
             file.import_file_create_time,
-            file.import_file_size
+            file.import_file_size,
+            file.converted_markdown_filename,
         ],
     ).map_err(|e: rusqlite::Error| e.to_string())? as i32;
     // 获取新插入的 file_id
