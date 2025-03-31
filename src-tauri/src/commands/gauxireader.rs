@@ -1,9 +1,9 @@
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::Manager;
-use tauri::{WebviewWindowBuilder, WebviewUrl};
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 use urlencoding::encode;
-use serde::{Deserialize, Serialize};
 // use base64::{Engine as _, engine::general_purpose};
 
 // 定义文件数据结构
@@ -28,7 +28,7 @@ pub async fn create_reader_window(
     app: tauri::AppHandle,
     label: String,
     title: String,
-    file_data: FileData,  // 使用强类型结构体替代 serde_json::Value
+    file_data: FileData, // 使用强类型结构体替代 serde_json::Value
 ) -> Result<(), String> {
     // 检查窗口是否已存在
     if app.get_webview_window(&label).is_some() {
@@ -39,15 +39,21 @@ pub async fn create_reader_window(
     // let encoded_path = general_purpose::URL_SAFE.encode(&file_data.file_path);
 
     // 构建URL查询参数
-    let url = WebviewUrl::App(format!(
-        "/reader?filePath={}&fileType={}&fileName={}",
-        encode(&file_data.file_path),
-        encode(&file_data.file_type),
-        encode(&file_data.file_name)
-    ).into());
+    let url = WebviewUrl::App(
+        format!(
+            "/reader?filePath={}&fileType={}&fileName={}",
+            encode(&file_data.file_path),
+            encode(&file_data.file_type),
+            encode(&file_data.file_name)
+        )
+        .into(),
+    );
 
     info!("url: {}", url);
-    info!("正在打开文件: {} (路径: {})", file_data.file_name, file_data.file_path);
+    info!(
+        "正在打开文件: {} (路径: {})",
+        file_data.file_name, file_data.file_path
+    );
 
     // 创建窗口
     let window = WebviewWindowBuilder::new(&app, &label, url)
@@ -60,12 +66,16 @@ pub async fn create_reader_window(
 
     // 存储文件数据
     if let Some(storage) = app.try_state::<WindowDataStorage>() {
-        storage.data.lock().unwrap().insert(label.clone(), file_data);
+        storage
+            .data
+            .lock()
+            .unwrap()
+            .insert(label.clone(), file_data);
     }
 
     // 短暂延迟后显示窗口
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
-    
+
     Ok(())
 }

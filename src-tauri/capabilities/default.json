@@ -23,6 +23,7 @@
     "core:window:allow-set-fullscreen",
     "core:webview:allow-create-webview-window",
     "core:webview:allow-webview-show",
-    "core:webview:allow-create-webview"
+    "core:webview:allow-create-webview",
+    "fs:default"
   ]
 }

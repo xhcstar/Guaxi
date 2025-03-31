@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use tauri::{Emitter, Window};
 use tracing::{error, info};
+use pdfium_render::prelude::*;
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -40,10 +41,56 @@ struct ConversionProgress {
     message: String,
 }
 
+#[tauri::command]
+pub async fn get_converted_pdf_page_count(pdf_path: String) -> Result<u32, String> {
+    let bindings = Pdfium::bind_to_system_library()
+        .or_else(|_| Pdfium::bind_to_bundled_library())
+        .map_err(|e| format!("Failed to initialize PDFium: {}", e))?;
+    
+    let pdfium = Pdfium::new(bindings);
+    
+    let document = pdfium.load_pdf_from_file(&pdf_path, None)
+        .map_err(|e| format!("Failed to load PDF: {}", e))?;
+    
+    // Properly handle usize to u32 conversion
+    document.pages().len()
+        .try_into()
+        .map_err(|_| "Page count exceeds u32 maximum".to_string())
+}
+
+#[tauri::command]
+pub async fn get_converted_pdf_page(
+    pdf_path: String, 
+    page_num: u32
+) -> Result<String, String> {
+    let bindings = Pdfium::bind_to_system_library()
+        .or_else(|_| Pdfium::bind_to_bundled_library())
+        .map_err(|e| format!("Failed to initialize PDFium: {}", e))?;
+    
+    let pdfium = Pdfium::new(bindings);
+    
+    let document = pdfium.load_pdf_from_file(&pdf_path, None)
+        .map_err(|e| format!("Failed to load PDF: {}", e))?;
+    
+    // Convert page_num to usize safely
+    let page_index = page_num.checked_sub(1)
+        .and_then(|n| n.try_into().ok())
+        .ok_or("Invalid page number")?;
+        
+    let page = document.pages()
+        .get(page_index)
+        .map_err(|e| format!("Failed to get page {}: {}", page_num, e))?;
+    
+    page.text()
+        .map_err(|e| format!("Failed to extract text: {}", e))?
+        .all()
+        .map_err(|e| format!("Failed to get text content: {}", e))
+        .map(|text| text.to_string())
+}
 
 #[tauri::command]
 pub async fn check_file_converted(
-    output_dir: String,  // 只需要传入output_dir参数
+    output_dir: String, // 只需要传入output_dir参数
 ) -> Result<bool, String> {
     // 检查输出文件是否存在
     info!("Checking if file is converted: {}", output_dir);
@@ -107,22 +154,23 @@ pub async fn convert_to_markdown(
         if let Some(stdout) = stdout {
             let mut reader = BufReader::new(stdout);
             let mut buffer = Vec::new();
-    
+
             loop {
                 buffer.clear();
                 match reader.read_until(b'\n', &mut buffer) {
                     Ok(0) => break,
                     Ok(_) => {
-                        let filtered: Vec<u8> = buffer.iter()
+                        let filtered: Vec<u8> = buffer
+                            .iter()
                             .filter(|&&b| b.is_ascii() && !b.is_ascii_control())
                             .cloned()
                             .collect();
-                        
+
                         let line = String::from_utf8_lossy(&filtered).trim().to_string();
-                        
+
                         if !line.is_empty() {
                             info!("Converter output: {}", line);
-                            
+
                             if let Some(percent) = parse_progress(&line) {
                                 window_clone_stdout
                                     .emit(
@@ -153,22 +201,23 @@ pub async fn convert_to_markdown(
         if let Some(stderr) = stderr {
             let mut reader = BufReader::new(stderr);
             let mut buffer = Vec::new();
-    
+
             loop {
                 buffer.clear();
                 match reader.read_until(b'\n', &mut buffer) {
                     Ok(0) => break,
                     Ok(_) => {
-                        let filtered: Vec<u8> = buffer.iter()
+                        let filtered: Vec<u8> = buffer
+                            .iter()
                             .filter(|&&b| b.is_ascii() && !b.is_ascii_control())
                             .cloned()
                             .collect();
-                        
+
                         let line = String::from_utf8_lossy(&filtered).trim().to_string();
-                        
+
                         if !line.is_empty() {
                             error!("Converter stderr: {}", line);
-                            
+
                             if let Some(percent) = parse_progress(&line) {
                                 window_clone_stderr
                                     .emit(
@@ -231,7 +280,7 @@ fn parse_progress(line: &str) -> Option<u32> {
     info!("Parsing progress: {}", line);
 
     // 使用更精确的字符串匹配
-    if line.contains("Loaded ")  {
+    if line.contains("Loaded ") {
         return Some(10);
     } else if line.contains("Recognizing layout...") {
         return Some(25);

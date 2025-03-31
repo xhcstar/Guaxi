@@ -1,7 +1,7 @@
 <template>
 	<div class="guaxi-reader">
 		<component :is="readerComponent" v-if="readerComponent" :filePath="filePath" :fileType="fileType" 
-			:fileName="fileName" @close=" emit('close')" />
+			:fileName="fileName" :library="library" @close=" emit('close')" />
 		<div v-else class="unknown-type">
 			不支持的文件类型: {{ fileType }}
 			<p>文件名: {{ fileData?.name || '未知' }}</p>
@@ -11,7 +11,8 @@
 
 <script setup>
 import { computed } from 'vue'
-import GuaxiPDFReader from './GuaxiPDFReader.vue'
+// import GuaxiPDFReader from './GuaxiPDFReader.vue'
+import GuaxiConverterPDFReader from './GuaxiConverterPDFReader.vue'
 import GuaxiMarkdownReader from './GuaxiMarkdownReader.vue'
 import GuaxiHtmlReader from './GuaxiHtmlReader.vue'
 import GuaxiEpubReader from './GuaxiEpubReader.vue'
@@ -32,6 +33,10 @@ const props = defineProps({
 	fileName: {
 		type: String,
 		required: true,
+	},
+	library: {
+		type: String,
+		required: true,	
 	}
 })
 
@@ -59,7 +64,7 @@ const readerComponent = computed(() => {
 	}
 
 	const typeMap = {
-		pdf: GuaxiPDFReader,
+		pdf: GuaxiConverterPDFReader,
 		md: GuaxiMarkdownReader,
 		markdown: GuaxiMarkdownReader,
 		html: GuaxiHtmlReader,

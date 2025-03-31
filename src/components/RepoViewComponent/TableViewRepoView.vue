@@ -1065,6 +1065,7 @@ const handleOpen = async (row) => {
         file_type: fileType,
         file_name: rowFileName,
         file_path: ReadFilePath,
+        library: row.library,
       }
     })
 
@@ -1075,6 +1076,7 @@ const handleOpen = async (row) => {
         type: fileType,
         name: rowFileName,
         path: ReadFilePath,
+        library: row.library,
       }
     })
   } catch (error) {

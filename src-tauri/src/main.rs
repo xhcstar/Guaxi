@@ -41,6 +41,7 @@ async fn main() {
     app_init().await;
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -49,6 +50,8 @@ async fn main() {
             commands::docprocess::reader_open_file,
             commands::docprocess::convert_to_markdown,
             commands::docprocess::check_file_converted,
+            commands::docprocess::get_converted_pdf_page,
+            commands::docprocess::get_converted_pdf_page_count,
             commands::fileprocess::get_file_tree,
             commands::fileprocess::read_file_content,
             commands::fileprocess::write_file_content,
