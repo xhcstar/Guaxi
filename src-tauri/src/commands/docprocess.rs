@@ -41,52 +41,86 @@ struct ConversionProgress {
     message: String,
 }
 
-#[tauri::command]
-pub async fn get_converted_pdf_page_count(pdf_path: String) -> Result<u32, String> {
-    let bindings = Pdfium::bind_to_system_library()
-        .or_else(|_| Pdfium::bind_to_bundled_library())
-        .map_err(|e| format!("Failed to initialize PDFium: {}", e))?;
-    
-    let pdfium = Pdfium::new(bindings);
-    
-    let document = pdfium.load_pdf_from_file(&pdf_path, None)
-        .map_err(|e| format!("Failed to load PDF: {}", e))?;
-    
-    // Properly handle usize to u32 conversion
-    document.pages().len()
-        .try_into()
-        .map_err(|_| "Page count exceeds u32 maximum".to_string())
+#[derive(Serialize, Deserialize)]
+struct PdfElement {
+    #[serde(rename = "type")]
+    element_type: String,
+    content: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PdfPageResponse {
+    page_number: usize,
+    total_pages: usize,
+    elements: Vec<PdfElement>,
+    error: Option<String>,
 }
 
 #[tauri::command]
 pub async fn get_converted_pdf_page(
-    pdf_path: String, 
-    page_num: u32
+    request: serde_json::Value
 ) -> Result<String, String> {
-    let bindings = Pdfium::bind_to_system_library()
-        .or_else(|_| Pdfium::bind_to_bundled_library())
-        .map_err(|e| format!("Failed to initialize PDFium: {}", e))?;
-    
-    let pdfium = Pdfium::new(bindings);
-    
-    let document = pdfium.load_pdf_from_file(&pdf_path, None)
-        .map_err(|e| format!("Failed to load PDF: {}", e))?;
-    
-    // Convert page_num to usize safely
-    let page_index = page_num.checked_sub(1)
-        .and_then(|n| n.try_into().ok())
-        .ok_or("Invalid page number")?;
-        
-    let page = document.pages()
-        .get(page_index)
-        .map_err(|e| format!("Failed to get page {}: {}", page_num, e))?;
-    
-    page.text()
-        .map_err(|e| format!("Failed to extract text: {}", e))?
-        .all()
-        .map_err(|e| format!("Failed to get text content: {}", e))
-        .map(|text| text.to_string())
+    use std::io::Cursor;
+
+    let filepath = request["filepath"].as_str().ok_or("Missing filepath")?;
+    let curpage = request["curpage"].as_u64().ok_or("Invalid page number")? as usize;
+
+    let pdfium = Pdfium::new(
+        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
+            .map_err(|e| e.to_string())?
+    );
+
+    let document = pdfium.load_pdf_from_file(filepath, None)
+        .map_err(|e| e.to_string())?;
+
+    let total_pages = document.pages().len();
+    let page = document.pages().get((curpage - 1).try_into().map_err(|_| "Page number conversion failed")?)
+        .map_err(|_| format!("Page {} out of bounds", curpage))?;
+
+    let mut elements = Vec::new();
+
+    // 提取文本元素（使用all()方法获取完整文本）
+    match page.text() {
+        Ok(text) => {
+            let full_text = text.all(); // 获取页面全部文本
+            elements.push(PdfElement {
+                element_type: "text".to_string(),
+                content: full_text,
+            });
+        }
+        Err(e) => return Err(e.to_string()),
+    }
+
+    // 提取图像元素
+    let render_config = PdfRenderConfig::new()
+        .set_target_width(2000)
+        .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
+
+    if let Ok(image) = page.render_with_config(&render_config) {
+        let mut bytes = Vec::new();
+        let mut cursor = Cursor::new(&mut bytes);
+        if image.as_image().into_rgb8()
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .is_ok() 
+        {
+            elements.push(PdfElement {
+                element_type: "image".to_string(),
+                content: base64::encode(&bytes),
+            });
+        }
+    }
+
+    // 构建响应
+    let response = PdfPageResponse {
+        page_number: curpage,
+        total_pages: total_pages.into(), // 处理u16到usize的转换
+        elements,
+        error: None,
+    };
+
+    serde_json::to_string(&response).map_err(|e| e.to_string())
 }
+
 
 #[tauri::command]
 pub async fn check_file_converted(

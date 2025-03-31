@@ -12,7 +12,7 @@
 <script setup>
 import { computed } from 'vue'
 // import GuaxiPDFReader from './GuaxiPDFReader.vue'
-import GuaxiConverterPDFReader from './GuaxiConverterPDFReader.vue'
+import GuaxiConvertPDFReader from './GuaxiConvertPDFReader.vue'
 import GuaxiMarkdownReader from './GuaxiMarkdownReader.vue'
 import GuaxiHtmlReader from './GuaxiHtmlReader.vue'
 import GuaxiEpubReader from './GuaxiEpubReader.vue'
@@ -64,7 +64,7 @@ const readerComponent = computed(() => {
 	}
 
 	const typeMap = {
-		pdf: GuaxiConverterPDFReader,
+		pdf: GuaxiConvertPDFReader,
 		md: GuaxiMarkdownReader,
 		markdown: GuaxiMarkdownReader,
 		html: GuaxiHtmlReader,
