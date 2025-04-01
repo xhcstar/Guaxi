@@ -31,64 +31,20 @@
 
     <!-- 主内容区 -->
     <div class="pdf-main-content">
-      <!-- 左侧PDF内容 -->
-      <div class="pdf-panel">
-        <div class="pdf-content" ref="pdfContent">
-          <template v-for="(element, index) in elements" :key="index">
-            <!-- 文本元素 -->
-            <div v-if="element.type === 'text'" class="text-element content-element" @mouseenter="hoverElement(index)"
-              @mouseleave="delayUnhover(index)" @click="addToNotes(element)"
-              :class="{ 'hovered': hoveredIndex === index }">
-              <div class="element-content">{{ element.content }}</div>
-
-              <div class="hover-area" @mouseenter="keepHovered(index)" @mouseleave="delayUnhover(index)">
-                <transition name="bubble">
-                  <div v-if="hoveredIndex === index" class="hover-bubble" @click.stop="addToNotes(element)">
-                    点击添加到笔记
-                  </div>
-                </transition>
-              </div>
-            </div>
-
-            <!-- 图像元素 -->
-            <div v-else-if="element.type === 'image'" class="image-element content-element"
-              @mouseenter="hoverElement(index)" @mouseleave="delayUnhover(index)" @click="addToNotes(element)"
-              :class="{ 'hovered': hoveredIndex === index }">
-              <img :src="'data:image/png;base64,' + element.content">
-
-              <div class="hover-area" @mouseenter="keepHovered(index)" @mouseleave="delayUnhover(index)">
-                <transition name="bubble">
-                  <div v-if="hoveredIndex === index" class="hover-bubble" @click.stop="addToNotes(element)">
-                    点击添加到笔记
-                  </div>
-                </transition>
-              </div>
-            </div>
-
-            <!-- 表格元素 -->
-            <div v-else-if="element.type === 'table'" class="table-element content-element"
-              @mouseenter="hoverElement(index)" @mouseleave="delayUnhover(index)" @click="addToNotes(element)"
-              :class="{ 'hovered': hoveredIndex === index }">
-              <img :src="'data:image/png;base64,' + element.content">
-
-              <div class="hover-area" @mouseenter="keepHovered(index)" @mouseleave="delayUnhover(index)">
-                <transition name="bubble">
-                  <div v-if="hoveredIndex === index" class="hover-bubble" @click.stop="addToNotes(element)">
-                    点击添加到笔记
-                  </div>
-                </transition>
-              </div>
-            </div>
-          </template>
+      <!-- 修改PDF渲染区域 -->
+      <div class="pdf-render-panel">
+        <img v-if="elements.length > 0 && elements[0].type === 'image'" :src="elements[0].content"
+          alt="Rendered PDF Page" class="rendered-pdf-image" />
+        <div v-else class="pdf-loading-message">
+          正在加载PDF页面...
         </div>
       </div>
 
       <!-- 右侧Markdown内容 -->
       <div class="markdown-panel">
         <div class="markdown-content">
-          <div v-for="(line, index) in markdownLines" :key="index" 
-               class="markdown-line" 
-               @click="addMarkdownToNotes(line)">
+          <div v-for="(line, index) in markdownLines" :key="index" class="markdown-line"
+            @click="addMarkdownToNotes(line)">
             {{ line }}
           </div>
         </div>
@@ -121,12 +77,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { join } from '@tauri-apps/api/path'
+import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 
+import { marked } from 'marked'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
+import Prism from 'prismjs'
+import 'prismjs/themes/prism.css'
+import mermaid from 'mermaid'
+
 const store = repoStore()
-const librariesRoot = store.librariesRoot
+const { librariesRoot } = storeToRefs(store)
 
 const props = defineProps({
   filePath: {
@@ -153,6 +118,7 @@ const currentPage = ref(1)
 const totalPages = ref(0)
 const jumpPage = ref(1)
 const elements = ref([])
+const pdfUrl = ref('')
 // Markdown数据状态
 const markdownContent = ref('')
 const markdownLines = ref([])
@@ -164,11 +130,121 @@ const hoveredIndex = ref(-1)
 const showNoteBubble = ref(false)
 const hoverTimeout = ref(null)
 
+
+// 渲染数学公式
+function renderMath(html) {
+  const latexRegex = /\$\$(.+?)\$\$|\$(.+?)\$/g;
+  return html.replace(latexRegex, (match, blockMath, inlineMath) => {
+    let mathContent = blockMath || inlineMath;
+    try {
+      if (blockMath) {
+        return `<div class="katex-display">${katex.renderToString(mathContent, { throwOnError: false })}</div>`;
+      } else {
+        return `<span class="katex-inline">${katex.renderToString(mathContent, { throwOnError: false })}</span>`;
+      }
+    } catch (e) {
+      console.error("KaTeX 渲染错误：", e);
+      return match; // 如果渲染失败，返回原始文本
+    }
+  });
+}
+
+const renderCodeBlocks = (content) => {
+  const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
+
+  codeBlocks.forEach((block) => {
+    const language = block.match(/```(\w+)\n/);  // 获取语言类型
+    if (language && language[1]) {
+      const lang = language[1].toLowerCase();
+      if (Prism.languages[lang]) {
+        block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
+          const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
+          return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
+        });
+      }
+    }
+  });
+
+  return content.replace(/```[\s\S]+?```/g, (block) => {
+    return `<pre class="code-block">${block}</pre>`;
+  });
+};
+
+const renderMermaid = (content) => {
+  const mermaidRegex = /```mermaid([\s\S]+?)```/g
+  return content.replace(mermaidRegex, (match, diagram) => {
+    const mermaidId = `mermaid-${Math.random().toString(36).substring(2, 9)}`
+    nextTick(() => {
+      const target = document.getElementById(mermaidId)
+      if (target) {
+        target.style.width = '100%' // 确保容器宽度占满父容器
+        target.style.height = 'auto' // 高度自适应
+        mermaid.render(mermaidId, diagram, (svgCode) => {
+          // 移除或调整 viewBox 和 max-width
+          svgCode = svgCode.replace(/viewBox="[^"]+"/, 'viewBox="0 0 100 100"')
+          svgCode = svgCode.replace(/style="[^"]+"/, 'style="width: 100%; height: auto;"')
+          target.innerHTML = svgCode
+        })
+      }
+    })
+    return `<div id="${mermaidId}" class="mermaid">${diagram}</div>`
+  })
+}
+
+const renderMarkdown = (content) => {
+  if (!content) {
+    console.warn('Markdown 内容为空或未定义')
+    return ''
+  }
+  // console.log('Markdown 内容:', content)
+
+  // 渲染 Mermaid 图表
+  let html = renderMermaid(content);
+
+  html = marked(html);
+
+  // 渲染数学公式
+  html = renderMath(html);
+
+  // 渲染代码块
+  html = renderCodeBlocks(html);
+
+  // 添加表格样式
+  html = html.replace(
+    /<table>/g,
+    '<table style="border-collapse: collapse; width: 100%;">'
+  );
+  html = html.replace(
+    /<th>/g,
+    '<th style="border: 1px solid black; padding: 8px; background: linear-gradient(to right, #7e807f, #7e806f); color: white; font-weight: bold; border-radius: 4px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); transition: background-color 0.3s ease;">'
+  );
+  html = html.replace(
+    /<td>/g,
+    '<td style="border: 1px solid black; padding: 8px; background-color: #f9f9f9; color: #333;">'
+  );
+
+  nextTick(() => {
+    Prism.highlightAll();
+    mermaid.run();
+  });
+
+  // console.log('渲染后的 Markdown 内容:', html)
+
+  return html;
+}
+
 // 计算Markdown文件路径
-const markdownFilePath = computed(() => {
-  store.get_librariesRoot()
+const markdownFilePath = computed(async () => {
   const baseFileName = props.fileName.replace('.pdf', '')
-  return `${librariesRoot}\\Libraries\\${props.library}\\${baseFileName}\\markdown\\${baseFileName}\\${baseFileName}.md`
+  return await join(
+    librariesRoot.value,
+    'Libraries',
+    props.library,
+    baseFileName,
+    'markdown',
+    baseFileName,
+    `${baseFileName}.md`
+  )
 })
 
 // 方法定义
@@ -190,7 +266,6 @@ const delayUnhover = (index) => {
   }, 300)
 }
 
-// 显示添加笔记的提示气泡
 const showNoteBubbleMessage = () => {
   showNoteBubble.value = true
   setTimeout(() => {
@@ -199,7 +274,6 @@ const showNoteBubbleMessage = () => {
 }
 
 // 加载PDF页面
-// 在setup()中或<script setup>顶部添加
 const loadPdfPage = async (pageNum: number) => {
   try {
     const response = await invoke<string>('get_converted_pdf_page', {
@@ -211,35 +285,19 @@ const loadPdfPage = async (pageNum: number) => {
       }
     });
 
-    console.log('Loading PDF', request)
-
-    const data = JSON.parse(response) as {
-      page_number: number;
-      total_pages: number;
-      elements: Array<{
-        type: string;
-        content: string;
-      }>;
-    };
-
-    // 更新状态
+    const data = JSON.parse(response);
     currentPage.value = data.page_number;
     totalPages.value = data.total_pages;
-    
-    // 处理元素内容
-    elements.value = data.elements.map(el => ({
-      ...el,
-      // 为图片类元素添加Data URL前缀
-      content: ['image', 'table'].includes(el.type) 
-        ? `data:image/png;base64,${el.content}`
-        : el.content,
-      // 添加唯一key
-      key: `${el.type}_${Date.now()}_${Math.random().toString(36).slice(2)}`
-    }));
+
+    // 显示渲染后的PDF图像
+    elements.value = [{
+      type: "image",
+      content: `data:image/png;base64,${data.image_data}`,
+      key: `rendered_page_${pageNum}`
+    }];
 
   } catch (error) {
     console.error('PDF加载失败:', error);
-    // 错误处理增强
     elements.value = [];
     if (error instanceof Error) {
       alert(`PDF加载错误: ${error.message}`);
@@ -247,28 +305,41 @@ const loadPdfPage = async (pageNum: number) => {
   }
 };
 
+// PDF加载事件处理
+const onPdfLoad = () => {
+  console.log('PDF加载成功')
+}
+
+const onPdfError = () => {
+  console.error('PDF加载失败')
+}
+
 // 加载Markdown文件
 const loadMarkdownFile = async () => {
   try {
-    console.log('加载Markdown文件...', markdownFilePath.value);
+    const filepath = await markdownFilePath.value
     const response = await invoke('load_markdown_content', {
-      filepath: markdownFilePath.value
-    });
+      filepath: filepath
+    })
 
     if (!response.success) {
-      throw new Error(response.error || 'Failed to load markdown');
+      throw new Error(response.error || 'Failed to load markdown')
     }
 
-    markdownContent.value = response.content;
-    markdownLines.value = response.content.split('\n').filter(line => line.trim() !== '');
-    return response.content;
+    markdownContent.value = response.content
+    console.log('Markdown内容:', markdownContent.value)
+    // 确保 content 是字符串
+    let content = typeof response.content === 'string' ? response.content : ''
+    markdownLines.value = renderMarkdown(content)
+    return response.content
   } catch (error) {
-    console.error('加载Markdown失败:', error);
-    markdownContent.value = '';
-    markdownLines.value = [];
-    throw error;
+    console.error('加载Markdown失败:', error)
+    markdownContent.value = ''
+    markdownLines.value = []
+    throw error
   }
 }
+
 
 // 添加内容到笔记
 const addToNotes = (element) => {
@@ -346,9 +417,10 @@ const toggleNotesPanel = () => {
 
 // 初始化加载第一页和Markdown文件
 onMounted(() => {
-  store.get_librariesRoot()
-  loadPdfPage(1)
-  loadMarkdownFile()
+  store.get_librariesRoot().then(() => {
+    loadPdfPage(1)
+    loadMarkdownFile()
+  })
 })
 
 // 监听PDF路径变化
@@ -373,50 +445,18 @@ watch(() => props.filePath, (newPath) => {
   overflow: hidden;
 }
 
-.right-controls {
-  display: flex;
-  gap: 10px;
-}
-
-/* 笔记开关按钮样式 */
-.toggle-notes {
-  padding: 6px 12px;
-  background-color: #3498db;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.toggle-notes:hover {
-  background-color: #2980b9;
-}
-
-.icon-notes::before {
-  content: "📝";
-  margin-right: 5px;
-}
-
-.icon-notes-active::before {
-  content: "📖";
-  margin-right: 5px;
-}
-
 .pdf-controls {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 20px;
+  padding: 10px 20px;
   background-color: #2c3e50;
   color: white;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  z-index: 10;
+  flex-shrink: 0;
 }
 
 .page-info {
   font-size: 14px;
-  opacity: 0.8;
 }
 
 .page-navigation {
@@ -431,6 +471,11 @@ watch(() => props.filePath, (newPath) => {
   text-align: center;
   border: 1px solid #ddd;
   border-radius: 4px;
+}
+
+.right-controls {
+  display: flex;
+  gap: 10px;
 }
 
 button {
@@ -452,6 +497,10 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.toggle-notes {
+  background-color: #3498db;
+}
+
 .export-notes {
   background-color: #27ae60;
 }
@@ -466,11 +515,32 @@ button:disabled {
   overflow: hidden;
 }
 
-.pdf-panel {
+.pdf-render-panel {
   flex: 1;
-  overflow-y: auto;
-  padding: 20px;
+  overflow: hidden;
   border-right: 1px solid #ddd;
+}
+
+.pdf-object {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* 添加渲染PDF图像的样式 */
+.rendered-pdf-image {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.pdf-loading-message {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  color: #666;
 }
 
 .markdown-panel {
@@ -478,10 +548,6 @@ button:disabled {
   overflow-y: auto;
   padding: 20px;
   background-color: #f9f9f9;
-}
-
-.markdown-content {
-  line-height: 1.6;
 }
 
 .markdown-line {
@@ -494,119 +560,15 @@ button:disabled {
 }
 
 .markdown-line:hover {
-  background-color: #e6f7ff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.text-element {
-  margin-bottom: 15px;
-  padding: 10px;
-  background-color: #f9f9f9;
-  border-radius: 4px;
-  cursor: pointer;
-  position: relative;
-}
-
-.image-element,
-.table-element {
-  margin-bottom: 20px;
-  cursor: pointer;
-  position: relative;
-}
-
-.image-element img,
-.table-element img {
-  max-width: 100%;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-}
-
-.hover-area {
-  position: absolute;
-  bottom: -40px;
-  left: 0;
-  width: 100%;
-  height: 50px;
-  pointer-events: auto;
-}
-
-.hover-bubble {
-  position: absolute;
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  background-color: #2c3e50;
-  color: white;
-  padding: 5px 10px;
-  border-radius: 15px;
-  font-size: 12px;
-  white-space: nowrap;
-  z-index: 20;
-  cursor: pointer;
-}
-
-.text-element.hovered {
-  box-shadow: 0 0 15px rgba(100, 149, 237, 0.6);
-  background-color: rgba(100, 149, 237, 0.1);
-  border-radius: 4px;
-}
-
-.image-element.hovered,
-.table-element.hovered {
-  box-shadow: 0 0 20px rgba(100, 149, 237, 0.8);
-}
-
-/* 气泡动画 */
-.bubble-enter-active,
-.bubble-leave-active {
-  transition: all 0.3s ease;
-}
-
-.bubble-enter-from,
-.bubble-leave-to {
-  opacity: 0;
-  transform: translateX(-50%) translateY(10px);
-}
-
-/* 添加笔记的提示气泡 */
-.note-added-bubble {
-  position: fixed;
-  top: 70px;
-  right: 20px;
-  background-color: #27ae60;
-  color: white;
-  padding: 10px 15px;
-  border-radius: 20px;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-  z-index: 1000;
-}
-
-.bubble-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.bubble-content .icon-check {
-  font-size: 16px;
-}
-
-/* 淡入淡出动画 */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.5s;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
+  background-color: #e8f4fc;
 }
 
 .notes-panel {
   position: fixed;
-  right: -400px;
   top: 0;
-  bottom: 0;
+  right: -400px;
   width: 400px;
+  height: 100%;
   background-color: white;
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
   transition: right 0.3s ease;
@@ -619,83 +581,68 @@ button:disabled {
   right: 0;
 }
 
-
 .notes-header {
-	padding: 15px 20px;
-	height: 22px;
-	background-color: #2c3e50;
-	color: white;
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	flex-shrink: 0;
-	/* 防止header被压缩 */
-}
-
-.notes-header h3 {
-	margin: 0;
-	font-size: 18px;
-	font-weight: 500;
-}
-
-.close-btn {
-	background: none;
-	border: none;
-	color: white;
-	font-size: 20px;
-	cursor: pointer;
-	padding: 5px;
-	transition: transform 0.2s;
-}
-
-.close-btn:hover {
-	transform: scale(1.1);
+  padding: 15px 20px;
+  background-color: #2c3e50;
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .notes-content {
-	flex: 1;
-	/* 占据剩余空间 */
-	padding: 0;
-	/* 移除内边距 */
-	display: flex;
-	overflow: hidden;
-	/* 防止内容溢出 */
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
 }
 
 .notes-textarea {
-	width: 100%;
-	height: 100%;
-	border: none;
-	resize: none;
-	padding: 20px;
-	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	font-size: 14px;
-	line-height: 1.6;
-	color: #333;
-	background-color: #f9f9f9;
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  resize: none;
+  font-family: inherit;
+  font-size: 14px;
 }
 
-.notes-textarea:focus {
-	outline: none;
-	background-color: #fff;
+.close-btn {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 5px;
+  transition: transform 0.2s;
 }
 
-/* 滚动条样式 */
-.notes-textarea::-webkit-scrollbar {
-	width: 8px;
+.close-btn:hover {
+  transform: scale(1.1);
 }
 
-.notes-textarea::-webkit-scrollbar-track {
-	background: #f1f1f1;
+.note-added-bubble {
+  position: fixed;
+  top: 70px;
+  right: 20px;
+  background-color: #27ae60;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 20px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.notes-textarea::-webkit-scrollbar-thumb {
-	background: #c1c1c1;
-	border-radius: 4px;
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.5s;
 }
 
-.notes-textarea::-webkit-scrollbar-thumb:hover {
-	background: #a8a8a8;
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
-
 </style>

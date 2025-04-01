@@ -4,7 +4,7 @@
   "description": "Capability for the main window",
   "windows": [
     "main",
-    "reader-1*"
+    "reader-*"
   ],
   "permissions": [
     "core:default",
@@ -25,6 +25,7 @@
     "core:webview:allow-create-webview-window",
     "core:webview:allow-webview-show",
     "core:webview:allow-create-webview",
+    "core:path:allow-join",
     "fs:allow-app-read-recursive",
     "fs:allow-app-write-recursive"
   ]
