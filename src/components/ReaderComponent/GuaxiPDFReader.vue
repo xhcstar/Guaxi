@@ -316,6 +316,7 @@ const handleThumbnailScroll = (e) => {
 
 // 初始化加载第一页
 onMounted(() => {
+	store.get_librariesRoot()
 	loadPdfPage(1)
 })
 

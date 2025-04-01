@@ -55,8 +55,8 @@ const props = defineProps({
 
 // 更严格的组件选择逻辑
 const readerComponent = computed(() => {
-	const { fileType, filePath, fileName } = props
-	console.log('readerComponent', fileType, filePath, fileName)
+	const { fileType, filePath, fileName, library } = props
+	console.log('readerComponent', fileType, filePath, fileName, library)
 
 	if (!fileType || !fileName) {
 		console.error('Missing required props')

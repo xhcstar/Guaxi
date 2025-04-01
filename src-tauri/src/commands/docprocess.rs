@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use tauri::{Emitter, Window};
 use tracing::{error, info};
 use pdfium_render::prelude::*;
+use std::io::Cursor;
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -56,39 +57,102 @@ struct PdfPageResponse {
     error: Option<String>,
 }
 
+
+#[derive(Debug, Serialize)]
+pub struct MarkdownResponse {
+    success: bool,
+    content: String,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn load_markdown_content(filepath: String) -> MarkdownResponse {
+    info!("load_markdown_content: {}", filepath);
+    // 直接读取文件内容，不进行路径检查
+    match std::fs::read_to_string(&filepath) {
+        Ok(content) => MarkdownResponse {
+            success: true,
+            content,
+            error: None,
+        },
+        Err(e) => MarkdownResponse {
+            success: false,
+            content: String::new(),
+            error: Some(format!("Failed to read markdown file: {}", e)),
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn get_converted_pdf_page(
     request: serde_json::Value
 ) -> Result<String, String> {
-    use std::io::Cursor;
 
-    let filepath = request["filepath"].as_str().ok_or("Missing filepath")?;
-    let curpage = request["curpage"].as_u64().ok_or("Invalid page number")? as usize;
+    // 添加请求开始日志
+    info!("[PDF] 开始处理请求，参数: {:?}", request);
+
+    let filepath = request["filepath"].as_str().ok_or({
+        error!("[PDF] 错误: 缺少filepath参数");
+        "Missing filepath"
+    })?;
+
+    info!("[PDF] 文件路径: {}", filepath);
+
+    let curpage = request["curpage"].as_u64().ok_or({
+        error!("[PDF] 错误: 无效的页码参数");
+        "Invalid page number"
+    })? as usize;
+
+    info!("[PDF] 请求页码: {}", curpage);
 
     let pdfium = Pdfium::new(
         Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
-            .map_err(|e| e.to_string())?
+            .map_err(|e| {
+                error!("[PDF] PDFium库加载失败: {}", e);
+                e.to_string()
+            })?
     );
 
+    info!("[PDF] PDFium初始化成功");
+
     let document = pdfium.load_pdf_from_file(filepath, None)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            error!("[PDF] 文件加载失败: {} | 路径: {}", e, filepath);
+            e.to_string()
+        })?;
+
+    info!("[PDF] PDF文件加载成功");
 
     let total_pages = document.pages().len();
-    let page = document.pages().get((curpage - 1).try_into().map_err(|_| "Page number conversion failed")?)
-        .map_err(|_| format!("Page {} out of bounds", curpage))?;
+    info!("[PDF] 文档总页数: {}", total_pages);
+
+    let page = document.pages().get((curpage - 1).try_into().map_err(|_| {
+        error!("[PDF] 页码转换失败: {}", curpage);
+        "Page number conversion failed"
+    })?)
+        .map_err(|_| {
+            error!("[PDF] 页码越界: {} (总页数: {})", curpage, total_pages);
+            format!("Page {} out of bounds", curpage)
+        })?;
+
+    info!("[PDF] 成功获取第{}页", curpage);
 
     let mut elements = Vec::new();
 
-    // 提取文本元素（使用all()方法获取完整文本）
+    // 提取文本元素
     match page.text() {
         Ok(text) => {
-            let full_text = text.all(); // 获取页面全部文本
+            let full_text = text.all();
+            info!("[PDF] 提取文本成功，字符数: {}", full_text.len());
             elements.push(PdfElement {
                 element_type: "text".to_string(),
                 content: full_text,
             });
         }
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            error!("[PDF] 文本提取失败: {}", e);
+            return Err(e.to_string());
+        }
     }
 
     // 提取图像元素
@@ -103,22 +167,34 @@ pub async fn get_converted_pdf_page(
             .write_to(&mut cursor, image::ImageFormat::Png)
             .is_ok() 
         {
+            info!("[PDF] 图像渲染成功，大小: {}字节", bytes.len());
             elements.push(PdfElement {
                 element_type: "image".to_string(),
                 content: base64::encode(&bytes),
             });
+        } else {
+            error!("[PDF] 图像编码失败");
         }
+    } else {
+        error!("[PDF] 页面渲染失败");
     }
+
+    // 先记录元素数量
+    let elements_len = elements.len();
+    info!("[PDF] 构建响应完成，包含{}个元素", elements_len);
 
     // 构建响应
     let response = PdfPageResponse {
         page_number: curpage,
-        total_pages: total_pages.into(), // 处理u16到usize的转换
+        total_pages: total_pages.into(),
         elements,
         error: None,
     };
 
-    serde_json::to_string(&response).map_err(|e| e.to_string())
+    serde_json::to_string(&response).map_err(|e| {
+        error!("[PDF] JSON序列化失败: {}", e);
+        e.to_string()
+    })
 }
 
 

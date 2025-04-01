@@ -12,6 +12,7 @@ pub struct FileData {
     file_type: String,
     file_name: String,
     file_path: String,
+    library: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     base_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,10 +42,11 @@ pub async fn create_reader_window(
     // 构建URL查询参数
     let url = WebviewUrl::App(
         format!(
-            "/reader?filePath={}&fileType={}&fileName={}",
+            "/reader?filePath={}&fileType={}&fileName={}&library={}",
             encode(&file_data.file_path),
             encode(&file_data.file_type),
-            encode(&file_data.file_name)
+            encode(&file_data.file_name),
+            encode(&file_data.library),
         )
         .into(),
     );

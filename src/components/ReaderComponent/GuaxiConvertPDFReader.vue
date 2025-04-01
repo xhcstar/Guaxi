@@ -123,10 +123,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { readFile } from '@tauri-apps/plugin-fs';
 import { repoStore } from '../../stores/repoStore'
 
 const store = repoStore()
+const librariesRoot = store.librariesRoot
 
 const props = defineProps({
   filePath: {
@@ -166,8 +166,9 @@ const hoverTimeout = ref(null)
 
 // 计算Markdown文件路径
 const markdownFilePath = computed(() => {
+  store.get_librariesRoot()
   const baseFileName = props.fileName.replace('.pdf', '')
-  return `${store.librariesRoot}\\Libraries\\${props.library}\\${baseFileName}\\markdown\\${baseFileName}\\${baseFileName}.md`
+  return `${librariesRoot}\\Libraries\\${props.library}\\${baseFileName}\\markdown\\${baseFileName}\\${baseFileName}.md`
 })
 
 // 方法定义
@@ -210,6 +211,8 @@ const loadPdfPage = async (pageNum: number) => {
       }
     });
 
+    console.log('Loading PDF', request)
+
     const data = JSON.parse(response) as {
       page_number: number;
       total_pages: number;
@@ -247,13 +250,23 @@ const loadPdfPage = async (pageNum: number) => {
 // 加载Markdown文件
 const loadMarkdownFile = async () => {
   try {
-    const content = await readFile(markdownFilePath.value);
-    markdownContent.value = content;
-    markdownLines.value = content.split('\n').filter(line => line.trim() !== '');
+    console.log('加载Markdown文件...', markdownFilePath.value);
+    const response = await invoke('load_markdown_content', {
+      filepath: markdownFilePath.value
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to load markdown');
+    }
+
+    markdownContent.value = response.content;
+    markdownLines.value = response.content.split('\n').filter(line => line.trim() !== '');
+    return response.content;
   } catch (error) {
     console.error('加载Markdown失败:', error);
     markdownContent.value = '';
     markdownLines.value = [];
+    throw error;
   }
 }
 
@@ -333,6 +346,7 @@ const toggleNotesPanel = () => {
 
 // 初始化加载第一页和Markdown文件
 onMounted(() => {
+  store.get_librariesRoot()
   loadPdfPage(1)
   loadMarkdownFile()
 })

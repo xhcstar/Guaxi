@@ -51,6 +51,7 @@ async fn main() {
             commands::docprocess::convert_to_markdown,
             commands::docprocess::check_file_converted,
             commands::docprocess::get_converted_pdf_page,
+            commands::docprocess::load_markdown_content,
             commands::fileprocess::get_file_tree,
             commands::fileprocess::read_file_content,
             commands::fileprocess::write_file_content,

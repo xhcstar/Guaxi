@@ -8,6 +8,7 @@ import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
+import { Library } from '@vicons/ionicons5'
 
 
 export const routes = [
@@ -58,7 +59,8 @@ export const routes = [
     props: (route) => ({  // 关键：显式传递查询参数作为props
       filePath: route.query.filePath,  // 直接传递Base64编码的字符串
       fileType: route.query.fileType,
-      fileName: route.query.fileName
+      fileName: route.query.fileName,
+      library: route.query.library,
     })
   },
 ];
