@@ -26,4 +26,5 @@
     "core:webview:allow-create-webview",
     "fs:allow-app-read-recursive",
     "fs:allow-app-write-recursive"
+  ]
 }
