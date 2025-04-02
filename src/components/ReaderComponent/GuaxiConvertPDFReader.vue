@@ -76,6 +76,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join } from '@tauri-apps/api/path'
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 
@@ -187,40 +188,90 @@ const renderMermaid = (content) => {
   })
 }
 
-const renderMarkdown = (content: string) => {
-  const renderer = {
-    ...new marked.Renderer(),
-    image(token: any) {
-      const src = token.href || '';
-      console.log('图片路径:', src); // 调试日志
+async function renderMarkdown(content, options = {}) {
+  try {
+    console.log('[DEBUG] 原始Markdown内容:', content.slice(0, 100) + (content.length > 100 ? '...' : ''));
 
-      return `<img src="${src}" 
-                  alt="${token.text || ''}" 
-                  title="${token.title || ''}" 
-                  class="markdown-image"
-                  onerror="console.error('图片加载失败:', this.src); this.style.display='none'">`;
+    // 1. 配置自定义渲染器（重点修复图片对象问题）
+    const renderer = new marked.Renderer();
+    renderer.image = (href, title, text) => {
+      const src = extractImagePath(href); // 统一路径提取方法
+      console.log('[DEBUG] 图片渲染参数:', { src, text });
+      return `<img src="${src}" alt="${text || ''}" class="markdown-image">`;
+    };
+
+    marked.use({
+      renderer,
+      async: true,
+      breaks: true,
+      gfm: true
+    });
+
+    // 2. 强化图片路径处理
+    const processedContent = await processImages(content, options.libraryBasePath);
+    console.log('[DEBUG] 处理后内容预览:', processedContent.slice(0, 200));
+
+    // 3. 安全解析
+    const html = await marked.parse(processedContent);
+    if (typeof html !== 'string') {
+      throw new Error(`渲染结果类型异常: ${typeof html}`);
     }
-  };
 
-  marked.use({ 
-    renderer,
-    mangle: false,
-    headerIds: false
-  });
-
-  // 其余处理保持不变
-  content = renderMermaid(content);
-  content = renderCodeBlocks(content);
-  content = renderMath(content);
-
-  const html = marked.parse(content);
-  return html.split('\n')
-    .filter(line => line.trim())
-    .map(line => ({
-      raw: getRawContent(line),
+    return html.split('\n').filter(Boolean).map(line => ({
+      raw: line,
       html: line
     }));
-};
+
+  } catch (error) {
+    console.error('[ERROR] 渲染失败:', error);
+    return [{
+      raw: content,
+      html: `<div class="render-error">${escapeHtml(error.message)}</div>`
+    }];
+  }
+}
+
+// 辅助函数：统一提取图片路径
+function extractImagePath(href) {
+  if (!href) return '';
+  // 处理新版marked返回的对象路径
+  if (typeof href === 'object' && href.href) return href.href;
+  // 处理字符串路径
+  if (typeof href === 'string') return href;
+  console.warn('[WARN] 未知图片路径格式:', href);
+  return '';
+}
+
+async function processImages(content, basePath = '') {
+  const imgRegex = /!$$(.*?)$$$(.*?)$/g;
+  const replacements = [];
+
+  for (const match of content.matchAll(imgRegex)) {
+    const [full, alt, src] = match;
+    if (!src.match(/^(http|\/|data:image)/i)) {
+      try {
+        // 特殊处理下划线路径
+        const normalizedSrc = src.startsWith('_') ? src.slice(1) : src;
+        const fullPath = await join(basePath, normalizedSrc);
+        const safeSrc = await convertFileSrc(fullPath);
+        replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
+      } catch (error) {
+        console.warn(`路径转换失败: ${src}`, error);
+      }
+    }
+  }
+  return replacements.reduce((result, { from, to }) => result.replace(from, to), content);
+}
+
+// 简易HTML转义
+function escapeHtml(unsafe) {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
 const renderedMarkdown = computed(() => {
   return markdownLines.value.map(line => line.html).join('')
@@ -411,7 +462,7 @@ const loadPdfPage = async (pageNum: number) => {
 const loadMarkdownPage = async (pageNum: number) => {
   try {
     if (!markdownFilePath.value) {
-      await updateMarkdownPath()
+      await updateMarkdownPath();
     }
 
     const response = await invoke('load_markdown_content', {
@@ -423,34 +474,45 @@ const loadMarkdownPage = async (pageNum: number) => {
       throw new Error(response.error || 'Failed to load markdown');
     }
 
-    // // 获取markdown文件所在目录
-    // const mdDir = await join(markdownFilePath.value, '..');
-    
-    // // 处理图片路径 - 确保返回绝对路径
-    // const imgMatches = [...response.content.matchAll(/!\[(.*?)\]\((.*?)\)/g)];
-    // const processedParts = await Promise.all(
-    //   imgMatches.map(async (match) => {
-    //     const [fullMatch, alt, src] = match;
-    //     if (!src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
-    //       // 构建绝对路径
-    //       const imgPath = await join(mdDir, src);
-    //       // 将Windows路径转换为正斜杠
-    //       const normalizedPath = imgPath.replace(/\\/g, '/');
-    //       return { match: fullMatch, replacement: `![${alt}](${normalizedPath})` };
-    //     }
-    //     return { match: fullMatch, replacement: fullMatch };
-    //   })
-    // );
+    // 获取markdown文件所在目录
+    const mdDir = await join(markdownFilePath.value, '..');
+
+    // 处理图片路径 - 转换为安全协议路径
+    const imgMatches = [...response.content.matchAll(/!$$(.*?)$$$(.*?)$/g)];
+    const processedParts = await Promise.all(
+      imgMatches.map(async (match) => {
+        const [fullMatch, alt, src] = match;
+        if (!src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
+          try {
+            const imgPath = await join(mdDir, src);
+            const safePath = convertFileSrc(imgPath); // 关键修改：转换为asset协议
+            return {
+              match: fullMatch,
+              replacement: `![${alt}](${safePath})`
+            };
+          } catch (error) {
+            console.error('图片路径转换失败:', error);
+            return { match: fullMatch, replacement: fullMatch };
+          }
+        }
+        return { match: fullMatch, replacement: fullMatch };
+      })
+    );
 
     // 构建最终内容
-    // let content = response.content;
-    // processedParts.forEach(({ match, replacement }) => {
-    //   content = content.replace(match, replacement);
-    // });
+    let content = response.content;
+    processedParts.forEach(({ match, replacement }) => {
+      content = content.replace(match, replacement);
+    });
 
-    markdownContent.value = response.content;
+    markdownContent.value = content;
     console.log('渲染前的 Markdown 内容:', markdownContent.value);
-    markdownLines.value = renderMarkdown(markdownContent.value);
+
+    // 渲染时传递目录路径
+    markdownLines.value = await renderMarkdown(markdownContent.value, {
+      libraryBasePath: mdDir
+    });
+
     console.log('渲染后的 Markdown 内容:', markdownLines.value);
   } catch (error) {
     console.error('加载Markdown失败:', error);

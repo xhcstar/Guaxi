@@ -27,6 +27,11 @@
     "core:webview:allow-create-webview",
     "core:path:allow-join",
     "fs:allow-app-read-recursive",
-    "fs:allow-app-write-recursive"
+    "fs:allow-app-write-recursive",
+    "fs:read-all",
+    "fs:write-all",
+    "fs:read-files",
+    "fs:read-dirs"
+
   ]
 }
