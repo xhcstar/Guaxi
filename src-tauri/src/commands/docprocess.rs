@@ -177,6 +177,7 @@ pub async fn convert_to_markdown(
         .arg("--output_format")
         .arg("markdown")
         .arg("--disable_multiprocessing")
+        .arg("--paginate_output")
         .arg("--output_dir")
         .arg(&request.output_dir)
         .stdout(Stdio::piped())
@@ -308,34 +309,24 @@ pub async fn convert_to_markdown(
     }
 }
 
-// "Recognizing layout" -> 20%
-// "Running OCR Error Detection: " -> 30%
-// "Detecting bboxes: " -> 40%
-// "Texify inference:" -> 50%
-// "Detecting bboxes: " -> 70%
-// "Recognizing tables:" -> 80%
-// "Saved markdown to " -> 90%
-
 fn parse_progress(line: &str) -> Option<u32> {
     info!("Parsing progress: {}", line);
 
     // 使用更精确的字符串匹配
     if line.contains("Loaded ") {
         return Some(10);
-    } else if line.contains("Recognizing layout...") {
+    } else if line.contains("Recognizing layout") {
         return Some(25);
     } else if line.contains("Running OCR Error Detection") {
         return Some(35);
-    } else if line.contains("First pass: Detecting bboxes") {
-        return Some(45);
     } else if line.contains("Texify inference started") {
-        return Some(55);
-    } else if line.contains("Second pass: Detecting bboxes") {
-        return Some(65);
+        return Some(50);
+    } else if line.contains("Recognizing Text") {
+        return Some(70);
     } else if line.contains("Recognizing tables") {
-        return Some(75);
-    } else if line.contains("Saving markdown to") {
         return Some(85);
+    } else if line.contains("Saving markdown to") {
+        return Some(95);
     }
 
     None

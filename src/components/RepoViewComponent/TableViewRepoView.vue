@@ -681,8 +681,8 @@ const buildConvertOutputFilePath = async (fileName, library) => {
     : `${store.librariesRoot}/Libraries/${library}/${fileNameWithoutExt}/markdown`;
     
   const fullPath = osPlatform === 'windows'
-    ? `${basePath}\\${fileNameWithoutExt}.md`
-    : `${basePath}/${fileNameWithoutExt}.md`;
+    ? `${basePath}\\${fileNameWithoutExt}\\${fileNameWithoutExt}.md`
+    : `${basePath}/${fileNameWithoutExt}/${fileNameWithoutExt}.md`;
 
   console.log('basePath:', basePath);
   console.log('fullPath:', fullPath);
@@ -765,8 +765,10 @@ const addFile = async () => {
           outputDir: fileToCheck
         });
 
-        if (!isConverted && (!currentForm.value.convetToMarkdownFilename || 
+        if (isConverted && (!currentForm.value.convetToMarkdownFilename || 
                             currentForm.value.convetToMarkdownFilename.trim() === '')) {
+          console.log('isConverted', isConverted);
+          console.log('convetToMarkdownFilename', currentForm.value.convetToMarkdownFilename);
           message.success('已存在转换文件，无需转换');
           // 关闭对话框并清空表单
           isAddFileModalVisible.value = false;
@@ -790,6 +792,20 @@ const addFile = async () => {
         // 转换完成后取消监听
         unlisten()
       } catch (error) {
+        // 更新进度条状态为失败
+        const fileName = currentForm.value.filePath.split(/[\\/]/).pop() || '未知文件'
+        const progressIndex = progresses.value.findIndex(p => p.fileName === fileName)
+        if (progressIndex !== -1) {
+          progresses.value[progressIndex] = {
+            ...progresses.value[progressIndex],
+            message: `转换失败: ${error.message || error}`,
+            current: 100
+          }
+          // 3秒后自动移除失败的进度条
+          setTimeout(() => {
+            progresses.value = progresses.value.filter((_, i) => i !== progressIndex)
+          }, 3000)
+        }
         message.error(`添加文件失败: ${error}`)
       }
     } else if (store.currentDatabase === 'NotesDb') {
