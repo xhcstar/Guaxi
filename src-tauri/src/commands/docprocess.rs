@@ -67,14 +67,26 @@ pub struct MarkdownResponse {
 }
 
 #[tauri::command]
-pub async fn load_markdown_content(filepath: String) -> MarkdownResponse {
-    info!("load_markdown_content: {}", filepath);
-    // 直接读取文件内容，不进行路径检查
+pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownResponse {
+    info!("load_markdown_content: {}, page: {}", filepath, page);
     match std::fs::read_to_string(&filepath) {
-        Ok(content) => MarkdownResponse {
-            success: true,
-            content,
-            error: None,
+        Ok(content) => {
+            // 使用更精确的分页符匹配
+            let pages: Vec<&str> = content.split("\n{").collect();
+            let page_content = if page < pages.len() {
+                pages[page].trim_start_matches(|c: char| c.is_numeric())
+                    .trim_start_matches('}')
+                    .trim_start_matches('-')
+                    .trim()
+            } else {
+                ""
+            };
+            
+            MarkdownResponse {
+                success: true,
+                content: page_content.to_string(),
+                error: None,
+            }
         },
         Err(e) => MarkdownResponse {
             success: false,

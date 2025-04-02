@@ -41,13 +41,9 @@
       </div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel">
-        <div class="markdown-content">
-          <div v-for="(line, index) in markdownLines" :key="index" class="markdown-line"
-            @click="addMarkdownToNotes(line)">
-            {{ line }}
-          </div>
-        </div>
+      <div class="markdown-panel" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
+        @mouseleave="handleMarkdownLeave">
+        <div class="markdown-content" ref="markdownContainer" v-html="renderedMarkdown"></div>
       </div>
     </div>
 
@@ -191,52 +187,170 @@ const renderMermaid = (content) => {
   })
 }
 
-const renderMarkdown = (content) => {
-  if (!content) {
-    console.warn('Markdown 内容为空或未定义')
-    return ''
-  }
-  // console.log('Markdown 内容:', content)
+const renderMarkdown = (content: string) => {
+  // 1. 创建安全的图片渲染器
+  const renderer = {
+    ...new marked.Renderer(),
+    image(href: string | any, title: string, text: string) { // 允许any类型防御
+      // 强制转换href为字符串（处理对象意外传入的情况）
+      const src = typeof href === 'string' ? href : 
+                  href?.toString?.() || '';
+      
+      // 单行完整HTML输出（避免被分割）
+      return `<img src="${src}" alt="${text || ''}" 
+                  title="${title || ''}" class="markdown-image"
+                  onerror="this.style.display='none'">`;
+    }
+  };
 
-  // 渲染 Mermaid 图表
-  let html = renderMermaid(content);
-
-  html = marked(html);
-
-  // 渲染数学公式
-  html = renderMath(html);
-
-  // 渲染代码块
-  html = renderCodeBlocks(html);
-
-  // 添加表格样式
-  html = html.replace(
-    /<table>/g,
-    '<table style="border-collapse: collapse; width: 100%;">'
-  );
-  html = html.replace(
-    /<th>/g,
-    '<th style="border: 1px solid black; padding: 8px; background: linear-gradient(to right, #7e807f, #7e806f); color: white; font-weight: bold; border-radius: 4px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); transition: background-color 0.3s ease;">'
-  );
-  html = html.replace(
-    /<td>/g,
-    '<td style="border: 1px solid black; padding: 8px; background-color: #f9f9f9; color: #333;">'
-  );
-
-  nextTick(() => {
-    Prism.highlightAll();
-    mermaid.run();
+  // 2. 配置marked（禁用可能导致干扰的选项）
+  marked.use({
+    renderer,
+    mangle: false,
+    headerIds: false,
+    breaks: false, // 禁用自动换行，防止标签被分割
+    gfm: true,
+    smartypants: true
   });
 
-  // console.log('渲染后的 Markdown 内容:', html)
+  // 3. 处理内容流水线
+  try {
+    content = renderMermaid(content);
+    content = renderCodeBlocks(content);
+    content = renderMath(content);
 
-  return html;
+    // 4. 渲染为完整HTML（不分割单标签）
+    const html = marked.parse(content);
+    
+    // 5. 按段落分割（而非按行），保持HTML结构
+    const paragraphs = html.split(/(<\/p>|<\/h\d>)/)
+      .filter(chunk => chunk.trim())
+      .map(chunk => ({
+        raw: getRawContent(chunk),
+        html: chunk
+      }));
+
+    return paragraphs;
+  } catch (error) {
+    console.error('Markdown渲染失败:', error);
+    return [{
+      raw: content,
+      html: `<p class="error">渲染错误: ${error.message}</p>`
+    }];
+  }
+};
+
+const renderedMarkdown = computed(() => {
+  return markdownLines.value.map(line => line.html).join('')
+})
+
+const handleMarkdownClick = (e) => {
+  // 清除之前选中的元素
+  const prevSelected = document.querySelectorAll('.markdown-content .selected');
+  prevSelected.forEach(el => el.classList.remove('selected'));
+
+  // 获取点击的元素
+  const target = e.target;
+
+  // 如果是代码块、数学公式等特殊元素，则跳过
+  if (target.closest('pre, .katex')) {
+    return;
+  }
+
+  // 获取选中的文本
+  const selection = window.getSelection();
+  const selectedText = selection.toString().trim();
+
+  let selectedElement = null;
+  let message = '';
+
+  if (selectedText && selection.rangeCount > 0) {
+    // 添加文本到笔记
+    selectedElement = selection.getRangeAt(0).startContainer.parentElement;
+    message = `已选中文本: ${selectedText.substring(0, 30)}${selectedText.length > 30 ? '...' : ''}`;
+    addToNotes({
+      type: 'text',
+      content: selectedText
+    });
+    selection.removeAllRanges();
+  } else if (target.tagName === 'IMG') {
+    // 添加图片到笔记
+    selectedElement = target;
+    message = '已选中图片';
+    addToNotes({
+      type: 'image',
+      content: target.src
+    });
+  } else {
+    // 获取最近的段落内容
+    const paragraph = target.closest('p, h1, h2, h3, h4, h5, h6, li, blockquote');
+    if (paragraph) {
+      selectedElement = paragraph;
+      message = `已选中段落: ${paragraph.textContent.substring(0, 30)}${paragraph.textContent.length > 30 ? '...' : ''}`;
+      addToNotes({
+        type: 'text',
+        content: paragraph.textContent || ''
+      });
+    }
+  }
+
+  // 添加选中效果
+  if (selectedElement) {
+    selectedElement.classList.add('selected');
+    showSelectionMessage(message);
+    // 确保元素可见
+    selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 
-// 计算Markdown文件路径
-const markdownFilePath = computed(async () => {
+const showSelectionMessage = (message: string) => {
+  // 移除旧的消息
+  const oldMessage = document.querySelector('.selection-message');
+  if (oldMessage) oldMessage.remove();
+
+  const messageEl = document.createElement('div');
+  messageEl.className = 'selection-message';
+  messageEl.textContent = message;
+  document.body.appendChild(messageEl);
+
+  setTimeout(() => {
+    messageEl.classList.add('fade-out');
+    setTimeout(() => messageEl.remove(), 500);
+  }, 1500);
+}
+const handleMarkdownHover = (e) => {
+  const target = e.target;
+
+  // 清除之前的悬停效果
+  document.querySelectorAll('.markdown-content .hovered').forEach(el => {
+    el.classList.remove('hovered');
+  });
+
+  // 如果是代码块、数学公式等特殊元素，则跳过
+  if (target.closest('pre, .katex')) {
+    return;
+  }
+
+  // 获取最近的段落元素
+  const paragraph = target.closest('p, h1, h2, h3, h4, h5, h6, li, blockquote');
+  if (paragraph) {
+    paragraph.classList.add('hovered');
+  }
+}
+
+const handleMarkdownLeave = () => {
+  // 清除所有悬停效果
+  document.querySelectorAll('.markdown-content .hovered').forEach(el => {
+    el.classList.remove('hovered');
+  });
+}
+
+const markdownFilePath = ref('')
+
+// 在onMounted或watch中更新路径
+const updateMarkdownPath = async () => {
   const baseFileName = props.fileName.replace('.pdf', '')
-  return await join(
+  markdownFilePath.value = await join(
     librariesRoot.value,
     'Libraries',
     props.library,
@@ -245,7 +359,13 @@ const markdownFilePath = computed(async () => {
     baseFileName,
     `${baseFileName}.md`
   )
-})
+}
+
+// 辅助函数：从HTML中提取原始Markdown内容
+const getRawContent = (html) => {
+  // 简单实现：去除HTML标签
+  return html.replace(/<[^>]+>/g, '').trim();
+};
 
 // 方法定义
 const hoverElement = (index) => {
@@ -305,41 +425,57 @@ const loadPdfPage = async (pageNum: number) => {
   }
 };
 
-// PDF加载事件处理
-const onPdfLoad = () => {
-  console.log('PDF加载成功')
-}
-
-const onPdfError = () => {
-  console.error('PDF加载失败')
-}
-
-// 加载Markdown文件
-const loadMarkdownFile = async () => {
+// 加载Markdown页面
+const loadMarkdownPage = async (pageNum: number) => {
   try {
-    const filepath = await markdownFilePath.value
-    const response = await invoke('load_markdown_content', {
-      filepath: filepath
-    })
-
-    if (!response.success) {
-      throw new Error(response.error || 'Failed to load markdown')
+    if (!markdownFilePath.value) {
+      await updateMarkdownPath()
     }
 
-    markdownContent.value = response.content
-    console.log('Markdown内容:', markdownContent.value)
-    // 确保 content 是字符串
-    let content = typeof response.content === 'string' ? response.content : ''
-    markdownLines.value = renderMarkdown(content)
-    return response.content
-  } catch (error) {
-    console.error('加载Markdown失败:', error)
-    markdownContent.value = ''
-    markdownLines.value = []
-    throw error
-  }
-}
+    const response = await invoke('load_markdown_content', {
+      filepath: markdownFilePath.value,
+      page: pageNum - 1
+    });
 
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to load markdown');
+    }
+
+    // // 获取markdown文件所在目录
+    // const mdDir = await join(markdownFilePath.value, '..');
+    
+    // // 处理图片路径 - 确保返回绝对路径
+    // const imgMatches = [...response.content.matchAll(/!\[(.*?)\]\((.*?)\)/g)];
+    // const processedParts = await Promise.all(
+    //   imgMatches.map(async (match) => {
+    //     const [fullMatch, alt, src] = match;
+    //     if (!src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
+    //       // 构建绝对路径
+    //       const imgPath = await join(mdDir, src);
+    //       // 将Windows路径转换为正斜杠
+    //       const normalizedPath = imgPath.replace(/\\/g, '/');
+    //       return { match: fullMatch, replacement: `![${alt}](${normalizedPath})` };
+    //     }
+    //     return { match: fullMatch, replacement: fullMatch };
+    //   })
+    // );
+
+    // 构建最终内容
+    // let content = response.content;
+    // processedParts.forEach(({ match, replacement }) => {
+    //   content = content.replace(match, replacement);
+    // });
+
+    markdownContent.value = response.content;
+    console.log('渲染前的 Markdown 内容:', markdownContent.value);
+    markdownLines.value = renderMarkdown(markdownContent.value);
+    console.log('渲染后的 Markdown 内容:', markdownLines.value);
+  } catch (error) {
+    console.error('加载Markdown失败:', error);
+    markdownContent.value = '';
+    markdownLines.value = [];
+  }
+};
 
 // 添加内容到笔记
 const addToNotes = (element) => {
@@ -391,47 +527,58 @@ const exportNotes = () => {
   URL.revokeObjectURL(url)
 }
 
-// 分页控制
+// 分页控制 - 统一处理PDF和Markdown的页面切换
 const prevPage = () => {
   if (currentPage.value > 1) {
-    loadPdfPage(currentPage.value - 1)
+    const newPage = currentPage.value - 1;
+    currentPage.value = newPage;
+    jumpPage.value = newPage;
+    loadPdfPage(newPage);
+    loadMarkdownPage(newPage);
   }
-}
+};
 
 const nextPage = () => {
   if (currentPage.value < totalPages.value) {
-    loadPdfPage(currentPage.value + 1)
+    const newPage = currentPage.value + 1;
+    currentPage.value = newPage;
+    jumpPage.value = newPage;
+    loadPdfPage(newPage);
+    loadMarkdownPage(newPage);
   }
-}
+};
 
 const goToPage = (page) => {
-  const pageNum = typeof page === 'number' ? page : jumpPage.value
-  const targetPage = Math.max(1, Math.min(pageNum, totalPages.value))
-  loadPdfPage(targetPage)
-}
+  const pageNum = typeof page === 'number' ? page : jumpPage.value;
+  const targetPage = Math.max(1, Math.min(pageNum, totalPages.value));
+  currentPage.value = targetPage;
+  jumpPage.value = targetPage;
+  loadPdfPage(targetPage);
+  loadMarkdownPage(targetPage);
+};
 
 // UI控制
 const toggleNotesPanel = () => {
   showNotes.value = !showNotes.value
 }
 
-// 初始化加载第一页和Markdown文件
 onMounted(() => {
-  store.get_librariesRoot().then(() => {
-    loadPdfPage(1)
-    loadMarkdownFile()
-  })
-})
+  store.get_librariesRoot().then(async () => {
+    await updateMarkdownPath();
+    loadPdfPage(1);
+    loadMarkdownPage(1);
+  });
+});
 
-// 监听PDF路径变化
-watch(() => props.filePath, (newPath) => {
+watch(() => props.filePath, async (newPath) => {
   if (newPath) {
-    currentPage.value = 1
-    loadPdfPage(1)
-    loadMarkdownFile()
-    notesContent.value = '' // 清空笔记
+    await updateMarkdownPath();
+    currentPage.value = 1;
+    loadPdfPage(1);
+    loadMarkdownPage(1);
+    notesContent.value = '';
   }
-})
+});
 </script>
 
 <style scoped>
@@ -521,13 +668,6 @@ button:disabled {
   border-right: 1px solid #ddd;
 }
 
-.pdf-object {
-  width: 100%;
-  height: 100%;
-  border: none;
-}
-
-/* 添加渲染PDF图像的样式 */
 .rendered-pdf-image {
   width: 100%;
   height: auto;
@@ -550,17 +690,76 @@ button:disabled {
   background-color: #f9f9f9;
 }
 
-.markdown-line {
-  margin-bottom: 10px;
-  padding: 8px;
-  background-color: white;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
+.markdown-content {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  color: #333;
+  user-select: text;
+  padding: 10px;
+  cursor: text;
 }
 
-.markdown-line:hover {
-  background-color: #e8f4fc;
+.markdown-content :deep(p),
+.markdown-content :deep(h1),
+.markdown-content :deep(h2),
+.markdown-content :deep(h3),
+.markdown-content :deep(h4),
+.markdown-content :deep(h5),
+.markdown-content :deep(h6),
+.markdown-content :deep(li),
+.markdown-content :deep(blockquote) {
+  position: relative;
+  transition: all 0.2s ease;
+  padding: 4px 8px;
+  margin: 4px 0;
+  border-radius: 4px;
+}
+
+.markdown-content :deep(.markdown-image) {
+  max-width: 100%;
+  height: auto;
+  margin: 10px 0;
+  border-radius: 4px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.markdown-content :deep(.markdown-image:hover) {
+  transform: scale(1.02);
+}
+
+.markdown-content :deep(.selected),
+.markdown-content :deep(.hovered) {
+  background-color: rgba(52, 152, 219, 0.2);
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.5);
+  transform: scale(1.005);
+  outline: none;
+}
+
+.markdown-content :deep(.selected) {
+  background-color: rgba(52, 152, 219, 0.3);
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.7);
+}
+
+.selection-message {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 20px;
+  z-index: 1001;
+  opacity: 1;
+  transition: opacity 0.5s ease;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.selection-message.fade-out {
+  opacity: 0;
 }
 
 .notes-panel {
@@ -583,6 +782,7 @@ button:disabled {
 
 .notes-header {
   padding: 15px 20px;
+  height: 19px;
   background-color: #2c3e50;
   color: white;
   display: flex;
