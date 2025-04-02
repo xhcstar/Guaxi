@@ -188,56 +188,38 @@ const renderMermaid = (content) => {
 }
 
 const renderMarkdown = (content: string) => {
-  // 1. 创建安全的图片渲染器
   const renderer = {
     ...new marked.Renderer(),
-    image(href: string | any, title: string, text: string) { // 允许any类型防御
-      // 强制转换href为字符串（处理对象意外传入的情况）
-      const src = typeof href === 'string' ? href : 
-                  href?.toString?.() || '';
-      
-      // 单行完整HTML输出（避免被分割）
-      return `<img src="${src}" alt="${text || ''}" 
-                  title="${title || ''}" class="markdown-image"
-                  onerror="this.style.display='none'">`;
+    image(token: any) {
+      const src = token.href || '';
+      console.log('图片路径:', src); // 调试日志
+
+      return `<img src="${src}" 
+                  alt="${token.text || ''}" 
+                  title="${token.title || ''}" 
+                  class="markdown-image"
+                  onerror="console.error('图片加载失败:', this.src); this.style.display='none'">`;
     }
   };
 
-  // 2. 配置marked（禁用可能导致干扰的选项）
-  marked.use({
+  marked.use({ 
     renderer,
     mangle: false,
-    headerIds: false,
-    breaks: false, // 禁用自动换行，防止标签被分割
-    gfm: true,
-    smartypants: true
+    headerIds: false
   });
 
-  // 3. 处理内容流水线
-  try {
-    content = renderMermaid(content);
-    content = renderCodeBlocks(content);
-    content = renderMath(content);
+  // 其余处理保持不变
+  content = renderMermaid(content);
+  content = renderCodeBlocks(content);
+  content = renderMath(content);
 
-    // 4. 渲染为完整HTML（不分割单标签）
-    const html = marked.parse(content);
-    
-    // 5. 按段落分割（而非按行），保持HTML结构
-    const paragraphs = html.split(/(<\/p>|<\/h\d>)/)
-      .filter(chunk => chunk.trim())
-      .map(chunk => ({
-        raw: getRawContent(chunk),
-        html: chunk
-      }));
-
-    return paragraphs;
-  } catch (error) {
-    console.error('Markdown渲染失败:', error);
-    return [{
-      raw: content,
-      html: `<p class="error">渲染错误: ${error.message}</p>`
-    }];
-  }
+  const html = marked.parse(content);
+  return html.split('\n')
+    .filter(line => line.trim())
+    .map(line => ({
+      raw: getRawContent(line),
+      html: line
+    }));
 };
 
 const renderedMarkdown = computed(() => {
