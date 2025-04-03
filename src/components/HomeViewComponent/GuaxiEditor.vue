@@ -26,7 +26,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { NAlert, NTooltip, NIcon } from 'naive-ui'
+import { NTooltip, NIcon } from 'naive-ui'
 import { EyeOutline, PencilOutline } from '@vicons/ionicons5'
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { join, dirname } from '@tauri-apps/api/path'
