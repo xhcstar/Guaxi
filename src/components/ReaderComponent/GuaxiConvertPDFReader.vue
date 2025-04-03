@@ -75,7 +75,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { join } from '@tauri-apps/api/path'
+import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
@@ -115,17 +115,15 @@ const currentPage = ref(1)
 const totalPages = ref(0)
 const jumpPage = ref(1)
 const elements = ref([])
-const pdfUrl = ref('')
 // Markdown数据状态
 const markdownContent = ref('')
 const markdownLines = ref([])
+const markdownFilePath = ref('')
 // 笔记状态
 const showNotes = ref(false)
 const notesContent = ref('')
 // UI状态
-const hoveredIndex = ref(-1)
 const showNoteBubble = ref(false)
-const hoverTimeout = ref(null)
 
 
 // 渲染数学公式
@@ -196,7 +194,6 @@ async function renderMarkdown(content, options = {}) {
     const renderer = new marked.Renderer();
     renderer.image = (href, title, text) => {
       const src = extractImagePath(href); // 统一路径提取方法
-      console.log('[DEBUG] 图片渲染参数:', { src, text });
       return `<img src="${src}" alt="${text || ''}" class="markdown-image">`;
     };
 
@@ -204,7 +201,13 @@ async function renderMarkdown(content, options = {}) {
       renderer,
       async: true,
       breaks: true,
-      gfm: true
+      gfm: true,
+      highlight: (code, lang) => {
+        if (Prism.languages[lang]) {
+          return Prism.highlight(code, Prism.languages[lang], lang);
+        }
+        return code;
+      }
     });
 
     // 2. 强化图片路径处理
@@ -212,21 +215,98 @@ async function renderMarkdown(content, options = {}) {
     console.log('[DEBUG] 处理后内容预览:', processedContent.slice(0, 200));
 
     // 3. 安全解析
-    const html = await marked.parse(processedContent);
+    let html = await marked.parse(processedContent);
     if (typeof html !== 'string') {
       throw new Error(`渲染结果类型异常: ${typeof html}`);
     }
 
-    return html.split('\n').filter(Boolean).map(line => ({
-      raw: line,
-      html: line
-    }));
+    // 4. 渲染数学公式
+    html = renderMath(html);
+
+    // 5. 渲染mermaid图表
+    html = renderMermaid(html);
+
+    // 6. 渲染代码块
+    html = renderCodeBlocks(html);
+
+    // 添加表格样式
+    html = html.replace(
+      /<table>/g,
+      '<table style="border-collapse: collapse; width: 100%;">'
+    );
+    html = html.replace(
+      /<th>/g,
+      '<th style="border: 1px solid black; padding: 8px; background: linear-gradient(to right, #7e807f, #7e806f); color: white; font-weight: bold; border-radius: 4px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); transition: background-color 0.3s ease;">'
+    );
+    html = html.replace(
+      /<td>/g,
+      '<td style="border: 1px solid black; padding: 8px; background-color: #f9f9f9; color: #333;">'
+    );
+
+    // 创建临时DOM元素来解析HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+
+    // 递归遍历DOM节点并拆分
+    const splitByNodes = (node) => {
+      const result = [];
+
+      // 处理文本节点
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent.trim();
+        if (text) {
+          result.push({
+            raw: text,
+            html: text
+          });
+        }
+        return result;
+      }
+
+      // 处理元素节点
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        // 特殊处理这些元素，保持其完整性
+        const keepWholeTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+          'img', 'table', 'pre', 'code', 'div.katex-display',
+          'span.katex-inline', 'div.mermaid'];
+
+        if (keepWholeTags.some(tag => node.matches(tag))) {
+          const outerHTML = node.outerHTML;
+          result.push({
+            raw: outerHTML,
+            html: outerHTML
+          });
+          return result;
+        }
+
+        // 递归处理子节点
+        for (const child of node.childNodes) {
+          result.push(...splitByNodes(child));
+        }
+        return result;
+      }
+
+      return result;
+    };
+
+    // 从临时div的子节点开始处理
+    const lines = [];
+    for (const child of tempDiv.childNodes) {
+      lines.push(...splitByNodes(child));
+    }
+
+    nextTick(() => {
+      Prism.highlightAll();
+      mermaid.run();
+    });
+
+    return lines;
 
   } catch (error) {
     console.error('[ERROR] 渲染失败:', error);
     return [{
       raw: content,
-      html: `<div class="render-error">${escapeHtml(error.message)}</div>`
+      html: `<div class="render-error">${error.message}</div>`
     }];
   }
 }
@@ -243,16 +323,14 @@ function extractImagePath(href) {
 }
 
 async function processImages(content, basePath = '') {
-  const imgRegex = /!$$(.*?)$$$(.*?)$/g;
+  const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
   const replacements = [];
 
   for (const match of content.matchAll(imgRegex)) {
     const [full, alt, src] = match;
     if (!src.match(/^(http|\/|data:image)/i)) {
       try {
-        // 特殊处理下划线路径
-        const normalizedSrc = src.startsWith('_') ? src.slice(1) : src;
-        const fullPath = await join(basePath, normalizedSrc);
+        const fullPath = await join(basePath, src);
         const safeSrc = await convertFileSrc(fullPath);
         replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
       } catch (error) {
@@ -261,16 +339,6 @@ async function processImages(content, basePath = '') {
     }
   }
   return replacements.reduce((result, { from, to }) => result.replace(from, to), content);
-}
-
-// 简易HTML转义
-function escapeHtml(unsafe) {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }
 
 const renderedMarkdown = computed(() => {
@@ -285,54 +353,85 @@ const handleMarkdownClick = (e) => {
   // 获取点击的元素
   const target = e.target;
 
-  // 如果是代码块、数学公式等特殊元素，则跳过
-  if (target.closest('pre, .katex')) {
-    return;
-  }
-
   // 获取选中的文本
   const selection = window.getSelection();
   const selectedText = selection.toString().trim();
 
   let selectedElement = null;
   let message = '';
+  let noteContent = '';
+  let noteHtml = '';
 
-  if (selectedText && selection.rangeCount > 0) {
-    // 添加文本到笔记
-    selectedElement = selection.getRangeAt(0).startContainer.parentElement;
-    message = `已选中文本: ${selectedText.substring(0, 30)}${selectedText.length > 30 ? '...' : ''}`;
-    addToNotes({
-      type: 'text',
-      content: selectedText
-    });
-    selection.removeAllRanges();
-  } else if (target.tagName === 'IMG') {
-    // 添加图片到笔记
+  // 处理代码块点击
+  const codeBlock = target.closest('pre, code, .code-block');
+  if (codeBlock) {
+    selectedElement = codeBlock;
+    const codeContent = codeBlock.textContent || '';
+    message = `已选中代码块: ${codeContent.substring(0, 30)}${codeContent.length > 30 ? '...' : ''}`;
+    noteContent = `\`\`\`\n${codeContent}\n\`\`\``;
+    noteHtml = codeBlock.outerHTML; // 直接使用原始HTML
+  }
+  // 处理数学公式点击
+  else if (target.closest('.katex-display, .katex-inline')) {
+    selectedElement = target.closest('.katex-display, .katex-inline');
+    const mathContent = selectedElement.getAttribute('aria-label') || selectedElement.textContent || '';
+    message = `已选中数学公式: ${mathContent.substring(0, 30)}${mathContent.length > 30 ? '...' : ''}`;
+    noteContent = `$$${mathContent}$$`;
+    noteHtml = selectedElement.outerHTML; // 直接使用原始HTML
+  }
+  // 处理mermaid图表点击
+  else if (target.closest('.mermaid, svg')) {
+    selectedElement = target.closest('.mermaid, svg');
+    const mermaidContent = selectedElement.querySelector('.mermaid')?.textContent || selectedElement.textContent || '';
+    message = '已选中图表';
+    noteContent = `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
+    noteHtml = selectedElement.outerHTML; // 直接使用原始HTML
+  }
+  // 处理图片点击
+  else if (target.tagName === 'IMG') {
     selectedElement = target;
     message = '已选中图片';
-    addToNotes({
-      type: 'image',
-      content: target.src
-    });
-  } else {
-    // 获取最近的段落内容
+    noteContent = `![图片](${target.src})`;
+    noteHtml = target.outerHTML; // 直接使用原始HTML
+  }
+  // 处理文本选择
+  else if (selectedText && selection.rangeCount > 0) {
+    selectedElement = selection.getRangeAt(0).startContainer.parentElement;
+    message = `已选中文本: ${selectedText.substring(0, 30)}${selectedText.length > 30 ? '...' : ''}`;
+    noteContent = selectedText;
+    noteHtml = `<p>${selectedText}</p>`; // 包装成段落
+  }
+  // 处理段落点击
+  else {
     const paragraph = target.closest('p, h1, h2, h3, h4, h5, h6, li, blockquote');
     if (paragraph) {
       selectedElement = paragraph;
-      message = `已选中段落: ${paragraph.textContent.substring(0, 30)}${paragraph.textContent.length > 30 ? '...' : ''}`;
-      addToNotes({
-        type: 'text',
-        content: paragraph.textContent || ''
-      });
+      const textContent = paragraph.textContent || '';
+      message = `已选中段落: ${textContent.substring(0, 30)}${textContent.length > 30 ? '...' : ''}`;
+      noteContent = textContent;
+      noteHtml = paragraph.outerHTML; // 直接使用原始HTML
     }
   }
 
-  // 添加选中效果
+  // 添加选中效果和笔记
   if (selectedElement) {
     selectedElement.classList.add('selected');
     showSelectionMessage(message);
-    // 确保元素可见
     selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // 添加到笔记
+    const timestamp = new Date().toLocaleString();
+    let noteType = 'text';
+    if (target.tagName === 'IMG') noteType = 'image';
+    else if (codeBlock) noteType = 'code';
+    else if (target.closest('.katex-display, .katex-inline')) noteType = 'math';
+    else if (target.closest('.mermaid, svg')) noteType = 'diagram';
+
+    addToNotes({
+      type: noteType,
+      content: noteContent,
+      html: noteHtml // 添加HTML格式内容
+    });
   }
 }
 
@@ -351,6 +450,7 @@ const showSelectionMessage = (message: string) => {
     setTimeout(() => messageEl.remove(), 500);
   }, 1500);
 }
+
 const handleMarkdownHover = (e) => {
   const target = e.target;
 
@@ -359,15 +459,16 @@ const handleMarkdownHover = (e) => {
     el.classList.remove('hovered');
   });
 
-  // 如果是代码块、数学公式等特殊元素，则跳过
-  if (target.closest('pre, .katex')) {
-    return;
-  }
+  // 获取最近的段落元素或特殊元素
+  const element = target.closest(
+    'p, h1, h2, h3, h4, h5, h6, li, blockquote, ' +
+    'pre, code, .code-block, ' +  // 代码块
+    '.katex-display, .katex-inline, ' +  // 数学公式
+    '.mermaid, svg'  // mermaid图表和生成的SVG元素
+  );
 
-  // 获取最近的段落元素
-  const paragraph = target.closest('p, h1, h2, h3, h4, h5, h6, li, blockquote');
-  if (paragraph) {
-    paragraph.classList.add('hovered');
+  if (element) {
+    element.classList.add('hovered');
   }
 }
 
@@ -377,8 +478,6 @@ const handleMarkdownLeave = () => {
     el.classList.remove('hovered');
   });
 }
-
-const markdownFilePath = ref('')
 
 // 在onMounted或watch中更新路径
 const updateMarkdownPath = async () => {
@@ -392,31 +491,6 @@ const updateMarkdownPath = async () => {
     baseFileName,
     `${baseFileName}.md`
   )
-}
-
-// 辅助函数：从HTML中提取原始Markdown内容
-const getRawContent = (html) => {
-  // 简单实现：去除HTML标签
-  return html.replace(/<[^>]+>/g, '').trim();
-};
-
-// 方法定义
-const hoverElement = (index) => {
-  clearTimeout(hoverTimeout.value)
-  hoveredIndex.value = index
-}
-
-const keepHovered = (index) => {
-  clearTimeout(hoverTimeout.value)
-  hoveredIndex.value = index
-}
-
-const delayUnhover = (index) => {
-  hoverTimeout.value = setTimeout(() => {
-    if (hoveredIndex.value === index) {
-      hoveredIndex.value = -1
-    }
-  }, 300)
 }
 
 const showNoteBubbleMessage = () => {
@@ -475,81 +549,102 @@ const loadMarkdownPage = async (pageNum: number) => {
     }
 
     // 获取markdown文件所在目录
-    const mdDir = await join(markdownFilePath.value, '..');
+    const mdDir = await dirname(markdownFilePath.value);
 
-    // 处理图片路径 - 转换为安全协议路径
-    const imgMatches = [...response.content.matchAll(/!$$(.*?)$$$(.*?)$/g)];
-    const processedParts = await Promise.all(
-      imgMatches.map(async (match) => {
-        const [fullMatch, alt, src] = match;
-        if (!src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
-          try {
-            const imgPath = await join(mdDir, src);
-            const safePath = convertFileSrc(imgPath); // 关键修改：转换为asset协议
-            return {
-              match: fullMatch,
-              replacement: `![${alt}](${safePath})`
-            };
-          } catch (error) {
-            console.error('图片路径转换失败:', error);
-            return { match: fullMatch, replacement: fullMatch };
-          }
-        }
-        return { match: fullMatch, replacement: fullMatch };
-      })
+    // // 修正后的正则表达式（匹配标准Markdown图片语法）
+    // const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
+    // let processedContent = response.content;
+    // let match;
+
+    // // 创建替换映射表
+    // const replacements: { original: string; replacement: string }[] = [];
+
+    // // 先收集所有需要替换的内容
+    // while ((match = imgRegex.exec(response.content)) !== null) {
+    //   const [fullMatch, altText, imgPath] = match;
+    //   console.debug('匹配到图片:', { altText, imgPath });
+
+    //   // 只处理本地相对路径
+    //   if (!imgPath.match(/^(http|https|data:|\/)/i)) {
+    //     try {
+    //       // 处理Windows路径中的反斜杠
+    //       const normalizedPath = imgPath.replace(/\\/g, '/');
+    //       const fullFsPath = await join(mdDir, normalizedPath);
+    //       const tauriPath = convertFileSrc(fullFsPath);
+
+    //       replacements.push({
+    //         original: fullMatch,
+    //         replacement: `![${altText}](${tauriPath})`
+    //       });
+
+    //       console.debug('图片路径转换:', {
+    //         original: imgPath,
+    //         converted: tauriPath
+    //       });
+    //     } catch (error) {
+    //       console.error(`路径转换失败: ${imgPath}`, error);
+    //       replacements.push({
+    //         original: fullMatch,
+    //         replacement: `![${altText}](${imgPath}) <!-- 转换失败 -->`
+    //       });
+    //     }
+    //   }
+    // }
+
+    // // 执行批量替换（避免重复处理）
+    // replacements.forEach(({ original, replacement }) => {
+    //   processedContent = processedContent.replace(original, replacement);
+    // });
+
+    // markdownContent.value = processedContent;
+    markdownContent.value = response.content;
+    // console.log("markdownContent.value:", markdownContent.value);
+    // markdownLines.value = await renderMarkdown(markdownContent.value, {
+    //   libraryBasePath: mdDir
+    // });
+    markdownLines.value = await renderMarkdown(markdownContent.value,
+      { libraryBasePath: mdDir }
     );
+    console.log("markdownLines.value:", markdownLines.value);
 
-    // 构建最终内容
-    let content = response.content;
-    processedParts.forEach(({ match, replacement }) => {
-      content = content.replace(match, replacement);
-    });
-
-    markdownContent.value = content;
-    console.log('渲染前的 Markdown 内容:', markdownContent.value);
-
-    // 渲染时传递目录路径
-    markdownLines.value = await renderMarkdown(markdownContent.value, {
-      libraryBasePath: mdDir
-    });
-
-    console.log('渲染后的 Markdown 内容:', markdownLines.value);
   } catch (error) {
     console.error('加载Markdown失败:', error);
-    markdownContent.value = '';
-    markdownLines.value = [];
+    markdownLines.value = [{
+      raw: '',
+      html: `<div class="error">加载错误: ${error.message}</div>`
+    }];
   }
 };
 
 // 添加内容到笔记
 const addToNotes = (element) => {
-  const timestamp = new Date().toLocaleString()
-  let note = ''
+  const timestamp = new Date().toLocaleString();
+  let note = '';
+
+  // 优先使用HTML内容，如果没有则使用Markdown内容
+  const content = element.html || element.content;
 
   switch (element.type) {
     case 'text':
-      note = `## 文本摘录 (${timestamp})\n${element.content}\n\n`
-      break
+      note = `## 文本摘录 (${timestamp})\n${content}\n\n`;
+      break;
     case 'image':
-      note = `## 图片摘录 (${timestamp})\n![图片](${element.content})\n\n`
-      break
-    case 'table':
-      note = `## 表格摘录 (${timestamp})\n![表格](${element.content})\n\n`
-      break
+      note = `## 图片摘录 (${timestamp})\n${content}\n\n`;
+      break;
+    case 'code':
+      note = `## 代码摘录 (${timestamp})\n${content}\n\n`;
+      break;
+    case 'math':
+      note = `## 公式摘录 (${timestamp})\n${content}\n\n`;
+      break;
+    case 'diagram':
+      note = `## 图表摘录 (${timestamp})\n${content}\n\n`;
+      break;
   }
 
-  notesContent.value += note
-  showNotes.value = true
-  showNoteBubbleMessage()
-}
-
-// 添加Markdown内容到笔记
-const addMarkdownToNotes = (line) => {
-  const timestamp = new Date().toLocaleString()
-  const note = `## Markdown摘录 (${timestamp})\n${line}\n\n`
-  notesContent.value += note
-  showNotes.value = true
-  showNoteBubbleMessage()
+  notesContent.value += note;
+  showNotes.value = true;
+  showNoteBubbleMessage();
 }
 
 // 导出笔记
@@ -612,6 +707,14 @@ onMounted(() => {
     loadPdfPage(1);
     loadMarkdownPage(1);
   });
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default', // 使用默认主题
+    flowchart: {
+      useMaxWidth: false, // 禁用最大宽度限制
+      htmlLabels: true, // 使用 HTML 标签
+    },
+  })
 });
 
 watch(() => props.filePath, async (newPath) => {
@@ -731,13 +834,14 @@ button:disabled {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
-  background-color: #f9f9f9;
+  background-color: #faf9f9;
 }
 
 .markdown-content {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.6;
-  color: #333;
+  color: #000000;
+  background-color: #faf9f9;
   user-select: text;
   padding: 10px;
   cursor: text;
@@ -775,15 +879,15 @@ button:disabled {
 
 .markdown-content :deep(.selected),
 .markdown-content :deep(.hovered) {
-  background-color: rgba(52, 152, 219, 0.2);
-  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.5);
+  background-color: rgba(72, 215, 240, 0.2);
+  box-shadow: 0 0 0 2px rgba(65, 210, 230, 0.5);
   transform: scale(1.005);
   outline: none;
 }
 
 .markdown-content :deep(.selected) {
-  background-color: rgba(52, 152, 219, 0.3);
-  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.7);
+  background-color: rgba(33, 213, 236, 0.3);
+  box-shadow: 0 0 0 3px rgba(85, 231, 207, 0.7);
 }
 
 .selection-message {
