@@ -98,25 +98,22 @@ const loadFileTree = async () => {
 
 // 对文件树数据进行排序（先文件后目录）
 const sortFileTree = (tree) => {
-  // 递归排序每个节点的 children
-  const sortedTree = tree.map((node) => {
-    if (node.children && node.children.length > 0) {
-      // 对子节点进行排序
-      node.children = sortFileTree(node.children)
+  if (!tree || !Array.isArray(tree)) return [];  // Add null check
+  
+  return tree.map(item => {
+    if (item.children) {
+      item.children = sortFileTree(item.children);
     }
-    return node
-  })
-
-  // 对当前层级的节点进行排序
-  const result = sortedTree.sort((a, b) => {
-    if (a.is_directory === b.is_directory) return 0 // 如果类型相同，保持原顺序
-    return a.is_directory ? 1 : -1 // 目录排在后，文件排在前
-  })
-
-  // 输出排序后的结果
-  // console.log('对文件树数据进行排序', result)
-  return result
-}
+    return item;
+  }).sort((a, b) => {
+    // Directories first, then files
+    if (a.type === 'directory' && b.type !== 'directory') return -1;
+    if (a.type !== 'directory' && b.type === 'directory') return 1;
+    
+    // Alphabetical sorting
+    return a.name.localeCompare(b.name);
+  });
+};
 
 // 修改 renderLabel，支持编辑模式
 const renderLabel = ({ option }) => {

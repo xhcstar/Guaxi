@@ -194,8 +194,8 @@ const handleRemove = (path) => {
 const handleAdd = async () => {
   if (newRepoPath.value) {
     // 将路径统一转换为 Linux 系统的正斜杠模式
-    const normalizedPath = newRepoPath.value.replace(/\\/g, '/');
-    fileTreeStore.addRepoPath(normalizedPath);
+    // const normalizedPath = newRepoPath.value.replace(/\\/g, '/');
+    fileTreeStore.addRepoPath(newRepoPath.value);
     newRepoPath.value = '';
     showAddPathModal.value = false;
   }
@@ -212,8 +212,8 @@ const handleOpenFileBrowser = async () => {
 
     if (selectedPath) {
       // 将路径统一转换为 Linux 系统的正斜杠模式
-      const normalizedPath = selectedPath.replace(/\\/g, '/');
-      newRepoPath.value = normalizedPath;
+      // const normalizedPath = selectedPath.replace(/\\/g, '/');
+      newRepoPath.value = selectedPath;
       showAddPathModal.value = true; // 显示模态框
     }
   } catch (error) {
