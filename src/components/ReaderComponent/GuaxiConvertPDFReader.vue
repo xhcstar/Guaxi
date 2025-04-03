@@ -19,6 +19,22 @@
       </div>
 
       <div class="right-controls">
+        <button class="rotate-left" @click="rotate(-90)">
+          <i class="icon-rotate-left"></i> 左旋
+        </button>
+        <button class="rotate-right" @click="rotate(90)">
+          <i class="icon-rotate-right"></i> 右旋
+        </button>
+        <button class="fit-width" @click="fitToWidth">
+          <i class="icon-fit-width"></i> 适合宽度
+        </button>
+        <button class="zoom-out" @click="zoomOut" :disabled="zoomLevel <= 0.5">
+          <i class="icon-zoom-out"></i> 缩小
+        </button>
+        <span class="zoom-level">{{ Math.round(zoomLevel * 100) }}%</span>
+        <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2">
+          <i class="icon-zoom-in"></i> 放大
+        </button>
         <button class="toggle-notes" @click="toggleNotesPanel">
           <i :class="showNotes ? 'icon-notes-active' : 'icon-notes'"></i>
           {{ showNotes ? '隐藏笔记' : '显示笔记' }}
@@ -32,13 +48,21 @@
     <!-- 主内容区 -->
     <div class="pdf-main-content">
       <!-- 修改PDF渲染区域 -->
-      <div class="pdf-render-panel">
-        <img v-if="elements.length > 0 && elements[0].type === 'image'" :src="elements[0].content"
-          alt="Rendered PDF Page" class="rendered-pdf-image" />
-        <div v-else class="pdf-loading-message">
-          正在加载PDF页面...
+      <div class="pdf-render-panel" @wheel="handleWheelZoom" ref="pdfPanel">
+        <div class="pdf-image-container" :style="{
+          transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
+          transformOrigin: 'center center'
+        }">
+          <img v-if="elements.length > 0 && elements[0].type === 'image'" :src="elements[0].content"
+            alt="Rendered PDF Page" class="rendered-pdf-image" ref="pdfImage" />
+          <div v-else class="pdf-loading-message">
+            正在加载PDF页面...
+          </div>
         </div>
       </div>
+
+      <!-- 可拖动的中间线 -->
+      <div class="resize-handle" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
       <div class="markdown-panel" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
@@ -73,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -701,11 +725,106 @@ const toggleNotesPanel = () => {
   showNotes.value = !showNotes.value
 }
 
+// 缩放功能方法
+const zoomIn = () => {
+  zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2);
+};
+
+const zoomOut = () => {
+  zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5);
+};
+
+// 缩放状态
+const zoomLevel = ref(1);
+// 添加旋转状态
+const rotation = ref(0);
+const pdfPanel = ref(null);
+const pdfImage = ref(null);
+// 添加拖动状态
+const isResizing = ref(false);
+const startX = ref(0);
+const startLeftWidth = ref(0);
+const leftPanelWidth = ref('55%'); // 初始宽度
+
+// 开始拖动
+const startResize = (e) => {
+  isResizing.value = true;
+  startX.value = e.clientX;
+  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.pdf-render-panel')).width, 10);
+  document.addEventListener('mousemove', handleMouseMove);
+  document.addEventListener('mouseup', stopResize);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+};
+
+// 处理鼠标移动
+const handleMouseMove = (e) => {
+  if (!isResizing.value) return;
+  
+  const containerWidth = document.querySelector('.pdf-main-content').offsetWidth;
+  const dx = e.clientX - startX.value;
+  let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
+  
+  // 限制最小宽度
+  newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
+  
+  leftPanelWidth.value = `${newLeftWidth}%`;
+};
+
+// 停止拖动
+const stopResize = () => {
+  isResizing.value = false;
+  document.removeEventListener('mousemove', handleMouseMove);
+  document.removeEventListener('mouseup', stopResize);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+};
+// 旋转功能
+const rotate = (degrees) => {
+  rotation.value = (rotation.value + degrees) % 360;
+};
+
+const fitToWidth = () => {
+  if (!pdfPanel.value || !pdfImage.value) return;
+  
+  const panelWidth = pdfPanel.value.clientWidth;
+  const imgWidth = pdfImage.value.naturalWidth;
+  
+  // 考虑旋转状态
+  const isVertical = Math.abs(rotation.value % 180) === 90;
+  const effectiveWidth = isVertical ? pdfImage.value.naturalHeight : imgWidth;
+  
+  // 计算适合宽度，留出10px边距
+  zoomLevel.value = (panelWidth - 10) / effectiveWidth;
+  
+  // 确保图片居中
+  nextTick(() => {
+    if (pdfPanel.value) {
+      pdfPanel.value.scrollLeft = (pdfImage.value.clientWidth - panelWidth) / 2;
+    }
+  });
+};
+
+// 修改handleWheelZoom方法，考虑旋转状态
+const handleWheelZoom = (e) => {
+  if (e.ctrlKey) {
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 0.1 : -0.1;
+    zoomLevel.value = Math.max(0.5, Math.min(2, zoomLevel.value + delta));
+  }
+};
+
 onMounted(() => {
   store.get_librariesRoot().then(async () => {
     await updateMarkdownPath();
     loadPdfPage(1);
     loadMarkdownPage(1);
+    // 添加窗口大小变化监听
+    window.addEventListener('resize', handleResize);
+    // 添加延迟确保DOM完全渲染
+    setTimeout(() => {
+      fitToWidth(); // 初始加载时自动适合宽度
+    }, 100);
   });
   mermaid.initialize({
     startOnLoad: true,
@@ -716,6 +835,19 @@ onMounted(() => {
     },
   })
 });
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize);
+  // 清理拖动事件监听
+  document.removeEventListener('mousemove', handleMouseMove);
+  document.removeEventListener('mouseup', stopResize);
+});
+
+const handleResize = () => {
+  if (pdfPanel.value && pdfImage.value) {
+    fitToWidth();
+  }
+};
 
 watch(() => props.filePath, async (newPath) => {
   if (newPath) {
@@ -772,6 +904,54 @@ watch(() => props.filePath, async (newPath) => {
   gap: 10px;
 }
 
+/* 添加缩放控制按钮样式 */
+.zoom-level {
+  margin: 0 10px;
+  font-size: 14px;
+  min-width: 50px;
+  text-align: center;
+}
+
+.zoom-in,
+.zoom-out {
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.zoom-in:hover,
+.zoom-out:hover {
+  background-color: #2980b9;
+}
+
+.zoom-in:disabled,
+.zoom-out:disabled {
+  background-color: #95a5a6;
+  cursor: not-allowed;
+}
+
+.rotate-left,
+.rotate-right,
+.fit-width {
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rotate-left:hover,
+.rotate-right:hover,
+.fit-width:hover {
+  background-color: #2980b9;
+}
+
 button {
   padding: 6px 12px;
   background-color: #3498db;
@@ -807,19 +987,33 @@ button:disabled {
   flex: 1;
   display: flex;
   overflow: hidden;
+  gap: 0;
 }
 
 .pdf-render-panel {
-  flex: 1;
-  overflow: hidden;
-  border-right: 1px solid #ddd;
+  flex: 0 0 v-bind(leftPanelWidth);
+  min-width: 0;
+  overflow: auto;
+  position: relative;
+  background-color: #f5f5f5;
+}
+
+.pdf-image-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .rendered-pdf-image {
-  width: 100%;
-  height: auto;
+  max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  transition: transform 0.2s ease;
 }
 
 .pdf-loading-message {
@@ -830,18 +1024,36 @@ button:disabled {
   color: #666;
 }
 
+.resize-handle {
+  width: 3px;
+  height: 100%;
+  background-color: #ddd;
+  cursor: col-resize;
+  position: relative;
+  z-index: 10;
+}
+
+.resize-handle:hover {
+  background-color: #4acadb;
+}
+
+.resize-handle:active {
+  background-color: #55ebd7;
+}
+
 .markdown-panel {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: 20px;
-  background-color: #faf9f9;
+  padding: 5px;
+  background-color: #f5f5f5;
 }
 
 .markdown-content {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.6;
   color: #000000;
-  background-color: #faf9f9;
+  background-color: #f5f5f5;
   user-select: text;
   padding: 10px;
   cursor: text;
