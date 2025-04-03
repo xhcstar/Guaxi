@@ -7,40 +7,49 @@
       </div>
 
       <div class="page-navigation">
-        <button @click="prevPage" :disabled="currentPage <= 1">
-          <i class="icon-arrow-left"></i> 上一页
+        <button @click="prevPage" :disabled="currentPage <= 1" title="上一页">
+          <n-icon :component="ArrowBackOutline" />
+          <span class="btn-text">上一页</span>
         </button>
 
         <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage">
 
-        <button @click="nextPage" :disabled="currentPage >= totalPages">
-          下一页 <i class="icon-arrow-right"></i>
+        <button @click="nextPage" :disabled="currentPage >= totalPages" title="下一页">
+          <span class="btn-text">下一页</span>
+          <n-icon :component="ArrowForwardOutline" />
         </button>
       </div>
 
       <div class="right-controls">
-        <button class="rotate-left" @click="rotate(-90)">
-          <i class="icon-rotate-left"></i> 左旋
+        <button class="rotate-left" @click="rotate(-90)" title="向左旋转90度">
+          <n-icon :component="RefreshCircleOutline" :rotate="90" />
+          <span class="btn-text">左旋</span>
         </button>
-        <button class="rotate-right" @click="rotate(90)">
-          <i class="icon-rotate-right"></i> 右旋
+        <button class="rotate-right" @click="rotate(90)" title="向右旋转90度">
+          <n-icon :component="RefreshCircleOutline" :rotate="-90" />
+          <span class="btn-text">右旋</span>
         </button>
-        <button class="fit-width" @click="fitToWidth">
-          <i class="icon-fit-width"></i> 适合宽度
+        <button class="fit-width" @click="fitToWidth" title="将页面调整为适合宽度">
+          <n-icon :component="ExpandOutline" />
+          <span class="btn-text">适合宽度</span>
         </button>
-        <button class="zoom-out" @click="zoomOut" :disabled="zoomLevel <= 0.5">
-          <i class="icon-zoom-out"></i> 缩小
+        <button class="zoom-out" @click="zoomOut" :disabled="zoomLevel <= 0.5" title="缩小">
+          <n-icon :component="RemoveOutline" />
         </button>
         <span class="zoom-level">{{ Math.round(zoomLevel * 100) }}%</span>
-        <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2">
-          <i class="icon-zoom-in"></i> 放大
+        <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
+          <n-icon :component="AddOutline" />
         </button>
-        <button class="toggle-notes" @click="toggleNotesPanel">
-          <i :class="showNotes ? 'icon-notes-active' : 'icon-notes'"></i>
-          {{ showNotes ? '隐藏笔记' : '显示笔记' }}
+        <!-- 显示/隐藏笔记按钮 -->
+        <button class="toggle-notes" @click="toggleNotesPanel" :title="showNotes ? '隐藏笔记' : '显示笔记'">
+          <n-icon :component="DocumentTextOutline" />
+          <span class="btn-text">{{ showNotes ? '隐藏笔记' : '显示笔记' }}</span>
         </button>
-        <button class="export-notes" @click="exportNotes">
-          <i class="icon-download"></i> 导出笔记
+
+        <!-- 导出笔记按钮 -->
+        <button class="export-notes" @click="exportNotes" title="导出笔记">
+          <n-icon :component="DownloadOutline" />
+          <span class="btn-text">导出笔记</span>
         </button>
       </div>
     </div>
@@ -76,11 +85,11 @@
       <div class="notes-header">
         <h3>我的笔记</h3>
         <button @click="toggleNotesPanel" class="close-btn">
-          <i class="icon-close">×</i>
+          <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
       <div class="notes-content">
-        <textarea v-model="notesContent" placeholder="点击PDF或Markdown内容添加到笔记..." class="notes-textarea"></textarea>
+        <textarea v-model="notesContent" placeholder="点击Markdown内容添加到笔记..." class="notes-textarea"></textarea>
       </div>
     </div>
 
@@ -111,8 +120,18 @@ import Prism from 'prismjs'
 import 'prismjs/themes/prism.css'
 import mermaid from 'mermaid'
 
-const store = repoStore()
-const { librariesRoot } = storeToRefs(store)
+import {
+  ArrowBackOutline,
+  ArrowForwardOutline,
+  RefreshCircleOutline,
+  ExpandOutline,
+  SearchOutline,
+  AddOutline,
+  RemoveOutline,
+  DocumentTextOutline,
+  DownloadOutline,
+  CloseOutline
+} from '@vicons/ionicons5'
 
 const props = defineProps({
   filePath: {
@@ -134,6 +153,19 @@ const props = defineProps({
   }
 })
 
+const store = repoStore()
+const { librariesRoot } = storeToRefs(store)
+// 缩放状态
+const zoomLevel = ref(1);
+// 添加旋转状态
+const rotation = ref(0);
+const pdfPanel = ref(null);
+const pdfImage = ref(null);
+// 添加拖动状态
+const isResizing = ref(false);
+const startX = ref(0);
+const startLeftWidth = ref(0);
+const leftPanelWidth = ref('55%'); // 初始宽度
 // PDF数据状态
 const currentPage = ref(1)
 const totalPages = ref(0)
@@ -734,18 +766,6 @@ const zoomOut = () => {
   zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5);
 };
 
-// 缩放状态
-const zoomLevel = ref(1);
-// 添加旋转状态
-const rotation = ref(0);
-const pdfPanel = ref(null);
-const pdfImage = ref(null);
-// 添加拖动状态
-const isResizing = ref(false);
-const startX = ref(0);
-const startLeftWidth = ref(0);
-const leftPanelWidth = ref('55%'); // 初始宽度
-
 // 开始拖动
 const startResize = (e) => {
   isResizing.value = true;
@@ -760,14 +780,14 @@ const startResize = (e) => {
 // 处理鼠标移动
 const handleMouseMove = (e) => {
   if (!isResizing.value) return;
-  
+
   const containerWidth = document.querySelector('.pdf-main-content').offsetWidth;
   const dx = e.clientX - startX.value;
   let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
-  
+
   // 限制最小宽度
   newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
-  
+
   leftPanelWidth.value = `${newLeftWidth}%`;
 };
 
@@ -786,17 +806,17 @@ const rotate = (degrees) => {
 
 const fitToWidth = () => {
   if (!pdfPanel.value || !pdfImage.value) return;
-  
+
   const panelWidth = pdfPanel.value.clientWidth;
   const imgWidth = pdfImage.value.naturalWidth;
-  
+
   // 考虑旋转状态
   const isVertical = Math.abs(rotation.value % 180) === 90;
   const effectiveWidth = isVertical ? pdfImage.value.naturalHeight : imgWidth;
-  
+
   // 计算适合宽度，留出10px边距
   zoomLevel.value = (panelWidth - 10) / effectiveWidth;
-  
+
   // 确保图片居中
   nextTick(() => {
     if (pdfPanel.value) {
@@ -875,14 +895,55 @@ watch(() => props.filePath, async (newPath) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 20px;
-  background-color: #2c3e50;
-  color: white;
-  flex-shrink: 0;
+  padding: 8px 16px;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+button {
+  padding: 8px 12px;
+  background-color: #ffffff;
+  color: #495057;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+button:hover {
+  background-color: #f8f9fa;
+  border-color: #e9ecef;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+button:disabled {
+  background-color: #f8f9fa;
+  color: #adb5bd;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.n-icon {
+  font-size: 16px;
 }
 
 .page-info {
   font-size: 14px;
+  font-weight: 500;
+  color: #495057;
+  padding: 6px 12px;
+  background-color: #ffffff;
+  border-radius: 6px;
+  border: 1px solid #e9ecef;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .page-navigation {
@@ -892,11 +953,13 @@ watch(() => props.filePath, async (newPath) => {
 }
 
 .page-navigation input {
-  width: 60px;
+  width: 50px;
   padding: 6px;
   text-align: center;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .right-controls {
@@ -906,26 +969,24 @@ watch(() => props.filePath, async (newPath) => {
 
 /* 添加缩放控制按钮样式 */
 .zoom-level {
-  margin: 0 10px;
-  font-size: 14px;
-  min-width: 50px;
+  min-width: 40px;
   text-align: center;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .zoom-in,
 .zoom-out {
-  background-color: #3498db;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: all 0.2s;
+  background-color: #f8f9fa;
+  color: #495057;
+  border: 1px solid #e9ecef;
 }
 
 .zoom-in:hover,
 .zoom-out:hover {
-  background-color: #2980b9;
+  background-color: #f1f3f5;
 }
 
 .zoom-in:disabled,
@@ -937,50 +998,49 @@ watch(() => props.filePath, async (newPath) => {
 .rotate-left,
 .rotate-right,
 .fit-width {
-  background-color: #3498db;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: all 0.2s;
+  background-color: #f8f9fa;
+  color: #495057;
+  border: 1px solid #e9ecef;
 }
 
 .rotate-left:hover,
 .rotate-right:hover,
 .fit-width:hover {
-  background-color: #2980b9;
-}
-
-button {
-  padding: 6px 12px;
-  background-color: #3498db;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-button:hover {
-  background-color: #2980b9;
-}
-
-button:disabled {
-  background-color: #95a5a6;
-  cursor: not-allowed;
+  background-color: #f1f3f5;
 }
 
 .toggle-notes {
-  background-color: #3498db;
+  background-color: #4dabf7;
+  color: white;
+  border: 1px solid #339af0;
+  transition: all 0.2s;
+}
+
+.toggle-notes:hover {
+  background-color: #339af0;
+  box-shadow: 0 2px 8px rgba(77, 171, 247, 0.3);
 }
 
 .export-notes {
-  background-color: #27ae60;
+  background-color: #20c997;
+  color: white;
+  border: 1px solid #12b886;
+  transition: all 0.2s;
 }
 
 .export-notes:hover {
-  background-color: #219653;
+  background-color: #12b886;
+  box-shadow: 0 2px 8px rgba(32, 201, 151, 0.3);
+}
+
+/* 保持按钮统一间距和形状 */
+.toggle-notes,
+.export-notes {
+  padding: 8px 12px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .pdf-main-content {
@@ -995,7 +1055,7 @@ button:disabled {
   min-width: 0;
   overflow: auto;
   position: relative;
-  background-color: #f5f5f5;
+  background-color: #ffffff;
 }
 
 .pdf-image-container {
@@ -1007,6 +1067,7 @@ button:disabled {
   display: flex;
   justify-content: center;
   align-items: center;
+  background-color: #f8f9fa;
 }
 
 .rendered-pdf-image {
@@ -1014,6 +1075,7 @@ button:disabled {
   max-height: 100%;
   object-fit: contain;
   transition: transform 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .pdf-loading-message {
@@ -1021,16 +1083,18 @@ button:disabled {
   justify-content: center;
   align-items: center;
   height: 100%;
-  color: #666;
+  color: #868e96;
+  font-size: 14px;
 }
 
 .resize-handle {
   width: 3px;
   height: 100%;
-  background-color: #ddd;
+  background-color: #e9ecef;
   cursor: col-resize;
   position: relative;
   z-index: 10;
+  transition: background-color 0.2s;
 }
 
 .resize-handle:hover {
@@ -1046,14 +1110,14 @@ button:disabled {
   min-width: 0;
   overflow-y: auto;
   padding: 5px;
-  background-color: #f5f5f5;
+  background-color: #ffffff;
 }
 
 .markdown-content {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.6;
   color: #000000;
-  background-color: #f5f5f5;
+  background-color: #ffffff;
   user-select: text;
   padding: 10px;
   cursor: text;
@@ -1128,12 +1192,13 @@ button:disabled {
   right: -400px;
   width: 400px;
   height: 100%;
-  background-color: white;
+  background-color: #ffffff;
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
   transition: right 0.3s ease;
   z-index: 100;
   display: flex;
   flex-direction: column;
+  border-left: 1px solid #e9ecef;
 }
 
 .notes-panel-visible {
@@ -1141,13 +1206,19 @@ button:disabled {
 }
 
 .notes-header {
-  padding: 15px 20px;
-  height: 19px;
-  background-color: #2c3e50;
+  padding: 12px 16px;
+  background-color: #4dabf7;
   color: white;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.notes-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
 }
 
 .notes-content {
@@ -1171,14 +1242,18 @@ button:disabled {
   background: none;
   border: none;
   color: white;
-  font-size: 20px;
   cursor: pointer;
-  padding: 5px;
-  transition: transform 0.2s;
+  padding: 4px;
+  border-radius: 50%;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .close-btn:hover {
-  transform: scale(1.1);
+  background-color: rgba(255, 255, 255, 0.2);
+  transform: rotate(90deg);
 }
 
 .note-added-bubble {
