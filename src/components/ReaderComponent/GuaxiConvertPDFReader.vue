@@ -112,13 +112,15 @@ import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
+import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { debounce } from 'lodash-es'
 
-import { marked } from 'marked'
-import katex from 'katex'
-import 'katex/dist/katex.min.css'
-import Prism from 'prismjs'
-import 'prismjs/themes/prism.css'
-import mermaid from 'mermaid'
+// import { marked } from 'marked'
+// import katex from 'katex'
+// import 'katex/dist/katex.min.css'
+// import Prism from 'prismjs'
+// import 'prismjs/themes/prism.css'
+// import mermaid from 'mermaid'
 
 import {
   ArrowBackOutline,
@@ -155,6 +157,7 @@ const props = defineProps({
 
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
+const markdownContainer = ref<HTMLElement | null>(null);
 // 缩放状态
 const zoomLevel = ref(1);
 // 添加旋转状态
@@ -173,7 +176,8 @@ const jumpPage = ref(1)
 const elements = ref([])
 // Markdown数据状态
 const markdownContent = ref('')
-const markdownLines = ref([])
+// const markdownLines = ref([])
+const markdownLines = ref<string[]>([]);
 const markdownFilePath = ref('')
 // 笔记状态
 const showNotes = ref(false)
@@ -242,62 +246,180 @@ const renderMermaid = (content) => {
   })
 }
 
-async function renderMarkdown(content, options = {}) {
-  try {
-    console.log('[DEBUG] 原始Markdown内容:', content.slice(0, 100) + (content.length > 100 ? '...' : ''));
+// async function renderMarkdown(content, options = {}) {
+//   try {
+//     console.log('[DEBUG] 原始Markdown内容:', content.slice(0, 100) + (content.length > 100 ? '...' : ''));
 
-    // 1. 配置自定义渲染器（重点修复图片对象问题）
-    const renderer = new marked.Renderer();
-    renderer.image = (href, title, text) => {
-      const src = extractImagePath(href); // 统一路径提取方法
-      return `<img src="${src}" alt="${text || ''}" class="markdown-image">`;
-    };
+//     // 1. 配置自定义渲染器（重点修复图片对象问题）
+//     const renderer = new marked.Renderer();
+//     renderer.image = (href, title, text) => {
+//       const src = extractImagePath(href); // 统一路径提取方法
+//       return `<img src="${src}" alt="${text || ''}" class="markdown-image">`;
+//     };
 
-    marked.use({
-      renderer,
-      async: true,
-      breaks: true,
-      gfm: true,
-      highlight: (code, lang) => {
-        if (Prism.languages[lang]) {
-          return Prism.highlight(code, Prism.languages[lang], lang);
-        }
-        return code;
+//     marked.use({
+//       renderer,
+//       async: true,
+//       breaks: true,
+//       gfm: true,
+//       highlight: (code, lang) => {
+//         if (Prism.languages[lang]) {
+//           return Prism.highlight(code, Prism.languages[lang], lang);
+//         }
+//         return code;
+//       }
+//     });
+
+//     // 2. 强化图片路径处理
+//     const processedContent = await processImages(content, options.libraryBasePath);
+//     console.log('[DEBUG] 处理后内容预览:', processedContent.slice(0, 200));
+
+//     // 3. 安全解析
+//     let html = await marked.parse(processedContent);
+//     if (typeof html !== 'string') {
+//       throw new Error(`渲染结果类型异常: ${typeof html}`);
+//     }
+
+//     // 4. 渲染数学公式
+//     html = renderMath(html);
+
+//     // 5. 渲染mermaid图表
+//     html = renderMermaid(html);
+
+//     // 6. 渲染代码块
+//     html = renderCodeBlocks(html);
+
+//     // 添加表格样式
+//     html = html.replace(
+//       /<table>/g,
+//       '<table style="border-collapse: collapse; width: 100%;">'
+//     );
+//     html = html.replace(
+//       /<th>/g,
+//       '<th style="border: 1px solid black; padding: 8px; background: linear-gradient(to right, #7e807f, #7e806f); color: white; font-weight: bold; border-radius: 4px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); transition: background-color 0.3s ease;">'
+//     );
+//     html = html.replace(
+//       /<td>/g,
+//       '<td style="border: 1px solid black; padding: 8px; background-color: #f9f9f9; color: #333;">'
+//     );
+
+//     // 创建临时DOM元素来解析HTML
+//     const tempDiv = document.createElement('div');
+//     tempDiv.innerHTML = html;
+
+//     // 递归遍历DOM节点并拆分
+//     const splitByNodes = (node) => {
+//       const result = [];
+
+//       // 处理文本节点
+//       if (node.nodeType === Node.TEXT_NODE) {
+//         const text = node.textContent.trim();
+//         if (text) {
+//           result.push({
+//             raw: text,
+//             html: text
+//           });
+//         }
+//         return result;
+//       }
+
+//       // 处理元素节点
+//       if (node.nodeType === Node.ELEMENT_NODE) {
+//         // 特殊处理这些元素，保持其完整性
+//         const keepWholeTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+//           'img', 'table', 'pre', 'code', 'div.katex-display',
+//           'span.katex-inline', 'div.mermaid'];
+
+//         if (keepWholeTags.some(tag => node.matches(tag))) {
+//           const outerHTML = node.outerHTML;
+//           result.push({
+//             raw: outerHTML,
+//             html: outerHTML
+//           });
+//           return result;
+//         }
+
+//         // 递归处理子节点
+//         for (const child of node.childNodes) {
+//           result.push(...splitByNodes(child));
+//         }
+//         return result;
+//       }
+
+//       return result;
+//     };
+
+//     // 从临时div的子节点开始处理
+//     const lines = [];
+//     for (const child of tempDiv.childNodes) {
+//       lines.push(...splitByNodes(child));
+//     }
+
+//     nextTick(() => {
+//       Prism.highlightAll();
+//       mermaid.run();
+//     });
+
+//     return lines;
+
+//   } catch (error) {
+//     console.error('[ERROR] 渲染失败:', error);
+//     return [{
+//       raw: content,
+//       html: `<div class="render-error">${error.message}</div>`
+//     }];
+//   }
+// }
+
+// 辅助函数：统一提取图片路径
+function extractImagePath(href) {
+  if (!href) return '';
+  // 处理新版marked返回的对象路径
+  if (typeof href === 'object' && href.href) return href.href;
+  // 处理字符串路径
+  if (typeof href === 'string') return href;
+  console.warn('[WARN] 未知图片路径格式:', href);
+  return '';
+}
+
+async function processImages(content, basePath = '') {
+  const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
+  const replacements = [];
+
+  for (const match of content.matchAll(imgRegex)) {
+    const [full, alt, src] = match;
+    if (!src.match(/^(http|\/|data:image)/i)) {
+      try {
+        const fullPath = await join(basePath, src);
+        const safeSrc = await convertFileSrc(fullPath);
+        replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
+      } catch (error) {
+        console.warn(`路径转换失败: ${src}`, error);
       }
+    }
+  }
+  return replacements.reduce((result, { from, to }) => result.replace(from, to), content);
+}
+
+
+// 防抖渲染
+async function convertPdfRenderMarkdown(content, options = {}) {
+  const processedContent = await processImages(content, options.libraryBasePath);
+  try {
+    let html = await renderMarkdown(processedContent, {
+      basePath: "",
+      mermaid: true,
+      math: true,
+      codeHighlight: true,
+      theme: 'default'
     });
 
-    // 2. 强化图片路径处理
-    const processedContent = await processImages(content, options.libraryBasePath);
-    console.log('[DEBUG] 处理后内容预览:', processedContent.slice(0, 200));
-
-    // 3. 安全解析
-    let html = await marked.parse(processedContent);
-    if (typeof html !== 'string') {
-      throw new Error(`渲染结果类型异常: ${typeof html}`);
-    }
-
-    // 4. 渲染数学公式
-    html = renderMath(html);
-
-    // 5. 渲染mermaid图表
-    html = renderMermaid(html);
-
-    // 6. 渲染代码块
-    html = renderCodeBlocks(html);
-
-    // 添加表格样式
-    html = html.replace(
-      /<table>/g,
-      '<table style="border-collapse: collapse; width: 100%;">'
-    );
-    html = html.replace(
-      /<th>/g,
-      '<th style="border: 1px solid black; padding: 8px; background: linear-gradient(to right, #7e807f, #7e806f); color: white; font-weight: bold; border-radius: 4px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); transition: background-color 0.3s ease;">'
-    );
-    html = html.replace(
-      /<td>/g,
-      '<td style="border: 1px solid black; padding: 8px; background-color: #f9f9f9; color: #333;">'
-    );
+    // 确保DOM更新后添加按钮
+    nextTick(() => {
+      if (markdownContainer.value) {
+        addCopyButtons(markdownContainer.value);
+      }
+    });
 
     // 创建临时DOM元素来解析HTML
     const tempDiv = document.createElement('div');
@@ -351,13 +473,7 @@ async function renderMarkdown(content, options = {}) {
       lines.push(...splitByNodes(child));
     }
 
-    nextTick(() => {
-      Prism.highlightAll();
-      mermaid.run();
-    });
-
     return lines;
-
   } catch (error) {
     console.error('[ERROR] 渲染失败:', error);
     return [{
@@ -365,36 +481,6 @@ async function renderMarkdown(content, options = {}) {
       html: `<div class="render-error">${error.message}</div>`
     }];
   }
-}
-
-// 辅助函数：统一提取图片路径
-function extractImagePath(href) {
-  if (!href) return '';
-  // 处理新版marked返回的对象路径
-  if (typeof href === 'object' && href.href) return href.href;
-  // 处理字符串路径
-  if (typeof href === 'string') return href;
-  console.warn('[WARN] 未知图片路径格式:', href);
-  return '';
-}
-
-async function processImages(content, basePath = '') {
-  const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
-  const replacements = [];
-
-  for (const match of content.matchAll(imgRegex)) {
-    const [full, alt, src] = match;
-    if (!src.match(/^(http|\/|data:image)/i)) {
-      try {
-        const fullPath = await join(basePath, src);
-        const safeSrc = await convertFileSrc(fullPath);
-        replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
-      } catch (error) {
-        console.warn(`路径转换失败: ${src}`, error);
-      }
-    }
-  }
-  return replacements.reduce((result, { from, to }) => result.replace(from, to), content);
 }
 
 const renderedMarkdown = computed(() => {
@@ -658,7 +744,7 @@ const loadMarkdownPage = async (pageNum: number) => {
     // markdownLines.value = await renderMarkdown(markdownContent.value, {
     //   libraryBasePath: mdDir
     // });
-    markdownLines.value = await renderMarkdown(markdownContent.value,
+    markdownLines.value = await convertPdfRenderMarkdown(markdownContent.value,
       { libraryBasePath: mdDir }
     );
     console.log("markdownLines.value:", markdownLines.value);
@@ -846,14 +932,14 @@ onMounted(() => {
       fitToWidth(); // 初始加载时自动适合宽度
     }, 100);
   });
-  mermaid.initialize({
-    startOnLoad: true,
-    theme: 'default', // 使用默认主题
-    flowchart: {
-      useMaxWidth: false, // 禁用最大宽度限制
-      htmlLabels: true, // 使用 HTML 标签
-    },
-  })
+  // mermaid.initialize({
+  //   startOnLoad: true,
+  //   theme: 'default', // 使用默认主题
+  //   flowchart: {
+  //     useMaxWidth: false, // 禁用最大宽度限制
+  //     htmlLabels: true, // 使用 HTML 标签
+  //   },
+  // })
 });
 
 onBeforeUnmount(() => {
@@ -1279,5 +1365,96 @@ button:disabled {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+</style>
+
+<style>
+/* 数学公式样式 */
+.math-inline {
+  display: inline;
+  vertical-align: middle;
+}
+
+.math-block {
+  display: block;
+  text-align: center;
+  margin: 1rem 0;
+}
+
+/* Mermaid图表样式 */
+.mermaid {
+  background-color: white;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 1em 0;
+  text-align: center;
+}
+
+.dark .mermaid {
+  background-color: #2d2d2d;
+}
+
+/* 代码块样式 */
+.hljs {
+  position: relative;
+  border-radius: 6px;
+  padding: 1.5em 1em !important;
+  font-family: 'JetBrainsMono Nerd Font Mono', monospace;
+  background: #f6f8fa !important;
+  border: 1px solid #e1e4e8;
+  margin: 1em 0;
+}
+
+/* 代码块复制按钮 */
+.hljs::before {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  padding: 2px 8px;
+  font-size: 12px;
+  background: #e1e4e8;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.hljs:hover::before {
+  opacity: 1;
+}
+
+/* 暗色模式代码块 */
+.dark .hljs {
+  background: #2d2d2d !important;
+  border-color: #444;
+}
+
+.dark .hljs::before {
+  background: #444;
+  color: #fff;
+}
+
+
+/* 复制按钮图标样式 */
+.copy-button svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+}
+
+/* 复制按钮悬停效果 */
+.hljs:hover .copy-button {
+  opacity: 1 !important;
+}
+
+/* 暗色模式适配 */
+.dark .copy-button {
+  background: rgba(60, 60, 60, 0.8) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #eee !important;
+}
+
+.dark .copy-button svg {
+  fill: #eee;
 }
 </style>
