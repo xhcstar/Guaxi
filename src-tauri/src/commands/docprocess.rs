@@ -1,13 +1,13 @@
+use pdfium_render::prelude::*;
 use pyo3::prelude::*;
 use pyo3::types::PyList; // 导入 PyList 类型
 use serde::{Deserialize, Serialize};
+use std::io::Cursor;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tauri::{Emitter, Window};
 use tracing::{error, info};
-use pdfium_render::prelude::*;
-use std::io::Cursor;
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -54,10 +54,9 @@ pub struct PdfPageResponse {
     page_number: usize,
     total_pages: usize,
     elements: Vec<PdfElement>,
-    image_data: String,  // Add this field for base64 encoded image
+    image_data: String, // Add this field for base64 encoded image
     error: Option<String>,
 }
-
 
 #[derive(Debug, Serialize)]
 pub struct MarkdownResponse {
@@ -74,20 +73,21 @@ pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownRes
             // 使用更精确的分页符匹配
             let pages: Vec<&str> = content.split("\n{").collect();
             let page_content = if page < pages.len() {
-                pages[page].trim_start_matches(|c: char| c.is_numeric())
+                pages[page]
+                    .trim_start_matches(|c: char| c.is_numeric())
                     .trim_start_matches('}')
                     .trim_start_matches('-')
                     .trim()
             } else {
                 ""
             };
-            
+
             MarkdownResponse {
                 success: true,
                 content: page_content.to_string(),
                 error: None,
             }
-        },
+        }
         Err(e) => MarkdownResponse {
             success: false,
             content: String::new(),
@@ -97,34 +97,42 @@ pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownRes
 }
 
 #[tauri::command]
-pub async fn get_converted_pdf_page(
-    request: serde_json::Value
-) -> Result<String, String> {
+pub async fn get_converted_pdf_page(request: serde_json::Value) -> Result<String, String> {
     let filepath = request["filepath"].as_str().ok_or("Missing filepath")?;
     let curpage = request["curpage"].as_u64().ok_or("Invalid page number")? as usize;
 
     let pdfium = Pdfium::new(
         Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("../../libs"))
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?,
     );
 
-    let document = pdfium.load_pdf_from_file(filepath, None)
+    let document = pdfium
+        .load_pdf_from_file(filepath, None)
         .map_err(|e| e.to_string())?;
 
     let total_pages = document.pages().len() as usize;
-    let page = document.pages().get((curpage - 1).try_into().map_err(|_| "Page number conversion failed")?)
+    let page = document
+        .pages()
+        .get(
+            (curpage - 1)
+                .try_into()
+                .map_err(|_| "Page number conversion failed")?,
+        )
         .map_err(|_| format!("Page {} out of bounds", curpage))?;
 
     let render_config = PdfRenderConfig::new()
         .set_target_width(1200)
         .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
 
-    let image = page.render_with_config(&render_config)
+    let image = page
+        .render_with_config(&render_config)
         .map_err(|e| format!("Failed to render page: {}", e))?;
 
     let mut bytes = Vec::new();
     let mut cursor = Cursor::new(&mut bytes);
-    image.as_image().into_rgb8()
+    image
+        .as_image()
+        .into_rgb8()
         .write_to(&mut cursor, image::ImageFormat::Png)
         .map_err(|e| format!("Failed to encode image: {}", e))?;
 
@@ -138,7 +146,6 @@ pub async fn get_converted_pdf_page(
 
     serde_json::to_string(&response).map_err(|e| e.to_string())
 }
-
 
 #[tauri::command]
 pub async fn check_file_converted(
