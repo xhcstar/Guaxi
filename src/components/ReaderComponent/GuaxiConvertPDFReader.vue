@@ -113,14 +113,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
-import { debounce } from 'lodash-es'
 
-// import { marked } from 'marked'
-// import katex from 'katex'
-// import 'katex/dist/katex.min.css'
-// import Prism from 'prismjs'
-// import 'prismjs/themes/prism.css'
-// import mermaid from 'mermaid'
 
 import {
   ArrowBackOutline,
@@ -401,8 +394,6 @@ async function processImages(content, basePath = '') {
   return replacements.reduce((result, { from, to }) => result.replace(from, to), content);
 }
 
-
-// 防抖渲染
 async function convertPdfRenderMarkdown(content, options = {}) {
   const processedContent = await processImages(content, options.libraryBasePath);
   try {
