@@ -11,7 +11,7 @@
         <n-avatar v-if="message.sender === 'me'" :src="activeChat.MeAvatar" size="medium" round />
         <n-avatar v-else :src="activeChat.ModelAvatar" size="medium" round />
         <div class="message-bubble">
-          <div class="message-content" v-html="renderMarkdown(message.content)"></div>
+          <div class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
         </div>
       </div>
 
@@ -38,47 +38,19 @@
   </div>
 </template>
 
-<script setup>
-import { ref, nextTick, computed, onMounted } from 'vue'
-import { marked } from 'marked';
-import katex from 'katex'; // 导入 KaTeX 库
-import 'katex/dist/katex.min.css'; // 导入 KaTeX 样式
-import Prism from 'prismjs';
-
-import 'prismjs/components/prism-python.min.js';  // 引入 Python 支持
-import 'prismjs/components/prism-c.min.js'
-import 'prismjs/components/prism-cpp.min.js'
-import 'prismjs/components/prism-markdown.min.js'
-import 'prismjs/components/prism-rust.min.js'
-
-import 'prismjs/components/prism-bash.min.js'
-import 'prismjs/components/prism-lua.min.js'
-import 'prismjs/components/prism-java.min.js'
-import 'prismjs/components/prism-powershell.min.js'
-import 'prismjs/components/prism-git.min.js'
-import 'prismjs/components/prism-toml.min.js'
-import 'prismjs/components/prism-yaml.min.js'
-import 'prismjs/components/prism-sql.min.js'
-import 'prismjs/components/prism-qml.min.js'
-
-import 'prismjs/components/prism-perl.min.js'
-import 'prismjs/components/prism-diff.min.js'
-import 'prismjs/components/prism-css.min.js'
-import 'prismjs/components/prism-csharp.min.js'
-import 'prismjs/components/prism-go.min.js'
-import 'prismjs/components/prism-log.min.js'
-import 'prismjs/components/prism-latex.min.js'
-import 'prismjs/components/prism-json.min.js'
-import 'prismjs/components/prism-asciidoc.min.js'
-import 'prismjs/components/prism-cmake.min.js'
-import 'prismjs/themes/prism.css';  // 引入 Prism 默认样式
+<script setup lang="ts">
+import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { addCopyButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
 
 
 const chatStore = useChatStore();
 const messageInput = ref(""); // 用户输入的消息
+let unsubscribe: (() => void) | null = null;
+const messageRefs = ref<HTMLElement[]>([]);
+
 
 // 当前激活的聊天会话
 const activeChat = computed(() =>
@@ -87,6 +59,7 @@ const activeChat = computed(() =>
 
 // 当前会话的消息记录
 const activeChatMessages = computed(() => activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []);
+
 
 // 滚动到最新消息
 const messageContainer = ref(null);
@@ -129,6 +102,7 @@ const sendMessage = async () => {
 
   messageInput.value = ""; // 清空输入框
   scrollToBottom(); // 滚动到底部
+  chatStore.accumulatedMessage = '';
 
   // 更新当前会话的消息记录
   try {
@@ -152,18 +126,6 @@ const handleKeydown = (event) => {
     sendMessage();
   }
 };
-
-// 初次加载后滚动到底部
-onMounted(() => {
-  listen("modle-streaming-respond-output", (event) => {
-    const message = event.payload;
-
-    console.log('get modle-streaming-respond-output:', event);
-    console.log('message:', message);
-    chatStore.collectChatSessionStream(message);
-  });
-  scrollToBottom();
-});
 
 let startY = 0;
 let startHeight = 0;
@@ -206,71 +168,40 @@ const stopResize = () => {
   document.body.style.userSelect = '';
 };
 
-function renderMarkdown(content) {
-  nextTick(() => {
-    Prism.highlightAll();
+onMounted(() => {
+  unsubscribe = listen("modle-streaming-respond-output", (event) => {
+    chatStore.collectChatSessionStream(event.payload);
+  }).then((unsubFn) => {
+    unsubscribe = unsubFn;
+  }).catch((err) => {
+    console.error('监听事件失败:', err);
+    unsubscribe = null;
   });
+});
 
-  console.log('content:', content);
-  // 先将 Markdown 转换为 HTML
-  let html = marked(content);
+onUnmounted(() => {
+  if (unsubscribe && typeof unsubscribe === 'function') {
+    unsubscribe(); // 清理监听器
+  }
+});
 
-  console.log('htmlmark:', html);
-  // 渲染数学公式
-  html = renderMath(html);
-  console.log('htmlmath:', html);
-  // 渲染代码块
-  html = renderCodeBlocks(html);
-
-  return html;
-}
-
-function renderMath(html) {
-  // 匹配 LaTeX 表达式，包括以下情况：
-  // 1. $$...$$ 块级公式
-  // 2. $...$ 内联公式
-  // 3. [ ... ] 标记的公式
-  // 4. (\ ... \) 标记的公式
-  const latexRegex = /\$\$(.+?)\$\$|\$(.+?)\$|\[(.+?)\]|\(\s*\\(.+?)\s*\)/g;
-
-  html = html.replace(latexRegex, (match, blockMath, inlineMath, bracketMath, parenMath) => {
-    let mathContent = blockMath || inlineMath || bracketMath || parenMath;
-    try {
-      // 根据类型选择块级或内联渲染
-      if (blockMath) {
-        return `<div class="katex-display">${katex.renderToString(mathContent)}</div>`;
-      } else {
-        return `<span class="katex-inline">${katex.renderToString(mathContent)}</span>`;
-      }
-    } catch (e) {
-      console.error("KaTeX 渲染错误：", e);
-      return match; // 如果渲染失败，返回原始文本
-    }
-  });
-
-  return html;
-}
-
-const renderCodeBlocks = (content) => {
-  const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
-
-  codeBlocks.forEach((block) => {
-    const language = block.match(/```(\w+)\n/);  // 获取语言类型
-    if (language && language[1]) {
-      const lang = language[1].toLowerCase();
-      if (Prism.languages[lang]) {
-        block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
-          const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
-          return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
-        });
-      }
-    }
-  });
-
-  return content.replace(/```[\s\S]+?```/g, (block) => {
-    return `<pre class="code-block">${block}</pre>`;
-  });
+const setMessageRef = (el: HTMLElement | null, index: number) => {
+  if (el) {
+    messageRefs.value[index] = el;
+  }
 };
+
+watch(setMessageRef, () => {
+  console.log('activeChatMessages changed:');
+  nextTick(() => {
+    messageRefs.value.forEach(container => {
+      if (container) {
+        addCopyButtons(container);
+      }
+    });
+  });
+});
+
 </script>
 
 <style scoped>
@@ -334,14 +265,16 @@ const renderCodeBlocks = (content) => {
 .message-left .message-bubble {
   background-color: #f0f0f0;
   font-size: 16px;
-  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; /* 使用等宽字体 */
+  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  /* 使用等宽字体 */
   border-top-left-radius: 0;
 }
 
 .message-right .message-bubble {
   background-color: #5acaa5;
   font-size: 16px;
-  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; /* 使用等宽字体 */
+  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  /* 使用等宽字体 */
   color: white;
   border-top-right-radius: 0;
 }
@@ -357,7 +290,8 @@ const renderCodeBlocks = (content) => {
   min-height: 80px;
   /* 设置最小高度 */
   font-size: 16px;
-  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; /* 使用等宽字体 */
+  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  /* 使用等宽字体 */
 }
 
 .chat-input-height-handle {
@@ -366,31 +300,5 @@ const renderCodeBlocks = (content) => {
   height: 2px;
   cursor: ns-resize;
   background-color: #aab4ae;
-}
-
-.katex-display {
-  display: block;
-  margin: 10px 0;
-}
-
-.katex-inline {
-  font-size: 1.2em;
-  margin-left: 5px;
-  margin-right: 5px;
-}
-
-/* 代码块滚动区域样式 */
-.code-block {
-  background-color: #2d2d2d;
-  color: #f8f8f2;
-  padding: 16px;
-  border-radius: 4px;
-  overflow-x: auto;
-  max-height: 300px;
-  white-space: pre-wrap;
-  /* 保持代码格式 */
-  word-wrap: break-word;
-  font-family: 'Courier New', monospace;
-  margin-top: 10px;
 }
 </style>

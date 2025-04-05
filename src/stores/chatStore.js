@@ -1,4 +1,7 @@
 import { defineStore } from "pinia";
+import { renderMarkdown } from "../components/GuaxiMarkdownRender/GuaxiMarker";
+import { nextTick } from 'vue'
+import { debounce } from "lodash-es";
 
 export const useChatStore = defineStore("chatStore", {
   state: () => ({
@@ -163,6 +166,10 @@ export const useChatStore = defineStore("chatStore", {
         { name: "Local-DeepSeek", selectedModel: "6" },
       ],
     },
+
+    lastMessage: null,
+    lastMessageTime: 0,
+    accumulatedMessage: "",
   }),
   actions: {
     // 更新激活的会话 ID
@@ -179,15 +186,15 @@ export const useChatStore = defineStore("chatStore", {
     },
 
     updateChatSession(answer) {
-      console.log("answer", answer);
-      console.log("this.selectedModel", this.selectedModel);
-      console.log("this.selectedTopic", this.selectedTopic);
+      // console.log("answer", answer);
+      // console.log("this.selectedModel", this.selectedModel);
+      // console.log("this.selectedTopic", this.selectedTopic);
       this.SelectModelchatSessions.find((session) => {
-        console.log("session", session);
+        // console.log("session", session);
         if (session.id === this.selectedModel) {
           session.MessagesList.find((topicitem) => {
             if (topicitem.topicid === this.selectedTopic) {
-              console.log("topicitem", topicitem);
+              // console.log("topicitem", topicitem);
               topicitem.topic.push({
                 msgid: topicitem.topic.length + 1,
                 sender: session.name,
@@ -200,35 +207,72 @@ export const useChatStore = defineStore("chatStore", {
         }
       });
     },
+    collectChatSessionStream(message) {
+      const now = Date.now();
 
-    collectChatSessionStream(answer) {
-      console.log("answer", answer);
-      console.log("this.selectedModel", this.selectedModel);
-      console.log("this.selectedTopic", this.selectedTopic);
+      if (message === this.lastMessage && now - this.lastMessageTime < 100) {
+        return;
+      }
+      // console.log("message", message);
+
+      this.lastMessage = message;
+      this.lastMessageTime = now;
+
+      if (typeof message === "string" && message.length > 0) {
+        const processedMessage = message
+          .replace(/(\s*)\$(\s*)/g, "$")
+          .replace(/(\s*)\$\$(\s*)/g, "$$");
+
+        this.accumulatedMessage += processedMessage;
+        this.updateMessageContent();
+      }
+    },
+
+    updateMessageContent() {
       this.SelectModelchatSessions.find((session) => {
-        console.log("session", session);
         if (session.id === this.selectedModel) {
           session.MessagesList.find((topicitem) => {
             if (topicitem.topicid === this.selectedTopic) {
-              console.log("topicitem", topicitem);
-              const latestTopic = topicitem.topic[topicitem.topic.length - 1]; // 获取最后一个消息条目
-              // 检查是否已经有内容
+              const latestTopic = topicitem.topic[topicitem.topic.length - 1];
               if (latestTopic && latestTopic.sender !== "me") {
-                latestTopic.content += `${answer}`;
+                this.renderDebounced(this.accumulatedMessage).then(
+                  (renderedMessage) => {
+                    latestTopic.content = renderedMessage;
+                  }
+                );
               } else {
-                // 如果没有消息条目，就创建一个新的
+                console.log(
+                  ">>>>>>>>>>>>>>>>>>>>>>>>>>> accumulatedMessage",
+                  this.accumulatedMessage
+                );
                 topicitem.topic.push({
                   msgid: topicitem.topic.length,
                   sender: session.name,
-                  content: answer,
+                  content: this.accumulatedMessage,
                 });
+                this.accumulatedMessage = "";
               }
-              answer = "";
             }
           });
         }
       });
     },
+
+    // 保留防抖渲染方法
+    renderDebounced: debounce(async function (content) {
+      try {
+        return await renderMarkdown(content, {
+          basePath: "",
+          mermaid: true,
+          math: true,
+          codeHighlight: true,
+          theme: "default",
+        });
+      } catch (error) {
+        console.error("渲染错误:", error);
+        return `<div class="render-error">${content}</div>`;
+      }
+    }, 100),
 
     addChatSession() {
       this.SelectModelchatSessions.find((session) => {

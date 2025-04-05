@@ -632,7 +632,7 @@ pub async fn get_answer_from_local_qwen_stream(
     };
 
     let request_body = json!({
-        "model": "qwen2.5:latest",
+        "model": "qwq:latest",
         "messages": [{"role": "user", "content": question}],
         "stream": true,  // 启用流式传输
     });
@@ -776,6 +776,7 @@ pub async fn get_answer_from_local_deepseek_stream(
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
+    let mut last_emitted = String::new(); // 新增：记录上次发送的内容
 
     // 流式输出数据
     while let Some(chunk) = stream.next().await {
@@ -789,6 +790,8 @@ pub async fn get_answer_from_local_deepseek_stream(
                     "get_answer_from_local_deepseek_stream: origin buffer: {:?}",
                     buffer
                 );
+
+                // 跳过特定字符的情况保持不变
                 if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
                     continue;
                 }
@@ -806,13 +809,16 @@ pub async fn get_answer_from_local_deepseek_stream(
                     buffer = re_inline.replace_all(&buffer, "$").to_string();
                 }
 
-                app.emit("modle-streaming-respond-output", &buffer)
-                    .map_err(|e| e.to_string())?;
-                info!(
-                    "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
-                    buffer
-                );
-                debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
+                // 新增：只有内容变化时才发送
+                if buffer != last_emitted && !buffer.is_empty() {
+                    app.emit("modle-streaming-respond-output", &buffer)
+                        .map_err(|e| e.to_string())?;
+                    last_emitted = buffer.clone(); // 更新最后发送的内容
+                    debug!(
+                        "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
+                        buffer
+                    );
+                }
 
                 buffer.clear();
             }
@@ -832,13 +838,16 @@ pub async fn get_answer_from_local_deepseek_stream(
         buffer = re_block.replace_all(&buffer, "$$").to_string();
         buffer = re_inline.replace_all(&buffer, "$").to_string();
 
-        // 触发事件处理剩余数据
-        app.emit("modle-streaming-respond-output", &buffer)
-            .map_err(|e| e.to_string())?;
-        debug!(
-            "get_answer_from_local_deepseek_stream: Emitting remaining buffered data: {}",
-            buffer
-        );
+        if buffer != last_emitted && !buffer.is_empty() {
+            // 触发事件处理剩余数据
+            app.emit("modle-streaming-respond-output", &buffer)
+                .map_err(|e| e.to_string())?;
+            debug!(
+                "get_answer_from_local_deepseek_stream: Emitting remaining buffered data: {}",
+                buffer
+            );
+        }
+
         debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
     }
 

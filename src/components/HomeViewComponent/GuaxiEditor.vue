@@ -25,7 +25,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
-import { NTooltip, NIcon } from 'naive-ui'
+import { NTooltip, NIcon, useMessage } from 'naive-ui'
 import { EyeOutline, PencilOutline } from '@vicons/ionicons5'
 import { dirname } from '@tauri-apps/api/path'
 import * as monaco from 'monaco-editor'
@@ -43,6 +43,8 @@ const selectedFile = computed(() => fileTreeStore.selectedFile)
 // 定义 rawContent 变量
 const rawContent = ref(selectedFile.value?.content || '')
 
+const message = useMessage() // 使用消息提示
+
 // 初始化编辑器
 const initEditor = () => {
   if (!editorContainer.value) {
@@ -59,7 +61,7 @@ const initEditor = () => {
     lineNumbers: 'on',
     scrollBeyondLastLine: false,
     fontSize: 18,
-    fontFamily: "'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
+    fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
     fontLigatures: true,
   });
 
@@ -88,7 +90,7 @@ const saveContent = () => {
   if (selectedFile.value && editor) {
     const content = editor.getValue();
     fileTreeStore.updateFileContent(selectedFile.value.path, content);
-    console.log('内容已保存');
+    message.info('修改已保存');
   }
 };
 
@@ -248,11 +250,11 @@ onUnmounted(() => {
 
 .preview {
   flex: 1;
-  height: calc(100% - 28px);
+  height: calc(100% - 25px);
   /* 调整高度 */
   padding: 8px;
   font-size: 17px;
-  font-family: 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   line-height: 1.6;
   overflow-y: auto;
 }
@@ -317,7 +319,8 @@ onUnmounted(() => {
   position: relative;
   border-radius: 6px;
   padding: 1.5em 1em !important;
-  font-family: 'JetBrainsMono Nerd Font Mono', monospace;
+  font-size: 17px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
   background: #f6f8fa !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
