@@ -216,25 +216,43 @@ onUnmounted(() => {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-end; /* 改为固定右对齐 */
   padding: 4px 8px;
-  /* 减小内边距 */
   height: 28px;
-  /* 固定高度 */
   background-color: var(--toolbar-bg, #f8f8f8);
   border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  position: sticky; /* 改为粘性定位 */
+  top: 0;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 300px; /* 设置最小宽度 */
+  z-index: 10; /* 确保在最上层 */
 }
 
 .toolbar-spacer {
   flex-grow: 1;
+  min-width: 16px; /* 添加最小间距 */
 }
 
 .mode-toggle {
   cursor: pointer;
   padding: 2px 6px;
-  /* 减小内边距 */
   border-radius: 4px;
   transition: background-color 0.2s;
+  position: relative;
+  z-index: 1;
+  white-space: nowrap;
+  flex-shrink: 0; /* 防止按钮缩小 */
+}
+
+/* 响应式处理 */
+@media (max-width: 600px) {
+  .toolbar {
+    padding: 4px;
+  }
+  .mode-toggle {
+    padding: 2px 4px;
+  }
 }
 
 .mode-toggle:hover {
@@ -251,12 +269,17 @@ onUnmounted(() => {
 .preview {
   flex: 1;
   height: calc(100% - 25px);
-  /* 调整高度 */
   padding: 8px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   line-height: 1.6;
   overflow-y: auto;
+  overflow-x: hidden; /* 添加水平溢出控制 */
+  word-wrap: break-word; /* 长单词换行 */
+}
+
+.preview code {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
 .render-error {
@@ -293,12 +316,14 @@ onUnmounted(() => {
 .math-inline {
   display: inline;
   vertical-align: middle;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
 .math-block {
   display: block;
   text-align: center;
   margin: 1rem 0;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
 /* Mermaid图表样式 */
@@ -308,10 +333,12 @@ onUnmounted(() => {
   padding: 16px;
   margin: 1em 0;
   text-align: center;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
 .dark .mermaid {
   background-color: #2d2d2d;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
 /* 代码块样式 */
@@ -324,6 +351,10 @@ onUnmounted(() => {
   background: #f6f8fa !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
+}
+
+.hljs code {
+  font-family: inherit !important;
 }
 
 /* 代码块复制按钮 */
@@ -348,11 +379,11 @@ onUnmounted(() => {
 .dark .hljs {
   background: #2d2d2d !important;
   border-color: #444;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
 }
 
-.dark .hljs::before {
-  background: #444;
-  color: #fff;
+.dark .hljs code {
+  font-family: inherit !important;
 }
 
 

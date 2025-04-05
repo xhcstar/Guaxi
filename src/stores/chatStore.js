@@ -272,7 +272,7 @@ export const useChatStore = defineStore("chatStore", {
         console.error("渲染错误:", error);
         return `<div class="render-error">${content}</div>`;
       }
-    }, 100),
+    }, 5),
 
     addChatSession() {
       this.SelectModelchatSessions.find((session) => {

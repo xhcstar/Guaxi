@@ -15,7 +15,6 @@ type RenderOptions = {
 };
 
 export const addCopyButtons = (container: HTMLElement) => {
-  console.log("addCopyButtons");
   // 移除已有按钮
   container.querySelectorAll(".copy-button").forEach((btn) => btn.remove());
 

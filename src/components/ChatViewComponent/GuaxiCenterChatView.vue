@@ -208,7 +208,7 @@ watch(setMessageRef, () => {
 .chat-container {
   width: 100%;
   height: 100%;
-  border: 1px solid #ddd;
+  border: 1px solid #ffffff;
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -219,8 +219,8 @@ watch(setMessageRef, () => {
   display: flex;
   align-items: center;
   padding: 7px 15px;
-  border-bottom: 1px solid #ddd;
-  background-color: #f8f9fa;
+  border-bottom: 1px solid #ffffff;
+  background-color: #ffffff;
 }
 
 .chat-title {
@@ -263,17 +263,17 @@ watch(setMessageRef, () => {
 }
 
 .message-left .message-bubble {
-  background-color: #f0f0f0;
+  background-color: #fdfffe;
   font-size: 16px;
-  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   /* 使用等宽字体 */
   border-top-left-radius: 0;
 }
 
 .message-right .message-bubble {
-  background-color: #5acaa5;
+  background-color: #45d6a6;
   font-size: 16px;
-  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   /* 使用等宽字体 */
   color: white;
   border-top-right-radius: 0;
@@ -289,8 +289,8 @@ watch(setMessageRef, () => {
   /* 固定输入区域的高度 */
   min-height: 80px;
   /* 设置最小高度 */
-  font-size: 16px;
-  font-family: 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  font-size: 17px;
+  font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   /* 使用等宽字体 */
 }
 
@@ -299,6 +299,139 @@ watch(setMessageRef, () => {
   width: 100%;
   height: 2px;
   cursor: ns-resize;
-  background-color: #aab4ae;
+  background-color: #ffffff;
+}
+</style>
+
+<style>
+/* 数学公式样式 */
+.math-inline {
+  display: inline;
+  vertical-align: middle;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.math-block {
+  display: block;
+  text-align: center;
+  margin: 1rem 0;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;;
+}
+
+/* Mermaid图表样式 */
+.mermaid {
+  background-color: white;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 1em 0;
+  text-align: center;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.dark .mermaid {
+  background-color: #2d2d2d;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+/* 代码块样式 */
+.hljs {
+  position: relative;
+  border-radius: 6px;
+  padding: 1.5em 1em !important;
+  font-size: 17px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  background: #f6f8fa !important;
+  border: 1px solid #e1e4e8;
+  margin: 1em 0;
+}
+
+.hljs code {
+  font-family: inherit !important;
+}
+
+/* 代码块复制按钮 */
+.hljs::before {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  padding: 2px 8px;
+  font-size: 12px;
+  background: #e1e4e8;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.hljs:hover::before {
+  opacity: 1;
+}
+
+/* 暗色模式代码块 */
+.dark .hljs {
+  background: #2d2d2d !important;
+  border-color: #444;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
+}
+
+.dark .hljs code {
+  font-family: inherit !important;
+}
+
+.dark .hljs::before {
+  background: #444;
+  color: #fff;
+}
+
+
+/* 复制按钮图标样式 */
+.copy-button svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+}
+
+/* 复制按钮悬停效果 */
+.hljs:hover .copy-button {
+  opacity: 1 !important;
+}
+
+/* 暗色模式适配 */
+.dark .copy-button {
+  background: rgba(60, 60, 60, 0.8) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #eee !important;
+}
+
+.dark .copy-button svg {
+  fill: #eee;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #ddd;
+}
+
+th, td {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: center;
+}
+
+th {
+  background-color: #f4f4f4;
+  font-weight: bold;
+}
+
+tr:nth-child(even) {
+  background-color: #f9f9f9;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
 }
 </style>

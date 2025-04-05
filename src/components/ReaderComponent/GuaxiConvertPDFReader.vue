@@ -1390,10 +1390,15 @@ button:disabled {
   position: relative;
   border-radius: 6px;
   padding: 1.5em 1em !important;
-  font-family: 'JetBrainsMono Nerd Font Mono', monospace;
+  font-size: 17px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
   background: #f6f8fa !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
+}
+
+.hljs code {
+  font-family: inherit !important;
 }
 
 /* 代码块复制按钮 */
@@ -1418,6 +1423,11 @@ button:disabled {
 .dark .hljs {
   background: #2d2d2d !important;
   border-color: #444;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
+}
+
+.dark .hljs code {
+  font-family: inherit !important;
 }
 
 .dark .hljs::before {
