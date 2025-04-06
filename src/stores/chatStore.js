@@ -241,10 +241,7 @@ export const useChatStore = defineStore("chatStore", {
                   }
                 );
               } else {
-                console.log(
-                  ">>>>>>>>>>>>>>>>>>>>>>>>>>> accumulatedMessage",
-                  this.accumulatedMessage
-                );
+                console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>> accumulatedMessage", this.accumulatedMessage);
                 topicitem.topic.push({
                   msgid: topicitem.topic.length,
                   sender: session.name,
@@ -272,7 +269,7 @@ export const useChatStore = defineStore("chatStore", {
         console.error("渲染错误:", error);
         return `<div class="render-error">${content}</div>`;
       }
-    }, 5),
+    }, 50),
 
     addChatSession() {
       this.SelectModelchatSessions.find((session) => {

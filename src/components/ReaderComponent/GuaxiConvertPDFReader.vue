@@ -1206,20 +1206,6 @@ code:not(.hljs code) {
   font-size: 0.9em;
 }
 
-/* 代码块复制按钮 */
-.hljs::before {
-  position: absolute;
-  right: 10px;
-  top: 10px;
-  padding: 2px 8px;
-  font-size: 12px;
-  background: #e1e4e8;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
 .hljs:hover::before {
   opacity: 1;
 }
@@ -1240,27 +1226,15 @@ code:not(.hljs code) {
   color: #fff;
 }
 
-
-/* 复制按钮图标样式 */
-.copy-button svg {
-  width: 14px;
-  height: 14px;
-  vertical-align: middle;
-}
-
-/* 复制按钮悬停效果 */
-.hljs:hover .copy-button {
+.copy-button {
   opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
-/* 暗色模式适配 */
 .dark .copy-button {
   background: rgba(60, 60, 60, 0.8) !important;
   border-color: rgba(255, 255, 255, 0.1) !important;
-  color: #eee !important;
 }
 
-.dark .copy-button svg {
-  fill: #eee;
-}
 </style>

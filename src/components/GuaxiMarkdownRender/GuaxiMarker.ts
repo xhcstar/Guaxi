@@ -18,24 +18,31 @@ export const addCopyButtons = (container: HTMLElement) => {
   // 移除已有按钮
   container.querySelectorAll(".copy-button").forEach((btn) => btn.remove());
 
-  // 仅添加新按钮
-  container.querySelectorAll(".hljs").forEach((codeBlock) => {
-    if (codeBlock.querySelector(".copy-button")) return;
+  // 查找所有可能的代码块容器（包括 hljs 和 pre code）
+  const codeContainers = Array.from(
+    container.querySelectorAll(".hljs, pre code")
+  );
 
+  codeContainers.forEach((codeContainer) => {
+    // 确保容器存在且没有重复按钮
+    if (!codeContainer || codeContainer.querySelector(".copy-button")) return;
+
+    // 获取实际的代码内容容器（可能是pre或.hljs）
+    const codeBlock = codeContainer.classList.contains("hljs")
+      ? codeContainer
+      : codeContainer.parentElement;
+
+    if (!codeBlock) return;
+
+    // 创建复制按钮
     const copyButton = document.createElement("button");
     copyButton.className = "copy-button";
 
     // 创建图标元素
-    const iconWrapper = document.createElement("span");
-    iconWrapper.innerHTML = `
-<svg t="1743777604650" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="2612" width="16" height="16"><path d="M833.33 767.96h-91.9c-21.73 0-39.34-17.6-39.34-39.34s17.62-39.34 39.34-39.34h91.9c8.82 0 15.98-7.18 15.98-15.98V193.8c0-8.8-7.17-15.98-15.98-15.98H353.84c-8.82 0-15.98 7.18-15.98 15.98v90.86c0 21.75-17.62 39.34-39.34 39.34s-39.34-17.6-39.34-39.34V193.8c0-52.21 42.47-94.67 94.67-94.67h479.49c52.19 0 94.67 42.45 94.67 94.67v479.49c-0.01 52.21-42.49 94.67-94.68 94.67z" fill="#333333" p-id="2613"></path><path d="M675.96 925.33H196.47c-52.19 0-94.67-42.45-94.67-94.67V351.17c0-52.21 42.47-94.67 94.67-94.67h479.49c52.19 0 94.67 42.45 94.67 94.67v479.49c-0.01 52.22-42.48 94.67-94.67 94.67zM196.47 335.19c-8.82 0-15.98 7.18-15.98 15.98v479.49c0 8.8 7.17 15.98 15.98 15.98h479.49c8.82 0 15.98-7.18 15.98-15.98V351.17c0-8.8-7.17-15.98-15.98-15.98H196.47z" fill="#333333" p-id="2614"></path></svg>
-    `;
-
     const textSpan = document.createElement("span");
     textSpan.className = "copy-button-text";
     textSpan.textContent = "复制";
 
-    copyButton.appendChild(iconWrapper);
     copyButton.appendChild(textSpan);
     copyButton.style.cssText = `
       position: absolute;
@@ -48,36 +55,25 @@ export const addCopyButtons = (container: HTMLElement) => {
       align-items: center;
       justify-content: center;
       color: rgba(0, 0, 0, 0.6);
-      background: transparent;
+      background: rgba(255, 255, 255, 0.8);
       border: none;
       cursor: pointer;
       z-index: 10;
-      opacity: 0;
-      transition: opacity 0.2s ease;
       gap: 4px;
     `;
 
-    // 鼠标悬停显示按钮
-    codeBlock.addEventListener("mouseenter", () => {
-      copyButton.style.opacity = "1";
-    });
-    codeBlock.addEventListener("mouseleave", () => {
-      copyButton.style.opacity = "0";
-    });
+    // 确保代码块容器有相对定位
+    if (!codeBlock.style.position) {
+      codeBlock.style.position = "relative";
+    }
 
-    codeBlock.style.position = "relative";
+    // 添加按钮到代码块
     codeBlock.appendChild(copyButton);
 
     copyButton.onclick = async (e) => {
       e.stopPropagation();
 
-      // 如果当前状态不是初始状态，直接恢复并返回
       if (copyButton.dataset.isCopying === "true") {
-        const originalHTML = copyButton.dataset.originalHtml;
-        if (originalHTML) {
-          copyButton.innerHTML = originalHTML;
-        }
-        delete copyButton.dataset.isCopying;
         return;
       }
 
@@ -87,39 +83,51 @@ export const addCopyButtons = (container: HTMLElement) => {
           ({ writeText }) => writeText(code)
         );
 
-        // 保存原始HTML结构
-        copyButton.dataset.originalHtml = copyButton.innerHTML;
+        // 保存原始文本
+        const originalText = textSpan.textContent;
+        copyButton.dataset.originalText = originalText;
         copyButton.dataset.isCopying = "true";
 
-        // 临时修改为"已复制"
-        copyButton.innerHTML = '<span class="copy-button-text">已复制</span>';
+        // 只修改文本内容
+        textSpan.textContent = "已复制";
 
-        // 存储定时器ID以便取消
+        // 清除之前的定时器（如果有）
+        if (copyButton.dataset.timeoutId) {
+          clearTimeout(parseInt(copyButton.dataset.timeoutId));
+        }
+
+        // 设置新的定时器
         const timeoutId = setTimeout(() => {
-          // 恢复原始HTML结构（包含图标）
-          copyButton.innerHTML = copyButton.dataset.originalHtml || "";
+          // 恢复原始文本
+          textSpan.textContent = originalText;
           delete copyButton.dataset.isCopying;
           delete copyButton.dataset.timeoutId;
-        }, 1500);
+        }, 2000);
 
         copyButton.dataset.timeoutId = timeoutId.toString();
       } catch (err) {
         console.error("复制失败:", err);
 
-        // 保存原始HTML结构
-        copyButton.dataset.originalHtml = copyButton.innerHTML;
+        // 保存原始文本
+        const originalText = textSpan.textContent;
+        copyButton.dataset.originalText = originalText;
         copyButton.dataset.isCopying = "true";
 
-        // 临时修改为"复制失败"
-        copyButton.innerHTML = '<span class="copy-button-text">复制失败</span>';
+        // 只修改文本内容
+        textSpan.textContent = "复制失败";
 
-        // 存储定时器ID以便取消
+        // 清除之前的定时器（如果有）
+        if (copyButton.dataset.timeoutId) {
+          clearTimeout(parseInt(copyButton.dataset.timeoutId));
+        }
+
+        // 设置新的定时器
         const timeoutId = setTimeout(() => {
-          // 恢复原始HTML结构（包含图标）
-          copyButton.innerHTML = copyButton.dataset.originalHtml || "";
+          // 恢复原始文本
+          textSpan.textContent = originalText;
           delete copyButton.dataset.isCopying;
           delete copyButton.dataset.timeoutId;
-        }, 1500);
+        }, 2000);
 
         copyButton.dataset.timeoutId = timeoutId.toString();
       }

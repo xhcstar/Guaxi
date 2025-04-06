@@ -19,8 +19,8 @@
 
     <div class="input-area">
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
-      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keydown="handleKeydown"
-        style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;" />
+      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keydown="handleKeydown" style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;" />
       <n-button @click="sendMessage" color="#dbe7e4"
         style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
@@ -188,19 +188,21 @@ onUnmounted(() => {
 const setMessageRef = (el: HTMLElement | null, index: number) => {
   if (el) {
     messageRefs.value[index] = el;
+    nextTick(() => {
+      addCopyButtons(el);
+    });
   }
 };
 
-watch(setMessageRef, () => {
-  console.log('activeChatMessages changed:');
-  nextTick(() => {
-    messageRefs.value.forEach(container => {
-      if (container) {
-        addCopyButtons(container);
-      }
-    });
-  });
-});
+// watch(activeChatMessages, () => {
+//   nextTick(() => {
+//     messageRefs.value.forEach(container => {
+//       if (container) {
+//         addCopyButtons(container);
+//       }
+//     });
+//   });
+// }, { deep: true });
 
 </script>
 
@@ -315,7 +317,8 @@ watch(setMessageRef, () => {
   display: block;
   text-align: center;
   margin: 1rem 0;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  ;
 }
 
 /* Mermaid图表样式 */
@@ -383,28 +386,16 @@ watch(setMessageRef, () => {
   color: #fff;
 }
 
-
-/* 复制按钮图标样式 */
-.copy-button svg {
-  width: 14px;
-  height: 14px;
-  vertical-align: middle;
-}
-
-/* 复制按钮悬停效果 */
-.hljs:hover .copy-button {
+.copy-button {
   opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 /* 暗色模式适配 */
 .dark .copy-button {
   background: rgba(60, 60, 60, 0.8) !important;
   border-color: rgba(255, 255, 255, 0.1) !important;
-  color: #eee !important;
-}
-
-.dark .copy-button svg {
-  fill: #eee;
 }
 
 table {
@@ -413,7 +404,8 @@ table {
   border: 1px solid #ddd;
 }
 
-th, td {
+th,
+td {
   border: 1px solid #ddd;
   padding: 8px;
   text-align: center;
