@@ -79,9 +79,30 @@ const initEditor = () => {
     return;
   }
 
+  // 获取文件扩展名并确定语言
+  const fileExt = selectedFile.value?.path?.split('.').pop() || 'markdown';
+  const languageMap = {
+    'js': 'javascript',
+    'ts': 'typescript',
+    'css': 'css',
+    'html': 'html',
+    'md': 'markdown',
+    'py': 'python',
+    'cpp': 'cpp',
+    'c': 'cpp',
+    'h': 'cpp',
+    'hpp': 'cpp',
+    'rs': 'rust',
+    'sh': 'shell',
+    'jsx': 'javascript',
+    'tsx': 'javascript',
+    'htm': 'html',
+  };
+  const language = languageMap[fileExt] || 'markdown';
+
   editor = monaco.editor.create(editorContainer.value, {
     value: rawContent.value,
-    language: 'markdown',
+    language: language,
     theme: 'vs',
     automaticLayout: true,  // 自动布局
     minimap: {
@@ -140,7 +161,7 @@ const initEditor = () => {
       bottom: 8  // 底部内边距
     },
     suggest: {
-      snippetsPreventQuickSuggestions: false  // 允许代码片段建议
+      snippetsPreventQuickSuggestions: true  // 允许代码片段建议
     },
     quickSuggestions: {
       other: true,
@@ -180,62 +201,74 @@ const initEditor = () => {
     });
   }
 
-  editor.onContextMenu((e) => {
-    e.event.preventDefault();
-    const menuItems = [
-      // 基础操作
-      { action: 'editor.action.clipboardCutAction', label: '剪切' },
-      { action: 'editor.action.clipboardCopyAction', label: '复制' },
-      { action: 'editor.action.clipboardPasteAction', label: '粘贴' },
-      { type: 'separator' },
-
-      // 格式相关
-      { action: 'editor.action.formatDocument', label: '格式化文档' },
-      { action: 'editor.action.commentLine', label: '注释/取消注释' },
-      { type: 'separator' },
-
-      // 自定义功能
-      {
-        label: '插入模板',
-        submenu: [
-          { action: 'insertTemplate.html', label: 'HTML模板' },
-          { action: 'insertTemplate.js', label: 'JavaScript模板' },
-          { action: 'insertTemplate.css', label: 'CSS模板' }
-        ]
-      },
-      { type: 'separator' },
-
-      // 其他功能
-      { action: 'editor.action.quickCommand', label: '命令面板' }
-    ];
-
-    // 显示自定义菜单
-    monaco.editor.showContextMenu({
-      getActions: () => menuItems,
-      getAnchor: () => ({ x: e.event.posx, y: e.event.posy }),
-      onHide: () => { }
+  // 注册自定义命令
+  const registerCommands = () => {
+    // Markdown模板命令
+    editor.addAction({
+      id: 'insert.md.template',
+      label: '插入Markdown模板',
+      run: () => {
+        const selection = editor.getSelection();
+        editor.executeEdits('', [{
+          range: selection,
+          text: '# 标题\n\n## 二级标题\n\n- 列表项1\n- 列表项2\n\n```python\n# 代码块\nprint("Hello World")\n```\n\n> 引用内容\n\n**粗体** *斜体*\n\n[链接文字](https://example.com)\n\n![图片描述](图片URL)'
+        }]);
+      }
     });
-  });
-
-  // 根据文件扩展名自动设置语言
-  const fileExt = selectedFile.value?.path?.split('.').pop() || 'markdown';
-  const languageMap = {
-    'js': 'javascript',
-    'ts': 'typescript',
-    'css': 'css',
-    'html': 'html',
-    'md': 'markdown',
-    'py': 'python',
-    'cpp': 'cpp',
-    'c': 'cpp',
-    'h': 'cpp',
-    'hpp': 'cpp',
-    'rs': 'rust',
-    'sh': 'shell',
-    'jsx': 'javascript',
-    'tsx': 'javascript',
-    'htm': 'html',
   };
+
+  // 注册自定义命令和菜单项
+  const registerContextMenu = () => {
+    // 1. 注册Markdown模板命令
+    editor.addAction({
+      id: 'insert.md.template',
+      label: '插入Markdown模板',
+      contextMenuGroupId: '2_custom',
+      contextMenuOrder: 1,
+      run: () => {
+        const selection = editor.getSelection();
+        editor.executeEdits('', [{
+          range: selection,
+          text: '# 标题\n\n## 二级标题\n\n- 列表项1\n- 列表项2\n\n```python\n# 代码块\nprint("Hello World")\n```\n\n> 引用内容\n\n**粗体** *斜体*\n\n[链接文字](https://example.com)\n\n![图片描述](图片URL)'
+        }]);
+      }
+    });
+
+    // 2. 覆盖默认上下文菜单
+    editor.onContextMenu((e) => {
+      e.event.preventDefault();
+
+      // 获取鼠标位置
+      const { posx, posy } = e.event;
+
+      // 3. 定义完整的菜单结构
+      const menuItems = [
+        // 基础编辑操作
+        { id: 'editor.action.clipboardCutAction', label: '剪切' },
+        { id: 'editor.action.clipboardCopyAction', label: '复制' },
+        { id: 'editor.action.clipboardPasteAction', label: '粘贴' },
+        { type: 'separator' },
+
+        // 自定义功能
+        { id: 'insert.md.template', label: '插入Markdown模板' },
+        { type: 'separator' },
+
+        // 其他功能
+        { id: 'editor.action.quickCommand', label: '命令面板' }
+      ];
+
+      // 4. 触发菜单显示
+      editor.focus();
+      editor.trigger('', 'editor.action.showContextMenu', {
+        anchor: { x: posx, y: posy },
+        menuItems,
+        domNode: editorContainer.value
+      });
+    });
+  };
+
+  // 初始化上下文菜单
+  registerContextMenu();
 
   editor.onDidChangeModelContent(() => {
     rawContent.value = editor.getValue()
@@ -451,7 +484,8 @@ onUnmounted(() => {
   width: 100%;
   box-sizing: border-box;
   position: relative;
-  min-width: 0; /* 允许容器缩小 */
+  min-width: 0;
+  /* 允许容器缩小 */
 }
 
 .toolbar {
@@ -463,19 +497,23 @@ onUnmounted(() => {
   height: 30px;
   background-color: var(--toolbar-bg, #f8f8f8);
   border-bottom: 1px solid var(--divider-color, #e0e0e0);
-  position: sticky; /* 改为粘性定位 */
+  position: sticky;
+  /* 改为粘性定位 */
   top: 0;
   width: 100%;
   box-sizing: border-box;
-  min-width: 0; /* 允许工具栏缩小 */
-  z-index: 10; /* 确保在最上层 */
+  min-width: 0;
+  /* 允许工具栏缩小 */
+  z-index: 10;
+  /* 确保在最上层 */
 }
 
 .toolbar-spacer {
   flex-grow: 1;
   min-width: 16px;
   /* 添加最小间距 */
-  flex-shrink: 1; /* 关键修复4: 允许间距缩小 */
+  flex-shrink: 1;
+  /* 关键修复4: 允许间距缩小 */
 }
 
 .toolbar-actions {
@@ -483,8 +521,10 @@ onUnmounted(() => {
   gap: 12px;
   /* 新增按钮间距 */
   align-items: center;
-  min-width: 0; /* 关键修复5: 允许操作区域缩小 */
-  flex-shrink: 0; /* 关键修复6: 防止按钮被压缩 */
+  min-width: 0;
+  /* 关键修复5: 允许操作区域缩小 */
+  flex-shrink: 0;
+  /* 关键修复6: 防止按钮被压缩 */
 }
 
 .mode-toggle {
