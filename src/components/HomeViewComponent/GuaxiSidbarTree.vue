@@ -1,7 +1,7 @@
 <template>
   <div class="tree-column">
     <!-- <TreeView /> -->
-     <GuaxiFileTree/>
+    <GuaxiFileTree />
   </div>
 </template>
 
@@ -15,7 +15,12 @@ import GuaxiFileTree from './GuaxiFileTree.vue';
 .tree-column {
   flex: 1;
   padding: 5px;
-  overflow-y: auto;
+  overflow: hidden;
+  /* 添加这行 */
+  display: flex;
+  /* 添加这行 */
+  flex-direction: column;
+  /* 添加这行 */
   height: 100%;
 }
 </style>

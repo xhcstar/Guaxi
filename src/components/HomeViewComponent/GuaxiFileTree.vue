@@ -3,7 +3,8 @@
     <!-- 文件树 -->
     <n-tree :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
       :expand-on-click="true" :show-line="true" @update:selected-keys="handleSelect" :node-props="RightClickMenu"
-      :on-update:expanded-keys="expandedKeys" />
+      :on-update:expanded-keys="expandedKeys" virtual-scroll :virtual-scroll-item-height="28"
+      style="height: 100%; overflow-y: auto;" />
   </div>
 
   <!-- 右键菜单 -->
