@@ -7,7 +7,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleVimMode">
-              <n-icon :component="vimMode ? TerminalOutline : CodeSlashOutline" />
+              <n-icon :component="vimMode ? LogoVimeo : Edit16Filled " />
             </n-button>
           </template>
           {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
@@ -15,7 +15,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleMode">
-              <n-icon :component="mode === 'edit' ? PencilOutline : EyeOutline" />
+              <n-icon :component="mode === 'edit' ? DocumentEdit16Regular : EyeOutline" />
             </n-button>
           </template>
           {{ mode === 'edit' ? '编辑模式' : '阅读模式' }}
@@ -39,7 +39,8 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
-import { EyeOutline, PencilOutline, TerminalOutline, CodeSlashOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo } from '@vicons/ionicons5'
+import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { debounce } from 'lodash-es'
@@ -295,6 +296,10 @@ const saveContent = () => {
     const content = editor.getValue();
     fileTreeStore.updateFileContent(selectedFile.value.path, content);
     message.info('修改已保存');
+    // 如果是vim模式，也显示保存提示
+    if (vimMode.value) {
+      message.info('修改已保存');
+    }
   }
 };
 
@@ -422,6 +427,11 @@ watch(renderedHtml, () => {
 
 // 添加Vim模式切换函数
 const toggleVimMode = () => {
+  if (mode.value === 'preview') {
+    message.warning('阅读模式下不能启用Vim编辑模式');
+    return;
+  }
+  
   vimMode.value = !vimMode.value;
 
   nextTick(() => {
