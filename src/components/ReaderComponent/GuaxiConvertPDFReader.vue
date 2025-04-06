@@ -240,7 +240,13 @@ async function convertPdfRenderMarkdown(content, options = {}) {
         // 特殊处理这些元素，保持其完整性
         const keepWholeTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
           'img', 'table', 'pre', 'code', 'div.katex-display',
-          'span.katex-inline', 'div.mermaid'];
+          'span.katex-inline', 'div.mermaid', 'svg.mermaid',
+          // 添加MathJax相关标签
+          'mjx-container', 'mjx-math', 'mjx-assistive-mml',
+          // 修改代码高亮相关标签 - 移除无效选择器
+          'div.hljs', 'code.hljs',
+          // 添加所有hljs开头的类名元素
+          '[class^="hljs-"]', '[class*=" hljs-"]'];
 
         if (keepWholeTags.some(tag => node.matches(tag))) {
           const outerHTML = node.outerHTML;
@@ -308,9 +314,9 @@ const handleMarkdownClick = (e) => {
     noteHtml = codeBlock.outerHTML; // 直接使用原始HTML
   }
   // 处理数学公式点击
-  else if (target.closest('.katex-display, .katex-inline')) {
-    selectedElement = target.closest('.katex-display, .katex-inline');
-    const mathContent = selectedElement.getAttribute('aria-label') || selectedElement.textContent || '';
+  else if (target.closest('mjx-container, mjx-math')) {
+    selectedElement = target.closest('mjx-container, mjx-math');
+    const mathContent = selectedElement.getAttribute('data-mjx-text') || selectedElement.textContent || '';
     message = `已选中数学公式: ${mathContent.substring(0, 30)}${mathContent.length > 30 ? '...' : ''}`;
     noteContent = `$$${mathContent}$$`;
     noteHtml = selectedElement.outerHTML; // 直接使用原始HTML
@@ -360,7 +366,7 @@ const handleMarkdownClick = (e) => {
     let noteType = 'text';
     if (target.tagName === 'IMG') noteType = 'image';
     else if (codeBlock) noteType = 'code';
-    else if (target.closest('.katex-display, .katex-inline')) noteType = 'math';
+    else if (target.closest('mjx-container, mjx-math')) noteType = 'math';
     else if (target.closest('.mermaid, svg')) noteType = 'diagram';
 
     addToNotes({
@@ -579,7 +585,7 @@ const addToNotes = (element) => {
   }
 
   notesContent.value += note;
-  showNotes.value = true;
+  // showNotes.value = true;
   showNoteBubbleMessage();
 }
 
@@ -987,7 +993,7 @@ button:disabled {
 
 .markdown-content {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1.6;
   color: #000000;
   background-color: #ffffff;
@@ -1236,5 +1242,4 @@ code:not(.hljs code) {
   background: rgba(60, 60, 60, 0.8) !important;
   border-color: rgba(255, 255, 255, 0.1) !important;
 }
-
 </style>
