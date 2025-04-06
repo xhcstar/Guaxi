@@ -4,9 +4,9 @@
 use tracing::info;
 use tracing_subscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
-// use tauri::command;
 
 mod commands;
+use commands::file_watcher::FileWatcher;
 
 async fn app_init() {
     // 在启动时加载配置文件
@@ -39,13 +39,17 @@ async fn main() {
     // 示例日志输出
     info!("Project started!");
     app_init().await;
+    let file_watcher = FileWatcher::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(file_watcher)
         .invoke_handler(tauri::generate_handler![
+            commands::file_watcher::start_file_watching,
+            commands::file_watcher::stop_file_watching,
             commands::chatview::get_chat_answer,
             commands::chatview::get_chat_answer_stream,
             commands::docprocess::reader_open_file,

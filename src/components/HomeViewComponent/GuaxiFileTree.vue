@@ -16,9 +16,10 @@
 import { NTree, NIcon } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
-import { h, ref, onMounted } from 'vue'
+import { h, ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { listen } from '@tauri-apps/api/event'
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
@@ -63,18 +64,6 @@ const contextMenuOptions = ref([
   },
 ])
 
-// 初始化时获取文件树数据
-onMounted(async () => {
-  await loadFileTree()
-  const treeElement = document.querySelector('.n-tree'); // 获取文件树元素
-  if (treeElement) {
-    treeElement.addEventListener('contextmenu', (e) => {
-      console.log('Tree contextmenu event triggered'); // 添加日志
-      handleTreeContextMenu(e);
-    });
-  }
-})
-
 // 加载文件树数据
 const loadFileTree = async () => {
   // console.log('初始化：开始获取文件树数据')
@@ -99,7 +88,7 @@ const loadFileTree = async () => {
 // 对文件树数据进行排序（先文件后目录）
 const sortFileTree = (tree) => {
   if (!tree || !Array.isArray(tree)) return [];  // Add null check
-  
+
   return tree.map(item => {
     if (item.children) {
       item.children = sortFileTree(item.children);
@@ -109,7 +98,7 @@ const sortFileTree = (tree) => {
     // Directories first, then files
     if (a.type === 'directory' && b.type !== 'directory') return -1;
     if (a.type !== 'directory' && b.type === 'directory') return 1;
-    
+
     // Alphabetical sorting
     return a.name.localeCompare(b.name);
   });
@@ -482,8 +471,8 @@ const selectTargetPath = async () => {
 };
 
 const refreshDirectory = async (directoryId) => {
-  console.log('刷新目录，directoryId:', directoryId);
-  console.log('文件树:', fileTree.value);
+  // console.log('刷新目录，directoryId:', directoryId);
+  // console.log('文件树:', fileTree.value);
 
   // 如果 directoryId 是根目录，刷新整个文件树
   const parentNode = findParentNode(fileTree.value, directoryId);
@@ -496,6 +485,7 @@ const refreshDirectory = async (directoryId) => {
   } else {
     // 否则刷新指定目录
     const directoryNode = findNodeById(fileTree.value, directoryId);
+    const wasExpanded = expandedKeys.value.includes(directoryNode)
     if (directoryNode && directoryNode.is_directory) {
       try {
         // 重新加载目录内容
@@ -503,6 +493,10 @@ const refreshDirectory = async (directoryId) => {
         directoryNode.children = [...fileTreeStore.fileTree];
         // 对子节点进行排序
         directoryNode.children = sortFileTree(directoryNode.children);
+        // 恢复展开状态
+        if (wasExpanded && !expandedKeys.value.includes(directoryNode)) {
+          expandedKeys.value.push(normalizedDirId)
+        }
         console.log('目录刷新成功:', directoryNode);
       } catch (error) {
         console.error('目录刷新失败:', error);
@@ -514,6 +508,182 @@ const refreshDirectory = async (directoryId) => {
 const normalizePath = (path) => {
   return path.replace(/\\/g, '/'); // 将 Windows 路径分隔符统一为 /
 };
+
+// 处理文件创建事件
+const handleFileCreated = async (filePath) => {
+  const parentPath = filePath.split('/').slice(0, -1).join('/')
+  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
+}
+
+// 处理文件删除事件
+// const handleFileRemoved = async (filePath) => {
+//   const parentPath = filePath.split('/').slice(0, -1).join('/')
+//   await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
+// }
+
+// 处理文件重命名事件
+const handleFileRenamed = async (oldPath, newPath) => {
+  try {
+    // 参数有效性检查
+    if (!newPath) {
+      console.warn('文件重命名事件参数无效:', { oldPath, newPath })
+      return
+    }
+
+    // 处理路径格式（统一使用正斜杠）
+    const normalizedNewPath = newPath.replace(/\\/g, '/')
+    const normalizedOldPath = oldPath ? oldPath.replace(/\\/g, '/') : null
+
+    // 计算父目录路径
+    const parentPath = normalizedOldPath
+      ? normalizedOldPath.split('/').slice(0, -1).join('/')
+      : normalizedNewPath.split('/').slice(0, -1).join('/')
+
+    // 刷新相关目录
+    await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
+
+    // 如果旧路径存在，还需要从树中移除旧节点
+    if (normalizedOldPath) {
+      const nodeToRemove = findNodeById(fileTree.value, normalizedOldPath)
+      if (nodeToRemove) {
+        const parentNode = findParentNode(fileTree.value, normalizedOldPath)
+        if (parentNode) {
+          parentNode.children = parentNode.children.filter(
+            child => child.id !== normalizedOldPath
+          )
+        }
+      }
+    }
+  } catch (error) {
+    console.error('处理文件重命名事件时出错:', error)
+  }
+}
+
+// 修改refreshDirectory函数以支持局部更新
+// const refreshDirectory = async (directoryId) => {
+//   console.log('刷新目录:', directoryId)
+
+//   // 如果是根目录，刷新整个文件树
+//   if (!directoryId || directoryId === fileTreeStore.activeRepoPath) {
+//     await loadFileTree()
+//     return
+//   }
+
+//   // 查找要刷新的目录节点
+//   const directoryNode = findNodeById(fileTree.value, directoryId)
+//   if (directoryNode && directoryNode.is_directory) {
+//     try {
+//       // 保存当前展开状态
+//       const wasExpanded = expandedKeys.value.includes(directoryId)
+
+//       // 重新加载目录内容
+//       await fileTreeStore.fetchFileTree(directoryId)
+//       directoryNode.children = [...fileTreeStore.fileTree]
+
+//       // 恢复展开状态
+//       if (wasExpanded && !expandedKeys.value.includes(directoryId)) {
+//         expandedKeys.value.push(directoryId)
+//       }
+
+//       console.log('目录局部刷新成功:', directoryNode)
+//     } catch (error) {
+//       console.error('目录刷新失败:', error)
+//     }
+//   }
+// }
+
+// 文件监控函数
+const setupFileWatcher = async () => {
+  // 先注册卸载钩子（必须在第一个 await 之前）
+  const unlistenRef = ref(null)
+  onUnmounted(async () => {
+    if (unlistenRef.value) {
+      await invoke('stop_file_watching')
+      unlistenRef.value()
+      console.log('文件监控已停止')
+    }
+  })
+  try {
+    console.log('开始监控目录:', fileTreeStore.activeRepoPath)
+
+    // 启动后端监控
+    await invoke('start_file_watching', {
+      path: fileTreeStore.activeRepoPath
+    })
+
+    // 监听文件变化事件
+    const unlisten = await listen('file_change', (event) => {
+      const payload = event.payload
+      console.log('文件系统变化事件:', payload)
+
+      switch (payload.kind) {
+        case 'Create':
+          console.log('文件创建事件:', payload.path)
+          handleFileCreated(payload.path)
+          break
+        case 'Remove':
+          console.log('文件删除事件:', payload.path)
+          handleFileRemoved(payload.path)
+          break
+        case 'Rename':
+          // 处理old_path可能为null的情况
+          const oldPath = payload.old_path || extractOldPathFromEvent(payload)
+          console.log('文件重命名事件:', oldPath, '->', payload.path)
+          handleFileRenamed(oldPath, payload.path)
+          break
+      }
+    })
+
+    console.log('文件监控已启动')
+  } catch (error) {
+    console.error('启动文件监控失败:', error)
+  }
+}
+
+// 辅助函数：从事件中提取旧路径（如果需要）
+const extractOldPathFromEvent = (event) => {
+  // 根据实际情况实现从事件中提取旧路径的逻辑
+  return null // 如果无法提取则返回null
+}
+
+// 优化处理文件删除事件的函数
+const handleFileRemoved = async (filePath) => {
+  const normalizedPath = normalizePath(filePath)
+  const parentPath = normalizedPath.split('/').slice(0, -1).join('/')
+
+  console.log('处理删除事件 - 文件路径:', normalizedPath, '父目录:', parentPath)
+
+  // 查找并删除节点
+  const nodeToRemove = findNodeById(fileTree.value, normalizedPath)
+  if (nodeToRemove) {
+    const parentNode = findParentNode(fileTree.value, normalizedPath)
+    if (parentNode) {
+      parentNode.children = parentNode.children.filter(child => child.id !== normalizedPath)
+      console.log('从父节点删除成功:', parentNode)
+    } else {
+      // 如果是根节点下的文件
+      fileTree.value = fileTree.value.filter(child => child.id !== normalizedPath)
+      console.log('从根节点删除成功')
+    }
+  }
+
+  // 刷新父目录
+  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
+}
+
+// 初始化时获取文件树数据
+onMounted(async () => {
+  await loadFileTree()
+  const treeElement = document.querySelector('.n-tree'); // 获取文件树元素
+  if (treeElement) {
+    treeElement.addEventListener('contextmenu', (e) => {
+      console.log('Tree contextmenu event triggered'); // 添加日志
+      handleTreeContextMenu(e);
+    });
+  }
+  // 添加文件监控
+  setupFileWatcher()
+})
 
 </script>
 
