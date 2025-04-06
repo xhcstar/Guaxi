@@ -161,7 +161,7 @@ const pdfImage = ref(null);
 const isResizing = ref(false);
 const startX = ref(0);
 const startLeftWidth = ref(0);
-const leftPanelWidth = ref('55%'); // 初始宽度
+const leftPanelWidth = ref('50%'); // 初始宽度
 // PDF数据状态
 const currentPage = ref(1)
 const totalPages = ref(0)
@@ -177,203 +177,6 @@ const showNotes = ref(false)
 const notesContent = ref('')
 // UI状态
 const showNoteBubble = ref(false)
-
-
-// 渲染数学公式
-function renderMath(html) {
-  const latexRegex = /\$\$(.+?)\$\$|\$(.+?)\$/g;
-  return html.replace(latexRegex, (match, blockMath, inlineMath) => {
-    let mathContent = blockMath || inlineMath;
-    try {
-      if (blockMath) {
-        return `<div class="katex-display">${katex.renderToString(mathContent, { throwOnError: false })}</div>`;
-      } else {
-        return `<span class="katex-inline">${katex.renderToString(mathContent, { throwOnError: false })}</span>`;
-      }
-    } catch (e) {
-      console.error("KaTeX 渲染错误：", e);
-      return match; // 如果渲染失败，返回原始文本
-    }
-  });
-}
-
-const renderCodeBlocks = (content) => {
-  const codeBlocks = content.match(/```[\s\S]+?```/g) || [];
-
-  codeBlocks.forEach((block) => {
-    const language = block.match(/```(\w+)\n/);  // 获取语言类型
-    if (language && language[1]) {
-      const lang = language[1].toLowerCase();
-      if (Prism.languages[lang]) {
-        block = block.replace(/```(\w+)\n([\s\S]+?)```/g, (match, p1, p2) => {
-          const highlightedCode = Prism.highlight(p2, Prism.languages[lang], lang);
-          return `<pre class="code-block"><code class="language-${lang}">${highlightedCode}</code></pre>`;
-        });
-      }
-    }
-  });
-
-  return content.replace(/```[\s\S]+?```/g, (block) => {
-    return `<pre class="code-block">${block}</pre>`;
-  });
-};
-
-const renderMermaid = (content) => {
-  const mermaidRegex = /```mermaid([\s\S]+?)```/g
-  return content.replace(mermaidRegex, (match, diagram) => {
-    const mermaidId = `mermaid-${Math.random().toString(36).substring(2, 9)}`
-    nextTick(() => {
-      const target = document.getElementById(mermaidId)
-      if (target) {
-        target.style.width = '100%' // 确保容器宽度占满父容器
-        target.style.height = 'auto' // 高度自适应
-        mermaid.render(mermaidId, diagram, (svgCode) => {
-          // 移除或调整 viewBox 和 max-width
-          svgCode = svgCode.replace(/viewBox="[^"]+"/, 'viewBox="0 0 100 100"')
-          svgCode = svgCode.replace(/style="[^"]+"/, 'style="width: 100%; height: auto;"')
-          target.innerHTML = svgCode
-        })
-      }
-    })
-    return `<div id="${mermaidId}" class="mermaid">${diagram}</div>`
-  })
-}
-
-// async function renderMarkdown(content, options = {}) {
-//   try {
-//     console.log('[DEBUG] 原始Markdown内容:', content.slice(0, 100) + (content.length > 100 ? '...' : ''));
-
-//     // 1. 配置自定义渲染器（重点修复图片对象问题）
-//     const renderer = new marked.Renderer();
-//     renderer.image = (href, title, text) => {
-//       const src = extractImagePath(href); // 统一路径提取方法
-//       return `<img src="${src}" alt="${text || ''}" class="markdown-image">`;
-//     };
-
-//     marked.use({
-//       renderer,
-//       async: true,
-//       breaks: true,
-//       gfm: true,
-//       highlight: (code, lang) => {
-//         if (Prism.languages[lang]) {
-//           return Prism.highlight(code, Prism.languages[lang], lang);
-//         }
-//         return code;
-//       }
-//     });
-
-//     // 2. 强化图片路径处理
-//     const processedContent = await processImages(content, options.libraryBasePath);
-//     console.log('[DEBUG] 处理后内容预览:', processedContent.slice(0, 200));
-
-//     // 3. 安全解析
-//     let html = await marked.parse(processedContent);
-//     if (typeof html !== 'string') {
-//       throw new Error(`渲染结果类型异常: ${typeof html}`);
-//     }
-
-//     // 4. 渲染数学公式
-//     html = renderMath(html);
-
-//     // 5. 渲染mermaid图表
-//     html = renderMermaid(html);
-
-//     // 6. 渲染代码块
-//     html = renderCodeBlocks(html);
-
-//     // 添加表格样式
-//     html = html.replace(
-//       /<table>/g,
-//       '<table style="border-collapse: collapse; width: 100%;">'
-//     );
-//     html = html.replace(
-//       /<th>/g,
-//       '<th style="border: 1px solid black; padding: 8px; background: linear-gradient(to right, #7e807f, #7e806f); color: white; font-weight: bold; border-radius: 4px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); transition: background-color 0.3s ease;">'
-//     );
-//     html = html.replace(
-//       /<td>/g,
-//       '<td style="border: 1px solid black; padding: 8px; background-color: #f9f9f9; color: #333;">'
-//     );
-
-//     // 创建临时DOM元素来解析HTML
-//     const tempDiv = document.createElement('div');
-//     tempDiv.innerHTML = html;
-
-//     // 递归遍历DOM节点并拆分
-//     const splitByNodes = (node) => {
-//       const result = [];
-
-//       // 处理文本节点
-//       if (node.nodeType === Node.TEXT_NODE) {
-//         const text = node.textContent.trim();
-//         if (text) {
-//           result.push({
-//             raw: text,
-//             html: text
-//           });
-//         }
-//         return result;
-//       }
-
-//       // 处理元素节点
-//       if (node.nodeType === Node.ELEMENT_NODE) {
-//         // 特殊处理这些元素，保持其完整性
-//         const keepWholeTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-//           'img', 'table', 'pre', 'code', 'div.katex-display',
-//           'span.katex-inline', 'div.mermaid'];
-
-//         if (keepWholeTags.some(tag => node.matches(tag))) {
-//           const outerHTML = node.outerHTML;
-//           result.push({
-//             raw: outerHTML,
-//             html: outerHTML
-//           });
-//           return result;
-//         }
-
-//         // 递归处理子节点
-//         for (const child of node.childNodes) {
-//           result.push(...splitByNodes(child));
-//         }
-//         return result;
-//       }
-
-//       return result;
-//     };
-
-//     // 从临时div的子节点开始处理
-//     const lines = [];
-//     for (const child of tempDiv.childNodes) {
-//       lines.push(...splitByNodes(child));
-//     }
-
-//     nextTick(() => {
-//       Prism.highlightAll();
-//       mermaid.run();
-//     });
-
-//     return lines;
-
-//   } catch (error) {
-//     console.error('[ERROR] 渲染失败:', error);
-//     return [{
-//       raw: content,
-//       html: `<div class="render-error">${error.message}</div>`
-//     }];
-//   }
-// }
-
-// 辅助函数：统一提取图片路径
-function extractImagePath(href) {
-  if (!href) return '';
-  // 处理新版marked返回的对象路径
-  if (typeof href === 'object' && href.href) return href.href;
-  // 处理字符串路径
-  if (typeof href === 'string') return href;
-  console.warn('[WARN] 未知图片路径格式:', href);
-  return '';
-}
 
 async function processImages(content, basePath = '') {
   const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
@@ -923,14 +726,6 @@ onMounted(() => {
       fitToWidth(); // 初始加载时自动适合宽度
     }, 100);
   });
-  // mermaid.initialize({
-  //   startOnLoad: true,
-  //   theme: 'default', // 使用默认主题
-  //   flowchart: {
-  //     useMaxWidth: false, // 禁用最大宽度限制
-  //     htmlLabels: true, // 使用 HTML 标签
-  //   },
-  // })
 });
 
 onBeforeUnmount(() => {
@@ -1191,7 +986,8 @@ button:disabled {
 }
 
 .markdown-content {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
   line-height: 1.6;
   color: #000000;
   background-color: #ffffff;
@@ -1276,6 +1072,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
   border-left: 1px solid #e9ecef;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
 }
 
 .notes-panel-visible {
@@ -1379,10 +1177,12 @@ button:disabled {
   padding: 16px;
   margin: 1em 0;
   text-align: center;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 .dark .mermaid {
   background-color: #2d2d2d;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* 代码块样式 */
@@ -1399,6 +1199,11 @@ button:disabled {
 
 .hljs code {
   font-family: inherit !important;
+}
+
+code:not(.hljs code) {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
+  font-size: 0.9em;
 }
 
 /* 代码块复制按钮 */

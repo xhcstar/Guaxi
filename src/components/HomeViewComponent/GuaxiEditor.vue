@@ -279,7 +279,7 @@ onUnmounted(() => {
 }
 
 .preview code {
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  font-family: inherit !important;
 }
 
 .render-error {
@@ -355,6 +355,11 @@ onUnmounted(() => {
 
 .hljs code {
   font-family: inherit !important;
+}
+
+code:not(.hljs code) {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
+  font-size: 0.9em;
 }
 
 /* 代码块复制按钮 */
