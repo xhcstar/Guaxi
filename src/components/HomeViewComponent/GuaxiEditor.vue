@@ -3,10 +3,20 @@
     <!-- 工具栏 -->
     <div class="toolbar">
       <div class="toolbar-spacer"></div>
-      <div class="mode-toggle" @click="toggleMode">
+      <div class="toolbar-actions">
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
-            <n-icon :component="mode === 'edit' ? PencilOutline : EyeOutline" />
+            <n-button text @click="toggleVimMode">
+              <n-icon :component="vimMode ? TerminalOutline : CodeSlashOutline" />
+            </n-button>
+          </template>
+          {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text @click="toggleMode">
+              <n-icon :component="mode === 'edit' ? PencilOutline : EyeOutline" />
+            </n-button>
           </template>
           {{ mode === 'edit' ? '编辑模式' : '阅读模式' }}
         </n-tooltip>
@@ -14,7 +24,10 @@
     </div>
 
     <!-- 编辑器 -->
-    <div v-show="selectedFile && mode === 'edit'" ref="editorContainer" class="editor"></div>
+    <div v-show="selectedFile && mode === 'edit'" ref="editorContainer" class="editor-wrapper">
+      <div ref="editorContainer" class="editor"></div>
+      <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
+    </div>
 
     <!-- 阅读模式 -->
     <div v-show="selectedFile && mode === 'preview'" v-html="renderedHtml" class="preview" ref="previewContainer">
@@ -26,11 +39,21 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
-import { EyeOutline, PencilOutline } from '@vicons/ionicons5'
+import { EyeOutline, PencilOutline, TerminalOutline, CodeSlashOutline } from '@vicons/ionicons5'
 import { dirname } from '@tauri-apps/api/path'
-import * as monaco from 'monaco-editor'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { debounce } from 'lodash-es'
+import * as monaco from 'monaco-editor'
+import { initVimMode } from 'monaco-vim';
+// 更新所有语言导入路径
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
+import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
+import 'monaco-editor/esm/vs/basic-languages/rust/rust.contribution'
+import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution'
+import 'monaco-editor/esm/vs/basic-languages/html/html.contribution'
+import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
+import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
+
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
@@ -45,6 +68,10 @@ const rawContent = ref(selectedFile.value?.content || '')
 
 const message = useMessage() // 使用消息提示
 
+const vimMode = ref(false);
+const vimStatusBar = ref<HTMLElement | null>(null);
+let vimModeInstance: any = null;
+
 // 初始化编辑器
 const initEditor = () => {
   if (!editorContainer.value) {
@@ -56,15 +83,159 @@ const initEditor = () => {
     value: rawContent.value,
     language: 'markdown',
     theme: 'vs',
-    automaticLayout: true,
-    minimap: { enabled: false },
+    automaticLayout: true,  // 自动布局
+    minimap: {
+      enabled: true,  // 启用迷你地图
+      showSlider: 'always',
+      size: 'fit'
+    },
+    scrollbar: {
+      vertical: 'auto',
+      horizontal: 'auto',
+      useShadows: true,
+      verticalScrollbarSize: 10,
+      horizontalScrollbarSize: 10,
+      arrowSize: 10,
+      alwaysConsumeMouseWheel: false,
+      verticalHasArrows: false,
+      horizontalHasArrows: false,
+      handleMouseWheel: true,
+      scrollByPage: false,
+      theme: {
+        scrollbarShadow: '#00000022',
+        scrollbarSliderBackground: '#64646466',
+        scrollbarSliderHoverBackground: '#64646499',
+        scrollbarSliderActiveBackground: '#646464CC'
+      }
+    },
+    vim: {
+      enabled: vimMode.value,
+      status: true,
+      useSystemClipboard: true,
+      handleKeys: {
+        '<C-s>': false,
+        '<C-c>': false,
+        '<C-v>': false,
+        '<C-a>': false
+      }
+    },
+    contextmenu: {
+      enabled: true,
+      addDefaultActions: true,
+      addNavigationActions: true
+    },
     lineNumbers: 'on',
+    lineNumbersMinChars: 3,  // 最小行号宽度
     scrollBeyondLastLine: false,
-    fontSize: 18,
+    fontSize: 18,  // 调整为更合适的字号
     fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
     fontLigatures: true,
+    wordWrap: 'on',  // 自动换行
+    wrappingIndent: 'indent',  // 换行缩进
+    renderWhitespace: 'selection',  // 选中时显示空白字符
+    renderLineHighlight: 'all',  // 高亮当前行
+    lineHeight: 24,  // 行高
+    padding: {
+      top: 8,  // 顶部内边距
+      bottom: 8  // 底部内边距
+    },
+    suggest: {
+      snippetsPreventQuickSuggestions: false  // 允许代码片段建议
+    },
+    quickSuggestions: {
+      other: true,
+      comments: false,
+      strings: true
+    },
+    parameterHints: {
+      enabled: true  // 启用参数提示
+    },
+    bracketPairColorization: {
+      enabled: true  // 括号配对着色
+    },
+    guides: {
+      bracketPairs: true,  // 显示括号配对引导线
+      bracketPairsHorizontal: 'active'  // 水平引导线
+    },
+    mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
 
+  if (vimMode.value) {
+    nextTick(() => {
+      if (editor && vimStatusBar.value) {
+        vimModeInstance = initVimMode(editor, vimStatusBar.value);
+        editor.updateOptions({
+          vim: {
+            enabled: true,
+            status: true,
+            useSystemClipboard: true,
+            handleKeys: {
+              '<C-s>': false,
+              '<C-c>': false,
+              '<C-v>': false
+            }
+          }
+        });
+      }
+    });
+  }
+
+  editor.onContextMenu((e) => {
+    e.event.preventDefault();
+    const menuItems = [
+      // 基础操作
+      { action: 'editor.action.clipboardCutAction', label: '剪切' },
+      { action: 'editor.action.clipboardCopyAction', label: '复制' },
+      { action: 'editor.action.clipboardPasteAction', label: '粘贴' },
+      { type: 'separator' },
+
+      // 格式相关
+      { action: 'editor.action.formatDocument', label: '格式化文档' },
+      { action: 'editor.action.commentLine', label: '注释/取消注释' },
+      { type: 'separator' },
+
+      // 自定义功能
+      {
+        label: '插入模板',
+        submenu: [
+          { action: 'insertTemplate.html', label: 'HTML模板' },
+          { action: 'insertTemplate.js', label: 'JavaScript模板' },
+          { action: 'insertTemplate.css', label: 'CSS模板' }
+        ]
+      },
+      { type: 'separator' },
+
+      // 其他功能
+      { action: 'editor.action.quickCommand', label: '命令面板' }
+    ];
+
+    // 显示自定义菜单
+    monaco.editor.showContextMenu({
+      getActions: () => menuItems,
+      getAnchor: () => ({ x: e.event.posx, y: e.event.posy }),
+      onHide: () => { }
+    });
+  });
+
+  // 根据文件扩展名自动设置语言
+  const fileExt = selectedFile.value?.path?.split('.').pop() || 'markdown';
+  const languageMap = {
+    'js': 'javascript',
+    'ts': 'typescript',
+    'css': 'css',
+    'html': 'html',
+    'md': 'markdown',
+    'py': 'python',
+    'cpp': 'cpp',
+    'c': 'cpp',
+    'h': 'cpp',
+    'hpp': 'cpp',
+    'rs': 'rust',
+    'sh': 'shell',
+    'jsx': 'javascript',
+    'tsx': 'javascript',
+    'htm': 'html',
+  };
 
   editor.onDidChangeModelContent(() => {
     rawContent.value = editor.getValue()
@@ -153,6 +324,31 @@ const renderDebounced = debounce(async (content) => {
 // 监听文件选择
 watch(selectedFile, (newFile) => {
   if (newFile) {
+    const fileExt = newFile.path?.split('.').pop() || 'markdown';
+    const languageMap = {
+      'py': 'python',
+      'cpp': 'cpp',
+      'c': 'cpp',
+      'h': 'cpp',
+      'hpp': 'cpp',
+      'rs': 'rust',
+      'sh': 'shell',
+      'js': 'javascript',
+      'jsx': 'javascript',
+      'ts': 'javascript',
+      'tsx': 'javascript',
+      'html': 'html',
+      'htm': 'html',
+      'css': 'css',
+      'md': 'markdown'
+    };
+
+    const language = languageMap[fileExt] || 'markdown';
+    if (editor) {
+      monaco.editor.setModelLanguage(editor.getModel(), language);
+    }
+
+    // 更新内容
     rawContent.value = newFile.content || '';
     if (editor) {
       updateEditorContent(newFile.content || '');
@@ -191,6 +387,43 @@ watch(renderedHtml, () => {
   });
 });
 
+// 添加Vim模式切换函数
+const toggleVimMode = () => {
+  vimMode.value = !vimMode.value;
+
+  nextTick(() => {
+    if (vimMode.value) {
+      if (editor && vimStatusBar.value) {
+        vimModeInstance = initVimMode(editor, vimStatusBar.value);
+        editor.updateOptions({
+          vim: {
+            enabled: true,
+            status: true,
+            useSystemClipboard: true,
+            handleKeys: {
+              '<C-s>': false,
+              '<C-c>': false,
+              '<C-v>': false
+            }
+          }
+        });
+      }
+    } else {
+      if (vimModeInstance) {
+        vimModeInstance.dispose();
+        vimModeInstance = null;
+      }
+      if (editor) {
+        editor.updateOptions({
+          vim: {
+            enabled: false
+          }
+        });
+      }
+    }
+  });
+};
+
 // 生命周期
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
@@ -200,6 +433,9 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
   editor?.dispose();
   editor = null;
+  if (vimModeInstance) {
+    vimModeInstance.dispose();
+  }
 });
 
 </script>
@@ -214,28 +450,41 @@ onUnmounted(() => {
   overflow: hidden;
   width: 100%;
   box-sizing: border-box;
-  position: relative; /* 新增 */
+  position: relative;
+  min-width: 0; /* 允许容器缩小 */
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end; /* 改为固定右对齐 */
+  justify-content: flex-end;
+  /* 改为固定右对齐 */
   padding: 4px 8px;
-  height: 28px;
+  height: 30px;
   background-color: var(--toolbar-bg, #f8f8f8);
   border-bottom: 1px solid var(--divider-color, #e0e0e0);
   position: sticky; /* 改为粘性定位 */
   top: 0;
   width: 100%;
   box-sizing: border-box;
-  min-width: 300px; /* 设置最小宽度 */
+  min-width: 0; /* 允许工具栏缩小 */
   z-index: 10; /* 确保在最上层 */
 }
 
 .toolbar-spacer {
   flex-grow: 1;
-  min-width: 16px; /* 添加最小间距 */
+  min-width: 16px;
+  /* 添加最小间距 */
+  flex-shrink: 1; /* 关键修复4: 允许间距缩小 */
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 12px;
+  /* 新增按钮间距 */
+  align-items: center;
+  min-width: 0; /* 关键修复5: 允许操作区域缩小 */
+  flex-shrink: 0; /* 关键修复6: 防止按钮被压缩 */
 }
 
 .mode-toggle {
@@ -246,8 +495,10 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
   white-space: nowrap;
-  flex-shrink: 0; /* 防止按钮缩小 */
-  box-sizing: border-box; /* 包含padding和border */
+  flex-shrink: 0;
+  /* 防止按钮缩小 */
+  box-sizing: border-box;
+  /* 包含padding和border */
 }
 
 /* 响应式处理 */
@@ -255,6 +506,7 @@ onUnmounted(() => {
   .toolbar {
     padding: 4px;
   }
+
   .mode-toggle {
     padding: 2px 4px;
   }
@@ -264,31 +516,58 @@ onUnmounted(() => {
   background-color: var(--hover-color, #f0f0f0);
 }
 
-.editor {
-  flex: 1;
+.editor-wrapper {
+  position: relative;
+  height: calc(100% - 30px);
   width: 100%;
-  height: calc(100% - 28px);
-  /* 调整高度 */
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.editor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.vim-status-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background-color: var(--toolbar-bg, #f8f8f8);
+  border-top: 1px solid var(--divider-color, #e0e0e0);
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
 }
 
 .preview {
-  flex: 1;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 30px;
   height: calc(100% - 25px);
-  padding: 8px;
+  padding: 12px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   line-height: 1.6;
   overflow-y: auto;
   overflow-x: hidden;
   word-wrap: break-word;
-  min-width: 0;
-  max-width: 100%;
   box-sizing: border-box;
-  position: absolute; /* 改为绝对定位 */
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: 28px; /* 与工具栏高度匹配 */
 }
 
 .preview code {
@@ -404,7 +683,8 @@ table {
   border: 1px solid #ddd;
 }
 
-th, td {
+th,
+td {
   border: 1px solid #ddd;
   padding: 8px;
   text-align: center;
@@ -425,5 +705,4 @@ img {
   display: block;
   margin: 0 auto;
 }
-
 </style>

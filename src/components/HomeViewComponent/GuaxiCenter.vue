@@ -1,7 +1,7 @@
 <template>
-  <div class="text-aera">
+  <!-- <div class="text-text"> -->
     <GuaxiEditor/>
-  </div>
+  <!-- </div> -->
 </template>
 
 <script setup>
@@ -11,7 +11,7 @@ import GuaxiEditor from './GuaxiEditor.vue';
 </script>
 
 <style scoped>
-.text-area {
+/* .text-area {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -19,9 +19,7 @@ import GuaxiEditor from './GuaxiEditor.vue';
   padding: 0;
   margin: 0;
   height: 100%;
-  overflow: hidden;
   width: 100%;
-  box-sizing: border-box;
-  position: relative; /* 新增 */
-}
+  overflow: hidden;
+} */
 </style>

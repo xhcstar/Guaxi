@@ -28,4 +28,15 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  optimizeDeps: {
+    include: [
+      'monaco-editor',
+      'monaco-vim'
+    ]
+  },
+  build: {
+    rollupOptions: {
+      external: ['monaco-vim']
+    }
+  },
 }));
