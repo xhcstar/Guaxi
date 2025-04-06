@@ -210,7 +210,11 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
+  position: relative; /* 新增 */
 }
 
 .toolbar {
@@ -243,6 +247,7 @@ onUnmounted(() => {
   z-index: 1;
   white-space: nowrap;
   flex-shrink: 0; /* 防止按钮缩小 */
+  box-sizing: border-box; /* 包含padding和border */
 }
 
 /* 响应式处理 */
@@ -274,8 +279,16 @@ onUnmounted(() => {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   line-height: 1.6;
   overflow-y: auto;
-  overflow-x: hidden; /* 添加水平溢出控制 */
-  word-wrap: break-word; /* 长单词换行 */
+  overflow-x: hidden;
+  word-wrap: break-word;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  position: absolute; /* 改为绝对定位 */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 28px; /* 与工具栏高度匹配 */
 }
 
 .preview code {
