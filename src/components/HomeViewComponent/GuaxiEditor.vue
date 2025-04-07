@@ -335,7 +335,7 @@ const renderDebounced = debounce(async (content) => {
   try {
     const basePath = selectedFile.value.path ? await dirname(selectedFile.value.path) : '';
     renderedHtml.value = await renderMarkdown(content, {
-      basePath,
+      basePath: basePath,
       mermaid: true,
       math: true,
       codeHighlight: true,

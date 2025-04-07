@@ -4,9 +4,13 @@
 use tracing::info;
 use tracing_subscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tauri::async_runtime::spawn;
 
 mod commands;
+mod guaxiservices;
+
 use commands::file_watcher::FileWatcher;
+use guaxiservices::server::start_backend_services;
 
 async fn app_init() {
     // 在启动时加载配置文件
@@ -96,6 +100,15 @@ async fn main() {
             commands::repoview::repofileproc::add_repo_import_file,
             commands::gauxireader::create_reader_window,
         ])
+        .setup(|_app| {
+            // 直接启动服务而不使用spawn
+            tauri::async_runtime::spawn(async {
+                if let Err(e) = start_backend_services().await {
+                    eprintln!("Failed to start backend services: {}", e);
+                }
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
