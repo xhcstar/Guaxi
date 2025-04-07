@@ -30,7 +30,7 @@ const svg = new SVG({
 });
 
 // 创建 MathJax 处理器
-let mathjaxDocument: any = null;
+let mathjaxDocument = null;
 
 export const initMathJax = () => {
   if (!mathjaxDocument) {
@@ -42,7 +42,7 @@ export const initMathJax = () => {
 };
 
 // 渲染数学公式
-export const renderMath = async (element: HTMLElement, isBlock: boolean) => {
+export const renderMath = async (element, isBlock) => {
   console.log('renderMath', element, isBlock);
   if (!mathjaxDocument) initMathJax();
 

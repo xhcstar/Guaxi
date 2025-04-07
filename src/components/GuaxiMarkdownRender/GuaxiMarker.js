@@ -6,15 +6,15 @@ import "highlight.js/styles/github.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
 import { nextTick } from "vue";
 
-type RenderOptions = {
-  mermaid?: boolean;
-  math?: boolean;
-  codeHighlight?: boolean;
-  theme?: "default" | "dark" | "neutral";
-  basePath?: string;
+RenderOptions = {
+  mermaid: boolean,
+  math: boolean,
+  codeHighlight: boolean,
+  theme: "default" | "dark" | "neutral",
+  basePath: string,
 };
 
-export const addCopyButtons = (container: HTMLElement) => {
+export const addCopyButtons = (container) => {
   // 移除已有按钮
   container.querySelectorAll(".copy-button").forEach((btn) => btn.remove());
 
@@ -136,19 +136,19 @@ export const addCopyButtons = (container: HTMLElement) => {
 };
 
 // 辅助函数：转义正则表达式特殊字符
-function escapeRegExp(string: string) {
+function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-interface ImageMapping {
-  original_path: string;
-  served_path: string;
-}
+// interface ImageMapping {
+//   original_path: string;
+//   served_path: string;
+// }
 
 export const renderMarkdown = async (
-  content: string,
-  options: RenderOptions = {}
-): Promise<string> => {
+  content,
+  options
+) => {
   console.log("原始内容:", content);
   const {
     mermaid: enableMermaid = true,
@@ -178,7 +178,7 @@ export const renderMarkdown = async (
 
     // 根据mappings替换图片路径
     let finalContent = processedContent;
-    mappings.forEach((mapping: ImageMapping) => {
+    mappings.forEach((mapping) => {
       finalContent = finalContent.replace(
         new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, 'g'),
         `](${mapping.served_path})`
@@ -224,7 +224,7 @@ export const renderMarkdown = async (
 
     // 添加Mermaid支持
     if (enableMermaid) {
-      const defaultFence = md.renderer.rules.fence!;
+      const defaultFence = md.renderer.rules.fence;
       md.renderer.rules.fence = (tokens, idx, options, env, self) => {
         const token = tokens[idx];
         if (token.info.trim() === "mermaid") {
@@ -256,7 +256,7 @@ export const renderMarkdown = async (
           mermaidElements.forEach((el) => {
             try {
               const content = el
-                .textContent!.replace(/&gt;/g, ">")
+                .textContent.replace(/&gt;/g, ">")
                 .replace(/&lt;/g, "<")
                 .replace(/&amp;/g, "&");
               el.innerHTML = content;
@@ -301,7 +301,7 @@ export const renderMarkdown = async (
           el.appendChild(mathSpan);
 
           // 调用MathJax渲染
-          renderMath(mathSpan as HTMLElement, isBlock);
+          renderMath(mathSpan, isBlock);
         } catch (err) {
           console.error("数学公式渲染错误:", err);
           el.innerHTML = `<span class="math-error">${
