@@ -159,7 +159,7 @@ export const renderMarkdown = async (
 
   try {
     // 调用后端处理图片路径
-    const response = await fetch("http://localhost:8888/api/markdown/process", {
+    const response = await fetch("http://localhost:8888/api/markdown/image_process", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
