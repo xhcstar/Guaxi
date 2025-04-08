@@ -172,7 +172,6 @@ const newFileForm = ref({
   importFileCreateTime: '',
   importFileSize: 0,
   convetToHtmlFilename: '',
-  importFileSize: '',
 })
 
 // 用于 NotesDb 库的表单
