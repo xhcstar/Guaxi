@@ -6,12 +6,12 @@ import "highlight.js/styles/github.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
 import { nextTick } from "vue";
 
-RenderOptions = {
-  mermaid: boolean,
-  math: boolean,
-  codeHighlight: boolean,
-  theme: "default" | "dark" | "neutral",
-  basePath: string,
+const RenderOptions = {
+  mermaid: undefined,
+  math: undefined,
+  codeHighlight: undefined,
+  theme: "default", // 移除类型注解
+  basePath: ""
 };
 
 export const addCopyButtons = (container) => {
