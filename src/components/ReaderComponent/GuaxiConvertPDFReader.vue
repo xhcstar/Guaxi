@@ -105,7 +105,7 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
@@ -150,7 +150,7 @@ const props = defineProps({
 
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
-const markdownContainer = ref<HTMLElement | null>(null);
+const markdownContainer = ref(null);
 // 缩放状态
 const zoomLevel = ref(1);
 // 添加旋转状态
@@ -170,7 +170,7 @@ const elements = ref([])
 // Markdown数据状态
 const markdownContent = ref('')
 // const markdownLines = ref([])
-const markdownLines = ref<string[]>([]);
+const markdownLines = ref([]);
 const markdownFilePath = ref('')
 // 笔记状态
 const showNotes = ref(false)
@@ -377,7 +377,7 @@ const handleMarkdownClick = (e) => {
   }
 }
 
-const showSelectionMessage = (message: string) => {
+const showSelectionMessage = (message) => {
   // 移除旧的消息
   const oldMessage = document.querySelector('.selection-message');
   if (oldMessage) oldMessage.remove();
@@ -443,7 +443,7 @@ const showNoteBubbleMessage = () => {
 }
 
 // 加载PDF页面
-const loadPdfPage = async (pageNum: number) => {
+const loadPdfPage = async (pageNum) => {
   try {
     const response = await invoke<string>('get_converted_pdf_page', {
       request: {
@@ -475,7 +475,7 @@ const loadPdfPage = async (pageNum: number) => {
 };
 
 // 加载Markdown页面
-const loadMarkdownPage = async (pageNum: number) => {
+const loadMarkdownPage = async (pageNum) => {
   try {
     if (!markdownFilePath.value) {
       await updateMarkdownPath();

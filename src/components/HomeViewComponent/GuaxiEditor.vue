@@ -35,7 +35,7 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
@@ -58,11 +58,11 @@ import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
-const mode = ref<'edit' | 'preview'>('edit');
+const mode = ref('edit');
 const renderedHtml = ref('');
-const previewContainer = ref<HTMLElement | null>(null);
-const editorContainer = ref<HTMLElement | null>(null);
-let editor: monaco.editor.IStandaloneCodeEditor | null = null;
+const previewContainer = ref(null);
+const editorContainer = ref(null);
+let editor = null;
 const selectedFile = computed(() => fileTreeStore.selectedFile)
 // 定义 rawContent 变量
 const rawContent = ref(selectedFile.value?.content || '')
@@ -70,8 +70,8 @@ const rawContent = ref(selectedFile.value?.content || '')
 const message = useMessage() // 使用消息提示
 
 const vimMode = ref(false);
-const vimStatusBar = ref<HTMLElement | null>(null);
-let vimModeInstance: any = null;
+const vimStatusBar = ref(null);
+let vimModeInstance = null;
 
 // 初始化编辑器
 const initEditor = () => {
@@ -281,7 +281,7 @@ const initEditor = () => {
 };
 
 // 更新编辑器内容
-const updateEditorContent = (content: string) => {
+const updateEditorContent = (content) => {
   if (editor) {
     editor.setValue(content);
     rawContent.value = content;
@@ -304,7 +304,7 @@ const saveContent = () => {
 };
 
 // 快捷键处理
-const handleKeyDown = (e: KeyboardEvent) => {
+const handleKeyDown = (e) => {
   if (e.ctrlKey && e.key === 's') {
     e.preventDefault();
     saveContent();

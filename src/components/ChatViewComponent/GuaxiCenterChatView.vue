@@ -38,7 +38,7 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup>
 import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
@@ -48,8 +48,8 @@ import { addCopyButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
 
 const chatStore = useChatStore();
 const messageInput = ref(""); // 用户输入的消息
-let unsubscribe: (() => void) | null = null;
-const messageRefs = ref<HTMLElement[]>([]);
+let unsubscribe = null;
+const messageRefs = ref([]);
 
 
 // 当前激活的聊天会话
@@ -185,7 +185,7 @@ onUnmounted(() => {
   }
 });
 
-const setMessageRef = (el: HTMLElement | null, index: number) => {
+const setMessageRef = (el, index) => {
   if (el) {
     messageRefs.value[index] = el;
     nextTick(() => {

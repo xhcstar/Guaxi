@@ -16,10 +16,8 @@
   </n-dropdown>
 </template>
 
-<script lang="ts">
-import type { DropdownOption } from 'naive-ui'
+<script>
 import { defineComponent, computed } from 'vue'
-import { NIcon } from 'naive-ui'
 import { useChatStore } from "../../stores/chatStore";
 
 
@@ -29,7 +27,7 @@ export default defineComponent({
     const chatStore = useChatStore();
 
     // 动态生成 options
-    const dropdownOptions = computed<DropdownOption[]>(() => {
+    const dropdownOptions = computed(() => {
       const { LLMlist } = chatStore;
 
       return [
@@ -55,7 +53,7 @@ export default defineComponent({
     });
 
     // 处理模型选择变化
-    const handleModelChange = (key: string) => {
+    const handleModelChange = (key) => {
       console.log('key', key);
       const selectModelId = parseInt(key.split('-')[1], 10);
       console.log('selectModelId', selectModelId);

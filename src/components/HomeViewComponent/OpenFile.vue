@@ -20,7 +20,7 @@
 
 </template>
 
-<script setup lang="ts">
+<script setup>
 // import type { DropdownOption } from 'naive-ui'
 import { ref, computed } from 'vue'
 import { useFileProcessStore } from '../../stores/fileProcessStore'

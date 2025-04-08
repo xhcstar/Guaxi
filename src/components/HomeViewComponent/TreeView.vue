@@ -13,14 +13,13 @@
     />
   </template>
   
-  <script lang="ts">
-  import type { TreeOption } from 'naive-ui'
+  <script >
   import { ChevronForward, PlanetOutline, SunnyOutline } from '@vicons/ionicons5'
   import { NIcon } from 'naive-ui'
   import { repeat } from 'seemly'
   import { defineComponent, h, ref } from 'vue'
   
-  function createData(level = 4, baseKey = ''): TreeOption[] | undefined {
+  function createData(level = 4, baseKey = ''){
     if (!level)
       return undefined
     return repeat(6 - level, undefined).map((_, index) => {
@@ -33,7 +32,7 @@
     })
   }
   
-  function createLabel(level: number): string {
+  function createLabel(level) {
     if (level === 4)
       return '道生一'
     if (level === 3)
@@ -52,7 +51,7 @@
         defaultExpandedKeys: ref(['40', '41']),
         renderSwitcherIcon: () =>
           h(NIcon, null, { default: () => h(ChevronForward) }),
-        renderSwitcherIconWithExpaned: ({ expanded }: { expanded: boolean }) =>
+        renderSwitcherIconWithExpaned: ({ expanded }) =>
           h(NIcon, null, {
             default: () => h(expanded ? SunnyOutline : PlanetOutline)
           })

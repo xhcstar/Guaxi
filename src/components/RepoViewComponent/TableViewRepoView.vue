@@ -120,7 +120,7 @@
   </n-modal>
 </template>
 
-<script setup lang="ts">
+<script setup>
 import { ref, onMounted, computed, h, nextTick, watch } from 'vue'
 import { repoStore } from '../../stores/repoStore'
 import {
@@ -195,7 +195,7 @@ const currentForm = computed(() => {
 
 // 进度条相关状态
 const progresses = ref([])
-const startProgressListener = async (filePath: string) => {
+const startProgressListener = async (filePath) => {
   const fileName = filePath.split(/[\\/]/).pop() || '未知文件'
 
   const newProgress = {

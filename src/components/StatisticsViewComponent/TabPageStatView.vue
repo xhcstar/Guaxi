@@ -87,10 +87,9 @@
     </n-space>
   </template>
   
-  <script setup lang="ts">
-  import type { TabsProps } from 'naive-ui'
+  <script setup >
   import { ref } from 'vue'
   
-  const placement = ref<NonNullable<TabsProps['placement']>>('left')
-  const type = ref<TabsProps['type']>('card')
+  const placement = ref('left')
+  const type = ref('card')
   </script>
