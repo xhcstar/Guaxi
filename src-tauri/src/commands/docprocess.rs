@@ -65,6 +65,12 @@ pub struct MarkdownResponse {
     error: Option<String>,
 }
 
+const PDFIUM_LIB_PATH: &str = if cfg!(debug_assertions) {
+    "../../libs"
+} else {
+    "./libs"
+};
+
 #[tauri::command]
 pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownResponse {
     info!("load_markdown_content: {}, page: {}", filepath, page);
@@ -98,13 +104,15 @@ pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownRes
 
 #[tauri::command]
 pub async fn get_converted_pdf_page(request: serde_json::Value) -> Result<String, String> {
+    info!("get_converted_pdf_page: {:?}", request);
     let filepath = request["filepath"].as_str().ok_or("Missing filepath")?;
     let curpage = request["curpage"].as_u64().ok_or("Invalid page number")? as usize;
 
     let pdfium = Pdfium::new(
-        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("../../libs"))
+        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(PDFIUM_LIB_PATH))
             .map_err(|e| e.to_string())?,
     );
+    info!("Opening PDF file: {}", filepath);
 
     let document = pdfium
         .load_pdf_from_file(filepath, None)

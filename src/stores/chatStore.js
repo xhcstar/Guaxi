@@ -1,7 +1,14 @@
 import { defineStore } from "pinia";
 import { renderMarkdown } from "../components/GuaxiMarkdownRender/GuaxiMarker";
-import { nextTick } from 'vue'
 import { debounce } from "lodash-es";
+import chatgptImg from '@/assets/chatgpt.png';
+import deepseekImg from '@/assets/deepseek.png';
+import qwenImg from '@/assets/qwen.png';
+import kimiImg from '@/assets/kimi.png';
+import doubaoImg from '@/assets/doubao.png';
+import localQwenImg from '@/assets/local_qwen.png';
+import localDeepseekImg from '@/assets/local_deepseek.png';
+import meImg from '@/assets/me.png';
 
 export const useChatStore = defineStore("chatStore", {
   state: () => ({
@@ -9,8 +16,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 0,
         name: "ChatGPT",
-        ModelAvatar: "./src/assets/chatgpt.png",
-        MeAvatar: "./src/assets/me.png",
+        ModelAvatar: chatgptImg,
+        MeAvatar: meImg,
         MessagesList: [
           {
             topicid: 0,
@@ -29,8 +36,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 1,
         name: "DeepSeek",
-        ModelAvatar: "./src/assets/deepseek.png",
-        MeAvatar: "./src/assets/me.png",
+        ModelAvatar: deepseekImg,
+        MeAvatar: meImg,
         MessagesList: [
           {
             topicid: 0,
@@ -49,8 +56,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 2,
         name: "Qwen",
-        ModelAvatar: "./src/assets/qwen.png",
-        MeAvatar: "./src/assets/me.png",
+        ModelAvatar: qwenImg,
+        MeAvatar: meImg,
         MessagesList: [
           {
             topicid: 0,
@@ -69,8 +76,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 3,
         name: "Kimi",
-        ModelAvatar: "./src/assets/kimi.png",
-        MeAvatar: "./src/assets/me.png",
+        ModelAvatar: kimiImg,
+        MeAvatar: meImg,
         MessagesList: [
           {
             topicid: 0,
@@ -89,8 +96,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 4,
         name: "豆包",
-        ModelAvatar: "./src/assets/doubao.png",
-        MeAvatar: "./src/assets/me.png",
+        ModelAvatar: doubaoImg,
+        MeAvatar: meImg,
         MessagesList: [
           {
             topicid: 0,
@@ -109,8 +116,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 5,
         name: "Local-Qwen",
-        ModelAvatar: "./src/assets/local_qwen.png",
-        MeAvatar: "./src/assets/me.png",
+        ModelAvatar: localQwenImg,
+        MeAvatar: meImg,
         MessagesList: [
           {
             topicid: 0,
@@ -129,8 +136,8 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 6,
         name: "Local-DeepSeek",
-        ModelAvatar: "./src/assets/local_deepseek.png",
-        MeAvatar: "./src/assets/me.png",
+        ModelAvatar: localDeepseekImg,
+        MeAvatar: meImg,
         MessagesList: [
           {
             topicid: 0,

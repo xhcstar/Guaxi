@@ -445,7 +445,7 @@ const showNoteBubbleMessage = () => {
 // 加载PDF页面
 const loadPdfPage = async (pageNum) => {
   try {
-    const response = await invoke<string>('get_converted_pdf_page', {
+    const response = await invoke('get_converted_pdf_page', {
       request: {
         filetype: 'pdf',
         filepath: props.filePath,

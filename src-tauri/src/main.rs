@@ -4,7 +4,6 @@
 use tracing::info;
 use tracing_subscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
-use tauri::async_runtime::spawn;
 
 mod commands;
 mod guaxiservices;

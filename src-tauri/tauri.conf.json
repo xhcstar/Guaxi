@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://localhost:8888 http://asset.localhost; connect-src 'self' http://ipc.localhost http://localhost:8888",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -42,7 +42,6 @@
     ],
     "resources": [
       "scripts/**/*",
-      "utils/**/*",
       "libs/**/*"
     ]
   }
