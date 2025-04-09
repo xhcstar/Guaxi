@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use tauri::command;
 use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize)]
