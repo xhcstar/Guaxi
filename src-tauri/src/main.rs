@@ -97,7 +97,8 @@ async fn main() {
             commands::repoview::search_imported_file_libraries,
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
-            commands::gauxireader::create_reader_window,
+            commands::guaxireader::create_reader_window,
+            commands::guaxiscreencap::capture_screen,
         ])
         .setup(|_app| {
             // 直接启动服务而不使用spawn

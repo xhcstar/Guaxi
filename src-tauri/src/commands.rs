@@ -1,9 +1,10 @@
 pub mod chatview;
 pub mod docprocess;
 pub mod fileprocess;
-pub mod gauxireader;
+pub mod guaxireader;
 pub mod repoview;
 pub mod serverview;
 pub mod settingview;
 pub mod statisticview;
 pub mod file_watcher;
+pub mod guaxiscreencap;
