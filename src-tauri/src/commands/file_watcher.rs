@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
-use tracing::{error, warn, info, debug};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FileEvent {
@@ -26,7 +26,7 @@ impl FileWatcher {
 
     pub async fn watch(&self, app: AppHandle, path: String) -> Result<(), String> {
         info!("Starting to watch path: {}", path);
-        
+
         let path = Path::new(&path).to_path_buf();
         if !path.exists() {
             let err_msg = format!("Path does not exist: {}", path.display());
@@ -39,7 +39,7 @@ impl FileWatcher {
             Ok(w) => {
                 info!("Successfully created file watcher");
                 w
-            },
+            }
             Err(e) => {
                 let err_msg = format!("Failed to create file watcher: {}", e);
                 error!("{}", err_msg);
@@ -62,7 +62,7 @@ impl FileWatcher {
                 match event {
                     Ok(event) => {
                         debug!("Received raw file event: {:?}", event);
-                        
+
                         let file_event = match event.kind {
                             notify::EventKind::Create(_) => {
                                 info!("File created: {:?}", event.paths);
@@ -71,7 +71,7 @@ impl FileWatcher {
                                     path: event.paths[0].to_string_lossy().to_string(),
                                     old_path: None,
                                 }
-                            },
+                            }
                             notify::EventKind::Remove(_) => {
                                 warn!("File removed: {:?}", event.paths);
                                 FileEvent {
@@ -79,7 +79,7 @@ impl FileWatcher {
                                     path: event.paths[0].to_string_lossy().to_string(),
                                     old_path: None,
                                 }
-                            },
+                            }
                             notify::EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
                                 info!("File renamed: {:?}", event.paths);
                                 let old_path = event.paths.get(1).map(|p| {
@@ -92,11 +92,11 @@ impl FileWatcher {
                                     path: event.paths[0].to_string_lossy().to_string(),
                                     old_path,
                                 }
-                            },
+                            }
                             _ => {
                                 debug!("Ignoring non-relevant file event: {:?}", event.kind);
-                                continue
-                            },
+                                continue;
+                            }
                         };
 
                         if let Err(e) = app.emit("file_change", &file_event) {
@@ -104,7 +104,7 @@ impl FileWatcher {
                         } else {
                             debug!("Successfully emitted file event: {:?}", file_event);
                         }
-                    },
+                    }
                     Err(e) => {
                         error!("Error receiving file event: {}", e);
                     }

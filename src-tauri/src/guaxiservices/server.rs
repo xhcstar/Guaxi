@@ -1,6 +1,6 @@
-use actix_web::{web, App, HttpServer};
-use actix_cors::Cors;
 use crate::guaxiservices::markdown_image_process;
+use actix_cors::Cors;
+use actix_web::{web, App, HttpServer};
 
 pub async fn start_backend_services() -> std::io::Result<()> {
     let server = HttpServer::new(move || {
@@ -12,10 +12,10 @@ pub async fn start_backend_services() -> std::io::Result<()> {
             .max_age(3600);
 
         App::new()
-            .wrap(cors)  // 应用CORS中间件
+            .wrap(cors) // 应用CORS中间件
             .configure(markdown_image_process::config)
     })
     .bind("127.0.0.1:8888")?;
-    
+
     server.run().await
 }

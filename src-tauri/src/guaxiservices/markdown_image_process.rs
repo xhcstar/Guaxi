@@ -54,8 +54,8 @@ async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
                     "http://localhost:8888/markdown/api/images/{}",
                     full_path
                         .to_string_lossy()
-                        .trim_start_matches(r"\\?\")  // 先移除UNC前缀
-                        .trim_start_matches('/')     // 再移除残留斜杠
+                        .trim_start_matches(r"\\?\") // 先移除UNC前缀
+                        .trim_start_matches('/') // 再移除残留斜杠
                         .replace('\\', "/")
                 );
                 info!("Served path: {}", served_path);
