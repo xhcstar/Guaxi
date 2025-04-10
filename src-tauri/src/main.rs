@@ -2,7 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::Emitter;
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tracing::info;
 use tracing_subscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -47,7 +46,7 @@ async fn main() {
     let file_watcher = FileWatcher::new();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
@@ -103,7 +102,10 @@ async fn main() {
             commands::guaxireader::create_reader_window,
             commands::guaxiscreencap::prepare_capture,
             commands::guaxiscreencap::capture_region,
-            commands::guaxiscreencap::show_save_dialog
+            commands::guaxiscreencap::show_save_dialog,
+            commands::guaxiscreencap::start_global_capture,
+            commands::guaxiscreencap::stop_global_capture,
+            commands::guaxiscreencap::get_mouse_position
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn
@@ -115,31 +117,19 @@ async fn main() {
 
             #[cfg(desktop)]
             {
-                use tauri_plugin_global_shortcut::{
-                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-                };
-                let screenshot_shortcut =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyP);
+                use tauri_plugin_global_shortcut::{ShortcutState};
 
-                // 1. 注册插件处理器
-                app.handle()
-                    .plugin(
-                        tauri_plugin_global_shortcut::Builder::new()
-                            .with_handler(move |app, shortcut, event| {
-                                if shortcut == &screenshot_shortcut
-                                    && event.state() == ShortcutState::Pressed
-                                {
-                                    app.emit("trigger-screenshot", ()).unwrap();
-                                }
-                            })
-                            .build(),
-                    )
-                    .map_err(|e| anyhow::Error::new(e))?;
-
-                // 2. 注册快捷键
-                app.global_shortcut()
-                    .register(screenshot_shortcut)
-                    .map_err(|e| anyhow::Error::new(e))?;
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_shortcuts(["ctrl+alt+z"])?
+                        .with_handler(|app, shortcut, event| {
+                            if event.state == ShortcutState::Pressed {
+                                info!("Shortcut pressed: {:?}", shortcut);
+                                app.emit("trigger-screenshot", ()).unwrap();
+                            }
+                        })
+                        .build(),
+                )?;
             }
 
             Ok(())

@@ -1,9 +1,13 @@
 use xcap::Monitor;
-use image::{DynamicImage, ImageBuffer, imageops::crop};
+use image::{DynamicImage, RgbaImage, ImageBuffer, imageops::crop};
 use std::path::PathBuf;
 use std::io::Cursor;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
+use enigo::{Enigo, Mouse, Settings, InputError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 
 #[derive(serde::Serialize)]
@@ -11,6 +15,49 @@ pub struct CaptureResult {
     width: u32,
     height: u32,
     temp_path: String,
+}
+
+struct CaptureState {
+    is_running: bool,
+}
+
+#[tauri::command]
+pub async fn start_global_capture(app: AppHandle) -> Result<(), String> {
+    let state = Arc::new(Mutex::new(CaptureState { is_running: true }));
+    
+    // 使用默认设置初始化 Enigo
+    let settings = Settings::default();
+    let mut enigo = Enigo::new(&settings).map_err(|e| e.to_string())?;
+    
+    // 启动鼠标位置监听线程
+    let app_clone = app.clone();
+    let state_clone = state.clone();
+    thread::spawn(move || {
+        while state_clone.lock().unwrap().is_running {
+            match enigo.location() {
+                Ok((x, y)) => {
+                    let _ = app_clone.emit("global-mouse-move", (x, y));
+                }
+                Err(e) => eprintln!("Failed to get mouse location: {}", e),
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_global_capture(app: AppHandle) -> Result<(), String> {
+    let _ = app.emit("stop-global-capture", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_mouse_position() -> Result<(i32, i32), String> {
+    let settings = Settings::default();
+    let mut enigo = Enigo::new(&settings).map_err(|e| e.to_string())?;
+    enigo.location().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -39,29 +86,19 @@ pub async fn capture_region(
     width: u32,
     height: u32,
 ) -> Result<Vec<u8>, String> {
-    let monitors = Monitor::all().map_err(|e| e.to_string())?;
-    let target = monitors.iter().find(|m| {
-        let mx = m.x().unwrap_or(0);
-        let my = m.y().unwrap_or(0);
-        let mw = m.width().unwrap_or(0);
-        let mh = m.height().unwrap_or(0);
-        
-        mx <= x as i32 && 
-        my <= y as i32 &&
-        mx + mw as i32 >= (x + width) as i32 &&
-        my + mh as i32 >= (y + height) as i32
-    }).ok_or("Selected region out of bounds")?;
+    // 获取主显示器
+    let primary = Monitor::all()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|m| m.is_primary().unwrap_or(false))
+        .ok_or("Primary monitor not found")?;
 
-    let image = target.capture_image().map_err(|e| e.to_string())?;
-    let dynamic_img = ImageBuffer::from_raw(
-        image.width(),
-        image.height(),
-        image.to_vec(),
-    ).ok_or("Failed to create image buffer")?;
-
-    let mut img_copy = dynamic_img.clone();
-    let cropped = crop(
-        &mut img_copy,
+    // 捕获整个屏幕
+    let image = primary.capture_image().map_err(|e| e.to_string())?;
+    
+    // 裁剪选定区域
+    let cropped = image::imageops::crop_imm(
+        &image,
         x,
         y,
         width,

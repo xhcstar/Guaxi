@@ -1,6 +1,6 @@
 use crate::guaxiservices::markdown_image_process;
 use actix_cors::Cors;
-use actix_web::{web, App, HttpServer};
+use actix_web::{App, HttpServer};
 
 pub async fn start_backend_services() -> std::io::Result<()> {
     let server = HttpServer::new(move || {

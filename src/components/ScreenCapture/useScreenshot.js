@@ -1,8 +1,9 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
-import { invoke } from '@tauri-apps/api/core';
-import { listen, emit } from '@tauri-apps/api/event';
+import { invoke } from "@tauri-apps/api/core";
+import { listen, emit } from "@tauri-apps/api/event";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { writeImage } from "@tauri-apps/plugin-clipboard-manager";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export function useScreenshot() {
   // --- 状态管理 ---
@@ -12,7 +13,8 @@ export function useScreenshot() {
   const selection = ref(null);
   const toolbarPosition = ref({ x: 0, y: 0 });
   let unlistenShortcut = null;
-  const appWindow = getCurrent(); // 获取当前窗口实例
+  let unlistenMouseMove = null;
+  const appWindow = getCurrentWindow();
 
   // --- 计算属性 ---
   const boxStyle = computed(() => {
@@ -26,23 +28,59 @@ export function useScreenshot() {
     };
   });
 
-  // --- 核心方法 ---
-  const startSelection = (e) => {
+  const startSelection = async (e) => {
     if (isPenMode.value) return;
+    
+    // 获取精确的鼠标位置
+    const pos = await invoke("get_mouse_position").catch(console.error) || 
+                { x: e.screenX, y: e.screenY };
+    
+    await appWindow.hide().catch(console.error);
     selection.value = {
-      start: { x: e.clientX, y: e.clientY },
-      end: { x: e.clientX, y: e.clientY },
+      start: { x: pos.x, y: pos.y },
+      end: { x: pos.x, y: pos.y }
     };
   };
 
-  const updateSelection = (e) => {
-    if (!selection.value || isPenMode.value) return;
-    selection.value.end = { x: e.clientX, y: e.clientY };
-    toolbarPosition.value = selection.value.end;
+  // 修改 activate 方法
+  const activate = async () => {
+    isActive.value = true;
+    document.body.style.cursor = "crosshair";
+    await invoke("start_global_capture").catch(console.error);
+    emit("screenshot-activated");
   };
 
+  // 修改 reset 方法
+  const reset = async () => {
+    isActive.value = false;
+    isPenMode.value = false;
+    showToolbar.value = false;
+    selection.value = null;
+    document.body.style.cursor = "";
+    
+    await invoke("stop_global_capture").catch(console.error);
+    await appWindow.show().catch(console.error);
+    emit("screenshot-closed");
+  };
+  
+  const updateSelection = (e) => {
+    if (!selection.value || isPenMode.value) return;
+    
+    // 直接使用屏幕绝对坐标
+    selection.value.end = { 
+      x: e.screenX, 
+      y: e.screenY 
+    };
+    toolbarPosition.value = selection.value.end;
+  };
+  
   const endSelection = () => {
     if (isPenMode.value || !selection.value) return;
+    
+    // 显示窗口并定位工具栏
+    appWindow.show().catch(console.error);
+    appWindow.setFocus().catch(console.error);
+    
     showToolbar.value = true;
   };
 
@@ -95,6 +133,7 @@ export function useScreenshot() {
   // --- 生命周期 ---
   const setupGlobalShortcut = async () => {
     unlistenShortcut = await listen("trigger-screenshot", () => {
+      console.log("触发截图");
       activate();
     });
   };
@@ -104,30 +143,16 @@ export function useScreenshot() {
     reset();
   };
 
-  // --- 公开方法 ---
-  const activate = () => {
-    isActive.value = true;
-    document.body.style.cursor = "crosshair";
-    emit("screenshot-activated");
-  };
-
-  const reset = () => {
-    isActive.value = false;
-    isPenMode.value = false;
-    showToolbar.value = false;
-    selection.value = null;
-    document.body.style.cursor = "";
-    emit("screenshot-closed");
-  };
-
   // --- 初始化 ---
   onMounted(() => {
     setupGlobalShortcut();
+    setupGlobalMouseListener();
     document.addEventListener("keydown", handleKeyDown);
   });
 
   onUnmounted(() => {
     cleanup();
+    unlistenMouseMove?.();
     document.removeEventListener("keydown", handleKeyDown);
   });
 
