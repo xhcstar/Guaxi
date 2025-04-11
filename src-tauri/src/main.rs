@@ -8,6 +8,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod commands;
 mod guaxiservices;
+mod screenshot;
 
 use commands::file_watcher::FileWatcher;
 use guaxiservices::server::start_backend_services;
@@ -100,12 +101,8 @@ async fn main() {
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
             commands::guaxireader::create_reader_window,
-            commands::guaxiscreencap::prepare_capture,
-            commands::guaxiscreencap::capture_region,
-            commands::guaxiscreencap::show_save_dialog,
-            commands::guaxiscreencap::start_global_capture,
-            commands::guaxiscreencap::stop_global_capture,
-            commands::guaxiscreencap::get_mouse_position
+            commands::guaxiscreencap::take_screenshot,
+            commands::guaxiscreencap::open_screenshot_ui
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn

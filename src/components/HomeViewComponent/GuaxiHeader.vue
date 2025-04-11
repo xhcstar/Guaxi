@@ -47,6 +47,7 @@
           </g>
         </svg>
       </n-icon>
+      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;" :component="Screenshot24Regular" @click="capture" ></n-icon>
     </div>
 
   </div>
@@ -57,7 +58,8 @@
 <script setup>
 import { computed } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
-import OpenFile from "./OpenFile.vue";
+import { Screenshot24Regular } from '@vicons/fluent'
+import { invoke } from '@tauri-apps/api/core'
 
 const siderStore = useSiderStore();
 const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
@@ -70,6 +72,27 @@ siderStore.toggleLeftSider()
 const toggleRightSider = () => {
 siderStore.toggleRightSider()
 };
+
+// 监听OCR结果
+// listen('ocr-result', (event) => {
+//   console.log('OCR结果:', event.payload)
+// })
+
+async function capture() {
+  console.log('开始截图...')
+  try {
+    const { image_data } = await invoke('take_screenshot') // 不再需要传递窗口参数
+    // ...处理图像数据...
+  } catch (err) {
+    console.error('截图失败:', err)
+  }
+}
+
+// 打开截图UI
+function openScreenshotUI() {
+  invoke('open_screenshot_ui')
+}
+
 </script>
 
 
