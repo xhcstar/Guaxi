@@ -37,8 +37,9 @@
             fill="#333333" p-id="21232"></path>
         </svg>
       </n-icon>
-      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;"
-        @click="toggleRightSider">
+      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;" :component="Screenshot24Regular"
+        @click="CaptureScreenshot"></n-icon>
+      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;" @click="toggleRightSider">
         <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">
           <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="4" y="4" width="16" height="16" rx="2"></rect>
@@ -47,7 +48,6 @@
           </g>
         </svg>
       </n-icon>
-      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;" :component="Screenshot24Regular" @click="capture" ></n-icon>
     </div>
 
   </div>
@@ -58,19 +58,22 @@
 <script setup>
 import { computed } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { Screenshot24Regular } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
+import { sep } from '@tauri-apps/api/path'
 
 const siderStore = useSiderStore();
+const fileTreeStore = useFileTreeStore()
 const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
 const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
 
 const toggleLeftSider = () => {
-siderStore.toggleLeftSider()
+  siderStore.toggleLeftSider()
 };
 
 const toggleRightSider = () => {
-siderStore.toggleRightSider()
+  siderStore.toggleRightSider()
 };
 
 // 监听OCR结果
@@ -78,19 +81,37 @@ siderStore.toggleRightSider()
 //   console.log('OCR结果:', event.payload)
 // })
 
-async function capture() {
-  console.log('开始截图...')
+async function CaptureScreenshot() {
   try {
-    const { image_data } = await invoke('take_screenshot') // 不再需要传递窗口参数
-    // ...处理图像数据...
+    const originalPath = fileTreeStore.selectedFile.path
+    console.log("Original path:", originalPath)
+
+    // 获取平台分隔符（需要await）
+    const pathSeparator = await sep()
+
+    // 1. 解析路径
+    const dirPath = originalPath.substring(0, originalPath.lastIndexOf(pathSeparator))
+    const fileName = originalPath.substring(
+      originalPath.lastIndexOf(pathSeparator) + 1,
+      originalPath.lastIndexOf('.')
+    )
+
+    // 2. 创建 images 目录
+    const imagesDir = `${dirPath}${pathSeparator}images`
+    console.log("Images directory:", imagesDir)
+    await invoke('create_screenshot_dir', { path: imagesDir })
+
+    // 3. 构建新路径
+    const screenshotPath = `${imagesDir}${pathSeparator}${fileName}.png`
+    console.log("Screenshot will be saved to:", screenshotPath)
+
+    // 4. 调用后端接口
+    await invoke('take_screenshot', { path: screenshotPath })
+
+    console.log("截图保存成功:", screenshotPath)
   } catch (err) {
     console.error('截图失败:', err)
   }
-}
-
-// 打开截图UI
-function openScreenshotUI() {
-  invoke('open_screenshot_ui')
 }
 
 </script>
@@ -99,18 +120,22 @@ function openScreenshotUI() {
 
 <style scoped>
 .guaxi-header {
-flex: 0 0 auto; /* 固定高度的 header */
-height: 35px; /* 设置你需要的高度 */
-background-color: #f5f5f5; /* 示例背景色 */
-box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1); /* 示例阴影 */
-border-bottom: 2px solid #aab4ae;
-display: flex; 
-align-items: center; 
-justify-content: space-between;
+  flex: 0 0 auto;
+  /* 固定高度的 header */
+  height: 35px;
+  /* 设置你需要的高度 */
+  background-color: #f5f5f5;
+  /* 示例背景色 */
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  /* 示例阴影 */
+  border-bottom: 2px solid #aab4ae;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .top-right-navigation-icon {
-margin-left: 10px;
+  margin-left: 10px;
 }
 </style>
 

@@ -8,7 +8,6 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod commands;
 mod guaxiservices;
-mod screenshot;
 
 use commands::file_watcher::FileWatcher;
 use guaxiservices::server::start_backend_services;
@@ -102,7 +101,7 @@ async fn main() {
             commands::repoview::repofileproc::add_repo_import_file,
             commands::guaxireader::create_reader_window,
             commands::guaxiscreencap::take_screenshot,
-            commands::guaxiscreencap::open_screenshot_ui
+            commands::guaxiscreencap::create_screenshot_dir,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn
@@ -114,7 +113,7 @@ async fn main() {
 
             #[cfg(desktop)]
             {
-                use tauri_plugin_global_shortcut::{ShortcutState};
+                use tauri_plugin_global_shortcut::ShortcutState;
 
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
@@ -122,7 +121,16 @@ async fn main() {
                         .with_handler(|app, shortcut, event| {
                             if event.state == ShortcutState::Pressed {
                                 info!("Shortcut pressed: {:?}", shortcut);
-                                app.emit("trigger-screenshot", ()).unwrap();
+                                // 创建异步任务处理截图
+                                let app_handle = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    match commands::guaxiscreencap::take_screenshot("".to_string())
+                                        .await
+                                    {
+                                        Ok(_) => info!("截图成功"),
+                                        Err(e) => eprintln!("截图失败: {}", e),
+                                    }
+                                });
                             }
                         })
                         .build(),

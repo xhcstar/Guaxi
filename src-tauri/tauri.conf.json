@@ -42,7 +42,10 @@
     ],
     "resources": [
       "scripts/**/*",
-      "libs/**/*"
+      "libs/**/*",
+      "utils/platforms/*",
+      "utils/Qt*",
+      "utils/ScreenShotTool*"
     ]
   }
 }

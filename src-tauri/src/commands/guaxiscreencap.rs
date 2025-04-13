@@ -1,38 +1,53 @@
-use tauri::Window;
-use crate::screenshot::{capture_full_screen, CaptureConfig};
+use std::env;
+use std::path::Path;
+use std::process::Command;
 
-#[derive(serde::Serialize)]
-pub struct CaptureResult {
-    image_data: Vec<u8>,
-    text: Option<String>,
+use tracing::info;
+
+#[tauri::command]
+pub async fn take_screenshot(path: String) -> Result<String, String> {
+    info!("Taking screenshot to path: {}", path);
+    // 获取当前程序的执行路径
+    let current_dir =
+        env::current_exe().map_err(|e| format!("Failed to get current executable path: {}", e))?;
+
+    // 构造 utils 目录下的 ScreenShotTool.exe 的路径
+    let utils_dir = current_dir
+        .parent()
+        .ok_or("Failed to get parent directory of the executable")?
+        .join("utils")
+        .join("ScreenShotTool.exe");
+    info!("utils_dir: {}", utils_dir.display());
+
+    // 检查 ScreenShotTool.exe 是否存在
+    if !utils_dir.exists() {
+        return Err(format!(
+            "ScreenShotTool.exe not found at path: {}",
+            utils_dir.display()
+        ));
+    }
+
+    // 调用 ScreenShotTool.exe 并传递 path 参数
+    let output = Command::new(utils_dir)
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("Failed to execute ScreenShotTool.exe: {}", e))?;
+
+    // 检查命令执行结果
+    if output.status.success() {
+        info!("Screenshot taken successfully");
+        Ok(format!("Screenshot saved to: {}", path))
+    } else {
+        Err(format!(
+            "ScreenShotTool.exe failed with error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
 }
 
 #[tauri::command]
-pub async fn take_screenshot(window: Window) -> Result<CaptureResult, String> {
-    let config = CaptureConfig::default();
-    let image_data = capture_full_screen(&config)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // 克隆一份数据用于UI线程
-    let ui_image_data = image_data.clone();
-    
-    window.run_on_main_thread(move || {
-        if let Err(e) = crate::screenshot::ui::ScreenshotApp::show_with_image(&ui_image_data) {
-            eprintln!("Failed to open screenshot UI: {}", e);
-        }
-    })
-    .map_err(|e| e.to_string())?; // 将tauri::Error转换为String
-
-    Ok(CaptureResult { image_data, text: None })
-}
-
-#[tauri::command]
-pub fn open_screenshot_ui(window: Window) -> Result<(), String> {
-    window.run_on_main_thread(|| {
-        if let Err(e) = crate::screenshot::ui::ScreenshotApp::show_standalone() {
-            eprintln!("Failed to open screenshot UI: {}", e);
-        }
-    })
-    .map_err(|e| e.to_string()) // 将tauri::Error转换为String
+pub fn create_screenshot_dir(path: String) -> Result<(), String> {
+    info!("Creating screenshot directory: {}", path);
+    std::fs::create_dir_all(&path)
+        .map_err(|e| format!("创建目录失败: {}", e))
 }
