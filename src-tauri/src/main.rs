@@ -100,6 +100,8 @@ async fn main() {
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
             commands::guaxireader::create_reader_window,
+            commands::guaxireader::save_notes_to_file,
+            commands::guaxireader::load_existing_notes,
             commands::guaxiscreencap::take_screenshot,
             commands::guaxiscreencap::create_screenshot_dir,
         ])

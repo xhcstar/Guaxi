@@ -558,8 +558,19 @@ const loadMarkdownPage = async (pageNum) => {
   }
 };
 
+const getNotesDirectory = async () => {
+  const baseFileName = props.fileName.replace('.pdf', '');
+  return await join(
+    librariesRoot.value,
+    'Libraries',
+    props.library,
+    baseFileName,
+    'notes'
+  );
+};
+
 // 添加内容到笔记
-const addToNotes = (element) => {
+const addToNotes = async (element) => {
   const timestamp = new Date().toLocaleString();
   let note = '';
 
@@ -586,7 +597,24 @@ const addToNotes = (element) => {
 
   notesContent.value += note;
   // showNotes.value = true;
-  showNoteBubbleMessage();
+  // showNoteBubbleMessage();
+  // 获取笔记文件路径
+  const notesDir = await getNotesDirectory();
+  
+  try {
+    // 调用Tauri后端写入笔记
+    const response = await invoke('save_notes_to_file', {
+      content: note,
+      notesDir: notesDir,
+      fileName: props.fileName.replace('.pdf', '')
+    });
+    
+    console.log('笔记保存成功:', response);
+    showNoteBubbleMessage();
+  } catch (error) {
+    console.error('保存笔记失败:', error);
+    alert(`保存笔记失败: ${error.message}`);
+  }
 }
 
 // 导出笔记
@@ -725,6 +753,22 @@ onMounted(() => {
     await updateMarkdownPath();
     loadPdfPage(1);
     loadMarkdownPage(1);
+
+    // 加载现有笔记
+    try {
+      const notesDir = await getNotesDirectory();
+      const response = await invoke('load_existing_notes', {
+        notesDir: notesDir,
+        fileName: props.fileName.replace('.pdf', '')
+      });
+      
+      if (response.content) {
+        notesContent.value = response.content;
+      }
+    } catch (error) {
+      console.error('加载笔记失败:', error);
+    }
+
     // 添加窗口大小变化监听
     window.addEventListener('resize', handleResize);
     // 添加延迟确保DOM完全渲染
