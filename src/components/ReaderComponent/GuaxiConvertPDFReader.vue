@@ -744,17 +744,17 @@ const exportNotes = () => {
   // 创建临时div来提取文本内容
   const tempDiv = document.createElement('div');
   tempDiv.innerHTML = notesContent.value;
-  
+
   // 转换内容为Markdown格式
   let exportContent = '';
-  
+
   // 处理每个笔记条目
   const items = tempDiv.querySelectorAll('.note-item');
   items.forEach(item => {
     const type = item.querySelector('.note-type')?.textContent || '笔记';
     const time = item.querySelector('.note-time')?.textContent || '';
     const content = item.querySelector('.note-content')?.textContent || '';
-    
+
     exportContent += `### ${type} (${time})\n\n`;
     exportContent += `${content}\n\n---\n\n`;
   });
@@ -764,7 +764,7 @@ const exportNotes = () => {
 
   const a = document.createElement('a');
   a.href = url;
-  a.download = `PDF笔记_${props.fileName.replace('.pdf', '')}_${new Date().toISOString().slice(0,10)}.md`;
+  a.download = `PDF笔记_${props.fileName.replace('.pdf', '')}_${new Date().toISOString().slice(0, 10)}.md`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -898,16 +898,27 @@ onMounted(() => {
       });
 
       if (response.content) {
+        // 保存原始Markdown内容
         notesContent.value = response.content;
+
+        // 渲染Markdown为HTML
+        const renderedHtml = await renderMarkdown(response.content, {
+          basePath: "",
+          mermaid: true,
+          math: true,
+          codeHighlight: true,
+          theme: 'default'
+        });
+
+        // 处理渲染后的HTML
+        processedNotesContent.value = renderedHtml
+          .replace(/<p><\/p>/g, '') // 移除空段落
+          .replace(/\n/g, '<br>'); // 保留换行
       }
     } catch (error) {
       console.error('加载笔记失败:', error);
+      processedNotesContent.value = `<div class="error">加载笔记失败: ${error.message}</div>`;
     }
-
-    // 初始化笔记内容
-    processedNotesContent.value = notesContent.value
-    .replace(/\n/g, '<br>')
-    .replace(/<p>|<\/p>/g, '')
 
     // 添加窗口大小变化监听
     window.addEventListener('resize', handleResize);
@@ -1452,8 +1463,15 @@ button:disabled {
 
 /* 淡入动画 */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
 
