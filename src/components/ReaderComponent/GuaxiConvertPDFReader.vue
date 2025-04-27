@@ -88,9 +88,10 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content">
-        <textarea v-model="notesContent" placeholder="点击Markdown内容添加到笔记..." class="notes-textarea"></textarea>
-      </div>
+      <!-- <textarea v-model="notesContent" placeholder="点击Markdown内容添加到笔记..." class="notes-textarea"></textarea> -->
+      <div class="notes-content" ref="notesEditor" contenteditable="true" @input="handleNotesInput"
+        @paste="handleNotesPaste" @keydown="handleNotesKeyDown" v-html="processedNotesContent"
+        placeholder="点击Markdown内容添加到笔记..."></div>
     </div>
 
     <!-- 添加笔记的提示气泡 -->
@@ -569,46 +570,162 @@ const getNotesDirectory = async () => {
   );
 };
 
+const processedNotesContent = ref('')
+const notesEditor = ref(null)
+
+// 处理笔记内容变化
+const handleNotesInput = (e) => {
+  const html = notesEditor.value.innerHTML
+  notesContent.value = html
+  processedNotesContent.value = renderInlineHtml(html)
+}
+
+// 简单的HTML渲染函数（保持基本格式）
+const renderInlineHtml = (html) => {
+  // 保留换行符
+  let processed = html.replace(/\n/g, '<br>')
+
+  // 自动为段落添加p标签（当没有块级元素时）
+  if (!/<(p|div|h[1-6]|blockquote|pre|ul|ol|li|table)/i.test(processed)) {
+    processed = processed.split('<br><br>').join('</p><p>')
+    processed = `<p>${processed}</p>`
+  }
+
+  return processed
+}
+
+// 处理粘贴事件
+const handleNotesPaste = (e) => {
+  e.preventDefault()
+  const text = (e.clipboardData || window.clipboardData).getData('text/plain')
+  document.execCommand('insertText', false, text)
+}
+
+// 处理特殊按键
+const handleNotesKeyDown = (e) => {
+  // 按Enter时创建新段落
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    document.execCommand('formatBlock', false, '<p>')
+  }
+}
+
 // 添加内容到笔记
 const addToNotes = async (element) => {
   const timestamp = new Date().toLocaleString();
-  let note = '';
+  let markdownNote = '';
+  let htmlNote = '';
 
   // 优先使用HTML内容，如果没有则使用Markdown内容
-  const content = element.html || element.content;
+  const markdownContent = element.content;
+  const htmlContent = element.html;
 
+  // console.log("addToNotes raw content:", element.content);
+
+  // 根据类型生成不同的视觉样式
   switch (element.type) {
     case 'text':
-      note = `## 文本摘录 (${timestamp})\n${content}\n\n`;
+      markdownNote = `## 文本摘录 (${timestamp})\n${markdownContent}\n\n`;
+      htmlNote = `
+        <div class="note-section note-text">
+          <div class="note-header">
+            <span class="note-icon">📝</span>
+            <span class="note-type">文本摘录</span>
+            <span class="note-time">${timestamp}</span>
+          </div>
+          <div class="note-content">${htmlContent || `<p>${markdownContent}</p>`}</div>
+        </div>
+      `;
       break;
     case 'image':
-      note = `## 图片摘录 (${timestamp})\n${content}\n\n`;
+      markdownNote = `## 图片摘录 (${timestamp})\n${markdownContent}\n\n`;
+      htmlNote = `
+        <div class="note-section note-image">
+          <div class="note-header">
+            <span class="note-icon">🖼️</span>
+            <span class="note-type">图片摘录</span>
+            <span class="note-time">${timestamp}</span>
+          </div>
+          <div class="note-content">${htmlContent || `<img src="${markdownContent.match(/!$$.*$$$(.*)$/)?.[1]}" alt="图片">`}</div>
+        </div>
+      `;
       break;
     case 'code':
-      note = `## 代码摘录 (${timestamp})\n${content}\n\n`;
+      markdownNote = `## 代码摘录 (${timestamp})\n${markdownContent}\n\n`;
+      htmlNote = `
+        <div class="note-section note-code">
+          <div class="note-header">
+            <span class="note-icon">💻</span>
+            <span class="note-type">代码摘录</span>
+            <span class="note-time">${timestamp}</span>
+          </div>
+          <div class="note-content">${htmlContent || `<pre><code>${markdownContent.replace(/^```[^\n]*\n|\n```$/g, '')}</code></pre>`}</div>
+        </div>
+      `;
       break;
     case 'math':
-      note = `## 公式摘录 (${timestamp})\n${content}\n\n`;
+      markdownNote = `## 公式摘录 (${timestamp})\n${markdownContent}\n\n`;
+      htmlNote = `
+        <div class="note-section note-math">
+          <div class="note-header">
+            <span class="note-icon">🧮</span>
+            <span class="note-type">公式摘录</span>
+            <span class="note-time">${timestamp}</span>
+          </div>
+          <div class="note-content">${htmlContent || `<div class="math-expression">${markdownContent}</div>`}</div>
+        </div>
+      `;
       break;
     case 'diagram':
-      note = `## 图表摘录 (${timestamp})\n${content}\n\n`;
+      markdownNote = `## 图表摘录 (${timestamp})\n${markdownContent}\n\n`;
+      htmlNote = `
+        <div class="note-section note-diagram">
+          <div class="note-header">
+            <span class="note-icon">📊</span>
+            <span class="note-type">图表摘录</span>
+            <span class="note-time">${timestamp}</span>
+          </div>
+          <div class="note-content">${htmlContent || `<div class="diagram-container">${markdownContent}</div>`}</div>
+        </div>
+      `;
       break;
+    default:
+      markdownNote = `## 笔记 (${timestamp})\n${markdownContent}\n\n`;
+      htmlNote = `
+        <div class="note-section note-default">
+          <div class="note-header">
+            <span class="note-icon">📌</span>
+            <span class="note-type">笔记</span>
+            <span class="note-time">${timestamp}</span>
+          </div>
+          <div class="note-content">${htmlContent || `<p>${markdownContent}</p>`}</div>
+        </div>
+      `;
   }
 
-  notesContent.value += note;
+  // 更新笔记内容
+  notesContent.value += htmlNote;
+  processedNotesContent.value += htmlNote;
+
+  // 滚动到底部
+  nextTick(() => {
+    notesEditor.value.scrollTop = notesEditor.value.scrollHeight;
+  });
+
+  // notesContent.value += htmlNote;
   // showNotes.value = true;
   // showNoteBubbleMessage();
   // 获取笔记文件路径
   const notesDir = await getNotesDirectory();
-  
+
   try {
     // 调用Tauri后端写入笔记
     const response = await invoke('save_notes_to_file', {
-      content: note,
+      content: markdownNote,
       notesDir: notesDir,
       fileName: props.fileName.replace('.pdf', '')
     });
-    
+
     console.log('笔记保存成功:', response);
     showNoteBubbleMessage();
   } catch (error) {
@@ -620,21 +737,39 @@ const addToNotes = async (element) => {
 // 导出笔记
 const exportNotes = () => {
   if (!notesContent.value) {
-    alert('笔记内容为空')
-    return
+    alert('笔记内容为空');
+    return;
   }
 
-  const blob = new Blob([notesContent.value], { type: 'text/markdown' })
-  const url = URL.createObjectURL(blob)
+  // 创建临时div来提取文本内容
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = notesContent.value;
+  
+  // 转换内容为Markdown格式
+  let exportContent = '';
+  
+  // 处理每个笔记条目
+  const items = tempDiv.querySelectorAll('.note-item');
+  items.forEach(item => {
+    const type = item.querySelector('.note-type')?.textContent || '笔记';
+    const time = item.querySelector('.note-time')?.textContent || '';
+    const content = item.querySelector('.note-content')?.textContent || '';
+    
+    exportContent += `### ${type} (${time})\n\n`;
+    exportContent += `${content}\n\n---\n\n`;
+  });
 
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `PDF笔记_${props.filePath.split('/').pop().split('.')[0]}.md`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
+  const blob = new Blob([exportContent], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `PDF笔记_${props.fileName.replace('.pdf', '')}_${new Date().toISOString().slice(0,10)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
 
 // 分页控制 - 统一处理PDF和Markdown的页面切换
 const prevPage = () => {
@@ -761,13 +896,18 @@ onMounted(() => {
         notesDir: notesDir,
         fileName: props.fileName.replace('.pdf', '')
       });
-      
+
       if (response.content) {
         notesContent.value = response.content;
       }
     } catch (error) {
       console.error('加载笔记失败:', error);
     }
+
+    // 初始化笔记内容
+    processedNotesContent.value = notesContent.value
+    .replace(/\n/g, '<br>')
+    .replace(/<p>|<\/p>/g, '')
 
     // 添加窗口大小变化监听
     window.addEventListener('resize', handleResize);
@@ -1146,7 +1286,7 @@ button:disabled {
   font-weight: 500;
 }
 
-.notes-content {
+/* .notes-content {
   flex: 1;
   padding: 20px;
   overflow-y: auto;
@@ -1161,7 +1301,7 @@ button:disabled {
   resize: none;
   font-family: inherit;
   font-size: 14px;
-}
+} */
 
 .close-btn {
   background: none;
@@ -1204,6 +1344,116 @@ button:disabled {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* 笔记条目基础样式 */
+.note-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s ease;
+}
+
+.note-section:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* 笔记头部样式 - 修改为单行布局 */
+.note-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.note-icon {
+  font-size: 1.2em;
+}
+
+.note-type {
+  font-weight: 500;
+  color: #333;
+  font-size: 0.95em;
+}
+
+.note-time {
+  font-size: 0.85em;
+  color: #888;
+  margin-left: auto;
+}
+
+/* 笔记内容样式 */
+.note-content {
+  padding: 0 4px;
+  line-height: 1.6;
+}
+
+/* 不同类型笔记的特殊样式 */
+.note-text {
+  border-left: 3px solid #4dabf7;
+}
+
+.note-code {
+  border-left: 3px solid #20c997;
+}
+
+.note-code .note-content pre {
+  background: #f8f8f8;
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.9em;
+}
+
+.note-math {
+  border-left: 3px solid #f76707;
+}
+
+.note-diagram {
+  border-left: 3px solid #9775fa;
+}
+
+.note-image {
+  border-left: 3px solid #f783ac;
+}
+
+.note-image .note-content img {
+  max-width: 100%;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 笔记容器样式 */
+.notes-content {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+  background-color: #f9f9f9;
+}
+
+.notes-content[contenteditable="true"] {
+  min-height: 100px;
+  background: white;
+  border-radius: 6px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* 空状态提示 */
+.notes-content:empty:before {
+  content: attr(placeholder);
+  color: #aaa;
+  display: block;
+  padding: 16px;
+  font-style: italic;
+}
+
+/* 淡入动画 */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 </style>
 
@@ -1285,5 +1535,25 @@ code:not(.hljs code) {
 .dark .copy-button {
   background: rgba(60, 60, 60, 0.8) !important;
   border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+
+.text-note {
+  white-space: pre-wrap;
+}
+
+.code-note pre {
+  background-color: #f6f8fa;
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.math-note {
+  overflow-x: auto;
+}
+
+.diagram-note {
+  text-align: center;
 }
 </style>
