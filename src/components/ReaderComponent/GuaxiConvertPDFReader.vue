@@ -88,7 +88,6 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <!-- <textarea v-model="notesContent" placeholder="点击Markdown内容添加到笔记..." class="notes-textarea"></textarea> -->
       <div class="notes-content" ref="notesEditor" contenteditable="true" @input="handleNotesInput"
         @paste="handleNotesPaste" @keydown="handleNotesKeyDown" v-html="processedNotesContent"
         placeholder="点击Markdown内容添加到笔记..."></div>
@@ -615,6 +614,7 @@ const addToNotes = async (element) => {
   const timestamp = new Date().toLocaleString();
   let markdownNote = '';
   let htmlNote = '';
+  let content = '';
 
   // 优先使用HTML内容，如果没有则使用Markdown内容
   const markdownContent = element.content;
@@ -625,78 +625,66 @@ const addToNotes = async (element) => {
   // 根据类型生成不同的视觉样式
   switch (element.type) {
     case 'text':
-      markdownNote = `## 文本摘录 (${timestamp})\n${markdownContent}\n\n`;
+      markdownNote = `##${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-text">
           <div class="note-header">
             <span class="note-icon">📝</span>
-            <span class="note-type">文本摘录</span>
-            <span class="note-time">${timestamp}</span>
           </div>
           <div class="note-content">${htmlContent || `<p>${markdownContent}</p>`}</div>
         </div>
       `;
       break;
     case 'image':
-      markdownNote = `## 图片摘录 (${timestamp})\n${markdownContent}\n\n`;
+      markdownNote = `##${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-image">
           <div class="note-header">
             <span class="note-icon">🖼️</span>
-            <span class="note-type">图片摘录</span>
-            <span class="note-time">${timestamp}</span>
           </div>
-          <div class="note-content">${htmlContent || `<img src="${markdownContent.match(/!$$.*$$$(.*)$/)?.[1]}" alt="图片">`}</div>
+          <div class="note-content">${htmlContent || `<img src="${markdownContent.match(/!$$.*$$$(.*)$/)?.[1]}" alt="${timestamp}">`}</div>
         </div>
       `;
       break;
     case 'code':
-      markdownNote = `## 代码摘录 (${timestamp})\n${markdownContent}\n\n`;
+      markdownNote = `##${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-code">
           <div class="note-header">
             <span class="note-icon">💻</span>
-            <span class="note-type">代码摘录</span>
-            <span class="note-time">${timestamp}</span>
           </div>
           <div class="note-content">${htmlContent || `<pre><code>${markdownContent.replace(/^```[^\n]*\n|\n```$/g, '')}</code></pre>`}</div>
         </div>
       `;
       break;
     case 'math':
-      markdownNote = `## 公式摘录 (${timestamp})\n${markdownContent}\n\n`;
+      markdownNote = `##${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-math">
           <div class="note-header">
             <span class="note-icon">🧮</span>
-            <span class="note-type">公式摘录</span>
-            <span class="note-time">${timestamp}</span>
           </div>
           <div class="note-content">${htmlContent || `<div class="math-expression">${markdownContent}</div>`}</div>
         </div>
       `;
       break;
     case 'diagram':
-      markdownNote = `## 图表摘录 (${timestamp})\n${markdownContent}\n\n`;
+      markdownNote = `##${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-diagram">
           <div class="note-header">
             <span class="note-icon">📊</span>
-            <span class="note-type">图表摘录</span>
-            <span class="note-time">${timestamp}</span>
           </div>
           <div class="note-content">${htmlContent || `<div class="diagram-container">${markdownContent}</div>`}</div>
         </div>
       `;
       break;
     default:
-      markdownNote = `## 笔记 (${timestamp})\n${markdownContent}\n\n`;
+      markdownNote = `##${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-default">
           <div class="note-header">
             <span class="note-icon">📌</span>
-            <span class="note-type">笔记</span>
-            <span class="note-time">${timestamp}</span>
           </div>
           <div class="note-content">${htmlContent || `<p>${markdownContent}</p>`}</div>
         </div>
@@ -704,7 +692,7 @@ const addToNotes = async (element) => {
   }
 
   // 更新笔记内容
-  notesContent.value += htmlNote;
+  notesContent.value += markdownNote;
   processedNotesContent.value += htmlNote;
 
   // 滚动到底部
@@ -712,16 +700,25 @@ const addToNotes = async (element) => {
     notesEditor.value.scrollTop = notesEditor.value.scrollHeight;
   });
 
-  // notesContent.value += htmlNote;
-  // showNotes.value = true;
-  // showNoteBubbleMessage();
-  // 获取笔记文件路径
   const notesDir = await getNotesDirectory();
 
   try {
+    if (element.type === 'math'|| element.type === 'diagram'
+      || element.type === 'code') {
+      content = htmlNote
+      console.log('笔记类型:', element.type);
+      console.log('html笔记内容:', htmlNote);
+      console.log('笔记内容:', content);
+    } else {
+      content = markdownNote
+      console.log('笔记类型:', element.type);
+      console.log('markdown笔记内容:', htmlNote);
+      console.log('笔记内容:', content);
+    }
+
     // 调用Tauri后端写入笔记
     const response = await invoke('save_notes_to_file', {
-      content: markdownNote,
+      content: content,
       notesDir: notesDir,
       fileName: props.fileName.replace('.pdf', '')
     });
@@ -914,6 +911,7 @@ onMounted(() => {
         processedNotesContent.value = renderedHtml
           .replace(/<p><\/p>/g, '') // 移除空段落
           .replace(/\n/g, '<br>'); // 保留换行
+        console.log('processedNotesContent笔记内容:', processedNotesContent.value);
       }
     } catch (error) {
       console.error('加载笔记失败:', error);
@@ -1263,8 +1261,8 @@ button:disabled {
 .notes-panel {
   position: fixed;
   top: 0;
-  right: -400px;
-  width: 400px;
+  right: -600px;
+  width: 600px;
   height: 100%;
   background-color: #ffffff;
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
