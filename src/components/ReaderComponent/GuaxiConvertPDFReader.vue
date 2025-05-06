@@ -569,6 +569,17 @@ const getNotesDirectory = async () => {
   );
 };
 
+const getImagesDirectory = async () => {
+  const baseFileName = props.fileName.replace('.pdf', '');
+  return await join(
+    librariesRoot.value,
+    'Libraries',
+    props.library,
+    baseFileName,
+    'images'
+  );
+};
+
 const processedNotesContent = ref('')
 const notesEditor = ref(null)
 
@@ -609,6 +620,96 @@ const handleNotesKeyDown = (e) => {
   }
 }
 
+// 生成唯一文件名（浏览器兼容方案）
+function generateUniqueSvgName(content, type = 'mermaid') {
+  // 简单哈希函数（替代Node.js的crypto）
+  const simpleHash = (str) => {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(16).substring(0, 8);
+  };
+
+  // 使用内容哈希和时间戳
+  const contentHash = simpleHash(content);
+  const timestamp = Date.now();
+  
+  return `${type}-${contentHash}-${timestamp}.svg`;
+}
+
+async function processRenderedSvg(content, type = 'mermaid') {
+  try {
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = content;
+    
+    const svgElement = tempDiv.querySelector('svg');
+    if (!svgElement) return content;
+
+    // 克隆并清理SVG
+    const svgClone = svgElement.cloneNode(true);
+    svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const svgContent = svgClone.outerHTML;
+    
+    // 生成唯一文件名（浏览器兼容）
+    const fileName = generateUniqueSvgName(svgContent, type);
+    const imageDir = await getImagesDirectory();
+    
+    // 调用Tauri后端保存
+    const { relative_path } = await invoke('save_svg_file', {
+      content: svgContent,
+      fileName: fileName,
+      imageDir: imageDir
+    });
+    const processedImagesPath = await processImages(`![${type}图表](../${relative_path})`, imageDir);
+    console.log(`${type}图表已保存到: ${processedImagesPath}`);
+    return processedImagesPath;
+    
+  } catch (error) {
+    console.error(`处理${type} SVG失败:`, error);
+    // 失败时返回原始内容，但添加错误标记
+    return `<!-- SVG处理失败 -->\n${content}`;
+  }
+}
+
+// 从渲染后的HTML代码块中提取原始代码
+function extractCodeFromRendered(htmlContent) {
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = htmlContent;
+
+  // 尝试从不同结构的代码块中提取
+  const codeElement = tempDiv.querySelector('pre code') ||
+    tempDiv.querySelector('.hljs code') ||
+    tempDiv.querySelector('code');
+
+  if (codeElement) {
+    return codeElement.textContent;
+  }
+
+  // 如果无法提取，尝试从原始内容中获取
+  const match = htmlContent.match(/<code[^>]*>([\s\S]*?)<\/code>/);
+  return match ? match[1] : htmlContent;
+}
+
+// 处理代码块内容
+function processCodeContent(content, htmlContent) {
+  // 提取原始代码
+  const rawCode = extractCodeFromRendered(htmlContent || content);
+
+  // 检测语言类型
+  let language = '';
+  const langMatch = content.match(/^```(\w+)/) ||
+    (htmlContent || '').match(/language-(\w+)/);
+  if (langMatch) language = langMatch[1];
+
+  // 生成标准Markdown代码块
+  return `\`\`\`${language}
+${rawCode.trim()}
+\`\`\``;
+}
+
 // 添加内容到笔记
 const addToNotes = async (element) => {
   const timestamp = new Date().toLocaleString();
@@ -625,7 +726,7 @@ const addToNotes = async (element) => {
   // 根据类型生成不同的视觉样式
   switch (element.type) {
     case 'text':
-      markdownNote = `##${markdownContent}\n\n`;
+      markdownNote = `### ${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-text">
           <div class="note-header">
@@ -636,7 +737,7 @@ const addToNotes = async (element) => {
       `;
       break;
     case 'image':
-      markdownNote = `##${markdownContent}\n\n`;
+      markdownNote = `${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-image">
           <div class="note-header">
@@ -647,7 +748,7 @@ const addToNotes = async (element) => {
       `;
       break;
     case 'code':
-      markdownNote = `##${markdownContent}\n\n`;
+      markdownNote = processCodeContent(element.content, element.html);
       htmlNote = `
         <div class="note-section note-code">
           <div class="note-header">
@@ -658,7 +759,7 @@ const addToNotes = async (element) => {
       `;
       break;
     case 'math':
-      markdownNote = `##${markdownContent}\n\n`;
+      markdownNote = await processRenderedSvg(element.html, 'math');
       htmlNote = `
         <div class="note-section note-math">
           <div class="note-header">
@@ -669,7 +770,7 @@ const addToNotes = async (element) => {
       `;
       break;
     case 'diagram':
-      markdownNote = `##${markdownContent}\n\n`;
+      markdownNote = await processRenderedSvg(element.html, 'mermaid');
       htmlNote = `
         <div class="note-section note-diagram">
           <div class="note-header">
@@ -680,7 +781,7 @@ const addToNotes = async (element) => {
       `;
       break;
     default:
-      markdownNote = `##${markdownContent}\n\n`;
+      markdownNote = `${markdownContent}\n\n`;
       htmlNote = `
         <div class="note-section note-default">
           <div class="note-header">
@@ -703,18 +804,10 @@ const addToNotes = async (element) => {
   const notesDir = await getNotesDirectory();
 
   try {
-    if (element.type === 'math'|| element.type === 'diagram'
-      || element.type === 'code') {
-      content = htmlNote
-      console.log('笔记类型:', element.type);
-      console.log('html笔记内容:', htmlNote);
-      console.log('笔记内容:', content);
-    } else {
-      content = markdownNote
-      console.log('笔记类型:', element.type);
-      console.log('markdown笔记内容:', htmlNote);
-      console.log('笔记内容:', content);
-    }
+    content = markdownNote
+    console.log('笔记类型:', element.type);
+    console.log('markdown笔记内容:', htmlNote);
+    console.log('笔记内容:', content);
 
     // 调用Tauri后端写入笔记
     const response = await invoke('save_notes_to_file', {

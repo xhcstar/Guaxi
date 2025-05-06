@@ -4,11 +4,17 @@ use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 use urlencoding::encode;
-// use base64::{Engine as _, engine::general_purpose};
-
+use sha2::{Sha256, Digest};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use chrono::Local;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SvgSaveResult {
+    pub success: bool,
+    pub relative_path: String,
+    pub content_hash: String,
+}
 
 #[derive(Serialize)]
 pub struct NoteResponse {
@@ -163,5 +169,44 @@ pub fn load_existing_notes(notes_dir: String, file_name: String) -> Result<NoteR
     Ok(NoteResponse {
         file_path: String::new(),
         content: String::new(),
+    })
+}
+
+#[tauri::command]
+pub async fn save_svg_file(
+    content: String,
+    file_name: String,
+    image_dir: String,
+) -> Result<SvgSaveResult, String> {
+    // 创建目标目录
+    let mut images_path = std::env::current_dir()
+        .map_err(|e| format!("获取当前目录失败: {}", e))?;
+    images_path.push(image_dir);
+    
+    std::fs::create_dir_all(&images_path)
+        .map_err(|e| format!("创建目录失败: {}", e))?;
+
+    // 计算SHA256哈希（即使前端用了简单哈希，后端仍保持强哈希）
+    let mut hasher = Sha256::new();
+    hasher.update(&content);
+    let content_hash = format!("{:x}", hasher.finalize());
+
+    // 构建完整路径
+    let mut file_path = images_path.clone();
+    file_path.push(&file_name);
+    info!("文件路径: {}", file_path.display());
+
+    // 保存文件（如果不存在）
+    if !file_path.exists() {
+        std::fs::write(&file_path, content)
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+    }
+
+    info!("保存成功，文件路径: {} {}", file_name, content_hash);
+
+    Ok(SvgSaveResult {
+        success: true,
+        relative_path: format!("images/{}", file_name), // 注意路径格式
+        content_hash,
     })
 }
