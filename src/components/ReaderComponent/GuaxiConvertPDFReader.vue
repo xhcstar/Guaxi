@@ -287,6 +287,45 @@ const renderedMarkdown = computed(() => {
   return markdownLines.value.map(line => line.html).join('')
 })
 
+function determineNoteType(target) {
+  const timestamp = new Date().toLocaleString();
+  
+  // 1. 优先检查数学公式
+  if (target.closest('mjx-container, mjx-math')) {
+    return 'math';
+  }
+  
+  // 2. 检查Mermaid图表
+  const mermaidContainer = target.closest('.mermaid, [data-processed="true"]');
+  if (mermaidContainer) {
+    // 确认是Mermaid而非普通代码块
+    if (mermaidContainer.querySelector('svg') || mermaidContainer.classList.contains('mermaid')) {
+      return 'diagram';
+    }
+  }
+  
+  // 3. 检查代码块
+  const pre = target.closest('pre');
+  if (pre) {
+    // 排除图表
+    if (!pre.classList.contains('mermaid')) {
+      // 检测标准代码结构或高亮类
+      if (pre.querySelector('code') || 
+          [...pre.classList].some(c => ['hovered','hljs','code'].includes(c))) {
+        return 'code';
+      }
+    }
+  }
+  
+  // 4. 检查图片
+  if (target.tagName === 'IMG') {
+    return 'image';
+  }
+  
+  // 默认文本类型
+  return 'text';
+}
+
 const handleMarkdownClick = (e) => {
   // 清除之前选中的元素
   const prevSelected = document.querySelectorAll('.markdown-content .selected');
@@ -363,11 +402,7 @@ const handleMarkdownClick = (e) => {
 
     // 添加到笔记
     const timestamp = new Date().toLocaleString();
-    let noteType = 'text';
-    if (target.tagName === 'IMG') noteType = 'image';
-    else if (codeBlock) noteType = 'code';
-    else if (target.closest('mjx-container, mjx-math')) noteType = 'math';
-    else if (target.closest('.mermaid, svg')) noteType = 'diagram';
+    const noteType = determineNoteType(target);
 
     addToNotes({
       type: noteType,
@@ -748,7 +783,7 @@ const addToNotes = async (element) => {
       `;
       break;
     case 'code':
-      markdownNote = processCodeContent(element.content, element.html);
+      markdownNote = `${processCodeContent(element.content, element.html)}\n\n`;
       htmlNote = `
         <div class="note-section note-code">
           <div class="note-header">
@@ -759,7 +794,7 @@ const addToNotes = async (element) => {
       `;
       break;
     case 'math':
-      markdownNote = await processRenderedSvg(element.html, 'math');
+      markdownNote = `${await processRenderedSvg(element.html, 'math')}\n\n`;
       htmlNote = `
         <div class="note-section note-math">
           <div class="note-header">
@@ -770,7 +805,7 @@ const addToNotes = async (element) => {
       `;
       break;
     case 'diagram':
-      markdownNote = await processRenderedSvg(element.html, 'mermaid');
+      markdownNote = `${await processRenderedSvg(element.html, 'mermaid')}\n\n`;
       htmlNote = `
         <div class="note-section note-diagram">
           <div class="note-header">
