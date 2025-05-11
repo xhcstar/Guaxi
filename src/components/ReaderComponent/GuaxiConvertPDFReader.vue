@@ -617,12 +617,117 @@ const getImagesDirectory = async () => {
 
 const processedNotesContent = ref('')
 const notesEditor = ref(null)
+let isComposing = false
 
-// 处理笔记内容变化
-const handleNotesInput = (e) => {
+// 添加保存笔记方法
+const saveNotes = async () => {
+  try {
+    const notesDir = await getNotesDirectory();
+    const content = notesEditor.value.innerText; // 获取纯文本内容
+    // 或者使用HTML内容：const content = notesEditor.value.innerHTML;
+    
+    const response = await invoke('save_notes_to_file', {
+      content: content,
+      notesDir: notesDir,
+      fileName: props.fileName.replace('.pdf', '')
+    });
+
+    console.log('笔记保存成功:', response);
+    showNoteBubbleMessage();
+  } catch (error) {
+    console.error('保存笔记失败:', error);
+    alert(`保存笔记失败: ${error.message}`);
+  }
+};
+
+// 改进后的输入处理
+const handleNotesInput = debounce(() => {
+  if (isComposing) return
+  
+  // 保存选区
+  const selection = window.getSelection()
+  const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+  const cursorState = range ? {
+    node: range.startContainer,
+    offset: range.startOffset
+  } : null
+  
+  // 获取并处理内容
   const html = notesEditor.value.innerHTML
   notesContent.value = html
   processedNotesContent.value = renderInlineHtml(html)
+  
+  // 恢复选区
+  if (cursorState && cursorState.node) {
+    const newRange = document.createRange()
+    newRange.setStart(cursorState.node, Math.min(cursorState.offset, cursorState.node.length))
+    newRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(newRange)
+  }
+
+  // 自动保存（可选）
+  saveNotes();
+}, 100)
+
+// 改进的粘贴处理
+const handleNotesPaste = (e) => {
+  e.preventDefault()
+  const text = e.clipboardData.getData('text/plain')
+  
+  // 使用现代API插入文本
+  const selection = window.getSelection()
+  if (!selection.rangeCount) return
+  
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  
+  // 创建文本节点保持格式
+  const textNode = document.createTextNode(text)
+  range.insertNode(textNode)
+  
+  // 移动光标到插入内容之后
+  range.setStartAfter(textNode)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+// 改进的按键处理
+const handleNotesKeyDown = (e) => {
+  // 中文输入法状态下不处理
+  if (isComposing) return
+  
+  // Enter键处理
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    
+    const selection = window.getSelection()
+    if (!selection.rangeCount) return
+    
+    const range = selection.getRangeAt(0)
+    const p = document.createElement('p')
+    p.innerHTML = '<br>'
+    
+    range.deleteContents()
+    range.insertNode(p)
+    
+    // 在新段落开始位置设置光标
+    const newRange = document.createRange()
+    newRange.setStart(p, 0)
+    newRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(newRange)
+  }
+}
+
+// 防抖函数
+function debounce(fn, delay) {
+  let timer = null
+  return function(...args) {
+    clearTimeout(timer)
+    timer = setTimeout(() => fn.apply(this, args), delay)
+  }
 }
 
 // 简单的HTML渲染函数（保持基本格式）
@@ -637,22 +742,6 @@ const renderInlineHtml = (html) => {
   }
 
   return processed
-}
-
-// 处理粘贴事件
-const handleNotesPaste = (e) => {
-  e.preventDefault()
-  const text = (e.clipboardData || window.clipboardData).getData('text/plain')
-  document.execCommand('insertText', false, text)
-}
-
-// 处理特殊按键
-const handleNotesKeyDown = (e) => {
-  // 按Enter时创建新段落
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    document.execCommand('formatBlock', false, '<p>')
-  }
 }
 
 // 生成唯一文件名（浏览器兼容方案）
@@ -1009,6 +1098,9 @@ const handleWheelZoom = (e) => {
 };
 
 onMounted(() => {
+  const editor = notesEditor.value
+  editor.addEventListener('compositionstart', () => { isComposing = true })
+  editor.addEventListener('compositionend', () => { isComposing = false })
   store.get_librariesRoot().then(async () => {
     await updateMarkdownPath();
     loadPdfPage(1);
