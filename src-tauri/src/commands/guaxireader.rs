@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -138,6 +139,44 @@ pub fn save_notes_to_file(content: String, notes_dir: String, file_name: String)
 }
 
 #[tauri::command]
+pub fn save_notes_to_file_no_append(content: String, notes_dir: String, file_name: String) -> Result<String, String> {
+    // 确保笔记目录存在
+    fs::create_dir_all(&notes_dir).map_err(|e| e.to_string())?;
+    
+    // 检查目录中是否已有笔记文件
+    let entries = fs::read_dir(&notes_dir).map_err(|e| e.to_string())?;
+    let mut note_files: Vec<String> = Vec::new();
+    
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "md") {
+            note_files.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    
+    // 确定要写入的文件路径
+    let file_path = if note_files.len() == 1 {
+        // 如果只有一个笔记文件，使用它
+        format!("{}/{}", notes_dir, note_files[0])
+    } else {
+        // 否则创建新的笔记文件
+        let now = Local::now().format("%Y_%m_%d_%H_%M_%S").to_string();
+        format!("{}/{}-note-{}.md", notes_dir, file_name, now)
+    };
+    
+    // 写入文件（追加模式）
+    let mut file = OpenOptions::new()
+        .create(true)
+        .open(&file_path)
+        .map_err(|e| e.to_string())?;
+        
+    writeln!(&mut file, "{}", content).map_err(|e| e.to_string())?;
+    
+    Ok(format!("笔记已保存到: {}", file_path))
+}
+
+#[tauri::command]
 pub fn load_existing_notes(notes_dir: String, file_name: String) -> Result<NoteResponse, String> {
     use std::fs;
     
@@ -209,4 +248,53 @@ pub async fn save_svg_file(
         relative_path: format!("images/{}", file_name), // 注意路径格式
         content_hash,
     })
+}
+
+#[tauri::command]
+pub async fn load_notes_file(file_path: String) -> Result<serde_json::Value, String> {
+  if !std::path::Path::new(&file_path).exists() {
+    return Ok(json!({ "cards": [] }));
+  }
+
+  let content = tokio::fs::read_to_string(&file_path)
+    .await
+    .map_err(|e| e.to_string())?;
+
+  serde_json::from_str(&content)
+    .map_err(|e| format!("解析笔记文件失败: {}", e))
+}
+
+#[tauri::command]
+pub async fn update_notes_file(
+  action: String,
+  data: serde_json::Value,
+  file_path: String,
+) -> Result<(), String> {
+  // 读取现有数据
+  let mut notes = load_notes_file(file_path.clone())
+    .await
+    .unwrap_or(json!({ "cards": [] }));
+
+  // 处理操作
+  let cards = notes["cards"]
+    .as_array_mut()
+    .ok_or("无效的笔记格式")?;
+
+  match action.as_str() {
+    "add" => cards.push(data),
+    "update" => {
+      if let Some(pos) = cards.iter().position(|c| c["id"] == data["id"]) {
+        cards[pos] = data;
+      }
+    },
+    "delete" => cards.retain(|c| c["id"] != data["id"]),
+    _ => return Err("无效的操作类型".into())
+  }
+
+  // 异步写入文件
+  tokio::fs::write(&file_path, notes.to_string())
+    .await
+    .map_err(|e| e.to_string())?;
+
+  Ok(())
 }
