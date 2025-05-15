@@ -141,7 +141,10 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
-import { NCard, NButton, NIcon, NText } from 'naive-ui'
+import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
+
+// 初始化 message
+const message = useMessage()
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
@@ -864,7 +867,18 @@ ${rawCode.trim()}
 // 响应式数据
 const noteCards = ref([])
 const activeCardIndex = ref(-1)
+// 添加加载状态
+const isNotesReady = ref(false)
 const notesFilePath = ref('')
+
+// 确保路径初始化的专用函数
+const ensureNotesPath = async () => {
+  if (!notesFilePath.value) {
+    const notesDir = await getNotesDirectory()
+    notesFilePath.value = await join(notesDir, `${props.fileName.replace('.pdf', '')}.html`)
+  }
+  return notesFilePath.value
+}
 
 // 时间格式化
 const formatTime = (timestamp) => {
@@ -990,6 +1004,7 @@ const updateBackendNotes = async (action, cardData) => {
       throw new Error('无效的操作类型');
     }
     
+    console.log('准备发送的数据 notesFilePath:', notesFilePath.value);
     // 准备要发送的数据
     const payload = {
       action,
@@ -1000,6 +1015,7 @@ const updateBackendNotes = async (action, cardData) => {
       },
       filePath: notesFilePath.value
     };
+    console.log('发送的数据:', payload);
     
     await invoke('update_notes_file', payload);
     
@@ -1164,66 +1180,24 @@ const handleWheelZoom = (e) => {
   }
 };
 
-onMounted(() => {
-  // const editor = notesEditor.value
-  // editor.addEventListener('compositionstart', () => { isComposing = true })
-  // editor.addEventListener('compositionend', () => { isComposing = false })
-  store.get_librariesRoot().then(async () => {
-    await updateMarkdownPath();
-    loadPdfPage(1);
-    loadMarkdownPage(1);
-    const notesDir = await getNotesDirectory();
-    const response = await invoke('load_existing_notes', {
-      notesDir: notesDir,
-      fileName: props.fileName.replace('.pdf', '')
-    });
-    notesFilePath.value = response.filePath;
-
-    await loadExistingNotes(); // 然后加载现有笔记
-
-
-    // 加载现有笔记
-    // try {
-    //   const notesDir = await getNotesDirectory();
-    //   const response = await invoke('load_existing_notes', {
-    //     notesDir: notesDir,
-    //     fileName: props.fileName.replace('.pdf', '')
-    //   });
-
-    //   if (response.content) {
-    //     // 保存原始Markdown内容
-    //     notesContent.value = response.content;
-
-    //     // 渲染Markdown为HTML
-    //     // const renderedHtml = await renderMarkdown(response.content, {
-    //     //   basePath: "",
-    //     //   mermaid: true,
-    //     //   math: true,
-    //     //   codeHighlight: true,
-    //     //   theme: 'default'
-    //     // });
-
-    //     // 处理渲染后的HTML
-    //     // processedNotesContent.value = renderedHtml
-    //     //   .replace(/<p><\/p>/g, '') // 移除空段落
-    //     //   .replace(/\n/g, '<br>'); // 保留换行
-
-    //     processedNotesContent.value = response.content
-    //     console.log('processedNotesContent笔记内容:', processedNotesContent.value);
-    //   }
-    // } catch (error) {
-    //   console.error('加载笔记失败:', error);
-    //   processedNotesContent.value = `<div class="error">加载笔记失败: ${error.message}</div>`;
-    // }
-
-    // 添加窗口大小变化监听
-    window.addEventListener('resize', handleResize);
-    // 添加延迟确保DOM完全渲染
-    setTimeout(() => {
-      fitToWidth(); // 初始加载时自动适合宽度
-    }, 100);
-  });
-});
+onMounted(async () => {
+  await store.get_librariesRoot()
+  await updateMarkdownPath()
+  
+  // 并行加载
+  await Promise.all([
+    (async () => {
+      await ensureNotesPath()
+      await loadExistingNotes()
+    })(),
+    loadPdfPage(1),
+    loadMarkdownPage(1)
+  ])
+  
+  isNotesReady.value = true
+  window.addEventListener('resize', handleResize)
+  setTimeout(fitToWidth, 100)
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize);
