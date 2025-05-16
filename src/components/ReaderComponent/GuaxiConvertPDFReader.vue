@@ -510,13 +510,6 @@ const updateMarkdownPath = async () => {
   )
 }
 
-const showNoteBubbleMessage = () => {
-  showNoteBubble.value = true
-  setTimeout(() => {
-    showNoteBubble.value = false
-  }, 2000)
-}
-
 // 加载PDF页面
 const loadPdfPage = async (pageNum) => {
   try {
@@ -567,58 +560,8 @@ const loadMarkdownPage = async (pageNum) => {
 
     // 获取markdown文件所在目录
     const mdDir = await dirname(markdownFilePath.value);
-
-    // // 修正后的正则表达式（匹配标准Markdown图片语法）
-    // const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
-    // let processedContent = response.content;
-    // let match;
-
-    // // 创建替换映射表
-    // const replacements: { original: string; replacement: string }[] = [];
-
-    // // 先收集所有需要替换的内容
-    // while ((match = imgRegex.exec(response.content)) !== null) {
-    //   const [fullMatch, altText, imgPath] = match;
-    //   console.debug('匹配到图片:', { altText, imgPath });
-
-    //   // 只处理本地相对路径
-    //   if (!imgPath.match(/^(http|https|data:|\/)/i)) {
-    //     try {
-    //       // 处理Windows路径中的反斜杠
-    //       const normalizedPath = imgPath.replace(/\\/g, '/');
-    //       const fullFsPath = await join(mdDir, normalizedPath);
-    //       const tauriPath = convertFileSrc(fullFsPath);
-
-    //       replacements.push({
-    //         original: fullMatch,
-    //         replacement: `![${altText}](${tauriPath})`
-    //       });
-
-    //       console.debug('图片路径转换:', {
-    //         original: imgPath,
-    //         converted: tauriPath
-    //       });
-    //     } catch (error) {
-    //       console.error(`路径转换失败: ${imgPath}`, error);
-    //       replacements.push({
-    //         original: fullMatch,
-    //         replacement: `![${altText}](${imgPath}) <!-- 转换失败 -->`
-    //       });
-    //     }
-    //   }
-    // }
-
-    // // 执行批量替换（避免重复处理）
-    // replacements.forEach(({ original, replacement }) => {
-    //   processedContent = processedContent.replace(original, replacement);
-    // });
-
-    // markdownContent.value = processedContent;
     markdownContent.value = response.content;
     // console.log("markdownContent.value:", markdownContent.value);
-    // markdownLines.value = await renderMarkdown(markdownContent.value, {
-    //   libraryBasePath: mdDir
-    // });
     markdownLines.value = await convertPdfRenderMarkdown(markdownContent.value,
       { libraryBasePath: mdDir }
     );
@@ -654,126 +597,6 @@ const getImagesDirectory = async () => {
     'images'
   );
 };
-
-const processedNotesContent = ref('')
-const notesEditor = ref(null)
-let isComposing = false
-
-// 添加保存笔记方法
-// const saveNotes = async () => {
-//   try {
-//     const notesDir = await getNotesDirectory();
-//     const content = notesEditor.value.innerText; // 获取纯文本内容
-//     // 或者使用HTML内容：const content = notesEditor.value.innerHTML;
-
-//     const response = await invoke('save_notes_to_file_no_append', {
-//       content: content,
-//       notesDir: notesDir,
-//       fileName: props.fileName.replace('.pdf', '')
-//     });
-
-//     console.log('笔记保存成功:', response);
-//     showNoteBubbleMessage();
-//   } catch (error) {
-//     console.error('保存笔记失败:', error);
-//     alert(`保存笔记失败: ${error.message}`);
-//   }
-// };
-
-// // 改进后的输入处理
-// const handleNotesInput = debounce(() => {
-//   if (isComposing) return
-
-//   // 保存选区
-//   const selection = window.getSelection()
-//   const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null
-//   const cursorState = range ? {
-//     node: range.startContainer,
-//     offset: range.startOffset
-//   } : null
-
-//   // 获取并处理内容
-//   const html = notesEditor.value.innerHTML
-//   notesContent.value = html
-//   processedNotesContent.value = renderInlineHtml(html)
-
-//   // 恢复选区
-//   if (cursorState && cursorState.node) {
-//     const newRange = document.createRange()
-//     newRange.setStart(cursorState.node, Math.min(cursorState.offset, cursorState.node.length))
-//     newRange.collapse(true)
-//     selection.removeAllRanges()
-//     selection.addRange(newRange)
-//   }
-
-//   // 自动保存（可选）
-//   saveNotes();
-// }, 100)
-
-// 改进的粘贴处理
-const handleNotesPaste = (e) => {
-  e.preventDefault()
-  const text = e.clipboardData.getData('text/plain')
-
-  // 使用现代API插入文本
-  const selection = window.getSelection()
-  if (!selection.rangeCount) return
-
-  const range = selection.getRangeAt(0)
-  range.deleteContents()
-
-  // 创建文本节点保持格式
-  const textNode = document.createTextNode(text)
-  range.insertNode(textNode)
-
-  // 移动光标到插入内容之后
-  range.setStartAfter(textNode)
-  range.collapse(true)
-  selection.removeAllRanges()
-  selection.addRange(range)
-}
-
-// 改进的按键处理
-const handleNotesKeyDown = (e) => {
-  // 中文输入法状态下不处理
-  if (isComposing) return
-
-  // Enter键处理
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-
-    const selection = window.getSelection()
-    if (!selection.rangeCount) return
-
-    const range = selection.getRangeAt(0)
-    const p = document.createElement('p')
-    p.innerHTML = '<br>'
-
-    range.deleteContents()
-    range.insertNode(p)
-
-    // 在新段落开始位置设置光标
-    const newRange = document.createRange()
-    newRange.setStart(p, 0)
-    newRange.collapse(true)
-    selection.removeAllRanges()
-    selection.addRange(newRange)
-  }
-}
-
-// 简单的HTML渲染函数（保持基本格式）
-const renderInlineHtml = (html) => {
-  // 保留换行符
-  let processed = html.replace(/\n/g, '<br>')
-
-  // 自动为段落添加p标签（当没有块级元素时）
-  if (!/<(p|div|h[1-6]|blockquote|pre|ul|ol|li|table)/i.test(processed)) {
-    processed = processed.split('<br><br>').join('</p><p>')
-    processed = `<p>${processed}</p>`
-  }
-
-  return processed
-}
 
 // 生成唯一文件名（浏览器兼容方案）
 function generateUniqueSvgName(content, type = 'mermaid') {
