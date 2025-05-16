@@ -57,10 +57,14 @@
     <!-- 主内容区 -->
     <div class="pdf-main-content">
       <!-- 修改PDF渲染区域 -->
-      <div class="pdf-render-panel" @wheel="handleWheelZoom" ref="pdfPanel">
+      <div class="pdf-render-panel" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
+        @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag"
+        :style="{ cursor: shouldShowDragCursor() ? 'grabbing' : canDrag() ? 'grab' : 'default' }">
         <div class="pdf-image-container" :style="{
           transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
-          transformOrigin: 'center center'
+          transformOrigin: 'center center',
+          width: '100%',
+          height: '100%'
         }">
           <img v-if="elements.length > 0 && elements[0].type === 'image'" :src="elements[0].content"
             alt="Rendered PDF Page" class="rendered-pdf-image" ref="pdfImage" />
@@ -751,15 +755,6 @@ const handleNotesKeyDown = (e) => {
   }
 }
 
-// 防抖函数
-function debounce(fn, delay) {
-  let timer = null
-  return function (...args) {
-    clearTimeout(timer)
-    timer = setTimeout(() => fn.apply(this, args), delay)
-  }
-}
-
 // 简单的HTML渲染函数（保持基本格式）
 const renderInlineHtml = (html) => {
   // 保留换行符
@@ -910,11 +905,11 @@ const saveCardEdit = async (index) => {
     const cardElement = document.querySelector(
       `.note-card:nth-child(${index + 1}) .note-content`
     );
-    
+
     if (cardElement) {
       noteCards.value[index].content = cardElement.innerHTML;
       noteCards.value[index].timestamp = new Date().toISOString();
-      
+
       // 调用更新函数
       await updateBackendNotes('update', noteCards.value[index]);
     }
@@ -925,10 +920,10 @@ const deleteCard = async (index) => {
   if (index >= 0 && index < noteCards.value.length) {
     const cardId = noteCards.value[index].id;
     noteCards.value.splice(index, 1);
-    
+
     // 调用更新函数
     await updateBackendNotes('delete', { id: cardId });
-    
+
     // 调整选中状态
     if (activeCardIndex.value === index) {
       activeCardIndex.value = -1;
@@ -978,10 +973,10 @@ const loadExistingNotes = async () => {
     const response = await invoke('load_notes_file', {
       filePath: notesFilePath.value
     });
-    
+
     // 确保返回的是解析后的JSON数据
     const notesData = typeof response === 'string' ? JSON.parse(response) : response;
-    
+
     if (notesData?.cards?.length) {
       noteCards.value = notesData.cards.map(card => ({
         ...card,
@@ -1003,7 +998,7 @@ const updateBackendNotes = async (action, cardData) => {
     if (!['add', 'update', 'delete'].includes(action)) {
       throw new Error('无效的操作类型');
     }
-    
+
     console.log('准备发送的数据 notesFilePath:', notesFilePath.value);
     // 准备要发送的数据
     const payload = {
@@ -1016,9 +1011,9 @@ const updateBackendNotes = async (action, cardData) => {
       filePath: notesFilePath.value
     };
     console.log('发送的数据:', payload);
-    
+
     await invoke('update_notes_file', payload);
-    
+
     // 成功后的反馈
     message.success('笔记已保存', {
       duration: 1500
@@ -1067,6 +1062,99 @@ const exportNotes = () => {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 };
+
+// 修改后的拖动相关代码
+const isDragging = ref(false)
+const startDragPos = ref({ x: 0, y: 0 })
+const startScrollPos = ref({ left: 0, top: 0 })
+
+// 判断是否应该显示拖拽光标（仅在拖动时）
+const shouldShowDragCursor = () => {
+  return isDragging.value && canDrag()
+}
+
+// 判断当前是否可以拖动（页面超出容器时才允许拖动）
+const canDrag = () => {
+  if (!pdfPanel.value || !pdfImage.value) return false
+
+  // 考虑旋转状态
+  const isVertical = Math.abs(rotation.value % 180) === 90
+  const effectiveWidth = isVertical ? pdfImage.value.naturalHeight : pdfImage.value.naturalWidth
+  const effectiveHeight = isVertical ? pdfImage.value.naturalWidth : pdfImage.value.naturalHeight
+
+  const scaledWidth = effectiveWidth * zoomLevel.value
+  const scaledHeight = effectiveHeight * zoomLevel.value
+
+  return scaledWidth > pdfPanel.value.clientWidth || scaledHeight > pdfPanel.value.clientHeight
+}
+
+// 开始拖拽
+const startDrag = (e) => {
+  if (!canDrag()) return
+
+  isDragging.value = true
+  startDragPos.value = { x: e.clientX, y: e.clientY }
+  startScrollPos.value = {
+    left: pdfPanel.value.scrollLeft,
+    top: pdfPanel.value.scrollTop
+  }
+
+  // 防止文本选中
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'grabbing'
+}
+
+// 处理拖拽
+const handleDrag = (e) => {
+  if (!isDragging.value) return
+
+  const dx = e.clientX - startDragPos.value.x
+  const dy = e.clientY - startDragPos.value.y
+
+  pdfPanel.value.scrollLeft = startScrollPos.value.left - dx
+  pdfPanel.value.scrollTop = startScrollPos.value.top - dy
+
+  // 确保拖动时页面跟随光标
+  e.preventDefault()
+}
+
+// 结束拖拽
+const endDrag = () => {
+  if (isDragging.value) {
+    isDragging.value = false
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+  }
+}
+
+// 修改handleWheelZoom方法，支持拖拽状态
+const handleWheelZoom = (e) => {
+  if (e.ctrlKey) {
+    e.preventDefault()
+    const delta = e.deltaY < 0 ? 0.1 : -0.1
+    zoomLevel.value = Math.max(0.5, Math.min(2, zoomLevel.value + delta))
+
+    // 缩放后确保内容可见
+    nextTick(() => {
+      if (pdfPanel.value && pdfImage.value) {
+        const panel = pdfPanel.value
+        const img = pdfImage.value
+
+        // 考虑旋转状态
+        const isVertical = Math.abs(rotation.value % 180) === 90
+        const effectiveWidth = isVertical ? img.naturalHeight : img.naturalWidth
+        const effectiveHeight = isVertical ? img.naturalWidth : img.naturalHeight
+
+        const scaledWidth = effectiveWidth * zoomLevel.value
+        const scaledHeight = effectiveHeight * zoomLevel.value
+
+        // 确保内容居中
+        panel.scrollLeft = Math.max(0, (scaledWidth - panel.clientWidth) / 2)
+        panel.scrollTop = Math.max(0, (scaledHeight - panel.clientHeight) / 2)
+      }
+    })
+  }
+}
 
 // 分页控制 - 统一处理PDF和Markdown的页面切换
 const prevPage = () => {
@@ -1147,44 +1235,98 @@ const stopResize = () => {
 };
 // 旋转功能
 const rotate = (degrees) => {
-  rotation.value = (rotation.value + degrees) % 360;
-};
-
-const fitToWidth = () => {
-  if (!pdfPanel.value || !pdfImage.value) return;
-
-  const panelWidth = pdfPanel.value.clientWidth;
-  const imgWidth = pdfImage.value.naturalWidth;
-
-  // 考虑旋转状态
-  const isVertical = Math.abs(rotation.value % 180) === 90;
-  const effectiveWidth = isVertical ? pdfImage.value.naturalHeight : imgWidth;
-
-  // 计算适合宽度，留出10px边距
-  zoomLevel.value = (panelWidth - 10) / effectiveWidth;
-
-  // 确保图片居中
+  rotation.value = (rotation.value + degrees) % 360
+  // 延迟处理确保DOM更新
   nextTick(() => {
-    if (pdfPanel.value) {
-      pdfPanel.value.scrollLeft = (pdfImage.value.clientWidth - panelWidth) / 2;
+    if (pdfImage.value?.naturalWidth) {
+      fitToWidth()
+    } else {
+      setTimeout(fitToWidth, 300)
     }
-  });
-};
+  })
+}
 
-// 修改handleWheelZoom方法，考虑旋转状态
-const handleWheelZoom = (e) => {
-  if (e.ctrlKey) {
-    e.preventDefault();
-    const delta = e.deltaY < 0 ? 0.1 : -0.1;
-    zoomLevel.value = Math.max(0.5, Math.min(2, zoomLevel.value + delta));
+// 1. 添加状态锁防止重复计算
+let isFitting = false
+const fitToWidth = () => {
+  if (!pdfPanel.value || !pdfImage.value || isFitting) return
+  isFitting = true
+
+  try {
+    const panel = pdfPanel.value
+    const img = pdfImage.value
+
+    // 确保图像已加载
+    if (!img.naturalWidth) {
+      console.warn('图像尺寸未加载完成')
+      return
+    }
+
+    const panelWidth = panel.clientWidth
+    const panelHeight = panel.clientHeight
+    const imgNaturalWidth = img.naturalWidth
+    const imgNaturalHeight = img.naturalHeight
+
+    // 考虑旋转状态
+    const isVertical = Math.abs(rotation.value % 180) === 90
+    const effectiveWidth = isVertical ? imgNaturalHeight : imgNaturalWidth
+    const effectiveHeight = isVertical ? imgNaturalWidth : imgNaturalHeight
+
+    // 计算安全边距（动态适应）
+    const horizontalMargin = Math.min(20, panelWidth * 0.05) // 不超过5%宽度
+    const verticalMargin = Math.min(20, panelHeight * 0.05) // 不超过5%高度
+
+    // 计算比例时考虑最小缩放限制
+    const minScale = 0.5 // 最小缩放比例
+    const widthRatio = (panelWidth - horizontalMargin * 2) / effectiveWidth
+    const heightRatio = (panelHeight - verticalMargin * 2) / effectiveHeight
+
+    // 动态选择策略：优先宽度适应，但确保内容可见
+    let newZoom = Math.max(minScale, Math.min(widthRatio, heightRatio))
+
+    // 防止过度缩小（当容器很大时）
+    if (effectiveWidth * newZoom < panelWidth * 0.8 &&
+      effectiveHeight * newZoom < panelHeight * 0.8) {
+      newZoom = Math.max(widthRatio, heightRatio)
+    }
+
+    zoomLevel.value = newZoom
+
+    // 更新光标状态
+    nextTick(() => {
+      panel.style.cursor = shouldShowDragCursor() ? 'grab' : 'default'
+    })
+
+    // 智能居中（使用requestAnimationFrame确保DOM更新）
+    requestAnimationFrame(() => {
+      const scaledWidth = effectiveWidth * zoomLevel.value
+      const scaledHeight = effectiveHeight * zoomLevel.value
+
+      panel.scrollLeft = Math.max(0, (scaledWidth - panelWidth) / 2)
+      panel.scrollTop = Math.max(0, (scaledHeight - panelHeight) / 2)
+    })
+
+  } catch (error) {
+    console.error('fitToWidth错误:', error)
+  } finally {
+    isFitting = false
   }
+}
+
+// 防抖函数防止频繁触发
+const debounce = (fn, delay) => {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
 };
 
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
-  
-  // 并行加载
+
+  // 并行加载但不包括fitToWidth
   await Promise.all([
     (async () => {
       await ensureNotesPath()
@@ -1193,10 +1335,24 @@ onMounted(async () => {
     loadPdfPage(1),
     loadMarkdownPage(1)
   ])
-  
-  isNotesReady.value = true
-  window.addEventListener('resize', handleResize)
-  setTimeout(fitToWidth, 100)
+
+  // 单独处理尺寸适应
+  nextTick(() => {
+    // 只保留一个触发源
+    window.addEventListener('resize', debounce(() => {
+      if (isNotesReady.value) fitToWidth()
+    }, 300))
+
+    // 确保图像加载完成
+    const checkImageLoaded = () => {
+      if (pdfImage.value?.complete && pdfImage.value.naturalWidth > 0) {
+        fitToWidth()
+      } else {
+        setTimeout(checkImageLoaded, 100)
+      }
+    }
+    checkImageLoaded()
+  })
 })
 
 onBeforeUnmount(() => {
@@ -1411,11 +1567,17 @@ button:disabled {
   justify-content: center;
   align-items: center;
   background-color: #f8f9fa;
+  /* 确保transform-origin始终有效 */
+  transform-origin: center center !important;
+  /* 添加过渡效果 */
+  transition: transform 0.3s ease-out;
 }
 
 .rendered-pdf-image {
-  max-width: 100%;
-  max-height: 100%;
+  max-width: none !important;
+  max-height: none !important;
+  width: auto;
+  height: auto;
   object-fit: contain;
   transition: transform 0.2s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
@@ -1582,8 +1744,8 @@ button:disabled {
 
 .note-card:hover {
   box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08),
-              0 3px 6px 0 rgba(0, 0, 0, 0.06),
-              0 5px 12px 4px rgba(0, 0, 0, 0.04);
+    0 3px 6px 0 rgba(0, 0, 0, 0.06),
+    0 5px 12px 4px rgba(0, 0, 0, 0.04);
 }
 
 .note-content {
