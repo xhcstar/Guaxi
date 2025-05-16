@@ -12,7 +12,7 @@
           <span class="btn-text">上一页</span>
         </button>
 
-        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage">
+        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage" style="font-size: 12px;">
 
         <button @click="nextPage" :disabled="currentPage >= totalPages" title="下一页">
           <span class="btn-text">下一页</span>
