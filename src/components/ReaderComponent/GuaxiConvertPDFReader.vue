@@ -104,7 +104,7 @@
           }" header-style="padding: 12px 16px;" content-style="padding: 0;" @click="handleCardClick(index)">
           <template #header-extra>
             <n-button v-if="activeCardIndex === index" text @click.stop="deleteCard(index)">
-              <n-icon :component="CloseOutline" size="18" />
+              <n-icon :component="CloseOutline" size="14" />
             </n-button>
           </template>
 
@@ -903,18 +903,18 @@ const exportNotes = () => {
 const startDrag = (e) => {
   try {
     if (e.button !== 0 || !pdfPanel.value) return;
-    
+
     // 取消任何进行中的动画
     if (animationFrameId.value) {
       cancelAnimationFrame(animationFrameId.value);
       animationFrameId.value = null;
     }
-    
+
     isDragging.value = true;
     isDecelerating.value = false;
-    startDragPos.value = { 
-      x: e.clientX, 
-      y: e.clientY 
+    startDragPos.value = {
+      x: e.clientX,
+      y: e.clientY
     };
     startScrollPos.value = {
       left: pdfPanel.value.scrollLeft,
@@ -922,10 +922,10 @@ const startDrag = (e) => {
     };
     velocity.value = { x: 0, y: 0 };
     lastDragTime.value = performance.now();
-    
+
     document.body.style.userSelect = 'none';
     pdfPanel.value.style.cursor = 'grabbing';
-    
+
     e.preventDefault();
   } catch (error) {
     console.error('Error in startDrag:', error);
@@ -936,19 +936,19 @@ const startDrag = (e) => {
 const handleDrag = (e) => {
   try {
     if (!isDragging.value || !pdfPanel.value) return;
-    
+
     const now = performance.now();
     const deltaTime = now - lastDragTime.value;
     lastDragTime.value = now;
-    
+
     // 计算移动距离
     const dx = e.clientX - startDragPos.value.x;
     const dy = e.clientY - startDragPos.value.y;
-    
+
     // 更新滚动位置
     pdfPanel.value.scrollLeft = startScrollPos.value.left - dx;
     pdfPanel.value.scrollTop = startScrollPos.value.top - dy;
-    
+
     // 计算速度（像素/毫秒）
     if (deltaTime > 0) {
       velocity.value = {
@@ -956,7 +956,7 @@ const handleDrag = (e) => {
         y: dy / deltaTime
       };
     }
-    
+
     e.preventDefault();
   } catch (error) {
     console.error('Error in handleDrag:', error);
@@ -967,13 +967,13 @@ const handleDrag = (e) => {
 const endDrag = () => {
   try {
     if (!isDragging.value) return;
-    
+
     resetDragState();
-    
+
     // 如果速度足够大，启动惯性滚动
     const speedThreshold = 0.1;
-    if (Math.abs(velocity.value.x) > speedThreshold || 
-        Math.abs(velocity.value.y) > speedThreshold) {
+    if (Math.abs(velocity.value.x) > speedThreshold ||
+      Math.abs(velocity.value.y) > speedThreshold) {
       isDecelerating.value = true;
       decelerate();
     }
@@ -1171,7 +1171,7 @@ const fitToWidth = () => {
       // 重置速度和拖拽状态
       velocity.value = { x: 0, y: 0 }
       isDecelerating.value = false
-      
+
       // 计算居中位置，考虑边界情况
       panel.scrollLeft = Math.max(0, Math.min(
         (scaledWidth - panelWidth) / 2,
@@ -1271,14 +1271,16 @@ watch(() => props.filePath, async (newPath) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
+  height: 28px;
+  padding: 6px 8px;
+  /* 原padding 8px 16px，按比例缩小 */
   background-color: #f8f9fa;
   border-bottom: 1px solid #e0e0e0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 button {
-  padding: 8px 12px;
+  padding: 5px 8px;
   background-color: #ffffff;
   color: #495057;
   border: 1px solid #e9ecef;
@@ -1287,8 +1289,8 @@ button {
   transition: all 0.2s;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 14px;
+  gap: 20px;
+  font-size: 12px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
@@ -1308,14 +1310,14 @@ button:disabled {
 }
 
 .n-icon {
-  font-size: 16px;
+  font-size: 12px;
 }
 
 .page-info {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   color: #495057;
-  padding: 6px 12px;
+  padding: 5px 8px;
   background-color: #ffffff;
   border-radius: 6px;
   border: 1px solid #e9ecef;
@@ -1345,12 +1347,13 @@ button:disabled {
 
 /* 添加缩放控制按钮样式 */
 .zoom-level {
-  min-width: 40px;
+  min-width: 20px;
   text-align: center;
-  font-size: 14px;
+  font-size: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 5px 8px;
 }
 
 .zoom-in,
@@ -1377,6 +1380,7 @@ button:disabled {
   background-color: #f8f9fa;
   color: #495057;
   border: 1px solid #e9ecef;
+  padding: 5px 8px;
 }
 
 .rotate-left:hover,
@@ -1432,8 +1436,10 @@ button:disabled {
   overflow: auto;
   position: relative;
   background-color: #ffffff;
-  overscroll-behavior: none; /* 防止浏览器默认的滚动行为 */
-  scroll-behavior: auto; /* 禁用默认的平滑滚动 */
+  overscroll-behavior: none;
+  /* 防止浏览器默认的滚动行为 */
+  scroll-behavior: auto;
+  /* 禁用默认的平滑滚动 */
 }
 
 .pdf-image-container {
@@ -1461,7 +1467,8 @@ button:disabled {
   object-fit: contain;
   transition: transform 0.2s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  pointer-events: none; /* 拖拽时禁用图片事件 */
+  pointer-events: none;
+  /* 拖拽时禁用图片事件 */
 }
 
 .pdf-loading-message {
