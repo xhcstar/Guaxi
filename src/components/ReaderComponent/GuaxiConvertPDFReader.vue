@@ -59,7 +59,7 @@
       <!-- 修改PDF渲染区域 -->
       <div class="pdf-render-panel" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
         @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag"
-        :style="{ cursor: shouldShowDragCursor() ? 'grabbing' : canDrag() ? 'grab' : 'default' }">
+        :style="{ cursor: isDragging ? 'grabbing' : 'default' }">
         <div class="pdf-image-container" :style="{
           transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
           transformOrigin: 'center center',
@@ -211,6 +211,12 @@ const showNotes = ref(false)
 const notesContent = ref('')
 // UI状态
 const showNoteBubble = ref(false)
+// 添加状态锁防止重复计算
+let isFitting = false
+// 拖拽处理
+const isDragging = ref(false)
+const startDragPos = ref({ x: 0, y: 0 })
+const startScrollPos = ref({ left: 0, top: 0 })
 
 async function processImages(content, basePath = '') {
   const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
@@ -1063,35 +1069,8 @@ const exportNotes = () => {
   URL.revokeObjectURL(url);
 };
 
-// 修改后的拖动相关代码
-const isDragging = ref(false)
-const startDragPos = ref({ x: 0, y: 0 })
-const startScrollPos = ref({ left: 0, top: 0 })
-
-// 判断是否应该显示拖拽光标（仅在拖动时）
-const shouldShowDragCursor = () => {
-  return isDragging.value && canDrag()
-}
-
-// 判断当前是否可以拖动（页面超出容器时才允许拖动）
-const canDrag = () => {
-  if (!pdfPanel.value || !pdfImage.value) return false
-
-  // 考虑旋转状态
-  const isVertical = Math.abs(rotation.value % 180) === 90
-  const effectiveWidth = isVertical ? pdfImage.value.naturalHeight : pdfImage.value.naturalWidth
-  const effectiveHeight = isVertical ? pdfImage.value.naturalWidth : pdfImage.value.naturalHeight
-
-  const scaledWidth = effectiveWidth * zoomLevel.value
-  const scaledHeight = effectiveHeight * zoomLevel.value
-
-  return scaledWidth > pdfPanel.value.clientWidth || scaledHeight > pdfPanel.value.clientHeight
-}
-
 // 开始拖拽
 const startDrag = (e) => {
-  if (!canDrag()) return
-
   isDragging.value = true
   startDragPos.value = { x: e.clientX, y: e.clientY }
   startScrollPos.value = {
@@ -1101,7 +1080,6 @@ const startDrag = (e) => {
 
   // 防止文本选中
   document.body.style.userSelect = 'none'
-  document.body.style.cursor = 'grabbing'
 }
 
 // 处理拖拽
@@ -1123,7 +1101,6 @@ const endDrag = () => {
   if (isDragging.value) {
     isDragging.value = false
     document.body.style.userSelect = ''
-    document.body.style.cursor = ''
   }
 }
 
@@ -1246,8 +1223,6 @@ const rotate = (degrees) => {
   })
 }
 
-// 1. 添加状态锁防止重复计算
-let isFitting = false
 const fitToWidth = () => {
   if (!pdfPanel.value || !pdfImage.value || isFitting) return
   isFitting = true
@@ -1292,10 +1267,10 @@ const fitToWidth = () => {
 
     zoomLevel.value = newZoom
 
-    // 更新光标状态
-    nextTick(() => {
-      panel.style.cursor = shouldShowDragCursor() ? 'grab' : 'default'
-    })
+    // // 更新光标状态
+    // nextTick(() => {
+    //   panel.style.cursor = shouldShowDragCursor() ? 'grab' : 'default'
+    // })
 
     // 智能居中（使用requestAnimationFrame确保DOM更新）
     requestAnimationFrame(() => {
