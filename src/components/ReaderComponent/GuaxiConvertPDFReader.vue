@@ -59,7 +59,7 @@
       <!-- 修改PDF渲染区域 -->
       <div class="pdf-render-panel" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
         @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag"
-        :style="{ cursor: isDragging ? 'grabbing' : 'default' }">
+        :style="{ cursor: isDragging ? 'grabbing' : 'grab' }">
 
         <div class="pdf-image-container" :style="{
           transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
@@ -234,6 +234,10 @@ let isFitting = false
 const isDragging = ref(false)
 const startDragPos = ref({ x: 0, y: 0 })
 const startScrollPos = ref({ left: 0, top: 0 })
+const velocity = ref({ x: 0, y: 0 })
+const lastDragTime = ref(0)
+const animationFrameId = ref(null)
+const isDecelerating = ref(false)
 
 async function processImages(content, basePath = '') {
   const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
@@ -533,7 +537,7 @@ const loadPdfPage = async (pageNum) => {
     const data = await loadPage(pageNum);
     currentPage.value = data.page_number;
     totalPages.value = data.total_pages;
-    
+
     console.log('加载成功:', {
       page: currentPage.value,
       total: totalPages.value,
@@ -896,40 +900,105 @@ const exportNotes = () => {
   URL.revokeObjectURL(url);
 };
 
-// 开始拖拽
 const startDrag = (e) => {
-  isDragging.value = true
-  startDragPos.value = { x: e.clientX, y: e.clientY }
-  startScrollPos.value = {
-    left: pdfPanel.value.scrollLeft,
-    top: pdfPanel.value.scrollTop
+  try {
+    if (e.button !== 0 || !pdfPanel.value) return;
+    
+    // 取消任何进行中的动画
+    if (animationFrameId.value) {
+      cancelAnimationFrame(animationFrameId.value);
+      animationFrameId.value = null;
+    }
+    
+    isDragging.value = true;
+    isDecelerating.value = false;
+    startDragPos.value = { 
+      x: e.clientX, 
+      y: e.clientY 
+    };
+    startScrollPos.value = {
+      left: pdfPanel.value.scrollLeft,
+      top: pdfPanel.value.scrollTop
+    };
+    velocity.value = { x: 0, y: 0 };
+    lastDragTime.value = performance.now();
+    
+    document.body.style.userSelect = 'none';
+    pdfPanel.value.style.cursor = 'grabbing';
+    
+    e.preventDefault();
+  } catch (error) {
+    console.error('Error in startDrag:', error);
+    resetDragState();
   }
+};
 
-  // 防止文本选中
-  document.body.style.userSelect = 'none'
-}
-
-// 处理拖拽
 const handleDrag = (e) => {
-  if (!isDragging.value) return
-
-  const dx = e.clientX - startDragPos.value.x
-  const dy = e.clientY - startDragPos.value.y
-
-  pdfPanel.value.scrollLeft = startScrollPos.value.left - dx
-  pdfPanel.value.scrollTop = startScrollPos.value.top - dy
-
-  // 确保拖动时页面跟随光标
-  e.preventDefault()
-}
-
-// 结束拖拽
-const endDrag = () => {
-  if (isDragging.value) {
-    isDragging.value = false
-    document.body.style.userSelect = ''
+  try {
+    if (!isDragging.value || !pdfPanel.value) return;
+    
+    const now = performance.now();
+    const deltaTime = now - lastDragTime.value;
+    lastDragTime.value = now;
+    
+    // 计算移动距离
+    const dx = e.clientX - startDragPos.value.x;
+    const dy = e.clientY - startDragPos.value.y;
+    
+    // 更新滚动位置
+    pdfPanel.value.scrollLeft = startScrollPos.value.left - dx;
+    pdfPanel.value.scrollTop = startScrollPos.value.top - dy;
+    
+    // 计算速度（像素/毫秒）
+    if (deltaTime > 0) {
+      velocity.value = {
+        x: dx / deltaTime,
+        y: dy / deltaTime
+      };
+    }
+    
+    e.preventDefault();
+  } catch (error) {
+    console.error('Error in handleDrag:', error);
+    endDrag();
   }
-}
+};
+
+const endDrag = () => {
+  try {
+    if (!isDragging.value) return;
+    
+    resetDragState();
+    
+    // 如果速度足够大，启动惯性滚动
+    const speedThreshold = 0.1;
+    if (Math.abs(velocity.value.x) > speedThreshold || 
+        Math.abs(velocity.value.y) > speedThreshold) {
+      isDecelerating.value = true;
+      decelerate();
+    }
+  } catch (error) {
+    console.error('Error in endDrag:', error);
+    resetDragState();
+  }
+};
+
+const resetDragState = () => {
+  isDragging.value = false;
+  isDecelerating.value = false;
+  document.body.style.userSelect = '';
+  if (pdfPanel.value) {
+    pdfPanel.value.style.cursor = 'grab';
+  }
+};
+
+// 在onBeforeUnmount中添加清理
+onBeforeUnmount(() => {
+  resetDragState();
+  if (animationFrameId.value) {
+    cancelAnimationFrame(animationFrameId.value);
+  }
+});
 
 // 修改handleWheelZoom方法，支持拖拽状态
 const handleWheelZoom = (e) => {
@@ -1094,18 +1163,24 @@ const fitToWidth = () => {
 
     zoomLevel.value = newZoom
 
-    // // 更新光标状态
-    // nextTick(() => {
-    //   panel.style.cursor = shouldShowDragCursor() ? 'grab' : 'default'
-    // })
-
     // 智能居中（使用requestAnimationFrame确保DOM更新）
     requestAnimationFrame(() => {
       const scaledWidth = effectiveWidth * zoomLevel.value
       const scaledHeight = effectiveHeight * zoomLevel.value
 
-      panel.scrollLeft = Math.max(0, (scaledWidth - panelWidth) / 2)
-      panel.scrollTop = Math.max(0, (scaledHeight - panelHeight) / 2)
+      // 重置速度和拖拽状态
+      velocity.value = { x: 0, y: 0 }
+      isDecelerating.value = false
+      
+      // 计算居中位置，考虑边界情况
+      panel.scrollLeft = Math.max(0, Math.min(
+        (scaledWidth - panelWidth) / 2,
+        scaledWidth - panelWidth
+      ))
+      panel.scrollTop = Math.max(0, Math.min(
+        (scaledHeight - panelHeight) / 2,
+        scaledHeight - panelHeight
+      ))
     })
 
   } catch (error) {
@@ -1357,6 +1432,8 @@ button:disabled {
   overflow: auto;
   position: relative;
   background-color: #ffffff;
+  overscroll-behavior: none; /* 防止浏览器默认的滚动行为 */
+  scroll-behavior: auto; /* 禁用默认的平滑滚动 */
 }
 
 .pdf-image-container {
@@ -1373,6 +1450,7 @@ button:disabled {
   transform-origin: center center !important;
   /* 添加过渡效果 */
   transition: transform 0.3s ease-out;
+  will-change: transform;
 }
 
 .rendered-pdf-image {
@@ -1383,6 +1461,7 @@ button:disabled {
   object-fit: contain;
   transition: transform 0.2s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  pointer-events: none; /* 拖拽时禁用图片事件 */
 }
 
 .pdf-loading-message {
