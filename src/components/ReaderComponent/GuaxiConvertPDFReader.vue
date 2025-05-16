@@ -60,14 +60,18 @@
       <div class="pdf-render-panel" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
         @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag"
         :style="{ cursor: isDragging ? 'grabbing' : 'default' }">
+
         <div class="pdf-image-container" :style="{
           transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
           transformOrigin: 'center center',
           width: '100%',
           height: '100%'
         }">
-          <img v-if="elements.length > 0 && elements[0].type === 'image'" :src="elements[0].content"
-            alt="Rendered PDF Page" class="rendered-pdf-image" ref="pdfImage" />
+          <!-- 图片/混合模式 -->
+          <img v-if="renderContent?.content" :src="renderContent.content" @load="handleImageLoad"
+            class="rendered-pdf-image" ref="pdfImage" />
+
+          <!-- 加载状态 -->
           <div v-else class="pdf-loading-message">
             正在加载PDF页面...
           </div>
@@ -146,9 +150,7 @@ import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
-
-// 初始化 message
-const message = useMessage()
+import usePdfRenderer from './usePdfRenderer'
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
@@ -182,9 +184,24 @@ const props = defineProps({
   }
 })
 
+// 初始化 message
+const message = useMessage()
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
 const markdownContainer = ref(null);
+// const renderMode = ref('vector') // 默认渲染模式
+// const renderContent = ref(null)  // 渲染内容
+
+const {
+  renderMode,
+  loadPage,
+  renderContent,
+  textLayer,
+  isLoading,
+  error,
+  currentPageData
+} = usePdfRenderer(props);
+
 // 缩放状态
 const zoomLevel = ref(1);
 // 添加旋转状态
@@ -513,32 +530,19 @@ const updateMarkdownPath = async () => {
 // 加载PDF页面
 const loadPdfPage = async (pageNum) => {
   try {
-    const response = await invoke('get_converted_pdf_page', {
-      request: {
-        filetype: 'pdf',
-        filepath: props.filePath,
-        curpage: pageNum,
-        lastpage: 0
-      }
-    });
-
-    const data = JSON.parse(response);
+    const data = await loadPage(pageNum);
     currentPage.value = data.page_number;
     totalPages.value = data.total_pages;
+    
+    console.log('加载成功:', {
+      page: currentPage.value,
+      total: totalPages.value,
+      type: renderContent.value?.type
+    });
 
-    // 显示渲染后的PDF图像
-    elements.value = [{
-      type: "image",
-      content: `data:image/png;base64,${data.image_data}`,
-      key: `rendered_page_${pageNum}`
-    }];
-
-  } catch (error) {
-    console.error('PDF加载失败:', error);
-    elements.value = [];
-    if (error instanceof Error) {
-      alert(`PDF加载错误: ${error.message}`);
-    }
+  } catch (err) {
+    console.error('页面加载失败:', err);
+    message.error(`加载失败: ${err.message}`);
   }
 };
 

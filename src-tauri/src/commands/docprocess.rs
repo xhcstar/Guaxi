@@ -2,12 +2,19 @@ use pdfium_render::prelude::*;
 use pyo3::prelude::*;
 use pyo3::types::PyList; // 导入 PyList 类型
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::Cursor;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tauri::{Emitter, Window};
 use tracing::{error, info};
+use image::ImageFormat; // 确保已导入 ImageFormat
+use base64::Engine as _; // 使用新的 base64 编码方式
+use base64::engine::general_purpose;
+use svg::node::element::{Rectangle, Text as SvgText};
+use svg::node::Text as SvgNodeText; // 用于创建文本节点
+use svg::Document;
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -42,20 +49,45 @@ struct ConversionProgress {
     message: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct PdfElement {
-    #[serde(rename = "type")]
-    element_type: String,
-    content: String,
+// 请求数据结构
+#[derive(Debug, Deserialize)]
+pub struct PdfRenderRequest {
+    filepath: String,
+    curpage: usize,
+    lastpage: usize,
+    #[serde(default)]
+    mode: String, // "vector"|"hybrid"|"image"(默认)
+    #[serde(default)]
+    scale: Option<f32>,
 }
 
-#[derive(Serialize, Deserialize)]
+// 响应数据结构
+#[derive(Debug, Serialize)]
 pub struct PdfPageResponse {
     page_number: usize,
     total_pages: usize,
-    elements: Vec<PdfElement>,
-    image_data: String, // Add this field for base64 encoded image
+    #[serde(skip_serializing_if = "Option::is_none")]
+    svg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_data: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    text_blocks: Vec<TextBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TextBlock {
+    text: String,
+    bounds: Bounds,
+}
+
+#[derive(Debug, Serialize)]
+struct Bounds {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,58 +135,228 @@ pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownRes
 }
 
 #[tauri::command]
-pub async fn get_converted_pdf_page(request: serde_json::Value) -> Result<String, String> {
+pub async fn get_converted_pdf_page(request: Value) -> Result<String, String> {
     info!("get_converted_pdf_page: {:?}", request);
-    let filepath = request["filepath"].as_str().ok_or("Missing filepath")?;
-    let curpage = request["curpage"].as_u64().ok_or("Invalid page number")? as usize;
+    
+    // 解析请求参数
+    let req: PdfRenderRequest = serde_json::from_value(request)
+        .map_err(|e| format!("请求解析失败: {}", e))?;
 
+    // 初始化PDFium
     let pdfium = Pdfium::new(
         Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
             PDFIUM_LIB_PATH,
         ))
-        .map_err(|e| e.to_string())?,
+        .map_err(|e| format!("PDFium初始化失败: {}", e))?,
     );
-    info!("Opening PDF file: {}", filepath);
 
-    let document = pdfium
-        .load_pdf_from_file(filepath, None)
-        .map_err(|e| e.to_string())?;
+    // 加载文档
+    let document = pdfium.load_pdf_from_file(&req.filepath, None)
+        .map_err(|e| format!("PDF加载失败: {}", e))?;
 
     let total_pages = document.pages().len() as usize;
-    let page = document
-        .pages()
-        .get(
-            (curpage - 1)
-                .try_into()
-                .map_err(|_| "Page number conversion failed")?,
-        )
-        .map_err(|_| format!("Page {} out of bounds", curpage))?;
+    if req.curpage < 1 || req.curpage > total_pages {
+        return Err(format!("页码 {} 超出范围(总页数: {})", req.curpage, total_pages));
+    }
 
-    let render_config = PdfRenderConfig::new()
-        .set_target_width(1200)
-        .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
+    // 获取目标页
+    let page = document.pages().get((req.curpage - 1) as u16)
+        .map_err(|_| format!("获取页面 {} 失败", req.curpage))?;
 
-    let image = page
-        .render_with_config(&render_config)
-        .map_err(|e| format!("Failed to render page: {}", e))?;
-
-    let mut bytes = Vec::new();
-    let mut cursor = Cursor::new(&mut bytes);
-    image
-        .as_image()
-        .into_rgb8()
-        .write_to(&mut cursor, image::ImageFormat::Png)
-        .map_err(|e| format!("Failed to encode image: {}", e))?;
-
-    let response = PdfPageResponse {
-        page_number: curpage,
-        total_pages,
-        elements: Vec::new(),
-        image_data: base64::encode(&bytes),
-        error: None,
+    // 根据模式处理
+    let response = match req.mode.as_str() {
+        "vector" => render_vector(&page, req.curpage, total_pages, req.scale),
+        "hybrid" => render_hybrid(&page, req.curpage, total_pages, req.scale),
+        _ => render_image(&page, req.curpage, total_pages, req.scale),
     };
 
     serde_json::to_string(&response).map_err(|e| e.to_string())
+}
+
+// 矢量模式 (SVG+文本)
+fn render_vector(page: &PdfPage, curpage: usize, total_pages: usize, scale: Option<f32>) -> PdfPageResponse {
+    let scale_factor = scale.unwrap_or(1.5);
+    let page_width = page.width().value;
+    let page_height = page.height().value;
+    
+    // 创建SVG文档
+    let mut doc = Document::new()
+        .set("width", format!("{}pt", page_width * scale_factor))
+        .set("height", format!("{}pt", page_height * scale_factor))
+        .set("viewBox", format!("0 0 {} {}", page_width, page_height))
+        .set("xmlns", "http://www.w3.org/2000/svg")
+        .set("xmlns:xlink", "http://www.w3.org/1999/xlink");
+
+    // 1. 渲染页面背景
+    doc = doc.add(
+        Rectangle::new()
+            .set("x", 0)
+            .set("y", 0)
+            .set("width", page_width)
+            .set("height", page_height)
+            .set("fill", "white")
+    );
+
+    // 2. 提取并渲染文本
+    let mut text_blocks = Vec::new();
+    if let Ok(text) = page.text() {
+        // 使用 text.all() 获取所有文本
+        let all_text = text.all();
+        text_blocks.push(TextBlock {
+            text: all_text.clone(),
+            bounds: Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: page_width as f32,
+                h: page_height as f32,
+            },
+        });
+
+        // 正确创建SVG文本元素 - 提供初始内容参数
+        let text_element = SvgText::new(all_text)  // 这里提供初始文本内容
+            .set("x", 10)
+            .set("y", 20)
+            .set("font-family", "Arial")
+            .set("font-size", 12)
+            .set("fill", "black");
+        
+        doc = doc.add(text_element);
+    }
+
+    // 3. 生成SVG字符串
+    let svg_string = doc.to_string();
+
+    PdfPageResponse {
+        page_number: curpage,
+        total_pages,
+        svg: Some(svg_string),
+        image_data: None,
+        text_blocks,
+        error: None,
+    }
+}
+
+// 混合模式 (图片+文本)
+fn render_hybrid(page: &PdfPage, curpage: usize, total_pages: usize, scale: Option<f32>) -> PdfPageResponse {
+    let mut config = PdfRenderConfig::new()
+        .set_target_width(1200)
+        .use_print_quality(true)
+        .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
+    
+    if let Some(s) = scale {
+        config = config.scale(s, s).expect("Failed to set scale");
+    }
+
+    let image = match page.render_with_config(&config) {
+        Ok(img) => img,
+        Err(e) => return PdfPageResponse {
+            page_number: curpage,
+            total_pages,
+            svg: None,
+            image_data: None,
+            text_blocks: vec![],
+            error: Some(format!("页面渲染失败: {}", e)),
+        },
+    };
+
+    let image_data = match encode_image(&image) {
+        Ok(data) => Some(data),
+        Err(e) => return PdfPageResponse {
+            page_number: curpage,
+            total_pages,
+            svg: None,
+            image_data: None,
+            text_blocks: vec![],
+            error: Some(format!("图片编码失败: {}", e)),
+        },
+    };
+
+    let text_blocks = extract_text_blocks(page);
+
+    PdfPageResponse {
+        page_number: curpage,
+        total_pages,
+        svg: None,
+        image_data,
+        text_blocks,
+        error: None,
+    }
+}
+
+// 图片模式 (兼容旧版)
+fn render_image(page: &PdfPage, curpage: usize, total_pages: usize, scale: Option<f32>) -> PdfPageResponse {
+    let mut config = PdfRenderConfig::new()
+        .set_target_width(1200)
+        .rotate_if_landscape(PdfPageRenderRotation::Degrees90, true);
+    
+    if let Some(s) = scale {
+        config = config.scale(s, s).expect("Failed to set scale");
+    }
+
+    let image = match page.render_with_config(&config) {
+        Ok(img) => img,
+        Err(e) => return PdfPageResponse {
+            page_number: curpage,
+            total_pages,
+            svg: None,
+            image_data: None,
+            text_blocks: vec![],
+            error: Some(format!("页面渲染失败: {}", e)),
+        },
+    };
+
+    let image_data = match encode_image(&image) {
+        Ok(data) => Some(data),
+        Err(e) => return PdfPageResponse {
+            page_number: curpage,
+            total_pages,
+            svg: None,
+            image_data: None,
+            text_blocks: vec![],
+            error: Some(format!("图片编码失败: {}", e)),
+        },
+    };
+
+    PdfPageResponse {
+        page_number: curpage,
+        total_pages,
+        svg: None,
+        image_data,
+        text_blocks: vec![],
+        error: None,
+    }
+}
+
+// 图片编码通用方法
+fn encode_image(image: &PdfBitmap) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    image
+        .as_image()
+        .into_rgb8()
+        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+        .map_err(|e| format!("图片编码失败: {}", e))?;
+    Ok(general_purpose::STANDARD.encode(&bytes))
+}
+
+// 提取文本块
+fn extract_text_blocks(page: &PdfPage) -> Vec<TextBlock> {
+    let mut blocks = Vec::new();
+    
+    if let Ok(text) = page.text() {
+        // 使用 text.all() 获取所有文本
+        let all_text = text.all();
+        blocks.push(TextBlock {
+            text: all_text,
+            bounds: Bounds {
+                x: 0.0,
+                y: 0.0,
+                w: page.width().value as f32,
+                h: page.height().value as f32,
+            },
+        });
+    }
+    
+    blocks
 }
 
 #[tauri::command]
