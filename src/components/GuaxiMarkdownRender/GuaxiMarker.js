@@ -11,7 +11,7 @@ const RenderOptions = {
   math: undefined,
   codeHighlight: undefined,
   theme: "default", // 移除类型注解
-  basePath: ""
+  basePath: "",
 };
 
 export const addCopyButtons = (container) => {
@@ -137,7 +137,7 @@ export const addCopyButtons = (container) => {
 
 // 辅助函数：转义正则表达式特殊字符
 function escapeRegExp(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // interface ImageMapping {
@@ -145,10 +145,7 @@ function escapeRegExp(string) {
 //   served_path: string;
 // }
 
-export const renderMarkdown = async (
-  content,
-  options
-) => {
+export const renderMarkdown = async (content, options) => {
   console.log("原始内容:", content);
   const {
     mermaid: enableMermaid = true,
@@ -159,14 +156,17 @@ export const renderMarkdown = async (
 
   try {
     // 调用后端处理图片路径
-    const response = await fetch("http://localhost:8888/api/markdown/image_process", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content,
-        base_path: options.basePath,
-      }),
-    });
+    const response = await fetch(
+      "http://localhost:8888/api/markdown/image_process",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content,
+          base_path: options.basePath,
+        }),
+      }
+    );
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -180,7 +180,7 @@ export const renderMarkdown = async (
     let finalContent = processedContent;
     mappings.forEach((mapping) => {
       finalContent = finalContent.replace(
-        new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, 'g'),
+        new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, "g"),
         `](${mapping.served_path})`
       );
     });
@@ -206,6 +206,8 @@ export const renderMarkdown = async (
       html: true,
       linkify: true,
       typographer: true,
+      breaks: false, // 禁用单换行转换为 <br>
+      xhtmlOut: true, // 使用XHTML兼容的闭合标签
       highlight: enableCodeHighlight
         ? (code, lang) => {
             if (lang && hljs.getLanguage(lang)) {
@@ -221,6 +223,27 @@ export const renderMarkdown = async (
           }
         : undefined,
     });
+
+    // 修改文本渲染规则，确保所有文本都被包裹
+    md.renderer.rules.text = (tokens, idx) => {
+      return `<span>${md.utils.escapeHtml(tokens[idx].content)}</span>`;
+    };
+
+    // 修改段落渲染规则
+    const defaultParagraphOpen =
+      md.renderer.rules.paragraph_open || ((tokens, idx) => "<p>");
+    const defaultParagraphClose =
+      md.renderer.rules.paragraph_close || ((tokens, idx) => "</p>");
+
+    md.renderer.rules.paragraph_open = (tokens, idx) => {
+      return defaultParagraphOpen(tokens, idx).replace(
+        "<p>",
+        '<p class="md-paragraph">'
+      );
+    };
+    md.renderer.rules.paragraph_close = (tokens, idx) => {
+      return defaultParagraphClose(tokens, idx);
+    };
 
     // 添加Mermaid支持
     if (enableMermaid) {
@@ -255,8 +278,8 @@ export const renderMarkdown = async (
           // 处理每个图表
           mermaidElements.forEach((el) => {
             try {
-              const content = el
-                .textContent.replace(/&gt;/g, ">")
+              const content = el.textContent
+                .replace(/&gt;/g, ">")
                 .replace(/&lt;/g, "<")
                 .replace(/&amp;/g, "&");
               el.innerHTML = content;
