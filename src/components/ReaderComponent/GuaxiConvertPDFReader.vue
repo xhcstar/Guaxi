@@ -12,7 +12,8 @@
           <span class="btn-text">上一页</span>
         </button>
 
-        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage" style="font-size: 12px;">
+        <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage"
+          style="font-size: 12px;">
 
         <button @click="nextPage" :disabled="currentPage >= totalPages" title="下一页">
           <span class="btn-text">下一页</span>
@@ -108,8 +109,18 @@
             </n-button>
           </template>
 
-          <div class="note-content" :contenteditable="activeCardIndex === index" @blur="saveCardEdit(index)"
-            v-html="card.content"></div>
+          <!-- 根据笔记类型使用不同的渲染方式 -->
+          <div v-if="card.type !== 'composite'" class="note-content" :contenteditable="activeCardIndex === index"
+            @blur="saveCardEdit(index)" v-html="card.content">
+          </div>
+
+          <!-- 添加复合笔记的专用渲染 -->
+          <div v-else class="composite-note-content">
+            <div v-for="(segment, segIndex) in parseCompositeContent(card.html)" :key="segIndex" class="note-segment"
+              :class="getSegmentClass(segment)">
+              <div v-html="segment.content"></div>
+            </div>
+          </div>
 
           <template #footer>
             <n-text depth="3" style="font-size: 12px;">
@@ -387,7 +398,23 @@ function determineNoteType(target) {
   return 'text';
 }
 
+// 添加全局状态管理
+const altKeyCollector = ref({
+  isActive: false,
+  currentCard: null,
+  timer: null
+})
+
 const handleMarkdownClick = (e) => {
+  // 检查是否按下了Alt键
+  const isAltPressed = e.altKey;
+
+  // 如果按下Alt键且当前没有激活收集器，则开始新的收集
+  if (isAltPressed && !altKeyCollector.value.isActive) {
+    startAltKeyCollection();
+    return; // 开始收集后直接返回，避免重复处理
+  }
+
   // 清除之前选中的元素
   const prevSelected = document.querySelectorAll('.markdown-content .selected');
   prevSelected.forEach(el => el.classList.remove('selected'));
@@ -411,7 +438,7 @@ const handleMarkdownClick = (e) => {
     const codeContent = codeBlock.textContent || '';
     message = `已选中代码块: ${codeContent.substring(0, 30)}${codeContent.length > 30 ? '...' : ''}`;
     noteContent = `\`\`\`\n${codeContent}\n\`\`\``;
-    noteHtml = codeBlock.outerHTML; // 直接使用原始HTML
+    noteHtml = codeBlock.outerHTML;
   }
   // 处理数学公式点击
   else if (target.closest('mjx-container, mjx-math')) {
@@ -419,7 +446,7 @@ const handleMarkdownClick = (e) => {
     const mathContent = selectedElement.getAttribute('data-mjx-text') || selectedElement.textContent || '';
     message = `已选中数学公式: ${mathContent.substring(0, 30)}${mathContent.length > 30 ? '...' : ''}`;
     noteContent = `$$${mathContent}$$`;
-    noteHtml = selectedElement.outerHTML; // 直接使用原始HTML
+    noteHtml = selectedElement.outerHTML;
   }
   // 处理mermaid图表点击
   else if (target.closest('.mermaid, svg')) {
@@ -427,21 +454,21 @@ const handleMarkdownClick = (e) => {
     const mermaidContent = selectedElement.querySelector('.mermaid')?.textContent || selectedElement.textContent || '';
     message = '已选中图表';
     noteContent = `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
-    noteHtml = selectedElement.outerHTML; // 直接使用原始HTML
+    noteHtml = selectedElement.outerHTML;
   }
   // 处理图片点击
   else if (target.tagName === 'IMG') {
     selectedElement = target;
     message = '已选中图片';
     noteContent = `![图片](${target.src})`;
-    noteHtml = target.outerHTML; // 直接使用原始HTML
+    noteHtml = target.outerHTML;
   }
   // 处理文本选择
   else if (selectedText && selection.rangeCount > 0) {
     selectedElement = selection.getRangeAt(0).startContainer.parentElement;
     message = `已选中文本: ${selectedText.substring(0, 30)}${selectedText.length > 30 ? '...' : ''}`;
     noteContent = selectedText;
-    noteHtml = `<p>${selectedText}</p>`; // 包装成段落
+    noteHtml = `<p>${selectedText}</p>`;
   }
   // 处理段落点击
   else {
@@ -451,7 +478,7 @@ const handleMarkdownClick = (e) => {
       const textContent = paragraph.textContent || '';
       message = `已选中段落: ${textContent.substring(0, 30)}${textContent.length > 30 ? '...' : ''}`;
       noteContent = textContent;
-      noteHtml = paragraph.outerHTML; // 直接使用原始HTML
+      noteHtml = paragraph.outerHTML;
     }
   }
 
@@ -462,16 +489,201 @@ const handleMarkdownClick = (e) => {
     selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
     // 添加到笔记
-    const timestamp = new Date().toLocaleString();
     const noteType = determineNoteType(target);
 
-    addToNotes({
-      type: noteType,
-      content: noteContent,
-      html: noteHtml // 添加HTML格式内容
+    // 如果Alt键被按下且收集器处于激活状态，则追加到当前卡片
+    if (altKeyCollector.value.isActive) {
+      appendToCurrentNote({
+        type: noteType,
+        content: noteContent,
+        html: noteHtml
+      });
+
+      // 更新卡片标题显示已收集内容数量
+      if (altKeyCollector.value.currentCard) {
+        const segments = parseCompositeContent(altKeyCollector.value.currentCard.html);
+        altKeyCollector.value.currentCard.title = `复合笔记 (${segments.length}项)`;
+
+        // 触发响应式更新
+        noteCards.value = [...noteCards.value];
+      }
+    } else {
+      // 否则创建新卡片
+      addToNotes({
+        type: noteType,
+        content: noteContent,
+        html: noteHtml
+      });
+    }
+  }
+
+  // 如果松开Alt键且收集器处于激活状态，则立即结束收集
+  if (!isAltPressed && altKeyCollector.value.isActive) {
+    endAltKeyCollection();
+  }
+};
+
+// 开始Alt键收集模式
+const startAltKeyCollection = () => {
+  // 清除任何现有的定时器
+  if (altKeyCollector.value.timer) {
+    clearTimeout(altKeyCollector.value.timer);
+    altKeyCollector.value.timer = null;
+  }
+
+  altKeyCollector.value.isActive = true;
+
+  // 创建新卡片并立即添加到笔记列表
+  const newCard = {
+    id: Date.now().toString(),
+    type: 'composite',
+    title: '复合笔记',
+    content: '',
+    html: '',
+    timestamp: new Date().toISOString()
+  };
+
+  noteCards.value.push(newCard);
+  activeCardIndex.value = noteCards.value.length - 1;
+  altKeyCollector.value.currentCard = newCard;
+
+  // 设置超时自动结束收集（安全机制）
+  altKeyCollector.value.timer = setTimeout(() => {
+    if (altKeyCollector.value.isActive) {
+      endAltKeyCollection();
+    }
+  }, 30000); // 30秒后自动结束
+
+  // 滚动到新卡片
+  nextTick(() => {
+    const cards = document.querySelectorAll('.n-card');
+    if (cards.length > 0) {
+      cards[cards.length - 1].scrollIntoView({ behavior: 'smooth' });
+    }
+  });
+
+  message.info('已进入多选模式，松开Alt键结束收集', { duration: 3000 });
+};
+
+// 结束Alt键收集模式
+const endAltKeyCollection = () => {
+  if (!altKeyCollector.value.isActive) return;
+
+  // 清除定时器
+  if (altKeyCollector.value.timer) {
+    clearTimeout(altKeyCollector.value.timer);
+    altKeyCollector.value.timer = null;
+  }
+
+  // 如果有收集内容，则添加到笔记
+  if (altKeyCollector.value.currentCard &&
+    (altKeyCollector.value.currentCard.content || altKeyCollector.value.currentCard.html)) {
+    // 确保卡片已经存在于noteCards中（因为我们在start时已经添加）
+    const existingIndex = noteCards.value.findIndex(card => card.id === altKeyCollector.value.currentCard.id);
+    if (existingIndex === -1) {
+      noteCards.value.push(altKeyCollector.value.currentCard);
+    }
+    activeCardIndex.value = noteCards.value.length - 1;
+    updateBackendNotes('add', altKeyCollector.value.currentCard);
+
+    nextTick(() => {
+      const cards = document.querySelectorAll('.n-card');
+      if (cards.length > 0) {
+        cards[cards.length - 1].scrollIntoView({ behavior: 'smooth' });
+      }
     });
   }
-}
+
+  // 重置状态
+  altKeyCollector.value.isActive = false;
+  altKeyCollector.value.currentCard = null;
+
+  message.success('多选模式已结束', { duration: 2000 });
+};
+
+// 解析复合笔记内容
+const parseCompositeContent = (html) => {
+  if (!html) return [];
+
+  try {
+    // 创建临时DOM来解析HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+
+    // 提取各个片段
+    const segments = Array.from(tempDiv.children).map(el => {
+      const classList = Array.from(el.classList);
+      let type = 'text';
+
+      if (classList.includes('code-segment')) type = 'code';
+      else if (classList.includes('image-segment')) type = 'image';
+      else if (classList.includes('diagram-segment')) type = 'diagram';
+      else if (el.querySelector('mjx-container, mjx-math')) type = 'math';
+
+      return {
+        type,
+        content: el.outerHTML
+      };
+    });
+
+    return segments;
+  } catch (error) {
+    console.error('解析复合笔记失败:', error);
+    return [{
+      type: 'text',
+      content: html
+    }];
+  }
+};
+
+// 获取片段样式类
+const getSegmentClass = (segment) => {
+  switch (segment.type) {
+    case 'code': return 'code-segment';
+    case 'image': return 'image-segment';
+    case 'diagram': return 'diagram-segment';
+    case 'math': return 'math-segment';
+    default: return 'text-segment';
+  }
+};
+
+// 修改appendToCurrentNote方法，确保复合笔记数据正确
+const appendToCurrentNote = (element) => {
+  if (!altKeyCollector.value.isActive || !altKeyCollector.value.currentCard) return;
+
+  const currentCard = altKeyCollector.value.currentCard;
+
+  // 根据类型处理内容追加
+  switch (element.type) {
+    case 'text':
+    case 'math':
+      currentCard.content += `\n\n${element.content}`;
+      currentCard.html += `<div class="note-segment ${element.type}-segment">${element.html}</div>`;
+      break;
+    case 'code':
+      currentCard.content += `\n\n${element.content}`;
+      currentCard.html += `<div class="note-segment code-segment">${element.html}</div>`;
+      break;
+    case 'image':
+      currentCard.content += `\n\n${element.content}`;
+      currentCard.html += `<div class="note-segment image-segment">${element.html}</div>`;
+      break;
+    case 'diagram':
+      currentCard.content += `\n\n${element.content}`;
+      currentCard.html += `<div class="note-segment diagram-segment">${element.html}</div>`;
+      break;
+    default:
+      currentCard.content += `\n\n${element.content}`;
+      currentCard.html += `<div class="note-segment">${element.html}</div>`;
+  }
+
+  // 更新卡片类型为复合类型
+  currentCard.type = 'composite';
+  currentCard.timestamp = new Date().toISOString();
+
+  // 显示追加成功的消息
+  message.success('内容已添加到当前收集', { duration: 1500 });
+};
 
 const showSelectionMessage = (message) => {
   // 移除旧的消息
@@ -772,6 +984,12 @@ const deleteCard = async (index) => {
 
 // 从Markdown内容添加卡片
 const addToNotes = async (element) => {
+  // 如果处于Alt键收集模式，则追加到当前卡片
+  if (altKeyCollector.value.isActive) {
+    appendToCurrentNote(element)
+    return
+  }
+
   const newCard = {
     id: Date.now().toString(),
     type: element.type || 'text',
@@ -1061,8 +1279,12 @@ const goToPage = (page) => {
 
 // UI控制
 const toggleNotesPanel = () => {
-  showNotes.value = !showNotes.value
-}
+  showNotes.value = !showNotes.value;
+  if (showNotes.value) {
+    // 强制重新渲染笔记卡片
+    noteCards.value = [...noteCards.value];
+  }
+};
 
 // 缩放功能方法
 const zoomIn = () => {
@@ -1213,6 +1435,15 @@ onMounted(async () => {
     loadMarkdownPage(1)
   ])
 
+  // 添加全局键盘事件监听
+  const handleKeyUp = (e) => {
+    if (e.key === 'Alt' && altKeyCollector.value.isActive) {
+      endAltKeyCollection();
+    }
+  };
+
+  window.addEventListener('keyup', handleKeyUp);
+
   // 单独处理尺寸适应
   nextTick(() => {
     // 只保留一个触发源
@@ -1237,6 +1468,7 @@ onBeforeUnmount(() => {
   // 清理拖动事件监听
   document.removeEventListener('mousemove', handleMouseMove);
   document.removeEventListener('mouseup', stopResize);
+  window.removeEventListener('keyup', handleKeyUp);
 });
 
 const handleResize = () => {
@@ -1706,6 +1938,59 @@ button:disabled {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* 复合笔记样式 */
+.composite-note-content {
+  padding: 12px;
+}
+
+.note-segment {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed #e0e0e0;
+}
+
+.text-segment {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.code-segment {
+  background: #f6f8fa;
+  padding: 12px;
+  border-radius: 6px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  overflow-x: auto;
+}
+
+.image-segment {
+  text-align: center;
+}
+
+.image-segment img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.diagram-segment {
+  background: white;
+  padding: 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.math-segment {
+  padding: 8px;
+  overflow-x: auto;
+}
+
+/* 确保内容可编辑时的样式 */
+.note-content[contenteditable="true"],
+.composite-note-content[contenteditable="true"] {
+  outline: 1px dashed #4dabf7;
+  min-height: 60px;
+  padding: 8px;
 }
 </style>
 
