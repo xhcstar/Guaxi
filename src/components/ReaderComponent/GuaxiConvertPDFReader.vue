@@ -464,43 +464,63 @@ async function processNoteImage(imgElement) {
   }
 }
 
-// 12. Markdown交互处理
-const handleMarkdownClick = async (e) => {  // 改为async函数
-  // 检查是否按下了Alt键
+const handleMarkdownClick = async (e) => {
+  // 1. 阻止默认行为（防止Alt+Click触发浏览器默认动作）
+  e.preventDefault();
+  
+  // 2. 获取关键状态
   const isAltPressed = e.altKey;
-
-  // 如果按下Alt键且当前没有激活收集器，则开始新的收集
-  if (isAltPressed && !altKeyCollector.value.isActive) {
-    startAltKeyCollection();
-    return;
-  }
-
-  // 清除之前选中的元素
-  const prevSelected = document.querySelectorAll('.markdown-content .selected');
-  prevSelected.forEach(el => el.classList.remove('selected'));
-
-  // 获取点击的元素
   const target = e.target;
-
-  // 获取选中的文本
   const selection = window.getSelection();
   const selectedText = selection.toString().trim();
 
+  // 3. Alt键特殊处理（不再提前return）
+  if (isAltPressed && !altKeyCollector.value.isActive) {
+    startAltKeyCollection();
+    // 继续执行后续逻辑，不return
+  }
+
+  // 4. 清除之前选中的元素
+  document.querySelectorAll('.markdown-content .selected').forEach(el => {
+    el.classList.remove('selected');
+  });
+
+  // 5. 元素类型判断
   let selectedElement = null;
   let message = '';
   let noteContent = '';
   let noteHtml = '';
 
-  // 处理代码块点击
-  const codeBlock = target.closest('pre, code, .code-block');
-  if (codeBlock) {
+  // 图片处理（现在支持Alt+Click）
+  if (target.tagName === 'IMG') {
+    selectedElement = target;
+    try {
+      const processedSrc = await processNoteImage(target);
+      message = '已选中图片';
+      noteContent = `![图片](${processedSrc})`;
+      noteHtml = `<img src="${processedSrc}" alt="笔记图片" class="note-image">`;
+      
+      // 标记base64图片
+      if (target.src.startsWith('data:')) {
+        noteHtml += '<!-- base64-image -->';
+      }
+    } catch (error) {
+      console.error('图片处理失败:', error);
+      message = '图片处理失败，使用原始链接';
+      noteContent = `![图片](${target.src})`;
+      noteHtml = target.outerHTML;
+    }
+  }
+  // 代码块
+  else if (target.closest('pre, code, .code-block')) {
+    const codeBlock = target.closest('pre, code, .code-block');
     selectedElement = codeBlock;
     const codeContent = codeBlock.textContent || '';
     message = `已选中代码块: ${codeContent.substring(0, 30)}${codeContent.length > 30 ? '...' : ''}`;
     noteContent = `\`\`\`\n${codeContent}\n\`\`\``;
     noteHtml = codeBlock.outerHTML;
   }
-  // 处理数学公式点击
+  // 数学公式
   else if (target.closest('mjx-container, mjx-math')) {
     selectedElement = target.closest('mjx-container, mjx-math');
     const mathContent = selectedElement.getAttribute('data-mjx-text') || selectedElement.textContent || '';
@@ -508,7 +528,7 @@ const handleMarkdownClick = async (e) => {  // 改为async函数
     noteContent = `$$${mathContent}$$`;
     noteHtml = selectedElement.outerHTML;
   }
-  // 处理mermaid图表点击
+  // mermaid图表
   else if (target.closest('.mermaid, svg')) {
     selectedElement = target.closest('.mermaid, svg');
     const mermaidContent = selectedElement.querySelector('.mermaid')?.textContent || selectedElement.textContent || '';
@@ -516,22 +536,14 @@ const handleMarkdownClick = async (e) => {  // 改为async函数
     noteContent = `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
     noteHtml = selectedElement.outerHTML;
   }
-  // 处理图片点击
-  else if (target.tagName === 'IMG') {
-    selectedElement = target;
-    message = '已选中图片';
-    noteContent = `![图片](${target.src})`;
-    noteHtml = target.outerHTML;
-    message = '图片处理失败，使用原始链接';
-  }
-  // 处理文本选择
+  // 文本选择
   else if (selectedText && selection.rangeCount > 0) {
     selectedElement = selection.getRangeAt(0).startContainer.parentElement;
     message = `已选中文本: ${selectedText.substring(0, 30)}${selectedText.length > 30 ? '...' : ''}`;
     noteContent = selectedText;
     noteHtml = `<p>${selectedText}</p>`;
   }
-  // 处理段落点击
+  // 段落点击
   else {
     const paragraph = target.closest('p, h1, h2, h3, h4, h5, h6, li, blockquote');
     if (paragraph) {
@@ -543,43 +555,40 @@ const handleMarkdownClick = async (e) => {  // 改为async函数
     }
   }
 
-  // 添加选中效果和笔记
+  // 6. 应用选中效果和笔记
   if (selectedElement) {
     selectedElement.classList.add('selected');
     showSelectionMessage(message);
     selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    console.log('选中元素:', target);
-    // 确定笔记类型
     const noteType = determineNoteType(target);
+    const noteData = {
+      type: noteType,
+      content: noteContent,
+      html: noteHtml
+    };
 
-    // 如果Alt键被按下且收集器处于激活状态，则追加到当前卡片
+    // 7. 区分复合笔记和新建笔记
     if (altKeyCollector.value.isActive) {
-      appendToCurrentNote({
-        type: noteType,
-        content: noteContent,
-        html: noteHtml
-      });
+      // 复合笔记特殊处理（保持图片一致性）
+      if (noteType === 'image') {
+        noteData.html = `<div class="note-segment image-segment">${noteHtml}</div>`;
+      }
+      appendToCurrentNote(noteData);
 
-      // 更新卡片标题显示已收集内容数量
+      // 更新复合笔记标题
       if (altKeyCollector.value.currentCard) {
         const segments = parseCompositeContent(altKeyCollector.value.currentCard.html);
         altKeyCollector.value.currentCard.title = `复合笔记 (${segments.length}项)`;
-
-        // 触发响应式更新
-        noteCards.value = [...noteCards.value];
+        noteCards.value = [...noteCards.value]; // 触发响应式更新
       }
     } else {
-      // 否则创建新卡片
-      addToNotes({
-        type: noteType,
-        content: noteContent,
-        html: noteHtml
-      });
+      // 新建笔记
+      await addToNotes(noteData);
     }
   }
 
-  // 如果松开Alt键且收集器处于激活状态，则立即结束收集
+  // 8. Alt键释放检测
   if (!isAltPressed && altKeyCollector.value.isActive) {
     endAltKeyCollection();
   }
