@@ -22,6 +22,10 @@
       </div>
 
       <div class="right-controls">
+        <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'">
+          <n-icon :component="LanguageOutline" />
+          <span class="btn-text">{{ showTranslation ? '隐藏译文' : '显示译文' }}</span>
+        </button>
         <button class="rotate-left" @click="rotate(-90)" title="向左旋转90度">
           <n-icon :component="RefreshCircleOutline" :rotate="90" />
           <span class="btn-text">左旋</span>
@@ -85,7 +89,15 @@
       <!-- 右侧Markdown内容 -->
       <div class="markdown-panel" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
         @mouseleave="handleMarkdownLeave">
-        <div class="markdown-content" ref="markdownContainer" v-html="renderedMarkdown"></div>
+        <div class="markdown-content" ref="markdownContainer">
+          <template v-for="(line, index) in markdownLines" :key="index">
+            <div class="markdown-line">
+              <div class="original-content" v-html="line.html"></div>
+              <div class="translated-content" v-if="showTranslation && line.translation" v-html="line.translation">
+              </div>
+            </div>
+          </template>
+        </div>
       </div>
     </div>
 
@@ -173,7 +185,8 @@ import {
   RemoveOutline,
   DocumentTextOutline,
   DownloadOutline,
-  CloseOutline
+  CloseOutline,
+  LanguageOutline
 } from '@vicons/ionicons5'
 
 const props = defineProps({
@@ -1422,6 +1435,65 @@ const debounce = (fn, delay) => {
   };
 };
 
+// 在响应式数据中添加
+const showTranslation = ref(false)
+const isTranslating = ref(false)
+
+// 添加翻译方法
+const toggleTranslate = async () => {
+  showTranslation.value = !showTranslation.value
+  
+  // 如果需要显示翻译且还没有翻译内容，则进行翻译
+  if (showTranslation.value && markdownLines.value.some(line => !line.translation)) {
+    await translateMarkdown()
+  }
+}
+
+const translateMarkdown = async () => {
+  if (isTranslating.value) return
+  isTranslating.value = true
+  
+  try {
+    // 只翻译没有翻译过的行
+    const linesToTranslate = markdownLines.value.filter(line => !line.translation)
+    
+    for (const line of linesToTranslate) {
+      // 跳过空行和代码块等不需要翻译的内容
+      if (!line.raw.trim() || line.raw.startsWith('```') || line.html.includes('class="hljs"')) {
+        line.translation = ''
+        continue
+      }
+      
+      // 调用翻译API
+      const response = await invoke('translate_text', {
+        text: line.raw,
+        sourceLang: 'auto',
+        targetLang: 'zh' // 假设目标语言是中文
+      })
+      
+      if (response.success) {
+        line.translation = await renderMarkdown(response.translatedText, {
+          basePath: "",
+          mermaid: true,
+          math: true,
+          codeHighlight: true,
+          theme: 'default'
+        })
+      } else {
+        line.translation = `<div class="translation-error">翻译失败: ${response.error || '未知错误'}</div>`
+      }
+    }
+    
+    // 触发响应式更新
+    markdownLines.value = [...markdownLines.value]
+  } catch (error) {
+    console.error('翻译失败:', error)
+    message.error(`翻译失败: ${error.message}`)
+  } finally {
+    isTranslating.value = false
+  }
+}
+
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
@@ -1992,6 +2064,44 @@ button:disabled {
   outline: 1px dashed #4dabf7;
   min-height: 60px;
   padding: 8px;
+}
+
+/* 添加翻译相关样式 */
+.toggle-translate {
+  background-color: #7950f2;
+  color: white;
+  border: 1px solid #6741d9;
+  transition: all 0.2s;
+}
+
+.toggle-translate:hover {
+  background-color: #6741d9;
+  box-shadow: 0 2px 8px rgba(121, 80, 242, 0.3);
+}
+
+.markdown-line {
+  margin-bottom: 1em;
+}
+
+.original-content {
+  padding: 8px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.8);
+}
+
+.translated-content {
+  padding: 8px;
+  margin-top: 4px;
+  border-radius: 4px;
+  background-color: rgba(245, 245, 245, 0.8);
+  border-left: 3px solid #7950f2;
+  color: #555;
+}
+
+.translation-error {
+  color: #ff6b6b;
+  font-size: 0.9em;
+  font-style: italic;
 }
 </style>
 
