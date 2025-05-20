@@ -102,10 +102,11 @@
           :bordered="true" :segmented="{
             content: true,
             footer: 'soft'
-          }" header-style="padding: 12px 16px;" content-style="padding: 0;" @click="handleCardClick(index)">
+          }" header-style="padding: 12px 16px;" content-style="padding: 0;" @mouseenter="activeCardIndex = index"
+          @mouseleave="activeCardIndex = -1">
           <template #header-extra>
             <n-button v-if="activeCardIndex === index" text @click.stop="deleteCard(index)">
-              <n-icon :component="CloseOutline" size="14" />
+              <n-icon :component="TrashOutline" size="12" />
             </n-button>
           </template>
 
@@ -167,7 +168,7 @@ import {
   ArrowForwardOutline,
   RefreshCircleOutline,
   ExpandOutline,
-  SearchOutline,
+  TrashOutline,
   AddOutline,
   RemoveOutline,
   DocumentTextOutline,
