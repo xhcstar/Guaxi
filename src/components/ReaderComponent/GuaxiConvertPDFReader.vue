@@ -22,10 +22,6 @@
       </div>
 
       <div class="right-controls">
-        <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'">
-          <n-icon :component="LanguageOutline" />
-          <span class="btn-text">{{ showTranslation ? '隐藏译文' : '显示译文' }}</span>
-        </button>
         <button class="rotate-left" @click="rotate(-90)" title="向左旋转90度">
           <n-icon :component="RefreshCircleOutline" :rotate="90" />
           <span class="btn-text">左旋</span>
@@ -55,6 +51,11 @@
         <button class="export-notes" @click="exportNotes" title="导出笔记">
           <n-icon :component="DownloadOutline" />
           <span class="btn-text">导出笔记</span>
+        </button>
+
+        <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'">
+          <n-icon :component="LanguageOutline" />
+          <span class="btn-text">{{ showTranslation ? '隐藏译文' : '显示译文' }}</span>
         </button>
       </div>
     </div>
@@ -189,6 +190,7 @@ import {
   LanguageOutline
 } from '@vicons/ionicons5'
 
+// 1. 组件属性定义
 const props = defineProps({
   filePath: {
     type: String,
@@ -209,14 +211,13 @@ const props = defineProps({
   }
 })
 
-// 初始化 message
+// 2. 初始化状态和工具
 const message = useMessage()
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
 const markdownContainer = ref(null);
-// const renderMode = ref('vector') // 默认渲染模式
-// const renderContent = ref(null)  // 渲染内容
 
+// 3. PDF渲染相关
 const {
   renderMode,
   loadPage,
@@ -227,35 +228,36 @@ const {
   currentPageData
 } = usePdfRenderer(props);
 
-// 缩放状态
+// 4. 视图状态
 const zoomLevel = ref(1);
-// 添加旋转状态
 const rotation = ref(0);
 const pdfPanel = ref(null);
 const pdfImage = ref(null);
-// 添加拖动状态
 const isResizing = ref(false);
 const startX = ref(0);
 const startLeftWidth = ref(0);
-const leftPanelWidth = ref('50%'); // 初始宽度
-// PDF数据状态
+const leftPanelWidth = ref('50%');
 const currentPage = ref(1)
 const totalPages = ref(0)
 const jumpPage = ref(1)
 const elements = ref([])
-// Markdown数据状态
+
+// 5. Markdown相关
 const markdownContent = ref('')
-// const markdownLines = ref([])
 const markdownLines = ref([]);
 const markdownFilePath = ref('')
-// 笔记状态
+
+// 6. 笔记相关
 const showNotes = ref(false)
 const notesContent = ref('')
-// UI状态
 const showNoteBubble = ref(false)
-// 添加状态锁防止重复计算
-let isFitting = false
-// 拖拽处理
+const isFitting = false
+const noteCards = ref([])
+const activeCardIndex = ref(-1)
+const isNotesReady = ref(false)
+const notesFilePath = ref('')
+
+// 7. 拖拽和动画相关
 const isDragging = ref(false)
 const startDragPos = ref({ x: 0, y: 0 })
 const startScrollPos = ref({ left: 0, top: 0 })
@@ -264,6 +266,18 @@ const lastDragTime = ref(0)
 const animationFrameId = ref(null)
 const isDecelerating = ref(false)
 
+// 8. 翻译相关
+const showTranslation = ref(false)
+const isTranslating = ref(false)
+
+// 9. Alt键收集器状态
+const altKeyCollector = ref({
+  isActive: false,
+  currentCard: null,
+  timer: null
+})
+
+// 10. 工具函数
 async function processImages(content, basePath = '') {
   const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
   const replacements = [];
@@ -369,11 +383,9 @@ async function convertPdfRenderMarkdown(content, options = {}) {
   }
 }
 
-const renderedMarkdown = computed(() => {
-  return markdownLines.value.map(line => line.html).join('')
-})
-
+// 11. 笔记相关函数
 function determineNoteType(target) {
+  console.log('determineNoteType called with target:', target);
   const timestamp = new Date().toLocaleString();
 
   // 1. 优先检查数学公式
@@ -412,21 +424,55 @@ function determineNoteType(target) {
   return 'text';
 }
 
-// 添加全局状态管理
-const altKeyCollector = ref({
-  isActive: false,
-  currentCard: null,
-  timer: null
-})
+async function processNoteImage(imgElement) {
+  try {
+    // 解码URL并提取实际路径
+    const rawSrc = imgElement.src;
+    let filePath = '';
 
-const handleMarkdownClick = (e) => {
+    if (rawSrc.startsWith('http://asset.localhost/')) {
+      filePath = decodeURIComponent(rawSrc.replace('http://asset.localhost/', ''));
+    } else if (rawSrc.startsWith('file://')) {
+      filePath = decodeURIComponent(new URL(rawSrc).pathname);
+    } else {
+      return rawSrc; // 非本地图片直接返回原URL
+    }
+
+    // 标准化Windows路径
+    if (process.platform === 'win32') {
+      filePath = filePath.replace(/^\/([a-zA-Z]:)/, '$1');
+    }
+
+    // 准备目标路径
+    const imageDir = await getImagesDirectory();
+    const ext = filePath.split('.').pop().toLowerCase();
+    const validExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    const finalExt = validExts.includes(ext) ? ext : 'png';
+    const fileName = `note-img-${Date.now()}.${finalExt}`;
+
+    // 调用后端复制图片
+    const { relativePath } = await invoke('copy_image_file', {
+      srcPath: filePath,
+      destDir: imageDir,
+      fileName: fileName
+    });
+
+    return `../images/${relativePath}`;
+  } catch (error) {
+    console.error('图片处理失败:', error);
+    return imgElement.src; // 失败时返回原URL
+  }
+}
+
+// 12. Markdown交互处理
+const handleMarkdownClick = async (e) => {  // 改为async函数
   // 检查是否按下了Alt键
   const isAltPressed = e.altKey;
 
   // 如果按下Alt键且当前没有激活收集器，则开始新的收集
   if (isAltPressed && !altKeyCollector.value.isActive) {
     startAltKeyCollection();
-    return; // 开始收集后直接返回，避免重复处理
+    return;
   }
 
   // 清除之前选中的元素
@@ -476,6 +522,7 @@ const handleMarkdownClick = (e) => {
     message = '已选中图片';
     noteContent = `![图片](${target.src})`;
     noteHtml = target.outerHTML;
+    message = '图片处理失败，使用原始链接';
   }
   // 处理文本选择
   else if (selectedText && selection.rangeCount > 0) {
@@ -502,7 +549,8 @@ const handleMarkdownClick = (e) => {
     showSelectionMessage(message);
     selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // 添加到笔记
+    console.log('选中元素:', target);
+    // 确定笔记类型
     const noteType = determineNoteType(target);
 
     // 如果Alt键被按下且收集器处于激活状态，则追加到当前卡片
@@ -619,6 +667,7 @@ const endAltKeyCollection = () => {
 const parseCompositeContent = (html) => {
   if (!html) return [];
 
+  console.log('解析复合笔记:', html);
   try {
     // 创建临时DOM来解析HTML
     const tempDiv = document.createElement('div');
@@ -633,6 +682,12 @@ const parseCompositeContent = (html) => {
       else if (classList.includes('image-segment')) type = 'image';
       else if (classList.includes('diagram-segment')) type = 'diagram';
       else if (el.querySelector('mjx-container, mjx-math')) type = 'math';
+
+      console.log('解析片段:', {
+        type,
+        content: el.outerHTML
+      });
+
 
       return {
         type,
@@ -661,7 +716,6 @@ const getSegmentClass = (segment) => {
   }
 };
 
-// 修改appendToCurrentNote方法，确保复合笔记数据正确
 const appendToCurrentNote = (element) => {
   if (!altKeyCollector.value.isActive || !altKeyCollector.value.currentCard) return;
 
@@ -699,6 +753,7 @@ const appendToCurrentNote = (element) => {
   message.success('内容已添加到当前收集', { duration: 1500 });
 };
 
+// 15. UI辅助函数
 const showSelectionMessage = (message) => {
   // 移除旧的消息
   const oldMessage = document.querySelector('.selection-message');
@@ -716,19 +771,16 @@ const showSelectionMessage = (message) => {
 }
 
 const handleMarkdownHover = (e) => {
-  const target = e.target;
-
   // 清除之前的悬停效果
   document.querySelectorAll('.markdown-content .hovered').forEach(el => {
     el.classList.remove('hovered');
   });
 
-  // 获取最近的段落元素或特殊元素
-  const element = target.closest(
+  const element = e.target.closest(
     'p, h1, h2, h3, h4, h5, h6, li, blockquote, ' +
-    'pre, code, .code-block, ' +  // 代码块
-    '.katex-display, .katex-inline, ' +  // 数学公式
-    '.mermaid, svg'  // mermaid图表和生成的SVG元素
+    'pre, code, .code-block, ' +
+    '.katex-display, .katex-inline, ' +
+    '.mermaid, svg'
   );
 
   if (element) {
@@ -743,7 +795,7 @@ const handleMarkdownLeave = () => {
   });
 }
 
-// 在onMounted或watch中更新路径
+// 16. 路径处理
 const updateMarkdownPath = async () => {
   const baseFileName = props.fileName.replace('.pdf', '')
   markdownFilePath.value = await join(
@@ -757,7 +809,29 @@ const updateMarkdownPath = async () => {
   )
 }
 
-// 加载PDF页面
+const getNotesDirectory = async () => {
+  const baseFileName = props.fileName.replace('.pdf', '');
+  return await join(
+    librariesRoot.value,
+    'Libraries',
+    props.library,
+    baseFileName,
+    'notes'
+  );
+};
+
+const getImagesDirectory = async () => {
+  const baseFileName = props.fileName.replace('.pdf', '');
+  return await join(
+    librariesRoot.value,
+    'Libraries',
+    props.library,
+    baseFileName,
+    'images'
+  );
+};
+
+// 17. 数据加载
 const loadPdfPage = async (pageNum) => {
   try {
     const data = await loadPage(pageNum);
@@ -808,28 +882,6 @@ const loadMarkdownPage = async (pageNum) => {
       html: `<div class="error">加载错误: ${error.message}</div>`
     }];
   }
-};
-
-const getNotesDirectory = async () => {
-  const baseFileName = props.fileName.replace('.pdf', '');
-  return await join(
-    librariesRoot.value,
-    'Libraries',
-    props.library,
-    baseFileName,
-    'notes'
-  );
-};
-
-const getImagesDirectory = async () => {
-  const baseFileName = props.fileName.replace('.pdf', '');
-  return await join(
-    librariesRoot.value,
-    'Libraries',
-    props.library,
-    baseFileName,
-    'images'
-  );
 };
 
 // 生成唯一文件名（浏览器兼容方案）
@@ -922,13 +974,6 @@ ${rawCode.trim()}
 \`\`\``;
 }
 
-// 响应式数据
-const noteCards = ref([])
-const activeCardIndex = ref(-1)
-// 添加加载状态
-const isNotesReady = ref(false)
-const notesFilePath = ref('')
-
 // 确保路径初始化的专用函数
 const ensureNotesPath = async () => {
   if (!notesFilePath.value) {
@@ -973,7 +1018,6 @@ const saveCardEdit = async (index) => {
       noteCards.value[index].content = cardElement.innerHTML;
       noteCards.value[index].timestamp = new Date().toISOString();
 
-      // 调用更新函数
       await updateBackendNotes('update', noteCards.value[index]);
     }
   }
@@ -984,7 +1028,6 @@ const deleteCard = async (index) => {
     const cardId = noteCards.value[index].id;
     noteCards.value.splice(index, 1);
 
-    // 调用更新函数
     await updateBackendNotes('delete', { id: cardId });
 
     // 调整选中状态
@@ -1083,7 +1126,6 @@ const updateBackendNotes = async (action, cardData) => {
 
     await invoke('update_notes_file', payload);
 
-    // 成功后的反馈
     message.success('笔记已保存', {
       duration: 1500
     });
@@ -1132,6 +1174,7 @@ const exportNotes = () => {
   URL.revokeObjectURL(url);
 };
 
+// 20. 拖拽和缩放功能
 const startDrag = (e) => {
   try {
     if (e.button !== 0 || !pdfPanel.value) return;
@@ -1224,15 +1267,31 @@ const resetDragState = () => {
   }
 };
 
-// 在onBeforeUnmount中添加清理
-onBeforeUnmount(() => {
-  resetDragState();
-  if (animationFrameId.value) {
-    cancelAnimationFrame(animationFrameId.value);
-  }
-});
+// 21. 惯性滚动处理
+const decelerate = () => {
+  if (!isDecelerating.value || !pdfPanel.value) return;
 
-// 修改handleWheelZoom方法，支持拖拽状态
+  const friction = 0.95; // 摩擦系数
+  const minSpeed = 0.5; // 最小速度阈值
+
+  // 应用摩擦减速
+  velocity.value.x *= friction;
+  velocity.value.y *= friction;
+
+  // 更新滚动位置
+  pdfPanel.value.scrollLeft += velocity.value.x * 16; // 16ms为一帧
+  pdfPanel.value.scrollTop += velocity.value.y * 16;
+
+  // 检查是否需要继续减速
+  if (Math.abs(velocity.value.x) > minSpeed || Math.abs(velocity.value.y) > minSpeed) {
+    animationFrameId.value = requestAnimationFrame(decelerate);
+  } else {
+    isDecelerating.value = false;
+    velocity.value = { x: 0, y: 0 };
+  }
+};
+
+// 22. 缩放控制
 const handleWheelZoom = (e) => {
   if (e.ctrlKey) {
     e.preventDefault()
@@ -1261,7 +1320,7 @@ const handleWheelZoom = (e) => {
   }
 }
 
-// 分页控制 - 统一处理PDF和Markdown的页面切换
+// 23. 分页控制
 const prevPage = () => {
   if (currentPage.value > 1) {
     const newPage = currentPage.value - 1;
@@ -1291,16 +1350,15 @@ const goToPage = (page) => {
   loadMarkdownPage(targetPage);
 };
 
-// UI控制
+// 24. 面板控制
 const toggleNotesPanel = () => {
   showNotes.value = !showNotes.value;
   if (showNotes.value) {
-    // 强制重新渲染笔记卡片
     noteCards.value = [...noteCards.value];
   }
 };
 
-// 缩放功能方法
+// 25. 缩放功能
 const zoomIn = () => {
   zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2);
 };
@@ -1309,7 +1367,7 @@ const zoomOut = () => {
   zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5);
 };
 
-// 开始拖动
+// 26. 面板大小调整
 const startResize = (e) => {
   isResizing.value = true;
   startX.value = e.clientX;
@@ -1342,10 +1400,10 @@ const stopResize = () => {
   document.body.style.cursor = '';
   document.body.style.userSelect = '';
 };
-// 旋转功能
+
+// 27. 旋转功能
 const rotate = (degrees) => {
   rotation.value = (rotation.value + degrees) % 360
-  // 延迟处理确保DOM更新
   nextTick(() => {
     if (pdfImage.value?.naturalWidth) {
       fitToWidth()
@@ -1355,78 +1413,80 @@ const rotate = (degrees) => {
   })
 }
 
+// 28. 自适应宽度
 const fitToWidth = () => {
-  if (!pdfPanel.value || !pdfImage.value || isFitting) return
-  isFitting = true
+  let isFitting = false;
+  if (!pdfPanel.value || !pdfImage.value || isFitting.value) return;
+  isFitting = true;
 
   try {
-    const panel = pdfPanel.value
-    const img = pdfImage.value
+    const panel = pdfPanel.value;
+    const img = pdfImage.value;
 
     // 确保图像已加载
     if (!img.naturalWidth) {
-      console.warn('图像尺寸未加载完成')
-      return
+      console.warn('图像尺寸未加载完成');
+      return;
     }
 
-    const panelWidth = panel.clientWidth
-    const panelHeight = panel.clientHeight
-    const imgNaturalWidth = img.naturalWidth
-    const imgNaturalHeight = img.naturalHeight
+    const panelWidth = panel.clientWidth;
+    const panelHeight = panel.clientHeight;
+    const imgNaturalWidth = img.naturalWidth;
+    const imgNaturalHeight = img.naturalHeight;
 
     // 考虑旋转状态
-    const isVertical = Math.abs(rotation.value % 180) === 90
-    const effectiveWidth = isVertical ? imgNaturalHeight : imgNaturalWidth
-    const effectiveHeight = isVertical ? imgNaturalWidth : imgNaturalHeight
+    const isVertical = Math.abs(rotation.value % 180) === 90;
+    const effectiveWidth = isVertical ? imgNaturalHeight : imgNaturalWidth;
+    const effectiveHeight = isVertical ? imgNaturalWidth : imgNaturalHeight;
 
     // 计算安全边距（动态适应）
-    const horizontalMargin = Math.min(20, panelWidth * 0.05) // 不超过5%宽度
-    const verticalMargin = Math.min(20, panelHeight * 0.05) // 不超过5%高度
+    const horizontalMargin = Math.min(20, panelWidth * 0.05);
+    const verticalMargin = Math.min(20, panelHeight * 0.05);
 
     // 计算比例时考虑最小缩放限制
-    const minScale = 0.5 // 最小缩放比例
-    const widthRatio = (panelWidth - horizontalMargin * 2) / effectiveWidth
-    const heightRatio = (panelHeight - verticalMargin * 2) / effectiveHeight
+    const minScale = 0.5;
+    const widthRatio = (panelWidth - horizontalMargin * 2) / effectiveWidth;
+    const heightRatio = (panelHeight - verticalMargin * 2) / effectiveHeight;
 
     // 动态选择策略：优先宽度适应，但确保内容可见
-    let newZoom = Math.max(minScale, Math.min(widthRatio, heightRatio))
+    let newZoom = Math.max(minScale, Math.min(widthRatio, heightRatio));
 
     // 防止过度缩小（当容器很大时）
     if (effectiveWidth * newZoom < panelWidth * 0.8 &&
       effectiveHeight * newZoom < panelHeight * 0.8) {
-      newZoom = Math.max(widthRatio, heightRatio)
+      newZoom = Math.max(widthRatio, heightRatio);
     }
 
-    zoomLevel.value = newZoom
+    zoomLevel.value = newZoom;
 
     // 智能居中（使用requestAnimationFrame确保DOM更新）
     requestAnimationFrame(() => {
-      const scaledWidth = effectiveWidth * zoomLevel.value
-      const scaledHeight = effectiveHeight * zoomLevel.value
+      const scaledWidth = effectiveWidth * zoomLevel.value;
+      const scaledHeight = effectiveHeight * zoomLevel.value;
 
       // 重置速度和拖拽状态
-      velocity.value = { x: 0, y: 0 }
-      isDecelerating.value = false
+      velocity.value = { x: 0, y: 0 };
+      isDecelerating.value = false;
 
       // 计算居中位置，考虑边界情况
       panel.scrollLeft = Math.max(0, Math.min(
         (scaledWidth - panelWidth) / 2,
         scaledWidth - panelWidth
-      ))
+      ));
       panel.scrollTop = Math.max(0, Math.min(
         (scaledHeight - panelHeight) / 2,
         scaledHeight - panelHeight
-      ))
-    })
+      ));
+    });
 
   } catch (error) {
-    console.error('fitToWidth错误:', error)
+    console.error('fitToWidth错误:', error);
   } finally {
-    isFitting = false
+    isFitting = false;
   }
 }
 
-// 防抖函数防止频繁触发
+// 29. 防抖函数
 const debounce = (fn, delay) => {
   let timer = null;
   return (...args) => {
@@ -1435,14 +1495,10 @@ const debounce = (fn, delay) => {
   };
 };
 
-// 在响应式数据中添加
-const showTranslation = ref(false)
-const isTranslating = ref(false)
-
-// 添加翻译方法
+// 30. 翻译功能
 const toggleTranslate = async () => {
   showTranslation.value = !showTranslation.value
-  
+
   // 如果需要显示翻译且还没有翻译内容，则进行翻译
   if (showTranslation.value && markdownLines.value.some(line => !line.translation)) {
     await translateMarkdown()
@@ -1452,25 +1508,25 @@ const toggleTranslate = async () => {
 const translateMarkdown = async () => {
   if (isTranslating.value) return
   isTranslating.value = true
-  
+
   try {
     // 只翻译没有翻译过的行
     const linesToTranslate = markdownLines.value.filter(line => !line.translation)
-    
+
     for (const line of linesToTranslate) {
       // 跳过空行和代码块等不需要翻译的内容
       if (!line.raw.trim() || line.raw.startsWith('```') || line.html.includes('class="hljs"')) {
         line.translation = ''
         continue
       }
-      
+
       // 调用翻译API
       const response = await invoke('translate_text', {
         text: line.raw,
         sourceLang: 'auto',
         targetLang: 'zh' // 假设目标语言是中文
       })
-      
+
       if (response.success) {
         line.translation = await renderMarkdown(response.translatedText, {
           basePath: "",
@@ -1483,7 +1539,7 @@ const translateMarkdown = async () => {
         line.translation = `<div class="translation-error">翻译失败: ${response.error || '未知错误'}</div>`
       }
     }
-    
+
     // 触发响应式更新
     markdownLines.value = [...markdownLines.value]
   } catch (error) {
@@ -1494,6 +1550,7 @@ const translateMarkdown = async () => {
   }
 }
 
+// 31. 生命周期和事件监听
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
@@ -1550,6 +1607,7 @@ const handleResize = () => {
   }
 };
 
+// 32. 文件路径变化监听
 watch(() => props.filePath, async (newPath) => {
   if (newPath) {
     await updateMarkdownPath();
@@ -1559,9 +1617,17 @@ watch(() => props.filePath, async (newPath) => {
     notesContent.value = '';
   }
 });
+
+// 33. 图片加载处理
+const handleImageLoad = () => {
+  nextTick(() => {
+    fitToWidth();
+  });
+};
 </script>
 
 <style scoped>
+/* 34. 主容器样式 */
 .pdf-viewer-container {
   position: relative;
   width: 100%;
@@ -1572,18 +1638,19 @@ watch(() => props.filePath, async (newPath) => {
   overflow: hidden;
 }
 
+/* 35. 控制栏样式 */
 .pdf-controls {
   display: flex;
   justify-content: space-between;
   align-items: center;
   height: 28px;
   padding: 6px 8px;
-  /* 原padding 8px 16px，按比例缩小 */
   background-color: #f8f9fa;
   border-bottom: 1px solid #e0e0e0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
+/* 36. 按钮基础样式 */
 button {
   padding: 5px 8px;
   background-color: #ffffff;
@@ -1614,10 +1681,7 @@ button:disabled {
   box-shadow: none;
 }
 
-.n-icon {
-  font-size: 12px;
-}
-
+/* 37. 页面信息样式 */
 .page-info {
   font-size: 12px;
   font-weight: 500;
@@ -1629,6 +1693,7 @@ button:disabled {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
+/* 38. 页面导航样式 */
 .page-navigation {
   display: flex;
   align-items: center;
@@ -1645,12 +1710,13 @@ button:disabled {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
+/* 39. 右侧控制区样式 */
 .right-controls {
   display: flex;
   gap: 10px;
 }
 
-/* 添加缩放控制按钮样式 */
+/* 40. 缩放控制样式 */
 .zoom-level {
   min-width: 20px;
   text-align: center;
@@ -1679,6 +1745,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* 41. 旋转按钮样式 */
 .rotate-left,
 .rotate-right,
 .fit-width {
@@ -1694,6 +1761,7 @@ button:disabled {
   background-color: #f1f3f5;
 }
 
+/* 42. 笔记按钮样式 */
 .toggle-notes {
   background-color: #4dabf7;
   color: white;
@@ -1706,6 +1774,7 @@ button:disabled {
   box-shadow: 0 2px 8px rgba(77, 171, 247, 0.3);
 }
 
+/* 43. 导出按钮样式 */
 .export-notes {
   background-color: #20c997;
   color: white;
@@ -1718,16 +1787,7 @@ button:disabled {
   box-shadow: 0 2px 8px rgba(32, 201, 151, 0.3);
 }
 
-/* 保持按钮统一间距和形状 */
-.toggle-notes,
-.export-notes {
-  padding: 8px 12px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
+/* 44. 主内容区样式 */
 .pdf-main-content {
   flex: 1;
   display: flex;
@@ -1735,6 +1795,7 @@ button:disabled {
   gap: 0;
 }
 
+/* 45. PDF渲染面板样式 */
 .pdf-render-panel {
   flex: 0 0 v-bind(leftPanelWidth);
   min-width: 0;
@@ -1742,11 +1803,10 @@ button:disabled {
   position: relative;
   background-color: #ffffff;
   overscroll-behavior: none;
-  /* 防止浏览器默认的滚动行为 */
   scroll-behavior: auto;
-  /* 禁用默认的平滑滚动 */
 }
 
+/* 46. 图片容器样式 */
 .pdf-image-container {
   position: absolute;
   top: 0;
@@ -1757,13 +1817,12 @@ button:disabled {
   justify-content: center;
   align-items: center;
   background-color: #f8f9fa;
-  /* 确保transform-origin始终有效 */
   transform-origin: center center !important;
-  /* 添加过渡效果 */
   transition: transform 0.3s ease-out;
   will-change: transform;
 }
 
+/* 47. 渲染图片样式 */
 .rendered-pdf-image {
   max-width: none !important;
   max-height: none !important;
@@ -1773,9 +1832,9 @@ button:disabled {
   transition: transform 0.2s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   pointer-events: none;
-  /* 拖拽时禁用图片事件 */
 }
 
+/* 48. 加载消息样式 */
 .pdf-loading-message {
   display: flex;
   justify-content: center;
@@ -1785,6 +1844,7 @@ button:disabled {
   font-size: 14px;
 }
 
+/* 49. 调整大小手柄样式 */
 .resize-handle {
   width: 3px;
   height: 100%;
@@ -1803,6 +1863,7 @@ button:disabled {
   background-color: #55ebd7;
 }
 
+/* 50. Markdown面板样式 */
 .markdown-panel {
   flex: 1;
   min-width: 0;
@@ -1811,6 +1872,7 @@ button:disabled {
   background-color: #ffffff;
 }
 
+/* 51. Markdown内容样式 */
 .markdown-content {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 18px;
@@ -1822,6 +1884,7 @@ button:disabled {
   cursor: text;
 }
 
+/* 52. Markdown元素样式 */
 .markdown-content :deep(p),
 .markdown-content :deep(h1),
 .markdown-content :deep(h2),
@@ -1838,6 +1901,7 @@ button:disabled {
   border-radius: 4px;
 }
 
+/* 53. 图片样式 */
 .markdown-content :deep(.markdown-image) {
   max-width: 100%;
   height: auto;
@@ -1852,6 +1916,7 @@ button:disabled {
   transform: scale(1.02);
 }
 
+/* 54. 选中和高亮样式 */
 .markdown-content :deep(.selected),
 .markdown-content :deep(.hovered) {
   background-color: rgba(72, 215, 240, 0.2);
@@ -1865,6 +1930,7 @@ button:disabled {
   box-shadow: 0 0 0 3px rgba(85, 231, 207, 0.7);
 }
 
+/* 55. 选择消息样式 */
 .selection-message {
   position: fixed;
   bottom: 20px;
@@ -1885,6 +1951,7 @@ button:disabled {
   opacity: 0;
 }
 
+/* 56. 笔记面板样式 */
 .notes-panel {
   position: fixed;
   top: 0;
@@ -1906,6 +1973,7 @@ button:disabled {
   right: 0;
 }
 
+/* 57. 笔记头部样式 */
 .notes-header {
   padding: 12px 16px;
   background-color: #4dabf7;
@@ -1922,6 +1990,7 @@ button:disabled {
   font-weight: 500;
 }
 
+/* 58. 笔记内容区样式 */
 .notes-content {
   padding: 12px;
   display: flex;
@@ -1930,6 +1999,7 @@ button:disabled {
   overflow-y: auto;
 }
 
+/* 59. 笔记卡片样式 */
 .note-card {
   transition: all 0.2s var(--n-bezier);
   cursor: pointer;
@@ -1941,6 +2011,7 @@ button:disabled {
     0 5px 12px 4px rgba(0, 0, 0, 0.04);
 }
 
+/* 60. 笔记内容样式 */
 .note-content {
   padding: 12px 16px;
   min-height: 60px;
@@ -1952,11 +2023,13 @@ button:disabled {
   border-radius: var(--n-border-radius);
 }
 
+/* 61. 添加卡片容器样式 */
 .add-card-container {
   margin-top: 8px;
   margin-bottom: 16px;
 }
 
+/* 62. 关闭按钮样式 */
 .close-btn {
   background: none;
   border: none;
@@ -1975,6 +2048,7 @@ button:disabled {
   transform: rotate(90deg);
 }
 
+/* 63. 笔记气泡样式 */
 .note-added-bubble {
   position: fixed;
   top: 70px;
@@ -1990,6 +2064,7 @@ button:disabled {
   gap: 10px;
 }
 
+/* 64. 淡入淡出动画 */
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.5s;
@@ -2000,20 +2075,7 @@ button:disabled {
   opacity: 0;
 }
 
-/* 淡入动画 */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* 复合笔记样式 */
+/* 65. 复合笔记样式 */
 .composite-note-content {
   padding: 12px;
 }
@@ -2024,6 +2086,7 @@ button:disabled {
   border-bottom: 1px dashed #e0e0e0;
 }
 
+/* 66. 不同类型笔记段落的样式 */
 .text-segment {
   font-size: 14px;
   line-height: 1.6;
@@ -2058,7 +2121,7 @@ button:disabled {
   overflow-x: auto;
 }
 
-/* 确保内容可编辑时的样式 */
+/* 67. 可编辑内容样式 */
 .note-content[contenteditable="true"],
 .composite-note-content[contenteditable="true"] {
   outline: 1px dashed #4dabf7;
@@ -2066,7 +2129,7 @@ button:disabled {
   padding: 8px;
 }
 
-/* 添加翻译相关样式 */
+/* 68. 翻译按钮样式 */
 .toggle-translate {
   background-color: #7950f2;
   color: white;
@@ -2079,10 +2142,12 @@ button:disabled {
   box-shadow: 0 2px 8px rgba(121, 80, 242, 0.3);
 }
 
+/* 69. Markdown行样式 */
 .markdown-line {
   margin-bottom: 1em;
 }
 
+/* 70. 原文和译文样式 */
 .original-content {
   padding: 8px;
   border-radius: 4px;
@@ -2106,7 +2171,7 @@ button:disabled {
 </style>
 
 <style>
-/* 数学公式样式 */
+/* 71. 数学公式全局样式 */
 .math-inline {
   display: inline;
   vertical-align: middle;
@@ -2118,7 +2183,7 @@ button:disabled {
   margin: 1rem 0;
 }
 
-/* Mermaid图表样式 */
+/* 72. Mermaid图表全局样式 */
 .mermaid {
   background-color: white;
   border-radius: 8px;
@@ -2133,7 +2198,7 @@ button:disabled {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* 代码块样式 */
+/* 73. 代码块全局样式 */
 .hljs {
   position: relative;
   border-radius: 6px;
@@ -2158,7 +2223,7 @@ code:not(.hljs code) {
   opacity: 1;
 }
 
-/* 暗色模式代码块 */
+/* 74. 暗色模式代码块 */
 .dark .hljs {
   background: #2d2d2d !important;
   border-color: #444;
@@ -2174,6 +2239,7 @@ code:not(.hljs code) {
   color: #fff;
 }
 
+/* 75. 复制按钮样式 */
 .copy-button {
   opacity: 1 !important;
   background: rgba(255, 255, 255, 0.8);
@@ -2185,7 +2251,7 @@ code:not(.hljs code) {
   border-color: rgba(255, 255, 255, 0.1) !important;
 }
 
-
+/* 76. 不同类型笔记的样式 */
 .text-note {
   white-space: pre-wrap;
 }

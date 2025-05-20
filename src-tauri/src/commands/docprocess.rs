@@ -13,8 +13,9 @@ use image::ImageFormat; // 确保已导入 ImageFormat
 use base64::Engine as _; // 使用新的 base64 编码方式
 use base64::engine::general_purpose;
 use svg::node::element::{Rectangle, Text as SvgText};
-use svg::node::Text as SvgNodeText; // 用于创建文本节点
 use svg::Document;
+use std::path::PathBuf;
+use fs_extra::file::CopyOptions;
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -119,6 +120,38 @@ pub async fn translate_text(
         confidence: 0.95,
         engine: "LibreTranslate".into(),
     })
+}
+
+#[tauri::command]
+pub async fn copy_image_file(
+    src_path: String,
+    dest_dir: String,
+    file_name: String,
+) -> Result<PathBuf, String> {
+    let src = PathBuf::from(&src_path);
+    let dest = PathBuf::from(&dest_dir).join(&file_name);
+
+    // 验证源文件
+    if !src.exists() {
+        return Err(format!("源文件不存在: {}", src.display()));
+    }
+
+    // 创建目标目录（递归）
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+
+    // 复制文件（支持大文件）
+    let mut options = fs_extra::file::CopyOptions::new();
+    options.overwrite = true;
+    fs_extra::file::copy(&src, &dest, &options)
+        .map_err(|e| format!("复制文件失败: {}", e))?;
+
+    // 返回相对路径
+    dest.strip_prefix(&dest_dir)
+        .map(|p| p.to_owned())
+        .map_err(|_| "无法计算相对路径".to_string())
 }
 
 #[tauri::command]
