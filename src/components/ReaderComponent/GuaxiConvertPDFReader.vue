@@ -53,9 +53,13 @@
           <span class="btn-text">导出笔记</span>
         </button>
 
-        <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'">
+        <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'"
+          :class="{ 'translating': isTranslating }">
           <n-icon :component="LanguageOutline" />
-          <span class="btn-text">{{ showTranslation ? '隐藏译文' : '显示译文' }}</span>
+          <span class="btn-text">
+            {{ showTranslation ? '隐藏译文' : '显示译文' }}
+            <span v-if="isTranslating" class="translating-indicator">...</span>
+          </span>
         </button>
       </div>
     </div>
@@ -94,7 +98,23 @@
           <template v-for="(line, index) in markdownLines" :key="index">
             <div class="markdown-line">
               <div class="original-content" v-html="line.html"></div>
-              <div class="translated-content" v-if="showTranslation && line.translation" v-html="line.translation">
+              <div v-if="showTranslation" class="translated-content" :class="{
+                'skipped-translation': line.skipTranslation,
+                'error-translation': line.translationError
+              }">
+                <template v-if="line.skipTranslation">
+                  <div v-html="line.html"></div>
+                  <span class="translation-skipped-marker">(内容未翻译)</span>
+                </template>
+                <template v-else-if="line.translationError">
+                  <div class="translation-error-message">
+                    {{ line.translationError }}
+                  </div>
+                  <!-- <div v-html="line.html" class="original-fallback"></div> -->
+                </template>
+                <template v-else>
+                  <div v-html="line.translation"></div>
+                </template>
               </div>
             </div>
           </template>
@@ -329,7 +349,9 @@ async function convertPdfRenderMarkdown(content, options = {}) {
         if (text) {
           result.push({
             raw: text,
-            html: text
+            html: text,
+            // 新增：默认不跳过翻译
+            skipTranslation: false
           });
         }
         return result;
@@ -350,9 +372,15 @@ async function convertPdfRenderMarkdown(content, options = {}) {
 
         if (keepWholeTags.some(tag => node.matches(tag))) {
           const outerHTML = node.outerHTML;
+
+          // 新增：判断是否需要跳过翻译
+          const skipTranslation = shouldSkipTranslation(node);
+
           result.push({
             raw: outerHTML,
-            html: outerHTML
+            html: outerHTML,
+            // 新增：标记是否需要跳过翻译
+            skipTranslation
           });
           return result;
         }
@@ -378,8 +406,62 @@ async function convertPdfRenderMarkdown(content, options = {}) {
     console.error('[ERROR] 渲染失败:', error);
     return [{
       raw: content,
-      html: `<div class="render-error">${error.message}</div>`
+      html: `<div class="render-error">${error.message}</div>`,
+      // 新增：错误内容也不翻译
+      skipTranslation: true
     }];
+  }
+}
+
+// 新增：判断节点是否需要跳过翻译
+function shouldSkipTranslation(node) {
+  // 首先检查 node 是否有效
+  if (!node || typeof node.matches !== 'function') {
+    return false;
+  }
+
+  try {
+    // 1. 图片元素
+    if (node.tagName === 'IMG') {
+      return true;
+    }
+
+    // 2. 数学公式相关元素
+    if (node.classList && (
+      node.classList.contains('katex-display') ||
+      node.classList.contains('katex-inline') ||
+      node.tagName === 'MJX-CONTAINER' ||
+      node.tagName === 'MJX-MATH'
+    )) {
+      return true;
+    }
+
+    // 3. 图表相关元素
+    if (node.classList && (
+      node.classList.contains('mermaid') ||
+      (node.tagName === 'SVG' && node.classList.contains('mermaid'))
+    )) {
+      return true;
+    }
+
+    // 4. 代码块
+    if (['PRE', 'CODE'].includes(node.tagName) ||
+      (node.classList && (
+        node.classList.contains('hljs') ||
+        Array.from(node.classList).some(cls => cls.startsWith('hljs-'))
+      ))) {
+      return true;
+    }
+
+    // 5. 表格
+    if (node.tagName === 'TABLE') {
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error('Error checking node:', error);
+    return false;
   }
 }
 
@@ -467,7 +549,7 @@ async function processNoteImage(imgElement) {
 const handleMarkdownClick = async (e) => {
   // 1. 阻止默认行为（防止Alt+Click触发浏览器默认动作）
   e.preventDefault();
-  
+
   // 2. 获取关键状态
   const isAltPressed = e.altKey;
   const target = e.target;
@@ -499,7 +581,7 @@ const handleMarkdownClick = async (e) => {
       message = '已选中图片';
       noteContent = `![图片](${processedSrc})`;
       noteHtml = `<img src="${processedSrc}" alt="笔记图片" class="note-image">`;
-      
+
       // 标记base64图片
       if (target.src.startsWith('data:')) {
         noteHtml += '<!-- base64-image -->';
@@ -1506,58 +1588,70 @@ const debounce = (fn, delay) => {
 
 // 30. 翻译功能
 const toggleTranslate = async () => {
-  showTranslation.value = !showTranslation.value
+  showTranslation.value = !showTranslation.value;
 
-  // 如果需要显示翻译且还没有翻译内容，则进行翻译
-  if (showTranslation.value && markdownLines.value.some(line => !line.translation)) {
-    await translateMarkdown()
+  if (showTranslation.value) {
+    // 先标记所有需要跳过的行
+    markdownLines.value = markdownLines.value.map(line => {
+      if (!line.translation) {
+        line.skipTranslation = shouldSkipTranslation(line.raw, line.html);
+        if (line.skipTranslation) {
+          line.translation = line.html; // 直接使用原始内容作为"翻译"
+        }
+      }
+      return line;
+    });
+
+    // 只翻译未标记为跳过的行
+    await translateMarkdown();
   }
-}
+};
 
 const translateMarkdown = async () => {
-  if (isTranslating.value) return
-  isTranslating.value = true
+  if (isTranslating.value) return;
+  isTranslating.value = true;
 
   try {
-    // 只翻译没有翻译过的行
-    const linesToTranslate = markdownLines.value.filter(line => !line.translation)
-
+    const linesToTranslate = markdownLines.value
+      .filter(line => !line.skipTranslation && !line.translation);
+    
     for (const line of linesToTranslate) {
-      // 跳过空行和代码块等不需要翻译的内容
-      if (!line.raw.trim() || line.raw.startsWith('```') || line.html.includes('class="hljs"')) {
-        line.translation = ''
-        continue
-      }
+      try {
+        line.translating = true;
+        
+        const response = await invoke('translate_text', {
+          text: line.raw,
+          sourceLang: 'auto',
+          targetLang: 'zh'
+        });
 
-      // 调用翻译API
-      const response = await invoke('translate_text', {
-        text: line.raw,
-        sourceLang: 'auto',
-        targetLang: 'zh' // 假设目标语言是中文
-      })
-
-      if (response.success) {
-        line.translation = await renderMarkdown(response.translatedText, {
-          basePath: "",
-          mermaid: true,
-          math: true,
-          codeHighlight: true,
-          theme: 'default'
-        })
-      } else {
-        line.translation = `<div class="translation-error">翻译失败: ${response.error || '未知错误'}</div>`
+        if (response.success) {
+          line.translation = await renderMarkdown(response.translatedText, {
+            basePath: "",
+            mermaid: true,
+            math: true,
+            codeHighlight: true,
+            theme: 'default'
+          });
+          line.translationError = null;
+        } else {
+          line.translationError = `翻译失败: ${response.error || '未知错误'}`;
+        }
+      } catch (error) {
+        line.translationError = `翻译失败: ${error.message}`;
+        console.error('翻译行失败:', error);
+      } finally {
+        line.translating = false;
       }
+      
+      // 强制更新视图
+      markdownLines.value = [...markdownLines.value];
+      await new Promise(resolve => setTimeout(resolve, 50)); // 小延迟避免UI阻塞
     }
-
-    // 触发响应式更新
-    markdownLines.value = [...markdownLines.value]
-  } catch (error) {
-    console.error('翻译失败:', error)
-    message.error(`翻译失败: ${error.message}`)
   } finally {
-    isTranslating.value = false
+    isTranslating.value = false;
   }
-}
+};
 
 // 31. 生命周期和事件监听
 onMounted(async () => {
@@ -2172,10 +2266,90 @@ button:disabled {
   color: #555;
 }
 
+.error-translation {
+  border-left: 3px solid #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.05);
+}
+
+.translation-error-message {
+  color: #ff6b6b;
+  font-size: 0.9em;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+
+.original-fallback {
+  opacity: 0.7;
+  border-top: 1px dashed #ccc;
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
 .translation-error {
   color: #ff6b6b;
   font-size: 0.9em;
   font-style: italic;
+}
+
+.translation-error-marker {
+  display: inline-block;
+  font-size: 0.8em;
+  background-color: #ffebee;
+  color: #ff6b6b;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+
+.translating-indicator {
+  display: inline-block;
+  width: 1em;
+  text-align: left;
+}
+
+.translating {
+  position: relative;
+  opacity: 0.7;
+}
+
+.translating::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: #4dabf7;
+  animation: translating-progress 2s infinite;
+}
+
+@keyframes translating-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skipped-translation {
+  opacity: 0.7;
+  border-left: 3px solid #ccc;
+  padding-left: 8px;
+  margin-left: 4px;
+  font-style: italic;
+  color: #666;
+}
+
+.translation-skipped-marker {
+  display: inline-block;
+  font-size: 0.8em;
+  background-color: #f0f0f0;
+  color: #999;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
 }
 </style>
 

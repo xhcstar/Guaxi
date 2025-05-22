@@ -98,29 +98,12 @@ pub struct MarkdownResponse {
     error: Option<String>,
 }
 
-#[derive(Serialize)]
-pub struct TranslationResponse {
-    pub text: String,
-    pub confidence: f32,
-    pub engine: String,
-}
 
 const PDFIUM_LIB_PATH: &str = if cfg!(debug_assertions) {
     "../../libs"
 } else {
     "./libs"
 };
-
-#[tauri::command]
-pub async fn translate_text(
-    text: String
-) -> Result<TranslationResponse, String> {
-    Ok(TranslationResponse {
-        text: "翻译结果".into(),
-        confidence: 0.95,
-        engine: "LibreTranslate".into(),
-    })
-}
 
 #[tauri::command]
 pub async fn copy_image_file(
