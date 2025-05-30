@@ -138,15 +138,24 @@
           }" header-style="padding: 12px 16px;" content-style="padding: 0;" @mouseenter="activeCardIndex = index"
           @mouseleave="activeCardIndex = -1">
           <template #header-extra>
-            <n-button v-if="activeCardIndex === index" text @click.stop="deleteCard(index)">
-              <n-icon :component="TrashOutline" size="12" />
-            </n-button>
+            <div class="card-actions" v-if="activeCardIndex === index">
+              <n-button v-if="card.type !== 'composite'" size="tiny" type="primary" @click.stop="saveCardEdit(index)">
+                <n-icon :component="SaveOutline" size="12" />
+              </n-button>
+              <n-button v-if="card.type !== 'composite'" size="tiny" text @click.stop="exitEditMode(index)">
+                <n-icon :component="ExitOutline" size="12" />
+              </n-button>
+              <n-button size="tiny" text @click.stop="deleteCard(index)">
+                <n-icon :component="TrashOutline" size="12" />
+              </n-button>
+            </div>
           </template>
 
           <!-- 根据笔记类型使用不同的渲染方式 -->
           <div v-if="card.type !== 'composite'" class="note-content" :contenteditable="activeCardIndex === index"
-            @blur="saveCardEdit(index)" v-html="card.content">
-          </div>
+            @keydown.enter="handleEnterKey(index, $event)" @keydown.meta.s.prevent="saveCardEdit(index)"
+            @keydown.ctrl.s.prevent="saveCardEdit(index)" v-html="card.content"
+            :ref="el => setContentEditableRef(index, el)"></div>
 
           <!-- 添加复合笔记的专用渲染 -->
           <div v-else class="composite-note-content">
@@ -207,7 +216,9 @@ import {
   DocumentTextOutline,
   DownloadOutline,
   CloseOutline,
-  LanguageOutline
+  LanguageOutline,
+  SaveOutline,
+  ExitOutline
 } from '@vicons/ionicons5'
 
 // 1. 组件属性定义
@@ -758,7 +769,7 @@ const endAltKeyCollection = () => {
 const parseCompositeContent = (html) => {
   if (!html) return [];
 
-  console.log('解析复合笔记:', html);
+  // console.log('解析复合笔记:', html);
   try {
     // 创建临时DOM来解析HTML
     const tempDiv = document.createElement('div');
@@ -774,10 +785,10 @@ const parseCompositeContent = (html) => {
       else if (classList.includes('diagram-segment')) type = 'diagram';
       else if (el.querySelector('mjx-container, mjx-math')) type = 'math';
 
-      console.log('解析片段:', {
-        type,
-        content: el.outerHTML
-      });
+      // console.log('解析片段:', {
+      //   type,
+      //   content: el.outerHTML
+      // });
 
 
       return {
@@ -1094,25 +1105,6 @@ const addNewCard = () => {
   updateBackendNotes('add', newCard)
 }
 
-// 处理卡片点击
-const handleCardClick = (index) => {
-  activeCardIndex.value = index
-}
-
-const saveCardEdit = async (index) => {
-  if (index >= 0 && index < noteCards.value.length) {
-    const cardElement = document.querySelector(
-      `.note-card:nth-child(${index + 1}) .note-content`
-    );
-
-    if (cardElement) {
-      noteCards.value[index].content = cardElement.innerHTML;
-      noteCards.value[index].timestamp = new Date().toISOString();
-
-      await updateBackendNotes('update', noteCards.value[index]);
-    }
-  }
-};
 
 const deleteCard = async (index) => {
   if (index >= 0 && index < noteCards.value.length) {
@@ -1614,11 +1606,11 @@ const translateMarkdown = async () => {
   try {
     const linesToTranslate = markdownLines.value
       .filter(line => !line.skipTranslation && !line.translation);
-    
+
     for (const line of linesToTranslate) {
       try {
         line.translating = true;
-        
+
         const response = await invoke('translate_text', {
           text: line.raw,
           sourceLang: 'auto',
@@ -1643,13 +1635,80 @@ const translateMarkdown = async () => {
       } finally {
         line.translating = false;
       }
-      
+
       // 强制更新视图
       markdownLines.value = [...markdownLines.value];
       await new Promise(resolve => setTimeout(resolve, 50)); // 小延迟避免UI阻塞
     }
   } finally {
     isTranslating.value = false;
+  }
+};
+
+// 1. 定义必要的 ref
+const contentEditables = ref([]);
+
+const setContentEditableRef = (index, el) => {
+  if (el) {
+    // 确保数组足够大
+    if (!contentEditables.value[index]) {
+      contentEditables.value = [...contentEditables.value];
+    }
+    contentEditables.value[index] = el;
+  }
+};
+
+// 2. 修改保存函数
+const saveCardEdit = async (index) => {
+  try {
+    if (index >= 0 && index < noteCards.value.length) {
+      const editableDiv = contentEditables.value[index];
+      if (!editableDiv) {
+        console.error('无法找到可编辑元素');
+        return;
+      }
+
+      noteCards.value[index].content = editableDiv.innerHTML;
+      noteCards.value[index].timestamp = new Date().toISOString();
+
+      await updateBackendNotes('update', noteCards.value[index]);
+
+      // 视觉反馈
+      editableDiv.classList.add('saved-feedback');
+      setTimeout(() => editableDiv.classList.remove('saved-feedback'), 1000);
+    }
+  } catch (error) {
+    console.error('保存失败:', error);
+    message.error(`保存失败: ${error.message}`);
+  }
+};
+
+// 4. 退出编辑模式
+const exitEditMode = (index) => {
+  const editableDiv = contentEditables.value[index];
+  if (editableDiv && editableDiv.innerHTML !== noteCards.value[index].content) {
+    if (!confirm('有未保存的修改，确定要取消吗？')) return;
+  }
+  activeCardIndex.value = -1;
+};
+
+// 4. 处理回车键行为
+const handleEnterKey = (index, event) => {
+  // 默认行为下插入div而不是br
+  if (!event.shiftKey) {
+    event.preventDefault();
+    document.execCommand('insertHTML', false, '<div><br></div>');
+  }
+
+  // 触发防抖保存
+  debouncedSave(index);
+};
+
+const debouncedSave = debounce(saveCardEdit, 500);
+
+const handleKeyUp = (e) => {
+  if (e.key === 'Alt' && altKeyCollector.value.isActive) {
+    endAltKeyCollection();
   }
 };
 
@@ -1669,12 +1728,6 @@ onMounted(async () => {
   ])
 
   // 添加全局键盘事件监听
-  const handleKeyUp = (e) => {
-    if (e.key === 'Alt' && altKeyCollector.value.isActive) {
-      endAltKeyCollection();
-    }
-  };
-
   window.addEventListener('keyup', handleKeyUp);
 
   // 单独处理尺寸适应
@@ -1694,6 +1747,14 @@ onMounted(async () => {
     }
     checkImageLoaded()
   })
+
+  const autoSaveInterval = setInterval(() => {
+    if (activeCardIndex.value !== -1) {
+      saveCardEdit(activeCardIndex.value);
+    }
+  }, 30000); // 每30秒自动保存
+
+  onBeforeUnmount(() => clearInterval(autoSaveInterval));
 })
 
 onBeforeUnmount(() => {
@@ -2102,6 +2163,47 @@ button:disabled {
   overflow-y: auto;
 }
 
+/* 60. 笔记内容样式 */
+.note-content {
+  padding: 12px 16px;
+  min-height: 60px;
+  outline: none;
+}
+
+/* 保存反馈动画 */
+.note-content.saved-feedback {
+  animation: savedPulse 1s;
+}
+
+@keyframes savedPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(77, 171, 247, 0.4);
+  }
+
+  70% {
+    box-shadow: 0 0 0 10px rgba(77, 171, 247, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(77, 171, 247, 0);
+  }
+}
+
+/* 编辑状态更明显的视觉反馈 */
+.note-content[contenteditable="true"] {
+  outline: 2px solid #4dabf7;
+  padding: 12px;
+  border-radius: 8px;
+  background-color: rgba(77, 171, 247, 0.05);
+  transition: all 0.2s ease;
+}
+
+/* 复合笔记的编辑状态 */
+.composite-note-content[contenteditable="true"] {
+  min-height: 100px;
+  padding: 12px;
+}
+
 /* 59. 笔记卡片样式 */
 .note-card {
   transition: all 0.2s var(--n-bezier);
@@ -2112,18 +2214,6 @@ button:disabled {
   box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08),
     0 3px 6px 0 rgba(0, 0, 0, 0.06),
     0 5px 12px 4px rgba(0, 0, 0, 0.04);
-}
-
-/* 60. 笔记内容样式 */
-.note-content {
-  padding: 12px 16px;
-  min-height: 60px;
-  outline: none;
-}
-
-.note-content[contenteditable="true"] {
-  background-color: var(--n-color);
-  border-radius: var(--n-border-radius);
 }
 
 /* 61. 添加卡片容器样式 */
@@ -2222,6 +2312,36 @@ button:disabled {
 .math-segment {
   padding: 8px;
   overflow-x: auto;
+}
+
+/* 卡片操作按钮容器 */
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 调整按钮间距 */
+}
+
+/* 按钮图标样式 */
+.n-button--tiny .n-icon {
+  margin: 0;
+  /* 移除默认外边距 */
+  display: flex;
+  /* 确保图标居中 */
+  align-items: center;
+  justify-content: center;
+}
+
+/* 按钮悬停效果 */
+.n-button--tiny:hover {
+  transform: scale(1.1);
+  transition: transform 0.2s ease;
+}
+
+/* 删除按钮特殊样式 */
+.n-button--tiny.text-type[data-v-xxxxxx]:hover {
+  color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.1);
 }
 
 /* 67. 可编辑内容样式 */
