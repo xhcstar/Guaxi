@@ -632,7 +632,7 @@ pub async fn get_answer_from_local_qwen_stream(
     };
 
     let request_body = json!({
-        "model": "qwq:latest",
+        "model": "qwen3:8b",
         "messages": [{"role": "user", "content": question}],
         "stream": true,  // 启用流式传输
     });
@@ -744,7 +744,7 @@ pub async fn get_answer_from_local_deepseek_stream(
     };
 
     let request_body = json!({
-        "model": "deepseek-r1:14b",
+        "model": "deepseek-r1:8b",
         "messages": [{"role": "user", "content": question}],
         "stream": true,  // 启用流式传输
     });

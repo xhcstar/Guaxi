@@ -1613,8 +1613,8 @@ const translateMarkdown = async () => {
 
         const response = await invoke('translate_text', {
           text: line.raw,
-          sourceLang: 'auto',
-          targetLang: 'zh'
+          secretId: "1122334",
+          secretKey: "4455667",
         });
 
         if (response.success) {
