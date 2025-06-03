@@ -11,13 +11,12 @@
           </g>
         </svg>
       </n-icon>
-      <div style="font-weight: bold; font-size: 16px;">Guaxi</div>
     </div>
 
     <div class="header-center">
       <div class="search-container">
-        <n-input v-model:value="searchQuery" placeholder="搜索文件或内容..." round clearable @keyup.enter="handleSearchEnter"
-          @focus="showSearchOptions">
+        <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索文件或内容..." round clearable
+          @keyup.enter="handleSearchEnter" @focus="showSearchOptions" @blur="handleSearchBlur">
           <template #prefix>
             <n-icon :component="Search32Filled" />
           </template>
@@ -46,15 +45,14 @@
   <!-- 搜索下拉框 -->
   <n-dropdown v-model:show="isSearchDropdownVisible" :options="searchOptions" placement="bottom-start"
     :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleSearchSelect" trigger="manual"
-    style="width: 300px" />
+    :style="dropdownStyle" />
+
+  <GuaxiSearchModal v-model:show="showSearchModal" :results="searchResults" />
 </template>
-
-
 
 <script setup>
 import { computed, ref, h } from "vue";
 import { NIcon, NDropdown } from 'naive-ui'
-
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import {
@@ -66,12 +64,16 @@ import {
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
+import GuaxiSearchModal from './GuaxiSearchModal.vue'
 
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
+const searchInputRef = ref(null)
+
 const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
 const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
-const searchType = ref('file') // 新增搜索类型状态
+const searchType = ref('file')
+
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider()
 };
@@ -80,50 +82,45 @@ const toggleRightSider = () => {
   siderStore.toggleRightSider()
 };
 
-// 监听OCR结果
-// listen('ocr-result', (event) => {
-//   console.log('OCR结果:', event.payload)
-// })
-
 async function CaptureScreenshot() {
   try {
     const originalPath = fileTreeStore.selectedFile.path
-    console.log("Original path:", originalPath)
+    console.log("[Screenshot] Original path:", originalPath)
 
-    // 获取平台分隔符（需要await）
     const pathSeparator = await sep()
 
-    // 1. 解析路径
     const dirPath = originalPath.substring(0, originalPath.lastIndexOf(pathSeparator))
     const fileName = originalPath.substring(
       originalPath.lastIndexOf(pathSeparator) + 1,
       originalPath.lastIndexOf('.')
     )
 
-    // 2. 创建 images 目录
     const imagesDir = `${dirPath}${pathSeparator}images`
-    console.log("Images directory:", imagesDir)
+    console.log("[Screenshot] Images directory:", imagesDir)
     await invoke('create_screenshot_dir', { path: imagesDir })
 
-    // 3. 构建新路径
     const screenshotPath = `${imagesDir}${pathSeparator}${fileName}.png`
-    console.log("Screenshot will be saved to:", screenshotPath)
+    console.log("[Screenshot] Will be saved to:", screenshotPath)
 
-    // 4. 调用后端接口
     await invoke('take_screenshot', { path: screenshotPath })
 
-    console.log("截图保存成功:", screenshotPath)
+    console.log("[Screenshot] Saved successfully:", screenshotPath)
   } catch (err) {
-    console.error('截图失败:', err)
+    console.error('[Screenshot] Failed:', err)
   }
 }
 
 // 搜索相关状态
 const isSearchDropdownVisible = ref(false)
 const contextMenuPosition = ref({ x: 0, y: 0 })
-const searchQuery = ref('') // 添加搜索查询变量
-const searchResults = ref([]) // 添加搜索结果变量
-const showSearchModal = ref(false) // 添加搜索模态框显示状态变量
+const searchQuery = ref('')
+const searchResults = ref([])
+const showSearchModal = ref(false)
+const dropdownWidth = ref(300)
+const dropdownStyle = computed(() => ({
+  width: `${dropdownWidth.value}px`,
+  maxWidth: '400px'
+}))
 
 // 搜索选项
 const searchOptions = [
@@ -139,19 +136,41 @@ const searchOptions = [
   }
 ]
 
-
 const showSearchOptions = (e) => {
   if (!isSearchDropdownVisible.value) {
-    isSearchDropdownVisible.value = true
-    const rect = e.target.getBoundingClientRect()
+    const inputElement = e.target
+    const rect = inputElement.getBoundingClientRect()
+
+    dropdownWidth.value = rect.width
+
     contextMenuPosition.value = {
       x: rect.left,
       y: rect.bottom + 5
     }
+
+    isSearchDropdownVisible.value = true
+
+    console.log('[Search] Show options menu', {
+      position: contextMenuPosition.value,
+      width: dropdownWidth.value,
+      searchType: searchType.value
+    })
   }
 }
+
+const handleSearchBlur = () => {
+  setTimeout(() => {
+    isSearchDropdownVisible.value = false
+  }, 200)
+}
+
 const handleSearchEnter = () => {
   if (searchQuery.value.trim()) {
+    console.log('[Search] Executing search:', {
+      query: searchQuery.value,
+      type: searchType.value
+    })
+
     if (searchType.value === 'file') {
       handleSearchFiles()
     } else {
@@ -161,19 +180,37 @@ const handleSearchEnter = () => {
 }
 
 const handleSearchSelect = (key) => {
+  console.log('[Search] Selected search type:', key)
   searchType.value = key
   isSearchDropdownVisible.value = false
+
   if (searchQuery.value.trim()) {
     handleSearchEnter()
   }
+
+  // 保持输入框焦点
+  searchInputRef.value?.focus()
 }
 
 async function handleSearchFiles() {
+  console.log('[Search] Starting file search:', {
+    query: searchQuery.value,
+    path: fileTreeStore.activeRepoPath
+  })
+
   try {
+    const startTime = performance.now()
     const results = await invoke('fd_search', {
       pattern: searchQuery.value,
       path: fileTreeStore.activeRepoPath
     })
+    const endTime = performance.now()
+
+    console.log('[Search] File search completed', {
+      resultCount: results.length,
+      duration: `${(endTime - startTime).toFixed(2)}ms`
+    })
+
     searchResults.value = results.map(item => ({
       path: item.path,
       fileName: item.path.split('/').pop(),
@@ -181,16 +218,32 @@ async function handleSearchFiles() {
     }))
     showSearchModal.value = true
   } catch (err) {
-    console.error('文件搜索失败:', err)
+    console.error('[Search] File search failed:', {
+      error: err,
+      query: searchQuery.value
+    })
   }
 }
 
 async function handleSearchNotes() {
+  console.log('[Search] Starting note search:', {
+    query: searchQuery.value,
+    path: `${fileTreeStore.activeRepoPath}`
+  })
+
   try {
+    const startTime = performance.now()
     const results = await invoke('rg_search', {
       pattern: searchQuery.value,
-      path: `${fileTreeStore.activeRepoPath}/notes`
+      path: `${fileTreeStore.activeRepoPath}`
     })
+    const endTime = performance.now()
+
+    console.log('[Search] Note search completed', {
+      resultCount: results.length,
+      duration: `${(endTime - startTime).toFixed(2)}ms`
+    })
+
     searchResults.value = results.map(item => ({
       path: item.path,
       preview: item.preview,
@@ -199,10 +252,12 @@ async function handleSearchNotes() {
     }))
     showSearchModal.value = true
   } catch (err) {
-    console.error('笔记搜索失败:', err)
+    console.error('[Search] Note search failed:', {
+      error: err,
+      query: searchQuery.value
+    })
   }
 }
-
 </script>
 
 <style scoped>
@@ -239,8 +294,9 @@ async function handleSearchNotes() {
 }
 
 .search-container {
+  position: relative;
   margin: 0;
-  padding: 0;  /* 添加这一行确保没有内边距 */
+  padding: 0;
   width: 100%;
   max-width: 400px;
 }
@@ -249,69 +305,33 @@ async function handleSearchNotes() {
   height: 25px !important;
   line-height: 25px !important;
   min-width: 200px;
-  margin: 0 !important;  /* 确保外边距为0 */
-  padding: 0 !important;  /* 确保内边距为0 */
+  margin: 0 !important;
+  padding: 0 8px !important;
+  transition: all 0.2s ease;
 }
 
-.n-input .n-input__border {
-  border: none !important;  /* 如果有边框影响间距 */
+:deep(.n-input__border) {
+  border: none !important;
 }
 
-.n-input .n-input-wrapper {
-  padding: 0 !important;  /* 确保输入框内部没有额外内边距 */
+:deep(.n-input-wrapper) {
+  padding: 0 !important;
 }
 
-/* 调整下拉菜单样式 */
-.n-dropdown-menu {
+:deep(.n-dropdown-menu) {
+  width: 100% !important;
+  max-width: 400px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
   margin-top: 4px !important;
+  padding: 4px 0;
+}
+
+:deep(.n-dropdown-option) {
+  padding: 8px 12px;
+}
+
+:deep(.n-dropdown-option:hover) {
+  background-color: #f5f5f5;
 }
 </style>
-
-
-
-
-<!-- <script>
-import { defineComponent, computed, ref, onMounted, onBeforeUnmount } from "vue";
-import { useSiderStore } from '../stores/useSiderStore'
-
-export default defineComponent({
-  // setup(props, { emit }) {
-  setup() {
-  // Reactive state variables
-  // const isLeftSiderCollapsed = ref(false);
-  // const isRightSiderCollapsed = ref(true);
-  
-  // // 更新左侧边栏的状态并向父组件发出事件
-  // const toggleLeftSider = () => {
-  //   isLeftSiderCollapsed.value = !isLeftSiderCollapsed.value;
-  //   emit('update-left-sider', isLeftSiderCollapsed.value); // 通过 emit 向父组件发送更新的状态
-  //   console.log("Header context isLeftSiderCollapsed", isLeftSiderCollapsed.value);
-  // };
-
-  // // 更新右侧边栏的状态并向父组件发出事件
-  // const toggleRightSider = () => {
-  //   isRightSiderCollapsed.value = !isRightSiderCollapsed.value;
-  //   emit('update-right-sider', isRightSiderCollapsed.value); // 通过 emit 向父组件发送更新的状态
-  //   console.log("Header context isRightSiderCollapsed", isRightSiderCollapsed.value);
-  // };
-  const siderStore = useSiderStore();
-  const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-  const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
-
-  const toggleLeftSider = () => {
-    siderStore.toggleLeftSider()
-  };
-
-  const toggleRightSider = () => {
-    siderStore.toggleRightSider()
-  };
-
-  return {
-    isLeftSiderCollapsed,
-    isRightSiderCollapsed,
-    toggleLeftSider,
-    toggleRightSider,
-  };
-},
-});
-</script> -->

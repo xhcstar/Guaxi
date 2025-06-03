@@ -1,5 +1,5 @@
 <template>
-  <n-modal v-model:show="show" :mask-closable="false">
+  <n-modal :show="show" :mask-closable="false" @update:show="handleUpdateShow">
     <n-card style="width: 800px; height: 600px">
       <n-tabs type="line">
         <n-tab-pane name="files" tab="文件">
@@ -22,15 +22,25 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { defineProps, defineEmits } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 
 const props = defineProps({
-  show: Boolean,
-  results: Array
+  show: {
+    type: Boolean,
+    required: true
+  },
+  results: {
+    type: Array,
+    default: () => []
+  }
 })
 
 const emit = defineEmits(['update:show'])
+
+const handleUpdateShow = (value) => {
+  emit('update:show', value)
+}
 
 const openFile = (path) => {
   emit('update:show', false)
