@@ -7,14 +7,46 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     selectedFile: null,
     repopathlist: [],
     activeRepoPath: null, // 当前激活的笔记库路径
+    openTabs: [],
+    activeTab: null,
   }),
   actions: {
+    // 在标签页中打开文件
+    openFileInTab(path, content) {
+      // 从路径中提取文件名
+      const fileName = path.split(/[\\/]/).pop();
+      console.log("文件名:", fileName);
+      if (!this.openTabs.some((tab) => tab.path === path)) {
+        this.openTabs.push({
+          path,
+          fileName,  // 添加文件名字段
+          content,
+          preview: this.generatePreview(content),
+        });
+      }
+      this.activeTab = path;
+      this.selectedFile = { path, content };
+    },
+
+    // 关闭标签页
+    closeTab(path) {
+      this.openTabs = this.openTabs.filter((tab) => tab.path !== path);
+      if (this.activeTab === path) {
+        this.activeTab =
+          this.openTabs.length > 0 ? this.openTabs[0].path : null;
+      }
+    },
+
+    // 生成预览内容
+    generatePreview(content) {
+      return content.length > 50 ? content.substring(0, 50) + "..." : content;
+    },
     // 获取文件树数据
     async fetchFileTree(path) {
-        console.log('开始获取文件树数据，路径:', path)
+      console.log("开始获取文件树数据，路径:", path);
       try {
         const result = await invoke("get_file_tree", { path });
-        console.log('获取文件树数据成功:', result)
+        console.log("获取文件树数据成功:", result);
         this.fileTree = result;
       } catch (error) {
         console.error("获取文件树数据失败:", error);
@@ -28,8 +60,10 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         const content = await invoke("read_file_content", { path });
         // console.log('获取文件内容成功:', content)
         this.selectedFile = { path, content };
+        return content
       } catch (error) {
         console.error("获取文件内容失败:", error);
+        return null
       }
     },
 

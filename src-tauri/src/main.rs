@@ -110,6 +110,8 @@ async fn main() {
             commands::guaxireader::load_existing_notes,
             commands::guaxiscreencap::take_screenshot,
             commands::guaxiscreencap::create_screenshot_dir,
+            commands::searcher::fd_search,
+            commands::searcher::rg_search,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn

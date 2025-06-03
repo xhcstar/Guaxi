@@ -137,7 +137,13 @@ const handleSelect = async (keys) => {
       console.log('找到选中节点:', selectedNode)
       if (!selectedNode.is_directory) {
         // console.log('选中节点是文件，开始获取文件内容')
-        fileTreeStore.fetchFileContent(selectedNode.id)
+        const content = await fileTreeStore.fetchFileContent(selectedNode.id)
+          if (content !== null) {  // 修改判断条件
+            // console.log('文件内容获取成功:', content)
+            fileTreeStore.openFileInTab(selectedNode.id, content)
+          } else {
+            console.error('文件内容获取失败')
+          }
       } else {
         // console.log('选中节点是目录，开始加载子目录内容')
         try {

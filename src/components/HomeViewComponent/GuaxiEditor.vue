@@ -1,5 +1,18 @@
 <template>
   <div class="editor-container">
+    <!-- 标签页栏 -->
+    <div class="tab-bar">
+      <div v-for="tab in fileTreeStore.openTabs" 
+           :key="tab.path"
+           :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
+           @click="switchTab(tab.path)"
+           @mousedown.middle="closeTab(tab.path)">
+        <span>{{ tab.fileName }}</span>
+        <n-icon size="14" @click.stop="closeTab(tab.path)">
+          <CloseOutline />
+        </n-icon>
+      </div>
+    </div>
     <!-- 工具栏 -->
     <div class="toolbar">
       <div class="toolbar-spacer"></div>
@@ -39,7 +52,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
-import { EyeOutline, LogoVimeo } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -467,6 +480,27 @@ const toggleVimMode = () => {
   });
 };
 
+const switchTab = (path) => {
+  fileTreeStore.activeTab = path;
+  const tab = fileTreeStore.openTabs.find(t => t.path === path);
+  if (tab) {
+    fileTreeStore.selectedFile = { path: tab.path, content: tab.content };
+    updateEditorContent(tab.content);
+  }
+};
+
+const closeTab = (path) => {
+  fileTreeStore.closeTab(path);
+  if (fileTreeStore.activeTab) {
+    const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
+    if (tab) {
+      updateEditorContent(tab.content);
+    }
+  } else {
+    updateEditorContent('');
+  }
+};
+
 // 生命周期
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
@@ -650,6 +684,32 @@ onUnmounted(() => {
 
 .dark .mode-toggle:hover {
   background-color: var(--dark-hover-color, #333);
+}
+
+.tab-bar {
+  display: flex;
+  height: 35px;
+  background: #f5f5f5;
+  border-bottom: 1px solid #ddd;
+  overflow-x: auto;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  padding: 0 15px;
+  border-right: 1px solid #ddd;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab-item.active {
+  background: #fff;
+  border-bottom: 2px solid #1890ff;
+}
+
+.tab-item:hover {
+  background: #eee;
 }
 </style>
 

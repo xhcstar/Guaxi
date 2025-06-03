@@ -9,3 +9,4 @@ pub mod settingview;
 pub mod statisticview;
 pub mod guaxiscreencap;
 pub mod translator;
+pub mod searcher;
