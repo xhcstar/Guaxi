@@ -1579,6 +1579,171 @@ const debounce = (fn, delay) => {
 };
 
 // 30. 翻译功能
+// const toggleTranslate = async () => {
+//   showTranslation.value = !showTranslation.value;
+
+//   if (showTranslation.value) {
+//     // 先标记所有需要跳过的行
+//     markdownLines.value = markdownLines.value.map(line => {
+//       if (!line.translation) {
+//         line.skipTranslation = shouldSkipTranslation(line.raw, line.html);
+//         if (line.skipTranslation) {
+//           line.translation = line.html; // 直接使用原始内容作为"翻译"
+//         }
+//       }
+//       return line;
+//     });
+
+//     // 只翻译未标记为跳过的行
+//     await translateMarkdown();
+//   }
+// };
+
+// 翻译相关状态
+const translateQueue = ref([]);
+// const isTranslating = ref(false);
+const lastTranslateTime = ref(0);
+const translateBatchSize = 5; // 每次批量翻译5条
+const translateInterval = 200; // 间隔200ms，确保不超过5次/秒
+
+// 修改后的翻译函数
+const translateMarkdown = async () => {
+  if (isTranslating.value) return;
+  
+  // 收集需要翻译的行
+  const linesToTranslate = markdownLines.value
+    .filter(line => !line.skipTranslation && !line.translation)
+    .map(line => {
+      // 提取纯文本内容
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = line.html;
+      const textNodes = [];
+      const extractText = (node) => {
+        if (shouldSkipTranslation(node)) return;
+        
+        if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+          textNodes.push(node.textContent.trim());
+        } else if (node.childNodes) {
+          for (const child of node.childNodes) {
+            extractText(child);
+          }
+        }
+      };
+      extractText(tempDiv);
+      
+      return {
+        line,
+        text: textNodes.join(' '), // 合并所有文本节点
+        html: line.html
+      };
+    })
+    .filter(item => item.text.length > 0);
+
+  // 添加到队列
+  translateQueue.value.push(...linesToTranslate);
+  
+  // 开始处理队列
+  processTranslateQueue();
+};
+
+// 处理翻译队列
+const processTranslateQueue = async () => {
+  if (isTranslating.value || translateQueue.value.length === 0) return;
+  
+  const now = Date.now();
+  if (now - lastTranslateTime.value < translateInterval) {
+    setTimeout(processTranslateQueue, translateInterval - (now - lastTranslateTime.value));
+    return;
+  }
+  
+  isTranslating.value = true;
+  try {
+    const currentBatch = translateQueue.value.splice(0, translateBatchSize);
+    const texts = currentBatch.map(item => item.text);
+    
+    // 调用后端接口
+    const response = await invoke('translate_text', {
+      texts: texts,
+      secretId: "1122334",
+      secretKey: "5566778",
+    });
+
+    // 调试日志
+    console.log('翻译响应:', response);
+    
+    // 修复点1: 检查响应结构是否匹配
+    if (response && response.translated_texts?.length === texts.length) {
+      currentBatch.forEach((item, index) => {
+        // 修复点2: 确保使用正确的字段名
+        const translatedText = response.translated_texts[index];
+        if (translatedText) {
+          item.line.translation = wrapTranslation(item.line.html, translatedText);
+          item.line.translationError = null;
+        } else {
+          item.line.translationError = '翻译结果为空';
+        }
+      });
+    } else {
+      // 修复点3: 提供更详细的错误信息
+      const errorMsg = response?.error || 
+                      (response?.translated_texts ? '返回结果数量不匹配' : '无效的响应格式');
+      currentBatch.forEach(item => {
+        item.line.translationError = `翻译失败: ${errorMsg}`;
+      });
+      console.error('翻译错误:', response);
+    }
+    
+    lastTranslateTime.value = Date.now();
+  } catch (error) {
+    // 修复点4: 更好的错误处理
+    console.error('翻译异常:', error);
+    translateQueue.value.forEach(item => {
+      item.line.translationError = `翻译异常: ${error.message || '未知错误'}`;
+    });
+  } finally {
+    isTranslating.value = false;
+    if (translateQueue.value.length > 0) {
+      setTimeout(processTranslateQueue, translateInterval);
+    }
+  }
+};
+
+const wrapTranslation = (html, translatedText) => {
+  if (!translatedText || translatedText.trim() === '') {
+    return html; // 返回原始内容
+  }
+
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = html;
+  
+  const textNodes = [];
+  const findTextNodes = (node) => {
+    if (shouldSkipTranslation(node)) return;
+    
+    if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+      textNodes.push(node);
+    } else if (node.childNodes) {
+      for (const child of node.childNodes) {
+        findTextNodes(child);
+      }
+    }
+  };
+  findTextNodes(tempDiv);
+  
+  let textPos = 0;
+  for (const node of textNodes) {
+    const originalText = node.textContent.trim();
+    if (textPos < translatedText.length) {
+      const endPos = Math.min(textPos + originalText.length, translatedText.length);
+      node.textContent = translatedText.substring(textPos, endPos);
+      textPos = endPos + 1;
+    }
+  }
+  
+  return tempDiv.innerHTML;
+};
+
+// 修改toggleTranslate函数
 const toggleTranslate = async () => {
   showTranslation.value = !showTranslation.value;
 
@@ -1596,52 +1761,6 @@ const toggleTranslate = async () => {
 
     // 只翻译未标记为跳过的行
     await translateMarkdown();
-  }
-};
-
-const translateMarkdown = async () => {
-  if (isTranslating.value) return;
-  isTranslating.value = true;
-
-  try {
-    const linesToTranslate = markdownLines.value
-      .filter(line => !line.skipTranslation && !line.translation);
-
-    for (const line of linesToTranslate) {
-      try {
-        line.translating = true;
-
-        const response = await invoke('translate_text', {
-          text: line.raw,
-          secretId: "1122334",
-          secretKey: "4455667",
-        });
-
-        if (response.success) {
-          line.translation = await renderMarkdown(response.translatedText, {
-            basePath: "",
-            mermaid: true,
-            math: true,
-            codeHighlight: true,
-            theme: 'default'
-          });
-          line.translationError = null;
-        } else {
-          line.translationError = `翻译失败: ${response.error || '未知错误'}`;
-        }
-      } catch (error) {
-        line.translationError = `翻译失败: ${error.message}`;
-        console.error('翻译行失败:', error);
-      } finally {
-        line.translating = false;
-      }
-
-      // 强制更新视图
-      markdownLines.value = [...markdownLines.value];
-      await new Promise(resolve => setTimeout(resolve, 50)); // 小延迟避免UI阻塞
-    }
-  } finally {
-    isTranslating.value = false;
   }
 };
 
