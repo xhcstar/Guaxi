@@ -1,19 +1,29 @@
 <template>
   <div class="right-sider-content">
-    <SideNavigator />
+    <GuaxiSearchNavigator 
+      :file-results="searchResults.fileResults"
+      :note-results="searchResults.noteResults"
+      :search-query="searchResults.searchQuery"
+    />
   </div>
 </template>
 
 <script setup>
-import SideNavigator from "./SideNavigator.vue";
+import GuaxiSearchNavigator from "./GuaxiSearchNavigator.vue"
+import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { computed } from 'vue'
+
+const rightSiderStore = useRightSiderStore()
+const searchResults = computed(() => rightSiderStore.searchResults)
 </script>
 
-<style scope>
+<style scoped>
 .right-sider-content {
   flex-grow: 1;
-  padding: 0px;
-  margin-left: 5px;
-  margin-top: 2px;
-  width: 100vh;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 </style>

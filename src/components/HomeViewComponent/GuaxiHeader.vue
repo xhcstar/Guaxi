@@ -46,8 +46,6 @@
   <n-dropdown v-model:show="isSearchDropdownVisible" :options="searchOptions" placement="bottom-start"
     :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleSearchSelect" trigger="manual"
     :style="dropdownStyle" />
-
-  <GuaxiSearchModal v-model:show="showSearchModal" :results="searchResults" />
 </template>
 
 <script setup>
@@ -64,8 +62,10 @@ import {
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
-import GuaxiSearchModal from './GuaxiSearchModal.vue'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
 
+
+const rightSiderStore = useRightSiderStore()
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
 const searchInputRef = ref(null)
@@ -193,69 +193,52 @@ const handleSearchSelect = (key) => {
 }
 
 async function handleSearchFiles() {
-  console.log('[Search] Starting file search:', {
-    query: searchQuery.value,
-    path: fileTreeStore.activeRepoPath
-  })
-
   try {
-    const startTime = performance.now()
     const results = await invoke('fd_search', {
       pattern: searchQuery.value,
       path: fileTreeStore.activeRepoPath
-    })
-    const endTime = performance.now()
-
-    console.log('[Search] File search completed', {
-      resultCount: results.length,
-      duration: `${(endTime - startTime).toFixed(2)}ms`
-    })
-
-    searchResults.value = results.map(item => ({
-      path: item.path,
-      fileName: item.path.split('/').pop(),
-      type: 'file'
-    }))
-    showSearchModal.value = true
+    });
+    
+    rightSiderStore.setSearchResults({
+      fileResults: results.map(item => ({
+        path: item.path,
+        file_name: item.file_name, // 确保使用正确的字段名
+        preview: item.preview,
+        line_number: item.line_number,
+        matches: item.matches
+      })),
+      noteResults: [],
+      searchQuery: searchQuery.value
+    });
   } catch (err) {
-    console.error('[Search] File search failed:', {
-      error: err,
-      query: searchQuery.value
-    })
+    console.error('[Search] File search failed:', err);
   }
 }
 
 async function handleSearchNotes() {
-  console.log('[Search] Starting note search:', {
-    query: searchQuery.value,
-    path: `${fileTreeStore.activeRepoPath}`
-  })
-
   try {
-    const startTime = performance.now()
     const results = await invoke('rg_search', {
       pattern: searchQuery.value,
-      path: `${fileTreeStore.activeRepoPath}`
-    })
-    const endTime = performance.now()
+      path: fileTreeStore.activeRepoPath
+    });
+    
+    // 过滤掉可能包含错误的结果
+    const validResults = results.filter(item => 
+      item.preview && item.line_number && !item.path.includes('.git')
+    );
+    
+    rightSiderStore.setSearchResults({
+      fileResults: [],
+      noteResults: validResults,
+      searchQuery: searchQuery.value
+    });
 
-    console.log('[Search] Note search completed', {
-      resultCount: results.length,
-      duration: `${(endTime - startTime).toFixed(2)}ms`
-    })
-
-    searchResults.value = results.map(item => ({
-      path: item.path,
-      preview: item.preview,
-      lineNumber: item.line_number,
-      type: 'note'
-    }))
-    showSearchModal.value = true
+    if (siderStore.isRightSiderCollapsed) {
+      siderStore.toggleRightSider();
+    }
   } catch (err) {
-    console.error('[Search] Note search failed:', {
-      error: err,
-      query: searchQuery.value
-    })
+    console.error('[Search] Note search failed:', err);
+    message.error('搜索失败: ' + (err.message || String(err)));
   }
 }
 </script>

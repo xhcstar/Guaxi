@@ -51,6 +51,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { useEditorStore } from '../../stores/editorStore'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
 import { EyeOutline, LogoVimeo, CloseOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
@@ -71,6 +72,7 @@ import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
+const editorStore = useEditorStore()
 const mode = ref('edit');
 const renderedHtml = ref('');
 const previewContainer = ref(null);
@@ -500,6 +502,68 @@ const closeTab = (path) => {
     updateEditorContent('');
   }
 };
+
+// 修改 applyHighlights 函数
+const applyHighlights = () => {
+  if (!editor || !editorStore.highlightInfo) return;
+
+  const { lineNumber, matches = [], text } = editorStore.highlightInfo;
+  
+  // 清除旧的高亮
+  if (editorStore.decorations) {
+    editor.deltaDecorations(editorStore.decorations, []);
+  }
+  
+  // 如果有精确匹配位置
+  if (matches && matches.length > 0) {
+    const newDecorations = matches.map(match => ({
+      range: new monaco.Range(
+        lineNumber,
+        match.start + 1,
+        lineNumber,
+        match.end + 1
+      ),
+      options: { 
+        inlineClassName: 'search-highlight',
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+      }
+    }));
+    
+    editorStore.decorations = editor.deltaDecorations([], newDecorations);
+    editor.revealLineInCenter(lineNumber);
+  } 
+  // 否则使用全文搜索
+  else if (text) {
+    const model = editor.getModel();
+    const foundMatches = model.findMatches(text, false, false, true, null, true);
+    
+    const newDecorations = foundMatches.map(match => ({
+      range: match.range,
+      options: {
+        inlineClassName: 'search-highlight',
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+      }
+    }));
+    
+    editorStore.decorations = editor.deltaDecorations([], newDecorations);
+    
+    if (foundMatches.length > 0) {
+      editor.revealRangeInCenter(foundMatches[0].range);
+    }
+  }
+};
+
+// 监听编辑器store的变化
+watch(() => editorStore.currentFile, (file) => {
+  if (file && editor) {
+    editor.setValue(file.content);
+    nextTick(applyHighlights);
+  }
+});
+
+watch(() => editorStore.highlightInfo, () => {
+  if (editor) applyHighlights();
+}, { deep: true });
 
 // 生命周期
 onMounted(() => {

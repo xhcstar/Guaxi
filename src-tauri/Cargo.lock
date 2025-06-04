@@ -2161,6 +2161,7 @@ dependencies = [
  "chrono",
  "fs_extra",
  "futures-util",
+ "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "hex",

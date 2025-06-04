@@ -11,19 +11,43 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     activeTab: null,
   }),
   actions: {
+    // 新增：专门处理搜索结果的打开
+    async openSearchResult(result) {
+      // 获取文件内容（如果未加载）
+      if (!this.openTabs.some((tab) => tab.path === result.path)) {
+        const content = await this.fetchFileContent(result.path);
+        this.openFileInTab(result.path, content);
+      }
+
+      // 激活标签页
+      this.activeTab = result.path;
+      this.selectedFile = {
+        path: result.path,
+        content: this.openTabs.find((tab) => tab.path === result.path).content,
+      };
+
+      // 返回需要高亮的信息
+      return {
+        path: result.path,
+        lineNumber: result.line_number,
+        matches: result.matches,
+        searchText: result.searchText,
+      };
+    },
+
     // 在标签页中打开文件
-    openFileInTab(path, content) {
-      // 从路径中提取文件名
+    async openFileInTab(path, content) {
       const fileName = path.split(/[\\/]/).pop();
-      console.log("文件名:", fileName);
+
       if (!this.openTabs.some((tab) => tab.path === path)) {
         this.openTabs.push({
           path,
-          fileName,  // 添加文件名字段
-          content,
+          fileName,
+          content: content || (await this.fetchFileContent(path)),
           preview: this.generatePreview(content),
         });
       }
+
       this.activeTab = path;
       this.selectedFile = { path, content };
     },
@@ -60,10 +84,10 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         const content = await invoke("read_file_content", { path });
         // console.log('获取文件内容成功:', content)
         this.selectedFile = { path, content };
-        return content
+        return content;
       } catch (error) {
         console.error("获取文件内容失败:", error);
-        return null
+        return null;
       }
     },
 
