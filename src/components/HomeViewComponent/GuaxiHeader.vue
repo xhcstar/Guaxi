@@ -202,7 +202,7 @@ async function handleSearchFiles() {
     rightSiderStore.setSearchResults({
       fileResults: results.map(item => ({
         path: item.path,
-        file_name: item.file_name, // 确保使用正确的字段名
+        file_name: item.file_name,
         preview: item.preview,
         line_number: item.line_number,
         matches: item.matches
@@ -210,6 +210,11 @@ async function handleSearchFiles() {
       noteResults: [],
       searchQuery: searchQuery.value
     });
+
+    // 添加这行代码：如果右侧边栏是折叠状态，则展开它
+    if (siderStore.isRightSiderCollapsed) {
+      siderStore.toggleRightSider();
+    }
   } catch (err) {
     console.error('[Search] File search failed:', err);
   }
@@ -222,7 +227,6 @@ async function handleSearchNotes() {
       path: fileTreeStore.activeRepoPath
     });
     
-    // 过滤掉可能包含错误的结果
     const validResults = results.filter(item => 
       item.preview && item.line_number && !item.path.includes('.git')
     );
@@ -233,6 +237,7 @@ async function handleSearchNotes() {
       searchQuery: searchQuery.value
     });
 
+    // 确保这行代码存在
     if (siderStore.isRightSiderCollapsed) {
       siderStore.toggleRightSider();
     }
