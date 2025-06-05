@@ -1,7 +1,7 @@
 <template>
-  <div @contextmenu="handleTreeContextMenu" style="width: 100%; height: 100%; position: relative;">
+  <div ref="treeContainer" @contextmenu="handleTreeContextMenu" style="width: 100%; height: 100%; position: relative;">
     <!-- 文件树 -->
-    <n-tree :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
+    <n-tree ref="treeRef" :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
       :expand-on-click="true" :show-line="true" @update:selected-keys="handleSelect" :node-props="RightClickMenu"
       :on-update:expanded-keys="expandedKeys" virtual-scroll :virtual-scroll-item-height="28"
       style="height: 100%; overflow-y: auto;" />
@@ -35,6 +35,7 @@ const selectedNode = ref(null) // 当前右键点击的节点
 
 // 已展开的目录
 const expandedKeys = ref([])
+const unlistenRef = ref(null)
 
 // 右键菜单选项
 const contextMenuOptions = ref([
@@ -138,12 +139,12 @@ const handleSelect = async (keys) => {
       if (!selectedNode.is_directory) {
         // console.log('选中节点是文件，开始获取文件内容')
         const content = await fileTreeStore.fetchFileContent(selectedNode.id)
-          if (content !== null) {  // 修改判断条件
-            // console.log('文件内容获取成功:', content)
-            fileTreeStore.openFileInTab(selectedNode.id, content)
-          } else {
-            console.error('文件内容获取失败')
-          }
+        if (content !== null) {  // 修改判断条件
+          // console.log('文件内容获取成功:', content)
+          fileTreeStore.openFileInTab(selectedNode.id, content)
+        } else {
+          console.error('文件内容获取失败')
+        }
       } else {
         // console.log('选中节点是目录，开始加载子目录内容')
         try {
@@ -186,34 +187,40 @@ const findNodeById = (tree, id) => {
 }
 
 // 处理文件树容器的右键点击事件
-const handleTreeContextMenu = (e) => {
-  console.log('文件树容器的右键点击事件触发，当前位置:', e.clientX, e.clientY)
-  e.preventDefault(); // 阻止默认右键菜单
+const treeRef = ref(null)
+const treeContainer = ref(null)
 
-  // 判断是否点击在空白区域
-  const treeContainer = e.currentTarget;
-  const treeElement = treeContainer.querySelector('.n-tree'); // 获取文件树元素
-  const isClickOnBlank = !treeElement.contains(e.target); // 判断是否点击在空白区域
+// 修改后的 handleTreeContextMenu 函数
+const handleTreeContextMenu = (e) => {
+  console.log('文件树容器的右键点击事件触发', e)
+  e.preventDefault()
+
+  // 检查是否点击在空白区域
+  const isClickOnBlank = !e.target.closest('.n-tree-node') &&
+    !e.target.closest('.n-tree-node-content') &&
+    treeContainer.value.contains(e.target)
 
   if (isClickOnBlank) {
-    // 如果是空白区域，显示右键菜单
-    isContextMenuVisible.value = true;
-    contextMenuPosition.value = { x: e.clientX, y: e.clientY };
-    selectedNode.value = null; // 设置当前选中的节点为 null（表示顶层目录）
+    isContextMenuVisible.value = true
+    contextMenuPosition.value = { x: e.clientX, y: e.clientY }
+    selectedNode.value = null // 设置为null表示顶层目录
+    console.log('空白区域右键点击，显示顶级菜单')
   }
-};
+}
 
 // 处理右键点击事件
 const RightClickMenu = ({ option }) => {
   return {
     onContextmenu: (e) => {
-      e.preventDefault(); // 阻止默认右键菜单
-      selectedNode.value = option; // 设置当前右键点击的节点
-      isContextMenuVisible.value = true; // 显示右键菜单
-      contextMenuPosition.value = { x: e.clientX, y: e.clientY }; // 设置菜单位置
+      e.preventDefault() // 阻止默认右键菜单
+      e.stopPropagation() // 阻止事件冒泡
+      selectedNode.value = option // 设置当前右键点击的节点
+      isContextMenuVisible.value = true // 显示右键菜单
+      contextMenuPosition.value = { x: e.clientX, y: e.clientY }  // 设置菜单位置
+      console.log('节点右键点击，显示节点菜单')
     },
-  };
-};
+  }
+}
 
 // 处理右键菜单选择
 const handleContextMenuSelect = (key) => {
@@ -601,15 +608,6 @@ const handleFileRenamed = async (oldPath, newPath) => {
 
 // 文件监控函数
 const setupFileWatcher = async () => {
-  // 先注册卸载钩子（必须在第一个 await 之前）
-  const unlistenRef = ref(null)
-  onUnmounted(async () => {
-    if (unlistenRef.value) {
-      await invoke('stop_file_watching')
-      unlistenRef.value()
-      console.log('文件监控已停止')
-    }
-  })
   try {
     console.log('开始监控目录:', fileTreeStore.activeRepoPath)
 
@@ -678,6 +676,22 @@ const handleFileRemoved = async (filePath) => {
   await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
 }
 
+// 修改后的清理函数
+const cleanupFileWatcher = () => {
+  if (unlistenRef.value) {
+    // 使用Promise链式调用处理异步操作
+    invoke('stop_file_watching')
+      .then(() => {
+        unlistenRef.value()
+        unlistenRef.value = null
+        console.log('文件监控已停止')
+      })
+      .catch(error => {
+        console.error('停止文件监控失败:', error)
+      })
+  }
+}
+
 // 初始化时获取文件树数据
 onMounted(async () => {
   await loadFileTree()
@@ -688,10 +702,62 @@ onMounted(async () => {
       handleTreeContextMenu(e);
     });
   }
+
+  // 添加容器右键事件监听
+  if (treeContainer.value) {
+    treeContainer.value.addEventListener('contextmenu', handleTreeContextMenu)
+  }
+
+  // 添加调试日志
+  const debugElement = treeContainer.value
+  if (debugElement) {
+    debugElement.addEventListener('click', (e) => {
+      console.log('点击目标:', e.target)
+      console.log('是否是空白区域:', !e.target.closest('.n-tree-node') &&
+        !e.target.closest('.n-tree-node-content') &&
+        treeContainer.value.contains(e.target))
+    })
+  }
+
   // 添加文件监控
   setupFileWatcher()
 })
 
+// 在组件卸载时清理事件监听器
+onUnmounted(() => {
+  if (treeContainer.value) {
+    treeContainer.value.removeEventListener('contextmenu', handleTreeContextMenu)
+  }
+
+  // 清理文件监控
+  cleanupFileWatcher()
+})
+
 </script>
 
-<style scoped></style>
+<style scoped>
+/* 添加空白区域样式 */
+.guaxi-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  /* 确保有足够的空白区域 */
+}
+
+/* 确保树容器有明确的尺寸 */
+.n-tree {
+  height: 100%;
+  position: relative;
+}
+
+/* 空白区域样式 */
+.tree-blank-area {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+}
+</style>
