@@ -1,10 +1,9 @@
 <template>
-  <div ref="treeContainer" @contextmenu="handleTreeContextMenu" style="width: 100%; height: 100%; position: relative;">
+  <div ref="treeContainer" class="tree-container" @contextmenu.prevent="handleTreeContextMenu">
     <!-- 文件树 -->
     <n-tree ref="treeRef" :data="fileTree" key-field="id" :render-label="renderLabel" :render-prefix="renderPrefix"
-      :expand-on-click="true" :show-line="true" @update:selected-keys="handleSelect" :node-props="RightClickMenu"
-      :on-update:expanded-keys="expandedKeys" virtual-scroll :virtual-scroll-item-height="28"
-      style="height: 100%; overflow-y: auto;" />
+      :expand-on-click="true" :show-line="true" @update:selected-keys="handleSelect" :node-props="nodeRightClickProps"
+      :on-update:expanded-keys="expandedKeys" virtual-scroll :virtual-scroll-item-height="28" class="tree-component" />
   </div>
 
   <!-- 右键菜单 -->
@@ -190,35 +189,34 @@ const findNodeById = (tree, id) => {
 const treeRef = ref(null)
 const treeContainer = ref(null)
 
-// 修改后的 handleTreeContextMenu 函数
+// 修改右键菜单处理
+const nodeRightClickProps = ({ option }) => ({
+  onContextmenu: (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    selectedNode.value = option
+    isContextMenuVisible.value = true
+    contextMenuPosition.value = { x: e.clientX, y: e.clientY }
+    console.log('节点右键菜单触发:', option.name)
+  }
+})
+
+// 修改容器右键处理
 const handleTreeContextMenu = (e) => {
-  console.log('文件树容器的右键点击事件触发', e)
+  // 阻止默认行为（包括Tauri调试菜单）
   e.preventDefault()
+  e.stopPropagation()
 
   // 检查是否点击在空白区域
-  const isClickOnBlank = !e.target.closest('.n-tree-node') &&
+  const isBlankArea = !e.target.closest('.n-tree-node') &&
     !e.target.closest('.n-tree-node-content') &&
     treeContainer.value.contains(e.target)
 
-  if (isClickOnBlank) {
+  if (isBlankArea) {
     isContextMenuVisible.value = true
     contextMenuPosition.value = { x: e.clientX, y: e.clientY }
-    selectedNode.value = null // 设置为null表示顶层目录
-    console.log('空白区域右键点击，显示顶级菜单')
-  }
-}
-
-// 处理右键点击事件
-const RightClickMenu = ({ option }) => {
-  return {
-    onContextmenu: (e) => {
-      e.preventDefault() // 阻止默认右键菜单
-      e.stopPropagation() // 阻止事件冒泡
-      selectedNode.value = option // 设置当前右键点击的节点
-      isContextMenuVisible.value = true // 显示右键菜单
-      contextMenuPosition.value = { x: e.clientX, y: e.clientY }  // 设置菜单位置
-      console.log('节点右键点击，显示节点菜单')
-    },
+    selectedNode.value = null
+    console.log('空白区域右键菜单触发')
   }
 }
 
@@ -695,28 +693,18 @@ const cleanupFileWatcher = () => {
 // 初始化时获取文件树数据
 onMounted(async () => {
   await loadFileTree()
-  const treeElement = document.querySelector('.n-tree'); // 获取文件树元素
-  if (treeElement) {
-    treeElement.addEventListener('contextmenu', (e) => {
-      console.log('Tree contextmenu event triggered'); // 添加日志
-      handleTreeContextMenu(e);
-    });
-  }
+
+  // 添加全局右键事件监听，阻止默认行为
+  document.addEventListener('contextmenu', (e) => {
+    if (treeContainer.value?.contains(e.target)) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+  })
 
   // 添加容器右键事件监听
   if (treeContainer.value) {
     treeContainer.value.addEventListener('contextmenu', handleTreeContextMenu)
-  }
-
-  // 添加调试日志
-  const debugElement = treeContainer.value
-  if (debugElement) {
-    debugElement.addEventListener('click', (e) => {
-      console.log('点击目标:', e.target)
-      console.log('是否是空白区域:', !e.target.closest('.n-tree-node') &&
-        !e.target.closest('.n-tree-node-content') &&
-        treeContainer.value.contains(e.target))
-    })
   }
 
   // 添加文件监控
@@ -725,6 +713,14 @@ onMounted(async () => {
 
 // 在组件卸载时清理事件监听器
 onUnmounted(() => {
+  // 移除全局右键事件监听
+  document.removeEventListener('contextmenu', (e) => {
+    if (treeContainer.value?.contains(e.target)) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+  })
+
   if (treeContainer.value) {
     treeContainer.value.removeEventListener('contextmenu', handleTreeContextMenu)
   }
@@ -736,28 +732,20 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* 添加空白区域样式 */
-.guaxi-content {
+.tree-container {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 300px;
-  /* 确保有足够的空白区域 */
+  min-height: 200px;
 }
 
-/* 确保树容器有明确的尺寸 */
-.n-tree {
+.tree-component {
   height: 100%;
-  position: relative;
+  width: 100%;
 }
 
-/* 空白区域样式 */
-.tree-blank-area {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1;
+/* 节点悬停效果 */
+.n-tree-node:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 </style>
