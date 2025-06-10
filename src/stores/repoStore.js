@@ -27,6 +27,7 @@ export const repoStore = defineStore("repoStore", {
             fromImportedFileLibrary: note.from_imported_file_library,
             noteFileCreateTime: note.note_file_create_time,
             noteFileUpdateTime: note.note_file_update_time,
+            knowledgeRepo: note.knowledge_repo,
           }));
         } else {
           // 调用获取文件数据的接口
@@ -45,6 +46,7 @@ export const repoStore = defineStore("repoStore", {
             importFileSize: file.import_file_size,
             convetToHtmlFilename: '',
             convetToMarkdownFilename: file.converted_markdown_filename,
+            knowledgeRepo: file.knowledge_repo,
           }));
         }
       } catch (error) {

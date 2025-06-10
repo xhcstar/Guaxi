@@ -18,6 +18,7 @@ pub struct NoteInput {
     from_imported_file_library: String,
     note_file_create_time: String,
     note_file_update_time: String,
+    knowledge_repo: String,
 }
 #[derive(Serialize, Deserialize)]
 pub struct ImportedFile {
@@ -30,6 +31,7 @@ pub struct ImportedFile {
     import_file_create_time: String,
     import_file_size: String,
     converted_markdown_filename: String,
+    knowledge_repo: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,6 +44,7 @@ pub struct ImportedFileInput {
     import_file_create_time: String,
     import_file_size: String,
     converted_markdown_filename: String,
+    knowledge_repo: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +58,7 @@ pub struct Note {
     from_imported_file_library: String,
     note_file_create_time: String,
     note_file_update_time: String,
+    knowledge_repo: String,
 }
 
 // 创建数据库文件路径
@@ -141,7 +145,8 @@ pub fn setup_db() -> Result<(), String> {
         txt_change_time TIMESTAMP,
         container_filename TEXT,
         container_filepath TEXT,
-        container_change_time TIMESTAMP
+        container_change_time TIMESTAMP,
+        knowledge_repo TEXT NOT NULL
     ",
     )
     .map_err(|e| e.to_string())?;
@@ -183,7 +188,8 @@ pub fn setup_db() -> Result<(), String> {
         from_imported_file TEXT,
         from_imported_file_library TEXT,
         note_file_create_time TEXT,
-        note_file_update_time TEXT
+        note_file_update_time TEXT,
+        knowledge_repo TEXT NOT NULL
     ",
     )
     .map_err(|e| e.to_string())?;
@@ -239,7 +245,8 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
     // 查询 imported_files 记录
     let mut stmt = conn
         .prepare(
-            "SELECT id, original_filename, description, library, original_filetype, create_time, original_filesize, markdown_filename FROM imported_files",
+            "SELECT id, original_filename, description, library, original_filetype, 
+            create_time, original_filesize, markdown_filename，knowledge_repo FROM imported_files",
         )
         .map_err(|e| e.to_string())?;
     let files = stmt
@@ -254,6 +261,7 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
                 import_file_create_time: row.get(5)?,
                 import_file_size: row.get(6)?,
                 converted_markdown_filename: row.get(7)?,
+                knowledge_repo: row.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -289,8 +297,9 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
 
     // 插入 imported_files 记录
     tx.execute(
-        "INSERT INTO imported_files (original_filename, description, library, original_filetype, create_time, original_filesize, markdown_filename) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO imported_files (original_filename, description, library, original_filetype, 
+        create_time, original_filesize, markdown_filename, knowledge_repo) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             file.import_file_name,
             file.description,
@@ -299,6 +308,7 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
             file.import_file_create_time,
             file.import_file_size,
             file.converted_markdown_filename,
+            file.knowledge_repo,
         ],
     ).map_err(|e: rusqlite::Error| e.to_string())? as i32;
     // 获取新插入的 file_id
@@ -355,7 +365,8 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
 
     // 更新 imported_files 记录
     tx.execute(
-        "UPDATE imported_files SET original_filename = ?, description = ?, library = ?, original_filetype = ?, create_time = ?, original_filesize = ? WHERE id = ?",
+        "UPDATE imported_files SET original_filename = ?, description = ?, library = ?, original_filetype = ?, 
+        create_time = ?, original_filesize = ?, knowledge_repo = ? WHERE id = ?",
         params![
             file.import_file_name,
             file.description,
@@ -363,6 +374,7 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
             file.file_type,
             file.import_file_create_time,
             file.import_file_size,
+            file.knowledge_repo,
             id
         ],
     ).map_err(|e| e.to_string())?;
@@ -432,7 +444,8 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
     // 查询 notes 记录
     let mut stmt = conn
         .prepare(
-            "SELECT id, description, note_file_name, note_file_type, from_imported_file, from_imported_file_library, note_file_create_time, note_file_update_time FROM notes",
+            "SELECT id, description, note_file_name, note_file_type, from_imported_file, 
+            from_imported_file_library, note_file_create_time, note_file_update_time, knowledge_repo, FROM notes",
         )
         .map_err(|e| e.to_string())?;
     let notes = stmt
@@ -447,6 +460,7 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
                 from_imported_file_library: row.get(5)?,
                 note_file_create_time: row.get(6)?,
                 note_file_update_time: row.get(7)?,
+                knowledge_repo: row.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -482,7 +496,9 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
 
     // 插入 notes 记录
     tx.execute(
-        "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, from_imported_file_library, note_file_create_time, note_file_update_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, 
+        from_imported_file_library, note_file_create_time, note_file_update_time, 
+        knowledge_repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             note.description,
             note.note_file_name,
@@ -490,7 +506,8 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
             note.from_imported_file,
             note.from_imported_file_library,
             note.note_file_create_time,
-            note.note_file_update_time
+            note.note_file_update_time,
+            note.knowledge_repo
         ],
     ).map_err(|e: rusqlite::Error| e.to_string())?;
 
@@ -547,8 +564,20 @@ pub fn update_note(id: i32, note: NoteInput) -> Result<(), String> {
 
     // 更新 notes 记录
     tx.execute(
-        "UPDATE notes SET description = ?, note_file_name = ?, note_file_type = ?, from_imported_file = ?, from_imported_file_library = ?, note_file_create_time = ?, note_file_update_time = ? WHERE id = ?",
-        params![note.description, note.note_file_name, note.note_file_type, note.from_imported_file, note.from_imported_file_library, note.note_file_create_time, note.note_file_update_time, id]
+        "UPDATE notes SET description = ?, note_file_name = ?, note_file_type = ?, 
+        from_imported_file = ?, from_imported_file_library = ?, note_file_create_time = ?, 
+        note_file_update_time = ?, knowledge_repo = ? WHERE id = ?",
+        params![
+            note.description,
+            note.note_file_name,
+            note.note_file_type,
+            note.from_imported_file,
+            note.from_imported_file_library,
+            note.note_file_create_time,
+            note.note_file_update_time,
+            note.knowledge_repo,
+            id
+        ]
     ).map_err(|e| e.to_string())?;
 
     // 删除旧标签关联
