@@ -1,18 +1,12 @@
 <template>
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
-    <div style="display: flex; align-items: center; gap: 8px; padding-left: 9px;">
-      <n-icon size="20" style="cursor: pointer;" @click="toggleLeftSider">
-        <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">
-          <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-            <path d="M9 4v16"></path>
-            <path d="M15 10l-2 2l2 2"></path>
-          </g>
-        </svg>
-      </n-icon>
+    <div class="header-left">
+      <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+      <div class="logo-text">Guaxi</div>
     </div>
 
+    <!-- 中间：搜索框 -->
     <div class="header-center">
       <div class="search-container">
         <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索文件或内容..." round clearable
@@ -24,21 +18,11 @@
       </div>
     </div>
 
-    <!-- 右侧占位内容 -->
-    <div style="gap: 8px; padding-right: 9px;">
-      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;"
-        :component="TextBulletListLtr20Filled"></n-icon>
-      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;" :component="Screenshot24Regular"
-        @click="CaptureScreenshot"></n-icon>
-      <n-icon class="top-right-navigation-icon" size="20" style="cursor: pointer;" @click="toggleRightSider">
-        <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">
-          <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-            <path d="M15 4v16"></path>
-            <path d="M9 10l2 2l-2 2"></path>
-          </g>
-        </svg>
-      </n-icon>
+    <!-- 右侧：功能图标 -->
+    <div class="header-right">
+      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
+      <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
+      <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
 
@@ -58,7 +42,9 @@ import {
   Search32Filled,
   TextBulletListLtr20Filled,
   DocumentSearch20Filled,
-  DocumentSearch24Regular
+  DocumentSearch24Regular,
+  PanelLeftContract24Regular,
+  PanelRightContract24Regular,
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
@@ -198,7 +184,7 @@ async function handleSearchFiles() {
       pattern: searchQuery.value,
       path: fileTreeStore.activeRepoPath
     });
-    
+
     rightSiderStore.setSearchResults({
       fileResults: results.map(item => ({
         path: item.path,
@@ -226,11 +212,11 @@ async function handleSearchNotes() {
       pattern: searchQuery.value,
       path: fileTreeStore.activeRepoPath
     });
-    
-    const validResults = results.filter(item => 
+
+    const validResults = results.filter(item =>
       item.preview && item.line_number && !item.path.includes('.git')
     );
-    
+
     rightSiderStore.setSearchResults({
       fileResults: [],
       noteResults: validResults,
@@ -252,13 +238,15 @@ async function handleSearchNotes() {
 .guaxi-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   height: 35px;
   background-color: #f5f5f5;
   box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
   border-bottom: 2px solid #aab4ae;
-  padding: 0 10px;
+  padding: 0 8px;
 }
 
+/* 左侧样式 */
 .header-left {
   display: flex;
   align-items: center;
@@ -266,13 +254,27 @@ async function handleSearchNotes() {
   min-width: 200px;
 }
 
+.logo-text {
+  font-weight: bold;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+/* 中间样式 */
 .header-center {
   flex: 1;
   display: flex;
   justify-content: center;
-  margin-top: 0px;
+  max-width: 600px;
+  margin: 0 10px;
 }
 
+.search-container {
+  width: 100%;
+  max-width: 400px;
+}
+
+/* 右侧样式 */
 .header-right {
   display: flex;
   align-items: center;
@@ -281,14 +283,21 @@ async function handleSearchNotes() {
   justify-content: flex-end;
 }
 
-.search-container {
-  position: relative;
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  max-width: 400px;
+/* 图标通用样式 */
+.header-icon {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 4px;
+  border-radius: 4px;
 }
 
+.header-icon:hover {
+  opacity: 0.8;
+  transform: scale(1.05);
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* 搜索输入框样式 */
 .n-input {
   height: 25px !important;
   line-height: 25px !important;
