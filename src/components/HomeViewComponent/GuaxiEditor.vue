@@ -769,7 +769,7 @@ onUnmounted(() => {
 
 .tab-item.active {
   background: #fff;
-  border-bottom: 2px solid #1890ff;
+  border-bottom: 2px solid #b6bdbe;
 }
 
 .tab-item:hover {
