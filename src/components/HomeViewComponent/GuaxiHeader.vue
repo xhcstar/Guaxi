@@ -239,11 +239,18 @@ async function handleSearchNotes() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 35px;
+  height: 35px; /* 固定高度 */
   background-color: #f5f5f5;
   box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
-  border-bottom: 2px solid #aab4ae;
   padding: 0 8px;
+  box-sizing: border-box; /* 确保padding不增加总高度 */
+}
+
+/* 重置所有内部div的盒模型 */
+.guaxi-header > div {
+  margin: 0;
+  padding: 0;
+  height: 100%;
 }
 
 /* 左侧样式 */
@@ -258,6 +265,7 @@ async function handleSearchNotes() {
   font-weight: bold;
   font-size: 16px;
   white-space: nowrap;
+  line-height: 1;
 }
 
 /* 中间样式 */
@@ -272,6 +280,17 @@ async function handleSearchNotes() {
 .search-container {
   width: 100%;
   max-width: 400px;
+  display: flex;
+  align-items: center;
+}
+
+/* 加强输入框样式优先级 */
+.search-container :deep(.n-input) {
+  height: 25px !important;
+  min-height: 25px !important;
+  line-height: 25px !important;
+  margin: 0 !important;
+  padding: 0 8px !important;
 }
 
 /* 右侧样式 */
@@ -287,8 +306,11 @@ async function handleSearchNotes() {
 .header-icon {
   cursor: pointer;
   transition: all 0.2s ease;
-  padding: 4px;
+  padding: 2px;
   border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .header-icon:hover {
@@ -297,24 +319,7 @@ async function handleSearchNotes() {
   background-color: rgba(0, 0, 0, 0.05);
 }
 
-/* 搜索输入框样式 */
-.n-input {
-  height: 25px !important;
-  line-height: 25px !important;
-  min-width: 200px;
-  margin: 0 !important;
-  padding: 0 8px !important;
-  transition: all 0.2s ease;
-}
-
-:deep(.n-input__border) {
-  border: none !important;
-}
-
-:deep(.n-input-wrapper) {
-  padding: 0 !important;
-}
-
+/* 下拉菜单样式 */
 :deep(.n-dropdown-menu) {
   width: 100% !important;
   max-width: 400px;

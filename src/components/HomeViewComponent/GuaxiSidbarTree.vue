@@ -15,12 +15,9 @@ import GuaxiFileTree from './GuaxiFileTree.vue';
 .tree-column {
   flex: 1;
   padding: 5px;
-  overflow: hidden;
-  /* 添加这行 */
-  display: flex;
-  /* 添加这行 */
-  flex-direction: column;
-  /* 添加这行 */
+  overflow-y: auto;  /* 添加内部滚动 */
   height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 </style>

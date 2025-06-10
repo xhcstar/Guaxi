@@ -735,7 +735,7 @@ onUnmounted(() => {
 .tree-container {
   position: relative;
   width: 100%;
-  height: 100%;
+  height: calc(100vh - 55px);
   min-height: 200px;
 }
 

@@ -39,7 +39,7 @@ import { NMessageProvider } from 'naive-ui';
 .main-header {
   flex: 0 0 auto;
   /* 固定高度的 header */
-  height: 30px;
+  height: 35px;
   /* 设置你需要的高度 */
   background-color: #f5f5f5;
   /* 示例背景色 */
@@ -55,7 +55,9 @@ import { NMessageProvider } from 'naive-ui';
   flex-direction: column;
   background-color: #ffffff;
   /* 示例背景色 */
-  overflow-y: auto;
+  /* overflow-y: auto; */
+  overflow: hidden;
+  min-height: 0;
   /* 如果内容超出，允许垂直滚动 */
   margin: 0;
   padding: 0;
