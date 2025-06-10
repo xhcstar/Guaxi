@@ -11,44 +11,37 @@ export const repoStore = defineStore("repoStore", {
   actions: {
     async fetchFiles(key) {
       try {
-        if (key === "NotesDb") {
-          // 调用获取笔记数据的接口
-          const notes = await invoke("get_notes");
-          console.log("get_notes", notes);
+        // 调用获取文件数据的接口
+        const files = await invoke("get_imported_files");
+        console.log("get_imported_files", files);
 
-          // 数据转换：将后端笔记数据映射为前端需要的数据结构
-          this.notes = notes.map((note) => ({
-            id: note.id,
-            description: note.description,
-            noteFileName: note.note_file_name,
-            noteFileType: note.note_file_type,
-            notesTags: note.tags.join(","), // 将 tags 数组转换为字符串
-            fromImportedFile: note.from_imported_file,
-            fromImportedFileLibrary: note.from_imported_file_library,
-            noteFileCreateTime: note.note_file_create_time,
-            noteFileUpdateTime: note.note_file_update_time,
-            knowledgeRepo: note.knowledge_repo,
-          }));
-        } else {
-          // 调用获取文件数据的接口
-          const files = await invoke("get_imported_files");
-          console.log("get_imported_files", files);
-
-          // 数据转换：将后端文件数据映射为前端需要的数据结构
-          this.files = files.map((file) => ({
-            id: file.id,
-            importFileName: file.import_file_name,
-            description: file.description,
-            importedFileTags: file.tags.join(","), // 将 tags 数组转换为字符串
-            type: file.file_type,
-            library: file.library,
-            importFileCreateTime: file.import_file_create_time,
-            importFileSize: file.import_file_size,
-            convetToHtmlFilename: '',
-            convetToMarkdownFilename: file.converted_markdown_filename,
-            knowledgeRepo: file.knowledge_repo,
-          }));
-        }
+        // 数据转换：将后端文件数据映射为前端需要的数据结构
+        this.files = files.map((file) => ({
+          id: file.id,
+          importFileName: file.import_file_name,
+          description: file.description,
+          importedFileTags: file.tags.join(","), // 将 tags 数组转换为字符串
+          type: file.file_type,
+          library: file.library,
+          importFileCreateTime: file.import_file_create_time,
+          importFileSize: file.import_file_size,
+          convetToHtmlFilename: "",
+          convetToMarkdownFilename: file.converted_markdown_filename,
+          knowledgeRepo: file.knowledge_repo,
+          newNoteForm: {
+            id: file.note_file.id,
+            description: file.note_file.description,
+            noteFileName: file.note_file.note_file_name,
+            noteFileType: file.note_file.note_file_type,
+            notesTags: file.note_file.tags.join(","), // 将 tags 数组转换为字符串
+            fromImportedFile: file.note_file.from_imported_file,
+            fromImportedFileLibrary: file.note_file.from_imported_file_library,
+            noteFileCreateTime: file.note_file.note_file_create_time,
+            noteFileUpdateTime: file.note_file.note_file_update_time,
+            knowledgeRepo: file.note_file.knowledge_repo,
+          },
+        }));
+        console.log("文件数据获取成功", this.files);
       } catch (error) {
         console.error("Error fetching data:", error);
         this.notes = []; // 重置笔记数据
@@ -73,10 +66,10 @@ export const repoStore = defineStore("repoStore", {
 
     async get_librariesRoot() {
       try {
-        this.librariesRoot = await invoke('get_libraries_root')
-        console.log('初始化：获取当librariesRoot路径成功', this.librariesRoot)
+        this.librariesRoot = await invoke("get_libraries_root");
+        console.log("初始化：获取当librariesRoot路径成功", this.librariesRoot);
       } catch (error) {
-        console.error('获取当librariesRoot仓库路径失败', error)
+        console.error("获取当librariesRoot仓库路径失败", error);
       }
     },
   },

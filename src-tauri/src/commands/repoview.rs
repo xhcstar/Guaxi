@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -7,45 +7,6 @@ use tracing::{error, info};
 
 pub mod repofileproc;
 pub mod sql_constants;
-
-#[derive(Serialize, Deserialize)]
-pub struct NoteInput {
-    description: String,
-    note_file_name: String,
-    tags: Vec<String>,
-    note_file_type: String,
-    from_imported_file: String,
-    from_imported_file_library: String,
-    note_file_create_time: String,
-    note_file_update_time: String,
-    knowledge_repo: String,
-}
-#[derive(Serialize, Deserialize)]
-pub struct ImportedFile {
-    id: i32,
-    import_file_name: String,
-    description: String,
-    library: String,
-    tags: Vec<String>,
-    file_type: String,
-    import_file_create_time: String,
-    import_file_size: String,
-    converted_markdown_filename: String,
-    knowledge_repo: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ImportedFileInput {
-    import_file_name: String,
-    description: String,
-    library: String,
-    tags: Vec<String>,
-    file_type: String,
-    import_file_create_time: String,
-    import_file_size: String,
-    converted_markdown_filename: String,
-    knowledge_repo: String,
-}
 
 #[derive(Serialize, Deserialize)]
 pub struct Note {
@@ -60,6 +21,50 @@ pub struct Note {
     note_file_update_time: String,
     knowledge_repo: String,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct NoteInput {
+    description: String,
+    note_file_name: String,
+    tags: Vec<String>,
+    note_file_type: String,
+    from_imported_file: String,
+    from_imported_file_library: String,
+    note_file_create_time: String,
+    note_file_update_time: String,
+    knowledge_repo: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ImportedFile {
+    id: i32,
+    import_file_name: String,
+    description: String,
+    library: String,
+    tags: Vec<String>,
+    file_type: String,
+    import_file_create_time: String,
+    import_file_size: String,
+    converted_markdown_filename: String,
+    knowledge_repo: String,
+    note_file: Option<Note>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ImportedFileInput {
+    import_file_name: String,
+    description: String,
+    library: String,
+    tags: Vec<String>,
+    file_type: String,
+    import_file_create_time: String,
+    import_file_size: String,
+    converted_markdown_filename: String,
+    knowledge_repo: String,
+    note_file_input: Option<NoteInput>,
+}
+
+
 
 // 创建数据库文件路径
 pub fn create_db_file() -> Result<PathBuf, String> {
@@ -246,7 +251,7 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, original_filename, description, library, original_filetype, 
-            create_time, original_filesize, markdown_filename，knowledge_repo FROM imported_files",
+            create_time, original_filesize, markdown_filename, knowledge_repo FROM imported_files",
         )
         .map_err(|e| e.to_string())?;
     let files = stmt
@@ -262,6 +267,7 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
                 import_file_size: row.get(6)?,
                 converted_markdown_filename: row.get(7)?,
                 knowledge_repo: row.get(8)?,
+                note_file: None, // 初始化为None，后面再查询
             })
         })
         .map_err(|e| e.to_string())?;
@@ -279,9 +285,46 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
         let tags = stmt
             .query_map(params![file.id], |row| Ok(row.get(0)?))
             .map_err(|e| e.to_string())?;
-        file.tags = tags
-            .collect::<Result<Vec<String>, _>>()
+        file.tags = tags.collect::<Result<Vec<String>, _>>().map_err(|e| e.to_string())?;
+
+        // 查询关联的笔记（通过from_imported_file字段关联）
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, description, note_file_name, note_file_type, from_imported_file, 
+                from_imported_file_library, note_file_create_time, note_file_update_time, knowledge_repo 
+                FROM notes WHERE from_imported_file = ?",
+            )
             .map_err(|e| e.to_string())?;
+        if let Ok(note) = stmt.query_row(params![file.import_file_name], |row| {
+            Ok(Note {
+                id: row.get(0)?,
+                description: row.get(1)?,
+                note_file_name: row.get(2)?,
+                tags: Vec::new(), // 需要单独查询标签
+                note_file_type: row.get(3)?,
+                from_imported_file: row.get(4)?,
+                from_imported_file_library: row.get(5)?,
+                note_file_create_time: row.get(6)?,
+                note_file_update_time: row.get(7)?,
+                knowledge_repo: row.get(8)?,
+            })
+        }) {
+            // 查询笔记的标签
+            let mut stmt = conn
+                .prepare(
+                    "SELECT nt.name FROM notes_tags nt JOIN notes_tags_relations ntr ON nt.id = ntr.tag_id WHERE ntr.note_id = ?",
+                )
+                .map_err(|e| e.to_string())?;
+            let tags = stmt
+                .query_map(params![note.id], |row| Ok(row.get(0)?))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(|e| e.to_string())?;
+            
+            let mut note_with_tags = note;
+            note_with_tags.tags = tags;
+            file.note_file = Some(note_with_tags);
+        }
 
         result.push(file);
     }
@@ -291,9 +334,7 @@ pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
 #[tauri::command]
 pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
     let mut conn = init_db().map_err(|e: rusqlite::Error| e.to_string())?;
-    let tx = conn
-        .transaction()
-        .map_err(|e: rusqlite::Error| e.to_string())?;
+    let tx = conn.transaction().map_err(|e: rusqlite::Error| e.to_string())?;
 
     // 插入 imported_files 记录
     tx.execute(
@@ -310,17 +351,12 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
             file.converted_markdown_filename,
             file.knowledge_repo,
         ],
-    ).map_err(|e: rusqlite::Error| e.to_string())? as i32;
-    // 获取新插入的 file_id
+    ).map_err(|e: rusqlite::Error| e.to_string())?;
+    
     let file_id = tx.last_insert_rowid() as i32;
-    info!("Inserted imported file with ID: {}", file_id);
 
-    // 插入标签并关联到 imported_files_tags_relations
+    // 处理标签
     for tag in &file.tags {
-        info!("Inserting tag: {}", tag);
-        info!("file.tags: {:?}", &file.tags.clone());
-
-        // 查询或插入标签
         let tag_id = tx
             .query_row(
                 "SELECT id FROM imported_files_tags WHERE name = ?",
@@ -335,21 +371,52 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
                 Ok(tx.last_insert_rowid())
             })
             .map_err(|e: rusqlite::Error| e.to_string())?;
-        info!("Inserted tag with ID: {}", tag_id);
 
-        // 插入 imported_files_tags_relations 记录
-        match tx.execute(
+        tx.execute(
             "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
             params![file_id, tag_id],
-        ) {
-            Ok(_) => info!(
-                "Inserted imported_files_tags_relations with file_id: {} tag_id: {}",
-                file_id, tag_id
-            ),
-            Err(e) => {
-                error!("Failed to insert imported_files_tags_relations: {}", e);
-                return Err(e.to_string());
-            }
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 处理关联笔记
+    if let Some(note_input) = file.note_file_input {
+        // 插入 notes 记录
+        tx.execute(
+            "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, 
+            from_imported_file_library, note_file_create_time, note_file_update_time, 
+            knowledge_repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                note_input.description,
+                note_input.note_file_name,
+                note_input.note_file_type,
+                file.import_file_name, // 使用导入文件名作为来源
+                file.library,
+                note_input.note_file_create_time,
+                note_input.note_file_update_time,
+                note_input.knowledge_repo
+            ],
+        ).map_err(|e: rusqlite::Error| e.to_string())?;
+
+        let note_id = tx.last_insert_rowid() as i32;
+
+        // 处理笔记标签
+        for tag in &note_input.tags {
+            let tag_id = tx
+                .query_row(
+                    "SELECT id FROM notes_tags WHERE name = ?",
+                    params![tag],
+                    |row| row.get(0),
+                )
+                .or_else(|_| {
+                    tx.execute("INSERT INTO notes_tags (name) VALUES (?)", params![tag])?;
+                    Ok(tx.last_insert_rowid())
+                })
+                .map_err(|e: rusqlite::Error| e.to_string())?;
+
+            tx.execute(
+                "INSERT INTO notes_tags_relations (note_id, tag_id) VALUES (?, ?)",
+                params![note_id, tag_id],
+            ).map_err(|e| e.to_string())?;
         }
     }
 
@@ -357,16 +424,20 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
     Ok(file_id)
 }
 
-// 更新导入文件
 #[tauri::command]
 pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), String> {
     let mut conn = init_db().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
+    // 获取原始文件名，用于更新关联的笔记
+    let original_filename: String = tx
+        .query_row("SELECT original_filename FROM imported_files WHERE id = ?", params![id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
     // 更新 imported_files 记录
     tx.execute(
         "UPDATE imported_files SET original_filename = ?, description = ?, library = ?, original_filetype = ?, 
-        create_time = ?, original_filesize = ?, knowledge_repo = ? WHERE id = ?",
+        create_time = ?, original_filesize = ?, markdown_filename = ?, knowledge_repo = ? WHERE id = ?",
         params![
             file.import_file_name,
             file.description,
@@ -374,21 +445,19 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
             file.file_type,
             file.import_file_create_time,
             file.import_file_size,
+            file.converted_markdown_filename,
             file.knowledge_repo,
             id
         ],
     ).map_err(|e| e.to_string())?;
 
-    // 删除旧标签关联
+    // 更新标签
     tx.execute(
         "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
         params![id],
-    )
-    .map_err(|e| e.to_string())?;
+    ).map_err(|e| e.to_string())?;
 
-    // 插入新标签并关联到 imported_files_tags_relations
     for tag in &file.tags {
-        // 查询或插入标签
         let tag_id = tx
             .query_row(
                 "SELECT id FROM imported_files_tags WHERE name = ?",
@@ -404,12 +473,126 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
             })
             .map_err(|e: rusqlite::Error| e.to_string())?;
 
-        // 插入 imported_files_tags_relations 记录
         tx.execute(
             "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
             params![id, tag_id],
-        )
-        .map_err(|e| e.to_string())?;
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 处理关联笔记
+    if let Some(note_input) = file.note_file_input {
+        // 检查是否已存在关联笔记
+        let existing_note_id: Option<i32> = tx
+            .query_row(
+                "SELECT id FROM notes WHERE from_imported_file = ?",
+                params![original_filename],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if let Some(note_id) = existing_note_id {
+            // 更新现有笔记
+            tx.execute(
+                "UPDATE notes SET description = ?, note_file_name = ?, note_file_type = ?, 
+                from_imported_file = ?, from_imported_file_library = ?, note_file_create_time = ?, 
+                note_file_update_time = ?, knowledge_repo = ? WHERE id = ?",
+                params![
+                    note_input.description,
+                    note_input.note_file_name,
+                    note_input.note_file_type,
+                    file.import_file_name, // 更新为新的导入文件名
+                    file.library,
+                    note_input.note_file_create_time,
+                    note_input.note_file_update_time,
+                    note_input.knowledge_repo,
+                    note_id
+                ],
+            ).map_err(|e| e.to_string())?;
+
+            // 更新笔记标签
+            tx.execute(
+                "DELETE FROM notes_tags_relations WHERE note_id = ?",
+                params![note_id],
+            ).map_err(|e| e.to_string())?;
+
+            for tag in &note_input.tags {
+                let tag_id = tx
+                    .query_row(
+                        "SELECT id FROM notes_tags WHERE name = ?",
+                        params![tag],
+                        |row| row.get(0),
+                    )
+                    .or_else(|_| {
+                        tx.execute("INSERT INTO notes_tags (name) VALUES (?)", params![tag])?;
+                        Ok(tx.last_insert_rowid())
+                    })
+                    .map_err(|e: rusqlite::Error| e.to_string())?;
+
+                tx.execute(
+                    "INSERT INTO notes_tags_relations (note_id, tag_id) VALUES (?, ?)",
+                    params![note_id, tag_id],
+                ).map_err(|e| e.to_string())?;
+            }
+        } else {
+            // 创建新笔记
+            tx.execute(
+                "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, 
+                from_imported_file_library, note_file_create_time, note_file_update_time, 
+                knowledge_repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    note_input.description,
+                    note_input.note_file_name,
+                    note_input.note_file_type,
+                    file.import_file_name,
+                    file.library,
+                    note_input.note_file_create_time,
+                    note_input.note_file_update_time,
+                    note_input.knowledge_repo
+                ],
+            ).map_err(|e| e.to_string())?;
+
+            let note_id = tx.last_insert_rowid() as i32;
+
+            // 添加笔记标签
+            for tag in &note_input.tags {
+                let tag_id = tx
+                    .query_row(
+                        "SELECT id FROM notes_tags WHERE name = ?",
+                        params![tag],
+                        |row| row.get(0),
+                    )
+                    .or_else(|_| {
+                        tx.execute("INSERT INTO notes_tags (name) VALUES (?)", params![tag])?;
+                        Ok(tx.last_insert_rowid())
+                    })
+                    .map_err(|e: rusqlite::Error| e.to_string())?;
+
+                tx.execute(
+                    "INSERT INTO notes_tags_relations (note_id, tag_id) VALUES (?, ?)",
+                    params![note_id, tag_id],
+                ).map_err(|e| e.to_string())?;
+            }
+        }
+    } else {
+        // 如果没有提供笔记输入，删除可能存在的关联笔记
+        if let Ok(note_id) = tx.query_row(
+            "SELECT id FROM notes WHERE from_imported_file = ?",
+            params![original_filename],
+            |row| row.get::<_, i32>(0),
+        ) {
+            // 删除笔记标签关联
+            tx.execute(
+                "DELETE FROM notes_tags_relations WHERE note_id = ?",
+                params![note_id],
+            ).map_err(|e| e.to_string())?;
+
+            // 删除笔记
+            tx.execute(
+                "DELETE FROM notes WHERE id = ?",
+                params![note_id],
+            ).map_err(|e| e.to_string())?;
+        }
     }
 
     tx.commit().map_err(|e| e.to_string())?;

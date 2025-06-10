@@ -40,6 +40,6 @@ const store = repoStore() // 使用 Pinia store
 function handleUpdateValue(key, item) {
   message.info(`切换到数据库: ${key}`)
   store.currentDatabase = key // 更新当前数据库
-  store.fetchFiles(key) // 根据 key 获取对应的数据
+  store.fetchFiles(store.currentDatabase) // 根据 key 获取对应的数据
 }
 </script>

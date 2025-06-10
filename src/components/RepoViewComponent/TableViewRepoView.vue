@@ -513,7 +513,7 @@ const createImportFileList = (addedNoteInfo, currentForm) => {
     import_file_size: currentForm.importFileSize,
     converted_markdown_filename: `${currentForm.importFileName.replace(/\.[^/.]+$/, '')}.md`,
     knowledge_repo: currentForm.knowledgeRepo,
-    newNoteForm: {
+    note_file_input: {
       description: `${addedNoteInfo.from_filename}的笔记`,
       note_file_name: addedNoteInfo.note_file_name,
       tags: currentForm.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
@@ -632,6 +632,7 @@ const addFile = async () => {
     console.log('importfileList:', importfileList);
 
     // 将 importfileList 写入数据库
+    console.log('importfileList:', importfileList);
     const fileId = await addFileToDatabase(importfileList);
 
     // 添加导入的文件到 store
@@ -648,14 +649,14 @@ const addFile = async () => {
       knowledgeRepo: currentForm.value.knowledgeRepo,
       newNoteForm: {
         description: `${addedNoteInfo.from_filename}的笔记`,
-        note_file_name: addedNoteInfo.note_file_name,
-        tags: currentForm.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
-        note_file_type: 'md',
-        from_imported_file: addedNoteInfo.from_filename,
-        from_imported_file_library: addedNoteInfo.library,
-        note_file_create_time: addedNoteInfo.create_time,
-        note_file_update_time: addedNoteInfo.update_time,
-        knowledge_repo: currentForm.knowledgeRepo,
+        noteFileName: addedNoteInfo.note_file_name,
+        notesTags: currentForm.value.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
+        noteFileType: 'md',
+        fromImportedFile: addedNoteInfo.from_filename,
+        fromImportedFileLibrary: addedNoteInfo.library,
+        noteFileCreateTime: addedNoteInfo.create_time,
+        noteFileUpdateTime: addedNoteInfo.update_time,
+        knowledgeRepo: currentForm.value.knowledgeRepo,
       }
     });
 
@@ -862,6 +863,7 @@ const resetForm = () => {
 
 // 根据当前数据库类型选择数据
 const currentData = computed(() => {
+  console.log('store.files:', store.files)
   return store.files
 })
 
@@ -1282,24 +1284,9 @@ const columns = computed(() => {
             fontWeight: 'bold', // 加粗
             color: '#000000', // 字体颜色
           }
-        }, '笔记描述'),
-      key: 'description',
+        }, '笔记文件名'),
+      key: 'newNoteForm.noteFileName',
       resizable: true,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.description,
-          onUpdateValue: async (v) => {
-            console.log('更新笔记描述', v)
-            const error = validateTableCell({ ...row, description: v });
-            if (error) {
-              message.error(error); // 使用 useMessage 的消息组件
-              return;
-            }
-            row.description = v
-            await updateNote(row); // 调用更新笔记的接口
-          },
-        })
-      },
     },
     {
       title: () => h('span',
@@ -1309,23 +1296,9 @@ const columns = computed(() => {
             fontWeight: 'bold', // 加粗
             color: '#000000', // 字体颜色
           }
-        }, '笔记文件名'),
-      key: 'noteFileName',
+        }, '笔记描述'),
+      key: 'newNoteForm.description',
       resizable: true,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.noteFileName,
-          onUpdateValue: async (v) => {
-            const error = validateTableCell({ ...row, noteFileName: v });
-            if (error) {
-              message.error(error); // 使用 useMessage 的消息组件
-              return;
-            }
-            row.noteFileName = v
-            await updateNote(row); // 调用更新笔记的接口
-          },
-        })
-      },
     },
     {
       title: () => h('span',
@@ -1336,25 +1309,8 @@ const columns = computed(() => {
             color: '#000000', // 字体颜色
           }
         }, '笔记标签'),
-      key: 'notesTags',
+      key: 'newNoteForm.notesTags',
       resizable: true,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.notesTags,
-          onUpdateValue: async (v) => {
-            console.log('更新笔记标签', v)
-            const error = validateTableCell({ ...row, notesTags: v });
-            if (error) {
-              message.error(error); // 使用 useMessage 的消息组件
-              return;
-            }
-            row.notesTags = v
-            await updateNote(row); // 调用更新笔记的接口
-          },
-          enableAutoComplete: true, // 启用自动补全
-          searchType: 'noteTags', // 指定搜索类型
-        })
-      },
     },
     {
       title: () => h('span',
@@ -1365,7 +1321,7 @@ const columns = computed(() => {
             color: '#000000', // 字体颜色
           }
         }, '笔记创建时间'),
-      key: 'noteFileCreateTime',
+      key: 'newNoteForm.noteFileCreateTime',
       resizable: true,
     },
     {
@@ -1377,7 +1333,7 @@ const columns = computed(() => {
             color: '#000000', // 字体颜色
           }
         }, '笔记修改时间'),
-      key: 'noteFileUpdateTime',
+      key: 'newNoteForm.noteFileUpdateTime',
       resizable: true,
     },
   ]
