@@ -244,18 +244,20 @@ pub fn setup_db() -> Result<(), String> {
 
 // 获取导入文件列表
 #[tauri::command]
-pub fn get_imported_files() -> Result<Vec<ImportedFile>, String> {
+pub fn get_imported_files(knowledge_repo: Option<String>) -> Result<Vec<ImportedFile>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
 
     // 查询 imported_files 记录
     let mut stmt = conn
         .prepare(
             "SELECT id, original_filename, description, library, original_filetype, 
-            create_time, original_filesize, markdown_filename, knowledge_repo FROM imported_files",
+            create_time, original_filesize, markdown_filename, knowledge_repo 
+            FROM imported_files 
+            WHERE knowledge_repo = ?",
         )
         .map_err(|e| e.to_string())?;
     let files = stmt
-        .query_map([], |row| {
+        .query_map(params![knowledge_repo], |row| {
             Ok(ImportedFile {
                 id: row.get(0)?,
                 import_file_name: row.get(1)?,
@@ -895,4 +897,20 @@ pub fn search_imported_file_libraries(query: String) -> Result<Vec<String>, Stri
         .map_err(|e| e.to_string())?;
 
     Ok(libraries)
+}
+
+#[tauri::command]
+pub fn get_knowledge_repos() -> Result<Vec<String>, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT knowledge_repo FROM imported_files")
+        .map_err(|e| e.to_string())?;
+    
+    let repos = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(repos)
 }

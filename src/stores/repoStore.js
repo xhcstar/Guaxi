@@ -12,7 +12,7 @@ export const repoStore = defineStore("repoStore", {
     async fetchFiles(key) {
       try {
         // 调用获取文件数据的接口
-        const files = await invoke("get_imported_files");
+        const files = await invoke("get_imported_files", { knowledgeRepo: key });
         console.log("get_imported_files", files);
 
         // 数据转换：将后端文件数据映射为前端需要的数据结构
@@ -29,7 +29,7 @@ export const repoStore = defineStore("repoStore", {
           convetToMarkdownFilename: file.converted_markdown_filename,
           knowledgeRepo: file.knowledge_repo,
           newNoteForm: {
-            id: file.note_file.id,
+            id: file.note_file.id || 0, // 如果没有 id，则默认为 0,
             description: file.note_file.description,
             noteFileName: file.note_file.note_file_name,
             noteFileType: file.note_file.note_file_type,

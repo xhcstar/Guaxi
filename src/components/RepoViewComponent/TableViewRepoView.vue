@@ -679,9 +679,12 @@ const addFile = async () => {
     //   noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
     //   knowledgeRepo: currentForm.value.knowledgeRepo,
     // });
-
+      // 转换完成后刷新数据
+      console.log('add_file currentDatabase', store.currentDatabase);
+      await store.fetchFiles(store.currentDatabase)
+      resetForm()
     try {
-      // 构建输出目录路径
+      构建输出目录路径
       const { outputDir, fileToCheck } = await buildConvertOutputFilePath(
         currentForm.value.importFileName,
         currentForm.value.library
@@ -713,7 +716,8 @@ const addFile = async () => {
       await convertFile(currentForm.value.filePath, outputDir)
 
       // 转换完成后刷新数据
-      await store.fetchFiles('importFileDB')
+      console.log('add_file currentDatabase', store.currentDatabase);
+      await store.fetchFiles(store.currentDatabase)
       resetForm()
 
       // 转换完成后取消监听
@@ -1427,7 +1431,7 @@ watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
 // 组件挂载时获取默认数据
 onMounted(async () => {
   store.get_librariesRoot()
-  await store.fetchFiles('importFileDB') // 默认加载数据库 1 的数据
+  await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
 })
 
 </script>

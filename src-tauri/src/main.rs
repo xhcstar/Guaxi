@@ -99,6 +99,7 @@ async fn main() {
             commands::repoview::search_imported_files,
             commands::repoview::search_libraries,
             commands::repoview::search_imported_file_libraries,
+            commands::repoview::get_knowledge_repos,
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
             commands::guaxireader::create_reader_window,
