@@ -74,7 +74,7 @@
         </svg>
       </n-icon>
     </div>
-    <GuaxiSidbarTreeStatView />
+    <!-- <GuaxiSidbarTreeStatView /> -->
   </div>
 </template>
 
