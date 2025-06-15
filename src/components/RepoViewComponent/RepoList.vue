@@ -1,43 +1,135 @@
 <template>
-  <n-input round size="small" placeholder="搜索" />
-  <n-menu :options="menuOptions" @update:value="handleUpdateValue" />
+  <div class="repo-sidebar">
+    <div class="repo-header">
+      <n-text class="repo-title">知识库</n-text>
+    </div>
+    <n-menu :options="menuOptions" @update:value="handleUpdateValue" class="repo-menu" />
+  </div>
 </template>
 
-<script setup >
-import { ServerOutline } from '@vicons/ionicons5' // 引入服务器图标
-import { NIcon, useMessage } from 'naive-ui'
-import { h, ref, onMounted } from 'vue'
+<script setup>
+import { BookmarksOutline } from '@vicons/ionicons5'
+import { NIcon, NText, useMessage } from 'naive-ui'
+import { h, ref, onMounted, computed } from 'vue'
 import { repoStore } from '../../stores/repoStore'
 import { invoke } from '@tauri-apps/api/core';
 
+const message = useMessage()
+const store = repoStore()
 
-const message = useMessage() // 使用消息提示
-const store = repoStore() // 使用 Pinia store
 // 渲染图标
 function renderIcon(icon) {
   return () => h(NIcon, null, { default: () => h(icon) })
 }
 
-const menuOptions = ref([]);
-
 // 处理菜单项点击事件
 function handleUpdateValue(key, item) {
-  message.info(`切换到数据库: ${key}`)
-  store.currentDatabase = key // 更新当前数据库
-  store.fetchFiles(store.currentDatabase) // 根据 key 获取对应的数据
+  store.currentDatabase = key
+  store.fetchFiles(store.currentDatabase)
 }
 
-onMounted(async () => {
-  try {
-    const repos = await invoke('get_knowledge_repos');
-    menuOptions.value = repos.map(repo => ({
-      label: repo,
-      key: repo,
-      icon: renderIcon(ServerOutline)
-    }));
-  } catch (error) {
-    console.error('获取知识库失败:', error);
-  }
+// 菜单选项使用计算属性
+const menuOptions = computed(() => {
+  return store.repos.map(repo => ({
+    label: repo,
+    key: repo,
+    icon: renderIcon(BookmarksOutline)
+  }));
 });
 
+onMounted(async () => {
+  await store.fetchRepos()
+  if (store.repos.length > 0) {
+    store.currentDatabase = store.repos[0]
+    await store.fetchFiles(store.currentDatabase)
+  }
+});
 </script>
+
+<style scoped>
+.repo-sidebar {
+  padding: 12px;
+  background-color: #f7f7f7;
+  border-right: 1px solid #e0e0e0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.repo-header {
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #e0e0e0;
+  background-color: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.repo-title {
+  font-size: 18px;
+  font-weight: 600;
+  /* 加粗程度增加 */
+  color: #191b1b;
+  /* 使用主题蓝色 */
+  letter-spacing: 0.5px;
+  /* 增加字间距 */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+  /* 轻微文字阴影 */
+  display: flex;
+  align-items: center;
+}
+
+.repo-title::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 16px;
+  background-color: #191b1b;
+  margin-right: 10px;
+  border-radius: 2px;
+}
+
+.repo-menu {
+  flex: 1;
+  overflow-y: auto;
+  background-color: #ffffff;
+  border-radius: 8px;
+  padding: 8px 0;
+}
+
+/* 菜单项样式 */
+:deep(.n-menu-item) {
+  border-radius: 6px;
+  margin: 4px 8px;
+  transition: all 0.2s ease;
+}
+
+:deep(.n-menu-item:hover) {
+  background-color: #f0f7ff;
+}
+
+:deep(.n-menu-item.n-menu-item--selected) {
+  background-color: #e1f0ff;
+  color: #1a73e8;
+  font-weight: 500;
+}
+
+:deep(.n-menu-item-content__icon) {
+  margin-right: 8px;
+  color: #5f6368;
+}
+
+:deep(.n-menu-item--selected .n-menu-item-content__icon) {
+  color: #1a73e8;
+}
+
+:deep(.n-menu-item-content) {
+  padding: 10px 16px;
+  font-size: 15px;
+}
+
+:deep(.n-menu-item-content__text) {
+  font-weight: 500;
+  /* 菜单文字也适当加粗 */
+}
+</style>

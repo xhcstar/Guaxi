@@ -177,21 +177,6 @@ const newFileForm = ref({
   newNoteForm: newNoteForm,
 })
 
-// 用于 NotesDb 库的表单
-// const newNoteForm = ref({
-//   id: 0,
-//   filePath: '',
-//   description: '',
-//   noteFileName: '',
-//   notesTags: '', // 所属库名字
-//   fromImportedFile: '',
-//   fromImportedFileLibrary: '',
-//   noteFileType: '',
-//   noteFileCreateTime: '',
-//   noteFileUpdateTime: '', // 笔记特有的字段
-//   knowledgeRepo: '', // 知识库名字
-// })
-
 // 当前表单（根据数据库类型动态切换）
 const currentForm = computed(() => {
   return newFileForm.value
@@ -527,34 +512,6 @@ const createImportFileList = (addedNoteInfo, currentForm) => {
   }
 };
 
-// 提取创建 importNoteList 的逻辑
-// const createImportNoteList = (addedNoteInfo, currentForm) => {
-//   if (store.currentDatabase === 'NotesDb') {
-//     return {
-//       description: currentForm.description,
-//       note_file_name: currentForm.noteFileName,
-//       tags: currentForm.notesTags.split(','),
-//       note_file_type: currentForm.noteFileType,
-//       from_imported_file: currentForm.fromImportedFile,
-//       from_imported_file_library: currentForm.fromImportedFileLibrary,
-//       note_file_create_time: currentForm.noteFileCreateTime,
-//       note_file_update_time: currentForm.noteFileCreateTime,
-//     }
-//   } else {
-//     return {
-//       description: `${addedNoteInfo.from_filename}的笔记`,
-//       note_file_name: addedNoteInfo.note_file_name,
-//       tags: currentForm.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
-//       note_file_type: 'md',
-//       from_imported_file: addedNoteInfo.from_filename,
-//       from_imported_file_library: addedNoteInfo.library,
-//       note_file_create_time: addedNoteInfo.create_time,
-//       note_file_update_time: addedNoteInfo.update_time,
-//       knowledge_repo: currentForm.knowledgeRepo,
-//     }
-//   }
-// };
-
 // 提取添加文件到数据库的逻辑
 const addFileToDatabase = async (fileInfo) => {
   try {
@@ -629,7 +586,6 @@ const addFile = async () => {
 
     // 创建 importfileList
     const importfileList = createImportFileList(addedNoteInfo, currentForm.value);
-    console.log('importfileList:', importfileList);
 
     // 将 importfileList 写入数据库
     console.log('importfileList:', importfileList);
@@ -660,31 +616,13 @@ const addFile = async () => {
       }
     });
 
-    // 创建 importNoteList
-    // const importNoteList = createImportNoteList(addedNoteInfo, currentForm.value);
-    // console.log('importNoteList:', importNoteList);
+    // 转换完成后刷新数据
+    console.log('add_file currentDatabase', store.currentDatabase);
+    await store.fetchRepos()
+    await store.fetchFiles(store.currentDatabase)
 
-    // 将 importNoteList 写入数据库
-    // const noteId = await addNoteToDatabase(importNoteList);
-
-    // 添加导入的笔记到 store
-    // store.addImportedNote({
-    //   id: noteId,
-    //   description: currentForm.value.description,
-    //   noteFileName: `${currentForm.value.noteFileName}.md`,
-    //   type: 'md',
-    //   notesTags: currentForm.value.notesTags,
-    //   fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
-    //   noteFileCreateTime: currentForm.value.noteFileCreateTime,
-    //   noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
-    //   knowledgeRepo: currentForm.value.knowledgeRepo,
-    // });
-      // 转换完成后刷新数据
-      console.log('add_file currentDatabase', store.currentDatabase);
-      await store.fetchFiles(store.currentDatabase)
-      resetForm()
     try {
-      构建输出目录路径
+      // 构建输出目录路径
       const { outputDir, fileToCheck } = await buildConvertOutputFilePath(
         currentForm.value.importFileName,
         currentForm.value.library
@@ -739,28 +677,6 @@ const addFile = async () => {
       }
       message.error(`添加文件失败: ${error}`)
     }
-    // else if (store.currentDatabase === 'NotesDb') {
-    //   // 创建 importNoteList
-    //   const importNoteList = createImportNoteList(null, currentForm.value);
-    //   console.log('importNoteList:', importNoteList);
-
-    //   // 将 importNoteList 写入数据库
-    //   const noteId = await addNoteToDatabase(importNoteList);
-
-    //   // 添加导入的笔记到 store
-    //   store.addImportedNote({
-    //     id: noteId,
-    //     description: currentForm.value.description,
-    //     noteFileName: `${currentForm.value.noteFileName}.md`,
-    //     type: 'md',
-    //     notesTags: currentForm.value.notesTags,
-    //     fromImportedFile: currentForm.value.fromImportedFile,
-    //     fromImportedFileLibrary: currentForm.value.fromImportedFileLibrary,
-    //     noteFileCreateTime: currentForm.value.noteFileCreateTime,
-    //     noteFileUpdateTime: currentForm.value.noteFileUpdateTime || currentForm.value.noteFileCreateTime,
-    //     knowledgeRepo: currentForm.value.knowledgeRepo,
-    //   });
-    // }
 
     // 关闭对话框并清空表单
     isAddFileModalVisible.value = false;
@@ -776,15 +692,29 @@ const updateImportedFile = async (row) => {
     // 将 tags 字段转换为数组
     const importedFileTags = typeof row.importedFileTags === 'string' ? row.importedFileTags.split(',') : row.importedFileTags;
 
+    console.log('updateImportedFile row:', row);
     // 确保 file 是一个对象
     const file = {
       import_file_name: row.importFileName,
       description: row.description,
       library: row.library,
+      tags: importedFileTags,
       file_type: row.type,
       import_file_create_time: row.importFileCreateTime,
       import_file_size: row.importFileSize,
-      tags: importedFileTags, // 传递转换后的 tags 数组
+      converted_markdown_filename: `${row.importFileName.replace(/\.[^/.]+$/, '')}.md`,
+      knowledge_repo: row.knowledgeRepo,
+      note_file_input: {
+        description: `${row.newNoteForm.description}`,
+        note_file_name: row.newNoteForm.noteFileName,
+        tags: row.newNoteForm.notesTags.split(','), // 使用新表单中的标签
+        note_file_type: 'md',
+        from_imported_file: row.importFileName,
+        from_imported_file_library: row.library,
+        note_file_create_time: row.newNoteForm.noteFileCreateTime,
+        note_file_update_time: row.newNoteForm.noteFileUpdateTime,
+        knowledge_repo: row.newNoteForm.knowledgeRepo,
+      }
     };
 
     // 打印日志：row.id 和 file
@@ -955,13 +885,9 @@ const rowProps = (row) => {
 // 方法：打开文件
 const handleOpen = async (row) => {
   // 1. 确定文件类型和文件名
-  const rowFileType = store.currentDatabase === 'importFileDB'
-    ? row.type?.toLowerCase() || ''
-    : row.noteFileType?.toLowerCase() || ''
+  const rowFileType = row.type?.toLowerCase() || ''
 
-  const rowFileName = store.currentDatabase === 'importFileDB'
-    ? row.importFileName || ''
-    : row.noteFileName || ''
+  const rowFileName = row.importFileName || ''
 
   // 2. 映射文件类型
   const fileType = mapFileType(rowFileType)
@@ -984,19 +910,11 @@ const handleOpen = async (row) => {
 
   console.log('store.librariesRoot:', store.librariesRoot)
 
-  if (store.currentDatabase === 'importFileDB') {
+  if (store.currentDatabase.length > 0) {
     if (osPlatform === 'windows') {
       ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\${rowFileType}\\${rowFileName}`
     } else if (osPlatform === 'linux') {
       ReadFilePath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/${rowFileType}/${rowFileName}`
-    } else {
-      console.error('未知的操作系统平台:', osPlatform)
-    }
-  } else if (store.currentDatabase === 'NotesDb') {
-    if (osPlatform === 'windows') {
-      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\notes\\${rowFileName}`
-    } else if (osPlatform === 'linux') {
-      ReadFilePath = `${store.librariesRoot}/Library/${row.library}/${baseFileName}/notes/${rowFileName}`
     } else {
       console.error('未知的操作系统平台:', osPlatform)
     }
@@ -1052,18 +970,13 @@ function mapFileType(rawType) {
 
 const handleDelete = async (row) => {
   try {
-    if (store.currentDatabase === 'importFileDB') {
-      // 调用删除导入文件的接口
-      await invoke('delete_imported_file', { id: row.id });
-      console.log('删除导入文件成功', row);
-    } else {
-      // 调用删除笔记的接口
-      await invoke('delete_note', { id: row.id });
-      console.log('删除笔记成功', row);
-    }
+    // 调用删除导入文件的接口
+    await invoke('delete_imported_file', { id: row.id });
+    console.log('删除导入文件成功', row);
 
     // 刷新数据
     await store.fetchFiles(store.currentDatabase);
+    await store.fetchRepos()
   } catch (error) {
     console.error('删除失败:', error);
   }

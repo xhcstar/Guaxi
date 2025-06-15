@@ -5,14 +5,41 @@ export const repoStore = defineStore("repoStore", {
   state: () => ({
     files: [], // 存储文件数据
     notes: [], // 存储笔记数据
-    currentDatabase: "importFileDB", // 默认选中的数据库
+    repos: [], // 存储知识库列表
+    currentDatabase: "", // 默认选中的数据库
     librariesRoot: "",
   }),
   actions: {
+    async fetchRepos() {
+      try {
+        const repos = await invoke("get_knowledge_repos");
+
+        // 按照字母表顺序排序（不区分大小写）
+        this.repos = repos.sort((a, b) => {
+          const nameA = a.toLowerCase();
+          const nameB = b.toLowerCase();
+          if (nameA < nameB) return -1;
+          if (nameA > nameB) return 1;
+          return 0;
+        });
+
+        if (!this.currentDatabase && this.repos.length > 0) {
+          this.currentDatabase = this.repos[0];
+        }
+
+        console.log("排序后的知识库列表:", this.repos);
+      } catch (error) {
+        console.error("获取知识库失败:", error);
+        throw error;
+      }
+    },
+
     async fetchFiles(key) {
       try {
         // 调用获取文件数据的接口
-        const files = await invoke("get_imported_files", { knowledgeRepo: key });
+        const files = await invoke("get_imported_files", {
+          knowledgeRepo: key,
+        });
         console.log("get_imported_files", files);
 
         // 数据转换：将后端文件数据映射为前端需要的数据结构
@@ -29,7 +56,7 @@ export const repoStore = defineStore("repoStore", {
           convetToMarkdownFilename: file.converted_markdown_filename,
           knowledgeRepo: file.knowledge_repo,
           newNoteForm: {
-            id: file.note_file.id || 0, // 如果没有 id，则默认为 0,
+            // id: file.note_file.id || 0, // 如果没有 id，则默认为 0,
             description: file.note_file.description,
             noteFileName: file.note_file.note_file_name,
             noteFileType: file.note_file.note_file_type,

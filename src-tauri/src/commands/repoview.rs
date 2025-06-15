@@ -8,7 +8,7 @@ use tracing::{error, info};
 pub mod repofileproc;
 pub mod sql_constants;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Note {
     id: i32,
     description: String,
@@ -22,7 +22,7 @@ pub struct Note {
     knowledge_repo: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct NoteInput {
     description: String,
     note_file_name: String,
@@ -35,7 +35,7 @@ pub struct NoteInput {
     knowledge_repo: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ImportedFile {
     id: i32,
     import_file_name: String,
@@ -50,7 +50,7 @@ pub struct ImportedFile {
     note_file: Option<Note>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ImportedFileInput {
     import_file_name: String,
     description: String,
@@ -431,6 +431,7 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
     let mut conn = init_db().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
+    info!("update_imported_file: {:?}", file);
     // 获取原始文件名，用于更新关联的笔记
     let original_filename: String = tx
         .query_row("SELECT original_filename FROM imported_files WHERE id = ?", params![id], |row| row.get(0))
