@@ -52,19 +52,15 @@ const isLoading = ref(false); // 是否正在加载
 
 // 样式
 const style = {
-  minHeight: '50px',
+  minHeight: '60px',
   cursor: 'pointer',
-  margin: '0 0px',
-  padding: '0 0px',
 };
 
 // 限制 input 宽度
 const inputStyle = {
   width: '100%', // 宽度与单元格一致
-  height: '100%',
-  maxWidth: '20px', // 最大宽度，避免过大
-  margin: '0 0px',
-  padding: '0 0px',
+  height: '80%',
+  maxWidth: '100%', // 最大宽度，避免过大
 };
 
 // 处理点击事件
@@ -154,3 +150,11 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside);
 });
 </script>
+
+<style scoped>
+.editable-cell {
+  display: flex;
+  align-items: center;
+  justify-content: left;
+}
+</style>

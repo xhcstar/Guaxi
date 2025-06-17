@@ -23,7 +23,7 @@
 
   <div class="main-content">
     <n-data-table ref="table" :columns="columns" :data="currentData" :max-height="500" virtual-scroll virtual-scroll-x
-      :scroll-x="scrollX" :min-row-height="80" :height-for-row="heightForRow" virtual-scroll-header :header-height="48"
+      :scroll-x="scrollX" :min-row-height="90" :height-for-row="heightForRow" virtual-scroll-header :header-height="48"
       :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
       :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
 
@@ -1076,7 +1076,6 @@ const columns = computed(() => {
       key: 'importFileName',
       width: 200,
       fixed: 'left',
-      resizable: true,
       render(row) {
         return h(ShowOrEdit, {
           value: row.importFileName,
@@ -1127,7 +1126,6 @@ const columns = computed(() => {
       }, '文件标签'),
       key: 'importedFileTags',
       width: 200,
-      resizable: true,
       render(row) {
         return h(ShowOrEdit, {
           value: row.importedFileTags,
@@ -1154,8 +1152,12 @@ const columns = computed(() => {
         }
       }, '文件类型'),
       key: 'type',
-      resizable: true,
       width: 120,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.type,
+        })
+      },
     },
     {
       title: () => h('span', {
@@ -1167,7 +1169,6 @@ const columns = computed(() => {
       }, '文件库'),
       key: 'library',
       width: 150,
-      resizable: true,
       filterOptions: [
         { label: 'Library1', value: 'Library1' },
         { label: 'Library2', value: 'Library2' },
@@ -1201,8 +1202,12 @@ const columns = computed(() => {
         }
       }, '入库时间'),
       key: 'importFileCreateTime',
-      resizable: true,
       width: 170,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.importFileCreateTime,
+        })
+      },
     },
     {
       title: () => h('span', {
@@ -1213,8 +1218,12 @@ const columns = computed(() => {
         }
       }, '文件大小'),
       key: 'importFileSize',
-      resizable: true,
       width: 100,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.importFileSize,
+        })
+      },
     },
     {
       title: () => h('span', {
@@ -1226,7 +1235,11 @@ const columns = computed(() => {
       }, '笔记文件名'),
       key: 'newNoteForm.noteFileName',
       width: 200,
-      resizable: true,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.importFileName,
+        })
+      },
     },
     {
       title: () => h('span', {
@@ -1238,7 +1251,11 @@ const columns = computed(() => {
       }, '笔记描述'),
       key: 'newNoteForm.description',
       width: 200,
-      resizable: true,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.newNoteForm.description,
+        })
+      },
     },
     {
       title: () => h('span', {
@@ -1250,7 +1267,11 @@ const columns = computed(() => {
       }, '笔记标签'),
       key: 'newNoteForm.notesTags',
       width: 200,
-      resizable: true,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.newNoteForm.notesTags,
+        })
+      },
     },
     {
       title: () => h('span', {
@@ -1262,7 +1283,11 @@ const columns = computed(() => {
       }, '笔记创建时间'),
       key: 'newNoteForm.noteFileCreateTime',
       width: 170,
-      resizable: true,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.newNoteForm.noteFileCreateTime,
+        })
+      },
     },
     {
       title: () => h('span', {
@@ -1276,7 +1301,11 @@ const columns = computed(() => {
       width: 170,
       fixed: 'right',
       align: 'left',
-      resizable: true,
+      render(row) {
+        return h(ShowOrEdit, {
+          value: row.newNoteForm.noteFileUpdateTime,
+        })
+      },
     },
   ];
   return cols;
