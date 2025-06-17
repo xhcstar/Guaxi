@@ -22,9 +22,10 @@
   </n-space>
 
   <div class="main-content">
-    <n-data-table ref="table" :columns="columns" :data="currentData" :header-height="28" virtual-scroll
-      :max-height="500" :scroll-x="1500" :pagination="pagination" :single-line="false" class="data-table"
-      :row-props="rowProps" :multiple="true" :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
+    <n-data-table ref="table" :columns="columns" :data="currentData" :max-height="500" virtual-scroll virtual-scroll-x
+      :scroll-x="scrollX" :min-row-height="80" :height-for-row="heightForRow" virtual-scroll-header :header-height="48"
+      :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
+      :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
 
     <!-- 进度条容器 - 固定在底部 -->
     <div class="progress-container-wrapper">
@@ -1033,22 +1034,48 @@ const handleMove = (row) => {
   console.log('移动', row)
 }
 
+
+// 计算表格总宽度
+const scrollX = computed(() => {
+  let totalWidth = 60; // 选择列
+  totalWidth += 200; // 文件名
+  totalWidth += 200; // 文件描述
+  totalWidth += 200; // 文件标签
+  totalWidth += 120; // 文件类型
+  totalWidth += 150; // 文件库
+  totalWidth += 170; // 入库时间
+  totalWidth += 100; // 文件大小
+  totalWidth += 200; // 笔记文件名
+  totalWidth += 200; // 笔记描述
+  totalWidth += 200; // 笔记标签
+  totalWidth += 170; // 笔记创建时间
+  totalWidth += 170; // 笔记修改时间
+  return totalWidth;
+});
+
+// 行高计算函数
+const heightForRow = () => 80;
+
 // 表格列配置
 const columns = computed(() => {
-  return [
+  const cols = [
     {
       type: 'selection',
+      width: 60,
+      fixed: 'left',
+      align: 'center'
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '文件名'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '文件名'),
       key: 'importFileName',
+      width: 200,
+      fixed: 'left',
       resizable: true,
       render(row) {
         return h(ShowOrEdit, {
@@ -1066,16 +1093,15 @@ const columns = computed(() => {
       },
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '文件描述'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '文件描述'),
       key: 'description',
-      resizable: true,
+      width: 200,
       render(row) {
         return h(ShowOrEdit, {
           value: row.description,
@@ -1092,15 +1118,15 @@ const columns = computed(() => {
       },
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '文件标签'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '文件标签'),
       key: 'importedFileTags',
+      width: 200,
       resizable: true,
       render(row) {
         return h(ShowOrEdit, {
@@ -1120,28 +1146,27 @@ const columns = computed(() => {
       },
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '文件类型'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '文件类型'),
       key: 'type',
       resizable: true,
-      width: 100,
+      width: 120,
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '文件库'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '文件库'),
       key: 'library',
+      width: 150,
       resizable: true,
       filterOptions: [
         { label: 'Library1', value: 'Library1' },
@@ -1168,92 +1193,93 @@ const columns = computed(() => {
       },
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '入库时间'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '入库时间'),
       key: 'importFileCreateTime',
       resizable: true,
-      width: '170',
+      width: 170,
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '文件大小'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '文件大小'),
       key: 'importFileSize',
       resizable: true,
       width: 100,
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '笔记文件名'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '笔记文件名'),
       key: 'newNoteForm.noteFileName',
+      width: 200,
       resizable: true,
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '笔记描述'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '笔记描述'),
       key: 'newNoteForm.description',
+      width: 200,
       resizable: true,
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '笔记标签'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '笔记标签'),
       key: 'newNoteForm.notesTags',
+      width: 200,
       resizable: true,
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '笔记创建时间'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '笔记创建时间'),
       key: 'newNoteForm.noteFileCreateTime',
+      width: 170,
       resizable: true,
     },
     {
-      title: () => h('span',
-        {
-          style: {
-            fontSize: '17px', // 调整字号
-            fontWeight: 'bold', // 加粗
-            color: '#000000', // 字体颜色
-          }
-        }, '笔记修改时间'),
+      title: () => h('span', {
+        style: {
+          fontSize: '17px',
+          fontWeight: 'bold',
+          color: '#000000',
+        }
+      }, '笔记修改时间'),
       key: 'newNoteForm.noteFileUpdateTime',
+      width: 170,
+      fixed: 'right',
+      align: 'left',
       resizable: true,
     },
-  ]
+  ];
+  return cols;
 });
 
 // 方法：按标题排序
@@ -1392,15 +1418,22 @@ onMounted(async () => {
   }
 }
 
-.data-table {
-  border: 1px solid #ddd;
-  border-radius: 4px;
+.main-content {
+  width: 100%;
   overflow: hidden;
+  position: relative;
+  /* 添加相对定位 */
+}
+
+.data-table {
+  width: 100%;
+  table-layout: fixed;
+  /* 使用固定布局 */
 }
 
 /* 行悬停效果 */
 .hovered-row {
-  background-color: #e8f5e9;
+  background-color: #9ae4f1;
   /* 淡绿色 */
 }
 

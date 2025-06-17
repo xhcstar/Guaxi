@@ -30,7 +30,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue';
+import { ref, nextTick, watch, onMounted, onUnmounted, h } from 'vue';
 import { NInput, NAutoComplete } from 'naive-ui';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -52,14 +52,19 @@ const isLoading = ref(false); // 是否正在加载
 
 // 样式
 const style = {
-  minHeight: '22px',
+  minHeight: '50px',
   cursor: 'pointer',
+  margin: '0 0px',
+  padding: '0 0px',
 };
 
 // 限制 input 宽度
 const inputStyle = {
   width: '100%', // 宽度与单元格一致
-  maxWidth: '200px', // 最大宽度，避免过大
+  height: '100%',
+  maxWidth: '20px', // 最大宽度，避免过大
+  margin: '0 0px',
+  padding: '0 0px',
 };
 
 // 处理点击事件
