@@ -23,7 +23,7 @@
 
   <div class="main-content">
     <n-data-table ref="table" :columns="columns" :data="currentData" :max-height="500" virtual-scroll virtual-scroll-x
-      :scroll-x="scrollX" :min-row-height="90" :height-for-row="heightForRow" virtual-scroll-header :header-height="48"
+      :scroll-x="scrollX" :min-row-height="85" :height-for-row="heightForRow" :header-height="85"
       :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
       :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
 
@@ -1034,282 +1034,178 @@ const handleMove = (row) => {
   console.log('移动', row)
 }
 
+const heightForRow = () => 85;
 
-// 计算表格总宽度
+// 标题样式
+const titleStyle = {
+  fontSize: '17px',
+  fontWeight: 'bold',
+  color: '#000000',
+};
+
+// 计算表格总宽度（动态计算方式）
 const scrollX = computed(() => {
-  let totalWidth = 60; // 选择列
-  totalWidth += 200; // 文件名
-  totalWidth += 200; // 文件描述
-  totalWidth += 200; // 文件标签
-  totalWidth += 120; // 文件类型
-  totalWidth += 150; // 文件库
-  totalWidth += 170; // 入库时间
-  totalWidth += 100; // 文件大小
-  totalWidth += 200; // 笔记文件名
-  totalWidth += 200; // 笔记描述
-  totalWidth += 200; // 笔记标签
-  totalWidth += 170; // 笔记创建时间
-  totalWidth += 170; // 笔记修改时间
+  let totalWidth = 0;
+  columns.value.forEach(column => {
+    totalWidth += column.width;
+  });
   return totalWidth;
 });
 
-// 行高计算函数
-const heightForRow = () => 80;
-
-// 表格列配置
+// 动态生成列配置
 const columns = computed(() => {
-  const cols = [
+  const columnDefinitions = [
+    // 选择列
     {
       type: 'selection',
       width: 60,
       fixed: 'left',
-      align: 'center'
+      align: 'center',
+      key: 'selection'
     },
+    // 文件名列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '文件名'),
+      title: () => h('span', { style: titleStyle }, '文件名'),
       key: 'importFileName',
       width: 200,
       fixed: 'left',
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.importFileName,
-          onUpdateValue: async (v) => {
-            const error = validateTableCell({ ...row, importFileName: v });
-            if (error) {
-              message.error(error); // 使用 useMessage 的消息组件
-              return;
-            }
-            row.importFileName = v; // 更新前端表格数据
-            await updateImportedFile(row); // 调用更新导入文件的接口
-          },
-        })
-      },
+      render: renderEditableCell('importFileName')
     },
+    // 文件描述列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '文件描述'),
+      title: () => h('span', { style: titleStyle }, '文件描述'),
       key: 'description',
       width: 200,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.description,
-          onUpdateValue: async (v) => {
-            const error = validateTableCell({ ...row, description: v });
-            if (error) {
-              message.error(error); // 使用 useMessage 的消息组件
-              return;
-            }
-            row.description = v; // 更新前端表格数据
-            await updateImportedFile(row); // 调用更新导入文件的接口
-          },
-        })
-      },
+      render: renderEditableCell('description')
     },
+    // 文件标签列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '文件标签'),
+      title: () => h('span', { style: titleStyle }, '文件标签'),
       key: 'importedFileTags',
-      width: 200,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.importedFileTags,
-          onUpdateValue: async (v) => {
-            const error = validateTableCell({ ...row, importedFileTags: v });
-            if (error) {
-              message.error(error); // 使用 useMessage 的消息组件
-              return;
-            }
-            row.importedFileTags = v
-            await updateImportedFile(row); // 调用更新导入文件的接口
-          },
-          enableAutoComplete: true, // 启用自动补全
-          searchType: 'importedFileTags', // 指定搜索类型
-        })
-      },
+      width: 150,
+      render: renderEditableCell('importedFileTags', true, 'importedFileTags')
     },
+    // 文件类型列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '文件类型'),
+      title: () => h('span', { style: titleStyle }, '文件类型'),
       key: 'type',
       width: 120,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.type,
-        })
-      },
+      render: renderReadonlyCell('type')
     },
+    // 文件库列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '文件库'),
+      title: () => h('span', { style: titleStyle }, '文件库'),
       key: 'library',
       width: 150,
       filterOptions: [
         { label: 'Library1', value: 'Library1' },
         { label: 'Library2', value: 'Library2' },
       ],
-      filter(value, row) {
-        return row.library === value
-      },
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.library,
-          onUpdateValue: async (v) => {
-            const error = validateTableCell({ ...row, library: v });
-            if (error) {
-              message.error(error); // 使用 useMessage 的消息组件
-              return;
-            }
-            row.library = v
-            await updateImportedFile(row); // 调用更新导入文件的接口
-          },
-          enableAutoComplete: true, // 启用自动补全
-          searchType: 'libraries', // 指定搜索类型
-        })
-      },
+      filter: (value, row) => row.library === value,
+      render: renderEditableCell('library', true, 'libraries')
     },
+    // 入库时间列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '入库时间'),
+      title: () => h('span', { style: titleStyle }, '入库时间'),
       key: 'importFileCreateTime',
       width: 170,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.importFileCreateTime,
-        })
-      },
+      render: renderReadonlyCell('importFileCreateTime')
     },
+    // 文件大小列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '文件大小'),
+      title: () => h('span', { style: titleStyle }, '文件大小'),
       key: 'importFileSize',
       width: 100,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.importFileSize,
-        })
-      },
+      render: renderReadonlyCell('importFileSize')
     },
+    // 笔记文件名列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '笔记文件名'),
+      title: () => h('span', { style: titleStyle }, '笔记文件名'),
       key: 'newNoteForm.noteFileName',
       width: 200,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.importFileName,
-        })
-      },
+      render: renderReadonlyCell('newNoteForm.noteFileName')
     },
+    // 笔记描述列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '笔记描述'),
+      title: () => h('span', { style: titleStyle }, '笔记描述'),
       key: 'newNoteForm.description',
       width: 200,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.newNoteForm.description,
-        })
-      },
+      render: renderReadonlyCell('newNoteForm.description')
     },
+    // 笔记标签列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '笔记标签'),
+      title: () => h('span', { style: titleStyle }, '笔记标签'),
       key: 'newNoteForm.notesTags',
-      width: 200,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.newNoteForm.notesTags,
-        })
-      },
+      width: 150,
+      render: renderReadonlyCell('newNoteForm.notesTags')
     },
+    // 笔记创建时间列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '笔记创建时间'),
+      title: () => h('span', { style: titleStyle }, '笔记创建时间'),
       key: 'newNoteForm.noteFileCreateTime',
       width: 170,
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.newNoteForm.noteFileCreateTime,
-        })
-      },
+      render: renderReadonlyCell('newNoteForm.noteFileCreateTime')
     },
+    // 笔记修改时间列
     {
-      title: () => h('span', {
-        style: {
-          fontSize: '17px',
-          fontWeight: 'bold',
-          color: '#000000',
-        }
-      }, '笔记修改时间'),
+      title: () => h('span', { style: titleStyle }, '笔记修改时间'),
       key: 'newNoteForm.noteFileUpdateTime',
       width: 170,
       fixed: 'right',
       align: 'left',
-      render(row) {
-        return h(ShowOrEdit, {
-          value: row.newNoteForm.noteFileUpdateTime,
-        })
-      },
-    },
+      render: renderReadonlyCell('newNoteForm.noteFileUpdateTime')
+    }
   ];
-  return cols;
+
+  return columnDefinitions;
 });
+
+// 渲染可编辑单元格的工厂函数
+const renderEditableCell = (field, enableAutoComplete = false, searchType = '') => {
+  return (row) => h(ShowOrEdit, {
+    value: getNestedValue(row, field),
+    onUpdateValue: async (v) => {
+      const newRow = { ...row };
+      setNestedValue(newRow, field, v);
+      const error = validateTableCell(newRow);
+      if (error) {
+        message.error(error);
+        return;
+      }
+      setNestedValue(row, field, v);
+      await updateImportedFile(row);
+    },
+    enableAutoComplete,
+    searchType
+  });
+};
+
+// 渲染只读单元格的工厂函数
+const renderReadonlyCell = (field) => {
+  return (row) => h(ShowOrEdit, {
+    value: getNestedValue(row, field),
+    readonly: true
+  });
+};
+
+// 辅助函数：获取嵌套对象属性
+const getNestedValue = (obj, path) => {
+  return path.split('.').reduce((o, p) => o?.[p], obj);
+};
+
+// 辅助函数：设置嵌套对象属性
+const setNestedValue = (obj, path, value) => {
+  const parts = path.split('.');
+  const last = parts.pop();
+  let current = obj;
+
+  for (const part of parts) {
+    current[part] = current[part] || {};
+    current = current[part];
+  }
+
+  current[last] = value;
+};
 
 // 方法：按标题排序
 const sortTitle = () => {

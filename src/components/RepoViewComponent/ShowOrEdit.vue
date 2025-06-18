@@ -1,19 +1,9 @@
 <template>
   <div :style="style" @click="handleOnClick" class="editable-cell">
     <!-- 使用 n-auto-complete 替换 n-input，当需要自动补全时 -->
-    <n-auto-complete
-      v-if="isEdit && enableAutoComplete"
-      ref="inputRef"
-      v-model:value="inputValue"
-      :options="options"
-      :loading="isLoading"
-      :style="inputStyle"
-      @update:value="handleUpdateValue"
-      @blur="handleChange"
-      @search="handleSearch"
-      @keyup.enter="handleChange"
-      clearable
-    />
+    <n-auto-complete v-if="isEdit && enableAutoComplete" ref="inputRef" v-model:value="inputValue" :options="options"
+      :loading="isLoading" :style="inputStyle" @update:value="handleUpdateValue" @blur="handleChange"
+      @search="handleSearch" @keyup.enter="handleChange" clearable />
     <!-- 否则使用 n-input -->
     <!-- <n-input
       v-else-if="isEdit"
@@ -110,7 +100,7 @@ const handleSearch = async (query) => {
         // console.error('未知的搜索类型:', props.searchType);
         return;
     }
-    
+
     if (!result) {
       console.error('搜索结果为空');
       return;
@@ -120,7 +110,7 @@ const handleSearch = async (query) => {
       console.log(`handleSearch 返回结果:`, result);
       options.value = result;
     }
-    
+
   } catch (error) {
     console.error('搜索失败:', error);
   } finally {
@@ -156,5 +146,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: left;
+  padding: 0px;
+  margin: 0px;
 }
 </style>
