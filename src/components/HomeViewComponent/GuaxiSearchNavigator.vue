@@ -98,29 +98,38 @@ const getFullPath = (item) => {
 const formatPreview = (item) => {
   if (!item.preview) return '';
 
-  let preview = escapeHtml(item.preview);
+  console.log('formatPreview', item);
   const matches = item.matches || [];
+  let preview = item.preview;
 
-  // 从后往前处理避免索引变化
+  // 1. 先在原始字符串插入高亮标签（从后往前，避免索引错乱）
   [...matches].sort((a, b) => b.start - a.start).forEach(match => {
     preview = [
       preview.slice(0, match.start),
-      '<span class="match-highlight">',
+      '<span class="search-highlight">',
       preview.slice(match.start, match.end),
       '</span>',
       preview.slice(match.end),
     ].join('');
   });
 
-  return preview;
+  // 2. 只转义非标签内容
+  return escapeHtmlExceptHighlight(preview);
 };
 
-// HTML转义防止XSS
-const escapeHtml = (text) => {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-};
+// 只转义非高亮标签内容
+function escapeHtmlExceptHighlight(html) {
+  // 用正则分割出所有 <span ...>...</span>，其余部分转义
+  return html.split(/(<span class="search-highlight">.*?<\/span>)/g)
+    .map(part => {
+      if (part.startsWith('<span')) return part;
+      // 其余部分转义
+      const div = document.createElement('div');
+      div.textContent = part;
+      return div.innerHTML;
+    })
+    .join('');
+}
 
 // 打开搜索结果
 const openSearchResult = async (item) => {
@@ -200,14 +209,4 @@ const openSearchResult = async (item) => {
   font-family: monospace;
 }
 
-.match-highlight {
-  background-color: rgba(255, 212, 0, 0.3);
-  padding: 0 1px;
-  border-radius: 2px;
-}
-
-/* 暗色模式适配 */
-.dark .match-highlight {
-  background-color: rgba(255, 212, 0, 0.5);
-}
 </style>

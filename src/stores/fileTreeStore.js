@@ -27,7 +27,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         content: this.openTabs.find((tab) => tab.path === result.path).content,
       };
 
-      console.log("this.selectedFile.content:", this.selectedFile.content);
+      // console.log("this.selectedFile.content:", this.selectedFile.content);
       // 返回需要高亮的信息
       return {
         path: result.path,

@@ -803,12 +803,6 @@ onUnmounted(() => {
 .tab-item:hover {
   background: #eee;
 }
-
-.search-highlight {
-  background: #ffe066 !important;
-  border-radius: 2px;
-  padding: 0 2px;
-}
 </style>
 
 <style>
@@ -912,5 +906,17 @@ img {
   height: auto;
   display: block;
   margin: 0 auto;
+}
+
+.search-highlight {
+  background-color: rgb(241, 168, 10) !important;
+  color: #000 !important;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.dark .search-highlight {
+  background-color: rgb(255, 208, 0) !important;
+  color: #000 !important;
 }
 </style>
