@@ -19,11 +19,14 @@ const searchResults = computed(() => rightSiderStore.searchResults)
 
 <style scoped>
 .right-sider-content {
-  flex-grow: 1;
-  padding: 0;
-  height: 100%;
+  flex: 1 1 0;
+  min-width: 200px;
+  max-width: 100vw;
+  box-sizing: border-box;
+  background: #fafbfc;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 </style>

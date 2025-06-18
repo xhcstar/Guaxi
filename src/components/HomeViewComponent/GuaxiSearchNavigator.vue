@@ -159,14 +159,21 @@ const openSearchResult = async (item) => {
 
 <style scoped>
 .search-navigator {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 12px;
   height: 100%;
   overflow-y: auto;
 }
 
 .search-result-item {
-  padding: 8px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .file-name {
@@ -194,19 +201,29 @@ const openSearchResult = async (item) => {
 }
 
 .preview-content {
-  margin-top: 4px;
-  margin-left: 26px;
-  /* 对齐图标 */
-  font-size: 13px;
-  color: var(--text-color-secondary);
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: break-all;
+  overflow-wrap: break-word;
+  /* 可选：多行省略号 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .line-number {
-  color: var(--text-color-tertiary);
-  margin-right: 6px;
-  font-family: monospace;
+  flex: 0 0 auto;
+  min-width: 40px;
+  color: #888;
+  font-size: 12px;
+  text-align: right;
+  margin-right: 4px;
+  user-select: none;
 }
 
 </style>
