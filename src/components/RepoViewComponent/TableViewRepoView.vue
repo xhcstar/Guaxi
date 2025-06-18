@@ -1076,7 +1076,7 @@ const columns = computed(() => {
       title: () => h('span', { style: titleStyle }, '文件描述'),
       key: 'description',
       width: 200,
-      render: renderEditableCell('description')
+      render: renderEditableCell('description', true, 'description')
     },
     // 文件标签列
     {
@@ -1162,6 +1162,7 @@ const columns = computed(() => {
 
 // 渲染可编辑单元格的工厂函数
 const renderEditableCell = (field, enableAutoComplete = false, searchType = '') => {
+  console.log('renderEditableCell', field, enableAutoComplete, searchType);
   return (row) => h(ShowOrEdit, {
     value: getNestedValue(row, field),
     onUpdateValue: async (v) => {
