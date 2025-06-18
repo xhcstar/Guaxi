@@ -34,7 +34,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         lineNumber: result.line_number,
         matches: result.matches,
         content: this.selectedFile.content,
-        searchText: result.searchText,
+        text: result.searchText, // 这里改为 text
       };
     },
 

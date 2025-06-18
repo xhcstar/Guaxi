@@ -131,22 +131,16 @@ const openSearchResult = async (item) => {
       searchText: props.searchQuery,
     });
 
-    // 日志调试
-    console.log('打开搜索结果:', result.path, '行号:', result.lineNumber);
-    console.log('搜索文本:', result.searchText);
-    console.log('文件内容:', result.content ? '有内容' : '无内容');
-    console.log('高亮信息:', result);
-
     // 设置高亮和当前文件
     editorStore.highlightInfo = {
       path: result.path,
       lineNumber: result.lineNumber,
       matches: result.matches,
-      searchText: result.searchText,
+      text: result.text, // 这里用 text 字段
     };
     editorStore.setFile({
       path: result.path,
-      content: result.content || '', // 保证不是 undefined
+      content: result.content || '',
     });
   } catch (err) {
     console.error('打开搜索结果失败:', err);
