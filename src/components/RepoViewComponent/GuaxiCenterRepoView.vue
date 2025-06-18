@@ -1,22 +1,23 @@
 <template>
   <div class="text-aera">
-    <TableViewRepoView />
+    <TableViewRepoView/>
   </div>
 </template>
 
 <script setup>
 import TableViewRepoView from './TableViewRepoView.vue'
 
-
 </script>
 
 <style scope>
 
-.text-aera {
-  flex-grow: 1;
+.text-area {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
   padding: 2px;
   margin-top: 2px;
-  width: 100%;
+  overflow: hidden;
 }
-
 </style>

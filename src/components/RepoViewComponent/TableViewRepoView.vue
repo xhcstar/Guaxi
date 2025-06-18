@@ -1,31 +1,35 @@
 <template>
-  <n-space vertical :size="12" class="container">
-    <!-- 工具栏 -->
-    <n-space justify="space-between" align="center" class="toolbar">
-      <!-- 左侧按钮组 -->
-      <n-space class="actions">
-        <n-button @click="sortTitle" class="action-button">按标题排序（升序）</n-button>
-        <n-button @click="filterLibrary" class="action-button">过滤所属库(Library1)</n-button>
-        <n-button @click="clearFilters" class="action-button">清除过滤器</n-button>
-        <n-button @click="clearSorter" class="action-button">清除排序</n-button>
+  <div class="main-content-wrapper">
+    <div class="toolbar-container">
+      <n-space vertical :size="12" class="container">
+        <!-- 工具栏 -->
+        <n-space justify="space-between" align="center" class="toolbar">
+          <!-- 左侧按钮组 -->
+          <n-space class="actions">
+            <n-button @click="sortTitle" class="action-button">按标题排序（升序）</n-button>
+            <n-button @click="filterLibrary" class="action-button">过滤所属库(Library1)</n-button>
+            <n-button @click="clearFilters" class="action-button">清除过滤器</n-button>
+            <n-button @click="clearSorter" class="action-button">清除排序</n-button>
+          </n-space>
+          <!-- 右侧添加按钮 -->
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text class="add-path-button" @click="showAddFileModal">
+                <n-icon :component="FolderAdd20Regular" :size="24" />
+              </n-button>
+            </template>
+            导入新的文件
+          </n-tooltip>
+        </n-space>
       </n-space>
-      <!-- 右侧添加按钮 -->
-      <n-tooltip trigger="hover">
-        <template #trigger>
-          <n-button text class="add-path-button" @click="showAddFileModal">
-            <n-icon :component="FolderAdd20Regular" :size="24" />
-          </n-button>
-        </template>
-        导入新的文件
-      </n-tooltip>
-    </n-space>
-  </n-space>
+    </div>
 
-  <div class="main-content">
-    <n-data-table ref="table" :columns="columns" :data="currentData" :max-height="500" virtual-scroll virtual-scroll-x
-      :scroll-x="scrollX" :min-row-height="85" :height-for-row="heightForRow" :header-height="85"
-      :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
-      :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
+    <div class="table-container">
+      <n-data-table ref="table" :columns="columns" :data="currentData" :max-height="500" virtual-scroll virtual-scroll-x
+        :scroll-x="scrollX" :min-row-height="85" :height-for-row="heightForRow" :header-height="85"
+        :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
+        :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
+    </div>
 
     <!-- 进度条容器 - 固定在底部 -->
     <div class="progress-container-wrapper">
@@ -1302,20 +1306,29 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.container {
+.main-content-wrapper {
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  padding: 16px;
-  box-sizing: border-box;
-  /* 确保内边距不影响宽度 */
+  height: 100%;
+  overflow: hidden;
 }
 
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.toolbar-container {
+  padding: 16px;
   width: 100%;
-  overflow-x: auto;
-  /* 允许水平滚动 */
+  box-sizing: border-box;
+}
+
+.table-container {
+  flex: 1;
+  width: 100%;
+  overflow: hidden;
+}
+
+.data-table {
+  width: 100% !important;
+  height: 100%;
 }
 
 .actions {
@@ -1342,19 +1355,6 @@ onMounted(async () => {
     margin-left: 0;
     /* 小屏幕时取消自动左边距 */
   }
-}
-
-.main-content {
-  width: 100%;
-  overflow: hidden;
-  position: relative;
-  /* 添加相对定位 */
-}
-
-.data-table {
-  width: 100%;
-  table-layout: fixed;
-  /* 使用固定布局 */
 }
 
 /* 行悬停效果 */
