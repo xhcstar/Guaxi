@@ -2,11 +2,9 @@
   <div class="editor-container">
     <!-- 标签页栏 -->
     <div class="tab-bar">
-      <div v-for="tab in fileTreeStore.openTabs" 
-           :key="tab.path"
-           :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
-           @click="switchTab(tab.path)"
-           @mousedown.middle="closeTab(tab.path)">
+      <div v-for="tab in fileTreeStore.openTabs" :key="tab.path"
+        :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
+        @mousedown.middle="closeTab(tab.path)">
         <span>{{ tab.fileName }}</span>
         <n-icon size="14" @click.stop="closeTab(tab.path)">
           <CloseOutline />
@@ -20,7 +18,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleVimMode">
-              <n-icon :component="vimMode ? LogoVimeo : Edit16Filled " />
+              <n-icon :component="vimMode ? LogoVimeo : Edit16Filled" />
             </n-button>
           </template>
           {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
@@ -446,7 +444,7 @@ const toggleVimMode = () => {
     message.warning('阅读模式下不能启用Vim编辑模式');
     return;
   }
-  
+
   vimMode.value = !vimMode.value;
 
   nextTick(() => {
@@ -503,50 +501,76 @@ const closeTab = (path) => {
   }
 };
 
-// 修改 applyHighlights 函数
 const applyHighlights = () => {
   if (!editor || !editorStore.highlightInfo) return;
 
+  const model = editor.getModel(); // 只声明一次
+  if (!model) return;
+
   const { lineNumber, matches = [], text } = editorStore.highlightInfo;
-  
+
+  console.log("WWW>>> applyHighlights", { lineNumber, matches, text });
   // 清除旧的高亮
   if (editorStore.decorations) {
     editor.deltaDecorations(editorStore.decorations, []);
+    editorStore.decorations = [];
   }
-  
-  // 如果有精确匹配位置
-  if (matches && matches.length > 0) {
-    const newDecorations = matches.map(match => ({
-      range: new monaco.Range(
-        lineNumber,
-        match.start + 1,
-        lineNumber,
-        match.end + 1
-      ),
-      options: { 
-        inlineClassName: 'search-highlight',
-        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-      }
-    }));
-    
+
+  let newDecorations = [];
+
+  // 检查行号合法性
+  const totalLines = model.getLineCount();
+  const validLineNumber = typeof lineNumber === 'number' && lineNumber >= 1 && lineNumber <= totalLines;
+
+  if (matches && matches.length > 0 && validLineNumber) {
+    const lineContent = model.getLineContent(lineNumber);
+    const lineLength = lineContent.length;
+
+    newDecorations = matches
+      .map(match => {
+        let start = Math.max(0, Math.min(match.start, lineLength));
+        let end = Math.max(start, Math.min(match.end, lineLength));
+        if (start >= end) return null;
+        return {
+          range: new monaco.Range(
+            lineNumber,
+            start + 1,
+            lineNumber,
+            end + 1
+          ),
+          options: {
+            inlineClassName: 'search-highlight',
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        };
+      })
+      .filter(Boolean);
+
     editorStore.decorations = editor.deltaDecorations([], newDecorations);
-    editor.revealLineInCenter(lineNumber);
-  } 
-  // 否则使用全文搜索
-  else if (text) {
-    const model = editor.getModel();
+
+    if (matches.length > 0) {
+      let first = matches[0];
+      let start = Math.max(0, Math.min(first.start, lineLength));
+      editor.revealPositionInCenter({
+        lineNumber,
+        column: start + 1
+      });
+    } else {
+      editor.revealLineInCenter(lineNumber);
+    }
+  } else if (text) {
     const foundMatches = model.findMatches(text, false, false, true, null, true);
-    
-    const newDecorations = foundMatches.map(match => ({
+
+    newDecorations = foundMatches.map(match => ({
       range: match.range,
       options: {
         inlineClassName: 'search-highlight',
         stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
       }
     }));
-    
+
     editorStore.decorations = editor.deltaDecorations([], newDecorations);
-    
+
     if (foundMatches.length > 0) {
       editor.revealRangeInCenter(foundMatches[0].range);
     }
@@ -556,13 +580,17 @@ const applyHighlights = () => {
 // 监听编辑器store的变化
 watch(() => editorStore.currentFile, (file) => {
   if (file && editor) {
+    console.log("WWW>>> editorStore.currentFile", file)
     editor.setValue(file.content);
     nextTick(applyHighlights);
   }
 });
 
 watch(() => editorStore.highlightInfo, () => {
-  if (editor) applyHighlights();
+  if (editor) {
+    console.log("WWW>>> editorStore.highlightInfo", editorStore.highlightInfo)
+    applyHighlights();
+  }
 }, { deep: true });
 
 // 生命周期
@@ -774,6 +802,12 @@ onUnmounted(() => {
 
 .tab-item:hover {
   background: #eee;
+}
+
+.search-highlight {
+  background: #ffe066 !important;
+  border-radius: 2px;
+  padding: 0 2px;
 }
 </style>
 

@@ -12,7 +12,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
   }),
   actions: {
     // 新增：专门处理搜索结果的打开
-    async openSearchResult(result) {
+    async fileTreeOpenSearchResult(result) {
+      console.log("打开搜索结果:", result);
       // 获取文件内容（如果未加载）
       if (!this.openTabs.some((tab) => tab.path === result.path)) {
         const content = await this.fetchFileContent(result.path);
@@ -26,11 +27,13 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         content: this.openTabs.find((tab) => tab.path === result.path).content,
       };
 
+      console.log("this.selectedFile.content:", this.selectedFile.content);
       // 返回需要高亮的信息
       return {
         path: result.path,
         lineNumber: result.line_number,
         matches: result.matches,
+        content: this.selectedFile.content,
         searchText: result.searchText,
       };
     },

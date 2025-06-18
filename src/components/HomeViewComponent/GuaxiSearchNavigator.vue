@@ -2,17 +2,9 @@
   <div class="search-navigator">
     <n-tabs type="line" animated>
       <n-tab-pane name="files" tab="文件搜索结果">
-        <n-empty
-          v-if="fileResults.length === 0"
-          description="暂无文件搜索结果"
-          style="margin-top: 20px"
-        />
+        <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
         <n-list v-else hoverable clickable>
-          <n-list-item
-            v-for="item in fileResults"
-            :key="item.path"
-            @click="openSearchResult(item)"
-          >
+          <n-list-item v-for="item in fileResults" :key="item.path" @click="openSearchResult(item)">
             <div class="search-result-item">
               <div class="file-name" :title="getFullPath(item)">
                 <n-icon size="18" :component="getFileIcon(item.path)" />
@@ -28,17 +20,10 @@
       </n-tab-pane>
 
       <n-tab-pane name="notes" tab="内容搜索结果">
-        <n-empty
-          v-if="noteResults.length === 0"
-          description="暂无内容搜索结果"
-          style="margin-top: 20px"
-        />
+        <n-empty v-if="noteResults.length === 0" description="暂无内容搜索结果" style="margin-top: 20px" />
         <n-list v-else hoverable clickable>
-          <n-list-item
-            v-for="item in noteResults"
-            :key="`${item.path}-${item.line_number}`"
-            @click="openSearchResult(item)"
-          >
+          <n-list-item v-for="item in noteResults" :key="`${item.path}-${item.line_number}`"
+            @click="openSearchResult(item)">
             <div class="search-result-item">
               <div class="file-name" :title="getFullPath(item)">
                 <n-icon size="18" :component="getFileIcon(item.path)" />
@@ -86,9 +71,9 @@ const props = defineProps({
 // 获取文件图标
 const getFileIcon = (path) => {
   const ext = path.split('.').pop()?.toLowerCase() || '';
-  
+
   if (path.endsWith('/')) return FolderOutline;
-  
+
   if (['md', 'txt', 'text', 'log'].includes(ext)) {
     return DocumentTextOutline;
   } else if (['rs', 'js', 'ts', 'py', 'java', 'c', 'cpp', 'h'].includes(ext)) {
@@ -112,10 +97,10 @@ const getFullPath = (item) => {
 // 格式化预览内容
 const formatPreview = (item) => {
   if (!item.preview) return '';
-  
+
   let preview = escapeHtml(item.preview);
   const matches = item.matches || [];
-  
+
   // 从后往前处理避免索引变化
   [...matches].sort((a, b) => b.start - a.start).forEach(match => {
     preview = [
@@ -126,7 +111,7 @@ const formatPreview = (item) => {
       preview.slice(match.end),
     ].join('');
   });
-  
+
   return preview;
 };
 
@@ -140,25 +125,29 @@ const escapeHtml = (text) => {
 // 打开搜索结果
 const openSearchResult = async (item) => {
   try {
-    const highlightInfo = {
-      path: item.path,
-      lineNumber: item.line_number,
-      matches: item.matches,
-      searchText: props.searchQuery,
-    };
-    
-    // 通过文件树存储打开文件
-    await fileTreeStore.openSearchResult({
+    // 通过 fileTreeStore 统一打开并获取内容和高亮信息
+    const result = await fileTreeStore.fileTreeOpenSearchResult({
       ...item,
       searchText: props.searchQuery,
     });
-    
-    // 通知编辑器高亮
+
+    // 日志调试
+    console.log('打开搜索结果:', result.path, '行号:', result.lineNumber);
+    console.log('搜索文本:', result.searchText);
+    console.log('文件内容:', result.content ? '有内容' : '无内容');
+    console.log('高亮信息:', result);
+
+    // 设置高亮和当前文件
+    editorStore.highlightInfo = {
+      path: result.path,
+      lineNumber: result.lineNumber,
+      matches: result.matches,
+      searchText: result.searchText,
+    };
     editorStore.setFile({
-      path: item.path,
-      highlightInfo,
+      path: result.path,
+      content: result.content || '', // 保证不是 undefined
     });
-    
   } catch (err) {
     console.error('打开搜索结果失败:', err);
   }
@@ -203,7 +192,8 @@ const openSearchResult = async (item) => {
 
 .preview-content {
   margin-top: 4px;
-  margin-left: 26px; /* 对齐图标 */
+  margin-left: 26px;
+  /* 对齐图标 */
   font-size: 13px;
   color: var(--text-color-secondary);
   white-space: pre-wrap;
