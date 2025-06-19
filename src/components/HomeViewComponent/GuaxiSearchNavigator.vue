@@ -208,7 +208,7 @@ const getFileIconProps = (path) => {
     icon,
     color: isActive ? '#3366ff' : '#666'
   };
-  console.log('[IconProps][file]', path, { ext, finalExt, icon, props });
+  // console.log('[IconProps][file]', path, { ext, finalExt, icon, props });
   return props;
 };
 
@@ -267,48 +267,64 @@ const getFullPath = (item) => {
 };
 
 /**
- * 格式化预览内容（添加高亮）
+ * 格式化预览内容（添加高亮，支持转义后索引映射）
  * @param {Object} item 文件项
  * @returns {string} HTML格式的预览内容
  */
 const formatPreview = (item) => {
   if (!item.preview) return '';
 
-  console.log('formatPreview', item);
   const matches = item.matches || [];
-  let preview = item.preview;
+  const { escaped, indexMap } = escapeHtmlWithIndexMap(item.preview);
 
-  // 1. 先在原始字符串插入高亮标签（从后往前，避免索引错乱）
-  [...matches].sort((a, b) => b.start - a.start).forEach(match => {
-    preview = [
-      preview.slice(0, match.start),
-      '<span class="search-highlight">',
-      preview.slice(match.start, match.end),
-      '</span>',
-      preview.slice(match.end),
-    ].join('');
+  // 1. 先在转义后的字符串插入高亮标签（用映射后的索引）
+  let result = escaped;
+  // 记录偏移量，插入标签后字符串变长
+  let offset = 0;
+  [...matches].forEach(match => {
+    const start = indexMap[match.start];
+    const end = indexMap[match.end];
+    if (start === undefined || end === undefined) return;
+    result =
+      result.slice(0, start + offset) +
+      '<span class="search-highlight">' +
+      result.slice(start + offset, end + offset) +
+      '</span>' +
+      result.slice(end + offset);
+    offset += '<span class="search-highlight">'.length + '</span>'.length;
   });
 
-  // 2. 只转义非标签内容
-  return escapeHtmlExceptHighlight(preview);
+  return result;
 };
 
 /**
- * 只转义非高亮标签内容
- * @param {string} html 包含高亮标签的HTML
- * @returns {string} 安全转义后的HTML
+ * 对字符串做HTML转义，并返回原始索引到转义后索引的映射
+ * @param {string} str
+ * @returns {{escaped: string, indexMap: number[]}}
  */
-function escapeHtmlExceptHighlight(html) {
-  // 用正则分割出所有 <span ...>...</span>，其余部分转义
-  return html.split(/(<span class="search-highlight">.*?<\/span>)/g)
-    .map(part => {
-      if (part.startsWith('<span')) return part;
-      // 其余部分转义
-      const div = document.createElement('div');
-      div.textContent = part;
-      return div.innerHTML;
-    })
-    .join('');
+function escapeHtmlWithIndexMap(str) {
+  let escaped = '';
+  const indexMap = [];
+  for (let i = 0, j = 0; i < str.length; i++) {
+    const ch = str[i];
+    let esc = '';
+    switch (ch) {
+      case '&': esc = '&amp;'; break;
+      case '<': esc = '&lt;'; break;
+      case '>': esc = '&gt;'; break;
+      case '"': esc = '&quot;'; break;
+      case "'": esc = '&#39;'; break;
+      case ' ': esc = '&nbsp;'; break;
+      default: esc = ch;
+    }
+    // 记录原始索引i在转义后字符串中的起始位置j
+    indexMap[i] = escaped.length;
+    escaped += esc;
+    j = escaped.length;
+  }
+  // 补一个终点
+  indexMap[str.length] = escaped.length;
+  return { escaped, indexMap };
 }
 
 /**
