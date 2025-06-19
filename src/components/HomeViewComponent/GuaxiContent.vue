@@ -1,8 +1,14 @@
 <template>
   <div class="guaxi-content">
     <n-layout has-sider>
-      <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
-        :collapsed-width="0" bordered content-style="padding: 0px;">
+      <n-layout-sider
+        v-model:collapsed="isLeftSiderCollapsed"
+        :width="leftSiderbarWidth"
+        collapse-mode="width"
+        :collapsed-width="0"
+        bordered
+        content-style="padding: 0px;"
+      >
         <GuaxiSidebar />
         <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar" />
       </n-layout-sider>
@@ -10,10 +16,21 @@
       <GuaxiCenter />
 
       <n-layout has-sider sider-placement="right">
-        <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-          :collapsed-width="0" bordered content-style="padding: 0px;">
+        <n-layout-sider
+          v-model:collapsed="isRightSiderCollapsed"
+          :width="rightSiderbarWidth"
+          :style="{ maxWidth: windowWidth + 'px' }"
+          collapse-mode="width"
+          :collapsed-width="0"
+          bordered
+          content-style="padding: 0px;"
+        >
           <GuaxiRightContent />
-          <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar" />
+          <div
+            class="sidebar-dragger right"
+            @mousedown="onMouseDownRightSidebar"
+            style="cursor: ew-resize; width: 6px; position: absolute; left: 0; top: 0; bottom: 0; z-index: 10;"
+          ></div>
         </n-layout-sider>
       </n-layout>
     </n-layout>
@@ -21,14 +38,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount } from "vue"
+import { ref, computed, onMounted, onBeforeUnmount } from "vue"
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiSidebar from "./GuaxiSidebar.vue"
 import GuaxiCenter from "./GuaxiCenter.vue"
 import GuaxiRightContent from "./GuaxiRightContent.vue"
 
-const MAX_RIGHT_SIDEBAR_WIDTH = 700; // 推荐最大宽度
-const MIN_RIGHT_SIDEBAR_WIDTH = 300; // 推荐最小宽度
+const MAX_RIGHT_SIDEBAR_WIDTH = 1000;
+const MIN_RIGHT_SIDEBAR_WIDTH = 350;
 
 const leftSiderbarWidth = ref(350);
 const leftSidebarresizing = ref(false);
@@ -37,22 +54,30 @@ const leftSidebarStartWidth = ref(0);
 
 const rightSiderbarWidth = ref(512);
 const rightSidebarresizing = ref(false);
-const rightSidebarStartX = ref(0);
-const rightSidebarStartWidth = ref(0);
 
 const siderStore = useSiderStore();
 const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
 const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
 
-const toggleLeftSider = () => {
-  siderStore.toggleLeftSider();
+const windowWidth = ref(window.innerWidth);
+
+const updateWindowWidth = () => {
+  windowWidth.value = window.innerWidth;
+  // 保证右侧边栏宽度不会超出窗口
+  if (rightSiderbarWidth.value > windowWidth.value) {
+    rightSiderbarWidth.value = windowWidth.value;
+  }
 };
 
-const toggleRightSider = () => {
-  siderStore.toggleRightSider();
-};
+onMounted(() => {
+  window.addEventListener('resize', updateWindowWidth);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateWindowWidth);
+  document.body.classList.remove('resizing');
+});
 
-// 使用requestAnimationFrame优化拖动性能
+// 左侧边栏拖动
 const optimizedMove = (handler) => {
   let ticking = false;
   return (event) => {
@@ -66,11 +91,9 @@ const optimizedMove = (handler) => {
   };
 };
 
-// 左侧边栏拖动处理（优化版）
 const onMouseDownLeftSidebar = (event) => {
   event.preventDefault();
   document.body.classList.add('resizing');
-
   leftSidebarresizing.value = true;
   leftSidebarStartX.value = event.clientX;
   leftSidebarStartWidth.value = leftSiderbarWidth.value;
@@ -91,37 +114,44 @@ const onMouseDownLeftSidebar = (event) => {
   document.addEventListener("mouseup", onMouseUp, { once: true });
 };
 
-// 右侧边栏拖动处理（优化版）
+// 右侧边栏拖动
 const onMouseDownRightSidebar = (event) => {
   event.preventDefault();
   document.body.classList.add('resizing');
-
   rightSidebarresizing.value = true;
 
-  const optimizedMoveHandler = optimizedMove((e) => {
-    const windowWidth = window.innerWidth;
-    const newWidth = windowWidth - e.clientX;
-    rightSiderbarWidth.value = Math.max(
-      MIN_RIGHT_SIDEBAR_WIDTH,
-      Math.min(MAX_RIGHT_SIDEBAR_WIDTH, newWidth)
-    );
-  });
+  const sider = document.querySelector('.n-layout-sider[sider-placement="right"]');
+  if (sider) {
+    sider.style.transition = 'none';
+    sider.style.userSelect = 'none';
+  }
+
+  const onMouseMove = (e) => {
+    const winWidth = window.innerWidth;
+    let newWidth = winWidth - e.clientX;
+    // 限制最大宽度为窗口宽度
+    newWidth = Math.max(MIN_RIGHT_SIDEBAR_WIDTH, Math.min(MAX_RIGHT_SIDEBAR_WIDTH, newWidth, winWidth));
+    rightSiderbarWidth.value = newWidth;
+  };
 
   const onMouseUp = () => {
     document.body.classList.remove('resizing');
-    document.removeEventListener("mousemove", optimizedMoveHandler);
-    document.removeEventListener("mouseup", onMouseUp);
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
     rightSidebarresizing.value = false;
+    if (sider) {
+      sider.style.transition = '';
+      sider.style.userSelect = '';
+    }
+    // 拖动结束时再次保证宽度不会超出
+    if (rightSiderbarWidth.value > window.innerWidth) {
+      rightSiderbarWidth.value = window.innerWidth;
+    }
   };
 
-  document.addEventListener("mousemove", optimizedMoveHandler);
-  document.addEventListener("mouseup", onMouseUp, { once: true });
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp, { once: true });
 };
-
-// 清理事件监听器
-onBeforeUnmount(() => {
-  document.body.classList.remove('resizing');
-});
 </script>
 
 <style scoped>
@@ -133,15 +163,12 @@ onBeforeUnmount(() => {
   background-color: #ffffff;
 }
 
-/* 公共侧边栏样式 */
 .n-layout-sider {
   position: relative;
   background: rgba(239, 243, 239, 0.3);
-  /* 移除过渡效果提升性能 */
   will-change: width;
 }
 
-/* 拖动手柄样式 */
 .sider-resize-handle,
 .sider-resize-handle-right {
   position: absolute;
@@ -169,18 +196,24 @@ onBeforeUnmount(() => {
 </style>
 
 <style>
-/* 全局拖动样式 */
 body.resizing {
   cursor: ew-resize !important;
   user-select: none !important;
 }
-
-/* 提升拖动性能 */
 body.resizing * {
   pointer-events: none;
 }
-
+.n-layout-sider[sider-placement="right"] {
+  transition: width 0.2s;
+  will-change: width;
+  max-width: 100vw;
+  box-sizing: border-box;
+}
 body.resizing .n-layout-sider,
+body.resizing .search-result-item {
+  transition: none !important;
+  box-shadow: none !important;
+}
 body.resizing .sider-resize-handle,
 body.resizing .sider-resize-handle-right {
   pointer-events: auto;
