@@ -1,7 +1,7 @@
 <template>
   <div class="search-navigator">
-    <n-tabs type="line" animated>
-      <n-tab-pane name="files" tab="文件搜索结果">
+    <n-tabs v-model:value="activeTab" type="line" animated>
+      <n-tab-pane name="files" :tab="filesTab">
         <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
         <n-list v-else hoverable clickable>
           <n-list-item v-for="item in fileResults" :key="item.path" @click="openSearchResult(item)">
@@ -19,7 +19,7 @@
         </n-list>
       </n-tab-pane>
 
-      <n-tab-pane name="notes" tab="内容搜索结果">
+      <n-tab-pane name="notes" :tab="notesTab">
         <n-empty v-if="noteResults.length === 0" description="暂无内容搜索结果" style="margin-top: 20px" />
         <n-list v-else hoverable clickable>
           <n-list-item v-for="item in noteResults" :key="`${item.path}-${item.line_number}`"
@@ -40,8 +40,9 @@
 </template>
 
 <script setup>
-import { h, defineComponent } from 'vue';
+import { h, defineComponent, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
+import { NTooltip } from 'naive-ui';
 import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { useEditorStore } from '../../stores/editorStore';
 
@@ -75,6 +76,7 @@ const IconifyIcon = defineComponent({
 
 const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
+const activeTab = ref('files');
 
 const props = defineProps({
   fileResults: {
@@ -179,9 +181,7 @@ const getFileIconPropsWithLog = (path) => {
   }
   return props;
 };
-const getFileIconComponent = (path) => {
-  return IconifyIcon;
-};
+
 const getFileIconProps = (path) => {
   const ext = path.split('.').pop()?.toLowerCase() || '';
   const isActive = editorStore.activeFile?.path === path;
@@ -211,6 +211,42 @@ const getFileIconProps = (path) => {
   console.log('[IconProps][file]', path, { ext, finalExt, icon, props });
   return props;
 };
+
+
+// 顶部tab自定义内容
+const filesTab = () =>
+  h(
+    NTooltip,
+    { placement: 'bottom', trigger: 'hover' },
+    {
+      trigger: () =>
+        h('span', { class: 'tab-label' }, [
+          h(Icon, {
+            icon: 'mdi:file-search-outline',
+            style: { fontSize: '18px', verticalAlign: 'middle', marginRight: '6px' }
+          }),
+          '文件搜索结果'
+        ]),
+      default: () => '显示文件路径匹配的搜索结果'
+    }
+  );
+
+const notesTab = () =>
+  h(
+    NTooltip,
+    { placement: 'bottom', trigger: 'hover' },
+    {
+      trigger: () =>
+        h('span', { class: 'tab-label' }, [
+          h(Icon, {
+            icon: 'mdi:text-box-search-outline',
+            style: { fontSize: '18px', verticalAlign: 'middle', marginRight: '6px' }
+          }),
+          '内容搜索结果'
+        ]),
+      default: () => '显示文件内容匹配的搜索结果'
+    }
+  );
 
 /**
  * 获取显示文件名
@@ -302,6 +338,19 @@ const openSearchResult = async (item) => {
     console.error('打开搜索结果失败:', err);
   }
 };
+
+// 每次新的搜索时，自动切换到有结果的tab（文件优先，其次内容）
+watch(
+  () => props.searchQuery,
+  () => {
+    if (props.fileResults && props.fileResults.length > 0) {
+      activeTab.value = 'files';
+    } else if (props.noteResults && props.noteResults.length > 0) {
+      activeTab.value = 'notes';
+    }
+    // 如果都没有结果，不切换tab
+  }
+);
 </script>
 
 <style scoped>
@@ -311,6 +360,34 @@ const openSearchResult = async (item) => {
   overflow-y: auto;
   padding: 0 0px;
   box-sizing: border-box;
+}
+
+.n-tabs .n-tabs-tab {
+  font-size: 15px;
+  font-weight: 500;
+  padding: 0 18px;
+  transition: color 0.2s, background 0.2s;
+  border-radius: 8px 8px 0 0;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.n-tabs .n-tabs-tab--active {
+  color: #1890ff;
+  background: #e6f7ff;
+  box-shadow: 0 2px 8px 0 rgba(24, 144, 255, 0.08);
+}
+
+.n-tabs .n-tabs-tab:hover {
+  background: #f0f7ff;
+  color: #1890ff;
+}
+
+.tab-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .n-list {
