@@ -27,7 +27,7 @@ import GuaxiSidebar from "./GuaxiSidebar.vue"
 import GuaxiCenter from "./GuaxiCenter.vue"
 import GuaxiRightContent from "./GuaxiRightContent.vue"
 
-const MAX_RIGHT_SIDEBAR_WIDTH = 1500; // 推荐最大宽度
+const MAX_RIGHT_SIDEBAR_WIDTH = 700; // 推荐最大宽度
 const MIN_RIGHT_SIDEBAR_WIDTH = 300; // 推荐最小宽度
 
 const leftSiderbarWidth = ref(350);
@@ -35,7 +35,7 @@ const leftSidebarresizing = ref(false);
 const leftSidebarStartX = ref(0);
 const leftSidebarStartWidth = ref(0);
 
-const rightSiderbarWidth = ref(520);
+const rightSiderbarWidth = ref(512);
 const rightSidebarresizing = ref(false);
 const rightSidebarStartX = ref(0);
 const rightSidebarStartWidth = ref(0);

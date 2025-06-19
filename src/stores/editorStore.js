@@ -7,6 +7,9 @@ export const useEditorStore = defineStore('editor', {
     decorations: [] // 存储当前高亮装饰器
   }),
   actions: {
+    isFileActive(file) {
+      return this.activeFile?.path === file?.path
+    },
     // 设置当前文件和高亮信息
     setFile(fileData) {
       this.currentFile = {
