@@ -206,6 +206,8 @@ async function handleSearchFiles() {
       searchQuery: searchQuery.value
     });
 
+    rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
+
     // 添加这行代码：如果右侧边栏是折叠状态，则展开它
     if (siderStore.isRightSiderCollapsed) {
       siderStore.toggleRightSider();
@@ -231,6 +233,8 @@ async function handleSearchNotes() {
       noteResults: validResults,
       searchQuery: searchQuery.value
     });
+
+    rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
 
     // 确保这行代码存在
     if (siderStore.isRightSiderCollapsed) {

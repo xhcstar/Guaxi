@@ -40,7 +40,7 @@
 </template>
 
 <script setup>
-import { h, defineComponent, ref, watch } from 'vue';
+import { h, defineComponent, ref, watch, onMounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import { NTooltip } from 'naive-ui';
 import { useFileTreeStore } from '../../stores/fileTreeStore';
@@ -357,7 +357,7 @@ const openSearchResult = async (item) => {
 
 // 每次新的搜索时，自动切换到有结果的tab（文件优先，其次内容）
 watch(
-  () => props.searchQuery,
+  [() => props.searchQuery, () => props.fileResults, () => props.noteResults],
   () => {
     if (props.fileResults && props.fileResults.length > 0) {
       activeTab.value = 'files';
@@ -367,6 +367,14 @@ watch(
     // 如果都没有结果，不切换tab
   }
 );
+
+onMounted(() => {
+  if (props.fileResults && props.fileResults.length > 0) {
+    activeTab.value = 'files';
+  } else if (props.noteResults && props.noteResults.length > 0) {
+    activeTab.value = 'notes';
+  }
+});
 </script>
 
 <style scoped>
