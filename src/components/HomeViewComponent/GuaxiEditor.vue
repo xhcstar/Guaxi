@@ -47,7 +47,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
@@ -66,6 +66,10 @@ import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution'
 import 'monaco-editor/esm/vs/basic-languages/html/html.contribution'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
 import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
+
+import MarkdownIt from 'markdown-it'
+import { useOutlineStore } from '../../stores/outlineStore'
+const outlineStore = useOutlineStore()
 
 
 // 引入 Pinia store
@@ -279,6 +283,8 @@ const initEditor = () => {
         domNode: editorContainer.value
       });
     });
+
+    outlineStore.setJumpToLine(jumpToLine)
   };
 
   // 初始化上下文菜单
@@ -593,9 +599,49 @@ watch(() => editorStore.highlightInfo, () => {
   }
 }, { deep: true });
 
+
+const md = new MarkdownIt()
+// const rawContent = ref('') // 假设你的编辑器内容绑定在这里
+const outline = ref([])
+
+function generateOutline(content) {
+  const tokens = md.parse(content, {})
+  const result = []
+  tokens.forEach((token, idx) => {
+    if (token.type === 'heading_open') {
+      const level = Number(token.tag.slice(1))
+      const nextToken = tokens[idx + 1]
+      if (nextToken && nextToken.type === 'inline') {
+        result.push({
+          level,
+          text: nextToken.content,
+          line: token.map ? token.map[0] + 1 : 1
+        })
+      }
+    }
+  })
+  outline.value = result
+  outlineStore.setOutline(result) // 同步到 store
+}
+
+function jumpToLine(line) {
+  if (editor) {
+    editor.revealLineInCenter(line)
+    editor.setPosition({ lineNumber: line, column: 1 })
+    editor.focus()
+  }
+}
+
+// 监听内容变化
+watch(rawContent, (val) => {
+  generateOutline(val)
+}, { immediate: true })
+
+
 // 生命周期
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
+  outlineStore.setJumpToLine(jumpToLine)
 });
 
 onUnmounted(() => {

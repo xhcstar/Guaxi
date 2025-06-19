@@ -1,20 +1,20 @@
 <template>
   <div class="right-sider-content">
-    <GuaxiSearchNavigator 
-      :file-results="searchResults.fileResults"
-      :note-results="searchResults.noteResults"
-      :search-query="searchResults.searchQuery"
-    />
+    <GuaxiOutline v-if="showOutline" />
+    <GuaxiSearchNavigator v-else :file-results="searchResults.fileResults" :note-results="searchResults.noteResults"
+      :search-query="searchResults.searchQuery" />
   </div>
 </template>
 
 <script setup>
 import GuaxiSearchNavigator from "./GuaxiSearchNavigator.vue"
+import GuaxiOutline from './GuaxiOutline.vue'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { computed } from 'vue'
 
 const rightSiderStore = useRightSiderStore()
 const searchResults = computed(() => rightSiderStore.searchResults)
+const showOutline = computed(() => rightSiderStore.panel === 'outline')
 </script>
 
 <style scoped>

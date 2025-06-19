@@ -20,7 +20,7 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
+      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="openOutlinePanel"></n-icon>
       <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
@@ -68,6 +68,10 @@ const toggleRightSider = () => {
   siderStore.toggleRightSider()
 };
 
+function openOutlinePanel() {
+  rightSiderStore.setPanel('outline')
+  rightSiderStore.open() // 如果有折叠逻辑
+}
 async function CaptureScreenshot() {
   try {
     const originalPath = fileTreeStore.selectedFile.path
@@ -239,15 +243,17 @@ async function handleSearchNotes() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 35px; /* 固定高度 */
+  height: 35px;
+  /* 固定高度 */
   background-color: #f5f5f5;
   box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
   padding: 0 8px;
-  box-sizing: border-box; /* 确保padding不增加总高度 */
+  box-sizing: border-box;
+  /* 确保padding不增加总高度 */
 }
 
 /* 重置所有内部div的盒模型 */
-.guaxi-header > div {
+.guaxi-header>div {
   margin: 0;
   padding: 0;
   height: 100%;
