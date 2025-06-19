@@ -71,7 +71,12 @@ const toggleRightSider = () => {
 function openOutlinePanel() {
   rightSiderStore.setPanel('outline')
   rightSiderStore.open() // 如果有折叠逻辑
+  // 主动展开右侧边栏
+  if (siderStore.isRightSiderCollapsed) {
+    siderStore.toggleRightSider();
+  }
 }
+
 async function CaptureScreenshot() {
   try {
     const originalPath = fileTreeStore.selectedFile.path

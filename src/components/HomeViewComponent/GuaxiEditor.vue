@@ -83,6 +83,10 @@ let editor = null;
 const selectedFile = computed(() => fileTreeStore.selectedFile)
 // 定义 rawContent 变量
 const rawContent = ref(selectedFile.value?.content || '')
+// 1. 获取当前激活tab对象和内容
+const activeTab = computed(() => fileTreeStore.openTabs.find(tab => tab.path === fileTreeStore.activeTab));
+const activeTabContent = computed(() => activeTab.value?.content || '');
+
 
 const message = useMessage() // 使用消息提示
 
@@ -601,10 +605,13 @@ watch(() => editorStore.highlightInfo, () => {
 
 
 const md = new MarkdownIt()
-// const rawContent = ref('') // 假设你的编辑器内容绑定在这里
-const outline = ref([])
-
 function generateOutline(content) {
+  const file = activeTab.value;
+  const ext = file?.path?.split('.').pop()?.toLowerCase();
+  if (ext !== 'md' && ext !== 'markdown') {
+    outlineStore.setOutline([]);
+    return;
+  }
   const tokens = md.parse(content, {})
   const result = []
   tokens.forEach((token, idx) => {
@@ -620,8 +627,7 @@ function generateOutline(content) {
       }
     }
   })
-  outline.value = result
-  outlineStore.setOutline(result) // 同步到 store
+  outlineStore.setOutline(result)
 }
 
 function jumpToLine(line) {
@@ -632,9 +638,9 @@ function jumpToLine(line) {
   }
 }
 
-// 监听内容变化
-watch(rawContent, (val) => {
-  generateOutline(val)
+// 监听 activeTab 和内容变化，生成大纲
+watch([() => fileTreeStore.activeTab, activeTabContent], ([tabPath, content]) => {
+  generateOutline(content)
 }, { immediate: true })
 
 
