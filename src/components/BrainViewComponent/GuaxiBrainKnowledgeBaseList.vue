@@ -16,17 +16,19 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { invoke } from '@tauri-apps/api/core'
 
 const store = useKnowledgeBaseStore()
-const knowledgeBases = store.knowledgeBases
+const { knowledgeBases } = storeToRefs(store) // 响应式解构
 const selectedId = ref(null)
 const treeData = ref([])
 
 const selectKnowledgeBase = async (kb) => {
   selectedId.value = kb.id
-  const root = await invoke('get_knowledge_base_tree', { root_path: kb.location })
+  // 这里参数名必须是 root_path
+  const root = await invoke('get_knowledge_base_tree', { rootPath: kb.location })
   treeData.value = [convertToTreeNode(root)]
 }
 
