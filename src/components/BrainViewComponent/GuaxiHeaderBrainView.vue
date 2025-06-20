@@ -8,25 +8,37 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
+      <n-icon class="header-icon" size="20" :component="Add24Regular" @click="showCreateDialog = true"></n-icon>
       <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
+  <!-- 弹窗放在 header 外部，浮动显示 -->
+  <CreateKnowledgeBaseDialog v-model:show="showCreateDialog" @created="onCreated" />
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { ref } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
+import CreateKnowledgeBaseDialog from './CreateKnowledgeBaseDialog.vue'
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+
+
 import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
-  TextBulletListLtr20Filled,
+  Add24Regular,
   Screenshot24Regular
 } from '@vicons/fluent'
 
 const viewKey = 'brain'
 const siderStore = useSiderStore();
+const showCreateDialog = ref(false)
+const store = useKnowledgeBaseStore()
+
+const onCreated = () => {
+  store.refresh()
+}
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)

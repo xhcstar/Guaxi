@@ -74,12 +74,12 @@
         </svg>
       </n-icon>
     </div>
-    <!-- <GuaxiSidbarTreeBrainView /> -->
+    <GuaxiSidbarBrainContent />
   </div>
 </template>
 
 <script setup>
-import GuaxiSidbarTreeBrainView from "./GuaxiSidbarTreeBrainView.vue"
+import GuaxiSidbarBrainContent from "./GuaxiSidbarBrainContent.vue"
 const navigateTo = (path) => {
   window.location.hash = path; // 修改 hash，实现导航
 };

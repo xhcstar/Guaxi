@@ -1,11 +1,12 @@
 <template>
   <div class="tree-column">
-    <TreeViewBrainView />
+    <!-- 知识库列表区域 -->
+    <GuaxiBrainKnowledgeBaseList />
   </div>
 </template>
 
 <script setup>
-import TreeViewBrainView from "./TreeViewBrainView.vue";
+import GuaxiBrainKnowledgeBaseList from "./GuaxiBrainKnowledgeBaseList.vue";
 
 </script>
 
