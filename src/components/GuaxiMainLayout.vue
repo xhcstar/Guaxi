@@ -12,7 +12,7 @@ import { ref, computed } from "vue";
 // import { routes } from '../router/index.js'
 import GuaxiHomePage from '../views/GuaxiHomePage.vue'
 import GuaxiChatPage from '../views/GuaxiChatPage.vue'
-import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
+import GuaxiBrainPage from '../views/GuaxiBrainPage.vue'
 import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
@@ -24,7 +24,7 @@ const routes = {
   '/': GuaxiHomePage,
   '/chat': GuaxiChatPage,
   '/repository': GuaxiRepoPage,
-  '/statistics': GuaxiStatisticsPage,
+  '/brain': GuaxiBrainPage,
   '/application': GuaxiApplicationPage,
   '/search': GuaxiSearchPage,
   '/setting': GuaxiSettingPage,

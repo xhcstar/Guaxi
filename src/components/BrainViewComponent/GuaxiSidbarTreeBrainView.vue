@@ -1,11 +1,11 @@
 <template>
   <div class="tree-column">
-    <TreeViewStatView />
+    <TreeViewBrainView />
   </div>
 </template>
 
 <script setup>
-import TreeViewStatView from "./TreeViewStatView.vue";
+import TreeViewBrainView from "./TreeViewBrainView.vue";
 
 </script>
 

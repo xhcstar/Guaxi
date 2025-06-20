@@ -3,17 +3,17 @@
       <n-layout has-sider>
         <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
           :collapsed-width="0" bordered content-style="padding: 0px;">
-          <GuaxiSidebarStatView />
+          <GuaxiSidebarBrainView />
           <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
         </n-layout-sider>
 
-        <GuaxiCenterStatView />
+        <GuaxiCenterBrainView />
 
         <n-layout has-sider sider-placement="right">
           <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
             :collapsed-width="0" bordered content-style="padding: 0px;">
             <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
-              <GuaxiRightContentStatView />
+              <GuaxiRightContentBrainView />
             </div>
           </n-layout-sider>
         </n-layout>
@@ -25,9 +25,9 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from "vue"
 import { useSiderStore } from '../../stores/useSiderStore'
-import GuaxiSidebarStatView from "./GuaxiSidebarStatView.vue"
-import GuaxiCenterStatView from "./GuaxiCenterStatView.vue"
-import GuaxiRightContentStatView from "./GuaxiRightContentStatView.vue"
+import GuaxiSidebarBrainView from "./GuaxiSidebarBrainView.vue"
+import GuaxiCenterBrainView from "./GuaxiCenterBrainView.vue"
+import GuaxiRightContentBrainView from "./GuaxiRightContentBrainView.vue"
 
 
 const leftSiderbarWidth = ref(350); // 默认宽度
@@ -153,7 +153,7 @@ import { defineComponent, ref, computed, onMounted, onBeforeUnmount, watch } fro
 import { useSiderStore } from '../stores/useSiderStore'
 import GuaxicoSidebar from "./GuaxicoSidebar.vue"
 import GuaxiSidbarTree from "./GuaxiSidbarTree.vue"
-import GuaxiRightContentStatView from "./GuaxiRightContentStatView.vue"
+import GuaxiRightContentBrainView from "./GuaxiRightContentBrainView.vue"
 
 export default defineComponent({
   components: {

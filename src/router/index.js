@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import GuaxiHomePage from '../views/GuaxiHomePage.vue'
 import GuaxiChatPage from '../views/GuaxiChatPage.vue'
-import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
+import GuaxiBrainPage from '../views/GuaxiBrainPage.vue'
 import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
@@ -33,9 +33,9 @@ export const routes = [
     component: GuaxiRepoPage,
   },
   {
-    path: '/statistics',
-    name: 'statistics',
-    component: GuaxiStatisticsPage,
+    path: '/brain',
+    name: 'brain',
+    component: GuaxiBrainPage,
   },
   {
     path: '/application',

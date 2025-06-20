@@ -1,11 +1,11 @@
 <template>
   <div class="right-sider-content">
-    <SideNavigatorStatView />
+    <SideNavigatorBrainView />
   </div>
 </template>
 
 <script setup>
-import SideNavigatorStatView from "./SideNavigatorStatView.vue";
+import SideNavigatorBrainView from "./SideNavigatorBrainView.vue";
 </script>
 
 <style scope>

@@ -1,18 +1,18 @@
 <template>
   <div class="app-layout">
     <div class="main-header">
-      <GuaxiHeaderStatView />
+      <GuaxiHeaderBrainView />
     </div>
     <div class="main-content">
-      <GuaxiContentStatView />
+      <GuaxiContentBrainView />
     </div>
   </div>
 </template>
 
 
 <script setup>
-import GuaxiHeaderStatView from "../components/StatisticsViewComponent/GuaxiHeaderStatView.vue";
-import GuaxiContentStatView from "../components/StatisticsViewComponent/GuaxiContentStatView.vue";
+import GuaxiHeaderBrainView from "../components/BrainViewComponent/GuaxiHeaderBrainView.vue";
+import GuaxiContentBrainView from "../components/BrainViewComponent/GuaxiContentBrainView.vue";
 
 </script>
 
