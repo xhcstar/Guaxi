@@ -32,8 +32,12 @@ const leftSiderbarWidth = ref(350); // 默认宽度
 const leftSidebarresizing = ref(false);
 const leftSidebarStartX = ref(0);
 const leftSidebarStartWidth = ref(0);
+const viewKey = 'repo'
 const siderStore = useSiderStore();
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
+const isLeftSiderCollapsed = computed({
+  get: () => siderStore.isLeftSiderCollapsed[viewKey] ?? false,
+  set: (val) => siderStore.setLeftSiderCollapsed(viewKey, val)
+})
 
 const onMouseDownLeftSidebar = (event) => {
   leftSidebarresizing.value = true;

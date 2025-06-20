@@ -41,11 +41,15 @@ const rightSiderbarWidth = ref(512)
 const windowWidth = ref(window.innerWidth)
 
 // Pinia 状态
+const viewKey = 'home'
 const siderStore = useSiderStore()
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed)
+const isLeftSiderCollapsed = computed({
+  get: () => siderStore.isLeftSiderCollapsed[viewKey] ?? false, // 默认展开
+  set: (val) => siderStore.setLeftSiderCollapsed(viewKey, val)
+})
 const isRightSiderCollapsed = computed({
-  get: () => siderStore.isRightSiderCollapsed,
-  set: (val) => { siderStore.isRightSiderCollapsed = val }
+  get: () => siderStore.isRightSiderCollapsed[viewKey] ?? true, // 默认隐藏
+  set: (val) => siderStore.setRightSiderCollapsed(viewKey, val)
 })
 
 // 窗口大小变化处理

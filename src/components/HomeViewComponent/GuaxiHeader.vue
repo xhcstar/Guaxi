@@ -55,25 +55,22 @@ const rightSiderStore = useRightSiderStore()
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
 const searchInputRef = ref(null)
-
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
 const searchType = ref('file')
 
+const viewKey = 'home'
 const toggleLeftSider = () => {
-  siderStore.toggleLeftSider()
-};
-
+  siderStore.toggleLeftSider(viewKey)
+}
 const toggleRightSider = () => {
-  siderStore.toggleRightSider()
-};
+  siderStore.toggleRightSider(viewKey)
+}
 
 function openOutlinePanel() {
   rightSiderStore.setPanel('outline')
-  rightSiderStore.open() // 如果有折叠逻辑
+  rightSiderStore.open()
   // 主动展开右侧边栏
-  if (siderStore.isRightSiderCollapsed) {
-    siderStore.toggleRightSider();
+  if (siderStore.isRightSiderCollapsed[viewKey]) {
+    siderStore.toggleRightSider(viewKey);
   }
 }
 
@@ -209,8 +206,8 @@ async function handleSearchFiles() {
     rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
 
     // 添加这行代码：如果右侧边栏是折叠状态，则展开它
-    if (siderStore.isRightSiderCollapsed) {
-      siderStore.toggleRightSider();
+    if (siderStore.isRightSiderCollapsed[viewKey]) {
+      siderStore.toggleRightSider(viewKey);
     }
   } catch (err) {
     console.error('[Search] File search failed:', err);
@@ -235,11 +232,10 @@ async function handleSearchNotes() {
     });
 
     rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
-
-    // 确保这行代码存在
-    if (siderStore.isRightSiderCollapsed) {
-      siderStore.toggleRightSider();
+    if (siderStore.isRightSiderCollapsed[viewKey]) {
+      siderStore.toggleRightSider(viewKey);
     }
+
   } catch (err) {
     console.error('[Search] Note search failed:', err);
     message.error('搜索失败: ' + (err.message || String(err)));

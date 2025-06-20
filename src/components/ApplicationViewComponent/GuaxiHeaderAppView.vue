@@ -25,16 +25,15 @@ import {
   Screenshot24Regular
 } from '@vicons/fluent'
 
+const viewKey = 'app'
 const siderStore = useSiderStore();
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
 
 const toggleLeftSider = () => {
-  siderStore.toggleLeftSider()
+  siderStore.toggleLeftSider(viewKey)
 };
 
 const toggleRightSider = () => {
-  siderStore.toggleRightSider()
+  siderStore.toggleRightSider(viewKey)
 };
 </script>
 

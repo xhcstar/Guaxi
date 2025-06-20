@@ -51,20 +51,17 @@ import { sep } from '@tauri-apps/api/path'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 
 const rightSiderStore = useRightSiderStore()
+const viewKey = 'repo'
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
 const searchInputRef = ref(null)
-
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
 const searchType = ref('file')
-
 const toggleLeftSider = () => {
-  siderStore.toggleLeftSider()
+  siderStore.toggleLeftSider(viewKey)
 };
 
 const toggleRightSider = () => {
-  siderStore.toggleRightSider()
+  siderStore.toggleRightSider(viewKey)
 };
 
 async function CaptureScreenshot() {

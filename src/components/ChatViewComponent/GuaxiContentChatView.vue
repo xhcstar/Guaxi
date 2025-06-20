@@ -38,9 +38,16 @@ const rightSiderbarWidth = ref(650); // 默认宽度
 const rightSidebarresizing = ref(false);
 const rightSidebarStartX = ref(0);
 const rightSidebarStartWidth = ref(0);
+const viewKey = 'chat'
 const siderStore = useSiderStore();
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
+const isLeftSiderCollapsed = computed({
+  get: () => siderStore.isLeftSiderCollapsed[viewKey] ?? false,
+  set: (val) => siderStore.setLeftSiderCollapsed(viewKey, val)
+})
+const isRightSiderCollapsed = computed({
+  get: () => siderStore.isRightSiderCollapsed[viewKey] ?? true,
+  set: (val) => siderStore.setRightSiderCollapsed(viewKey, val)
+})
 
 const onMouseDownLeftSidebar = (event) => {
   leftSidebarresizing.value = true;

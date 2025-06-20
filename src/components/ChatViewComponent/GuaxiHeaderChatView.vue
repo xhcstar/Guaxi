@@ -39,14 +39,14 @@ import {
   Screenshot24Regular
 } from '@vicons/fluent'
 
+const viewKey = 'chat'
 const siderStore = useSiderStore();
-
 const toggleLeftSider = () => {
-  siderStore.toggleLeftSider()
+  siderStore.toggleLeftSider(viewKey)
 };
 
 const toggleRightSider = () => {
-  siderStore.toggleRightSider()
+  siderStore.toggleRightSider(viewKey)
 };
 
 // 占位函数

@@ -36,17 +36,16 @@ const rightSiderbarWidth = ref(650); // 默认宽度
 const rightSidebarresizing = ref(false);
 const rightSidebarStartX = ref(0);
 const rightSidebarStartWidth = ref(0);
+const viewKey = 'app'
 const siderStore = useSiderStore();
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
-
-const toggleLeftSider = () => {
-  siderStore.toggleLeftSider()
-};
-
-const toggleRightSider = () => {
-  siderStore.toggleRightSider()
-};
+const isLeftSiderCollapsed = computed({
+  get: () => siderStore.isLeftSiderCollapsed[viewKey] ?? false, // 默认展开
+  set: (val) => siderStore.setLeftSiderCollapsed(viewKey, val)
+})
+const isRightSiderCollapsed = computed({
+  get: () => siderStore.isRightSiderCollapsed[viewKey] ?? true, // 默认隐藏
+  set: (val) => siderStore.setRightSiderCollapsed(viewKey, val)
+})
 
 const onMouseDownLeftSidebar = (event) => {
   leftSidebarresizing.value = true;

@@ -58,16 +58,15 @@
 import { computed } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
 
+const viewKey = 'error'
 const siderStore = useSiderStore();
-const isLeftSiderCollapsed = computed(() => siderStore.isLeftSiderCollapsed);
-const isRightSiderCollapsed = computed(() => siderStore.isRightSiderCollapsed);
 
 const toggleLeftSider = () => {
-  siderStore.toggleLeftSider()
+  siderStore.toggleLeftSider(viewKey)
 };
 
 const toggleRightSider = () => {
-  siderStore.toggleRightSider()
+  siderStore.toggleRightSider(viewKey)
 };
 </script>
 
