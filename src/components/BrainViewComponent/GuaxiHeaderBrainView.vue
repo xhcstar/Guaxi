@@ -8,19 +8,18 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="Add24Regular" @click="showCreateDialog = true"></n-icon>
+      <n-icon class="header-icon" size="20" :component="Add24Regular" @click="handleAddClick" />
       <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
-  <!-- 弹窗放在 header 外部，浮动显示 -->
-  <CreateKnowledgeBaseDialog v-model:show="showCreateDialog" @created="onCreated" />
+  <!-- 使用表单组件 -->
+  <CreateKnowledgeBaseForm />
 </template>
 
 <script setup>
-import { ref } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
-import CreateKnowledgeBaseDialog from './CreateKnowledgeBaseDialog.vue'
+import CreateKnowledgeBaseForm from './CreateKnowledgeBaseForm.vue'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 
 
@@ -33,12 +32,7 @@ import {
 
 const viewKey = 'brain'
 const siderStore = useSiderStore();
-const showCreateDialog = ref(false)
-const store = useKnowledgeBaseStore()
-
-const onCreated = () => {
-  store.refresh()
-}
+const knowledgeBaseStore = useKnowledgeBaseStore()
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
@@ -46,6 +40,12 @@ const toggleLeftSider = () => {
 
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
+};
+
+const handleAddClick = () => {
+  console.log('点击添加按钮，当前store状态:', knowledgeBaseStore.showForm);
+  knowledgeBaseStore.toggleForm(true);
+  console.log('调用toggleForm后store状态:', knowledgeBaseStore.showForm);
 };
 </script>
 

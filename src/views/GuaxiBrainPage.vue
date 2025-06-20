@@ -6,6 +6,7 @@
       </div>
       <div class="main-content">
         <GuaxiContentBrainView />
+        <CreateKnowledgeBaseForm />
       </div>
     </n-message-provider>
   </n-config-provider>
@@ -15,7 +16,7 @@
 <script setup>
 import GuaxiHeaderBrainView from "../components/BrainViewComponent/GuaxiHeaderBrainView.vue";
 import GuaxiContentBrainView from "../components/BrainViewComponent/GuaxiContentBrainView.vue";
-
+import CreateKnowledgeBaseForm from "../components/BrainViewComponent/CreateKnowledgeBaseForm.vue";
 </script>
 
 <style scoped>
