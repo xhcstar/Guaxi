@@ -1,15 +1,17 @@
 <template>
-  <n-config-provider>
-    <n-message-provider>
-      <div class="main-header">
-        <GuaxiHeaderBrainView />
-      </div>
-      <div class="main-content">
-        <GuaxiContentBrainView />
-        <CreateKnowledgeBaseForm />
-      </div>
-    </n-message-provider>
-  </n-config-provider>
+  <div class="app-layout">
+    <n-config-provider>
+      <n-message-provider>
+        <div class="main-header">
+          <GuaxiHeaderBrainView />
+        </div>
+        <div class="main-content">
+          <GuaxiContentBrainView />
+          <CreateKnowledgeBaseForm />
+        </div>
+      </n-message-provider>
+    </n-config-provider>
+  </div>
 </template>
 
 

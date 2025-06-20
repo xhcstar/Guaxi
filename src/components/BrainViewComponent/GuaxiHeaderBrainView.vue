@@ -13,13 +13,10 @@
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
-  <!-- 使用表单组件 -->
-  <CreateKnowledgeBaseForm />
 </template>
 
 <script setup>
 import { useSiderStore } from '../../stores/useSiderStore'
-import CreateKnowledgeBaseForm from './CreateKnowledgeBaseForm.vue'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 
 

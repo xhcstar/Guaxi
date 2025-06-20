@@ -61,14 +61,8 @@ const closeForm = () => {
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
   width: 500px;
   max-width: 90vw;
-}
-
-.debug-info {
-  position: absolute;
-  top: -30px;
-  left: 0;
-  color: red;
-  font-size: 12px;
+  max-height: 90vh;
+  overflow-y: hidden;
 }
 
 .form-actions {

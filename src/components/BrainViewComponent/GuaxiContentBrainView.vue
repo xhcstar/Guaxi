@@ -1,23 +1,23 @@
 <template>
   <div class="guaxi-content">
-      <n-layout has-sider>
-        <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
+    <n-layout has-sider>
+      <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
+        :collapsed-width="0" bordered content-style="padding: 0px;">
+        <GuaxiSidebarBrainView />
+        <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+      </n-layout-sider>
+
+      <GuaxiCenterBrainView />
+
+      <n-layout has-sider sider-placement="right">
+        <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
           :collapsed-width="0" bordered content-style="padding: 0px;">
-          <GuaxiSidebarBrainView />
-          <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+          <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
+            <GuaxiRightContentBrainView />
+          </div>
         </n-layout-sider>
-
-        <GuaxiCenterBrainView />
-
-        <n-layout has-sider sider-placement="right">
-          <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-            :collapsed-width="0" bordered content-style="padding: 0px;">
-            <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
-              <GuaxiRightContentBrainView />
-            </div>
-          </n-layout-sider>
-        </n-layout>
       </n-layout>
+    </n-layout>
   </div>
 </template>
 
@@ -116,11 +116,14 @@ onBeforeUnmount(() => {
 }
 
 .guaxi-content {
-  flex: 1 1 auto; /* 填充剩余空间 */
+  flex: 1 1 auto;
+  /* 填充剩余空间 */
   display: flex;
   flex-direction: column;
-  background-color: #ffffff; /* 示例背景色 */
-  overflow-y: auto; /* 如果内容超出，允许垂直滚动 */
+  background-color: #ffffff;
+  /* 示例背景色 */
+  overflow-y: auto;
+  /* 如果内容超出，允许垂直滚动 */
   margin: 0;
   padding: 0;
 }
