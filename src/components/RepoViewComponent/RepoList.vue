@@ -48,7 +48,7 @@ onMounted(async () => {
 
 <style scoped>
 .repo-sidebar {
-  padding: 12px;
+  padding: 4px;
   background-color: #f7f7f7;
   border-right: 1px solid #e0e0e0;
   height: 100%;

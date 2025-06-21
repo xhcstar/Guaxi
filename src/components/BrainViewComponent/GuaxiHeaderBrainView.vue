@@ -8,7 +8,7 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="Add24Regular" @click="handleAddClick" />
+      <n-icon class="header-icon" size="20" :component="BookAdd20Regular" @click="handleAddClick" />
       <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
@@ -23,7 +23,7 @@ import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
-  Add24Regular,
+  BookAdd20Regular,
   Screenshot24Regular
 } from '@vicons/fluent'
 
