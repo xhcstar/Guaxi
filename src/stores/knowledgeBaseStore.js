@@ -6,6 +6,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     knowledgeBases: [], // 知识库列表
     loading: false, // 加载状态
     showForm: false, // 是否显示表单
+    selectedKnowledgeBase: null, // 当前选中的知识库
     formData: {
       // 表单数据
       knowledgeBaseName: "", // 知识库名称
@@ -16,19 +17,47 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
 
   actions: {
     /**
-     * 获取知识库列表
+     * 获取知识库列表（自动选中第一个）
      */
     async fetchKnowledgeBases() {
       this.loading = true;
       try {
-        // 调用 Tauri 命令获取知识库列表
-        this.knowledgeBases = await invoke("get_knowledge_base_list");
+        const list = await invoke("get_knowledge_base_list");
+
+        // 标准化所有路径
+        this.knowledgeBases = list.map((kb) => ({
+          ...kb,
+          location: kb.location.replace(/\\/g, "/"),
+        }));
+
+        // 自动选中第一个知识库（如果存在且当前未选中）
+        if (this.knowledgeBases.length > 0 && !this.selectedKnowledgeBase) {
+          this.setSelectedKnowledgeBase(this.knowledgeBases[0]);
+        }
+
+        return this.knowledgeBases;
       } catch (error) {
         console.error("获取知识库列表失败:", error);
-        throw error; // 抛出错误以便组件处理
+        throw error;
       } finally {
         this.loading = false;
       }
+    },
+
+    /**
+     * 设置当前选中的知识库
+     */
+    setSelectedKnowledgeBase(kb) {
+      if (!kb) {
+        this.selectedKnowledgeBase = null;
+        return;
+      }
+
+      // 深拷贝并标准化路径
+      this.selectedKnowledgeBase = {
+        ...kb,
+        location: kb.location.replace(/\\/g, "/"),
+      };
     },
 
     /**

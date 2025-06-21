@@ -47,7 +47,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, h, shallowRef, onUnmounted } from 'vue';
+import { ref, onMounted, h, shallowRef, onUnmounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -71,10 +71,10 @@ import {
 
 const store = useKnowledgeBaseStore();
 const message = useMessage();
-const { knowledgeBases } = storeToRefs(store);
+const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store);
 
 // 使用 shallowRef 替代 ref 避免不必要的深度响应式
-const selectedId = ref(null);
+const selectedId = computed(() => selectedKnowledgeBase.value?.id || null);
 const treeData = shallowRef([]);
 const expanded = ref(false);
 const expandedKeys = ref([]);
@@ -96,7 +96,8 @@ const toggleKnowledgeBase = async (kb) => {
     } else {
       // 不同的知识库，重置状态
       expanded.value = true;
-      selectedId.value = kb.id;
+      // selectedId.value = kb.id;
+      store.setSelectedKnowledgeBase(kb);
       treeData.value = []; // 先清空数据
 
       // 异步加载树形数据
@@ -158,6 +159,19 @@ function convertToTreeNode(node) {
 
 onMounted(() => {
   store.fetchKnowledgeBases();
+});
+
+onMounted(async () => {
+  await store.fetchKnowledgeBases(); // 会自动选中第一个
+  
+  // 如果已有选中项，加载其树数据
+  if (selectedKnowledgeBase.value) {
+    const root = await invoke("get_knowledge_base_tree", { 
+      rootPath: selectedKnowledgeBase.value.location 
+    });
+    treeData.value = [convertToTreeNode(root)];
+    expandedKeys.value = [treeData.value[0].key];
+  }
 });
 
 onUnmounted(() => {

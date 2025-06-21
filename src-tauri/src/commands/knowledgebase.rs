@@ -178,6 +178,13 @@ pub fn get_knowledge_base_list() -> Result<Vec<KnowledgeBaseListItem>, String> {
 /// 获取知识库目录树命令
 #[tauri::command]
 pub fn get_knowledge_base_tree(root_path: String) -> Result<FileNode, String> {
+    let path = PathBuf::from(&root_path);
+    if !path.exists() {
+        return Err(format!("路径不存在: {}", root_path));
+    }
+    if !path.is_dir() {
+        return Err(format!("不是目录: {}", root_path));
+    }
     /// 递归读取目录结构
     fn read_dir_recursive(path: &PathBuf) -> Result<FileNode, String> {
         let name = path.file_name()

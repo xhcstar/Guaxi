@@ -1,10 +1,11 @@
 <template>
   <div class="text-aera">
+    <GuaxiKnowledgeBaseGraph />
   </div>
 </template>
 
 <script setup>
-
+import GuaxiKnowledgeBaseGraph from './GuaxiKnowledgeBaseGraph.vue';
 </script>
 
 <style scope>
