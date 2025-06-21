@@ -55,14 +55,16 @@ import { useMessage } from 'naive-ui';
 import {
   NList, NListItem, NTree, NTooltip, NButton, NIcon, NTag, NCollapseTransition
 } from 'naive-ui';
+
 import {
-  BookOutline as BookIcon,
+  BookOutline as BookListIcon,
   RefreshOutline as RefreshIcon,
-  ChevronDownOutline as ChevronDownIcon,
-  ChevronForwardOutline as ChevronForwardIcon,
   DocumentTextOutline as DocumentIcon,
-  FolderOutline as FolderIcon,
 } from '@vicons/ionicons5';
+
+import {
+  Book24Regular as BookIcon,
+} from '@vicons/fluent';
 
 
 const store = useKnowledgeBaseStore();
@@ -146,7 +148,7 @@ function convertToTreeNode(node) {
     prefix: () => h(
       NIcon,
       { size: 16 },
-      { default: () => h(node.is_dir ? FolderIcon : DocumentIcon) }
+      { default: () => h(node.is_dir ? BookListIcon : DocumentIcon) }
     ),
     children: node.children ? node.children.map(convertToTreeNode) : undefined
   };
@@ -240,12 +242,67 @@ onUnmounted(() => {
 }
 
 .kb-list-item {
-  padding-left: 12px;
-  /* 从16px减少到12px */
-  padding-right: 12px;
-  /* 从16px减少到12px */
+  padding: 8px 12px;
+  transition: all 0.2s ease;
+  border-radius: 6px;
+  margin: 2px 0;
+  position: relative;
+  /* 为伪元素定位做准备 */
+  overflow: hidden;
+  /* 防止光圈溢出 */
 }
 
+/* 鼠标悬停效果 */
+.kb-list-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(24, 144, 255, 0.1);
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+}
+
+.kb-list-item:hover::before {
+  opacity: 1;
+}
+
+/* 鼠标悬停时的文字和图标效果 */
+.kb-list-item:hover .kb-title {
+  color: #1890ff;
+}
+
+.kb-list-item:hover .kb-icon {
+  color: #1890ff;
+}
+
+.kb-list-item:hover .expand-icon {
+  color: #1890ff;
+}
+
+/* 选中状态效果 */
+.kb-list-item.active {
+  background-color: #e6f7ff;
+  border-left: 3px solid #1890ff;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
+}
+
+.kb-list-item.active::before {
+  background: rgba(24, 144, 255, 0.15);
+  opacity: 1;
+}
+
+/* 选中状态下的文字和图标 */
+.kb-list-item.active .kb-title,
+.kb-list-item.active .kb-icon,
+.kb-list-item.active .expand-icon {
+  color: #1890ff;
+  font-weight: 500;
+}
 
 .kb-item {
   display: flex;
@@ -292,7 +349,7 @@ onUnmounted(() => {
 .kb-tree {
   margin: 8px 0 12px 16px;
   border-left: 1px dashed var(--n-border-color);
-  padding-left: 12px;
+  padding-left: 8px;
 }
 
 .n-tree-node {
