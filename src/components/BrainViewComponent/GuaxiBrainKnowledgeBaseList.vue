@@ -59,6 +59,8 @@ import {
 import {
   BookOutline as BookListIcon,
   RefreshOutline as RefreshIcon,
+  ChevronDownOutline as ChevronDownIcon,
+  ChevronForwardOutline as ChevronForwardIcon,
   DocumentTextOutline as DocumentIcon,
 } from '@vicons/ionicons5';
 
