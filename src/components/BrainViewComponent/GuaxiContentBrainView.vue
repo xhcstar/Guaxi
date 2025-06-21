@@ -126,6 +126,7 @@ onBeforeUnmount(() => {
   /* 如果内容超出，允许垂直滚动 */
   margin: 0;
   padding: 0;
+  height: 100%;
 }
 
 .sider-resize-handle {

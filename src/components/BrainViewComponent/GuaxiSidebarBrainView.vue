@@ -101,6 +101,6 @@ const navigateTo = (path) => {
   width: var(--sider-width, 36px);
   border-right: 2px solid #aab4ae;
   margin-top: 10px;
-  height: 100vh;
+  height: 100%
 }
 </style>

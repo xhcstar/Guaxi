@@ -34,6 +34,7 @@ import CreateKnowledgeBaseForm from "../components/BrainViewComponent/CreateKnow
   /* 确保没有外部内边距 */
   box-sizing: border-box;
   /* 包括 padding 和 border 在内计算高度 */
+  overflow: hidden; /* 禁止外层滚动 */
 }
 
 /* 头部样式 */
