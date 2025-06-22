@@ -117,6 +117,54 @@ const selectedKB = computed(() => {
     (knowledgeBases.value.length > 0 ? knowledgeBases.value[0] : {})
 })
 
+
+const handleWindowResize = () => {
+  if (!camera || !container.value || !renderer) return;
+
+  camera.aspect = container.value.clientWidth / container.value.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.value.clientWidth, container.value.clientHeight);
+
+  if (DEBUG) console.log('窗口大小调整:', {
+    width: container.value.clientWidth,
+    height: container.value.clientHeight
+  });
+};
+
+const handleCanvasClick = (event) => {
+  if (!raycaster || !camera || !scene) return;
+
+  // 计算鼠标位置归一化坐标
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+  // 设置射线
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(scene.children, true);
+
+  if (intersects.length > 0) {
+    const clickedObject = intersects[0].object;
+    if (clickedObject.userData?.type === 'edge') {
+      selectedNode.value = {
+        type: 'edge',
+        name: '连接线',
+        from: findNodeByPosition(clickedObject.geometry.attributes.position.array.slice(0, 3)),
+        to: findNodeByPosition(clickedObject.geometry.attributes.position.array.slice(3, 6)),
+        object: clickedObject
+      };
+    } else {
+      selectedNode.value = {
+        ...clickedObject.userData,
+        object: clickedObject
+      };
+    }
+
+    if (DEBUG) console.log('点击对象:', selectedNode.value);
+  } else {
+    selectedNode.value = null;
+  }
+};
+
 // ============== 知识库验证 ==============
 /**
  * 验证知识库是否有效
@@ -768,12 +816,37 @@ const createEdge = (fromMesh, toMesh) => {
   return line;
 };
 
+// 在工具函数部分添加
+const disposeMaterial = (material) => {
+  if (!material) return;
+
+  if (Array.isArray(material)) {
+    material.forEach(m => disposeSingleMaterial(m));
+  } else {
+    disposeSingleMaterial(material);
+  }
+};
+
+const disposeSingleMaterial = (material) => {
+  material.dispose();
+  // 特殊处理需要手动释放的纹理
+  for (const key in material) {
+    if (material[key]?.isTexture) {
+      material[key].dispose();
+    }
+  }
+};
+
+// 增强版findNodeByPosition
 const findNodeByPosition = (positionArray) => {
-  const position = new THREE.Vector3().fromArray(positionArray)
-  return nodes.find(node =>
-    node.mesh.position.distanceTo(position) < 0.1
-  )
-}
+  if (!positionArray || positionArray.length < 3) return null;
+
+  const position = new THREE.Vector3().fromArray(positionArray);
+  return nodes.find(node => {
+    if (!node.mesh) return false;
+    return node.mesh.position.distanceTo(position) < 0.5; // 增加容差范围
+  });
+};
 
 const animate = () => {
   requestAnimationFrame(animate);
@@ -869,6 +942,14 @@ onMounted(async () => {
   await nextTick();
   initThreeJS();
 
+  // 添加事件监听（修改后版本）
+  window.addEventListener('resize', handleWindowResize, { passive: true });
+  if (renderer?.domElement) {
+    renderer.domElement.style.cursor = 'pointer';
+    renderer.domElement.addEventListener('click', handleCanvasClick);
+  }
+
+  // 原有知识库加载逻辑保持不变
   if (knowledgeBases.value.length === 0) {
     try {
       await store.fetchKnowledgeBases();
@@ -889,22 +970,78 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', onWindowResize)
+  log('开始组件卸载清理');
+
+  // 1. 移除事件监听器
+  window.removeEventListener('resize', handleWindowResize);
   if (renderer?.domElement) {
-    renderer.domElement.removeEventListener('click', onCanvasClick)
+    renderer.domElement.removeEventListener('click', handleCanvasClick);
   }
-  if (container.value && renderer?.domElement) {
-    container.value.removeChild(renderer.domElement)
-  }
+
+  // 2. 清理Three.js场景
   if (scene) {
-    scene.traverse(object => {
-      if (object.isMesh) {
-        object.geometry?.dispose()
-        object.material?.dispose()
+    log('开始清理场景对象');
+
+    // 清理所有材质和几何体
+    scene.traverse((object) => {
+      if (object.isMesh || object.isLine) {
+        if (object.geometry) {
+          object.geometry.dispose();
+          log(`已释放几何体: ${object.userData?.name || '未知对象'}`);
+        }
+
+        if (object.material) {
+          if (Array.isArray(object.material)) {
+            object.material.forEach(m => m.dispose());
+            log(`已释放材质数组: ${object.userData?.name || '未知对象'}`);
+          } else {
+            object.material.dispose();
+            log(`已释放材质: ${object.userData?.name || '未知对象'}`);
+          }
+        }
       }
-    })
+
+      // 特殊处理箭头辅助对象
+      if (object.isArrowHelper) {
+        scene.remove(object);
+        log('已移除箭头辅助对象');
+      }
+    });
+
+    // 清空场景
+    scene.children = [];
   }
-})
+
+  // 3. 移除渲染器DOM
+  if (container.value && renderer?.domElement) {
+    container.value.removeChild(renderer.domElement);
+    log('已移除渲染器DOM');
+  }
+
+  // 4. 释放控制器
+  if (controls) {
+    controls.dispose();
+    log('已释放控制器');
+  }
+
+  // 5. 释放渲染器
+  if (renderer) {
+    renderer.dispose();
+    renderer.forceContextLoss();
+    log('已释放渲染器');
+  }
+
+  // 6. 清空引用
+  scene = null;
+  camera = null;
+  renderer = null;
+  controls = null;
+  raycaster = null;
+  nodes = [];
+  edges = [];
+
+  log('组件卸载完成');
+});
 </script>
 
 <style scoped>
@@ -914,8 +1051,6 @@ onBeforeUnmount(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: var(--n-color);
-  transition: background-color 0.3s ease;
 }
 
 /* 节点发光效果 */
@@ -927,8 +1062,10 @@ onBeforeUnmount(() => {
   padding: 8px 16px;
   z-index: 10;
   backdrop-filter: blur(5px);
-  background-color: rgba(var(--n-color-embedded-rgb), 0.7) !important;
-  border-bottom: 1px solid var(--n-border-color) !important;
+  /* 固定亮色背景 */
+  background-color: rgba(255, 255, 255, 0.7) !important;
+  /* 固定亮色边框 */
+  border-bottom: 1px solid #e0e0e0 !important;
 }
 
 .graph-container {
@@ -939,9 +1076,19 @@ onBeforeUnmount(() => {
   background: linear-gradient(to bottom, #1a1a2e, #16213e) !important;
 }
 
-/* 暗色模式调整 */
+/* 图形容器样式 */
+.graph-container {
+  flex-grow: 1;
+  width: 100%;
+  height: calc(100% - 40px);
+  overflow: hidden;
+  /* 初始亮色背景 */
+  background: linear-gradient(to bottom, #f0f0f0, #e0e0e0) !important;
+}
+
+/* 暗色模式仅影响图形容器 */
 .dark-mode .graph-container {
-  background: linear-gradient(to bottom, #0f0f1a, #0a0a1f) !important;
+  background: linear-gradient(to bottom, #121212, #0a0a0a) !important;
 }
 
 .loading-overlay {
@@ -980,21 +1127,21 @@ onBeforeUnmount(() => {
   z-index: 100;
 }
 
+/* 增强空状态样式 */
 .empty-state-label {
-  color: var(--n-text-color);
-  font-size: 14px;
-  font-weight: 500;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 8px 12px;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: 16px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  background: rgba(var(--n-color-embedded-rgb), 0.9);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(20px);
 }
 
 .dark-mode {
   --n-color: #1a1a1a;
-  --n-color-embedded: #2a2a2a;
   --n-border-color: #333;
-  --n-color-modal: #2a2a2a;
   --n-text-color: rgba(255, 255, 255, 0.82);
 }
 
@@ -1005,9 +1152,7 @@ onBeforeUnmount(() => {
 
 :not(.dark-mode) {
   --n-color: #f5f5f5;
-  --n-color-embedded: #ffffff;
   --n-border-color: #e0e0e0;
-  --n-color-modal: #ffffff;
   --n-text-color: rgba(0, 0, 0, 0.82);
 }
 </style>
