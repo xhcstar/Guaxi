@@ -9,8 +9,30 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     activeRepoPath: null, // 当前激活的笔记库路径
     openTabs: [],
     activeTab: null,
+    // 新增：用于跟踪仓库展开状态的Map
+    expandedRepos: new Map(), // key: repoPath, value: boolean
   }),
   actions: {
+    // 新增：切换仓库展开状态
+    toggleRepoExpand(path) {
+      this.expandedRepos.set(path, !this.expandedRepos.get(path));
+    },
+
+    // 新增：检查仓库是否展开
+    isRepoExpanded(path) {
+      return this.expandedRepos.get(path) || false;
+    },
+    // 新增设置仓库列表方法
+    setRepopathlist(paths) {
+      this.repopathlist = paths;
+      console.log("设置仓库路径列表:", paths);
+    },
+
+    // 新增设置激活路径方法
+    setActiveRepoPath(path) {
+      this.activeRepoPath = path;
+      console.log("设置激活仓库路径:", path);
+    },
     // 新增：专门处理搜索结果的打开
     async fileTreeOpenSearchResult(result) {
       console.log("打开搜索结果:", result);
@@ -37,24 +59,6 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         text: result.searchText, // 这里改为 text
       };
     },
-
-    // 在标签页中打开文件
-    async openFileInTab(path, content) {
-      const fileName = path.split(/[\\/]/).pop();
-
-      if (!this.openTabs.some((tab) => tab.path === path)) {
-        this.openTabs.push({
-          path,
-          fileName,
-          content: content || (await this.fetchFileContent(path)),
-          preview: this.generatePreview(content),
-        });
-      }
-
-      this.activeTab = path;
-      this.selectedFile = { path, content };
-    },
-
     // 关闭标签页
     closeTab(path) {
       this.openTabs = this.openTabs.filter((tab) => tab.path !== path);
@@ -71,13 +75,47 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 获取文件树数据
     async fetchFileTree(path) {
       console.log("开始获取文件树数据，路径:", path);
+      if (this.currentRequestPath === path) return; // 防止重复请求
+
+      this.currentRequestPath = path;
       try {
         const result = await invoke("get_file_tree", { path });
         console.log("获取文件树数据成功:", result);
         this.fileTree = result;
       } catch (error) {
         console.error("获取文件树数据失败:", error);
+      } finally {
+        this.currentRequestPath = null;
       }
+    },
+
+    // 修改 openFileInTab 方法，防止重复打开
+    async openFileInTab(path, content) {
+      const fileName = path.split(/[\\/]/).pop();
+
+      // 检查是否已存在相同路径的标签页
+      const existingTab = this.openTabs.find((tab) => tab.path === path);
+      if (existingTab) {
+        this.activeTab = path;
+        return;
+      }
+
+      // 如果未提供内容，则获取内容
+      const fileContent = content || (await this.fetchFileContent(path));
+      if (fileContent === null) {
+        console.error("获取文件内容失败，不创建标签页");
+        return;
+      }
+
+      this.openTabs.push({
+        path,
+        fileName,
+        content: fileContent,
+        preview: this.generatePreview(fileContent),
+      });
+
+      this.activeTab = path;
+      this.selectedFile = { path, content: fileContent };
     },
 
     // 获取文件内容

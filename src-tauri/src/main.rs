@@ -72,6 +72,8 @@ async fn main() {
             commands::fileprocess::delete_path,
             commands::fileprocess::rename_path,
             commands::fileprocess::move_path,
+            commands::fileprocess::create_file_with_content,
+            commands::fileprocess::rename_directory,
             commands::settingview::get_active_repo_path,
             commands::settingview::set_active_repo_path,
             commands::settingview::get_server_config,

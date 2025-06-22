@@ -157,10 +157,6 @@ function convertToTreeNode(node) {
   };
 }
 
-onMounted(() => {
-  store.fetchKnowledgeBases();
-});
-
 onMounted(async () => {
   await store.fetchKnowledgeBases(); // 会自动选中第一个
   
