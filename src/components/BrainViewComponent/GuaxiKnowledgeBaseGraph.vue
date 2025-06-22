@@ -919,7 +919,7 @@ onBeforeUnmount(() => {
 }
 
 /* 节点发光效果 */
-.knowledge-graph-container ::v-deep canvas {
+.knowledge-graph-container:deep(canvas) {
   filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
 }
 
