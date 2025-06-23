@@ -1,20 +1,18 @@
 <template>
   <div class="file-tree-container">
-    <!-- 工具栏 -->
-    <div class="toolbar">
-      <n-space>
-        <n-text class="title">知识库编辑器</n-text>
-        <n-tooltip trigger="hover">
-          <template #trigger>
-            <n-button type="primary" size="small" circle @click="refreshAll" class="refresh-btn">
-              <template #icon>
-                <n-icon :component="RefreshIcon" />
-              </template>
-            </n-button>
-          </template>
-          刷新所有目录
-        </n-tooltip>
-      </n-space>
+    <!-- 修改后的工具栏 -->
+    <div class="list-header">
+      <div class="title-container">
+        <n-text class="repo-title-header">知识库编辑</n-text>
+      </div>
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshAll">
+            <n-icon :component="RefreshIcon" size="16" />
+          </n-icon-wrapper>
+        </template>
+        刷新所有目录
+      </n-tooltip>
     </div>
 
     <n-scrollbar class="repo-scroll-container">
@@ -23,12 +21,12 @@
           :class="{ active: path === fileTreeStore.activeRepoPath }" class="repo-list-item">
           <div class="repo-item" @click="toggleRepo(path)">
             <div class="repo-title">
-              <n-icon size="18" class="repo-icon">
+              <n-icon size="15" class="repo-icon">
                 <FolderIcon />
               </n-icon>
               {{ getRepoName(path) }}
             </div>
-            <n-icon size="18" class="expand-icon">
+            <n-icon size="15" class="expand-icon">
               <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(path) && path === fileTreeStore.activeRepoPath" />
               <chevron-forward-icon v-else />
             </n-icon>
@@ -60,7 +58,6 @@ import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOut
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { h, ref, onMounted, onUnmounted, watch, onBeforeUnmount } from 'vue'
-import { storeToRefs } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
@@ -930,7 +927,7 @@ onBeforeUnmount(() => {
   selectedNode.value = null
   expandedKeys.value = []
   lastSelectedKey.value = null
-   
+
   // 清理文件监控
   cleanupFileWatcher()
 })
@@ -958,8 +955,94 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 刷新图标样式 */
+.refresh-icon {
+  color: var(--n-text-color-secondary);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 4px;
+}
+
+.refresh-icon:hover {
+  color: var(--n-color-primary);
+  background-color: var(--n-color-primary-subtle);
+  transform: rotate(90deg);
+}
+
+/* 暗色模式适配 */
+.dark-mode .refresh-icon:hover {
+  background-color: rgba(65, 105, 225, 0.2);
+}
+
+/* 新增的标题栏样式 */
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  background-color: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.title-container {
+  display: flex;
+  align-items: center;
+  height: auto;
+  /* 确保高度自适应 */
+}
+
+.repo-title-header {
+  font-size: 18px !important;
+  /* 使用!important确保覆盖其他样式 */
+  font-weight: 600;
+  color: #191b1b;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+  display: flex;
+  align-items: center;
+  margin: 0;
+  /* 移除可能影响大小的外边距 */
+  padding: 0;
+  /* 移除可能影响大小的内边距 */
+  line-height: 1.2;
+  /* 设置合适的行高 */
+}
+
+.repo-title {
+  font-size: 15px !important;
+  /* 使用!important确保覆盖其他样式 */
+  font-weight: 600;
+  color: #191b1b;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+  display: flex;
+  align-items: center;
+  margin: 0;
+  /* 移除可能影响大小的外边距 */
+  padding: 0;
+  /* 移除可能影响大小的内边距 */
+  line-height: 1.2;
+  /* 设置合适的行高 */
+}
+
+/* 刷新按钮样式调整 */
+.refresh-btn {
+  background-color: #f0f0f0;
+  color: #5f6368;
+  border: none;
+  transition: all 0.3s ease;
+}
+
+.refresh-btn:hover {
+  background-color: #e0e0e0;
+  color: #191b1b;
+  transform: rotate(90deg);
+}
+
 .file-tree-container {
-  height: 100%;
+  height: calc(100% - var(--scrollbar-height, 42px));
   display: flex;
   flex-direction: column;
   background-color: var(--n-color-embedded);
@@ -998,8 +1081,10 @@ onUnmounted(() => {
 .repo-list-item {
   padding: 8px 12px;
   transition: all 0.2s ease;
+  border-radius: 6px;
   border-bottom: 1px solid var(--n-border-color);
   position: relative;
+  margin: 2px 0;
   overflow: hidden;
 }
 
