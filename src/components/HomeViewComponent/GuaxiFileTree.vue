@@ -1,6 +1,6 @@
 <template>
   <div class="file-tree-container">
-    <!-- 修改后的工具栏 -->
+    <!-- 工具栏 -->
     <div class="list-header">
       <div class="title-container">
         <n-text class="repo-title-header">知识库编辑</n-text>
@@ -26,12 +26,21 @@
               </n-icon>
               {{ getRepoName(path) }}
             </div>
-            <n-icon size="15" class="expand-icon">
-              <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(path) && path === fileTreeStore.activeRepoPath" />
-              <chevron-forward-icon v-else />
-            </n-icon>
+            <div class="repo-actions">
+              <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
+                <n-icon :component="FileAddIcon" size="14" />
+              </n-icon-wrapper>
+              <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(path)">
+                <n-icon :component="FolderAddIcon" size="14" />
+              </n-icon-wrapper>
+              <n-icon size="15" class="expand-icon">
+                <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(path) && path === fileTreeStore.activeRepoPath" />
+                <chevron-forward-icon v-else />
+              </n-icon>
+            </div>
           </div>
 
+          <!-- 将n-collapse-transition移到n-list-item内部，但在repo-item外部 -->
           <n-collapse-transition>
             <div v-if="path === fileTreeStore.activeRepoPath && fileTreeStore.isRepoExpanded(path)"
               class="tree-container">
@@ -61,9 +70,9 @@ import { h, ref, onMounted, onUnmounted, watch, onBeforeUnmount, nextTick } from
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
-import { NList, NListItem, NCollapseTransition, NText, NTooltip, NButton } from 'naive-ui'
+import { NList, NListItem, NCollapseTransition, NText, NTooltip, NIconWrapper } from 'naive-ui'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
-import { Folder20Regular as FolderIcon } from '@vicons/fluent'
+import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, FolderAdd20Regular as FolderAddIcon } from '@vicons/fluent'
 
 
 const message = useMessage();
@@ -84,6 +93,8 @@ const selectedNode = ref(null) // 当前右键点击的节点
 // 已展开的目录
 const expandedKeys = ref([])
 const unlistenRef = ref(null)
+
+const selectedKeys = ref([]); // 新增：存储当前选中的节点keys
 
 // 右键菜单选项
 const contextMenuOptions = ref([
@@ -114,6 +125,50 @@ const contextMenuOptions = ref([
   },
 ])
 
+
+// 修改后的handleAddFile函数
+const handleAddFile = async (repoPath) => {
+  try {
+    let parentPath = repoPath; // 默认使用仓库路径
+
+    // 如果有选中的节点，获取其路径
+    if (selectedKeys.value.length > 0) {
+      const selectedKey = selectedKeys.value[0];
+      const selectedNode = findNodeById(fileTree.value, selectedKey);
+
+      // 如果选中的是目录，则使用该目录路径
+      if (selectedNode?.is_directory) {
+        parentPath = selectedNode.id;
+      }
+    }
+
+    await addNode(parentPath, false);
+  } catch (error) {
+    message.error(`添加文件失败: ${error.message}`);
+  }
+};
+
+// 修改后的handleAddFolder函数
+const handleAddFolder = async (repoPath) => {
+  try {
+    let parentPath = repoPath; // 默认使用仓库路径
+
+    // 如果有选中的节点，获取其路径
+    if (selectedKeys.value.length > 0) {
+      const selectedKey = selectedKeys.value[0];
+      const selectedNode = findNodeById(fileTree.value, selectedKey);
+
+      // 如果选中的是目录，则使用该目录路径
+      if (selectedNode?.is_directory) {
+        parentPath = selectedNode.id;
+      }
+    }
+
+    await addNode(parentPath, true);
+  } catch (error) {
+    message.error(`添加文件夹失败: ${error.message}`);
+  }
+};
 
 // 获取仓库显示名称
 const getRepoName = (path) => {
@@ -210,6 +265,7 @@ const renderPrefix = ({ option }) => {
 
 const handleSelect = async (keys) => {
   console.log('触发选中事件, keys 参数:', keys);
+  selectedKeys.value = keys; // 更新选中的keys
 
   // 防抖处理
   if (lastSelectedKey.value === keys[0]) {
@@ -383,9 +439,10 @@ const editName = ref('')
 const addNode = async (parentId, isDirectory = false) => {
   parentId = normalizePath(parentId);
   console.log('添加节点，父节点 ID:', parentId, '是否目录:', isDirectory);
-  // 1. 查找父节点
+
   let parentNode;
   if (!parentId) {
+    // 如果没有parentId，使用当前激活的仓库路径作为根目录
     parentNode = {
       id: normalizePath(fileTreeStore.activeRepoPath),
       is_directory: true,
@@ -393,8 +450,14 @@ const addNode = async (parentId, isDirectory = false) => {
     };
   } else {
     parentNode = findNodeById(fileTree.value, parentId);
-    if (!parentNode || !parentNode.is_directory) {
-      throw new Error('只能在目录下添加文件');
+    if (!parentNode) {
+      // 如果找不到父节点，可能是根目录
+      parentNode = {
+        id: normalizePath(fileTreeStore.activeRepoPath),
+        is_directory: true,
+        children: fileTree.value
+      };
+      console.warn('未找到父节点，使用根目录作为父节点');
     }
   }
 
@@ -424,6 +487,8 @@ const addNode = async (parentId, isDirectory = false) => {
 
   // 5. 进入编辑模式
   startEditing(newNode);
+
+  selectedKeys.value = [];
 
   // 6. 返回Promise，在编辑完成后处理
   return new Promise((resolve) => {
@@ -465,6 +530,9 @@ const handleEditComplete = async (node, parentNode, isDirectory, resolve) => {
     parentNode.children = parentNode.children.filter(n => n.id !== node.id);
     message.error(`创建失败: ${error.message}`);
     resolve(null);
+  } finally {
+    // 重置选中路径
+    selectedKeys.value = [];
   }
 };
 
@@ -607,7 +675,7 @@ const startEditing = (node) => {
 const renderLabel = ({ option }) => {
   // 用 id 判断是否为正在编辑的节点
   if (editingNode.value && normalizePath(editingNode.value.id) === normalizePath(option.id)) {
-    console.log('EEE ======> renderLabel editingNode.value:', editingNode.value);
+    // console.log('EEE ======> renderLabel editingNode.value:', editingNode.value);
     return h('input', {
       class: 'editable-input',
       value: editName.value,
@@ -616,8 +684,8 @@ const renderLabel = ({ option }) => {
       onKeydown: handleKeydown,
     })
   } else {
-    console.log('======> renderLabel option:', option);
-    console.log('======> renderLabel editingNode.value:', editingNode.value);
+    // console.log('======> renderLabel option:', option);
+    // console.log('======> renderLabel editingNode.value:', editingNode.value);
     return option.name
   }
 }
@@ -1252,5 +1320,30 @@ onUnmounted(() => {
 
 .dark-mode .n-tree-node:hover {
   background: rgba(255, 255, 255, 0.05);
+}
+
+/* 新增的样式 */
+.repo-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.repo-list-item:hover .repo-actions {
+  opacity: 1;
+}
+
+.action-icon {
+  color: var(--n-text-color-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 2px;
+}
+
+.action-icon:hover {
+  color: var(--n-color-primary);
+  background-color: var(--n-color-primary-subtle);
 }
 </style>
