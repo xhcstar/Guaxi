@@ -1,55 +1,57 @@
 <template>
-  <!-- 模板部分保持不变 -->
   <div class="file-tree-container">
-    <div class="list-header">
-      <div class="title-container">
-        <n-text class="repo-title">知识库编辑器</n-text>
-      </div>
-      <n-tooltip trigger="hover">
-        <template #trigger>
-          <n-button type="primary" size="small" circle @click="refreshAll" class="refresh-btn">
-            <template #icon>
-              <n-icon :component="RefreshIcon" />
-            </template>
-          </n-button>
-        </template>
-        刷新所有目录
-      </n-tooltip>
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <n-space>
+        <n-text class="title">知识库编辑器</n-text>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button type="primary" size="small" circle @click="refreshAll" class="refresh-btn">
+              <template #icon>
+                <n-icon :component="RefreshIcon" />
+              </template>
+            </n-button>
+          </template>
+          刷新所有目录
+        </n-tooltip>
+      </n-space>
     </div>
 
-    <n-list bordered class="repo-list">
-      <n-list-item v-for="path in fileTreeStore.repopathlist" :key="path"
-        :class="{ active: path === fileTreeStore.activeRepoPath }" class="repo-list-item">
-        <div class="repo-item" @click="toggleRepo(path)">
-          <div class="repo-title">
-            <n-icon size="18" class="repo-icon">
-              <FolderIcon />
+    <n-scrollbar class="repo-scroll-container">
+      <n-list bordered class="repo-list">
+        <n-list-item v-for="path in fileTreeStore.repopathlist" :key="path"
+          :class="{ active: path === fileTreeStore.activeRepoPath }" class="repo-list-item">
+          <div class="repo-item" @click="toggleRepo(path)">
+            <div class="repo-title">
+              <n-icon size="18" class="repo-icon">
+                <FolderIcon />
+              </n-icon>
+              {{ getRepoName(path) }}
+            </div>
+            <n-icon size="18" class="expand-icon">
+              <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(path) && path === fileTreeStore.activeRepoPath" />
+              <chevron-forward-icon v-else />
             </n-icon>
-            {{ getRepoName(path) }}
           </div>
-          <n-icon size="18" class="expand-icon">
-            <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(path) && path === fileTreeStore.activeRepoPath" />
-            <chevron-forward-icon v-else />
-          </n-icon>
-        </div>
 
-        <n-collapse-transition>
-          <div v-if="path === fileTreeStore.activeRepoPath && fileTreeStore.isRepoExpanded(path)"
-            class="tree-container">
-            <n-tree ref="treeRef" :data="fileTree" key-field="id" :render-label="renderLabel"
-              :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true"
-              @update:selected-keys="handleSelect" :node-props="nodeProps" virtual-scroll
-              :virtual-scroll-item-height="28" class="tree-component" />
-          </div>
-        </n-collapse-transition>
-      </n-list-item>
-    </n-list>
+          <n-collapse-transition>
+            <div v-if="path === fileTreeStore.activeRepoPath && fileTreeStore.isRepoExpanded(path)"
+              class="tree-container">
+              <n-tree ref="treeRef" :data="fileTree" key-field="id" :render-label="renderLabel"
+                :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true"
+                @update:selected-keys="handleSelect" :node-props="nodeProps" virtual-scroll
+                :virtual-scroll-item-height="28" class="tree-component" />
+            </div>
+          </n-collapse-transition>
+        </n-list-item>
+      </n-list>
+    </n-scrollbar>
+
+    <!-- 右键菜单 -->
+    <n-dropdown v-model:show="isContextMenuVisible" :options="contextMenuOptions" placement="bottom-start"
+      :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect"
+      @clickoutside="handleClickoutside" />
   </div>
-
-  <!-- 右键菜单 -->
-  <n-dropdown v-model:show="isContextMenuVisible" :options="contextMenuOptions" placement="bottom-start"
-    :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect"
-    @clickoutside="handleClickoutside" />
 </template>
 
 <script setup>
@@ -57,7 +59,7 @@ import { NTree, NIcon, useMessage } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
-import { h, ref, onMounted, onUnmounted, watch } from 'vue'
+import { h, ref, onMounted, onUnmounted, watch, onBeforeUnmount } from 'vue'
 import { storeToRefs } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -71,9 +73,6 @@ const message = useMessage();
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
-const { repopathlist, activeRepoPath } = storeToRefs(fileTreeStore)
-console.log('[Store] 获取store数据:', { repopathlist: repopathlist.value, activeRepoPath: activeRepoPath.value })
-
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const lastSelectedKey = ref(null);
 
@@ -603,95 +602,19 @@ const findParentNode = (tree, targetId) => {
 
 // 开始编辑节点
 const startEditing = (node) => {
-  editingNode.value = node;
-  editName.value = node.name;
+  editingNode.value = node
+  editName.value = node.name
 
-  // 延迟执行，确保输入框已经渲染
-  setTimeout(() => {
-    const input = document.querySelector('.editable-input');
+  // 使用 nextTick 确保 DOM 已更新
+  nextTick(() => {
+    const input = document.querySelector('.editable-input')
     if (input) {
-      input.focus();
-      input.select();
-    } else {
-      console.warn('Input element not found');
+      input.focus()
+      input.select()
     }
-  }, 0);
-};
+  })
+}
 
-// const handleBlur = async () => {
-//   console.log('handleBlur triggered');
-//   if (!editingNode.value) return;
-
-//   const oldId = editingNode.value.id;
-//   const parentNode = findParentNode(fileTree.value, oldId);
-//   const parentPath = parentNode ? parentNode.id : fileTreeStore.activeRepoPath;
-
-//   if (editName.value.trim()) {
-//     // 1. 获取旧文件内容（如果是文件）
-//     let oldContent = '';
-//     if (!editingNode.value.is_directory) {
-//       try {
-//         oldContent = await fileTreeStore.fetchFileContent(oldId);
-//       } catch (error) {
-//         console.error('获取旧文件内容失败:', error);
-//       }
-//     }
-
-//     // 2. 构建新路径
-//     const newId = `${parentPath}/${editName.value}`;
-
-//     // 3. 更新节点信息
-//     editingNode.value.name = editName.value;
-//     editingNode.value.id = newId;
-
-//     // 4. 处理文件系统操作
-//     try {
-//       if (editingNode.value.is_directory) {
-//         // 目录重命名
-//         await invoke('rename_directory', {
-//           oldPath: oldId,
-//           newPath: newId
-//         });
-//       } else {
-//         // 文件重命名（先创建新文件，写入内容，再删除旧文件）
-//         await invoke('create_file_with_content', {
-//           path: newId,
-//           content: oldContent
-//         });
-//         await invoke('delete_path', { path: oldId });
-//       }
-
-//       // 5. 更新标签页（如果该文件已打开）
-//       const tabIndex = fileTreeStore.openTabs.findIndex(tab => tab.path === oldId);
-//       if (tabIndex !== -1) {
-//         fileTreeStore.openTabs[tabIndex].path = newId;
-//         fileTreeStore.openTabs[tabIndex].fileName = editName.value;
-
-//         // 更新当前激活标签
-//         if (fileTreeStore.activeTab === oldId) {
-//           fileTreeStore.activeTab = newId;
-//         }
-//       }
-//     } catch (error) {
-//       console.error('重命名操作失败:', error);
-//       // 恢复原状态
-//       editingNode.value.name = oldId.split(/[\\/]/).pop();
-//       editingNode.value.id = oldId;
-//       message.error(`重命名失败: ${error.message}`);
-//       return;
-//     }
-
-//     // 6. 刷新父目录
-//     await refreshDirectory(parentPath);
-//   } else {
-//     // 名称为空时的处理（保持不变）
-//     console.warn('名称为空，取消重命名');
-//   }
-
-//   // 结束编辑状态
-//   editingNode.value = null;
-//   editName.value = '';
-// };
 // 处理输入框的 keydown 事件
 const handleKeydown = (e) => {
   console.log('handleKeydown triggered'); // 添加日志
@@ -1000,6 +923,18 @@ const handleContextMenu = (e) => {
   }
 }
 
+onBeforeUnmount(() => {
+  // 清理所有状态
+  editingNode.value = null
+  editName.value = ''
+  selectedNode.value = null
+  expandedKeys.value = []
+  lastSelectedKey.value = null
+   
+  // 清理文件监控
+  cleanupFileWatcher()
+})
+
 // 初始化时获取文件树数据
 onMounted(async () => {
   // 1. 初始化知识库
@@ -1010,43 +945,12 @@ onMounted(async () => {
     await loadRepoTree(fileTreeStore.activeRepoPath)
   }
 
-  // 添加全局右键事件监听，阻止默认行为
-  // document.addEventListener('contextmenu', (e) => {
-  //   if (treeContainer.value?.contains(e.target)) {
-  //     e.preventDefault()
-  //     e.stopPropagation()
-  //   }
-  // })
-
-  // 添加容器右键事件监听
-  // if (treeContainerRef.value && typeof treeContainerRef.value.addEventListener === 'function') {
-  //   treeContainerRef.value.addEventListener('contextmenu', handleContextMenu)
-  // } else {
-  //   console.warn('无法添加事件监听器, treeContainerRef:', treeContainerRef.value)
-  // }
-
   // 添加文件监控
   setupFileWatcher()
 })
 
 // 在组件卸载时清理事件监听器
 onUnmounted(() => {
-  // 移除全局右键事件监听
-  // document.removeEventListener('contextmenu', (e) => {
-  //   if (treeContainer.value?.contains(e.target)) {
-  //     e.preventDefault()
-  //     e.stopPropagation()
-  //   }
-  // })
-
-  // try {
-  //   if (treeContainerRef.value && typeof treeContainerRef.value.removeEventListener === 'function') {
-  //     treeContainerRef.value.removeEventListener('contextmenu', handleContextMenu)
-  //   }
-  // } catch (error) {
-  //   console.error('移除事件监听器失败:', error)
-  // }
-
   // 清理文件监控
   cleanupFileWatcher()
 })
@@ -1054,25 +958,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.tree-container {
-  position: relative;
-  width: 100%;
-  height: calc(100vh - 55px);
-  min-height: 200px;
-  padding: 8px 0 8px 24px;
-  border-left: 1px dashed var(--n-border-color);
-}
-
-.tree-component {
-  height: 100%;
-  width: 100%;
-}
-
-/* 节点悬停效果 */
-.n-tree-node:hover {
-  background: rgba(0, 0, 0, 0.05);
-}
-
 .file-tree-container {
   height: 100%;
   display: flex;
@@ -1080,56 +965,80 @@ onUnmounted(() => {
   background-color: var(--n-color-embedded);
   border-radius: 8px;
   overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.list-header {
+.toolbar {
+  padding: 12px 16px;
+  background-color: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(5px);
+  border-bottom: 1px solid var(--n-border-color);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  background-color: #ffffff;
-  border-bottom: 1px solid var(--n-border-color);
 }
 
-.title-container {
-  display: flex;
-  align-items: center;
-}
-
-.repo-title {
+.title {
   font-size: 16px;
   font-weight: 600;
   color: var(--n-text-color);
 }
 
-.refresh-btn {
-  transition: transform 0.3s ease;
-}
-
-.refresh-btn:hover {
-  transform: rotate(90deg);
+.repo-scroll-container {
+  flex: 1;
+  height: 0;
+  background-color: #ffffff;
 }
 
 .repo-list {
-  flex: 1;
-  overflow-y: auto;
-  border-radius: 0 0 8px 8px;
-  background-color: #ffffff;
+  border-radius: 0;
+  background-color: transparent;
 }
 
 .repo-list-item {
   padding: 8px 12px;
   transition: all 0.2s ease;
   border-bottom: 1px solid var(--n-border-color);
+  position: relative;
+  overflow: hidden;
 }
 
 .repo-list-item:last-child {
   border-bottom: none;
 }
 
+/* 鼠标悬停效果 - 添加发光边框和背景 */
+.repo-list-item:hover {
+  background-color: rgba(24, 144, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(24, 144, 255, 0.2);
+}
+
+/* 鼠标悬停时的文字和图标效果 */
+.repo-list-item:hover .repo-title {
+  color: #1890ff;
+}
+
+.repo-list-item:hover .repo-icon {
+  color: #1890ff;
+}
+
+.repo-list-item:hover .expand-icon {
+  color: #1890ff;
+}
+
+/* 选中状态效果 */
 .repo-list-item.active {
-  background-color: var(--n-color-primary-subtle);
-  border-left: 3px solid var(--n-color-primary);
+  background-color: rgba(24, 144, 255, 0.08);
+  border-left: 3px solid #1890ff;
+  box-shadow: inset 0 0 8px rgba(24, 144, 255, 0.1);
+}
+
+/* 选中状态下的文字和图标 */
+.repo-list-item.active .repo-title,
+.repo-list-item.active .repo-icon,
+.repo-list-item.active .expand-icon {
+  color: #1890ff;
+  font-weight: 500;
 }
 
 .repo-item {
@@ -1146,25 +1055,39 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 14px;
+  color: var(--n-text-color);
+  transition: color 0.2s ease;
 }
 
 .repo-icon {
   color: var(--n-color-primary);
   margin-right: 8px;
+  transition: color 0.2s ease;
 }
 
-/* 展开图标动画 */
 .expand-icon {
-  transition: transform 0.2s ease;
+  transition: all 0.2s ease;
+  color: var(--n-text-color);
 }
 
 .expand-icon.rotated {
   transform: rotate(90deg);
 }
 
-/* 仓库项悬停效果 */
-.repo-item:hover {
-  background-color: rgba(0, 0, 0, 0.05);
+.tree-container {
+  position: relative;
+  width: 100%;
+  padding: 8px 0 8px 24px;
+  border-left: 1px dashed var(--n-border-color);
+}
+
+.tree-component {
+  width: 100%;
+}
+
+/* 节点悬停效果 */
+.n-tree-node:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 
 /* 编辑输入框样式 */
@@ -1180,5 +1103,45 @@ onUnmounted(() => {
 .editable-input:focus {
   border-color: var(--n-color-primary);
   box-shadow: 0 0 0 2px var(--n-color-primary-hover);
+}
+
+/* 刷新按钮动画 */
+.refresh-btn {
+  transition: transform 0.3s ease;
+}
+
+.refresh-btn:hover {
+  transform: rotate(90deg);
+}
+
+/* 暗色模式适配 */
+.dark-mode .file-tree-container {
+  background-color: var(--n-color-embedded);
+}
+
+.dark-mode .toolbar {
+  background-color: rgba(30, 30, 30, 0.7) !important;
+  border-bottom: 1px solid #333 !important;
+}
+
+.dark-mode .repo-scroll-container {
+  background-color: #1a1a1a;
+}
+
+.dark-mode .repo-list-item {
+  border-bottom: 1px solid #333;
+}
+
+.dark-mode .repo-list-item:hover {
+  background-color: rgba(65, 105, 225, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(65, 105, 225, 0.3);
+}
+
+.dark-mode .repo-list-item.active {
+  background-color: rgba(65, 105, 225, 0.2);
+}
+
+.dark-mode .n-tree-node:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 </style>
