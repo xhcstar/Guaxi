@@ -6,13 +6,11 @@
       </div>
       <n-tooltip trigger="hover">
         <template #trigger>
-          <n-button type="primary" size="small" circle @click="refreshList" class="refresh-btn">
-            <template #icon>
-              <n-icon :component="RefreshIcon" />
-            </template>
-          </n-button>
+          <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshList">
+            <n-icon :component="RefreshIcon" size="16" />
+          </n-icon-wrapper>
         </template>
-        刷新知识库列表
+        刷新知识库
       </n-tooltip>
     </div>
 
@@ -159,11 +157,11 @@ function convertToTreeNode(node) {
 
 onMounted(async () => {
   await store.fetchKnowledgeBases(); // 会自动选中第一个
-  
+
   // 如果已有选中项，加载其树数据
   if (selectedKnowledgeBase.value) {
-    const root = await invoke("get_knowledge_base_tree", { 
-      rootPath: selectedKnowledgeBase.value.location 
+    const root = await invoke("get_knowledge_base_tree", {
+      rootPath: selectedKnowledgeBase.value.location
     });
     treeData.value = [convertToTreeNode(root)];
     expandedKeys.value = [treeData.value[0].key];
@@ -179,6 +177,25 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 刷新图标样式 */
+.refresh-icon {
+  color: var(--n-text-color-secondary);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 4px;
+}
+
+.refresh-icon:hover {
+  color: var(--n-color-primary);
+  background-color: var(--n-color-primary-subtle);
+  transform: rotate(90deg);
+}
+
+/* 暗色模式适配 */
+.dark-mode .refresh-icon:hover {
+  background-color: rgba(65, 105, 225, 0.2);
+}
+
 /* 添加 tree-container 确保树形结构有稳定的容器 */
 .tree-container {
   width: 100%;
@@ -190,7 +207,7 @@ onUnmounted(() => {
 
 .knowledge-base-list {
   padding: 0px;
-  height: 100%;
+  height: calc(100% - var(--scrollbar-height, 36px));
   display: flex;
   flex-direction: column;
 }
@@ -231,18 +248,65 @@ onUnmounted(() => {
   border-radius: 2px;
 }
 
-/* 刷新按钮样式调整 */
+/* 刷新按钮样式调整 - 修改为GuaxiFileTree风格 */
 .refresh-btn {
-  background-color: #f0f0f0;
-  color: #5f6368;
+  background-color: transparent !important;
+  color: var(--n-text-color-secondary) !important;
   border: none;
   transition: all 0.3s ease;
+  box-shadow: none !important;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .refresh-btn:hover {
-  background-color: #e0e0e0;
-  color: #191b1b;
+  background-color: var(--n-color-primary-subtle) !important;
+  color: var(--n-color-primary) !important;
   transform: rotate(90deg);
+}
+
+.refresh-btn .n-icon {
+  font-size: 18px;
+}
+
+/* 暗色模式适配 */
+.dark-mode .refresh-btn {
+  color: var(--n-text-color-secondary) !important;
+}
+
+.dark-mode .refresh-btn:hover {
+  background-color: rgba(65, 105, 225, 0.2) !important;
+  color: var(--n-color-primary) !important;
+}
+
+/* 修改滚动条样式 - 变细且更现代 */
+.kb-list::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.kb-list::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  transition: background-color 0.3s;
+}
+
+.kb-list::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.4);
+}
+
+.kb-list::-webkit-scrollbar-track {
+  background-color: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+
+/* Firefox滚动条样式 */
+.kb-list {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
 }
 
 .kb-list {
