@@ -57,7 +57,7 @@ import { NTree, NIcon, useMessage } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
-import { h, ref, onMounted, onUnmounted, watch, onBeforeUnmount } from 'vue'
+import { h, ref, onMounted, onUnmounted, watch, onBeforeUnmount, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
@@ -157,23 +157,29 @@ const refreshAll = async () => {
   }
 }
 
+const normalizeTreeIds = (tree) => {
+  if (!tree || !Array.isArray(tree)) return [];
+  return tree.map(item => {
+    const newItem = { ...item, id: normalizePath(item.id) };
+    if (item.children) {
+      newItem.children = normalizeTreeIds(item.children);
+    }
+    return newItem;
+  });
+};
+
 // 加载文件树数据
-// 修改后的 loadFileTree 函数
 const loadFileTree = async () => {
   console.log('[API] 加载文件树')
   try {
-    // 每次加载前清空旧数据（避免显示残留）
     fileTree.value = []
-
     console.log('当前仓库路径:', fileTreeStore.activeRepoPath)
     await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath)
-
-    // 使用浅拷贝确保响应式更新
-    fileTree.value = [...sortFileTree(fileTreeStore.fileTree)]
-
+    // 先 normalize，再排序
+    fileTree.value = [...sortFileTree(normalizeTreeIds(fileTreeStore.fileTree))]
   } catch (error) {
     console.error('获取文件树数据失败', error)
-    fileTree.value = [] // 出错时清空
+    fileTree.value = []
   }
 }
 
@@ -195,21 +201,6 @@ const sortFileTree = (tree) => {
     return a.name.localeCompare(b.name);
   });
 };
-
-// 修改 renderLabel，支持编辑模式
-const renderLabel = ({ option }) => {
-  if (editingNode.value === option) {
-    return h('input', {
-      class: 'editable-input',
-      value: editName.value,
-      onInput: (e) => (editName.value = e.target.value),
-      onBlur: handleBlur,
-      onKeydown: handleKeydown,
-    })
-  } else {
-    return option.name
-  }
-}
 
 // 渲染文件树图标
 const renderPrefix = ({ option }) => {
@@ -287,7 +278,7 @@ const findNodeById = (tree, targetId) => {
   const dfs = (nodes) => {
     for (const node of nodes) {
       const nodePath = normalizePath(node.id);
-      console.log('检查节点:', nodePath);
+      // console.log('检查节点:', nodePath);
 
       if (nodePath === normalizedTargetId) {
         return node;
@@ -351,6 +342,7 @@ const handleContextMenuSelect = async (key) => {
   try {
     switch (key) {
       case 'addFile':
+        console.log('添加文件操作, 选中节点:', selectedNode.value);
         await addNode(selectedNode.value?.id, false);
         break;
       case 'addFolder':
@@ -389,6 +381,8 @@ const editName = ref('')
 
 // 修改后的 addNode 函数
 const addNode = async (parentId, isDirectory = false) => {
+  parentId = normalizePath(parentId);
+  console.log('添加节点，父节点 ID:', parentId, '是否目录:', isDirectory);
   // 1. 查找父节点
   let parentNode;
   if (!parentId) {
@@ -422,6 +416,11 @@ const addNode = async (parentId, isDirectory = false) => {
   parentNode.children.sort((a, b) =>
     a.is_directory === b.is_directory ? 0 : a.is_directory ? -1 : 1
   );
+
+  // ★ 自动展开父节点，确保新节点可见
+  if (!expandedKeys.value.includes(parentNode.id)) {
+    expandedKeys.value.push(parentNode.id);
+  }
 
   // 5. 进入编辑模式
   startEditing(newNode);
@@ -599,18 +598,43 @@ const findParentNode = (tree, targetId) => {
 
 // 开始编辑节点
 const startEditing = (node) => {
+  console.log('startEditing 开始编辑节点:', node.name);
   editingNode.value = node
   editName.value = node.name
-
-  // 使用 nextTick 确保 DOM 已更新
-  nextTick(() => {
-    const input = document.querySelector('.editable-input')
-    if (input) {
-      input.focus()
-      input.select()
-    }
-  })
+  console.log('startEditing ==> ', node);
 }
+
+const renderLabel = ({ option }) => {
+  // 用 id 判断是否为正在编辑的节点
+  if (editingNode.value && normalizePath(editingNode.value.id) === normalizePath(option.id)) {
+    console.log('EEE ======> renderLabel editingNode.value:', editingNode.value);
+    return h('input', {
+      class: 'editable-input',
+      value: editName.value,
+      onInput: (e) => (editName.value = e.target.value),
+      onBlur: handleBlur,
+      onKeydown: handleKeydown,
+    })
+  } else {
+    console.log('======> renderLabel option:', option);
+    console.log('======> renderLabel editingNode.value:', editingNode.value);
+    return option.name
+  }
+}
+
+watch(editingNode, (val) => {
+  if (val) {
+    nextTick(() => {
+      setTimeout(() => {
+        const input = document.querySelector('.editable-input')
+        if (input) {
+          input.focus()
+          input.select()
+        }
+      }, 50) // 延迟，确保 input 已渲染
+    })
+  }
+})
 
 // 处理输入框的 keydown 事件
 const handleKeydown = (e) => {
