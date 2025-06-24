@@ -266,26 +266,36 @@ const renderPrefix = ({ option }) => {
 }
 
 const handleSelect = async (keys) => {
-  // console.log('触发选中事件, keys 参数:', keys);
-  selectedKeys.value = keys; // 更新选中的keys
+  console.log('触发选中事件, keys 参数:', keys);
 
-  // 防抖处理
-  if (lastSelectedKey.value === keys[0]) {
-    // console.log('忽略重复选中:', keys[0]);
+  // 1. 处理空选中情况
+  if (!keys || keys.length === 0) {
+    console.log('空选中，清空选中状态');
+    lastSelectedKey.value = null;
+    selectedKeys.value = [];
     return;
   }
-  lastSelectedKey.value = keys[0];
 
   const selectedKey = keys[0];
-  if (!selectedKey) {
-    console.warn('未选中任何节点');
+  const normalizedKey = normalizePath(selectedKey);
+
+  // 2. 防抖处理 - 只有当新key与上次相同时才跳过
+  if (normalizedKey === normalizePath(lastSelectedKey.value)) {
+    console.log('忽略重复选中:', normalizedKey);
     return;
   }
 
-  console.log('查找选中节点, key:', selectedKey);
-  const selectedNode = findNodeById(fileTree.value, selectedKey);
+  // 3. 更新选中状态
+  selectedKeys.value = [selectedKey];
+  lastSelectedKey.value = selectedKey;
+
+  console.log('查找选中节点, key:', normalizedKey);
+  const selectedNode = findNodeById(fileTree.value, normalizedKey);
+
   if (!selectedNode) {
     console.warn('未找到选中节点');
+    lastSelectedKey.value = null;
+    selectedKeys.value = [];
     return;
   }
 
@@ -357,7 +367,7 @@ const nodeProps = ({ option }) => ({
   // 处理左键点击
   onClick: (e) => {
     e.stopPropagation()
-    console.log('节点左键点击:', option)
+    // console.log('节点左键点击:', option)
     handleSelect([option.id]) // 手动触发选中
   },
   // 处理右键点击
@@ -651,6 +661,9 @@ const deleteNode = async (nodeId) => {
       if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === nodeId) {
         fileTreeStore.selectedFile = null;
       }
+      // 清理选中状态，防止死锁
+      selectedKeys.value = [];
+      lastSelectedKey.value = null;
     }
   }
 }
