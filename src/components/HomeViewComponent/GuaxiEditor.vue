@@ -305,11 +305,23 @@ const initEditor = () => {
 
 // 更新编辑器内容
 const updateEditorContent = (content) => {
-  if (editor) {
-    editor.setValue(content);
-    rawContent.value = content;
-  } else {
+  if (!editor && content) {
     initEditor();
+    return;
+  }
+
+  if (editor) {
+    // 当内容为空时，确保完全重置编辑器
+    if (!content) {
+      editor.setValue('');
+      const model = editor.getModel();
+      if (model) {
+        model.setValue('');
+      }
+    } else {
+      editor.setValue(content);
+    }
+    rawContent.value = content;
   }
 };
 
@@ -429,6 +441,13 @@ watch(selectedFile, (newFile) => {
     if (mode.value === 'preview') {
       renderDebounced(newFile.content)
     }
+  } else {
+    if (editor) {
+      editor.setValue('');
+      editor.getModel().setValue('');
+    }
+    renderedHtml.value = '';
+    return;
   }
 }, { immediate: true });
 
@@ -501,13 +520,23 @@ const switchTab = (path) => {
 
 const closeTab = (path) => {
   fileTreeStore.closeTab(path);
-  if (fileTreeStore.activeTab) {
+  if (fileTreeStore.openTabs.length > 0) {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
     if (tab) {
       updateEditorContent(tab.content);
     }
   } else {
-    updateEditorContent('');
+    // 完全清空状态
+    fileTreeStore.activeTab = null;
+    fileTreeStore.selectedFile = null;
+    // 强制清空编辑器
+    if (editor) {
+      editor.setValue('');
+      editor.getModel().setValue(''); // 确保模型也被清空
+    }
+    // 隐藏编辑器区域
+    // mode.value = 'preview';
+    renderedHtml.value = '';
   }
 };
 
