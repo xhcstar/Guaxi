@@ -200,7 +200,7 @@ const loadRepoTree = async (path) => {
     // 无论数据是否为空都重新加载
     await loadFileTree()
     // 确保仓库在加载后保持展开状态
-    fileTreeStore.expandedRepos.set(path, true)
+    // fileTreeStore.expandedRepos.set(path, false)
   } catch (error) {
     console.error('[API] 加载仓库树失败:', error)
   }
