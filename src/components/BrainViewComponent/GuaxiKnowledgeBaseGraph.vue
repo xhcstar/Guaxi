@@ -1,144 +1,1122 @@
 <template>
+  <!-- Main container with dark mode support -->
   <div class="knowledge-graph-container" :class="{ 'dark-mode': darkMode }">
-    <!-- 工具栏 -->
+    <!-- Toolbar section with graph controls -->
     <div class="toolbar">
       <n-space>
+        <!-- Reset camera view button -->
         <n-button size="small" @click="resetCamera">
-          <template #icon>
-            <n-icon>
+          <template #icon><n-icon>
               <CompassOutline />
-            </n-icon>
-          </template>
+            </n-icon></template>
           重置视角
         </n-button>
+
+        <!-- Toggle auto-rotation button -->
         <n-button size="small" @click="toggleAutoRotate">
-          <template #icon>
-            <n-icon>
+          <template #icon><n-icon>
               <SyncOutline />
-            </n-icon>
-          </template>
+            </n-icon></template>
           {{ autoRotate ? '停止旋转' : '自动旋转' }}
         </n-button>
+
+        <!-- Toggle dark mode button -->
         <n-button size="small" @click="toggleDarkMode">
-          <template #icon>
-            <n-icon>
+          <template #icon><n-icon>
               <MoonOutline />
-            </n-icon>
-          </template>
+            </n-icon></template>
           {{ darkMode ? '亮色模式' : '暗色模式' }}
         </n-button>
+
+        <!-- Layout selection dropdown -->
+        <n-select v-model:value="currentLayout" :options="layoutOptions" size="small" style="width: 120px" />
+
+        <!-- Performance level slider -->
+        <n-slider v-model:value="performanceLevel" :step="1" :min="0" :max="2" :marks="performanceMarks"
+          style="width: 150px" />
       </n-space>
     </div>
 
-    <!-- Three.js 渲染容器 -->
+    <!-- Three.js rendering container -->
     <div ref="container" class="graph-container"></div>
 
-    <!-- 加载状态 -->
+    <!-- Loading overlay shown during data loading -->
     <div v-if="isLoading" class="loading-overlay">
       <n-spin size="large" />
+      <n-progress type="circle" :percentage="loadingProgress" :indicator-placement="'inside'" :show-indicator="false" />
     </div>
 
-    <!-- 节点信息面板 -->
+    <!-- Node information panel shown when a node is selected -->
     <div v-if="selectedNode" class="node-info-panel">
       <n-card :title="selectedNode.name || '连接线'" size="small">
         <n-space vertical>
-          <n-text v-if="selectedNode.type === 'knowledgeBase'">知识库</n-text>
-          <n-text v-if="selectedNode.type === 'file'">文件</n-text>
-          <n-text v-if="selectedNode.type === 'directory'">目录</n-text>
-          <n-text v-if="selectedNode.type === 'edge'">连接线</n-text>
+          <n-tag :type="getNodeTagType(selectedNode.type)" size="small">
+            {{ getNodeTypeName(selectedNode.type) }}
+          </n-tag>
           <n-text v-if="selectedNode.path">路径: {{ selectedNode.path }}</n-text>
           <n-text v-if="selectedNode.from">从: {{ selectedNode.from.name }}</n-text>
           <n-text v-if="selectedNode.to">到: {{ selectedNode.to.name }}</n-text>
-          <n-button size="small" @click="focusOnNode(selectedNode.type === 'edge' ? selectedNode.from : selectedNode)">
-            聚焦此节点
-          </n-button>
+          <n-button-group size="small">
+            <n-button @click="focusOnNode(selectedNode.type === 'edge' ? selectedNode.from : selectedNode)">
+              聚焦
+            </n-button>
+            <n-button @click="highlightConnectedNodes(selectedNode)">
+              高亮连接
+            </n-button>
+            <n-button v-if="selectedNode.type === 'file'" @click="openFile(selectedNode.path)">
+              打开文件
+            </n-button>
+          </n-button-group>
         </n-space>
       </n-card>
     </div>
 
-    <!-- 错误提示面板 -->
-    <div v-if="showError" class="error-panel">
-      <n-alert type="error" :title="errorMessage" closable @close="showError = false" />
+    <!-- Legend panel explaining node and edge types -->
+    <div class="legend-panel">
+      <n-card title="图例" size="small">
+        <n-space vertical>
+          <div class="legend-item">
+            <div class="legend-color knowledge-base"></div>
+            <n-text>知识库</n-text>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color directory"></div>
+            <n-text>目录</n-text>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color file"></div>
+            <n-text>文件</n-text>
+          </div>
+          <div class="legend-item">
+            <div class="legend-line strong-link"></div>
+            <n-text>强连接</n-text>
+          </div>
+          <div class="legend-item">
+            <div class="legend-line weak-link"></div>
+            <n-text>弱连接</n-text>
+          </div>
+        </n-space>
+      </n-card>
+    </div>
+
+    <!-- Search panel for finding nodes -->
+    <div class="search-panel">
+      <n-card title="搜索节点" size="small">
+        <n-input v-model:value="searchQuery" placeholder="搜索节点..." clearable @update:value="searchNodes">
+          <template #prefix>
+            <n-icon>
+              <SearchOutline />
+            </n-icon>
+          </template>
+        </n-input>
+        <n-list v-if="searchResults.length > 0" class="search-results">
+          <n-list-item v-for="result in searchResults" :key="result.id" @click="focusOnNode(result)">
+            <n-thing :title="result.name" :description="result.path" />
+          </n-list-item>
+        </n-list>
+      </n-card>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch, nextTick, computed } from 'vue'
-import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
-import { ArrowHelper } from 'three'
-import { LineDashedMaterial } from 'three'
-import { invoke } from '@tauri-apps/api/core'
-import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
-import { storeToRefs } from 'pinia'
-import { NButton, NSpace, NIcon, NCard, NText, NAlert, NSpin } from 'naive-ui'
+// Vue composition API imports
+import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue';
+
+// Three.js core and extensions
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
+import { Octree } from 'three/examples/jsm/math/Octree';
+import Stats from 'three/examples/jsm/libs/stats.module';
+import * as d3 from 'd3-force-3d';
+
+// Tauri API for backend communication
+import { invoke } from '@tauri-apps/api/core';
+
+// Pinia store for state management
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
+import { storeToRefs } from 'pinia';
+
+// UI components from Naive UI
 import {
-  CompassOutline,
-  SyncOutline,
-  MoonOutline,
-} from '@vicons/ionicons5'
-import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer'
+  NButton, NSpace, NIcon, NCard, NText, NAlert, NSpin,
+  NSelect, NSlider, NProgress, NTag, NButtonGroup,
+  NInput, NList, NListItem, NThing
+} from 'naive-ui';
 
-// ============== 调试配置 ==============
-const DEBUG = true
-const log = (...args) => DEBUG && console.log('[KnowledgeGraph]', ...args)
-const warn = (...args) => DEBUG && console.warn('[KnowledgeGraph]', ...args)
-const error = (...args) => DEBUG && console.error('[KnowledgeGraph]', ...args)
+// Icons from Ionicons
+import { CompassOutline, SyncOutline, MoonOutline, SearchOutline } from '@vicons/ionicons5';
 
-// ============== 响应式状态 ==============
-const container = ref(null)
-const autoRotate = ref(true)
-const darkMode = ref(false)
-const selectedNode = ref(null)
-const graphData = ref([])
-const isLoading = ref(false)
-const showError = ref(false)
-const errorMessage = ref('')
-const pendingKnowledgeBaseChange = ref(null)
+// Initialize Pinia store
+const store = useKnowledgeBaseStore();
 
-// ============== Three.js 变量 ==============
-let scene = null
-let camera = null
-let renderer = null
-let controls = null
-let raycaster = null
-const mouse = new THREE.Vector2()
-let nodes = []
-let edges = []
+// Destructure store properties with reactivity
+const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store);
 
-// ============== Store 相关 ==============
-const store = useKnowledgeBaseStore()
-log('Store 初始化完成:', store.$state)
-
-const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store)
+// Computed property for currently selected knowledge base
 const selectedKB = computed(() => {
   return selectedKnowledgeBase.value ||
-    (knowledgeBases.value.length > 0 ? knowledgeBases.value[0] : {})
-})
+    (knowledgeBases.value.length > 0 ? knowledgeBases.value[0] : {});
+});
 
+// Debug configuration
+const DEBUG = true;
+const log = (...args) => DEBUG && console.log('[KnowledgeGraph]', ...args);
+const warn = (...args) => DEBUG && console.warn('[KnowledgeGraph]', ...args);
+const error = (...args) => DEBUG && console.error('[KnowledgeGraph]', ...args);
 
-const handleWindowResize = () => {
-  if (!camera || !container.value || !renderer) return;
+// Reactive state variables
+const container = ref(null); // Reference to DOM container
+const autoRotate = ref(true); // Auto-rotation toggle state
+const darkMode = ref(false); // Dark mode toggle state
+const selectedNode = ref(null); // Currently selected node
+const isLoading = ref(false); // Loading state
+const loadingProgress = ref(0); // Loading progress percentage
+const showError = ref(false); // Error display state
+const errorMessage = ref(''); // Error message content
+const currentLayout = ref('force'); // Current graph layout type
+const performanceLevel = ref(1); // Performance quality level
+const searchQuery = ref(''); // Search query text
+const searchResults = ref([]); // Search results array
+const pendingKnowledgeBaseChange = ref(null); // Pending KB change
 
-  camera.aspect = container.value.clientWidth / container.value.clientHeight;
-  camera.updateProjectionMatrix();
+// Computed property to check if current KB is valid
+const hasValidKnowledgeBase = computed(() => {
+  return isValidKnowledgeBase(selectedKB.value);
+});
+
+// Layout options for dropdown
+const layoutOptions = [
+  { label: '力导向布局', value: 'force' },
+  { label: '层次布局', value: 'hierarchical' },
+  { label: '球形布局', value: 'spherical' },
+  { label: '树状布局', value: 'tree' }
+];
+
+// Performance level marks for slider
+const performanceMarks = {
+  0: '性能优先',
+  1: '平衡',
+  2: '质量优先'
+};
+
+// Three.js variables (non-reactive)
+let scene, camera, renderer, controls, raycaster, composer, labelRenderer;
+let nodes = [], edges = [], octree;
+const mouse = new THREE.Vector2(); // Mouse position tracker
+
+/**
+ * Initialize Three.js scene, renderer, camera and controls
+ */
+const initThreeJS = () => {
+  // 1. Create scene with background and fog
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xf0f0f0);
+  scene.fog = new THREE.FogExp2(scene.background, 0.002);
+
+  // 2. Create perspective camera
+  camera = new THREE.PerspectiveCamera(
+    60, // Field of view
+    container.value.clientWidth / container.value.clientHeight, // Aspect ratio
+    0.1, // Near clip
+    10000 // Far clip
+  );
+  camera.position.set(0, 0, 100); // Initial camera position
+
+  // 3. Create WebGL renderer with performance settings
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+    logarithmicDepthBuffer: true
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(container.value.clientWidth, container.value.clientHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  container.value.appendChild(renderer.domElement);
 
-  if (DEBUG) console.log('窗口大小调整:', {
-    width: container.value.clientWidth,
-    height: container.value.clientHeight
+  // 4. Create CSS2D renderer for labels
+  labelRenderer = new CSS2DRenderer();
+  labelRenderer.setSize(container.value.clientWidth, container.value.clientHeight);
+  labelRenderer.domElement.style.position = 'absolute';
+  labelRenderer.domElement.style.top = '0';
+  labelRenderer.domElement.style.pointerEvents = 'none';
+  container.value.appendChild(labelRenderer.domElement);
+
+  // 5. Set up post-processing effects
+  composer = new EffectComposer(renderer);
+  const renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+
+  if (camera && renderer?.domElement) {
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.autoRotate = autoRotate.value;
+    controls.autoRotateSpeed = 0.5;
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.minDistance = 20;
+    controls.maxDistance = 500;
+
+    // 确保 controls 已创建再设置 target
+    controls.target.set(0, 0, 0);
+    controls.update();
+  } else {
+    console.error('初始化控制器失败: camera或renderer.domElement未定义');
+  }
+
+  // Add bloom effect for glowing highlights
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    1.5, // Strength
+    0.4, // Radius
+    0.85 // Threshold
+  );
+  composer.addPass(bloomPass);
+
+  // 6. Add orbit controls for camera interaction
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.autoRotate = autoRotate.value;
+  controls.autoRotateSpeed = 0.5;
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.05;
+  controls.minDistance = 20;
+  controls.maxDistance = 500;
+
+  // 7. Set up scene lighting
+  setupLighting();
+
+  // 8. Initialize raycasting for mouse interaction
+  raycaster = new THREE.Raycaster();
+
+  // 9. Set up event listeners
+  setupEventListeners();
+};
+
+/**
+ * Reset camera to default position and orientation
+ */
+const resetCamera = () => {
+  if (!camera || !controls) return;
+
+  camera.position.set(0, 0, 100);
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  log('相机已重置');
+};
+
+/**
+ * Toggle auto-rotation of the graph
+ */
+const toggleAutoRotate = () => {
+  if (!controls) return;
+
+  autoRotate.value = !autoRotate.value;
+  controls.autoRotate = autoRotate.value;
+
+  log(`自动旋转已${autoRotate.value ? '开启' : '关闭'}`);
+};
+
+/**
+ * Toggle between dark and light mode
+ */
+const toggleDarkMode = () => {
+  darkMode.value = !darkMode.value;
+
+  // Update scene background
+  if (scene) {
+    scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xf0f0f0);
+    scene.fog.color.copy(scene.background);
+  }
+
+  // Update lighting for new mode
+  setupLighting();
+
+  log(`已切换至${darkMode.value ? '暗黑' : '亮色'}模式`);
+};
+
+/**
+ * Search nodes by name or path
+ * @param {string} query - Search term
+ */
+const searchNodes = (query) => {
+  if (!query || !nodes.length) {
+    searchResults.value = [];
+    return;
+  }
+
+  const lowerQuery = query.toLowerCase();
+  searchResults.value = nodes.filter(node =>
+    node.userData?.name?.toLowerCase().includes(lowerQuery) ||
+    node.userData?.path?.toLowerCase().includes(lowerQuery)
+  );
+
+  log(`搜索"${query}"找到${searchResults.value.length}个结果`);
+};
+
+/**
+ * Find node by its position in 3D space
+ * @param {Array} positionArray - [x, y, z] coordinates
+ * @returns {Object|null} Found node or null
+ */
+const findNodeByPosition = (positionArray) => {
+  if (!positionArray || positionArray.length < 3) return null;
+
+  const position = new THREE.Vector3(
+    positionArray[0],
+    positionArray[1],
+    positionArray[2]
+  );
+
+  return nodes.find(node =>
+    node.mesh &&
+    node.mesh.position.distanceTo(position) < 0.1
+  )?.userData || null;
+};
+
+/**
+ * Get tag type for node based on its type
+ * @param {string} type - Node type
+ * @returns {string} Tag type
+ */
+const getNodeTagType = (type) => {
+  switch (type) {
+    case 'knowledge-base': return 'warning';
+    case 'directory': return 'info';
+    case 'file': return 'success';
+    case 'edge': return 'error';
+    default: return 'default';
+  }
+};
+
+/**
+ * Get display name for node type
+ * @param {string} type - Node type
+ * @returns {string} Display name
+ */
+const getNodeTypeName = (type) => {
+  switch (type) {
+    case 'knowledge-base': return '知识库';
+    case 'directory': return '目录';
+    case 'file': return '文件';
+    case 'edge': return '连接';
+    default: return '未知';
+  }
+};
+
+/**
+ * Focus camera on specific node
+ * @param {Object} node - Node to focus on
+ */
+const focusOnNode = (node) => {
+  if (!node || !camera || !controls) return;
+
+  const targetPosition = node.mesh
+    ? node.mesh.position.clone()
+    : new THREE.Vector3(0, 0, 0);
+
+  // Calculate camera position
+  const direction = new THREE.Vector3(0, 0, 1);
+  const distance = 30;
+  const cameraPosition = targetPosition.clone()
+    .add(direction.multiplyScalar(distance));
+
+  // Animate camera movement
+  gsap.to(camera.position, {
+    x: cameraPosition.x,
+    y: cameraPosition.y,
+    z: cameraPosition.z,
+    duration: 1,
+    ease: "power2.inOut"
+  });
+
+  // Animate controls target
+  gsap.to(controls.target, {
+    x: targetPosition.x,
+    y: targetPosition.y,
+    z: targetPosition.z,
+    duration: 1,
+    ease: "power2.inOut"
+  });
+
+  log(`已聚焦到节点: ${node.name}`);
+};
+
+/**
+ * Highlight connected nodes and edges
+ * @param {Object} node - Node to highlight connections for
+ */
+const highlightConnectedNodes = (node) => {
+  if (!node) return;
+
+  resetNodeHighlights();
+
+  // Highlight current node
+  if (node.mesh) {
+    node.mesh.material.color.setHex(0xff0000);
+    node.mesh.material.emissive.setHex(0x333333);
+  }
+
+  // Highlight connected edges and nodes
+  edges.forEach(edge => {
+    if (edge.userData.from === node || edge.userData.to === node) {
+      edge.material.color.setHex(0xff0000);
+      edge.material.opacity = 1;
+
+      const otherNode = edge.userData.from === node
+        ? edge.userData.to
+        : edge.userData.from;
+
+      if (otherNode.mesh) {
+        otherNode.mesh.material.color.setHex(0xff9900);
+        otherNode.mesh.material.emissive.setHex(0x222222);
+      }
+    }
+  });
+
+  log(`已高亮${node.name}的连接节点`);
+};
+
+/**
+ * Open file associated with node
+ * @param {string} path - File path to open
+ */
+const openFile = (path) => {
+  if (!path) return;
+
+  log(`尝试打开文件: ${path}`);
+  // Implementation would use Tauri or Electron APIs here
+};
+
+/**
+ * Clear the Three.js scene and reset node/edge arrays
+ */
+const clearScene = () => {
+  if (!scene) return;
+
+  // Remove all objects and dispose resources
+  while (scene.children.length > 0) {
+    const obj = scene.children[0];
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      if (Array.isArray(obj.material)) {
+        obj.material.forEach(m => m.dispose());
+      } else {
+        obj.material.dispose();
+      }
+    }
+    scene.remove(obj);
+  }
+
+  // Reset node and edge collections
+  nodes = [];
+  edges = [];
+
+  log('场景已清理');
+};
+
+/**
+ * Fetch graph data from backend
+ * @returns {Promise<Object|null>} Graph data or null on error
+ */
+const fetchGraphData = async () => {
+  isLoading.value = true;
+
+  try {
+    // Validate selected knowledge base
+    if (!selectedKB.value?.id) {
+      throw new Error("未选择有效的知识库");
+    }
+
+    // Call store method to get data
+    const data = await store.fetchGraphData(selectedKB.value.id);
+    log('获取图形数据成功', data);
+    return data;
+  } catch (err) {
+    error('获取图形数据失败:', err);
+    showError.value = true;
+    errorMessage.value = '获取图形数据失败';
+    return null;
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+/**
+ * Create Three.js objects from graph data
+ * @param {Object} data - Graph data with nodes and edges
+ */
+const createNodesAndEdges = async (data) => {
+  console.log('创建节点和边, data:', data);
+  if (!data) return;
+
+  console.log('开始创建节点和边...');
+
+  // 创建节点
+  data.nodes.forEach(nodeData => {
+    console.log(`处理节点: ${nodeData.name} (${nodeData.type})`);
+
+    const geometry = new THREE.SphereGeometry(5, 32, 32);
+    const material = new THREE.MeshPhongMaterial({
+      color: getNodeColor(nodeData.type),
+      emissive: 0x000000,
+      shininess: 30
+    });
+
+    console.log(`创建节点: ${nodeData.name} (${nodeData.type})`);
+
+    // Create mesh with random initial position
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(
+      Math.random() * 100 - 50,
+      Math.random() * 100 - 50,
+      Math.random() * 100 - 50
+    );
+
+    // Store node data and add to scene
+    mesh.userData = nodeData;
+    scene.add(mesh);
+
+    // Track node in our collection
+    nodes.push({
+      mesh,
+      userData: nodeData,
+      targetPosition: mesh.position.clone()
+    });
+
+    // Add label if CSS2D is available
+    if (typeof CSS2DObject !== 'undefined') {
+      const label = document.createElement('div');
+      label.className = 'node-label';
+      label.textContent = nodeData.name;
+      const labelObj = new CSS2DObject(label);
+      labelObj.position.set(0, 10, 0);
+      mesh.add(labelObj);
+    }
+  });
+  console.log(`创建了${nodes.length}个节点`);
+
+  // Create edges between nodes
+  data.edges.forEach(edgeData => {
+    const fromNode = nodes.find(n => n.userData.id === edgeData.from);
+    const toNode = nodes.find(n => n.userData.id === edgeData.to);
+
+    if (fromNode && toNode) {
+      // Create curved path between nodes
+      const points = [
+        fromNode.mesh.position,
+        getControlPoint(fromNode.mesh.position, toNode.mesh.position),
+        toNode.mesh.position
+      ];
+
+      const curve = new THREE.CatmullRomCurve3(points);
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints(
+        curve.getPoints(10)
+      );
+
+      // Style edge based on connection strength
+      const lineMaterial = new THREE.LineBasicMaterial({
+        color: edgeData.strength > 0.5 ? 0xff5555 : 0x888888,
+        opacity: 0.6,
+        transparent: true
+      });
+
+      // Create line and add to scene
+      const line = new THREE.Line(lineGeometry, lineMaterial);
+      line.userData = {
+        ...edgeData,
+        from: fromNode,
+        to: toNode
+      };
+
+      scene.add(line);
+      edges.push(line);
+    }
+  });
+
+  log(`创建了${nodes.length}个节点和${edges.length}条边`);
+};
+
+/**
+ * Calculate control point for curved edges
+ * @param {THREE.Vector3} start - Start position
+ * @param {THREE.Vector3} end - End position
+ * @returns {THREE.Vector3} Control point
+ */
+const getControlPoint = (start, end) => {
+  const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+  const distance = start.distanceTo(end);
+  const height = Math.min(distance * 0.3, 30);
+
+  mid.z += height;
+  return mid;
+};
+
+/**
+ * Apply force-directed layout to nodes
+ */
+const forceDirectedLayout = () => {
+  log('应用力导向布局');
+
+  // Create d3 force simulation
+  const simulation = d3.forceSimulation(nodes.map(n => n.userData))
+    .force('charge', d3.forceManyBody().strength(-100))
+    .force('link', d3.forceLink(data.edges).distance(50))
+    .force('center', d3.forceCenter(0, 0, 0))
+    .force('collision', d3.forceCollide().radius(10));
+
+  // Update node positions on each tick
+  simulation.on('tick', () => {
+    nodes.forEach((node, i) => {
+      node.targetPosition.set(
+        simulation.nodes()[i].x || 0,
+        simulation.nodes()[i].y || 0,
+        simulation.nodes()[i].z || 0
+      );
+    });
+  });
+
+  // Stop after 1 second
+  setTimeout(() => simulation.stop(), 1000);
+};
+
+/**
+ * Apply hierarchical layout to nodes
+ */
+const hierarchicalLayout = () => {
+  log('应用层次布局');
+
+  // Simple hierarchical layout based on depth
+  nodes.forEach((node, i) => {
+    const depth = node.userData.depth || 1;
+    node.targetPosition.set(
+      (i % 10) * 20 - 100,
+      depth * 30 - 50,
+      0
+    );
   });
 };
 
-const handleCanvasClick = (event) => {
-  if (!raycaster || !camera || !scene) return;
+/**
+ * Apply spherical layout to nodes
+ */
+const sphericalLayout = () => {
+  log('应用球形布局');
 
-  // 计算鼠标位置归一化坐标
+  const radius = 50;
+  // Position nodes on a sphere using Fibonacci spiral
+  nodes.forEach((node, i) => {
+    const phi = Math.acos(-1 + (2 * i) / nodes.length);
+    const theta = Math.sqrt(nodes.length * Math.PI) * phi;
+
+    node.targetPosition.set(
+      radius * Math.cos(theta) * Math.sin(phi),
+      radius * Math.sin(theta) * Math.sin(phi),
+      radius * Math.cos(phi)
+    );
+  });
+};
+
+/**
+ * Apply tree layout to nodes
+ */
+const treeLayout = () => {
+  log('应用树状布局');
+
+  // Simple tree layout with parent-child relationships
+  const rootNodes = nodes.filter(n => !n.userData.parentId);
+  const childNodes = nodes.filter(n => n.userData.parentId);
+
+  // Position root nodes in a row
+  rootNodes.forEach((node, i) => {
+    node.targetPosition.set(i * 30 - 50, 0, 0);
+  });
+
+  // Position child nodes below their parents
+  childNodes.forEach((node, i) => {
+    const parent = nodes.find(n => n.userData.id === node.userData.parentId);
+    if (parent) {
+      node.targetPosition.set(
+        parent.targetPosition.x + (i % 3) * 10 - 10,
+        parent.targetPosition.y - 20,
+        parent.targetPosition.z + Math.floor(i / 3) * 10 - 10
+      );
+    }
+  });
+};
+
+/**
+ * Set up lighting for the scene
+ */
+const setupLighting = () => {
+  // Ambient light for overall illumination
+  const ambientLight = new THREE.AmbientLight(0x404040, darkMode.value ? 0.5 : 1.0);
+  scene.add(ambientLight);
+
+  // Directional light for shadows and highlights
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+  directionalLight.position.set(1, 1, 1);
+  directionalLight.castShadow = true;
+  directionalLight.shadow.mapSize.width = 2048;
+  directionalLight.shadow.mapSize.height = 2048;
+  scene.add(directionalLight);
+
+  // Hemisphere light for natural outdoor lighting effect
+  const hemisphereLight = new THREE.HemisphereLight(
+    0xffffbb, // Sky color
+    0x080820, // Ground color
+    0.5 // Intensity
+  );
+  scene.add(hemisphereLight);
+
+  // Point light for additional highlights
+  const pointLight = new THREE.PointLight(0xffffff, 1, 50);
+  pointLight.position.set(0, 0, 20);
+  scene.add(pointLight);
+};
+
+/**
+ * Handle window resize events
+ */
+const handleWindowResize = () => {
+  if (!camera || !container.value || !renderer) return;
+
+  // Update camera and renderer dimensions
+  camera.aspect = container.value.clientWidth / container.value.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.value.clientWidth, container.value.clientHeight);
+  labelRenderer?.setSize(container.value.clientWidth, container.value.clientHeight);
+
+  // Update post-processing effects
+  if (composer) {
+    composer.setSize(container.value.clientWidth, container.value.clientHeight);
+  }
+
+  if (DEBUG) {
+    log('窗口大小调整:', {
+      width: container.value.clientWidth,
+      height: container.value.clientHeight
+    });
+  }
+};
+
+/**
+ * Set up event listeners for interaction
+ */
+const setupEventListeners = () => {
+  window.addEventListener('resize', handleWindowResize);
+
+  // Mouse move for hover effects
+  renderer.domElement.addEventListener('mousemove', (event) => {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    // Highlight hovered node
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(scene.children, true);
+
+    if (intersects.length > 0) {
+      const object = intersects[0].object;
+      highlightNode(object);
+    } else {
+      resetNodeHighlights();
+    }
+  });
+
+  // Click for node selection
+  renderer.domElement.addEventListener('click', (event) => {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(scene.children, true);
+
+    if (intersects.length > 0) {
+      const clickedObject = intersects[0].object;
+      selectNode(clickedObject);
+    } else {
+      selectedNode.value = null;
+    }
+  });
+
+  // Double click to focus on node
+  renderer.domElement.addEventListener('dblclick', (event) => {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(scene.children, true);
+
+    if (intersects.length > 0) {
+      const object = intersects[0].object;
+      focusOnNode(object.userData);
+    }
+  });
+};
+
+/**
+ * Highlight a specific node
+ * @param {THREE.Object3D} object - Node to highlight
+ */
+const highlightNode = (object) => {
+  resetNodeHighlights();
+
+  if (object.userData?.type) {
+    // Highlight current node
+    if (object.material) {
+      object.userData.originalColor = object.material.color.getHex();
+      object.material.color.setHex(0xff0000);
+      object.material.emissive.setHex(0x333333);
+    }
+
+    // Highlight connected edges
+    edges.forEach(edge => {
+      if (edge.userData.from === object || edge.userData.to === object) {
+        edge.material.color.setHex(0xff0000);
+        edge.material.opacity = 1;
+      }
+    });
+  }
+};
+
+/**
+ * Reset all node highlights to default
+ */
+const resetNodeHighlights = () => {
+  nodes.forEach(node => {
+    if (node.mesh && node.mesh.material && node.userData.originalColor !== undefined) {
+      node.mesh.material.color.setHex(node.userData.originalColor);
+      node.mesh.material.emissive.setHex(0x000000);
+    }
+  });
+
+  edges.forEach(edge => {
+    if (edge.material) {
+      edge.material.color.setHex(0x888888);
+      edge.material.opacity = 0.6;
+    }
+  });
+};
+
+/**
+ * Select a node and update UI
+ * @param {THREE.Object3D} object - Node to select
+ */
+const selectNode = (object) => {
+  if (object.userData?.type === 'edge') {
+    selectedNode.value = {
+      type: 'edge',
+      name: '连接线',
+      from: findNodeByPosition(object.geometry.attributes.position.array.slice(0, 3)),
+      to: findNodeByPosition(object.geometry.attributes.position.array.slice(3, 6)),
+      object: object
+    };
+  } else {
+    selectedNode.value = {
+      ...object.userData,
+      object: object
+    };
+  }
+};
+
+/**
+ * Build the complete knowledge graph
+ */
+const buildGraph = async () => {
+  console.log('开始构建知识图谱...');
+  isLoading.value = true;
+  loadingProgress.value = 0;
+
+  try {
+    // 1. Clear existing scene
+    clearScene();
+
+    // 2. Fetch graph data
+    const treeData = await fetchGraphData();
+    loadingProgress.value = 30;
+
+    // 3. Create nodes and edges
+    await createNodesAndEdges(treeData);
+    loadingProgress.value = 70;
+
+    // 4. Apply selected layout
+    applyLayout(currentLayout.value);
+    loadingProgress.value = 90;
+
+    // 5. Initialize octree for spatial queries
+    octree = new Octree();
+    octree.fromGraphNode(nodes);
+
+    // 6. Start animation loop
+    animate();
+    loadingProgress.value = 100;
+  } catch (err) {
+    showError.value = true;
+    errorMessage.value = `构建失败: ${err.message}`;
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+/**
+ * Apply selected layout algorithm
+ * @param {string} layoutType - Layout type to apply
+ */
+const applyLayout = (layoutType) => {
+  console.log(`应用布局: ${layoutType}`);
+  switch (layoutType) {
+    case 'force':
+      forceDirectedLayout();
+      break;
+    case 'hierarchical':
+      hierarchicalLayout();
+      break;
+    case 'spherical':
+      sphericalLayout();
+      break;
+    case 'tree':
+      treeLayout();
+      break;
+    default:
+      forceDirectedLayout();
+  }
+};
+
+/**
+ * Animation loop for continuous rendering
+ */
+const animate = () => {
+  console.log('动画循环 - 场景状态:', {
+    children: scene.children.length,
+    nodes: nodes.length,
+    edges: edges.length,
+    cameraPosition: camera.position
+  });
+  requestAnimationFrame(animate);
+
+  // Update controls
+  if (controls) controls.update();
+
+  // Smoothly move nodes to target positions
+  nodes.forEach(node => {
+    if (node.targetPosition) {
+      node.mesh.position.lerp(node.targetPosition, 0.1);
+    }
+  });
+
+  // Update edge curves based on current node positions
+  edges.forEach(edge => {
+    if (edge.userData.from && edge.userData.to) {
+      const points = [
+        edge.userData.from.position,
+        getControlPoint(edge.userData.from.position, edge.userData.to.position),
+        edge.userData.to.position
+      ];
+      const curve = new THREE.CatmullRomCurve3(points);
+      const newPoints = curve.getPoints(10);
+      edge.geometry.dispose();
+      edge.geometry = new THREE.BufferGeometry().setFromPoints(newPoints);
+    }
+  });
+
+  // Render scene with post-processing
+  composer.render();
+  labelRenderer.render(scene, camera);
+};
+
+
+const testRender = () => {
+  if (renderer && scene && camera) {
+    // 添加测试立方体
+    const geometry = new THREE.BoxGeometry(10, 10, 10);
+    const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const cube = new THREE.Mesh(geometry, material);
+    scene.add(cube);
+
+    // 手动渲染
+    renderer.render(scene, camera);
+    console.log('测试立方体已渲染，应该看到红色立方体');
+  }
+};
+
+/**
+ * Show empty state with message
+ * @param {string} reason - Reason for empty state
+ */
+const showEmptyState = (reason = '') => {
+  clearScene();
+
+  // Create torus geometry as placeholder
+  const group = new THREE.Group();
+  const geometry = new THREE.TorusGeometry(3, 0.5, 16, 32);
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x3498db,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.6
+  });
+  const torus = new THREE.Mesh(geometry, material);
+  torus.rotation.x = Math.PI / 2;
+  group.add(torus);
+
+  // Add label if available
+  if (typeof CSS2DObject !== 'undefined') {
+    const label = document.createElement('div');
+    label.className = 'empty-state-label';
+    label.textContent = reason || '请选择知识库';
+    const labelObj = new CSS2DObject(label);
+    labelObj.position.set(0, -5, 0);
+    group.add(labelObj);
+  }
+
+  scene.add(group);
+
+  // Simple rotation animation
+  const animateGroup = () => {
+    group.rotation.y += 0.01;
+    requestAnimationFrame(animateGroup);
+  };
+  animateGroup();
+};
+
+// Watch for changes in selected knowledge base
+watch(
+  () => store.selectedKnowledgeBase,
+  (newVal) => {
+    if (!scene) {
+      console.warn('场景未初始化，将延迟处理知识库变化');
+      pendingKnowledgeBaseChange.value = newVal;
+      return;
+    }
+
+    if (isValidKnowledgeBase(newVal)) {
+      log('检测到有效知识库:', newVal.knowledge_base_name);
+      nextTick(() => buildGraph());
+    } else if (knowledgeBases.value.length > 0) {
+      store.setSelectedKnowledgeBase(knowledgeBases.value[0]);
+    } else {
+      showEmptyState('没有可用的知识库');
+    }
+  },
+  { immediate: true, deep: true }
+);
+
+/**
+ * Handle canvas click events
+ * @param {MouseEvent} event - Click event
+ */
+const handleCanvasClick = (event) => {
+  if (!raycaster || !camera) return;
+
+  // Calculate normalized mouse coordinates
   mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-  // 设置射线
+  // Find intersected objects
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects(scene.children, true);
 
@@ -158,18 +1136,47 @@ const handleCanvasClick = (event) => {
         object: clickedObject
       };
     }
-
-    if (DEBUG) console.log('点击对象:', selectedNode.value);
   } else {
     selectedNode.value = null;
   }
 };
 
-// ============== 知识库验证 ==============
+// Component lifecycle hooks
+onMounted(async () => {
+  log('组件挂载开始');
+
+  // 1. 先初始化Three.js场景
+  await nextTick();
+  initThreeJS();
+
+  // 2. 确保容器尺寸正确
+  handleWindowResize();
+
+  // 3. 然后加载数据
+  if (knowledgeBases.value.length === 0) {
+    try {
+      await store.fetchKnowledgeBases();
+    } catch (err) {
+      error('加载知识库列表失败:', err);
+      showError.value = true;
+      errorMessage.value = '加载知识库列表失败';
+    }
+  }
+
+  // 4. 最后构建图谱
+  if (hasValidKnowledgeBase.value) {
+    await buildGraph();
+  } else {
+    showEmptyState('没有可用的知识库');
+  }
+
+  testRender();
+});
+
 /**
- * 验证知识库是否有效
- * @param {Object} kb - 知识库对象
- * @returns {boolean} 是否有效
+ * Validate knowledge base object
+ * @param {Object} kb - Knowledge base to validate
+ * @returns {boolean} True if valid
  */
 const isValidKnowledgeBase = (kb) => {
   if (!kb || typeof kb !== 'object') {
@@ -177,14 +1184,14 @@ const isValidKnowledgeBase = (kb) => {
     return false;
   }
 
-  // 检查必要字段
+  // Check required fields
   const requiredFields = ['id', 'knowledge_base_name', 'location'];
   if (requiredFields.some(field => !(field in kb))) {
     warn('知识库缺少必要字段');
     return false;
   }
 
-  // 检查路径格式
+  // Validate path format
   if (typeof kb.location !== 'string') {
     warn('location必须为字符串');
     return false;
@@ -193,6 +1200,7 @@ const isValidKnowledgeBase = (kb) => {
   const normalizedPath = kb.location.replace(/\\/g, '/');
   const isWindows = navigator.platform.toLowerCase().includes('win');
 
+  // Platform-specific path validation
   if (isWindows) {
     if (!normalizedPath.match(/^[a-zA-Z]:\//)) {
       warn('Windows路径格式无效');
@@ -208,781 +1216,21 @@ const isValidKnowledgeBase = (kb) => {
   return true;
 };
 
-// 计算属性：当前知识库是否有效
-const hasValidKnowledgeBase = computed(() => {
-  return isValidKnowledgeBase(selectedKB.value);
-});
-
-// ============== 核心函数 ==============
-const initThreeJS = () => {
-  log('开始初始化 Three.js 场景');
-
-  if (!container.value) {
-    error('容器元素未找到');
-    showError.value = true;
-    errorMessage.value = '渲染容器未找到';
-    return;
-  }
-
-  try {
-    // 1. 创建场景
-    scene = new THREE.Scene();
-    scene.background = darkMode.value ? new THREE.Color(0x121212) : new THREE.Color(0xf0f0f0);
-    scene.fog = new THREE.FogExp2(darkMode.value ? 0x050505 : 0xf0f0f0, 0.002);
-
-    // 2. 创建相机
-    camera = new THREE.PerspectiveCamera(
-      60, // 更宽的视野
-      container.value.clientWidth / container.value.clientHeight,
-      0.1,
-      10000
-    );
-    camera.position.set(0, 0, 100);
-
-    // 3. 创建渲染器
-    renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true
-    });
-    renderer.setSize(container.value.clientWidth, container.value.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    container.value.appendChild(renderer.domElement);
-
-    // 4. 添加控制器
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.autoRotate = autoRotate.value;
-    controls.autoRotateSpeed = 0.5; // 更慢的旋转速度
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.minDistance = 20;
-    controls.maxDistance = 500;
-
-    // 5. 添加光照
-    const ambientLight = new THREE.AmbientLight(0x404040, darkMode.value ? 0.5 : 1.0);
-    scene.add(ambientLight);
-
-    // 主光源
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(1, 1, 1);
-    directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 2048;
-    directionalLight.shadow.mapSize.height = 2048;
-    scene.add(directionalLight);
-
-    // 辅助光源
-    const hemisphereLight = new THREE.HemisphereLight(
-      0xffffbb, 0x080820, 0.5
-    );
-    scene.add(hemisphereLight);
-
-    // 6. 初始化射线检测
-    raycaster = new THREE.Raycaster();
-
-    // 7. 设置事件监听
-    window.addEventListener('resize', () => {
-      camera.aspect = container.value.clientWidth / container.value.clientHeight
-      camera.updateProjectionMatrix()
-      renderer.setSize(container.value.clientWidth, container.value.clientHeight)
-    })
-
-    renderer.domElement.addEventListener('click', (event) => {
-      mouse.x = (event.clientX / window.innerWidth) * 2 - 1
-      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1
-      raycaster.setFromCamera(mouse, camera)
-      const intersects = raycaster.intersectObjects(scene.children, true)
-
-      if (intersects.length > 0) {
-        const clickedObject = intersects[0].object
-        if (clickedObject.userData?.type === 'edge') {
-          selectedNode.value = {
-            type: 'edge',
-            name: '连接线',
-            from: findNodeByPosition(clickedObject.geometry.attributes.position.array.slice(0, 3)),
-            to: findNodeByPosition(clickedObject.geometry.attributes.position.array.slice(3, 6))
-          }
-        } else {
-          selectedNode.value = clickedObject.userData
-        }
-      }
-    })
-
-    log('Three.js 初始化完成')
-
-    // 处理延迟的知识库变化
-    if (pendingKnowledgeBaseChange.value) {
-      log('处理延迟的知识库变化:', pendingKnowledgeBaseChange.value)
-      const kb = pendingKnowledgeBaseChange.value
-      pendingKnowledgeBaseChange.value = null
-      nextTick(() => {
-        if (isValidKnowledgeBase(kb)) {
-          buildGraph()
-        }
-      })
-    }
-  } catch (err) {
-    error('Three.js 初始化失败:', err)
-    showError.value = true
-    errorMessage.value = `Three.js 初始化失败: ${err.message}`
-  }
-}
-
-const resetCamera = () => {
-  if (camera && controls) {
-    camera.position.set(0, 0, 50)
-    controls.reset()
-    log('相机视角已重置')
-  }
-}
-
-const toggleAutoRotate = () => {
-  autoRotate.value = !autoRotate.value
-  if (controls) {
-    controls.autoRotate = autoRotate.value
-    log(`自动旋转已${autoRotate.value ? '开启' : '关闭'}`)
-  }
-}
-
-const toggleDarkMode = () => {
-  darkMode.value = !darkMode.value
-  if (scene) {
-    scene.background = darkMode.value
-      ? new THREE.Color(0x121212)
-      : new THREE.Color(0xf0f0f0)
-  }
-  log(`已切换至${darkMode.value ? '暗色' : '亮色'}模式`)
-}
-
-/**
- * 清理场景资源
- */
-const clearScene = () => {
-  log(`清理场景，当前节点数: ${nodes.length}, 边数: ${edges.length}`)
-
-  // 移除所有节点
-  nodes.forEach(node => {
-    if (node.mesh && scene) {
-      scene.remove(node.mesh)
-      if (node.mesh.geometry) node.mesh.geometry.dispose()
-      if (node.mesh.material) node.mesh.material.dispose()
-    }
-  })
-
-  // 移除所有边和箭头
-  edges.forEach(edge => {
-    if (edge && scene) {
-      scene.remove(edge)
-      if (edge.userData?.arrow) {
-        scene.remove(edge.userData.arrow)
-      }
-      if (edge.geometry) edge.geometry.dispose()
-      if (edge.material) edge.material.dispose()
-    }
-  })
-
-  // 重置数组
-  nodes = []
-  edges = []
-}
-
-/**
- * 递归处理树形数据
- * @param {Object} treeData - 原始树形数据
- * 1. 创建根节点
- * 2. 递归创建子节点和连接边
- * 3. 确保所有节点和边正确添加到场景
- */
-const processTree = (node, parentMesh = null, depth = 0) => {
-  log(`处理节点[深度${depth}]: ${node.name} (${node.is_dir ? '目录' : '文件'})`);
-
-  // 创建节点对象（传递depth参数）
-  const newNode = {
-    id: node.path || `node_${depth}_${Date.now()}`,
-    name: node.name,
-    type: node.is_dir ? 'directory' : 'file',
-    path: node.path,
-    depth: depth,
-    mesh: createNodeMesh(
-      node.name,
-      node.is_dir ? 0x3498db : 0x2ecc71, // 目录蓝色，文件绿色
-      Math.max(1.5, 5 - depth * 0.8), // 基础大小调整
-      depth // 传递深度信息
-    )
-  };
-
-  // 添加到节点列表和场景
-  nodes.push(newNode);
-  scene.add(newNode.mesh);
-  log(`节点创建完成: ${newNode.name} (ID: ${newNode.id})`);
-
-  // 如果不是根节点，创建连接线
-  if (parentMesh) {
-    log(`创建连接线: ${parentMesh.userData.name} -> ${newNode.name}`);
-    const edge = createEdge(parentMesh, newNode.mesh);
-    edges.push(edge);
-    scene.add(edge);
-  }
-
-  // 递归处理子节点
-  if (node.children && node.is_dir) {
-    log(`发现${node.children.length}个子节点，开始递归处理...`);
-    node.children.forEach((child, index) => {
-      log(`处理子节点[${index + 1}/${node.children.length}]: ${child.name}`);
-      processTree(child, newNode.mesh, depth + 1);
-    });
-  }
-
-  return newNode;
-};
-
-/**
- * 构建知识图谱主函数
- * 1. 验证知识库有效性
- * 2. 清理现有场景
- * 3. 获取知识库树形数据
- * 4. 处理并可视化树形结构
- * 5. 布局节点和边
- * 6. 启动动画循环
- */
-const buildGraph = async () => {
-  // ============== 初始化阶段 ==============
-  if (isLoading.value) {
-    log('正在加载中，跳过重复请求');
-    return;
-  }
-
-  log('开始构建知识图谱');
-  isLoading.value = true;
-  showError.value = false;
-  const startTime = Date.now();
-
-  try {
-    // ============== 1. 验证知识库有效性 ==============
-    log('验证知识库有效性...');
-    if (!isValidKnowledgeBase(selectedKB.value)) {
-      throw new Error('当前知识库无效，缺少必要字段或路径格式错误');
-    }
-    log('知识库验证通过:', {
-      id: selectedKB.value.id,
-      name: selectedKB.value.knowledge_base_name,
-      location: selectedKB.value.location
-    });
-
-    // ============== 2. 清理现有场景 ==============
-    log('清理现有场景...');
-    clearScene();
-    log('场景清理完成');
-
-    // ============== 3. 获取知识库树形数据 ==============
-    log('请求知识库树数据...');
-    const normalizedPath = selectedKB.value.location.replace(/\\/g, '/');
-    const treeData = await invoke("get_knowledge_base_tree", {
-      rootPath: normalizedPath
-    }).catch(err => {
-      throw new Error(`获取树数据失败: ${err.message}`);
-    });
-
-    if (!treeData || !treeData.name) {
-      throw new Error('获取到的树数据格式无效');
-    }
-    log('获取树数据成功:', {
-      name: treeData.name,
-      childrenCount: treeData.children?.length || 0,
-      isDirectory: treeData.is_dir
-    });
-
-    // ============== 4. 处理树形数据 ==============
-    log('开始处理树形数据...');
-    /**
-     * 递归处理树形数据
-     * @param {Object} node - 当前节点数据
-     * @param {THREE.Mesh|null} parentMesh - 父节点网格对象
-     * @param {number} depth - 当前递归深度
-     * @returns {Object} 处理后的节点对象
-     */
-    const processTree = (node, parentMesh = null, depth = 0) => {
-      log(`处理节点[深度${depth}]: ${node.name} (${node.is_dir ? '目录' : '文件'})`);
-
-      // 创建节点对象
-      const newNode = {
-        id: node.path || `node_${depth}_${Date.now()}`, // 确保唯一ID
-        name: node.name,
-        type: node.is_dir ? 'directory' : 'file',
-        path: node.path,
-        depth: depth,
-        mesh: createNodeMesh(
-          node.name,
-          node.is_dir ? 0x3498db : 0x2ecc71, // 目录蓝色，文件绿色
-          Math.max(1, 3 - depth * 0.5) // 随深度减小尺寸，最小为1
-        )
-      };
-
-      // 添加到节点列表和场景
-      nodes.push(newNode);
-      scene.add(newNode.mesh);
-      log(`节点创建完成: ${newNode.name} (ID: ${newNode.id})`);
-
-      // 如果不是根节点，创建连接线
-      if (parentMesh) {
-        log(`创建连接线: ${parentMesh.userData.name} -> ${newNode.name}`);
-        const edge = createEdge(parentMesh, newNode.mesh);
-        edges.push(edge);
-        scene.add(edge);
-      }
-
-      // 递归处理子节点
-      if (node.children && node.is_dir) {
-        log(`发现${node.children.length}个子节点，开始递归处理...`);
-        node.children.forEach((child, index) => {
-          log(`处理子节点[${index + 1}/${node.children.length}]: ${child.name}`);
-          processTree(child, newNode.mesh, depth + 1);
-        });
-      }
-
-      return newNode;
-    };
-
-    // 从根节点开始处理
-    const rootNode = processTree(treeData);
-    log(`树形数据处理完成，共创建 ${nodes.length} 个节点和 ${edges.length} 条边`);
-
-    // ============== 5. 布局节点 ==============
-    log('开始布局节点...');
-    layoutNodes();
-    log('节点布局完成');
-
-    // ============== 6. 布局后处理 ==============
-    log('开始布局后处理...');
-
-    // 添加自动旋转初始角度
-    if (controls) {
-      controls.autoRotate = true;
-      controls.autoRotateSpeed = 0.5;
-      controls.reset();
-      log('初始化自动旋转控制器');
-    }
-
-    // 添加场景动画
-    scene.traverse(object => {
-      if (object.isMesh) {
-        object.userData.originalPosition = object.position.clone();
-        if (object.userData.depth > 0) { // 非根节点添加轻微浮动
-          object.userData.floatSpeed = Math.random() * 0.02 + 0.01;
-          object.userData.floatDistance = Math.random() * 0.5 + 0.3;
-        }
-      }
-    });
-    log('添加场景动画效果');
-
-    // ============== 7. 启动动画循环 ==============
-    animate();
-    log(`知识图谱构建完成，总耗时 ${Date.now() - startTime}ms`);
-
-  } catch (err) {
-    error("构建知识图谱失败:", err);
-    showError.value = true;
-    errorMessage.value = `构建失败: ${err.message}`;
-    showEmptyState('构建失败: ' + err.message);
-  } finally {
-    isLoading.value = false;
-    log('构建流程结束');
-  }
-};
-
-const layoutNodes = () => {
-  log('开始布局节点');
-
-  if (!scene || nodes.length === 0) {
-    warn('场景未初始化或没有节点可布局');
-    return;
-  }
-
-  // ============== 1. 根节点居中 ==============
-  const rootNode = nodes[0];
-  rootNode.mesh.position.set(0, 0, 0);
-  log(`根节点 "${rootNode.name}" 放置在中心位置 (0, 0, 0)`);
-
-  // ============== 2. 第一层级布局（行星） ==============
-  const firstLevelNodes = edges
-    .filter(edge => edge.userData.from === rootNode.mesh)
-    .map(edge => nodes.find(n => n.mesh === edge.userData.to));
-
-  if (firstLevelNodes.length > 0) {
-    const firstLevelRadius = 20; // 行星轨道半径
-    const firstLevelAngleStep = (Math.PI * 2) / firstLevelNodes.length;
-    const firstLevelZOffset = 5; // Z轴偏移量
-
-    firstLevelNodes.forEach((node, index) => {
-      const angle = firstLevelAngleStep * index;
-      const zPos = index % 2 === 0 ? firstLevelZOffset : -firstLevelZOffset;
-
-      node.mesh.position.set(
-        Math.cos(angle) * firstLevelRadius,
-        Math.sin(angle) * firstLevelRadius,
-        zPos
-      );
-      log(`第一级节点 "${node.name}" 放置在 (${node.mesh.position.x.toFixed(1)}, ${node.mesh.position.y.toFixed(1)}, ${node.mesh.position.z.toFixed(1)})`);
-
-      // ============== 3. 第二层级布局（卫星） ==============
-      const secondLevelNodes = edges
-        .filter(edge => edge.userData.from === node.mesh)
-        .map(edge => nodes.find(n => n.mesh === edge.userData.to));
-
-      if (secondLevelNodes.length > 0) {
-        const secondLevelRadius = 10; // 卫星轨道半径
-        const secondLevelAngleStep = (Math.PI * 2) / secondLevelNodes.length;
-        const secondLevelZOffset = 3; // Z轴偏移量
-
-        secondLevelNodes.forEach((subNode, subIndex) => {
-          const subAngle = secondLevelAngleStep * subIndex;
-          const subZPos = subIndex % 2 === 0 ?
-            node.mesh.position.z + secondLevelZOffset :
-            node.mesh.position.z - secondLevelZOffset;
-
-          subNode.mesh.position.set(
-            node.mesh.position.x + Math.cos(subAngle) * secondLevelRadius,
-            node.mesh.position.y + Math.sin(subAngle) * secondLevelRadius,
-            subZPos
-          );
-          log(`第二级节点 "${subNode.name}" 放置在 (${subNode.mesh.position.x.toFixed(1)}, ${subNode.mesh.position.y.toFixed(1)}, ${subNode.mesh.position.z.toFixed(1)})`);
-        });
-      }
-    });
-  }
-
-  // ============== 4. 更新所有边的几何体 ==============
-  log('开始更新所有连接线...');
-  edges.forEach((edge, index) => {
-    if (!edge.userData.from || !edge.userData.to) {
-      warn(`边[${index}]的from/to未定义，跳过更新`);
-      return;
-    }
-
-    // 更新线几何体
-    edge.geometry.dispose();
-    edge.geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3().copy(edge.userData.from.position),
-      new THREE.Vector3().copy(edge.userData.to.position)
-    ]);
-
-    // 更新箭头位置和方向
-    if (edge.userData.arrow) {
-      const dir = new THREE.Vector3().subVectors(
-        edge.userData.to.position,
-        edge.userData.from.position
-      ).normalize();
-
-      const arrowLength = Math.min(
-        15,
-        edge.userData.from.position.distanceTo(edge.userData.to.position) * 0.6
-      );
-
-      edge.userData.arrow.position.copy(edge.userData.from.position);
-      edge.userData.arrow.setDirection(dir);
-      edge.userData.arrow.setLength(
-        arrowLength,
-        Math.max(0.15, arrowLength * 0.15),
-        Math.max(0.1, arrowLength * 0.1)
-      );
-    }
-    log(`更新连接线 "${edge.userData.from.userData.name} -> ${edge.userData.to.userData.name}"`);
-  });
-
-  // ============== 5. 自动调整相机位置 ==============
-  if (camera && controls) {
-    const boundingBox = new THREE.Box3().setFromObject(scene);
-    const size = boundingBox.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const fov = camera.fov * (Math.PI / 180);
-    const cameraZ = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
-
-    camera.position.z = cameraZ;
-    controls.target.set(0, 0, 0);
-    controls.update();
-    log(`自动调整相机位置到 (0, 0, ${cameraZ.toFixed(1)})`);
-  }
-
-  log('节点布局完成');
-};
-
-const createNodeMesh = (name, color, size = 3, depth = 0) => {
-  // 根据深度调整节点属性
-  let finalSize, finalColor, wireframe;
-
-  switch (depth) {
-    case 0: // 根节点（恒星）
-      finalSize = 6;
-      finalColor = 0xF39C12; // 橙色
-      wireframe = false;
-      break;
-    case 1: // 第一级节点（行星）
-      finalSize = 4;
-      finalColor = 0x3498db; // 蓝色
-      wireframe = false;
-      break;
-    case 2: // 第二级节点（卫星）
-      finalSize = 2.5;
-      finalColor = 0x2ecc71; // 绿色
-      wireframe = name.endsWith('.md'); // 文件显示为线框
-      break;
-    default: // 更深层级
-      finalSize = Math.max(1.5, 4 - depth * 0.8);
-      finalColor = color;
-      wireframe = name.endsWith('.md');
-  }
-
-  const geometry = new THREE.SphereGeometry(finalSize, 32, 32);
-  const material = new THREE.MeshPhongMaterial({
-    color: finalColor,
-    transparent: true,
-    opacity: wireframe ? 0.7 : 0.9,
-    shininess: 100,
-    specular: 0x222222,
-    wireframe: wireframe,
-    wireframeLinewidth: 1
-  });
-
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-
-  mesh.userData = {
-    name,
-    type: depth === 0 ? 'knowledgeBase' : (name.endsWith('.md') ? 'file' : 'directory'),
-    depth
-  };
-
-  log(`创建 ${depth === 0 ? '根' : depth === 1 ? '第一级' : '第二级'}节点 "${name}" (大小: ${finalSize}, 颜色: ${finalColor.toString(16)}, ${wireframe ? '线框' : '实体'})`);
-  return mesh;
-};
-
-const createEdge = (fromMesh, toMesh) => {
-  // 创建连接线几何体
-  const points = [
-    new THREE.Vector3().copy(fromMesh.position),
-    new THREE.Vector3().copy(toMesh.position)
-  ];
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-
-  // 根据连接类型设置不同样式
-  const isFileConnection = toMesh.userData.type === 'file';
-  const material = new THREE.LineBasicMaterial({
-    color: isFileConnection ? 0x00ff00 : 0x5555ff, // 文件连接绿色，目录连接蓝色
-    linewidth: isFileConnection ? 1 : 2,
-    transparent: true,
-    opacity: 0.8
-  });
-
-  const line = new THREE.Line(geometry, material);
-
-  // 添加箭头（仅目录连接显示箭头）
-  if (toMesh.userData.type !== 'file') {
-    const dir = new THREE.Vector3().subVectors(
-      toMesh.position,
-      fromMesh.position
-    ).normalize();
-
-    const distance = fromMesh.position.distanceTo(toMesh.position);
-    const arrowLength = Math.min(10, distance * 0.3);
-
-    const arrow = new THREE.ArrowHelper(
-      dir,
-      fromMesh.position,
-      arrowLength,
-      0xff5555,  // 红色箭头
-      arrowLength * 0.2,
-      arrowLength * 0.1
-    );
-
-    line.userData = {
-      type: 'edge',
-      from: fromMesh,
-      to: toMesh,
-      arrow: arrow
-    };
-
-    scene.add(arrow);
-    log(`创建带箭头的连接线 "${fromMesh.userData.name} -> ${toMesh.userData.name}"`);
-  } else {
-    line.userData = {
-      type: 'edge',
-      from: fromMesh,
-      to: toMesh
-    };
-    log(`创建普通连接线 "${fromMesh.userData.name} -> ${toMesh.userData.name}"`);
-  }
-
-  return line;
-};
-
-// 在工具函数部分添加
-const disposeMaterial = (material) => {
-  if (!material) return;
-
-  if (Array.isArray(material)) {
-    material.forEach(m => disposeSingleMaterial(m));
-  } else {
-    disposeSingleMaterial(material);
-  }
-};
-
-const disposeSingleMaterial = (material) => {
-  material.dispose();
-  // 特殊处理需要手动释放的纹理
-  for (const key in material) {
-    if (material[key]?.isTexture) {
-      material[key].dispose();
-    }
-  }
-};
-
-// 增强版findNodeByPosition
-const findNodeByPosition = (positionArray) => {
-  if (!positionArray || positionArray.length < 3) return null;
-
-  const position = new THREE.Vector3().fromArray(positionArray);
-  return nodes.find(node => {
-    if (!node.mesh) return false;
-    return node.mesh.position.distanceTo(position) < 0.5; // 增加容差范围
-  });
-};
-
-const animate = () => {
-  requestAnimationFrame(animate);
-
-  // 自动旋转时保持视角在中心
-  if (controls && autoRotate.value) {
-    controls.target.set(0, 0, 0);
-  }
-
-  // 更新控制器
-  if (controls) controls.update();
-
-  // 渲染场景
-  renderer.render(scene, camera);
-
-  // 调试信息
-  if (DEBUG && frames % 120 === 0) {
-    log('当前场景状态:');
-    log(`- 节点数量: ${nodes.length}`);
-    log(`- 边数量: ${edges.length}`);
-    log(`- 相机位置: (${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)})`);
-
-    nodes.forEach(node => {
-      log(`节点 "${node.name}":`,
-        `位置: (${node.mesh.position.x.toFixed(1)}, ${node.mesh.position.y.toFixed(1)}, ${node.mesh.position.z.toFixed(1)})`,
-        `大小: ${node.mesh.geometry.parameters.radius.toFixed(1)}`,
-        `类型: ${node.type}`
-      );
-    });
-  }
-  frames++;
-};
-let frames = 0; // 用于调试计数
-
-const showEmptyState = (reason = '') => {
-  clearScene()
-
-  const group = new THREE.Group()
-  const geometry = new THREE.TorusGeometry(3, 0.5, 16, 32)
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x3498db,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.6
-  })
-  const torus = new THREE.Mesh(geometry, material)
-  torus.rotation.x = Math.PI / 2
-  group.add(torus)
-
-  if (typeof CSS2DObject !== 'undefined') {
-    const label = document.createElement('div')
-    label.className = 'empty-state-label'
-    label.textContent = reason || '请选择知识库'
-    const labelObject = new CSS2DObject(label)
-    labelObject.position.set(0, -5, 0)
-    group.add(labelObject)
-  }
-
-  scene.add(group)
-
-  const animateGroup = () => {
-    group.rotation.y += 0.01
-    requestAnimationFrame(animateGroup)
-  }
-  animateGroup()
-}
-
-// ============== 生命周期 ==============
-watch(
-  () => store.selectedKnowledgeBase,
-  (newVal) => {
-    if (!scene) {
-      warn('场景未初始化，将延迟处理知识库变化');
-      pendingKnowledgeBaseChange.value = newVal;
-      return;
-    }
-
-    if (isValidKnowledgeBase(newVal)) {
-      log('检测到有效知识库:', newVal.knowledge_base_name);
-      nextTick(() => buildGraph());
-    } else if (knowledgeBases.value.length > 0) {
-      store.setSelectedKnowledgeBase(knowledgeBases.value[0]);
-    } else {
-      showEmptyState('没有可用的知识库');
-    }
-  },
-  { immediate: true, deep: true }
-);
-
-onMounted(async () => {
-  log('组件挂载开始');
-
-  await nextTick();
-  initThreeJS();
-
-  // 添加事件监听（修改后版本）
-  window.addEventListener('resize', handleWindowResize, { passive: true });
-  if (renderer?.domElement) {
-    renderer.domElement.style.cursor = 'pointer';
-    renderer.domElement.addEventListener('click', handleCanvasClick);
-  }
-
-  // 原有知识库加载逻辑保持不变
-  if (knowledgeBases.value.length === 0) {
-    try {
-      await store.fetchKnowledgeBases();
-    } catch (err) {
-      error('加载知识库列表失败:', err);
-      showError.value = true;
-      errorMessage.value = '加载知识库列表失败';
-    }
-  }
-
-  if (hasValidKnowledgeBase.value) {
-    await buildGraph();
-  } else if (knowledgeBases.value.length > 0) {
-    store.setSelectedKnowledgeBase(knowledgeBases.value[0]);
-  } else {
-    showEmptyState('没有可用的知识库');
-  }
-});
-
+// Clean up on component unmount
 onBeforeUnmount(() => {
   log('开始组件卸载清理');
 
-  // 1. 移除事件监听器
+  // 1. Remove event listeners
   window.removeEventListener('resize', handleWindowResize);
   if (renderer?.domElement) {
     renderer.domElement.removeEventListener('click', handleCanvasClick);
   }
 
-  // 2. 清理Three.js场景
+  // 2. Clean up Three.js scene
   if (scene) {
     log('开始清理场景对象');
 
-    // 清理所有材质和几何体
+    // Dispose all geometries and materials
     scene.traverse((object) => {
       if (object.isMesh || object.isLine) {
         if (object.geometry) {
@@ -1001,37 +1249,37 @@ onBeforeUnmount(() => {
         }
       }
 
-      // 特殊处理箭头辅助对象
+      // Special handling for helper objects
       if (object.isArrowHelper) {
         scene.remove(object);
         log('已移除箭头辅助对象');
       }
     });
 
-    // 清空场景
+    // Clear scene children
     scene.children = [];
   }
 
-  // 3. 移除渲染器DOM
+  // 3. Remove renderer DOM
   if (container.value && renderer?.domElement) {
     container.value.removeChild(renderer.domElement);
     log('已移除渲染器DOM');
   }
 
-  // 4. 释放控制器
+  // 4. Dispose controls
   if (controls) {
     controls.dispose();
     log('已释放控制器');
   }
 
-  // 5. 释放渲染器
+  // 5. Dispose renderer
   if (renderer) {
     renderer.dispose();
     renderer.forceContextLoss();
     log('已释放渲染器');
   }
 
-  // 6. 清空引用
+  // 6. Clear references
   scene = null;
   camera = null;
   renderer = null;
@@ -1045,114 +1293,201 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* Main container styling */
 .knowledge-graph-container {
   position: relative;
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-/* 节点发光效果 */
-.knowledge-graph-container:deep(canvas) {
-  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
-}
-
+/* Toolbar styling */
 .toolbar {
   padding: 8px 16px;
   z-index: 10;
-  backdrop-filter: blur(5px);
-  /* 固定亮色背景 */
-  background-color: rgba(255, 255, 255, 0.7) !important;
-  /* 固定亮色边框 */
-  border-bottom: 1px solid #e0e0e0 !important;
+  background-color: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid #e0e0e0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
+/* Dark mode toolbar variation */
+.dark-mode .toolbar {
+  background-color: rgba(30, 30, 30, 0.9);
+  border-bottom-color: #333;
+}
+
+/* Graph container styling */
 .graph-container {
   flex-grow: 1;
   width: 100%;
   height: calc(100% - 40px);
-  overflow: hidden;
-  background: linear-gradient(to bottom, #1a1a2e, #16213e) !important;
+  background: linear-gradient(to bottom, #f0f0f0, #e0e0e0);
 }
 
-/* 图形容器样式 */
-.graph-container {
-  flex-grow: 1;
-  width: 100%;
-  height: calc(100% - 40px);
-  overflow: hidden;
-  /* 初始亮色背景 */
-  background: linear-gradient(to bottom, #f0f0f0, #e0e0e0) !important;
-}
-
-/* 暗色模式仅影响图形容器 */
+/* Dark mode graph container */
 .dark-mode .graph-container {
-  background: linear-gradient(to bottom, #121212, #0a0a0a) !important;
+  background: linear-gradient(to bottom, #121212, #0a0a0a);
 }
 
+/* Loading overlay styling */
 .loading-overlay {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.2);
   display: flex;
   justify-content: center;
   align-items: center;
+  background-color: rgba(0, 0, 0, 0.5);
   z-index: 1000;
 }
 
+/* Node info panel styling */
 .node-info-panel {
   position: absolute;
   bottom: 20px;
   right: 20px;
   max-width: 300px;
   z-index: 10;
-  backdrop-filter: blur(5px);
-  background-color: rgba(var(--n-color-modal-rgb), 0.85) !important;
-  border: 1px solid var(--n-border-color) !important;
+  background-color: rgba(255, 255, 255, 0.9);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.error-panel {
+/* Dark mode node info panel */
+.dark-mode .node-info-panel {
+  background-color: rgba(30, 30, 30, 0.9);
+}
+
+/* Legend panel styling */
+.legend-panel {
   position: absolute;
-  top: 50px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 80%;
-  max-width: 600px;
-  z-index: 100;
+  top: 60px;
+  left: 20px;
+  width: 150px;
+  z-index: 10;
+  background-color: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-/* 增强空状态样式 */
-.empty-state-label {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  font-size: 16px;
-  padding: 12px 16px;
-  border-radius: 6px;
-  background: rgba(var(--n-color-embedded-rgb), 0.9);
-  backdrop-filter: blur(4px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  transform: translateY(20px);
+/* Dark mode legend panel */
+.dark-mode .legend-panel {
+  background-color: rgba(30, 30, 30, 0.9);
 }
 
-.dark-mode {
-  --n-color: #1a1a1a;
-  --n-border-color: #333;
-  --n-text-color: rgba(255, 255, 255, 0.82);
+/* Legend item styling */
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin: 4px 0;
 }
 
-.dark-mode .empty-state-label {
-  background: rgba(30, 30, 30, 0.9);
+/* Color indicators in legend */
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+/* Knowledge base color */
+.legend-color.knowledge-base {
+  background-color: #f39c12;
+}
+
+/* Directory color */
+.legend-color.directory {
+  background-color: #3498db;
+}
+
+/* File color */
+.legend-color.file {
+  background-color: #2ecc71;
+}
+
+/* Line indicators in legend */
+.legend-line {
+  width: 24px;
+  height: 2px;
+  margin-right: 8px;
+}
+
+/* Strong connection line */
+.legend-line.strong-link {
+  background-color: #ff5555;
+}
+
+/* Weak connection line */
+.legend-line.weak-link {
+  background-color: #888888;
+  opacity: 0.6;
+}
+
+/* Search panel styling */
+.search-panel {
+  position: absolute;
+  top: 60px;
+  right: 20px;
+  width: 250px;
+  z-index: 10;
+  background-color: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Dark mode search panel */
+.dark-mode .search-panel {
+  background-color: rgba(30, 30, 30, 0.9);
+}
+
+/* Search results list */
+.search-results {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+/* Node label styling (deep selector for dynamically created elements) */
+:deep(.node-label) {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  color: #333;
+  background-color: rgba(255, 255, 255, 0.9);
+  padding: 4px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+  transform: translateY(15px);
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Dark mode node labels */
+.dark-mode :deep(.node-label) {
   color: #fff;
+  background-color: rgba(30, 30, 30, 0.9);
 }
 
-:not(.dark-mode) {
-  --n-color: #f5f5f5;
-  --n-border-color: #e0e0e0;
-  --n-text-color: rgba(0, 0, 0, 0.82);
+/* Root node animation */
+:deep(.root-node) {
+  animation: pulse 2s infinite;
+}
+
+/* Pulse animation keyframes */
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.05);
+  }
+
+  100% {
+    transform: scale(1);
+  }
 }
 </style>

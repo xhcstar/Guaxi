@@ -218,3 +218,112 @@ pub fn get_knowledge_base_tree(root_path: String) -> Result<FileNode, String> {
     let path = PathBuf::from(root_path);
     read_dir_recursive(&path)
 }
+
+
+// 添加图形数据结构体
+#[derive(Serialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub name: String,
+    pub r#type: String,  // 使用 r#type 因为 type 是 Rust 关键字
+    pub path: Option<String>,
+    pub size: Option<f64>,
+}
+
+#[derive(Serialize)]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+    pub strength: f64,
+    pub r#type: Option<String>,  // 使用 r#type 因为 type 是 Rust 关键字
+}
+
+#[derive(Serialize)]
+pub struct GraphData {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// 获取知识库图形数据命令
+#[tauri::command]
+pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, String> {
+    // 1. 获取知识库路径
+    let db_path = create_db_file().map_err(|e| e.to_string())?;
+    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    
+    let kb_path: String = conn.query_row(
+        "SELECT location FROM knowledge_bases WHERE id = ?",
+        [knowledge_base_id],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    
+    let kb_path = PathBuf::from(kb_path);
+    if !kb_path.exists() {
+        return Err("知识库路径不存在".to_string());
+    }
+
+    // 2. 构建图形数据
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    // 添加知识库根节点
+    nodes.push(GraphNode {
+        id: format!("kb_{}", knowledge_base_id),
+        name: kb_path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+        r#type: "knowledge-base".to_string(),
+        path: Some(kb_path.to_string_lossy().to_string()),
+        size: Some(1.0),
+    });
+
+    // 遍历知识库目录结构，添加文件和目录节点
+    if let Ok(entries) = fs::read_dir(&kb_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_dir = path.is_dir();
+            
+            // 跳过隐藏文件/目录
+            if path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.starts_with('.'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let node_id = format!("node_{}", nodes.len());
+            nodes.push(GraphNode {
+                id: node_id.clone(),
+                name: path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                r#type: if is_dir { "directory" } else { "file" }.to_string(),
+                path: Some(path.to_string_lossy().to_string()),
+                size: Some(if is_dir { 0.5 } else { 0.3 }),
+            });
+
+            // 添加连接到知识库根节点的边
+            edges.push(GraphEdge {
+                from: format!("kb_{}", knowledge_base_id),
+                to: node_id,
+                strength: if is_dir { 0.7 } else { 0.5 },
+                r#type: Some("contains".to_string()),
+            });
+        }
+    }
+
+    // 3. 添加一些示例关系边（实际应用中应该从数据库或分析中获取）
+    if nodes.len() > 1 {
+        edges.push(GraphEdge {
+            from: nodes[1].id.clone(),
+            to: nodes[2 % nodes.len()].id.clone(),
+            strength: 0.8,
+            r#type: Some("reference".to_string()),
+        });
+    }
+
+    Ok(GraphData { nodes, edges })
+}

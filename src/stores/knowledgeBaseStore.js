@@ -17,6 +17,38 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
 
   actions: {
     /**
+     * 获取知识库图形数据
+     * @param {string} knowledgeBaseId - 知识库ID
+     * @returns {Promise<Object>} 图形数据
+     */
+    async fetchGraphData(knowledgeBaseId) {
+      this.loading = true;
+      try {
+        const graphData = await invoke("get_knowledge_graph_data", {
+          knowledgeBaseId: parseInt(knowledgeBaseId), // 确保传递数字类型
+        });
+
+        console.log("获取图形数据成功:", graphData);
+        // 对数据进行必要的处理
+        return {
+          nodes: graphData.nodes.map((node) => ({
+            ...node,
+            type: node.type || "unknown", // 确保有 type 字段
+          })),
+          edges: graphData.edges.map((edge) => ({
+            ...edge,
+            type: edge.type || "relation", // 确保有 type 字段
+          })),
+        };
+      } catch (error) {
+        console.error("获取图形数据失败:", error);
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    /**
      * 获取知识库列表（自动选中第一个）
      */
     async fetchKnowledgeBases() {
