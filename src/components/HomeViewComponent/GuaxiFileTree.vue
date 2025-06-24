@@ -66,7 +66,7 @@ import { NTree, NIcon, useMessage } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
-import { h, ref, onMounted, onUnmounted, watch, onBeforeUnmount, nextTick } from 'vue'
+import { h, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
@@ -1044,19 +1044,21 @@ const handleFileRemoved = async (filePath) => {
   await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
 }
 
-// 修改后的清理函数
-const cleanupFileWatcher = () => {
-  if (unlistenRef.value) {
-    // 使用Promise链式调用处理异步操作
-    invoke('stop_file_watching')
-      .then(() => {
-        unlistenRef.value()
-        unlistenRef.value = null
-        console.log('文件监控已停止')
-      })
-      .catch(error => {
-        console.error('停止文件监控失败:', error)
-      })
+// 清理函数
+const cleanupFileWatcher = async () => {
+  try {
+    // 先停止后端监控
+    await invoke('stop_file_watching')
+
+    // 然后清理前端监听器
+    if (unlistenRef.value && typeof unlistenRef.value === 'function') {
+      await unlistenRef.value()
+      unlistenRef.value = null
+    }
+    console.log('文件监控已停止')
+  } catch (error) {
+    console.error('停止文件监控失败:', error)
+    throw error // 重新抛出错误以便外部捕获
   }
 }
 
@@ -1090,20 +1092,13 @@ const initializeRepositories = async () => {
   } catch (error) {
     console.error('[Error] 初始化知识库失败:', error)
     throw error
+  } finally {
+    // 确保文件监控被正确设置
+    if (fileTreeStore.activeRepoPath) {
+      await setupFileWatcher()
+    }
   }
 }
-
-onBeforeUnmount(() => {
-  // 清理所有状态
-  editingNode.value = null
-  editName.value = ''
-  selectedNode.value = null
-  expandedKeys.value = []
-  lastSelectedKey.value = null
-
-  // 清理文件监控
-  cleanupFileWatcher()
-})
 
 // 初始化时获取文件树数据
 onMounted(async () => {
@@ -1116,13 +1111,22 @@ onMounted(async () => {
   }
 
   // 添加文件监控
-  setupFileWatcher()
+  // setupFileWatcher()
 })
 
-// 在组件卸载时清理事件监听器
+
 onUnmounted(() => {
-  // 清理文件监控
-  cleanupFileWatcher()
+  // 清理所有状态
+  editingNode.value = null
+  editName.value = ''
+  selectedNode.value = null
+  expandedKeys.value = []
+  lastSelectedKey.value = null
+
+  // 清理文件监控 - 不使用 await
+  cleanupFileWatcher().catch(error => {
+    console.error('清理文件监控时出错:', error)
+  })
 })
 
 </script>
