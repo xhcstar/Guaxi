@@ -76,6 +76,8 @@ import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, Fold
 
 
 const message = useMessage();
+// 处理文件树容器的右键点击事件
+const treeRef = ref(null)
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
@@ -173,13 +175,13 @@ const handleAddFolder = async (repoPath) => {
 // 获取仓库显示名称
 const getRepoName = (path) => {
   const name = path.split(/[\\/]/).pop() || path
-  console.log('[Util] 获取仓库名称:', { path, name })
+  // console.log('[Util] 获取仓库名称:', { path, name })
   return name
 }
 
 const toggleRepo = async (path) => {
-  console.log('目标路径:', path)
-  console.log('当前激活路径:', fileTreeStore.activeRepoPath)
+  // console.log('目标路径:', path)
+  // console.log('当前激活路径:', fileTreeStore.activeRepoPath)
 
   if (fileTreeStore.activeRepoPath === path) {
     // 如果点击的是当前已激活的仓库，则切换展开状态
@@ -193,7 +195,7 @@ const toggleRepo = async (path) => {
 }
 
 const loadRepoTree = async (path) => {
-  console.log('[API] 加载仓库树')
+  // console.log('[API] 加载仓库树')
   try {
     // 无论数据是否为空都重新加载
     await loadFileTree()
@@ -205,7 +207,7 @@ const loadRepoTree = async (path) => {
 }
 
 const refreshAll = async () => {
-  console.log('[Action] 刷新所有仓库')
+  // console.log('[Action] 刷新所有仓库')
   for (const path of fileTreeStore.repopathlist) {
     console.log('[Refresh] 刷新仓库:', path)
     await loadRepoTree(path)
@@ -225,7 +227,7 @@ const normalizeTreeIds = (tree) => {
 
 // 加载文件树数据
 const loadFileTree = async () => {
-  console.log('[API] 加载文件树')
+  // console.log('[API] 加载文件树')
   try {
     fileTree.value = []
     console.log('当前仓库路径:', fileTreeStore.activeRepoPath)
@@ -264,12 +266,12 @@ const renderPrefix = ({ option }) => {
 }
 
 const handleSelect = async (keys) => {
-  console.log('触发选中事件, keys 参数:', keys);
+  // console.log('触发选中事件, keys 参数:', keys);
   selectedKeys.value = keys; // 更新选中的keys
 
   // 防抖处理
   if (lastSelectedKey.value === keys[0]) {
-    console.log('忽略重复选中:', keys[0]);
+    // console.log('忽略重复选中:', keys[0]);
     return;
   }
   lastSelectedKey.value = keys[0];
@@ -291,7 +293,7 @@ const handleSelect = async (keys) => {
 
   if (!selectedNode.is_directory) {
     try {
-      console.log('选中节点是文件，开始获取文件内容');
+      // console.log('选中节点是文件，开始获取文件内容');
 
       // 检查是否已存在标签页
       const existingTab = fileTreeStore.openTabs.find(tab => tab.path === selectedNode.id);
@@ -304,7 +306,7 @@ const handleSelect = async (keys) => {
       // 获取文件内容
       const content = await fileTreeStore.fetchFileContent(selectedNode.id);
       if (content !== null) {
-        console.log('文件内容获取成功，打开标签页');
+        // console.log('文件内容获取成功，打开标签页');
         await fileTreeStore.openFileInTab(selectedNode.id, content);
       } else {
         console.error('文件内容获取失败');
@@ -314,10 +316,10 @@ const handleSelect = async (keys) => {
     }
   } else {
     try {
-      console.log('选中节点是目录，开始加载子目录内容');
+      // console.log('选中节点是目录，开始加载子目录内容');
       await fileTreeStore.fetchFileTree(selectedNode.id);
       selectedNode.children = [...fileTreeStore.fileTree];
-      console.log('子目录内容加载成功:', selectedNode.children);
+      // console.log('子目录内容加载成功:', selectedNode.children);
       sortFileTree(selectedNode.children);
     } catch (error) {
       console.error('加载子目录内容失败:', error);
@@ -351,10 +353,6 @@ const findNodeById = (tree, targetId) => {
   return dfs(tree);
 };
 
-// 处理文件树容器的右键点击事件
-const treeRef = ref(null)
-const treeContainer = ref(null)
-
 const nodeProps = ({ option }) => ({
   // 处理左键点击
   onClick: (e) => {
@@ -373,32 +371,12 @@ const nodeProps = ({ option }) => ({
   }
 })
 
-// 修改容器右键处理
-const handleTreeContextMenu = (e) => {
-  // 阻止默认行为（包括Tauri调试菜单）
-  e.preventDefault()
-  e.stopPropagation()
-
-  // 检查是否点击在空白区域
-  const isBlankArea = !e.target.closest('.n-tree-node') &&
-    !e.target.closest('.n-tree-node-content') &&
-    treeContainer.value.contains(e.target)
-
-  if (isBlankArea) {
-    isContextMenuVisible.value = true
-    contextMenuPosition.value = { x: e.clientX, y: e.clientY }
-    selectedNode.value = null
-    console.log('空白区域右键菜单触发')
-  }
-}
-
 // 处理右键菜单选择
 const handleContextMenuSelect = async (key) => {
   isContextMenuVisible.value = false;
   try {
     switch (key) {
       case 'addFile':
-        console.log('添加文件操作, 选中节点:', selectedNode.value);
         await addNode(selectedNode.value?.id, false);
         break;
       case 'addFolder':
@@ -438,7 +416,7 @@ const editName = ref('')
 // 修改后的 addNode 函数
 const addNode = async (parentId, isDirectory = false) => {
   parentId = normalizePath(parentId);
-  console.log('添加节点，父节点 ID:', parentId, '是否目录:', isDirectory);
+  // console.log('添加节点，父节点 ID:', parentId, '是否目录:', isDirectory);
 
   let parentNode;
   let isRoot = false;
@@ -460,7 +438,7 @@ const addNode = async (parentId, isDirectory = false) => {
         children: fileTree.value
       };
       isRoot = true;
-      console.warn('未找到父节点，使用根目录作为父节点');
+      // console.warn('未找到父节点，使用根目录作为父节点');
     }
   }
 
@@ -552,10 +530,30 @@ const handleBlur = async () => {
   const parentNode = findParentNode(fileTree.value, oldId);
   const parentPath = parentNode ? parentNode.id : fileTreeStore.activeRepoPath;
 
-  if (!editName.value.trim()) {
+  if (!editName.value.trim() ||
+    editName.value === '新建文件' ||
+    editName.value === '新建文件夹') {
     // 名称为空，如果是新节点则删除
     if (node.isNew) {
-      parentNode.children = parentNode.children.filter(n => n.id !== oldId);
+      if (!parentNode) {
+        // console.warn('未找到父节点，无法删除新节点');
+        // 根目录下直接从 fileTree.value 里移除
+        fileTree.value = fileTree.value.filter(n => n.id !== oldId);
+        // 新增：刷新根目录
+        parentPath = normalizePath(node.id).split('/').slice(0, -1).join('/');
+        if (!parentPath || parentPath === normalizePath(fileTreeStore.activeRepoPath)) {
+          await loadFileTree();
+        } else {
+          await refreshDirectory(parentPath);
+        }
+      } else {
+        parentNode.children = parentNode.children.filter(n => n.id !== oldId);
+        if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
+          await loadFileTree();
+        } else {
+          await refreshDirectory(parentPath);
+        }
+      }
     }
     editingNode.value = null;
     editName.value = '';
@@ -614,7 +612,12 @@ const handleBlur = async () => {
   } finally {
     editingNode.value = null;
     editName.value = '';
-    await refreshDirectory(parentPath);
+    // 根目录下刷新整个树，否则刷新父目录
+    if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
+      await loadFileTree();
+    } else {
+      await refreshDirectory(parentPath);
+    }
   }
 };
 
@@ -712,12 +715,36 @@ watch(editingNode, (val) => {
 })
 
 // 处理输入框的 keydown 事件
-const handleKeydown = (e) => {
+const handleKeydown = async (e) => {
   console.log('handleKeydown triggered'); // 添加日志
   if (e.key === 'Enter') {
     e.target.blur(); // 触发 input 失焦事件
   } else if (e.key === 'Escape') {
     // 取消编辑
+    if (editingNode.value && editingNode.value.isNew) {
+      const node = editingNode.value;
+      let parentNode = findParentNode(fileTree.value, node.id);
+      let parentPath = parentNode ? parentNode.id : null;
+
+      // 新增：如果 parentNode 没找到，直接用路径推断父目录
+      if (!parentNode) {
+        parentPath = normalizePath(node.id).split('/').slice(0, -1).join('/');
+        // 根目录特殊处理
+        if (!parentPath || parentPath === normalizePath(fileTreeStore.activeRepoPath)) {
+          await loadFileTree();
+        } else {
+          await refreshDirectory(parentPath);
+        }
+      } else {
+        parentNode.children = parentNode.children.filter(n => n.id !== node.id);
+        // 根目录下刷新整个树，否则刷新父目录
+        if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
+          await loadFileTree();
+        } else {
+          await refreshDirectory(parentPath);
+        }
+      }
+    }
     editingNode.value = null;
     editName.value = '';
   }
@@ -840,18 +867,16 @@ const normalizePath = (path) => {
 
 // 处理文件创建事件
 const handleFileCreated = async (filePath) => {
-  const parentPath = filePath.split('/').slice(0, -1).join('/')
+  // console.log('文件创建事件:', filePath)
+  const normalizedPath = normalizePath(filePath)
+  const parentPath = normalizedPath.split('/').slice(0, -1).join('/')
+  // console.log('处理创建事件 - 文件路径:', normalizedPath, '父目录:', parentPath)
   await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
 }
 
-// 处理文件删除事件
-// const handleFileRemoved = async (filePath) => {
-//   const parentPath = filePath.split('/').slice(0, -1).join('/')
-//   await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
-// }
-
 // 处理文件重命名事件
 const handleFileRenamed = async (oldPath, newPath) => {
+  // console.log('文件重命名事件:', oldPath, '->', newPath)
   if (!newPath) return;
 
   try {
@@ -904,27 +929,35 @@ const setupFileWatcher = async () => {
     })
 
     // 监听文件变化事件
+    if (unlistenRef.value) {
+      // 先移除旧监听器，避免重复
+      await unlistenRef.value();
+      unlistenRef.value = null;
+    }
+
+    // 监听文件变化事件
     const unlisten = await listen('file_change', (event) => {
       const payload = event.payload
       console.log('文件系统变化事件:', payload)
 
       switch (payload.kind) {
         case 'Create':
-          console.log('文件创建事件:', payload.path)
+          // console.log('文件创建事件:', payload.path)
           handleFileCreated(payload.path)
           break
         case 'Remove':
-          console.log('文件删除事件:', payload.path)
+          // console.log('文件删除事件:', payload.path)
           handleFileRemoved(payload.path)
           break
         case 'Rename':
           // 处理old_path可能为null的情况
           const oldPath = payload.old_path || extractOldPathFromEvent(payload)
-          console.log('文件重命名事件:', oldPath, '->', payload.path)
+          // console.log('文件重命名事件:', oldPath, '->', payload.path)
           handleFileRenamed(oldPath, payload.path)
           break
       }
     })
+    unlistenRef.value = unlisten; // ★ 保存监听器
 
     console.log('文件监控已启动')
   } catch (error) {
@@ -943,7 +976,7 @@ const handleFileRemoved = async (filePath) => {
   const normalizedPath = normalizePath(filePath)
   const parentPath = normalizedPath.split('/').slice(0, -1).join('/')
 
-  console.log('处理删除事件 - 文件路径:', normalizedPath, '父目录:', parentPath)
+  // console.log('处理删除事件 - 文件路径:', normalizedPath, '父目录:', parentPath)
 
   // 查找并删除节点
   const nodeToRemove = findNodeById(fileTree.value, normalizedPath)
@@ -951,11 +984,11 @@ const handleFileRemoved = async (filePath) => {
     const parentNode = findParentNode(fileTree.value, normalizedPath)
     if (parentNode) {
       parentNode.children = parentNode.children.filter(child => child.id !== normalizedPath)
-      console.log('从父节点删除成功:', parentNode)
+      // console.log('从父节点删除成功:', parentNode)
     } else {
       // 如果是根节点下的文件
       fileTree.value = fileTree.value.filter(child => child.id !== normalizedPath)
-      console.log('从根节点删除成功')
+      // console.log('从根节点删除成功')
     }
   }
 
@@ -1009,13 +1042,6 @@ const initializeRepositories = async () => {
   } catch (error) {
     console.error('[Error] 初始化知识库失败:', error)
     throw error
-  }
-}
-
-// 使用单独的函数处理右键事件
-const handleContextMenu = (e) => {
-  if (e.target.closest('.n-tree')) {
-    handleTreeContextMenu(e)
   }
 }
 
@@ -1212,7 +1238,8 @@ onUnmounted(() => {
 
 /* 选中状态效果*/
 .repo-list-item.active {
-  background-color: rgba(24, 144, 255, 0.16); /* 比原来更深一点 */
+  background-color: rgba(24, 144, 255, 0.16);
+  /* 比原来更深一点 */
   border-left: 3px solid #1890ff;
   box-shadow: inset 0 0 8px rgba(24, 144, 255, 0.13);
 }
