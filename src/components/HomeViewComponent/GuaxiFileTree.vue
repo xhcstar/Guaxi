@@ -441,13 +441,15 @@ const addNode = async (parentId, isDirectory = false) => {
   console.log('添加节点，父节点 ID:', parentId, '是否目录:', isDirectory);
 
   let parentNode;
-  if (!parentId) {
+  let isRoot = false;
+  if (!parentId || parentId === normalizePath(fileTreeStore.activeRepoPath)) {
     // 如果没有parentId，使用当前激活的仓库路径作为根目录
     parentNode = {
       id: normalizePath(fileTreeStore.activeRepoPath),
       is_directory: true,
       children: fileTree.value
     };
+    isRoot = true;
   } else {
     parentNode = findNodeById(fileTree.value, parentId);
     if (!parentNode) {
@@ -457,6 +459,7 @@ const addNode = async (parentId, isDirectory = false) => {
         is_directory: true,
         children: fileTree.value
       };
+      isRoot = true;
       console.warn('未找到父节点，使用根目录作为父节点');
     }
   }
@@ -474,11 +477,15 @@ const addNode = async (parentId, isDirectory = false) => {
     isNew: true // 标记为新节点
   };
 
-  // 4. 添加到父节点
-  parentNode.children = [...(parentNode.children || []), newNode];
-  parentNode.children.sort((a, b) =>
-    a.is_directory === b.is_directory ? 0 : a.is_directory ? -1 : 1
-  );
+  if (isRoot) {
+    // 直接操作 fileTree.value
+    fileTree.value = [...fileTree.value, newNode];
+  } else {
+    parentNode.children = [...(parentNode.children || []), newNode];
+    parentNode.children.sort((a, b) =>
+      a.is_directory === b.is_directory ? 0 : a.is_directory ? -1 : 1
+    );
+  }
 
   // ★ 自动展开父节点，确保新节点可见
   if (!expandedKeys.value.includes(parentNode.id)) {
@@ -675,7 +682,7 @@ const startEditing = (node) => {
 const renderLabel = ({ option }) => {
   // 用 id 判断是否为正在编辑的节点
   if (editingNode.value && normalizePath(editingNode.value.id) === normalizePath(option.id)) {
-    // console.log('EEE ======> renderLabel editingNode.value:', editingNode.value);
+    console.log('EEE ======> renderLabel editingNode.value:', editingNode.value);
     return h('input', {
       class: 'editable-input',
       value: editName.value,
@@ -708,7 +715,7 @@ watch(editingNode, (val) => {
 const handleKeydown = (e) => {
   console.log('handleKeydown triggered'); // 添加日志
   if (e.key === 'Enter') {
-    handleBlur(); // 按下 Enter 键时结束编辑
+    e.target.blur(); // 触发 input 失焦事件
   } else if (e.key === 'Escape') {
     // 取消编辑
     editingNode.value = null;
@@ -1203,11 +1210,18 @@ onUnmounted(() => {
   color: #1890ff;
 }
 
-/* 选中状态效果 */
+/* 选中状态效果*/
 .repo-list-item.active {
-  background-color: rgba(24, 144, 255, 0.08);
+  background-color: rgba(24, 144, 255, 0.16); /* 比原来更深一点 */
   border-left: 3px solid #1890ff;
-  box-shadow: inset 0 0 8px rgba(24, 144, 255, 0.1);
+  box-shadow: inset 0 0 8px rgba(24, 144, 255, 0.13);
+}
+
+/* 暗色模式下选中状态更明显 */
+.dark-mode .repo-list-item.active {
+  background-color: rgba(24, 144, 255, 0.22);
+  border-left: 3px solid #8ab4f8;
+  box-shadow: inset 0 0 8px rgba(138, 180, 248, 0.18);
 }
 
 /* 选中状态下的文字和图标 */
@@ -1305,21 +1319,35 @@ onUnmounted(() => {
   background-color: #1a1a1a;
 }
 
-.dark-mode .repo-list-item {
-  border-bottom: 1px solid #333;
+/* 选中状态下的 action/refresh 图标 */
+.repo-list-item.active .action-icon,
+.repo-list-item.active .refresh-icon {
+  color: var(--n-color-primary, #1890ff);
+  background-color: var(--n-color-primary-suppl, #e6f7ff);
 }
 
-.dark-mode .repo-list-item:hover {
-  background-color: rgba(65, 105, 225, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(65, 105, 225, 0.3);
+/* 按下状态下的 action/refresh 图标 */
+.action-icon:active,
+.refresh-icon:active {
+  color: var(--n-color-primary-hover, #1765ad);
+  background-color: var(--n-color-primary-suppl, #e6f7ff);
 }
 
-.dark-mode .repo-list-item.active {
-  background-color: rgba(65, 105, 225, 0.2);
+/* 暗色模式下 action/refresh 图标 */
+.dark-mode .action-icon,
+.dark-mode .refresh-icon {
+  color: #444a57;
+  background-color: transparent;
 }
 
-.dark-mode .n-tree-node:hover {
-  background: rgba(255, 255, 255, 0.05);
+.dark-mode .action-icon:hover,
+.dark-mode .action-icon.active,
+.dark-mode .refresh-icon:hover,
+.dark-mode .refresh-icon.active,
+.dark-mode .repo-list-item.active .action-icon,
+.dark-mode .repo-list-item.active .refresh-icon {
+  color: #8ab4f8;
+  background-color: rgba(65, 105, 225, 0.13);
 }
 
 /* 新增的样式 */
@@ -1335,15 +1363,24 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-.action-icon {
-  color: var(--n-text-color-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
+/* Action/refresh 图标基础样式（合并） */
+.action-icon,
+.refresh-icon {
+  color: var(--n-text-color-disabled, #bfbfbf);
+  /* 平时较淡，与背景接近 */
+  background-color: transparent;
+  transition: color 0.2s, background-color 0.2s;
+  border-radius: 4px;
   padding: 2px;
 }
 
-.action-icon:hover {
-  color: var(--n-color-primary);
-  background-color: var(--n-color-primary-subtle);
+.action-icon:hover,
+.action-icon.active,
+.refresh-icon:hover,
+.refresh-icon.active {
+  color: var(--n-color-primary, #1890ff);
+  /* 选中时主色 */
+  background-color: var(--n-color-primary-suppl, #e6f7ff);
+  /* 选中时淡主色背景 */
 }
 </style>
