@@ -600,8 +600,17 @@ const handleBlur = async () => {
     if (tabIndex !== -1) {
       fileTreeStore.openTabs[tabIndex].path = newId;
       fileTreeStore.openTabs[tabIndex].fileName = editName.value;
+      // 同步内容（如果内容有变化）
+      fileTreeStore.openTabs[tabIndex].content = node.content || fileTreeStore.openTabs[tabIndex].content;
       if (fileTreeStore.activeTab === oldId) {
         fileTreeStore.activeTab = newId;
+      }
+      // 如果编辑器当前打开的就是这个文件，也同步 selectedFile
+      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === oldId) {
+        fileTreeStore.selectedFile = {
+          path: newId,
+          content: fileTreeStore.openTabs[tabIndex].content
+        };
       }
     }
   } catch (error) {
@@ -635,6 +644,12 @@ const deleteNode = async (nodeId) => {
       } else {
         await invoke('delete_path', { path: nodeId })
         await refreshDirectory(fileTreeStore.activeRepoPath);
+      }
+      // 删除后关闭标签页
+      fileTreeStore.closeTab(nodeId);
+      // 如果当前编辑器打开的就是被删文件，也清空 selectedFile
+      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === nodeId) {
+        fileTreeStore.selectedFile = null;
       }
     }
   }
@@ -900,10 +915,19 @@ const handleFileRenamed = async (oldPath, newPath) => {
     if (tabIndex !== -1) {
       fileTreeStore.openTabs[tabIndex].path = normalizedNewPath;
       fileTreeStore.openTabs[tabIndex].fileName = newPath.split(/[\\/]/).pop();
-      fileTreeStore.openTabs[tabIndex].content = fileTreeStore.openTabs[tabIndex].content; // 保留内容
+      // 保留内容
+      fileTreeStore.openTabs[tabIndex].content = fileTreeStore.openTabs[tabIndex].content;
 
+      // 更新激活标签
       if (fileTreeStore.activeTab === normalizedOldPath) {
         fileTreeStore.activeTab = normalizedNewPath;
+      }
+      // 更新编辑器当前文件
+      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedOldPath) {
+        fileTreeStore.selectedFile = {
+          path: normalizedNewPath,
+          content: fileTreeStore.openTabs[tabIndex].content
+        };
       }
     }
 
@@ -990,6 +1014,17 @@ const handleFileRemoved = async (filePath) => {
       fileTree.value = fileTree.value.filter(child => child.id !== normalizedPath)
       // console.log('从根节点删除成功')
     }
+  }
+
+  // 删除后关闭标签页
+  fileTreeStore.closeTab(normalizedPath);
+  // 如果当前编辑器打开的就是被删文件，也清空 selectedFile
+  if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedPath) {
+    fileTreeStore.selectedFile = null;
+  }
+  // 如果当前激活标签就是被删文件，也清空 activeTab
+  if (fileTreeStore.activeTab === normalizedPath) {
+    fileTreeStore.activeTab = null;
   }
 
   // 刷新父目录
