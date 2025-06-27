@@ -130,7 +130,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
-import { Octree } from 'three/examples/jsm/math/Octree';
+import { Octree } from 'three/addons/math/Octree.js';
+import { gsap } from "gsap";
 import Stats from 'three/examples/jsm/libs/stats.module';
 import * as d3 from 'd3-force-3d';
 
@@ -380,7 +381,7 @@ const searchNodes = (query) => {
  * @returns {Object|null} Found node or null
  */
 const findNodeByPosition = (positionArray) => {
-  if (!positionArray || positionArray.length < 3) return null;
+  if (!positionArray || positionArray.length < 3 || !octree) return null;
 
   const position = new THREE.Vector3(
     positionArray[0],
@@ -388,10 +389,13 @@ const findNodeByPosition = (positionArray) => {
     positionArray[2]
   );
 
-  return nodes.find(node =>
-    node.mesh &&
-    node.mesh.position.distanceTo(position) < 0.1
-  )?.userData || null;
+  // 使用八叉树查询
+  const result = octree.search(position, 5); // 5是搜索半径
+  if (result.length > 0) {
+    return result[0].userData || null;
+  }
+
+  return null;
 };
 
 /**
@@ -567,44 +571,31 @@ const fetchGraphData = async () => {
  * @param {Object} data - Graph data with nodes and edges
  */
 const createNodesAndEdges = async (data) => {
-  // console.log('创建节点和边, data:', data);
   if (!data) return;
 
   console.log('开始创建节点和边...');
 
-  // 创建节点
+  // 1. 创建节点
   data.nodes.forEach(nodeData => {
-    // console.log(`处理节点: ${nodeData.name} (${nodeData.type})`);
-
-    const geometry = new THREE.SphereGeometry(2, 32, 32); // 从 5 改为 2
+    const geometry = new THREE.SphereGeometry(2, 32, 32);
     const material = new THREE.MeshPhongMaterial({
       color: getNodeColor(nodeData.type),
       emissive: 0x000000,
       shininess: 30
     });
 
-    // console.log(`创建节点: ${nodeData.name} (${nodeData.type})`);
-
-    // Create mesh with random initial position
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(
-      Math.random() * 100 - 50,
-      Math.random() * 100 - 50,
-      Math.random() * 100 - 50
-    );
-
-    // Store node data and add to scene
+    mesh.position.set(0, 0, 0);
     mesh.userData = nodeData;
     scene.add(mesh);
 
-    // Track node in our collection
     nodes.push({
       mesh,
       userData: nodeData,
-      targetPosition: mesh.position.clone()
+      targetPosition: new THREE.Vector3(0, 0, 0)
     });
 
-    // Add label if CSS2D is available
+    // 添加标签
     if (typeof CSS2DObject !== 'undefined') {
       const label = document.createElement('div');
       label.className = 'node-label';
@@ -614,49 +605,69 @@ const createNodesAndEdges = async (data) => {
       mesh.add(labelObj);
     }
   });
-  // console.log(`创建了${nodes.length}个节点`);
 
-  // Create edges between nodes
+  // 2. 先应用布局，确保节点有正确位置
+  await applyLayout(currentLayout.value);
+
+  // 3. 创建边（在节点位置确定后）
+  // 先清除所有现有边
+  edges.forEach(edge => {
+    scene.remove(edge);
+    if (edge.geometry) edge.geometry.dispose();
+    if (edge.material) edge.material.dispose();
+  });
+  edges = [];
+
   data.edges.forEach(edgeData => {
     const fromNode = nodes.find(n => n.userData.id === edgeData.from);
     const toNode = nodes.find(n => n.userData.id === edgeData.to);
 
     if (fromNode && toNode) {
-      // Create curved path between nodes
-      const points = [
-        fromNode.mesh.position,
-        getControlPoint(fromNode.mesh.position, toNode.mesh.position),
-        toNode.mesh.position
-      ];
+      // 创建直线几何体
+      const geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(6); // 两个点，每个点3个坐标
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-      const curve = new THREE.CatmullRomCurve3(points);
-      const lineGeometry = new THREE.BufferGeometry().setFromPoints(
-        curve.getPoints(10)
-      );
-
-      // Style edge based on connection strength
-      const lineMaterial = new THREE.LineBasicMaterial({
+      // 使用更稳定的线材质
+      const material = new THREE.LineBasicMaterial({
         color: edgeData.strength > 0.5 ? 0xff5555 : 0x888888,
+        linewidth: 2,
+        transparent: true,
         opacity: 0.6,
-        transparent: true
+        depthTest: true,
+        depthWrite: true
       });
 
-      // Create line and add to scene
-      const line = new THREE.Line(lineGeometry, lineMaterial);
+      const line = new THREE.Line(geometry, material);
+
+      // 保存更新函数
       line.userData = {
         ...edgeData,
         from: fromNode,
-        to: toNode
+        to: toNode,
+        update: () => {
+          if (fromNode.mesh && toNode.mesh) {
+            const positions = line.geometry.attributes.position.array;
+            positions[0] = fromNode.mesh.position.x;
+            positions[1] = fromNode.mesh.position.y;
+            positions[2] = fromNode.mesh.position.z;
+            positions[3] = toNode.mesh.position.x;
+            positions[4] = toNode.mesh.position.y;
+            positions[5] = toNode.mesh.position.z;
+            line.geometry.attributes.position.needsUpdate = true;
+            line.geometry.computeBoundingSphere();
+          }
+        }
       };
 
       scene.add(line);
       edges.push(line);
+      line.userData.update(); // 初始更新
     }
   });
 
   log(`创建了${nodes.length}个节点和${edges.length}条边`);
 };
-
 /**
  * Calculate control point for curved edges
  * @param {THREE.Vector3} start - Start position
@@ -666,9 +677,18 @@ const createNodesAndEdges = async (data) => {
 const getControlPoint = (start, end) => {
   const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
   const distance = start.distanceTo(end);
-  const height = Math.min(distance * 0.3, 30);
 
-  mid.z += height;
+  // 根据距离动态调整曲线高度
+  const height = Math.min(distance * 0.5, 50);
+
+  // 随机方向避免所有曲线在同一平面
+  const dir = new THREE.Vector3(
+    Math.random() * 0.2 - 0.1,
+    Math.random() * 0.2 - 0.1,
+    1
+  ).normalize();
+
+  mid.add(dir.multiplyScalar(height));
   return mid;
 };
 
@@ -984,27 +1004,22 @@ const buildGraph = async () => {
 
     console.log('获取知识图谱数据成功！');
     loadingProgress.value = 60;
+
     // 3. Create nodes and edges
     await createNodesAndEdges(treeData);
     loadingProgress.value = 70;
     console.log('创建节点和边成功！');
 
     // 4. Apply selected layout
-    applyLayout(currentLayout.value);
+    await applyLayout(currentLayout.value);
     loadingProgress.value = 90;
     console.log('应用布局成功！');
 
     // 5. Initialize octree for spatial queries
     const meshes = nodes.map(n => n.mesh).filter(Boolean);
-    console.log('准备初始化八叉树', meshes);
-    octree = new Octree();
-    octree.fromGraphNode(meshes);
-    console.log('初始化八叉树成功！');
+    console.log('准备初始化八叉树，网格数量:', meshes.length);
+    await initOctree(meshes);
 
-    // 添加准备检查
-    if (scene.children.length === 0) {
-      console.warn('场景中没有可渲染对象');
-    }
     // 6. Start animation loop
     startAnimate();
     console.log('开始动画循环！');
@@ -1015,6 +1030,62 @@ const buildGraph = async () => {
   } finally {
     isLoading.value = false;
     resetCamera();
+  }
+};
+
+/**
+ * 优化的八叉树初始化方法
+ * @param {Array} meshes - 需要加入八叉树的网格数组
+ */
+const initOctree = async (meshes) => {
+  if (!meshes || meshes.length === 0) {
+    console.warn('没有网格数据可用于初始化八叉树');
+    octree = {
+      search: () => [],
+      addGraphNode: () => { },
+      clear: () => { }
+    };
+    return;
+  }
+
+  try {
+    console.time('八叉树初始化耗时');
+
+    // 创建新的八叉树实例
+    octree = new Octree();
+
+    // 检查八叉树方法是否可用
+    if (typeof octree.addGraphNode === 'function') {
+      // 标准初始化流程
+      meshes.forEach(mesh => {
+        if (mesh.geometry) {
+          // 确保几何体有边界框
+          if (!mesh.geometry.boundingBox) {
+            mesh.geometry.computeBoundingBox();
+          }
+          octree.addGraphNode(mesh);
+        }
+      });
+    } else {
+      // 降级处理
+      console.warn('八叉树缺少addGraphNode方法，使用简化版本');
+      octree = {
+        search: () => [],
+        addGraphNode: () => { },
+        clear: () => { }
+      };
+    }
+
+    console.timeEnd('八叉树初始化耗时');
+    console.log(`八叉树初始化完成，共处理${meshes.length}个网格`);
+  } catch (e) {
+    console.error('八叉树初始化失败:', e);
+    // 降级处理
+    octree = {
+      search: () => [],
+      addGraphNode: () => console.warn('八叉树功能不可用'),
+      clear: () => { }
+    };
   }
 };
 
@@ -1031,34 +1102,45 @@ const getNodeColor = (type) => {
  * Apply selected layout algorithm
  * @param {string} layoutType - Layout type to apply
  */
-const applyLayout = (layoutType) => {
-  console.log(`应用布局: ${layoutType}`);
-  switch (layoutType) {
-    case 'force':
-      forceDirectedLayout();
-      break;
-    case 'hierarchical':
-      hierarchicalLayout();
-      break;
-    case 'spherical':
-      sphericalLayout();
-      break;
-    case 'tree':
-      treeLayout();
-      break;
-    default:
-      forceDirectedLayout();
-  }
-};
+const applyLayout = async (layoutType) => {
+  if (!nodes.length) return;
 
-const startAnimate = () => {
-  console.log('startAnimate 开始动画');
-  if (animationFrameId) {
-    console.warn('startAnimate 动画循环已在运行，取消之前的循环');
-    cancelAnimationFrame(animationFrameId);
-    animationFrameId = null;
-  }
-  animate();
+  console.log(`应用布局: ${layoutType}`);
+
+  // 停止当前所有动画
+  nodes.forEach(node => {
+    node.targetPosition = node.mesh.position.clone();
+  });
+
+  // 使用Promise确保布局完成
+  await new Promise(resolve => {
+    setTimeout(() => {
+      switch (layoutType) {
+        case 'force':
+          forceDirectedLayout();
+          break;
+        case 'hierarchical':
+          hierarchicalLayout();
+          break;
+        case 'spherical':
+          sphericalLayout();
+          break;
+        case 'tree':
+          treeLayout();
+          break;
+        default:
+          forceDirectedLayout();
+      }
+      resolve();
+    }, 0);
+  });
+
+  // 更新所有边
+  edges.forEach(edge => {
+    if (edge.userData?.update) {
+      edge.userData.update();
+    }
+  });
 };
 
 /**
@@ -1067,29 +1149,47 @@ const startAnimate = () => {
 let animationFrameId = null;
 
 const animate = () => {
-  console.log('animate 循环动画');
-  if (!renderer || !scene || !camera) {
-    animationFrameId = null;
-    return;
-  }
-
   animationFrameId = requestAnimationFrame(animate);
 
+  // 平滑过渡节点位置
   nodes.forEach(node => {
     if (node.mesh && node.targetPosition) {
-      node.mesh.position.lerp(node.targetPosition, 0.2);
+      node.mesh.position.lerp(node.targetPosition, 0.1);
+    }
+  });
+
+  // 更新边位置
+  edges.forEach(edge => {
+    if (edge.userData?.update) {
+      edge.userData.update();
     }
   });
 
   if (controls) controls.update();
 
-  renderer.render(scene, camera);
+  // 使用composer进行渲染（如果存在）
+  if (composer) {
+    composer.render();
+  } else {
+    renderer.render(scene, camera);
+  }
+
   labelRenderer?.render(scene, camera);
-
-  console.log('animate running, scene.children.length:', scene.children.length);
-
 };
 
+const startAnimate = () => {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+  animate();
+};
+
+watch(currentLayout, (newLayout) => {
+  if (scene && nodes.length > 0) {
+    applyLayout(newLayout);
+  }
+});
 
 const testRender = () => {
   if (renderer && scene && camera) {
@@ -1344,6 +1444,12 @@ onBeforeUnmount(() => {
     renderer.dispose();
     renderer.forceContextLoss();
     log('已释放渲染器');
+  }
+
+  // 添加八叉树清理
+  if (octree) {
+    octree = null;
+    console.log('已释放八叉树');
   }
 
   // 6. Clear references
