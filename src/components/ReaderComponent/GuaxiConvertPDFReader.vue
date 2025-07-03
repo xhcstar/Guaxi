@@ -332,6 +332,7 @@ async function convertPdfRenderMarkdown(content, options = {}) {
   const processedContent = await processImages(content, options.libraryBasePath);
   try {
     let html = await renderMarkdown(processedContent, {
+      preserveOriginal: true,
       basePath: "",
       mermaid: true,
       math: true,
@@ -476,13 +477,27 @@ function shouldSkipTranslation(node) {
   }
 }
 
+// 添加安全编码函数
+function safeEncode(content) {
+  if (!content) return '';
+
+  return encodeURIComponent(content)
+    .replace(/'/g, "%27")
+    .replace(/"/g, "%22")
+    .replace(/</g, "%3C")
+    .replace(/>/g, "%3E")
+    .replace(/&/g, "%26")
+    .replace(/\//g, "%2F")
+    .replace(/\\/g, "%5C");
+}
+
 // 11. 笔记相关函数
 function determineNoteType(target) {
   console.log('determineNoteType called with target:', target);
   const timestamp = new Date().toLocaleString();
 
   // 1. 优先检查数学公式
-  if (target.closest('mjx-container, mjx-math')) {
+  if (target.closest('mjx-container, mjx-math, .math-inline, .math-block')) {
     return 'math';
   }
 
@@ -557,6 +572,7 @@ async function processNoteImage(imgElement) {
   }
 }
 
+// 在handleMarkdownClick函数中添加获取原始Markdown的逻辑
 const handleMarkdownClick = async (e) => {
   // 1. 阻止默认行为（防止Alt+Click触发浏览器默认动作）
   e.preventDefault();
@@ -583,6 +599,7 @@ const handleMarkdownClick = async (e) => {
   let message = '';
   let noteContent = '';
   let noteHtml = '';
+  let originalMarkdown = ''; // 新增：存储原始Markdown
 
   // 图片处理（现在支持Alt+Click）
   if (target.tagName === 'IMG') {
@@ -592,6 +609,7 @@ const handleMarkdownClick = async (e) => {
       message = '已选中图片';
       noteContent = `![图片](${processedSrc})`;
       noteHtml = `<img src="${processedSrc}" alt="笔记图片" class="note-image">`;
+      originalMarkdown = noteContent; // 图片的原始Markdown就是noteContent
 
       // 标记base64图片
       if (target.src.startsWith('data:')) {
@@ -602,6 +620,7 @@ const handleMarkdownClick = async (e) => {
       message = '图片处理失败，使用原始链接';
       noteContent = `![图片](${target.src})`;
       noteHtml = target.outerHTML;
+      originalMarkdown = noteContent;
     }
   }
   // 代码块
@@ -610,30 +629,76 @@ const handleMarkdownClick = async (e) => {
     selectedElement = codeBlock;
     const codeContent = codeBlock.textContent || '';
     message = `已选中代码块: ${codeContent.substring(0, 30)}${codeContent.length > 30 ? '...' : ''}`;
-    noteContent = `\`\`\`\n${codeContent}\n\`\`\``;
+
+    // 获取原始Markdown（从data-md-original属性）
+    originalMarkdown = codeBlock.closest('[data-md-original]')?.getAttribute('data-md-original') ||
+      `\`\`\`\n${codeContent}\n\`\`\``;
+
+    // 解码原始Markdown
+    originalMarkdown = decodeURIComponent(originalMarkdown);
+
+    noteContent = originalMarkdown;
     noteHtml = codeBlock.outerHTML;
   }
   // 数学公式
-  else if (target.closest('mjx-container, mjx-math')) {
-    selectedElement = target.closest('mjx-container, mjx-math');
-    const mathContent = selectedElement.getAttribute('data-mjx-text') || selectedElement.textContent || '';
-    message = `已选中数学公式: ${mathContent.substring(0, 30)}${mathContent.length > 30 ? '...' : ''}`;
-    noteContent = `$$${mathContent}$$`;
-    noteHtml = selectedElement.outerHTML;
+  else if (target.closest('mjx-container, mjx-math, .math-inline, .math-block')) {
+    const mathElement = target.closest('mjx-container, mjx-math, .math-inline, .math-block');
+    selectedElement = mathElement;
+
+    // 尝试从多个可能的位置获取原始公式
+    const original = mathElement.getAttribute('data-md-original') ||
+      mathElement.getAttribute('data-mjx-text') ||
+      mathElement.textContent;
+
+    // 安全解码原始内容
+    let decodedOriginal = original;
+    try {
+      decodedOriginal = decodeURIComponent(original);
+    } catch (err) {
+      console.warn('解码公式失败:', err);
+    }
+
+    // 移除可能的包装字符
+    decodedOriginal = decodedOriginal.replace(/^[\s$]*|[\s$]*$/g, '');
+
+    // 确定公式类型（行内或块级）
+    const isBlock = mathElement.classList.contains('math-block') ||
+      mathElement.tagName === 'MJX-BLOCK';
+
+    // 构建标准Markdown格式
+    noteContent = isBlock ? `$$${decodedOriginal}$$` : `$${decodedOriginal}$`;
+    noteHtml = mathElement.outerHTML;
+    message = `已选中${isBlock ? '块级' : '行内'}公式: ${decodedOriginal.substring(0, 30)}${decodedOriginal.length > 30 ? '...' : ''}`;
   }
   // mermaid图表
   else if (target.closest('.mermaid, svg')) {
     selectedElement = target.closest('.mermaid, svg');
     const mermaidContent = selectedElement.querySelector('.mermaid')?.textContent || selectedElement.textContent || '';
     message = '已选中图表';
-    noteContent = `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
+
+    // 获取原始Markdown（从data-md-original属性）
+    originalMarkdown = selectedElement.closest('[data-md-original]')?.getAttribute('data-md-original') ||
+      `\`\`\`mermaid\n${mermaidContent}\n\`\`\``;
+
+    // 解码原始Markdown
+    originalMarkdown = decodeURIComponent(originalMarkdown);
+
+    noteContent = originalMarkdown;
     noteHtml = selectedElement.outerHTML;
   }
   // 文本选择
   else if (selectedText && selection.rangeCount > 0) {
     selectedElement = selection.getRangeAt(0).startContainer.parentElement;
     message = `已选中文本: ${selectedText.substring(0, 30)}${selectedText.length > 30 ? '...' : ''}`;
-    noteContent = selectedText;
+
+    // 获取原始Markdown（从data-md-original属性）
+    originalMarkdown = selectedElement.closest('[data-md-original]')?.getAttribute('data-md-original') ||
+      selectedText;
+
+    // 解码原始Markdown
+    originalMarkdown = decodeURIComponent(originalMarkdown);
+
+    noteContent = originalMarkdown;
     noteHtml = `<p>${selectedText}</p>`;
   }
   // 段落点击
@@ -643,7 +708,15 @@ const handleMarkdownClick = async (e) => {
       selectedElement = paragraph;
       const textContent = paragraph.textContent || '';
       message = `已选中段落: ${textContent.substring(0, 30)}${textContent.length > 30 ? '...' : ''}`;
-      noteContent = textContent;
+
+      // 获取原始Markdown（从data-md-original属性）
+      originalMarkdown = paragraph.getAttribute('data-md-original') ||
+        textContent;
+
+      // 解码原始Markdown
+      originalMarkdown = decodeURIComponent(originalMarkdown);
+
+      noteContent = originalMarkdown;
       noteHtml = paragraph.outerHTML;
     }
   }
@@ -657,8 +730,9 @@ const handleMarkdownClick = async (e) => {
     const noteType = determineNoteType(target);
     const noteData = {
       type: noteType,
-      content: noteContent,
-      html: noteHtml
+      content: noteContent, // 使用原始Markdown作为内容
+      html: noteHtml,
+      originalMarkdown: originalMarkdown // 新增：存储原始Markdown
     };
 
     // 7. 区分复合笔记和新建笔记
@@ -1122,7 +1196,7 @@ const deleteCard = async (index) => {
   }
 };
 
-// 从Markdown内容添加卡片
+// 修改addToNotes函数，确保原始Markdown被保存
 const addToNotes = async (element) => {
   // 如果处于Alt键收集模式，则追加到当前卡片
   if (altKeyCollector.value.isActive) {
@@ -1134,8 +1208,10 @@ const addToNotes = async (element) => {
     id: Date.now().toString(),
     type: element.type || 'text',
     title: getCardTitle(element.type),
-    content: element.html || element.content,
-    timestamp: new Date().toISOString()
+    content: element.originalMarkdown || element.content, // 优先使用原始Markdown
+    html: element.html,
+    timestamp: new Date().toISOString(),
+    originalMarkdown: element.originalMarkdown // 新增：存储原始Markdown
   }
 
   noteCards.value.push(newCard)
@@ -1187,6 +1263,7 @@ const loadExistingNotes = async () => {
   }
 };
 
+// 修改updateBackendNotes函数，确保原始Markdown被保存到文件
 const updateBackendNotes = async (action, cardData) => {
   try {
     // 添加类型检查
@@ -1201,7 +1278,8 @@ const updateBackendNotes = async (action, cardData) => {
       data: {
         ...cardData,
         // 确保数据完整
-        timestamp: cardData.timestamp || new Date().toISOString()
+        timestamp: cardData.timestamp || new Date().toISOString(),
+        originalMarkdown: cardData.originalMarkdown || cardData.content // 保留原始Markdown
       },
       filePath: notesFilePath.value
     };
@@ -1609,7 +1687,7 @@ const translateInterval = 200; // 间隔200ms，确保不超过5次/秒
 // 修改后的翻译函数
 const translateMarkdown = async () => {
   if (isTranslating.value) return;
-  
+
   // 收集需要翻译的行
   const linesToTranslate = markdownLines.value
     .filter(line => !line.skipTranslation && !line.translation)
@@ -1620,7 +1698,7 @@ const translateMarkdown = async () => {
       const textNodes = [];
       const extractText = (node) => {
         if (shouldSkipTranslation(node)) return;
-        
+
         if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
           textNodes.push(node.textContent.trim());
         } else if (node.childNodes) {
@@ -1630,7 +1708,7 @@ const translateMarkdown = async () => {
         }
       };
       extractText(tempDiv);
-      
+
       return {
         line,
         text: textNodes.join(' '), // 合并所有文本节点
@@ -1641,7 +1719,7 @@ const translateMarkdown = async () => {
 
   // 添加到队列
   translateQueue.value.push(...linesToTranslate);
-  
+
   // 开始处理队列
   processTranslateQueue();
 };
@@ -1649,18 +1727,18 @@ const translateMarkdown = async () => {
 // 处理翻译队列
 const processTranslateQueue = async () => {
   if (isTranslating.value || translateQueue.value.length === 0) return;
-  
+
   const now = Date.now();
   if (now - lastTranslateTime.value < translateInterval) {
     setTimeout(processTranslateQueue, translateInterval - (now - lastTranslateTime.value));
     return;
   }
-  
+
   isTranslating.value = true;
   try {
     const currentBatch = translateQueue.value.splice(0, translateBatchSize);
     const texts = currentBatch.map(item => item.text);
-    
+
     // 调用后端接口
     const response = await invoke('translate_text', {
       texts: texts,
@@ -1670,7 +1748,7 @@ const processTranslateQueue = async () => {
 
     // 调试日志
     console.log('翻译响应:', response);
-    
+
     // 修复点1: 检查响应结构是否匹配
     if (response && response.translated_texts?.length === texts.length) {
       currentBatch.forEach((item, index) => {
@@ -1685,14 +1763,14 @@ const processTranslateQueue = async () => {
       });
     } else {
       // 修复点3: 提供更详细的错误信息
-      const errorMsg = response?.error || 
-                      (response?.translated_texts ? '返回结果数量不匹配' : '无效的响应格式');
+      const errorMsg = response?.error ||
+        (response?.translated_texts ? '返回结果数量不匹配' : '无效的响应格式');
       currentBatch.forEach(item => {
         item.line.translationError = `翻译失败: ${errorMsg}`;
       });
       console.error('翻译错误:', response);
     }
-    
+
     lastTranslateTime.value = Date.now();
   } catch (error) {
     // 修复点4: 更好的错误处理
@@ -1715,11 +1793,11 @@ const wrapTranslation = (html, translatedText) => {
 
   const tempDiv = document.createElement('div');
   tempDiv.innerHTML = html;
-  
+
   const textNodes = [];
   const findTextNodes = (node) => {
     if (shouldSkipTranslation(node)) return;
-    
+
     if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
       textNodes.push(node);
     } else if (node.childNodes) {
@@ -1729,7 +1807,7 @@ const wrapTranslation = (html, translatedText) => {
     }
   };
   findTextNodes(tempDiv);
-  
+
   let textPos = 0;
   for (const node of textNodes) {
     const originalText = node.textContent.trim();
@@ -1739,7 +1817,7 @@ const wrapTranslation = (html, translatedText) => {
       textPos = endPos + 1;
     }
   }
-  
+
   return tempDiv.innerHTML;
 };
 

@@ -148,6 +148,7 @@ function escapeRegExp(string) {
 export const renderMarkdown = async (content, options) => {
   console.log("原始内容:", content);
   const {
+    preserveOriginal = false, // 新增参数，控制是否保留原始内容
     mermaid: enableMermaid = true,
     math: enableMath = true,
     codeHighlight: enableCodeHighlight = true,
@@ -173,11 +174,10 @@ export const renderMarkdown = async (content, options) => {
     }
 
     const result = await response.json();
-    const processedContent = result.processed_content;
+    let finalContent = result.processed_content;
     const mappings = result.mappings || [];
 
     // 根据mappings替换图片路径
-    let finalContent = processedContent;
     mappings.forEach((mapping) => {
       finalContent = finalContent.replace(
         new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, "g"),
@@ -186,7 +186,8 @@ export const renderMarkdown = async (content, options) => {
     });
 
     console.log("result:", result);
-    console.log("处理后的内容:", processedContent);
+    console.log("处理后的内容:", finalContent); // 修复变量名错误，processedContent改为finalContent
+
     // 初始化各组件
     if (enableMermaid) {
       // console.log("初始化Mermaid配置");
@@ -201,6 +202,7 @@ export const renderMarkdown = async (content, options) => {
       // console.log("初始化MathJax");
       initMathJax();
     }
+
     // 配置Markdown-it
     const md = new MarkdownIt({
       html: true,
@@ -229,23 +231,67 @@ export const renderMarkdown = async (content, options) => {
       return `<span>${md.utils.escapeHtml(tokens[idx].content)}</span>`;
     };
 
-    // 修改段落渲染规则
+    // 保留原始段落渲染规则
     const defaultParagraphOpen =
       md.renderer.rules.paragraph_open || ((tokens, idx) => "<p>");
     const defaultParagraphClose =
       md.renderer.rules.paragraph_close || ((tokens, idx) => "</p>");
 
+    // 修改段落渲染规则（保留原有md-paragraph class添加功能）
     md.renderer.rules.paragraph_open = (tokens, idx) => {
-      return defaultParagraphOpen(tokens, idx).replace(
-        "<p>",
-        '<p class="md-paragraph">'
+      let paragraph = defaultParagraphOpen(tokens, idx).replace(
+        "<p",
+        '<p class="md-paragraph"'
       );
+
+      // 如果需要保留原始内容，添加data-md-original属性
+      if (preserveOriginal) {
+        const originalLines = content.split("\n");
+        const original = originalLines[idx] || ""; // 使用token索引获取对应行
+        paragraph = paragraph.replace(
+          "<p",
+          `<p data-md-original="${safeEncode(original)}"`
+        );
+      }
+
+      return paragraph;
     };
+
     md.renderer.rules.paragraph_close = (tokens, idx) => {
       return defaultParagraphClose(tokens, idx);
     };
 
-    // 添加Mermaid支持
+    // 保留原始内容的逻辑
+    if (preserveOriginal) {
+      const originalLines = content.split("\n");
+      let lineIndex = 0;
+
+      // 修改代码块渲染规则（同时保留高亮功能）
+      const defaultFence = md.renderer.rules.fence;
+      md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+        const token = tokens[idx];
+        const original = `\`\`\`${token.info || ""}\n${token.content}\n\`\`\``;
+        const rendered = defaultFence(tokens, idx, options, env, self);
+        return `<div data-md-original="${safeEncode(
+          original
+        )}">${rendered}</div>`;
+      };
+
+      // 修改标题渲染规则
+      const defaultHeadingOpen =
+        md.renderer.rules.heading_open ||
+        ((tokens, idx) => `<h${tokens[idx].hLevel}>`);
+
+      md.renderer.rules.heading_open = (tokens, idx) => {
+        const original = originalLines[lineIndex++] || "";
+        return defaultHeadingOpen(tokens, idx).replace(
+          `<h${tokens[idx].hLevel}`,
+          `<h${tokens[idx].hLevel} data-md-original="${safeEncode(original)}"`
+        );
+      };
+    }
+
+    // 添加Mermaid支持（同时保留原始内容功能）
     if (enableMermaid) {
       const defaultFence = md.renderer.rules.fence;
       md.renderer.rules.fence = (tokens, idx, options, env, self) => {
@@ -255,15 +301,74 @@ export const renderMarkdown = async (content, options) => {
             .replace(/&gt;/g, ">")
             .replace(/&lt;/g, "<")
             .replace(/&amp;/g, "&");
+
+          // 如果需要保留原始内容，添加data-md-original属性
+          if (preserveOriginal) {
+            const original = `\`\`\`mermaid\n${content}\n\`\`\``;
+            return `<pre class="mermaid" data-md-original="${safeEncode(
+              original
+            )}">${content}</pre>`;
+          }
           return `<pre class="mermaid">${content}</pre>`;
         }
         return defaultFence(tokens, idx, options, env, self);
       };
     }
 
-    // 添加数学公式支持
+    // 添加数学公式支持（完整修改部分）
     if (enableMath) {
       md.use(markdownItMathjax);
+
+      // 保存原始渲染函数
+      const originalInlineMath =
+        md.renderer.rules.math_inline ||
+        ((tokens, idx) => {
+          return `<span class="math-inline">${tokens[idx].content}</span>`;
+        });
+
+      const originalBlockMath =
+        md.renderer.rules.math_block ||
+        ((tokens, idx) => {
+          return `<div class="math-block">${tokens[idx].content}</div>`;
+        });
+
+      // 重写行内数学公式渲染
+      md.renderer.rules.math_inline = (tokens, idx, options, env, self) => {
+        const token = tokens[idx];
+        const originalContent = `$${token.content}$`;
+
+        // 获取默认渲染结果
+        let result = originalInlineMath(tokens, idx, options, env, self);
+
+        // 添加原始内容属性
+        if (preserveOriginal) {
+          result = result.replace(
+            "<span",
+            `<span data-md-original="${safeEncode(originalContent)}"`
+          );
+        }
+
+        return result;
+      };
+
+      // 重写块级数学公式渲染
+      md.renderer.rules.math_block = (tokens, idx, options, env, self) => {
+        const token = tokens[idx];
+        const originalContent = `$$${token.content}$$`;
+
+        // 获取默认渲染结果
+        let result = originalBlockMath(tokens, idx, options, env, self);
+
+        // 添加原始内容属性
+        if (preserveOriginal) {
+          result = result.replace(
+            "<div",
+            `<div data-md-original="${safeEncode(originalContent)}"`
+          );
+        }
+
+        return result;
+      };
     }
 
     // 执行渲染
@@ -306,21 +411,31 @@ export const renderMarkdown = async (content, options) => {
       }
     }
 
-    // 处理数学公式
+    // 处理数学公式（修改后的部分）
     if (enableMath) {
-      // console.log("开始处理数学公式");
       container.querySelectorAll(".math-inline, .math-block").forEach((el) => {
         try {
-          // 获取原始内容并修复可能的转义字符
+          // 获取原始内容
           const rawContent = el.textContent || "";
           const isBlock = el.classList.contains("math-block");
 
-          // 临时清空内容避免重复处理
+          // 获取原始Markdown（如果存在）
+          const originalMarkdown =
+            el.getAttribute("data-md-original") ||
+            (isBlock ? `$$${rawContent}$$` : `$${rawContent}$`);
+
+          // 临时清空内容
           el.textContent = "";
 
           // 创建新的span元素用于渲染
           const mathSpan = document.createElement("span");
           mathSpan.textContent = rawContent;
+
+          // 保留原始Markdown
+          if (preserveOriginal) {
+            mathSpan.setAttribute("data-md-original", originalMarkdown);
+          }
+
           el.appendChild(mathSpan);
 
           // 调用MathJax渲染
@@ -342,3 +457,17 @@ export const renderMarkdown = async (content, options) => {
     return content;
   }
 };
+
+// 安全编码函数（完整实现）
+function safeEncode(content) {
+  if (!content) return "";
+
+  return encodeURIComponent(content)
+    .replace(/'/g, "%27")
+    .replace(/"/g, "%22")
+    .replace(/</g, "%3C")
+    .replace(/>/g, "%3E")
+    .replace(/&/g, "%26")
+    .replace(/\//g, "%2F")
+    .replace(/\\/g, "%5C");
+}
