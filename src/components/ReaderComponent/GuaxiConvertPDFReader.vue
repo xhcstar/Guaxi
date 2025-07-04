@@ -480,10 +480,10 @@ function shouldSkipTranslation(node) {
 // 添加安全编码函数
 function safeEncode(content) {
   if (!content) return '';
-  
+
   // 首先确保是字符串
   content = String(content);
-  
+
   // 替换保留字符
   return encodeURIComponent(content)
     .replace(/'/g, "%27")     // 单引号
@@ -697,12 +697,12 @@ const handleMarkdownClick = async (e) => {
 
     message = `已选中${isBlockFormula ? '块级' : '行内'}公式: ${decodedOriginal.substring(0, 30)}${decodedOriginal.length > 30 ? '...' : ''}`;
 
-    console.log('数学公式处理结果:', {
-      noteContent,
-      noteHtml,
-      originalMarkdown,
-      isBlockFormula
-    });
+    // console.log('数学公式处理结果:', {
+      // noteContent,
+      // noteHtml,
+      // originalMarkdown,
+      // isBlockFormula
+    // });
   }
   // mermaid图表
   else if (target.closest('.mermaid, svg')) {
@@ -731,6 +731,7 @@ const handleMarkdownClick = async (e) => {
 
     // 解码原始Markdown
     originalMarkdown = decodeURIComponent(originalMarkdown);
+    console.log('原始Markdown:', originalMarkdown);
 
     noteContent = originalMarkdown;
     noteHtml = `<p>${selectedText}</p>`;
@@ -746,6 +747,8 @@ const handleMarkdownClick = async (e) => {
       // 获取原始Markdown（从data-md-original属性）
       originalMarkdown = paragraph.getAttribute('data-md-original') ||
         textContent;
+      
+      console.log('段落原始Markdown:', originalMarkdown);
 
       // 解码原始Markdown
       originalMarkdown = decodeURIComponent(originalMarkdown);
@@ -2806,7 +2809,8 @@ code:not(.hljs code) {
 }
 
 /* 确保数学公式容器正确显示 */
-.math-inline-container, .math-block-container {
+.math-inline-container,
+.math-block-container {
   display: inline-block;
 }
 

@@ -226,32 +226,42 @@ export const renderMarkdown = async (content, options) => {
         : undefined,
     });
 
-    // 修改文本渲染规则，确保所有文本都被包裹
-    md.renderer.rules.text = (tokens, idx) => {
-      return `<span>${md.utils.escapeHtml(tokens[idx].content)}</span>`;
-    };
-
-    // 保留原始段落渲染规则
+    // 段落渲染规则
     const defaultParagraphOpen =
       md.renderer.rules.paragraph_open || ((tokens, idx) => "<p>");
     const defaultParagraphClose =
       md.renderer.rules.paragraph_close || ((tokens, idx) => "</p>");
 
-    // 修改段落渲染规则（保留原有md-paragraph class添加功能）
     md.renderer.rules.paragraph_open = (tokens, idx) => {
       let paragraph = defaultParagraphOpen(tokens, idx).replace(
         "<p",
         '<p class="md-paragraph"'
       );
 
-      // 如果需要保留原始内容，添加data-md-original属性
       if (preserveOriginal) {
-        const originalLines = content.split("\n");
-        const original = originalLines[idx] || ""; // 使用token索引获取对应行
-        paragraph = paragraph.replace(
-          "<p",
-          `<p data-md-original="${safeEncode(original)}"`
-        );
+        // 只为普通段落添加原始内容，不处理代码块、数学公式块、mermaid图表块
+        // 判断当前段落是否属于这些特殊块的范围
+        // token.map: [起始行, 结束行]，可用于定位原文行号
+        const token = tokens[idx];
+        // 只处理有 map 属性的段落（即普通段落），跳过没有 map 的（如代码块、公式块等）
+        if (token && Array.isArray(token.map)) {
+          // 取段落起始行
+          const lineIndex = token.map[0];
+          // 用正则分割，兼容 \r\n、\n、\r
+          const originalLines = content.split(/\r?\n|\r/);
+          const original = originalLines[lineIndex] || "";
+          // 仅为普通段落添加 data-md-original
+          paragraph = paragraph.replace(
+            "<p",
+            `<p data-md-original="${safeEncode(original)}"`
+          );
+          // 可选：调试输出
+          // console.log(`段落[${idx}] - 设置原始内容:`, {
+          //   lineIndex,
+          //   originalContent: original,
+          //   encodedContent: safeEncode(original),
+          // });
+        }
       }
 
       return paragraph;
@@ -260,36 +270,6 @@ export const renderMarkdown = async (content, options) => {
     md.renderer.rules.paragraph_close = (tokens, idx) => {
       return defaultParagraphClose(tokens, idx);
     };
-
-    // 保留原始内容的逻辑
-    if (preserveOriginal) {
-      const originalLines = content.split("\n");
-      let lineIndex = 0;
-
-      // 修改代码块渲染规则（同时保留高亮功能）
-      const defaultFence = md.renderer.rules.fence;
-      md.renderer.rules.fence = (tokens, idx, options, env, self) => {
-        const token = tokens[idx];
-        const original = `\`\`\`${token.info || ""}\n${token.content}\n\`\`\``;
-        const rendered = defaultFence(tokens, idx, options, env, self);
-        return `<div data-md-original="${safeEncode(
-          original
-        )}">${rendered}</div>`;
-      };
-
-      // 修改标题渲染规则
-      const defaultHeadingOpen =
-        md.renderer.rules.heading_open ||
-        ((tokens, idx) => `<h${tokens[idx].hLevel}>`);
-
-      md.renderer.rules.heading_open = (tokens, idx) => {
-        const original = originalLines[lineIndex++] || "";
-        return defaultHeadingOpen(tokens, idx).replace(
-          `<h${tokens[idx].hLevel}`,
-          `<h${tokens[idx].hLevel} data-md-original="${safeEncode(original)}"`
-        );
-      };
-    }
 
     // 添加Mermaid支持（同时保留原始内容功能）
     if (enableMermaid) {
@@ -439,9 +419,12 @@ export const renderMarkdown = async (content, options) => {
 
 // 安全编码函数（完整实现）
 function safeEncode(content) {
-  if (!content) return "";
+  if (!content) {
+    console.warn("安全编码: 空内容");
+    return "";
+  }
 
-  return encodeURIComponent(content)
+  const encoded = encodeURIComponent(content)
     .replace(/'/g, "%27")
     .replace(/"/g, "%22")
     .replace(/</g, "%3C")
@@ -449,4 +432,7 @@ function safeEncode(content) {
     .replace(/&/g, "%26")
     .replace(/\//g, "%2F")
     .replace(/\\/g, "%5C");
+
+  // console.log("安全编码结果:", { original: content, encoded });
+  return encoded;
 }
