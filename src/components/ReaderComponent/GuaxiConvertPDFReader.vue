@@ -154,12 +154,12 @@
           <!-- 根据笔记类型使用不同的渲染方式 -->
           <div v-if="card.type !== 'composite'" class="note-content" :contenteditable="activeCardIndex === index"
             @keydown.enter="handleEnterKey(index, $event)" @keydown.meta.s.prevent="saveCardEdit(index)"
-            @keydown.ctrl.s.prevent="saveCardEdit(index)" v-html="card.content"
+            @keydown.ctrl.s.prevent="saveCardEdit(index)" v-html="noteHtmls[index]"
             :ref="el => setContentEditableRef(index, el)"></div>
 
           <!-- 添加复合笔记的专用渲染 -->
           <div v-else class="composite-note-content">
-            <div v-for="(segment, segIndex) in parseCompositeContent(card.html)" :key="segIndex" class="note-segment"
+            <div v-for="(segment, segIndex) in compositeSegments[index]" :key="segIndex" class="note-segment"
               :class="getSegmentClass(segment)">
               <div v-html="segment.content"></div>
             </div>
@@ -196,7 +196,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, watchEffect, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -247,6 +247,8 @@ const message = useMessage()
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
 const markdownContainer = ref(null);
+const noteHtmls = ref([]);
+const compositeSegments = ref([]);
 
 // 3. PDF渲染相关
 const {
@@ -327,6 +329,23 @@ async function processImages(content, basePath = '') {
   }
   return replacements.reduce((result, { from, to }) => result.replace(from, to), content);
 }
+
+// 渲染笔记内容为HTML
+const renderNoteContent = async (markdown) => {
+  if (!markdown) return '';
+  try {
+    return await renderMarkdown(markdown, {
+      preserveOriginal: false,
+      basePath: "",
+      mermaid: true,
+      math: true,
+      codeHighlight: true,
+      theme: 'default'
+    });
+  } catch (e) {
+    return `<div class="render-error">${e.message}</div>`;
+  }
+};
 
 async function convertPdfRenderMarkdown(content, options = {}) {
   const processedContent = await processImages(content, options.libraryBasePath);
@@ -656,7 +675,7 @@ const handleMarkdownClick = async (e) => {
     selectedElement = mathElement;
 
     // 调试信息
-    console.log('点击的数学元素:', mathElement);
+    // console.log('点击的数学元素:', mathElement);
 
     // 查找原始LaTeX内容（按优先级）
     let original = mathElement.getAttribute('data-md-original');
@@ -698,10 +717,10 @@ const handleMarkdownClick = async (e) => {
     message = `已选中${isBlockFormula ? '块级' : '行内'}公式: ${decodedOriginal.substring(0, 30)}${decodedOriginal.length > 30 ? '...' : ''}`;
 
     // console.log('数学公式处理结果:', {
-      // noteContent,
-      // noteHtml,
-      // originalMarkdown,
-      // isBlockFormula
+    // noteContent,
+    // noteHtml,
+    // originalMarkdown,
+    // isBlockFormula
     // });
   }
   // mermaid图表
@@ -747,7 +766,7 @@ const handleMarkdownClick = async (e) => {
       // 获取原始Markdown（从data-md-original属性）
       originalMarkdown = paragraph.getAttribute('data-md-original') ||
         textContent;
-      
+
       console.log('段落原始Markdown:', originalMarkdown);
 
       // 解码原始Markdown
@@ -877,43 +896,51 @@ const endAltKeyCollection = () => {
 };
 
 // 解析复合笔记内容
-const parseCompositeContent = (html) => {
+const parseCompositeContent = async (html) => {
   if (!html) return [];
-
-  // console.log('解析复合笔记:', html);
   try {
-    // 创建临时DOM来解析HTML
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = html;
-
-    // 提取各个片段
-    const segments = Array.from(tempDiv.children).map(el => {
-      const classList = Array.from(el.classList);
+    const segments = await Promise.all(Array.from(tempDiv.children).map(async el => {
       let type = 'text';
-
+      const classList = Array.from(el.classList);
       if (classList.includes('code-segment')) type = 'code';
       else if (classList.includes('image-segment')) type = 'image';
       else if (classList.includes('diagram-segment')) type = 'diagram';
       else if (el.querySelector('mjx-container, mjx-math')) type = 'math';
 
-      // console.log('解析片段:', {
-      //   type,
-      //   content: el.outerHTML
-      // });
+      let rawMarkdown = '';
+      if (type === 'diagram') {
+        const mermaidRaw = el.getAttribute('data-md-original');
+        if (mermaidRaw) {
+          rawMarkdown = decodeURIComponent(mermaidRaw); // 关键修正
+        } else {
+          const mermaidText = el.textContent || '';
+          rawMarkdown = `\`\`\`mermaid\n${mermaidText.trim()}\n\`\`\``;
+        }
+      } else if (type === 'code') {
+        const codeRaw = el.getAttribute('data-md-original');
+        if (codeRaw) {
+          rawMarkdown = decodeURIComponent(codeRaw); // 关键修正
+        } else {
+          const codeText = el.textContent || '';
+          rawMarkdown = `\`\`\`\n${codeText.trim()}\n\`\`\``;
+        }
+      } else {
+        rawMarkdown = el.textContent || el.outerHTML;
+      }
 
-
+      const rendered = await renderNoteContent(rawMarkdown);
       return {
         type,
-        content: el.outerHTML
+        content: rendered
       };
-    });
-
+    }));
     return segments;
   } catch (error) {
-    console.error('解析复合笔记失败:', error);
     return [{
       type: 'text',
-      content: html
+      content: `<div class="render-error">${error.message}</div>`
     }];
   }
 };
@@ -941,17 +968,17 @@ const appendToCurrentNote = (element) => {
       currentCard.content += `\n\n${element.content}`;
       currentCard.html += `<div class="note-segment ${element.type}-segment">${element.html}</div>`;
       break;
-    case 'code':
-      currentCard.content += `\n\n${element.content}`;
-      currentCard.html += `<div class="note-segment code-segment">${element.html}</div>`;
-      break;
     case 'image':
       currentCard.content += `\n\n${element.content}`;
       currentCard.html += `<div class="note-segment image-segment">${element.html}</div>`;
       break;
+    case 'code':
+      currentCard.content += `\n\n${element.content}`;
+      currentCard.html += `<div class="note-segment code-segment" data-md-original="${encodeURIComponent(element.originalMarkdown || element.content)}">${element.html}</div>`;
+      break;
     case 'diagram':
       currentCard.content += `\n\n${element.content}`;
-      currentCard.html += `<div class="note-segment diagram-segment">${element.html}</div>`;
+      currentCard.html += `<div class="note-segment diagram-segment" data-md-original="${encodeURIComponent(element.originalMarkdown || element.content)}">${element.html}</div>`;
       break;
     default:
       currentCard.content += `\n\n${element.content}`;
@@ -2022,6 +2049,37 @@ const handleImageLoad = () => {
     fitToWidth();
   });
 };
+
+// 监听 noteCards，自动渲染所有笔记
+watchEffect(async () => {
+  noteHtmls.value = await Promise.all(
+    noteCards.value.map(card =>
+      renderNoteContent(card.originalMarkdown || card.content)
+    )
+  );
+
+  compositeSegments.value = await Promise.all(
+    noteCards.value.map(async card =>
+      card.type === 'composite'
+        ? await parseCompositeContent(card.html)
+        : []
+    )
+  );
+
+  // 等待 DOM 更新后，手动渲染 mermaid
+  nextTick(() => {
+    document.querySelectorAll('.composite-note-content .mermaid').forEach(el => {
+      try {
+        // 只渲染未被渲染过的
+        if (!el.querySelector('svg')) {
+          mermaid.run({ nodes: [el] });
+        }
+      } catch (e) {
+        // 忽略已渲染的
+      }
+    });
+  });
+});
 </script>
 
 <style scoped>
