@@ -480,15 +480,24 @@ function shouldSkipTranslation(node) {
 // 添加安全编码函数
 function safeEncode(content) {
   if (!content) return '';
-
+  
+  // 首先确保是字符串
+  content = String(content);
+  
+  // 替换保留字符
   return encodeURIComponent(content)
-    .replace(/'/g, "%27")
-    .replace(/"/g, "%22")
-    .replace(/</g, "%3C")
-    .replace(/>/g, "%3E")
-    .replace(/&/g, "%26")
-    .replace(/\//g, "%2F")
-    .replace(/\\/g, "%5C");
+    .replace(/'/g, "%27")     // 单引号
+    .replace(/"/g, "%22")     // 双引号
+    .replace(/</g, "%3C")     // 小于号
+    .replace(/>/g, "%3E")     // 大于号
+    .replace(/&/g, "%26")     // &符号
+    .replace(/\//g, "%2F")    // 斜杠
+    .replace(/\\/g, "%5C")    // 反斜杠
+    .replace(/\$/g, "%24")    // $符号（数学公式重要字符）
+    .replace(/{/g, "%7B")     // 左大括号
+    .replace(/}/g, "%7D")     // 右大括号
+    .replace(/\^/g, "%5E")    // 脱字符
+    .replace(/_/g, "%5F");    // 下划线
 }
 
 // 11. 笔记相关函数
@@ -641,34 +650,59 @@ const handleMarkdownClick = async (e) => {
     noteHtml = codeBlock.outerHTML;
   }
   // 数学公式
-  else if (target.closest('mjx-container, mjx-math, .math-inline, .math-block')) {
-    const mathElement = target.closest('mjx-container, mjx-math, .math-inline, .math-block');
+  else if (target.closest('mjx-container, mjx-math, .math-inline, .math-block, svg.math-rendered')) {
+    // 获取最接近的数学元素（可能是容器或SVG）
+    const mathElement = target.closest('mjx-container, mjx-math, .math-inline, .math-block, svg.math-rendered');
     selectedElement = mathElement;
 
-    // 尝试从多个可能的位置获取原始公式
-    const original = mathElement.getAttribute('data-md-original') ||
-      mathElement.getAttribute('data-mjx-text') ||
-      mathElement.textContent;
+    // 调试信息
+    console.log('点击的数学元素:', mathElement);
+
+    // 查找原始LaTeX内容（按优先级）
+    let original = mathElement.getAttribute('data-md-original');
+    if (!original && mathElement.closest('[data-md-original]')) {
+      original = mathElement.closest('[data-md-original]').getAttribute('data-md-original');
+    }
+    if (!original && mathElement.querySelector('[data-md-original]')) {
+      original = mathElement.querySelector('[data-md-original]').getAttribute('data-md-original');
+    }
 
     // 安全解码原始内容
     let decodedOriginal = original;
     try {
-      decodedOriginal = decodeURIComponent(original);
+      if (decodedOriginal) {
+        decodedOriginal = decodeURIComponent(decodedOriginal);
+      } else {
+        console.warn('未找到data-md-original属性，尝试从元素内容重建');
+        const isBlock = mathElement.classList.contains('math-block') ||
+          mathElement.closest('.math-block') ||
+          mathElement.tagName === 'MJX-BLOCK';
+        const content = mathElement.textContent || '';
+        decodedOriginal = isBlock ? `$$${content}$$` : `$${content}$`;
+      }
     } catch (err) {
       console.warn('解码公式失败:', err);
+      decodedOriginal = original || '无法获取公式内容';
     }
 
-    // 移除可能的包装字符
-    decodedOriginal = decodedOriginal.replace(/^[\s$]*|[\s$]*$/g, '');
-
-    // 确定公式类型（行内或块级）
-    const isBlock = mathElement.classList.contains('math-block') ||
-      mathElement.tagName === 'MJX-BLOCK';
-
-    // 构建标准Markdown格式
-    noteContent = isBlock ? `$$${decodedOriginal}$$` : `$${decodedOriginal}$`;
+    // 构建笔记数据
+    noteContent = decodedOriginal;
     noteHtml = mathElement.outerHTML;
-    message = `已选中${isBlock ? '块级' : '行内'}公式: ${decodedOriginal.substring(0, 30)}${decodedOriginal.length > 30 ? '...' : ''}`;
+    originalMarkdown = decodedOriginal;
+
+    // 确定是否为块级公式
+    const isBlockFormula = decodedOriginal.startsWith('$$') &&
+      decodedOriginal.endsWith('$$') &&
+      decodedOriginal.length > 4;
+
+    message = `已选中${isBlockFormula ? '块级' : '行内'}公式: ${decodedOriginal.substring(0, 30)}${decodedOriginal.length > 30 ? '...' : ''}`;
+
+    console.log('数学公式处理结果:', {
+      noteContent,
+      noteHtml,
+      originalMarkdown,
+      isBlockFormula
+    });
   }
   // mermaid图表
   else if (target.closest('.mermaid, svg')) {
@@ -1154,7 +1188,7 @@ ${rawCode.trim()}
 const ensureNotesPath = async () => {
   if (!notesFilePath.value) {
     const notesDir = await getNotesDirectory()
-    notesFilePath.value = await join(notesDir, `${props.fileName.replace('.pdf', '')}.html`)
+    notesFilePath.value = await join(notesDir, `${props.fileName.replace('.pdf', '')}.md`)
   }
   return notesFilePath.value
 }
@@ -2672,7 +2706,7 @@ button:disabled {
 
 <style>
 /* 71. 数学公式全局样式 */
-.math-inline {
+/* .math-inline {
   display: inline;
   vertical-align: middle;
 }
@@ -2681,7 +2715,7 @@ button:disabled {
   display: block;
   text-align: center;
   margin: 1rem 0;
-}
+} */
 
 /* 72. Mermaid图表全局样式 */
 .mermaid {
@@ -2768,6 +2802,22 @@ code:not(.hljs code) {
 }
 
 .diagram-note {
+  text-align: center;
+}
+
+/* 确保数学公式容器正确显示 */
+.math-inline-container, .math-block-container {
+  display: inline-block;
+}
+
+mjx-container.math-inline {
+  display: inline;
+  vertical-align: middle;
+}
+
+mjx-container.math-block {
+  display: block;
+  margin: 1em 0;
   text-align: center;
 }
 </style>

@@ -146,7 +146,7 @@ function escapeRegExp(string) {
 // }
 
 export const renderMarkdown = async (content, options) => {
-  console.log("原始内容:", content);
+  // console.log("原始内容:", content);
   const {
     preserveOriginal = false, // 新增参数，控制是否保留原始内容
     mermaid: enableMermaid = true,
@@ -185,8 +185,8 @@ export const renderMarkdown = async (content, options) => {
       );
     });
 
-    console.log("result:", result);
-    console.log("处理后的内容:", finalContent); // 修复变量名错误，processedContent改为finalContent
+    // console.log("result:", result);
+    // console.log("处理后的内容:", finalContent);
 
     // 初始化各组件
     if (enableMermaid) {
@@ -320,54 +320,45 @@ export const renderMarkdown = async (content, options) => {
       md.use(markdownItMathjax);
 
       // 保存原始渲染函数
-      const originalInlineMath =
-        md.renderer.rules.math_inline ||
-        ((tokens, idx) => {
-          return `<span class="math-inline">${tokens[idx].content}</span>`;
-        });
-
-      const originalBlockMath =
-        md.renderer.rules.math_block ||
-        ((tokens, idx) => {
-          return `<div class="math-block">${tokens[idx].content}</div>`;
-        });
+      const originalInlineMath = md.renderer.rules.math_inline;
+      const originalBlockMath = md.renderer.rules.math_block;
 
       // 重写行内数学公式渲染
       md.renderer.rules.math_inline = (tokens, idx, options, env, self) => {
         const token = tokens[idx];
-        const originalContent = `$${token.content}$`;
+        const originalLatex = `$${token.content}$`;
 
-        // 获取默认渲染结果
-        let result = originalInlineMath(tokens, idx, options, env, self);
+        // 创建容器元素并添加原始内容
+        const container = document.createElement("span");
+        container.className = "math-inline-container";
+        container.setAttribute("data-md-original", safeEncode(originalLatex));
 
-        // 添加原始内容属性
-        if (preserveOriginal) {
-          result = result.replace(
-            "<span",
-            `<span data-md-original="${safeEncode(originalContent)}"`
-          );
-        }
+        // 使用原始渲染器生成内容
+        const mathContent = originalInlineMath
+          ? originalInlineMath(tokens, idx, options, env, self)
+          : `<span class="math-inline">${token.content}</span>`;
 
-        return result;
+        container.innerHTML = mathContent;
+        return container.outerHTML;
       };
 
       // 重写块级数学公式渲染
       md.renderer.rules.math_block = (tokens, idx, options, env, self) => {
         const token = tokens[idx];
-        const originalContent = `$$${token.content}$$`;
+        const originalLatex = `$$${token.content}$$`;
 
-        // 获取默认渲染结果
-        let result = originalBlockMath(tokens, idx, options, env, self);
+        // 创建容器元素并添加原始内容
+        const container = document.createElement("div");
+        container.className = "math-block-container";
+        container.setAttribute("data-md-original", safeEncode(originalLatex));
 
-        // 添加原始内容属性
-        if (preserveOriginal) {
-          result = result.replace(
-            "<div",
-            `<div data-md-original="${safeEncode(originalContent)}"`
-          );
-        }
+        // 使用原始渲染器生成内容
+        const mathContent = originalBlockMath
+          ? originalBlockMath(tokens, idx, options, env, self)
+          : `<div class="math-block">${token.content}</div>`;
 
-        return result;
+        container.innerHTML = mathContent;
+        return container.outerHTML;
       };
     }
 
@@ -411,42 +402,30 @@ export const renderMarkdown = async (content, options) => {
       }
     }
 
-    // 处理数学公式（修改后的部分）
     if (enableMath) {
-      container.querySelectorAll(".math-inline, .math-block").forEach((el) => {
-        try {
-          // 获取原始内容
-          const rawContent = el.textContent || "";
-          const isBlock = el.classList.contains("math-block");
+      // 处理已渲染的数学公式
+      container
+        .querySelectorAll(".math-inline-container, .math-block-container")
+        .forEach((el) => {
+          const mjxContainer = el.querySelector("mjx-container");
+          if (mjxContainer) {
+            // 将原始内容转移到mjx-container
+            mjxContainer.setAttribute(
+              "data-md-original",
+              el.getAttribute("data-md-original")
+            );
 
-          // 获取原始Markdown（如果存在）
-          const originalMarkdown =
-            el.getAttribute("data-md-original") ||
-            (isBlock ? `$$${rawContent}$$` : `$${rawContent}$`);
+            // 保留容器类名
+            mjxContainer.classList.add(
+              el.classList.contains("math-inline-container")
+                ? "math-inline"
+                : "math-block"
+            );
 
-          // 临时清空内容
-          el.textContent = "";
-
-          // 创建新的span元素用于渲染
-          const mathSpan = document.createElement("span");
-          mathSpan.textContent = rawContent;
-
-          // 保留原始Markdown
-          if (preserveOriginal) {
-            mathSpan.setAttribute("data-md-original", originalMarkdown);
+            // 替换容器
+            el.replaceWith(mjxContainer);
           }
-
-          el.appendChild(mathSpan);
-
-          // 调用MathJax渲染
-          renderMath(mathSpan, isBlock);
-        } catch (err) {
-          console.error("数学公式渲染错误:", err);
-          el.innerHTML = `<span class="math-error">${
-            err instanceof Error ? err.message : String(err)
-          }</span>`;
-        }
-      });
+        });
     }
 
     addCopyButtons(container);
