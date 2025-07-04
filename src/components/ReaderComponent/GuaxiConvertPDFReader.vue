@@ -655,18 +655,33 @@ const handleMarkdownClick = async (e) => {
   else if (target.closest('pre, code, .code-block')) {
     const codeBlock = target.closest('pre, code, .code-block');
     selectedElement = codeBlock;
-    const codeContent = codeBlock.textContent || '';
+
+    // 克隆代码块节点以避免修改原始DOM
+    const clonedBlock = codeBlock.cloneNode(true);
+
+    // 移除克隆节点中的复制按钮
+    const copyButton = clonedBlock.querySelector('.copy-button');
+    if (copyButton) {
+      copyButton.remove();
+    }
+
+    // 获取处理后的代码内容
+    const codeContent = clonedBlock.textContent || '';
     message = `已选中代码块: ${codeContent.substring(0, 30)}${codeContent.length > 30 ? '...' : ''}`;
+    console.log('选中的代码块:', codeBlock);
 
     // 获取原始Markdown（从data-md-original属性）
     originalMarkdown = codeBlock.closest('[data-md-original]')?.getAttribute('data-md-original') ||
       `\`\`\`\n${codeContent}\n\`\`\``;
+    console.log('代码块原始Markdown:', originalMarkdown);
 
-    // 解码原始Markdown
+    // 解码原始Markdown并移除可能的"复制"文本
     originalMarkdown = decodeURIComponent(originalMarkdown);
+    originalMarkdown = originalMarkdown.replace(/\s*复制\s*$/, ''); // 移除末尾的"复制"文本
 
+    // 使用处理后的HTML（不含复制按钮）
     noteContent = originalMarkdown;
-    noteHtml = codeBlock.outerHTML;
+    noteHtml = clonedBlock.outerHTML;
   }
   // 数学公式
   else if (target.closest('mjx-container, mjx-math, .math-inline, .math-block, svg.math-rendered')) {
@@ -856,7 +871,7 @@ const startAltKeyCollection = () => {
     }
   });
 
-  message.info('已进入多选模式，松开Alt键结束收集', { duration: 3000 });
+  message.info('已进入多选模式, 松开Alt键结束收集', { duration: 3000 });
 };
 
 // 结束Alt键收集模式
