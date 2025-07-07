@@ -9,6 +9,28 @@ pub struct ExcerptNote {
     pub file_name: String, // 文件名（不含路径）
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExcerptItem {
+    id: String,
+    r#type: String,
+    content: String,
+    timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExcerptCard {
+    id: String,
+    r#type: String,
+    title: String,
+    items: Vec<ExcerptItem>,
+    timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExcerptFile {
+    cards: Vec<ExcerptCard>,
+}
+
 #[tauri::command]
 pub async fn search_excerpt_notes(pattern: &str, path: &str) -> Result<Vec<ExcerptNote>, String> {
     let libraries_path = Path::new(path).join("Libraries");
@@ -90,4 +112,13 @@ fn search_notes_in_dir(notes_dir: &Path, pattern: &str) -> std::io::Result<Vec<E
     }
 
     Ok(results)
+}
+
+#[tauri::command]
+pub async fn read_excerpt_file(path: String) -> Result<ExcerptFile, String> {
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse JSON: {}", e))
 }
