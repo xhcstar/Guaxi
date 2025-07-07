@@ -2498,11 +2498,10 @@ button:disabled {
 
 /* 编辑状态更明显的视觉反馈 */
 .note-content[contenteditable="true"] {
-  outline: 2px solid #4dabf7;
+  /* outline: 2px solid #4dabf7; */
   padding: 12px;
   border-radius: 8px;
-  background-color: rgba(77, 171, 247, 0.05);
-  transition: all 0.2s ease;
+  background-color: rgba(3, 101, 167, 0.05);
 }
 
 /* 复合笔记的编辑状态 */
@@ -2651,13 +2650,6 @@ button:disabled {
   background-color: rgba(255, 107, 107, 0.1);
 }
 
-/* 67. 可编辑内容样式 */
-.note-content[contenteditable="true"],
-.composite-note-content[contenteditable="true"] {
-  outline: 1px dashed #4dabf7;
-  min-height: 60px;
-  padding: 8px;
-}
 
 /* 68. 翻译按钮样式 */
 .toggle-translate {
