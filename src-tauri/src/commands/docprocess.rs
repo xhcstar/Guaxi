@@ -131,6 +131,14 @@ pub async fn copy_image_file(
     fs_extra::file::copy(&src, &dest, &options)
         .map_err(|e| format!("复制文件失败: {}", e))?;
 
+    info!("文件复制成功: {} -> {}", src.display(), dest.display());
+
+    // 处理相对路径的显示
+    let relative_path = dest.strip_prefix(&dest_dir)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "无法计算相对路径".to_string());
+    info!("相对路径 {}", relative_path);
+
     // 返回相对路径
     dest.strip_prefix(&dest_dir)
         .map(|p| p.to_owned())

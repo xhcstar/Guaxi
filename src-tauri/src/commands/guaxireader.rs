@@ -1,14 +1,14 @@
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 use urlencoding::encode;
-use sha2::{Sha256, Digest};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use chrono::Local;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SvgSaveResult {
@@ -39,6 +39,31 @@ pub struct FileData {
 // 窗口数据存储
 pub struct WindowDataStorage {
     data: Mutex<std::collections::HashMap<String, FileData>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NoteItem {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub item_type: String, // "text", "image", "code", "math", "diagram"
+    pub content: String,
+    pub original_markdown: String,
+    pub timestamp: String, // ISO 8601格式字符串
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NoteCard {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub card_type: String, // "single" or "composite"
+    pub title: String,
+    pub items: Vec<NoteItem>,
+    pub timestamp: String, // ISO 8601格式字符串
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NotesData {
+    pub cards: Vec<NoteCard>,
 }
 
 #[tauri::command]
@@ -100,14 +125,18 @@ pub async fn create_reader_window(
 }
 
 #[tauri::command]
-pub fn save_notes_to_file(content: String, notes_dir: String, file_name: String) -> Result<String, String> {
+pub fn save_notes_to_file(
+    content: String,
+    notes_dir: String,
+    file_name: String,
+) -> Result<String, String> {
     // 确保笔记目录存在
     fs::create_dir_all(&notes_dir).map_err(|e| e.to_string())?;
-    
+
     // 检查目录中是否已有笔记文件
     let entries = fs::read_dir(&notes_dir).map_err(|e| e.to_string())?;
     let mut note_files: Vec<String> = Vec::new();
-    
+
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
@@ -115,7 +144,7 @@ pub fn save_notes_to_file(content: String, notes_dir: String, file_name: String)
             note_files.push(path.file_name().unwrap().to_string_lossy().into_owned());
         }
     }
-    
+
     // 确定要写入的文件路径
     let file_path = if note_files.len() == 1 {
         // 如果只有一个笔记文件，使用它
@@ -125,28 +154,32 @@ pub fn save_notes_to_file(content: String, notes_dir: String, file_name: String)
         let now = Local::now().format("%Y_%m_%d_%H_%M_%S").to_string();
         format!("{}/{}-note-{}.md", notes_dir, file_name, now)
     };
-    
+
     // 写入文件（追加模式）
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&file_path)
         .map_err(|e| e.to_string())?;
-        
+
     writeln!(&mut file, "{}", content).map_err(|e| e.to_string())?;
-    
+
     Ok(format!("笔记已保存到: {}", file_path))
 }
 
 #[tauri::command]
-pub fn save_notes_to_file_no_append(content: String, notes_dir: String, file_name: String) -> Result<String, String> {
+pub fn save_notes_to_file_no_append(
+    content: String,
+    notes_dir: String,
+    file_name: String,
+) -> Result<String, String> {
     // 确保笔记目录存在
     fs::create_dir_all(&notes_dir).map_err(|e| e.to_string())?;
-    
+
     // 检查目录中是否已有笔记文件
     let entries = fs::read_dir(&notes_dir).map_err(|e| e.to_string())?;
     let mut note_files: Vec<String> = Vec::new();
-    
+
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
@@ -154,7 +187,7 @@ pub fn save_notes_to_file_no_append(content: String, notes_dir: String, file_nam
             note_files.push(path.file_name().unwrap().to_string_lossy().into_owned());
         }
     }
-    
+
     // 确定要写入的文件路径
     let file_path = if note_files.len() == 1 {
         // 如果只有一个笔记文件，使用它
@@ -164,29 +197,29 @@ pub fn save_notes_to_file_no_append(content: String, notes_dir: String, file_nam
         let now = Local::now().format("%Y_%m_%d_%H_%M_%S").to_string();
         format!("{}/{}-note-{}.md", notes_dir, file_name, now)
     };
-    
+
     // 写入文件（追加模式）
     let mut file = OpenOptions::new()
         .create(true)
         .open(&file_path)
         .map_err(|e| e.to_string())?;
-        
+
     writeln!(&mut file, "{}", content).map_err(|e| e.to_string())?;
-    
+
     Ok(format!("笔记已保存到: {}", file_path))
 }
 
 #[tauri::command]
 pub fn load_existing_notes(notes_dir: String, file_name: String) -> Result<NoteResponse, String> {
     use std::fs;
-    
+
     // 确保笔记目录存在
     fs::create_dir_all(&notes_dir).map_err(|e| e.to_string())?;
-    
+
     // 检查目录中的笔记文件
     let entries = fs::read_dir(&notes_dir).map_err(|e| e.to_string())?;
     let mut note_files: Vec<String> = Vec::new();
-    
+
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
@@ -194,17 +227,14 @@ pub fn load_existing_notes(notes_dir: String, file_name: String) -> Result<NoteR
             note_files.push(path.file_name().unwrap().to_string_lossy().into_owned());
         }
     }
-    
+
     // 如果有且只有一个笔记文件，加载它
     if note_files.len() == 1 {
         let file_path = format!("{}/{}", notes_dir, note_files[0]);
         let content = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
-        return Ok(NoteResponse {
-            file_path,
-            content,
-        });
+        return Ok(NoteResponse { file_path, content });
     }
-    
+
     Ok(NoteResponse {
         file_path: String::new(),
         content: String::new(),
@@ -218,12 +248,11 @@ pub async fn save_svg_file(
     image_dir: String,
 ) -> Result<SvgSaveResult, String> {
     // 创建目标目录
-    let mut images_path = std::env::current_dir()
-        .map_err(|e| format!("获取当前目录失败: {}", e))?;
+    let mut images_path =
+        std::env::current_dir().map_err(|e| format!("获取当前目录失败: {}", e))?;
     images_path.push(image_dir);
-    
-    std::fs::create_dir_all(&images_path)
-        .map_err(|e| format!("创建目录失败: {}", e))?;
+
+    std::fs::create_dir_all(&images_path).map_err(|e| format!("创建目录失败: {}", e))?;
 
     // 计算SHA256哈希（即使前端用了简单哈希，后端仍保持强哈希）
     let mut hasher = Sha256::new();
@@ -237,8 +266,7 @@ pub async fn save_svg_file(
 
     // 保存文件（如果不存在）
     if !file_path.exists() {
-        std::fs::write(&file_path, content)
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+        std::fs::write(&file_path, content).map_err(|e| format!("写入文件失败: {}", e))?;
     }
 
     info!("保存成功，文件路径: {} {}", file_name, content_hash);
@@ -251,50 +279,63 @@ pub async fn save_svg_file(
 }
 
 #[tauri::command]
-pub async fn load_notes_file(file_path: String) -> Result<serde_json::Value, String> {
-  if !std::path::Path::new(&file_path).exists() {
-    return Ok(json!({ "cards": [] }));
-  }
+pub async fn load_notes_file(file_path: String) -> Result<NotesData, String> {
+    // 如果文件不存在，返回空数据结构
+    if !std::path::Path::new(&file_path).exists() {
+        return Ok(NotesData { cards: Vec::new() });
+    }
 
-  let content = tokio::fs::read_to_string(&file_path)
-    .await
-    .map_err(|e| e.to_string())?;
+    // 读取文件内容
+    let content = tokio::fs::read_to_string(&file_path)
+        .await
+        .map_err(|e| e.to_string())?;
 
-  serde_json::from_str(&content)
-    .map_err(|e| format!("解析笔记文件失败: {}", e))
+    // 解析JSON数据
+    let notes: NotesData =
+        serde_json::from_str(&content).map_err(|e| format!("解析笔记文件失败: {}", e))?;
+
+    Ok(notes)
 }
 
 #[tauri::command]
 pub async fn update_notes_file(
-  action: String,
-  data: serde_json::Value,
-  file_path: String,
+    action: String,
+    data: serde_json::Value,
+    file_path: String,
 ) -> Result<(), String> {
-  // 读取现有数据
-  let mut notes = load_notes_file(file_path.clone())
-    .await
-    .unwrap_or(json!({ "cards": [] }));
+    // 读取现有数据
+    let mut notes = load_notes_file(file_path.clone())
+        .await
+        .unwrap_or_else(|_| NotesData { cards: Vec::new() });
 
-  // 处理操作
-  let cards = notes["cards"]
-    .as_array_mut()
-    .ok_or("无效的笔记格式")?;
+    // 解析传入的数据
+    let card: NoteCard =
+        serde_json::from_value(data).map_err(|e| format!("解析笔记数据失败: {}", e))?;
 
-  match action.as_str() {
-    "add" => cards.push(data),
-    "update" => {
-      if let Some(pos) = cards.iter().position(|c| c["id"] == data["id"]) {
-        cards[pos] = data;
-      }
-    },
-    "delete" => cards.retain(|c| c["id"] != data["id"]),
-    _ => return Err("无效的操作类型".into())
-  }
+    // 处理操作
+    match action.as_str() {
+        "add" => {
+            notes.cards.push(card);
+        }
+        "update" => {
+            if let Some(pos) = notes.cards.iter().position(|c| c.id == card.id) {
+                notes.cards[pos] = card;
+            } else {
+                return Err("未找到要更新的笔记".into());
+            }
+        }
+        "delete" => {
+            notes.cards.retain(|c| c.id != card.id);
+        }
+        _ => return Err("无效的操作类型".into()),
+    }
 
-  // 异步写入文件
-  tokio::fs::write(&file_path, notes.to_string())
-    .await
-    .map_err(|e| e.to_string())?;
+    // 异步写入文件
+    let json = serde_json::to_string_pretty(&notes).map_err(|e| e.to_string())?;
 
-  Ok(())
+    tokio::fs::write(&file_path, json)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }

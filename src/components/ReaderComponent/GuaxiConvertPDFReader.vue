@@ -200,6 +200,7 @@ import { ref, watchEffect, onMounted, onBeforeUnmount, watch, nextTick } from 'v
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { platform } from '@tauri-apps/plugin-os';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -334,7 +335,9 @@ async function processImages(content, basePath = '') {
 const renderNoteContent = async (markdown) => {
   if (!markdown) return '';
   try {
-    return await renderMarkdown(markdown, {
+    const imageDir = await getImagesDirectory();
+    const processedContent = await processImages(markdown, imageDir);
+    return await renderMarkdown(processedContent, {
       preserveOriginal: false,
       basePath: "",
       mermaid: true,
@@ -522,7 +525,6 @@ function safeEncode(content) {
 // 11. 笔记相关函数
 function determineNoteType(target) {
   console.log('determineNoteType called with target:', target);
-  const timestamp = new Date().toLocaleString();
 
   // 1. 优先检查数学公式
   if (target.closest('mjx-container, mjx-math, .math-inline, .math-block')) {
@@ -564,18 +566,23 @@ async function processNoteImage(imgElement) {
   try {
     // 解码URL并提取实际路径
     const rawSrc = imgElement.src;
+    // console.log('原始图片路径：', rawSrc);
     let filePath = '';
 
     if (rawSrc.startsWith('http://asset.localhost/')) {
       filePath = decodeURIComponent(rawSrc.replace('http://asset.localhost/', ''));
+      // console.log('处理本地图片路径', rawSrc, filePath);
     } else if (rawSrc.startsWith('file://')) {
       filePath = decodeURIComponent(new URL(rawSrc).pathname);
+      // console.log('处理file协议图片路径', rawSrc, filePath);
     } else {
+      // console.warn('非本地图片，无需处理:', rawSrc);
       return rawSrc; // 非本地图片直接返回原URL
     }
 
+    const osPlatform = await platform();
     // 标准化Windows路径
-    if (process.platform === 'win32') {
+    if (osPlatform === 'win32') {
       filePath = filePath.replace(/^\/([a-zA-Z]:)/, '$1');
     }
 
@@ -586,8 +593,14 @@ async function processNoteImage(imgElement) {
     const finalExt = validExts.includes(ext) ? ext : 'png';
     const fileName = `note-img-${Date.now()}.${finalExt}`;
 
+    // console.log('准备复制图片:', {
+    //   srcPath: filePath,
+    //   destDir: imageDir,
+    //   fileName: fileName
+    // });
+
     // 调用后端复制图片
-    const { relativePath } = await invoke('copy_image_file', {
+    const relativePath = await invoke('copy_image_file', {
       srcPath: filePath,
       destDir: imageDir,
       fileName: fileName
@@ -626,7 +639,6 @@ const handleMarkdownClick = async (e) => {
   let selectedElement = null;
   let message = '';
   let noteContent = '';
-  let noteHtml = '';
   let originalMarkdown = ''; // 新增：存储原始Markdown
 
   // 图片处理（现在支持Alt+Click）
@@ -636,18 +648,11 @@ const handleMarkdownClick = async (e) => {
       const processedSrc = await processNoteImage(target);
       message = '已选中图片';
       noteContent = `![图片](${processedSrc})`;
-      noteHtml = `<img src="${processedSrc}" alt="笔记图片" class="note-image">`;
       originalMarkdown = noteContent; // 图片的原始Markdown就是noteContent
-
-      // 标记base64图片
-      if (target.src.startsWith('data:')) {
-        noteHtml += '<!-- base64-image -->';
-      }
     } catch (error) {
       console.error('图片处理失败:', error);
       message = '图片处理失败，使用原始链接';
       noteContent = `![图片](${target.src})`;
-      noteHtml = target.outerHTML;
       originalMarkdown = noteContent;
     }
   }
@@ -681,7 +686,6 @@ const handleMarkdownClick = async (e) => {
 
     // 使用处理后的HTML（不含复制按钮）
     noteContent = originalMarkdown;
-    noteHtml = clonedBlock.outerHTML;
   }
   // 数学公式
   else if (target.closest('mjx-container, mjx-math, .math-inline, .math-block, svg.math-rendered')) {
@@ -721,7 +725,6 @@ const handleMarkdownClick = async (e) => {
 
     // 构建笔记数据
     noteContent = decodedOriginal;
-    noteHtml = mathElement.outerHTML;
     originalMarkdown = decodedOriginal;
 
     // 确定是否为块级公式
@@ -733,7 +736,6 @@ const handleMarkdownClick = async (e) => {
 
     // console.log('数学公式处理结果:', {
     // noteContent,
-    // noteHtml,
     // originalMarkdown,
     // isBlockFormula
     // });
@@ -752,7 +754,6 @@ const handleMarkdownClick = async (e) => {
     originalMarkdown = decodeURIComponent(originalMarkdown);
 
     noteContent = originalMarkdown;
-    noteHtml = selectedElement.outerHTML;
   }
   // 文本选择
   else if (selectedText && selection.rangeCount > 0) {
@@ -768,7 +769,6 @@ const handleMarkdownClick = async (e) => {
     console.log('原始Markdown:', originalMarkdown);
 
     noteContent = originalMarkdown;
-    noteHtml = `<p>${selectedText}</p>`;
   }
   // 段落点击
   else {
@@ -788,7 +788,6 @@ const handleMarkdownClick = async (e) => {
       originalMarkdown = decodeURIComponent(originalMarkdown);
 
       noteContent = originalMarkdown;
-      noteHtml = paragraph.outerHTML;
     }
   }
 
@@ -802,24 +801,15 @@ const handleMarkdownClick = async (e) => {
     const noteData = {
       type: noteType,
       content: noteContent, // 使用原始Markdown作为内容
-      html: noteHtml,
       originalMarkdown: originalMarkdown // 新增：存储原始Markdown
     };
 
+    console.log('确定的笔记类型:', noteType);
+    console.log('笔记数据:', noteData);
+
     // 7. 区分复合笔记和新建笔记
     if (altKeyCollector.value.isActive) {
-      // 复合笔记特殊处理（保持图片一致性）
-      if (noteType === 'image') {
-        noteData.html = `<div class="note-segment image-segment">${noteHtml}</div>`;
-      }
       appendToCurrentNote(noteData);
-
-      // 更新复合笔记标题
-      if (altKeyCollector.value.currentCard) {
-        const segments = parseCompositeContent(altKeyCollector.value.currentCard.html);
-        altKeyCollector.value.currentCard.title = `复合笔记 (${segments.length}项)`;
-        noteCards.value = [...noteCards.value]; // 触发响应式更新
-      }
     } else {
       // 新建笔记
       await addToNotes(noteData);
@@ -834,7 +824,6 @@ const handleMarkdownClick = async (e) => {
 
 // 开始Alt键收集模式
 const startAltKeyCollection = () => {
-  // 清除任何现有的定时器
   if (altKeyCollector.value.timer) {
     clearTimeout(altKeyCollector.value.timer);
     altKeyCollector.value.timer = null;
@@ -842,13 +831,13 @@ const startAltKeyCollection = () => {
 
   altKeyCollector.value.isActive = true;
 
-  // 创建新卡片并立即添加到笔记列表
+  // 创建新的复合笔记卡片
   const newCard = {
     id: Date.now().toString(),
     type: 'composite',
-    title: '复合笔记',
+    title: '复合笔记 (0项)',
     content: '',
-    html: '',
+    items: [], // 初始化空数组
     timestamp: new Date().toISOString()
   };
 
@@ -856,19 +845,14 @@ const startAltKeyCollection = () => {
   activeCardIndex.value = noteCards.value.length - 1;
   altKeyCollector.value.currentCard = newCard;
 
-  // 设置超时自动结束收集（安全机制）
+  // 设置30秒后自动结束收集
   altKeyCollector.value.timer = setTimeout(() => {
-    if (altKeyCollector.value.isActive) {
-      endAltKeyCollection();
-    }
-  }, 30000); // 30秒后自动结束
+    if (altKeyCollector.value.isActive) endAltKeyCollection();
+  }, 30000);
 
-  // 滚动到新卡片
   nextTick(() => {
     const cards = document.querySelectorAll('.n-card');
-    if (cards.length > 0) {
-      cards[cards.length - 1].scrollIntoView({ behavior: 'smooth' });
-    }
+    if (cards.length > 0) cards[cards.length - 1].scrollIntoView({ behavior: 'smooth' });
   });
 
   message.info('已进入多选模式, 松开Alt键结束收集', { duration: 3000 });
@@ -886,7 +870,7 @@ const endAltKeyCollection = () => {
 
   // 如果有收集内容，则添加到笔记
   if (altKeyCollector.value.currentCard &&
-    (altKeyCollector.value.currentCard.content || altKeyCollector.value.currentCard.html)) {
+    (altKeyCollector.value.currentCard.content || altKeyCollector.value.currentCard.originalMarkdown)) {
     // 确保卡片已经存在于noteCards中（因为我们在start时已经添加）
     const existingIndex = noteCards.value.findIndex(card => card.id === altKeyCollector.value.currentCard.id);
     if (existingIndex === -1) {
@@ -910,55 +894,48 @@ const endAltKeyCollection = () => {
   message.success('多选模式已结束', { duration: 2000 });
 };
 
-// 解析复合笔记内容
-const parseCompositeContent = async (html) => {
-  if (!html) return [];
+/**
+ * 解析复合笔记内容 - 直接从items数组中获取内容
+ * @param {Array} items 笔记条目数组
+ * @returns {Promise<Array>} 解析后的笔记片段数组
+ */
+async function parseCompositeContent(items) {
+  if (!items || !Array.isArray(items)) {
+    console.warn('无效的items参数:', items);
+    return [];
+  }
+
   try {
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = html;
-    const segments = await Promise.all(Array.from(tempDiv.children).map(async el => {
-      let type = 'text';
-      const classList = Array.from(el.classList);
-      if (classList.includes('code-segment')) type = 'code';
-      else if (classList.includes('image-segment')) type = 'image';
-      else if (classList.includes('diagram-segment')) type = 'diagram';
-      else if (el.querySelector('mjx-container, mjx-math')) type = 'math';
+    // 并行处理所有items
+    const segments = await Promise.all(
+      items.map(async (item, index) => {
+        // 使用item中的内容，优先使用original_markdown
+        const content = item.original_markdown || item.content || '';
 
-      let rawMarkdown = '';
-      if (type === 'diagram') {
-        const mermaidRaw = el.getAttribute('data-md-original');
-        if (mermaidRaw) {
-          rawMarkdown = decodeURIComponent(mermaidRaw); // 关键修正
-        } else {
-          const mermaidText = el.textContent || '';
-          rawMarkdown = `\`\`\`mermaid\n${mermaidText.trim()}\n\`\`\``;
-        }
-      } else if (type === 'code') {
-        const codeRaw = el.getAttribute('data-md-original');
-        if (codeRaw) {
-          rawMarkdown = decodeURIComponent(codeRaw); // 关键修正
-        } else {
-          const codeText = el.textContent || '';
-          rawMarkdown = `\`\`\`\n${codeText.trim()}\n\`\`\``;
-        }
-      } else {
-        rawMarkdown = el.textContent || el.outerHTML;
-      }
+        // 渲染Markdown为HTML
+        const html = await renderNoteContent(content);
 
-      const rendered = await renderNoteContent(rawMarkdown);
-      return {
-        type,
-        content: rendered
-      };
-    }));
+        return {
+          id: item.id || `${Date.now()}-${index}`,
+          type: item.type || 'text', // 默认类型为text
+          content: html,
+          originalMarkdown: content,
+          timestamp: item.timestamp || new Date().toISOString()
+        };
+      })
+    );
+
     return segments;
   } catch (error) {
+    console.error('解析复合笔记失败:', error);
     return [{
-      type: 'text',
-      content: `<div class="render-error">${error.message}</div>`
+      type: 'error',
+      content: `<div class="parse-error">解析失败: ${error.message}</div>`,
+      originalMarkdown: '解析失败',
+      timestamp: new Date().toISOString()
     }];
   }
-};
+}
 
 // 获取片段样式类
 const getSegmentClass = (segment) => {
@@ -976,36 +953,38 @@ const appendToCurrentNote = (element) => {
 
   const currentCard = altKeyCollector.value.currentCard;
 
-  // 根据类型处理内容追加
-  switch (element.type) {
-    case 'text':
-    case 'math':
-      currentCard.content += `\n\n${element.content}`;
-      currentCard.html += `<div class="note-segment ${element.type}-segment">${element.html}</div>`;
-      break;
-    case 'image':
-      currentCard.content += `\n\n${element.content}`;
-      currentCard.html += `<div class="note-segment image-segment">${element.html}</div>`;
-      break;
-    case 'code':
-      currentCard.content += `\n\n${element.content}`;
-      currentCard.html += `<div class="note-segment code-segment" data-md-original="${encodeURIComponent(element.originalMarkdown || element.content)}">${element.html}</div>`;
-      break;
-    case 'diagram':
-      currentCard.content += `\n\n${element.content}`;
-      currentCard.html += `<div class="note-segment diagram-segment" data-md-original="${encodeURIComponent(element.originalMarkdown || element.content)}">${element.html}</div>`;
-      break;
-    default:
-      currentCard.content += `\n\n${element.content}`;
-      currentCard.html += `<div class="note-segment">${element.html}</div>`;
+  // 确保items数组存在
+  if (!currentCard.items) {
+    currentCard.items = [];
   }
 
-  // 更新卡片类型为复合类型
+  // 创建新条目
+  const newItem = {
+    id: Date.now().toString(),
+    type: element.type,
+    content: element.content,
+    originalMarkdown: element.originalMarkdown,
+    timestamp: new Date().toISOString()
+  };
+
+  // 添加到items数组
+  currentCard.items.push(newItem);
+
+  // 更新卡片内容（将所有条目内容合并，带编号）
+  currentCard.content = currentCard.items.map((item, index) => {
+    return `${index + 1}. ${item.originalMarkdown || item.content}`;
+  }).join('\n\n');
+
+  // 更新卡片类型和标题
   currentCard.type = 'composite';
+  currentCard.title = `复合笔记 (${currentCard.items.length}项)`;
   currentCard.timestamp = new Date().toISOString();
 
+  // 触发响应式更新
+  noteCards.value = [...noteCards.value];
+
   // 显示追加成功的消息
-  message.success('内容已添加到当前收集', { duration: 1500 });
+  message.success(`已添加第 ${currentCard.items.length} 条内容`, { duration: 1500 });
 };
 
 // 15. UI辅助函数
@@ -1233,7 +1212,7 @@ ${rawCode.trim()}
 const ensureNotesPath = async () => {
   if (!notesFilePath.value) {
     const notesDir = await getNotesDirectory()
-    notesFilePath.value = await join(notesDir, `${props.fileName.replace('.pdf', '')}.md`)
+    notesFilePath.value = await join(notesDir, `${props.fileName.replace('.pdf', '')}.json`)
   }
   return notesFilePath.value
 }
@@ -1275,35 +1254,40 @@ const deleteCard = async (index) => {
   }
 };
 
-// 修改addToNotes函数，确保原始Markdown被保存
 const addToNotes = async (element) => {
   // 如果处于Alt键收集模式，则追加到当前卡片
   if (altKeyCollector.value.isActive) {
-    appendToCurrentNote(element)
-    return
+    appendToCurrentNote(element);
+    return;
   }
 
+  // 创建新卡片（单条笔记）
   const newCard = {
     id: Date.now().toString(),
-    type: element.type || 'text',
+    type: 'single',  // 单条笔记类型
     title: getCardTitle(element.type),
-    content: element.originalMarkdown || element.content, // 优先使用原始Markdown
-    html: element.html,
     timestamp: new Date().toISOString(),
-    originalMarkdown: element.originalMarkdown // 新增：存储原始Markdown
-  }
+    // 单条笔记的items数组只包含一个元素
+    items: [{
+      id: `${Date.now()}-0`,
+      type: element.type,
+      content: element.content,
+      originalMarkdown: element.originalMarkdown,
+      timestamp: new Date().toISOString()
+    }]
+  };
 
-  noteCards.value.push(newCard)
-  activeCardIndex.value = noteCards.value.length - 1
-  await updateBackendNotes('add', newCard)
+  noteCards.value.push(newCard);
+  activeCardIndex.value = noteCards.value.length - 1;
+  await updateBackendNotes('add', newCard);
 
   nextTick(() => {
-    const cards = document.querySelectorAll('.n-card')
+    const cards = document.querySelectorAll('.n-card');
     if (cards.length > 0) {
-      cards[cards.length - 1].scrollIntoView({ behavior: 'smooth' })
+      cards[cards.length - 1].scrollIntoView({ behavior: 'smooth' });
     }
-  })
-}
+  });
+};
 
 // 获取卡片标题
 const getCardTitle = (type) => {
@@ -1328,52 +1312,115 @@ const loadExistingNotes = async () => {
     const notesData = typeof response === 'string' ? JSON.parse(response) : response;
 
     if (notesData?.cards?.length) {
-      noteCards.value = notesData.cards.map(card => ({
-        ...card,
-        // 确保旧数据兼容
-        id: card.id || Date.now().toString(),
-        timestamp: card.timestamp || new Date().toISOString()
-      }));
+      noteCards.value = notesData.cards.map(card => {
+        // 兼容旧数据格式
+        const items = card.items || [{
+          id: card.id || Date.now().toString(),
+          type: card.type === 'composite' ? 'text' : card.type,
+          content: card.content,
+          originalMarkdown: card.originalMarkdown || card.content,
+          timestamp: card.timestamp || new Date().toISOString()
+        }];
+
+        return {
+          ...card,
+          id: card.id || Date.now().toString(),
+          type: items.length > 1 ? 'composite' : 'single', // 根据条目数量确定类型
+          items,
+          timestamp: card.timestamp || new Date().toISOString()
+        };
+      });
     }
   } catch (error) {
     console.error('加载笔记失败:', error);
-    // 如果文件不存在，初始化空数组
     noteCards.value = [];
+  }
+};
+
+const handleMissingNote = async (action, cardData) => {
+  try {
+    // 1. 尝试重新加载数据
+    await loadExistingNotes();
+
+    // 2. 检查笔记是否存在
+    const exists = noteCards.value.some(card => card.id === cardData?.id);
+
+    if (!exists) {
+      console.warn('笔记不存在，自动转为新增操作', cardData);
+
+      // 3. 确保数据完整
+      const completeCard = {
+        ...cardData,
+        items: Array.isArray(cardData.items) ? cardData.items : [],
+        timestamp: cardData.timestamp || new Date().toISOString()
+      };
+
+      await updateBackendNotes('add', completeCard);
+    }
+  } catch (error) {
+    console.error('处理缺失笔记失败:', error);
+    message.error('自动恢复失败，请手动添加笔记');
   }
 };
 
 // 修改updateBackendNotes函数，确保原始Markdown被保存到文件
 const updateBackendNotes = async (action, cardData) => {
   try {
-    // 添加类型检查
-    if (!['add', 'update', 'delete'].includes(action)) {
-      throw new Error('无效的操作类型');
+    // 1. 验证必要字段
+    if (!cardData?.id) {
+      throw new Error('无效的笔记ID');
     }
 
-    console.log('准备发送的数据 notesFilePath:', notesFilePath.value);
-    // 准备要发送的数据
+    // 2. 确保items数组存在
+    const items = Array.isArray(cardData.items) ? cardData.items : [];
+
+    // 3. 构建与后端匹配的数据结构
     const payload = {
       action,
       data: {
-        ...cardData,
-        // 确保数据完整
-        timestamp: cardData.timestamp || new Date().toISOString(),
-        originalMarkdown: cardData.originalMarkdown || cardData.content // 保留原始Markdown
+        id: cardData.id,
+        type: cardData.type || 'single',
+        title: cardData.title || '',
+        items: items.map(item => ({
+          id: item.id || `${cardData.id}-${Date.now()}`,
+          type: item.type || 'text',
+          content: item.content || '',
+          original_markdown: item.original_markdown || item.content || '',
+          timestamp: item.timestamp || new Date().toISOString()
+        })),
+        timestamp: cardData.timestamp || new Date().toISOString()
       },
-      filePath: notesFilePath.value
+      filePath: await ensureNotesPath() // 确保路径已初始化
     };
-    console.log('发送的数据:', payload);
+
+    // 4. 调试日志
+    console.debug('发送更新请求:', {
+      action,
+      cardId: cardData.id,
+      payload: JSON.parse(JSON.stringify(payload)) // 深度拷贝
+    });
 
     await invoke('update_notes_file', payload);
+    message.success('笔记已保存', { duration: 1500 });
 
-    message.success('笔记已保存', {
-      duration: 1500
-    });
   } catch (error) {
-    console.error('更新笔记失败:', error);
-    message.error(`保存失败: ${error.message}`, {
-      duration: 3000
+    // 5. 更健壮的错误处理
+    const errorMessage = typeof error === 'object'
+      ? error.message || error.toString()
+      : String(error);
+
+    console.error('更新笔记失败:', {
+      error: errorMessage,
+      cardData: JSON.parse(JSON.stringify(cardData || {}))
     });
+
+    // 6. 安全地检查错误信息
+    const normalizedError = errorMessage.toLowerCase();
+    if (normalizedError.includes('未找到') || normalizedError.includes('not found')) {
+      await handleMissingNote(action, cardData);
+    } else {
+      message.error(`保存失败: ${errorMessage}`, { duration: 3000 });
+    }
   }
 };
 
@@ -1937,24 +1984,50 @@ const setContentEditableRef = (index, el) => {
 // 2. 修改保存函数
 const saveCardEdit = async (index) => {
   try {
-    if (index >= 0 && index < noteCards.value.length) {
-      const editableDiv = contentEditables.value[index];
-      if (!editableDiv) {
-        console.error('无法找到可编辑元素');
-        return;
+    if (index < 0 || index >= noteCards.value.length) {
+      throw new Error('无效的卡片索引');
+    }
+
+    const editableDiv = contentEditables.value[index];
+    if (!editableDiv) {
+      throw new Error('找不到可编辑元素');
+    }
+
+    // 创建卡片的深拷贝
+    const currentCard = JSON.parse(JSON.stringify(noteCards.value[index]));
+
+    // 统一处理内容更新
+    if (currentCard.type === 'composite') {
+      currentCard.content = editableDiv.innerHTML;
+    } else {
+      // 确保items数组存在
+      if (!Array.isArray(currentCard.items)) {
+        currentCard.items = [];
       }
 
-      noteCards.value[index].content = editableDiv.innerHTML;
-      noteCards.value[index].timestamp = new Date().toISOString();
-
-      await updateBackendNotes('update', noteCards.value[index]);
-
-      // 视觉反馈
-      editableDiv.classList.add('saved-feedback');
-      setTimeout(() => editableDiv.classList.remove('saved-feedback'), 1000);
+      // 更新或创建第一个item
+      if (currentCard.items[0]) {
+        currentCard.items[0].content = editableDiv.innerHTML;
+      } else {
+        currentCard.items[0] = {
+          id: `${currentCard.id}-0`,
+          type: 'text',
+          content: editableDiv.innerHTML,
+          original_markdown: '',
+          timestamp: new Date().toISOString()
+        };
+      }
     }
+
+    currentCard.timestamp = new Date().toISOString();
+    await updateBackendNotes('update', currentCard);
+
   } catch (error) {
-    console.error('保存失败:', error);
+    console.error('保存编辑失败:', {
+      error,
+      index,
+      card: noteCards.value[index]
+    });
     message.error(`保存失败: ${error.message}`);
   }
 };
@@ -2068,16 +2141,21 @@ const handleImageLoad = () => {
 // 监听 noteCards，自动渲染所有笔记
 watchEffect(async () => {
   noteHtmls.value = await Promise.all(
-    noteCards.value.map(card =>
-      renderNoteContent(card.originalMarkdown || card.content)
-    )
+    noteCards.value.map(async card => {
+      if (card.type === 'single') {
+        // 单条笔记从items[0]获取内容
+        const item = card.items?.[0] || {};
+        return await renderNoteContent(item.originalMarkdown || item.content || '');
+      }
+      return ""; // 非单个笔记返回空字符串
+    })
   );
 
   compositeSegments.value = await Promise.all(
-    noteCards.value.map(async card =>
+    noteCards.value.map(card =>
       card.type === 'composite'
-        ? await parseCompositeContent(card.html)
-        : []
+        ? parseCompositeContent(card.items)
+        : [] // 非复合笔记返回空数组
     )
   );
 
