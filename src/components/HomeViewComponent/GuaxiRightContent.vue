@@ -2,7 +2,8 @@
   <div class="right-sider-content">
     <GuaxiOutline v-if="rightSiderStore.panel === 'outline'" />
     <GuaxiSearchNavigator v-else-if="rightSiderStore.panel === 'search'" :file-results="searchResults.fileResults"
-      :note-results="searchResults.noteResults" :search-query="searchResults.searchQuery" />
+      :note-results="searchResults.noteResults" :search-query="searchResults.searchQuery"
+      :excerpt-results="searchResults.excerptResults" />
   </div>
 </template>
 

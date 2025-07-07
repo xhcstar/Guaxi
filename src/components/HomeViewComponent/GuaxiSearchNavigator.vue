@@ -35,6 +35,10 @@
           </n-list-item>
         </n-list>
       </n-tab-pane>
+
+      <n-tab-pane name="excerpts" :tab="excerptsTab">
+        <GuaxiNoteExcerpt :excerpt-results="excerptResults" />
+      </n-tab-pane>
     </n-tabs>
   </div>
 </template>
@@ -45,6 +49,7 @@ import { Icon } from '@iconify/vue';
 import { NTooltip } from 'naive-ui';
 import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { useEditorStore } from '../../stores/editorStore';
+import GuaxiNoteExcerpt from './GuaxiNoteExcerpt.vue'
 
 
 const IconifyIcon = defineComponent({
@@ -84,6 +89,10 @@ const props = defineProps({
     default: () => [],
   },
   noteResults: {
+    type: Array,
+    default: () => [],
+  },
+  excerptResults: {
     type: Array,
     default: () => [],
   },
@@ -248,6 +257,23 @@ const notesTab = () =>
     }
   );
 
+const excerptsTab = () =>
+  h(
+    NTooltip,
+    { placement: 'bottom', trigger: 'hover' },
+    {
+      trigger: () =>
+        h('span', { class: 'tab-label' }, [
+          h(Icon, {
+            icon: 'mdi:note-search-outline',
+            style: { fontSize: '18px', verticalAlign: 'middle', marginRight: '6px' }
+          }),
+          '摘录笔记'
+        ]),
+      default: () => '显示摘录笔记的搜索结果'
+    }
+  );
+
 /**
  * 获取显示文件名
  * @param {Object} item 文件项
@@ -363,6 +389,8 @@ watch(
       activeTab.value = 'files';
     } else if (props.noteResults && props.noteResults.length > 0) {
       activeTab.value = 'notes';
+    } else if (props.excerptResults && props.excerptResults.length > 0) {
+      activeTab.value = 'excerpts';
     }
     // 如果都没有结果，不切换tab
   }
@@ -373,6 +401,8 @@ onMounted(() => {
     activeTab.value = 'files';
   } else if (props.noteResults && props.noteResults.length > 0) {
     activeTab.value = 'notes';
+  } else if (props.excerptResults && props.excerptResults.length > 0) {
+    activeTab.value = 'excerpts';
   }
 });
 </script>

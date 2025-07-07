@@ -119,6 +119,7 @@ async fn main() {
             commands::knowledgebase::get_knowledge_base_list,
             commands::knowledgebase::get_knowledge_base_tree,
             commands::knowledgebase::get_knowledge_graph_data,
+            commands::excerptsearch::search_excerpt_notes,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn

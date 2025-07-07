@@ -5,6 +5,7 @@ export const useRightSiderStore = defineStore("rightSider", {
     searchResults: {
       fileResults: [],
       noteResults: [],
+      excerptResults: [], // 新增：摘录搜索结果
       searchQuery: "",
     },
     // 新增：当前右侧面板类型（如 'search', 'outline' 等）
@@ -20,6 +21,7 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.searchResults = {
         fileResults: [],
         noteResults: [],
+        excerptResults: [],
         searchQuery: "",
       };
     },

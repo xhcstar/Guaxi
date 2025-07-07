@@ -33,10 +33,12 @@
 </template>
 
 <script setup>
-import { computed, ref, h } from "vue";
+import { computed, ref, h, onMounted } from "vue";
 import { NIcon, NDropdown } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import {
   Screenshot24Regular,
   Search32Filled,
@@ -45,13 +47,14 @@ import {
   DocumentSearch24Regular,
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
+  NotebookSection24Regular
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
-import { useRightSiderStore } from '../../stores/rightSiderStore'
 
 
 const rightSiderStore = useRightSiderStore()
+const settingsStore = useSettingsStore()
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
 const searchInputRef = ref(null)
@@ -125,6 +128,11 @@ const searchOptions = [
     label: '搜索关键字',
     key: 'note',
     icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
+  },
+  {
+    label: '搜索摘录笔记',
+    key: 'excerpt',
+    icon: () => h(NIcon, null, { default: () => h(NotebookSection24Regular) })
   }
 ]
 
@@ -165,8 +173,10 @@ const handleSearchEnter = () => {
 
     if (searchType.value === 'file') {
       handleSearchFiles()
-    } else {
+    } else if (searchType.value === 'note') {
       handleSearchNotes()
+    } else if (searchType.value === 'excerpt') {
+      handleSearchExcerpts()
     }
   }
 }
@@ -241,6 +251,40 @@ async function handleSearchNotes() {
     message.error('搜索失败: ' + (err.message || String(err)));
   }
 }
+
+async function handleSearchExcerpts() {
+  try {
+    console.log('[Search] Executing excerpt search:', {
+      query: searchQuery.value,
+      path: settingsStore.librariesRoot
+    });
+    const results = await invoke('search_excerpt_notes', {
+      pattern: searchQuery.value,
+      path: settingsStore.librariesRoot
+    });
+    console.log('[Search] Excerpt search results:', results);
+
+    rightSiderStore.setSearchResults({
+      fileResults: [],
+      noteResults: [],
+      excerptResults: results, // 只包含file_path和file_name的数组
+      searchQuery: searchQuery.value
+    });
+
+    rightSiderStore.panel = 'search';
+    if (siderStore.isRightSiderCollapsed[viewKey]) {
+      siderStore.toggleRightSider(viewKey);
+    }
+
+  } catch (err) {
+    console.error('[Search] Excerpt search failed:', err);
+    message.error('摘录搜索失败: ' + (err.message || String(err)));
+  }
+}
+
+onMounted(async () => {
+  settingsStore.get_librariesRoot()
+})
 </script>
 
 <style scoped>

@@ -11,3 +11,4 @@ pub mod guaxiscreencap;
 pub mod translator;
 pub mod searcher;
 pub mod knowledgebase;
+pub mod excerptsearch;
