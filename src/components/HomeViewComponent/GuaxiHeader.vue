@@ -217,7 +217,7 @@ async function handleSearchFiles() {
 
     // 添加这行代码：如果右侧边栏是折叠状态，则展开它
     if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.toggleRightSider(viewKey);
+      siderStore.setRightSiderCollapsed(viewKey, false); // 确保右侧边栏展开
     }
   } catch (err) {
     console.error('[Search] File search failed:', err);
@@ -243,7 +243,7 @@ async function handleSearchNotes() {
 
     rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
     if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.toggleRightSider(viewKey);
+      siderStore.setRightSiderCollapsed(viewKey, false); // 确保右侧边栏展开
     }
 
   } catch (err) {
@@ -273,7 +273,7 @@ async function handleSearchExcerpts() {
 
     rightSiderStore.panel = 'search';
     if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.toggleRightSider(viewKey);
+      siderStore.setRightSiderCollapsed(viewKey, false); // 确保右侧边栏展开
     }
 
   } catch (err) {
