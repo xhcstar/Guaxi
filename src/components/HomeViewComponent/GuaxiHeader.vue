@@ -216,7 +216,7 @@ async function handleSearchFiles() {
     rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
 
     // 添加这行代码：如果右侧边栏是折叠状态，则展开它
-    if (siderStore.isRightSiderCollapsed[viewKey]) {
+    if (!siderStore.isRightSiderCollapsed[viewKey]) {
       siderStore.toggleRightSider(viewKey);
     }
   } catch (err) {
@@ -242,7 +242,7 @@ async function handleSearchNotes() {
     });
 
     rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
-    if (siderStore.isRightSiderCollapsed[viewKey]) {
+    if (!siderStore.isRightSiderCollapsed[viewKey]) {
       siderStore.toggleRightSider(viewKey);
     }
 
@@ -272,7 +272,7 @@ async function handleSearchExcerpts() {
     });
 
     rightSiderStore.panel = 'search';
-    if (siderStore.isRightSiderCollapsed[viewKey]) {
+    if (!siderStore.isRightSiderCollapsed[viewKey]) {
       siderStore.toggleRightSider(viewKey);
     }
 
