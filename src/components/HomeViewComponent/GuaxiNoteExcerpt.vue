@@ -300,15 +300,55 @@ const formatTimestamp = (timestamp) => {
   return new Date(timestamp).toLocaleString();
 };
 
-// 修改 insertExcerpt 函数，添加 async
 const insertExcerpt = async (item) => {
-  const content = `[${item.file_name.replace('.json', '')}](${item.file_path})`;
   try {
-    await editorStore.insertContent(content);
-    window.$message?.success('摘录已插入');
+    // 如果文件未展开，先加载内容
+    if (!item.content && !item.expanded) {
+      await toggleFileExpand(item);
+    }
+
+    // 等待内容加载完成
+    if (!item.content) {
+      window.$message?.warning('文件内容尚未加载完成，请稍后再试');
+      return;
+    }
+
+    // 收集所有卡片项内容
+    let contentToInsert = "";
+
+    // 遍历所有卡片和卡片项
+    item.content.cards?.forEach(card => {
+      card.items?.forEach(item => {
+        // 根据不同类型格式化内容
+        switch (item.type) {
+          case 'text':
+            contentToInsert += `\n${item.content}\n`;
+            break;
+          case 'math':
+            contentToInsert += `\n${item.content}\n`;
+            break;
+          case 'code':
+            contentToInsert += `\n${item.content}\n`;
+            break;
+          case 'image':
+            contentToInsert += `\n${item.content}\n`;
+            break;
+          case 'diagram':
+            contentToInsert += `\n${item.content}\n`;
+            break;
+          default:
+            contentToInsert += `\n${item.content}\n`;
+        }
+      });
+    });
+
+    // 插入到编辑器
+    await editorStore.insertContent(contentToInsert);
+    window.$message?.success(`已插入 ${item.content.cards?.length || 0} 个卡片的内容`);
+
   } catch (error) {
     console.error('插入摘录失败:', error);
-    window.$message?.error('插入摘录失败');
+    window.$message?.error('插入摘录失败: ' + error.message);
   }
 };
 
