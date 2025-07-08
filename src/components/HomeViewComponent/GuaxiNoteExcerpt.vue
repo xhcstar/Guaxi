@@ -356,16 +356,17 @@ watch(() => props.excerptResults, (newVal) => {
 <style scoped>
 .excerpt-navigator {
   height: 100%;
+  width: 100%;
   max-width: 512px;
   overflow-y: auto;
-  padding: 0 0px;
+  padding: 0;
   box-sizing: border-box;
 }
 
 .n-list {
   padding: 0;
   margin: 0;
-  max-height: 100%;
+  height: 100%;
   overflow-y: auto;
 }
 
@@ -379,13 +380,12 @@ watch(() => props.excerptResults, (newVal) => {
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-width: 512px;
   width: 100%;
   box-sizing: border-box;
   background: var(--n-card-color, #fff);
   border-radius: 6px;
   box-shadow: none;
-  padding: 8px 12px;
+  padding: 8px;
   margin-bottom: 2px;
   transition: box-shadow 0.2s;
   position: relative;
@@ -405,21 +405,20 @@ watch(() => props.excerptResults, (newVal) => {
   font-weight: 500;
   color: var(--text-color);
   width: 100%;
-  white-space: nowrap;
   cursor: pointer;
+  min-width: 0;
+  /* 允许子元素缩小 */
 }
 
 .filename-text {
-  display: inline;
-  max-width: 200px;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-grow: 1;
 }
 
 .insert-btn {
-  margin-left: 8px;
+  margin-left: auto;
   flex-shrink: 0;
 }
 
@@ -433,42 +432,54 @@ watch(() => props.excerptResults, (newVal) => {
   background-color: #f8fafc;
   border-radius: 6px;
   margin-top: 8px;
+  width: 100%;
 }
 
 .card-container {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
 }
 
 .excerpt-card {
   margin-bottom: 12px;
+  width: 100%;
 }
 
 .card-header {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
 .card-title {
   font-weight: 500;
-  flex-grow: 1;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-timestamp {
   font-size: 12px;
   color: #666;
+  flex-shrink: 0;
 }
 
 .card-items {
   margin-top: 12px;
+  width: 100%;
 }
 
 .card-item {
   padding: 8px;
   margin-bottom: 8px;
   border-bottom: 1px solid #eee;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .card-item-header {
@@ -476,20 +487,26 @@ watch(() => props.excerptResults, (newVal) => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 4px;
+  width: 100%;
+  min-width: 0;
 }
 
 .card-item-type {
   font-size: 12px;
   color: #888;
+  flex-shrink: 0;
 }
 
 .card-item-insert {
   margin-left: 8px;
+  flex-shrink: 0;
 }
 
 .card-item-content {
   margin: 8px 0;
   white-space: pre-wrap;
+  word-break: break-word;
+  width: 100%;
 }
 
 .card-item-timestamp {
