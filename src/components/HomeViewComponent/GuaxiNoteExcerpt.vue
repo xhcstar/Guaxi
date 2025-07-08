@@ -8,13 +8,13 @@
     <n-list v-else hoverable clickable>
       <n-list-item v-for="item in excerptResults" :key="item.file_path">
         <div class="excerpt-result-item">
-          <div class="file-name" :title="item.file_path" @click="toggleFileExpand(item)">
+          <div class="file-name" :title="item.file_path">
+            <!-- 将展开箭头移到最前面 -->
+            <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="12" @click="toggleFileExpand(item)"
+              class="expand-icon" />
             <IconifyIcon v-bind="getFileIconPropsWithLog(item.file_path)" />
             <span class="filename-text">{{ item.file_name }}</span>
-            <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="18" />
-          </div>
-          <div class="excerpt-actions">
-            <n-button size="tiny" type="primary" tertiary @click.stop="insertExcerpt(item)">
+            <n-button size="tiny" type="primary" tertiary @click.stop="insertExcerpt(item)" class="insert-btn">
               <template #icon>
                 <n-icon :component="TextGrammarArrowLeft20Regular" />
               </template>
@@ -58,7 +58,7 @@
                 </div>
               </n-card>
             </div>
-            <n-empty v-else-if="!item.loading" description="无法加载文件内容" />
+            <n-empty v-else-if="item.loading" description="无法加载文件内容" />
           </n-spin>
         </div>
       </n-list-item>
@@ -288,7 +288,8 @@ const formatCardItemType = (type) => {
     'text': '文本',
     'math': '公式',
     'code': '代码',
-    'image': '图片'
+    'image': '图片',
+    'diagram': '图表'
   };
   return typeMap[type] || type;
 };
@@ -315,19 +316,16 @@ const insertCardItem = (cardItem) => {
       contentToInsert = cardItem.content;
       break;
     case 'math':
-      contentToInsert = `\n$$\n${cardItem.content}\n$$\n`;
+      contentToInsert = `${cardItem.content}`;
       break;
     case 'code':
-      contentToInsert = `\n\`\`\`\n${cardItem.content}\n\`\`\`\n`;
+      contentToInsert = `${cardItem.content}`;
       break;
     case 'image':
-      // 提取图片路径
-      const match = cardItem.content.match(/!\[.*\]\((.*)\)/);
-      if (match && match[1]) {
-        contentToInsert = `\n![图片](${match[1]})\n`;
-      } else {
-        contentToInsert = `\n![图片](${cardItem.content})\n`;
-      }
+      contentToInsert = `${cardItem.content}`;
+      break;
+    case 'diagram':
+      contentToInsert = `${cardItem.content}`;
       break;
     default:
       contentToInsert = cardItem.content;
@@ -381,7 +379,7 @@ watch(() => props.excerptResults, (newVal) => {
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-width: 600px;
+  max-width: 512px;
   width: 100%;
   box-sizing: border-box;
   background: var(--n-card-color, #fff);
@@ -402,7 +400,7 @@ watch(() => props.excerptResults, (newVal) => {
 .file-name {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-size: 14px;
   font-weight: 500;
   color: var(--text-color);
@@ -413,22 +411,25 @@ watch(() => props.excerptResults, (newVal) => {
 
 .filename-text {
   display: inline;
-  max-width: 320px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-grow: 1;
 }
 
-.excerpt-actions {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+.insert-btn {
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.expand-icon {
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 .file-content {
-  padding: 12px;
+  padding: 2px;
   background-color: #f8fafc;
   border-radius: 6px;
   margin-top: 8px;
@@ -437,7 +438,7 @@ watch(() => props.excerptResults, (newVal) => {
 .card-container {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .excerpt-card {
