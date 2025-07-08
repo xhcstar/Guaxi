@@ -128,7 +128,7 @@ const initEditor = () => {
     theme: 'vs',
     automaticLayout: true,  // 自动布局
     minimap: {
-      enabled: true,  // 启用迷你地图
+      enabled: false,  // 启用迷你地图
       showSlider: 'always',
       size: 'fit'
     },
@@ -202,6 +202,9 @@ const initEditor = () => {
     },
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
+
+  // 注册编辑器实例到store
+  editorStore.setEditorInstance(editor);
 
   if (vimMode.value) {
     nextTick(() => {
@@ -683,6 +686,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
   editor?.dispose();
   editor = null;
+  editorStore.setEditorInstance(null); // 清除store中的引用
   if (vimModeInstance) {
     vimModeInstance.dispose();
   }
@@ -779,6 +783,7 @@ onUnmounted(() => {
   width: 100%;
   box-sizing: border-box;
   overflow: hidden;
+  margin-bottom: 1%;
 }
 
 .editor {
@@ -789,8 +794,9 @@ onUnmounted(() => {
   bottom: 0;
   width: 100%;
   height: 100%;
+  line-height: 1.5;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .vim-status-bar {
@@ -820,7 +826,7 @@ onUnmounted(() => {
   padding: 12px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  line-height: 1.6;
+  line-height: 1.5;
   overflow-y: auto;
   overflow-x: hidden;
   word-wrap: break-word;

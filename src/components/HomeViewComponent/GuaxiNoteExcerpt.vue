@@ -300,40 +300,51 @@ const formatTimestamp = (timestamp) => {
   return new Date(timestamp).toLocaleString();
 };
 
-const insertExcerpt = (item) => {
+// 修改 insertExcerpt 函数，添加 async
+const insertExcerpt = async (item) => {
   const content = `[${item.file_name.replace('.json', '')}](${item.file_path})`;
-  editorStore.insertContent(content);
-  window.$message?.success('摘录已插入');
+  try {
+    await editorStore.insertContent(content);
+    window.$message?.success('摘录已插入');
+  } catch (error) {
+    console.error('插入摘录失败:', error);
+    window.$message?.error('插入摘录失败');
+  }
 };
 
-// 插入卡片项内容到编辑器
-const insertCardItem = (cardItem) => {
+// 修改 insertCardItem 函数，添加 async
+const insertCardItem = async (cardItem) => {
   let contentToInsert = '';
 
   // 根据不同类型格式化内容
   switch (cardItem.type) {
     case 'text':
-      contentToInsert = cardItem.content;
+      contentToInsert = `\n${cardItem.content}\n`;
       break;
     case 'math':
-      contentToInsert = `${cardItem.content}`;
+      contentToInsert = `\n${cardItem.content}\n`;
       break;
     case 'code':
-      contentToInsert = `${cardItem.content}`;
+      contentToInsert = `\n${cardItem.content}\n`;
       break;
     case 'image':
-      contentToInsert = `${cardItem.content}`;
+      contentToInsert = `\n${cardItem.content}\n`;
       break;
     case 'diagram':
-      contentToInsert = `${cardItem.content}`;
+      contentToInsert = `\n${cardItem.content}\n`;
       break;
     default:
       contentToInsert = cardItem.content;
   }
 
   // 插入到编辑器
-  editorStore.insertContent(contentToInsert);
-  window.$message?.success('内容已插入');
+  try {
+    await editorStore.insertContent(contentToInsert);
+    window.$message?.success('内容已插入');
+  } catch (error) {
+    console.error('插入内容失败:', error);
+    window.$message?.error('插入内容失败');
+  }
 };
 
 // 监听搜索结果变化
@@ -356,8 +367,8 @@ watch(() => props.excerptResults, (newVal) => {
 <style scoped>
 .excerpt-navigator {
   height: 100%;
-  width: 100%;
-  max-width: 512px;
+  width: 80%;
+  /* max-width: 400px; */
   overflow-y: auto;
   padding: 0;
   box-sizing: border-box;
