@@ -402,26 +402,26 @@ const insertExcerpt = async (item) => {
         // 根据不同类型格式化内容
         switch (cardItem.type) {
           case 'text':
-            contentToInsert += `\n${cardItem.content}\n`;
+            contentToInsert += `\n${cardItem.content}`;
             break;
           case 'math':
-            contentToInsert += `\n${cardItem.content}\n`;
+            contentToInsert += `\n${cardItem.content}`;
             break;
           case 'code':
-            contentToInsert += `\n${cardItem.content}\n`;
+            contentToInsert += `\n${cardItem.content}`;
             break;
           case 'image':
             const fileBasePath = cardItem.file_path || '';
             const imageDir = await getImagesDirectory(fileBasePath);
             const processedImageContent = await processImages(cardItem.content, imageDir);
             console.log(">>>>>>>> processedImageContent:", processedImageContent);
-            contentToInsert += `\n${processedImageContent}\n`;
+            contentToInsert += `\n${processedImageContent}`;
             break;
           case 'diagram':
-            contentToInsert += `\n${cardItem.content}\n`;
+            contentToInsert += `\n${cardItem.content}`;
             break;
           default:
-            contentToInsert += `\n${cardItem.content}\n`;
+            contentToInsert += `\n${cardItem.content}`;
         }
       }
     }
@@ -445,13 +445,13 @@ const insertCardItem = async (cardItem, parentFilePath) => {
     // 根据不同类型格式化内容
     switch (cardItem.type) {
       case 'text':
-        contentToInsert = `\n${cardItem.content}\n`;
+        contentToInsert = `\n${cardItem.content}`;
         break;
       case 'math':
-        contentToInsert = `\n${cardItem.content}\n`;
+        contentToInsert = `\n${cardItem.content}`;
         break;
       case 'code':
-        contentToInsert = `\n${cardItem.content}\n`;
+        contentToInsert = `\n${cardItem.content}`;
         break;
       case 'image':
         console.log('处理图片类型:', cardItem);
@@ -461,7 +461,7 @@ const insertCardItem = async (cardItem, parentFilePath) => {
 
         if (!fileBasePath) {
           console.warn('没有可用的文件路径，使用原始内容');
-          contentToInsert = `\n${cardItem.content}\n`;
+          contentToInsert = `\n${cardItem.content}`;
           break;
         }
 
@@ -470,10 +470,10 @@ const insertCardItem = async (cardItem, parentFilePath) => {
 
         const processedImageContent = await processImages(cardItem.content, imageDir);
         console.log("处理后的图片内容:", processedImageContent);
-        contentToInsert = `\n${processedImageContent}\n`;
+        contentToInsert = `\n${processedImageContent}`;
         break;
       case 'diagram':
-        contentToInsert = `\n${cardItem.content}\n`;
+        contentToInsert = `\n${cardItem.content}`;
         break;
       default:
         contentToInsert = cardItem.content;
@@ -508,23 +508,40 @@ watch(() => props.excerptResults, (newVal) => {
 <style scoped>
 .excerpt-navigator {
   height: 100%;
-  width: 80%;
-  /* max-width: 400px; */
-  overflow-y: auto;
-  padding: 0;
+  width: 100%;
+  min-height: 0;
+  padding-bottom: 15px;
+  margin-bottom: 15px;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .n-list {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   padding: 0;
   margin: 0;
-  height: 100%;
+}
+
+/* 当有展开项时显示滚动条 */
+.n-list.has-expanded-item {
   overflow-y: auto;
 }
 
 .n-list-item {
+  width: 100%;
+  max-width: 500px;
   margin: 0 !important;
   padding: 2px 0 !important;
+  transition: all 0.2s ease;
+}
+
+/* 鼠标悬停效果增强 */
+.n-list-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .excerpt-result-item {
@@ -539,14 +556,16 @@ watch(() => props.excerptResults, (newVal) => {
   box-shadow: none;
   padding: 8px;
   margin-bottom: 2px;
-  transition: box-shadow 0.2s;
+  transition: all 0.2s ease;
   position: relative;
 }
 
+/* 增强的悬停效果 */
 .n-list-item:hover .excerpt-result-item {
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.2), 0 2px 8px 0 rgba(7, 118, 161, 0.1);
-  background: #f0f7ff;
-  transition: box-shadow 0.2s, background 0.2s;
+  background: linear-gradient(to right, #f0f7ff, #ffffff);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
+    0 2px 12px 0 rgba(7, 118, 161, 0.15);
+  transform: scale(1.01);
 }
 
 .file-name {
@@ -559,11 +578,20 @@ watch(() => props.excerptResults, (newVal) => {
   width: 100%;
   cursor: pointer;
   min-width: 0;
-  /* 允许子元素缩小 */
+  overflow: hidden;
+  padding-right: 8px;
+  box-sizing: border-box;
+  transition: color 0.2s;
+}
+
+/* 文件名悬停效果 */
+.n-list-item:hover .file-name {
+  color: #1890ff;
 }
 
 .filename-text {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -572,19 +600,71 @@ watch(() => props.excerptResults, (newVal) => {
 .insert-btn {
   margin-left: auto;
   flex-shrink: 0;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+/* 插入按钮悬停效果 */
+.n-list-item:hover .insert-btn {
+  background-color: rgba(24, 144, 255, 0.1);
+  transform: translateX(-2px);
 }
 
 .expand-icon {
   flex-shrink: 0;
   cursor: pointer;
+  margin-right: 4px;
+  transition: transform 0.2s;
+}
+
+/* 展开图标悬停效果 */
+.n-list-item:hover .expand-icon {
+  color: #1890ff;
+  transform: scale(1.2);
+}
+
+/* 窄滚动条样式 - 适用于 WebKit 浏览器（Chrome, Safari, Edge等） */
+.file-content::-webkit-scrollbar {
+  width: 6px;
+  /* 滚动条宽度 */
+  height: 6px;
+  /* 水平滚动条高度 */
+}
+
+.file-content::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  /* 滚动条轨道颜色 */
+  border-radius: 3px;
+}
+
+.file-content::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  /* 滚动条滑块颜色 */
+  border-radius: 3px;
+}
+
+.file-content::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+  /* 鼠标悬停时滑块颜色 */
 }
 
 .file-content {
-  padding: 2px;
+  width: 100%;
+  padding: 8px;
   background-color: #f8fafc;
   border-radius: 6px;
   margin-top: 8px;
-  width: 100%;
+  box-sizing: border-box;
+  max-height: calc(100vh - 25px);
+  overflow-y: auto;
+  transition: max-height 0.3s ease;
+}
+
+/* 展开状态下的样式 */
+.file-content.expanded {
+  max-height: 500px;
+  /* 根据需要调整 */
+  overflow: auto;
 }
 
 .card-container {
@@ -592,11 +672,22 @@ watch(() => props.excerptResults, (newVal) => {
   flex-direction: column;
   gap: 8px;
   width: 100%;
+  box-sizing: border-box;
+  min-height: 0;
 }
 
 .excerpt-card {
-  margin-bottom: 12px;
   width: 100%;
+  max-width: 100%;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+  transition: all 0.2s;
+}
+
+/* 卡片悬停效果 */
+.excerpt-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
 }
 
 .card-header {
@@ -624,14 +715,22 @@ watch(() => props.excerptResults, (newVal) => {
 .card-items {
   margin-top: 12px;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .card-item {
-  padding: 8px;
+  padding: 12px;
   margin-bottom: 8px;
   border-bottom: 1px solid #eee;
   width: 100%;
   box-sizing: border-box;
+  transition: all 0.2s;
+}
+
+/* 卡片项悬停效果 */
+.card-item:hover {
+  background-color: #f9f9f9;
+  border-radius: 4px;
 }
 
 .card-item-header {
@@ -652,6 +751,12 @@ watch(() => props.excerptResults, (newVal) => {
 .card-item-insert {
   margin-left: 8px;
   flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+/* 卡片项插入按钮悬停效果 */
+.card-item:hover .card-item-insert {
+  background-color: rgba(24, 144, 255, 0.1);
 }
 
 .card-item-timestamp {
@@ -661,25 +766,83 @@ watch(() => props.excerptResults, (newVal) => {
 }
 
 .card-item-rendered {
+  width: 100%;
+  max-width: 100%;
   margin: 8px 0;
   padding: 8px;
   background: #f8f9fa;
   border-radius: 4px;
   border: 1px solid #eee;
+  box-sizing: border-box;
+  /* 只在内容溢出时显示滚动条 */
+  overflow: auto;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  transition: all 0.2s;
+}
+
+/* 渲染内容悬停效果 */
+.card-item:hover .card-item-rendered {
+  background-color: #fff;
+  border-color: #d9d9d9;
 }
 
 .card-item-rendered :deep(pre) {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
   margin: 0;
-  padding: 0;
+  padding: 0.5em;
+  background: #f5f5f5;
+  border-radius: 3px;
 }
 
 .card-item-rendered :deep(code) {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', monospace;
   font-size: 0.9em;
+  white-space: pre-wrap;
 }
 
 .card-item-rendered :deep(img) {
   max-width: 100%;
   height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.card-item-rendered :deep(table) {
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  display: block;
+  border-collapse: collapse;
+}
+
+.card-item-rendered :deep(table td),
+.card-item-rendered :deep(table th) {
+  padding: 6px 13px;
+  border: 1px solid #dfe2e5;
+}
+
+.card-item-rendered :deep(blockquote) {
+  margin: 0;
+  padding: 0 1em;
+  color: #6a737d;
+  border-left: 0.25em solid #dfe2e5;
+}
+
+/* 加载状态动画增强 */
+.n-spin-container {
+  transition: all 0.3s ease;
+}
+
+.n-spin-container .n-spin-content {
+  opacity: 0.8;
+  transition: opacity 0.3s;
+}
+
+.n-spin-container .n-spin-content:hover {
+  opacity: 1;
 }
 </style>
