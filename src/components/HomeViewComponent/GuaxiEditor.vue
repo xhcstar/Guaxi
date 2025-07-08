@@ -174,7 +174,7 @@ const initEditor = () => {
     fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
     fontLigatures: true,
     wordWrap: 'on',  // 自动换行
-    wrappingIndent: 'indent',  // 换行缩进
+    // wrappingIndent: 'indent',  // 换行缩进
     renderWhitespace: 'selection',  // 选中时显示空白字符
     renderLineHighlight: 'all',  // 高亮当前行
     lineHeight: 24,  // 行高
