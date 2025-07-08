@@ -42,17 +42,16 @@
                   <div v-for="(cardItem, index) in card.items" :key="index" class="card-item">
                     <div class="card-item-header">
                       <div class="card-item-type">{{ formatCardItemType(cardItem.type) }}</div>
-                      <n-button size="tiny" type="primary" tertiary @click.stop="insertCardItem(cardItem)"
-                        class="card-item-insert">
+                      <n-button size="tiny" type="primary" tertiary
+                        @click.stop="insertCardItem(cardItem, item.file_path)" class="card-item-insert">
                         <template #icon>
                           <n-icon :component="TextGrammarArrowLeft20Regular" size="14" />
                         </template>
                         插入
                       </n-button>
                     </div>
-                    <div class="card-item-content">
-                      {{ cardItem.content }}
-                    </div>
+                    <!-- 使用现有renderMarkdown接口渲染内容 -->
+                    <div class="card-item-rendered" v-html="renderedContents[cardItem.id] || cardItem.content"></div>
                     <div class="card-item-timestamp">{{ formatTimestamp(cardItem.timestamp) }}</div>
                   </div>
                 </div>
@@ -86,6 +85,10 @@ import { ChevronDown, ChevronRight } from '@vicons/fa';
 import { useEditorStore } from '../../stores/editorStore';
 import { useRightSiderStore } from '../../stores/rightSiderStore';
 import { useSiderStore } from '../../stores/useSiderStore';
+import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { join } from '@tauri-apps/api/path'
+import { path } from '@tauri-apps/api';
+import { convertFileSrc } from '@tauri-apps/api/core';
 
 const IconifyIcon = defineComponent({
   name: 'IconifyIcon',
@@ -117,6 +120,7 @@ const IconifyIcon = defineComponent({
 const editorStore = useEditorStore();
 const rightSiderStore = useRightSiderStore();
 const siderStore = useSiderStore();
+const renderedContents = ref({});
 
 const props = defineProps({
   excerptResults: {
@@ -245,16 +249,88 @@ const excerptResults = ref(props.excerptResults.map(item => ({
   content: null
 })));
 
-// 切换文件展开状态
+async function processImages(content, basePath = '') {
+  const imgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g;
+  const replacements = [];
+
+  for (const match of content.matchAll(imgRegex)) {
+    const [full, alt, src] = match;
+    if (!src.match(/^(http|\/|data:image)/i)) {
+      try {
+        const fullPath = await join(basePath, src);
+        const safeSrc = await convertFileSrc(fullPath);
+        replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
+      } catch (error) {
+        console.warn(`路径转换失败: ${src}`, error);
+      }
+    }
+  }
+  return replacements.reduce((result, { from, to }) => result.replace(from, to), content);
+}
+
+const getImagesDirectory = async (filePath) => {
+  if (!filePath) {
+    console.warn('未提供有效文件路径');
+    return '';
+  }
+
+  try {
+    const dirPath = await path.dirname(filePath);
+    const parentDir = await path.dirname(dirPath);
+    const imagesDir = await path.join(parentDir, 'images');
+    return await path.normalize(imagesDir);
+  } catch (error) {
+    console.error('获取images目录失败:', error);
+    return ''; // 返回空字符串而不是抛出错误
+  }
+};
+
+// 使用现有的renderMarkdown接口渲染卡片内容
+const renderedCardContent = async (cardItem, excerptFilePath) => {
+  try {
+    // 获取文件所在目录作为basePath
+    const basePath = excerptFilePath ? excerptFilePath : '';
+    const imageDir = await getImagesDirectory(basePath)
+    const processedContent = await processImages(cardItem.content, imageDir);
+
+    // 使用您提供的renderMarkdown接口
+    return await renderMarkdown(processedContent, {
+      basePath: basePath,
+      mermaid: true,
+      math: true,
+      codeHighlight: true,
+      theme: 'default'
+    });
+  } catch (error) {
+    console.error('渲染卡片内容失败:', error);
+    return cardItem.content; // 失败时返回原始内容
+  }
+};
+
+// 缓存渲染结果
+const renderedContentCache = ref({});
+
+// 修改后的toggleFileExpand方法，预渲染内容
 const toggleFileExpand = async (item) => {
   item.expanded = !item.expanded;
   if (item.expanded && !item.content) {
     try {
       item.loading = true;
-      // 使用 Tauri 接口读取摘录文件
       item.content = await invoke('read_excerpt_file', {
         path: item.file_path
       });
+
+      // 预渲染所有卡片内容
+      if (item.content?.cards) {
+        for (const card of item.content.cards) {
+          if (card.items) {
+            for (const cardItem of card.items) {
+              const rendered = await renderedCardContent(cardItem, item.file_path);
+              renderedContents.value[cardItem.id || `${card.id}_${cardItem.type}_${cardItem.timestamp}`] = rendered;
+            }
+          }
+        }
+      }
     } catch (err) {
       console.error('加载文件内容失败:', err);
       window.$message?.error('加载文件内容失败: ' + err);
@@ -316,31 +392,39 @@ const insertExcerpt = async (item) => {
     // 收集所有卡片项内容
     let contentToInsert = "";
 
-    // 遍历所有卡片和卡片项
-    item.content.cards?.forEach(card => {
-      card.items?.forEach(item => {
+    // 使用 for...of 替代 forEach，以便使用 await
+    for (const card of item.content.cards || []) {
+      for (const cardItem of card.items || []) {
+        // 确保每个卡片项都有父文件路径引用
+        if (!cardItem.file_path) {
+          cardItem.file_path = item.file_path; // 直接赋值给file_path
+        }
         // 根据不同类型格式化内容
-        switch (item.type) {
+        switch (cardItem.type) {
           case 'text':
-            contentToInsert += `\n${item.content}\n`;
+            contentToInsert += `\n${cardItem.content}\n`;
             break;
           case 'math':
-            contentToInsert += `\n${item.content}\n`;
+            contentToInsert += `\n${cardItem.content}\n`;
             break;
           case 'code':
-            contentToInsert += `\n${item.content}\n`;
+            contentToInsert += `\n${cardItem.content}\n`;
             break;
           case 'image':
-            contentToInsert += `\n${item.content}\n`;
+            const fileBasePath = cardItem.file_path || '';
+            const imageDir = await getImagesDirectory(fileBasePath);
+            const processedImageContent = await processImages(cardItem.content, imageDir);
+            console.log(">>>>>>>> processedImageContent:", processedImageContent);
+            contentToInsert += `\n${processedImageContent}\n`;
             break;
           case 'diagram':
-            contentToInsert += `\n${item.content}\n`;
+            contentToInsert += `\n${cardItem.content}\n`;
             break;
           default:
-            contentToInsert += `\n${item.content}\n`;
+            contentToInsert += `\n${cardItem.content}\n`;
         }
-      });
-    });
+      }
+    }
 
     // 插入到编辑器
     await editorStore.insertContent(contentToInsert);
@@ -353,32 +437,49 @@ const insertExcerpt = async (item) => {
 };
 
 // 修改 insertCardItem 函数，添加 async
-const insertCardItem = async (cardItem) => {
+const insertCardItem = async (cardItem, parentFilePath) => {
   let contentToInsert = '';
+  console.log('插入摘录:', cardItem);
 
-  // 根据不同类型格式化内容
-  switch (cardItem.type) {
-    case 'text':
-      contentToInsert = `\n${cardItem.content}\n`;
-      break;
-    case 'math':
-      contentToInsert = `\n${cardItem.content}\n`;
-      break;
-    case 'code':
-      contentToInsert = `\n${cardItem.content}\n`;
-      break;
-    case 'image':
-      contentToInsert = `\n${cardItem.content}\n`;
-      break;
-    case 'diagram':
-      contentToInsert = `\n${cardItem.content}\n`;
-      break;
-    default:
-      contentToInsert = cardItem.content;
-  }
-
-  // 插入到编辑器
   try {
+    // 根据不同类型格式化内容
+    switch (cardItem.type) {
+      case 'text':
+        contentToInsert = `\n${cardItem.content}\n`;
+        break;
+      case 'math':
+        contentToInsert = `\n${cardItem.content}\n`;
+        break;
+      case 'code':
+        contentToInsert = `\n${cardItem.content}\n`;
+        break;
+      case 'image':
+        console.log('处理图片类型:', cardItem);
+        // 优先使用卡片项自身的file_path，没有则使用父文件路径
+        const fileBasePath = cardItem.file_path || parentFilePath || '';
+        console.log('使用的基础路径:', fileBasePath);
+
+        if (!fileBasePath) {
+          console.warn('没有可用的文件路径，使用原始内容');
+          contentToInsert = `\n${cardItem.content}\n`;
+          break;
+        }
+
+        const imageDir = await getImagesDirectory(fileBasePath);
+        console.log('图片目录:', imageDir);
+
+        const processedImageContent = await processImages(cardItem.content, imageDir);
+        console.log("处理后的图片内容:", processedImageContent);
+        contentToInsert = `\n${processedImageContent}\n`;
+        break;
+      case 'diagram':
+        contentToInsert = `\n${cardItem.content}\n`;
+        break;
+      default:
+        contentToInsert = cardItem.content;
+    }
+
+    // 插入到编辑器
     await editorStore.insertContent(contentToInsert);
     window.$message?.success('内容已插入');
   } catch (error) {
@@ -553,16 +654,32 @@ watch(() => props.excerptResults, (newVal) => {
   flex-shrink: 0;
 }
 
-.card-item-content {
-  margin: 8px 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  width: 100%;
-}
-
 .card-item-timestamp {
   font-size: 11px;
   color: #999;
   text-align: right;
+}
+
+.card-item-rendered {
+  margin: 8px 0;
+  padding: 8px;
+  background: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #eee;
+}
+
+.card-item-rendered :deep(pre) {
+  margin: 0;
+  padding: 0;
+}
+
+.card-item-rendered :deep(code) {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', monospace;
+  font-size: 0.9em;
+}
+
+.card-item-rendered :deep(img) {
+  max-width: 100%;
+  height: auto;
 }
 </style>

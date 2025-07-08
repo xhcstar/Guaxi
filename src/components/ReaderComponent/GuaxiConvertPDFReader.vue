@@ -1292,11 +1292,11 @@ const addToNotes = async (element) => {
 // 获取卡片标题
 const getCardTitle = (type) => {
   const titles = {
-    text: '文本笔记',
-    image: '图片笔记',
-    code: '代码片段',
-    math: '数学公式',
-    diagram: '图表'
+    text: '文本摘录',
+    image: '图片摘录',
+    code: '代码摘录',
+    math: '公式摘录',
+    diagram: '图表摘录'
   }
   return titles[type] || '笔记'
 }
