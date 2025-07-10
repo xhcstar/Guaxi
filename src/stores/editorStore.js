@@ -9,6 +9,12 @@ export const useEditorStore = defineStore("editor", {
     decorations: [], // 存储当前高亮装饰器
     editorInstance: null, // Monaco编辑器实例引用
     isInserting: false, // 新增：插入操作状态标志
+    cursorPosition: { lineNumber: 1, column: 1 },
+    language: 'plaintext',
+    problems: { errors: 0, warnings: 0 },
+    encoding: 'UTF-8',
+    lineEnding: 'LF',
+    indentation: 'Spaces: 2'
   }),
   actions: {
     // 检查文件是否处于激活状态
@@ -107,5 +113,15 @@ export const useEditorStore = defineStore("editor", {
         this.isInserting = false; // 重置插入状态
       }
     },
+
+    setCursorPosition(position) {
+      this.cursorPosition = position
+    },
+    setLanguage(language) {
+      this.language = language
+    },
+    setProblems({ errors, warnings }) {
+      this.problems = { errors, warnings }
+    }
   },
 });

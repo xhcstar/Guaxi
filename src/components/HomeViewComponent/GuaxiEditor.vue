@@ -35,9 +35,12 @@
     </div>
 
     <!-- 编辑器 -->
-    <div v-show="selectedFile && mode === 'edit'" ref="editorContainer" class="editor-wrapper">
-      <div ref="editorContainer" class="editor"></div>
+    <div v-show="selectedFile && mode === 'edit'" class="editor-wrapper">
+      <div ref="editorContainer" class="editor-container">
+        <!-- 编辑器内容将在这里渲染 -->
+      </div>
       <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
+      <GuaxiEditorStatusBar class="editor-status-bar" />
     </div>
 
     <!-- 阅读模式 -->
@@ -50,6 +53,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
+import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
 import { EyeOutline, LogoVimeo, CloseOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
@@ -129,7 +133,7 @@ const initEditor = () => {
     automaticLayout: true,  // 自动布局
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
-    wordWrap: 'bounded',
+    wordWrap: 'off',
     renderValidationDecorations: 'on',
     minimap: {
       enabled: false,  // 启用迷你地图
@@ -307,7 +311,28 @@ const initEditor = () => {
       renderDebounced(rawContent.value)
     }
   })
+
+  // 监听光标位置变化
+  editor.onDidChangeCursorPosition(e => {
+    editorStore.setCursorPosition(e.position)
+  })
+
+  // 监听语言变化
+  editor.onDidChangeModelLanguage(() => {
+    const language = editor.getModel()?.getLanguageId() || 'plaintext'
+    editorStore.setLanguage(language)
+  })
+
+  // 监听内容变化（用于错误检查）
+  editor.onDidChangeModelContent(debounce(() => {
+    // 这里可以添加错误检查逻辑
+    updateProblemCount(0, 0) // 示例值
+  }, 300))
 };
+
+const updateProblemCount = (errors, warnings) => {
+  editorStore.setProblems({ errors, warnings })
+}
 
 // 更新编辑器内容
 const updateEditorContent = (content) => {
@@ -699,19 +724,6 @@ onUnmounted(() => {
 
 
 <style scoped>
-.editor-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-width: 0;
-  overflow: hidden;
-  width: 100%;
-  box-sizing: border-box;
-  position: relative;
-  min-width: 0;
-  /* 允许容器缩小 */
-}
-
 .toolbar {
   display: flex;
   align-items: center;
@@ -782,28 +794,28 @@ onUnmounted(() => {
 
 .editor-wrapper {
   position: relative;
-  height: calc(100% - 30px);
+  height: calc(100% - 60px);
+  /* 减去顶部工具栏和标签栏高度 */
   width: 100%;
-  box-sizing: border-box;
-  overflow: visible;
-  margin-bottom: 40px;
+  display: flex;
+  flex-direction: column;
 }
 
-.editor {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+.editor-container {
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 28px);
+  min-width: 0;
+  overflow: hidden;
   width: 100%;
-  height: 100%;
-  line-height: 1.5;
   box-sizing: border-box;
+  position: relative;
+  min-width: 0;
 }
 
 .vim-status-bar {
   position: absolute;
-  bottom: 0;
+  bottom: 22px;
   left: 0;
   right: 0;
   height: 20px;
@@ -812,10 +824,17 @@ onUnmounted(() => {
   padding: 2px 8px;
   font-size: 12px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
+  z-index: 1;
+}
+
+.editor-status-bar {
+  height: 22px;
+  background-color: var(--statusBar-background);
+  border-top: 1px solid var(--statusBar-border);
+  flex-shrink: 0;
+  /* 防止状态栏被压缩 */
+  z-index: 2;
+  /* 确保在编辑器上方 */
 }
 
 .preview {
@@ -823,7 +842,7 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  top: 30px;
+  top: 40px;
   height: calc(100% - 25px);
   padding: 12px;
   font-size: 17px;
