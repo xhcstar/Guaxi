@@ -303,35 +303,70 @@ const initEditor = () => {
 
   // 初始化上下文菜单
   registerContextMenu();
+  setupEditorListeners();
+};
 
-  editor.onDidChangeModelContent(() => {
-    rawContent.value = editor.getValue()
-    // 内容变化时触发预览更新
-    if (mode.value === 'preview') {
-      renderDebounced(rawContent.value)
-    }
-  })
+const setupEditorListeners = () => {
+  if (!editor) return;
 
   // 监听光标位置变化
   editor.onDidChangeCursorPosition(e => {
-    editorStore.setCursorPosition(e.position)
-  })
+    editorStore.setCursorPosition(e.position);
+  });
+
+  // 监听内容变化（用于问题检测）
+  editor.onDidChangeModelContent(debounce(() => {
+    const content = editor.getValue();
+    const problems = analyzeContentForProblems(content);
+    editorStore.setProblems(problems);
+
+    // 更新原始内容
+    rawContent.value = content;
+  }, 300));
 
   // 监听语言变化
   editor.onDidChangeModelLanguage(() => {
-    const language = editor.getModel()?.getLanguageId() || 'plaintext'
-    editorStore.setLanguage(language)
-  })
+    const language = editor.getModel()?.getLanguageId() || 'plaintext';
+    editorStore.setLanguage(language);
+  });
 
-  // 监听内容变化（用于错误检查）
-  editor.onDidChangeModelContent(debounce(() => {
-    // 这里可以添加错误检查逻辑
-    updateProblemCount(0, 0) // 示例值
-  }, 300))
+  // 监听选择变化
+  editor.onDidChangeCursorSelection(e => {
+    const model = editor.getModel();
+    if (!model) return;
+
+    const selectedText = model.getValueInRange(e.selection);
+    const status = selectedText
+      ? `Selected ${countLines(selectedText)} lines, ${selectedText.length} chars`
+      : null;
+    editorStore.setSelectionStatus(status);
+  });
 };
 
-const updateProblemCount = (errors, warnings) => {
-  editorStore.setProblems({ errors, warnings })
+// 内容问题分析
+function analyzeContentForProblems(content) {
+  // 这里实现实际的问题检测逻辑
+  let errors = 0;
+  let warnings = 0;
+
+  // 示例：简单分析常见问题
+  const lines = content.split('\n');
+  lines.forEach(line => {
+    // 检查未闭合的括号
+    const openBraces = (line.match(/\(/g) || []).length;
+    const closeBraces = (line.match(/\)/g) || []).length;
+    if (openBraces !== closeBraces) errors++;
+
+    // 检查长行
+    if (line.length > 120) warnings++;
+  });
+
+  return { errors, warnings };
+}
+
+// 计算行数
+function countLines(text) {
+  return text.split(/\r\n|\n|\r/).length;
 }
 
 // 更新编辑器内容

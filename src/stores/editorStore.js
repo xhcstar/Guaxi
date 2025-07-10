@@ -9,12 +9,15 @@ export const useEditorStore = defineStore("editor", {
     decorations: [], // 存储当前高亮装饰器
     editorInstance: null, // Monaco编辑器实例引用
     isInserting: false, // 新增：插入操作状态标志
+
+    // 状态栏相关状态
     cursorPosition: { lineNumber: 1, column: 1 },
-    language: 'plaintext',
+    language: "plaintext",
     problems: { errors: 0, warnings: 0 },
-    encoding: 'UTF-8',
-    lineEnding: 'LF',
-    indentation: 'Spaces: 2'
+    encoding: "UTF-8",
+    lineEnding: "LF",
+    indentation: "Spaces: 2",
+    selectionStatus: null,
   }),
   actions: {
     // 检查文件是否处于激活状态
@@ -113,15 +116,140 @@ export const useEditorStore = defineStore("editor", {
         this.isInserting = false; // 重置插入状态
       }
     },
-
+    // 更新光标位置
     setCursorPosition(position) {
-      this.cursorPosition = position
+      this.cursorPosition = position;
+      if (this.editorInstance) {
+        this.editorInstance.revealPositionInCenter(position);
+      }
     },
+
+    // 更新问题计数
+    setProblems({ errors = 0, warnings = 0 }) {
+      this.problems = { errors, warnings };
+    },
+
+    // 更新语言
     setLanguage(language) {
-      this.language = language
+      this.language = language;
+      if (this.editorInstance) {
+        const model = this.editorInstance.getModel();
+        if (model) {
+          monaco.editor.setModelLanguage(model, language);
+        }
+      }
     },
-    setProblems({ errors, warnings }) {
-      this.problems = { errors, warnings }
-    }
+
+    // 更新编码
+    setEncoding(encoding) {
+      this.encoding = encoding;
+    },
+
+    // 更新行尾符
+    setLineEnding(lineEnding) {
+      this.lineEnding = lineEnding;
+    },
+
+    // 更新缩进
+    setIndentation(indentation) {
+      this.indentation = indentation;
+    },
+
+    // 更新选择状态
+    setSelectionStatus(status) {
+      this.selectionStatus = status;
+    },
+    // 更新光标位置
+    updateCursorPosition(position) {
+      this.cursorPosition = position;
+
+      // 如果编辑器实例存在，确保光标可见
+      if (this.editorInstance) {
+        this.editorInstance.revealPositionInCenter(position);
+      }
+    },
+
+    // 更新语言模式
+    updateLanguage(language) {
+      this.language = language;
+
+      // 如果编辑器实例存在，更新语言
+      if (this.editorInstance) {
+        const model = this.editorInstance.getModel();
+        if (model) {
+          monaco.editor.setModelLanguage(model, language);
+        }
+      }
+    },
+
+    // 更新问题计数
+    updateProblemCount(errors = 0, warnings = 0) {
+      this.problems = { errors, warnings };
+    },
+
+    // 更新编码信息
+    updateEncoding(encoding) {
+      this.encoding = encoding;
+
+      // 这里可以添加实际编码转换逻辑
+      console.log("Encoding changed to:", encoding);
+    },
+
+    // 更新行尾符
+    updateLineEnding(lineEnding) {
+      this.lineEnding = lineEnding;
+
+      // 如果编辑器实例存在，更新行尾符
+      if (this.editorInstance) {
+        const model = this.editorInstance.getModel();
+        if (model) {
+          const options = model.getOptions();
+          options.defaultEOL =
+            lineEnding === "LF"
+              ? monaco.editor.DefaultEndOfLine.LF
+              : monaco.editor.DefaultEndOfLine.CRLF;
+          model.updateOptions(options);
+        }
+      }
+    },
+
+    // 更新缩进设置
+    updateIndentation(indentation) {
+      this.indentation = indentation;
+
+      // 如果编辑器实例存在，更新缩进
+      if (this.editorInstance) {
+        const model = this.editorInstance.getModel();
+        if (model) {
+          const options = model.getOptions();
+
+          if (indentation === "Tabs") {
+            options.insertSpaces = false;
+            options.tabSize = 4;
+          } else {
+            options.insertSpaces = true;
+            const spaceCount = parseInt(indentation.split(":")[1].trim());
+            options.tabSize = spaceCount;
+          }
+
+          model.updateOptions(options);
+        }
+      }
+    },
+
+    // 更新选择状态
+    updateSelectionStatus(status) {
+      this.selectionStatus = status;
+    },
+
+    // 检测文件编码
+    detectFileEncoding(content) {
+      try {
+        const result = detect(content);
+        return result.encoding || "UTF-8";
+      } catch {
+        return "UTF-8";
+      }
+    },
   },
 });
