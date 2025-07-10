@@ -127,6 +127,10 @@ const initEditor = () => {
     language: language,
     theme: 'vs',
     automaticLayout: true,  // 自动布局
+    scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
+    fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
+    wordWrap: 'bounded',
+    renderValidationDecorations: 'on',
     minimap: {
       enabled: false,  // 启用迷你地图
       showSlider: 'always',
@@ -173,7 +177,6 @@ const initEditor = () => {
     fontSize: 18,  // 调整为更合适的字号
     fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
     fontLigatures: true,
-    wordWrap: 'on',  // 自动换行
     // wrappingIndent: 'indent',  // 换行缩进
     renderWhitespace: 'selection',  // 选中时显示空白字符
     renderLineHighlight: 'all',  // 高亮当前行
@@ -782,8 +785,8 @@ onUnmounted(() => {
   height: calc(100% - 30px);
   width: 100%;
   box-sizing: border-box;
-  overflow: hidden;
-  margin-bottom: 1%;
+  overflow: visible;
+  margin-bottom: 40px;
 }
 
 .editor {
@@ -796,7 +799,6 @@ onUnmounted(() => {
   height: 100%;
   line-height: 1.5;
   box-sizing: border-box;
-  overflow: auto;
 }
 
 .vim-status-bar {
