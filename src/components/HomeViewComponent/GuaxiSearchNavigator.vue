@@ -417,7 +417,7 @@ onMounted(() => {
 .search-navigator {
   height: 100%;
   /* 确保有明确的高度 */
-  max-width: 512px;
+  max-width: 480px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -478,6 +478,7 @@ onMounted(() => {
 .tab-content {
   height: 100%;
   max-height: calc(100vh - 108px);
+  max-width: 465px;
   /* 根据实际需要调整 */
   overflow-y: auto;
   padding: 8px 4px 5px 0;
@@ -528,7 +529,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  max-width: 600px;
+  max-width: 460px;
   width: 100%;
   box-sizing: border-box;
   background: var(--n-card-color, #fff);

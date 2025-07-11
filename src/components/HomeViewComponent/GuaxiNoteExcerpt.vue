@@ -1,11 +1,11 @@
 <template>
-  <div class="excerpt-navigator" :class="{ 'has-expanded-items': hasExpandedItems }">
+  <div class="excerpt-navigator">
     <n-empty v-if="excerptResults.length === 0" description="暂无摘录笔记搜索结果" style="margin-top: 20px">
       <template #extra>
         <n-text depth="3">尝试不同的搜索词</n-text>
       </template>
     </n-empty>
-    <n-list v-else hoverable clickable :class="{ 'has-expanded-item': hasExpandedItems }">
+    <n-list v-else hoverable clickable>
       <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path">
         <div class="excerpt-result-item">
           <div class="file-name" :title="item.file_path">
@@ -66,7 +66,7 @@
 </template>
 
 <script setup>
-import { h, defineComponent, ref, watch, computed } from 'vue';
+import { h, defineComponent, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -205,10 +205,6 @@ const FILE_ICON_MAP = {
   // 默认文件
   default: 'mdi:file-outline'
 };
-
-const hasExpandedItems = computed(() => {
-  return excerptResults.value.some(item => item.expanded)
-})
 
 const getFileIconPropsWithLog = (path) => {
   const props = getFileIconProps(path);
@@ -514,18 +510,20 @@ watch(() => props.excerptResults, (newVal) => {
   height: 100%;
   width: 100%;
   min-height: 0;
+  max-height: calc(100vh - 50px);
   padding-bottom: 15px;
   margin-bottom: 15px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
   /* 只在这里设置滚动 */
 }
 
 /* 当有展开项时，改为内部滚动 */
 .excerpt-navigator.has-expanded-items {
   overflow-y: visible;
+  max-height: calc(100vh - 50px);
 }
 
 .n-list {
@@ -535,22 +533,13 @@ watch(() => props.excerptResults, (newVal) => {
   width: 100%;
   padding: 0;
   margin: 0;
-}
-
-/* 当有展开项时，列表容器需要滚动 */
-.n-list.has-expanded-item {
   overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-  max-width: 480px;
-  width: 100%;
-  padding: 0;
-  margin: 0;
+  /* 只在列表容器设置滚动 */
 }
 
 .n-list-item {
   width: 100%;
-  max-width: 470px;
+  max-width: 450px;
   margin: 0 !important;
   padding: 2px 0 !important;
   transition: all 0.2s ease;
@@ -562,6 +551,25 @@ watch(() => props.excerptResults, (newVal) => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
+/* 统一滚动条样式 */
+.n-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.n-list::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.n-list::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.n-list::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
 .excerpt-result-item {
   display: flex;
   flex-direction: column;
@@ -569,7 +577,7 @@ watch(() => props.excerptResults, (newVal) => {
   top: 4px;
   gap: 4px;
   width: 100%;
-  max-width: 460px;
+  max-width: 450px;
   box-sizing: border-box;
   background: var(--n-card-color, #fff);
   border-radius: 6px;
@@ -599,7 +607,7 @@ watch(() => props.excerptResults, (newVal) => {
   width: 100%;
   cursor: pointer;
   min-width: 0;
-  max-width: 400px;
+  max-width: 420px;
   overflow: hidden;
   padding-right: 8px;
   box-sizing: border-box;
@@ -645,46 +653,18 @@ watch(() => props.excerptResults, (newVal) => {
   transform: scale(1.2);
 }
 
-/* 窄滚动条样式 - 适用于 WebKit 浏览器（Chrome, Safari, Edge等） */
-.file-content::-webkit-scrollbar {
-  width: 6px;
-  /* 滚动条宽度 */
-  height: 6px;
-  /* 水平滚动条高度 */
-}
-
-.file-content::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  /* 滚动条轨道颜色 */
-  border-radius: 3px;
-}
-
-.file-content::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  /* 滚动条滑块颜色 */
-  border-radius: 3px;
-}
-
-.file-content::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
-  /* 鼠标悬停时滑块颜色 */
-}
-
 .file-content {
   width: 100%;
-  padding: 8px;
   background-color: #f8fafc;
   border-radius: 6px;
   margin-top: 8px;
   box-sizing: border-box;
-  max-height: calc(100vh - 150px);
-  overflow-y: auto;
   transition: max-height 0.3s ease;
 }
 
 /* 展开状态下的样式 */
 .file-content.expanded {
-  max-height: 500px;
+  max-height: 470px;
   /* 根据需要调整 */
   overflow: auto;
 }
