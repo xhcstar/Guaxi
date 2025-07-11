@@ -1,45 +1,78 @@
 <template>
   <div class="search-navigator">
     <n-tabs v-model:value="activeTab" type="line" animated>
+      <!-- 文件搜索结果标签页 -->
       <n-tab-pane name="files" :tab="filesTab">
         <div class="tab-content">
           <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
-            <n-list-item v-for="item in fileResults" :key="item.path" @click="openSearchResult(item)">
-              <div class="search-result-item">
-                <div class="file-name" :title="getFullPath(item)">
-                  <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
-                  <span class="filename-text">{{ getFileName(item) }}</span>
-                  <span class="line-badge" v-if="item.line_number">L{{ item.line_number }}</span>
+            <n-virtual-list :items="keyedFileResults" :item-size="64" :key-field="'_uniqueKey'" class="scroller"
+              @scroll="debouncedScroll">
+              <template #default="{ item }">
+                <n-list-item @click="openSearchResult(item)">
+                  <div class="search-result-item">
+                    <div class="file-name" :title="getFullPath(item)">
+                      <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
+                      <span class="filename-text">{{ getFileName(item) }}</span>
+                      <span class="line-badge" v-if="item.line_number">L{{ item.line_number }}</span>
+                    </div>
+                    <div v-if="item.preview" class="preview-content">
+                      <span v-html="formatPreview(item)"></span>
+                    </div>
+                  </div>
+                </n-list-item>
+              </template>
+              <template #footer>
+                <div v-if="searchState.loading" class="loading-more">
+                  <n-spin size="small" />
                 </div>
-                <div v-if="item.preview" class="preview-content">
-                  <span v-html="formatPreview(item)"></span>
-                </div>
-              </div>
-            </n-list-item>
+              </template>
+            </n-virtual-list>
           </n-list>
         </div>
       </n-tab-pane>
 
+      <!-- 内容搜索结果标签页 -->
       <n-tab-pane name="notes" :tab="notesTab">
         <div class="tab-content">
+          <div v-if="invalidNoteItems.length > 0" class="error-banner">
+            警告：发现 {{ invalidNoteItems.length }} 个无效搜索结果项
+            <n-button text @click="showInvalidItems = !showInvalidItems" size="tiny">
+              {{ showInvalidItems ? '隐藏详情' : '显示详情' }}
+            </n-button>
+            <div v-if="showInvalidItems" class="invalid-items-detail">
+              <div v-for="(item, index) in invalidNoteItems" :key="index" class="invalid-item">
+                <n-text type="error">无效项 {{ index + 1 }}: {{ JSON.stringify(item) }}</n-text>
+              </div>
+            </div>
+          </div>
           <n-empty v-if="noteResults.length === 0" description="暂无内容搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
-            <n-list-item v-for="item in noteResults" :key="`${item.path}-${item.line_number}`"
-              @click="openSearchResult(item)">
-              <div class="search-result-item">
-                <div class="file-name" :title="getFullPath(item)">
-                  <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
-                  <span class="filename-text">{{ getFileName(item) }}</span>
-                  <span class="line-badge">L{{ item.line_number }}</span>
+            <n-virtual-list :items="keyedNoteResults" :item-size="64" :key-field="'_uniqueKey'" class="scroller"
+              @scroll="debouncedScroll">
+              <template #default="{ item }">
+                <n-list-item @click="openSearchResult(item)">
+                  <div class="search-result-item">
+                    <div class="file-name" :title="getFullPath(item)">
+                      <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
+                      <span class="filename-text">{{ getFileName(item) }}</span>
+                      <span class="line-badge">L{{ item.line_number }}</span>
+                    </div>
+                    <div class="preview-content" v-html="formatPreview(item)"></div>
+                  </div>
+                </n-list-item>
+              </template>
+              <template #footer>
+                <div v-if="searchState.loading" class="loading-more">
+                  <n-spin size="small" />
                 </div>
-                <div class="preview-content" v-html="formatPreview(item)"></div>
-              </div>
-            </n-list-item>
+              </template>
+            </n-virtual-list>
           </n-list>
         </div>
       </n-tab-pane>
 
+      <!-- 摘录笔记标签页 -->
       <n-tab-pane name="excerpts" :tab="excerptsTab">
         <div class="tab-content-excerpts">
           <GuaxiNoteExcerpt :excerpt-results="excerptResults" />
@@ -50,13 +83,26 @@
 </template>
 
 <script setup>
-import { h, defineComponent, ref, watch, onMounted } from 'vue';
+import { h, defineComponent, reactive, ref, watch, onMounted, computed, onBeforeUnmount } from 'vue';
 import { Icon } from '@iconify/vue';
-import { NTooltip } from 'naive-ui';
+import { debounce } from 'lodash-es';
+import {
+  NIcon,
+  NSpin,
+  NTooltip,
+  NButton,
+  NText,
+  NVirtualList
+} from 'naive-ui';
 import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { useEditorStore } from '../../stores/editorStore';
-import GuaxiNoteExcerpt from './GuaxiNoteExcerpt.vue'
+import { useRightSiderStore } from '../../stores/rightSiderStore';
+import { useSiderStore } from '../../stores/useSiderStore';
+import GuaxiNoteExcerpt from './GuaxiNoteExcerpt.vue';
 
+// 移除 vue3-virtual-scroller 相关导入
+// import { RecycleScroller } from 'vue3-virtual-scroller';
+// import 'vue3-virtual-scroller/dist/vue3-virtual-scroller.css';
 
 const IconifyIcon = defineComponent({
   name: 'IconifyIcon',
@@ -87,31 +133,96 @@ const IconifyIcon = defineComponent({
 
 const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
+const rightSiderStore = useRightSiderStore();
+const siderStore = useSiderStore();
 const activeTab = ref('files');
+const showInvalidItems = ref(false);
 
 const props = defineProps({
   fileResults: {
     type: Array,
-    default: () => [],
+    required: true,
+    default: () => []
   },
   noteResults: {
     type: Array,
-    default: () => [],
+    required: true,
+    default: () => []
   },
   excerptResults: {
     type: Array,
-    default: () => [],
+    required: true,
+    default: () => []
   },
   searchQuery: {
     type: String,
-    default: '',
-  },
+    required: true,
+    default: ''
+  }
 });
 
-/**
- * 文件类型到图标的映射表
- * 使用 VSCode 风格图标 + Material Design 图标作为补充
- */
+// 添加对 store 的直接监听
+watch(() => rightSiderStore.searchResults, (newVal) => {
+  console.log('[Navigator] Store results updated:', newVal);
+}, { deep: true });
+
+// 搜索状态管理
+const searchState = reactive({
+  loading: false,
+  activeSearch: null,
+  cancelToken: null,
+  batchSize: 20,
+  loadedResults: 0,
+  hasMore: false
+});
+
+// 计算属性：过滤无效的笔记结果
+const validNoteResults = computed(() => {
+  return props.noteResults.filter(item => {
+    // 基本验证
+    if (!item || typeof item !== 'object') return false;
+
+    // 确保必要字段存在
+    const hasPath = item.path && typeof item.path === 'string';
+    const hasFileName = item.file_name && typeof item.file_name === 'string';
+    const hasContent = (item.preview || item.text) && typeof (item.preview || item.text) === 'string';
+
+    if (!hasPath && !hasFileName) {
+      console.warn('[InvalidItem] Missing path/file_name:', item);
+      return false;
+    }
+
+    if (!hasContent) {
+      console.warn('[InvalidItem] Missing content:', item);
+      return false;
+    }
+
+    return true;
+  });
+});
+
+// 计算属性：获取无效的笔记项
+const invalidNoteItems = computed(() => {
+  return props.noteResults.filter(item => {
+    try {
+      const key = getKeyField(item);
+      return !key;
+    } catch {
+      return true;
+    }
+  });
+});
+
+// 滚动事件处理
+const handleScroll = (e) => {
+  // 这里可以添加滚动时的逻辑
+  console.log('Scrolling:', e);
+};
+
+// 使用防抖
+const debouncedScroll = debounce(handleScroll, 200);
+
+// 文件图标映射
 const FILE_ICON_MAP = {
   // 文件夹
   folder: 'mdi:folder-outline',
@@ -227,77 +338,6 @@ const getFileIconProps = (path) => {
   return props;
 };
 
-
-// 顶部tab自定义内容
-const filesTab = () =>
-  h(
-    NTooltip,
-    { placement: 'bottom', trigger: 'hover' },
-    {
-      trigger: () =>
-        h('span', { class: 'tab-label' }, [
-          h(Icon, {
-            icon: 'mdi:file-search-outline',
-            style: { fontSize: '18px', verticalAlign: 'middle', marginRight: '6px' }
-          }),
-          '文件搜索结果'
-        ]),
-      default: () => '显示文件路径匹配的搜索结果'
-    }
-  );
-
-const notesTab = () =>
-  h(
-    NTooltip,
-    { placement: 'bottom', trigger: 'hover' },
-    {
-      trigger: () =>
-        h('span', { class: 'tab-label' }, [
-          h(Icon, {
-            icon: 'mdi:text-box-search-outline',
-            style: { fontSize: '18px', verticalAlign: 'middle', marginRight: '6px' }
-          }),
-          '内容搜索结果'
-        ]),
-      default: () => '显示文件内容匹配的搜索结果'
-    }
-  );
-
-const excerptsTab = () =>
-  h(
-    NTooltip,
-    { placement: 'bottom', trigger: 'hover' },
-    {
-      trigger: () =>
-        h('span', { class: 'tab-label' }, [
-          h(Icon, {
-            icon: 'mdi:note-search-outline',
-            style: { fontSize: '18px', verticalAlign: 'middle', marginRight: '6px' }
-          }),
-          '摘录笔记'
-        ]),
-      default: () => '显示摘录笔记的搜索结果'
-    }
-  );
-
-/**
- * 获取显示文件名
- * @param {Object} item 文件项
- * @returns {string} 文件名
- */
-const getFileName = (item) => {
-  return item.file_name || item.path.split(/[\\/]/).pop();
-};
-
-/**
- * 获取完整路径提示
- * @param {Object} item 文件项
- * @returns {string} 完整路径
- */
-const getFullPath = (item) => {
-  return item.path.replace(/\\/g, '/');
-};
-
 /**
  * 格式化预览内容（添加高亮，支持转义后索引映射）
  * @param {Object} item 文件项
@@ -387,29 +427,205 @@ const openSearchResult = async (item) => {
   }
 };
 
-// 每次新的搜索时，自动切换到有结果的tab（文件优先，其次内容）
-watch(
-  [() => props.searchQuery, () => props.fileResults, () => props.noteResults],
-  () => {
-    if (props.fileResults && props.fileResults.length > 0) {
-      activeTab.value = 'files';
-    } else if (props.noteResults && props.noteResults.length > 0) {
-      activeTab.value = 'notes';
-    } else if (props.excerptResults && props.excerptResults.length > 0) {
-      activeTab.value = 'excerpts';
-    }
-    // 如果都没有结果，不切换tab
+// 更健壮的 keyField 生成函数
+const getKeyField = (item) => {
+  // 防御性编程：确保 item 存在
+  if (!item) {
+    const fallback = `null_${Math.random().toString(36).substring(2, 9)}`;
+    console.error('[KeyError] Item is null/undefined, using fallback:', fallback);
+    return fallback;
   }
-);
+
+  // 调试信息
+  console.log('[KeyDebug] Generating key for:', {
+    path: item.path,
+    file_name: item.file_name,
+    line_number: item.line_number
+  });
+
+  // 优先使用 path
+  if (item.path && typeof item.path === 'string') {
+    return item.path;
+  }
+
+  // 次选 file_name + line_number
+  const fileName = item.file_name || '';
+  const lineNumber = item.line_number !== undefined ? item.line_number : '0';
+  if (fileName || lineNumber !== '0') {
+    return `${fileName}_${lineNumber}`;
+  }
+
+  // 尝试其他可能字段
+  if (item.id) return `id_${item.id}`;
+  if (item.name) return `name_${item.name}`;
+
+  // 最终 fallback
+  const fallback = `fb_${Math.random().toString(36).substring(2, 9)}`;
+  console.warn('[KeyFallback] Using fallback key:', fallback, 'for item:', item);
+  return fallback;
+};
+
+// 添加调试信息
+onMounted(() => {
+  console.log('[SearchNavigator] Component mounted with initial props:', {
+    fileResults: props.fileResults,
+    noteResults: props.noteResults,
+    excerptResults: props.excerptResults,
+    searchQuery: props.searchQuery
+  });
+
+  console.log('[KeyDebug] Sample key for first file result:',
+    props.fileResults[0] ? getKeyField(props.fileResults[0]) : 'No file results');
+
+  console.log('[KeyDebug] Sample key for first note result:',
+    props.noteResults[0] ? getKeyField(props.noteResults[0]) : 'No note results');
+});
+
+// 监听搜索结果变化
+watch(() => props.noteResults, (newVal) => {
+  const invalidItems = newVal.filter(item => {
+    try {
+      return !getKeyField(item);
+    } catch {
+      return true;
+    }
+  });
+
+  if (invalidItems.length > 0) {
+    console.error('[Validation] Found invalid note results:', invalidItems);
+  }
+}, { deep: true });
+
+// 标签页切换逻辑
+watch(() => props.searchQuery, () => {
+  console.log('[TabDebug] Determining active tab based on results:', {
+    notes: props.noteResults.length,
+    files: props.fileResults.length,
+    excerpts: props.excerptResults.length
+  });
+
+  if (validNoteResults.value.length > 0) {
+    activeTab.value = 'notes';
+    console.log('[TabDebug] Switched to notes tab');
+  } else if (props.fileResults.length > 0) {
+    activeTab.value = 'files';
+    console.log('[TabDebug] Switched to files tab');
+  } else if (props.excerptResults.length > 0) {
+    activeTab.value = 'excerpts';
+    console.log('[TabDebug] Switched to excerpts tab');
+  }
+});
+
+// ...保持其他工具函数不变...
+
+// 标签页自定义内容
+const filesTab = () => h(NTooltip, { placement: 'bottom' }, {
+  trigger: () => h('span', { class: 'tab-label' }, [
+    h(Icon, { icon: 'mdi:file-search-outline', style: { fontSize: '18px', marginRight: '6px' } }),
+    '文件搜索结果'
+  ]),
+  default: () => '显示文件路径匹配的搜索结果'
+});
+
+const notesTab = () => h(NTooltip, { placement: 'bottom' }, {
+  trigger: () => h('span', { class: 'tab-label' }, [
+    h(Icon, { icon: 'mdi:text-box-search-outline', style: { fontSize: '18px', marginRight: '6px' } }),
+    '内容搜索结果'
+  ]),
+  default: () => '显示文件内容匹配的搜索结果'
+});
+
+const excerptsTab = () => h(NTooltip, { placement: 'bottom' }, {
+  trigger: () => h('span', { class: 'tab-label' }, [
+    h(Icon, { icon: 'mdi:note-search-outline', style: { fontSize: '18px', marginRight: '6px' } }),
+    '摘录笔记'
+  ]),
+  default: () => '显示摘录笔记的搜索结果'
+});
+
+// 工具函数
+const getFileName = (item) => item.file_name || item.path?.split(/[\\/]/).pop() || '未知文件';
+const getFullPath = (item) => item.path?.replace(/\\/g, '/') || '';
+
+// 增强的键生成函数
+const generateItemKey = (item, fallbackIndex) => {
+  try {
+    // 防御性编程
+    if (!item) {
+      return `null_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+
+    // 使用更可靠的复合键
+    const components = [
+      item._searchType || 'unknown',
+      item.path || '',
+      item.file_name || '',
+      item.line_number || 0,
+      item.excerpt_id || '',
+      fallbackIndex
+    ];
+
+    // 创建唯一键
+    const key = components.join('|');
+    const hash = btoa(encodeURIComponent(key)).substr(0, 16);
+    
+    return `search_${hash}`;
+  } catch (err) {
+    console.error('[KeyError] Failed to generate key:', err, 'for item:', item);
+    return `err_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+};
+
+// 计算属性增强
+const keyedFileResults = computed(() => {
+  return rightSiderStore.searchResults.fileResults
+    .map((item, index) => ({
+      ...item,
+      _uniqueKey: generateItemKey(item, index)
+    }));
+});
+
+const keyedNoteResults = computed(() => {
+  return rightSiderStore.searchResults.noteResults
+    .filter(item => {
+      const isValid = item.path && item.preview;
+      if (!isValid) {
+        console.warn('[InvalidItem] Filtered out note result:', item);
+      }
+      return isValid;
+    })
+    .map((item, index) => ({
+      ...item,
+      _uniqueKey: generateItemKey(item, index)
+    }));
+});
+
+// 确保搜索结果数据有效
+watch(() => props.fileResults, (newVal) => {
+  if (newVal.some(item => !item.path)) {
+    console.warn('发现无效的搜索结果项:', newVal.filter(item => !item.path));
+  }
+}, { immediate: true });
+
+watch(() => props.noteResults, (newVal) => {
+  if (newVal.some(item => !item.path)) {
+    console.warn('发现无效的笔记结果项:', newVal.filter(item => !item.path));
+  }
+}, { immediate: true });
 
 onMounted(() => {
-  if (props.fileResults && props.fileResults.length > 0) {
-    activeTab.value = 'files';
-  } else if (props.noteResults && props.noteResults.length > 0) {
+  if (validNoteResults.value.length > 0) {
     activeTab.value = 'notes';
-  } else if (props.excerptResults && props.excerptResults.length > 0) {
+  } else if (props.fileResults.length > 0) {
+    activeTab.value = 'files';
+  } else if (props.excerptResults.length > 0) {
     activeTab.value = 'excerpts';
   }
+});
+
+// 确保组件卸载时取消防抖
+onBeforeUnmount(() => {
+  debouncedScroll.cancel();
 });
 </script>
 
@@ -502,6 +718,27 @@ onMounted(() => {
   max-height: calc(100vh - 108px);
   overflow: hidden;
   padding: 8px 4px 5px 0;
+}
+
+.scroller {
+  height: calc(100vh - 150px);
+  width: 100%;
+  overflow-y: auto;
+}
+
+/* 确保虚拟列表项正确显示 */
+:deep(.n-virtual-list) {
+  width: 100%;
+}
+
+:deep(.n-virtual-list-item) {
+  width: 100%;
+}
+
+.loading-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
 }
 
 .n-list {
@@ -644,5 +881,29 @@ onMounted(() => {
 .n-tabs-pane-wrapper-enter-from,
 .n-tabs-pane-wrapper-leave-to {
   opacity: 0;
+}
+
+.error-banner {
+  background: #fff2f0;
+  padding: 8px 12px;
+  margin: 8px 0;
+  color: #f5222d;
+  border: 1px solid #ffccc7;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.invalid-items-detail {
+  margin-top: 8px;
+  padding: 8px;
+  background: #fff9f9;
+  border: 1px dashed #ffccc7;
+  border-radius: 4px;
+}
+
+.invalid-item {
+  padding: 4px 0;
+  font-size: 12px;
+  word-break: break-all;
 }
 </style>

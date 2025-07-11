@@ -115,6 +115,7 @@ async fn main() {
             commands::guaxiscreencap::create_screenshot_dir,
             commands::searcher::fd_search,
             commands::searcher::rg_search,
+            commands::searcher::cancel_search,
             commands::knowledgebase::create_knowledge_base,
             commands::knowledgebase::get_knowledge_base_list,
             commands::knowledgebase::get_knowledge_base_tree,

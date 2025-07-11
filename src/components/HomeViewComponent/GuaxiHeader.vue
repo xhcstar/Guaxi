@@ -33,7 +33,7 @@
 </template>
 
 <script setup>
-import { computed, ref, h, onMounted } from "vue";
+import { computed, ref, h, onMounted, nextTick } from "vue";
 import { NIcon, NDropdown } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
@@ -164,6 +164,16 @@ const handleSearchBlur = () => {
   }, 200)
 }
 
+const openSearchPanel = () => {
+  // 确保右侧面板是搜索面板
+  rightSiderStore.setPanel('search');
+
+  // 如果右侧边栏折叠，展开它
+  if (siderStore.isRightSiderCollapsed[viewKey]) {
+    siderStore.setRightSiderCollapsed(viewKey, false);
+  }
+};
+
 const handleSearchEnter = () => {
   if (searchQuery.value.trim()) {
     console.log('[Search] Executing search:', {
@@ -182,73 +192,196 @@ const handleSearchEnter = () => {
 }
 
 const handleSearchSelect = (key) => {
-  console.log('[Search] Selected search type:', key)
-  searchType.value = key
-  isSearchDropdownVisible.value = false
+  console.log('[Search] Selected search type:', key);
 
+  // 重置搜索状态
+  searchType.value = key;
+  rightSiderStore.setSearchResults({
+    fileResults: [],
+    noteResults: [],
+    excerptResults: [],
+    searchQuery: searchQuery.value,
+    lastSearchType: key
+  });
+
+  isSearchDropdownVisible.value = false;
+
+  // 如果当前有搜索词，立即执行新类型的搜索
   if (searchQuery.value.trim()) {
-    handleSearchEnter()
+    console.log('[Search] Auto-triggering search after type change');
+    handleSearchEnter();
   }
 
   // 保持输入框焦点
-  searchInputRef.value?.focus()
-}
+  nextTick(() => {
+    searchInputRef.value?.focus();
+  });
+};
+
+// 通用的搜索结果规范化函数
+const normalizeSearchResults = (rawResults, type) => {
+  if (!Array.isArray(rawResults)) {
+    console.warn(`[Search] Expected array for ${type} results, got:`, rawResults);
+    return [];
+  }
+
+  return rawResults
+    .filter(item => {
+      // 基础验证
+      const isValid = item && typeof item === 'object';
+      if (!isValid) {
+        console.warn(`[Search] Invalid ${type} item filtered:`, item);
+        return false;
+      }
+      return true;
+    })
+    .map(item => {
+      // 规范化字段
+      const normalized = {
+        path: String(item.path || ''),
+        file_name: String(item.file_name || path.basename(item.path || '')),
+        preview: String(item.preview || item.text || ''),
+        line_number: Number(item.line_number) || 0,
+        matches: Array.isArray(item.matches) ? item.matches : [],
+        _searchType: type
+      };
+
+      // 特殊处理摘录搜索结果
+      if (type === 'excerpt') {
+        normalized.excerpt_id = item.id || '';
+        normalized.source_file = item.source_file || '';
+      }
+
+      return normalized;
+    })
+    .filter(item => {
+      // 最终验证
+      const isValid = item.path && (item.preview || item.file_name);
+      if (!isValid) {
+        console.warn(`[Search] Incomplete ${type} item filtered:`, item);
+      }
+      return isValid;
+    });
+};
 
 async function handleSearchFiles() {
   try {
-    const results = await invoke('fd_search', {
+    console.log('[Search] Starting file search:', {
+      query: searchQuery.value,
+      path: fileTreeStore.activeRepoPath
+    });
+
+    // 清除旧结果
+    rightSiderStore.setSearchResults({
+      fileResults: [],
+      noteResults: [],
+      excerptResults: [],
+      searchQuery: searchQuery.value
+    });
+
+    // 调用搜索API
+    const rawResponse = await invoke('fd_search', {
       pattern: searchQuery.value,
       path: fileTreeStore.activeRepoPath
     });
 
+    // 解析和规范化结果
+    const [rawResults = [], hasMore = false] = Array.isArray(rawResponse)
+      ? rawResponse
+      : [];
+
+    const validResults = normalizeSearchResults(rawResults, 'file');
+
+    // 更新存储状态
     rightSiderStore.setSearchResults({
-      fileResults: results.map(item => ({
-        path: item.path,
-        file_name: item.file_name,
-        preview: item.preview,
-        line_number: item.line_number,
-        matches: item.matches
-      })),
+      fileResults: validResults,
       noteResults: [],
-      searchQuery: searchQuery.value
+      excerptResults: [],
+      searchQuery: searchQuery.value,
+      hasMore,
+      loading: false
     });
 
-    rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
+    // 打开搜索结果面板
+    openSearchPanel();
 
-    // 添加这行代码：如果右侧边栏是折叠状态，则展开它
-    if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.setRightSiderCollapsed(viewKey, false); // 确保右侧边栏展开
-    }
-  } catch (err) {
-    console.error('[Search] File search failed:', err);
+    console.log('[Search] File search completed', {
+      results: validResults.length,
+      hasMore
+    });
+
+  } catch (error) {
+    console.error('[Search] File search failed:', error);
+    rightSiderStore.setSearchResults({
+      fileResults: [],
+      noteResults: [],
+      excerptResults: [],
+      searchQuery: searchQuery.value,
+      error: error.message || '文件搜索失败'
+    });
+    message.error(`文件搜索失败: ${error.message}`);
   }
 }
 
 async function handleSearchNotes() {
   try {
-    const results = await invoke('rg_search', {
+    console.log('[Search] Starting note search:', {
+      query: searchQuery.value,
+      path: fileTreeStore.activeRepoPath
+    });
+
+    // 清除旧结果
+    rightSiderStore.setSearchResults({
+      fileResults: [],
+      noteResults: [],
+      excerptResults: [],
+      searchQuery: searchQuery.value,
+      loading: true
+    });
+
+    const response = await invoke('rg_search', {
       pattern: searchQuery.value,
       path: fileTreeStore.activeRepoPath
     });
 
-    const validResults = results.filter(item =>
-      item.preview && item.line_number && !item.path.includes('.git')
-    );
+    // 智能解析响应结构
+    const rawResults = (() => {
+      if (!response) return [];
+      if (Array.isArray(response[0])) return response[0]; // [results, hasMore]结构
+      if (Array.isArray(response)) return response;      // 纯数组结构
+      return [response];                                // 单结果对象
+    })();
 
+    // 规范化结果
+    const validResults = normalizeSearchResults(rawResults, 'note');
+
+    // 更新存储状态
     rightSiderStore.setSearchResults({
       fileResults: [],
       noteResults: validResults,
-      searchQuery: searchQuery.value
+      excerptResults: [],
+      searchQuery: searchQuery.value,
+      loading: false
     });
 
-    rightSiderStore.panel = 'search'; // 新增：切换到搜索面板
-    if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.setRightSiderCollapsed(viewKey, false); // 确保右侧边栏展开
-    }
+    // 打开搜索结果面板
+    openSearchPanel();
+
+    console.log('[Search] Note search completed', {
+      results: validResults.length
+    });
 
   } catch (err) {
     console.error('[Search] Note search failed:', err);
-    message.error('搜索失败: ' + (err.message || String(err)));
+    rightSiderStore.setSearchResults({
+      fileResults: [],
+      noteResults: [],
+      excerptResults: [],
+      searchQuery: searchQuery.value,
+      error: err.message || '内容搜索失败',
+      loading: false
+    });
+    message.error(`内容搜索失败: ${err.message}`);
   }
 }
 

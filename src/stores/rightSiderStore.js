@@ -15,6 +15,11 @@ export const useRightSiderStore = defineStore("rightSider", {
   }),
   actions: {
     setSearchResults(results) {
+      console.log('[DEBUG][Store] Setting search results:', { // DEBUG
+        fileResults: results.fileResults?.length || 0,
+        noteResults: results.noteResults?.length || 0,
+        query: results.searchQuery
+      });
       this.searchResults = results;
     },
     clearSearchResults() {

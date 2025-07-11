@@ -1,85 +1,19 @@
+use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
 use grep_searcher::{sinks, Searcher, SearcherBuilder};
-use grep_matcher::Matcher;
 use ignore::WalkBuilder;
+use lazy_static::lazy_static;
+use lru::LruCache;
+use parking_lot::RwLock;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::ffi::OsStr;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-#[derive(Debug, Serialize)]
-pub struct Match {
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SearchResult {
-    pub path: String,
-    pub file_name: String,
-    pub preview: Option<String>,
-    pub line_number: Option<u64>,
-    pub matches: Vec<Match>,
-}
-
-// 判断是否为二进制文件扩展名
-fn is_binary_extension(ext: &OsStr) -> bool {
-    let ext = ext.to_string_lossy().to_lowercase();
-    matches!(ext.as_str(), 
-        "gz" | "bz2" | "zip" | "lzma" | "xz" | "zst" | 
-        "pack" | "idx" | "rev" | "png" | "jpg" | "jpeg" | 
-        "gif" | "pdf" | "doc" | "docx" | "xls" | "xlsx" |
-        "ppt" | "pptx" | "bin" | "exe" | "dll" | "so" |
-        "class" | "jar" | "war" | "tar" | "rar" | "7z"
-    )
-}
-
-// 判断是否应该跳过的路径
-fn should_skip_path(path: &Path) -> bool {
-    // 跳过.git目录
-    path.components().any(|c| c.as_os_str() == ".git") ||
-    // 跳过常见二进制文件扩展名
-    path.extension().map_or(false, is_binary_extension)
-}
-
-#[tauri::command]
-pub async fn fd_search(pattern: String, path: String) -> Result<Vec<SearchResult>, String> {
-    let path = Path::new(&path);
-    if !path.exists() {
-        return Err("路径不存在".into());
-    }
-
-    let mut results = Vec::new();
-
-    for entry in WalkBuilder::new(path)
-        .hidden(false)
-        .add_custom_ignore_filename(".ignore") // 添加自定义忽略文件
-        .build()
-        .filter_map(Result::ok)
-    {
-        // 跳过不需要搜索的文件和目录
-        if should_skip_path(entry.path()) {
-            continue;
-        }
-
-        if let Some(file_name) = entry.path().file_name() {
-            let file_name = file_name.to_string_lossy();
-            if file_name.contains(&pattern) {
-                results.push(SearchResult {
-                    path: entry.path().to_string_lossy().to_string(),
-                    file_name: file_name.into_owned(),
-                    preview: None,
-                    line_number: None,
-                    matches: vec![],
-                });
-            }
-        }
-    }
-
-    Ok(results)
-}
-
-/// 将字节区间转换为字符区间（用于高亮索引准确性）
-/// 返回 (char_start, char_end)
+// 辅助函数：字节索引转字符索引
 fn byte_to_char_indices(line: &str, start: usize, end: usize) -> (usize, usize) {
     let mut char_start = None;
     let mut char_end = None;
@@ -91,45 +25,258 @@ fn byte_to_char_indices(line: &str, start: usize, end: usize) -> (usize, usize) 
             char_end = Some(i);
         }
     }
-    // 处理 end 恰好在行尾的情况
     let total_chars = line.chars().count();
     (
-        char_start.unwrap_or_else(|| {
-            if start == line.len() { total_chars } else { 0 }
-        }),
-        char_end.unwrap_or_else(|| {
-            if end == line.len() { total_chars } else { 0 }
-        }),
+        char_start.unwrap_or_else(|| if start == line.len() { total_chars } else { 0 }),
+        char_end.unwrap_or_else(|| if end == line.len() { total_chars } else { 0 }),
     )
 }
 
+// 使用NonZeroUsize创建LRU缓存
+lazy_static! {
+    static ref SEARCH_CACHE: RwLock<LruCache<String, Vec<SearchResult>>> =
+        RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap()));
+}
+
+struct SearchManager {
+    active_searches: Arc<RwLock<Vec<String>>>,
+}
+
+impl SearchManager {
+    fn new() -> Self {
+        Self {
+            active_searches: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    fn register_search(&self, id: &str) {
+        self.active_searches.write().push(id.to_string());
+    }
+
+    fn cancel_search(&self, id: &str) {
+        self.active_searches.write().retain(|x| x != id);
+    }
+
+    fn is_cancelled(&self, id: &str) -> bool {
+        !self.active_searches.read().contains(&id.to_string())
+    }
+}
+
+lazy_static! {
+    static ref SEARCH_MANAGER: SearchManager = SearchManager::new();
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct Match {
+    pub start: usize,
+    pub end: usize,
+    pub score: u8,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SearchResult {
+    pub path: String,
+    pub file_name: String,
+    pub preview: Option<String>,
+    pub line_number: Option<u64>,
+    pub matches: Vec<Match>,
+    pub score: u32,
+}
+
+fn is_binary_extension(ext: &OsStr) -> bool {
+    let ext = ext.to_string_lossy().to_lowercase();
+    matches!(
+        ext.as_str(),
+        "gz" | "bz2"
+            | "zip"
+            | "lzma"
+            | "xz"
+            | "zst"
+            | "pack"
+            | "idx"
+            | "rev"
+            | "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "pdf"
+            | "doc"
+            | "docx"
+            | "xls"
+            | "xlsx"
+            | "ppt"
+            | "pptx"
+            | "bin"
+            | "exe"
+            | "dll"
+            | "so"
+            | "class"
+            | "jar"
+            | "war"
+            | "tar"
+            | "rar"
+            | "7z"
+    )
+}
+
+fn should_skip_path(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == ".git")
+        || path.extension().map_or(false, is_binary_extension)
+}
+
 #[tauri::command]
-pub async fn rg_search(pattern: String, path: String) -> Result<Vec<SearchResult>, String> {
+pub async fn fd_search(
+    pattern: String,
+    path: String,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    search_id: Option<String>,
+) -> Result<(Vec<SearchResult>, bool), String> {
+    let start_time = Instant::now();
     let path = Path::new(&path);
+
     if !path.exists() {
         return Err("路径不存在".into());
     }
 
-    let matcher = RegexMatcher::new(&pattern).map_err(|e| format!("搜索模式无效: {}", e))?;
-    let mut searcher = SearcherBuilder::new()
-        .line_number(true)
-        .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00')) // 二进制检测
-        .build();
+    if let Some(id) = &search_id {
+        if SEARCH_MANAGER.is_cancelled(id) {
+            return Err("搜索已取消".into());
+        }
+    }
 
-    let mut results = Vec::new();
+    // 使用display()格式化Path
+    let cache_key = format!("{}:{}", pattern, path.display());
 
-    for entry in WalkBuilder::new(path)
+    // 检查缓存（使用读锁和peek方法）
+    {
+        let cache = SEARCH_CACHE.read();
+        if let Some(cached) = cache.peek(&cache_key) {
+            let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
+            let results = cached
+                .iter()
+                .skip(offset.unwrap_or(0))
+                .take(limit.unwrap_or(50))
+                .cloned()
+                .collect();
+            return Ok((results, has_more));
+        }
+    }
+
+    let file_paths: Vec<_> = WalkBuilder::new(path)
         .hidden(false)
-        .add_custom_ignore_filename(".ignore") // 添加自定义忽略文件
+        .add_custom_ignore_filename(".ignore")
         .build()
         .filter_map(Result::ok)
-    {
-        // 跳过不需要搜索的文件和目录
-        if should_skip_path(entry.path()) {
-            continue;
-        }
+        .filter(|entry| {
+            entry.file_type().map_or(false, |ft| ft.is_file()) && !should_skip_path(entry.path())
+        })
+        .collect();
 
-        if entry.file_type().map_or(false, |ft| ft.is_file()) {
+    // 使用rayon的par_iter()进行并行处理
+    let results: Vec<SearchResult> = file_paths
+        .par_iter()
+        .filter_map(|entry| {
+            if let Some(id) = &search_id {
+                if SEARCH_MANAGER.is_cancelled(id) {
+                    return None;
+                }
+            }
+
+            if let Some(file_name) = entry.path().file_name() {
+                let file_name = file_name.to_string_lossy();
+                if file_name.contains(&pattern) {
+                    return Some(SearchResult {
+                        path: entry.path().to_string_lossy().to_string(),
+                        file_name: file_name.into_owned(),
+                        preview: None,
+                        line_number: None,
+                        matches: vec![],
+                        score: 0,
+                    });
+                }
+            }
+            None
+        })
+        .collect();
+
+    // 更新缓存（使用写锁）
+    {
+        let mut cache = SEARCH_CACHE.write();
+        cache.put(cache_key, results.clone());
+    }
+
+    let limit = limit.unwrap_or(50);
+    let offset = offset.unwrap_or(0);
+    let has_more = results.len() > offset + limit;
+    let paginated_results = results.into_iter().skip(offset).take(limit).collect();
+
+    println!("文件搜索完成，耗时: {:?}", start_time.elapsed());
+    Ok((paginated_results, has_more))
+}
+
+#[tauri::command]
+pub async fn rg_search(
+    pattern: String,
+    path: String,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    search_id: Option<String>,
+) -> Result<(Vec<SearchResult>, bool), String> {
+    let start_time = Instant::now();
+    let path = Path::new(&path);
+
+    if !path.exists() {
+        return Err("路径不存在".into());
+    }
+
+    if let Some(id) = &search_id {
+        if SEARCH_MANAGER.is_cancelled(id) {
+            return Err("搜索已取消".into());
+        }
+        SEARCH_MANAGER.register_search(id);
+    }
+
+    // 使用display()格式化Path
+    let cache_key = format!("{}:{}", pattern, path.display());
+
+    // 检查缓存（使用读锁和peek方法）
+    {
+        let cache = SEARCH_CACHE.read();
+        if let Some(cached) = cache.peek(&cache_key) {
+            let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
+            let results = cached
+                .iter()
+                .skip(offset.unwrap_or(0))
+                .take(limit.unwrap_or(50))
+                .cloned()
+                .collect();
+            return Ok((results, has_more));
+        }
+    }
+
+    let matcher = RegexMatcher::new(&pattern).map_err(|e| format!("搜索模式无效: {}", e))?;
+
+    let file_paths: Vec<_> = WalkBuilder::new(path)
+        .hidden(false)
+        .add_custom_ignore_filename(".ignore")
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_type().map_or(false, |ft| ft.is_file()) && !should_skip_path(entry.path())
+        })
+        .collect();
+
+    // 使用rayon的par_iter()进行并行处理
+    let all_results: Vec<SearchResult> = file_paths
+        .par_iter()
+        .filter_map(|entry| {
+            if let Some(id) = &search_id {
+                if SEARCH_MANAGER.is_cancelled(id) {
+                    return None;
+                }
+            }
+
             let path_str = entry.path().to_string_lossy().to_string();
             let file_name = entry
                 .path()
@@ -137,77 +284,104 @@ pub async fn rg_search(pattern: String, path: String) -> Result<Vec<SearchResult
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
 
-            // 使用更安全的搜索方式
-            match searcher.search_path(
+            let mut searcher = SearcherBuilder::new()
+                .line_number(true)
+                .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00'))
+                .build();
+
+            let mut file_results = Vec::new();
+            let mut file_score = 0;
+
+            if let Err(e) = searcher.search_path(
                 &matcher,
                 entry.path(),
                 sinks::UTF8(|lineno, line| {
-                    // 检查是否为有效的UTF-8文本
-                    if std::str::from_utf8(line.as_bytes()).is_err() {
-                        println!(
-                            "[rg_search][skip] 非UTF-8文件: {}",
-                            path_str
-                        );
-                        return Ok(true); // 跳过非UTF-8文件
-                    }
-
                     let mut matches = vec![];
+                    let mut line_score = 0;
+
                     matcher.find_iter(line.as_bytes(), |m| {
-                        // 字节索引转字符索引，保证前端高亮准确
                         let (char_start, char_end) = byte_to_char_indices(line, m.start(), m.end());
-                        if char_start != m.start() || char_end != m.end() {
-                            println!(
-                                "[rg_search][debug] 字节索引({}-{}) => 字符索引({}-{})，内容: {}",
-                                m.start(),
-                                m.end(),
-                                char_start,
-                                char_end,
-                                &line[m.start()..m.end().min(line.len())]
-                            );
-                        }
+
+                        let match_len = char_end - char_start;
+                        let match_score = match_len as u8 + if m.start() == 0 { 5 } else { 0 };
+
                         matches.push(Match {
                             start: char_start,
                             end: char_end,
+                            score: match_score,
                         });
+
+                        line_score += match_score as u32;
                         true
                     })?;
 
                     if !matches.is_empty() {
-                        println!(
-                            "[rg_search][match] 文件: {}, 行: {}, 匹配数: {}, 内容: {}",
-                            path_str,
-                            lineno,
-                            matches.len(),
-                            line
-                        );
+                        file_score += line_score;
+                        file_results.push(SearchResult {
+                            path: path_str.clone(),
+                            file_name: file_name.clone(),
+                            preview: Some(line.to_string()),
+                            line_number: Some(lineno),
+                            matches,
+                            score: line_score,
+                        });
                     }
-
-                    results.push(SearchResult {
-                        path: path_str.clone(),
-                        file_name: file_name.clone(),
-                        preview: Some(line.to_string()),
-                        line_number: Some(lineno),
-                        matches,
-                    });
 
                     Ok(true)
                 }),
             ) {
-                Ok(_) => (),
-                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                    // 跳过二进制文件错误
-                    println!(
-                        "[rg_search][skip] 二进制文件或无效数据: {}",
-                        path_str
-                    );
-                    continue;
-                }
-                Err(e) => {
+                if e.kind() != std::io::ErrorKind::InvalidData {
                     eprintln!("搜索文件错误: {} - {}", entry.path().display(), e);
                 }
+                return None;
             }
-        }
+
+            file_results.sort_by(|a, b| b.score.cmp(&a.score));
+
+            if !file_results.is_empty() {
+                Some((file_score, file_results))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flat_map(|(file_score, mut results)| {
+            for result in &mut results {
+                result.score += file_score;
+            }
+            results
+        })
+        .collect();
+
+    let mut sorted_results = all_results;
+    sorted_results.sort_by(|a, b| b.score.cmp(&a.score));
+
+    // 更新缓存（使用写锁）
+    {
+        let mut cache = SEARCH_CACHE.write();
+        cache.put(cache_key, sorted_results.clone());
     }
 
-    Ok(results)
+    let limit = limit.unwrap_or(50);
+    let offset = offset.unwrap_or(0);
+    let has_more = sorted_results.len() > offset + limit;
+    let paginated_results = sorted_results
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect();
+
+    if let Some(id) = search_id {
+        SEARCH_MANAGER.cancel_search(&id);
+    }
+
+    println!("内容搜索完成，耗时: {:?}", start_time.elapsed());
+    Ok((paginated_results, has_more))
+}
+
+#[tauri::command]
+pub async fn cancel_search(search_id: String) -> Result<(), String> {
+    SEARCH_MANAGER.cancel_search(&search_id);
+    Ok(())
 }
