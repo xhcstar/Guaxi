@@ -2,38 +2,42 @@
   <div class="search-navigator">
     <n-tabs v-model:value="activeTab" type="line" animated>
       <n-tab-pane name="files" :tab="filesTab">
-        <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
-        <n-list v-else hoverable clickable>
-          <n-list-item v-for="item in fileResults" :key="item.path" @click="openSearchResult(item)">
-            <div class="search-result-item">
-              <div class="file-name" :title="getFullPath(item)">
-                <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
-                <span class="filename-text">{{ getFileName(item) }}</span>
-                <span class="line-badge" v-if="item.line_number">L{{ item.line_number }}</span>
+        <div class="tab-content">
+          <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
+          <n-list v-else hoverable clickable>
+            <n-list-item v-for="item in fileResults" :key="item.path" @click="openSearchResult(item)">
+              <div class="search-result-item">
+                <div class="file-name" :title="getFullPath(item)">
+                  <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
+                  <span class="filename-text">{{ getFileName(item) }}</span>
+                  <span class="line-badge" v-if="item.line_number">L{{ item.line_number }}</span>
+                </div>
+                <div v-if="item.preview" class="preview-content">
+                  <span v-html="formatPreview(item)"></span>
+                </div>
               </div>
-              <div v-if="item.preview" class="preview-content">
-                <span v-html="formatPreview(item)"></span>
-              </div>
-            </div>
-          </n-list-item>
-        </n-list>
+            </n-list-item>
+          </n-list>
+        </div>
       </n-tab-pane>
 
       <n-tab-pane name="notes" :tab="notesTab">
-        <n-empty v-if="noteResults.length === 0" description="暂无内容搜索结果" style="margin-top: 20px" />
-        <n-list v-else hoverable clickable>
-          <n-list-item v-for="item in noteResults" :key="`${item.path}-${item.line_number}`"
-            @click="openSearchResult(item)">
-            <div class="search-result-item">
-              <div class="file-name" :title="getFullPath(item)">
-                <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
-                <span class="filename-text">{{ getFileName(item) }}</span>
-                <span class="line-badge">L{{ item.line_number }}</span>
+        <div class="tab-content">
+          <n-empty v-if="noteResults.length === 0" description="暂无内容搜索结果" style="margin-top: 20px" />
+          <n-list v-else hoverable clickable>
+            <n-list-item v-for="item in noteResults" :key="`${item.path}-${item.line_number}`"
+              @click="openSearchResult(item)">
+              <div class="search-result-item">
+                <div class="file-name" :title="getFullPath(item)">
+                  <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
+                  <span class="filename-text">{{ getFileName(item) }}</span>
+                  <span class="line-badge">L{{ item.line_number }}</span>
+                </div>
+                <div class="preview-content" v-html="formatPreview(item)"></div>
               </div>
-              <div class="preview-content" v-html="formatPreview(item)"></div>
-            </div>
-          </n-list-item>
-        </n-list>
+            </n-list-item>
+          </n-list>
+        </div>
       </n-tab-pane>
 
       <n-tab-pane name="excerpts" :tab="excerptsTab">
@@ -410,10 +414,22 @@ onMounted(() => {
 <style scoped>
 .search-navigator {
   height: 100%;
+  /* 确保有明确的高度 */
   max-width: 512px;
-  overflow-y: auto;
-  padding: 0 0px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
   box-sizing: border-box;
+}
+
+/* 确保 tabs 容器不滚动 */
+.n-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* 继承父容器高度 */
+  overflow: hidden;
 }
 
 .n-tabs .n-tabs-tab {
@@ -444,11 +460,51 @@ onMounted(() => {
   gap: 4px;
 }
 
+/* 关键修改：确保tab内容区域有明确的高度限制 */
+:deep(.n-tabs) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.n-tabs-content) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tab-content {
+  height: 100%;
+  max-height: calc(100vh - 108px);
+  /* 根据实际需要调整 */
+  overflow-y: auto;
+  padding: 8px 4px 5px 0;
+}
+
+/* 新增：窄滚动条样式 */
+.tab-content::-webkit-scrollbar {
+  width: 6px;
+  /* 滚动条宽度 */
+  height: 6px;
+  /* 横向滚动条高度 */
+}
+
+.tab-content::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.tab-content::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.4);
+}
+
+.tab-content::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
 .n-list {
   padding: 0;
   margin: 0;
-  max-height: 100%;
-  overflow-y: auto;
 }
 
 /* 紧凑化 n-list-item */
@@ -544,8 +600,21 @@ onMounted(() => {
   transition: background 0.2s;
 }
 
-/* 动画美化 */
+.n-tab-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 关键修改：为 tab 面板内容区域设置固定高度 */
 .n-tabs-pane-wrapper {
+  flex: 1;
+  min-height: 0;
+  /* 重要：允许内容区域收缩 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* 防止内部溢出 */
   transition: opacity 0.3s;
 }
 
