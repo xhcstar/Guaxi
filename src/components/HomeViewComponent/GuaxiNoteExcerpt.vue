@@ -531,6 +531,7 @@ watch(() => props.excerptResults, (newVal) => {
 .n-list {
   flex: 1;
   min-height: 0;
+  max-width: 470px;
   width: 100%;
   padding: 0;
   margin: 0;
@@ -539,11 +540,17 @@ watch(() => props.excerptResults, (newVal) => {
 /* 当有展开项时，列表容器需要滚动 */
 .n-list.has-expanded-item {
   overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  max-width: 480px;
+  width: 100%;
+  padding: 0;
+  margin: 0;
 }
 
 .n-list-item {
   width: 100%;
-  max-width: 500px;
+  max-width: 470px;
   margin: 0 !important;
   padding: 2px 0 !important;
   transition: all 0.2s ease;
@@ -562,7 +569,7 @@ watch(() => props.excerptResults, (newVal) => {
   top: 4px;
   gap: 4px;
   width: 100%;
-  max-width: 490px;
+  max-width: 460px;
   box-sizing: border-box;
   background: var(--n-card-color, #fff);
   border-radius: 6px;
@@ -592,6 +599,7 @@ watch(() => props.excerptResults, (newVal) => {
   width: 100%;
   cursor: pointer;
   min-width: 0;
+  max-width: 400px;
   overflow: hidden;
   padding-right: 8px;
   box-sizing: border-box;

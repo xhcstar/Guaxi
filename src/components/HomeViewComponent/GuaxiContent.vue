@@ -32,12 +32,12 @@ import GuaxiCenter from "./GuaxiCenter.vue"
 import GuaxiRightContent from "./GuaxiRightContent.vue"
 
 // 常量定义
-const MAX_RIGHT_SIDEBAR_WIDTH = 520
+const MAX_RIGHT_SIDEBAR_WIDTH = 490
 const MIN_RIGHT_SIDEBAR_WIDTH = 350
 
 // 响应式状态
 const leftSiderbarWidth = ref(350)
-const rightSiderbarWidth = ref(520)
+const rightSiderbarWidth = ref(490)
 const windowWidth = ref(window.innerWidth)
 
 // Pinia 状态
