@@ -416,8 +416,7 @@ onMounted(() => {
 <style scoped>
 .search-navigator {
   height: 100%;
-  /* 确保有明确的高度 */
-  max-width: 480px;
+  max-width: 470px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -425,12 +424,10 @@ onMounted(() => {
   box-sizing: border-box;
 }
 
-/* 确保 tabs 容器不滚动 */
 .n-tabs {
   display: flex;
   flex-direction: column;
   height: 100%;
-  /* 继承父容器高度 */
   overflow: hidden;
 }
 
@@ -462,7 +459,6 @@ onMounted(() => {
   gap: 4px;
 }
 
-/* 关键修改：确保tab内容区域有明确的高度限制 */
 :deep(.n-tabs) {
   height: 100%;
   display: flex;
@@ -478,18 +474,14 @@ onMounted(() => {
 .tab-content {
   height: 100%;
   max-height: calc(100vh - 108px);
-  max-width: 465px;
-  /* 根据实际需要调整 */
+  max-width: 470px;
   overflow-y: auto;
   padding: 8px 4px 5px 0;
 }
 
-/* 新增：窄滚动条样式 */
 .tab-content::-webkit-scrollbar {
   width: 6px;
-  /* 滚动条宽度 */
   height: 6px;
-  /* 横向滚动条高度 */
 }
 
 .tab-content::-webkit-scrollbar-thumb {
@@ -508,60 +500,79 @@ onMounted(() => {
 .tab-content-excerpts {
   height: 100%;
   max-height: calc(100vh - 108px);
-  overflow: hidden; /* 隐藏外部滚动条 */
+  overflow: hidden;
   padding: 8px 4px 5px 0;
 }
 
 .n-list {
   padding: 0;
   margin: 0;
+  max-width: 460px;
+  width: 100%;
 }
 
-/* 紧凑化 n-list-item */
 .n-list-item {
+  width: 100%;
+  max-width: 460px;
   margin: 0 !important;
   padding: 2px 0 !important;
+  transition: all 0.2s ease;
 }
 
-/* 紧凑化 search-result-item，设置最大宽度和横向滚动 */
+.n-list-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
 .search-result-item {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  max-width: 460px;
+  gap: 4px;
   width: 100%;
+  max-width: 450px;
   box-sizing: border-box;
   background: var(--n-card-color, #fff);
   border-radius: 6px;
   box-shadow: none;
-  padding: 4px 6px;
+  padding: 8px;
   margin-bottom: 2px;
-  transition: box-shadow 0.2s;
-  overflow-x: auto;
+  margin-left: 8px;
+  transition: all 0.2s ease;
+  position: relative;
 }
 
 .n-list-item:hover .search-result-item {
-  box-shadow: 0 0 0 3pxrgb(33, 189, 236), 0 2px 8px 0 rgba(7, 118, 161, 0.1);
-  background: #f0f7ff;
-  transition: box-shadow 0.2s, background 0.2s;
+  background: linear-gradient(to right, #f0f7ff, #ffffff);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
+    0 2px 12px 0 rgba(7, 118, 161, 0.15);
+  transform: scale(1.01);
 }
 
 .file-name {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-size: 14px;
   font-weight: 500;
   color: var(--text-color);
   width: 100%;
-  white-space: nowrap;
-  overflow-x: auto;
+  cursor: pointer;
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  padding-right: 8px;
+  box-sizing: border-box;
+  transition: color 0.2s;
+}
+
+.n-list-item:hover .file-name {
+  color: #1890ff;
 }
 
 .filename-text {
-  display: inline;
-  max-width: 320px;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -573,7 +584,7 @@ onMounted(() => {
   padding: 1px 6px;
   border-radius: 4px;
   font-size: 11px;
-  margin-left: 6px;
+  margin-left: auto;
   flex-shrink: 0;
   display: inline-block;
 }
@@ -596,7 +607,7 @@ onMounted(() => {
   line-height: 1.5;
   background: #f8fafc;
   border-radius: 4px;
-  padding: 0px 5px;
+  padding: 8px;
   position: relative;
 }
 
@@ -616,15 +627,12 @@ onMounted(() => {
   flex-direction: column;
 }
 
-/* 关键修改：为 tab 面板内容区域设置固定高度 */
 .n-tabs-pane-wrapper {
   flex: 1;
   min-height: 0;
-  /* 重要：允许内容区域收缩 */
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* 防止内部溢出 */
   transition: opacity 0.3s;
 }
 
