@@ -12,14 +12,14 @@
       <GuaxiCenter />
 
       <!-- 右侧边栏 -->
-      <n-layout has-sider sider-placement="right">
-        <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-          :collapsed-width="0" bordered content-style="padding: 0;" :native-scrollbar="false"
-          style="height: 100%; position: relative;">
-          <GuaxiRightContent />
-          <div class="sidebar-dragger right" @mousedown="onMouseDownRightSidebar" />
-        </n-layout-sider>
-      </n-layout>
+      <!-- <n-layout has-sider sider-placement="right"> -->
+      <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
+        :collapsed-width="0" bordered content-style="padding: 0;" :native-scrollbar="false"
+        style="height: 100%; position: relative;">
+        <GuaxiRightContent />
+        <div class="sidebar-dragger right" @mousedown="onMouseDownRightSidebar" />
+      </n-layout-sider>
+      <!-- </n-layout> -->
     </n-layout>
   </div>
 </template>
@@ -32,7 +32,7 @@ import GuaxiCenter from "./GuaxiCenter.vue"
 import GuaxiRightContent from "./GuaxiRightContent.vue"
 
 // 常量定义
-const MAX_RIGHT_SIDEBAR_WIDTH = 880
+const MAX_RIGHT_SIDEBAR_WIDTH = 520
 const MIN_RIGHT_SIDEBAR_WIDTH = 350
 
 // 响应式状态
