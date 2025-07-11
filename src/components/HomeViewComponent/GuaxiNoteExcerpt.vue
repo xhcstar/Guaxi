@@ -1,12 +1,12 @@
 <template>
-  <div class="excerpt-navigator">
+  <div class="excerpt-navigator" :class="{ 'has-expanded-items': hasExpandedItems }">
     <n-empty v-if="excerptResults.length === 0" description="暂无摘录笔记搜索结果" style="margin-top: 20px">
       <template #extra>
         <n-text depth="3">尝试不同的搜索词</n-text>
       </template>
     </n-empty>
-    <n-list v-else hoverable clickable>
-      <n-list-item v-for="item in excerptResults" :key="item.file_path">
+    <n-list v-else hoverable clickable :class="{ 'has-expanded-item': hasExpandedItems }">
+      <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path">
         <div class="excerpt-result-item">
           <div class="file-name" :title="item.file_path">
             <!-- 将展开箭头移到最前面 -->
@@ -66,7 +66,7 @@
 </template>
 
 <script setup>
-import { h, defineComponent, ref, watch } from 'vue';
+import { h, defineComponent, ref, watch, computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -205,6 +205,10 @@ const FILE_ICON_MAP = {
   // 默认文件
   default: 'mdi:file-outline'
 };
+
+const hasExpandedItems = computed(() => {
+  return excerptResults.value.some(item => item.expanded)
+})
 
 const getFileIconPropsWithLog = (path) => {
   const props = getFileIconProps(path);
@@ -515,6 +519,13 @@ watch(() => props.excerptResults, (newVal) => {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  /* 只在这里设置滚动 */
+}
+
+/* 当有展开项时，改为内部滚动 */
+.excerpt-navigator.has-expanded-items {
+  overflow-y: visible;
 }
 
 .n-list {
@@ -525,7 +536,7 @@ watch(() => props.excerptResults, (newVal) => {
   margin: 0;
 }
 
-/* 当有展开项时显示滚动条 */
+/* 当有展开项时，列表容器需要滚动 */
 .n-list.has-expanded-item {
   overflow-y: auto;
 }
@@ -548,14 +559,17 @@ watch(() => props.excerptResults, (newVal) => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  top: 4px;
   gap: 4px;
   width: 100%;
+  max-width: 490px;
   box-sizing: border-box;
   background: var(--n-card-color, #fff);
   border-radius: 6px;
   box-shadow: none;
   padding: 8px;
   margin-bottom: 2px;
+  margin-left: 8px;
   transition: all 0.2s ease;
   position: relative;
 }
@@ -655,7 +669,7 @@ watch(() => props.excerptResults, (newVal) => {
   border-radius: 6px;
   margin-top: 8px;
   box-sizing: border-box;
-  max-height: calc(100vh - 25px);
+  max-height: calc(100vh - 150px);
   overflow-y: auto;
   transition: max-height 0.3s ease;
 }

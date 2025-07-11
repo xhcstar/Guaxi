@@ -41,7 +41,9 @@
       </n-tab-pane>
 
       <n-tab-pane name="excerpts" :tab="excerptsTab">
-        <GuaxiNoteExcerpt :excerpt-results="excerptResults" />
+        <div class="tab-content-excerpts">
+          <GuaxiNoteExcerpt :excerpt-results="excerptResults" />
+        </div>
       </n-tab-pane>
     </n-tabs>
   </div>
@@ -500,6 +502,13 @@ onMounted(() => {
 
 .tab-content::-webkit-scrollbar-track {
   background-color: transparent;
+}
+
+.tab-content-excerpts {
+  height: 100%;
+  max-height: calc(100vh - 108px);
+  overflow: hidden; /* 隐藏外部滚动条 */
+  padding: 8px 4px 5px 0;
 }
 
 .n-list {
