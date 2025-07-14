@@ -39,6 +39,7 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useMessage } from 'naive-ui';
 import {
   Screenshot24Regular,
   Search32Filled,
@@ -61,6 +62,7 @@ const searchInputRef = ref(null)
 const searchType = ref('file')
 
 const viewKey = 'home'
+const message = useMessage();
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
 }
@@ -220,6 +222,7 @@ const handleSearchSelect = (key) => {
 
 // 通用的搜索结果规范化函数
 const normalizeSearchResults = (rawResults, type) => {
+  let normalized = {};
   if (!Array.isArray(rawResults)) {
     console.warn(`[Search] Expected array for ${type} results, got:`, rawResults);
     return [];
@@ -237,14 +240,24 @@ const normalizeSearchResults = (rawResults, type) => {
     })
     .map(item => {
       // 规范化字段
-      const normalized = {
-        path: String(item.path || ''),
-        file_name: String(item.file_name || path.basename(item.path || '')),
-        preview: String(item.preview || item.text || ''),
-        line_number: Number(item.line_number) || 0,
-        matches: Array.isArray(item.matches) ? item.matches : [],
-        _searchType: type
-      };
+      if (type === 'note') {
+        normalized = {
+          path: String(item.path || ''),
+          file_name: String(item.file_name || path.basename(item.path || '')),
+          preview: String(item.preview || item.text || ''),
+          line_number: Number(item.line_number) || 0,
+          matches: Array.isArray(item.matches) ? item.matches : [],
+          _searchType: type
+        }
+      }
+
+      if (type === 'file') {
+        normalized = {
+          path: String(item.path || ''),
+          file_name: String(item.file_name || path.basename(item.path || '')),
+          _searchType: type
+        }
+      }
 
       // 特殊处理摘录搜索结果
       if (type === 'excerpt') {
@@ -279,6 +292,7 @@ async function handleSearchFiles() {
       searchQuery: searchQuery.value
     });
 
+    console.log('[Search] Searching... ', searchQuery.value, fileTreeStore.activeRepoPath);
     // 调用搜索API
     const rawResponse = await invoke('fd_search', {
       pattern: searchQuery.value,
@@ -290,7 +304,13 @@ async function handleSearchFiles() {
       ? rawResponse
       : [];
 
+    console.log('{Search] File Search rawResults', rawResults);
     const validResults = normalizeSearchResults(rawResults, 'file');
+
+    console.log('[Search] File search completed', {
+      results: validResults.length,
+      hasMore
+    });
 
     // 更新存储状态
     rightSiderStore.setSearchResults({
@@ -304,12 +324,6 @@ async function handleSearchFiles() {
 
     // 打开搜索结果面板
     openSearchPanel();
-
-    console.log('[Search] File search completed', {
-      results: validResults.length,
-      hasMore
-    });
-
   } catch (error) {
     console.error('[Search] File search failed:', error);
     rightSiderStore.setSearchResults({

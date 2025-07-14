@@ -161,10 +161,10 @@ const props = defineProps({
   }
 });
 
-// 添加对 store 的直接监听
-watch(() => rightSiderStore.searchResults, (newVal) => {
-  console.log('[Navigator] Store results updated:', newVal);
-}, { deep: true });
+// // 添加对 store 的直接监听
+// watch(() => rightSiderStore.searchResults, (newVal) => {
+//   console.log('[Navigator] Store results updated:', newVal);
+// }, { deep: true });
 
 // 搜索状态管理
 const searchState = reactive({

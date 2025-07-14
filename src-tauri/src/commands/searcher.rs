@@ -12,6 +12,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::{debug, error, info, warn};
 
 // 辅助函数：字节索引转字符索引
 fn byte_to_char_indices(line: &str, start: usize, end: usize) -> (usize, usize) {
@@ -132,6 +133,7 @@ pub async fn fd_search(
     offset: Option<usize>,
     search_id: Option<String>,
 ) -> Result<(Vec<SearchResult>, bool), String> {
+    info!("fd_search called with pattern: {}, path: {}", pattern, path);
     let start_time = Instant::now();
     let path = Path::new(&path);
 
@@ -139,27 +141,35 @@ pub async fn fd_search(
         return Err("路径不存在".into());
     }
 
+    info!("fd_search path exists");
     if let Some(id) = &search_id {
         if SEARCH_MANAGER.is_cancelled(id) {
             return Err("搜索已取消".into());
         }
     }
+    info!("fd_search start: {:?}", search_id);
 
-    // 使用display()格式化Path
-    let cache_key = format!("{}:{}", pattern, path.display());
+    // 修改1：在缓存键前添加"fd:"前缀，防止与rg_search的缓存冲突
+    let cache_key = format!("fd:{}:{}", pattern, path.display());
 
     // 检查缓存（使用读锁和peek方法）
     {
         let cache = SEARCH_CACHE.read();
         if let Some(cached) = cache.peek(&cache_key) {
-            let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
-            let results = cached
-                .iter()
-                .skip(offset.unwrap_or(0))
-                .take(limit.unwrap_or(50))
-                .cloned()
-                .collect();
-            return Ok((results, has_more));
+            // 修改2：增加缓存结果验证，确保是文件名搜索结果
+            if cached.iter().all(|r| r.preview.is_none() && r.matches.is_empty()) {
+                let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
+                let results = cached
+                    .iter()
+                    .skip(offset.unwrap_or(0))
+                    .take(limit.unwrap_or(50))
+                    .cloned()
+                    .collect();
+                info!("Cache key: {}", cache_key);
+                info!("Cache size: {}", cache.len());
+                info!("Returning: {:?} ", results);
+                return Ok((results, has_more));
+            }
         }
     }
 
@@ -172,6 +182,8 @@ pub async fn fd_search(
             entry.file_type().map_or(false, |ft| ft.is_file()) && !should_skip_path(entry.path())
         })
         .collect();
+
+    info!("Total files: {:?}", file_paths);
 
     // 使用rayon的par_iter()进行并行处理
     let results: Vec<SearchResult> = file_paths
@@ -186,6 +198,7 @@ pub async fn fd_search(
             if let Some(file_name) = entry.path().file_name() {
                 let file_name = file_name.to_string_lossy();
                 if file_name.contains(&pattern) {
+                    // 修改3：确保只返回文件名搜索结果
                     return Some(SearchResult {
                         path: entry.path().to_string_lossy().to_string(),
                         file_name: file_name.into_owned(),
@@ -211,7 +224,7 @@ pub async fn fd_search(
     let has_more = results.len() > offset + limit;
     let paginated_results = results.into_iter().skip(offset).take(limit).collect();
 
-    println!("文件搜索完成，耗时: {:?}", start_time.elapsed());
+    info!("文件搜索完成: {:?}", paginated_results);
     Ok((paginated_results, has_more))
 }
 
@@ -237,21 +250,24 @@ pub async fn rg_search(
         SEARCH_MANAGER.register_search(id);
     }
 
-    // 使用display()格式化Path
-    let cache_key = format!("{}:{}", pattern, path.display());
+    // 修改4：在缓存键前添加"rg:"前缀，防止与fd_search的缓存冲突
+    let cache_key = format!("rg:{}:{}", pattern, path.display());
 
     // 检查缓存（使用读锁和peek方法）
     {
         let cache = SEARCH_CACHE.read();
         if let Some(cached) = cache.peek(&cache_key) {
-            let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
-            let results = cached
-                .iter()
-                .skip(offset.unwrap_or(0))
-                .take(limit.unwrap_or(50))
-                .cloned()
-                .collect();
-            return Ok((results, has_more));
+            // 修改5：增加缓存结果验证，确保是内容搜索结果
+            if cached.iter().any(|r| r.preview.is_some() || !r.matches.is_empty()) {
+                let has_more = cached.len() > offset.unwrap_or(0) + limit.unwrap_or(50);
+                let results = cached
+                    .iter()
+                    .skip(offset.unwrap_or(0))
+                    .take(limit.unwrap_or(50))
+                    .cloned()
+                    .collect();
+                return Ok((results, has_more));
+            }
         }
     }
 
