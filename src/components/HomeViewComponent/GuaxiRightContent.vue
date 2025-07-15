@@ -5,7 +5,8 @@
       :file-results="rightSiderStore.searchResults.fileResults"
       :note-results="rightSiderStore.searchResults.noteResults"
       :search-query="rightSiderStore.searchResults.searchQuery"
-      :excerpt-results="rightSiderStore.searchResults.excerptResults" />
+      :excerpt-results="rightSiderStore.searchResults.excerptResults"
+      :last-search-type="rightSiderStore.searchResults.lastSearchType" />
   </div>
 </template>
 
@@ -13,10 +14,8 @@
 import GuaxiSearchNavigator from "./GuaxiSearchNavigator.vue"
 import GuaxiOutline from './GuaxiOutline.vue'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
-import { computed } from 'vue'
 
 const rightSiderStore = useRightSiderStore()
-const searchResults = computed(() => rightSiderStore.searchResults)
 </script>
 
 <style scoped>

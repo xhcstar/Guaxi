@@ -166,16 +166,6 @@ const handleSearchBlur = () => {
   }, 200)
 }
 
-const openSearchPanel = () => {
-  // 确保右侧面板是搜索面板
-  rightSiderStore.setPanel('search');
-
-  // 如果右侧边栏折叠，展开它
-  if (siderStore.isRightSiderCollapsed[viewKey]) {
-    siderStore.setRightSiderCollapsed(viewKey, false);
-  }
-};
-
 const handleSearchEnter = () => {
   if (searchQuery.value.trim()) {
     console.log('[Search] Executing search:', {
@@ -318,12 +308,17 @@ async function handleSearchFiles() {
       noteResults: [],
       excerptResults: [],
       searchQuery: searchQuery.value,
-      hasMore,
+      lastSearchType: 'file',
       loading: false
     });
 
     // 打开搜索结果面板
-    openSearchPanel();
+    rightSiderStore.setPanel('search');
+
+    // 如果右侧边栏折叠，展开它
+    if (siderStore.isRightSiderCollapsed[viewKey]) {
+      siderStore.setRightSiderCollapsed(viewKey, false);
+    }
   } catch (error) {
     console.error('[Search] File search failed:', error);
     rightSiderStore.setSearchResults({
@@ -375,11 +370,17 @@ async function handleSearchNotes() {
       noteResults: validResults,
       excerptResults: [],
       searchQuery: searchQuery.value,
+      lastSearchType: 'note',
       loading: false
     });
 
     // 打开搜索结果面板
-    openSearchPanel();
+    rightSiderStore.setPanel('search');
+
+    // 如果右侧边栏折叠，展开它
+    if (siderStore.isRightSiderCollapsed[viewKey]) {
+      siderStore.setRightSiderCollapsed(viewKey, false);
+    }
 
     console.log('[Search] Note search completed', {
       results: validResults.length
@@ -415,7 +416,8 @@ async function handleSearchExcerpts() {
       fileResults: [],
       noteResults: [],
       excerptResults: results, // 只包含file_path和file_name的数组
-      searchQuery: searchQuery.value
+      searchQuery: searchQuery.value,
+      lastSearchType: 'note',
     });
 
     rightSiderStore.panel = 'search';

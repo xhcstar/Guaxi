@@ -100,10 +100,6 @@ import { useRightSiderStore } from '../../stores/rightSiderStore';
 import { useSiderStore } from '../../stores/useSiderStore';
 import GuaxiNoteExcerpt from './GuaxiNoteExcerpt.vue';
 
-// 移除 vue3-virtual-scroller 相关导入
-// import { RecycleScroller } from 'vue3-virtual-scroller';
-// import 'vue3-virtual-scroller/dist/vue3-virtual-scroller.css';
-
 const IconifyIcon = defineComponent({
   name: 'IconifyIcon',
   props: {
@@ -158,13 +154,13 @@ const props = defineProps({
     type: String,
     required: true,
     default: ''
+  },
+  lastSearchType: {
+    type: String,
+    required: true,
+    default: 'file'
   }
 });
-
-// // 添加对 store 的直接监听
-// watch(() => rightSiderStore.searchResults, (newVal) => {
-//   console.log('[Navigator] Store results updated:', newVal);
-// }, { deep: true });
 
 // 搜索状态管理
 const searchState = reactive({
@@ -175,6 +171,57 @@ const searchState = reactive({
   loadedResults: 0,
   hasMore: false
 });
+
+// 监听搜索类型变化，自动切换标签页
+watch(() => props.lastSearchType, (newType) => {
+  if (newType) {
+    switch (newType) {
+      case 'file':
+        if (props.fileResults.length > 0) {
+          activeTab.value = 'files';
+        }
+        break;
+      case 'note':
+        if (props.noteResults.length > 0) {
+          activeTab.value = 'notes';
+        }
+        break;
+      case 'excerpt':
+        if (props.excerptResults.length > 0) {
+          activeTab.value = 'excerpts';
+        }
+        break;
+    }
+  }
+});
+
+// 监听搜索结果变化，自动切换到有结果的标签页
+watch([() => props.fileResults, () => props.noteResults, () => props.excerptResults], () => {
+  // 如果当前标签页已经有结果，则不切换
+  if ((activeTab.value === 'files' && props.fileResults.length > 0) ||
+    (activeTab.value === 'notes' && props.noteResults.length > 0) ||
+    (activeTab.value === 'excerpts' && props.excerptResults.length > 0)) {
+    return;
+  }
+
+  // 根据搜索类型和结果自动切换
+  if (props.lastSearchType === 'file' && props.fileResults.length > 0) {
+    activeTab.value = 'files';
+  } else if (props.lastSearchType === 'note' && props.noteResults.length > 0) {
+    activeTab.value = 'notes';
+  } else if (props.lastSearchType === 'excerpt' && props.excerptResults.length > 0) {
+    activeTab.value = 'excerpts';
+  } else {
+    // 默认切换到第一个有结果的标签页
+    if (props.fileResults.length > 0) {
+      activeTab.value = 'files';
+    } else if (props.noteResults.length > 0) {
+      activeTab.value = 'notes';
+    } else if (props.excerptResults.length > 0) {
+      activeTab.value = 'excerpts';
+    }
+  }
+}, { immediate: true });
 
 // 计算属性：过滤无效的笔记结果
 const validNoteResults = computed(() => {
@@ -304,6 +351,12 @@ const getFileIconPropsWithLog = (path) => {
   const props = getFileIconProps(path);
   if (!props.icon) {
     console.warn('[n-icon] icon prop missing!', path, props);
+    // 返回一个默认的图标
+    return {
+      icon: FILE_ICON_MAP.default,
+      size: 18,
+      color: '#666'
+    };
   }
   return props;
 };
@@ -481,42 +534,6 @@ onMounted(() => {
     props.noteResults[0] ? getKeyField(props.noteResults[0]) : 'No note results');
 });
 
-// 监听搜索结果变化
-watch(() => props.noteResults, (newVal) => {
-  const invalidItems = newVal.filter(item => {
-    try {
-      return !getKeyField(item);
-    } catch {
-      return true;
-    }
-  });
-
-  if (invalidItems.length > 0) {
-    console.error('[Validation] Found invalid note results:', invalidItems);
-  }
-}, { deep: true });
-
-// 标签页切换逻辑
-watch(() => props.searchQuery, () => {
-  console.log('[TabDebug] Determining active tab based on results:', {
-    notes: props.noteResults.length,
-    files: props.fileResults.length,
-    excerpts: props.excerptResults.length
-  });
-
-  if (validNoteResults.value.length > 0) {
-    activeTab.value = 'notes';
-    console.log('[TabDebug] Switched to notes tab');
-  } else if (props.fileResults.length > 0) {
-    activeTab.value = 'files';
-    console.log('[TabDebug] Switched to files tab');
-  } else if (props.excerptResults.length > 0) {
-    activeTab.value = 'excerpts';
-    console.log('[TabDebug] Switched to excerpts tab');
-  }
-});
-
-// ...保持其他工具函数不变...
 
 // 标签页自定义内容
 const filesTab = () => h(NTooltip, { placement: 'bottom' }, {
@@ -568,7 +585,7 @@ const generateItemKey = (item, fallbackIndex) => {
     // 创建唯一键
     const key = components.join('|');
     const hash = btoa(encodeURIComponent(key)).substr(0, 16);
-    
+
     return `search_${hash}`;
   } catch (err) {
     console.error('[KeyError] Failed to generate key:', err, 'for item:', item);

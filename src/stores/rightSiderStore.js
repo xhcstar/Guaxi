@@ -7,6 +7,9 @@ export const useRightSiderStore = defineStore("rightSider", {
       noteResults: [],
       excerptResults: [], // 新增：摘录搜索结果
       searchQuery: "",
+      lastSearchType: "file",
+      error: "",
+      loading: false,
     },
     // 新增：当前右侧面板类型（如 'search', 'outline' 等）
     panel: "",
@@ -15,11 +18,14 @@ export const useRightSiderStore = defineStore("rightSider", {
   }),
   actions: {
     setSearchResults(results) {
-      console.log('[DEBUG][Store] Setting search results:', { // DEBUG
+      console.log("[DEBUG][Store] Setting search results:", {
+        // DEBUG
         fileResults: results.fileResults?.length || 0,
         noteResults: results.noteResults?.length || 0,
-        query: results.searchQuery
+        query: results.searchQuery,
+        lastSearchType: results.lastSearchType,
       });
+
       this.searchResults = results;
     },
     clearSearchResults() {
