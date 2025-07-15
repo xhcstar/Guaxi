@@ -189,10 +189,6 @@ const handleSearchSelect = (key) => {
   // 重置搜索状态
   searchType.value = key;
   rightSiderStore.setSearchResults({
-    fileResults: [],
-    noteResults: [],
-    excerptResults: [],
-    searchQuery: searchQuery.value,
     lastSearchType: key
   });
 
@@ -277,8 +273,6 @@ async function handleSearchFiles() {
     // 清除旧结果
     rightSiderStore.setSearchResults({
       fileResults: [],
-      noteResults: [],
-      excerptResults: [],
       searchQuery: searchQuery.value
     });
 
@@ -305,8 +299,6 @@ async function handleSearchFiles() {
     // 更新存储状态
     rightSiderStore.setSearchResults({
       fileResults: validResults,
-      noteResults: [],
-      excerptResults: [],
       searchQuery: searchQuery.value,
       lastSearchType: 'file',
       loading: false
@@ -314,17 +306,14 @@ async function handleSearchFiles() {
 
     // 打开搜索结果面板
     rightSiderStore.setPanel('search');
-
     // 如果右侧边栏折叠，展开它
-    if (siderStore.isRightSiderCollapsed[viewKey]) {
+    if (!siderStore.isRightSiderCollapsed[viewKey]) {
       siderStore.setRightSiderCollapsed(viewKey, false);
     }
   } catch (error) {
     console.error('[Search] File search failed:', error);
     rightSiderStore.setSearchResults({
       fileResults: [],
-      noteResults: [],
-      excerptResults: [],
       searchQuery: searchQuery.value,
       error: error.message || '文件搜索失败'
     });
@@ -341,9 +330,7 @@ async function handleSearchNotes() {
 
     // 清除旧结果
     rightSiderStore.setSearchResults({
-      fileResults: [],
       noteResults: [],
-      excerptResults: [],
       searchQuery: searchQuery.value,
       loading: true
     });
@@ -366,9 +353,7 @@ async function handleSearchNotes() {
 
     // 更新存储状态
     rightSiderStore.setSearchResults({
-      fileResults: [],
       noteResults: validResults,
-      excerptResults: [],
       searchQuery: searchQuery.value,
       lastSearchType: 'note',
       loading: false
@@ -376,9 +361,8 @@ async function handleSearchNotes() {
 
     // 打开搜索结果面板
     rightSiderStore.setPanel('search');
-
     // 如果右侧边栏折叠，展开它
-    if (siderStore.isRightSiderCollapsed[viewKey]) {
+    if (!siderStore.isRightSiderCollapsed[viewKey]) {
       siderStore.setRightSiderCollapsed(viewKey, false);
     }
 
@@ -389,9 +373,7 @@ async function handleSearchNotes() {
   } catch (err) {
     console.error('[Search] Note search failed:', err);
     rightSiderStore.setSearchResults({
-      fileResults: [],
       noteResults: [],
-      excerptResults: [],
       searchQuery: searchQuery.value,
       error: err.message || '内容搜索失败',
       loading: false
@@ -413,8 +395,6 @@ async function handleSearchExcerpts() {
     console.log('[Search] Excerpt search results:', results);
 
     rightSiderStore.setSearchResults({
-      fileResults: [],
-      noteResults: [],
       excerptResults: results, // 只包含file_path和file_name的数组
       searchQuery: searchQuery.value,
       lastSearchType: 'note',

@@ -97,7 +97,6 @@ import {
 import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { useRightSiderStore } from '../../stores/rightSiderStore';
-import { useSiderStore } from '../../stores/useSiderStore';
 import GuaxiNoteExcerpt from './GuaxiNoteExcerpt.vue';
 
 const IconifyIcon = defineComponent({
@@ -130,7 +129,6 @@ const IconifyIcon = defineComponent({
 const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
 const rightSiderStore = useRightSiderStore();
-const siderStore = useSiderStore();
 const activeTab = ref('files');
 const showInvalidItems = ref(false);
 

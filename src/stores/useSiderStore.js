@@ -24,6 +24,7 @@ export const useSiderStore = defineStore('sider', () => {
     isLeftSiderCollapsed.value[viewKey] = value
   }
   function setRightSiderCollapsed(viewKey, value) {
+    console.log('setRightSiderCollapsed', viewKey, value)
     isRightSiderCollapsed.value[viewKey] = value
   }
 
