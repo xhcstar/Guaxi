@@ -763,14 +763,14 @@ onBeforeUnmount(() => {
 .n-list {
   padding: 0;
   margin: 0;
-  max-width: 480px;
+  max-width: 475px;
   width: 100%;
   overflow: hidden;
 }
 
 .n-list-item {
   width: 100%;
-  max-width: 475px;
+  max-width: 465px;
   margin: 0 !important;
   padding: 2px 0 !important;
   transition: all 0.2s ease;

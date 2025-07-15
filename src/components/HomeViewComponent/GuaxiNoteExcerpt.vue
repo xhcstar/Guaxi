@@ -529,7 +529,7 @@ watch(() => props.excerptResults, (newVal) => {
 .n-list {
   flex: 1;
   min-height: 0;
-  max-width: 470px;
+  max-width: 475px;
   width: 100%;
   padding: 0;
   margin: 0;
@@ -539,7 +539,7 @@ watch(() => props.excerptResults, (newVal) => {
 
 .n-list-item {
   width: 100%;
-  max-width: 460px;
+  max-width: 465px;
   margin: 2px !important;
   padding: 2px 0 !important;
   transition: all 0.2s ease;
