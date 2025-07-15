@@ -490,11 +490,11 @@ const getKeyField = (item) => {
   }
 
   // 调试信息
-  console.log('[KeyDebug] Generating key for:', {
-    path: item.path,
-    file_name: item.file_name,
-    line_number: item.line_number
-  });
+  // console.log('[KeyDebug] Generating key for:', {
+  //   path: item.path,
+  //   file_name: item.file_name,
+  //   line_number: item.line_number
+  // });
 
   // 优先使用 path
   if (item.path && typeof item.path === 'string') {
@@ -649,7 +649,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .search-navigator {
   height: 100%;
-  max-width: 470px;
+  max-width: 490px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -707,9 +707,11 @@ onBeforeUnmount(() => {
 .tab-content {
   height: 100%;
   max-height: calc(100vh - 108px);
-  max-width: 470px;
-  overflow-y: auto;
+  max-width: 480px;
+  overflow: hidden;
   padding: 8px 4px 5px 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .tab-content::-webkit-scrollbar {
@@ -738,9 +740,9 @@ onBeforeUnmount(() => {
 }
 
 .scroller {
-  height: calc(100vh - 150px);
+  height: calc(100vh - 108px);
   width: 100%;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* 确保虚拟列表项正确显示 */
@@ -761,13 +763,14 @@ onBeforeUnmount(() => {
 .n-list {
   padding: 0;
   margin: 0;
-  max-width: 460px;
+  max-width: 480px;
   width: 100%;
+  overflow: hidden;
 }
 
 .n-list-item {
   width: 100%;
-  max-width: 460px;
+  max-width: 475px;
   margin: 0 !important;
   padding: 2px 0 !important;
   transition: all 0.2s ease;
@@ -792,6 +795,7 @@ onBeforeUnmount(() => {
   padding: 8px;
   margin-bottom: 2px;
   margin-left: 8px;
+  margin-top: 5px;
   transition: all 0.2s ease;
   position: relative;
 }
@@ -848,7 +852,7 @@ onBeforeUnmount(() => {
   max-width: 100%;
   width: 100%;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   overflow-wrap: break-word;
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -862,7 +866,9 @@ onBeforeUnmount(() => {
   background: #f8fafc;
   border-radius: 4px;
   padding: 8px;
+  max-height: calc(3 * 1.5em + 16px);
   position: relative;
+  text-overflow: ellipsis;
 }
 
 .search-highlight {

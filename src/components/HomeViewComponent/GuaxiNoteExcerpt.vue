@@ -539,8 +539,8 @@ watch(() => props.excerptResults, (newVal) => {
 
 .n-list-item {
   width: 100%;
-  max-width: 450px;
-  margin: 0 !important;
+  max-width: 460px;
+  margin: 2px !important;
   padding: 2px 0 !important;
   transition: all 0.2s ease;
 }
