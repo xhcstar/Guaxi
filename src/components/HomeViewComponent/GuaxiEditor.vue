@@ -1,7 +1,7 @@
 <template>
   <div class="editor-container">
     <!-- 标签页栏 -->
-    <div class="tab-bar">
+    <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
       <div v-for="tab in fileTreeStore.openTabs" :key="tab.path"
         :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
         @mousedown.middle="closeTab(tab.path)">
@@ -97,6 +97,8 @@ const message = useMessage() // 使用消息提示
 const vimMode = ref(false);
 const vimStatusBar = ref(null);
 let vimModeInstance = null;
+
+const tabBarRef = ref(null)
 
 // 初始化编辑器
 const initEditor = () => {
@@ -305,6 +307,16 @@ const initEditor = () => {
   registerContextMenu();
   setupEditorListeners();
 };
+
+const handleWheelScroll = (e) => {
+  if (!tabBarRef.value) return
+  
+  // 阻止默认的垂直滚动行为
+  e.preventDefault()
+  
+  // 水平滚动（乘以一个系数可以调整滚动速度）
+  tabBarRef.value.scrollLeft += e.deltaY * 0.5
+}
 
 const setupEditorListeners = () => {
   if (!editor) return;
@@ -927,6 +939,20 @@ onUnmounted(() => {
   background: #f5f5f5;
   border-bottom: 1px solid #ddd;
   overflow-x: auto;
+}
+
+.tab-bar::-webkit-scrollbar {
+  width: 3px;
+  height: 4px;
+}
+
+.tab-bar::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.tab-bar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.4);
 }
 
 .tab-item {
