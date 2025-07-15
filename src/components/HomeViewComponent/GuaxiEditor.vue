@@ -15,6 +15,40 @@
     <div class="toolbar">
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
+        <!-- 添加 Git 操作按钮 -->
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text @click="gitPull" :loading="gitLoading.pull">
+              <n-icon>
+                <DownloadOutline />
+              </n-icon>
+            </n-button>
+          </template>
+          Pull Changes
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text @click="gitCommit" :loading="gitLoading.commit">
+              <n-icon>
+                <CheckmarkOutline />
+              </n-icon>
+            </n-button>
+          </template>
+          Commit Changes
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text @click="gitPush" :loading="gitLoading.push">
+              <n-icon>
+                <CloudUploadOutline />
+              </n-icon>
+            </n-button>
+          </template>
+          Push Changes
+        </n-tooltip>
+
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleVimMode">
@@ -73,6 +107,24 @@ import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
 
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
+import { GitBranchOutline, DownloadOutline, CloudUploadOutline, CheckmarkOutline } from '@vicons/ionicons5'
+import GitService from './utils/GitService'
+
+// 在现有状态定义后添加
+const gitService = ref(null)
+const gitDecorations = ref([])
+const gitBranch = ref('')
+const gitChanges = ref({
+  added: 0,
+  modified: 0,
+  deleted: 0
+})
+const gitLoading = ref({
+  pull: false,
+  push: false,
+  commit: false
+})
+
 const outlineStore = useOutlineStore()
 
 
@@ -310,10 +362,10 @@ const initEditor = () => {
 
 const handleWheelScroll = (e) => {
   if (!tabBarRef.value) return
-  
+
   // 阻止默认的垂直滚动行为
   e.preventDefault()
-  
+
   // 水平滚动（乘以一个系数可以调整滚动速度）
   tabBarRef.value.scrollLeft += e.deltaY * 0.5
 }
@@ -473,7 +525,7 @@ const renderDebounced = debounce(async (content) => {
 }, 300);
 
 // 监听文件选择
-watch(selectedFile, (newFile) => {
+watch(selectedFile,  async (newFile) => {
   if (newFile) {
     const fileExt = newFile.path?.split('.').pop() || 'markdown';
     const languageMap = {
@@ -519,6 +571,10 @@ watch(selectedFile, (newFile) => {
     if (mode.value === 'preview') {
       renderDebounced(newFile.content)
     }
+
+    // 更新 Git 状态
+    await initGitService()
+    await updateGitDecorations()
   } else {
     if (editor) {
       editor.setValue('');
@@ -751,10 +807,135 @@ watch([() => fileTreeStore.activeTab, activeTabContent], ([tabPath, content]) =>
 }, { immediate: true })
 
 
+// 初始化 Git 服务
+const initGitService = async () => {
+  try {
+    if (selectedFile.value?.path) {
+      const dir = await dirname(selectedFile.value.path)
+      gitService.value = new GitService(dir)
+      await updateGitStatus()
+    }
+  } catch (error) {
+    console.warn('Git initialization failed:', error)
+  }
+}
+
+// 更新 Git 状态
+const updateGitStatus = async () => {
+  if (!gitService.value) return
+  
+  try {
+    gitBranch.value = await gitService.value.getCurrentBranch()
+    await updateGitChanges()
+  } catch (error) {
+    console.warn('Git status update failed:', error)
+  }
+}
+
+// 更新 Git 变更
+const updateGitChanges = async () => {
+  if (!gitService.value || !selectedFile.value?.path) return
+  
+  try {
+    const status = await gitService.value.getFileStatus(selectedFile.value.path)
+    gitChanges.value = {
+      added: status.filter(s => s === 'A').length,
+      modified: status.filter(s => s === 'M').length,
+      deleted: status.filter(s => s === 'D').length
+    }
+  } catch (error) {
+    console.error('Update git changes failed:', error)
+  }
+}
+
+// 更新 Git 装饰器
+const updateGitDecorations = async () => {
+  if (!editor || !selectedFile.value?.path || !gitService.value) return
+
+  try {
+    const changes = await gitService.value.getLineChanges(selectedFile.value.path)
+    
+    const decorations = [
+      ...changes.added.map(line => ({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: true,
+          className: 'git-line-added',
+          glyphMarginClassName: 'git-glyph-added'
+        }
+      })),
+      ...changes.modified.map(line => ({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: true,
+          className: 'git-line-modified',
+          glyphMarginClassName: 'git-glyph-modified'
+        }
+      }))
+    ]
+
+    gitDecorations.value = editor.deltaDecorations(
+      gitDecorations.value,
+      decorations
+    )
+  } catch (error) {
+    console.error('Update git decorations failed:', error)
+  }
+}
+
+// Git 操作命令
+const gitCommit = async () => {
+  const message = prompt('Commit message:')
+  if (!message) return
+
+  gitLoading.value.commit = true
+  try {
+    await gitService.value.commit(message)
+    message.success('Commit successful')
+    await updateGitDecorations()
+    await updateGitChanges()
+  } catch (error) {
+    message.error(`Commit failed: ${error}`)
+  } finally {
+    gitLoading.value.commit = false
+  }
+}
+
+const gitPull = async () => {
+  gitLoading.value.pull = true
+  try {
+    await gitService.value.pull()
+    message.success('Pull successful')
+    await updateGitDecorations()
+    await updateGitChanges()
+  } catch (error) {
+    message.error(`Pull failed: ${error}`)
+  } finally {
+    gitLoading.value.pull = false
+  }
+}
+
+const gitPush = async () => {
+  gitLoading.value.push = true
+  try {
+    await gitService.value.push()
+    message.success('Push successful')
+  } catch (error) {
+    message.error(`Push failed: ${error}`)
+  } finally {
+    gitLoading.value.push = false
+  }
+}
+
 // 生命周期
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   outlineStore.setJumpToLine(jumpToLine)
+
+  // 在 nextTick 中初始化 Git
+  nextTick(async () => {
+    await initGitService()
+  })
 });
 
 onUnmounted(() => {
@@ -971,6 +1152,49 @@ onUnmounted(() => {
 
 .tab-item:hover {
   background: #eee;
+}
+
+/* 在现有样式后添加 */
+.git-line-added {
+  background-color: rgba(97, 175, 97, 0.1);
+}
+
+.git-line-modified {
+  background-color: rgba(255, 213, 0, 0.1);
+}
+
+.git-glyph-added {
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%2361af61"/></svg>') no-repeat;
+}
+
+.git-glyph-modified {
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%23ffd500"/></svg>') no-repeat;
+}
+
+/* 状态栏 Git 信息样式 */
+.git-branch {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.git-change {
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.git-added {
+  color: #61af61;
+}
+
+.git-modified {
+  color: #e5c07b;
+}
+
+.git-deleted {
+  color: #e06c75;
 }
 </style>
 

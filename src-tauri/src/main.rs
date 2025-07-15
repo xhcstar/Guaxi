@@ -123,6 +123,15 @@ async fn main() {
             commands::knowledgebase::get_knowledge_graph_data,
             commands::excerptsearch::search_excerpt_notes,
             commands::excerptsearch::read_excerpt_file,
+            commands::git::get_git_root,
+            commands::git::get_git_status,
+            commands::git::get_current_branch,
+            commands::git::list_branches,
+            commands::git::git_commit,
+            commands::git::git_push,
+            commands::git::git_pull,
+            commands::git::checkout_branch,
+            commands::git::create_branch,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn

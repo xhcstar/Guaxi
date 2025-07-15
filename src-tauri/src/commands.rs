@@ -13,3 +13,4 @@ pub mod translator_free;
 pub mod searcher;
 pub mod knowledgebase;
 pub mod excerptsearch;
+pub mod git;
