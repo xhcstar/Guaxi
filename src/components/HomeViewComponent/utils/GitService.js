@@ -11,11 +11,27 @@ export default class GitService {
   }
 
   async getFileStatus(filePath) {
-    return await invoke("get_file_status", { path: filePath });
+    try {
+      // 修改为调用 get_git_status
+      return await invoke("get_git_status", { path: filePath });
+    } catch (error) {
+      console.error('获取文件状态失败:', error);
+      return [];
+    }
   }
 
   async getLineChanges(filePath) {
-    return await invoke("get_line_changes", { path: filePath });
+    try {
+      // 这个命令在后端可能不存在，我们可以复用 get_git_status
+      const status = await this.getFileStatus(filePath);
+      return {
+        added: status.filter(s => s.status === 'A').map(s => s.lines_added).flat(),
+        modified: status.filter(s => s.status === 'M').map(s => s.lines_modified).flat()
+      };
+    } catch (error) {
+      console.error('获取行变更失败:', error);
+      return { added: [], modified: [] };
+    }
   }
 
   async commit(message) {

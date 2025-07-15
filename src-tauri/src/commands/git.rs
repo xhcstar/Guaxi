@@ -41,7 +41,12 @@ pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
     let mut changes = Vec::new();
 
     for entry in statuses.iter() {
-        let path = entry.path().unwrap().to_string();
+        // 安全处理 path() 可能返回 None 的情况
+        let path = match entry.path() {
+            Some(p) => p.to_string(),
+            None => continue, // 跳过没有路径的条目
+        };
+
         let status = match entry.status() {
             s if s.is_index_new() => "A",
             s if s.is_index_modified() => "M",
@@ -63,8 +68,8 @@ pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
 
         diff.foreach(
             &mut |delta, _| {
-                if delta.new_file().path().unwrap().to_str().unwrap() == path {
-                    true
+                if let Some(new_file) = delta.new_file().path() {
+                    new_file.to_str().map_or(false, |p| p == path)
                 } else {
                     false
                 }
@@ -72,14 +77,15 @@ pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
             None,
             None,
             Some(&mut |delta, maybe_hunk, line| {
-                if delta.new_file().path().unwrap().to_str().unwrap() == path {
-                    // 直接使用 line 参数，不需要 Option 包装
-                    match line.origin() {
-                        '+' => lines_added.push(line.new_lineno().unwrap()),
-                        '-' => lines_deleted.push(line.old_lineno().unwrap()),
-                        ' ' => (),
-                        _ => lines_modified
-                            .push(line.new_lineno().unwrap_or(line.old_lineno().unwrap())),
+                if let Some(new_file) = delta.new_file().path() {
+                    if new_file.to_str().map_or(false, |p| p == path) {
+                        match line.origin() {
+                            '+' => lines_added.push(line.new_lineno().unwrap_or(0)),
+                            '-' => lines_deleted.push(line.old_lineno().unwrap_or(0)),
+                            ' ' => (),
+                            _ => lines_modified
+                                .push(line.new_lineno().unwrap_or(line.old_lineno().unwrap_or(0))),
+                        }
                     }
                 }
                 true
@@ -105,7 +111,7 @@ pub fn get_current_branch(path: String) -> Result<String, String> {
     let head = repo.head().map_err(|e| e.to_string())?;
     head.shorthand()
         .map(|s| s.to_string())
-        .ok_or("No branch found".into())
+        .ok_or_else(|| "No branch found".to_string())
 }
 
 #[tauri::command]
@@ -125,7 +131,7 @@ pub fn list_branches(path: String) -> Result<Vec<GitBranch>, String> {
         let name = branch
             .name()
             .map_err(|e| e.to_string())?
-            .unwrap()
+            .unwrap_or_default()
             .to_string();
         let name_clone = name.clone();
         result.push(GitBranch {

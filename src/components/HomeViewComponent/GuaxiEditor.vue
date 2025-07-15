@@ -525,7 +525,7 @@ const renderDebounced = debounce(async (content) => {
 }, 300);
 
 // 监听文件选择
-watch(selectedFile,  async (newFile) => {
+watch(selectedFile, async (newFile) => {
   if (newFile) {
     const fileExt = newFile.path?.split('.').pop() || 'markdown';
     const languageMap = {
@@ -822,39 +822,48 @@ const initGitService = async () => {
 
 // 更新 Git 状态
 const updateGitStatus = async () => {
-  if (!gitService.value) return
-  
-  try {
-    gitBranch.value = await gitService.value.getCurrentBranch()
-    await updateGitChanges()
-  } catch (error) {
-    console.warn('Git status update failed:', error)
-  }
-}
+  if (!gitService.value) return;
 
-// 更新 Git 变更
-const updateGitChanges = async () => {
-  if (!gitService.value || !selectedFile.value?.path) return
-  
   try {
-    const status = await gitService.value.getFileStatus(selectedFile.value.path)
+    gitBranch.value = await gitService.value.getCurrentBranch();
+    await updateGitChanges();
+  } catch (error) {
+    console.warn('Git status update failed:', error);
+    gitBranch.value = '';
     gitChanges.value = {
-      added: status.filter(s => s === 'A').length,
-      modified: status.filter(s => s === 'M').length,
-      deleted: status.filter(s => s === 'D').length
-    }
-  } catch (error) {
-    console.error('Update git changes failed:', error)
+      added: 0,
+      modified: 0,
+      deleted: 0
+    };
   }
-}
+};
 
-// 更新 Git 装饰器
-const updateGitDecorations = async () => {
-  if (!editor || !selectedFile.value?.path || !gitService.value) return
+const updateGitChanges = async () => {
+  if (!gitService.value || !selectedFile.value?.path) return;
 
   try {
-    const changes = await gitService.value.getLineChanges(selectedFile.value.path)
-    
+    const status = await gitService.value.getFileStatus(selectedFile.value.path);
+    gitChanges.value = {
+      added: status.filter(s => s.status === 'A').length,
+      modified: status.filter(s => s.status === 'M').length,
+      deleted: status.filter(s => s.status === 'D').length
+    };
+  } catch (error) {
+    console.error('Update git changes failed:', error);
+    gitChanges.value = {
+      added: 0,
+      modified: 0,
+      deleted: 0
+    };
+  }
+};
+
+const updateGitDecorations = async () => {
+  if (!editor || !selectedFile.value?.path || !gitService.value) return;
+
+  try {
+    const changes = await gitService.value.getLineChanges(selectedFile.value.path);
+
     const decorations = [
       ...changes.added.map(line => ({
         range: new monaco.Range(line, 1, line, 1),
@@ -872,16 +881,19 @@ const updateGitDecorations = async () => {
           glyphMarginClassName: 'git-glyph-modified'
         }
       }))
-    ]
+    ];
 
     gitDecorations.value = editor.deltaDecorations(
       gitDecorations.value,
       decorations
-    )
+    );
   } catch (error) {
-    console.error('Update git decorations failed:', error)
+    console.error('Update git decorations failed:', error);
+    if (gitDecorations.value.length > 0) {
+      gitDecorations.value = editor.deltaDecorations(gitDecorations.value, []);
+    }
   }
-}
+};
 
 // Git 操作命令
 const gitCommit = async () => {
