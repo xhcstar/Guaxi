@@ -111,8 +111,6 @@ async function CaptureScreenshot() {
 const isSearchDropdownVisible = ref(false)
 const contextMenuPosition = ref({ x: 0, y: 0 })
 const searchQuery = ref('')
-const searchResults = ref([])
-const showSearchModal = ref(false)
 const dropdownWidth = ref(300)
 const dropdownStyle = computed(() => ({
   width: `${dropdownWidth.value}px`,
