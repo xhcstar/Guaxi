@@ -127,6 +127,9 @@ const contextMenuOptions = ref([
   },
 ])
 
+const isHiddenPath = (path) => {
+  return path.split('/').some(part => part.startsWith('.'));
+};
 
 // 修改后的handleAddFile函数
 const handleAddFile = async (repoPath) => {
@@ -227,18 +230,22 @@ const normalizeTreeIds = (tree) => {
 
 // 加载文件树数据
 const loadFileTree = async () => {
-  // console.log('[API] 加载文件树')
+  console.log('[API] 加载文件树');
   try {
-    fileTree.value = []
-    console.log('当前仓库路径:', fileTreeStore.activeRepoPath)
-    await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath)
+    fileTree.value = [];
+    console.log('当前仓库路径:', fileTreeStore.activeRepoPath);
+    await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath);
+    
+    // 过滤隐藏目录
+    const filteredTree = fileTreeStore.fileTree.filter(node => !isHiddenPath(node.id));
+    
     // 先 normalize，再排序
-    fileTree.value = [...sortFileTree(normalizeTreeIds(fileTreeStore.fileTree))]
+    fileTree.value = [...sortFileTree(normalizeTreeIds(filteredTree))];
   } catch (error) {
-    console.error('获取文件树数据失败', error)
-    fileTree.value = []
+    console.error('获取文件树数据失败', error);
+    fileTree.value = [];
   }
-}
+};
 
 // 对文件树数据进行排序（先文件后目录）
 const sortFileTree = (tree) => {
@@ -279,6 +286,12 @@ const handleSelect = async (keys) => {
   const selectedKey = keys[0];
   const normalizedKey = normalizePath(selectedKey);
 
+  // 检查是否是隐藏路径
+  if (isHiddenPath(normalizedKey)) {
+    console.log('跳过隐藏目录/文件:', normalizedKey);
+    return;
+  }
+
   // 2. 防抖处理 - 只有当新key与上次相同时才跳过
   if (normalizedKey === normalizePath(lastSelectedKey.value)) {
     console.log('忽略重复选中:', normalizedKey);
@@ -303,8 +316,6 @@ const handleSelect = async (keys) => {
 
   if (!selectedNode.is_directory) {
     try {
-      // console.log('选中节点是文件，开始获取文件内容');
-
       // 检查是否已存在标签页
       const existingTab = fileTreeStore.openTabs.find(tab => tab.path === selectedNode.id);
       if (existingTab) {
@@ -316,7 +327,6 @@ const handleSelect = async (keys) => {
       // 获取文件内容
       const content = await fileTreeStore.fetchFileContent(selectedNode.id);
       if (content !== null) {
-        // console.log('文件内容获取成功，打开标签页');
         await fileTreeStore.openFileInTab(selectedNode.id, content);
       } else {
         console.error('文件内容获取失败');
@@ -326,10 +336,8 @@ const handleSelect = async (keys) => {
     }
   } else {
     try {
-      // console.log('选中节点是目录，开始加载子目录内容');
       await fileTreeStore.fetchFileTree(selectedNode.id);
       selectedNode.children = [...fileTreeStore.fileTree];
-      // console.log('子目录内容加载成功:', selectedNode.children);
       sortFileTree(selectedNode.children);
     } catch (error) {
       console.error('加载子目录内容失败:', error);
@@ -342,11 +350,21 @@ const findNodeById = (tree, targetId) => {
   const normalizedTargetId = normalizePath(targetId);
   console.log('查找节点:', normalizedTargetId);
 
+  // 跳过隐藏目录
+  if (isHiddenPath(normalizedTargetId)) {
+    console.log('跳过隐藏目录:', normalizedTargetId);
+    return null;
+  }
+
   // 深度优先搜索
   const dfs = (nodes) => {
     for (const node of nodes) {
       const nodePath = normalizePath(node.id);
-      // console.log('检查节点:', nodePath);
+      
+      // 跳过隐藏目录
+      if (isHiddenPath(nodePath)) {
+        continue;
+      }
 
       if (nodePath === normalizedTargetId) {
         return node;
@@ -837,6 +855,12 @@ const selectTargetPath = async () => {
 const refreshDirectory = async (directoryId) => {
   console.log('刷新目录:', directoryId);
 
+  // 检查是否是隐藏目录
+  if (isHiddenPath(directoryId)) {
+    console.log('跳过隐藏目录刷新:', directoryId);
+    return;
+  }
+
   // 如果是根目录，刷新整个文件树
   if (!directoryId || directoryId === fileTreeStore.activeRepoPath) {
     await loadFileTree();
@@ -895,31 +919,38 @@ const normalizePath = (path) => {
 
 // 处理文件创建事件
 const handleFileCreated = async (filePath) => {
-  // console.log('文件创建事件:', filePath)
-  const normalizedPath = normalizePath(filePath)
-  const parentPath = normalizedPath.split('/').slice(0, -1).join('/')
-  // console.log('处理创建事件 - 文件路径:', normalizedPath, '父目录:', parentPath)
-  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
-}
+  const normalizedPath = normalizePath(filePath);
+  const parentPath = normalizedPath.split('/').slice(0, -1).join('/');
+
+  // 检查是否是隐藏路径
+  if (isHiddenPath(normalizedPath) || isHiddenPath(parentPath)) {
+    console.log('跳过隐藏目录的文件创建事件:', normalizedPath);
+    return;
+  }
+
+  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath);
+};
 
 // 处理文件重命名事件
 const handleFileRenamed = async (oldPath, newPath) => {
-  // console.log('文件重命名事件:', oldPath, '->', newPath)
   if (!newPath) return;
 
   try {
     const normalizedNewPath = normalizePath(newPath);
     const normalizedOldPath = oldPath ? normalizePath(oldPath) : null;
 
+    // 检查是否是隐藏路径
+    if (isHiddenPath(normalizedNewPath) || (normalizedOldPath && isHiddenPath(normalizedOldPath))) {
+      console.log('跳过隐藏目录的文件重命名事件:', normalizedOldPath, '->', normalizedNewPath);
+      return;
+    }
+
     // 1. 更新树中的节点
     if (normalizedOldPath) {
       const nodeToUpdate = findNodeById(fileTree.value, normalizedOldPath);
       if (nodeToUpdate) {
-        // 保留原有内容
-        const content = nodeToUpdate.content;
         nodeToUpdate.id = normalizedNewPath;
         nodeToUpdate.name = newPath.split(/[\\/]/).pop();
-        nodeToUpdate.content = content; // 保留内容
       }
     }
 
@@ -928,14 +959,10 @@ const handleFileRenamed = async (oldPath, newPath) => {
     if (tabIndex !== -1) {
       fileTreeStore.openTabs[tabIndex].path = normalizedNewPath;
       fileTreeStore.openTabs[tabIndex].fileName = newPath.split(/[\\/]/).pop();
-      // 保留内容
-      fileTreeStore.openTabs[tabIndex].content = fileTreeStore.openTabs[tabIndex].content;
 
-      // 更新激活标签
       if (fileTreeStore.activeTab === normalizedOldPath) {
         fileTreeStore.activeTab = normalizedNewPath;
       }
-      // 更新编辑器当前文件
       if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedOldPath) {
         fileTreeStore.selectedFile = {
           path: normalizedNewPath,
@@ -1010,39 +1037,37 @@ const extractOldPathFromEvent = (event) => {
 
 // 优化处理文件删除事件的函数
 const handleFileRemoved = async (filePath) => {
-  const normalizedPath = normalizePath(filePath)
-  const parentPath = normalizedPath.split('/').slice(0, -1).join('/')
+  const normalizedPath = normalizePath(filePath);
+  const parentPath = normalizedPath.split('/').slice(0, -1).join('/');
 
-  // console.log('处理删除事件 - 文件路径:', normalizedPath, '父目录:', parentPath)
+  // 检查是否是隐藏路径
+  if (isHiddenPath(normalizedPath) || isHiddenPath(parentPath)) {
+    console.log('跳过隐藏目录的文件删除事件:', normalizedPath);
+    return;
+  }
 
   // 查找并删除节点
-  const nodeToRemove = findNodeById(fileTree.value, normalizedPath)
+  const nodeToRemove = findNodeById(fileTree.value, normalizedPath);
   if (nodeToRemove) {
-    const parentNode = findParentNode(fileTree.value, normalizedPath)
+    const parentNode = findParentNode(fileTree.value, normalizedPath);
     if (parentNode) {
-      parentNode.children = parentNode.children.filter(child => child.id !== normalizedPath)
-      // console.log('从父节点删除成功:', parentNode)
+      parentNode.children = parentNode.children.filter(child => child.id !== normalizedPath);
     } else {
-      // 如果是根节点下的文件
-      fileTree.value = fileTree.value.filter(child => child.id !== normalizedPath)
-      // console.log('从根节点删除成功')
+      fileTree.value = fileTree.value.filter(child => child.id !== normalizedPath);
     }
   }
 
   // 删除后关闭标签页
   fileTreeStore.closeTab(normalizedPath);
-  // 如果当前编辑器打开的就是被删文件，也清空 selectedFile
   if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedPath) {
     fileTreeStore.selectedFile = null;
   }
-  // 如果当前激活标签就是被删文件，也清空 activeTab
   if (fileTreeStore.activeTab === normalizedPath) {
     fileTreeStore.activeTab = null;
   }
 
-  // 刷新父目录
-  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
-}
+  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath);
+};
 
 // 清理函数
 const cleanupFileWatcher = async () => {
