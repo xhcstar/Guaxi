@@ -65,3 +65,4 @@ grep-matcher = "0.1.7"
 rayon = "1.10.0"
 parking_lot = "0.12.4"
 lru = "0.16.0"
+uuid = { version = "1.17.0", features = ["v4"] }

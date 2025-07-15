@@ -1865,11 +1865,16 @@ const processTranslateQueue = async () => {
     const currentBatch = translateQueue.value.splice(0, translateBatchSize);
     const texts = currentBatch.map(item => item.text);
 
-    // 调用后端接口
-    const response = await invoke('translate_text', {
+    // 付费翻译接口
+    // const response = await invoke('translate_text', {
+    //   texts: texts,
+    //   secretId: "1122334",
+    //   secretKey: "5566778",
+    // });
+
+    // 免费翻译接口
+    const response = await invoke('translate_text_free', {
       texts: texts,
-      secretId: "1122334",
-      secretKey: "5566778",
     });
 
     // 调试日志
