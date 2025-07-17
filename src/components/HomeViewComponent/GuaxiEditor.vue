@@ -18,35 +18,13 @@
         <!-- 添加 Git 操作按钮 -->
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
-            <n-button text @click="gitPull" :loading="gitLoading.pull">
+            <n-button text @click="toggleGitPanel">
               <n-icon>
-                <DownloadOutline />
+                <GitBranchOutline />
               </n-icon>
             </n-button>
           </template>
-          Pull Changes
-        </n-tooltip>
-
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="gitCommit" :loading="gitLoading.commit">
-              <n-icon>
-                <CheckmarkOutline />
-              </n-icon>
-            </n-button>
-          </template>
-          Commit Changes
-        </n-tooltip>
-
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="gitPush" :loading="gitLoading.push">
-              <n-icon>
-                <CloudUploadOutline />
-              </n-icon>
-            </n-button>
-          </template>
-          Push Changes
+          Git 操作
         </n-tooltip>
 
         <n-tooltip placement="top" trigger="hover">
@@ -80,6 +58,8 @@
     <!-- 阅读模式 -->
     <div v-show="selectedFile && mode === 'preview'" v-html="renderedHtml" class="preview" ref="previewContainer">
     </div>
+    <!-- 添加 GitPanel 组件 -->
+    <GitPanel ref="gitPanel" :workspace-path="fileTreeStore.activeRepoPath" />
   </div>
 </template>
 
@@ -107,25 +87,13 @@ import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
 
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
-import { GitBranchOutline, DownloadOutline, CloudUploadOutline, CheckmarkOutline } from '@vicons/ionicons5'
+import { GitBranchOutline } from '@vicons/ionicons5'
+import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
 
-// 在现有状态定义后添加
-const gitService = ref(null)
-const gitDecorations = ref([])
-const gitBranch = ref('')
-const gitChanges = ref({
-  added: 0,
-  modified: 0,
-  deleted: 0
-})
-const gitLoading = ref({
-  pull: false,
-  push: false,
-  commit: false
-})
-
 const outlineStore = useOutlineStore()
+// 添加 GitPanel 组件引用
+const gitPanel = ref(null)
 
 
 // 引入 Pinia store
@@ -151,7 +119,6 @@ const vimStatusBar = ref(null);
 let vimModeInstance = null;
 
 const tabBarRef = ref(null)
-
 // 初始化编辑器
 const initEditor = () => {
   if (!editorContainer.value) {
@@ -194,6 +161,7 @@ const initEditor = () => {
       showSlider: 'always',
       size: 'fit'
     },
+    glyphMargin: true, // 启用行号左侧边栏
     scrollbar: {
       vertical: 'auto',
       horizontal: 'auto',
@@ -359,6 +327,63 @@ const initEditor = () => {
   registerContextMenu();
   setupEditorListeners();
 };
+
+
+// Git 服务
+const gitService = ref(null)
+
+// 初始化 Git 服务
+const initGitService = async () => {
+  if (selectedFile.value?.path) {
+    const dir = await dirname(selectedFile.value.path)
+    gitService.value = new GitService(dir)
+    await updateGitStatus()
+  }
+}
+
+// 更新 Git 状态
+const updateGitStatus = async () => {
+  if (!gitService.value || !selectedFile.value?.path) return
+
+  try {
+    const branch = await gitService.value.getCurrentBranch()
+    editorStore.setGitBranch(branch)
+
+    const status = await gitService.value.getFileStatus(selectedFile.value.path)
+    editorStore.setGitChanges({
+      added: status.filter(s => s.status === 'A').length,
+      modified: status.filter(s => s.status === 'M').length,
+      deleted: status.filter(s => s.status === 'D').length
+    })
+
+    await updateGitDecorations()
+  } catch (error) {
+    console.error('更新 Git 状态失败:', error)
+  }
+}
+
+// 更新 Git 装饰器
+const updateGitDecorations = async () => {
+  if (!editor || !selectedFile.value?.path || !gitService.value) return
+
+  try {
+    const changes = await gitService.value.getLineChanges(selectedFile.value.path)
+    editorStore.updateGitLineDecorations({
+      added: changes.added,
+      modified: changes.modified,
+      deleted: changes.deleted
+    })
+  } catch (error) {
+    console.error('更新 Git 装饰器失败:', error)
+  }
+}
+
+// 切换 Git 面板
+const toggleGitPanel = () => {
+  if (gitPanel.value) {
+    gitPanel.value.open() // 调用子组件暴露的 open 方法
+  }
+}
 
 const handleWheelScroll = (e) => {
   if (!tabBarRef.value) return
@@ -572,8 +597,6 @@ watch(selectedFile, async (newFile) => {
       renderDebounced(newFile.content)
     }
 
-    // 更新 Git 状态
-    await initGitService()
     await updateGitDecorations()
   } else {
     if (editor) {
@@ -807,147 +830,11 @@ watch([() => fileTreeStore.activeTab, activeTabContent], ([tabPath, content]) =>
 }, { immediate: true })
 
 
-// 初始化 Git 服务
-const initGitService = async () => {
-  try {
-    if (selectedFile.value?.path) {
-      const dir = await dirname(selectedFile.value.path)
-      gitService.value = new GitService(dir)
-      await updateGitStatus()
-    }
-  } catch (error) {
-    console.warn('Git initialization failed:', error)
-  }
-}
-
-// 更新 Git 状态
-const updateGitStatus = async () => {
-  if (!gitService.value) return;
-
-  try {
-    gitBranch.value = await gitService.value.getCurrentBranch();
-    await updateGitChanges();
-  } catch (error) {
-    console.warn('Git status update failed:', error);
-    gitBranch.value = '';
-    gitChanges.value = {
-      added: 0,
-      modified: 0,
-      deleted: 0
-    };
-  }
-};
-
-const updateGitChanges = async () => {
-  if (!gitService.value || !selectedFile.value?.path) return;
-
-  try {
-    const status = await gitService.value.getFileStatus(selectedFile.value.path);
-    gitChanges.value = {
-      added: status.filter(s => s.status === 'A').length,
-      modified: status.filter(s => s.status === 'M').length,
-      deleted: status.filter(s => s.status === 'D').length
-    };
-  } catch (error) {
-    console.error('Update git changes failed:', error);
-    gitChanges.value = {
-      added: 0,
-      modified: 0,
-      deleted: 0
-    };
-  }
-};
-
-const updateGitDecorations = async () => {
-  if (!editor || !selectedFile.value?.path || !gitService.value) return;
-
-  try {
-    const changes = await gitService.value.getLineChanges(selectedFile.value.path);
-
-    const decorations = [
-      ...changes.added.map(line => ({
-        range: new monaco.Range(line, 1, line, 1),
-        options: {
-          isWholeLine: true,
-          className: 'git-line-added',
-          glyphMarginClassName: 'git-glyph-added'
-        }
-      })),
-      ...changes.modified.map(line => ({
-        range: new monaco.Range(line, 1, line, 1),
-        options: {
-          isWholeLine: true,
-          className: 'git-line-modified',
-          glyphMarginClassName: 'git-glyph-modified'
-        }
-      }))
-    ];
-
-    gitDecorations.value = editor.deltaDecorations(
-      gitDecorations.value,
-      decorations
-    );
-  } catch (error) {
-    console.error('Update git decorations failed:', error);
-    if (gitDecorations.value.length > 0) {
-      gitDecorations.value = editor.deltaDecorations(gitDecorations.value, []);
-    }
-  }
-};
-
-// Git 操作命令
-const gitCommit = async () => {
-  const message = prompt('Commit message:')
-  if (!message) return
-
-  gitLoading.value.commit = true
-  try {
-    await gitService.value.commit(message)
-    message.success('Commit successful')
-    await updateGitDecorations()
-    await updateGitChanges()
-  } catch (error) {
-    message.error(`Commit failed: ${error}`)
-  } finally {
-    gitLoading.value.commit = false
-  }
-}
-
-const gitPull = async () => {
-  gitLoading.value.pull = true
-  try {
-    await gitService.value.pull()
-    message.success('Pull successful')
-    await updateGitDecorations()
-    await updateGitChanges()
-  } catch (error) {
-    message.error(`Pull failed: ${error}`)
-  } finally {
-    gitLoading.value.pull = false
-  }
-}
-
-const gitPush = async () => {
-  gitLoading.value.push = true
-  try {
-    await gitService.value.push()
-    message.success('Push successful')
-  } catch (error) {
-    message.error(`Push failed: ${error}`)
-  } finally {
-    gitLoading.value.push = false
-  }
-}
-
 // 生命周期
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   outlineStore.setJumpToLine(jumpToLine)
-
-  // 在 nextTick 中初始化 Git
-  nextTick(async () => {
-    await initGitService()
-  })
+  initGitService()
 });
 
 onUnmounted(() => {
@@ -1166,47 +1053,28 @@ onUnmounted(() => {
   background: #eee;
 }
 
-/* 在现有样式后添加 */
+/* Git 行变更装饰器样式 */
 .git-line-added {
-  background-color: rgba(97, 175, 97, 0.1);
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%2361af61"/></svg>') no-repeat;
+  background-position: 0 center;
+  margin-left: 3px;
 }
 
 .git-line-modified {
-  background-color: rgba(255, 213, 0, 0.1);
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%23e5c07b"/></svg>') no-repeat;
+  background-position: 0 center;
+  margin-left: 3px;
 }
 
-.git-glyph-added {
-  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%2361af61"/></svg>') no-repeat;
+.git-line-deleted {
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%23e06c75"/></svg>') no-repeat;
+  background-position: 0 center;
+  margin-left: 3px;
 }
 
-.git-glyph-modified {
-  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%23ffd500"/></svg>') no-repeat;
-}
-
-/* 状态栏 Git 信息样式 */
-.git-branch {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  font-size: 12px;
-}
-
-.git-change {
-  font-size: 11px;
-  margin-left: 4px;
-}
-
-.git-added {
-  color: #61af61;
-}
-
-.git-modified {
-  color: #e5c07b;
-}
-
-.git-deleted {
-  color: #e06c75;
+/* 确保装饰器区域可见 */
+.monaco-editor .glyph-margin {
+  background-color: var(--vscode-editorGutter-background);
 }
 </style>
 

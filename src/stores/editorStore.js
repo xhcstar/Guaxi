@@ -18,6 +18,17 @@ export const useEditorStore = defineStore("editor", {
     lineEnding: "LF",
     indentation: "Spaces: 2",
     selectionStatus: null,
+
+    // Git 相关状态
+    gitDecorations: [], // Git 行变更装饰器定义
+    gitDecorationIds: [], // 当前应用的装饰器ID
+    gitChanges: {
+      // Git 变更统计
+      added: 0,
+      modified: 0,
+      deleted: 0,
+    },
+    gitBranch: "", // 当前 Git 分支
   }),
   actions: {
     // 检查文件是否处于激活状态
@@ -39,10 +50,11 @@ export const useEditorStore = defineStore("editor", {
       this.triggerEditorUpdate();
     },
 
-    // 清除所有高亮
+    // 清除所有装饰器（包括 Git 装饰器）
     clearHighlights() {
       this.highlightInfo = null;
       this.decorations = [];
+      this.clearGitDecorations();
       this.triggerEditorUpdate();
     },
 
@@ -54,8 +66,86 @@ export const useEditorStore = defineStore("editor", {
       console.debug("[EditorStore] Triggering editor update");
     },
 
+    // Git 相关操作
+    setGitBranch(branch) {
+      this.gitBranch = branch;
+    },
+
+    setGitChanges(changes) {
+      this.gitChanges = {
+        added: changes.added || 0,
+        modified: changes.modified || 0,
+        deleted: changes.deleted || 0,
+      };
+    },
+
+    setGitDecorations(decorations) {
+      this.gitDecorations = decorations;
+      this.applyGitDecorations();
+    },
+
+    applyGitDecorations() {
+      if (!this.editorInstance || this.gitDecorations.length === 0) return;
+
+      if (this.gitDecorationIds.length > 0) {
+        this.editorInstance.deltaDecorations(this.gitDecorationIds, []);
+      }
+
+      this.gitDecorationIds = this.editorInstance.deltaDecorations(
+        [],
+        this.gitDecorations
+      );
+    },
+
+    clearGitDecorations() {
+      if (this.editorInstance && this.gitDecorationIds.length > 0) {
+        this.editorInstance.deltaDecorations(this.gitDecorationIds, []);
+      }
+      this.gitDecorations = [];
+      this.gitDecorationIds = [];
+    },
+
+    updateGitLineDecorations({ added = [], modified = [], deleted = [] }) {
+      const decorations = [
+        ...added.map((line) => this.createGitDecoration(line, "added")),
+        ...modified.map((line) => this.createGitDecoration(line, "modified")),
+        ...deleted.map((line) => this.createGitDecoration(line, "deleted")),
+      ];
+
+      this.setGitDecorations(decorations);
+    },
+
+    createGitDecoration(line, type) {
+      const className = `git-line-${type}`;
+      const hoverMessage = {
+        added: "新增行",
+        modified: "修改行",
+        deleted: "删除行",
+      }[type];
+
+      return {
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: true,
+          glyphMarginClassName: className,
+          glyphMarginHoverMessage: { value: hoverMessage },
+          stickiness:
+            monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      };
+    },
+
+    // 更新设置编辑器实例（确保清除旧装饰器）
     setEditorInstance(editor) {
-      this.editorInstance = editor ? markRaw(editor) : null; // 保持非响应式
+      if (this.editorInstance && this.gitDecorationIds.length > 0) {
+        this.editorInstance.deltaDecorations(this.gitDecorationIds, []);
+      }
+
+      this.editorInstance = editor ? markRaw(editor) : null;
+
+      if (editor && this.gitDecorations.length > 0) {
+        this.applyGitDecorations();
+      }
     },
 
     async insertContent(content) {

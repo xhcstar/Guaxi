@@ -1,5 +1,5 @@
 // src/utils/GitService.js
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from "@tauri-apps/api/core";
 
 export default class GitService {
   constructor(workspacePath) {
@@ -15,7 +15,7 @@ export default class GitService {
       // 修改为调用 get_git_status
       return await invoke("get_git_status", { path: filePath });
     } catch (error) {
-      console.error('获取文件状态失败:', error);
+      console.error("获取文件状态失败:", error);
       return [];
     }
   }
@@ -25,11 +25,17 @@ export default class GitService {
       // 这个命令在后端可能不存在，我们可以复用 get_git_status
       const status = await this.getFileStatus(filePath);
       return {
-        added: status.filter(s => s.status === 'A').map(s => s.lines_added).flat(),
-        modified: status.filter(s => s.status === 'M').map(s => s.lines_modified).flat()
+        added: status
+          .filter((s) => s.status === "A")
+          .map((s) => s.lines_added)
+          .flat(),
+        modified: status
+          .filter((s) => s.status === "M")
+          .map((s) => s.lines_modified)
+          .flat(),
       };
     } catch (error) {
-      console.error('获取行变更失败:', error);
+      console.error("获取行变更失败:", error);
       return { added: [], modified: [] };
     }
   }
@@ -47,5 +53,25 @@ export default class GitService {
 
   async push() {
     return await invoke("git_push", { path: this.workspacePath });
+  }
+
+  async getLineChanges(filePath) {
+    try {
+      const status = await this.getFileStatus(filePath);
+      return {
+        added: status
+          .filter((s) => s.status === "A")
+          .flatMap((s) => s.lines_added),
+        modified: status
+          .filter((s) => s.status === "M")
+          .flatMap((s) => s.lines_modified),
+        deleted: status
+          .filter((s) => s.status === "D")
+          .flatMap((s) => s.lines_deleted),
+      };
+    } catch (error) {
+      console.error("获取行变更失败:", error);
+      return { added: [], modified: [], deleted: [] };
+    }
   }
 }
