@@ -132,6 +132,8 @@ async fn main() {
             commands::git::git_pull,
             commands::git::checkout_branch,
             commands::git::create_branch,
+            commands::git::git_read_file,
+            commands::git::get_git_log,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn
