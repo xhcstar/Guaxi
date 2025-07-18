@@ -1,211 +1,310 @@
 <template>
-    <n-modal v-model:show="visible" :mask-closable="false" preset="card" :style="modalStyle" class="gitkraken-modal"
-        @after-leave="handleClose">
-        <!-- 主容器 -->
-        <div class="gitkraken-container">
-            <!-- 左侧分支图 -->
-            <div class="git-graph">
-                <div class="graph-container" ref="graphContainer">
-                    <div class="branch-list">
-                        <n-scrollbar>
-                            <n-list>
-                                <n-list-item v-for="branch in branches" :key="branch.name"
-                                    :class="{ 'current-branch': branch.is_current }">
-                                    <n-space vertical>
-                                        <n-space align="center" @click="toggleBranch(branch.name)">
-                                            <n-icon v-if="branch.is_current" color="#4fc08d">
-                                                <GitBranchOutline />
-                                            </n-icon>
-                                            <span>{{ branch.name }}</span>
-                                            <n-icon>
-                                                <ChevronDownOutline v-if="expandedBranches.has(branch.name)" />
-                                                <ChevronForwardOutline v-else />
-                                            </n-icon>
-                                        </n-space>
-
-                                        <n-collapse-transition v-if="expandedBranches.has(branch.name)">
-                                            <n-list class="commit-list">
-                                                <n-list-item v-for="commit in branchCommits[branch.name] || []"
-                                                    :key="commit.id" @click="selectCommit(commit)"
-                                                    :class="{ 'selected-commit': selectedCommit?.id === commit.id }">
-                                                    <n-space vertical>
-                                                        <n-text strong>{{ commit.summary }}</n-text>
-                                                        <n-text depth="3" style="font-size: 12px">
-                                                            {{ commit.author }} - {{ formatDate(commit.date) }}
-                                                        </n-text>
-                                                    </n-space>
-                                                </n-list-item>
-                                            </n-list>
-                                        </n-collapse-transition>
-                                    </n-space>
-                                </n-list-item>
-                            </n-list>
-                        </n-scrollbar>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 右侧操作区 -->
-            <div class="git-operations">
-                <!-- 顶部工具栏 -->
-                <div class="git-toolbar">
-                    <n-space>
-                        <n-button type="primary" @click="handlePull" :loading="gitLoading.pull">
-                            <template #icon>
-                                <n-icon>
-                                    <CloudDownloadOutline />
-                                </n-icon>
-                            </template>
-                            拉取
-                        </n-button>
-                        <n-button type="primary" @click="handlePush" :loading="gitLoading.push">
-                            <template #icon>
-                                <n-icon>
-                                    <CloudUploadOutline />
-                                </n-icon>
-                            </template>
-                            推送
-                        </n-button>
-                        <n-button type="info" @click="refreshGitStatus">
-                            <template #icon>
-                                <n-icon>
-                                    <RefreshOutline />
-                                </n-icon>
-                            </template>
-                            刷新
-                        </n-button>
-                        <n-button type="success" @click="showCreateBranchModal = true">
-                            <template #icon>
-                                <n-icon>
-                                    <GitBranchOutline />
-                                </n-icon>
-                            </template>
-                            新建分支
-                        </n-button>
-                    </n-space>
-
-                    <div class="branch-info">
-                        <n-tag type="info" round>
-                            <n-icon>
-                                <GitBranchOutline />
-                            </n-icon>
-                            {{ currentBranch }}
-                        </n-tag>
-                    </div>
-                </div>
-
-                <!-- 变更文件列表 -->
-                <div class="file-changes">
-                    <n-tabs type="segment" size="small">
-                        <n-tab-pane name="unstaged" tab="工作区">
-                            <n-data-table :columns="fileColumns" :data="unstagedFiles" :pagination="pagination"
-                                size="small" :row-class-name="getRowClass" @row-click="handleFileClick" />
-                        </n-tab-pane>
-                        <n-tab-pane name="staged" tab="暂存区">
-                            <n-data-table :columns="fileColumns" :data="stagedFiles" :pagination="pagination"
-                                size="small" :row-class-name="getRowClass" @row-click="handleFileClick" />
-                        </n-tab-pane>
-                    </n-tabs>
-
-                    <!-- 文件差异预览 -->
-                    <div class="diff-viewer" v-if="selectedFile">
-                        <n-card size="small" :title="selectedFile.path">
-                            <n-scrollbar style="max-height: 300px">
-                                <pre class="diff-content">{{ selectedFile.diff || '无差异内容' }}</pre>
-                            </n-scrollbar>
-                        </n-card>
-                    </div>
-
-                    <!-- 提交详情预览 -->
-                    <div class="commit-details" v-if="selectedCommit">
-                        <n-card size="small" :title="`提交 ${selectedCommit.id.slice(0, 7)}`">
-                            <n-scrollbar style="max-height: 300px">
-                                <div class="commit-meta">
-                                    <n-space vertical>
-                                        <n-text strong>作者: {{ selectedCommit.author }}</n-text>
-                                        <n-text>日期: {{ formatDateFull(selectedCommit.date) }}</n-text>
-                                    </n-space>
-                                </div>
-                                <pre class="commit-message">{{ selectedCommit.message }}</pre>
-                            </n-scrollbar>
-                        </n-card>
-                    </div>
-                </div>
-
-                <!-- 提交区域 -->
-                <div class="commit-area">
-                    <n-input v-model:value="commitForm.message" type="textarea" placeholder="提交信息 (必填)"
-                        :autosize="{ minRows: 3 }" />
-                    <div class="commit-actions">
-                        <n-space>
-                            <n-button type="primary" @click="handleCommit" :disabled="!commitForm.message.trim()">
-                                提交
-                            </n-button>
-                            <n-button @click="handleStageAll">
-                                暂存全部
-                            </n-button>
-                            <n-button @click="handleUnstageAll">
-                                取消暂存
-                            </n-button>
-                        </n-space>
-                        <div class="change-stats">
-                            <n-space>
-                                <n-tag type="success" size="small">
-                                    <n-icon>
-                                        <AddCircleOutline />
-                                    </n-icon>
-                                    {{ gitChanges.added }}
-                                </n-tag>
-                                <n-tag type="warning" size="small">
-                                    <n-icon>
-                                        <CreateOutline />
-                                    </n-icon>
-                                    {{ gitChanges.modified }}
-                                </n-tag>
-                                <n-tag type="error" size="small">
-                                    <n-icon>
-                                        <RemoveCircleOutline />
-                                    </n-icon>
-                                    {{ gitChanges.deleted }}
-                                </n-tag>
-                            </n-space>
-                        </div>
-                    </div>
-                </div>
-            </div>
+  <n-modal v-model:show="visible" :mask-closable="false" preset="card" :style="modalStyle" class="gitkraken-modal"
+    @after-leave="handleClose">
+    <!-- 主容器 -->
+    <div class="gitkraken-container">
+      <!-- 左侧面板 - 类似VSCode的Git面板 -->
+      <div class="git-sidebar">
+        <div class="source-control-header">
+          <n-space align="center" justify="space-between">
+            <n-text strong>仓库管理</n-text>
+            <n-button text @click="refreshGitStatus">
+              <template #icon>
+                <n-icon>
+                  <RefreshOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </n-space>
         </div>
 
-        <!-- 新建分支模态框 -->
-        <n-modal v-model:show="showCreateBranchModal" title="新建分支" preset="dialog" positive-text="创建"
-            @positive-click="handleCreateBranch">
-            <n-input v-model:value="newBranchName" placeholder="输入新分支名称" />
-        </n-modal>
+        <!-- 提交区域 -->
+        <div class="commit-section">
+          <n-input v-model:value="commitForm.message" type="textarea" placeholder="提交信息 (必填)"
+            :autosize="{ minRows: 1, maxRows: 3 }" style="min-width: 250px; margin-bottom: 8px;" />
+          <n-button type="primary" @click="handleCommit"
+            :disabled="!commitForm.message.trim() || stagedFiles.length === 0" style="width: 100%;">
+            提交
+          </n-button>
+        </div>
+
+        <!-- 变更文件列表 -->
+        <div class="changes-section">
+          <n-collapse :default-expanded-names="['changes']">
+            <n-collapse-item name="changes" title="Changes">
+              <template #header-extra>
+                <n-badge :value="unstagedFiles.length" :max="99" />
+              </template>
+
+              <n-list>
+                <!-- 操作按钮行 -->
+                <n-list-item>
+                  <n-space justify="space-between">
+                    <n-space>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
+                            <template #icon>
+                              <n-icon>
+                                <AddCircleOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        暂存全部
+                      </n-tooltip>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
+                            <template #icon>
+                              <n-icon>
+                                <CloseCircleOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        丢弃全部
+                      </n-tooltip>
+                    </n-space>
+
+                    <n-tag type="info" size="small">
+                      <n-icon>
+                        <GitBranchOutline />
+                      </n-icon>
+                      {{ currentBranch }}
+                    </n-tag>
+                  </n-space>
+                </n-list-item>
+
+                <!-- 文件列表项 -->
+                <n-list-item v-for="file in unstagedFiles" :key="file.path">
+                  <n-space align="center" justify="space-between">
+                    <n-space align="center" @click="handleFileClick(file)">
+                      <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                      <n-text>{{ file.path }}</n-text>
+                    </n-space>
+                    <n-space>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click.stop="handleStageFile(file)">
+                            <template #icon>
+                              <n-icon>
+                                <AddCircleOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        暂存
+                      </n-tooltip>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click.stop="handleDiscardFile(file)">
+                            <template #icon>
+                              <n-icon>
+                                <CloseCircleOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        丢弃
+                      </n-tooltip>
+                    </n-space>
+                  </n-space>
+                </n-list-item>
+              </n-list>
+            </n-collapse-item>
+          </n-collapse>
+
+          <n-collapse :default-expanded-names="['staged']">
+            <n-collapse-item name="staged" title="Staged Changes">
+              <template #header-extra>
+                <n-badge :value="stagedFiles.length" :max="99" />
+              </template>
+
+              <n-list>
+                <!-- 操作按钮行 -->
+                <n-list-item>
+                  <n-space justify="space-between">
+                    <n-space>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
+                            <template #icon>
+                              <n-icon>
+                                <RemoveCircleOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        取消暂存全部
+                      </n-tooltip>
+                    </n-space>
+                  </n-space>
+                </n-list-item>
+
+                <!-- 暂存文件列表项 -->
+                <n-list-item v-for="file in stagedFiles" :key="file.path">
+                  <n-space align="center" justify="space-between">
+                    <n-space align="center" @click="handleFileClick(file)">
+                      <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                      <n-text>{{ file.path }}</n-text>
+                    </n-space>
+                    <n-space>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click.stop="handleUnstageFile(file)">
+                            <template #icon>
+                              <n-icon>
+                                <RemoveCircleOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        取消暂存
+                      </n-tooltip>
+                    </n-space>
+                  </n-space>
+                </n-list-item>
+              </n-list>
+            </n-collapse-item>
+          </n-collapse>
+        </div>
+
+        <!-- 提交历史 -->
+        <div class="commits-section">
+          <n-collapse :default-expanded-names="['commits']">
+            <n-collapse-item name="commits" title="提交历史">
+              <n-list>
+                <!-- 操作按钮行 -->
+                <n-list-item>
+                  <n-space>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-button text @click="handlePull" :loading="gitLoading.pull">
+                          <template #icon>
+                            <n-icon>
+                              <CloudDownloadOutline />
+                            </n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                      拉取
+                    </n-tooltip>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-button text @click="handlePush" :loading="gitLoading.push">
+                          <template #icon>
+                            <n-icon>
+                              <CloudUploadOutline />
+                            </n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                      推送
+                    </n-tooltip>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-button text @click="showCreateBranchModal = true">
+                          <template #icon>
+                            <n-icon>
+                              <GitBranchOutline />
+                            </n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                      创建分支
+                    </n-tooltip>
+                  </n-space>
+                </n-list-item>
+
+                <!-- 提交历史列表项 -->
+                <n-list-item v-for="commit in commits" :key="commit.id" @click="selectCommit(commit)"
+                  :class="{ 'selected-commit': selectedCommit?.id === commit.id }">
+                  <n-space vertical>
+                    <n-text strong>{{ commit.summary }}</n-text>
+                    <n-text depth="3" style="font-size: 12px">
+                      {{ commit.author }} - {{ formatDate(commit.date) }}
+                    </n-text>
+                  </n-space>
+                </n-list-item>
+              </n-list>
+            </n-collapse-item>
+          </n-collapse>
+        </div>
+      </div>
+
+      <!-- 右侧内容区域 -->
+      <div class="git-content">
+        <!-- 文件差异或提交详情 -->
+        <div class="content-viewer">
+          <div v-if="selectedFile" class="diff-viewer">
+            <n-card size="small" :title="selectedFile.path" embedded>
+              <n-scrollbar style="height: 100%">
+                <pre class="diff-content">{{ selectedFile.diff || '无差异内容' }}</pre>
+              </n-scrollbar>
+            </n-card>
+          </div>
+
+          <div v-if="selectedCommit" class="commit-details">
+            <n-card size="small" :title="`提交 ${selectedCommit.id.slice(0, 7)}`" embedded>
+              <n-scrollbar style="height: 100%">
+                <div class="commit-meta">
+                  <n-space vertical>
+                    <n-text strong>作者: {{ selectedCommit.author }}</n-text>
+                    <n-text>日期: {{ formatDateFull(selectedCommit.date) }}</n-text>
+                  </n-space>
+                </div>
+                <pre class="commit-message">{{ selectedCommit.message }}</pre>
+                <div class="commit-diff">
+                  <n-divider title-placement="left">修改内容</n-divider>
+                  <!-- 使用 pre 标签保留格式 -->
+                  <pre class="diff-content">{{ selectedCommit.diff }}</pre>
+                </div>
+              </n-scrollbar>
+            </n-card>
+          </div>
+
+          <div v-if="!selectedFile && !selectedCommit" class="empty-state">
+            <n-empty description="选择文件或提交查看详情" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新建分支模态框 -->
+    <n-modal v-model:show="showCreateBranchModal" title="新建分支" preset="dialog" positive-text="创建"
+      @positive-click="handleCreateBranch">
+      <n-input v-model:value="newBranchName" placeholder="输入新分支名称" />
     </n-modal>
+  </n-modal>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, h } from 'vue'
-import { NIcon, NTag, NButton, NCollapseTransition } from 'naive-ui'
+import { ref, computed, onMounted } from 'vue'
 import {
-    GitBranchOutline,
-    CloudDownloadOutline,
-    CloudUploadOutline,
-    RefreshOutline,
-    AddCircleOutline,
-    CreateOutline,
-    RemoveCircleOutline,
-    ChevronDownOutline,
-    ChevronForwardOutline
+  NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip
+} from 'naive-ui'
+import {
+  GitBranchOutline,
+  CloudDownloadOutline,
+  CloudUploadOutline,
+  RefreshOutline,
+  AddCircleOutline,
+  CreateOutline,
+  RemoveCircleOutline,
+  CloseCircleOutline,
+  DocumentOutline,
+  GitCommitOutline
 } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { useMessage } from 'naive-ui'
 
 // 日志级别枚举
 const LogLevel = {
-    DEBUG: 0,
-    INFO: 1,
-    WARN: 2,
-    ERROR: 3
+  DEBUG: 0,
+  INFO: 1,
+  WARN: 2,
+  ERROR: 3
 }
 
 // 当前日志级别 (可根据环境变量设置)
@@ -213,33 +312,33 @@ const currentLogLevel = import.meta.env.DEV ? LogLevel.DEBUG : LogLevel.INFO
 
 // 自定义日志记录器
 const logger = {
-    debug: (...args) => {
-        if (currentLogLevel <= LogLevel.DEBUG) {
-            console.debug('[GitPanel][DEBUG]', ...args)
-        }
-    },
-    info: (...args) => {
-        if (currentLogLevel <= LogLevel.INFO) {
-            console.log('[GitPanel][INFO]', ...args)
-        }
-    },
-    warn: (...args) => {
-        if (currentLogLevel <= LogLevel.WARN) {
-            console.warn('[GitPanel][WARN]', ...args)
-        }
-    },
-    error: (...args) => {
-        if (currentLogLevel <= LogLevel.ERROR) {
-            console.error('[GitPanel][ERROR]', ...args)
-        }
+  debug: (...args) => {
+    if (currentLogLevel <= LogLevel.DEBUG) {
+      console.debug('[GitPanel][DEBUG]', ...args)
     }
+  },
+  info: (...args) => {
+    if (currentLogLevel <= LogLevel.INFO) {
+      console.log('[GitPanel][INFO]', ...args)
+    }
+  },
+  warn: (...args) => {
+    if (currentLogLevel <= LogLevel.WARN) {
+      console.warn('[GitPanel][WARN]', ...args)
+    }
+  },
+  error: (...args) => {
+    if (currentLogLevel <= LogLevel.ERROR) {
+      console.error('[GitPanel][ERROR]', ...args)
+    }
+  }
 }
 
 const props = defineProps({
-    workspacePath: {
-        type: String,
-        required: true
-    }
+  workspacePath: {
+    type: String,
+    required: true
+  }
 })
 
 const message = useMessage()
@@ -252,593 +351,720 @@ const newBranchName = ref('')
 // 状态数据
 const currentBranch = ref('')
 const branches = ref([])
+const commits = ref([])
 const gitChanges = ref({
-    added: 0,
-    modified: 0,
-    deleted: 0
+  added: 0,
+  modified: 0,
+  deleted: 0
 })
 const unstagedFiles = ref([])
 const stagedFiles = ref([])
 const selectedFile = ref(null)
 const gitLoading = ref({
-    pull: false,
-    push: false,
-    commit: false
+  pull: false,
+  push: false,
+  commit: false
 })
-const expandedBranches = ref(new Set())
-const branchCommits = ref({})
 const selectedCommit = ref(null)
 
 // 表单数据
 const commitForm = ref({
-    message: ''
+  message: ''
 })
 
 // 模态框样式
 const modalStyle = computed(() => ({
-    width: '90vw',
-    height: '85vh',
-    maxWidth: '1400px',
-    maxHeight: '900px'
+  width: '90vw',
+  height: '85vh',
+  maxWidth: '1400px',
+  maxHeight: '900px'
 }))
-
-// 表格列定义
-const fileColumns = [
-    {
-        title: '文件',
-        key: 'path',
-        render: (row) => {
-            const icon = row.status === 'A' ? AddCircleOutline :
-                row.status === 'M' ? CreateOutline :
-                    row.status === 'D' ? RemoveCircleOutline : null
-            return h('div', { class: 'file-item' }, [
-                icon ? h(NIcon, { component: icon, size: 16, class: 'file-icon' }) : null,
-                h('span', { class: 'file-path' }, row.path)
-            ])
-        }
-    },
-    {
-        title: '状态',
-        key: 'status',
-        render: (row) => {
-            const statusMap = {
-                'A': { type: 'success', text: '新增' },
-                'M': { type: 'warning', text: '修改' },
-                'D': { type: 'error', text: '删除' },
-                '?': { type: 'default', text: '未跟踪' }
-            }
-            const status = statusMap[row.status] || { type: 'default', text: row.status }
-            return h(NTag, { type: status.type, size: 'small', bordered: false }, { default: () => status.text })
-        }
-    },
-    {
-        title: '操作',
-        key: 'actions',
-        render: (row) => h('div', { class: 'file-actions' }, [
-            h(NButton, {
-                text: true,
-                size: 'small',
-                onClick: (e) => {
-                    e.stopPropagation()
-                    handleStageFile(row)
-                }
-            }, { default: () => '暂存' }),
-            h(NButton, {
-                text: true,
-                size: 'small',
-                onClick: (e) => {
-                    e.stopPropagation()
-                    handleDiscardFile(row)
-                }
-            }, { default: () => '丢弃' })
-        ])
-    }
-]
-
-const pagination = {
-    pageSize: 10
-}
 
 // 方法
 const open = () => {
-    logger.info('Opening Git panel', { workspacePath: props.workspacePath })
-    visible.value = true
-    refreshGitStatus()
+  logger.info('Opening Git panel', { workspacePath: props.workspacePath })
+  visible.value = true
+  refreshGitStatus()
 }
 
 const handleClose = () => {
-    logger.debug('Closing Git panel')
-    selectedFile.value = null
-    selectedCommit.value = null
-    commitForm.value.message = ''
-    expandedBranches.value.clear()
+  logger.debug('Closing Git panel')
+  selectedFile.value = null
+  selectedCommit.value = null
+  commitForm.value.message = ''
 }
 
 const refreshGitStatus = async () => {
-    logger.debug('Refreshing Git status')
-    try {
-        // 获取当前分支
-        currentBranch.value = await invoke('get_current_branch', { path: props.workspacePath })
-        logger.debug('Current branch retrieved', { branch: currentBranch.value })
+  logger.debug('Refreshing Git status')
+  try {
+    const statuses = await invoke('get_git_status', { path: props.workspacePath })
 
-        // 获取分支列表
-        branches.value = await invoke('list_branches', { path: props.workspacePath })
-        logger.debug('Branches retrieved', { count: branches.value.length })
+    // 创建临时容器
+    const newStagedFiles = []
+    const newUnstagedFiles = []
 
-        // 获取文件状态
-        const statuses = await invoke('get_git_status', { path: props.workspacePath })
-        logger.debug('Git status retrieved', { count: statuses.length })
+    // 智能合并策略
+    statuses.forEach(file => {
+      // 检查是否已存在于当前状态中（保留diff等状态）
+      const existingFile = [...stagedFiles.value, ...unstagedFiles.value]
+        .find(f => f.path === file.path)
 
-        // 计算变更数量
-        gitChanges.value = {
-            added: statuses.filter(s => s.status === 'A').length,
-            modified: statuses.filter(s => s.status === 'M').length,
-            deleted: statuses.filter(s => s.status === 'D').length
-        }
-        logger.debug('Git changes calculated', gitChanges.value)
+      const fileData = {
+        path: file.path,
+        status: file.status,
+        diff: existingFile?.diff || file.diff || '',
+        staged: file.staged || ['A', 'M', 'D'].includes(file.status)
+      }
 
-        // 设置未暂存文件
-        unstagedFiles.value = statuses.map(file => ({
-            path: file.path,
-            status: file.status,
-            diff: '' // 初始为空，点击后加载
-        }))
+      if (fileData.staged) {
+        newStagedFiles.push(fileData)
+      } else {
+        newUnstagedFiles.push(fileData)
+      }
+    })
 
-        // 暂存区文件从工作区中筛选已暂存的文件
-        stagedFiles.value = unstagedFiles.value.filter(file => ['A', 'M', 'D'].includes(file.status))
-        logger.debug('Files categorized', {
-            unstaged: unstagedFiles.value.length,
-            staged: stagedFiles.value.length
-        })
-    } catch (error) {
-        logger.error('Failed to refresh Git status', error)
-        message.error(`获取Git状态失败: ${error}`)
-    }
+    // 保留正在处理中的文件
+    stagedFiles.value.forEach(file => {
+      if (file.__pending && !newStagedFiles.some(f => f.path === file.path)) {
+        newStagedFiles.push(file)
+      }
+    })
+
+    unstagedFiles.value.forEach(file => {
+      if (file.__pending && !newUnstagedFiles.some(f => f.path === file.path)) {
+        newUnstagedFiles.push(file)
+      }
+    })
+
+    // 批量更新响应式数据
+    stagedFiles.value = newStagedFiles
+    unstagedFiles.value = newUnstagedFiles
+
+    selectedFile.value = null
+  } catch (error) {
+    logger.error('Failed to refresh Git status', error)
+    message.error(`获取Git状态失败: ${error}`)
+  }
 }
 
-const toggleBranch = async (branchName) => {
-    if (expandedBranches.value.has(branchName)) {
-        expandedBranches.value.delete(branchName);
-    } else {
-        expandedBranches.value.add(branchName);
-        if (!branchCommits.value[branchName]) {
-            try {
-                // 确保参数名与 Rust 后端定义一致
-                branchCommits.value[branchName] = await invoke('get_git_log', {
-                    path: props.workspacePath,
-                    branchName: branchName  // 使用 branch_name 而不是 branchName
-                });
-            } catch (error) {
-                logger.error('Failed to get git log', { branch: branchName, error });
-                message.error(`获取提交历史失败: ${error}`);
-            }
-        }
-    }
-};
+const selectCommit = async (commit) => {
+  logger.debug('Selecting commit', { commit: commit.id })
+  try {
+    selectedCommit.value = commit
+    selectedFile.value = null
 
-const selectCommit = (commit) => {
-    selectedCommit.value = commit;
-};
+    // 获取提交的差异内容
+    const diff = await invoke('get_commit_diff', {
+      path: props.workspacePath,
+      commitId: commit.id
+    })
+
+    // 确保差异内容正确赋值
+    selectedCommit.value = {
+      ...commit,
+      diff: diff || '无差异内容'
+    }
+
+    logger.debug('Commit diff loaded', { commit: commit.id })
+  } catch (error) {
+    logger.error('Failed to load commit diff', { commit: commit.id, error })
+    message.error(`获取提交差异失败: ${error}`)
+  }
+}
 
 const formatDate = (timestamp) => {
-    return new Date(parseInt(timestamp) * 1000).toLocaleDateString();
-};
+  return new Date(parseInt(timestamp) * 1000).toLocaleDateString()
+}
 
 const formatDateFull = (timestamp) => {
-    return new Date(parseInt(timestamp) * 1000).toLocaleString();
-};
+  return new Date(parseInt(timestamp) * 1000).toLocaleString()
+}
+
+const getFileStatusIcon = (status) => {
+  switch (status) {
+    case 'A': return AddCircleOutline // 已暂存的新文件
+    case 'M': return CreateOutline    // 修改的文件
+    case 'D': return RemoveCircleOutline // 删除的文件
+    case '?': return DocumentOutline  // 未跟踪文件
+    case 'R': return GitCommitOutline // 重命名文件
+    case 'T': return GitCommitOutline // 类型变更
+    default: return DocumentOutline   // 其他状态
+  }
+}
 
 const handleFileClick = async (row) => {
-    logger.debug('File clicked', { file: row.path })
-    try {
-        selectedFile.value = row
-        if (!row.diff) {
-            logger.debug('Loading file diff', { file: row.path })
-            const content = await invoke('git_read_file', {
-                path: props.workspacePath,
-                filePath: row.path
-            })
-            selectedFile.value.diff = content
-            logger.debug('File content loaded', { file: row.path, length: content.length })
-        }
-    } catch (error) {
-        logger.error('Failed to load file content', { file: row.path, error })
-        message.error(`获取文件内容失败: ${error}`)
+  logger.debug('File clicked', { file: row.path })
+  try {
+    selectedFile.value = row
+    selectedCommit.value = null
+    if (!row.diff) {
+      logger.debug('Loading file diff', { file: row.path })
+      const content = await invoke('git_read_file', {
+        path: props.workspacePath,
+        filePath: row.path
+      })
+      selectedFile.value.diff = content
+      logger.debug('File content loaded', { file: row.path, length: content.length })
     }
+  } catch (error) {
+    logger.error('Failed to load file content', { file: row.path, error })
+    message.error(`获取文件内容失败: ${error}`)
+  }
 }
 
 const handleStageFile = async (file) => {
-    logger.debug('Staging file', { file: file.path })
-    try {
-        file.status = 'M'
-        logger.info('File staged', { file: file.path })
-        message.success(`已暂存文件: ${file.path}`)
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Failed to stage file', { file: file.path, error })
-        message.error(`暂存文件失败: ${error}`)
+  try {
+    // 1. 立即从unstagedFiles中移除文件（视觉反馈）
+    const fileIndex = unstagedFiles.value.findIndex(f => f.path === file.path)
+    if (fileIndex !== -1) {
+      const [stagedFile] = unstagedFiles.value.splice(fileIndex, 1)
+
+      // 2. 添加到stagedFiles（带过渡状态）
+      stagedFiles.value.push({
+        ...stagedFile,
+        status: stagedFile.status === '?' ? 'A' :
+          stagedFile.status === 'M' ? 'M' : 'D',
+        staged: true,
+        __pending: true  // 标记为处理中状态
+      })
     }
+
+    // 3. 执行后端操作
+    await invoke('stage_file', {
+      path: props.workspacePath,
+      filePath: file.path
+    })
+
+    message.success(`已暂存文件: ${file.path}`)
+
+    // 4. 更新文件状态为已完成
+    const stagedIndex = stagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
+    if (stagedIndex !== -1) {
+      stagedFiles.value[stagedIndex].__pending = false
+    }
+
+    // 5. 执行完整状态刷新（但保留现有UI状态）
+    const freshStatus = await invoke('get_git_status', { path: props.workspacePath })
+
+    // 6. 智能合并状态（而不是完全替换）
+    freshStatus.forEach(freshFile => {
+      if (freshFile.path === file.path) {
+        const existingIndex = stagedFiles.value.findIndex(f => f.path === freshFile.path)
+        if (existingIndex !== -1) {
+          // 保留用户可能已经展开查看的diff内容
+          stagedFiles.value[existingIndex] = {
+            ...freshFile,
+            diff: stagedFiles.value[existingIndex].diff || freshFile.diff || ''
+          }
+        }
+      }
+    })
+  } catch (error) {
+    // 回滚UI状态
+    const stagedIndex = stagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
+    if (stagedIndex !== -1) {
+      const [revertedFile] = stagedFiles.value.splice(stagedIndex, 1)
+      unstagedFiles.value.push({
+        ...revertedFile,
+        status: revertedFile.status === 'A' ? '?' :
+          revertedFile.status === 'M' ? 'M' : 'D',
+        staged: false,
+        __pending: undefined
+      })
+    }
+    message.error(`暂存文件失败: ${error}`)
+  }
+}
+
+const handleUnstageFile = async (file) => {
+  try {
+    // 1. 立即从stagedFiles中移除文件
+    const fileIndex = stagedFiles.value.findIndex(f => f.path === file.path)
+    if (fileIndex !== -1) {
+      const [unstagedFile] = stagedFiles.value.splice(fileIndex, 1)
+
+      // 2. 添加到unstagedFiles（带过渡状态）
+      unstagedFiles.value.push({
+        ...unstagedFile,
+        status: unstagedFile.status === 'A' ? '?' :
+          unstagedFile.status === 'M' ? 'M' : 'D',
+        staged: false,
+        __pending: true
+      })
+    }
+
+    // 3. 执行后端操作
+    await invoke('unstage_file', {
+      path: props.workspacePath,
+      filePath: file.path
+    })
+
+    // 4. 更新状态
+    const unstagedIndex = unstagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
+    if (unstagedIndex !== -1) {
+      unstagedFiles.value[unstagedIndex].__pending = false
+    }
+
+    // 5. 智能刷新状态
+    const freshStatus = await invoke('get_git_status', { path: props.workspacePath })
+
+    freshStatus.forEach(freshFile => {
+      if (freshFile.path === file.path) {
+        const existingIndex = unstagedFiles.value.findIndex(f => f.path === freshFile.path)
+        if (existingIndex !== -1) {
+          unstagedFiles.value[existingIndex] = {
+            ...freshFile,
+            diff: unstagedFiles.value[existingIndex].diff || freshFile.diff || ''
+          }
+        }
+      }
+    })
+  } catch (error) {
+    // 回滚UI状态
+    const unstagedIndex = unstagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
+    if (unstagedIndex !== -1) {
+      const [revertedFile] = unstagedFiles.value.splice(unstagedIndex, 1)
+      stagedFiles.value.push({
+        ...revertedFile,
+        status: revertedFile.status === '?' ? 'A' :
+          revertedFile.status === 'M' ? 'M' : 'D',
+        staged: true,
+        __pending: undefined
+      })
+    }
+    message.error(`取消暂存失败: ${error}`)
+  }
 }
 
 const handleStageAll = async () => {
-    logger.debug('Staging all files')
-    try {
-        unstagedFiles.value.forEach(file => {
-            if (file.status === '?') file.status = 'A'
-        })
-        logger.info('All files staged', { count: unstagedFiles.value.length })
-        message.success('已暂存所有变更')
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Failed to stage all files', error)
-        message.error(`暂存全部失败: ${error}`)
-    }
+  logger.debug('Staging all files')
+  try {
+    await invoke('stage_all', {
+      path: props.workspacePath
+    })
+    logger.info('All files staged', { count: unstagedFiles.value.length })
+    message.success('已暂存所有变更')
+    await refreshGitStatus()
+  } catch (error) {
+    logger.error('Failed to stage all files', error)
+    message.error(`暂存全部失败: ${error}`)
+  }
 }
 
 const handleUnstageAll = async () => {
-    logger.debug('Unstaging all files')
-    try {
-        stagedFiles.value.forEach(file => {
-            if (['A', 'M', 'D'].includes(file.status)) file.status = '?'
-        })
-        logger.info('All files unstaged', { count: stagedFiles.value.length })
-        message.success('已取消所有暂存')
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Failed to unstage all files', error)
-        message.error(`取消暂存失败: ${error}`)
-    }
+  logger.debug('Unstaging all files')
+  try {
+    await invoke('unstage_all', {
+      path: props.workspacePath
+    })
+    logger.info('All files unstaged', { count: stagedFiles.value.length })
+    message.success('已取消所有暂存')
+    await refreshGitStatus()
+  } catch (error) {
+    logger.error('Failed to unstage all files', error)
+    message.error(`取消暂存失败: ${error}`)
+  }
 }
 
 const handleDiscardFile = async (file) => {
-    logger.debug('Discarding file changes', { file: file.path })
-    try {
-        const index = unstagedFiles.value.findIndex(f => f.path === file.path)
-        if (index !== -1) {
-            unstagedFiles.value.splice(index, 1)
-        }
-        logger.info('File changes discarded', { file: file.path })
-        message.success(`已丢弃文件变更: ${file.path}`)
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Failed to discard file changes', { file: file.path, error })
-        message.error(`丢弃文件失败: ${error}`)
-    }
+  logger.debug('Discarding file changes', { file: file.path })
+  try {
+    await invoke('discard_file', {
+      path: props.workspacePath,
+      filePath: file.path
+    })
+    logger.info('File changes discarded', { file: file.path })
+    message.success(`已丢弃文件变更: ${file.path}`)
+    await refreshGitStatus()
+  } catch (error) {
+    logger.error('Failed to discard file changes', { file: file.path, error })
+    message.error(`丢弃文件失败: ${error}`)
+  }
+}
+
+const handleDiscardAll = async () => {
+  logger.debug('Discarding all changes')
+  try {
+    await invoke('discard_all', {
+      path: props.workspacePath
+    })
+    logger.info('All changes discarded')
+    message.success('已丢弃所有变更')
+    await refreshGitStatus()
+  } catch (error) {
+    logger.error('Failed to discard all changes', error)
+    message.error(`丢弃全部失败: ${error}`)
+  }
 }
 
 const handleCommit = async () => {
-    logger.debug('Preparing to commit', { message: commitForm.value.message })
-    if (!commitForm.value.message.trim()) {
-        logger.warn('Commit message is empty')
-        message.warning('请输入提交信息')
-        return
-    }
+  if (!commitForm.value.message.trim()) {
+    message.warning('请输入提交信息')
+    return
+  }
 
-    gitLoading.value.commit = true
-    try {
-        logger.info('Committing changes', { message: commitForm.value.message })
-        await invoke('git_commit', {
-            path: props.workspacePath,
-            message: commitForm.value.message
-        })
-        logger.info('Commit successful')
-        message.success('提交成功')
-        commitForm.value.message = ''
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Commit failed', { error })
-        message.error(`提交失败: ${error}`)
-    } finally {
-        gitLoading.value.commit = false
-    }
+  try {
+    await invoke('git_commit', {
+      path: props.workspacePath,
+      message: commitForm.value.message
+    })
+    message.success('提交成功')
+    commitForm.value.message = ''
+    await refreshGitStatus() // 确保调用
+  } catch (error) {
+    message.error(`提交失败: ${error}`)
+  }
 }
 
 const handlePull = async () => {
-    logger.debug('Pulling changes')
-    gitLoading.value.pull = true
-    try {
-        await invoke('git_pull', { path: props.workspacePath })
-        logger.info('Pull successful')
-        message.success('拉取成功')
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Pull failed', { error })
-        message.error(`拉取失败: ${error}`)
-    } finally {
-        gitLoading.value.pull = false
-    }
+  logger.debug('Pulling changes')
+  gitLoading.value.pull = true
+  try {
+    await invoke('git_pull', { path: props.workspacePath })
+    logger.info('Pull successful')
+    message.success('拉取成功')
+    refreshGitStatus()
+  } catch (error) {
+    logger.error('Pull failed', { error })
+    message.error(`拉取失败: ${error}`)
+  } finally {
+    gitLoading.value.pull = false
+  }
 }
 
 const handlePush = async () => {
-    logger.debug('Pushing changes')
-    gitLoading.value.push = true
-    try {
-        await invoke('git_push', { path: props.workspacePath })
-        logger.info('Push successful')
-        message.success('推送成功')
-    } catch (error) {
-        logger.error('Push failed', { error })
-        message.error(`推送失败: ${error}`)
-    } finally {
-        gitLoading.value.push = false
-    }
+  logger.debug('Pushing changes')
+  gitLoading.value.push = true
+  try {
+    await invoke('git_push', { path: props.workspacePath })
+    logger.info('Push successful')
+    message.success('推送成功')
+  } catch (error) {
+    logger.error('Push failed', { error })
+    message.error(`推送失败: ${error}`)
+  } finally {
+    gitLoading.value.push = false
+  }
 }
 
 const checkoutBranch = async (branchName) => {
-    logger.debug('Checking out branch', { branch: branchName })
-    expandedBranches.value.delete(branchName)
-    try {
-        await invoke('checkout_branch', {
-            path: props.workspacePath,
-            branch_name: branchName
-        })
-        logger.info('Branch checkout successful', { branch: branchName })
-        message.success(`已切换到分支 ${branchName}`)
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Branch checkout failed', { branch: branchName, error })
-        message.error(`切换分支失败: ${error}`)
-    }
+  logger.debug('Checking out branch', { branch: branchName })
+  try {
+    await invoke('checkout_branch', {
+      path: props.workspacePath,
+      branch_name: branchName
+    })
+    logger.info('Branch checkout successful', { branch: branchName })
+    message.success(`已切换到分支 ${branchName}`)
+    refreshGitStatus()
+  } catch (error) {
+    logger.error('Branch checkout failed', { branch: branchName, error })
+    message.error(`切换分支失败: ${error}`)
+  }
 }
 
 const handleCreateBranch = async () => {
-    logger.debug('Creating new branch', { name: newBranchName.value })
-    if (!newBranchName.value.trim()) {
-        logger.warn('New branch name is empty')
-        message.warning('请输入分支名称')
-        return
-    }
+  logger.debug('Creating new branch', { name: newBranchName.value })
+  if (!newBranchName.value.trim()) {
+    logger.warn('New branch name is empty')
+    message.warning('请输入分支名称')
+    return
+  }
 
-    try {
-        await invoke('create_branch', {
-            path: props.workspacePath,
-            branch_name: newBranchName.value
-        })
-        logger.info('Branch created', { name: newBranchName.value })
-        message.success(`已创建分支 ${newBranchName.value}`)
-        showCreateBranchModal.value = false
-        newBranchName.value = ''
-        refreshGitStatus()
-    } catch (error) {
-        logger.error('Failed to create branch', { name: newBranchName.value, error })
-        message.error(`创建分支失败: ${error}`)
-    }
-}
-
-const getRowClass = (row) => {
-    return `file-row file-status-${row.status.toLowerCase()}`
+  try {
+    await invoke('create_branch', {
+      path: props.workspacePath,
+      branch_name: newBranchName.value
+    })
+    logger.info('Branch created', { name: newBranchName.value })
+    message.success(`已创建分支 ${newBranchName.value}`)
+    showCreateBranchModal.value = false
+    newBranchName.value = ''
+    refreshGitStatus()
+  } catch (error) {
+    logger.error('Failed to create branch', { name: newBranchName.value, error })
+    message.error(`创建分支失败: ${error}`)
+  }
 }
 
 onMounted(() => {
-    logger.debug('Component mounted')
-    refreshGitStatus()
+  logger.debug('Component mounted')
+  refreshGitStatus()
 })
 
 defineExpose({
-    open
+  open
 })
 </script>
 
 <style>
 /* 全局样式 - 浅色主题 */
 :root {
-    --bg-color: #f8f9fa;
-    --text-color: #212529;
-    --text-color-secondary: #6c757d;
-    --divider-color: #dee2e6;
-    --hover-color: rgba(0, 0, 0, 0.05);
-    --graph-bg: #e9ecef;
-    --added-bg: rgba(40, 167, 69, 0.1);
-    --modified-bg: rgba(255, 193, 7, 0.1);
-    --deleted-bg: rgba(220, 53, 69, 0.1);
-    --current-branch-bg: rgba(40, 167, 69, 0.15);
-    --card-bg: #ffffff;
-    --input-bg: #ffffff;
+  --bg-color: #f8f9fa;
+  --text-color: #212529;
+  --text-color-secondary: #6c757d;
+  --divider-color: #dee2e6;
+  --hover-color: rgba(0, 0, 0, 0.05);
+  --graph-bg: #e9ecef;
+  --added-bg: rgba(40, 167, 69, 0.1);
+  --modified-bg: rgba(255, 193, 7, 0.1);
+  --deleted-bg: rgba(220, 53, 69, 0.1);
+  --current-branch-bg: rgba(40, 167, 69, 0.15);
+  --card-bg: #ffffff;
+  --input-bg: #ffffff;
+  --sidebar-bg: #f3f3f3;
+  --sidebar-width: 280px;
 }
 
 .n-card {
-    background-color: var(--card-bg);
-    border: 1px solid var(--divider-color);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background-color: var(--card-bg);
+  border: 1px solid var(--divider-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .n-modal {
-    background-color: var(--bg-color);
+  background-color: var(--bg-color);
 }
 
 .n-list-item {
-    background-color: transparent;
+  background-color: transparent;
 }
 
 .n-tabs .n-tabs-pane-wrapper {
-    background-color: var(--bg-color);
+  background-color: var(--bg-color);
 }
 
 .n-input,
 .n-textarea {
-    background-color: var(--input-bg);
+  background-color: var(--input-bg);
 }
 
 /* 表格样式 */
 .n-data-table {
-    background-color: var(--card-bg);
+  background-color: var(--card-bg);
 }
 
 .n-data-table .n-data-table-tr:hover {
-    background-color: var(--hover-color);
+  background-color: var(--hover-color);
 }
 
 /* 分支列表样式 */
 .branch-list {
-    background-color: var(--graph-bg);
+  background-color: var(--graph-bg);
 }
 
 .current-branch {
-    background-color: var(--current-branch-bg);
+  background-color: var(--current-branch-bg);
 }
 
 /* 提交列表样式 */
 .commit-list .n-list-item:hover {
-    background-color: var(--hover-color);
+  background-color: var(--hover-color);
 }
 
 .selected-commit {
-    background-color: var(--current-branch-bg);
+  background-color: var(--current-branch-bg);
 }
 
 /* 差异查看器样式 */
 .diff-content {
-    background-color: var(--card-bg);
-    padding: 8px;
-    border-radius: 4px;
+  font-family: 'Maple Mono NF CN', monospace;
+  font-size: 14px;
+  white-space: pre-wrap;
+  margin: 0;
+  padding: 8px;
+  background-color: var(--card-bg);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+/* 差异高亮样式 */
+.diff-added {
+  color: #22863a;
+  background-color: rgba(46, 160, 67, 0.1);
+}
+
+.diff-removed {
+  color: #cb2431;
+  background-color: rgba(203, 36, 49, 0.1);
+}
+
+.diff-header {
+  color: #6a737d;
+  font-weight: bold;
 }
 
 /* 按钮样式 */
 .n-button {
-    transition: all 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .n-button:hover {
-    transform: translateY(-1px);
+  transform: translateY(-1px);
 }
 
 /* 模态框动画 */
 .gitkraken-modal-enter-active,
 .gitkraken-modal-leave-active {
-    transition: all 0.3s ease;
+  transition: all 0.3s ease;
 }
 
 .gitkraken-modal-enter-from,
 .gitkraken-modal-leave-to {
-    opacity: 0;
-    transform: translateY(20px);
+  opacity: 0;
+  transform: translateY(20px);
 }
 </style>
 
 <style scoped>
 .gitkraken-modal {
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .gitkraken-container {
-    display: flex;
-    height: 100%;
-    background-color: var(--bg-color);
-    color: var(--text-color);
+  display: flex;
+  height: 100%;
+  background-color: var(--bg-color);
+  color: var(--text-color);
 }
 
-.git-graph {
-    width: 300px;
-    border-right: 1px solid var(--divider-color);
-    overflow-y: auto;
-    padding: 16px;
-    background-color: var(--graph-bg);
+.git-sidebar {
+  width: var(--sidebar-width);
+  border-right: 1px solid var(--divider-color);
+  display: flex;
+  flex-direction: column;
+  background-color: var(--sidebar-bg);
+  height: 100%;
 }
 
-.git-operations {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+.source-control-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
 }
 
-.git-toolbar {
-    padding: 12px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid var(--divider-color);
-    background-color: var(--card-bg);
+.commit-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
 }
 
-.file-changes {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    background-color: var(--bg-color);
+.changes-section {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.commits-section {
+  border-top: 1px solid var(--divider-color);
+}
+
+.git-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-viewer {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .diff-viewer,
 .commit-details {
-    background-color: var(--card-bg);
-    margin: 12px;
-    border-radius: 6px;
+  flex: 1;
+  overflow: hidden;
 }
 
-.commit-area {
-    padding: 12px;
-    border-top: 1px solid var(--divider-color);
-    background-color: var(--card-bg);
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
 }
 
 .file-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .file-icon {
-    color: var(--text-color-secondary);
+  color: var(--text-color-secondary);
 }
 
 .file-path {
-    color: var(--text-color);
+  color: var(--text-color);
 }
 
 .file-actions {
-    display: flex;
-    gap: 4px;
+  display: flex;
+  gap: 4px;
 }
 
 .file-row:hover {
-    background-color: var(--hover-color);
+  background-color: var(--hover-color);
 }
 
 .file-status-a {
-    background-color: var(--added-bg);
+  background-color: var(--added-bg);
 }
 
 .file-status-m {
-    background-color: var(--modified-bg);
+  background-color: var(--modified-bg);
 }
 
 .file-status-d {
-    background-color: var(--deleted-bg);
+  background-color: var(--deleted-bg);
 }
 
 .commit-list {
-    margin-left: 24px;
-    border-left: 1px solid var(--divider-color);
-    padding-left: 8px;
+  margin-left: 24px;
+  border-left: 1px solid var(--divider-color);
+  padding-left: 8px;
 }
 
 .commit-list .n-list-item {
-    padding: 8px;
-    margin: 4px 0;
-    border-radius: 4px;
+  padding: 8px;
+  margin: 4px 0;
+  border-radius: 4px;
 }
 
 .commit-meta {
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--divider-color);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--divider-color);
 }
 
 .commit-message {
-    white-space: pre-wrap;
-    font-family: 'Maple Mono NF CN', monospace;
-    font-size: 14px;
-    margin-top: 8px;
-    color: var(--text-color);
+  white-space: pre-wrap;
+  font-family: 'Maple Mono NF CN', monospace;
+  font-size: 14px;
+  margin-top: 8px;
+  color: var(--text-color);
 }
 
-.diff-content {
-    font-family: 'Maple Mono NF CN', monospace;
-    white-space: pre-wrap;
-    font-size: 14px;
-    color: var(--text-color);
+.commit-diff {
+  margin-top: 16px;
+}
+
+.n-collapse-item .n-collapse-item__header {
+  padding: 4px 12px;
+}
+
+.n-collapse-item .n-collapse-item__content-inner {
+  padding: 4px 0;
+}
+
+.n-list-item {
+  padding: 4px 12px;
+}
+
+.n-list-item:hover {
+  background-color: var(--hover-color);
 }
 </style>

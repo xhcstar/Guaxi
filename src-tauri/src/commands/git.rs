@@ -1,6 +1,7 @@
 use git2::{
-    build::CheckoutBuilder, BranchType, DiffFormat, DiffOptions, FetchOptions, PushOptions,
-    RemoteCallbacks, Repository, StatusOptions, StatusShow, RepositoryOpenFlags
+    build::CheckoutBuilder, BranchType, DiffFormat, DiffOptions, FetchOptions, Index, IndexEntry,
+    ObjectType, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags, StatusOptions,
+    StatusShow, TreeEntry,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -47,10 +48,11 @@ pub fn get_git_root(path: String) -> Result<String, String> {
     // 使用 NO_SEARCH 标志禁止向上查找父目录
     let repo = Repository::open_ext(
         &path,
-        RepositoryOpenFlags::NO_SEARCH,  // 关键标志，禁止向上查找
-        Vec::<&Path>::new()             // 不需要额外的 git 目录
-    ).map_err(|e| format!("Failed to open repository: {}", e))?;
-    
+        RepositoryOpenFlags::NO_SEARCH, // 关键标志，禁止向上查找
+        Vec::<&Path>::new(),            // 不需要额外的 git 目录
+    )
+    .map_err(|e| format!("Failed to open repository: {}", e))?;
+
     repo.workdir()
         .ok_or("Bare repository has no working directory".to_string())?
         .to_str()
@@ -60,48 +62,45 @@ pub fn get_git_root(path: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
-    // 同样使用 NO_SEARCH 标志
-    let repo = Repository::open_ext(
-        &path,
-        RepositoryOpenFlags::NO_SEARCH,
-        Vec::<&Path>::new()
-    ).map_err(|e| format!("Failed to open repository: {}", e))?;
- 
+    let repo = Repository::open_ext(&path, RepositoryOpenFlags::NO_SEARCH, Vec::<&Path>::new())
+        .map_err(|e| format!("Failed to open repository: {}", e))?;
+
     let mut options = StatusOptions::new();
     options.include_untracked(true);
     options.recurse_untracked_dirs(true);
     options.show(StatusShow::IndexAndWorkdir);
 
-    let statuses = repo
-        .statuses(Some(&mut options))
+    let statuses = repo.statuses(Some(&mut options))
         .map_err(|e| format!("Failed to get statuses: {}", e))?;
 
     let mut changes = Vec::new();
 
     for entry in statuses.iter() {
         let path = match entry.path() {
-            Some(p) => Path::new(p).to_str().unwrap_or("").to_string(),
+            Some(p) => p.to_string(),
             None => continue,
         };
 
-        let status = match entry.status() {
-            s if s.is_index_new() => "A",
-            s if s.is_index_modified() => "M",
-            s if s.is_index_deleted() => "D",
-            s if s.is_wt_new() => "?",
-            s if s.is_wt_modified() => "M",
-            s if s.is_wt_deleted() => "D",
-            _ => " ",
-        }
-        .to_string();
-
-        let diff = match get_file_diff_safe(&repo, &path) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("Failed to get diff for {}: {}", path, e);
-                String::new()
-            }
-        };
+        // 更精确的状态判断
+        let status = if entry.status().is_index_new() {
+            "A" // 已暂存的新文件
+        } else if entry.status().is_index_modified() {
+            "M" // 已暂存的修改
+        } else if entry.status().is_index_deleted() {
+            "D" // 已暂存的删除
+        } else if entry.status().is_wt_new() {
+            "?" // 未跟踪文件
+        } else if entry.status().is_wt_modified() {
+            "M" // 工作区修改但未暂存
+        } else if entry.status().is_wt_deleted() {
+            "D" // 工作区删除但未暂存
+        } else if entry.status().is_wt_renamed() {
+            "R" // 重命名
+        } else if entry.status().is_wt_typechange() {
+            "T" // 类型变更
+        } else {
+            " " // 其他状态
+        }.to_string();
 
         changes.push(GitChange {
             path,
@@ -109,48 +108,11 @@ pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
             lines_added: Vec::new(),
             lines_modified: Vec::new(),
             lines_deleted: Vec::new(),
-            diff,
+            diff: String::new(),
         });
     }
 
     Ok(changes)
-}
-
-fn get_file_diff_safe(repo: &Repository, path: &str) -> Result<String, String> {
-    let head = match repo.head() {
-        Ok(h) => h,
-        Err(_) => return Ok(String::new()),
-    };
-
-    let head_tree = match head.peel_to_tree() {
-        Ok(t) => t,
-        Err(_) => return Ok(String::new()),
-    };
-
-    let mut diff_opts = DiffOptions::new();
-    diff_opts.context_lines(3);
-    diff_opts.pathspec(path);
-
-    let diff = repo
-        .diff_tree_to_workdir(Some(&head_tree), Some(&mut diff_opts))
-        .map_err(|e| format!("Diff error: {}", e))?;
-
-    let mut output = String::new();
-    diff.print(DiffFormat::Patch, |_, _, line| {
-        if let Ok(content) = std::str::from_utf8(line.content()) {
-            output.push_str(content);
-        }
-        true
-    })
-    .map_err(|e| format!("Diff print error: {}", e))?;
-
-    Ok(output)
-}
-
-#[tauri::command]
-pub fn get_file_diff(path: String, file_path: String) -> Result<String, String> {
-    let repo = Repository::discover(&path).map_err(|e| e.to_string())?;
-    get_file_diff_safe(&repo, &file_path)
 }
 
 #[tauri::command]
@@ -598,4 +560,297 @@ pub fn get_git_log(path: String, branch_name: String) -> Result<Vec<GitCommit>, 
     }
 
     Ok(commits)
+}
+
+#[tauri::command]
+pub fn stage_file(path: String, file_path: String) -> Result<(), String> {
+    info!("Staging file: {} in path: {}", file_path, path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let mut index = repo.index().map_err(|e| {
+        error!("Failed to get index: {}", e);
+        e.to_string()
+    })?;
+
+    index.add_path(Path::new(&file_path)).map_err(|e| {
+        error!("Failed to add path to index: {}", e);
+        e.to_string()
+    })?;
+
+    index.write().map_err(|e| {
+        error!("Failed to write index: {}", e);
+        e.to_string()
+    })?;
+
+    info!("File staged successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stage_all(path: String) -> Result<(), String> {
+    info!("Staging all changes in path: {}", path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let mut index = repo.index().map_err(|e| {
+        error!("Failed to get index: {}", e);
+        e.to_string()
+    })?;
+
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .map_err(|e| {
+            error!("Failed to add all to index: {}", e);
+            e.to_string()
+        })?;
+
+    index.write().map_err(|e| {
+        error!("Failed to write index: {}", e);
+        e.to_string()
+    })?;
+
+    info!("All changes staged successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unstage_file(path: String, file_path: String) -> Result<(), String> {
+    info!("Unstaging file: {} in path: {}", file_path, path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let head = repo.head().map_err(|e| {
+        error!("Failed to get HEAD: {}", e);
+        e.to_string()
+    })?;
+
+    let head_tree = head.peel_to_tree().map_err(|e| {
+        error!("Failed to peel to tree: {}", e);
+        e.to_string()
+    })?;
+
+    let mut index = repo.index().map_err(|e| {
+        error!("Failed to get index: {}", e);
+        e.to_string()
+    })?;
+
+    // 1. 从索引中移除文件
+    index.remove_path(Path::new(&file_path)).map_err(|e| {
+        error!("Failed to remove path from index: {}", e);
+        e.to_string()
+    })?;
+
+    // 2. 检查HEAD中是否有这个文件
+    if let Ok(entry) = head_tree.get_path(Path::new(&file_path)) {
+        if entry.kind() != Some(ObjectType::Tree) {
+            // 3. 如果HEAD中有这个文件，将其添加到索引中
+            let obj = repo.find_object(entry.id(), None).map_err(|e| {
+                error!("Failed to find object: {}", e);
+                e.to_string()
+            })?;
+
+            // 手动构造 IndexEntry
+            let mut index_entry = IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: entry.filemode() as u32, // 修复类型转换
+                uid: 0,
+                gid: 0,
+                file_size: 0,
+                id: entry.id(),
+                flags: 0,
+                flags_extended: 0,
+                path: file_path.as_bytes().to_vec(),
+            };
+
+            index.add(&index_entry).map_err(|e| {
+                error!("Failed to add entry to index: {}", e);
+                e.to_string()
+            })?;
+        }
+    }
+
+    // 4. 写入索引
+    index.write().map_err(|e| {
+        error!("Failed to write index: {}", e);
+        e.to_string()
+    })?;
+
+    info!("File unstaged successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unstage_all(path: String) -> Result<(), String> {
+    info!("Unstaging all changes in path: {}", path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let head = repo.head().map_err(|e| {
+        error!("Failed to get HEAD: {}", e);
+        e.to_string()
+    })?;
+
+    let head_tree = head.peel_to_tree().map_err(|e| {
+        error!("Failed to peel to tree: {}", e);
+        e.to_string()
+    })?;
+
+    let mut index = repo.index().map_err(|e| {
+        error!("Failed to get index: {}", e);
+        e.to_string()
+    })?;
+
+    // 重置整个索引到 HEAD
+    index.read_tree(&head_tree).map_err(|e| {
+        error!("Failed to read tree into index: {}", e);
+        e.to_string()
+    })?;
+
+    index.write().map_err(|e| {
+        error!("Failed to write index: {}", e);
+        e.to_string()
+    })?;
+
+    info!("All changes unstaged successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn discard_file(path: String, file_path: String) -> Result<(), String> {
+    info!(
+        "Discarding changes for file: {} in path: {}",
+        file_path, path
+    );
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let head = repo.head().map_err(|e| {
+        error!("Failed to get HEAD: {}", e);
+        e.to_string()
+    })?;
+
+    let head_tree = head.peel_to_tree().map_err(|e| {
+        error!("Failed to peel to tree: {}", e);
+        e.to_string()
+    })?;
+
+    let mut checkout_builder = CheckoutBuilder::new();
+    checkout_builder.path(Path::new(&file_path));
+    checkout_builder.force();
+
+    repo.checkout_tree(head_tree.as_object(), Some(&mut checkout_builder))
+        .map_err(|e| {
+            error!("Failed to checkout tree: {}", e);
+            e.to_string()
+        })?;
+
+    info!("File changes discarded successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn discard_all(path: String) -> Result<(), String> {
+    info!("Discarding all changes in path: {}", path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let mut checkout_builder = CheckoutBuilder::new();
+    checkout_builder.force();
+
+    repo.checkout_head(Some(&mut checkout_builder))
+        .map_err(|e| {
+            error!("Failed to checkout HEAD: {}", e);
+            e.to_string()
+        })?;
+
+    info!("All changes discarded successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_commit_diff(path: String, commit_id: String) -> Result<String, String> {
+    info!("Getting diff for commit: {} in path: {}", commit_id, path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let commit = repo
+        .find_commit(git2::Oid::from_str(&commit_id).map_err(|e| {
+            error!("Failed to parse commit ID: {}", e);
+            e.to_string()
+        })?)
+        .map_err(|e| {
+            error!("Failed to find commit: {}", e);
+            e.to_string()
+        })?;
+
+    // 获取父提交（如果有）
+    let parent = if commit.parent_count() > 0 {
+        Some(commit.parent(0).map_err(|e| {
+            error!("Failed to get parent commit: {}", e);
+            e.to_string()
+        })?)
+    } else {
+        None
+    };
+
+    // 获取父提交的树对象
+    let parent_tree = parent.as_ref().and_then(|p| p.tree().ok());
+
+    // 获取当前提交的树对象
+    let commit_tree = commit.tree().map_err(|e| {
+        error!("Failed to get commit tree: {}", e);
+        e.to_string()
+    })?;
+
+    // 设置差异选项
+    let mut diff_options = DiffOptions::new();
+    diff_options.context_lines(3); // 显示3行上下文
+    diff_options.show_binary(true); // 显示二进制文件差异
+    diff_options.include_untracked(true); // 包含未跟踪文件
+
+    // 生成差异
+    let diff = repo
+        .diff_tree_to_tree(
+            parent_tree.as_ref(),
+            Some(&commit_tree),
+            Some(&mut diff_options),
+        )
+        .map_err(|e| {
+            error!("Failed to generate diff: {}", e);
+            e.to_string()
+        })?;
+
+    // 格式化差异输出
+    let mut output = String::new();
+    diff.print(DiffFormat::Patch, |_, _, line| {
+        if let Ok(content) = std::str::from_utf8(line.content()) {
+            output.push_str(content);
+        }
+        true
+    })
+    .map_err(|e| {
+        error!("Failed to print diff: {}", e);
+        e.to_string()
+    })?;
+
+    info!("Successfully generated diff for commit: {}", commit_id);
+    Ok(output)
 }
