@@ -24,6 +24,7 @@ pub struct GitChange {
     lines_modified: Vec<u32>,
     lines_deleted: Vec<u32>,
     diff: String,
+    staged: bool, // 新增字段，表示是否已暂存
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,15 +63,16 @@ pub fn get_git_root(path: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
-    let repo = Repository::open_ext(&path, RepositoryOpenFlags::NO_SEARCH, Vec::<&Path>::new())
-        .map_err(|e| format!("Failed to open repository: {}", e))?;
+    let repo =
+        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
     let mut options = StatusOptions::new();
     options.include_untracked(true);
     options.recurse_untracked_dirs(true);
     options.show(StatusShow::IndexAndWorkdir);
 
-    let statuses = repo.statuses(Some(&mut options))
+    let statuses = repo
+        .statuses(Some(&mut options))
         .map_err(|e| format!("Failed to get statuses: {}", e))?;
 
     let mut changes = Vec::new();
@@ -82,33 +84,34 @@ pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
         };
 
         // 更精确的状态判断
-        let status = if entry.status().is_index_new() {
-            "A" // 已暂存的新文件
+        let (status, staged) = if entry.status().is_index_new() {
+            ("A", true) // 已暂存的新文件
         } else if entry.status().is_index_modified() {
-            "M" // 已暂存的修改
+            ("M", true) // 已暂存的修改
         } else if entry.status().is_index_deleted() {
-            "D" // 已暂存的删除
+            ("D", true) // 已暂存的删除
         } else if entry.status().is_wt_new() {
-            "?" // 未跟踪文件
+            ("?", false) // 未跟踪文件
         } else if entry.status().is_wt_modified() {
-            "M" // 工作区修改但未暂存
+            ("M", false) // 工作区修改但未暂存
         } else if entry.status().is_wt_deleted() {
-            "D" // 工作区删除但未暂存
+            ("D", false) // 工作区删除但未暂存
         } else if entry.status().is_wt_renamed() {
-            "R" // 重命名
+            ("R", false) // 重命名
         } else if entry.status().is_wt_typechange() {
-            "T" // 类型变更
+            ("T", false) // 类型变更
         } else {
-            " " // 其他状态
-        }.to_string();
+            (" ", false) // 其他状态
+        };
 
         changes.push(GitChange {
             path,
-            status,
+            status: status.to_string(),
             lines_added: Vec::new(),
             lines_modified: Vec::new(),
             lines_deleted: Vec::new(),
             diff: String::new(),
+            staged, // 添加 staged 字段
         });
     }
 
@@ -525,8 +528,70 @@ pub fn get_staged_files(path: String) -> Result<Vec<GitChange>, String> {
             lines_modified: Vec::new(),
             lines_deleted: Vec::new(),
             diff: String::new(),
+            staged: true, // 添加 staged 字段并设置为 true
         })
         .collect())
+}
+
+#[tauri::command]
+pub fn unstage_file(path: String, file_path: String) -> Result<(), String> {
+    let repo =
+        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    // 获取HEAD提交
+    let head = repo
+        .head()
+        .map_err(|e| format!("Failed to get HEAD: {}", e))?;
+    let head_commit = head
+        .peel_to_commit()
+        .map_err(|e| format!("Failed to peel to commit: {}", e))?;
+    let head_tree = head_commit
+        .tree()
+        .map_err(|e| format!("Failed to get tree: {}", e))?;
+
+    let mut index = repo
+        .index()
+        .map_err(|e| format!("Failed to get index: {}", e))?;
+
+    // 从索引中移除文件
+    index
+        .remove_path(Path::new(&file_path))
+        .map_err(|e| format!("Failed to remove path from index: {}", e))?;
+
+    // 如果文件在HEAD中存在，则恢复到HEAD版本
+    if let Ok(entry) = head_tree.get_path(Path::new(&file_path)) {
+        // 创建 IndexEntry
+        let mut index_entry = IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: entry.filemode() as u32,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: entry.id(),
+            flags: 0,
+            flags_extended: 0,
+            path: file_path.as_bytes().to_vec(),
+        };
+
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|e| format!("Failed to find blob: {}", e))?;
+
+        // 使用正确的 IndexEntry 参数
+        index
+            .add_frombuffer(&index_entry, blob.content())
+            .map_err(|e| format!("Failed to add from buffer: {}", e))?;
+    }
+
+    // 写入索引
+    index
+        .write()
+        .map_err(|e| format!("Failed to write index: {}", e))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -564,28 +629,23 @@ pub fn get_git_log(path: String, branch_name: String) -> Result<Vec<GitCommit>, 
 
 #[tauri::command]
 pub fn stage_file(path: String, file_path: String) -> Result<(), String> {
-    info!("Staging file: {} in path: {}", file_path, path);
-    let repo = Repository::discover(&path).map_err(|e| {
-        error!("Failed to discover repository: {}", e);
-        e.to_string()
-    })?;
+    let repo =
+        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
-    let mut index = repo.index().map_err(|e| {
-        error!("Failed to get index: {}", e);
-        e.to_string()
-    })?;
+    let mut index = repo
+        .index()
+        .map_err(|e| format!("Failed to get index: {}", e))?;
 
-    index.add_path(Path::new(&file_path)).map_err(|e| {
-        error!("Failed to add path to index: {}", e);
-        e.to_string()
-    })?;
+    // 添加文件到索引
+    index
+        .add_path(Path::new(&file_path))
+        .map_err(|e| format!("Failed to add path to index: {}", e))?;
 
-    index.write().map_err(|e| {
-        error!("Failed to write index: {}", e);
-        e.to_string()
-    })?;
+    // 写入索引
+    index
+        .write()
+        .map_err(|e| format!("Failed to write index: {}", e))?;
 
-    info!("File staged successfully");
     Ok(())
 }
 
@@ -615,77 +675,6 @@ pub fn stage_all(path: String) -> Result<(), String> {
     })?;
 
     info!("All changes staged successfully");
-    Ok(())
-}
-
-#[tauri::command]
-pub fn unstage_file(path: String, file_path: String) -> Result<(), String> {
-    info!("Unstaging file: {} in path: {}", file_path, path);
-    let repo = Repository::discover(&path).map_err(|e| {
-        error!("Failed to discover repository: {}", e);
-        e.to_string()
-    })?;
-
-    let head = repo.head().map_err(|e| {
-        error!("Failed to get HEAD: {}", e);
-        e.to_string()
-    })?;
-
-    let head_tree = head.peel_to_tree().map_err(|e| {
-        error!("Failed to peel to tree: {}", e);
-        e.to_string()
-    })?;
-
-    let mut index = repo.index().map_err(|e| {
-        error!("Failed to get index: {}", e);
-        e.to_string()
-    })?;
-
-    // 1. 从索引中移除文件
-    index.remove_path(Path::new(&file_path)).map_err(|e| {
-        error!("Failed to remove path from index: {}", e);
-        e.to_string()
-    })?;
-
-    // 2. 检查HEAD中是否有这个文件
-    if let Ok(entry) = head_tree.get_path(Path::new(&file_path)) {
-        if entry.kind() != Some(ObjectType::Tree) {
-            // 3. 如果HEAD中有这个文件，将其添加到索引中
-            let obj = repo.find_object(entry.id(), None).map_err(|e| {
-                error!("Failed to find object: {}", e);
-                e.to_string()
-            })?;
-
-            // 手动构造 IndexEntry
-            let mut index_entry = IndexEntry {
-                ctime: git2::IndexTime::new(0, 0),
-                mtime: git2::IndexTime::new(0, 0),
-                dev: 0,
-                ino: 0,
-                mode: entry.filemode() as u32, // 修复类型转换
-                uid: 0,
-                gid: 0,
-                file_size: 0,
-                id: entry.id(),
-                flags: 0,
-                flags_extended: 0,
-                path: file_path.as_bytes().to_vec(),
-            };
-
-            index.add(&index_entry).map_err(|e| {
-                error!("Failed to add entry to index: {}", e);
-                e.to_string()
-            })?;
-        }
-    }
-
-    // 4. 写入索引
-    index.write().map_err(|e| {
-        error!("Failed to write index: {}", e);
-        e.to_string()
-    })?;
-
-    info!("File unstaged successfully");
     Ok(())
 }
 

@@ -403,36 +403,19 @@ const refreshGitStatus = async () => {
     const newStagedFiles = []
     const newUnstagedFiles = []
 
-    // 智能合并策略
+    // 根据后端返回的 staged 字段正确分类文件
     statuses.forEach(file => {
-      // 检查是否已存在于当前状态中（保留diff等状态）
-      const existingFile = [...stagedFiles.value, ...unstagedFiles.value]
-        .find(f => f.path === file.path)
-
       const fileData = {
         path: file.path,
         status: file.status,
-        diff: existingFile?.diff || file.diff || '',
-        staged: file.staged || ['A', 'M', 'D'].includes(file.status)
+        diff: file.diff || '',
+        staged: file.staged // 使用后端返回的 staged 状态
       }
 
       if (fileData.staged) {
         newStagedFiles.push(fileData)
       } else {
         newUnstagedFiles.push(fileData)
-      }
-    })
-
-    // 保留正在处理中的文件
-    stagedFiles.value.forEach(file => {
-      if (file.__pending && !newStagedFiles.some(f => f.path === file.path)) {
-        newStagedFiles.push(file)
-      }
-    })
-
-    unstagedFiles.value.forEach(file => {
-      if (file.__pending && !newUnstagedFiles.some(f => f.path === file.path)) {
-        newUnstagedFiles.push(file)
       }
     })
 
