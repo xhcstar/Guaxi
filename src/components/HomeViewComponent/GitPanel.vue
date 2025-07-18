@@ -441,9 +441,26 @@ const refreshGitStatus = async () => {
     unstagedFiles.value = newUnstagedFiles
 
     selectedFile.value = null
+
+    // 添加获取提交历史的调用
+    await loadCommitHistory()
   } catch (error) {
     logger.error('Failed to refresh Git status', error)
     message.error(`获取Git状态失败: ${error}`)
+  }
+}
+
+const loadCommitHistory = async () => {
+  try {
+    const currentBranch = await invoke('get_current_branch', { path: props.workspacePath })
+    commits.value = await invoke('get_git_log', {
+      path: props.workspacePath,
+      branchName: currentBranch
+    })
+    logger.debug('Commit history loaded', { count: commits.value.length })
+  } catch (error) {
+    logger.error('Failed to load commit history', error)
+    message.error(`获取提交历史失败: ${error}`)
   }
 }
 
