@@ -59,7 +59,9 @@
     <div v-show="selectedFile && mode === 'preview'" v-html="renderedHtml" class="preview" ref="previewContainer">
     </div>
     <!-- 添加 GitPanel 组件 -->
+    <!--
     <GitPanel ref="gitPanel" :workspace-path="fileTreeStore.activeRepoPath" />
+    -->
   </div>
 </template>
 
@@ -90,6 +92,7 @@ import { useOutlineStore } from '../../stores/outlineStore'
 import { GitBranchOutline } from '@vicons/ionicons5'
 import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
+import { invoke } from '@tauri-apps/api/core'
 
 const outlineStore = useOutlineStore()
 // 添加 GitPanel 组件引用
@@ -379,9 +382,25 @@ const updateGitDecorations = async () => {
 }
 
 // 切换 Git 面板
-const toggleGitPanel = () => {
+const toggleGitPanel = async () => {
   if (gitPanel.value) {
     gitPanel.value.open() // 调用子组件暴露的 open 方法
+  }
+
+  const windowLabel = `git-${Date.now()}` // 唯一窗口标识
+  const windowTitle = `${fileTreeStore.activeRepoPath || '未命名文件'}` // 使用不带后缀的文件名
+
+  console.log('打开 Git 窗口:', windowLabel, windowTitle)
+  console.log('workspace_path:', fileTreeStore.activeRepoPath)
+  try {
+    await invoke('create_git_window', {
+      label: windowLabel,
+      title: windowTitle,
+      workspacePath: fileTreeStore.activeRepoPath,
+    })
+  } catch (error) {
+    console.error('创建窗口失败:', error)
+    alert(`无法打开文件: ${error.message || '未知错误'}`)
   }
 }
 

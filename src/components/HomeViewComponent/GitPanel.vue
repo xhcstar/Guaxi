@@ -297,7 +297,7 @@ import {
   GitCommitOutline
 } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
-import { useMessage } from 'naive-ui'
+// import { useMessage } from 'naive-ui'
 
 // 日志级别枚举
 const LogLevel = {
@@ -341,7 +341,7 @@ const props = defineProps({
   }
 })
 
-const message = useMessage()
+// const message = useMessage()
 
 // 控制显示状态
 const visible = ref(false)
@@ -429,7 +429,7 @@ const refreshGitStatus = async () => {
     await loadCommitHistory()
   } catch (error) {
     logger.error('Failed to refresh Git status', error)
-    message.error(`获取Git状态失败: ${error}`)
+    // // message.error(`获取Git状态失败: ${error}`)
   }
 }
 
@@ -443,7 +443,7 @@ const loadCommitHistory = async () => {
     logger.debug('Commit history loaded', { count: commits.value.length })
   } catch (error) {
     logger.error('Failed to load commit history', error)
-    message.error(`获取提交历史失败: ${error}`)
+    // // message.error(`获取提交历史失败: ${error}`)
   }
 }
 
@@ -468,7 +468,7 @@ const selectCommit = async (commit) => {
     logger.debug('Commit diff loaded', { commit: commit.id })
   } catch (error) {
     logger.error('Failed to load commit diff', { commit: commit.id, error })
-    message.error(`获取提交差异失败: ${error}`)
+    // // message.error(`获取提交差异失败: ${error}`)
   }
 }
 
@@ -508,7 +508,7 @@ const handleFileClick = async (row) => {
     }
   } catch (error) {
     logger.error('Failed to load file content', { file: row.path, error })
-    message.error(`获取文件内容失败: ${error}`)
+    // // message.error(`获取文件内容失败: ${error}`)
   }
 }
 
@@ -535,7 +535,7 @@ const handleStageFile = async (file) => {
       filePath: file.path
     })
 
-    message.success(`已暂存文件: ${file.path}`)
+    // // message.success(`已暂存文件: ${file.path}`)
 
     // 4. 更新文件状态为已完成
     const stagedIndex = stagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
@@ -572,7 +572,7 @@ const handleStageFile = async (file) => {
         __pending: undefined
       })
     }
-    message.error(`暂存文件失败: ${error}`)
+    // // message.error(`暂存文件失败: ${error}`)
   }
 }
 
@@ -632,7 +632,7 @@ const handleUnstageFile = async (file) => {
         __pending: undefined
       })
     }
-    message.error(`取消暂存失败: ${error}`)
+    // // message.error(`取消暂存失败: ${error}`)
   }
 }
 
@@ -643,11 +643,11 @@ const handleStageAll = async () => {
       path: props.workspacePath
     })
     logger.info('All files staged', { count: unstagedFiles.value.length })
-    message.success('已暂存所有变更')
+    // // message.success('已暂存所有变更')
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to stage all files', error)
-    message.error(`暂存全部失败: ${error}`)
+    // // message.error(`暂存全部失败: ${error}`)
   }
 }
 
@@ -658,11 +658,11 @@ const handleUnstageAll = async () => {
       path: props.workspacePath
     })
     logger.info('All files unstaged', { count: stagedFiles.value.length })
-    message.success('已取消所有暂存')
+    // message.success('已取消所有暂存')
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to unstage all files', error)
-    message.error(`取消暂存失败: ${error}`)
+    // message.error(`取消暂存失败: ${error}`)
   }
 }
 
@@ -674,11 +674,11 @@ const handleDiscardFile = async (file) => {
       filePath: file.path
     })
     logger.info('File changes discarded', { file: file.path })
-    message.success(`已丢弃文件变更: ${file.path}`)
+    // message.success(`已丢弃文件变更: ${file.path}`)
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to discard file changes', { file: file.path, error })
-    message.error(`丢弃文件失败: ${error}`)
+    // message.error(`丢弃文件失败: ${error}`)
   }
 }
 
@@ -689,17 +689,17 @@ const handleDiscardAll = async () => {
       path: props.workspacePath
     })
     logger.info('All changes discarded')
-    message.success('已丢弃所有变更')
+    // message.success('已丢弃所有变更')
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to discard all changes', error)
-    message.error(`丢弃全部失败: ${error}`)
+    // message.error(`丢弃全部失败: ${error}`)
   }
 }
 
 const handleCommit = async () => {
   if (!commitForm.value.message.trim()) {
-    message.warning('请输入提交信息')
+    // message.warning('请输入提交信息')
     return
   }
 
@@ -708,11 +708,11 @@ const handleCommit = async () => {
       path: props.workspacePath,
       message: commitForm.value.message
     })
-    message.success('提交成功')
+    // message.success('提交成功')
     commitForm.value.message = ''
     await refreshGitStatus() // 确保调用
   } catch (error) {
-    message.error(`提交失败: ${error}`)
+    // message.error(`提交失败: ${error}`)
   }
 }
 
@@ -722,11 +722,11 @@ const handlePull = async () => {
   try {
     await invoke('git_pull', { path: props.workspacePath })
     logger.info('Pull successful')
-    message.success('拉取成功')
+    // message.success('拉取成功')
     refreshGitStatus()
   } catch (error) {
     logger.error('Pull failed', { error })
-    message.error(`拉取失败: ${error}`)
+    // message.error(`拉取失败: ${error}`)
   } finally {
     gitLoading.value.pull = false
   }
@@ -738,10 +738,10 @@ const handlePush = async () => {
   try {
     await invoke('git_push', { path: props.workspacePath })
     logger.info('Push successful')
-    message.success('推送成功')
+    // message.success('推送成功')
   } catch (error) {
     logger.error('Push failed', { error })
-    message.error(`推送失败: ${error}`)
+    // message.error(`推送失败: ${error}`)
   } finally {
     gitLoading.value.push = false
   }
@@ -755,11 +755,11 @@ const checkoutBranch = async (branchName) => {
       branch_name: branchName
     })
     logger.info('Branch checkout successful', { branch: branchName })
-    message.success(`已切换到分支 ${branchName}`)
+    // message.success(`已切换到分支 ${branchName}`)
     refreshGitStatus()
   } catch (error) {
     logger.error('Branch checkout failed', { branch: branchName, error })
-    message.error(`切换分支失败: ${error}`)
+    // message.error(`切换分支失败: ${error}`)
   }
 }
 
@@ -767,7 +767,7 @@ const handleCreateBranch = async () => {
   logger.debug('Creating new branch', { name: newBranchName.value })
   if (!newBranchName.value.trim()) {
     logger.warn('New branch name is empty')
-    message.warning('请输入分支名称')
+    // message.warning('请输入分支名称')
     return
   }
 
@@ -777,13 +777,13 @@ const handleCreateBranch = async () => {
       branch_name: newBranchName.value
     })
     logger.info('Branch created', { name: newBranchName.value })
-    message.success(`已创建分支 ${newBranchName.value}`)
+    // message.success(`已创建分支 ${newBranchName.value}`)
     showCreateBranchModal.value = false
     newBranchName.value = ''
     refreshGitStatus()
   } catch (error) {
     logger.error('Failed to create branch', { name: newBranchName.value, error })
-    message.error(`创建分支失败: ${error}`)
+    // message.error(`创建分支失败: ${error}`)
   }
 }
 

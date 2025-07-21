@@ -8,7 +8,7 @@ import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
-import { Library } from '@vicons/ionicons5'
+import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
 
 
 export const routes = [
@@ -61,6 +61,14 @@ export const routes = [
       fileType: route.query.fileType,
       fileName: route.query.fileName,
       library: route.query.library,
+    })
+  },
+  {
+    path: '/git',
+    name: 'git',
+    component: GitPanel,
+    props: (route) => ({  // 关键：显式传递查询参数作为props
+      workspacePath: route.query.workspacePath,
     })
   },
 ];

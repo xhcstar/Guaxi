@@ -6,6 +6,9 @@ use git2::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
+use tauri::Manager;
+use tauri::{WebviewUrl, WebviewWindowBuilder};
+use urlencoding::encode;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitCommit {
@@ -842,4 +845,46 @@ pub fn get_commit_diff(path: String, commit_id: String) -> Result<String, String
 
     info!("Successfully generated diff for commit: {}", commit_id);
     Ok(output)
+}
+
+#[tauri::command]
+pub async fn create_git_window(
+    app: tauri::AppHandle,
+    label: String,
+    title: String,
+    workspace_path: String,
+) -> Result<(), String> {
+    // 检查窗口是否已存在
+    if app.get_webview_window(&label).is_some() {
+        return Err(format!("窗口 {} 已存在", label));
+    }
+
+    info!("workspace_path: {}", workspace_path);
+
+    // 构建URL查询参数
+    let url = WebviewUrl::App(
+        format!(
+            "/git?workspace_path={}",
+            encode(&workspace_path),
+        )
+        .into(),
+    );
+
+    info!("url: {}", url);
+    info!("正在打开路径: {}", workspace_path);
+
+    // 创建窗口
+    let window = WebviewWindowBuilder::new(&app, &label, url)
+        .title(&title)
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(800.0, 600.0)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("创建窗口失败: {}", e))?;
+
+    // 短暂延迟后显示窗口
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+
+    Ok(())
 }
