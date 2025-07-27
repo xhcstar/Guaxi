@@ -383,10 +383,6 @@ const updateGitDecorations = async () => {
 
 // 切换 Git 面板
 const toggleGitPanel = async () => {
-  if (gitPanel.value) {
-    gitPanel.value.open() // 调用子组件暴露的 open 方法
-  }
-
   const windowLabel = `git-${Date.now()}` // 唯一窗口标识
   const windowTitle = `${fileTreeStore.activeRepoPath || '未命名文件'}` // 使用不带后缀的文件名
 

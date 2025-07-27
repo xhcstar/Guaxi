@@ -377,20 +377,6 @@ const modalStyle = computed(() => ({
   maxHeight: '900px'
 }))
 
-// 方法
-const open = () => {
-  logger.info('Opening Git panel', { workspacePath: props.workspacePath })
-  visible.value = true
-  refreshGitStatus()
-}
-
-const handleClose = () => {
-  logger.debug('Closing Git panel')
-  selectedFile.value = null
-  selectedCommit.value = null
-  commitForm.value.message = ''
-}
-
 const refreshGitStatus = async () => {
   logger.debug('Refreshing Git status')
   console.log('repo path:', props.workspacePath)
