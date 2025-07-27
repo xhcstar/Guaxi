@@ -864,7 +864,7 @@ pub async fn create_git_window(
     // 构建URL查询参数
     let url = WebviewUrl::App(
         format!(
-            "/git?workspace_path={}",
+            "/git?workspacePath={}",
             encode(&workspace_path),
         )
         .into(),
