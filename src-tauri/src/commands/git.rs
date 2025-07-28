@@ -390,52 +390,6 @@ pub fn git_pull(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn checkout_branch(path: String, branch_name: String) -> Result<(), String> {
-    info!("Checking out branch: {} for path: {}", branch_name, path);
-    let repo = Repository::discover(&path).map_err(|e| {
-        error!("Failed to discover repository: {}", e);
-        e.to_string()
-    })?;
-
-    let branch = repo
-        .find_branch(&branch_name, BranchType::Local)
-        .map_err(|e| {
-            error!("Failed to find branch {}: {}", branch_name, e);
-            e.to_string()
-        })?;
-
-    let reference = branch.into_reference();
-    let commit = repo
-        .reference_to_annotated_commit(&reference)
-        .map_err(|e| {
-            error!("Failed to get annotated commit: {}", e);
-            e.to_string()
-        })?;
-
-    let commit_obj = repo.find_commit(commit.id()).map_err(|e| {
-        error!("Failed to find commit: {}", e);
-        e.to_string()
-    })?;
-
-    repo.checkout_tree(
-        &commit_obj.as_object(),
-        Some(CheckoutBuilder::default().force()),
-    )
-    .map_err(|e| {
-        error!("Failed to checkout tree: {}", e);
-        e.to_string()
-    })?;
-
-    repo.set_head(reference.name().unwrap()).map_err(|e| {
-        error!("Failed to set HEAD: {}", e);
-        e.to_string()
-    })?;
-
-    info!("Checkout successful");
-    Ok(())
-}
-
-#[tauri::command]
 pub fn create_branch(path: String, branch_name: String) -> Result<(), String> {
     info!("Creating branch: {} for path: {}", branch_name, path);
     let repo = Repository::discover(&path).map_err(|e| {
@@ -886,5 +840,66 @@ pub async fn create_git_window(
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
 
+    Ok(())
+}
+
+#[tauri::command]
+pub fn checkout_branch(path: String, branch_name: String) -> Result<(), String> {
+    info!("Checking out branch: {} for path: {}", branch_name, path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    // 查找本地分支
+    let branch = match repo.find_branch(&branch_name, BranchType::Local) {
+        Ok(b) => b,
+        Err(_) => {
+            // 如果本地分支不存在，尝试查找远程分支
+            let remote_branch_name = format!("origin/{}", branch_name);
+            repo.find_branch(&remote_branch_name, BranchType::Remote)
+                .map_err(|e| {
+                    error!("Failed to find branch {}: {}", branch_name, e);
+                    format!("Branch {} not found: {}", branch_name, e)
+                })?
+        }
+    };
+
+    let reference = branch.into_reference();
+    let commit = repo
+        .reference_to_annotated_commit(&reference)
+        .map_err(|e| {
+            error!("Failed to get annotated commit: {}", e);
+            e.to_string()
+        })?;
+
+    // 设置检出选项
+    let mut checkout_builder = CheckoutBuilder::new();
+    checkout_builder.force(); // 强制检出，丢弃本地修改
+    checkout_builder.remove_untracked(true); // 删除未跟踪的文件
+
+    // 获取 commit 对象并转换为 Object
+    let commit_obj = repo.find_commit(commit.id()).map_err(|e| {
+        error!("Failed to find commit: {}", e);
+        e.to_string()
+    })?;
+    
+    // 使用 commit 对象进行检出
+    repo.checkout_tree(
+        &commit_obj.as_object(),
+        Some(&mut checkout_builder),
+    )
+    .map_err(|e| {
+        error!("Failed to checkout tree: {}", e);
+        e.to_string()
+    })?;
+
+    // 设置HEAD指向新分支
+    repo.set_head(reference.name().unwrap()).map_err(|e| {
+        error!("Failed to set HEAD: {}", e);
+        e.to_string()
+    })?;
+
+    info!("Successfully checked out branch: {}", branch_name);
     Ok(())
 }

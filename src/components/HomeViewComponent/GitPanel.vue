@@ -72,7 +72,7 @@
                           </n-tooltip>
                         </n-space>
 
-                        <n-tag type="info" size="small">
+                        <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
                           <n-icon>
                             <GitBranchOutline />
                           </n-icon>
@@ -225,7 +225,7 @@
                         </n-tooltip>
                         <n-tooltip trigger="hover">
                           <template #trigger>
-                            <n-button text @click="showCreateBranchModal = true">
+                            <n-button text @click="showBranchPanel = true">
                               <template #icon>
                                 <n-icon>
                                   <GitBranchOutline />
@@ -295,17 +295,70 @@
     </div>
   </div>
 
-  <!-- 新建分支模态框 -->
-  <n-modal v-model:show="showCreateBranchModal" title="新建分支" preset="dialog" positive-text="创建"
-    @positive-click="handleCreateBranch">
-    <n-input v-model:value="newBranchName" placeholder="输入新分支名称" />
+  <!-- 分支选择面板 -->
+  <n-modal v-model:show="showBranchPanel" preset="card" title="选择分支" :bordered="false" size="medium"
+    style="width: 600px" :mask-closable="false">
+    <div class="branch-panel-container">
+      <!-- 分支列表 -->
+      <n-scrollbar style="max-height: 400px">
+        <n-list hoverable clickable>
+          <n-list-item v-for="branch in branches" :key="branch.name" @click="handleBranchItemClick(branch)"
+            :class="{ 'current-branch-item': branch.is_current }">
+            <n-space align="center" justify="space-between">
+              <n-space align="center">
+                <n-icon v-if="branch.is_current" color="green">
+                  <CheckmarkCircleOutline />
+                </n-icon>
+                <n-text :type="branch.is_current ? 'success' : undefined">
+                  {{ branch.name }}
+                </n-text>
+              </n-space>
+              <n-tag v-if="branch.is_current" size="small" type="success">
+                当前分支
+              </n-tag>
+            </n-space>
+          </n-list-item>
+        </n-list>
+      </n-scrollbar>
+
+      <!-- 创建分支按钮 -->
+      <div class="create-branch-footer">
+        <n-button type="primary" @click="showCreateBranchModal = true" style="width: 100%; margin-top: 16px">
+          <template #icon>
+            <n-icon>
+              <AddCircleOutline />
+            </n-icon>
+          </template>
+          创建新分支
+        </n-button>
+      </div>
+    </div>
+  </n-modal>
+
+  <n-modal v-model:show="showCreateBranchModal" preset="dialog" title="创建新分支">
+    <n-form>
+      <n-form-item label="分支名称" required>
+        <n-input v-model:value="newBranchName" placeholder="请输入新分支名称" />
+      </n-form-item>
+    </n-form>
+    <template #action>
+      <n-space justify="end">
+        <n-button @click="showCreateBranchModal = false">取消</n-button>
+        <n-button type="primary" @click="handleCreateBranch" :disabled="!newBranchName.trim()">
+          创建
+        </n-button>
+      </n-space>
+    </template>
   </n-modal>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, h, onMounted, onUnmounted, nextTick } from 'vue'
 import {
-  NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip
+  NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip, NForm,
+  NFormItem,
+  NInput,
+  createDiscreteApi,
 } from 'naive-ui'
 import {
   GitBranchOutline,
@@ -317,9 +370,12 @@ import {
   RemoveCircleOutline,
   CloseCircleOutline,
   DocumentOutline,
-  GitCommitOutline
+  GitCommitOutline,
+  CheckmarkCircleOutline
 } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
+
+const { notification } = createDiscreteApi(['notification'])
 
 // 日志级别枚举
 const LogLevel = {
@@ -381,11 +437,6 @@ const isDraggingChanges = ref(false)
 const initialHeightStaged = ref(0)
 const commitsDivider = ref(null)
 const isDraggingCommits = ref(false)
-const initialHeightStagedCommits = ref(0)
-
-// 控制显示状态
-const showCreateBranchModal = ref(false)
-const newBranchName = ref('')
 
 // 状态数据
 const currentBranch = ref('')
@@ -402,8 +453,9 @@ const selectedFile = ref(null)
 const gitLoading = ref({
   pull: false,
   push: false,
-  commit: false
-})
+  commit: false,
+  checkout: false  // 添加分支切换加载状态
+});
 const selectedCommit = ref(null)
 
 // 表单数据
@@ -413,6 +465,155 @@ const commitForm = ref({
 
 // 在现有代码的顶部添加
 const MIN_HEIGHT_FOR_SCROLL = 200; // 触发滚动条的最小高度
+
+
+// 分支面板相关状态
+const showBranchPanel = ref(false)
+const showCreateBranchModal = ref(false)
+const newBranchName = ref('')
+
+const confirmBranchSwitch = () => {
+  return new Promise((resolve) => {
+    notification.warning({
+      title: '未提交的更改',
+      content: '当前分支有未提交的更改，切换分支可能会丢失这些更改。是否继续？',
+      duration: 0,
+      meta: () => h('div', {
+        style: {
+          display: 'flex',
+          justifyContent: 'flex-end',
+          marginTop: '12px'
+        }
+      }, [
+        h(NButton, {
+          size: 'small',
+          onClick: () => resolve(false)
+        }, '取消'),
+        h(NButton, {
+          size: 'small',
+          type: 'primary',
+          onClick: () => resolve(true),
+          style: {
+            marginLeft: '8px'
+          }
+        }, '继续切换')
+      ])
+    });
+  });
+};
+// 获取分支列表
+const fetchBranches = async () => {
+  try {
+    const result = await invoke('list_branches', {
+      path: props.workspacePath
+    });
+
+    // 获取当前分支
+    const current = await invoke('get_current_branch', {
+      path: props.workspacePath
+    });
+
+    // 更新分支列表和当前分支
+    branches.value = result.map(b => ({
+      ...b,
+      is_current: b.name === current
+    }));
+
+    currentBranch.value = current;
+  } catch (error) {
+    console.error('Failed to fetch branches:', error);
+    notification.error({
+      title: '获取分支失败',
+      content: error.toString(),
+      duration: 3000
+    });
+  }
+};
+
+// 切换分支
+const handleBranchItemClick = async (branch) => {
+  if (!branch.is_current) {
+    // 检查是否有未提交的更改
+    if (unstagedFiles.value.length > 0 || stagedFiles.value.length > 0) {
+      const confirmed = await confirmBranchSwitch();
+      if (!confirmed) return;
+    }
+
+    try {
+      // 显示加载状态
+      gitLoading.value.checkout = true;
+
+      // 执行分支切换
+      await invoke('checkout_branch', {
+        path: props.workspacePath,
+        branchName: branch.name
+      });
+
+      // 更新当前分支状态
+      currentBranch.value = branch.name;
+
+      // 关闭分支面板
+      showBranchPanel.value = false;
+
+      // 刷新所有相关状态
+      await Promise.all([
+        fetchBranches(),       // 刷新分支列表
+        refreshGitStatus(),    // 刷新文件状态
+        loadCommitHistory()    // 刷新提交历史
+      ]);
+
+      // 显示成功通知
+      notification.success({
+        title: '分支切换成功',
+        content: `已切换到分支 ${branch.name}`,
+        duration: 2000
+      });
+    } catch (error) {
+      console.error('Failed to checkout branch:', error);
+      notification.error({
+        title: '分支切换失败',
+        content: error.toString(),
+        duration: 3000
+      });
+    } finally {
+      gitLoading.value.checkout = false;
+    }
+  }
+};
+
+const handleCreateBranch = async () => {
+  if (!newBranchName.value.trim()) {
+    notification.warning({
+      title: '分支名称不能为空',
+      duration: 2000
+    });
+    return;
+  }
+
+  try {
+    // 修改这里 - 确保参数名与后端一致
+    await invoke('create_branch', {
+      path: props.workspacePath,
+      branchName: newBranchName.value  // 使用 branch_name 而不是 branchName
+    });
+
+    notification.success({
+      title: '创建成功',
+      content: `分支 ${newBranchName.value} 已创建`,
+      duration: 2000
+    });
+
+    await fetchBranches();
+    showCreateBranchModal.value = false;
+    newBranchName.value = '';
+  } catch (error) {
+    notification.error({
+      title: '创建分支失败',
+      content: error.toString(),
+      duration: 3000
+    });
+  }
+}
 
 // 在现有函数后面添加新函数
 const checkScrollableSections = () => {
@@ -722,6 +923,7 @@ const toggleSectionVisibility = (section, headerHeight) => {
 onMounted(() => {
   logger.debug('Component mounted')
   refreshGitStatus()
+  fetchBranches() // 添加这行
 
   nextTick(() => {
     if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
@@ -757,12 +959,17 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', stopCommitsDrag)
 })
 
-// 其他原有方法保持不变...
 const refreshGitStatus = async () => {
   logger.debug('Refreshing Git status')
   console.log('repo path:', props.workspacePath)
   try {
-    const statuses = await invoke('get_git_status', { path: props.workspacePath })
+    const statuses = await invoke('get_git_status', {
+      path: props.workspacePath
+    });
+
+    // 重置选择状态
+    selectedFile.value = null;
+    selectedCommit.value = null;
 
     // 创建临时容器
     const newStagedFiles = []
@@ -788,7 +995,6 @@ const refreshGitStatus = async () => {
     stagedFiles.value = newStagedFiles
     unstagedFiles.value = newUnstagedFiles
 
-    selectedFile.value = null
 
     // 添加获取提交历史的调用
     await loadCommitHistory()
@@ -1097,40 +1303,6 @@ const handlePush = async () => {
   }
 }
 
-const checkoutBranch = async (branchName) => {
-  logger.debug('Checking out branch', { branch: branchName })
-  try {
-    await invoke('checkout_branch', {
-      path: props.workspacePath,
-      branch_name: branchName
-    })
-    logger.info('Branch checkout successful', { branch: branchName })
-    refreshGitStatus()
-  } catch (error) {
-    logger.error('Branch checkout failed', { branch: branchName, error })
-  }
-}
-
-const handleCreateBranch = async () => {
-  logger.debug('Creating new branch', { name: newBranchName.value })
-  if (!newBranchName.value.trim()) {
-    logger.warn('New branch name is empty')
-    return
-  }
-
-  try {
-    await invoke('create_branch', {
-      path: props.workspacePath,
-      branch_name: newBranchName.value
-    })
-    logger.info('Branch created', { name: newBranchName.value })
-    showCreateBranchModal.value = false
-    newBranchName.value = ''
-    refreshGitStatus()
-  } catch (error) {
-    logger.error('Failed to create branch', { name: newBranchName.value, error })
-  }
-}
 </script>
 
 <style>
@@ -1497,5 +1669,23 @@ const handleCreateBranch = async () => {
 
 .n-list-item:hover {
   background-color: var(--hover-color);
+}
+
+.current-branch-item {
+  background-color: rgba(40, 167, 69, 0.1);
+}
+
+/* 分支面板容器 */
+.branch-panel-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 创建分支按钮区域 */
+.create-branch-footer {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--divider-color);
 }
 </style>
