@@ -528,93 +528,154 @@ const startCommitsDrag = (e) => {
 }
 
 const handleCommitsDrag = (e) => {
-  if (!isDraggingCommits.value) return
+  if (!isDraggingCommits.value) return;
 
-  const dy = e.clientY - startY.value
-  logger.debug('Commits拖动开始', {
-    dy,
-    startY: startY.value,
-    currentY: e.clientY,
-    initialCommitsHeight: initialHeightCommits.value,
-    initialChangesHeight: initialHeightChanges.value,
-    initialStagedHeight: initialHeightStaged.value,
-    panelsHeight: panelsHeight.value
-  })
+  // 边界检查
+  if (panelsHeight.value <= 0) {
+    logger.warn('无效的panelsHeight', panelsHeight.value);
+    return;
+  }
 
-  // 计算新的Commits区域高度（直接基于dy变化）
-  const newCommitsHeight = initialHeightCommits.value - dy // 注意这里是减dy
+  const dy = e.clientY - startY.value;
+  // logger.debug('Commits拖动开始', {
+  //   dy,
+  //   startY: startY.value,
+  //   currentY: e.clientY,
+  //   initialCommitsHeight: initialHeightCommits.value,
+  //   initialChangesHeight: initialHeightChanges.value,
+  //   initialStagedHeight: initialHeightStaged.value,
+  //   panelsHeight: panelsHeight.value
+  // });
+
+  // 添加拖动视觉反馈
+  commitsDivider.value?.classList.add('dragging');
+
+  // 计算新高度（注意这里是减dy，确保方向正确）
+  const newCommitsHeight = initialHeightCommits.value - dy;
 
   // 计算最小和最大高度限制
-  const minCommitsHeight = commitsHeaderHeight.value
-  const maxCommitsHeight = panelsHeight.value - changesHeaderHeight.value - stagedHeaderHeight.value - 16
-  logger.debug('高度限制检查', { minCommitsHeight, maxCommitsHeight, newCommitsHeight })
+  const minCommitsHeight = Math.max(commitsHeaderHeight.value, 22); // 确保最小高度
+  const maxCommitsHeight = Math.min(
+    panelsHeight.value - changesHeaderHeight.value - stagedHeaderHeight.value - 16,
+    panelsHeight.value * 0.8 // 不超过总高度的80%
+  );
 
-  // 确保高度在限制范围内
-  const clampedCommitsHeight = Math.max(minCommitsHeight, Math.min(maxCommitsHeight, newCommitsHeight))
+  // logger.debug('高度限制检查', {
+  //   minCommitsHeight,
+  //   maxCommitsHeight,
+  //   newCommitsHeight,
+  //   availableSpace: panelsHeight.value - changesHeaderHeight.value - stagedHeaderHeight.value
+  // });
 
-  // 计算高度变化量（正值表示Commits区域减小，上方区域应增加）
-  const heightChange = initialHeightCommits.value - clampedCommitsHeight
-  logger.debug('高度变化计算', {
-    heightChange,
-    clampedCommitsHeight,
-    initialCommitsHeight: initialHeightCommits.value
-  })
+  // 应用边界限制
+  const clampedCommitsHeight = Math.max(
+    minCommitsHeight,
+    Math.min(maxCommitsHeight, newCommitsHeight)
+  );
 
+  // 计算高度变化量（正值表示Commits区域减小）
+  const heightChange = initialHeightCommits.value - clampedCommitsHeight;
+  // logger.debug('高度变化计算', {
+  //   heightChange,
+  //   clampedCommitsHeight,
+  //   initialCommitsHeight: initialHeightCommits.value
+  // });
+
+  // 使用requestAnimationFrame确保流畅更新
   requestAnimationFrame(() => {
     // 更新Commits区域高度
-    commitsHeight.value = clampedCommitsHeight
-    logger.debug('更新Commits高度', { clampedCommitsHeight })
+    commitsHeight.value = clampedCommitsHeight;
 
-    // 按比例调整上方两个区域
-    const totalInitialHeight = initialHeightChanges.value + initialHeightStaged.value
-    const changesRatio = initialHeightChanges.value / totalInitialHeight
-    const stagedRatio = initialHeightStaged.value / totalInitialHeight
-    logger.debug('区域比例计算', {
-      totalInitialHeight,
-      changesRatio,
-      stagedRatio
-    })
+    // 计算上方区域应分配的高度变化
+    const totalInitialHeight = initialHeightChanges.value + initialHeightStaged.value;
+    const changesRatio = totalInitialHeight > 0
+      ? initialHeightChanges.value / totalInitialHeight
+      : 0.5;
+    const stagedRatio = totalInitialHeight > 0
+      ? initialHeightStaged.value / totalInitialHeight
+      : 0.5;
 
-    // 上方区域应该增加高度（因为下方区域减少了）
-    changesHeight.value = initialHeightChanges.value + (heightChange * changesRatio)
-    stagedHeight.value = initialHeightStaged.value + (heightChange * stagedRatio)
-    logger.debug('新高度计算', {
-      changesHeight: changesHeight.value,
-      stagedHeight: stagedHeight.value
-    })
+    // logger.debug('区域比例计算', {
+    //   totalInitialHeight,
+    //   changesRatio,
+    //   stagedRatio,
+    //   changesHeaderHeight: changesHeaderHeight.value,
+    //   stagedHeaderHeight: stagedHeaderHeight.value
+    // });
 
-    // 确保高度不低于最小值
-    changesHeight.value = Math.max(changesHeaderHeight.value, changesHeight.value)
-    stagedHeight.value = Math.max(stagedHeaderHeight.value, stagedHeight.value)
-    logger.debug('最终高度设置', {
-      changesHeight: changesHeight.value,
-      stagedHeight: stagedHeight.value,
-      commitsHeight: commitsHeight.value
-    })
+    // 计算上方区域新高度（确保不低于最小高度）
+    const newChangesHeight = Math.max(
+      changesHeaderHeight.value,
+      initialHeightChanges.value + (heightChange * changesRatio)
+    );
+    const newStagedHeight = Math.max(
+      stagedHeaderHeight.value,
+      initialHeightStaged.value + (heightChange * stagedRatio)
+    );
 
-    // 当区域高度接近最小值时，隐藏内容但保留标题
-    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value)
-    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value)
-  })
-}
+    // 应用新高度
+    changesHeight.value = newChangesHeight;
+    stagedHeight.value = newStagedHeight;
+
+    // logger.debug('最终高度设置', {
+    //   changesHeight: changesHeight.value,
+    //   stagedHeight: stagedHeight.value,
+    //   commitsHeight: commitsHeight.value,
+    //   remainingSpace: panelsHeight.value - changesHeight.value - stagedHeight.value - commitsHeight.value
+    // });
+
+    // 动态显示/隐藏内容区域
+    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value);
+    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value);
+
+    // 强制重新布局（解决某些浏览器渲染问题）
+    if (panelsContainer.value) {
+      panelsContainer.value.style.overflow = 'hidden';
+      panelsContainer.value.offsetHeight; // 触发重绘
+      panelsContainer.value.style.overflow = '';
+    }
+  });
+};
 
 const stopCommitsDrag = () => {
   isDraggingCommits.value = false;
+  commitsDivider.value?.classList.remove('dragging');
   document.body.style.userSelect = '';
   document.body.style.cursor = '';
   document.removeEventListener('mousemove', handleCommitsDrag);
   document.removeEventListener('mouseup', stopCommitsDrag);
-}
+
+  // 最终布局调整
+  nextTick(() => {
+    if (panelsContainer.value) {
+      panelsContainer.value.style.display = 'none';
+      panelsContainer.value.offsetHeight; // 触发重绘
+      panelsContainer.value.style.display = 'flex';
+    }
+  });
+};
 
 // 新增辅助函数
 const toggleSectionVisibility = (section, headerHeight) => {
-  const content = section.querySelector('.scrollable-content')
-  if (section.offsetHeight <= headerHeight + 10) {
-    content.style.display = 'none'
+  if (!section) return;
+
+  const content = section.querySelector('.n-collapse-item__content');
+  const header = section.querySelector('.n-collapse-item__header');
+  const contentInner = section.querySelector('.n-collapse-item__content-inner');
+
+  if (!content || !header || !contentInner) return;
+
+  const sectionHeight = section.offsetHeight;
+  const isCollapsed = sectionHeight <= headerHeight + 10;
+
+  if (isCollapsed) {
+    contentInner.classList.add('collapsed');
+    header.style.cursor = 'row-resize';
   } else {
-    content.style.display = 'block'
+    contentInner.classList.remove('collapsed');
+    header.style.cursor = '';
   }
-}
+};
 
 onMounted(() => {
   logger.debug('Component mounted')
@@ -1208,32 +1269,55 @@ const handleCreateBranch = async () => {
 
 /* 确保分隔线可见 */
 .section-divider,
+/* 分隔条样式优化 */
 .commits-divider {
-  height: 8px;
-  background-color: var(--divider-color);
+  height: 2px;
+  background-color: #69abd8;
   cursor: row-resize;
   position: relative;
-  flex-shrink: 0;
-  z-index: 2;
+  transition: background-color 0.2s ease;
+  z-index: 10;
 }
 
-.section-divider .divider-handle,
+.commits-divider.dragging {
+  background-color: #69abd8;
+  height: 2px;
+  z-index: 100;
+}
+
 .commits-divider .divider-handle {
   position: absolute;
   top: 2px;
   left: 50%;
   transform: translateX(-50%);
-  width: 30px;
-  height: 4px;
-  background-color: #0078d4;
+  width: 40px;
+  height: 2px;
+  background-color: var(--primary-color);
   border-radius: 2px;
   opacity: 0.3;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, width 0.2s;
 }
 
-.section-divider:hover .divider-handle,
-.commits-divider:hover .divider-handle {
+.commits-divider:hover .divider-handle,
+.commits-divider.dragging .divider-handle {
   opacity: 1;
+  width: 60px;
+}
+
+/* 防止拖动时文本选中 */
+.panels-container {
+  user-select: none;
+}
+
+/* 动态内容区域显示控制 */
+.n-collapse-item__content-inner {
+  transition: opacity 0.15s ease;
+}
+
+.n-collapse-item__content-inner.collapsed {
+  opacity: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 /* 可滚动内容区域 */
