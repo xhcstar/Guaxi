@@ -260,35 +260,56 @@
     </div>
 
     <!-- 右侧内容区域 -->
+    <!-- 右侧内容区域 -->
     <div class="git-content">
       <!-- 文件差异或提交详情 -->
       <div class="content-viewer">
         <div v-if="selectedFile" class="diff-viewer">
-          <n-card size="small" :title="selectedFile.path" embedded>
-            <n-scrollbar style="height: 100%">
-              <!-- 使用 monaco-editor 实现专业差异对比 -->
-              <div ref="diffEditorContainer" class="diff-editor-container" style="height: 100%;"></div>
-            </n-scrollbar>
-          </n-card>
+          <!-- 顶部工具栏 -->
+          <div class="diff-toolbar">
+            <n-space align="center" justify="space-between">
+              <n-text strong>{{ selectedFile.path }}</n-text>
+              <n-space>
+                <n-button text @click="navigateDiff('prev')">
+                  <template #icon>
+                    <n-icon>
+                      <ChevronUpOutline />
+                    </n-icon>
+                  </template>
+                </n-button>
+                <n-button text @click="navigateDiff('next')">
+                  <template #icon>
+                    <n-icon>
+                      <ChevronDownOutline />
+                    </n-icon>
+                  </template>
+                </n-button>
+              </n-space>
+            </n-space>
+          </div>
+          <!-- Monaco Editor 容器 -->
+          <div ref="diffEditorContainer" class="diff-editor-container"></div>
         </div>
 
         <div v-if="selectedCommit" class="commit-details">
-          <n-card size="small" :title="`提交 ${selectedCommit.id.slice(0, 7)}`" embedded>
-            <n-scrollbar style="height: 100%">
-              <div class="commit-meta">
-                <n-space vertical>
-                  <n-text strong>作者: {{ selectedCommit.author }}</n-text>
-                  <n-text>日期: {{ formatDateFull(selectedCommit.date) }}</n-text>
-                </n-space>
-              </div>
-              <pre class="commit-message">{{ selectedCommit.message }}</pre>
-              <div class="commit-diff">
-                <n-divider title-placement="left">修改内容</n-divider>
-                <!-- 使用 monaco-editor 显示提交差异 -->
-                <div ref="commitDiffEditorContainer" class="diff-editor-container" style="height: 100%;"></div>
-              </div>
-            </n-scrollbar>
-          </n-card>
+          <!-- 提交详情顶部栏 -->
+          <div class="commit-toolbar">
+            <n-space align="center" justify="space-between">
+              <n-text strong>提交 {{ selectedCommit.id.slice(0, 7) }}</n-text>
+              <n-space>
+                <n-text>作者: {{ selectedCommit.author }}</n-text>
+                <n-text>日期: {{ formatDateFull(selectedCommit.date) }}</n-text>
+              </n-space>
+            </n-space>
+          </div>
+          <!-- 提交消息 -->
+          <div class="commit-message">
+            <pre>{{ selectedCommit.message }}</pre>
+          </div>
+          <!-- 提交差异 -->
+          <div class="commit-diff">
+            <div ref="commitDiffEditorContainer" class="diff-editor-container"></div>
+          </div>
         </div>
 
         <div v-if="!selectedFile && !selectedCommit" class="empty-state">
@@ -374,7 +395,9 @@ import {
   CloseCircleOutline,
   DocumentOutline,
   GitCommitOutline,
-  CheckmarkCircleOutline
+  CheckmarkCircleOutline,
+  ChevronUpOutline,
+  ChevronDownOutline
 } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import * as monaco from 'monaco-editor'
@@ -482,6 +505,29 @@ const commitDiffEditor = ref(null)
 const diffEditorContainer = ref(null)
 const commitDiffEditorContainer = ref(null)
 
+// 添加导航函数
+const navigateDiff = (direction) => {
+  // 这里实现导航到上一个/下一个差异块的逻辑
+  console.log(`Navigate to ${direction} diff block`)
+  // 实际实现需要调用 Monaco Editor 的 API 来导航差异
+  if (diffEditor.value) {
+    const editor = diffEditor.value.getModifiedEditor()
+    const position = editor.getPosition()
+    const range = new monaco.Range(
+      position.lineNumber,
+      position.column,
+      position.lineNumber,
+      position.column
+    )
+
+    if (direction === 'prev') {
+      editor.getAction('editor.action.diffReview.prev').run()
+    } else {
+      editor.getAction('editor.action.diffReview.next').run()
+    }
+  }
+}
+
 // 初始化 Monaco Editor
 const initMonacoEditor = async () => {
   return new Promise((resolve) => {
@@ -493,7 +539,7 @@ const initMonacoEditor = async () => {
         diffEditor.value = monaco.editor.createDiffEditor(diffEditorContainer.value, {
           readOnly: true,
           renderSideBySide: true,
-          automaticLayout: true,
+          automaticLayout: true, // 启用自动布局
           theme: 'vs',
           scrollBeyondLastLine: false,
           renderIndicators: true,
@@ -1706,12 +1752,13 @@ watch(selectedCommit, (newVal) => {
   position: relative;
 }
 
+/* 修改右侧内容区域样式 */
 .git-content {
   flex: 1;
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow: hidden;
+  background-color: var(--card-bg);
 }
 
 .content-viewer {
@@ -1722,80 +1769,65 @@ watch(selectedCommit, (newVal) => {
   overflow: hidden;
 }
 
-.diff-viewer,
-.commit-details {
-  flex: 1;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+/* 顶部工具栏样式 */
+.diff-toolbar,
+.commit-toolbar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+  z-index: 1;
 }
 
 /* Monaco Editor 容器样式 */
 .diff-editor-container {
   flex: 1;
-  height: 100%;
+  height: calc(100% - 41px);
+  /* 减去工具栏高度 */
   width: 100%;
-  min-height: 300px;
 }
 
-.n-card {
-  height: 100%;
+/* 提交详情样式 */
+.commit-details {
   display: flex;
   flex-direction: column;
-}
-
-.n-card__content {
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-}
-
-.n-scrollbar {
   height: 100%;
 }
 
-/* 响应式布局调整 */
-@media (max-width: 768px) {
-  .gitkraken-container {
-    flex-direction: column;
-  }
-
-  .git-sidebar {
-    width: 100%;
-    max-width: 100%;
-    height: 40vh;
-  }
-
-  .git-content {
-    height: 60vh;
-  }
+.commit-message {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--bg-color);
 }
 
-/* 暗色主题支持 */
+.commit-diff {
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 空状态样式 */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+/* 暗色主题适配 */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg-color: #1e1e1e;
-    --text-color: #e0e0e0;
-    --text-color-secondary: #a0a0a0;
-    --divider-color: #3a3a3a;
-    --hover-color: rgba(255, 255, 255, 0.05);
-    --graph-bg: #2a2a2a;
-    --added-bg: rgba(46, 160, 67, 0.2);
-    --modified-bg: rgba(255, 193, 7, 0.2);
-    --deleted-bg: rgba(220, 53, 69, 0.2);
-    --current-branch-bg: rgba(46, 160, 67, 0.3);
-    --card-bg: #252526;
-    --input-bg: #333333;
-    --sidebar-bg: #252526;
+  .git-content {
+    background-color: var(--card-bg);
   }
 
-  .monaco-editor .monaco-editor-background {
-    background-color: var(--card-bg) !important;
+  .diff-toolbar,
+  .commit-toolbar {
+    background-color: var(--card-bg);
+    border-bottom-color: var(--divider-color);
   }
 
-  .monaco-editor .margin {
-    background-color: var(--sidebar-bg) !important;
+  .commit-message {
+    background-color: var(--bg-color);
+    border-bottom-color: var(--divider-color);
   }
 }
 
