@@ -29,213 +29,231 @@
         </n-button>
       </div>
 
-      <!-- 变更文件列表 -->
-      <div class="changes-section" ref="changesSection">
-        <n-collapse :default-expanded-names="['changes']">
-          <n-collapse-item name="changes" title="Changes">
-            <template #header-extra>
-              <n-badge :value="unstagedFiles.length" :max="99" />
-            </template>
+      <!-- 变更文件列表容器 -->
+      <div class="changes-container">
+        <!-- 新增 panels-container 作为共同父容器 -->
+        <div class="panels-container" ref="panelsContainer">
+          <!-- Changes区域 -->
+          <div class="changes-section" ref="changesSection" :style="{ flex: `0 0 ${changesHeight}px` }">
+            <n-collapse :default-expanded-names="['changes']">
+              <n-collapse-item name="changes" title="Changes">
+                <template #header-extra>
+                  <n-badge :value="unstagedFiles.length" :max="99" />
+                </template>
+                <div class="scrollable-content">
+                  <n-list>
+                    <!-- 操作按钮行 -->
+                    <n-list-item>
+                      <n-space justify="space-between">
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
+                                <template #icon>
+                                  <n-icon>
+                                    <AddCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            暂存全部
+                          </n-tooltip>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
+                                <template #icon>
+                                  <n-icon>
+                                    <CloseCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            丢弃全部
+                          </n-tooltip>
+                        </n-space>
 
-            <n-list>
-              <!-- 操作按钮行 -->
-              <n-list-item>
-                <n-space justify="space-between">
-                  <n-space>
-                    <n-tooltip trigger="hover">
-                      <template #trigger>
-                        <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
-                          <template #icon>
-                            <n-icon>
-                              <AddCircleOutline />
-                            </n-icon>
-                          </template>
-                        </n-button>
-                      </template>
-                      暂存全部
-                    </n-tooltip>
-                    <n-tooltip trigger="hover">
-                      <template #trigger>
-                        <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
-                          <template #icon>
-                            <n-icon>
-                              <CloseCircleOutline />
-                            </n-icon>
-                          </template>
-                        </n-button>
-                      </template>
-                      丢弃全部
-                    </n-tooltip>
-                  </n-space>
-
-                  <n-tag type="info" size="small">
-                    <n-icon>
-                      <GitBranchOutline />
-                    </n-icon>
-                    {{ currentBranch }}
-                  </n-tag>
-                </n-space>
-              </n-list-item>
-
-              <!-- 文件列表项 -->
-              <n-list-item v-for="file in unstagedFiles" :key="file.path">
-                <n-space align="center" justify="space-between">
-                  <n-space align="center" @click="handleFileClick(file)">
-                    <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                    <n-text>{{ file.path }}</n-text>
-                  </n-space>
-                  <n-space>
-                    <n-tooltip trigger="hover">
-                      <template #trigger>
-                        <n-button text @click.stop="handleStageFile(file)">
-                          <template #icon>
-                            <n-icon>
-                              <AddCircleOutline />
-                            </n-icon>
-                          </template>
-                        </n-button>
-                      </template>
-                      暂存
-                    </n-tooltip>
-                    <n-tooltip trigger="hover">
-                      <template #trigger>
-                        <n-button text @click.stop="handleDiscardFile(file)">
-                          <template #icon>
-                            <n-icon>
-                              <CloseCircleOutline />
-                            </n-icon>
-                          </template>
-                        </n-button>
-                      </template>
-                      丢弃
-                    </n-tooltip>
-                  </n-space>
-                </n-space>
-              </n-list-item>
-            </n-list>
-          </n-collapse-item>
-        </n-collapse>
-
-        <n-collapse :default-expanded-names="['staged']">
-          <n-collapse-item name="staged" title="Staged Changes">
-            <template #header-extra>
-              <n-badge :value="stagedFiles.length" :max="99" />
-            </template>
-
-            <n-list>
-              <!-- 操作按钮行 -->
-              <n-list-item>
-                <n-space justify="space-between">
-                  <n-space>
-                    <n-tooltip trigger="hover">
-                      <template #trigger>
-                        <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
-                          <template #icon>
-                            <n-icon>
-                              <RemoveCircleOutline />
-                            </n-icon>
-                          </template>
-                        </n-button>
-                      </template>
-                      取消暂存全部
-                    </n-tooltip>
-                  </n-space>
-                </n-space>
-              </n-list-item>
-
-              <!-- 暂存文件列表项 -->
-              <n-list-item v-for="file in stagedFiles" :key="file.path">
-                <n-space align="center" justify="space-between">
-                  <n-space align="center" @click="handleFileClick(file)">
-                    <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                    <n-text>{{ file.path }}</n-text>
-                  </n-space>
-                  <n-space>
-                    <n-tooltip trigger="hover">
-                      <template #trigger>
-                        <n-button text @click.stop="handleUnstageFile(file)">
-                          <template #icon>
-                            <n-icon>
-                              <RemoveCircleOutline />
-                            </n-icon>
-                          </template>
-                        </n-button>
-                      </template>
-                      取消暂存
-                    </n-tooltip>
-                  </n-space>
-                </n-space>
-              </n-list-item>
-            </n-list>
-          </n-collapse-item>
-        </n-collapse>
-      </div>
-
-      <!-- 区域分隔线 - 添加更明显的拖动手柄 -->
-      <div class="section-divider" ref="divider" @mousedown="startVerticalDrag">
-        <div class="divider-handle"></div>
-      </div>
-
-      <!-- 提交历史 -->
-      <div class="commits-section" ref="commitsSection">
-        <n-collapse :default-expanded-names="['commits']">
-          <n-collapse-item name="commits" title="提交历史">
-            <n-list>
-              <!-- 操作按钮行 -->
-              <n-list-item>
-                <n-space>
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <n-button text @click="handlePull" :loading="gitLoading.pull">
-                        <template #icon>
-                          <n-icon>
-                            <CloudDownloadOutline />
-                          </n-icon>
-                        </template>
-                      </n-button>
-                    </template>
-                    拉取
-                  </n-tooltip>
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <n-button text @click="handlePush" :loading="gitLoading.push">
-                        <template #icon>
-                          <n-icon>
-                            <CloudUploadOutline />
-                          </n-icon>
-                        </template>
-                      </n-button>
-                    </template>
-                    推送
-                  </n-tooltip>
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <n-button text @click="showCreateBranchModal = true">
-                        <template #icon>
+                        <n-tag type="info" size="small">
                           <n-icon>
                             <GitBranchOutline />
                           </n-icon>
-                        </template>
-                      </n-button>
-                    </template>
-                    创建分支
-                  </n-tooltip>
-                </n-space>
-              </n-list-item>
+                          {{ currentBranch }}
+                        </n-tag>
+                      </n-space>
+                    </n-list-item>
 
-              <!-- 提交历史列表项 -->
-              <n-list-item v-for="commit in commits" :key="commit.id" @click="selectCommit(commit)"
-                :class="{ 'selected-commit': selectedCommit?.id === commit.id }">
-                <n-space vertical>
-                  <n-text strong>{{ commit.summary }}</n-text>
-                  <n-text depth="3" style="font-size: 12px">
-                    {{ commit.author }} - {{ formatDate(commit.date) }}
-                  </n-text>
-                </n-space>
-              </n-list-item>
-            </n-list>
-          </n-collapse-item>
-        </n-collapse>
+                    <!-- 文件列表项 -->
+                    <n-list-item v-for="file in unstagedFiles" :key="file.path">
+                      <n-space align="center" justify="space-between">
+                        <n-space align="center" @click="handleFileClick(file)">
+                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                          <n-text>{{ file.path }}</n-text>
+                        </n-space>
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click.stop="handleStageFile(file)">
+                                <template #icon>
+                                  <n-icon>
+                                    <AddCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            暂存
+                          </n-tooltip>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click.stop="handleDiscardFile(file)">
+                                <template #icon>
+                                  <n-icon>
+                                    <CloseCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            丢弃
+                          </n-tooltip>
+                        </n-space>
+                      </n-space>
+                    </n-list-item>
+                  </n-list>
+                </div>
+              </n-collapse-item>
+            </n-collapse>
+          </div>
+
+          <!-- Changes和Staged Changes之间的分隔线 -->
+          <div class="section-divider" ref="changesDivider" @mousedown="startChangesDrag">
+            <div class="divider-handle"></div>
+          </div>
+
+          <!-- Staged Changes区域 -->
+          <div class="staged-section" ref="stagedSection" :style="{ flex: `0 0 ${stagedHeight}px` }">
+            <n-collapse :default-expanded-names="['staged']">
+              <n-collapse-item name="staged" title="Staged Changes">
+                <template #header-extra>
+                  <n-badge :value="stagedFiles.length" :max="99" />
+                </template>
+                <div class="scrollable-content">
+                  <n-list>
+                    <!-- 操作按钮行 -->
+                    <n-list-item>
+                      <n-space justify="space-between">
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
+                                <template #icon>
+                                  <n-icon>
+                                    <RemoveCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            取消暂存全部
+                          </n-tooltip>
+                        </n-space>
+                      </n-space>
+                    </n-list-item>
+
+                    <!-- 暂存文件列表项 -->
+                    <n-list-item v-for="file in stagedFiles" :key="file.path">
+                      <n-space align="center" justify="space-between">
+                        <n-space align="center" @click="handleFileClick(file)">
+                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                          <n-text>{{ file.path }}</n-text>
+                        </n-space>
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click.stop="handleUnstageFile(file)">
+                                <template #icon>
+                                  <n-icon>
+                                    <RemoveCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            取消暂存
+                          </n-tooltip>
+                        </n-space>
+                      </n-space>
+                    </n-list-item>
+                  </n-list>
+                </div>
+              </n-collapse-item>
+            </n-collapse>
+          </div>
+
+          <!-- Staged Changes和提交历史之间的分隔线 -->
+          <div class="commits-divider" ref="commitsDivider" @mousedown="startCommitsDrag">
+            <div class="divider-handle"></div>
+          </div>
+
+          <!-- 提交历史区域 -->
+          <div class="commits-section" ref="commitsSection" :style="{ flex: `0 0 ${commitsHeight}px` }">
+            <n-collapse :default-expanded-names="['commits']">
+              <n-collapse-item name="commits" title="提交历史">
+                <div class="scrollable-content">
+                  <n-list>
+                    <!-- 操作按钮行 -->
+                    <n-list-item>
+                      <n-space>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handlePull" :loading="gitLoading.pull">
+                              <template #icon>
+                                <n-icon>
+                                  <CloudDownloadOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          拉取
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handlePush" :loading="gitLoading.push">
+                              <template #icon>
+                                <n-icon>
+                                  <CloudUploadOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          推送
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="showCreateBranchModal = true">
+                              <template #icon>
+                                <n-icon>
+                                  <GitBranchOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          创建分支
+                        </n-tooltip>
+                      </n-space>
+                    </n-list-item>
+
+                    <!-- 提交历史列表项 -->
+                    <n-list-item v-for="commit in commits" :key="commit.id" @click="selectCommit(commit)"
+                      :class="{ 'selected-commit': selectedCommit?.id === commit.id }">
+                      <n-space vertical>
+                        <n-text strong>{{ commit.summary }}</n-text>
+                        <n-text depth="3" style="font-size: 12px">
+                          {{ commit.author }} - {{ formatDate(commit.date) }}
+                        </n-text>
+                      </n-space>
+                    </n-list-item>
+                  </n-list>
+                </div>
+              </n-collapse-item>
+            </n-collapse>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -357,6 +375,13 @@ const startX = ref(0)
 const initialHeightChanges = ref(0)
 const initialHeightCommits = ref(0)
 const initialWidthSidebar = ref(280)
+const changesDivider = ref(null)
+const stagedSection = ref(null)
+const isDraggingChanges = ref(false)
+const initialHeightStaged = ref(0)
+const commitsDivider = ref(null)
+const isDraggingCommits = ref(false)
+const initialHeightStagedCommits = ref(0)
 
 // 控制显示状态
 const showCreateBranchModal = ref(false)
@@ -414,89 +439,216 @@ const stopSidebarDrag = () => {
   document.removeEventListener('mouseup', stopSidebarDrag)
 }
 
-const startVerticalDrag = (e) => {
-  logger.debug('Attempting to start vertical drag', {
-    target: e.target,
-    isDivider: e.target === divider.value,
-    isHandle: e.target.closest('.divider-handle')
-  })
+// 在setup部分添加以下代码
+const changesHeaderHeight = ref(40) // Changes区域标题高度
+const stagedHeaderHeight = ref(40) // Staged区域标题高度
+const commitsHeaderHeight = ref(40) // Commits区域标题高度
+// 添加新的响应式变量
+const changesHeight = ref(0)
+const stagedHeight = ref(0)
+const commitsHeight = ref(0)
+const panelsContainer = ref(null)
+const panelsHeight = ref(0)
 
-  // 确保只在拖动句柄上触发
-  if (e.target.closest('.divider-handle') || e.target === divider.value) {
-    logger.debug('Vertical drag started', {
-      startY: e.clientY,
-      changesHeight: changesSection.value?.clientHeight,
-      commitsHeight: commitsSection.value?.clientHeight
-    })
-
-    isDraggingVertical.value = true
+// 修改 startChangesDrag 函数
+const startChangesDrag = (e) => {
+  if (e.target === changesDivider.value || e.target.closest('.divider-handle')) {
+    isDraggingChanges.value = true
     startY.value = e.clientY
-    initialHeightChanges.value = changesSection.value?.clientHeight || 0
-    initialHeightCommits.value = commitsSection.value?.clientHeight || 0
+    initialHeightChanges.value = changesHeight.value
+    initialHeightStaged.value = stagedHeight.value
+    panelsHeight.value = panelsContainer.value.offsetHeight
 
-    // 防止文本选中
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'row-resize'
-    document.addEventListener('mousemove', handleVerticalDrag)
-    document.addEventListener('mouseup', stopVerticalDrag)
+    document.addEventListener('mousemove', handleChangesDrag)
+    document.addEventListener('mouseup', stopChangesDrag)
     e.preventDefault()
-  } else {
-    logger.debug('Vertical drag not started - incorrect target')
+    e.stopPropagation()
   }
 }
 
-const handleVerticalDrag = (e) => {
-  if (!isDraggingVertical.value) return
+// 修改 handleChangesDrag 函数
+const handleChangesDrag = (e) => {
+  if (!isDraggingChanges.value) return
 
   const dy = e.clientY - startY.value
-  const newChangesHeight = Math.max(100, initialHeightChanges.value + dy)
-  const newCommitsHeight = Math.max(100, initialHeightCommits.value - dy)
+  const newChangesHeight = initialHeightChanges.value + dy
 
-  // 使用requestAnimationFrame确保流畅更新
+  // 计算最小和最大高度限制
+  const minChangesHeight = changesHeaderHeight.value
+  const maxChangesHeight = panelsHeight.value - stagedHeaderHeight.value - commitsHeaderHeight.value - 16
+
+  // 确保高度在限制范围内
+  const clampedChangesHeight = Math.max(minChangesHeight, Math.min(maxChangesHeight, newChangesHeight))
+
+  // 计算Staged区域的新高度（剩余空间减去分隔线高度）
+  const newStagedHeight = panelsHeight.value - clampedChangesHeight - 8 - commitsHeight.value
+
   requestAnimationFrame(() => {
-    changesSection.value.style.height = `${newChangesHeight}px`
-    commitsSection.value.style.height = `${newCommitsHeight}px`
+    // 更新高度值
+    changesHeight.value = clampedChangesHeight
+    stagedHeight.value = newStagedHeight
 
-    // 强制重新计算布局
-    changesSection.value.style.display = 'block'
-    commitsSection.value.style.display = 'block'
+    // 当区域高度接近最小值时，隐藏内容但保留标题
+    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value)
+    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value)
   })
 }
 
-const stopVerticalDrag = () => {
-  logger.debug('Stopping vertical drag')
-  isDraggingVertical.value = false
-  document.body.style.userSelect = ''
-  document.body.style.cursor = ''
-  document.removeEventListener('mousemove', handleVerticalDrag)
-  document.removeEventListener('mouseup', stopVerticalDrag)
+const stopChangesDrag = () => {
+  isDraggingChanges.value = false;
+  logger.debug('停止拖拽Changes区域分隔线', {
+    finalChangesHeight: changesSection.value.offsetHeight,
+    finalStagedHeight: stagedSection.value.offsetHeight
+  });
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+  document.removeEventListener('mousemove', handleChangesDrag);
+  document.removeEventListener('mouseup', stopChangesDrag);
+}
+
+// 修改 startCommitsDrag 函数
+const startCommitsDrag = (e) => {
+  if (e.target === commitsDivider.value || e.target.closest('.divider-handle')) {
+    isDraggingCommits.value = true
+    startY.value = e.clientY
+    initialHeightCommits.value = commitsHeight.value
+    initialHeightStaged.value = stagedHeight.value
+    initialHeightChanges.value = changesHeight.value
+    panelsHeight.value = panelsContainer.value.offsetHeight
+
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'row-resize'
+    document.addEventListener('mousemove', handleCommitsDrag)
+    document.addEventListener('mouseup', stopCommitsDrag)
+    e.preventDefault()
+    e.stopPropagation()
+  }
+}
+
+const handleCommitsDrag = (e) => {
+  if (!isDraggingCommits.value) return
+
+  const dy = e.clientY - startY.value
+  logger.debug('Commits拖动开始', {
+    dy,
+    startY: startY.value,
+    currentY: e.clientY,
+    initialCommitsHeight: initialHeightCommits.value,
+    initialChangesHeight: initialHeightChanges.value,
+    initialStagedHeight: initialHeightStaged.value,
+    panelsHeight: panelsHeight.value
+  })
+
+  // 计算新的Commits区域高度（直接基于dy变化）
+  const newCommitsHeight = initialHeightCommits.value - dy // 注意这里是减dy
+
+  // 计算最小和最大高度限制
+  const minCommitsHeight = commitsHeaderHeight.value
+  const maxCommitsHeight = panelsHeight.value - changesHeaderHeight.value - stagedHeaderHeight.value - 16
+  logger.debug('高度限制检查', { minCommitsHeight, maxCommitsHeight, newCommitsHeight })
+
+  // 确保高度在限制范围内
+  const clampedCommitsHeight = Math.max(minCommitsHeight, Math.min(maxCommitsHeight, newCommitsHeight))
+
+  // 计算高度变化量（正值表示Commits区域减小，上方区域应增加）
+  const heightChange = initialHeightCommits.value - clampedCommitsHeight
+  logger.debug('高度变化计算', {
+    heightChange,
+    clampedCommitsHeight,
+    initialCommitsHeight: initialHeightCommits.value
+  })
+
+  requestAnimationFrame(() => {
+    // 更新Commits区域高度
+    commitsHeight.value = clampedCommitsHeight
+    logger.debug('更新Commits高度', { clampedCommitsHeight })
+
+    // 按比例调整上方两个区域
+    const totalInitialHeight = initialHeightChanges.value + initialHeightStaged.value
+    const changesRatio = initialHeightChanges.value / totalInitialHeight
+    const stagedRatio = initialHeightStaged.value / totalInitialHeight
+    logger.debug('区域比例计算', {
+      totalInitialHeight,
+      changesRatio,
+      stagedRatio
+    })
+
+    // 上方区域应该增加高度（因为下方区域减少了）
+    changesHeight.value = initialHeightChanges.value + (heightChange * changesRatio)
+    stagedHeight.value = initialHeightStaged.value + (heightChange * stagedRatio)
+    logger.debug('新高度计算', {
+      changesHeight: changesHeight.value,
+      stagedHeight: stagedHeight.value
+    })
+
+    // 确保高度不低于最小值
+    changesHeight.value = Math.max(changesHeaderHeight.value, changesHeight.value)
+    stagedHeight.value = Math.max(stagedHeaderHeight.value, stagedHeight.value)
+    logger.debug('最终高度设置', {
+      changesHeight: changesHeight.value,
+      stagedHeight: stagedHeight.value,
+      commitsHeight: commitsHeight.value
+    })
+
+    // 当区域高度接近最小值时，隐藏内容但保留标题
+    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value)
+    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value)
+  })
+}
+
+const stopCommitsDrag = () => {
+  isDraggingCommits.value = false;
+  document.body.style.userSelect = '';
+  document.body.style.cursor = '';
+  document.removeEventListener('mousemove', handleCommitsDrag);
+  document.removeEventListener('mouseup', stopCommitsDrag);
+}
+
+// 新增辅助函数
+const toggleSectionVisibility = (section, headerHeight) => {
+  const content = section.querySelector('.scrollable-content')
+  if (section.offsetHeight <= headerHeight + 10) {
+    content.style.display = 'none'
+  } else {
+    content.style.display = 'block'
+  }
 }
 
 onMounted(() => {
   logger.debug('Component mounted')
   refreshGitStatus()
 
-  // 确保元素已挂载
   nextTick(() => {
-    logger.debug('Checking elements after mount', {
-      changesSection: !!changesSection.value,
-      commitsSection: !!commitsSection.value,
-      divider: !!divider.value
-    })
+    if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
+      panelsHeight.value = panelsContainer.value.offsetHeight
 
-    if (changesSection.value && commitsSection.value) {
-      logger.debug('Setting initial heights')
-      changesSection.value.style.height = '40%'
-      commitsSection.value.style.height = '60%'
+      // 设置初始高度比例
+      changesHeight.value = panelsHeight.value * 0.3
+      stagedHeight.value = panelsHeight.value * 0.3
+      commitsHeight.value = panelsHeight.value * 0.4
+
+      // 确保标题栏高度正确
+      const changesHeader = changesSection.value.querySelector('.n-collapse-item__header')
+      const stagedHeader = stagedSection.value.querySelector('.n-collapse-item__header')
+      const commitsHeader = commitsSection.value.querySelector('.n-collapse-item__header')
+
+      changesHeaderHeight.value = changesHeader?.offsetHeight || 40
+      stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
+      commitsHeaderHeight.value = commitsHeader?.offsetHeight || 40
     }
   })
 })
 
 onUnmounted(() => {
+  // 移除所有事件监听器
   document.removeEventListener('mousemove', handleSidebarDrag)
   document.removeEventListener('mouseup', stopSidebarDrag)
-  document.removeEventListener('mousemove', handleVerticalDrag)
-  document.removeEventListener('mouseup', stopVerticalDrag)
+  document.removeEventListener('mousemove', handleChangesDrag)
+  document.removeEventListener('mouseup', stopChangesDrag)
+  document.removeEventListener('mousemove', handleCommitsDrag)
+  document.removeEventListener('mouseup', stopCommitsDrag)
 })
 
 // 其他原有方法保持不变...
@@ -987,12 +1139,6 @@ const handleCreateBranch = async () => {
 </style>
 
 <style scoped>
-.gitkraken-modal {
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
 .gitkraken-container {
   display: flex;
   height: 100vh;
@@ -1002,6 +1148,8 @@ const handleCreateBranch = async () => {
 }
 
 .git-sidebar {
+  display: flex;
+  flex-direction: column;
   width: var(--sidebar-width);
   min-width: 200px;
   max-width: 600px;
@@ -1012,6 +1160,106 @@ const handleCreateBranch = async () => {
   height: 100%;
   overflow: hidden;
   position: relative;
+}
+
+.source-control-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+  flex-shrink: 0;
+}
+
+.commit-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+  flex-shrink: 0;
+}
+
+/* 新增 panels-container 样式 */
+.panels-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* 修改 changes-container 样式 */
+.changes-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+.changes-section,
+.staged-section,
+.commits-section {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 40px;
+  /* 标题栏高度 */
+  transition: flex 0.1s ease-out;
+}
+
+/* 确保分隔线可见 */
+.section-divider,
+.commits-divider {
+  height: 8px;
+  background-color: var(--divider-color);
+  cursor: row-resize;
+  position: relative;
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+.section-divider .divider-handle,
+.commits-divider .divider-handle {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 4px;
+  background-color: #0078d4;
+  border-radius: 2px;
+  opacity: 0.3;
+  transition: opacity 0.2s;
+}
+
+.section-divider:hover .divider-handle,
+.commits-divider:hover .divider-handle {
+  opacity: 1;
+}
+
+/* 可滚动内容区域 */
+.scrollable-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* 确保标题栏始终可见 */
+.n-collapse-item__header {
+  position: sticky;
+  top: 0;
+  background-color: var(--card-bg);
+  z-index: 1;
+  height: 40px;
+  /* 固定标题栏高度 */
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+}
+
+.n-list {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar-resize-handle {
@@ -1026,94 +1274,6 @@ const handleCreateBranch = async () => {
 
 .sidebar-resize-handle:hover {
   background-color: var(--divider-color);
-}
-
-.source-control-header {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--divider-color);
-  background-color: var(--card-bg);
-}
-
-.commit-section {
-  padding: 12px;
-  border-bottom: 1px solid var(--divider-color);
-  background-color: var(--card-bg);
-}
-
-.changes-section {
-  flex: 0 0 auto;
-  /* 不自动增长，由高度属性控制 */
-  overflow-y: auto;
-  position: relative;
-  min-height: 100px;
-  max-height: 80%;
-}
-
-/* 修改分隔线样式 */
-.section-divider {
-  flex: 0 0 8px;
-  /* 固定高度 */
-  height: 8px;
-  background-color: var(--divider-color);
-  cursor: row-resize;
-  margin: 0;
-  position: relative;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.divider-handle {
-  width: 30px;
-  height: 4px;
-  background-color: var(--text-color-secondary);
-  border-radius: 2px;
-  opacity: 0.3;
-  transition: opacity 0.2s;
-}
-
-.section-divider:hover .divider-handle {
-  opacity: 1;
-}
-
-.commits-section {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 100px;
-  max-height: 80%;
-}
-
-/* 强制更新高度计算 */
-.changes-section,
-.commits-section {
-  will-change: height;
-  /* 提示浏览器优化重绘 */
-  contain: strict;
-  /* 限制渲染范围提高性能 */
-}
-
-/* 自定义滚动条样式 */
-.changes-section::-webkit-scrollbar,
-.commits-section::-webkit-scrollbar {
-  width: 6px;
-}
-
-.changes-section::-webkit-scrollbar-track,
-.commits-section::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.changes-section::-webkit-scrollbar-thumb,
-.commits-section::-webkit-scrollbar-thumb {
-  background-color: var(--text-color-secondary);
-  border-radius: 3px;
-  opacity: 0.3;
-}
-
-.changes-section::-webkit-scrollbar-thumb:hover,
-.commits-section::-webkit-scrollbar-thumb:hover {
-  opacity: 0.6;
 }
 
 .git-content {
@@ -1144,69 +1304,23 @@ const handleCreateBranch = async () => {
   height: 100%;
 }
 
-.file-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* 自定义滚动条样式 */
+.scrollable-content::-webkit-scrollbar {
+  width: 6px;
 }
 
-.file-icon {
-  color: var(--text-color-secondary);
+.scrollable-content::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.file-path {
-  color: var(--text-color);
+.scrollable-content::-webkit-scrollbar-thumb {
+  background-color: var(--text-color-secondary);
+  border-radius: 3px;
+  opacity: 0.3;
 }
 
-.file-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.file-row:hover {
-  background-color: var(--hover-color);
-}
-
-.file-status-a {
-  background-color: var(--added-bg);
-}
-
-.file-status-m {
-  background-color: var(--modified-bg);
-}
-
-.file-status-d {
-  background-color: var(--deleted-bg);
-}
-
-.commit-list {
-  margin-left: 24px;
-  border-left: 1px solid var(--divider-color);
-  padding-left: 8px;
-}
-
-.commit-list .n-list-item {
-  padding: 8px;
-  margin: 4px 0;
-  border-radius: 4px;
-}
-
-.commit-meta {
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--divider-color);
-}
-
-.commit-message {
-  white-space: pre-wrap;
-  font-family: 'Maple Mono NF CN', monospace;
-  font-size: 14px;
-  margin-top: 8px;
-  color: var(--text-color);
-}
-
-.commit-diff {
-  margin-top: 16px;
+.scrollable-content::-webkit-scrollbar-thumb:hover {
+  opacity: 0.6;
 }
 
 .n-collapse-item .n-collapse-item__header {
