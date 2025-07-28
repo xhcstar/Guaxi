@@ -483,38 +483,41 @@ const diffEditorContainer = ref(null)
 const commitDiffEditorContainer = ref(null)
 
 // 初始化 Monaco Editor
-const initMonacoEditor = () => {
-  nextTick(() => {
-    if (diffEditorContainer.value) {
-      console.log('Initializing Monaco diff editor');
-      registerDiffLanguages();
+const initMonacoEditor = async () => {
+  return new Promise((resolve) => {
+    nextTick(async () => {
+      if (diffEditorContainer.value) {
+        console.log('Initializing Monaco diff editor')
+        await registerDiffLanguages()
 
-      diffEditor.value = monaco.editor.createDiffEditor(diffEditorContainer.value, {
-        readOnly: true,
-        renderSideBySide: true,
-        automaticLayout: true,
-        theme: 'vs',
-        scrollBeyondLastLine: false,
-        renderIndicators: true,
-        renderWhitespace: 'selection',
-      });
+        diffEditor.value = monaco.editor.createDiffEditor(diffEditorContainer.value, {
+          readOnly: true,
+          renderSideBySide: true,
+          automaticLayout: true,
+          theme: 'vs',
+          scrollBeyondLastLine: false,
+          renderIndicators: true,
+          renderWhitespace: 'selection',
+        })
 
-      console.log('Monaco diff editor initialized');
-    }
-  });
+        console.log('Monaco diff editor initialized')
+        resolve()
+      }
+    })
+  })
 }
 
 // 更新文件差异内容
 const updateFileDiff = async (file) => {
-  console.log('[Diff] Starting diff update for file:', file.path);
+  console.log('[Diff] Starting diff update for file:', file.path)
   if (!diffEditor.value) {
-    console.error('[Diff] Diff editor not initialized');
-    return;
+    console.error('[Diff] Diff editor not initialized')
+    return
   }
 
   try {
-    const filePath = file.path.replace(/\\/g, '/');
-    console.log('[Diff] Fetching content for:', filePath);
+    const filePath = file.path.replace(/\\/g, '/')
+    console.log('[Diff] Fetching content for:', filePath)
 
     const [originalContent, modifiedContent] = await Promise.all([
       invoke('get_file_content', {
@@ -522,57 +525,57 @@ const updateFileDiff = async (file) => {
         filePath: filePath,
         revision: 'HEAD'
       }).catch(e => {
-        console.error('[Diff] Error getting original content:', e);
-        return '// Unable to load original content';
+        console.error('[Diff] Error getting original content:', e)
+        return '// Unable to load original content'
       }),
       invoke('get_file_content', {
         path: props.workspacePath,
         filePath: filePath
       }).catch(e => {
-        console.error('[Diff] Error getting modified content:', e);
-        return '// Unable to load modified content';
+        console.error('[Diff] Error getting modified content:', e)
+        return '// Unable to load modified content'
       })
-    ]);
+    ])
 
     console.log('[Diff] Content fetched:', {
       originalLength: originalContent.length,
       modifiedLength: modifiedContent.length
-    });
+    })
 
-    const language = getLanguageForFile(file.path);
-    console.log('[Diff] Detected language:', language);
+    const language = getLanguageForFile(file.path)
+    console.log('[Diff] Detected language:', language)
 
     const originalModel = monaco.editor.createModel(
       originalContent,
       language
-    );
+    )
     const modifiedModel = monaco.editor.createModel(
       modifiedContent,
       language
-    );
+    )
 
-    console.log('[Diff] Models created, setting to editor');
+    console.log('[Diff] Models created, setting to editor')
     diffEditor.value.setModel({
       original: originalModel,
       modified: modifiedModel
-    });
+    })
 
-    // 强制重新布局
+    // 添加延迟以确保布局正确
     setTimeout(() => {
-      console.log('[Diff] Triggering layout');
-      diffEditor.value.layout();
-    }, 100);
+      console.log('[Diff] Triggering layout')
+      diffEditor.value.layout()
+    }, 100)
 
   } catch (error) {
-    console.error('[Diff] Error in updateFileDiff:', error);
+    console.error('[Diff] Error in updateFileDiff:', error)
     const errorModel = monaco.editor.createModel(
       `Error loading diff:\n${error.message}`,
       'text/plain'
-    );
+    )
     diffEditor.value.setModel({
       original: errorModel,
       modified: errorModel
-    });
+    })
   }
 }
 
@@ -1181,9 +1184,9 @@ onMounted(() => {
   logger.debug('Component mounted')
   refreshGitStatus()
   fetchBranches() // 添加这行
-  initMonacoEditor()
 
   nextTick(() => {
+    initMonacoEditor()
     if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
       panelsHeight.value = panelsContainer.value.offsetHeight
 
@@ -1304,22 +1307,28 @@ const getFileStatusIcon = (status) => {
 }
 
 const handleFileClick = async (file) => {
-  console.log('Handling file click:', file.path);
+  console.log('Handling file click:', file.path)
   try {
-    selectedFile.value = file;
-    selectedCommit.value = null;
+    selectedFile.value = file
+    selectedCommit.value = null
 
-    console.log('Updating file diff for:', file.path);
-    await nextTick();
-    await updateFileDiff(file);
-    console.log('File diff updated successfully');
+    console.log('Updating file diff for:', file.path)
+
+    // 确保编辑器已初始化
+    if (!diffEditor.value) {
+      await initMonacoEditor()
+    }
+
+    await nextTick()
+    await updateFileDiff(file)
+    console.log('File diff updated successfully')
   } catch (error) {
-    console.error('Failed to load file content', error);
+    console.error('Failed to load file content', error)
     notification.error({
       title: '加载文件失败',
       content: `无法加载文件 ${file.path} 的内容: ${error}`,
       duration: 3000
-    });
+    })
   }
 }
 
