@@ -71,13 +71,6 @@
                             丢弃全部
                           </n-tooltip>
                         </n-space>
-
-                        <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
-                          <n-icon>
-                            <GitBranchOutline />
-                          </n-icon>
-                          {{ currentBranch }}
-                        </n-tag>
                       </n-space>
                     </n-list-item>
 
@@ -198,43 +191,52 @@
                   <n-list>
                     <!-- 操作按钮行 -->
                     <n-list-item>
-                      <n-space>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handlePull" :loading="gitLoading.pull">
-                              <template #icon>
-                                <n-icon>
-                                  <CloudDownloadOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          拉取
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handlePush" :loading="gitLoading.push">
-                              <template #icon>
-                                <n-icon>
-                                  <CloudUploadOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          推送
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="showBranchPanel = true">
-                              <template #icon>
-                                <n-icon>
-                                  <GitBranchOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          创建分支
-                        </n-tooltip>
+                      <n-space justify="space-between">
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handlePull" :loading="gitLoading.pull">
+                                <template #icon>
+                                  <n-icon>
+                                    <CloudDownloadOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            拉取
+                          </n-tooltip>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handlePush" :loading="gitLoading.push">
+                                <template #icon>
+                                  <n-icon>
+                                    <CloudUploadOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            推送
+                          </n-tooltip>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="showBranchPanel = true">
+                                <template #icon>
+                                  <n-icon>
+                                    <GitBranchOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            创建分支
+                          </n-tooltip>
+                        </n-space>
+                        <!-- 将分支标签移动到这里 -->
+                        <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
+                          <n-icon>
+                            <GitBranchOutline />
+                          </n-icon>
+                          {{ currentBranch }}
+                        </n-tag>
                       </n-space>
                     </n-list-item>
 
