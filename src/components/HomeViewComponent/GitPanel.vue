@@ -267,7 +267,7 @@
           <n-card size="small" :title="selectedFile.path" embedded>
             <n-scrollbar style="height: 100%">
               <!-- 使用 monaco-editor 实现专业差异对比 -->
-              <div ref="diffEditorContainer" class="diff-editor-container"></div>
+              <div ref="diffEditorContainer" class="diff-editor-container" style="height: 100%;"></div>
             </n-scrollbar>
           </n-card>
         </div>
@@ -285,7 +285,7 @@
               <div class="commit-diff">
                 <n-divider title-placement="left">修改内容</n-divider>
                 <!-- 使用 monaco-editor 显示提交差异 -->
-                <div ref="commitDiffEditorContainer" class="diff-editor-container"></div>
+                <div ref="commitDiffEditorContainer" class="diff-editor-container" style="height: 100%;"></div>
               </div>
             </n-scrollbar>
           </n-card>
@@ -500,6 +500,17 @@ const initMonacoEditor = async () => {
           renderWhitespace: 'selection',
         })
 
+        // 强制设置初始布局
+        setTimeout(() => {
+          const container = diffEditorContainer.value
+          if (container) {
+            const height = container.clientHeight
+            const width = container.clientWidth
+            console.log('[Diff] Initial container dimensions:', { width, height })
+            diffEditor.value.layout({ width, height })
+          }
+        }, 100)
+
         console.log('Monaco diff editor initialized')
         resolve()
       }
@@ -537,13 +548,7 @@ const updateFileDiff = async (file) => {
       })
     ])
 
-    console.log('[Diff] Content fetched:', {
-      originalLength: originalContent.length,
-      modifiedLength: modifiedContent.length
-    })
-
     const language = getLanguageForFile(file.path)
-    console.log('[Diff] Detected language:', language)
 
     const originalModel = monaco.editor.createModel(
       originalContent,
@@ -554,7 +559,6 @@ const updateFileDiff = async (file) => {
       language
     )
 
-    console.log('[Diff] Models created, setting to editor')
     diffEditor.value.setModel({
       original: originalModel,
       modified: modifiedModel
@@ -562,9 +566,14 @@ const updateFileDiff = async (file) => {
 
     // 添加延迟以确保布局正确
     setTimeout(() => {
-      console.log('[Diff] Triggering layout')
-      diffEditor.value.layout()
-    }, 100)
+      const container = diffEditorContainer.value
+      if (container) {
+        const height = container.clientHeight
+        const width = container.clientWidth
+        console.log('[Diff] Container dimensions:', { width, height })
+        diffEditor.value.layout({ width, height })
+      }
+    }, 200)
 
   } catch (error) {
     console.error('[Diff] Error in updateFileDiff:', error)
@@ -673,62 +682,6 @@ const parseUnifiedDiff = (diff) => {
     original: original.join('\n'),
     modified: modified.join('\n')
   }
-}
-
-// 解析差异内容函数
-function parseDiffContent(diff, type) {
-  const lines = diff.split('\n')
-  let result = ''
-  let lineNumber = 1
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-
-    if (line.startsWith('@@')) {
-      // 跳过差异头部
-      continue
-    }
-
-    if (type === 'original') {
-      if (line.startsWith('+')) {
-        // 新增行在原文件中不存在
-        result += `<div class="diff-line empty-line" data-line="${lineNumber}"></div>`
-      } else if (line.startsWith('-')) {
-        // 删除行在原文件中存在
-        result += `<div class="diff-line removed-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
-        lineNumber++
-      } else {
-        // 未修改行
-        result += `<div class="diff-line unchanged-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
-        lineNumber++
-      }
-    } else if (type === 'modified') {
-      if (line.startsWith('+')) {
-        // 新增行在修改后文件中存在
-        result += `<div class="diff-line added-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
-        lineNumber++
-      } else if (line.startsWith('-')) {
-        // 删除行在修改后文件中不存在
-        result += `<div class="diff-line empty-line" data-line="${lineNumber}"></div>`
-      } else {
-        // 未修改行
-        result += `<div class="diff-line unchanged-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
-        lineNumber++
-      }
-    }
-  }
-
-  return result
-}
-
-// HTML转义函数
-function escapeHtml(unsafe) {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;")
 }
 
 const confirmBranchSwitch = () => {
@@ -1180,10 +1133,25 @@ const toggleSectionVisibility = (section, headerHeight) => {
   }
 };
 
+// 添加窗口大小变化处理函数
+const handleResize = () => {
+  if (diffEditor.value) {
+    const container = diffEditorContainer.value
+    if (container) {
+      const height = container.clientHeight
+      const width = container.clientWidth
+      diffEditor.value.layout({ width, height })
+    }
+  }
+}
+
 onMounted(() => {
   logger.debug('Component mounted')
   refreshGitStatus()
   fetchBranches() // 添加这行
+
+  // 添加窗口大小变化监听
+  window.addEventListener('resize', handleResize)
 
   nextTick(() => {
     initMonacoEditor()
@@ -1742,6 +1710,7 @@ watch(selectedCommit, (newVal) => {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -1749,15 +1718,17 @@ watch(selectedCommit, (newVal) => {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 100%;
   overflow: hidden;
 }
 
 .diff-viewer,
 .commit-details {
   flex: 1;
-  overflow: hidden;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* Monaco Editor 容器样式 */
@@ -1765,6 +1736,23 @@ watch(selectedCommit, (newVal) => {
   flex: 1;
   height: 100%;
   width: 100%;
+  min-height: 300px;
+}
+
+.n-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.n-card__content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.n-scrollbar {
+  height: 100%;
 }
 
 /* 响应式布局调整 */
