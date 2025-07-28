@@ -411,6 +411,42 @@ const commitForm = ref({
   message: ''
 })
 
+// 在现有代码的顶部添加
+const MIN_HEIGHT_FOR_SCROLL = 200; // 触发滚动条的最小高度
+
+// 在现有函数后面添加新函数
+const checkScrollableSections = () => {
+  // Changes区域
+  if (changesSection.value) {
+    const content = changesSection.value.querySelector('.scrollable-content');
+    if (content) {
+      const shouldScroll = changesHeight.value < MIN_HEIGHT_FOR_SCROLL;
+      content.style.overflowY = shouldScroll ? 'auto' : 'hidden';
+      content.style.maxHeight = shouldScroll ? `${changesHeight.value - changesHeaderHeight.value}px` : '';
+    }
+  }
+
+  // Staged区域
+  if (stagedSection.value) {
+    const content = stagedSection.value.querySelector('.scrollable-content');
+    if (content) {
+      const shouldScroll = stagedHeight.value < MIN_HEIGHT_FOR_SCROLL;
+      content.style.overflowY = shouldScroll ? 'auto' : 'hidden';
+      content.style.maxHeight = shouldScroll ? `${stagedHeight.value - stagedHeaderHeight.value}px` : '';
+    }
+  }
+
+  // Commits区域
+  if (commitsSection.value) {
+    const content = commitsSection.value.querySelector('.scrollable-content');
+    if (content) {
+      const shouldScroll = commitsHeight.value < MIN_HEIGHT_FOR_SCROLL;
+      content.style.overflowY = shouldScroll ? 'auto' : 'hidden';
+      content.style.maxHeight = shouldScroll ? `${commitsHeight.value - commitsHeaderHeight.value}px` : '';
+    }
+  }
+};
+
 // 拖动处理函数
 const startSidebarDrag = (e) => {
   isDraggingSidebar.value = true
@@ -470,31 +506,34 @@ const startChangesDrag = (e) => {
 
 // 修改 handleChangesDrag 函数
 const handleChangesDrag = (e) => {
-  if (!isDraggingChanges.value) return
+  if (!isDraggingChanges.value) return;
 
-  const dy = e.clientY - startY.value
-  const newChangesHeight = initialHeightChanges.value + dy
+  const dy = e.clientY - startY.value;
+  const newChangesHeight = initialHeightChanges.value + dy;
 
   // 计算最小和最大高度限制
-  const minChangesHeight = changesHeaderHeight.value
-  const maxChangesHeight = panelsHeight.value - stagedHeaderHeight.value - commitsHeaderHeight.value - 16
+  const minChangesHeight = changesHeaderHeight.value;
+  const maxChangesHeight = panelsHeight.value - stagedHeaderHeight.value - commitsHeaderHeight.value - 16;
 
   // 确保高度在限制范围内
-  const clampedChangesHeight = Math.max(minChangesHeight, Math.min(maxChangesHeight, newChangesHeight))
+  const clampedChangesHeight = Math.max(minChangesHeight, Math.min(maxChangesHeight, newChangesHeight));
 
   // 计算Staged区域的新高度（剩余空间减去分隔线高度）
-  const newStagedHeight = panelsHeight.value - clampedChangesHeight - 8 - commitsHeight.value
+  const newStagedHeight = panelsHeight.value - clampedChangesHeight - 8 - commitsHeight.value;
 
   requestAnimationFrame(() => {
     // 更新高度值
-    changesHeight.value = clampedChangesHeight
-    stagedHeight.value = newStagedHeight
+    changesHeight.value = clampedChangesHeight;
+    stagedHeight.value = newStagedHeight;
 
     // 当区域高度接近最小值时，隐藏内容但保留标题
-    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value)
-    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value)
-  })
-}
+    toggleSectionVisibility(changesSection.value, changesHeaderHeight.value);
+    toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value);
+
+    // 检查是否需要显示滚动条
+    checkScrollableSections();
+  });
+};
 
 const stopChangesDrag = () => {
   isDraggingChanges.value = false;
@@ -634,6 +673,9 @@ const handleCommitsDrag = (e) => {
       panelsContainer.value.offsetHeight; // 触发重绘
       panelsContainer.value.style.overflow = '';
     }
+
+    // 检查是否需要显示滚动条
+    checkScrollableSections();
   });
 };
 
@@ -698,6 +740,9 @@ onMounted(() => {
       changesHeaderHeight.value = changesHeader?.offsetHeight || 40
       stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
       commitsHeaderHeight.value = commitsHeader?.offsetHeight || 40
+
+      // 初始检查滚动条
+      checkScrollableSections();
     }
   })
 })
@@ -747,6 +792,8 @@ const refreshGitStatus = async () => {
 
     // 添加获取提交历史的调用
     await loadCommitHistory()
+    // 刷新后检查滚动条
+    nextTick(checkScrollableSections);
   } catch (error) {
     logger.error('Failed to refresh Git status', error)
   }
@@ -873,6 +920,9 @@ const handleStageFile = async (file) => {
         }
       }
     })
+
+    // 操作完成后检查滚动条
+    nextTick(checkScrollableSections);
   } catch (error) {
     // 回滚UI状态
     const stagedIndex = stagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
@@ -932,6 +982,9 @@ const handleUnstageFile = async (file) => {
         }
       }
     })
+
+    // 操作完成后检查滚动条
+    nextTick(checkScrollableSections);
   } catch (error) {
     // 回滚UI状态
     const unstagedIndex = unstagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
@@ -1320,11 +1373,33 @@ const handleCreateBranch = async () => {
   overflow: hidden;
 }
 
-/* 可滚动内容区域 */
 .scrollable-content {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: hidden;
+  /* 默认隐藏，根据高度动态显示 */
   min-height: 0;
+  transition: all 0.2s ease;
+  padding-right: 4px;
+  /* 为滚动条留出空间 */
+}
+
+/* 自定义滚动条样式 */
+.scrollable-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollable-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollable-content::-webkit-scrollbar-thumb {
+  background-color: var(--text-color-secondary);
+  border-radius: 3px;
+  opacity: 0.3;
+}
+
+.scrollable-content::-webkit-scrollbar-thumb:hover {
+  opacity: 0.6;
 }
 
 /* 确保标题栏始终可见 */
