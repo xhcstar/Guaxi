@@ -2,7 +2,10 @@
   <!-- 主容器 - 直接作为页面内容 -->
   <div class="gitkraken-container">
     <!-- 左侧面板 - 类似VSCode的Git面板 -->
-    <div class="git-sidebar">
+    <div class="git-sidebar" ref="sidebar">
+      <!-- 侧边栏右侧拖动条 -->
+      <div class="sidebar-resize-handle" @mousedown="startSidebarDrag"></div>
+
       <div class="source-control-header">
         <n-space align="center" justify="space-between">
           <n-text strong>仓库管理</n-text>
@@ -27,7 +30,7 @@
       </div>
 
       <!-- 变更文件列表 -->
-      <div class="changes-section">
+      <div class="changes-section" ref="changesSection">
         <n-collapse :default-expanded-names="['changes']">
           <n-collapse-item name="changes" title="Changes">
             <template #header-extra>
@@ -168,8 +171,13 @@
         </n-collapse>
       </div>
 
+      <!-- 区域分隔线 - 添加更明显的拖动手柄 -->
+      <div class="section-divider" ref="divider" @mousedown="startVerticalDrag">
+        <div class="divider-handle"></div>
+      </div>
+
       <!-- 提交历史 -->
-      <div class="commits-section">
+      <div class="commits-section" ref="commitsSection">
         <n-collapse :default-expanded-names="['commits']">
           <n-collapse-item name="commits" title="提交历史">
             <n-list>
@@ -277,7 +285,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import {
   NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip
 } from 'naive-ui'
@@ -294,7 +302,6 @@ import {
   GitCommitOutline
 } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
-// import { useMessage } from 'naive-ui'
 
 // 日志级别枚举
 const LogLevel = {
@@ -334,14 +341,24 @@ const logger = {
 const props = defineProps({
   workspacePath: {
     type: String,
-    required: true  // 根据业务需求决定是否必需
+    required: true
   }
 })
 
-// const message = useMessage()
+// 拖动相关状态
+const sidebar = ref(null)
+const changesSection = ref(null)
+const commitsSection = ref(null)
+const divider = ref(null)
+const isDraggingSidebar = ref(false)
+const isDraggingVertical = ref(false)
+const startY = ref(0)
+const startX = ref(0)
+const initialHeightChanges = ref(0)
+const initialHeightCommits = ref(0)
+const initialWidthSidebar = ref(280)
 
 // 控制显示状态
-const visible = ref(false)
 const showCreateBranchModal = ref(false)
 const newBranchName = ref('')
 
@@ -369,14 +386,120 @@ const commitForm = ref({
   message: ''
 })
 
-// 模态框样式
-const modalStyle = computed(() => ({
-  width: '90vw',
-  height: '85vh',
-  maxWidth: '1400px',
-  maxHeight: '900px'
-}))
+// 拖动处理函数
+const startSidebarDrag = (e) => {
+  isDraggingSidebar.value = true
+  startX.value = e.clientX
+  initialWidthSidebar.value = parseInt(getComputedStyle(sidebar.value).width)
+  document.body.style.cursor = 'col-resize'
+  document.addEventListener('mousemove', handleSidebarDrag)
+  document.addEventListener('mouseup', stopSidebarDrag)
+  e.preventDefault()
+}
 
+const handleSidebarDrag = (e) => {
+  if (isDraggingSidebar.value) {
+    const dx = e.clientX - startX.value
+    const newWidth = initialWidthSidebar.value + dx
+    if (newWidth > 200 && newWidth < 600) {
+      sidebar.value.style.width = `${newWidth}px`
+    }
+  }
+}
+
+const stopSidebarDrag = () => {
+  isDraggingSidebar.value = false
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', handleSidebarDrag)
+  document.removeEventListener('mouseup', stopSidebarDrag)
+}
+
+const startVerticalDrag = (e) => {
+  logger.debug('Attempting to start vertical drag', {
+    target: e.target,
+    isDivider: e.target === divider.value,
+    isHandle: e.target.closest('.divider-handle')
+  })
+
+  // 确保只在拖动句柄上触发
+  if (e.target.closest('.divider-handle') || e.target === divider.value) {
+    logger.debug('Vertical drag started', {
+      startY: e.clientY,
+      changesHeight: changesSection.value?.clientHeight,
+      commitsHeight: commitsSection.value?.clientHeight
+    })
+
+    isDraggingVertical.value = true
+    startY.value = e.clientY
+    initialHeightChanges.value = changesSection.value?.clientHeight || 0
+    initialHeightCommits.value = commitsSection.value?.clientHeight || 0
+
+    // 防止文本选中
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'row-resize'
+    document.addEventListener('mousemove', handleVerticalDrag)
+    document.addEventListener('mouseup', stopVerticalDrag)
+    e.preventDefault()
+  } else {
+    logger.debug('Vertical drag not started - incorrect target')
+  }
+}
+
+const handleVerticalDrag = (e) => {
+  if (!isDraggingVertical.value) return
+
+  const dy = e.clientY - startY.value
+  const newChangesHeight = Math.max(100, initialHeightChanges.value + dy)
+  const newCommitsHeight = Math.max(100, initialHeightCommits.value - dy)
+
+  // 使用requestAnimationFrame确保流畅更新
+  requestAnimationFrame(() => {
+    changesSection.value.style.height = `${newChangesHeight}px`
+    commitsSection.value.style.height = `${newCommitsHeight}px`
+
+    // 强制重新计算布局
+    changesSection.value.style.display = 'block'
+    commitsSection.value.style.display = 'block'
+  })
+}
+
+const stopVerticalDrag = () => {
+  logger.debug('Stopping vertical drag')
+  isDraggingVertical.value = false
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', handleVerticalDrag)
+  document.removeEventListener('mouseup', stopVerticalDrag)
+}
+
+onMounted(() => {
+  logger.debug('Component mounted')
+  refreshGitStatus()
+
+  // 确保元素已挂载
+  nextTick(() => {
+    logger.debug('Checking elements after mount', {
+      changesSection: !!changesSection.value,
+      commitsSection: !!commitsSection.value,
+      divider: !!divider.value
+    })
+
+    if (changesSection.value && commitsSection.value) {
+      logger.debug('Setting initial heights')
+      changesSection.value.style.height = '40%'
+      commitsSection.value.style.height = '60%'
+    }
+  })
+})
+
+onUnmounted(() => {
+  document.removeEventListener('mousemove', handleSidebarDrag)
+  document.removeEventListener('mouseup', stopSidebarDrag)
+  document.removeEventListener('mousemove', handleVerticalDrag)
+  document.removeEventListener('mouseup', stopVerticalDrag)
+})
+
+// 其他原有方法保持不变...
 const refreshGitStatus = async () => {
   logger.debug('Refreshing Git status')
   console.log('repo path:', props.workspacePath)
@@ -413,7 +536,6 @@ const refreshGitStatus = async () => {
     await loadCommitHistory()
   } catch (error) {
     logger.error('Failed to refresh Git status', error)
-    // // message.error(`获取Git状态失败: ${error}`)
   }
 }
 
@@ -427,7 +549,6 @@ const loadCommitHistory = async () => {
     logger.debug('Commit history loaded', { count: commits.value.length })
   } catch (error) {
     logger.error('Failed to load commit history', error)
-    // // message.error(`获取提交历史失败: ${error}`)
   }
 }
 
@@ -452,7 +573,6 @@ const selectCommit = async (commit) => {
     logger.debug('Commit diff loaded', { commit: commit.id })
   } catch (error) {
     logger.error('Failed to load commit diff', { commit: commit.id, error })
-    // // message.error(`获取提交差异失败: ${error}`)
   }
 }
 
@@ -492,7 +612,6 @@ const handleFileClick = async (row) => {
     }
   } catch (error) {
     logger.error('Failed to load file content', { file: row.path, error })
-    // // message.error(`获取文件内容失败: ${error}`)
   }
 }
 
@@ -518,8 +637,6 @@ const handleStageFile = async (file) => {
       path: props.workspacePath,
       filePath: file.path
     })
-
-    // // message.success(`已暂存文件: ${file.path}`)
 
     // 4. 更新文件状态为已完成
     const stagedIndex = stagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
@@ -556,7 +673,6 @@ const handleStageFile = async (file) => {
         __pending: undefined
       })
     }
-    // // message.error(`暂存文件失败: ${error}`)
   }
 }
 
@@ -616,7 +732,6 @@ const handleUnstageFile = async (file) => {
         __pending: undefined
       })
     }
-    // // message.error(`取消暂存失败: ${error}`)
   }
 }
 
@@ -627,11 +742,9 @@ const handleStageAll = async () => {
       path: props.workspacePath
     })
     logger.info('All files staged', { count: unstagedFiles.value.length })
-    // // message.success('已暂存所有变更')
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to stage all files', error)
-    // // message.error(`暂存全部失败: ${error}`)
   }
 }
 
@@ -642,11 +755,9 @@ const handleUnstageAll = async () => {
       path: props.workspacePath
     })
     logger.info('All files unstaged', { count: stagedFiles.value.length })
-    // message.success('已取消所有暂存')
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to unstage all files', error)
-    // message.error(`取消暂存失败: ${error}`)
   }
 }
 
@@ -658,11 +769,9 @@ const handleDiscardFile = async (file) => {
       filePath: file.path
     })
     logger.info('File changes discarded', { file: file.path })
-    // message.success(`已丢弃文件变更: ${file.path}`)
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to discard file changes', { file: file.path, error })
-    // message.error(`丢弃文件失败: ${error}`)
   }
 }
 
@@ -673,17 +782,14 @@ const handleDiscardAll = async () => {
       path: props.workspacePath
     })
     logger.info('All changes discarded')
-    // message.success('已丢弃所有变更')
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to discard all changes', error)
-    // message.error(`丢弃全部失败: ${error}`)
   }
 }
 
 const handleCommit = async () => {
   if (!commitForm.value.message.trim()) {
-    // message.warning('请输入提交信息')
     return
   }
 
@@ -692,11 +798,9 @@ const handleCommit = async () => {
       path: props.workspacePath,
       message: commitForm.value.message
     })
-    // message.success('提交成功')
     commitForm.value.message = ''
-    await refreshGitStatus() // 确保调用
+    await refreshGitStatus()
   } catch (error) {
-    // message.error(`提交失败: ${error}`)
   }
 }
 
@@ -706,11 +810,9 @@ const handlePull = async () => {
   try {
     await invoke('git_pull', { path: props.workspacePath })
     logger.info('Pull successful')
-    // message.success('拉取成功')
     refreshGitStatus()
   } catch (error) {
     logger.error('Pull failed', { error })
-    // message.error(`拉取失败: ${error}`)
   } finally {
     gitLoading.value.pull = false
   }
@@ -722,10 +824,8 @@ const handlePush = async () => {
   try {
     await invoke('git_push', { path: props.workspacePath })
     logger.info('Push successful')
-    // message.success('推送成功')
   } catch (error) {
     logger.error('Push failed', { error })
-    // message.error(`推送失败: ${error}`)
   } finally {
     gitLoading.value.push = false
   }
@@ -739,11 +839,9 @@ const checkoutBranch = async (branchName) => {
       branch_name: branchName
     })
     logger.info('Branch checkout successful', { branch: branchName })
-    // message.success(`已切换到分支 ${branchName}`)
     refreshGitStatus()
   } catch (error) {
     logger.error('Branch checkout failed', { branch: branchName, error })
-    // message.error(`切换分支失败: ${error}`)
   }
 }
 
@@ -751,7 +849,6 @@ const handleCreateBranch = async () => {
   logger.debug('Creating new branch', { name: newBranchName.value })
   if (!newBranchName.value.trim()) {
     logger.warn('New branch name is empty')
-    // message.warning('请输入分支名称')
     return
   }
 
@@ -761,25 +858,13 @@ const handleCreateBranch = async () => {
       branch_name: newBranchName.value
     })
     logger.info('Branch created', { name: newBranchName.value })
-    // message.success(`已创建分支 ${newBranchName.value}`)
     showCreateBranchModal.value = false
     newBranchName.value = ''
     refreshGitStatus()
   } catch (error) {
     logger.error('Failed to create branch', { name: newBranchName.value, error })
-    // message.error(`创建分支失败: ${error}`)
   }
 }
-
-onMounted(() => {
-  logger.debug('Component mounted')
-  visible.value = true
-  refreshGitStatus()
-})
-
-defineExpose({
-  open
-})
 </script>
 
 <style>
@@ -911,21 +996,36 @@ defineExpose({
 .gitkraken-container {
   display: flex;
   height: 100vh;
-  /* 占据整个视口高度 */
   width: 100vw;
-  /* 占据整个视口宽度 */
   background-color: var(--bg-color);
   color: var(--text-color);
 }
 
 .git-sidebar {
   width: var(--sidebar-width);
+  min-width: 200px;
+  max-width: 600px;
   border-right: 1px solid var(--divider-color);
   display: flex;
   flex-direction: column;
   background-color: var(--sidebar-bg);
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
+  position: relative;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.sidebar-resize-handle:hover {
+  background-color: var(--divider-color);
 }
 
 .source-control-header {
@@ -941,12 +1041,79 @@ defineExpose({
 }
 
 .changes-section {
-  flex: 1;
+  flex: 0 0 auto;
+  /* 不自动增长，由高度属性控制 */
   overflow-y: auto;
+  position: relative;
+  min-height: 100px;
+  max-height: 80%;
+}
+
+/* 修改分隔线样式 */
+.section-divider {
+  flex: 0 0 8px;
+  /* 固定高度 */
+  height: 8px;
+  background-color: var(--divider-color);
+  cursor: row-resize;
+  margin: 0;
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.divider-handle {
+  width: 30px;
+  height: 4px;
+  background-color: var(--text-color-secondary);
+  border-radius: 2px;
+  opacity: 0.3;
+  transition: opacity 0.2s;
+}
+
+.section-divider:hover .divider-handle {
+  opacity: 1;
 }
 
 .commits-section {
-  border-top: 1px solid var(--divider-color);
+  flex: 1;
+  overflow-y: auto;
+  min-height: 100px;
+  max-height: 80%;
+}
+
+/* 强制更新高度计算 */
+.changes-section,
+.commits-section {
+  will-change: height;
+  /* 提示浏览器优化重绘 */
+  contain: strict;
+  /* 限制渲染范围提高性能 */
+}
+
+/* 自定义滚动条样式 */
+.changes-section::-webkit-scrollbar,
+.commits-section::-webkit-scrollbar {
+  width: 6px;
+}
+
+.changes-section::-webkit-scrollbar-track,
+.commits-section::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.changes-section::-webkit-scrollbar-thumb,
+.commits-section::-webkit-scrollbar-thumb {
+  background-color: var(--text-color-secondary);
+  border-radius: 3px;
+  opacity: 0.3;
+}
+
+.changes-section::-webkit-scrollbar-thumb:hover,
+.commits-section::-webkit-scrollbar-thumb:hover {
+  opacity: 0.6;
 }
 
 .git-content {
@@ -1044,6 +1211,7 @@ defineExpose({
 
 .n-collapse-item .n-collapse-item__header {
   padding: 4px 12px;
+  position: relative;
 }
 
 .n-collapse-item .n-collapse-item__content-inner {
