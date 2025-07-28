@@ -266,7 +266,8 @@
         <div v-if="selectedFile" class="diff-viewer">
           <n-card size="small" :title="selectedFile.path" embedded>
             <n-scrollbar style="height: 100%">
-              <pre class="diff-content">{{ selectedFile.diff || '无差异内容' }}</pre>
+              <!-- 使用 monaco-editor 实现专业差异对比 -->
+              <div ref="diffEditorContainer" class="diff-editor-container"></div>
             </n-scrollbar>
           </n-card>
         </div>
@@ -283,8 +284,8 @@
               <pre class="commit-message">{{ selectedCommit.message }}</pre>
               <div class="commit-diff">
                 <n-divider title-placement="left">修改内容</n-divider>
-                <!-- 使用 pre 标签保留格式 -->
-                <pre class="diff-content">{{ selectedCommit.diff }}</pre>
+                <!-- 使用 monaco-editor 显示提交差异 -->
+                <div ref="commitDiffEditorContainer" class="diff-editor-container"></div>
               </div>
             </n-scrollbar>
           </n-card>
@@ -355,7 +356,7 @@
 </template>
 
 <script setup>
-import { ref, h, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, h, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import {
   NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip, NForm,
   NFormItem,
@@ -376,6 +377,8 @@ import {
   CheckmarkCircleOutline
 } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
+import * as monaco from 'monaco-editor'
+import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言注册
 
 const { notification } = createDiscreteApi(['notification'])
 
@@ -468,11 +471,262 @@ const commitForm = ref({
 // 在现有代码的顶部添加
 const MIN_HEIGHT_FOR_SCROLL = 200; // 触发滚动条的最小高度
 
-
 // 分支面板相关状态
 const showBranchPanel = ref(false)
 const showCreateBranchModal = ref(false)
 const newBranchName = ref('')
+
+// Monaco Editor 实例
+const diffEditor = ref(null)
+const commitDiffEditor = ref(null)
+const diffEditorContainer = ref(null)
+const commitDiffEditorContainer = ref(null)
+
+// 初始化 Monaco Editor
+const initMonacoEditor = () => {
+  nextTick(() => {
+    if (diffEditorContainer.value) {
+      console.log('Initializing Monaco diff editor');
+      registerDiffLanguages();
+
+      diffEditor.value = monaco.editor.createDiffEditor(diffEditorContainer.value, {
+        readOnly: true,
+        renderSideBySide: true,
+        automaticLayout: true,
+        theme: 'vs',
+        scrollBeyondLastLine: false,
+        renderIndicators: true,
+        renderWhitespace: 'selection',
+      });
+
+      console.log('Monaco diff editor initialized');
+    }
+  });
+}
+
+// 更新文件差异内容
+const updateFileDiff = async (file) => {
+  console.log('[Diff] Starting diff update for file:', file.path);
+  if (!diffEditor.value) {
+    console.error('[Diff] Diff editor not initialized');
+    return;
+  }
+
+  try {
+    const filePath = file.path.replace(/\\/g, '/');
+    console.log('[Diff] Fetching content for:', filePath);
+
+    const [originalContent, modifiedContent] = await Promise.all([
+      invoke('get_file_content', {
+        path: props.workspacePath,
+        filePath: filePath,
+        revision: 'HEAD'
+      }).catch(e => {
+        console.error('[Diff] Error getting original content:', e);
+        return '// Unable to load original content';
+      }),
+      invoke('get_file_content', {
+        path: props.workspacePath,
+        filePath: filePath
+      }).catch(e => {
+        console.error('[Diff] Error getting modified content:', e);
+        return '// Unable to load modified content';
+      })
+    ]);
+
+    console.log('[Diff] Content fetched:', {
+      originalLength: originalContent.length,
+      modifiedLength: modifiedContent.length
+    });
+
+    const language = getLanguageForFile(file.path);
+    console.log('[Diff] Detected language:', language);
+
+    const originalModel = monaco.editor.createModel(
+      originalContent,
+      language
+    );
+    const modifiedModel = monaco.editor.createModel(
+      modifiedContent,
+      language
+    );
+
+    console.log('[Diff] Models created, setting to editor');
+    diffEditor.value.setModel({
+      original: originalModel,
+      modified: modifiedModel
+    });
+
+    // 强制重新布局
+    setTimeout(() => {
+      console.log('[Diff] Triggering layout');
+      diffEditor.value.layout();
+    }, 100);
+
+  } catch (error) {
+    console.error('[Diff] Error in updateFileDiff:', error);
+    const errorModel = monaco.editor.createModel(
+      `Error loading diff:\n${error.message}`,
+      'text/plain'
+    );
+    diffEditor.value.setModel({
+      original: errorModel,
+      modified: errorModel
+    });
+  }
+}
+
+// 更新提交差异内容
+const updateCommitDiff = async (commit) => {
+  if (!commitDiffEditor.value) return
+
+  try {
+    // 获取提交差异
+    const diff = await invoke('get_commit_diff', {
+      path: props.workspacePath,
+      commitId: commit.id
+    })
+
+    // 解析差异内容
+    const { original, modified } = parseUnifiedDiff(diff)
+
+    // 创建 Monaco 模型
+    const originalModel = monaco.editor.createModel(
+      original,
+      'plaintext'
+    )
+    const modifiedModel = monaco.editor.createModel(
+      modified,
+      'plaintext'
+    )
+
+    // 设置差异编辑器模型
+    commitDiffEditor.value.setModel({
+      original: originalModel,
+      modified: modifiedModel
+    })
+
+  } catch (error) {
+    logger.error('Failed to update commit diff', error)
+  }
+}
+
+// 根据文件扩展名获取语言
+const getLanguageForFile = (path) => {
+  const extension = path.split('.').pop().toLowerCase()
+  switch (extension) {
+    case 'js': return 'javascript'
+    case 'ts': return 'typescript'
+    case 'py': return 'python'
+    case 'rb': return 'ruby'
+    case 'go': return 'go'
+    case 'rs': return 'rust'
+    case 'java': return 'java'
+    case 'c': return 'c'
+    case 'cpp': return 'cpp'
+    case 'h': return 'cpp'
+    case 'hpp': return 'cpp'
+    case 'cs': return 'csharp'
+    case 'php': return 'php'
+    case 'html': return 'html'
+    case 'css': return 'css'
+    case 'scss': return 'scss'
+    case 'less': return 'less'
+    case 'json': return 'json'
+    case 'xml': return 'xml'
+    case 'yml': return 'yaml'
+    case 'yaml': return 'yaml'
+    case 'md': return 'markdown'
+    case 'sh': return 'shell'
+    case 'vue': return 'vue'
+    default: return 'plaintext'
+  }
+}
+
+// 解析 unified diff 格式
+const parseUnifiedDiff = (diff) => {
+  const lines = diff.split('\n')
+  let original = []
+  let modified = []
+  let lineNumber = 1
+
+  for (const line of lines) {
+    if (line.startsWith('@@')) {
+      // 跳过差异头部
+      continue
+    }
+
+    if (line.startsWith('-')) {
+      original.push(line.substring(1))
+    } else if (line.startsWith('+')) {
+      modified.push(line.substring(1))
+    } else {
+      original.push(line.substring(1))
+      modified.push(line.substring(1))
+    }
+  }
+
+  return {
+    original: original.join('\n'),
+    modified: modified.join('\n')
+  }
+}
+
+// 解析差异内容函数
+function parseDiffContent(diff, type) {
+  const lines = diff.split('\n')
+  let result = ''
+  let lineNumber = 1
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    if (line.startsWith('@@')) {
+      // 跳过差异头部
+      continue
+    }
+
+    if (type === 'original') {
+      if (line.startsWith('+')) {
+        // 新增行在原文件中不存在
+        result += `<div class="diff-line empty-line" data-line="${lineNumber}"></div>`
+      } else if (line.startsWith('-')) {
+        // 删除行在原文件中存在
+        result += `<div class="diff-line removed-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
+        lineNumber++
+      } else {
+        // 未修改行
+        result += `<div class="diff-line unchanged-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
+        lineNumber++
+      }
+    } else if (type === 'modified') {
+      if (line.startsWith('+')) {
+        // 新增行在修改后文件中存在
+        result += `<div class="diff-line added-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
+        lineNumber++
+      } else if (line.startsWith('-')) {
+        // 删除行在修改后文件中不存在
+        result += `<div class="diff-line empty-line" data-line="${lineNumber}"></div>`
+      } else {
+        // 未修改行
+        result += `<div class="diff-line unchanged-line" data-line="${lineNumber}">${escapeHtml(line.substring(1))}</div>`
+        lineNumber++
+      }
+    }
+  }
+
+  return result
+}
+
+// HTML转义函数
+function escapeHtml(unsafe) {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+}
 
 const confirmBranchSwitch = () => {
   return new Promise((resolve) => {
@@ -503,6 +757,7 @@ const confirmBranchSwitch = () => {
     });
   });
 };
+
 // 获取分支列表
 const fetchBranches = async () => {
   try {
@@ -926,6 +1181,7 @@ onMounted(() => {
   logger.debug('Component mounted')
   refreshGitStatus()
   fetchBranches() // 添加这行
+  initMonacoEditor()
 
   nextTick(() => {
     if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
@@ -959,6 +1215,13 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', stopChangesDrag)
   document.removeEventListener('mousemove', handleCommitsDrag)
   document.removeEventListener('mouseup', stopCommitsDrag)
+
+  if (diffEditor.value) {
+    diffEditor.value.dispose()
+  }
+  if (commitDiffEditor.value) {
+    commitDiffEditor.value.dispose()
+  }
 })
 
 const refreshGitStatus = async () => {
@@ -1020,30 +1283,6 @@ const loadCommitHistory = async () => {
   }
 }
 
-const selectCommit = async (commit) => {
-  logger.debug('Selecting commit', { commit: commit.id })
-  try {
-    selectedCommit.value = commit
-    selectedFile.value = null
-
-    // 获取提交的差异内容
-    const diff = await invoke('get_commit_diff', {
-      path: props.workspacePath,
-      commitId: commit.id
-    })
-
-    // 确保差异内容正确赋值
-    selectedCommit.value = {
-      ...commit,
-      diff: diff || '无差异内容'
-    }
-
-    logger.debug('Commit diff loaded', { commit: commit.id })
-  } catch (error) {
-    logger.error('Failed to load commit diff', { commit: commit.id, error })
-  }
-}
-
 const formatDate = (timestamp) => {
   return new Date(parseInt(timestamp) * 1000).toLocaleDateString()
 }
@@ -1064,22 +1303,43 @@ const getFileStatusIcon = (status) => {
   }
 }
 
-const handleFileClick = async (row) => {
-  logger.debug('File clicked', { file: row.path })
+const handleFileClick = async (file) => {
+  console.log('Handling file click:', file.path);
   try {
-    selectedFile.value = row
-    selectedCommit.value = null
-    if (!row.diff) {
-      logger.debug('Loading file diff', { file: row.path })
-      const content = await invoke('git_read_file', {
-        path: props.workspacePath,
-        filePath: row.path
-      })
-      selectedFile.value.diff = content
-      logger.debug('File content loaded', { file: row.path, length: content.length })
-    }
+    selectedFile.value = file;
+    selectedCommit.value = null;
+
+    console.log('Updating file diff for:', file.path);
+    await nextTick();
+    await updateFileDiff(file);
+    console.log('File diff updated successfully');
   } catch (error) {
-    logger.error('Failed to load file content', { file: row.path, error })
+    console.error('Failed to load file content', error);
+    notification.error({
+      title: '加载文件失败',
+      content: `无法加载文件 ${file.path} 的内容: ${error}`,
+      duration: 3000
+    });
+  }
+}
+
+const selectCommit = async (commit) => {
+  logger.debug('Selecting commit', { commit: commit.id })
+  try {
+    selectedCommit.value = commit
+    selectedFile.value = null
+
+    // 使用 Monaco Editor 显示提交差异
+    await nextTick()
+    updateCommitDiff(commit)
+
+  } catch (error) {
+    logger.error('Failed to load commit diff', { commit: commit.id, error })
+    notification.error({
+      title: '加载提交差异失败',
+      content: `无法加载提交 ${commit.id.slice(0, 7)} 的差异内容: ${error}`,
+      duration: 3000
+    })
   }
 }
 
@@ -1305,6 +1565,28 @@ const handlePush = async () => {
   }
 }
 
+// 监听 selectedFile 变化
+watch(selectedFile, (newVal) => {
+  if (newVal) {
+    nextTick(() => {
+      updateFileDiff(newVal)
+    })
+  } else if (diffEditor.value) {
+    diffEditor.value.setModel(null)
+  }
+})
+
+// 监听 selectedCommit 变化
+watch(selectedCommit, (newVal) => {
+  if (newVal) {
+    nextTick(() => {
+      updateCommitDiff(newVal)
+    })
+  } else if (commitDiffEditor.value) {
+    commitDiffEditor.value.setModel(null)
+  }
+})
+
 </script>
 
 <style>
@@ -1427,27 +1709,97 @@ const handlePush = async () => {
 </style>
 
 <style scoped>
+/* 主容器布局调整 */
 .gitkraken-container {
   display: flex;
   height: 100vh;
   width: 100vw;
-  background-color: var(--bg-color);
-  color: var(--text-color);
+  overflow: hidden;
 }
 
 .git-sidebar {
-  display: flex;
-  flex-direction: column;
-  width: var(--sidebar-width);
+  width: 280px;
   min-width: 200px;
   max-width: 600px;
-  border-right: 1px solid var(--divider-color);
+  height: 100%;
   display: flex;
   flex-direction: column;
+  border-right: 1px solid var(--divider-color);
   background-color: var(--sidebar-bg);
-  height: 100%;
-  overflow: hidden;
   position: relative;
+}
+
+.git-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.diff-viewer,
+.commit-details {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Monaco Editor 容器样式 */
+.diff-editor-container {
+  flex: 1;
+  height: 100%;
+  width: 100%;
+}
+
+/* 响应式布局调整 */
+@media (max-width: 768px) {
+  .gitkraken-container {
+    flex-direction: column;
+  }
+
+  .git-sidebar {
+    width: 100%;
+    max-width: 100%;
+    height: 40vh;
+  }
+
+  .git-content {
+    height: 60vh;
+  }
+}
+
+/* 暗色主题支持 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color: #1e1e1e;
+    --text-color: #e0e0e0;
+    --text-color-secondary: #a0a0a0;
+    --divider-color: #3a3a3a;
+    --hover-color: rgba(255, 255, 255, 0.05);
+    --graph-bg: #2a2a2a;
+    --added-bg: rgba(46, 160, 67, 0.2);
+    --modified-bg: rgba(255, 193, 7, 0.2);
+    --deleted-bg: rgba(220, 53, 69, 0.2);
+    --current-branch-bg: rgba(46, 160, 67, 0.3);
+    --card-bg: #252526;
+    --input-bg: #333333;
+    --sidebar-bg: #252526;
+  }
+
+  .monaco-editor .monaco-editor-background {
+    background-color: var(--card-bg) !important;
+  }
+
+  .monaco-editor .margin {
+    background-color: var(--sidebar-bg) !important;
+  }
 }
 
 .source-control-header {
@@ -1637,6 +1989,72 @@ const handlePush = async () => {
   height: 100%;
 }
 
+/* 差异对比视图样式 */
+.diff-container {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+
+.diff-original,
+.diff-modified {
+  flex: 1;
+  overflow: auto;
+  border-right: 1px solid var(--divider-color);
+  position: relative;
+}
+
+.diff-modified {
+  border-right: none;
+}
+
+.diff-header {
+  position: sticky;
+  top: 0;
+  background-color: var(--card-bg);
+  padding: 8px 12px;
+  font-weight: bold;
+  border-bottom: 1px solid var(--divider-color);
+  z-index: 1;
+}
+
+.diff-line {
+  padding: 0 12px;
+  line-height: 1.5;
+  font-family: 'Maple Mono NF CN', monospace;
+  font-size: 14px;
+  white-space: pre;
+}
+
+.added-line {
+  background-color: rgba(46, 160, 67, 0.1);
+}
+
+.removed-line {
+  background-color: rgba(203, 36, 49, 0.1);
+  text-decoration: line-through;
+}
+
+.unchanged-line {
+  color: var(--text-color);
+}
+
+.empty-line {
+  background-color: rgba(0, 0, 0, 0.05);
+  min-height: 1.5em;
+}
+
+/* 行号样式 */
+.diff-line::before {
+  content: attr(data-line);
+  display: inline-block;
+  width: 40px;
+  padding-right: 12px;
+  color: var(--text-color-secondary);
+  text-align: right;
+  user-select: none;
+}
+
 /* 自定义滚动条样式 */
 .scrollable-content::-webkit-scrollbar {
   width: 6px;
@@ -1689,5 +2107,41 @@ const handlePush = async () => {
   margin-top: auto;
   padding-top: 16px;
   border-top: 1px solid var(--divider-color);
+}
+
+.diff-editor-container {
+  height: 100%;
+  width: 100%;
+  min-height: 300px;
+}
+
+/* 调整 Monaco Editor 主题 */
+.monaco-editor .line-numbers {
+  color: #6c757d !important;
+}
+
+.monaco-editor .margin {
+  background-color: var(--sidebar-bg) !important;
+}
+
+.monaco-editor .monaco-editor-background {
+  background-color: var(--card-bg) !important;
+}
+
+/* 差异高亮样式 */
+.monaco-editor .char-delete {
+  background-color: rgba(203, 36, 49, 0.1) !important;
+}
+
+.monaco-editor .char-insert {
+  background-color: rgba(40, 167, 69, 0.1) !important;
+}
+
+.monaco-editor .line-delete {
+  background-color: rgba(203, 36, 49, 0.05) !important;
+}
+
+.monaco-editor .line-insert {
+  background-color: rgba(40, 167, 69, 0.05) !important;
 }
 </style>

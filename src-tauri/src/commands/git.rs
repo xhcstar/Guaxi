@@ -5,9 +5,9 @@ use git2::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tracing::{debug, error, info, warn};
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tracing::{debug, error, info, warn};
 use urlencoding::encode;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -816,13 +816,7 @@ pub async fn create_git_window(
     info!("workspace_path: {}", workspace_path);
 
     // 构建URL查询参数
-    let url = WebviewUrl::App(
-        format!(
-            "/git?workspacePath={}",
-            encode(&workspace_path),
-        )
-        .into(),
-    );
+    let url = WebviewUrl::App(format!("/git?workspacePath={}", encode(&workspace_path),).into());
 
     info!("url: {}", url);
     info!("正在打开路径: {}", workspace_path);
@@ -883,16 +877,13 @@ pub fn checkout_branch(path: String, branch_name: String) -> Result<(), String> 
         error!("Failed to find commit: {}", e);
         e.to_string()
     })?;
-    
+
     // 使用 commit 对象进行检出
-    repo.checkout_tree(
-        &commit_obj.as_object(),
-        Some(&mut checkout_builder),
-    )
-    .map_err(|e| {
-        error!("Failed to checkout tree: {}", e);
-        e.to_string()
-    })?;
+    repo.checkout_tree(&commit_obj.as_object(), Some(&mut checkout_builder))
+        .map_err(|e| {
+            error!("Failed to checkout tree: {}", e);
+            e.to_string()
+        })?;
 
     // 设置HEAD指向新分支
     repo.set_head(reference.name().unwrap()).map_err(|e| {
@@ -902,4 +893,44 @@ pub fn checkout_branch(path: String, branch_name: String) -> Result<(), String> 
 
     info!("Successfully checked out branch: {}", branch_name);
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_file_content(
+    path: String,
+    file_path: String,
+    revision: Option<String>,
+) -> Result<String, String> {
+    let repo =
+        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    // 处理路径分隔符问题
+    let file_path = Path::new(&file_path);
+
+    let object = if let Some(rev) = revision {
+        repo.revparse_single(&rev)
+            .map_err(|e| format!("Failed to find revision {}: {}", rev, e))?
+    } else {
+        let head = repo
+            .head()
+            .map_err(|e| format!("Failed to get HEAD: {}", e))?;
+        head.peel_to_tree()
+            .map_err(|e| format!("Failed to peel HEAD to tree: {}", e))?
+            .into_object()
+    };
+
+    let tree = object
+        .peel_to_tree()
+        .map_err(|e| format!("Failed to peel to tree: {}", e))?;
+
+    let entry = tree
+        .get_path(file_path)
+        .map_err(|_| format!("File not found in revision: {}", file_path.display()))?;
+
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|e| format!("Failed to find blob: {}", e))?;
+
+    String::from_utf8(blob.content().to_vec())
+        .map_err(|e| format!("Failed to convert blob content to UTF-8: {}", e))
 }
