@@ -682,6 +682,15 @@ const toggleVimMode = () => {
 };
 
 const switchTab = (path) => {
+  // 保存当前编辑内容
+  if (editor && fileTreeStore.activeTab) {
+    const currentContent = editor.getValue();
+    const tabIndex = fileTreeStore.openTabs.findIndex(tab => tab.path === fileTreeStore.activeTab);
+    if (tabIndex !== -1) {
+      fileTreeStore.openTabs[tabIndex].content = currentContent;
+    }
+  }
+
   fileTreeStore.activeTab = path;
   const tab = fileTreeStore.openTabs.find(t => t.path === path);
   if (tab) {
@@ -691,6 +700,12 @@ const switchTab = (path) => {
 };
 
 const closeTab = (path) => {
+  // 保存当前内容
+  if (editor && fileTreeStore.activeTab === path) {
+    const content = editor.getValue();
+    fileTreeStore.updateTabContent(path, content);
+  }
+
   fileTreeStore.closeTab(path);
   if (fileTreeStore.openTabs.length > 0) {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);

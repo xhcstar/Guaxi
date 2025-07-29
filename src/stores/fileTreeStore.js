@@ -149,6 +149,19 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       }
     },
 
+    updateTabContent(path, content) {
+      const tabIndex = this.openTabs.findIndex((tab) => tab.path === path);
+      if (tabIndex !== -1) {
+        this.openTabs[tabIndex].content = content;
+        this.openTabs[tabIndex].preview = this.generatePreview(content);
+
+        // 如果当前选中的文件是这个标签页，也更新它
+        if (this.selectedFile && this.selectedFile.path === path) {
+          this.selectedFile.content = content;
+        }
+      }
+    },
+
     // 设置当前激活的笔记库路径
     setActiveRepoPath(path) {
       this.activeRepoPath = path;
