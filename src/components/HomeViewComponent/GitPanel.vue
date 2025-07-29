@@ -185,67 +185,76 @@
           <div class="commits-section" ref="commitsSection" :style="{ flex: `0 0 ${commitsHeight}px` }">
             <n-collapse :default-expanded-names="['commits']">
               <n-collapse-item name="commits" title="提交历史">
-                <n-list>
-                  <!-- 操作按钮行 -->
-                  <n-list-item>
-                    <n-space justify="space-between">
-                      <n-space>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handlePull" :loading="gitLoading.pull">
-                              <template #icon>
-                                <n-icon>
-                                  <CloudDownloadOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          拉取
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handlePush" :loading="gitLoading.push">
-                              <template #icon>
-                                <n-icon>
-                                  <CloudUploadOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          推送
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="showBranchPanel = true">
-                              <template #icon>
-                                <n-icon>
-                                  <GitBranchOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          创建分支
-                        </n-tooltip>
-                      </n-space>
-                      <!-- 将分支标签移动到这里 -->
-                      <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
-                        <n-icon>
-                          <GitBranchOutline />
-                        </n-icon>
-                        {{ currentBranch }}
-                      </n-tag>
+                <!-- 操作工具栏 -->
+                <div class="commits-toolbar">
+                  <n-space justify="space-between" align="center">
+                    <n-space>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click="handlePull" :loading="gitLoading.pull">
+                            <template #icon>
+                              <n-icon>
+                                <CloudDownloadOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        拉取
+                      </n-tooltip>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click="handlePush" :loading="gitLoading.push">
+                            <template #icon>
+                              <n-icon>
+                                <CloudUploadOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        推送
+                      </n-tooltip>
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <n-button text @click="showBranchPanel = true">
+                            <template #icon>
+                              <n-icon>
+                                <GitBranchOutline />
+                              </n-icon>
+                            </template>
+                          </n-button>
+                        </template>
+                        创建分支
+                      </n-tooltip>
                     </n-space>
-                  </n-list-item>
+                    <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
+                      <n-icon>
+                        <GitBranchOutline />
+                      </n-icon>
+                      {{ currentBranch }}
+                    </n-tag>
+                  </n-space>
+                </div>
 
-                  <!-- 提交历史列表项 -->
-                  <n-list-item v-for="commit in commits" :key="commit.id" @click="selectCommit(commit)" :class="{
-                    'selected-commit': selectedCommit?.id === commit.id,
-                    'expanded-commit': expandedCommit?.id === commit.id
-                  }">
-                    <n-space vertical>
-                      <n-text strong>{{ commit.summary }}</n-text>
+                <!-- 提交历史列表 -->
+                <div class="commits-list">
+                  <n-scrollbar>
+                    <div v-for="commit in commits" :key="commit.id" class="commit-item" :class="{
+                      'selected-commit': selectedCommit?.id === commit.id,
+                      'expanded-commit': expandedCommit?.id === commit.id
+                    }" @click="selectCommit(commit)">
+                      <!-- 提交信息摘要 -->
+                      <div class="commit-summary">
+                        <n-text strong>{{ commit.summary }}</n-text>
+                        <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
+                      </div>
 
-                      <!-- 新增：展开的提交文件列表 -->
+                      <!-- 提交元信息 -->
+                      <div class="commit-meta">
+                        <n-text depth="3">{{ commit.author }}</n-text>
+                        <n-text depth="3">{{ formatDateRelative(commit.date) }}</n-text>
+                      </div>
+
+                      <!-- 展开的文件变更列表 -->
                       <div v-if="expandedCommit?.id === commit.id" class="commit-files">
                         <n-list>
                           <n-list-item v-for="file in commitFiles" :key="file.path"
@@ -261,9 +270,9 @@
                           </n-list-item>
                         </n-list>
                       </div>
-                    </n-space>
-                  </n-list-item>
-                </n-list>
+                    </div>
+                  </n-scrollbar>
+                </div>
               </n-collapse-item>
             </n-collapse>
           </div>
@@ -1731,6 +1740,40 @@ const handlePush = async () => {
   }
 }
 
+// 格式化相对时间
+const formatDateRelative = (timestamp) => {
+  const now = new Date()
+  const date = new Date(parseInt(timestamp) * 1000)
+  const diffInSeconds = Math.floor((now - date) / 1000)
+
+  if (diffInSeconds < 60) {
+    return `${diffInSeconds}秒前`
+  }
+
+  const diffInMinutes = Math.floor(diffInSeconds / 60)
+  if (diffInMinutes < 60) {
+    return `${diffInMinutes}分钟前`
+  }
+
+  const diffInHours = Math.floor(diffInMinutes / 60)
+  if (diffInHours < 24) {
+    return `${diffInHours}小时前`
+  }
+
+  const diffInDays = Math.floor(diffInHours / 24)
+  if (diffInDays < 30) {
+    return `${diffInDays}天前`
+  }
+
+  const diffInMonths = Math.floor(diffInDays / 30)
+  if (diffInMonths < 12) {
+    return `${diffInMonths}个月前`
+  }
+
+  const diffInYears = Math.floor(diffInMonths / 12)
+  return `${diffInYears}年前`
+}
+
 // 监听 selectedFile 变化
 watch(selectedFile, (newVal) => {
   if (newVal) {
@@ -2128,6 +2171,8 @@ onUnmounted(() => {
   min-height: 40px;
   /* 标题栏高度 */
   transition: flex 0.1s ease-out;
+  background-color: var(--card-bg);
+  border-top: 1px solid var(--divider-color);
 }
 
 /* 自定义滚动条样式 */
@@ -2155,6 +2200,85 @@ onUnmounted(() => {
 .staged-section::-webkit-scrollbar-thumb:hover,
 .commits-section::-webkit-scrollbar-thumb:hover {
   opacity: 0.6;
+}
+
+.commits-toolbar {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+}
+
+.commits-list {
+  height: calc(100% - 40px);
+  overflow: hidden;
+}
+
+.commit-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  border-left: 3px solid transparent;
+}
+
+.commit-item:hover {
+  background-color: var(--hover-color);
+}
+
+.commit-summary {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.commit-hash {
+  margin-left: 8px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.commit-meta {
+  display: flex;
+  font-size: 12px;
+}
+
+.commit-meta>*:not(:last-child) {
+  margin-right: 8px;
+}
+
+.expanded-commit {
+  background-color: rgba(0, 123, 255, 0.05);
+  border-left: 3px solid #007bff;
+}
+
+.selected-commit {
+  background-color: rgba(0, 123, 255, 0.1);
+}
+
+.commit-files {
+  margin-top: 8px;
+  margin-left: 16px;
+  border-left: 2px solid var(--divider-color);
+  padding-left: 8px;
+}
+
+.selected-file {
+  background-color: rgba(0, 123, 255, 0.05);
+  border-left: 2px solid #007bff;
+}
+
+/* 暗色主题适配 */
+@media (prefers-color-scheme: dark) {
+  .commit-item:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .expanded-commit {
+    background-color: rgba(0, 123, 255, 0.1);
+  }
+
+  .selected-commit {
+    background-color: rgba(0, 123, 255, 0.15);
+  }
 }
 
 /* 确保分隔线可见 */
@@ -2433,23 +2557,5 @@ onUnmounted(() => {
   .loading-overlay {
     background-color: rgba(0, 0, 0, 0.5);
   }
-}
-
-/* 新增样式 */
-.expanded-commit {
-  background-color: rgba(0, 123, 255, 0.1);
-  border-left: 3px solid #007bff;
-}
-
-.commit-files {
-  margin-top: 8px;
-  margin-left: 16px;
-  border-left: 2px solid #e9ecef;
-  padding-left: 8px;
-}
-
-.selected-file {
-  background-color: rgba(0, 123, 255, 0.05);
-  border-left: 2px solid #007bff;
 }
 </style>
