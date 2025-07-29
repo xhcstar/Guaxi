@@ -377,7 +377,7 @@
 </template>
 
 <script setup>
-import { ref, h, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, h, onMounted, onUnmounted, nextTick, watch, markRaw } from 'vue'
 import {
   NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip, NForm,
   NFormItem,
@@ -500,137 +500,31 @@ const showCreateBranchModal = ref(false)
 const newBranchName = ref('')
 
 // Monaco Editor 实例
-const diffEditor = ref(null)
 const commitDiffEditor = ref(null)
-const diffEditorContainer = ref(null)
 const commitDiffEditorContainer = ref(null)
+const diffEditorContainer = ref(null)
+const isEditorInitialized = ref(false)
+let diffEditor = null
+let resizeObserver = null
 
-// 添加导航函数
+
 const navigateDiff = (direction) => {
-  // 这里实现导航到上一个/下一个差异块的逻辑
-  console.log(`Navigate to ${direction} diff block`)
-  // 实际实现需要调用 Monaco Editor 的 API 来导航差异
-  if (diffEditor.value) {
-    const editor = diffEditor.value.getModifiedEditor()
-    const position = editor.getPosition()
-    const range = new monaco.Range(
-      position.lineNumber,
-      position.column,
-      position.lineNumber,
-      position.column
-    )
-
-    if (direction === 'prev') {
-      editor.getAction('editor.action.diffReview.prev').run()
-    } else {
-      editor.getAction('editor.action.diffReview.next').run()
-    }
-  }
-}
-
-// 初始化 Monaco Editor
-const initMonacoEditor = async () => {
-  return new Promise((resolve) => {
-    nextTick(async () => {
-      if (diffEditorContainer.value) {
-        console.log('Initializing Monaco diff editor')
-        await registerDiffLanguages()
-
-        diffEditor.value = monaco.editor.createDiffEditor(diffEditorContainer.value, {
-          readOnly: true,
-          renderSideBySide: true,
-          automaticLayout: true, // 启用自动布局
-          theme: 'vs',
-          scrollBeyondLastLine: false,
-          renderIndicators: true,
-          renderWhitespace: 'selection',
-        })
-
-        // 强制设置初始布局
-        setTimeout(() => {
-          const container = diffEditorContainer.value
-          if (container) {
-            const height = container.clientHeight
-            const width = container.clientWidth
-            console.log('[Diff] Initial container dimensions:', { width, height })
-            diffEditor.value.layout({ width, height })
-          }
-        }, 100)
-
-        console.log('Monaco diff editor initialized')
-        resolve()
-      }
-    })
-  })
-}
-
-// 更新文件差异内容
-const updateFileDiff = async (file) => {
-  console.log('[Diff] Starting diff update for file:', file.path)
-  if (!diffEditor.value) {
-    console.error('[Diff] Diff editor not initialized')
-    return
-  }
+  if (!diffEditor) return;
 
   try {
-    const filePath = file.path.replace(/\\/g, '/')
-    console.log('[Diff] Fetching content for:', filePath)
+    const editor = diffEditor.getModifiedEditor();
+    const action = direction === 'prev'
+      ? 'editor.action.diffReview.prev'
+      : 'editor.action.diffReview.next';
 
-    const [originalContent, modifiedContent] = await Promise.all([
-      invoke('get_file_content', {
-        path: props.workspacePath,
-        filePath: filePath,
-        revision: 'HEAD'
-      }).catch(e => {
-        console.error('[Diff] Error getting original content:', e)
-        return '// Unable to load original content'
-      }),
-      invoke('get_file_content', {
-        path: props.workspacePath,
-        filePath: filePath
-      }).catch(e => {
-        console.error('[Diff] Error getting modified content:', e)
-        return '// Unable to load modified content'
-      })
-    ])
-
-    const language = getLanguageForFile(file.path)
-
-    const originalModel = monaco.editor.createModel(
-      originalContent,
-      language
-    )
-    const modifiedModel = monaco.editor.createModel(
-      modifiedContent,
-      language
-    )
-
-    diffEditor.value.setModel({
-      original: originalModel,
-      modified: modifiedModel
-    })
-
-    // 添加延迟以确保布局正确
-    setTimeout(() => {
-      const container = diffEditorContainer.value
-      if (container) {
-        const height = container.clientHeight
-        const width = container.clientWidth
-        console.log('[Diff] Container dimensions:', { width, height })
-        diffEditor.value.layout({ width, height })
-      }
-    }, 200)
-
+    const diffAction = editor.getAction(action);
+    if (diffAction) {
+      diffAction.run().catch(e => {
+        console.error(`Failed to navigate ${direction} diff:`, e);
+      });
+    }
   } catch (error) {
-    console.error('[Diff] Error in updateFileDiff:', error)
-    const errorModel = monaco.editor.createModel(
-      `Error loading diff:\n${error.message}`,
-      'text/plain'
-    )
-    diffEditor.value.setModel({
-      original: errorModel,
-      modified: errorModel
-    })
+    console.error('Error in navigateDiff:', error);
   }
 }
 
@@ -1179,68 +1073,6 @@ const toggleSectionVisibility = (section, headerHeight) => {
   }
 };
 
-// 添加窗口大小变化处理函数
-const handleResize = () => {
-  if (diffEditor.value) {
-    const container = diffEditorContainer.value
-    if (container) {
-      const height = container.clientHeight
-      const width = container.clientWidth
-      diffEditor.value.layout({ width, height })
-    }
-  }
-}
-
-onMounted(() => {
-  logger.debug('Component mounted')
-  refreshGitStatus()
-  fetchBranches() // 添加这行
-
-  // 添加窗口大小变化监听
-  window.addEventListener('resize', handleResize)
-
-  nextTick(() => {
-    initMonacoEditor()
-    if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
-      panelsHeight.value = panelsContainer.value.offsetHeight
-
-      // 设置初始高度比例
-      changesHeight.value = panelsHeight.value * 0.3
-      stagedHeight.value = panelsHeight.value * 0.3
-      commitsHeight.value = panelsHeight.value * 0.4
-
-      // 确保标题栏高度正确
-      const changesHeader = changesSection.value.querySelector('.n-collapse-item__header')
-      const stagedHeader = stagedSection.value.querySelector('.n-collapse-item__header')
-      const commitsHeader = commitsSection.value.querySelector('.n-collapse-item__header')
-
-      changesHeaderHeight.value = changesHeader?.offsetHeight || 40
-      stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
-      commitsHeaderHeight.value = commitsHeader?.offsetHeight || 40
-
-      // 初始检查滚动条
-      checkScrollableSections();
-    }
-  })
-})
-
-onUnmounted(() => {
-  // 移除所有事件监听器
-  document.removeEventListener('mousemove', handleSidebarDrag)
-  document.removeEventListener('mouseup', stopSidebarDrag)
-  document.removeEventListener('mousemove', handleChangesDrag)
-  document.removeEventListener('mouseup', stopChangesDrag)
-  document.removeEventListener('mousemove', handleCommitsDrag)
-  document.removeEventListener('mouseup', stopCommitsDrag)
-
-  if (diffEditor.value) {
-    diffEditor.value.dispose()
-  }
-  if (commitDiffEditor.value) {
-    commitDiffEditor.value.dispose()
-  }
-})
-
 const refreshGitStatus = async () => {
   logger.debug('Refreshing Git status')
   console.log('repo path:', props.workspacePath)
@@ -1320,22 +1152,189 @@ const getFileStatusIcon = (status) => {
   }
 }
 
+const initMonacoEditor = async () => {
+  if (isEditorInitialized.value || !diffEditorContainer.value) return;
+
+  try {
+    // 清理容器
+    while (diffEditorContainer.value.firstChild) {
+      diffEditorContainer.value.removeChild(diffEditorContainer.value.firstChild);
+    }
+
+    // 创建新的容器元素
+    const editorContainer = document.createElement('div');
+    editorContainer.className = 'monaco-diff-editor-container';
+    editorContainer.style.height = '100%';
+    editorContainer.style.width = '100%';
+    diffEditorContainer.value.appendChild(editorContainer);
+
+    // 注册自定义语言
+    await registerDiffLanguages();
+
+    // 初始化差异编辑器
+    diffEditor = markRaw(monaco.editor.createDiffEditor(editorContainer, {
+      originalEditable: false,
+      readOnly: true,
+      automaticLayout: true,
+      theme: 'vs',
+      renderSideBySide: true,  // 关键设置，确保并排显示
+      renderIndicators: true,
+      scrollBeyondLastLine: false,
+      diffAlgorithm: 'advanced', // 使用高级差异算法
+      diffWordWrap: 'on',        // 启用单词换行
+      enableSplitViewResizing: true // 允许调整左右视图大小
+    }));
+
+    isEditorInitialized.value = true;
+
+    // 初始空模型
+    const emptyModel = monaco.editor.createModel('', 'plaintext');
+    diffEditor.setModel({
+      original: emptyModel,
+      modified: emptyModel
+    });
+
+    // 添加resize observer
+    resizeObserver = new ResizeObserver(() => {
+      if (diffEditor && editorContainer) {
+        const height = editorContainer.clientHeight;
+        const width = editorContainer.clientWidth;
+        diffEditor.layout({ width, height });
+      }
+    });
+    resizeObserver.observe(editorContainer);
+
+  } catch (error) {
+    console.error('Failed to initialize Monaco diff editor:', error);
+    notification.error({
+      title: '编辑器初始化失败',
+      content: error.message,
+      duration: 3000
+    });
+  }
+}
+
+const updateFileDiff = async (file) => {
+  if (!isEditorInitialized.value || !diffEditorContainer.value) {
+    await initMonacoEditor();
+  }
+
+  if (!diffEditor || !diffEditorContainer.value) {
+    console.error('Diff editor not available');
+    return;
+  }
+
+  try {
+    const filePath = file.path.replace(/\\/g, '/');
+    console.log('[Diff] Loading diff for:', filePath);
+
+    // 同时获取原始内容和修改内容
+    const [originalContent, modifiedContent] = await Promise.all([
+      invoke('get_file_content', {
+        path: props.workspacePath,
+        filePath: filePath,
+        revision: 'HEAD'  // 获取HEAD版本的内容
+      }).catch(e => {
+        console.warn('Failed to get original content:', e);
+        return ''; // 对于新文件，原始内容为空
+      }),
+      invoke('get_file_content', {
+        path: props.workspacePath,
+        filePath: filePath
+      }).catch(e => {
+        console.error('Failed to get modified content:', e);
+        throw e;
+      })
+    ]);
+
+    const language = getLanguageForFile(file.path);
+
+    // 清理旧模型
+    const oldModel = diffEditor.getModel();
+    if (oldModel) {
+      setTimeout(() => {
+        oldModel.original?.dispose();
+        oldModel.modified?.dispose();
+      }, 100);
+    }
+
+    // 创建新模型
+    const originalModel = monaco.editor.createModel(
+      originalContent,
+      language
+    );
+    const modifiedModel = monaco.editor.createModel(
+      modifiedContent,
+      language
+    );
+
+    // 设置差异模型
+    diffEditor.setModel({
+      original: originalModel,
+      modified: modifiedModel
+    });
+
+    // 配置差异编辑器
+    diffEditor.updateOptions({
+      renderSideBySide: true,
+      renderIndicators: true,
+      renderWhitespace: 'selection',
+      readOnly: true,
+      automaticLayout: true
+    });
+
+    // 确保布局正确
+    nextTick(() => {
+      if (diffEditor && diffEditorContainer.value) {
+        const height = diffEditorContainer.value.clientHeight;
+        const width = diffEditorContainer.value.clientWidth;
+        diffEditor.layout({ width, height });
+
+        // 正确的方式导航到第一个差异
+        setTimeout(() => {
+          const modifiedEditor = diffEditor.getModifiedEditor();
+          const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
+          if (diffNavAction) {
+            diffNavAction.run().catch(console.error);
+          }
+        }, 200);
+      }
+    });
+
+  } catch (error) {
+    console.error('[Diff] Error in updateFileDiff:', error);
+    const errorModel = monaco.editor.createModel(
+      `Error loading file diff:\n${error.message}`,
+      'text/plain'
+    );
+    diffEditor.setModel({
+      original: errorModel,
+      modified: errorModel
+    });
+  }
+}
+
+// 添加编辑器大小调整函数
+const handleEditorResize = () => {
+  if (diffEditor && diffEditorContainer.value) {
+    const height = diffEditorContainer.value.clientHeight
+    const width = diffEditorContainer.value.clientWidth
+    diffEditor.layout({ width, height })
+  }
+}
+
+// 修改文件点击处理
 const handleFileClick = async (file) => {
-  console.log('Handling file click:', file.path)
   try {
     selectedFile.value = file
     selectedCommit.value = null
 
-    console.log('Updating file diff for:', file.path)
-
-    // 确保编辑器已初始化
-    if (!diffEditor.value) {
+    if (!isEditorInitialized.value) {
       await initMonacoEditor()
     }
 
     await nextTick()
     await updateFileDiff(file)
-    console.log('File diff updated successfully')
   } catch (error) {
     console.error('Failed to load file content', error)
     notification.error({
@@ -1594,8 +1593,8 @@ watch(selectedFile, (newVal) => {
     nextTick(() => {
       updateFileDiff(newVal)
     })
-  } else if (diffEditor.value) {
-    diffEditor.value.setModel(null)
+  } else if (diffEditor) {
+    diffEditor.setModel(null)
   }
 })
 
@@ -1610,6 +1609,84 @@ watch(selectedCommit, (newVal) => {
   }
 })
 
+onMounted(() => {
+  logger.debug('Component mounted')
+
+  // 初始化操作
+  const initialize = async () => {
+    try {
+      await Promise.all([
+        refreshGitStatus(),
+        fetchBranches()
+      ])
+
+      // 初始化编辑器但不等待
+      initMonacoEditor().catch(console.error)
+
+      // 设置面板高度
+      nextTick(() => {
+        if (changesSection.value && stagedSection.value && commitsSection.value && panelsContainer.value) {
+          panelsHeight.value = panelsContainer.value.offsetHeight
+          changesHeight.value = panelsHeight.value * 0.3
+          stagedHeight.value = panelsHeight.value * 0.3
+          commitsHeight.value = panelsHeight.value * 0.4
+
+          const changesHeader = changesSection.value.querySelector('.n-collapse-item__header')
+          const stagedHeader = stagedSection.value.querySelector('.n-collapse-item__header')
+          const commitsHeader = commitsSection.value.querySelector('.n-collapse-item__header')
+
+          changesHeaderHeight.value = changesHeader?.offsetHeight || 40
+          stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
+          commitsHeaderHeight.value = commitsHeader?.offsetHeight || 40
+
+          checkScrollableSections()
+        }
+      })
+    } catch (error) {
+      console.error('Initialization error:', error)
+    }
+  }
+
+  // 执行初始化但不等待
+  initialize().catch(console.error)
+})
+
+onUnmounted(() => {
+  // 移除所有事件监听器
+  document.removeEventListener('mousemove', handleSidebarDrag)
+  document.removeEventListener('mouseup', stopSidebarDrag)
+  document.removeEventListener('mousemove', handleChangesDrag)
+  document.removeEventListener('mouseup', stopChangesDrag)
+  document.removeEventListener('mousemove', handleCommitsDrag)
+  document.removeEventListener('mouseup', stopCommitsDrag)
+
+  // 清理编辑器
+  if (diffEditor) {
+    const model = diffEditor.getModel()
+    if (model) {
+      model.original?.dispose()
+      model.modified?.dispose()
+    }
+    diffEditor.dispose()
+    diffEditor = null
+  }
+
+  // 清理容器
+  if (diffEditorContainer.value) {
+    while (diffEditorContainer.value.firstChild) {
+      diffEditorContainer.value.removeChild(diffEditorContainer.value.firstChild)
+    }
+  }
+
+  // 移除resize observer
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+
+  // 移除事件监听
+  window.removeEventListener('resize', handleEditorResize)
+})
 </script>
 
 <style>
@@ -1778,12 +1855,46 @@ watch(selectedCommit, (newVal) => {
   z-index: 1;
 }
 
-/* Monaco Editor 容器样式 */
 .diff-editor-container {
   flex: 1;
   height: calc(100% - 41px);
   /* 减去工具栏高度 */
   width: 100%;
+  min-height: 200px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Monaco Editor 自定义样式 */
+.monaco-diff-editor-container {
+  height: 100%;
+}
+
+/* 差异高亮样式 */
+.monaco-editor .line-insert {
+  background-color: rgba(155, 185, 85, 0.2);
+}
+
+.monaco-editor .line-delete {
+  background-color: rgba(255, 0, 0, 0.2);
+}
+
+.monaco-editor .char-insert {
+  background-color: rgba(155, 185, 85, 0.3);
+}
+
+.monaco-editor .char-delete {
+  background-color: rgba(255, 0, 0, 0.3);
+}
+
+/* 分隔线样式 */
+.monaco-diff-editor .split-view-view {
+  border-right: 1px solid var(--divider-color);
+}
+
+/* 行号样式 */
+.monaco-editor .line-numbers {
+  color: var(--text-color-secondary) !important;
 }
 
 /* 提交详情样式 */

@@ -901,36 +901,114 @@ pub fn get_file_content(
     file_path: String,
     revision: Option<String>,
 ) -> Result<String, String> {
-    let repo =
-        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to open repository at {}: {}", path, e);
+        format!("Failed to open repository: {}", e)
+    })?;
 
     // 处理路径分隔符问题
     let file_path = Path::new(&file_path);
+    debug!("Getting content for file: {}", file_path.display());
 
-    let object = if let Some(rev) = revision {
-        repo.revparse_single(&rev)
-            .map_err(|e| format!("Failed to find revision {}: {}", rev, e))?
+    // 获取指定版本或工作目录的文件内容
+    let content = if let Some(rev) = revision {
+        debug!("Getting content from revision: {}", rev);
+        // 获取指定版本的文件内容
+        let object = repo.revparse_single(&rev).map_err(|e| {
+            error!("Failed to find revision {}: {}", rev, e);
+            format!("Failed to find revision {}: {}", rev, e)
+        })?;
+
+        let tree = object.peel_to_tree().map_err(|e| {
+            error!("Failed to peel to tree: {}", e);
+            format!("Failed to peel to tree: {}", e)
+        })?;
+
+        let entry = tree.get_path(file_path).map_err(|e| {
+            error!("File not found in revision {}: {}", file_path.display(), e);
+            format!("File not found in revision: {}", file_path.display())
+        })?;
+
+        let blob = repo.find_blob(entry.id()).map_err(|e| {
+            error!("Failed to find blob: {}", e);
+            format!("Failed to find blob: {}", e)
+        })?;
+
+        String::from_utf8(blob.content().to_vec()).map_err(|e| {
+            error!("Failed to convert blob content to UTF-8: {}", e);
+            format!("Failed to convert blob content to UTF-8: {}", e)
+        })?
     } else {
-        let head = repo
-            .head()
-            .map_err(|e| format!("Failed to get HEAD: {}", e))?;
-        head.peel_to_tree()
-            .map_err(|e| format!("Failed to peel HEAD to tree: {}", e))?
-            .into_object()
+        debug!("Getting content from working directory");
+        // 获取工作目录的文件内容
+        let full_path = Path::new(&path).join(file_path);
+        std::fs::read_to_string(&full_path).map_err(|e| {
+            error!("Failed to read file {}: {}", full_path.display(), e);
+            format!("Failed to read file: {}", e)
+        })?
     };
 
-    let tree = object
-        .peel_to_tree()
-        .map_err(|e| format!("Failed to peel to tree: {}", e))?;
+    debug!("Successfully retrieved content for {}", file_path.display());
+    Ok(content)
+}
 
-    let entry = tree
-        .get_path(file_path)
-        .map_err(|_| format!("File not found in revision: {}", file_path.display()))?;
+#[tauri::command]
+pub fn get_file_diff(path: String, file_path: String) -> Result<String, String> {
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
 
-    let blob = repo
-        .find_blob(entry.id())
-        .map_err(|e| format!("Failed to find blob: {}", e))?;
+    // 获取HEAD树
+    let head = repo.head().map_err(|e| {
+        error!("Failed to get HEAD: {}", e);
+        e.to_string()
+    })?;
+    let head_tree = head.peel_to_tree().map_err(|e| {
+        error!("Failed to peel to tree: {}", e);
+        e.to_string()
+    })?;
 
-    String::from_utf8(blob.content().to_vec())
-        .map_err(|e| format!("Failed to convert blob content to UTF-8: {}", e))
+    // 获取索引
+    let mut index = repo.index().map_err(|e| {
+        error!("Failed to get index: {}", e);
+        e.to_string()
+    })?;
+    let index_tree = repo
+        .find_tree(index.write_tree().map_err(|e| {
+            error!("Failed to write tree: {}", e);
+            e.to_string()
+        })?)
+        .map_err(|e| {
+            error!("Failed to find tree: {}", e);
+            e.to_string()
+        })?;
+
+    // 设置差异选项
+    let mut diff_options = DiffOptions::new();
+    diff_options.pathspec(file_path.clone());
+    diff_options.context_lines(3);
+
+    // 生成差异
+    let diff = repo
+        .diff_tree_to_tree(Some(&head_tree), Some(&index_tree), Some(&mut diff_options))
+        .map_err(|e| {
+            error!("Failed to generate diff: {}", e);
+            e.to_string()
+        })?;
+
+    // 格式化差异输出
+    let mut output = String::new();
+    diff.print(DiffFormat::Patch, |_, _, line| {
+        if let Ok(content) = std::str::from_utf8(line.content()) {
+            output.push_str(content);
+        }
+        true
+    })
+    .map_err(|e| {
+        error!("Failed to print diff: {}", e);
+        e.to_string()
+    })?;
+
+    Ok(output)
 }
