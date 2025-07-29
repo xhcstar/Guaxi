@@ -115,7 +115,7 @@ const activeTab = computed(() => fileTreeStore.openTabs.find(tab => tab.path ===
 const activeTabContent = computed(() => activeTab.value?.content || '');
 
 
-const message = useMessage() // 使用消息提示
+const message = useMessage()
 
 const vimMode = ref(false);
 const vimStatusBar = ref(null);

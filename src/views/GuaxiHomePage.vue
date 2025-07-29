@@ -1,5 +1,5 @@
 <template>
-  <n-message-provider>
+  <n-message-provider placement="bottom">
     <div class="app-layout">
       <div class="main-header">
         <GuaxiHeader />
