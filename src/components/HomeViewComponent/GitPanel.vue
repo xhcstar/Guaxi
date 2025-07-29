@@ -182,7 +182,7 @@
           </div>
 
           <!-- 提交历史区域 -->
-          <div class="commits-section" ref="commitsSection" :style="{ flex: `0 0 ${commitsHeight}px` }">
+          <div class="commits-section" ref="commitsSection">
             <n-collapse :default-expanded-names="['commits']">
               <n-collapse-item name="commits" title="提交历史">
                 <!-- 操作工具栏 -->
@@ -237,41 +237,39 @@
 
                 <!-- 提交历史列表 -->
                 <div class="commits-list">
-                  <n-scrollbar>
-                    <div v-for="commit in commits" :key="commit.id" class="commit-item" :class="{
-                      'selected-commit': selectedCommit?.id === commit.id,
-                      'expanded-commit': expandedCommit?.id === commit.id
-                    }" @click="selectCommit(commit)">
-                      <!-- 提交信息摘要 -->
-                      <div class="commit-summary">
-                        <n-text strong>{{ commit.summary }}</n-text>
-                        <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
-                      </div>
-
-                      <!-- 提交元信息 -->
-                      <div class="commit-meta">
-                        <n-text depth="3">{{ commit.author }}</n-text>
-                        <n-text depth="3">{{ formatDateRelative(commit.date) }}</n-text>
-                      </div>
-
-                      <!-- 展开的文件变更列表 -->
-                      <div v-if="expandedCommit?.id === commit.id" class="commit-files">
-                        <n-list>
-                          <n-list-item v-for="file in commitFiles" :key="file.path"
-                            @click.stop="handleCommitFileClick(file)"
-                            :class="{ 'selected-file': selectedFile?.path === file.path }">
-                            <n-space align="center">
-                              <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                              <n-text>{{ file.path }}</n-text>
-                              <n-tag v-if="file.status !== ' '" size="small" :type="getStatusTagType(file.status)">
-                                {{ file.status }}
-                              </n-tag>
-                            </n-space>
-                          </n-list-item>
-                        </n-list>
-                      </div>
+                  <div v-for="commit in commits" :key="commit.id" class="commit-item" :class="{
+                    'selected-commit': selectedCommit?.id === commit.id,
+                    'expanded-commit': expandedCommit?.id === commit.id
+                  }" @click="selectCommit(commit)">
+                    <!-- 提交信息摘要 -->
+                    <div class="commit-summary">
+                      <n-text strong>{{ commit.summary }}</n-text>
+                      <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
                     </div>
-                  </n-scrollbar>
+
+                    <!-- 提交元信息 -->
+                    <div class="commit-meta">
+                      <n-text depth="3">{{ commit.author }}</n-text>
+                      <n-text depth="3">{{ formatDateRelative(commit.date) }}</n-text>
+                    </div>
+
+                    <!-- 展开的文件变更列表 -->
+                    <div v-if="expandedCommit?.id === commit.id" class="commit-files">
+                      <n-list>
+                        <n-list-item v-for="file in commitFiles" :key="file.path"
+                          @click.stop="handleCommitFileClick(file)"
+                          :class="{ 'selected-file': selectedFile?.path === file.path }">
+                          <n-space align="center">
+                            <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                            <n-text>{{ file.path }}</n-text>
+                            <n-tag v-if="file.status !== ' '" size="small" :type="getStatusTagType(file.status)">
+                              {{ file.status }}
+                            </n-tag>
+                          </n-space>
+                        </n-list-item>
+                      </n-list>
+                    </div>
+                  </div>
                 </div>
               </n-collapse-item>
             </n-collapse>
