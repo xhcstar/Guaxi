@@ -1116,6 +1116,7 @@ const refreshGitStatus = async () => {
     // 重置选择状态
     selectedFile.value = null;
     selectedCommit.value = null;
+    isEditorInitialized.value = false;
 
     // 创建临时容器
     const newStagedFiles = []
@@ -1247,10 +1248,14 @@ const initMonacoEditor = async () => {
 }
 
 const updateFileDiff = async (file) => {
+  console.log('updateFileDiff: isEditorInitialized.value ', isEditorInitialized.value, 'diffEditorContainer.value', diffEditorContainer.value);
   if (!isEditorInitialized.value || !diffEditorContainer.value) {
     await initMonacoEditor();
+  } else {
+    isEditorInitialized.value = false;
   }
 
+  console.log('updateFileDiff: diffEditor ', diffEditor, 'diffEditorContainer.value', diffEditorContainer.value);
   if (!diffEditor || !diffEditorContainer.value) {
     console.error('Diff editor not available');
     return;
