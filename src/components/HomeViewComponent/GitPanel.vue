@@ -40,77 +40,76 @@
                 <template #header-extra>
                   <n-badge :value="unstagedFiles.length" :max="99" />
                 </template>
-                <div class="scrollable-content">
-                  <n-list>
-                    <!-- 操作按钮行 -->
-                    <n-list-item>
-                      <n-space justify="space-between">
-                        <n-space>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
-                                <template #icon>
-                                  <n-icon>
-                                    <AddCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            暂存全部
-                          </n-tooltip>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
-                                <template #icon>
-                                  <n-icon>
-                                    <CloseCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            丢弃全部
-                          </n-tooltip>
-                        </n-space>
-                      </n-space>
-                    </n-list-item>
 
-                    <!-- 文件列表项 -->
-                    <n-list-item v-for="file in unstagedFiles" :key="file.path">
-                      <n-space align="center" justify="space-between">
-                        <n-space align="center" @click="handleFileClick(file)">
-                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                          <n-text>{{ file.path }}</n-text>
-                        </n-space>
-                        <n-space>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click.stop="handleStageFile(file)">
-                                <template #icon>
-                                  <n-icon>
-                                    <AddCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            暂存
-                          </n-tooltip>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click.stop="handleDiscardFile(file)">
-                                <template #icon>
-                                  <n-icon>
-                                    <CloseCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            丢弃
-                          </n-tooltip>
-                        </n-space>
+                <n-list>
+                  <!-- 操作按钮行 -->
+                  <n-list-item>
+                    <n-space justify="space-between">
+                      <n-space>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
+                              <template #icon>
+                                <n-icon>
+                                  <AddCircleOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          暂存全部
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
+                              <template #icon>
+                                <n-icon>
+                                  <CloseCircleOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          丢弃全部
+                        </n-tooltip>
                       </n-space>
-                    </n-list-item>
-                  </n-list>
-                </div>
+                    </n-space>
+                  </n-list-item>
+
+                  <!-- 文件列表项 -->
+                  <n-list-item v-for="file in unstagedFiles" :key="file.path">
+                    <n-space align="center" justify="space-between">
+                      <n-space align="center" @click="handleFileClick(file)">
+                        <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                        <n-text>{{ file.path }}</n-text>
+                      </n-space>
+                      <n-space>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click.stop="handleStageFile(file)">
+                              <template #icon>
+                                <n-icon>
+                                  <AddCircleOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          暂存
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click.stop="handleDiscardFile(file)">
+                              <template #icon>
+                                <n-icon>
+                                  <CloseCircleOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          丢弃
+                        </n-tooltip>
+                      </n-space>
+                    </n-space>
+                  </n-list-item>
+                </n-list>
               </n-collapse-item>
             </n-collapse>
           </div>
@@ -127,53 +126,52 @@
                 <template #header-extra>
                   <n-badge :value="stagedFiles.length" :max="99" />
                 </template>
-                <div class="scrollable-content">
-                  <n-list>
-                    <!-- 操作按钮行 -->
-                    <n-list-item>
-                      <n-space justify="space-between">
-                        <n-space>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
-                                <template #icon>
-                                  <n-icon>
-                                    <RemoveCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            取消暂存全部
-                          </n-tooltip>
-                        </n-space>
-                      </n-space>
-                    </n-list-item>
 
-                    <!-- 暂存文件列表项 -->
-                    <n-list-item v-for="file in stagedFiles" :key="file.path">
-                      <n-space align="center" justify="space-between">
-                        <n-space align="center" @click="handleFileClick(file)">
-                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                          <n-text>{{ file.path }}</n-text>
-                        </n-space>
-                        <n-space>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click.stop="handleUnstageFile(file)">
-                                <template #icon>
-                                  <n-icon>
-                                    <RemoveCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            取消暂存
-                          </n-tooltip>
-                        </n-space>
+                <n-list>
+                  <!-- 操作按钮行 -->
+                  <n-list-item>
+                    <n-space justify="space-between">
+                      <n-space>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
+                              <template #icon>
+                                <n-icon>
+                                  <RemoveCircleOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          取消暂存全部
+                        </n-tooltip>
                       </n-space>
-                    </n-list-item>
-                  </n-list>
-                </div>
+                    </n-space>
+                  </n-list-item>
+
+                  <!-- 暂存文件列表项 -->
+                  <n-list-item v-for="file in stagedFiles" :key="file.path">
+                    <n-space align="center" justify="space-between">
+                      <n-space align="center" @click="handleFileClick(file)">
+                        <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                        <n-text>{{ file.path }}</n-text>
+                      </n-space>
+                      <n-space>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click.stop="handleUnstageFile(file)">
+                              <template #icon>
+                                <n-icon>
+                                  <RemoveCircleOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          取消暂存
+                        </n-tooltip>
+                      </n-space>
+                    </n-space>
+                  </n-list-item>
+                </n-list>
               </n-collapse-item>
             </n-collapse>
           </div>
@@ -187,71 +185,85 @@
           <div class="commits-section" ref="commitsSection" :style="{ flex: `0 0 ${commitsHeight}px` }">
             <n-collapse :default-expanded-names="['commits']">
               <n-collapse-item name="commits" title="提交历史">
-                <div class="scrollable-content">
-                  <n-list>
-                    <!-- 操作按钮行 -->
-                    <n-list-item>
-                      <n-space justify="space-between">
-                        <n-space>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handlePull" :loading="gitLoading.pull">
-                                <template #icon>
-                                  <n-icon>
-                                    <CloudDownloadOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            拉取
-                          </n-tooltip>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handlePush" :loading="gitLoading.push">
-                                <template #icon>
-                                  <n-icon>
-                                    <CloudUploadOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            推送
-                          </n-tooltip>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="showBranchPanel = true">
-                                <template #icon>
-                                  <n-icon>
-                                    <GitBranchOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            创建分支
-                          </n-tooltip>
-                        </n-space>
-                        <!-- 将分支标签移动到这里 -->
-                        <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
-                          <n-icon>
-                            <GitBranchOutline />
-                          </n-icon>
-                          {{ currentBranch }}
-                        </n-tag>
+                <n-list>
+                  <!-- 操作按钮行 -->
+                  <n-list-item>
+                    <n-space justify="space-between">
+                      <n-space>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handlePull" :loading="gitLoading.pull">
+                              <template #icon>
+                                <n-icon>
+                                  <CloudDownloadOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          拉取
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handlePush" :loading="gitLoading.push">
+                              <template #icon>
+                                <n-icon>
+                                  <CloudUploadOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          推送
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="showBranchPanel = true">
+                              <template #icon>
+                                <n-icon>
+                                  <GitBranchOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          创建分支
+                        </n-tooltip>
                       </n-space>
-                    </n-list-item>
+                      <!-- 将分支标签移动到这里 -->
+                      <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
+                        <n-icon>
+                          <GitBranchOutline />
+                        </n-icon>
+                        {{ currentBranch }}
+                      </n-tag>
+                    </n-space>
+                  </n-list-item>
 
-                    <!-- 提交历史列表项 -->
-                    <n-list-item v-for="commit in commits" :key="commit.id" @click="selectCommit(commit)"
-                      :class="{ 'selected-commit': selectedCommit?.id === commit.id }">
-                      <n-space vertical>
-                        <n-text strong>{{ commit.summary }}</n-text>
-                        <n-text depth="3" style="font-size: 12px">
-                          {{ commit.author }} - {{ formatDate(commit.date) }}
-                        </n-text>
-                      </n-space>
-                    </n-list-item>
-                  </n-list>
-                </div>
+                  <!-- 提交历史列表项 -->
+                  <n-list-item v-for="commit in commits" :key="commit.id" @click="selectCommit(commit)" :class="{
+                    'selected-commit': selectedCommit?.id === commit.id,
+                    'expanded-commit': expandedCommit?.id === commit.id
+                  }">
+                    <n-space vertical>
+                      <n-text strong>{{ commit.summary }}</n-text>
+
+                      <!-- 新增：展开的提交文件列表 -->
+                      <div v-if="expandedCommit?.id === commit.id" class="commit-files">
+                        <n-list>
+                          <n-list-item v-for="file in commitFiles" :key="file.path"
+                            @click.stop="handleCommitFileClick(file)"
+                            :class="{ 'selected-file': selectedFile?.path === file.path }">
+                            <n-space align="center">
+                              <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                              <n-text>{{ file.path }}</n-text>
+                              <n-tag v-if="file.status !== ' '" size="small" :type="getStatusTagType(file.status)">
+                                {{ file.status }}
+                              </n-tag>
+                            </n-space>
+                          </n-list-item>
+                        </n-list>
+                      </div>
+                    </n-space>
+                  </n-list-item>
+                </n-list>
               </n-collapse-item>
             </n-collapse>
           </div>
@@ -261,73 +273,72 @@
 
     <!-- 右侧内容区域 -->
     <div class="git-content">
+      <!-- 顶部导航栏 -->
+      <div class="content-navbar">
+        <n-space align="center" justify="space-between">
+          <n-space align="center">
+            <!-- 显示文件信息 -->
+            <template v-if="selectedFile">
+              <n-text strong>{{ selectedFile.path }}</n-text>
+              <!-- 添加加载状态 -->
+              <div v-if="diffLoading.file" class="loading-overlay">
+                <n-spin size="large" />
+              </div>
+            </template>
+
+            <!-- 显示提交信息（如果有） -->
+            <template v-if="selectedCommit">
+              <n-divider vertical />
+              <n-space align="center">
+                <n-text strong>提交: {{ selectedCommit.id.slice(0, 7) }}</n-text>
+                <n-text>主题: {{ selectedCommit.message.split('\n')[0] }}</n-text>
+                <n-text>作者: {{ selectedCommit.author }}</n-text>
+                <n-text>日期: {{ formatDateFull(selectedCommit.date) }}</n-text>
+              </n-space>
+              <div v-if="diffLoading.commit" class="loading-overlay">
+                <n-spin size="large" />
+              </div>
+            </template>
+
+            <template v-if="!selectedFile && !selectedCommit">
+              <n-text>未选择文件或提交</n-text>
+            </template>
+          </n-space>
+
+          <!-- 导航按钮 -->
+          <n-space>
+            <n-button text @click="navigateDiff('prev')" :disabled="!selectedFile || diffLoading.file">
+              <template #icon>
+                <n-icon>
+                  <ChevronUpOutline />
+                </n-icon>
+              </template>
+            </n-button>
+            <n-button text @click="navigateDiff('next')" :disabled="!selectedFile || diffLoading.file">
+              <template #icon>
+                <n-icon>
+                  <ChevronDownOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </n-space>
+        </n-space>
+      </div>
+
       <!-- 文件差异或提交详情 -->
       <div class="content-viewer">
         <div v-if="selectedFile" class="diff-viewer">
-          <!-- 顶部工具栏 -->
-          <div class="diff-toolbar">
-            <n-space align="center" justify="space-between">
-              <n-text strong>{{ selectedFile.path }}</n-text>
-              <n-space>
-                <n-button text @click="navigateDiff('prev')" :loading="diffLoading.navigation"
-                  :disabled="diffLoading.file">
-                  <template #icon>
-                    <n-icon>
-                      <ChevronUpOutline />
-                    </n-icon>
-                  </template>
-                </n-button>
-                <n-button text @click="navigateDiff('next')" :loading="diffLoading.navigation"
-                  :disabled="diffLoading.file">
-                  <template #icon>
-                    <n-icon>
-                      <ChevronDownOutline />
-                    </n-icon>
-                  </template>
-                </n-button>
-              </n-space>
-            </n-space>
-          </div>
-
-          <!-- 添加加载状态 -->
-          <div v-if="diffLoading.file" class="loading-overlay">
-            <n-spin size="large" />
-          </div>
-
           <!-- Monaco Editor 容器 -->
           <div ref="diffEditorContainer" class="diff-editor-container"></div>
         </div>
 
         <!-- 在 commit-details 部分添加加载状态 -->
-        <div v-if="selectedCommit" class="commit-details">
-          <!-- 提交详情顶部栏 -->
-          <div class="commit-toolbar">
-            <n-space align="center" justify="space-between">
-              <n-text strong>提交 {{ selectedCommit.id.slice(0, 7) }}</n-text>
-              <n-space>
-                <n-text>作者: {{ selectedCommit.author }}</n-text>
-                <n-text>日期: {{ formatDateFull(selectedCommit.date) }}</n-text>
-              </n-space>
-            </n-space>
-          </div>
-
-          <!-- 提交消息 -->
-          <div class="commit-message">
-            <pre>{{ selectedCommit.message }}</pre>
-          </div>
-
-          <!-- 添加加载状态 -->
-          <div v-if="diffLoading.commit" class="loading-overlay">
-            <n-spin size="large" />
-          </div>
-
+        <div v-else-if="selectedCommit" class="commit-details">
           <!-- 提交差异 -->
-          <div class="commit-diff">
-            <div ref="commitDiffEditorContainer" class="diff-editor-container"></div>
-          </div>
+          <div ref="commitDiffEditorContainer" class="diff-editor-container"></div>
         </div>
 
-        <div v-if="!selectedFile && !selectedCommit" class="empty-state">
+        <div v-else="!selectedFile && !selectedCommit" class="empty-state">
           <n-empty description="选择文件或提交查看详情" />
         </div>
       </div>
@@ -466,14 +477,12 @@ const props = defineProps({
 const sidebar = ref(null)
 const changesSection = ref(null)
 const commitsSection = ref(null)
-const divider = ref(null)
 const isDraggingSidebar = ref(false)
-const isDraggingVertical = ref(false)
 const startY = ref(0)
 const startX = ref(0)
 const initialHeightChanges = ref(0)
 const initialHeightCommits = ref(0)
-const initialWidthSidebar = ref(280)
+const initialWidthSidebar = ref(350)
 const changesDivider = ref(null)
 const stagedSection = ref(null)
 const isDraggingChanges = ref(false)
@@ -485,11 +494,6 @@ const isDraggingCommits = ref(false)
 const currentBranch = ref('')
 const branches = ref([])
 const commits = ref([])
-const gitChanges = ref({
-  added: 0,
-  modified: 0,
-  deleted: 0
-})
 const unstagedFiles = ref([])
 const stagedFiles = ref([])
 const selectedFile = ref(null)
@@ -499,15 +503,15 @@ const gitLoading = ref({
   commit: false,
   checkout: false  // 添加分支切换加载状态
 });
+
 const selectedCommit = ref(null)
+const expandedCommit = ref(null)
+const commitFiles = ref([])
 
 // 表单数据
 const commitForm = ref({
   message: ''
 })
-
-// 在现有代码的顶部添加
-const MIN_HEIGHT_FOR_SCROLL = 200; // 触发滚动条的最小高度
 
 // 分支面板相关状态
 const showBranchPanel = ref(false)
@@ -528,6 +532,112 @@ const diffLoading = ref({
   navigation: false
 });
 
+// 新增辅助函数 - 获取状态标签类型
+const getStatusTagType = (status) => {
+  switch (status) {
+    case 'A': return 'success'
+    case 'M': return 'warning'
+    case 'D': return 'error'
+    case 'R': return 'info'
+    default: return 'default'
+  }
+}
+
+// 修改 selectCommit 函数
+const selectCommit = async (commit) => {
+  logger.debug('Selecting commit', { commit: commit.id })
+  try {
+    // 如果点击的是已展开的提交，则收起
+    if (expandedCommit.value?.id === commit.id) {
+      expandedCommit.value = null
+      commitFiles.value = []
+      selectedCommit.value = null
+      return
+    }
+
+    selectedCommit.value = commit
+    expandedCommit.value = commit
+    selectedFile.value = null
+
+    // 获取提交的修改文件列表
+    const files = await invoke('get_commit_files', {
+      path: props.workspacePath,
+      commitId: commit.id
+    })
+    commitFiles.value = files
+
+    // 默认显示第一个文件的差异
+    if (files.length > 0) {
+      await handleCommitFileClick(files[0])
+    } else {
+      // 如果没有文件，清空差异显示
+      if (commitDiffEditor.value) {
+        commitDiffEditor.value.setModel(null)
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to load commit diff', { commit: commit.id, error })
+    notification.error({
+      title: '加载提交差异失败',
+      content: `无法加载提交 ${commit.id.slice(0, 7)} 的差异内容: ${error}`,
+      duration: 3000
+    })
+  }
+}
+
+const handleCommitFileClick = async (file) => {
+  try {
+    selectedFile.value = file  // 只更新selectedFile，保留selectedCommit
+    diffLoading.value.file = true
+
+    if (!isEditorInitialized.value) {
+      await initMonacoEditor()
+    }
+
+    // 获取文件差异
+    const diff = await invoke('get_commit_file_diff', {
+      path: props.workspacePath,
+      commitId: expandedCommit.value.id,
+      filePath: file.path
+    })
+
+    // 解析差异内容
+    const { original, modified } = parseUnifiedDiff(diff)
+
+    // 创建 Monaco 模型
+    const language = getLanguageForFile(file.path)
+    const originalModel = monaco.editor.createModel(original, language)
+    const modifiedModel = monaco.editor.createModel(modified, language)
+
+    // 设置差异编辑器模型
+    if (commitDiffEditor.value) {
+      commitDiffEditor.value.setModel({
+        original: originalModel,
+        modified: modifiedModel
+      })
+
+      // 导航到第一个差异
+      setTimeout(() => {
+        const modifiedEditor = commitDiffEditor.value.getModifiedEditor()
+        const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next')
+        if (diffNavAction) {
+          diffNavAction.run().then(() => {
+            modifiedEditor.revealPositionInCenter(modifiedEditor.getPosition())
+          })
+        }
+      }, 100)
+    }
+  } catch (error) {
+    logger.error('Failed to load commit file diff', error)
+    notification.error({
+      title: '加载文件差异失败',
+      content: `无法加载文件 ${file.path} 的差异内容: ${error}`,
+      duration: 3000
+    })
+  } finally {
+    diffLoading.value.file = false
+  }
+}
 
 const navigateDiff = async (direction) => {
   if (!diffEditor || diffLoading.value.navigation) return;
@@ -554,7 +664,13 @@ const navigateDiff = async (direction) => {
 }
 
 const updateCommitDiff = async (commit) => {
-  if (!commitDiffEditor.value) return;
+  if (!isEditorInitialized.value || !commitDiffEditorContainer.value) {
+    await initMonacoEditor();
+  } else {
+    isEditorInitialized.value = false;
+  }
+
+  if (!commit || !commitDiffEditor.value) return;
 
   diffLoading.value.commit = true;
 
@@ -800,39 +916,6 @@ const handleCreateBranch = async () => {
   }
 }
 
-// 在现有函数后面添加新函数
-const checkScrollableSections = () => {
-  // Changes区域
-  if (changesSection.value) {
-    const content = changesSection.value.querySelector('.scrollable-content');
-    if (content) {
-      const shouldScroll = changesHeight.value < MIN_HEIGHT_FOR_SCROLL;
-      content.style.overflowY = shouldScroll ? 'auto' : 'hidden';
-      content.style.maxHeight = shouldScroll ? `${changesHeight.value - changesHeaderHeight.value}px` : '';
-    }
-  }
-
-  // Staged区域
-  if (stagedSection.value) {
-    const content = stagedSection.value.querySelector('.scrollable-content');
-    if (content) {
-      const shouldScroll = stagedHeight.value < MIN_HEIGHT_FOR_SCROLL;
-      content.style.overflowY = shouldScroll ? 'auto' : 'hidden';
-      content.style.maxHeight = shouldScroll ? `${stagedHeight.value - stagedHeaderHeight.value}px` : '';
-    }
-  }
-
-  // Commits区域
-  if (commitsSection.value) {
-    const content = commitsSection.value.querySelector('.scrollable-content');
-    if (content) {
-      const shouldScroll = commitsHeight.value < MIN_HEIGHT_FOR_SCROLL;
-      content.style.overflowY = shouldScroll ? 'auto' : 'hidden';
-      content.style.maxHeight = shouldScroll ? `${commitsHeight.value - commitsHeaderHeight.value}px` : '';
-    }
-  }
-};
-
 // 拖动处理函数
 const startSidebarDrag = (e) => {
   isDraggingSidebar.value = true
@@ -916,8 +999,6 @@ const handleChangesDrag = (e) => {
     toggleSectionVisibility(changesSection.value, changesHeaderHeight.value);
     toggleSectionVisibility(stagedSection.value, stagedHeaderHeight.value);
 
-    // 检查是否需要显示滚动条
-    checkScrollableSections();
   });
 };
 
@@ -1060,8 +1141,6 @@ const handleCommitsDrag = (e) => {
       panelsContainer.value.style.overflow = '';
     }
 
-    // 检查是否需要显示滚动条
-    checkScrollableSections();
   });
 };
 
@@ -1145,8 +1224,6 @@ const refreshGitStatus = async () => {
 
     // 添加获取提交历史的调用
     await loadCommitHistory()
-    // 刷新后检查滚动条
-    nextTick(checkScrollableSections);
   } catch (error) {
     logger.error('Failed to refresh Git status', error)
   }
@@ -1163,10 +1240,6 @@ const loadCommitHistory = async () => {
   } catch (error) {
     logger.error('Failed to load commit history', error)
   }
-}
-
-const formatDate = (timestamp) => {
-  return new Date(parseInt(timestamp) * 1000).toLocaleDateString()
 }
 
 const formatDateFull = (timestamp) => {
@@ -1215,7 +1288,12 @@ const initMonacoEditor = async () => {
       scrollBeyondLastLine: false,
       diffAlgorithm: 'advanced',
       diffWordWrap: 'on',
-      enableSplitViewResizing: true
+      enableSplitViewResizing: true,
+      lineHeight: 24,  // 行高
+      padding: {
+        top: 8,  // 顶部内边距
+        bottom: 8  // 底部内边距
+      },
     }));
 
     isEditorInitialized.value = true;
@@ -1381,26 +1459,6 @@ const handleFileClick = async (file) => {
   }
 }
 
-const selectCommit = async (commit) => {
-  logger.debug('Selecting commit', { commit: commit.id })
-  try {
-    selectedCommit.value = commit
-    selectedFile.value = null
-
-    // 使用 Monaco Editor 显示提交差异
-    await nextTick()
-    updateCommitDiff(commit)
-
-  } catch (error) {
-    logger.error('Failed to load commit diff', { commit: commit.id, error })
-    notification.error({
-      title: '加载提交差异失败',
-      content: `无法加载提交 ${commit.id.slice(0, 7)} 的差异内容: ${error}`,
-      duration: 3000
-    })
-  }
-}
-
 const handleStageFile = async (file) => {
   try {
     // 1. 立即从unstagedFiles中移除文件（视觉反馈）
@@ -1447,8 +1505,6 @@ const handleStageFile = async (file) => {
       }
     })
 
-    // 操作完成后检查滚动条
-    nextTick(checkScrollableSections);
   } catch (error) {
     // 回滚UI状态
     const stagedIndex = stagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
@@ -1509,8 +1565,6 @@ const handleUnstageFile = async (file) => {
       }
     })
 
-    // 操作完成后检查滚动条
-    nextTick(checkScrollableSections);
   } catch (error) {
     // 回滚UI状态
     const unstagedIndex = unstagedFiles.value.findIndex(f => f.path === file.path && f.__pending)
@@ -1675,7 +1729,6 @@ onMounted(() => {
           stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
           commitsHeaderHeight.value = commitsHeader?.offsetHeight || 40
 
-          checkScrollableSections()
         }
       })
     } catch (error) {
@@ -1854,7 +1907,7 @@ onUnmounted(() => {
 }
 
 .git-sidebar {
-  width: 280px;
+  width: 350px;
   min-width: 200px;
   max-width: 600px;
   height: 100%;
@@ -1874,31 +1927,39 @@ onUnmounted(() => {
   background-color: var(--card-bg);
 }
 
+/* 顶部导航栏样式 */
+.content-navbar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+  z-index: 1;
+  flex-shrink: 0;
+}
+
 .content-viewer {
   flex: 1;
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  min-height: 0;
+  /* 关键：允许内容区域收缩 */
 }
 
-/* 顶部工具栏样式 */
-.diff-toolbar,
-.commit-toolbar {
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--divider-color);
-  background-color: var(--card-bg);
-  z-index: 1;
-}
-
-.diff-editor-container {
+.diff-viewer,
+.commit-details {
   flex: 1;
-  height: calc(100% - 41px);
-  /* 减去工具栏高度 */
-  width: 100%;
-  min-height: 200px;
-  position: relative;
-  overflow: hidden;
+  min-height: 0;
+  /* 关键：允许内部内容收缩 */
+  display: flex;
+  flex-direction: column;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
 }
 
 /* Monaco Editor 自定义样式 */
@@ -1946,13 +2007,6 @@ onUnmounted(() => {
   background-color: var(--bg-color);
 }
 
-.commit-diff {
-  flex: 1;
-  height: 100%;
-  position: relative;
-  overflow: hidden;
-}
-
 /* 空状态样式 */
 .empty-state {
   display: flex;
@@ -1967,8 +2021,7 @@ onUnmounted(() => {
     background-color: var(--card-bg);
   }
 
-  .diff-toolbar,
-  .commit-toolbar {
+  .content-navbar {
     background-color: var(--card-bg);
     border-bottom-color: var(--divider-color);
   }
@@ -2015,12 +2068,39 @@ onUnmounted(() => {
 .changes-section,
 .staged-section,
 .commits-section {
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   min-height: 40px;
   /* 标题栏高度 */
   transition: flex 0.1s ease-out;
+}
+
+/* 自定义滚动条样式 */
+.changes-section::-webkit-scrollbar,
+.staged-section::-webkit-scrollbar,
+.commits-section::-webkit-scrollbar {
+  width: 3px;
+}
+
+.changes-section::-webkit-scrollbar-track,
+.staged-section::-webkit-scrollbar-track,
+.commits-section::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.changes-section::-webkit-scrollbar-thumb,
+.staged-section::-webkit-scrollbar-thumb,
+.commits-section::-webkit-scrollbar-thumb {
+  background-color: var(--text-color-secondary);
+  border-radius: 3px;
+  opacity: 0.3;
+}
+
+.changes-section::-webkit-scrollbar-thumb:hover,
+.staged-section::-webkit-scrollbar-thumb:hover,
+.commits-section::-webkit-scrollbar-thumb:hover {
+  opacity: 0.6;
 }
 
 /* 确保分隔线可见 */
@@ -2074,35 +2154,6 @@ onUnmounted(() => {
   opacity: 0;
   height: 0;
   overflow: hidden;
-}
-
-.scrollable-content {
-  flex: 1;
-  overflow-y: hidden;
-  /* 默认隐藏，根据高度动态显示 */
-  min-height: 0;
-  transition: all 0.2s ease;
-  padding-right: 4px;
-  /* 为滚动条留出空间 */
-}
-
-/* 自定义滚动条样式 */
-.scrollable-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.scrollable-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.scrollable-content::-webkit-scrollbar-thumb {
-  background-color: var(--text-color-secondary);
-  border-radius: 3px;
-  opacity: 0.3;
-}
-
-.scrollable-content::-webkit-scrollbar-thumb:hover {
-  opacity: 0.6;
 }
 
 /* 确保标题栏始终可见 */
@@ -2232,25 +2283,6 @@ onUnmounted(() => {
   user-select: none;
 }
 
-/* 自定义滚动条样式 */
-.scrollable-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.scrollable-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.scrollable-content::-webkit-scrollbar-thumb {
-  background-color: var(--text-color-secondary);
-  border-radius: 3px;
-  opacity: 0.3;
-}
-
-.scrollable-content::-webkit-scrollbar-thumb:hover {
-  opacity: 0.6;
-}
-
 .n-collapse-item .n-collapse-item__header {
   padding: 4px 12px;
   position: relative;
@@ -2294,7 +2326,7 @@ onUnmounted(() => {
   min-height: 200px;
   position: relative;
   overflow: hidden;
-  padding: auto;
+  padding: 0px;
 }
 
 /* 调整 Monaco Editor 主题 */
@@ -2347,5 +2379,23 @@ onUnmounted(() => {
   .loading-overlay {
     background-color: rgba(0, 0, 0, 0.5);
   }
+}
+
+/* 新增样式 */
+.expanded-commit {
+  background-color: rgba(0, 123, 255, 0.1);
+  border-left: 3px solid #007bff;
+}
+
+.commit-files {
+  margin-top: 8px;
+  margin-left: 16px;
+  border-left: 2px solid #e9ecef;
+  padding-left: 8px;
+}
+
+.selected-file {
+  background-color: rgba(0, 123, 255, 0.05);
+  border-left: 2px solid #007bff;
 }
 </style>

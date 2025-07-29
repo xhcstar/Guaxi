@@ -144,6 +144,8 @@ async fn main() {
             commands::git::create_git_window,
             commands::git::get_file_content,
             commands::git::get_file_diff,
+            commands::git::get_commit_file_diff,
+            commands::git::get_commit_files,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn

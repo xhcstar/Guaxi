@@ -1,7 +1,7 @@
 use git2::{
-    build::CheckoutBuilder, BranchType, DiffFormat, DiffOptions, FetchOptions, Index, IndexEntry,
-    ObjectType, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags, StatusOptions,
-    StatusShow, TreeEntry,
+    build::CheckoutBuilder, BranchType, Delta, DiffFormat, DiffOptions, FetchOptions, Index,
+    IndexEntry, Oid, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags, StatusOptions,
+    StatusShow,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -34,6 +34,14 @@ pub struct GitChange {
 pub struct GitBranch {
     name: String,
     is_current: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommitFile {
+    path: String,
+    status: String, // "A", "M", "D", etc.
+    additions: usize,
+    deletions: usize,
 }
 
 #[tauri::command]
@@ -1009,6 +1017,147 @@ pub fn get_file_diff(path: String, file_path: String) -> Result<String, String> 
         error!("Failed to print diff: {}", e);
         e.to_string()
     })?;
+
+    Ok(output)
+}
+
+#[tauri::command]
+pub fn get_commit_files(path: String, commit_id: String) -> Result<Vec<CommitFile>, String> {
+    let repo =
+        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    let commit = repo
+        .find_commit(Oid::from_str(&commit_id).map_err(|e| format!("Invalid commit ID: {}", e))?)
+        .map_err(|e| format!("Failed to find commit: {}", e))?;
+
+    // 获取父提交（如果有）
+    let parent = if commit.parent_count() > 0 {
+        Some(
+            commit
+                .parent(0)
+                .map_err(|e| format!("Failed to get parent commit: {}", e))?,
+        )
+    } else {
+        None
+    };
+
+    // 获取父提交的树对象
+    let parent_tree = parent.as_ref().and_then(|p| p.tree().ok());
+
+    // 获取当前提交的树对象
+    let commit_tree = commit
+        .tree()
+        .map_err(|e| format!("Failed to get commit tree: {}", e))?;
+
+    // 生成差异
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
+        .map_err(|e| format!("Failed to generate diff: {}", e))?;
+
+    let mut files = Vec::new();
+
+    // 处理差异统计
+    diff.foreach(
+        &mut |delta, _| {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            let status = match delta.status() {
+                Delta::Added => "A",
+                Delta::Modified => "M",
+                Delta::Deleted => "D",
+                Delta::Renamed => "R",
+                Delta::Copied => "C",
+                Delta::Ignored => "I",
+                Delta::Untracked => "?",
+                Delta::Typechange => "T",
+                Delta::Unreadable => "U",
+                _ => " ",
+            }
+            .to_string();
+
+            // 计算增删行数
+            let mut additions = 0;
+            let mut deletions = 0;
+            delta.new_file().id().is_zero().then(|| additions += 1);
+            delta.old_file().id().is_zero().then(|| deletions += 1);
+
+            files.push(CommitFile {
+                path,
+                status,
+                additions,
+                deletions,
+            });
+            true
+        },
+        None,
+        None,
+        None,
+    )
+    .map_err(|e| format!("Failed to process diff: {}", e))?;
+
+    Ok(files)
+}
+
+#[tauri::command]
+pub fn get_commit_file_diff(
+    path: String,
+    commit_id: String,
+    file_path: String,
+) -> Result<String, String> {
+    let repo =
+        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
+
+    let commit = repo
+        .find_commit(Oid::from_str(&commit_id).map_err(|e| format!("Invalid commit ID: {}", e))?)
+        .map_err(|e| format!("Failed to find commit: {}", e))?;
+
+    // 获取父提交（如果有）
+    let parent = if commit.parent_count() > 0 {
+        Some(
+            commit
+                .parent(0)
+                .map_err(|e| format!("Failed to get parent commit: {}", e))?,
+        )
+    } else {
+        None
+    };
+
+    // 获取父提交的树对象
+    let parent_tree = parent.as_ref().and_then(|p| p.tree().ok());
+
+    // 获取当前提交的树对象
+    let commit_tree = commit
+        .tree()
+        .map_err(|e| format!("Failed to get commit tree: {}", e))?;
+
+    // 设置差异选项，只针对特定文件
+    let mut diff_options = DiffOptions::new();
+    diff_options.pathspec(&file_path);
+    diff_options.context_lines(3);
+
+    // 生成差异
+    let diff = repo
+        .diff_tree_to_tree(
+            parent_tree.as_ref(),
+            Some(&commit_tree),
+            Some(&mut diff_options),
+        )
+        .map_err(|e| format!("Failed to generate diff: {}", e))?;
+
+    // 格式化差异输出
+    let mut output = String::new();
+    diff.print(DiffFormat::Patch, |_, _, line| {
+        if let Ok(content) = std::str::from_utf8(line.content()) {
+            output.push_str(content);
+        }
+        true
+    })
+    .map_err(|e| format!("Failed to print diff: {}", e))?;
 
     Ok(output)
 }
