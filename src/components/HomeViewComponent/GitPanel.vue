@@ -640,24 +640,73 @@ const handleCommitFileClick = async (file) => {
 }
 
 const navigateDiff = async (direction) => {
-  if (!diffEditor || diffLoading.value.navigation) return;
+  if (!diffEditor || diffLoading.value.navigation) {
+    logger.warn('Navigation skipped - editor not ready or navigation in progress');
+    return;
+  }
 
   diffLoading.value.navigation = true;
 
   try {
     const editor = diffEditor.getModifiedEditor();
-    const action = direction === 'prev'
+    logger.debug('Got modified editor instance');
+
+    // 检查编辑器是否已准备好
+    if (!editor.getModel()) {
+      logger.warn('Editor model not ready for navigation');
+      return;
+    }
+
+    // 尝试获取导航动作
+    const actionName = direction === 'prev'
       ? 'editor.action.diffReview.prev'
       : 'editor.action.diffReview.next';
 
-    const diffAction = editor.getAction(action);
-    if (diffAction) {
-      await diffAction.run();
-      // 确保视图滚动到差异位置
-      editor.revealPositionInCenter(editor.getPosition());
+    const action = editor.getAction(actionName);
+    if (!action) {
+      // 如果标准动作不存在，尝试备用方案
+      logger.warn(`Action ${actionName} not found, trying alternative approach`);
+
+      // 备用方案：直接操作编辑器选择第一个差异
+      const changes = diffEditor.getLineChanges();
+      if (changes && changes.length > 0) {
+        const change = direction === 'prev'
+          ? changes[changes.length - 1]
+          : changes[0];
+
+        editor.setPosition({
+          lineNumber: change.modifiedStartLineNumber,
+          column: 1
+        });
+        editor.revealPositionInCenter({
+          lineNumber: change.modifiedStartLineNumber,
+          column: 1
+        });
+        editor.focus();
+        logger.debug('Navigated using line changes API');
+        return;
+      }
+
+      throw new Error(`No navigation action or changes available`);
+    }
+
+    logger.debug(`Executing ${actionName}`);
+    await action.run();
+
+    // 确保视图滚动到差异位置
+    const position = editor.getPosition();
+    if (position) {
+      editor.revealPositionInCenter(position);
+      editor.focus();
+      logger.debug('Navigation completed successfully');
     }
   } catch (error) {
-    console.error(`Failed to navigate ${direction} diff:`, error);
+    logger.error(`Failed to navigate ${direction} diff`, error);
+    notification.error({
+      title: '导航失败',
+      content: `无法跳转到差异位置: ${error.message}`,
+      duration: 2000
+    });
   } finally {
     diffLoading.value.navigation = false;
   }
@@ -1294,6 +1343,11 @@ const initMonacoEditor = async () => {
         top: 8,  // 顶部内边距
         bottom: 8  // 底部内边距
       },
+      // 确保差异导航功能可用
+      diffReview: {
+        showMovedCodeBlocks: true,
+        followCaret: true
+      }
     }));
 
     isEditorInitialized.value = true;
