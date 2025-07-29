@@ -260,7 +260,6 @@
     </div>
 
     <!-- 右侧内容区域 -->
-    <!-- 右侧内容区域 -->
     <div class="git-content">
       <!-- 文件差异或提交详情 -->
       <div class="content-viewer">
@@ -270,14 +269,16 @@
             <n-space align="center" justify="space-between">
               <n-text strong>{{ selectedFile.path }}</n-text>
               <n-space>
-                <n-button text @click="navigateDiff('prev')">
+                <n-button text @click="navigateDiff('prev')" :loading="diffLoading.navigation"
+                  :disabled="diffLoading.file">
                   <template #icon>
                     <n-icon>
                       <ChevronUpOutline />
                     </n-icon>
                   </template>
                 </n-button>
-                <n-button text @click="navigateDiff('next')">
+                <n-button text @click="navigateDiff('next')" :loading="diffLoading.navigation"
+                  :disabled="diffLoading.file">
                   <template #icon>
                     <n-icon>
                       <ChevronDownOutline />
@@ -287,10 +288,17 @@
               </n-space>
             </n-space>
           </div>
+
+          <!-- 添加加载状态 -->
+          <div v-if="diffLoading.file" class="loading-overlay">
+            <n-spin size="large" />
+          </div>
+
           <!-- Monaco Editor 容器 -->
           <div ref="diffEditorContainer" class="diff-editor-container"></div>
         </div>
 
+        <!-- 在 commit-details 部分添加加载状态 -->
         <div v-if="selectedCommit" class="commit-details">
           <!-- 提交详情顶部栏 -->
           <div class="commit-toolbar">
@@ -302,10 +310,17 @@
               </n-space>
             </n-space>
           </div>
+
           <!-- 提交消息 -->
           <div class="commit-message">
             <pre>{{ selectedCommit.message }}</pre>
           </div>
+
+          <!-- 添加加载状态 -->
+          <div v-if="diffLoading.commit" class="loading-overlay">
+            <n-spin size="large" />
+          </div>
+
           <!-- 提交差异 -->
           <div class="commit-diff">
             <div ref="commitDiffEditorContainer" class="diff-editor-container"></div>
@@ -507,9 +522,17 @@ const isEditorInitialized = ref(false)
 let diffEditor = null
 let resizeObserver = null
 
+const diffLoading = ref({
+  file: false,
+  commit: false,
+  navigation: false
+});
 
-const navigateDiff = (direction) => {
-  if (!diffEditor) return;
+
+const navigateDiff = async (direction) => {
+  if (!diffEditor || diffLoading.value.navigation) return;
+
+  diffLoading.value.navigation = true;
 
   try {
     const editor = diffEditor.getModifiedEditor();
@@ -519,47 +542,56 @@ const navigateDiff = (direction) => {
 
     const diffAction = editor.getAction(action);
     if (diffAction) {
-      diffAction.run().catch(e => {
-        console.error(`Failed to navigate ${direction} diff:`, e);
-      });
+      await diffAction.run();
+      // 确保视图滚动到差异位置
+      editor.revealPositionInCenter(editor.getPosition());
     }
   } catch (error) {
-    console.error('Error in navigateDiff:', error);
+    console.error(`Failed to navigate ${direction} diff:`, error);
+  } finally {
+    diffLoading.value.navigation = false;
   }
 }
 
-// 更新提交差异内容
 const updateCommitDiff = async (commit) => {
-  if (!commitDiffEditor.value) return
+  if (!commitDiffEditor.value) return;
+
+  diffLoading.value.commit = true;
 
   try {
     // 获取提交差异
     const diff = await invoke('get_commit_diff', {
       path: props.workspacePath,
       commitId: commit.id
-    })
+    });
 
     // 解析差异内容
-    const { original, modified } = parseUnifiedDiff(diff)
+    const { original, modified } = parseUnifiedDiff(diff);
 
     // 创建 Monaco 模型
-    const originalModel = monaco.editor.createModel(
-      original,
-      'plaintext'
-    )
-    const modifiedModel = monaco.editor.createModel(
-      modified,
-      'plaintext'
-    )
+    const originalModel = monaco.editor.createModel(original, 'plaintext');
+    const modifiedModel = monaco.editor.createModel(modified, 'plaintext');
 
     // 设置差异编辑器模型
     commitDiffEditor.value.setModel({
       original: originalModel,
       modified: modifiedModel
-    })
+    });
 
+    // 导航到第一个差异
+    setTimeout(() => {
+      const modifiedEditor = commitDiffEditor.value.getModifiedEditor();
+      const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
+      if (diffNavAction) {
+        diffNavAction.run().then(() => {
+          modifiedEditor.revealPositionInCenter(modifiedEditor.getPosition());
+        });
+      }
+    }, 100);
   } catch (error) {
-    logger.error('Failed to update commit diff', error)
+    logger.error('Failed to update commit diff', error);
+  } finally {
+    diffLoading.value.commit = false;
   }
 }
 
@@ -1177,12 +1209,12 @@ const initMonacoEditor = async () => {
       readOnly: true,
       automaticLayout: true,
       theme: 'vs',
-      renderSideBySide: true,  // 关键设置，确保并排显示
+      renderSideBySide: true,
       renderIndicators: true,
       scrollBeyondLastLine: false,
-      diffAlgorithm: 'advanced', // 使用高级差异算法
-      diffWordWrap: 'on',        // 启用单词换行
-      enableSplitViewResizing: true // 允许调整左右视图大小
+      diffAlgorithm: 'advanced',
+      diffWordWrap: 'on',
+      enableSplitViewResizing: true
     }));
 
     isEditorInitialized.value = true;
@@ -1224,16 +1256,18 @@ const updateFileDiff = async (file) => {
     return;
   }
 
+  diffLoading.value.file = true;
+
   try {
     const filePath = file.path.replace(/\\/g, '/');
     console.log('[Diff] Loading diff for:', filePath);
 
-    // 同时获取原始内容和修改内容
+    // 先获取新内容
     const [originalContent, modifiedContent] = await Promise.all([
       invoke('get_file_content', {
         path: props.workspacePath,
         filePath: filePath,
-        revision: 'HEAD'  // 获取HEAD版本的内容
+        revision: 'HEAD'
       }).catch(e => {
         console.warn('Failed to get original content:', e);
         return ''; // 对于新文件，原始内容为空
@@ -1249,30 +1283,26 @@ const updateFileDiff = async (file) => {
 
     const language = getLanguageForFile(file.path);
 
-    // 清理旧模型
+    // 创建新模型
+    const originalModel = monaco.editor.createModel(originalContent, language);
+    const modifiedModel = monaco.editor.createModel(modifiedContent, language);
+
+    // 获取当前模型以便后续清理
     const oldModel = diffEditor.getModel();
+
+    // 设置新模型
+    diffEditor.setModel({
+      original: originalModel,
+      modified: modifiedModel
+    });
+
+    // 清理旧模型（如果有）
     if (oldModel) {
       setTimeout(() => {
         oldModel.original?.dispose();
         oldModel.modified?.dispose();
       }, 100);
     }
-
-    // 创建新模型
-    const originalModel = monaco.editor.createModel(
-      originalContent,
-      language
-    );
-    const modifiedModel = monaco.editor.createModel(
-      modifiedContent,
-      language
-    );
-
-    // 设置差异模型
-    diffEditor.setModel({
-      original: originalModel,
-      modified: modifiedModel
-    });
 
     // 配置差异编辑器
     diffEditor.updateOptions({
@@ -1284,23 +1314,22 @@ const updateFileDiff = async (file) => {
     });
 
     // 确保布局正确
-    nextTick(() => {
-      if (diffEditor && diffEditorContainer.value) {
-        const height = diffEditorContainer.value.clientHeight;
-        const width = diffEditorContainer.value.clientWidth;
-        diffEditor.layout({ width, height });
+    await nextTick();
+    if (diffEditor && diffEditorContainer.value) {
+      const height = diffEditorContainer.value.clientHeight;
+      const width = diffEditorContainer.value.clientWidth;
+      diffEditor.layout({ width, height });
 
-        // 正确的方式导航到第一个差异
-        setTimeout(() => {
-          const modifiedEditor = diffEditor.getModifiedEditor();
-          const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
-          if (diffNavAction) {
-            diffNavAction.run().catch(console.error);
-          }
-        }, 200);
-      }
-    });
-
+      // 导航到第一个差异
+      setTimeout(async () => {
+        const modifiedEditor = diffEditor.getModifiedEditor();
+        const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
+        if (diffNavAction) {
+          await diffNavAction.run();
+          modifiedEditor.revealPositionInCenter(modifiedEditor.getPosition());
+        }
+      }, 100);
+    }
   } catch (error) {
     console.error('[Diff] Error in updateFileDiff:', error);
     const errorModel = monaco.editor.createModel(
@@ -1311,6 +1340,8 @@ const updateFileDiff = async (file) => {
       original: errorModel,
       modified: errorModel
     });
+  } finally {
+    diffLoading.value.file = false;
   }
 }
 
@@ -1913,6 +1944,7 @@ onUnmounted(() => {
 .commit-diff {
   flex: 1;
   height: 100%;
+  position: relative;
   overflow: hidden;
 }
 
@@ -2249,10 +2281,15 @@ onUnmounted(() => {
   border-top: 1px solid var(--divider-color);
 }
 
+/* 优化编辑器容器样式 */
 .diff-editor-container {
-  height: 100%;
+  flex: 1;
+  height: calc(100% - 41px);
   width: 100%;
-  min-height: 300px;
+  min-height: 200px;
+  position: relative;
+  overflow: hidden;
+  padding: auto;
 }
 
 /* 调整 Monaco Editor 主题 */
@@ -2283,5 +2320,27 @@ onUnmounted(() => {
 
 .monaco-editor .line-insert {
   background-color: rgba(40, 167, 69, 0.05) !important;
+}
+
+/* 添加加载状态样式 */
+.loading-overlay {
+  position: absolute;
+  top: 41px;
+  /* 工具栏高度 */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 255, 255, 0.7);
+  z-index: 10;
+}
+
+/* 暗色主题适配 */
+@media (prefers-color-scheme: dark) {
+  .loading-overlay {
+    background-color: rgba(0, 0, 0, 0.5);
+  }
 }
 </style>
