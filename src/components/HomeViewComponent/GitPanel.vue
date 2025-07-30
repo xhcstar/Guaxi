@@ -342,7 +342,7 @@
         <!-- 在 commit-details 部分添加加载状态 -->
         <div v-else-if="selectedCommit" class="commit-details">
           <!-- 提交差异 -->
-          <div ref="commitDiffEditorContainer" class="diff-editor-container"></div>
+          <div ref="diffEditorContainer" class="diff-editor-container"></div>
         </div>
 
         <div v-else="!selectedFile && !selectedCommit" class="empty-state">
@@ -526,8 +526,6 @@ const showCreateBranchModal = ref(false)
 const newBranchName = ref('')
 
 // Monaco Editor 实例
-const commitDiffEditor = ref(null)
-const commitDiffEditorContainer = ref(null)
 const diffEditorContainer = ref(null)
 const isEditorInitialized = ref(false)
 let diffEditor = null
@@ -552,10 +550,11 @@ const getStatusTagType = (status) => {
 
 // 修改 selectCommit 函数
 const selectCommit = async (commit) => {
-  logger.debug('Selecting commit', { commit: commit.id })
+  logger.info('Selecting commit', { commitId: commit.id })
   try {
     // 如果点击的是已展开的提交，则收起
     if (expandedCommit.value?.id === commit.id) {
+      logger.info('Collapsing already expanded commit')
       expandedCommit.value = null
       commitFiles.value = []
       selectedCommit.value = null
@@ -566,24 +565,30 @@ const selectCommit = async (commit) => {
     expandedCommit.value = commit
     selectedFile.value = null
 
-    // 获取提交的修改文件列表
+    logger.info('Fetching commit files')
     const files = await invoke('get_commit_files', {
       path: props.workspacePath,
       commitId: commit.id
     })
+
+    logger.info('Received commit files', { count: files.length })
     commitFiles.value = files
 
     // 默认显示第一个文件的差异
     if (files.length > 0) {
+      logger.info('Selecting first file in commit')
       await handleCommitFileClick(files[0])
     } else {
-      // 如果没有文件，清空差异显示
-      if (commitDiffEditor.value) {
-        commitDiffEditor.value.setModel(null)
+      logger.info('No files in commit, clearing diff')
+      if (diffEditor.value) {
+        diffEditor.value.setModel(null)
       }
     }
   } catch (error) {
-    logger.error('Failed to load commit diff', { commit: commit.id, error })
+    logger.error('Failed to load commit diff', {
+      commitId: commit.id,
+      error: error.message
+    })
     notification.error({
       title: '加载提交差异失败',
       content: `无法加载提交 ${commit.id.slice(0, 7)} 的差异内容: ${error}`,
@@ -593,6 +598,10 @@ const selectCommit = async (commit) => {
 }
 
 const handleCommitFileClick = async (file) => {
+  logger.info('Handling commit file click', {
+    filePath: file.path,
+    status: file.status
+  })
   try {
     selectedFile.value = file  // 只更新selectedFile，保留selectedCommit
     diffLoading.value.file = true
@@ -608,31 +617,61 @@ const handleCommitFileClick = async (file) => {
       filePath: file.path
     })
 
-    // 解析差异内容
-    const { original, modified } = parseUnifiedDiff(diff)
+    // 确保diff是对象且包含original和modified
+    if (!diff || typeof diff !== 'object') {
+      throw new Error('Invalid diff format received from backend')
+    }
 
-    // 创建 Monaco 模型
     const language = getLanguageForFile(file.path)
-    const originalModel = monaco.editor.createModel(original, language)
-    const modifiedModel = monaco.editor.createModel(modified, language)
 
-    // 设置差异编辑器模型
-    if (commitDiffEditor.value) {
-      commitDiffEditor.value.setModel({
-        original: originalModel,
-        modified: modifiedModel
-      })
+    // 创建新模型前先处理空内容情况
+    const originalContent = diff[0] || ''
+    const modifiedContent = diff[1] || ''
+    const originalModel = monaco.editor.createModel(originalContent, language)
+    const modifiedModel = monaco.editor.createModel(modifiedContent, language)
+
+    // 获取当前模型以便后续清理
+    const oldModel = diffEditor.getModel();
+
+    // 设置新模型
+    diffEditor.setModel({
+      original: originalModel,
+      modified: modifiedModel
+    });
+
+    // 清理旧模型（如果有）
+    if (oldModel) {
+      setTimeout(() => {
+        oldModel.original?.dispose();
+        oldModel.modified?.dispose();
+      }, 100);
+    }
+
+    // 配置差异编辑器
+    diffEditor.updateOptions({
+      renderSideBySide: true,
+      renderIndicators: true,
+      renderWhitespace: 'selection',
+      readOnly: true,
+      automaticLayout: true
+    });
+
+    // 确保布局正确
+    await nextTick();
+    if (diffEditor && diffEditorContainer.value) {
+      const height = diffEditorContainer.value.clientHeight;
+      const width = diffEditorContainer.value.clientWidth;
+      diffEditor.layout({ width, height });
 
       // 导航到第一个差异
-      setTimeout(() => {
-        const modifiedEditor = commitDiffEditor.value.getModifiedEditor()
-        const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next')
+      setTimeout(async () => {
+        const modifiedEditor = diffEditor.getModifiedEditor();
+        const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
         if (diffNavAction) {
-          diffNavAction.run().then(() => {
-            modifiedEditor.revealPositionInCenter(modifiedEditor.getPosition())
-          })
+          await diffNavAction.run();
+          modifiedEditor.revealPositionInCenter(modifiedEditor.getPosition());
         }
-      }, 100)
+      }, 100);
     }
   } catch (error) {
     logger.error('Failed to load commit file diff', error)
@@ -656,7 +695,7 @@ const navigateDiff = async (direction) => {
 
   try {
     const editor = diffEditor.getModifiedEditor();
-    logger.debug('Got modified editor instance');
+    logger.info('Got modified editor instance');
 
     // 检查编辑器是否已准备好
     if (!editor.getModel()) {
@@ -720,13 +759,13 @@ const navigateDiff = async (direction) => {
 }
 
 const updateCommitDiff = async (commit) => {
-  if (!isEditorInitialized.value || !commitDiffEditorContainer.value) {
+  if (!isEditorInitialized.value || !diffEditorContainer.value) {
     await initMonacoEditor();
   } else {
     isEditorInitialized.value = false;
   }
 
-  if (!commit || !commitDiffEditor.value) return;
+  if (!commit || !diffEditor.value) return;
 
   diffLoading.value.commit = true;
 
@@ -745,14 +784,14 @@ const updateCommitDiff = async (commit) => {
     const modifiedModel = monaco.editor.createModel(modified, 'plaintext');
 
     // 设置差异编辑器模型
-    commitDiffEditor.value.setModel({
+    diffEditor.value.setModel({
       original: originalModel,
       modified: modifiedModel
     });
 
     // 导航到第一个差异
     setTimeout(() => {
-      const modifiedEditor = commitDiffEditor.value.getModifiedEditor();
+      const modifiedEditor = diffEditor.value.getModifiedEditor();
       const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
       if (diffNavAction) {
         diffNavAction.run().then(() => {
@@ -1789,8 +1828,8 @@ watch(selectedCommit, (newVal) => {
     nextTick(() => {
       updateCommitDiff(newVal)
     })
-  } else if (commitDiffEditor.value) {
-    commitDiffEditor.value.setModel(null)
+  } else if (diffEditor.value) {
+    diffEditor.value.setModel(null)
   }
 })
 

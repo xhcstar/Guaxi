@@ -1,7 +1,7 @@
 use git2::{
-    build::CheckoutBuilder, BranchType, Delta, DiffFormat, DiffOptions, FetchOptions, Index,
-    IndexEntry, Oid, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags, StatusOptions,
-    StatusShow,
+    build::CheckoutBuilder, BranchType, Delta, DiffFormat, DiffOptions, FetchOptions, IndexEntry,
+    Oid, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags, StatusOptions, StatusShow,
+    Tree,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -1105,59 +1105,55 @@ pub fn get_commit_files(path: String, commit_id: String) -> Result<Vec<CommitFil
 
 #[tauri::command]
 pub fn get_commit_file_diff(
-    path: String,
-    commit_id: String,
-    file_path: String,
-) -> Result<String, String> {
-    let repo =
-        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
+    path: String,      // 仓库路径
+    commit_id: String, // 提交ID
+    file_path: String, // 文件路径
+) -> Result<(String, String), String> {
+    // 1. 打开Git仓库
+    let repo = Repository::discover(&path).map_err(|e| format!("无法打开仓库: {}", e))?;
 
+    // 2. 查找指定提交
     let commit = repo
-        .find_commit(Oid::from_str(&commit_id).map_err(|e| format!("Invalid commit ID: {}", e))?)
-        .map_err(|e| format!("Failed to find commit: {}", e))?;
+        .find_commit(Oid::from_str(&commit_id).map_err(|e| format!("无效的提交ID: {}", e))?)
+        .map_err(|e| format!("无法找到提交: {}", e))?;
 
-    // 获取父提交（如果有）
+    // 3. 获取父提交(用于对比)
     let parent = if commit.parent_count() > 0 {
         Some(
             commit
                 .parent(0)
-                .map_err(|e| format!("Failed to get parent commit: {}", e))?,
+                .map_err(|e| format!("无法获取父提交: {}", e))?,
         )
     } else {
         None
     };
 
-    // 获取父提交的树对象
-    let parent_tree = parent.as_ref().and_then(|p| p.tree().ok());
-
-    // 获取当前提交的树对象
-    let commit_tree = commit
-        .tree()
-        .map_err(|e| format!("Failed to get commit tree: {}", e))?;
-
-    // 设置差异选项，只针对特定文件
-    let mut diff_options = DiffOptions::new();
-    diff_options.pathspec(&file_path);
-    diff_options.context_lines(3);
-
-    // 生成差异
-    let diff = repo
-        .diff_tree_to_tree(
-            parent_tree.as_ref(),
-            Some(&commit_tree),
-            Some(&mut diff_options),
-        )
-        .map_err(|e| format!("Failed to generate diff: {}", e))?;
-
-    // 格式化差异输出
-    let mut output = String::new();
-    diff.print(DiffFormat::Patch, |_, _, line| {
-        if let Ok(content) = std::str::from_utf8(line.content()) {
-            output.push_str(content);
+    // 4. 获取文件在两个提交中的内容
+    let get_file_content = |tree: Option<&Tree>| -> Result<String, String> {
+        match tree.and_then(|t| t.get_path(Path::new(&file_path)).ok()) {
+            Some(entry) => {
+                let blob = repo
+                    .find_blob(entry.id())
+                    .map_err(|e| format!("无法找到blob: {}", e))?;
+                String::from_utf8(blob.content().to_vec())
+                    .map_err(|e| format!("文件内容解码失败: {}", e))
+            }
+            None => Ok(String::new()), // 文件不存在返回空
         }
-        true
-    })
-    .map_err(|e| format!("Failed to print diff: {}", e))?;
+    };
 
-    Ok(output)
+    // 5. 获取原始内容(父提交)和修改后内容(当前提交)
+    let original = if let Some(p) = parent.as_ref() {
+        get_file_content(Some(&p.tree().map_err(|e| format!("无法获取父树: {}", e))?))?
+    } else {
+        String::new()
+    };
+
+    let modified = get_file_content(Some(
+        &commit
+            .tree()
+            .map_err(|e| format!("无法获取提交树: {}", e))?,
+    ))?;
+
+    Ok((original, modified))
 }
