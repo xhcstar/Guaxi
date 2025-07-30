@@ -216,7 +216,7 @@ const mouse = new THREE.Vector2(); // Mouse position tracker
 const initThreeJS = () => {
   // 1. Create scene with background and fog
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xf0f0f0);
+  scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xbbbbbb);
   scene.fog = new THREE.FogExp2(scene.background, 0.002);
 
   console.log('[initThreeJS]');
@@ -243,6 +243,12 @@ const initThreeJS = () => {
     errorMessage.value = '浏览器不支持 WebGL 或初始化失败';
     return;
   }
+
+  // 启用线宽支持
+  const gl = renderer.getContext();
+  gl.getExtension('EXT_frag_depth');
+  gl.getExtension('OES_standard_derivatives');
+
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(container.value.clientWidth, container.value.clientHeight);
   renderer.shadowMap.enabled = true;
@@ -344,13 +350,33 @@ const toggleAutoRotate = () => {
 const toggleDarkMode = () => {
   darkMode.value = !darkMode.value;
 
-  // Update scene background
+  // 更新场景背景和雾
   if (scene) {
-    scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xf0f0f0);
+    scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xeeeeee);
     scene.fog.color.copy(scene.background);
   }
 
-  // Update lighting for new mode
+  // 更新节点材质
+  nodes.forEach(node => {
+    if (node.mesh?.material) {
+      node.mesh.material.color.setHex(getNodeColor(node.userData.type));
+      node.mesh.material.emissive.setHex(darkMode.value ? 0x000000 : 0x222222);
+      node.mesh.material.emissiveIntensity = darkMode.value ? 0.1 : 0.3;
+      node.mesh.material.needsUpdate = true;
+    }
+  });
+
+  // 更新边材质
+  edges.forEach(edge => {
+    if (edge.material) {
+      edge.material.color.setHex(darkMode.value ? 0x888888 : 0x1565C0);
+      edge.material.linewidth = darkMode.value ? 1 : 2;
+      edge.material.opacity = darkMode.value ? 0.8 : 0.9;
+      edge.material.needsUpdate = true;
+    }
+  });
+
+  // 更新光照
   setupLighting();
 
   log(`已切换至${darkMode.value ? '暗黑' : '亮色'}模式`);
@@ -578,10 +604,13 @@ const createNodesAndEdges = async (data) => {
   // 1. 创建节点
   data.nodes.forEach(nodeData => {
     const geometry = new THREE.SphereGeometry(2, 32, 32);
-    const material = new THREE.MeshPhongMaterial({
+    // 改用 MeshStandardMaterial 或 MeshPhongMaterial
+    const material = new THREE.MeshStandardMaterial({
       color: getNodeColor(nodeData.type),
-      emissive: 0x000000,
-      shininess: 30
+      metalness: 0.2,       // 降低金属感
+      roughness: 0.5,        // 增加粗糙度以增强漫反射
+      emissive: 0x111111,   // 轻微自发光避免纯黑
+      emissiveIntensity: 0.2
     });
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -628,12 +657,12 @@ const createNodesAndEdges = async (data) => {
       const positions = new Float32Array(6); // 两个点，每个点3个坐标
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-      // 使用更稳定的线材质
+
       const material = new THREE.LineBasicMaterial({
-        color: edgeData.strength > 0.5 ? 0xff5555 : 0x888888,
-        linewidth: 2,
+        color: darkMode.value ? 0x888888 : 0x1565C0, // 暗色用浅灰，亮色用深蓝
+        linewidth: darkMode.value ? 1 : 2,
         transparent: true,
-        opacity: 0.6,
+        opacity: darkMode.value ? 0.8 : 1,
         depthTest: true,
         depthWrite: true
       });
@@ -794,30 +823,32 @@ const treeLayout = () => {
  * Set up lighting for the scene
  */
 const setupLighting = () => {
-  // Ambient light for overall illumination
-  const ambientLight = new THREE.AmbientLight(0xffffff, darkMode.value ? 0.8 : 1.0);
+  // 清除所有现有光源
+  scene.children.filter(obj => obj.isLight).forEach(light => scene.remove(light));
+
+  // 亮色模式下增强环境光
+  const ambientLight = new THREE.AmbientLight(
+    0xFFFFFF,
+    darkMode.value ? 0.4 : 0.8  // 亮色模式更强
+  );
   scene.add(ambientLight);
 
-  // Directional light for shadows and highlights
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-  directionalLight.position.set(1, 1, 1);
+  // 主方向光（模拟太阳光）
+  const directionalLight = new THREE.DirectionalLight(
+    0xFFFFFF,
+    darkMode.value ? 0.8 : 1.2  // 亮色模式更强
+  );
+  directionalLight.position.set(1, 1, 1).normalize();
   directionalLight.castShadow = true;
-  directionalLight.shadow.mapSize.width = 2048;
-  directionalLight.shadow.mapSize.height = 2048;
   scene.add(directionalLight);
 
-  // Hemisphere light for natural outdoor lighting effect
+  // 辅助的半球光
   const hemisphereLight = new THREE.HemisphereLight(
-    0xffffbb, // Sky color
-    0x080820, // Ground color
-    0.5 // Intensity
+    0xFFFFFF, // 天空颜色
+    0x888888, // 地面颜色
+    darkMode.value ? 0.5 : 0.8  // 亮色模式更强
   );
   scene.add(hemisphereLight);
-
-  // Point light for additional highlights
-  const pointLight = new THREE.PointLight(0xffffff, 1, 50);
-  pointLight.position.set(0, 0, 20);
-  scene.add(pointLight);
 };
 
 /**
@@ -1089,13 +1120,24 @@ const initOctree = async (meshes) => {
   }
 };
 
+// 确保亮色模式返回明亮的颜色
 const getNodeColor = (type) => {
-  switch (type) {
-    case 'knowledge-base': return 0xf39c12; // 橙色
-    case 'directory': return 0x3498db;     // 蓝色
-    case 'file': return 0x2ecc71;         // 绿色
-    default: return 0xcccccc;             // 默认灰色
-  }
+  const lightColors = {
+    'knowledge-base': 0xFFA500, // 亮橙色
+    'directory': 0x1E90FF,     // 亮蓝色
+    'file': 0x32CD32,          // 亮绿色
+    'default': 0x777777        // 中灰色
+  };
+
+  const darkColors = {
+    'knowledge-base': 0xF39C12,
+    'directory': 0x3498DB,
+    'file': 0x2ECC71,
+    'default': 0xCCCCCC
+  };
+
+  return darkMode.value ? darkColors[type] || darkColors.default
+    : lightColors[type] || lightColors.default;
 }
 
 /**
@@ -1215,11 +1257,13 @@ const showEmptyState = (reason = '') => {
   // Create torus geometry as placeholder
   const group = new THREE.Group();
   const geometry = new THREE.TorusGeometry(3, 0.5, 16, 32);
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x3498db,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.6
+  // 改用 MeshStandardMaterial 或 MeshPhongMaterial
+  const material = new THREE.MeshStandardMaterial({
+    color: getNodeColor(nodeData.type),
+    metalness: 0.2,       // 降低金属感
+    roughness: 0.5,        // 增加粗糙度以增强漫反射
+    emissive: 0x111111,   // 轻微自发光避免纯黑
+    emissiveIntensity: 0.2
   });
   const torus = new THREE.Mesh(geometry, material);
   torus.rotation.x = Math.PI / 2;
@@ -1481,15 +1525,18 @@ onBeforeUnmount(() => {
 .toolbar {
   padding: 8px 16px;
   z-index: 10;
-  background-color: rgba(255, 255, 255, 0.9);
-  border-bottom: 1px solid #e0e0e0;
+  background-color: var(--toolbar-bg, rgba(255, 255, 255, 0.9));
+  border-bottom: 1px solid var(--toolbar-border, #e0e0e0);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-/* Dark mode toolbar variation */
+/* 暗色模式下的工具栏 */
 .dark-mode .toolbar {
-  background-color: rgba(30, 30, 30, 0.9);
-  border-bottom-color: #333;
+  padding: 8px 16px;
+  z-index: 10;
+  background-color: var(--toolbar-bg, rgba(255, 255, 255, 0.9));
+  border-bottom: 1px solid var(--toolbar-border, #e0e0e0);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 /* Graph container styling */
@@ -1505,10 +1552,14 @@ onBeforeUnmount(() => {
 
 /* 确保渲染器canvas可见 */
 .graph-container canvas {
-  display: block;
-  position: absolute;
-  top: 0;
-  left: 0;
+  /* 必须确保这些属性不被覆盖 */
+  display: block !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: 1 !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }
 
 /* Dark mode graph container */
@@ -1533,7 +1584,7 @@ onBeforeUnmount(() => {
 /* Node info panel styling */
 .node-info-panel {
   position: absolute;
-  bottom: 20px;
+  bottom: 50px;
   right: 20px;
   max-width: 300px;
   z-index: 10;
@@ -1547,28 +1598,45 @@ onBeforeUnmount(() => {
   background-color: rgba(30, 30, 30, 0.9);
 }
 
-/* Legend panel styling */
+/* 修改 legend-panel 的样式 */
 .legend-panel {
   position: absolute;
-  top: 60px;
-  left: 20px;
-  width: 150px;
-  z-index: 10;
+  top: 120px;
+  /* 下移避免遮挡工具栏 */
+  left: 10px;
+  width: 95px;
+  /* 缩小宽度 */
+  z-index: 5;
+  /* 确保在工具栏下方 */
   background-color: rgba(255, 255, 255, 0.9);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transform: scale(0.9);
+  /* 整体缩小 */
+  transform-origin: top left;
 }
 
-/* Dark mode legend panel */
-.dark-mode .legend-panel {
-  background-color: rgba(30, 30, 30, 0.9);
-}
-
-/* Legend item styling */
+/* 调整图例项的大小 */
 .legend-item {
   display: flex;
   align-items: center;
-  margin: 4px 0;
+  margin: 2px 0;
+  /* 减小间距 */
+  font-size: 12px;
+  /* 缩小字体 */
+}
+
+.legend-color,
+.legend-line {
+  transform: scale(0.8);
+  /* 缩小颜色标记 */
+  margin-right: 4px;
+  /* 减小右边距 */
+}
+
+/* 暗色模式下的调整 */
+.dark-mode .legend-panel {
+  background-color: rgba(30, 30, 30, 0.9);
 }
 
 /* Color indicators in legend */
@@ -1594,13 +1662,6 @@ onBeforeUnmount(() => {
   background-color: #2ecc71;
 }
 
-/* Line indicators in legend */
-.legend-line {
-  width: 24px;
-  height: 2px;
-  margin-right: 8px;
-}
-
 /* Strong connection line */
 .legend-line.strong-link {
   background-color: #ff5555;
@@ -1615,9 +1676,9 @@ onBeforeUnmount(() => {
 /* Search panel styling */
 .search-panel {
   position: absolute;
-  top: 60px;
+  top: 120px;
   right: 20px;
-  width: 250px;
+  width: 240px;
   z-index: 10;
   background-color: rgba(255, 255, 255, 0.9);
   border-radius: 8px;
