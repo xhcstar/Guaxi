@@ -2,277 +2,288 @@
   <!-- 主容器 - 直接作为页面内容 -->
   <div class="gitkraken-container">
     <!-- 左侧面板 - 类似VSCode的Git面板 -->
-    <div class="git-sidebar" ref="sidebar">
+    <div class="git-sidebar" ref="sidebar" :style="{ width: isSidebarCollapsed ? '0px' : '350px' }">
       <!-- 侧边栏右侧拖动条 -->
       <div class="sidebar-resize-handle" @mousedown="startSidebarDrag"></div>
 
-      <div class="source-control-header">
-        <n-space align="center" justify="space-between">
-          <n-text strong>仓库管理</n-text>
-          <n-button text @click="refreshGitStatus">
-            <template #icon>
-              <n-icon>
-                <RefreshOutline />
-              </n-icon>
-            </template>
+      <!-- 新增的折叠按钮（放在侧边栏内部但绝对定位到右侧） -->
+      <div class="sidebar-collapse-button" :class="{ 'collapsed': isSidebarCollapsed }" @click="toggleSidebar">
+        <n-icon>
+          <ChevronLeft20Filled v-if="!isSidebarCollapsed" />
+          <ChevronRight20Filled v-else />
+        </n-icon>
+      </div>
+
+      <!-- 仓库管理和提交区域容器 -->
+      <div class="sidebar-content" :style="{ display: isSidebarCollapsed ? 'none' : 'block' }">
+        <div class="source-control-header">
+          <n-space align="center" justify="space-between">
+            <n-text strong>仓库管理</n-text>
+            <n-button text @click="refreshGitStatus">
+              <template #icon>
+                <n-icon>
+                  <RefreshOutline />
+                </n-icon>
+              </template>
+            </n-button>
+          </n-space>
+        </div>
+
+        <!-- 提交区域 -->
+        <div class="commit-section">
+          <n-input v-model:value="commitForm.message" type="textarea" placeholder="提交信息 (必填)"
+            :autosize="{ minRows: 1, maxRows: 3 }" style="min-width: 250px; margin-bottom: 8px;" />
+          <n-button type="primary" @click="handleCommit"
+            :disabled="!commitForm.message.trim() || stagedFiles.length === 0" style="width: 100%;">
+            提交
           </n-button>
-        </n-space>
-      </div>
+        </div>
 
-      <!-- 提交区域 -->
-      <div class="commit-section">
-        <n-input v-model:value="commitForm.message" type="textarea" placeholder="提交信息 (必填)"
-          :autosize="{ minRows: 1, maxRows: 3 }" style="min-width: 250px; margin-bottom: 8px;" />
-        <n-button type="primary" @click="handleCommit"
-          :disabled="!commitForm.message.trim() || stagedFiles.length === 0" style="width: 100%;">
-          提交
-        </n-button>
-      </div>
+        <!-- 变更文件列表容器 -->
+        <div class="changes-container">
+          <!-- 原有内容保持不变 -->
+          <div class="panels-container" ref="panelsContainer">
+            <!-- Changes区域 -->
+            <div class="changes-section" ref="changesSection" :style="{ flex: `0 0 ${changesHeight}px` }">
+              <n-collapse :default-expanded-names="['changes']">
+                <n-collapse-item name="changes" title="Changes">
+                  <template #header-extra>
+                    <n-badge :value="unstagedFiles.length" :max="99" />
+                  </template>
 
-      <!-- 变更文件列表容器 -->
-      <div class="changes-container">
-        <!-- 新增 panels-container 作为共同父容器 -->
-        <div class="panels-container" ref="panelsContainer">
-          <!-- Changes区域 -->
-          <div class="changes-section" ref="changesSection" :style="{ flex: `0 0 ${changesHeight}px` }">
-            <n-collapse :default-expanded-names="['changes']">
-              <n-collapse-item name="changes" title="Changes">
-                <template #header-extra>
-                  <n-badge :value="unstagedFiles.length" :max="99" />
-                </template>
-
-                <n-list>
-                  <!-- 操作按钮行 -->
-                  <n-list-item>
-                    <n-space justify="space-between">
-                      <n-space>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
-                              <template #icon>
-                                <n-icon>
-                                  <AddCircleOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          暂存全部
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
-                              <template #icon>
-                                <n-icon>
-                                  <CloseCircleOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          丢弃全部
-                        </n-tooltip>
-                      </n-space>
-                    </n-space>
-                  </n-list-item>
-
-                  <!-- 文件列表项 -->
-                  <n-list-item v-for="file in unstagedFiles" :key="file.path">
-                    <n-space align="center" justify="space-between">
-                      <n-space align="center" @click="handleFileClick(file)">
-                        <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                        <n-text>{{ file.path }}</n-text>
-                      </n-space>
-                      <n-space>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click.stop="handleStageFile(file)">
-                              <template #icon>
-                                <n-icon>
-                                  <AddCircleOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          暂存
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click.stop="handleDiscardFile(file)">
-                              <template #icon>
-                                <n-icon>
-                                  <CloseCircleOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          丢弃
-                        </n-tooltip>
-                      </n-space>
-                    </n-space>
-                  </n-list-item>
-                </n-list>
-              </n-collapse-item>
-            </n-collapse>
-          </div>
-
-          <!-- Changes和Staged Changes之间的分隔线 -->
-          <div class="section-divider" ref="changesDivider" @mousedown="startChangesDrag">
-            <div class="divider-handle"></div>
-          </div>
-
-          <!-- Staged Changes区域 -->
-          <div class="staged-section" ref="stagedSection" :style="{ flex: `0 0 ${stagedHeight}px` }">
-            <n-collapse :default-expanded-names="['staged']">
-              <n-collapse-item name="staged" title="Staged Changes">
-                <template #header-extra>
-                  <n-badge :value="stagedFiles.length" :max="99" />
-                </template>
-
-                <n-list>
-                  <!-- 操作按钮行 -->
-                  <n-list-item>
-                    <n-space justify="space-between">
-                      <n-space>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
-                              <template #icon>
-                                <n-icon>
-                                  <RemoveCircleOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          取消暂存全部
-                        </n-tooltip>
-                      </n-space>
-                    </n-space>
-                  </n-list-item>
-
-                  <!-- 暂存文件列表项 -->
-                  <n-list-item v-for="file in stagedFiles" :key="file.path">
-                    <n-space align="center" justify="space-between">
-                      <n-space align="center" @click="handleFileClick(file)">
-                        <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                        <n-text>{{ file.path }}</n-text>
-                      </n-space>
-                      <n-space>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click.stop="handleUnstageFile(file)">
-                              <template #icon>
-                                <n-icon>
-                                  <RemoveCircleOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
-                          </template>
-                          取消暂存
-                        </n-tooltip>
-                      </n-space>
-                    </n-space>
-                  </n-list-item>
-                </n-list>
-              </n-collapse-item>
-            </n-collapse>
-          </div>
-
-          <!-- Staged Changes和提交历史之间的分隔线 -->
-          <div class="commits-divider" ref="commitsDivider" @mousedown="startCommitsDrag">
-            <div class="divider-handle"></div>
-          </div>
-
-          <!-- 提交历史区域 -->
-          <div class="commits-section" ref="commitsSection">
-            <n-collapse :default-expanded-names="['commits']">
-              <n-collapse-item name="commits" title="提交历史">
-                <!-- 操作工具栏 -->
-                <div class="commits-toolbar">
-                  <n-space justify="space-between" align="center">
-                    <n-space>
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <n-button text @click="handlePull" :loading="gitLoading.pull">
-                            <template #icon>
-                              <n-icon>
-                                <CloudDownloadOutline />
-                              </n-icon>
+                  <n-list>
+                    <!-- 操作按钮行 -->
+                    <n-list-item>
+                      <n-space justify="space-between">
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
+                                <template #icon>
+                                  <n-icon>
+                                    <AddCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
                             </template>
-                          </n-button>
-                        </template>
-                        拉取
-                      </n-tooltip>
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <n-button text @click="handlePush" :loading="gitLoading.push">
-                            <template #icon>
-                              <n-icon>
-                                <CloudUploadOutline />
-                              </n-icon>
+                            暂存全部
+                          </n-tooltip>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
+                                <template #icon>
+                                  <n-icon>
+                                    <CloseCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
                             </template>
-                          </n-button>
-                        </template>
-                        推送
-                      </n-tooltip>
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
-                          <n-button text @click="showBranchPanel = true">
-                            <template #icon>
-                              <n-icon>
-                                <GitBranchOutline />
-                              </n-icon>
+                            丢弃全部
+                          </n-tooltip>
+                        </n-space>
+                      </n-space>
+                    </n-list-item>
+
+                    <!-- 文件列表项 -->
+                    <n-list-item v-for="file in unstagedFiles" :key="file.path">
+                      <n-space align="center" justify="space-between">
+                        <n-space align="center" @click="handleFileClick(file)">
+                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                          <n-text>{{ file.path }}</n-text>
+                        </n-space>
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click.stop="handleStageFile(file)">
+                                <template #icon>
+                                  <n-icon>
+                                    <AddCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
                             </template>
-                          </n-button>
-                        </template>
-                        创建分支
-                      </n-tooltip>
+                            暂存
+                          </n-tooltip>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click.stop="handleDiscardFile(file)">
+                                <template #icon>
+                                  <n-icon>
+                                    <CloseCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            丢弃
+                          </n-tooltip>
+                        </n-space>
+                      </n-space>
+                    </n-list-item>
+                  </n-list>
+                </n-collapse-item>
+              </n-collapse>
+            </div>
+
+            <!-- Changes和Staged Changes之间的分隔线 -->
+            <div class="section-divider" ref="changesDivider" @mousedown="startChangesDrag">
+              <div class="divider-handle"></div>
+            </div>
+
+            <!-- Staged Changes区域 -->
+            <div class="staged-section" ref="stagedSection" :style="{ flex: `0 0 ${stagedHeight}px` }">
+              <n-collapse :default-expanded-names="['staged']">
+                <n-collapse-item name="staged" title="Staged Changes">
+                  <template #header-extra>
+                    <n-badge :value="stagedFiles.length" :max="99" />
+                  </template>
+
+                  <n-list>
+                    <!-- 操作按钮行 -->
+                    <n-list-item>
+                      <n-space justify="space-between">
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
+                                <template #icon>
+                                  <n-icon>
+                                    <RemoveCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            取消暂存全部
+                          </n-tooltip>
+                        </n-space>
+                      </n-space>
+                    </n-list-item>
+
+                    <!-- 暂存文件列表项 -->
+                    <n-list-item v-for="file in stagedFiles" :key="file.path">
+                      <n-space align="center" justify="space-between">
+                        <n-space align="center" @click="handleFileClick(file)">
+                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                          <n-text>{{ file.path }}</n-text>
+                        </n-space>
+                        <n-space>
+                          <n-tooltip trigger="hover">
+                            <template #trigger>
+                              <n-button text @click.stop="handleUnstageFile(file)">
+                                <template #icon>
+                                  <n-icon>
+                                    <RemoveCircleOutline />
+                                  </n-icon>
+                                </template>
+                              </n-button>
+                            </template>
+                            取消暂存
+                          </n-tooltip>
+                        </n-space>
+                      </n-space>
+                    </n-list-item>
+                  </n-list>
+                </n-collapse-item>
+              </n-collapse>
+            </div>
+
+            <!-- Staged Changes和提交历史之间的分隔线 -->
+            <div class="commits-divider" ref="commitsDivider" @mousedown="startCommitsDrag">
+              <div class="divider-handle"></div>
+            </div>
+
+            <!-- 提交历史区域 -->
+            <div class="commits-section" ref="commitsSection">
+              <n-collapse :default-expanded-names="['commits']">
+                <n-collapse-item name="commits" title="提交历史">
+                  <!-- 操作工具栏 -->
+                  <div class="commits-toolbar">
+                    <n-space justify="space-between" align="center">
+                      <n-space>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handlePull" :loading="gitLoading.pull">
+                              <template #icon>
+                                <n-icon>
+                                  <CloudDownloadOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          拉取
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="handlePush" :loading="gitLoading.push">
+                              <template #icon>
+                                <n-icon>
+                                  <CloudUploadOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          推送
+                        </n-tooltip>
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-button text @click="showBranchPanel = true">
+                              <template #icon>
+                                <n-icon>
+                                  <GitBranchOutline />
+                                </n-icon>
+                              </template>
+                            </n-button>
+                          </template>
+                          创建分支
+                        </n-tooltip>
+                      </n-space>
+                      <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
+                        <n-icon>
+                          <GitBranchOutline />
+                        </n-icon>
+                        {{ currentBranch }}
+                      </n-tag>
                     </n-space>
-                    <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
-                      <n-icon>
-                        <GitBranchOutline />
-                      </n-icon>
-                      {{ currentBranch }}
-                    </n-tag>
-                  </n-space>
-                </div>
+                  </div>
 
-                <!-- 提交历史列表 -->
-                <div class="commits-list">
-                  <div v-for="commit in commits" :key="commit.id" class="commit-item" :class="{
-                    'selected-commit': selectedCommit?.id === commit.id,
-                    'expanded-commit': expandedCommit?.id === commit.id
-                  }" @click="selectCommit(commit)">
-                    <!-- 提交信息摘要 -->
-                    <div class="commit-summary">
-                      <n-text strong>{{ commit.summary }}</n-text>
-                      <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
-                    </div>
+                  <!-- 提交历史列表 -->
+                  <div class="commits-list">
+                    <div v-for="commit in commits" :key="commit.id" class="commit-item" :class="{
+                      'selected-commit': selectedCommit?.id === commit.id,
+                      'expanded-commit': expandedCommit?.id === commit.id
+                    }" @click="selectCommit(commit)">
+                      <!-- 提交信息摘要 -->
+                      <div class="commit-summary">
+                        <n-text strong>{{ commit.summary }}</n-text>
+                        <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
+                      </div>
 
-                    <!-- 提交元信息 -->
-                    <div class="commit-meta">
-                      <n-text depth="3">{{ commit.author }}</n-text>
-                      <n-text depth="3">{{ formatDateRelative(commit.date) }}</n-text>
-                    </div>
+                      <!-- 提交元信息 -->
+                      <div class="commit-meta">
+                        <n-text depth="3">{{ commit.author }}</n-text>
+                        <n-text depth="3">{{ formatDateRelative(commit.date) }}</n-text>
+                      </div>
 
-                    <!-- 展开的文件变更列表 -->
-                    <div v-if="expandedCommit?.id === commit.id" class="commit-files">
-                      <n-list>
-                        <n-list-item v-for="file in commitFiles" :key="file.path"
-                          @click.stop="handleCommitFileClick(file)"
-                          :class="{ 'selected-file': selectedFile?.path === file.path }">
-                          <n-space align="center">
-                            <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                            <n-text>{{ file.path }}</n-text>
-                            <n-tag v-if="file.status !== ' '" size="small" :type="getStatusTagType(file.status)">
-                              {{ file.status }}
-                            </n-tag>
-                          </n-space>
-                        </n-list-item>
-                      </n-list>
+                      <!-- 展开的文件变更列表 -->
+                      <div v-if="expandedCommit?.id === commit.id" class="commit-files">
+                        <n-list>
+                          <n-list-item v-for="file in commitFiles" :key="file.path"
+                            @click.stop="handleCommitFileClick(file)"
+                            :class="{ 'selected-file': selectedFile?.path === file.path }">
+                            <n-space align="center">
+                              <n-icon :component="getFileStatusIcon(file.status)" size="16" />
+                              <n-text>{{ file.path }}</n-text>
+                              <n-tag v-if="file.status !== ' '" size="small" :type="getStatusTagType(file.status)">
+                                {{ file.status }}
+                              </n-tag>
+                            </n-space>
+                          </n-list-item>
+                        </n-list>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </n-collapse-item>
-            </n-collapse>
+                </n-collapse-item>
+              </n-collapse>
+            </div>
           </div>
         </div>
       </div>
@@ -432,6 +443,7 @@ import {
   ChevronUpOutline,
   ChevronDownOutline
 } from '@vicons/ionicons5'
+import { ChevronLeft20Filled, ChevronRight20Filled } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import * as monaco from 'monaco-editor'
 import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言注册
@@ -536,6 +548,14 @@ const diffLoading = ref({
   commit: false,
   navigation: false
 });
+
+// 添加侧边栏折叠状态
+const isSidebarCollapsed = ref(false)
+
+// 添加切换函数
+const toggleSidebar = () => {
+  isSidebarCollapsed.value = !isSidebarCollapsed.value
+}
 
 // 新增辅助函数 - 获取状态标签类型
 const getStatusTagType = (status) => {
@@ -2041,11 +2061,12 @@ onUnmounted(() => {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  position: relative;
 }
 
 .git-sidebar {
   width: 350px;
-  min-width: 200px;
+  min-width: 0px;
   max-width: 600px;
   height: 100%;
   display: flex;
@@ -2053,6 +2074,7 @@ onUnmounted(() => {
   border-right: 1px solid var(--divider-color);
   background-color: var(--sidebar-bg);
   position: relative;
+  transition: width 0.2s ease;
 }
 
 /* 修改右侧内容区域样式 */
@@ -2173,7 +2195,7 @@ onUnmounted(() => {
   padding: 8px 12px;
   border-bottom: 1px solid var(--divider-color);
   background-color: var(--card-bg);
-  flex-shrink: 0;
+  /* flex-shrink: 0; */
 }
 
 .commit-section {
@@ -2597,5 +2619,47 @@ onUnmounted(() => {
   .loading-overlay {
     background-color: rgba(0, 0, 0, 0.5);
   }
+}
+
+/* 新增折叠按钮样式 */
+.sidebar-collapse-button {
+  position: absolute;
+  right: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 40px;
+  background-color: var(--sidebar-bg);
+  border: 1px solid var(--divider-color);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 100;
+  transition: all 0.2s ease;
+}
+
+.sidebar-collapse-button.collapsed {
+  position: fixed;
+  left: 0;
+  right: auto;
+  border-left: 1px solid var(--divider-color);
+  border-radius: 0 4px 4px 0;
+}
+
+.sidebar-collapse-button:hover {
+  background-color: var(--hover-color);
+}
+
+.sidebar-collapse-button .n-icon {
+  font-size: 16px;
+  color: var(--text-color-secondary);
+}
+
+.sidebar-content {
+  height: 100%;
+  overflow: hidden;
 }
 </style>
