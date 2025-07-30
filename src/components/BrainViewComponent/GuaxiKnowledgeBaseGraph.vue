@@ -352,7 +352,7 @@ const toggleDarkMode = () => {
 
   // 更新场景背景和雾
   if (scene) {
-    scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xeeeeee);
+    scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xbbbbbb);
     scene.fog.color.copy(scene.background);
   }
 
@@ -604,13 +604,13 @@ const createNodesAndEdges = async (data) => {
   // 1. 创建节点
   data.nodes.forEach(nodeData => {
     const geometry = new THREE.SphereGeometry(2, 32, 32);
-    // 改用 MeshStandardMaterial 或 MeshPhongMaterial
+
     const material = new THREE.MeshStandardMaterial({
       color: getNodeColor(nodeData.type),
-      metalness: 0.2,       // 降低金属感
-      roughness: 0.5,        // 增加粗糙度以增强漫反射
-      emissive: 0x111111,   // 轻微自发光避免纯黑
-      emissiveIntensity: 0.2
+      metalness: 0.2,
+      roughness: 0.5,
+      emissive: darkMode.value ? 0x111111 : 0x888888, // 亮色模式下使用浅灰色自发光
+      emissiveIntensity: darkMode.value ? 0.2 : 0.5   // 亮色模式下增加自发光强度
     });
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -826,17 +826,17 @@ const setupLighting = () => {
   // 清除所有现有光源
   scene.children.filter(obj => obj.isLight).forEach(light => scene.remove(light));
 
-  // 亮色模式下增强环境光
+  // 亮色模式下使用更强的环境光
   const ambientLight = new THREE.AmbientLight(
     0xFFFFFF,
-    darkMode.value ? 0.4 : 0.8  // 亮色模式更强
+    darkMode.value ? 0.4 : 1.0  // 亮色模式增加到1.0
   );
   scene.add(ambientLight);
 
   // 主方向光（模拟太阳光）
   const directionalLight = new THREE.DirectionalLight(
     0xFFFFFF,
-    darkMode.value ? 0.8 : 1.2  // 亮色模式更强
+    darkMode.value ? 0.8 : 1.5  // 亮色模式增加到1.5
   );
   directionalLight.position.set(1, 1, 1).normalize();
   directionalLight.castShadow = true;
@@ -846,7 +846,7 @@ const setupLighting = () => {
   const hemisphereLight = new THREE.HemisphereLight(
     0xFFFFFF, // 天空颜色
     0x888888, // 地面颜色
-    darkMode.value ? 0.5 : 0.8  // 亮色模式更强
+    darkMode.value ? 0.5 : 1.0  // 亮色模式增加到1.0
   );
   scene.add(hemisphereLight);
 };
@@ -1136,6 +1136,7 @@ const getNodeColor = (type) => {
     'default': 0xCCCCCC
   };
 
+  // 亮色模式下使用更鲜艳的颜色
   return darkMode.value ? darkColors[type] || darkColors.default
     : lightColors[type] || lightColors.default;
 }
@@ -1257,13 +1258,12 @@ const showEmptyState = (reason = '') => {
   // Create torus geometry as placeholder
   const group = new THREE.Group();
   const geometry = new THREE.TorusGeometry(3, 0.5, 16, 32);
-  // 改用 MeshStandardMaterial 或 MeshPhongMaterial
   const material = new THREE.MeshStandardMaterial({
     color: getNodeColor(nodeData.type),
-    metalness: 0.2,       // 降低金属感
-    roughness: 0.5,        // 增加粗糙度以增强漫反射
-    emissive: 0x111111,   // 轻微自发光避免纯黑
-    emissiveIntensity: 0.2
+    metalness: 0.2,
+    roughness: 0.5,
+    emissive: darkMode.value ? 0x111111 : 0x888888, // 亮色模式下使用浅灰色自发光
+    emissiveIntensity: darkMode.value ? 0.2 : 0.5   // 亮色模式下增加自发光强度
   });
   const torus = new THREE.Mesh(geometry, material);
   torus.rotation.x = Math.PI / 2;
