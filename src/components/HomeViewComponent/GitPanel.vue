@@ -2273,6 +2273,8 @@ onUnmounted(() => {
 .commits-list {
   height: calc(100% - 40px);
   overflow: hidden;
+  margin-bottom: 40px;
+  padding-bottom: 120px;
 }
 
 .commit-item {
