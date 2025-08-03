@@ -13,8 +13,8 @@ pub struct Library {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LibraryConfig {
-    libraries_repo_path: String,
-    library: Vec<Library>,
+    pub libraries_repo_path: String,
+    pub library: Vec<Library>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

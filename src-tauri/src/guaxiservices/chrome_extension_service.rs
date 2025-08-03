@@ -1,9 +1,10 @@
-use actix_web::{web, HttpResponse, Responder, post};
-use serde::{Deserialize, Serialize};
+use crate::commands::settingview::{get_libraries_root};
+use actix_web::{post, web, HttpResponse, Responder};
 use chrono::Local;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // 扩展请求数据结构
 #[derive(Debug, Deserialize)]
@@ -24,10 +25,7 @@ pub struct ExtensionResponse {
 
 // 配置服务路由
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/extension")
-            .service(handle_extension_data)
-    );
+    cfg.service(web::scope("/extension").service(handle_extension_data));
 }
 
 // 处理扩展数据的主端点
@@ -45,18 +43,21 @@ async fn handle_extension_data(req: web::Json<ExtensionRequest>) -> impl Respond
     let sanitized_title = sanitize_filename(&req.title);
     let filename = format!("{}_{}.html", sanitized_title, timestamp);
 
-    let save_dir = "chrome_extension_data";
-    if let Err(e) = fs::create_dir_all(save_dir) {
-        return HttpResponse::InternalServerError().json(ExtensionResponse {
-            success: false,
-            message: format!("Failed to create directory: {}", e),
-            saved_path: None,
-        });
+    let save_dir = PathBuf::from(get_libraries_root())
+        .join("collect_html");
+
+    if !save_dir.exists() {
+        if let Err(e) = fs::create_dir_all(&save_dir) {
+            return HttpResponse::InternalServerError().json(ExtensionResponse {
+                success: false,
+                message: format!("Failed to create directory: {}", e),
+                saved_path: None,
+            });
+        }
     }
 
-    let raw_path = format!("{}/{}", save_dir, filename);
-    let write_result = File::create(&raw_path)
-        .and_then(|mut f| f.write_all(req.html.as_bytes()));
+    let raw_path = save_dir.join(filename);
+    let write_result = File::create(&raw_path).and_then(|mut f| f.write_all(req.html.as_bytes()));
 
     if let Err(e) = write_result {
         return HttpResponse::InternalServerError().json(ExtensionResponse {
@@ -69,7 +70,7 @@ async fn handle_extension_data(req: web::Json<ExtensionRequest>) -> impl Respond
     HttpResponse::Ok().json(ExtensionResponse {
         success: true,
         message: "HTML saved successfully".to_string(),
-        saved_path: Some(raw_path),
+        saved_path: Some(raw_path.to_string_lossy().into_owned()),
     })
 }
 
