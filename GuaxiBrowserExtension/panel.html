@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Guaxi Browser Extension</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div class="panel-container">
+    <h1>Guaxi</h1>
+    
+    <div class="toggle-container">
+      <label class="switch">
+        <input type="checkbox" id="masterSwitch">
+        <span class="slider round"></span>
+      </label>
+      <span>Enable Extension</span>
+    </div>
+    
+    <div class="mode-selector">
+      <h3>Save Mode:</h3>
+      <div class="radio-group">
+        <label>
+          <input type="radio" name="saveMode" value="fullPage" checked>
+          Save Entire Page
+        </label>
+        <label>
+          <input type="radio" name="saveMode" value="selection">
+          Select Content to Save
+        </label>
+      </div>
+    </div>
+    
+    <button id="saveButton">Save Now</button>
+    
+    <div class="status" id="statusMessage"></div>
+  </div>
+  
+  <script src="panel.js"></script>
+</body>
+</html>
