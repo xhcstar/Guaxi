@@ -1,5 +1,5 @@
 let selectionModeActive = false;
-let selectedElement = null;
+let selectedElements = []; // 存储已选元素
 
 // 处理保存请求
 async function handleSaveRequest(request) {
@@ -8,9 +8,11 @@ async function handleSaveRequest(request) {
   try {
     if (request.mode === "fullPage") {
       return await saveFullPage();
+    } else if (request.mode === "partial") {
+      // 激活选择模式，等待用户选择
+      return await activateSelectionMode();
     }
-    // 你可以保留 selection 模式，也可以直接移除
-    return { success: false, error: "Only fullPage mode is supported" };
+    return { success: false, error: "Unknown mode" };
   } catch (error) {
     console.error("[Guaxi] Save request failed:", error);
     return { success: false, error: error.message };
@@ -26,10 +28,10 @@ async function saveFullPage() {
     title: document.title,
     html: html,
     timestamp: new Date().toISOString(),
+    mode: "fullPage",
   };
 
   try {
-    // tauri 后端监听在 8888 端口
     const response = await fetch("http://localhost:8888/extension/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -53,79 +55,119 @@ async function saveSelection(element) {
   }
 
   console.log("[Guaxi] Saving selection:", element);
-  const markdown = new TurndownService().turndown(element.innerHTML);
 
-  return {
-    success: true,
-    data: {
-      url: window.location.href,
-      title: document.title,
-      content: markdown,
-      mode: "partial",
-      element: {
-        id: element.id || null,
-        tag: element.tagName,
-        class: element.className || null,
-      },
-      timestamp: new Date().toISOString(),
-    },
+  // 只发送 html 字段，与后端 ExtensionRequest 保持一致
+  const data = {
+    url: window.location.href,
+    title: document.title,
+    html: element.outerHTML,
+    timestamp: new Date().toISOString(),
+    mode: "partial",
   };
+
+  try {
+    const response = await fetch("http://localhost:8888/extension/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const result = await response.json();
+    if (result.success) {
+      return { success: true, data: result };
+    } else {
+      return { success: false, error: result.message || "Save failed" };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 }
 
 // ==================== 选择模式 ====================
+function deactivateSelectionMode() {
+  selectionModeActive = false;
+  document.body.style.cursor = "";
+  document.removeEventListener("mouseover", handleMouseOver);
+  document.querySelectorAll(".guaxi-hover-highlight").forEach((el) => {
+    el.classList.remove("guaxi-hover-highlight");
+  });
+  document.querySelectorAll(".guaxi-selected-highlight").forEach((el) => {
+    el.classList.remove("guaxi-selected-highlight");
+  });
+  const styleTag = document.getElementById("guaxi-highlight-styles");
+  if (styleTag) styleTag.remove();
+  removeExistingTooltips();
+  document.removeEventListener("mousedown", handleAltClick, true);
+  document.removeEventListener("keydown", handleKeyDown);
+}
 
 // 激活选择模式
 async function activateSelectionMode() {
-  return new Promise((resolve) => {
-    console.log("[Guaxi] Activating selection mode");
-    selectionModeActive = true;
-    addHighlightStyles();
-    document.body.style.cursor = "pointer";
+  if (selectionModeActive) return;
+  selectionModeActive = true;
+  addHighlightStyles();
+  document.body.style.cursor = "pointer";
 
-    // 点击处理函数
-    const handleClick = async (e) => {
+  document.addEventListener("mouseover", handleMouseOver);
+
+  window.handleAltClick = (e) => {
+    if (!selectionModeActive) return;
+    if (e.altKey && e.button === 0) {
       e.preventDefault();
       e.stopImmediatePropagation();
-
       const element = findSelectableElement(e.target);
-      if (element) {
-        try {
-          highlightElement(element);
-          const result = await saveSelection(element);
-          resolve(result);
-        } catch (error) {
-          resolve({
-            success: false,
-            error: error.message,
-          });
-        } finally {
-          deactivateSelectionMode();
-        }
+      if (element && !selectedElements.includes(element)) {
+        highlightElement(element);
+        selectedElements.push(element);
+        showTooltip("已选中一个模块，可继续选中其它模块", false);
       }
-    };
+    }
+  };
 
-    // 键盘处理函数
-    const handleKeyDown = (e) => {
-      if (e.key === "Escape") {
-        console.log("[Guaxi] Selection canceled by ESC");
-        resolve({
-          success: false,
-          error: "Selection canceled",
-        });
-        deactivateSelectionMode();
-      }
-    };
+  window.handleKeyDown = (e) => {
+    if (e.key === "Escape") {
+      deactivateSelectionMode();
+      showTooltip("已退出选中模式", false);
+    }
+  };
 
-    // 添加事件监听
-    document.addEventListener("click", handleClick, {
-      once: true,
-      capture: true,
+  document.addEventListener("mousedown", window.handleAltClick, true);
+  document.addEventListener("keydown", window.handleKeyDown);
+
+  showTooltip("按住 Alt 并点击模块可选中，ESC 退出", false);
+}
+
+// 保存所有已选内容
+async function saveAllSelections() {
+  if (!selectedElements.length) {
+    return { success: false, error: "No elements selected" };
+  }
+  const htmlArr = selectedElements.map((el) => el.outerHTML);
+  const data = {
+    url: window.location.href,
+    title: document.title,
+    html: htmlArr.join("\n"),
+    timestamp: new Date().toISOString(),
+    mode: "partial",
+  };
+
+  try {
+    const response = await fetch("http://localhost:8888/extension/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
     });
-    document.addEventListener("mouseover", handleMouseOver);
-    document.addEventListener("keydown", handleKeyDown);
-
-    showTooltip("Click on the content you want to save. Press ESC to cancel.");
-  });
+    const result = await response.json();
+    if (result.success) {
+      selectedElements = []; // 清空已选
+      showTooltip("所有选中模块已保存", false);
+      deactivateSelectionMode(); // 保存后退出选中模式
+      return { success: true, data: result };
+    } else {
+      return { success: false, error: result.message || "Save failed" };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 }
 
 // 高亮选中元素
@@ -139,40 +181,13 @@ function highlightElement(element) {
 // 鼠标悬停处理
 function handleMouseOver(e) {
   if (!selectionModeActive) return;
-
   document.querySelectorAll(".guaxi-hover-highlight").forEach((el) => {
     el.classList.remove("guaxi-hover-highlight");
   });
-
   const element = findSelectableElement(e.target);
   if (element) {
     element.classList.add("guaxi-hover-highlight");
   }
-}
-
-// 取消选择模式
-function deactivateSelectionMode() {
-  if (!selectionModeActive) return;
-
-  console.log("[Guaxi] Deactivating selection mode");
-  selectionModeActive = false;
-
-  // 清理样式
-  document.body.style.cursor = "";
-  document.querySelectorAll('[class*="guaxi-"]').forEach((el) => {
-    el.classList.remove("guaxi-hover-highlight", "guaxi-selected-highlight");
-  });
-
-  // 移除样式标签
-  const styleTag = document.getElementById("guaxi-highlight-styles");
-  if (styleTag) styleTag.remove();
-
-  // 移除事件监听
-  document.removeEventListener("mouseover", handleMouseOver);
-  document.removeEventListener("keydown", handleEscapeKey);
-
-  // 移除提示
-  document.querySelectorAll(".guaxi-tooltip").forEach((el) => el.remove());
 }
 
 // 查找可选择的元素
@@ -205,13 +220,13 @@ function addHighlightStyles() {
   style.id = "guaxi-highlight-styles";
   style.textContent = `
     .guaxi-hover-highlight {
-      outline: 2px dashed #4CAF50 !important;
-      background-color: rgba(76, 175, 80, 0.1) !important;
+      background-color: rgba(33, 150, 243, 0.2) !important;
+      outline: 2px dashed #2196F3 !important;
       cursor: pointer !important;
     }
     .guaxi-selected-highlight {
-      outline: 2px solid #2196F3 !important;
-      background-color: rgba(33, 150, 243, 0.2) !important;
+      background-color: rgba(33, 150, 243, 0.4) !important;
+      outline: 2px solid #1976D2 !important;
     }
   `;
   document.head.appendChild(style);
@@ -259,9 +274,22 @@ function removeExistingTooltips() {
 // 监听来自后台的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "saveContent") {
-    console.log("[Guaxi] Received save request:", request);
     handleSaveRequest(request).then(sendResponse);
-    return true; // 保持消息通道开放
+    return true;
+  }
+  if (request.action === "startSelectionMode") {
+    activateSelectionMode();
+    sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === "saveAllSelections") {
+    saveAllSelections().then(sendResponse);
+    return true;
+  }
+  if (request.action === "exitSelectionMode") {
+    deactivateSelectionMode();
+    sendResponse({ success: true });
+    return true;
   }
   return false;
 });

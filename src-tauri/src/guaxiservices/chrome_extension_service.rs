@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 pub struct ExtensionRequest {
     pub url: String,
     pub title: String,
-    pub html: String, // 改为 html 字段
+    pub html: String,
     pub timestamp: String,
+    pub mode: String, // 新增字段
 }
 
 // 响应数据结构
@@ -39,13 +40,7 @@ async fn handle_extension_data(req: web::Json<ExtensionRequest>) -> impl Respond
         });
     }
 
-    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    let sanitized_title = sanitize_filename(&req.title);
-    let filename = format!("{}_{}.html", sanitized_title, timestamp);
-
-    let save_dir = PathBuf::from(get_libraries_root())
-        .join("collect_html");
-
+    let save_dir = PathBuf::from(get_libraries_root()).join("collect_html");
     if !save_dir.exists() {
         if let Err(e) = fs::create_dir_all(&save_dir) {
             return HttpResponse::InternalServerError().json(ExtensionResponse {
@@ -56,8 +51,36 @@ async fn handle_extension_data(req: web::Json<ExtensionRequest>) -> impl Respond
         }
     }
 
-    let raw_path = save_dir.join(filename);
-    let write_result = File::create(&raw_path).and_then(|mut f| f.write_all(req.html.as_bytes()));
+    // 文件名逻辑
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let sanitized_title = sanitize_filename(&req.title);
+
+    let (filename, write_result) = if req.mode == "fullPage" {
+        // 每次完整页面保存新文件
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("{}_{}.html", sanitized_title, timestamp);
+        let raw_path = save_dir.join(&filename);
+        let result = File::create(&raw_path).and_then(|mut f| f.write_all(req.html.as_bytes()));
+        (filename, result)
+    } else {
+        // partial 模式：用 url hash 作为文件名，追加写入
+        let mut hasher = DefaultHasher::new();
+        req.url.hash(&mut hasher);
+        let url_hash = hasher.finish();
+        let filename = format!("{}_{}.html", sanitized_title, url_hash);
+        let raw_path = save_dir.join(&filename);
+        let html_fragment = format!(
+            "<div data-guaxi-timestamp=\"{}\">\n{}\n</div>\n",
+            req.timestamp, req.html
+        );
+        let result = if raw_path.exists() {
+            File::options().append(true).open(&raw_path).and_then(|mut f| f.write_all(html_fragment.as_bytes()))
+        } else {
+            File::create(&raw_path).and_then(|mut f| f.write_all(html_fragment.as_bytes()))
+        };
+        (filename, result)
+    };
 
     if let Err(e) = write_result {
         return HttpResponse::InternalServerError().json(ExtensionResponse {
@@ -70,7 +93,7 @@ async fn handle_extension_data(req: web::Json<ExtensionRequest>) -> impl Respond
     HttpResponse::Ok().json(ExtensionResponse {
         success: true,
         message: "HTML saved successfully".to_string(),
-        saved_path: Some(raw_path.to_string_lossy().into_owned()),
+        saved_path: Some(save_dir.join(filename).to_string_lossy().into_owned()),
     })
 }
 

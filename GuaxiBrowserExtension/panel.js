@@ -9,9 +9,19 @@ document.addEventListener("DOMContentLoaded", () => {
   chrome.storage.sync.get(["enabled", "saveMode"], (data) => {
     elements.masterSwitch.checked = data.enabled !== false;
     const defaultMode = data.saveMode || "fullPage";
-    document.querySelector(
+    const radio = document.querySelector(
       `input[name="saveMode"][value="${defaultMode}"]`
-    ).checked = true;
+    );
+    if (radio) radio.checked = true;
+
+    // 新增：如果默认就是 partial，自动进入选中模式
+    if (defaultMode === "partial") {
+      chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+        if (tab?.id) {
+          chrome.tabs.sendMessage(tab.id, { action: "startSelectionMode" });
+        }
+      });
+    }
   });
 
   // 事件监听
@@ -29,10 +39,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function handleModeChange(e) {
     chrome.storage.sync.set({ saveMode: e.target.value });
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (!tab?.id) return;
+      if (e.target.value === "partial") {
+        chrome.tabs.sendMessage(tab.id, { action: "startSelectionMode" });
+      } else {
+        // 切换到全页保存时，退出选中模式
+        chrome.tabs.sendMessage(tab.id, { action: "exitSelectionMode" });
+      }
+    });
   }
 
   async function handleSaveClick() {
-    const { enabled } = await chrome.storage.sync.get(["enabled"]);
+    const { enabled, saveMode } = await chrome.storage.sync.get([
+      "enabled",
+      "saveMode",
+    ]);
 
     if (!enabled) {
       showStatus("Please enable extension first", true);
@@ -52,31 +74,24 @@ document.addEventListener("DOMContentLoaded", () => {
     showStatus("Processing...");
 
     try {
-      // 强制 mode 为 fullPage
-      const response = await Promise.race([
-        chrome.tabs.sendMessage(tab.id, {
-          action: "saveContent",
-          mode: "fullPage", // 强制使用 fullPage 模式
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Operation timed out")), 10000)
-        ),
-      ]);
-
-      console.log("Message response:", response);
-
-      if (response.success) {
-        showStatus("Saved successfully!");
-        // 可以在这里添加保存到本地存储的逻辑
-        await chrome.storage.local.set({
-          lastSaved: {
-            timestamp: new Date().toISOString(),
-            url: response.data?.url,
-            title: response.data?.title,
-          },
+      let response;
+      if (saveMode === "partial") {
+        // 让 content script 保存所有已选内容
+        response = await chrome.tabs.sendMessage(tab.id, {
+          action: "saveAllSelections",
         });
       } else {
-        showStatus(`Failed: ${response.error || "Unknown error"}`, true);
+        // 发送保存整个页面
+        response = await chrome.tabs.sendMessage(tab.id, {
+          action: "saveContent",
+          mode: "fullPage",
+        });
+      }
+
+      if (response?.success) {
+        showStatus("Saved successfully!");
+      } else {
+        showStatus(`Failed: ${response?.error || "Unknown error"}`, true);
       }
     } catch (error) {
       let errorMessage = error.message;
