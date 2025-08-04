@@ -36,24 +36,23 @@ document.addEventListener("DOMContentLoaded", () => {
     showStatus(e.target.checked ? "Extension enabled" : "Extension disabled");
   }
 
-// 在 handleModeChange 中添加检查
-function handleModeChange(e) {
-  chrome.storage.sync.set({ saveMode: e.target.value });
-  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    if (!tab?.id) return;
-    
-    // 只在模式确实改变时发送消息
-    chrome.storage.sync.get(['saveMode'], (result) => {
-      if (result.saveMode !== e.target.value) {
-        if (e.target.value === "partial") {
-          chrome.tabs.sendMessage(tab.id, { action: "startSelectionMode" });
-        } else {
-          chrome.tabs.sendMessage(tab.id, { action: "exitSelectionMode" });
-        }
+  function handleModeChange(e) {
+    // 保存新模式到存储
+    chrome.storage.sync.set({ saveMode: e.target.value });
+
+    // 获取当前活动标签页
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (!tab?.id) return;
+
+      // 无论切换到什么模式，都先停用当前选择模式
+      chrome.tabs.sendMessage(tab.id, { action: "exitSelectionMode" });
+
+      // 如果是切换到partial模式，再启动选择模式
+      if (e.target.value === "partial") {
+        chrome.tabs.sendMessage(tab.id, { action: "startSelectionMode" });
       }
     });
-  });
-}
+  }
 
   async function handleSaveClick() {
     const { enabled, saveMode } = await chrome.storage.sync.get([
