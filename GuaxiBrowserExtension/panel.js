@@ -36,17 +36,24 @@ document.addEventListener("DOMContentLoaded", () => {
     showStatus(e.target.checked ? "Extension enabled" : "Extension disabled");
   }
 
-  function handleModeChange(e) {
-    chrome.storage.sync.set({ saveMode: e.target.value });
-    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-      if (!tab?.id) return;
-      if (e.target.value === "partial") {
-        chrome.tabs.sendMessage(tab.id, { action: "startSelectionMode" });
-      } else {
-        chrome.tabs.sendMessage(tab.id, { action: "exitSelectionMode" });
+// 在 handleModeChange 中添加检查
+function handleModeChange(e) {
+  chrome.storage.sync.set({ saveMode: e.target.value });
+  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    if (!tab?.id) return;
+    
+    // 只在模式确实改变时发送消息
+    chrome.storage.sync.get(['saveMode'], (result) => {
+      if (result.saveMode !== e.target.value) {
+        if (e.target.value === "partial") {
+          chrome.tabs.sendMessage(tab.id, { action: "startSelectionMode" });
+        } else {
+          chrome.tabs.sendMessage(tab.id, { action: "exitSelectionMode" });
+        }
       }
     });
-  }
+  });
+}
 
   async function handleSaveClick() {
     const { enabled, saveMode } = await chrome.storage.sync.get([

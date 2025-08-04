@@ -31,12 +31,11 @@ async function saveFullPage() {
 
     // 克隆整个文档
     const clone = document.documentElement.cloneNode(true);
-    const processed = await inlineResources(clone);
 
     const data = {
       url: window.location.href,
       title: document.title,
-      html: processed.outerHTML,
+      html: clone.outerHTML,
       timestamp: new Date().toISOString(),
       mode: "fullPage",
     };
@@ -178,31 +177,31 @@ async function saveAllSelections() {
   });
 
   // 5. 内联资源
-  const processed = await inlineResources(docClone);
+  // const processed = await inlineResources(docClone);
 
   // 6. 保留原 <html> 和 <body> 的属性
-  function getAttrs(node) {
-    return Array.from(node.attributes)
-      .map((attr) => `${attr.name}="${attr.value}"`)
-      .join(" ");
-  }
-  const htmlAttrs = getAttrs(document.documentElement);
-  const bodyAttrs = getAttrs(document.body);
+  //   function getAttrs(node) {
+  //     return Array.from(node.attributes)
+  //       .map((attr) => `${attr.name}="${attr.value}"`)
+  //       .join(" ");
+  //   }
+  //   const htmlAttrs = getAttrs(document.documentElement);
+  //   const bodyAttrs = getAttrs(document.body);
 
-  // 7. 拼接完整 HTML
-  const headHtml = document.head.innerHTML;
-  const html = `<!DOCTYPE html>
-<html ${htmlAttrs}>
-  <head>${headHtml}</head>
-  <body ${bodyAttrs}>
-    ${processed.querySelector("body").innerHTML}
-  </body>
-</html>`;
+  //   // 7. 拼接完整 HTML
+  //   const headHtml = document.head.innerHTML;
+  //   const html = `<!DOCTYPE html>
+  // <html ${htmlAttrs}>
+  //   <head>${headHtml}</head>
+  //   <body ${bodyAttrs}>
+  //     ${processed.querySelector("body").innerHTML}
+  //   </body>
+  // </html>`;
 
   const data = {
     url: window.location.href,
     title: document.title,
-    html,
+    html: docClone.outerHTML,
     timestamp: new Date().toISOString(),
     mode: "partial",
   };
@@ -210,8 +209,9 @@ async function saveAllSelections() {
   const result = await sendToBackend(data);
   if (result.success) {
     selectedElements = [];
-    deactivateSelectionMode();
   }
+
+  deactivateSelectionMode();
   return result;
 }
 
@@ -248,18 +248,27 @@ function deactivateSelectionMode() {
 
 // 激活选择模式
 async function activateSelectionMode() {
+  console.log("Selection mode activated");
   if (selectionModeActive) return;
   selectionModeActive = true;
+
+  // 移除旧的监听器（如果存在）
+  document.removeEventListener("mousedown", window.handleAltClick, true);
+  document.removeEventListener("keydown", window.handleKeyDown);
+
   addHighlightStyles();
   document.body.style.cursor = "pointer";
 
   document.addEventListener("mouseover", handleMouseOver);
 
   window.handleAltClick = (e) => {
+    console.log("Alt click event triggered");
     if (!selectionModeActive) return;
     if (e.altKey && e.button === 0) {
       e.preventDefault();
       e.stopImmediatePropagation();
+      e.stopPropagation();
+
       const element = findSelectableElement(e.target);
       if (element && !selectedElements.includes(element)) {
         highlightElement(element);
