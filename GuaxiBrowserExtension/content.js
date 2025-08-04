@@ -20,63 +20,209 @@ async function handleSaveRequest(request) {
 }
 
 // 保存完整页面
+// ==================== 保存逻辑 ====================
 async function saveFullPage() {
-  console.log("[Guaxi] Saving full page (raw HTML)...");
-  const html = document.documentElement.outerHTML;
-  const data = {
-    url: window.location.href,
-    title: document.title,
-    html: html,
-    timestamp: new Date().toISOString(),
-    mode: "fullPage",
-  };
-
   try {
-    const response = await fetch("http://localhost:8888/extension/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
+    // 等待动态内容加载
+    await new Promise((resolve) => {
+      if (document.readyState === "complete") resolve();
+      else window.addEventListener("load", resolve);
     });
-    const result = await response.json();
-    if (result.success) {
-      return { success: true, data: result };
-    } else {
-      return { success: false, error: result.message || "Save failed" };
-    }
+
+    // 克隆整个文档
+    const clone = document.documentElement.cloneNode(true);
+    const processed = await inlineResources(clone);
+
+    const data = {
+      url: window.location.href,
+      title: document.title,
+      html: processed.outerHTML,
+      timestamp: new Date().toISOString(),
+      mode: "fullPage",
+    };
+
+    const result = await sendToBackend(data);
+    showTooltip(result.success ? "Full page saved!" : `Error: ${result.error}`);
+    return result;
   } catch (error) {
+    showTooltip(`Save failed: ${error.message}`, true);
     return { success: false, error: error.message };
   }
 }
 
-// 保存选中内容
+/**
+ * 递归隐藏目标元素的同级节点，保留父级结构
+ * @param {Element} el - 目标元素（在克隆体中）
+ */
+function hideSiblingsRecursive(el) {
+  if (!el.parentElement) return;
+  Array.from(el.parentElement.children).forEach((sib) => {
+    if (sib !== el) {
+      sib.style.display = "none";
+    }
+  });
+  hideSiblingsRecursive(el.parentElement);
+}
+
 async function saveSelection(element) {
-  if (!element) {
-    throw new Error("No element selected");
+  if (!element) throw new Error("No element selected");
+
+  // 先移除所有高亮class，避免保存时带上
+  document
+    .querySelectorAll(".guaxi-selected-highlight, .guaxi-hover-highlight")
+    .forEach((el) => {
+      el.classList.remove("guaxi-selected-highlight", "guaxi-hover-highlight");
+    });
+
+  // 克隆整个页面
+  const docClone = document.documentElement.cloneNode(true);
+
+  // 获取选中元素在原页面中的唯一选择器
+  function getUniqueSelector(el) {
+    if (el.id) return `#${el.id}`;
+    let path = [];
+    while (el && el.nodeType === 1 && el !== document.body) {
+      let selector = el.nodeName.toLowerCase();
+      if (el.className) selector += "." + [...el.classList].join(".");
+      path.unshift(selector);
+      el = el.parentElement;
+    }
+    return path.length ? path.join(" > ") : null;
+  }
+  const selector = getUniqueSelector(element);
+
+  // 在克隆体中查找对应元素
+  const targetInClone = docClone.querySelector(selector);
+
+  // 递归隐藏同级元素，保留父级结构
+  if (targetInClone) {
+    hideSiblingsRecursive(targetInClone);
+    targetInClone.style.display = ""; // 显示自身
+    targetInClone.scrollIntoView();
   }
 
-  console.log("[Guaxi] Saving selection:", element);
+  // 内联资源（样式、脚本、计算样式等）
+  const processed = await inlineResources(docClone);
 
-  // 只发送 html 字段，与后端 ExtensionRequest 保持一致
+  // 保留原 <html> 和 <body> 的属性
+  function getAttrs(node) {
+    return Array.from(node.attributes)
+      .map((attr) => `${attr.name}="${attr.value}"`)
+      .join(" ");
+  }
+  const htmlAttrs = getAttrs(document.documentElement);
+  const bodyAttrs = getAttrs(document.body);
+
+  // 拼接完整 HTML
+  const headHtml = document.head.innerHTML;
+  const html = `<!DOCTYPE html>
+<html ${htmlAttrs}>
+  <head>${headHtml}</head>
+  <body ${bodyAttrs}>
+    ${processed.querySelector("body").innerHTML}
+  </body>
+</html>`;
+
   const data = {
     url: window.location.href,
     title: document.title,
-    html: element.outerHTML,
+    html,
     timestamp: new Date().toISOString(),
     mode: "partial",
   };
 
+  return await sendToBackend(data);
+}
+
+async function saveAllSelections() {
+  if (!selectedElements.length) {
+    showTooltip("No elements selected", true);
+    return { success: false, error: "No elements selected" };
+  }
+
+  // 先移除所有高亮class，避免保存时带上
+  document
+    .querySelectorAll(".guaxi-selected-highlight, .guaxi-hover-highlight")
+    .forEach((el) => {
+      el.classList.remove("guaxi-selected-highlight", "guaxi-hover-highlight");
+    });
+
+  // 多选时，保留页面结构和样式，只显示所有选中元素
+  // 1. 克隆整个页面
+  const docClone = document.documentElement.cloneNode(true);
+
+  // 2. 获取所有选中元素在原页面中的唯一选择器
+  function getUniqueSelector(el) {
+    if (el.id) return `#${el.id}`;
+    let path = [];
+    while (el && el.nodeType === 1 && el !== document.body) {
+      let selector = el.nodeName.toLowerCase();
+      if (el.className) selector += "." + [...el.classList].join(".");
+      path.unshift(selector);
+      el = el.parentElement;
+    }
+    return path.length ? path.join(" > ") : null;
+  }
+  const selectors = selectedElements.map(getUniqueSelector);
+
+  // 3. 在克隆体中查找对应元素
+  const targetsInClone = selectors
+    .map((selector) => docClone.querySelector(selector))
+    .filter(Boolean);
+
+  // 4. 递归隐藏同级元素，只显示所有选中元素
+  targetsInClone.forEach((target) => {
+    hideSiblingsRecursive(target);
+    target.style.display = "";
+    target.scrollIntoView();
+  });
+
+  // 5. 内联资源
+  const processed = await inlineResources(docClone);
+
+  // 6. 保留原 <html> 和 <body> 的属性
+  function getAttrs(node) {
+    return Array.from(node.attributes)
+      .map((attr) => `${attr.name}="${attr.value}"`)
+      .join(" ");
+  }
+  const htmlAttrs = getAttrs(document.documentElement);
+  const bodyAttrs = getAttrs(document.body);
+
+  // 7. 拼接完整 HTML
+  const headHtml = document.head.innerHTML;
+  const html = `<!DOCTYPE html>
+<html ${htmlAttrs}>
+  <head>${headHtml}</head>
+  <body ${bodyAttrs}>
+    ${processed.querySelector("body").innerHTML}
+  </body>
+</html>`;
+
+  const data = {
+    url: window.location.href,
+    title: document.title,
+    html,
+    timestamp: new Date().toISOString(),
+    mode: "partial",
+  };
+
+  const result = await sendToBackend(data);
+  if (result.success) {
+    selectedElements = [];
+    deactivateSelectionMode();
+  }
+  return result;
+}
+
+async function sendToBackend(data) {
   try {
     const response = await fetch("http://localhost:8888/extension/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    const result = await response.json();
-    if (result.success) {
-      return { success: true, data: result };
-    } else {
-      return { success: false, error: result.message || "Save failed" };
-    }
+    return await response.json();
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -134,40 +280,6 @@ async function activateSelectionMode() {
   document.addEventListener("keydown", window.handleKeyDown);
 
   showTooltip("按住 Alt 并点击模块可选中，ESC 退出", false);
-}
-
-// 保存所有已选内容
-async function saveAllSelections() {
-  if (!selectedElements.length) {
-    return { success: false, error: "No elements selected" };
-  }
-  const htmlArr = selectedElements.map((el) => el.outerHTML);
-  const data = {
-    url: window.location.href,
-    title: document.title,
-    html: htmlArr.join("\n"),
-    timestamp: new Date().toISOString(),
-    mode: "partial",
-  };
-
-  try {
-    const response = await fetch("http://localhost:8888/extension/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    const result = await response.json();
-    if (result.success) {
-      selectedElements = []; // 清空已选
-      showTooltip("所有选中模块已保存", false);
-      deactivateSelectionMode(); // 保存后退出选中模式
-      return { success: true, data: result };
-    } else {
-      return { success: false, error: result.message || "Save failed" };
-    }
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
 }
 
 // 高亮选中元素
@@ -267,6 +379,91 @@ function showTooltip(message, isError = false) {
 // 移除现有提示
 function removeExistingTooltips() {
   document.querySelectorAll(".guaxi-tooltip").forEach((t) => t.remove());
+}
+
+// ==================== 样式与资源处理 ====================
+/**
+ * 内联页面所有样式和脚本资源，尽量还原浏览器效果
+ * @param {HTMLElement} element - 需要处理的根节点（通常是克隆的document.documentElement）
+ */
+async function inlineResources(element = document.documentElement) {
+  // 1. 内联所有 <link rel="stylesheet">（包括动态注入的）
+  const linkNodes = Array.from(
+    element.querySelectorAll('link[rel="stylesheet"]')
+  );
+  await Promise.all(
+    linkNodes.map(async (link) => {
+      const href = link.href;
+      if (!href) return;
+      try {
+        const resp = await fetch(href, { credentials: "include" });
+        if (resp.ok) {
+          const css = await resp.text();
+          const style = document.createElement("style");
+          style.textContent = `/* Inlined: ${href} */\n${css}`;
+          link.parentNode.replaceChild(style, link);
+        }
+      } catch (e) {
+        // fetch 失败则保留原link
+        console.warn("Failed to inline stylesheet:", href, e);
+      }
+    })
+  );
+
+  // 2. 保留所有 <style> 标签（包括动态注入的）
+  // 克隆体已包含所有 <style>，无需特殊处理
+
+  // 3. 内联所有 <script src="">
+  const scriptNodes = Array.from(element.querySelectorAll("script[src]"));
+  await Promise.all(
+    scriptNodes.map(async (script) => {
+      const src = script.src;
+      if (!src) return;
+      try {
+        const resp = await fetch(src, { credentials: "include" });
+        if (resp.ok) {
+          const js = await resp.text();
+          const inlineScript = document.createElement("script");
+          inlineScript.textContent = `/* Inlined: ${src} */\n${js}`;
+          // 保留原属性（如type等）
+          for (const attr of script.attributes) {
+            if (attr.name !== "src")
+              inlineScript.setAttribute(attr.name, attr.value);
+          }
+          script.parentNode.replaceChild(inlineScript, script);
+        }
+      } catch (e) {
+        // fetch 失败则保留原script
+        console.warn("Failed to inline script:", src, e);
+      }
+    })
+  );
+
+  // 4. 内联同源样式表（styleSheets），包括动态注入的 <style>
+  // 注意：这里遍历克隆体的 <style>，而不是原页面的 document.styleSheets
+  const head = element.querySelector("head");
+  if (head) {
+    const styleNodes = Array.from(head.querySelectorAll("style"));
+    styleNodes.forEach((styleNode) => {
+      // 可选：处理 @import 语句
+      // 这里假设 <style> 已经包含了动态注入的内容
+    });
+  }
+
+  // 5. 内联计算样式（可选，若要最大还原视觉效果）
+  Array.from(element.querySelectorAll("*")).forEach((el) => {
+    const computed = getComputedStyle(el);
+    let style = "";
+    for (let i = 0; i < computed.length; i++) {
+      const prop = computed[i];
+      if (!prop.startsWith("-")) {
+        style += `${prop}:${computed.getPropertyValue(prop)};`;
+      }
+    }
+    el.setAttribute("style", style);
+  });
+
+  return element;
 }
 
 // ==================== 消息通信 ====================

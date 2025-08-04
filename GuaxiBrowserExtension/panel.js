@@ -14,7 +14,6 @@ document.addEventListener("DOMContentLoaded", () => {
     );
     if (radio) radio.checked = true;
 
-    // 新增：如果默认就是 partial，自动进入选中模式
     if (defaultMode === "partial") {
       chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
         if (tab?.id) {
@@ -44,7 +43,6 @@ document.addEventListener("DOMContentLoaded", () => {
       if (e.target.value === "partial") {
         chrome.tabs.sendMessage(tab.id, { action: "startSelectionMode" });
       } else {
-        // 切换到全页保存时，退出选中模式
         chrome.tabs.sendMessage(tab.id, { action: "exitSelectionMode" });
       }
     });
@@ -76,12 +74,10 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       let response;
       if (saveMode === "partial") {
-        // 让 content script 保存所有已选内容
         response = await chrome.tabs.sendMessage(tab.id, {
           action: "saveAllSelections",
         });
       } else {
-        // 发送保存整个页面
         response = await chrome.tabs.sendMessage(tab.id, {
           action: "saveContent",
           mode: "fullPage",
