@@ -1,6 +1,13 @@
 let selectionModeActive = false;
 let selectedElements = []; // 存储已选元素
 
+// 定义需要特殊处理的域名列表
+const SPECIAL_DOMAINS = [
+  "github.githubassets.com",
+  "www.gstatic.com",
+  "fonts.googleapis.com",
+  "fonts.gstatic.com",
+];
 /**
  * 等待React/Vue应用完全渲染
  * 安全等待页面渲染（兼容SPA和非SPA）
@@ -302,17 +309,39 @@ async function processDynamicElementsInClone(clone) {
 }
 
 /**
- * 修改后的inlineResources函数
+ * 改进的inlinePageResources函数
  */
-async function inlineResources(element = document.documentElement) {
-  // 1. 处理CSS资源
+async function inlinePageResources(element = document.documentElement) {
+  // 1. 处理CSS资源 - 增强错误处理和特殊域名处理
   const linkNodes = Array.from(
     element.querySelectorAll('link[rel="stylesheet"]')
   );
   await Promise.all(
     linkNodes.map(async (link) => {
       try {
-        const response = await fetch(link.href, { credentials: "include" });
+        if (!link.href) return;
+
+        // 自动识别第三方资源
+        const isThirdParty = !link.href.includes(location.origin);
+        const fetchOptions = {
+          credentials: isThirdParty ? "omit" : "include",
+          headers: {
+            Accept: "text/css,*/*;q=0.1",
+            "Sec-Fetch-Dest": "style",
+          },
+        };
+
+        const response = await fetch(link.href, fetchOptions);
+
+        // 检查响应状态和内容类型
+        if (
+          !response.ok ||
+          !response.headers.get("content-type")?.includes("text/css")
+        ) {
+          console.warn(`无效的CSS响应: ${link.href}`);
+          return;
+        }
+
         const css = await response.text();
         const style = document.createElement("style");
 
@@ -322,36 +351,77 @@ async function inlineResources(element = document.documentElement) {
         style.textContent = processedCSS;
         link.replaceWith(style);
       } catch (e) {
-        console.warn("样式内联失败:", link.href, e);
+        console.warn(`样式内联失败: ${link.href}`, e);
+        // 保留原始link标签作为fallback
       }
     })
   );
 
-  // 2. 处理JavaScript模块
+  // 2. 处理JavaScript模块 - 更智能的关键脚本识别
   const scriptNodes = Array.from(element.querySelectorAll("script[src]"));
   await Promise.all(
     scriptNodes.map(async (script) => {
-      // 保留关键运行时脚本
-      if (script.src.includes("runtime") || script.src.includes("vendor")) {
-        try {
-          const response = await fetch(script.src);
+      try {
+        if (!script.src) return;
+
+        // 识别关键运行时脚本
+        const isCriticalScript =
+          script.src.includes("runtime") ||
+          script.src.includes("vendor") ||
+          script.src.includes("main") ||
+          script.src.includes("app") ||
+          script.src.includes("bundle");
+
+        if (isCriticalScript) {
+          const isThirdParty = !script.src.includes(location.origin);
+          const fetchOptions = {
+            credentials: isThirdParty ? "omit" : "include",
+            headers: {
+              Accept: "application/javascript,*/*;q=0.1",
+              "Sec-Fetch-Dest": "script",
+            },
+          };
+
+          const response = await fetch(script.src, fetchOptions);
+
+          if (
+            !response.ok ||
+            !response.headers.get("content-type")?.includes("javascript")
+          ) {
+            console.warn(`无效的JS响应: ${script.src}`);
+            return;
+          }
+
           const js = await response.text();
           const newScript = document.createElement("script");
           newScript.textContent = js;
+
+          // 保留原属性（如type等）
+          Array.from(script.attributes).forEach((attr) => {
+            if (attr.name !== "src")
+              newScript.setAttribute(attr.name, attr.value);
+          });
+
           script.replaceWith(newScript);
-        } catch (e) {
-          console.warn("脚本内联失败:", script.src, e);
+        } else {
+          script.remove(); // 移除非关键脚本
         }
-      } else {
-        script.remove(); // 移除非关键脚本
+      } catch (e) {
+        console.warn(`脚本内联失败: ${script.src}`, e);
       }
     })
   );
 
-  // 3. 处理Webpack注入的样式
+  // 3. 处理Webpack注入的样式 - 更精确的识别
   const styleNodes = Array.from(element.querySelectorAll("style"));
   styleNodes.forEach((style) => {
-    if (!style.textContent.includes("#app")) {
+    const isCritical =
+      style.textContent.includes("#app") ||
+      style.textContent.includes("body") ||
+      style.textContent.includes("html") ||
+      style.textContent.includes(":root");
+
+    if (!isCritical) {
       style.remove(); // 移除非关键样式
     }
   });
@@ -360,76 +430,175 @@ async function inlineResources(element = document.documentElement) {
 }
 
 /**
- * 处理CSS中的URL引用
+ * 改进的processCSSUrls函数
  */
 async function processCSSUrls(css, baseUrl) {
   const urlRegex = /url\((?!['"]?(?:data|blob):)(['"]?)([^'")]*)\1\)/gi;
-  const base = new URL(baseUrl);
 
-  const processed = await Promise.all(
-    Array.from(css.matchAll(urlRegex)).map(async (match) => {
-      const [fullMatch, quote, url] = match;
-      try {
-        const absoluteUrl = new URL(url, base).href;
-        const dataUrl = await fetchResourceAsDataURL(absoluteUrl);
-        return `url(${quote}${dataUrl}${quote})`;
-      } catch (e) {
-        console.warn(`Failed to inline CSS resource: ${url}`, e);
-        return fullMatch; // 失败时返回原URL
-      }
-    })
-  );
+  try {
+    const base = new URL(baseUrl);
+    const processed = await Promise.all(
+      Array.from(css.matchAll(urlRegex)).map(async (match) => {
+        const [fullMatch, quote, url] = match;
+        try {
+          const absoluteUrl = new URL(url, base).href;
 
-  let i = 0;
-  return css.replace(urlRegex, () => processed[i++]);
+          // 自动判断是否第三方资源
+          const isThirdParty = !absoluteUrl.includes(location.origin);
+          const fetchOptions = {
+            credentials: isThirdParty ? "omit" : "include",
+          };
+
+          const dataUrl = await fetchResourceAsDataURL(
+            absoluteUrl,
+            fetchOptions
+          );
+          return `url(${quote}${dataUrl}${quote})`;
+        } catch (e) {
+          console.warn(`CSS资源内联失败: ${url}`, e);
+          return fullMatch; // 失败时返回原URL
+        }
+      })
+    );
+
+    let i = 0;
+    return css.replace(urlRegex, () => processed[i++]);
+  } catch (e) {
+    console.warn(`处理CSS URL失败: ${baseUrl}`, e);
+    return css; // 失败时返回原始CSS
+  }
 }
 
 /**
  * 获取资源并转换为DataURL
  */
-async function fetchResourceAsDataURL(url) {
-  const response = await fetch(url, { credentials: "include" });
-  if (!response.ok) throw new Error(`Failed to fetch ${url}`);
+async function fetchResourceAsDataURL(url, options = {}) {
+  try {
+    const isSpecialDomain = SPECIAL_DOMAINS.some((domain) =>
+      url.includes(domain)
+    );
 
-  const blob = await response.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+    const fetchOptions = {
+      credentials: isSpecialDomain ? "omit" : "include",
+      ...options,
+    };
+
+    const response = await fetch(url, fetchOptions);
+
+    if (!response.ok) {
+      throw new Error(`HTTP错误: ${response.status}`);
+    }
+
+    // 检查内容类型
+    const contentType = response.headers.get("content-type");
+    if (!contentType) {
+      throw new Error("缺少Content-Type头");
+    }
+
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("文件读取失败"));
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.warn(`获取DataURL失败: ${url}`, e);
+    throw e;
+  }
 }
 
 /**
  * 内联媒体资源
  */
+/**
+ * 改进的inlineMediaResources函数
+ */
 async function inlineMediaResources(element) {
-  // 处理图片
+  // 处理图片 - 只处理视口内或关键区域的图片
   const images = Array.from(
     element.querySelectorAll('img[src]:not([src^="data:"])')
-  );
+  ).filter((img) => {
+    const rect = img.getBoundingClientRect();
+    return (
+      rect.width > 50 &&
+      rect.height > 50 && // 尺寸较大的图片
+      (rect.top < window.innerHeight * 2 || // 视口内或下方不远
+        img.classList.contains("logo") || // 或者是logo
+        img.id === "app-icon") // 或者是应用图标
+    );
+  });
+
   await Promise.all(
     images.map(async (img) => {
       try {
-        const dataUrl = await fetchResourceAsDataURL(img.src);
+        const isThirdParty = !img.src.includes(location.origin);
+        const fetchOptions = {
+          credentials: isThirdParty ? "omit" : "include",
+        };
+
+        const dataUrl = await fetchResourceAsDataURL(img.src, fetchOptions);
         img.src = dataUrl;
       } catch (e) {
-        console.warn(`Failed to inline image: ${img.src}`, e);
+        console.warn(`内联图片失败: ${img.src}`, e);
       }
     })
   );
 
-  // 处理视频和音频
+  // 处理关键背景图
+  const elementsWithBg = Array.from(
+    element.querySelectorAll('[style*="background-image"]')
+  ).filter((el) => {
+    const style = getComputedStyle(el);
+    return (
+      style.backgroundImage &&
+      style.backgroundImage !== "none" &&
+      !style.backgroundImage.includes("data:") &&
+      el.getBoundingClientRect().width > 100
+    );
+  });
+
+  await Promise.all(
+    elementsWithBg.map(async (el) => {
+      try {
+        const style = getComputedStyle(el);
+        const bgUrl = style.backgroundImage
+          .replace(/^url\(["']?/, "")
+          .replace(/["']?\)$/, "");
+
+        if (!bgUrl.startsWith("http")) return;
+
+        const isThirdParty = !bgUrl.includes(location.origin);
+        const fetchOptions = {
+          credentials: isThirdParty ? "omit" : "include",
+        };
+
+        const dataUrl = await fetchResourceAsDataURL(bgUrl, fetchOptions);
+        el.style.backgroundImage = `url(${dataUrl})`;
+      } catch (e) {
+        console.warn(`内联背景图失败`, e);
+      }
+    })
+  );
+
+  // 处理视频和音频源
   const mediaElements = Array.from(
     element.querySelectorAll("video source, audio source")
   );
   await Promise.all(
     mediaElements.map(async (media) => {
       try {
-        const dataUrl = await fetchResourceAsDataURL(media.src);
+        if (!media.src || media.src.startsWith("data:")) return;
+
+        const isThirdParty = !media.src.includes(location.origin);
+        const fetchOptions = {
+          credentials: isThirdParty ? "omit" : "include",
+        };
+
+        const dataUrl = await fetchResourceAsDataURL(media.src, fetchOptions);
         media.src = dataUrl;
       } catch (e) {
-        console.warn(`Failed to inline media: ${media.src}`, e);
+        console.warn(`内联媒体源失败: ${media.src}`, e);
       }
     })
   );
@@ -439,16 +608,34 @@ async function inlineMediaResources(element) {
  * 内联计算样式
  */
 function inlineComputedStyles(element) {
-  Array.from(element.querySelectorAll("*")).forEach((el) => {
-    const computed = getComputedStyle(el);
-    let style = "";
-    for (let i = 0; i < computed.length; i++) {
-      const prop = computed[i];
-      if (!prop.startsWith("-")) {
-        style += `${prop}:${computed.getPropertyValue(prop)};`;
+  // 只处理关键元素，减少不必要的处理
+  const criticalSelectors = [
+    "#app",
+    ".app",
+    "#root",
+    ".root",
+    "body",
+    "html",
+    "main",
+    ".main",
+    "header",
+    ".header",
+    "footer",
+    ".footer",
+  ];
+
+  criticalSelectors.forEach((selector) => {
+    element.querySelectorAll(selector).forEach((el) => {
+      const computed = getComputedStyle(el);
+      let style = "";
+      for (let i = 0; i < computed.length; i++) {
+        const prop = computed[i];
+        if (!prop.startsWith("-")) {
+          style += `${prop}:${computed.getPropertyValue(prop)};`;
+        }
       }
-    }
-    el.setAttribute("style", style);
+      el.setAttribute("style", style);
+    });
   });
 }
 
@@ -469,14 +656,18 @@ function hideSiblingsRecursive(el) {
 // 处理保存请求
 async function handleSaveRequest(request) {
   console.log("[Guaxi] Handling save request:", request);
+  console.log("[Guaxi] Current selection mode state:", selectionModeActive);
+  console.log("[Guaxi] Selected elements count:", selectedElements.length);
 
   try {
     if (request.mode === "fullPage") {
+      console.log("[Guaxi] Starting full page save process");
       return await saveFullPage();
     } else if (request.mode === "partial") {
-      // 激活选择模式，等待用户选择
+      console.log("[Guaxi] Starting partial save/selection process");
       return await activateSelectionMode();
     }
+    console.warn("[Guaxi] Unknown mode requested:", request.mode);
     return { success: false, error: "Unknown mode" };
   } catch (error) {
     console.error("[Guaxi] Save request failed:", error);
@@ -486,78 +677,97 @@ async function handleSaveRequest(request) {
 
 // 保存完整页面
 async function saveFullPage() {
+  console.log("[Guaxi] Starting full page save process");
   let clone;
 
   try {
-    // 阶段1：等待基础加载
+    console.log("[Guaxi] Waiting for base page load");
     await new Promise((resolve) => {
       if (document.readyState === "complete") {
+        console.log("[Guaxi] Document already loaded");
         resolve();
       } else {
+        console.log("[Guaxi] Adding load event listener");
         const onLoad = () => {
+          console.log("[Guaxi] Page load event fired");
           window.removeEventListener("load", onLoad);
           resolve();
         };
         window.addEventListener("load", onLoad);
-        setTimeout(resolve, 10000);
+        setTimeout(() => {
+          console.log("[Guaxi] Page load timeout reached");
+          resolve();
+        }, 10000);
       }
     });
 
-    // 阶段2：等待动态内容（不中断流程）
+    console.log("[Guaxi] Waiting for dynamic content");
     try {
       await waitForDynamicContent();
+      console.log("[Guaxi] Dynamic content loaded");
     } catch (e) {
-      console.warn("等待动态内容时出错:", e);
+      console.warn("[Guaxi] Error waiting for dynamic content:", e);
     }
 
-    // 阶段3：等待页面渲染（兼容SPA和非SPA）
+    console.log("[Guaxi] Waiting for page render");
     try {
       await safeWaitForPageRender();
+      console.log("[Guaxi] Page render complete");
     } catch (e) {
-      console.warn("等待页面渲染时出错:", e);
+      console.warn("[Guaxi] Error waiting for page render:", e);
     }
 
-    // 阶段4：捕获样式（如果有）
+    console.log("[Guaxi] Capturing dynamic styles");
     try {
       captureDynamicStyles();
+      console.log("[Guaxi] Dynamic styles captured");
     } catch (e) {
-      console.warn("捕获样式时出错:", e);
+      console.warn("[Guaxi] Error capturing styles:", e);
     }
 
-    // 阶段5：克隆文档
+    console.log("[Guaxi] Cloning document");
     clone = document.documentElement.cloneNode(true);
+    console.log("[Guaxi] Document cloned successfully");
 
-    // 阶段6：处理SPA内容（如果存在）
+    console.log("[Guaxi] Checking for SPA root");
     const appRoot =
       document.getElementById("app") ||
       document.querySelector("[data-reactroot], [data-vue-app]");
     if (appRoot) {
+      console.log("[Guaxi] Found SPA root, processing");
       try {
         const cloneAppRoot =
           clone.querySelector("#app") ||
           clone.querySelector("[data-reactroot], [data-vue-app]");
         if (cloneAppRoot) {
           cloneAppRoot.innerHTML = appRoot.innerHTML;
+          console.log("[Guaxi] SPA content processed");
         }
       } catch (e) {
-        console.warn("处理SPA内容时出错:", e);
+        console.warn("[Guaxi] Error processing SPA content:", e);
       }
     }
 
-    // 阶段7：处理资源（不中断流程）
+    console.log("[Guaxi] Inlining resources");
     try {
-      await inlineResources(clone);
+      await inlinePageResources(clone);
+      console.log("[Guaxi] Page resources inlined");
+      await inlineMediaResources(clone);
+      console.log("[Guaxi] Media resources inlined");
+      inlineComputedStyles(clone);
+      console.log("[Guaxi] Computed styles inlined");
     } catch (e) {
-      console.warn("资源内联时出错:", e);
+      console.warn("[Guaxi] Error inlining resources:", e);
     }
   } catch (mainError) {
-    console.error("保存过程中发生主要错误:", mainError);
+    console.error("[Guaxi] Main save process error:", mainError);
     if (!clone) {
+      console.log("[Guaxi] Creating fallback clone due to error");
       clone = document.documentElement.cloneNode(true);
     }
   }
 
-  // 最终保存
+  console.log("[Guaxi] Preparing final data");
   const data = {
     url: location.href,
     title: document.title,
@@ -567,14 +777,21 @@ async function saveFullPage() {
   };
 
   try {
+    console.log("[Guaxi] Sending data to backend");
     const result = await sendToBackend(data);
+    console.log("[Guaxi] Backend response:", result);
     showTooltip(result.success ? "页面保存成功!" : `错误: ${result.error}`);
     return result;
   } catch (e) {
+    console.error("[Guaxi] Failed to send to backend:", e);
     showTooltip(`保存失败: ${e.message}`, true);
     return { success: false, error: e.message };
   }
 }
+
+/**
+ * 改进的saveSelection函数
+ */
 async function saveSelection(element) {
   if (!element) throw new Error("No element selected");
 
@@ -607,8 +824,9 @@ async function saveSelection(element) {
   // 处理克隆体中的动态内容
   await processDynamicElementsInClone(docClone);
 
-  // 内联资源
-  const processed = await inlineResources(docClone);
+  // 内联资源 - 只内联必要资源
+  await inlinePageResources(docClone);
+  await inlineMediaResources(docClone);
 
   // 保留原<html>和<body>的属性
   const htmlAttrs = getAttrs(document.documentElement);
@@ -620,7 +838,7 @@ async function saveSelection(element) {
 <html ${htmlAttrs}>
   <head>${headHtml}</head>
   <body ${bodyAttrs}>
-    ${processed.querySelector("body").innerHTML}
+    ${docClone.querySelector("body").innerHTML}
   </body>
 </html>`;
 
@@ -635,48 +853,55 @@ async function saveSelection(element) {
   return await sendToBackend(data);
 }
 
+/**
+ * 改进的saveAllSelections函数
+ */
 async function saveAllSelections() {
   if (!selectedElements.length) {
     showTooltip("No elements selected", true);
     return { success: false, error: "No elements selected" };
   }
 
-  // 先移除所有高亮class，避免保存时带上
+  // 先移除所有高亮class
   document
     .querySelectorAll(".guaxi-selected-highlight, .guaxi-hover-highlight")
     .forEach((el) => {
       el.classList.remove("guaxi-selected-highlight", "guaxi-hover-highlight");
     });
 
-  // 多选时，保留页面结构和样式，只显示所有选中元素
-  // 1. 克隆整个页面
+  // 克隆整个页面
   const docClone = document.documentElement.cloneNode(true);
 
-  // 2. 获取所有选中元素在原页面中的唯一选择器
-  function getUniqueSelector(el) {
+  // 获取所有选中元素的选择器
+  const selectors = selectedElements.map((el) => {
     if (el.id) return `#${el.id}`;
-    let path = [];
+
+    const path = [];
     while (el && el.nodeType === 1 && el !== document.body) {
       let selector = el.nodeName.toLowerCase();
-      if (el.className) selector += "." + [...el.classList].join(".");
+      if (el.className) selector += `.${[...el.classList].join(".")}`;
       path.unshift(selector);
       el = el.parentElement;
     }
-    return path.length ? path.join(" > ") : null;
-  }
-  const selectors = selectedElements.map(getUniqueSelector);
+    return path.join(" > ");
+  });
 
-  // 3. 在克隆体中查找对应元素
+  // 在克隆体中查找对应元素
   const targetsInClone = selectors
     .map((selector) => docClone.querySelector(selector))
     .filter(Boolean);
 
-  // 4. 递归隐藏同级元素，只显示所有选中元素
+  // 递归隐藏同级元素，只显示所有选中元素
   targetsInClone.forEach((target) => {
     hideSiblingsRecursive(target);
     target.style.display = "";
-    target.scrollIntoView();
   });
+
+  // 处理动态内容
+  await processDynamicElementsInClone(docClone);
+
+  // 内联必要资源
+  await inlinePageResources(docClone);
 
   const data = {
     url: window.location.href,
@@ -696,14 +921,21 @@ async function saveAllSelections() {
 }
 
 async function sendToBackend(data) {
+  console.log("[Guaxi] Sending to backend:", data);
+
   try {
     const response = await fetch("http://localhost:8888/extension/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    return await response.json();
+
+    console.log("[Guaxi] Received response status:", response.status);
+    const result = await response.json();
+    console.log("[Guaxi] Backend processing result:", result);
+    return result;
   } catch (error) {
+    console.error("[Guaxi] Backend request failed:", error);
     return { success: false, error: error.message };
   }
 }
@@ -875,7 +1107,7 @@ function removeExistingTooltips() {
  * 内联页面所有样式和脚本资源，尽量还原浏览器效果
  * @param {HTMLElement} element - 需要处理的根节点（通常是克隆的document.documentElement）
  */
-async function inlineResources(element = document.documentElement) {
+async function inlineAllResources(element = document.documentElement) {
   // 1. 内联所有 <link rel="stylesheet">（包括动态注入的）
   const linkNodes = Array.from(
     element.querySelectorAll('link[rel="stylesheet"]')

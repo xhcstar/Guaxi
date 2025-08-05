@@ -23,7 +23,10 @@
     "scripting",
     "storage",
     "commands",
-    "webNavigation"
+    "webNavigation",
+    "webRequest",
+    "webRequestBlocking",
+    "http://localhost:8888/"
   ],
   "host_permissions": ["<all_urls>"],
   "action": {
