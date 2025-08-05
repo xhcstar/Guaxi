@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use tracing::{info, warn, error};
 
 // 扩展请求数据结构
 #[derive(Debug, Deserialize)]
@@ -32,6 +33,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 // 处理扩展数据的主端点
 #[post("/save")]
 async fn handle_extension_data(req: web::Json<ExtensionRequest>) -> impl Responder {
+    info!("Received extension data from extension for URL: {:?}", req);
     if req.html.is_empty() {
         return HttpResponse::BadRequest().json(ExtensionResponse {
             success: false,
