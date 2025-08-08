@@ -1143,7 +1143,7 @@ async function sendToBackend(data) {
 }
 
 async function uploadInChunks(data) {
-  const CHUNK_SIZE = 512 * 1024; // 512KB分块
+  const CHUNK_SIZE = 4 * 1024 * 1024; // 4M分块
   const fileId = generateFileId();
   const htmlBytes = new TextEncoder().encode(data.html);
   const totalChunks = Math.ceil(htmlBytes.length / CHUNK_SIZE);
