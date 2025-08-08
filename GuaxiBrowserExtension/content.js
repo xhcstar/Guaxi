@@ -921,23 +921,253 @@ async function saveAllSelections() {
 }
 
 async function sendToBackend(data) {
-  console.log("[Guaxi] Sending to backend:", data);
-
   try {
-    const response = await fetch("http://localhost:8888/extension/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
+    // 1. 验证数据格式
+    const validationErrors = validateRequestData(data);
+    if (validationErrors) {
+      const errorMsg = "无效的请求数据: " + validationErrors.join(", ");
+      showTooltip(errorMsg, true);
+      throw new Error(errorMsg);
+    }
+
+    // 2. 准备请求数据
+    const requestData = {
+      url: data.url,
+      title: data.title,
+      html: data.html,
+      timestamp: data.timestamp || new Date().toISOString(),
+      mode: data.mode || "fullPage",
+    };
+
+    console.log("发送数据到后端:", {
+      url: requestData.url,
+      title: requestData.title,
+      htmlLength: formatBytes(requestData.html.length),
+      mode: requestData.mode,
     });
 
-    console.log("[Guaxi] Received response status:", response.status);
-    const result = await response.json();
-    console.log("[Guaxi] Backend processing result:", result);
+    // 显示上传中提示
+    showTooltip("正在上传数据...");
+
+    // 3. 根据内容大小选择传输方式
+    let result;
+    if (requestData.html.length <= 2 * 1024 * 1024) {
+      // 小于2MB直接发送
+      result = await sendNormalRequest(requestData);
+    } else {
+      // 大文件分块上传
+      result = await uploadInChunks(requestData);
+    }
+
+    // 检查结果并显示相应提示
+    if (result && result.success) {
+      showTooltip("保存成功！");
+    } else {
+      const errorMsg = result?.message || "保存失败，未知错误";
+      showTooltip(errorMsg, true);
+      throw new Error(errorMsg);
+    }
+
     return result;
   } catch (error) {
-    console.error("[Guaxi] Backend request failed:", error);
-    return { success: false, error: error.message };
+    console.error("上传失败:", error);
+    showTooltip(`上传失败: ${error.message}`, true);
+    throw error; // 继续向上抛出错误以便调用方处理
   }
+}
+
+async function uploadInChunks(data) {
+  const CHUNK_SIZE = 512 * 1024; // 512KB分块
+  const fileId = generateFileId();
+  const htmlBytes = new TextEncoder().encode(data.html);
+  const totalChunks = Math.ceil(htmlBytes.length / CHUNK_SIZE);
+
+  console.log(`开始分块上传 (共 ${totalChunks} 块)`);
+  showTooltip(`开始上传 (共 ${totalChunks} 块)`);
+
+  // 1. 发送元数据
+  try {
+    const metaResponse = await fetch(
+      "http://localhost:8888/extension/save_meta",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: data.url,
+          title: data.title,
+          timestamp: data.timestamp,
+          mode: data.mode,
+          fileId,
+          totalChunks,
+          originalLength: htmlBytes.length,
+        }),
+      }
+    );
+
+    if (!metaResponse.ok) {
+      throw new Error(`元数据上传失败: ${metaResponse.status}`);
+    }
+  } catch (error) {
+    showTooltip("元数据上传失败", true);
+    throw error;
+  }
+
+  // 2. 分块上传
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkStart = i * CHUNK_SIZE;
+    const chunkEnd = Math.min((i + 1) * CHUNK_SIZE, htmlBytes.length);
+    const chunk = htmlBytes.slice(chunkStart, chunkEnd);
+
+    try {
+      const chunkResponse = await fetch(
+        "http://localhost:8888/extension/save_chunk",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-File-ID": fileId,
+            "X-Chunk-Index": i.toString(),
+            "X-Total-Chunks": totalChunks.toString(),
+            "X-Chunk-Start": chunkStart.toString(),
+            "X-Chunk-End": chunkEnd.toString(),
+          },
+          body: chunk,
+        }
+      );
+
+      if (!chunkResponse.ok) {
+        throw new Error(`分块上传失败: ${chunkResponse.status}`);
+      }
+
+      // 更新进度提示
+      const progress = Math.round(((i + 1) / totalChunks) * 100);
+      showTooltip(`上传中... ${progress}%`);
+    } catch (error) {
+      showTooltip(`分块 ${i + 1}/${totalChunks} 上传失败`, true);
+      throw error;
+    }
+  }
+
+  // 3. 完成上传
+  try {
+    const completeResponse = await fetch(
+      "http://localhost:8888/extension/complete",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-File-ID": fileId,
+          "X-Expected-Length": htmlBytes.length.toString(),
+          "X-Checksum": await calculateChecksum(htmlBytes),
+        },
+      }
+    );
+
+    if (!completeResponse.ok) {
+      throw new Error("完成上传失败");
+    }
+
+    return await completeResponse.json();
+  } catch (error) {
+    showTooltip("完成上传时出错", true);
+    throw error;
+  }
+}
+
+// 计算SHA-256校验和
+async function calculateChecksum(arrayBuffer) {
+  const hashBuffer = await crypto.subtle.digest("SHA-256", arrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// 增强的fetch函数（带超时）
+function fetchWithTimeout(url, options, timeout = 30000) {
+  return Promise.race([
+    fetch(url, options),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Request timeout")), timeout)
+    ),
+  ]);
+}
+
+// 带重试的fetch函数
+async function fetchWithRetry(url, options, maxRetries = 3) {
+  let lastError = null;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await fetchWithTimeout(url, options);
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (i < maxRetries - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
+      }
+    }
+  }
+
+  throw lastError || new Error("Unknown error");
+}
+
+// 辅助函数
+function generateFileId() {
+  return `${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .substr(2, 8)}`;
+}
+
+function generateRequestId() {
+  return crypto.randomUUID?.() || Math.random().toString(36).substr(2, 16);
+}
+
+// 格式化字节大小显示
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 Bytes";
+  const k = 1024;
+  const sizes = ["Bytes", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+// 发送普通请求
+async function sendNormalRequest(data) {
+  const response = await fetch("http://localhost:8888/extension/save", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`服务器响应错误: ${response.status}: ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+function validateRequestData(data) {
+  const errors = [];
+
+  if (!data.url || typeof data.url !== "string") {
+    errors.push("Invalid or missing URL");
+  }
+
+  if (!data.title || typeof data.title !== "string") {
+    errors.push("Invalid or missing title");
+  }
+
+  if (!data.html || typeof data.html !== "string") {
+    errors.push("Invalid or missing HTML content");
+  }
+
+  if (data.mode && !["fullPage", "partial"].includes(data.mode)) {
+    errors.push('Invalid mode, must be "fullPage" or "partial"');
+  }
+
+  return errors.length ? errors : null;
 }
 
 // ==================== 选择模式 ====================
