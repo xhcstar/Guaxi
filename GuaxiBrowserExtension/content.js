@@ -66,42 +66,171 @@ async function safeWaitForPageRender() {
 
 /**
  * 捕获动态样式
+ * 改进的captureDynamicStyles函数
+ * 增强对静态页面的样式捕获能力
  */
 function captureDynamicStyles() {
   try {
-    // 1. 处理样式表
+    // 1. 捕获所有样式表（包括跨域样式表）
     Array.from(document.styleSheets).forEach((sheet) => {
       try {
-        if (sheet.href && sheet.href.includes(location.origin)) {
-          const rules = Array.from(sheet.cssRules || []);
-          rules.forEach((rule) => {
-            try {
-              if (rule.selectorText) {
+        let cssRules = [];
+        try {
+          // 尝试获取所有CSS规则（可能因跨域限制失败）
+          cssRules = Array.from(sheet.cssRules || []);
+        } catch (e) {
+          // 跨域样式表处理：通过AJAX获取样式内容
+          if (sheet.href) {
+            fetch(sheet.href, { credentials: "omit" })
+              .then((res) => res.text())
+              .then((css) => {
                 const style = document.createElement("style");
-                style.textContent = rule.cssText;
+                style.textContent = css;
                 document.head.appendChild(style);
-              }
-            } catch (e) {
-              console.warn("处理CSS规则失败:", e);
-            }
-          });
+              })
+              .catch((e) => console.warn("获取跨域样式失败:", sheet.href, e));
+          }
+          return;
         }
+
+        // 处理获取到的规则
+        cssRules.forEach((rule) => {
+          try {
+            if (
+              rule.type === CSSRule.STYLE_RULE ||
+              rule.type === CSSRule.MEDIA_RULE ||
+              rule.type === CSSRule.SUPPORTS_RULE
+            ) {
+              const style = document.createElement("style");
+              style.textContent = rule.cssText;
+              document.head.appendChild(style);
+            }
+          } catch (e) {
+            console.warn("处理CSS规则失败:", e);
+          }
+        });
       } catch (e) {
         console.warn("处理样式表失败:", e);
       }
     });
 
-    // 2. 处理内联样式
-    document.querySelectorAll("style").forEach((style) => {
+    // 2. 捕获内联样式和计算样式
+    document.querySelectorAll("*").forEach((el) => {
       try {
-        document.head.appendChild(style.cloneNode(true));
+        // 捕获内联样式
+        if (el.hasAttribute("style")) {
+          const style = document.createElement("style");
+          style.textContent = `[data-capture-id="${
+            el.id || el.className
+          }"] { ${el.getAttribute("style")} }`;
+          document.head.appendChild(style);
+        }
+
+        // 捕获计算样式（关键元素）
+        if (
+          [
+            "body",
+            "html",
+            "main",
+            "header",
+            "footer",
+            "article",
+            "div",
+            "section",
+          ].includes(el.tagName.toLowerCase())
+        ) {
+          const computed = getComputedStyle(el);
+          let styleText = "";
+          for (let i = 0; i < computed.length; i++) {
+            const prop = computed[i];
+            if (
+              prop.startsWith("background") ||
+              prop.startsWith("border") ||
+              prop.startsWith("font") ||
+              prop.startsWith("padding") ||
+              prop.startsWith("margin")
+            ) {
+              styleText += `${prop}: ${computed.getPropertyValue(prop)};`;
+            }
+          }
+          if (styleText) {
+            const style = document.createElement("style");
+            style.textContent = `[data-capture-id="${
+              el.id || el.className
+            }"] { ${styleText} }`;
+            document.head.appendChild(style);
+          }
+        }
       } catch (e) {
-        console.warn("克隆样式标签失败:", e);
+        console.warn("捕获元素样式失败:", e);
       }
     });
+
+    // 3. 捕获特殊样式（伪元素、媒体查询等）
+    const extraStyles = `
+      /* 捕获伪元素样式 */
+      body::before, body::after, 
+      div::before, div::after,
+      main::before, main::after {
+        ${getComputedStyle(document.body, "::before").cssText}
+      }
+      
+      /* 捕获媒体查询 */
+      @media (max-width: 768px) {
+        body {
+          ${getComputedStyle(document.body).cssText}
+        }
+      }
+    `;
+    const style = document.createElement("style");
+    style.textContent = extraStyles;
+    document.head.appendChild(style);
   } catch (e) {
     console.warn("捕获样式时发生错误:", e);
   }
+}
+
+/**
+ * 改进的cloneDocument函数
+ * 更好地保留静态页面的结构和样式
+ */
+function cloneDocument() {
+  const clone = document.documentElement.cloneNode(true);
+
+  // 1. 特殊处理GitHub等常见网站
+  if (window.location.hostname.includes("github.com")) {
+    // 保留GitHub特有的样式和结构
+    const githubStyles = document.querySelectorAll(
+      'head style, head link[rel="stylesheet"]'
+    );
+    githubStyles.forEach((style) => {
+      clone.querySelector("head").appendChild(style.cloneNode(true));
+    });
+
+    // 保留GitHub的页面结构
+    const mainContent = document.querySelector(".repository-content");
+    if (mainContent) {
+      clone.querySelector(".repository-content").innerHTML =
+        mainContent.innerHTML;
+    }
+  }
+
+  // 2. 保留body的所有属性
+  const bodyAttrs = document.body.attributes;
+  const cloneBody = clone.querySelector("body");
+  Array.from(bodyAttrs).forEach((attr) => {
+    cloneBody.setAttribute(attr.name, attr.value);
+  });
+
+  // 3. 保留关键meta标签
+  const metaTags = document.querySelectorAll(
+    'meta[name^="viewport"], meta[charset]'
+  );
+  metaTags.forEach((meta) => {
+    clone.querySelector("head").appendChild(meta.cloneNode(true));
+  });
+
+  return clone;
 }
 
 /**
@@ -310,9 +439,10 @@ async function processDynamicElementsInClone(clone) {
 
 /**
  * 改进的inlinePageResources函数
+ * 针对静态页面优化资源内联
  */
 async function inlinePageResources(element = document.documentElement) {
-  // 1. 处理CSS资源 - 增强错误处理和特殊域名处理
+  // 1. 内联所有CSS资源（增强对静态页面的支持）
   const linkNodes = Array.from(
     element.querySelectorAll('link[rel="stylesheet"]')
   );
@@ -321,82 +451,63 @@ async function inlinePageResources(element = document.documentElement) {
       try {
         if (!link.href) return;
 
-        // 自动识别第三方资源
-        const isThirdParty = !link.href.includes(location.origin);
+        // 特殊处理常见CDN资源
+        const isSpecialDomain = SPECIAL_DOMAINS.some((domain) =>
+          link.href.includes(domain)
+        );
         const fetchOptions = {
-          credentials: isThirdParty ? "omit" : "include",
-          headers: {
-            Accept: "text/css,*/*;q=0.1",
-            "Sec-Fetch-Dest": "style",
-          },
+          credentials: isSpecialDomain ? "omit" : "include",
         };
 
         const response = await fetch(link.href, fetchOptions);
+        if (!response.ok) return;
 
-        // 检查响应状态和内容类型
-        if (
-          !response.ok ||
-          !response.headers.get("content-type")?.includes("text/css")
-        ) {
-          console.warn(`无效的CSS响应: ${link.href}`);
-          return;
-        }
+        let css = await response.text();
 
-        const css = await response.text();
+        // 修复CSS中的相对路径
+        const baseUrl = new URL(link.href);
+        css = css.replace(
+          /url\((?!['"]?(?:data|http))['"]?([^'")]*)['"]?\)/g,
+          (match, p1) => {
+            return `url('${new URL(p1, baseUrl).href}')`;
+          }
+        );
+
         const style = document.createElement("style");
-
-        // 处理字体和图片引用
-        const processedCSS = await processCSSUrls(css, link.href);
-
-        style.textContent = processedCSS;
+        style.textContent = css;
         link.replaceWith(style);
       } catch (e) {
         console.warn(`样式内联失败: ${link.href}`, e);
-        // 保留原始link标签作为fallback
       }
     })
   );
 
-  // 2. 处理JavaScript模块 - 更智能的关键脚本识别
+  // 2. 内联关键图片和背景
+  await inlineCriticalAssets(element);
+
+  // 3. 保留页面结构的关键脚本
   const scriptNodes = Array.from(element.querySelectorAll("script[src]"));
   await Promise.all(
     scriptNodes.map(async (script) => {
       try {
         if (!script.src) return;
 
-        // 识别关键运行时脚本
-        const isCriticalScript =
-          script.src.includes("runtime") ||
-          script.src.includes("vendor") ||
+        // 只内联关键脚本（如布局相关）
+        const isCritical =
           script.src.includes("main") ||
           script.src.includes("app") ||
-          script.src.includes("bundle");
+          script.src.includes("runtime") ||
+          script.getAttribute("type") === "application/json";
 
-        if (isCriticalScript) {
-          const isThirdParty = !script.src.includes(location.origin);
-          const fetchOptions = {
-            credentials: isThirdParty ? "omit" : "include",
-            headers: {
-              Accept: "application/javascript,*/*;q=0.1",
-              "Sec-Fetch-Dest": "script",
-            },
-          };
-
-          const response = await fetch(script.src, fetchOptions);
-
-          if (
-            !response.ok ||
-            !response.headers.get("content-type")?.includes("javascript")
-          ) {
-            console.warn(`无效的JS响应: ${script.src}`);
-            return;
-          }
+        if (isCritical) {
+          const response = await fetch(script.src, { credentials: "include" });
+          if (!response.ok) return;
 
           const js = await response.text();
           const newScript = document.createElement("script");
           newScript.textContent = js;
 
-          // 保留原属性（如type等）
+          // 保留原属性
           Array.from(script.attributes).forEach((attr) => {
             if (attr.name !== "src")
               newScript.setAttribute(attr.name, attr.value);
@@ -404,7 +515,7 @@ async function inlinePageResources(element = document.documentElement) {
 
           script.replaceWith(newScript);
         } else {
-          script.remove(); // 移除非关键脚本
+          script.remove();
         }
       } catch (e) {
         console.warn(`脚本内联失败: ${script.src}`, e);
@@ -412,23 +523,139 @@ async function inlinePageResources(element = document.documentElement) {
     })
   );
 
-  // 3. 处理Webpack注入的样式 - 更精确的识别
-  const styleNodes = Array.from(element.querySelectorAll("style"));
-  styleNodes.forEach((style) => {
-    const isCritical =
-      style.textContent.includes("#app") ||
-      style.textContent.includes("body") ||
-      style.textContent.includes("html") ||
-      style.textContent.includes(":root");
-
-    if (!isCritical) {
-      style.remove(); // 移除非关键样式
-    }
-  });
-
   return element;
 }
 
+/**
+ * 内联关键静态资源（图片、背景等）
+ */
+async function inlineCriticalAssets(element) {
+  // 1. 内联视口内图片
+  const images = Array.from(element.querySelectorAll("img")).filter((img) => {
+    const rect = img.getBoundingClientRect();
+    return rect.top < window.innerHeight * 2;
+  });
+
+  await Promise.all(
+    images.map(async (img) => {
+      try {
+        if (!img.src || img.src.startsWith("data:")) return;
+
+        const response = await fetch(img.src, { credentials: "include" });
+        if (!response.ok) return;
+
+        const blob = await response.blob();
+        const dataUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+
+        img.src = dataUrl;
+      } catch (e) {
+        console.warn("图片内联失败:", img.src, e);
+      }
+    })
+  );
+
+  // 2. 内联关键背景图
+  const elementsWithBg = Array.from(element.querySelectorAll("*")).filter(
+    (el) => {
+      const style = getComputedStyle(el);
+      return style.backgroundImage && !style.backgroundImage.includes("none");
+    }
+  );
+
+  await Promise.all(
+    elementsWithBg.map(async (el) => {
+      try {
+        const style = getComputedStyle(el);
+        const bgUrl = style.backgroundImage
+          .replace(/^url\(['"]?/, "")
+          .replace(/['"]?\)$/, "");
+
+        if (!bgUrl.startsWith("http")) return;
+
+        const response = await fetch(bgUrl, { credentials: "include" });
+        if (!response.ok) return;
+
+        const blob = await response.blob();
+        const dataUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+
+        el.style.backgroundImage = `url(${dataUrl})`;
+      } catch (e) {
+        console.warn("背景图内联失败:", e);
+      }
+    })
+  );
+}
+
+/**
+ * 针对特定网站的优化处理
+ */
+function optimizeForSpecificSites(clone) {
+  const hostname = window.location.hostname;
+
+  // GitHub优化
+  if (hostname.includes("github.com")) {
+    // 保留GitHub的导航和文件结构
+    const header = document.querySelector("header");
+    const repoNav = document.querySelector(
+      ".repository-content .file-navigation"
+    );
+    const fileContent = document.querySelector(".repository-content .Box");
+
+    if (header) clone.querySelector("header").innerHTML = header.innerHTML;
+    if (repoNav)
+      clone.querySelector(".file-navigation").innerHTML = repoNav.innerHTML;
+    if (fileContent)
+      clone.querySelector(".Box").innerHTML = fileContent.innerHTML;
+
+    // 保留GitHub的样式
+    const githubStyles = document.querySelectorAll(
+      'head style, head link[rel="stylesheet"]'
+    );
+    githubStyles.forEach((style) => {
+      clone.querySelector("head").appendChild(style.cloneNode(true));
+    });
+  }
+
+  // Google搜索结果优化
+  if (hostname.includes("google.com")) {
+    // 保留搜索结果结构
+    const main = document.querySelector("#main");
+    if (main) clone.querySelector("#main").innerHTML = main.innerHTML;
+
+    // 保留Google的样式
+    const googleStyles = document.querySelectorAll(
+      'head style, head link[rel="stylesheet"]'
+    );
+    googleStyles.forEach((style) => {
+      clone.querySelector("head").appendChild(style.cloneNode(true));
+    });
+  }
+
+  // 通用博客优化
+  if (document.querySelector("article.post, article.blog-post")) {
+    // 保留文章主体和样式
+    const article = document.querySelector("article");
+    if (article) clone.querySelector("article").innerHTML = article.innerHTML;
+
+    // 保留代码高亮样式
+    const codeStyles = document.querySelectorAll(
+      'head link[href*="highlight"], head style'
+    );
+    codeStyles.forEach((style) => {
+      clone.querySelector("head").appendChild(style.cloneNode(true));
+    });
+  }
+
+  return clone;
+}
 /**
  * 改进的processCSSUrls函数
  */
@@ -675,99 +902,41 @@ async function handleSaveRequest(request) {
   }
 }
 
-// 保存完整页面
+/**
+ * 改进的saveFullPage函数
+ * 针对静态页面优化的完整保存流程
+ */
 async function saveFullPage() {
-  console.log("[Guaxi] Starting full page save process");
   let clone;
 
   try {
-    console.log("[Guaxi] Waiting for base page load");
-    await new Promise((resolve) => {
-      if (document.readyState === "complete") {
-        console.log("[Guaxi] Document already loaded");
-        resolve();
-      } else {
-        console.log("[Guaxi] Adding load event listener");
-        const onLoad = () => {
-          console.log("[Guaxi] Page load event fired");
-          window.removeEventListener("load", onLoad);
-          resolve();
-        };
-        window.addEventListener("load", onLoad);
-        setTimeout(() => {
-          console.log("[Guaxi] Page load timeout reached");
-          resolve();
-        }, 10000);
-      }
-    });
+    // 1. 等待页面完全加载
+    await safeWaitForPageRender();
 
-    console.log("[Guaxi] Waiting for dynamic content");
-    try {
-      await waitForDynamicContent();
-      console.log("[Guaxi] Dynamic content loaded");
-    } catch (e) {
-      console.warn("[Guaxi] Error waiting for dynamic content:", e);
-    }
+    // 2. 捕获动态样式
+    captureDynamicStyles();
 
-    console.log("[Guaxi] Waiting for page render");
-    try {
-      await safeWaitForPageRender();
-      console.log("[Guaxi] Page render complete");
-    } catch (e) {
-      console.warn("[Guaxi] Error waiting for page render:", e);
-    }
+    // 3. 克隆文档
+    clone = cloneDocument();
 
-    console.log("[Guaxi] Capturing dynamic styles");
-    try {
-      captureDynamicStyles();
-      console.log("[Guaxi] Dynamic styles captured");
-    } catch (e) {
-      console.warn("[Guaxi] Error capturing styles:", e);
-    }
+    // 4. 针对特定网站优化
+    clone = optimizeForSpecificSites(clone);
 
-    console.log("[Guaxi] Cloning document");
-    clone = document.documentElement.cloneNode(true);
-    console.log("[Guaxi] Document cloned successfully");
+    // 5. 内联资源
+    await inlinePageResources(clone);
+    await inlineCriticalAssets(clone);
 
-    console.log("[Guaxi] Checking for SPA root");
-    const appRoot =
-      document.getElementById("app") ||
-      document.querySelector("[data-reactroot], [data-vue-app]");
-    if (appRoot) {
-      console.log("[Guaxi] Found SPA root, processing");
-      try {
-        const cloneAppRoot =
-          clone.querySelector("#app") ||
-          clone.querySelector("[data-reactroot], [data-vue-app]");
-        if (cloneAppRoot) {
-          cloneAppRoot.innerHTML = appRoot.innerHTML;
-          console.log("[Guaxi] SPA content processed");
-        }
-      } catch (e) {
-        console.warn("[Guaxi] Error processing SPA content:", e);
-      }
-    }
+    // 6. 内联计算样式（关键元素）
+    inlineComputedStyles(clone);
 
-    console.log("[Guaxi] Inlining resources");
-    try {
-      await inlinePageResources(clone);
-      console.log("[Guaxi] Page resources inlined");
-      await inlineMediaResources(clone);
-      console.log("[Guaxi] Media resources inlined");
-      inlineComputedStyles(clone);
-      console.log("[Guaxi] Computed styles inlined");
-    } catch (e) {
-      console.warn("[Guaxi] Error inlining resources:", e);
-    }
-  } catch (mainError) {
-    console.error("[Guaxi] Main save process error:", mainError);
-    if (!clone) {
-      console.log("[Guaxi] Creating fallback clone due to error");
-      clone = document.documentElement.cloneNode(true);
-    }
+    // 7. 处理动态内容
+    await processDynamicElementsInClone(clone);
+  } catch (error) {
+    console.error("保存过程中出错:", error);
+    if (!clone) clone = document.documentElement.cloneNode(true);
   }
 
-  console.log("[Guaxi] Preparing final data");
+  // 准备最终数据
   const data = {
     url: location.href,
     title: document.title,
@@ -777,15 +946,12 @@ async function saveFullPage() {
   };
 
   try {
-    console.log("[Guaxi] Sending data to backend");
     const result = await sendToBackend(data);
-    console.log("[Guaxi] Backend response:", result);
-    showTooltip(result.success ? "页面保存成功!" : `错误: ${result.error}`);
+    showTooltip(result.success ? "页面保存成功!" : `错误: ${result.message}`);
     return result;
-  } catch (e) {
-    console.error("[Guaxi] Failed to send to backend:", e);
-    showTooltip(`保存失败: ${e.message}`, true);
-    return { success: false, error: e.message };
+  } catch (error) {
+    showTooltip(`保存失败: ${error.message}`, true);
+    throw error;
   }
 }
 
