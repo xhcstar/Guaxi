@@ -1,4 +1,5 @@
 use crate::commands::settingview::get_libraries_root;
+use crate::state::SharedState;
 use actix_web::{post, web, HttpRequest, HttpResponse, Responder};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,22 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter};
 use tracing::{error, info, warn};
+
+// 文件信息结构
+#[derive(Serialize, Debug)]
+struct BrowserSavedHtmlInfo {
+    file_name: String,
+    file_path: String,
+    create_time: u64,
+    modify_time: u64,
+    file_type: String,
+    knowledge_repo: String,
+    tags: Vec<String>,
+    description: String,
+    file_size: u64,
+}
 
 // 扩展请求数据结构
 #[derive(Debug, Deserialize)]
@@ -56,16 +72,18 @@ struct UploadState {
 type UploadStore = Arc<Mutex<HashMap<String, UploadState>>>;
 
 // 配置服务路由
-pub fn config(cfg: &mut web::ServiceConfig) {
+pub fn config(cfg: &mut web::ServiceConfig, state: web::Data<SharedState>) {
     let store = Arc::new(Mutex::new(HashMap::<String, UploadState>::new()));
 
-    cfg.app_data(web::Data::new(store)).service(
-        web::scope("/extension")
-            .service(handle_extension_data)
-            .service(handle_chunked_meta)
-            .service(handle_chunk_upload)
-            .service(handle_chunked_complete),
-    );
+    cfg.app_data(web::Data::new(store))
+        .app_data(state) // 注册 SharedState
+        .service(
+            web::scope("/extension")
+                .service(handle_extension_data)
+                .service(handle_chunked_meta)
+                .service(handle_chunk_upload)
+                .service(handle_chunked_complete),
+        );
 }
 
 #[post("/save")]
@@ -123,7 +141,8 @@ async fn handle_chunk_upload(
                 Ok(n) => n,
                 Err(_) => {
                     cleanup();
-                    return HttpResponse::BadRequest().json(error_response("Invalid X-Chunk-Index"));
+                    return HttpResponse::BadRequest()
+                        .json(error_response("Invalid X-Chunk-Index"));
                 }
             },
             Err(_) => {
@@ -144,7 +163,8 @@ async fn handle_chunk_upload(
                 Ok(n) => n,
                 Err(_) => {
                     cleanup();
-                    return HttpResponse::BadRequest().json(error_response("Invalid X-Chunk-Start"));
+                    return HttpResponse::BadRequest()
+                        .json(error_response("Invalid X-Chunk-Start"));
                 }
             },
             Err(_) => {
@@ -195,7 +215,8 @@ async fn handle_chunk_upload(
         Ok(store) => store,
         Err(_) => {
             cleanup();
-            return HttpResponse::InternalServerError().json(error_response("Failed to lock store"));
+            return HttpResponse::InternalServerError()
+                .json(error_response("Failed to lock store"));
         }
     };
 
@@ -247,7 +268,11 @@ async fn handle_chunk_upload(
 }
 
 #[post("/complete")]
-async fn handle_chunked_complete(req: HttpRequest, store: web::Data<UploadStore>) -> HttpResponse {
+async fn handle_chunked_complete(
+    req: HttpRequest,
+    store: web::Data<UploadStore>,
+    state: web::Data<SharedState>,
+) -> HttpResponse {
     // 验证头信息
     let file_id = match req.headers().get("X-File-ID") {
         Some(header) => match header.to_str() {
@@ -290,7 +315,8 @@ async fn handle_chunked_complete(req: HttpRequest, store: web::Data<UploadStore>
             Ok(checksum) => checksum,
             Err(_) => {
                 cleanup();
-                return HttpResponse::BadRequest().json(error_response("Invalid X-Checksum header"));
+                return HttpResponse::BadRequest()
+                    .json(error_response("Invalid X-Checksum header"));
             }
         },
         None => {
@@ -367,6 +393,18 @@ async fn handle_chunked_complete(req: HttpRequest, store: web::Data<UploadStore>
             return e;
         }
     };
+
+    info!("Saved file: {}", save_path.to_string_lossy());
+    // 处理文件信息并触发事件
+    if let Some(app_handle) = state.get_app_handle() {
+        if let Err(e) =
+            process_and_emit_browser_saved_html_info(&meta, &file_content, &save_path, &app_handle)
+        {
+            error!("Failed to emit event: {}", e);
+        }
+    } else {
+        warn!("AppHandle not initialized, skipping event emission");
+    }
 
     // 清理临时文件
     cleanup();
@@ -614,4 +652,65 @@ fn cleanup_temp_file(file_id: &str) {
             );
         }
     }
+}
+
+// 处理html文件信息并触发事件
+fn process_and_emit_browser_saved_html_info(
+    meta: &ChunkedMeta,
+    file_content: &[u8],
+    save_path: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    info!(
+        "Processing and emitting browser saved HTML info for file: {}",
+        save_path.display()
+    );
+
+    // 获取文件元数据
+    let file_metadata = match fs::metadata(save_path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            error!("Failed to get file metadata: {}", e);
+            return Err(format!("Failed to get file metadata: {}", e));
+        }
+    };
+
+    // 构建文件信息结构
+    let file_info = BrowserSavedHtmlInfo {
+        file_name: save_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        file_path: save_path.to_string_lossy().into_owned(),
+        create_time: file_metadata
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        modify_time: file_metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        file_type: "html".to_string(),
+        knowledge_repo: "default".to_string(),
+        tags: vec!["webpage".to_string()],
+        description: meta.title.clone(),
+        file_size: file_metadata.len(),
+    };
+
+    info!("File info: {:?}", file_info);
+    // 触发 Tauri 事件 - 使用 AppHandle 的 emit_all 方法
+    app_handle
+        .emit(
+            "add_browser_saved_html_file_event",
+            serde_json::to_value(&file_info)
+                .map_err(|e| format!("Failed to serialize file info: {}", e))?,
+        )
+        .map_err(|e| format!("Failed to emit event: {}", e))?;
+    info!("Emitted add_browser_saved_html_file_event with file info: {:?}", file_info);
+    Ok(())
 }

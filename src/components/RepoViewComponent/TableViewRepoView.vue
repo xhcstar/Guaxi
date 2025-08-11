@@ -112,7 +112,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, h, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, h, nextTick, watch } from 'vue'
 import { repoStore } from '../../stores/repoStore'
 import {
   FolderAdd20Regular,
@@ -150,6 +150,8 @@ const isAddFileModalVisible = ref(false)
 const tableRef = ref(null)
 // 分页配置
 const pagination = ref({ pageSize: 15 })
+
+let unlistenBrowserExtension = null;
 
 
 const newNoteForm = {
@@ -1245,6 +1247,48 @@ const handleCheckboxUpdate = (rowKeys) => {
   console.log('选中的行 keys:', rowKeys)
 }
 
+
+// TableViewRepoView.vue
+const handleFileInfoEvent = async (event) => {
+  console.log('handleFileInfoEvent', event);
+  const fileInfo = event.payload;
+  
+  // 构建表单数据
+  newFileForm.value = {
+    id: 0,
+    filePath: fileInfo.file_path,
+    importFileName: fileInfo.file_name,
+    description: fileInfo.description,
+    importedFileTags: fileInfo.tags.join(','),
+    type: fileInfo.file_type,
+    library: 'default',
+    importFileCreateTime: new Date(fileInfo.create_time * 1000).toISOString(),
+    importFileSize: fileInfo.file_size,
+    knowledgeRepo: fileInfo.knowledge_repo,
+    newNoteForm: {
+      id: 0,
+      description: `${fileInfo.file_name}的笔记`,
+      noteFileName: `${fileInfo.file_name.replace(/\.[^/.]+$/, "")}_note.md`,
+      notesTags: fileInfo.tags.join(','),
+      noteFileType: 'md',
+      fromImportedFile: fileInfo.file_name,
+      fromImportedFileLibrary: 'default',
+      noteFileCreateTime: new Date().toISOString(),
+      noteFileUpdateTime: new Date().toISOString(),
+      knowledgeRepo: fileInfo.knowledge_repo,
+    }
+  };
+  
+  // 调用 addFile 方法
+  try {
+    await addFile();
+    message.success('文件添加成功');
+  } catch (error) {
+    console.error('添加文件失败:', error);
+    message.error(`添加文件失败: ${error.message || error}`);
+  }
+};
+
 // 引入搜索逻辑
 const {
   noteTagOptions,
@@ -1297,10 +1341,33 @@ watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
   handleImportedFileLibrarySearch(newValue);
 });
 
+const initAppHandle = async () => {
+  try {
+    await invoke('init_backend_services');
+    console.log('AppHandle initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize AppHandle:', error);
+    message.error('初始化应用句柄失败，部分功能可能受限');
+  }
+};
+
 // 组件挂载时获取默认数据
 onMounted(async () => {
+  // 初始化 AppHandle
+  await initAppHandle();
+
   store.get_librariesRoot()
   await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
+
+  // 监听 Tauri 事件
+  unlistenBrowserExtension = await listen('add_browser_saved_html_file_event', handleFileInfoEvent);
+})
+
+onUnmounted(() => {
+  // 移除 Tauri 事件监听
+  if (unlistenBrowserExtension) {
+    unlistenBrowserExtension();
+  }
 })
 
 </script>
