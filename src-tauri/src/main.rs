@@ -8,9 +8,12 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 mod commands;
 mod guaxiservices;
+mod state;
 
 use commands::file_watcher::FileWatcher;
 use guaxiservices::server::start_backend_services;
+
+use state::SharedState;
 
 async fn app_init() {
     // 在启动时加载配置文件
@@ -45,6 +48,8 @@ async fn main() {
     app_init().await;
     let file_watcher = FileWatcher::new();
 
+    let shared_state = SharedState::new();
+
     tauri::Builder::default()
         // .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -52,6 +57,7 @@ async fn main() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(file_watcher)
+        .manage(shared_state.clone())
         .invoke_handler(tauri::generate_handler![
             commands::file_watcher::start_file_watching,
             commands::file_watcher::stop_file_watching,
@@ -146,11 +152,12 @@ async fn main() {
             commands::git::get_file_diff,
             commands::git::get_commit_file_diff,
             commands::git::get_commit_files,
+            commands::serverview::init_backend_services,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn
             tauri::async_runtime::spawn(async {
-                if let Err(e) = start_backend_services().await {
+                if let Err(e) = start_backend_services(shared_state).await {
                     eprintln!("Failed to start backend services: {}", e);
                 }
             });
