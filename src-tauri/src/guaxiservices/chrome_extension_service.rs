@@ -60,6 +60,7 @@ struct BrowserSavedHtmlInfo {
     modify_time: u64,
     file_type: String,
     knowledge_repo: String,
+    file_repo: String,
     tags: Vec<String>,
     description: String,
     file_size: u64,
@@ -741,6 +742,7 @@ fn process_and_emit_browser_saved_html_info(
         tags: vec!["webpage".to_string()],
         description: meta.title.clone(),
         file_size: file_metadata.len(),
+        file_repo: "default".to_string(),
     };
 
     info!("File info: {:?}", file_info);
@@ -759,7 +761,7 @@ fn process_and_emit_browser_saved_html_info(
 
 // GuaxiWebClipper普通保存接口
 #[post("/webclipper/save")]
-async fn handle_webclipper_save(req: web::Json<GuaxiWebClipperRequest>) -> impl Responder {
+async fn handle_webclipper_save(req: web::Json<GuaxiWebClipperRequest>, state: web::Data<SharedState>) -> impl Responder {
     info!("Received GuaxiWebClipper data for URL: {}", req.url);
     info!("Title: {}, Description: {}, Mode: {}, knowledgeBase: {}, fileRepo: {}, tags: {:?}, timestamp: {}", 
         req.title, req.description, req.mode, req.knowledge_base, req.file_repo, req.tags, req.timestamp);
@@ -777,6 +779,15 @@ async fn handle_webclipper_save(req: web::Json<GuaxiWebClipperRequest>) -> impl 
         Ok(res) => res,
         Err(e) => return e,
     };
+
+    let save_path = save_dir.join(&filename);
+    let save_path_ref = save_path.as_path();
+    // 处理文件信息并触发事件
+    if let Some(app_handle) = state.get_app_handle() {
+        if let Err(e) = process_and_emit_webclipper_info_for_md(req, &save_path_ref, &app_handle) {
+            error!("Failed to emit event: {}", e);
+        }
+    }
 
     match result {
         Ok(_) => HttpResponse::Ok().json(success_response(
@@ -1082,11 +1093,12 @@ fn process_and_emit_webclipper_info(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0),
-        file_type: "html".to_string(),
+        file_type: "md".to_string(),
         knowledge_repo: "default".to_string(),
         tags: vec!["webpage".to_string()],
         description: meta.title.clone(),
         file_size: file_metadata.len(),
+        file_repo: "default".to_string(),
     };
 
     app_handle
@@ -1096,6 +1108,39 @@ fn process_and_emit_webclipper_info(
                 .map_err(|e| format!("Failed to serialize file info: {}", e))?,
         )
         .map_err(|e| format!("Failed to emit event: {}", e))?;
+
+    Ok(())
+}
+
+fn process_and_emit_webclipper_info_for_md(
+    req: web::Json<GuaxiWebClipperRequest>,
+    save_path: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    let file_metadata = fs::metadata(save_path).map_err(|e| format!("Failed to get file metadata: {}", e))?;
+
+    let file_info = BrowserSavedHtmlInfo {
+        file_name: save_path.file_name().unwrap().to_string_lossy().into_owned(),
+        file_path: save_path.to_string_lossy().into_owned(),
+        create_time: req.timestamp.parse::<i64>().unwrap_or(0) as u64,
+        modify_time: req.timestamp.parse::<i64>().unwrap_or(0) as u64,
+        file_type: "md".to_string(),
+        knowledge_repo: req.knowledge_base.clone(),
+        tags: req.tags.clone(),
+        description: req.description.clone(),
+        file_size: file_metadata.len(),
+        file_repo: req.file_repo.clone(),
+    };
+
+    app_handle
+        .emit(
+            "add_browser_saved_html_file_event",
+            serde_json::to_value(&file_info)
+                .map_err(|e| format!("Failed to serialize file info: {}", e))?,
+        )
+        .map_err(|e| format!("Failed to emit event: {}", e))?;
+
+    info!("Emitted add_browser_saved_html_file_event with file info: {:?}", file_info);
 
     Ok(())
 }
