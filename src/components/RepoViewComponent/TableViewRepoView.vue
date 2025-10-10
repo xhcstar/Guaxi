@@ -1262,7 +1262,7 @@ const handleFileInfoEvent = async (event) => {
     importedFileTags: fileInfo.tags.join(','),
     type: fileInfo.file_type,
     library: 'default',
-    importFileCreateTime: new Date(fileInfo.create_time * 1000).toISOString(),
+    importFileCreateTime: fileInfo.create_time,
     importFileSize: fileInfo.file_size,
     knowledgeRepo: fileInfo.knowledge_repo,
     newNoteForm: {

@@ -66,6 +66,20 @@ struct BrowserSavedHtmlInfo {
     file_size: u64,
 }
 
+#[derive(Serialize, Debug)]
+struct GuaxiWebClipperInfo {
+    file_name: String,
+    file_path: String,
+    create_time: String,
+    modify_time: String,
+    file_type: String,
+    knowledge_repo: String,
+    file_repo: String,
+    tags: Vec<String>,
+    description: String,
+    file_size: u64,
+}
+
 // 扩展请求数据结构
 #[derive(Debug, Deserialize)]
 pub struct ExtensionRequest {
@@ -1119,11 +1133,11 @@ fn process_and_emit_webclipper_info_for_md(
 ) -> Result<(), String> {
     let file_metadata = fs::metadata(save_path).map_err(|e| format!("Failed to get file metadata: {}", e))?;
 
-    let file_info = BrowserSavedHtmlInfo {
+    let file_info = GuaxiWebClipperInfo {
         file_name: save_path.file_name().unwrap().to_string_lossy().into_owned(),
         file_path: save_path.to_string_lossy().into_owned(),
-        create_time: req.timestamp.parse::<i64>().unwrap_or(0) as u64,
-        modify_time: req.timestamp.parse::<i64>().unwrap_or(0) as u64,
+        create_time: req.timestamp.clone(),
+        modify_time: req.timestamp.clone(),
         file_type: "md".to_string(),
         knowledge_repo: req.knowledge_base.clone(),
         tags: req.tags.clone(),
