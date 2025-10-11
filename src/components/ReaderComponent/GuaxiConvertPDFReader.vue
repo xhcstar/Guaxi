@@ -641,8 +641,22 @@ const handleMarkdownClick = async (e) => {
   let noteContent = '';
   let originalMarkdown = ''; // 新增：存储原始Markdown
 
+  // 处理翻译内容（如果点击在翻译区域内）
+  const translatedElement = target.closest('.translated-content');
+  if (translatedElement) {
+    // 获取最内层的div（实际包含翻译内容的元素）
+    const contentDiv = translatedElement.querySelector('div');
+    if (contentDiv) {
+      selectedElement = translatedElement;
+      noteContent = contentDiv.innerHTML; // 获取翻译内容的HTML
+      message = '已选中译文';
+      
+      // 如果需要纯文本内容，可以使用:
+      noteContent = contentDiv.textContent;
+    }
+  }
   // 图片处理（现在支持Alt+Click）
-  if (target.tagName === 'IMG') {
+  else if (target.tagName === 'IMG') {
     selectedElement = target;
     try {
       const processedSrc = await processNoteImage(target);
