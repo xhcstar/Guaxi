@@ -114,6 +114,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, h, nextTick, watch } from 'vue'
 import { repoStore } from '../../stores/repoStore'
+import { useEventStore } from '../../stores/eventsStore'
 import {
   FolderAdd20Regular,
   Delete20Regular,
@@ -142,6 +143,8 @@ import { listen } from '@tauri-apps/api/event';
 // 引入 Pinia store
 const store = repoStore()
 
+const eventStore = useEventStore();
+
 // 获取 message 实例
 const message = useMessage();
 // 添加文件对话框状态
@@ -151,8 +154,9 @@ const tableRef = ref(null)
 // 分页配置
 const pagination = ref({ pageSize: 15 })
 
-let unlistenBrowserExtension = null;
+// let unlistenBrowserExtension = null;
 
+let unsubscribe = null;
 
 const newNoteForm = {
   id: 0,
@@ -1313,10 +1317,15 @@ const handleCheckboxUpdate = (rowKeys) => {
 
 
 // TableViewRepoView.vue
-const handleFileInfoEvent = async (event) => {
-  console.log('handleFileInfoEvent', event);
-  const fileInfo = event.payload;
-  
+const handleFileInfoEvent = async (payload) => {
+  if (!payload) {
+    console.error('事件 payload 为空');
+    return;
+  }
+
+  const fileInfo = payload;
+  console.log('handleFileInfoEvent', payload);
+
   // 构建表单数据
   newFileForm.value = {
     id: 0,
@@ -1342,7 +1351,7 @@ const handleFileInfoEvent = async (event) => {
       knowledgeRepo: fileInfo.knowledge_repo,
     }
   };
-  
+
   // 调用 addFile 方法
   try {
     await addFileFromWeb();
@@ -1405,6 +1414,14 @@ watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
   handleImportedFileLibrarySearch(newValue);
 });
 
+watch(() => eventStore.webClipperEvent, (newEvent) => {
+  if (newEvent) {
+    handleFileInfoEvent({ payload: newEvent });
+    // 处理完后清除事件
+    eventStore.webClipperEvent = null;
+  }
+});
+
 const initAppHandle = async () => {
   try {
     await invoke('init_backend_services');
@@ -1424,14 +1441,32 @@ onMounted(async () => {
   await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
 
   // 监听 Tauri 事件
-  unlistenBrowserExtension = await listen('add_web_clipper_file_event', handleFileInfoEvent);
+  // unlistenBrowserExtension = await listen('add_web_clipper_file_event', handleFileInfoEvent);
+
+  try {
+    // 安全初始化
+    await eventStore.initGlobalListeners();
+
+    // 订阅事件（带自动注册）
+    const unsubscribe = eventStore.subscribe(
+      'add_web_clipper_file_event',
+      (payload) => {
+        console.log('处理事件:', payload);
+        handleFileInfoEvent(payload);
+      }
+    );
+
+    onUnmounted(unsubscribe);
+  } catch (error) {
+    console.error('事件系统初始化失败:', error);
+  }
 })
 
 onUnmounted(() => {
   // 移除 Tauri 事件监听
-  if (unlistenBrowserExtension) {
-    unlistenBrowserExtension();
-  }
+  // if (unlistenBrowserExtension) {
+  //   unlistenBrowserExtension();
+  // }
 })
 
 </script>
