@@ -1544,9 +1544,19 @@ const toggleTranslate = async () => {
     });
 
     await translateMarkdown();
+  } else {
+    // 新增：隐藏译文时重置翻译状态
+    isTranslating.value = false;
+    translateQueue.value = [];
+    lastTranslateTime.value = 0;
+
+    // 移除所有行的翻译错误状态
+    markdownLines.value = markdownLines.value.map(line => {
+      line.translationError = null;
+      return line;
+    });
   }
 };
-
 const contentEditables = ref([]);
 
 const setContentEditableRef = (index, el) => {
