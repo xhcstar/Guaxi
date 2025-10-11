@@ -571,6 +571,71 @@ const buildConvertOutputFilePath = async (fileName, library) => {
   };
 };
 
+const addFileFromWeb = async () => {
+  try {
+    // 校验表单
+    const validationError = await validateForm(); // 等待 validateForm 的结果
+    if (validationError) {
+      message.error(validationError); // 确保 validationError 是字符串
+      return; // 终止添加
+    }
+
+    if (!currentForm.value.library || !currentForm.value.importFileName) {
+      message.error('Library or importFileName path is missing: ', currentForm.value);
+      return;
+    }
+
+    // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
+    const addedNoteInfo = await invoke('add_web_clipper_import_file', {
+      library: currentForm.value.library,
+      filePath: currentForm.value.filePath,
+    });
+
+    // 创建 importfileList
+    const importfileList = createImportFileList(addedNoteInfo, currentForm.value);
+
+    // 将 importfileList 写入数据库
+    console.log('importfileList:', importfileList);
+    const fileId = await addFileToDatabase(importfileList);
+
+    // 添加导入的文件到 store
+    store.addImportedFile({
+      id: fileId,
+      importFileName: currentForm.value.importFileName,
+      description: currentForm.value.description,
+      importedFileTags: currentForm.value.importedFileTags,
+      type: currentForm.value.type,
+      library: currentForm.value.library,
+      importFileCreateTime: currentForm.value.importFileCreateTime,
+      importFileSize: currentForm.value.importFileSize,
+      convetToMarkdownFilename: `${currentForm.value.importFileName.replace(/\.[^/.]+$/, "")}.md`,
+      knowledgeRepo: currentForm.value.knowledgeRepo,
+      newNoteForm: {
+        description: `${addedNoteInfo.from_filename}的笔记`,
+        noteFileName: addedNoteInfo.note_file_name,
+        notesTags: currentForm.value.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
+        noteFileType: 'md',
+        fromImportedFile: addedNoteInfo.from_filename,
+        fromImportedFileLibrary: addedNoteInfo.library,
+        noteFileCreateTime: addedNoteInfo.create_time,
+        noteFileUpdateTime: addedNoteInfo.update_time,
+        knowledgeRepo: currentForm.value.knowledgeRepo,
+      }
+    });
+
+    // 转换完成后刷新数据
+    console.log('add_file currentDatabase', store.currentDatabase);
+    await store.fetchRepos()
+    await store.fetchFiles(store.currentDatabase)
+
+    // 关闭对话框并清空表单
+    isAddFileModalVisible.value = false;
+    resetForm();
+  } catch (error) {
+    console.error('Error adding file:', error);
+  }
+};
+
 const addFile = async () => {
   try {
     // 校验表单
@@ -785,7 +850,6 @@ const resetForm = () => {
     importFileSize: 0,
     convetToHtmlFilename: '',
     convetToMarkdownFilename: "",
-    importFileSize: '',
     knowledgeRepo: '',
     newNoteForm: {
       id: 0,
@@ -1261,7 +1325,7 @@ const handleFileInfoEvent = async (event) => {
     description: fileInfo.description,
     importedFileTags: fileInfo.tags.join(','),
     type: fileInfo.file_type,
-    library: 'default',
+    library: fileInfo.file_repo,
     importFileCreateTime: fileInfo.create_time,
     importFileSize: fileInfo.file_size,
     knowledgeRepo: fileInfo.knowledge_repo,
@@ -1272,7 +1336,7 @@ const handleFileInfoEvent = async (event) => {
       notesTags: fileInfo.tags.join(','),
       noteFileType: 'md',
       fromImportedFile: fileInfo.file_name,
-      fromImportedFileLibrary: 'default',
+      fromImportedFileLibrary: fileInfo.file_repo,
       noteFileCreateTime: new Date().toISOString(),
       noteFileUpdateTime: new Date().toISOString(),
       knowledgeRepo: fileInfo.knowledge_repo,
@@ -1281,7 +1345,7 @@ const handleFileInfoEvent = async (event) => {
   
   // 调用 addFile 方法
   try {
-    await addFile();
+    await addFileFromWeb();
     message.success('文件添加成功');
   } catch (error) {
     console.error('添加文件失败:', error);
@@ -1360,7 +1424,7 @@ onMounted(async () => {
   await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
 
   // 监听 Tauri 事件
-  unlistenBrowserExtension = await listen('add_browser_saved_html_file_event', handleFileInfoEvent);
+  unlistenBrowserExtension = await listen('add_web_clipper_file_event', handleFileInfoEvent);
 })
 
 onUnmounted(() => {

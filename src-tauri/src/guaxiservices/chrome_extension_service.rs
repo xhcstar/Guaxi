@@ -1117,11 +1117,13 @@ fn process_and_emit_webclipper_info(
 
     app_handle
         .emit(
-            "add_browser_saved_html_file_event",
+            "add_web_clipper_file_event",
             serde_json::to_value(&file_info)
                 .map_err(|e| format!("Failed to serialize file info: {}", e))?,
         )
         .map_err(|e| format!("Failed to emit event: {}", e))?;
+
+    info!("Emitted add_web_clipper_file_event with file info: {:?}", file_info);
 
     Ok(())
 }
@@ -1148,13 +1150,13 @@ fn process_and_emit_webclipper_info_for_md(
 
     app_handle
         .emit(
-            "add_browser_saved_html_file_event",
+            "add_web_clipper_file_event",
             serde_json::to_value(&file_info)
                 .map_err(|e| format!("Failed to serialize file info: {}", e))?,
         )
         .map_err(|e| format!("Failed to emit event: {}", e))?;
 
-    info!("Emitted add_browser_saved_html_file_event with file info: {:?}", file_info);
+    info!("Emitted add_web_clipper_file_event with file info: {:?}", file_info);
 
     Ok(())
 }
