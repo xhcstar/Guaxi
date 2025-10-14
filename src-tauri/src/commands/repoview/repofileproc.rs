@@ -93,10 +93,14 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
         .ok_or("Failed to get file stem")?;
     info!("file_stem: {}", file_stem);
 
-    // 获取文件后缀名（不包含“.”）
+    // 获取文件后缀名(不包含“.”)
     let file_extension = Path::new(file_name)
         .extension()
         .and_then(|ext| ext.to_str())
+        .map(|ext| match ext {
+            "doc" | "docx" => "word",
+            ext => ext,
+        })
         .unwrap_or(""); // 如果文件没有后缀名，则默认为空字符串
     info!("file_extension: {}", file_extension);
 
@@ -175,7 +179,10 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
 }
 
 #[tauri::command]
-pub fn add_web_clipper_import_file(library: String, file_path: String) -> Result<ImportNoteInfo, String> {
+pub fn add_web_clipper_import_file(
+    library: String,
+    file_path: String,
+) -> Result<ImportNoteInfo, String> {
     info!(
         "add_repo_import_file: library: {} file_path: {}",
         library, file_path

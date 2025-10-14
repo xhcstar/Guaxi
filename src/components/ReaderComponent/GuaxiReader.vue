@@ -30,7 +30,7 @@ const props = defineProps({
 	fileType: {
 		type: String,
 		required: true,
-		validator: (value) => ['pdf', 'md', 'html', 'epub', 'doc', 'txt'].includes(value)
+		validator: (value) => ['pdf', 'md', 'html', 'epub', 'doc', 'txt', 'docx', 'word'].includes(value)
 	},
 	fileName: {
 		type: String,
