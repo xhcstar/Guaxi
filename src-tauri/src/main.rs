@@ -69,6 +69,7 @@ async fn main() {
             commands::docprocess::get_converted_pdf_page,
             commands::docprocess::load_markdown_content,
             commands::markdown_reader_doc_process::markdown_reader_load_markdown_file,
+            commands::word_reader_doc_process::read_word_file,
             commands::translator::translate_text,
             commands::translator_free::translate_text_free,
             commands::docprocess::copy_image_file,

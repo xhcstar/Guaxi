@@ -987,9 +987,9 @@ const handleOpen = async (row) => {
 
   if (store.currentDatabase.length > 0) {
     if (osPlatform === 'windows') {
-      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\${rowFileType}\\${rowFileName}`
+      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\${fileType}\\${rowFileName}`
     } else if (osPlatform === 'linux') {
-      ReadFilePath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/${rowFileType}/${rowFileName}`
+      ReadFilePath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/${fileType}/${rowFileName}`
     } else {
       console.error('未知的操作系统平台:', osPlatform)
     }

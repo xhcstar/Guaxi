@@ -58,15 +58,17 @@
 
     <!-- 主内容区 -->
     <div class="word-main-content">
-      <!-- Markdown渲染区域 -->
-      <div class="word-source-panel" ref="sourcePanel">
+      <!-- 左侧Word文档预览区域 -->
+      <div class="word-source-panel" :style="{ width: leftPanelWidth }">
         <div class="word-source-container">
-          <!-- Markdown原文内容 -->
-          <div v-if="wordContent" class="word-source-content" ref="sourceContent">
-            <pre>{{ wordContent }}</pre>
-          </div>
+          <!-- Office Online Viewer 或 docx-preview 渲染容器 -->
+          <iframe v-if="isOnline && useOfficeViewer" ref="officeViewer" :src="officeViewerUrl" width="100%"
+            height="100%" frameborder="0" class="office-viewer-iframe"></iframe>
+
+          <div v-else ref="wordPreviewContainer" class="word-preview-container"></div>
+
           <!-- 加载状态 -->
-          <div v-else class="markdown-loading-message">
+          <div v-if="isLoading" class="markdown-loading-message">
             正在加载Word文件...
           </div>
         </div>
@@ -119,8 +121,8 @@
           :bordered="true" :segmented="{
             content: true,
             footer: 'soft'
-          }" header-style="padding: 12px 16px;" content-style="padding: 0;"
-          @mouseenter="activeCardIndex = index" @mouseleave="activeCardIndex = -1">
+          }" header-style="padding: 12px 16px;" content-style="padding: 0;" @mouseenter="activeCardIndex = index"
+          @mouseleave="activeCardIndex = -1">
           <template #header-extra>
             <div class="card-actions" v-if="activeCardIndex === index">
               <n-button v-if="card.type !== 'composite'" size="tiny" type="primary" @click.stop="saveCardEdit(index)">
@@ -182,6 +184,7 @@
 <script setup>
 import { ref, watchEffect, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { renderAsync } from 'docx-preview'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { platform } from '@tauri-apps/plugin-os';
@@ -246,13 +249,19 @@ const totalPages = ref(0)
 const jumpPage = ref(1)
 const elements = ref([])
 
+
+const isOnline = ref(true) // 默认假设在线
+const useOfficeViewer = ref(true) // 默认使用Office Viewer
+const officeViewerUrl = ref('')
+const wordPreviewContainer = ref(null)
+const officeViewer = ref(null)
+const isLoading = ref(false)
+
 // Markdown相关
 const markdownContent = ref('')
 // const markdownHtml = ref('')
 const markdownLines = ref([]);
 const markdownFilePath = ref('')
-
-const wordContent = ref('')
 
 // 笔记相关
 const showNotes = ref(false)
@@ -283,6 +292,149 @@ const altKeyCollector = ref({
   currentCard: null,
   timer: null
 })
+
+
+// 新增方法：检查网络状态
+const checkNetworkStatus = async () => {
+  try {
+    // 尝试访问一个轻量级的API端点检查网络
+    const response = await fetch('https://www.microsoft.com/favicon.ico', {
+      method: 'HEAD',
+      mode: 'no-cors',
+      cache: 'no-store'
+    })
+    isOnline.value = true
+  } catch (error) {
+    isOnline.value = false
+    useOfficeViewer.value = false
+  }
+}
+
+// 新增日志记录函数
+const log = {
+  debug: (...args) => console.debug('[DEBUG]', ...args),
+  info: (...args) => console.info('[INFO]', ...args),
+  warn: (...args) => console.warn('[WARN]', ...args),
+  error: (...args) => console.error('[ERROR]', ...args)
+}
+
+// 修改 loadWithDocxPreview 函数
+const loadWithDocxPreview = async () => {
+  try {
+    console.log('开始使用docx-preview加载Word文档');
+    console.log("filename: ", props.filePath)
+    // 调用自定义后端接口
+    const fileContent = await invoke('read_word_file', {
+      path: props.filePath
+    });
+
+    console.log('Word文件读取完成，大小:', fileContent.length, 'bytes');
+
+    // 转换为Uint8Array
+    const uint8Array = new Uint8Array(fileContent);
+
+    // 清空容器
+    if (wordPreviewContainer.value) {
+      wordPreviewContainer.value.innerHTML = '';
+    } else {
+      throw new Error('预览容器不存在');
+    }
+
+    // 渲染Word文档
+    await renderAsync(
+      uint8Array,
+      wordPreviewContainer.value,
+      null,
+      {
+        ignoreWidth: false,
+        ignoreHeight: false,
+        ignoreFonts: false,
+        breakPages: true,
+        debug: false,
+        inWrapper: true
+      }
+    );
+
+    console.log('Word文档渲染完成');
+    applyZoomLevel();
+
+  } catch (error) {
+    console.error('加载Word文件失败:', error);
+
+    if (wordPreviewContainer.value) {
+      wordPreviewContainer.value.innerHTML = `
+        <div class="error-message">
+          加载Word文件失败: ${error.message}
+        </div>
+      `;
+    }
+  }
+};
+
+// 修改 loadWordDocument 函数
+const loadWordDocument = async () => {
+  isLoading.value = true;
+
+  try {
+    await checkNetworkStatus();
+
+    if (isOnline.value && useOfficeViewer.value) {
+      // 使用Office Online Viewer
+      const fileUrl = await convertFileSrc(props.filePath);
+      officeViewerUrl.value = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`;
+
+      // 等待iframe加载
+      await new Promise((resolve, reject) => {
+        const iframe = officeViewer.value;
+        iframe.onload = resolve;
+        iframe.onerror = () => {
+          useOfficeViewer.value = false;
+          reject(new Error('Office Viewer加载失败'));
+        };
+
+        setTimeout(() => {
+          useOfficeViewer.value = false;
+          resolve();
+        }, 10000);
+      }).catch(() => {
+        useOfficeViewer.value = false;
+      });
+    }
+
+    // 如果Office Viewer不可用，使用docx-preview
+    if (!isOnline.value || !useOfficeViewer.value) {
+      await loadWithDocxPreview();
+    }
+  } catch (error) {
+    console.error('加载Word文件失败:', error);
+    message.error(`加载Word文件失败: ${error.message}`);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+// 修改applyZoomLevel函数，添加日志
+const applyZoomLevel = () => {
+  if (!wordPreviewContainer.value) {
+    log.warn('无法应用缩放级别: wordPreviewContainer不存在')
+    return
+  }
+
+  const container = wordPreviewContainer.value.querySelector('.docx-wrapper')
+  if (!container) {
+    log.warn('无法应用缩放级别: 未找到.docx-wrapper元素')
+    return
+  }
+
+  log.debug('应用缩放级别', {
+    zoomLevel: zoomLevel.value,
+    containerWidth: container.scrollWidth,
+    containerHeight: container.scrollHeight
+  })
+
+  container.style.transform = `scale(${zoomLevel.value})`
+  container.style.transformOrigin = '0 0'
+}
 
 // 工具函数
 async function processImages(content, basePath = '') {
@@ -1307,12 +1459,14 @@ const toggleNotesPanel = () => {
 };
 
 const zoomIn = () => {
-  zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2);
-};
+  zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2)
+  applyZoomLevel()
+}
 
 const zoomOut = () => {
-  zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5);
-};
+  zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5)
+  applyZoomLevel()
+}
 
 const startResize = (e) => {
   isResizing.value = true;
@@ -1345,58 +1499,21 @@ const stopResize = () => {
 };
 
 const fitToWidth = () => {
-  let isFitting = false;
-  if (!markdownPanel.value || !markdownContent.value || isFitting.value) return;
-  isFitting = true;
+  if (useOfficeViewer.value && officeViewer.value) {
+    // Office Viewer不支持缩放，提示用户
+    message.info('Office Viewer模式下无法调整缩放，请使用本地预览模式')
+    return
+  }
 
-  try {
-    const panel = markdownPanel.value;
-    const content = markdownContent.value;
+  if (!wordPreviewContainer.value) return
 
-    if (!content.clientWidth) {
-      return;
-    }
+  const wrapper = wordPreviewContainer.value.querySelector('.docx-wrapper')
+  const panel = wordPreviewContainer.value.parentElement
 
-    const panelWidth = panel.clientWidth;
-    const panelHeight = panel.clientHeight;
-
-    const horizontalMargin = Math.min(20, panelWidth * 0.05);
-    const verticalMargin = Math.min(20, panelHeight * 0.05);
-
-    const minScale = 0.5;
-    const widthRatio = (panelWidth - horizontalMargin * 2) / content.clientWidth;
-    const heightRatio = (panelHeight - verticalMargin * 2) / content.clientHeight;
-
-    let newZoom = Math.max(minScale, Math.min(widthRatio, heightRatio));
-
-    if (content.clientWidth * newZoom < panelWidth * 0.8 &&
-      content.clientHeight * newZoom < panelHeight * 0.8) {
-      newZoom = Math.max(widthRatio, heightRatio);
-    }
-
-    zoomLevel.value = newZoom;
-
-    requestAnimationFrame(() => {
-      const scaledWidth = content.clientWidth * zoomLevel.value;
-      const scaledHeight = content.clientHeight * zoomLevel.value;
-
-      velocity.value = { x: 0, y: 0 };
-      isDecelerating.value = false;
-
-      panel.scrollLeft = Math.max(0, Math.min(
-        (scaledWidth - panelWidth) / 2,
-        scaledWidth - panelWidth
-      ));
-      panel.scrollTop = Math.max(0, Math.min(
-        (scaledHeight - panelHeight) / 2,
-        scaledHeight - panelHeight
-      ));
-    });
-
-  } catch (error) {
-    console.error('fitToWidth错误:', error);
-  } finally {
-    isFitting = false;
+  if (wrapper && panel) {
+    const scale = panel.clientWidth / wrapper.scrollWidth
+    zoomLevel.value = Math.min(scale, 1)
+    applyZoomLevel()
   }
 }
 
@@ -1646,12 +1763,18 @@ const handleKeyUp = (e) => {
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
+  await checkNetworkStatus()
+  log.debug('网络状态检查完成', {
+    isOnline: isOnline.value,
+    useOfficeViewer: useOfficeViewer.value
+  })
 
   await Promise.all([
     (async () => {
       await ensureNotesPath()
       await loadExistingNotes()
     })(),
+    loadWordDocument(),
     loadMarkdownPage()
   ])
 
@@ -1704,6 +1827,10 @@ watch(() => props.filePath, async (newPath) => {
 });
 
 watchEffect(async () => {
+  if (props.fileType === 'word') {
+    loadWordDocument()
+  }
+
   noteHtmls.value = await Promise.all(
     noteCards.value.map(async card => {
       if (card.type === 'single') {
@@ -1736,51 +1863,61 @@ watchEffect(async () => {
 </script>
 
 <style scoped>
+.word-main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 左侧Word文档区域 */
 .word-source-panel {
-  flex: 0 0 v-bind(leftPanelWidth);
-  min-width: 0;
+  height: 100%;
   overflow: auto;
   position: relative;
-  background-color: #ffffff;
-  padding: 1px;
+  background-color: white;
+  min-width: 30%;
+  /* 设置最小宽度 */
 }
 
 .word-source-container {
   width: 100%;
   height: 100%;
-  overflow: auto;
+  position: relative;
 }
 
-.word-source-content {
+/* 新增样式 */
+.office-viewer-iframe {
   width: 100%;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
-  font-size: 18px;
-  line-height: 1.6;
-  color: #000000;
-  white-space: pre-wrap;
-  /* 关键修改：允许自动换行 */
-  word-wrap: break-word;
-  /* 允许长单词换行 */
-  overflow-wrap: break-word;
-  /* 更现代的换行方式 */
-  tab-size: 2;
-  padding: 4px;
+  height: 100%;
+  border: none;
+  background: white;
 }
 
-/* 确保pre元素继承所有样式 */
-.word-source-content pre {
-  margin: 0;
-  padding: 0;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
-  color: inherit;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  background: transparent;
-  border: none;
-  border-radius: 0;
+.word-preview-container {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 20px;
+  background: white;
+}
+
+.word-preview-container :deep(.docx-wrapper) {
+  background: white;
+  padding: 20px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  margin: 0 auto;
+}
+
+.word-preview-container :deep(page) {
+  margin-bottom: 20px;
+  break-after: page;
+}
+
+.error-message {
+  color: #ff4d4f;
+  padding: 20px;
+  text-align: center;
 }
 
 /* 右侧渲染面板样式调整 */
@@ -1941,13 +2078,6 @@ button:disabled {
 .export-notes:hover {
   background-color: #12b886;
   box-shadow: 0 2px 8px rgba(32, 201, 151, 0.3);
-}
-
-.word-main-content {
-  flex: 1;
-  display: flex;
-  overflow: hidden;
-  gap: 0;
 }
 
 .markdown-render-panel {
