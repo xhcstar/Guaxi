@@ -61,12 +61,7 @@
       <!-- 左侧Word文档预览区域 -->
       <div class="word-source-panel" :style="{ width: leftPanelWidth }">
         <div class="word-source-container">
-          <!-- Office Online Viewer 或 docx-preview 渲染容器 -->
-          <iframe v-if="isOnline && useOfficeViewer" ref="officeViewer" :src="officeViewerUrl" width="100%"
-            height="100%" frameborder="0" class="office-viewer-iframe"></iframe>
-
-          <div v-else ref="wordPreviewContainer" class="word-preview-container"></div>
-
+          <div ref="wordPreviewContainer" class="word-preview-container"></div>
           <!-- 加载状态 -->
           <div v-if="isLoading" class="markdown-loading-message">
             正在加载Word文件...
@@ -250,11 +245,7 @@ const jumpPage = ref(1)
 const elements = ref([])
 
 
-const isOnline = ref(true) // 默认假设在线
-const useOfficeViewer = ref(true) // 默认使用Office Viewer
-const officeViewerUrl = ref('')
 const wordPreviewContainer = ref(null)
-const officeViewer = ref(null)
 const isLoading = ref(false)
 
 // Markdown相关
@@ -292,23 +283,6 @@ const altKeyCollector = ref({
   currentCard: null,
   timer: null
 })
-
-
-// 新增方法：检查网络状态
-const checkNetworkStatus = async () => {
-  try {
-    // 尝试访问一个轻量级的API端点检查网络
-    const response = await fetch('https://www.microsoft.com/favicon.ico', {
-      method: 'HEAD',
-      mode: 'no-cors',
-      cache: 'no-store'
-    })
-    isOnline.value = true
-  } catch (error) {
-    isOnline.value = false
-    useOfficeViewer.value = false
-  }
-}
 
 // 新增日志记录函数
 const log = {
@@ -376,35 +350,8 @@ const loadWordDocument = async () => {
   isLoading.value = true;
 
   try {
-    await checkNetworkStatus();
-
-    if (isOnline.value && useOfficeViewer.value) {
-      // 使用Office Online Viewer
-      const fileUrl = await convertFileSrc(props.filePath);
-      officeViewerUrl.value = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`;
-
-      // 等待iframe加载
-      await new Promise((resolve, reject) => {
-        const iframe = officeViewer.value;
-        iframe.onload = resolve;
-        iframe.onerror = () => {
-          useOfficeViewer.value = false;
-          reject(new Error('Office Viewer加载失败'));
-        };
-
-        setTimeout(() => {
-          useOfficeViewer.value = false;
-          resolve();
-        }, 10000);
-      }).catch(() => {
-        useOfficeViewer.value = false;
-      });
-    }
-
-    // 如果Office Viewer不可用，使用docx-preview
-    if (!isOnline.value || !useOfficeViewer.value) {
-      await loadWithDocxPreview();
-    }
+    console.log('开始加载Word文档:', props.filePath);
+    await loadWithDocxPreview();
   } catch (error) {
     console.error('加载Word文件失败:', error);
     message.error(`加载Word文件失败: ${error.message}`);
@@ -1499,11 +1446,6 @@ const stopResize = () => {
 };
 
 const fitToWidth = () => {
-  if (useOfficeViewer.value && officeViewer.value) {
-    // Office Viewer不支持缩放，提示用户
-    message.info('Office Viewer模式下无法调整缩放，请使用本地预览模式')
-    return
-  }
 
   if (!wordPreviewContainer.value) return
 
@@ -1763,11 +1705,6 @@ const handleKeyUp = (e) => {
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
-  await checkNetworkStatus()
-  log.debug('网络状态检查完成', {
-    isOnline: isOnline.value,
-    useOfficeViewer: useOfficeViewer.value
-  })
 
   await Promise.all([
     (async () => {
@@ -1877,27 +1814,21 @@ watchEffect(async () => {
   position: relative;
   background-color: white;
   min-width: 30%;
-  /* 设置最小宽度 */
 }
 
 .word-source-container {
   width: 100%;
   height: 100%;
   position: relative;
-}
-
-/* 新增样式 */
-.office-viewer-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: white;
+  overflow: hidden;
+  /* 禁止内部滚动 */
 }
 
 .word-preview-container {
   width: 100%;
   height: 100%;
   overflow: auto;
+  /* 只保留这一个滚动条 */
   padding: 20px;
   background: white;
 }
@@ -1907,11 +1838,15 @@ watchEffect(async () => {
   padding: 20px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
   margin: 0 auto;
+  overflow: visible !important;
+  /* 强制取消内部滚动 */
 }
 
 .word-preview-container :deep(page) {
   margin-bottom: 20px;
   break-after: page;
+  overflow: visible !important;
+  /* 强制取消内部滚动 */
 }
 
 .error-message {
