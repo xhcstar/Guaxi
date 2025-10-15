@@ -38,6 +38,7 @@
     "@vue/tsconfig": "^0.7.0",
     "d3-force-3d": "^3.0.6",
     "docx-preview": "^0.3.7",
+    "epubjs": "^0.3.93",
     "gsap": "^3.13.0",
     "highlight.js": "^11.11.1",
     "js-base64": "^3.7.7",

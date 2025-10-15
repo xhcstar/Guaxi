@@ -16,3 +16,4 @@ pub mod excerptsearch;
 pub mod git;
 pub mod markdown_reader_doc_process;
 pub mod word_reader_doc_process;
+pub mod epub_reader_doc_process;
