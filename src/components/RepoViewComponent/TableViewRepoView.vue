@@ -1109,6 +1109,39 @@ const handleDelete = async (row) => {
   }
 };
 
+const handleDeleteAll = async (row) => {
+  if (!row.importFileName || !row.library) {
+    message.error('缺少必要信息：文件名或库名');
+    return;
+  }
+
+  // 获取不带后缀的文件名
+  const baseFileName = row.importFileName.includes('.')
+    ? row.importFileName.substring(0, row.importFileName.lastIndexOf('.'))
+    : row.importFileName;
+
+  const osPlatform = await platform();
+  let dirPath = '';
+
+  if (osPlatform === 'windows') {
+    dirPath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}`;
+  } else {
+    dirPath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}`;
+  }
+
+  try {
+    // 调用删除导入文件的接口
+    await invoke('delete_imported_all_file', { id: row.id, path: dirPath });
+    console.log('删除导入文件成功', row);
+
+    // 刷新数据
+    await store.fetchFiles(store.currentDatabase);
+    await store.fetchRepos()
+  } catch (error) {
+    console.error('删除失败:', error);
+  }
+}
+
 // 方法：编辑文件或笔记
 const handleEdit = async (row) => {
   try {

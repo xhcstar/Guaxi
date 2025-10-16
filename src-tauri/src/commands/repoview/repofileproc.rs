@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::info;
+use crate::commands::repoview::delete_imported_file;
 
 #[derive(serde::Serialize)]
 pub struct FileInfo {
@@ -372,5 +373,24 @@ pub async fn open_in_file_explorer(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open file manager: {}", e))?;
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_imported_all_file(id: i32, path: String) -> Result<(), String> {
+    // 首先删除数据库记录
+    delete_imported_file(id)?;
+
+    // 然后删除文件系统中的目录及其所有内容
+    let dir_path = Path::new(&path);
+    if !dir_path.exists() {
+        return Err(format!("Directory does not exist: {}", path));
+    }
+
+    // 递归删除目录及其所有内容
+    fs::remove_dir_all(dir_path)
+        .map_err(|e| format!("Failed to delete directory {}: {}", path, e))?;
+
+    info!("Successfully deleted directory and all contents: {}", path);
     Ok(())
 }
