@@ -63,7 +63,7 @@
         <div class="epub-source-container">
           <div ref="epubPreviewContainer" class="epub-preview-container"></div>
           <!-- 加载状态 -->
-          <div v-if="isLoading" class="markdown-loading-message">
+          <div v-if="isLoading" class="epub-loading-message">
             正在加载epub文件...
           </div>
         </div>
@@ -1491,34 +1491,67 @@ const zoomOut = () => {
 }
 
 const startResize = (e) => {
-  isResizing.value = true;
-  startX.value = e.clientX;
-  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.epub-source-panel')).width, 10);
-  document.addEventListener('mousemove', handleResizeMouseMove);
-  document.addEventListener('mouseup', stopResize);
-  document.body.style.cursor = 'col-resize';
-  document.body.style.userSelect = 'none';
+  try {
+    console.log('startResize triggered');
+    isResizing.value = true;
+    startX.value = e.clientX;
+
+    // 修改选择器为正确的面板类名
+    const leftPanel = document.querySelector('.epub-source-panel');
+    if (!leftPanel) {
+      throw new Error('左侧面板元素未找到');
+    }
+
+    startLeftWidth.value = parseInt(window.getComputedStyle(leftPanel).width, 10);
+
+    // 添加事件监听
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', stopResize);
+
+    // 更新光标样式
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    e.preventDefault();
+  } catch (error) {
+    console.error('调整大小错误:', error);
+    isResizing.value = false;
+    message.error('调整大小失败: ' + error.message);
+  }
 };
 
-const handleResizeMouseMove = (e) => {
+const handleMouseMove = (e) => {
   if (!isResizing.value) return;
 
-  const containerWidth = document.querySelector('.epub-main-content').offsetWidth;
-  const dx = e.clientX - startX.value;
-  let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
+  try {
+    const container = document.querySelector('.epub-main-content');
+    if (!container) return;
 
-  // 限制最小和最大宽度
-  newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
+    const containerWidth = container.offsetWidth;
+    const dx = e.clientX - startX.value;
+    let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
 
-  leftPanelWidth.value = `${newLeftWidth}%`;
+    // 限制调整范围在30%-70%之间
+    newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
+
+    leftPanelWidth.value = `${newLeftWidth}%`;
+    e.preventDefault();
+  } catch (error) {
+    console.error('调整大小移动错误:', error);
+    stopResize();
+  }
 };
 
 const stopResize = () => {
-  isResizing.value = false;
-  document.removeEventListener('mousemove', handleResizeMouseMove);
-  document.removeEventListener('mouseup', stopResize);
-  document.body.style.cursor = '';
-  document.body.style.userSelect = '';
+  try {
+    isResizing.value = false;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', stopResize);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  } catch (error) {
+    console.error('停止调整大小错误:', error);
+  }
 };
 
 const fitToWidth = () => {
@@ -2101,7 +2134,7 @@ button:disabled {
 }
 
 /* 加载消息样式 */
-.markdown-loading-message {
+.epub-loading-message {
   display: flex;
   justify-content: center;
   align-items: center;
@@ -2111,20 +2144,17 @@ button:disabled {
 }
 
 .resize-handle {
-  width: 5px;
+  width: 3px;
   height: 100%;
   background-color: #e9ecef;
   cursor: col-resize;
-  position: absolute;
-  left: calc(v-bind(leftPanelWidth) - 4px);
-  /* 居中定位 */
-  z-index: 100;
-  /* 确保在最上层 */
+  position: relative;
+  z-index: 10;
   transition: background-color 0.2s;
 }
 
 .resize-handle:hover {
-  background-color: rgba(74, 202, 219, 0.8);
+  background-color: #4acadb;
 }
 
 .resize-handle:active {

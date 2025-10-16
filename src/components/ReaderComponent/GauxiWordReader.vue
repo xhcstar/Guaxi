@@ -63,7 +63,7 @@
         <div class="word-source-container">
           <div ref="wordPreviewContainer" class="word-preview-container"></div>
           <!-- 加载状态 -->
-          <div v-if="isLoading" class="markdown-loading-message">
+          <div v-if="isLoading" class="word-loading-message">
             正在加载Word文件...
           </div>
         </div>
@@ -292,49 +292,34 @@ const log = {
   error: (...args) => console.error('[ERROR]', ...args)
 }
 
-// 修改 loadWithDocxPreview 函数
 const loadWithDocxPreview = async () => {
   try {
-    console.log('开始使用docx-preview加载Word文档');
-    console.log("filename: ", props.filePath)
-    // 调用自定义后端接口
     const fileContent = await invoke('read_word_file', {
       path: props.filePath
     });
 
-    console.log('Word文件读取完成，大小:', fileContent.length, 'bytes');
-
-    // 转换为Uint8Array
     const uint8Array = new Uint8Array(fileContent);
 
-    // 清空容器
     if (wordPreviewContainer.value) {
       wordPreviewContainer.value.innerHTML = '';
-    } else {
-      throw new Error('预览容器不存在');
     }
 
-    // 渲染Word文档
     await renderAsync(
       uint8Array,
       wordPreviewContainer.value,
       null,
       {
+        inWrapper: false,  // 关键修改
         ignoreWidth: false,
         ignoreHeight: false,
-        ignoreFonts: false,
-        breakPages: true,
-        debug: false,
-        inWrapper: true
+        breakPages: false, // 不分页
+        debug: false
       }
     );
 
-    console.log('Word文档渲染完成');
     applyZoomLevel();
-
   } catch (error) {
     console.error('加载Word文件失败:', error);
-
     if (wordPreviewContainer.value) {
       wordPreviewContainer.value.innerHTML = `
         <div class="error-message">
@@ -360,28 +345,16 @@ const loadWordDocument = async () => {
   }
 };
 
-// 修改applyZoomLevel函数，添加日志
 const applyZoomLevel = () => {
-  if (!wordPreviewContainer.value) {
-    log.warn('无法应用缩放级别: wordPreviewContainer不存在')
-    return
-  }
+  if (!wordPreviewContainer.value) return;
 
-  const container = wordPreviewContainer.value.querySelector('.docx-wrapper')
-  if (!container) {
-    log.warn('无法应用缩放级别: 未找到.docx-wrapper元素')
-    return
-  }
+  const docxElement = wordPreviewContainer.value.querySelector('.docx');
+  if (!docxElement) return;
 
-  log.debug('应用缩放级别', {
-    zoomLevel: zoomLevel.value,
-    containerWidth: container.scrollWidth,
-    containerHeight: container.scrollHeight
-  })
-
-  container.style.transform = `scale(${zoomLevel.value})`
-  container.style.transformOrigin = '0 0'
-}
+  docxElement.style.transform = `scale(${zoomLevel.value})`;
+  docxElement.style.transformOrigin = '0 0';
+  docxElement.style.width = `${100 / zoomLevel.value}%`;
+};
 
 // 工具函数
 async function processImages(content, basePath = '') {
@@ -1416,48 +1389,81 @@ const zoomOut = () => {
 }
 
 const startResize = (e) => {
-  isResizing.value = true;
-  startX.value = e.clientX;
-  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.markdown-render-panel')).width, 10);
-  document.addEventListener('mousemove', handleMouseMove);
-  document.addEventListener('mouseup', stopResize);
-  document.body.style.cursor = 'col-resize';
-  document.body.style.userSelect = 'none';
+  try {
+    console.log('startResize triggered');
+    isResizing.value = true;
+    startX.value = e.clientX;
+
+    // 修改选择器为正确的面板类名
+    const leftPanel = document.querySelector('.word-source-panel');
+    if (!leftPanel) {
+      throw new Error('左侧面板元素未找到');
+    }
+
+    startLeftWidth.value = parseInt(window.getComputedStyle(leftPanel).width, 10);
+
+    // 添加事件监听
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', stopResize);
+
+    // 更新光标样式
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    e.preventDefault();
+  } catch (error) {
+    console.error('调整大小错误:', error);
+    isResizing.value = false;
+    message.error('调整大小失败: ' + error.message);
+  }
 };
 
 const handleMouseMove = (e) => {
   if (!isResizing.value) return;
 
-  const containerWidth = document.querySelector('.word-main-content').offsetWidth;
-  const dx = e.clientX - startX.value;
-  let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
+  try {
+    const container = document.querySelector('.word-main-content');
+    if (!container) return;
 
-  newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
+    const containerWidth = container.offsetWidth;
+    const dx = e.clientX - startX.value;
+    let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
 
-  leftPanelWidth.value = `${newLeftWidth}%`;
+    // 限制调整范围在30%-70%之间
+    newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
+
+    leftPanelWidth.value = `${newLeftWidth}%`;
+    e.preventDefault();
+  } catch (error) {
+    console.error('调整大小移动错误:', error);
+    stopResize();
+  }
 };
 
 const stopResize = () => {
-  isResizing.value = false;
-  document.removeEventListener('mousemove', handleMouseMove);
-  document.removeEventListener('mouseup', stopResize);
-  document.body.style.cursor = '';
-  document.body.style.userSelect = '';
+  try {
+    isResizing.value = false;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', stopResize);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  } catch (error) {
+    console.error('停止调整大小错误:', error);
+  }
 };
 
 const fitToWidth = () => {
+  if (!wordPreviewContainer.value) return;
 
-  if (!wordPreviewContainer.value) return
+  const docxElement = wordPreviewContainer.value.querySelector('.docx');
+  if (!docxElement) return;
 
-  const wrapper = wordPreviewContainer.value.querySelector('.docx-wrapper')
-  const panel = wordPreviewContainer.value.parentElement
+  const containerWidth = wordPreviewContainer.value.clientWidth;
+  const contentWidth = docxElement.scrollWidth;
 
-  if (wrapper && panel) {
-    const scale = panel.clientWidth / wrapper.scrollWidth
-    zoomLevel.value = Math.min(scale, 1)
-    applyZoomLevel()
-  }
-}
+  zoomLevel.value = Math.min(1, containerWidth / contentWidth);
+  applyZoomLevel();
+};
 
 const debounce = (fn, delay) => {
   let timer = null;
@@ -1816,30 +1822,24 @@ watchEffect(async () => {
   min-width: 30%;
 }
 
-.word-source-container {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  overflow: hidden;
-  /* 禁止内部滚动 */
-}
-
 .word-preview-container {
   width: 100%;
   height: 100%;
   overflow: auto;
-  /* 只保留这一个滚动条 */
   padding: 20px;
   background: white;
 }
 
-.word-preview-container :deep(.docx-wrapper) {
-  background: white;
-  padding: 20px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  margin: 0 auto;
-  overflow: visible !important;
-  /* 强制取消内部滚动 */
+.word-preview-container :deep(.docx) {
+  width: 100% !important;
+  height: auto !important;
+  padding: 0;
+  margin: 0;
+  box-shadow: none;
+}
+
+.word-preview-container :deep(.docx > *) {
+  max-width: 100% !important;
 }
 
 .word-preview-container :deep(page) {
@@ -2047,7 +2047,7 @@ button:disabled {
   overflow: auto;
 }
 
-.markdown-loading-message {
+.word-loading-message {
   display: flex;
   justify-content: center;
   align-items: center;
