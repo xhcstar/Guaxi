@@ -3,20 +3,20 @@
     <!-- 顶部控制栏 -->
     <div class="epub-markdown-controls">
       <div class="page-info">
-        <span>第 {{ currentPage }} 页 / 共 {{ totalPages }} 页</span>
+        <span>第 {{ currentPage }} 章 / 共 {{ totalPages }} 章</span>
       </div>
 
       <div class="page-navigation">
         <button @click="prevPage" :disabled="currentPage <= 1" title="上一页">
           <n-icon :component="ArrowBackOutline" />
-          <span class="btn-text">上一页</span>
+          <span class="btn-text">上一章</span>
         </button>
 
         <input type="number" v-model.number="jumpPage" min="1" :max="totalPages" @keyup.enter="goToPage"
           style="font-size: 12px;">
 
         <button @click="nextPage" :disabled="currentPage >= totalPages" title="下一页">
-          <span class="btn-text">下一页</span>
+          <span class="btn-text">下一章</span>
           <n-icon :component="ArrowForwardOutline" />
         </button>
       </div>
@@ -325,7 +325,7 @@ const loadWithEpubPreview = async () => {
       height: '100%',
       spread: "none",
       flow: "scrolled",  // 启用垂直滚动模式
-      overflow: "hidden"
+      overflow: "auto"
     });
 
     // 等待渲染完成
@@ -1491,67 +1491,55 @@ const zoomOut = () => {
 }
 
 const startResize = (e) => {
-  try {
-    console.log('startResize triggered');
-    isResizing.value = true;
-    startX.value = e.clientX;
+  e.preventDefault();
+  e.stopPropagation();
 
-    // 修改选择器为正确的面板类名
-    const leftPanel = document.querySelector('.epub-source-panel');
-    if (!leftPanel) {
-      throw new Error('左侧面板元素未找到');
-    }
+  isResizing.value = true;
+  startX.value = e.clientX;
+  startLeftWidth.value = parseInt(document.querySelector('.epub-source-panel').offsetWidth, 10);
 
-    startLeftWidth.value = parseInt(window.getComputedStyle(leftPanel).width, 10);
-
-    // 添加事件监听
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', stopResize);
-
-    // 更新光标样式
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    e.preventDefault();
-  } catch (error) {
-    console.error('调整大小错误:', error);
-    isResizing.value = false;
-    message.error('调整大小失败: ' + error.message);
+  // 临时禁用EPUB区域的鼠标事件
+  const epubContainer = document.querySelector('.epub-preview-container');
+  if (epubContainer) {
+    epubContainer.style.pointerEvents = 'none';
+    epubContainer.style.userSelect = 'none';
   }
+
+  // 添加全局事件监听
+  document.addEventListener('mousemove', handleMouseMove);
+  document.addEventListener('mouseup', stopResize);
 };
 
 const handleMouseMove = (e) => {
   if (!isResizing.value) return;
 
-  try {
-    const container = document.querySelector('.epub-main-content');
-    if (!container) return;
+  const dx = e.clientX - startX.value;
+  const container = document.querySelector('.epub-main-content');
+  const containerWidth = container.offsetWidth;
+  let newWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
 
-    const containerWidth = container.offsetWidth;
-    const dx = e.clientX - startX.value;
-    let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
+  // 限制调整范围
+  leftPanelWidth.value = `${Math.max(30, Math.min(70, newWidth))}%`;
 
-    // 限制调整范围在30%-70%之间
-    newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
-
-    leftPanelWidth.value = `${newLeftWidth}%`;
-    e.preventDefault();
-  } catch (error) {
-    console.error('调整大小移动错误:', error);
-    stopResize();
-  }
+  e.preventDefault();
+  e.stopPropagation();
 };
 
 const stopResize = () => {
-  try {
-    isResizing.value = false;
-    document.removeEventListener('mousemove', handleMouseMove);
-    document.removeEventListener('mouseup', stopResize);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  } catch (error) {
-    console.error('停止调整大小错误:', error);
+  if (!isResizing.value) return;
+
+  isResizing.value = false;
+
+  // 恢复EPUB区域的鼠标事件
+  const epubContainer = document.querySelector('.epub-preview-container');
+  if (epubContainer) {
+    epubContainer.style.pointerEvents = 'auto';
+    epubContainer.style.userSelect = 'auto';
   }
+
+  // 移除事件监听
+  document.removeEventListener('mousemove', handleMouseMove);
+  document.removeEventListener('mouseup', stopResize);
 };
 
 const fitToWidth = () => {
@@ -2101,29 +2089,21 @@ button:disabled {
 
 .epub-source-container {
   width: 100%;
-  height: auto;
-  /* 改为auto以适应内容高度 */
+  height: 100%;
   position: relative;
-  overflow: visible;
-  /* 允许内容完全显示 */
-  /* 确保不出现滚动条 */
+  overflow: hidden;
 }
 
 .epub-preview-container {
   width: 100%;
-  height: auto;
-  /* 改为auto以适应内容高度 */
-  overflow-y: visible;
-  /* 允许内容完全显示 */
-  /* 只在内容区允许滚动 */
+  height: 100%;
+  overflow: auto;
   box-sizing: border-box;
-  padding: 20px;
+  padding: 0px;
   background: white;
-
-  /* 重要：确保内容不会撑开容器 */
   display: flex;
   flex-direction: column;
-  align-items: center;
+  transition: pointer-events 0.1s ease; /* 添加平滑过渡 */
 }
 
 /* 确保EPUB内容行高一致 */
