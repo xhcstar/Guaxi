@@ -116,6 +116,7 @@ async fn main() {
             commands::repoview::repofileproc::get_file_info,
             commands::repoview::repofileproc::add_repo_import_file,
             commands::repoview::repofileproc::add_web_clipper_import_file,
+            commands::repoview::repofileproc::open_in_file_explorer,
             commands::guaxireader::create_reader_window,
             commands::guaxireader::save_notes_to_file,
             commands::guaxireader::save_notes_to_file_no_append,

@@ -908,6 +908,16 @@ const contextMenuOptions = [
     icon: () => h(NIcon, { component: Open20Regular, size: 16 }),
   },
   {
+    label: '打开导入文件所在目录',
+    key: 'openDirImport',
+    icon: () => h(NIcon, { component: Open20Regular, size: 16 }),
+  },
+  {
+    label: '打开笔记文件所在目录',
+    key: 'openDirNote',
+    icon: () => h(NIcon, { component: Open20Regular, size: 16 }),
+  },
+  {
     label: '编辑',
     key: 'edit',
     icon: () => h(NIcon, { component: Edit20Regular, size: 16 }),
@@ -923,8 +933,18 @@ const contextMenuOptions = [
     icon: () => h(NIcon, { component: Delete20Regular, size: 16 }),
   },
   {
+    label: '删除该条目及相关文件',
+    key: 'deleteAll',
+    icon: () => h(NIcon, { component: Delete20Regular, size: 16 }),
+  },
+  {
     label: '移动',
     key: 'move',
+    icon: () => h(NIcon, { component: ArrowMove24Regular, size: 16 }),
+  },
+  {
+    label: '导出',
+    key: 'export',
     icon: () => h(NIcon, { component: ArrowMove24Regular, size: 16 }),
   },
 ]
@@ -949,6 +969,20 @@ const handleContextMenuSelect = (key) => {
     case 'move':
       handleMove(selectedRow.value)
       break
+    case 'deleteAll':
+      handleDeleteAll(selectedRow.value)
+      break
+    case 'export':
+      handleExport(selectedRow.value)
+      break
+    case 'openDirImport':
+      handleOpenDirImport(selectedRow.value)
+      break
+    case 'openDirNote':
+      handleOpenDirNote(selectedRow.value)
+      break
+    default:
+        console.warn('未知操作:', key)
   }
 
   showDropdown.value = false
@@ -1125,6 +1159,68 @@ const handleShare = (row) => {
 const handleMove = (row) => {
   console.log('移动', row)
 }
+
+// 方法：在系统文件资源管理器中打开导入文件所在目录
+const handleOpenDirImport = async (row) => {
+  try {
+    if (!row.importFileName || !row.library) {
+      message.error('缺少必要信息：文件名或库名');
+      return;
+    }
+
+    // 获取不带后缀的文件名
+    const baseFileName = row.importFileName.includes('.')
+      ? row.importFileName.substring(0, row.importFileName.lastIndexOf('.'))
+      : row.importFileName;
+
+    const osPlatform = await platform();
+    let dirPath = '';
+
+    if (osPlatform === 'windows') {
+      dirPath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}`;
+    } else {
+      dirPath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}`;
+    }
+
+    // 调用 Tauri 后端在系统文件资源管理器中打开目录
+    await invoke('open_in_file_explorer', { path: dirPath });
+    console.log('在文件资源管理器中打开导入文件目录:', dirPath);
+  } catch (error) {
+    console.error('打开导入文件目录失败:', error);
+    message.error(`打开目录失败: ${error.message || error}`);
+  }
+};
+
+// 方法：在系统文件资源管理器中打开笔记文件所在目录
+const handleOpenDirNote = async (row) => {
+  try {
+    if (!row.newNoteForm?.noteFileName || !row.library) {
+      message.error('缺少必要信息：笔记文件名或库名');
+      return;
+    }
+
+    // 获取导入文件的基础名（不带后缀）
+    const baseFileName = row.importFileName.includes('.')
+      ? row.importFileName.substring(0, row.importFileName.lastIndexOf('.'))
+      : row.importFileName;
+
+    const osPlatform = await platform();
+    let dirPath = '';
+
+    if (osPlatform === 'windows') {
+      dirPath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\markdown`;
+    } else {
+      dirPath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/markdown`;
+    }
+
+    // 调用 Tauri 后端在系统文件资源管理器中打开目录
+    await invoke('open_in_file_explorer', { path: dirPath });
+    console.log('在文件资源管理器中打开笔记文件目录:', dirPath);
+  } catch (error) {
+    console.error('打开笔记文件目录失败:', error);
+    message.error(`打开目录失败: ${error.message || error}`);
+  }
+};
 
 const heightForRow = () => 85;
 

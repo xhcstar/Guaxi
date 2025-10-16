@@ -106,8 +106,8 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
     info!("file_extension: {}", file_extension);
 
     match file_extension {
-        "txt" | "pdf" | "doc" | "docx" | "epub" | "html" | "png" | "jpg" | "jpeg" | "pptx" | "ppt"
-        => {}
+        "txt" | "pdf" | "doc" | "docx" | "epub" | "html" | "png" | "jpg" | "jpeg" | "pptx"
+        | "ppt" => {}
         _ => {
             return Err("UnsupportedFileType".to_string());
         }
@@ -150,9 +150,17 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
         }
 
         let text_convert_file_path = text_convert_dir.join(file_stem).with_extension("md");
-        info!(">>>>>>>> text_convert_file_path: {} , file_path: {} ", text_convert_file_path.display(), &file_path);
+        info!(
+            ">>>>>>>> text_convert_file_path: {} , file_path: {} ",
+            text_convert_file_path.display(),
+            &file_path
+        );
         fs::copy(&file_path, &text_convert_file_path).map_err(|e| e.to_string())?;
-        info!("Copy file from {} to {}", file_path, text_convert_file_path.display());
+        info!(
+            "Copy file from {} to {}",
+            file_path,
+            text_convert_file_path.display()
+        );
     }
 
     // 在文件名称目录下创建 notes 目录
@@ -195,7 +203,11 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
         library, // 直接返回传入的库名称，例如 "qw"
         note_file_name: note_file_name,
         from_filename: file_name.to_string(),
-        not_converted: if file_extension == "txt" { Some(true) } else { Some(false) },
+        not_converted: if file_extension == "txt" {
+            Some(true)
+        } else {
+            Some(false)
+        },
     };
 
     info!("import_note_info: {:?}", import_note_info);
@@ -323,8 +335,42 @@ pub fn add_web_clipper_import_file(
         library, // 直接返回传入的库名称，例如 "qw"
         note_file_name: note_file_name,
         from_filename: file_name.to_string(),
-        not_converted: if file_extension == "txt" { Some(true) } else { Some(false) },
+        not_converted: if file_extension == "txt" {
+            Some(true)
+        } else {
+            Some(false)
+        },
     };
 
     Ok(import_note_info)
+}
+
+#[tauri::command]
+pub async fn open_in_file_explorer(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(path.replace("/", "\\")) // 确保Windows使用反斜杠
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // 尝试使用xdg-open（大多数Linux桌面环境支持）
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file manager: {}", e))?;
+    }
+
+    Ok(())
 }
