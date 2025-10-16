@@ -2205,6 +2205,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "encoding_rs",
  "fs_extra",
  "futures-util",
  "git2",

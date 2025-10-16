@@ -655,9 +655,23 @@ const addFile = async () => {
     }
 
     // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
+    // const addedNoteInfo = await invoke('add_repo_import_file', {
+    //   library: currentForm.value.library,
+    //   filePath: currentForm.value.filePath,
+    // });
+
+    // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
     const addedNoteInfo = await invoke('add_repo_import_file', {
       library: currentForm.value.library,
       filePath: currentForm.value.filePath,
+    }).catch(error => {
+      // 处理不同的错误类型
+      let errorMessage = 'Failed to import file';
+      if (error.includes('Unsupported file type')) {
+        errorMessage = 'Unsupported file type';
+      }
+      message.error(errorMessage);
+      throw new Error(errorMessage);
     });
 
     // 创建 importfileList
@@ -709,7 +723,11 @@ const addFile = async () => {
         outputDir: fileToCheck
       });
 
-      if (isConverted && (!currentForm.value.convetToMarkdownFilename ||
+      console.log('isConverted', isConverted);
+      console.log('>>>>>>>>> addedNoteInfo', addedNoteInfo);
+
+      if (isConverted && addedNoteInfo.notConverted || 
+        (!currentForm.value.convetToMarkdownFilename ||
         currentForm.value.convetToMarkdownFilename.trim() === '')) {
         console.log('isConverted', isConverted);
         console.log('convetToMarkdownFilename', currentForm.value.convetToMarkdownFilename);

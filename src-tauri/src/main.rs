@@ -71,6 +71,7 @@ async fn main() {
             commands::markdown_reader_doc_process::markdown_reader_load_markdown_file,
             commands::word_reader_doc_process::read_word_file,
             commands::epub_reader_doc_process::read_epub_file,
+            commands::text_reader_doc_process::read_text_file,
             commands::translator::translate_text,
             commands::translator_free::translate_text_free,
             commands::docprocess::copy_image_file,

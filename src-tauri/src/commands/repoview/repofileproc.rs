@@ -13,13 +13,14 @@ pub struct FileInfo {
     file_size: u64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ImportNoteInfo {
     create_time: String,
     update_time: String,
     library: String,
     note_file_name: String,
     from_filename: String,
+    not_converted: Option<bool>,
 }
 
 #[tauri::command]
@@ -104,6 +105,14 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
         .unwrap_or(""); // 如果文件没有后缀名，则默认为空字符串
     info!("file_extension: {}", file_extension);
 
+    match file_extension {
+        "txt" | "pdf" | "doc" | "docx" | "epub" | "html" | "png" | "jpg" | "jpeg" | "pptx" | "ppt"
+        => {}
+        _ => {
+            return Err("UnsupportedFileType".to_string());
+        }
+    }
+
     // 构建以文件名称命名的子目录路径
     let file_dir = library_dir.join(file_stem);
     if !file_dir.exists() {
@@ -131,6 +140,19 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
             fs::create_dir(&folder_path).map_err(|e| e.to_string())?;
             info!("create_dir {} directory: {}", folder, folder_path.display());
         }
+    }
+
+    if file_extension == "txt" {
+        let text_convert_dir = file_dir.join("markdown");
+        if !text_convert_dir.exists() {
+            fs::create_dir(&text_convert_dir).map_err(|e| e.to_string())?;
+            info!("create_dir directory: {}", text_convert_dir.display());
+        }
+
+        let text_convert_file_path = text_convert_dir.join(file_stem).with_extension("md");
+        info!(">>>>>>>> text_convert_file_path: {} , file_path: {} ", text_convert_file_path.display(), &file_path);
+        fs::copy(&file_path, &text_convert_file_path).map_err(|e| e.to_string())?;
+        info!("Copy file from {} to {}", file_path, text_convert_file_path.display());
     }
 
     // 在文件名称目录下创建 notes 目录
@@ -173,7 +195,10 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
         library, // 直接返回传入的库名称，例如 "qw"
         note_file_name: note_file_name,
         from_filename: file_name.to_string(),
+        not_converted: if file_extension == "txt" { Some(true) } else { Some(false) },
     };
+
+    info!("import_note_info: {:?}", import_note_info);
 
     Ok(import_note_info)
 }
@@ -298,6 +323,7 @@ pub fn add_web_clipper_import_file(
         library, // 直接返回传入的库名称，例如 "qw"
         note_file_name: note_file_name,
         from_filename: file_name.to_string(),
+        not_converted: if file_extension == "txt" { Some(true) } else { Some(false) },
     };
 
     Ok(import_note_info)
