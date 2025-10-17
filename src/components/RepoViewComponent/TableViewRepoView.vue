@@ -1,21 +1,87 @@
 <template>
   <div class="main-content-wrapper">
+    <!-- 搜索栏 -->
+    <div class="search-container">
+      <n-card class="search-card" :bordered="false">
+        <n-space vertical :size="16">
+          <n-space align="center" justify="space-between">
+            <h3 class="search-title">高级搜索</h3>
+            <n-button text @click="toggleSearchPanel">
+              <n-icon :size="20">
+                <svg v-if="searchPanelCollapsed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                  fill="currentColor">
+                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+                </svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19 13H5v-2h14v2z" />
+                </svg>
+              </n-icon>
+            </n-button>
+          </n-space>
+
+          <n-space v-show="!searchPanelCollapsed" vertical :size="12">
+            <!-- 关键字搜索 -->
+            <n-input-group>
+              <n-input v-model:value="searchParams.keyword" placeholder="输入关键字搜索" clearable round>
+                <template #prefix>
+                  <n-icon :component="SearchIcon" />
+                </template>
+              </n-input>
+              <n-button type="primary" round @click="handleSearch">
+                搜索
+              </n-button>
+            </n-input-group>
+
+            <!-- 高级搜索条件 -->
+            <n-space :size="16" wrap>
+              <n-select v-model:value="searchParams.library" :options="libraryOptions" placeholder="选择文件库" clearable
+                filterable style="min-width: 180px" @search="handleLibrarySearch" />
+
+              <n-select v-model:value="searchParams.tags" :options="importedFileTagOptions" placeholder="选择标签" clearable
+                filterable multiple style="min-width: 180px" @search="handleImportedFileTagSearch" />
+
+              <n-date-picker v-model:value="searchParams.dateRange" type="daterange" clearable placeholder="选择日期范围"
+                style="min-width: 220px" />
+
+              <n-select v-model:value="searchParams.knowledgeRepo" :options="knowledgeRepoOptions" placeholder="选择知识库"
+                clearable filterable style="min-width: 180px" />
+
+              <n-select v-model:value="searchParams.fileType" :options="fileTypeOptions" placeholder="选择文件类型" clearable
+                style="min-width: 150px" />
+            </n-space>
+          </n-space>
+        </n-space>
+      </n-card>
+    </div>
+
     <div class="toolbar-container">
       <n-space vertical :size="12" class="container">
         <!-- 工具栏 -->
         <n-space justify="space-between" align="center" class="toolbar">
           <!-- 左侧按钮组 -->
           <n-space class="actions">
-            <n-button @click="sortTitle" class="action-button">按标题排序（升序）</n-button>
-            <n-button @click="filterLibrary" class="action-button">过滤所属库(Library1)</n-button>
-            <n-button @click="clearFilters" class="action-button">清除过滤器</n-button>
-            <n-button @click="clearSorter" class="action-button">清除排序</n-button>
+            <n-button @click="sortTitle" class="action-button" secondary>
+              <template #icon>
+                <n-icon :component="SortAscendingIcon" />
+              </template>
+              按标题排序
+            </n-button>
+            <n-button @click="clearFilters" class="action-button" secondary>
+              <template #icon>
+                <n-icon :component="FilterOffIcon" />
+              </template>
+              清除筛选
+            </n-button>
           </n-space>
+
           <!-- 右侧添加按钮 -->
           <n-tooltip trigger="hover">
             <template #trigger>
-              <n-button text class="add-path-button" @click="showAddFileModal">
-                <n-icon :component="FolderAdd20Regular" :size="24" />
+              <n-button type="primary" round @click="showAddFileModal" class="add-path-button">
+                <template #icon>
+                  <n-icon :component="FolderAdd20Regular" />
+                </template>
+                导入文件
               </n-button>
             </template>
             导入新的文件
@@ -25,10 +91,10 @@
     </div>
 
     <div class="table-container">
-      <n-data-table ref="table" :columns="columns" :data="currentData" :max-height="500" virtual-scroll virtual-scroll-x
-        :scroll-x="scrollX" :min-row-height="85" :height-for-row="heightForRow" :header-height="85"
+      <n-data-table ref="table" :columns="columns" :data="filteredData" :max-height="500" virtual-scroll
+        virtual-scroll-x :scroll-x="scrollX" :min-row-height="85" :height-for-row="heightForRow" :header-height="85"
         :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
-        :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
+        :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" striped />
     </div>
 
     <!-- 进度条容器 - 固定在底部 -->
@@ -137,24 +203,153 @@ import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
 import { Library, Settings } from '@vicons/ionicons5'
 import { listen } from '@tauri-apps/api/event';
-// import { Window } from '@tauri-apps/api/window';
-// import { Webview } from "@tauri-apps/api/webview"
+
+// 搜索图标
+const SearchIcon = {
+  render() {
+    return h('svg', {
+      xmlns: 'http://www.w3.org/2000/svg',
+      viewBox: '0 0 24 24',
+      fill: 'currentColor'
+    }, [
+      h('path', {
+        d: 'M15.5 14h-.79l-.28-.27a6.5 6.5 0 0 0 1.48-5.34c-.47-2.78-2.79-5-5.59-5.34a6.505 6.505 0 0 0-7.27 7.27c.34 2.8 2.56 5.12 5.34 5.59a6.5 6.5 0 0 0 5.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'
+      })
+    ]);
+  }
+};
+
+// 排序图标
+const SortAscendingIcon = {
+  render() {
+    return h('svg', {
+      xmlns: 'http://www.w3.org/2000/svg',
+      viewBox: '0 0 24 24',
+      fill: 'currentColor'
+    }, [
+      h('path', {
+        d: 'M19 17h3l-4 4-4-4h3V3h2v14zM9 13H5v-2h4V9H5V7h4V5H5V3H3v12h2v-2h4v-2zm2-2h2v2h-2v-2zm0-4h2v2h-2V7zm0 8h2v2h-2v-2z'
+      })
+    ]);
+  }
+};
+
+// 清除筛选图标
+const FilterOffIcon = {
+  render() {
+    return h('svg', {
+      xmlns: 'http://www.w3.org/2000/svg',
+      viewBox: '0 0 24 24',
+      fill: 'currentColor'
+    }, [
+      h('path', {
+        d: 'M19.79 5.61C20.3 4.95 19.83 4 19 4H6.83l7.97 7.97 4.99-6.36zM2.81 2.81L1.39 4.22 10 13v6c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-2.17l5.78 5.78 1.41-1.41L2.81 2.81z'
+      })
+    ]);
+  }
+};
 
 // 引入 Pinia store
 const store = repoStore()
-
 const eventStore = useEventStore();
 
 // 获取 message 实例
 const message = useMessage();
+
+// 搜索相关状态
+const searchParams = ref({
+  keyword: '',
+  library: null,
+  tags: [],
+  dateRange: null,
+  knowledgeRepo: null,
+  fileType: null
+});
+
+const searchPanelCollapsed = ref(false);
+const toggleSearchPanel = () => {
+  searchPanelCollapsed.value = !searchPanelCollapsed.value;
+};
+
+// 文件类型选项
+const fileTypeOptions = [
+  { label: 'PDF', value: 'pdf' },
+  { label: 'Markdown', value: 'md' },
+  { label: 'HTML', value: 'html' },
+  { label: 'Word', value: 'docx' },
+  { label: 'Text', value: 'txt' },
+  { label: 'EPUB', value: 'epub' }
+];
+
+// 知识库选项
+const knowledgeRepoOptions = computed(() => {
+  return store.repos.map(repo => ({
+    label: repo.name,
+    value: repo.name
+  }));
+});
+
+// 过滤后的数据
+const filteredData = computed(() => {
+  let data = currentData.value;
+
+  // 关键字搜索
+  if (searchParams.value.keyword) {
+    const keyword = searchParams.value.keyword.toLowerCase();
+    data = data.filter(item =>
+      item.importFileName?.toLowerCase().includes(keyword) ||
+      item.description?.toLowerCase().includes(keyword) ||
+      item.importedFileTags?.toLowerCase().includes(keyword) ||
+      item.newNoteForm?.description?.toLowerCase().includes(keyword) ||
+      item.newNoteForm?.notesTags?.toLowerCase().includes(keyword)
+    );
+  }
+
+  // 文件库筛选
+  if (searchParams.value.library) {
+    data = data.filter(item => item.library === searchParams.value.library);
+  }
+
+  // 标签筛选
+  if (searchParams.value.tags && searchParams.value.tags.length > 0) {
+    data = data.filter(item => {
+      const itemTags = item.importedFileTags?.split(',') || [];
+      return searchParams.value.tags.some(tag => itemTags.includes(tag));
+    });
+  }
+
+  // 日期范围筛选
+  if (searchParams.value.dateRange && searchParams.value.dateRange.length === 2) {
+    const [start, end] = searchParams.value.dateRange;
+    data = data.filter(item => {
+      const itemDate = new Date(item.importFileCreateTime).getTime();
+      return itemDate >= start && itemDate <= end;
+    });
+  }
+
+  // 知识库筛选
+  if (searchParams.value.knowledgeRepo) {
+    data = data.filter(item => item.knowledgeRepo === searchParams.value.knowledgeRepo);
+  }
+
+  // 文件类型筛选
+  if (searchParams.value.fileType) {
+    data = data.filter(item => item.type === searchParams.value.fileType);
+  }
+
+  return data;
+});
+
+const handleSearch = () => {
+  message.success('搜索完成，找到 ' + filteredData.value.length + ' 条结果');
+};
+
 // 添加文件对话框状态
 const isAddFileModalVisible = ref(false)
 // 表格实例
 const tableRef = ref(null)
 // 分页配置
 const pagination = ref({ pageSize: 15 })
-
-// let unlistenBrowserExtension = null;
 
 let unsubscribe = null;
 
@@ -387,7 +582,6 @@ const validateTableCell = (row) => {
   console.log('store.currentDatabase', store.currentDatabase);
 
   // 校验标签
-
   if (!row.importedFileTags || row.importedFileTags.trim() === '') {
     console.log('row.importedFileTags', row.importedFileTags);
     row.importedFileTags = "default"; // 设置默认值
@@ -655,12 +849,6 @@ const addFile = async () => {
     }
 
     // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
-    // const addedNoteInfo = await invoke('add_repo_import_file', {
-    //   library: currentForm.value.library,
-    //   filePath: currentForm.value.filePath,
-    // });
-
-    // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
     const addedNoteInfo = await invoke('add_repo_import_file', {
       library: currentForm.value.library,
       filePath: currentForm.value.filePath,
@@ -726,9 +914,9 @@ const addFile = async () => {
       console.log('isConverted', isConverted);
       console.log('>>>>>>>>> addedNoteInfo', addedNoteInfo);
 
-      if (isConverted && addedNoteInfo.notConverted || 
+      if (isConverted && addedNoteInfo.notConverted ||
         (!currentForm.value.convetToMarkdownFilename ||
-        currentForm.value.convetToMarkdownFilename.trim() === '')) {
+          currentForm.value.convetToMarkdownFilename.trim() === '')) {
         console.log('isConverted', isConverted);
         console.log('convetToMarkdownFilename', currentForm.value.convetToMarkdownFilename);
         message.success('已存在转换文件，无需转换');
@@ -982,7 +1170,7 @@ const handleContextMenuSelect = (key) => {
       handleOpenDirNote(selectedRow.value)
       break
     default:
-        console.warn('未知操作:', key)
+      console.warn('未知操作:', key)
   }
 
   showDropdown.value = false
@@ -1462,7 +1650,6 @@ const handleCheckboxUpdate = (rowKeys) => {
   console.log('选中的行 keys:', rowKeys)
 }
 
-
 // TableViewRepoView.vue
 const handleFileInfoEvent = async (payload) => {
   if (!payload) {
@@ -1587,9 +1774,6 @@ onMounted(async () => {
   store.get_librariesRoot()
   await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
 
-  // 监听 Tauri 事件
-  // unlistenBrowserExtension = await listen('add_web_clipper_file_event', handleFileInfoEvent);
-
   try {
     // 安全初始化
     await eventStore.initGlobalListeners();
@@ -1615,7 +1799,6 @@ onUnmounted(() => {
   //   unlistenBrowserExtension();
   // }
 })
-
 </script>
 
 <style scoped>
@@ -1625,10 +1808,34 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  background-color: #f5f7fa;
+}
+
+.search-container {
+  padding: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.search-card {
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
+}
+
+.search-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.search-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
 }
 
 .toolbar-container {
-  padding: 16px;
+  padding: 0 16px 16px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -1637,43 +1844,43 @@ onUnmounted(() => {
   flex: 1;
   width: 100%;
   overflow: hidden;
+  padding: 0 16px 16px;
+  box-sizing: border-box;
 }
 
 .data-table {
   width: 100% !important;
   height: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
 .actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  /* 允许按钮换行 */
 }
 
 .add-path-button {
   margin-left: auto;
   white-space: nowrap;
-  /* 防止按钮文本换行 */
 }
 
 /* 响应式设计 */
 @media (max-width: 768px) {
   .actions {
     flex-direction: column;
-    /* 小屏幕时按钮堆叠显示 */
   }
 
   .add-path-button {
     margin-left: 0;
-    /* 小屏幕时取消自动左边距 */
   }
 }
 
 /* 行悬停效果 */
 .hovered-row {
-  background-color: #9ae4f1;
-  /* 淡绿色 */
+  background-color: #f0f7ff;
 }
 
 /* 右键菜单样式 */
@@ -1695,8 +1902,7 @@ onUnmounted(() => {
 }
 
 .custom-dropdown .n-dropdown-option:hover {
-  background-color: #e8f5e9;
-  /* 淡绿色 */
+  background-color: #f0f7ff;
 }
 
 .custom-dropdown .n-dropdown-option .n-icon {
@@ -1717,12 +1923,11 @@ onUnmounted(() => {
 
 .n-auto-complete {
   width: 100%;
-  /* 确保宽度足够 */
 }
 
 .progress-container {
   position: fixed;
-  bottom: 0px;
+  bottom: 20px;
   right: 20px;
   width: 350px;
   max-height: 50vh;
@@ -1731,7 +1936,7 @@ onUnmounted(() => {
   background-color: white;
   border-radius: 8px;
   box-shadow: 0 2px 12px 0 rgba(56, 54, 54, 0.884);
-  padding: 0px;
+  padding: 12px;
 }
 
 .progress-container .n-card {
@@ -1747,5 +1952,53 @@ onUnmounted(() => {
   right: 5%;
   top: 50%;
   transform: translateY(-50%);
+}
+
+/* 表格样式优化 */
+:deep(.n-data-table) {
+  --n-border-color: #eaeaea;
+  --n-th-color: #f8f9fa;
+  --n-td-color: #ffffff;
+  --n-td-color-hover: #f5f7fa;
+  --n-td-color-striped: #f9f9f9;
+}
+
+:deep(.n-data-table-th) {
+  font-weight: 600;
+  color: #333;
+}
+
+:deep(.n-data-table-td) {
+  padding: 12px 16px;
+}
+
+/* 搜索输入框样式 */
+:deep(.n-input-group) {
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+:deep(.n-input) {
+  border-radius: 20px 0 0 20px !important;
+}
+
+:deep(.n-button) {
+  border-radius: 0 20px 20px 0 !important;
+}
+
+/* 选择器样式 */
+:deep(.n-select) {
+  --n-border: 1px solid #e0e0e0;
+  --n-border-hover: 1px solid #c0c4cc;
+  --n-border-focus: 1px solid #409EFF;
+  --n-border-radius: 8px;
+}
+
+/* 日期选择器样式 */
+:deep(.n-date-picker) {
+  --n-border: 1px solid #e0e0e0;
+  --n-border-hover: 1px solid #c0c4cc;
+  --n-border-focus: 1px solid #409EFF;
+  --n-border-radius: 8px;
 }
 </style>
