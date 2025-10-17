@@ -1313,7 +1313,7 @@ const zoomOut = () => {
 const startResize = (e) => {
   isResizing.value = true;
   startX.value = e.clientX;
-  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.markdown-render-panel')).width, 10);
+  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.markdown-source-panel')).width, 10);
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('mouseup', stopResize);
   document.body.style.cursor = 'col-resize';
@@ -1779,15 +1779,6 @@ watchEffect(async () => {
   border-radius: 0;
 }
 
-/* 右侧渲染面板样式调整 */
-.markdown-render-panel {
-  flex: 1;
-  min-width: 0;
-  overflow-y: auto;
-  padding: 20px;
-  background-color: #ffffff;
-}
-
 .markdown-content {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 18px;
@@ -1944,16 +1935,6 @@ button:disabled {
   display: flex;
   overflow: hidden;
   gap: 0;
-}
-
-.markdown-render-panel {
-  flex: 0 0 v-bind(leftPanelWidth);
-  min-width: 0;
-  overflow: auto;
-  position: relative;
-  background-color: #ffffff;
-  overscroll-behavior: none;
-  scroll-behavior: auto;
 }
 
 .markdown-content-container {
