@@ -3,8 +3,8 @@
     <!-- 顶部工具栏 -->
     <div class="top-toolbar">
       <n-space justify="space-between" align="center">
-        <!-- 左侧按钮组 -->
-        <n-space>
+        <!-- 左侧按钮组 - 添加了padding-left和间距 -->
+        <n-space class="toolbar-left" :size="16">
           <!-- 任务列表图标按钮 -->
           <n-tooltip trigger="hover">
             <template #trigger>
@@ -17,6 +17,12 @@
             </template>
             转换任务列表
           </n-tooltip>
+
+          <!-- 预留位置1 -->
+          <div class="toolbar-placeholder"></div>
+
+          <!-- 预留位置2 -->
+          <div class="toolbar-placeholder"></div>
         </n-space>
 
         <!-- 右侧按钮组 -->
@@ -34,18 +40,17 @@
             :class="{ 'task-item-completed': progress.current >= 100 }">
             <div class="task-content">
               <div class="task-header">
-                <n-text strong>{{ progress.fileName }}</n-text>
-                <n-tag v-if="progress.current < 100" size="small" type="info" round>
+                <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
+                <n-tag v-if="progress.current < 100" size="small" type="info" class="task-tag">
                   转换中
                 </n-tag>
-                <n-tag v-else size="small" type="success" round>
+                <n-tag v-else size="small" type="success" class="task-tag">
                   已完成
                 </n-tag>
               </div>
 
               <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
-                :status="progress.current >= 100 ? 'success' : 'info'" :height="8" :border-radius="4"
-                :fill-border-radius="4" class="task-progress" />
+                :status="progress.current >= 100 ? 'success' : 'info'" :height="15" class="task-progress" />
 
               <n-text depth="3" class="task-message">
                 <n-icon size="14" class="task-message-icon">
@@ -64,34 +69,39 @@
       <n-card class="search-card" :bordered="false">
         <n-space vertical :size="16">
           <n-space align="center" justify="space-between">
-            <h3 class="search-title">高级搜索</h3>
-            <n-button text @click="toggleSearchPanel">
-              <n-icon :size="20">
-                <svg v-if="searchPanelCollapsed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-                  fill="currentColor">
-                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-                </svg>
-                <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M19 13H5v-2h14v2z" />
-                </svg>
-              </n-icon>
-            </n-button>
+            <h3 class="search-title">搜索</h3>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button text @click="toggleSearchPanel">
+                  <n-icon :size="20">
+                    <svg v-if="searchPanelCollapsed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                      fill="currentColor">
+                      <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+                    </svg>
+                    <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M19 13H5v-2h14v2z" />
+                    </svg>
+                  </n-icon>
+                </n-button>
+              </template>
+              {{ searchPanelCollapsed ? '展开高级搜索' : '折叠高级搜索' }}
+            </n-tooltip>
           </n-space>
 
-          <n-space v-show="!searchPanelCollapsed" vertical :size="12">
-            <!-- 关键字搜索 -->
-            <n-input-group>
-              <n-input v-model:value="searchParams.keyword" placeholder="输入关键字搜索" clearable round>
-                <template #prefix>
-                  <n-icon :component="SearchIcon" />
-                </template>
-              </n-input>
-              <n-button type="primary" round @click="handleSearch">
-                搜索
-              </n-button>
-            </n-input-group>
+          <!-- 默认显示关键字搜索栏 -->
+          <n-input-group>
+            <n-input v-model:value="searchParams.keyword" placeholder="输入关键字搜索" clearable>
+              <template #prefix>
+                <n-icon :component="SearchIcon" />
+              </template>
+            </n-input>
+            <n-button type="primary" @click="handleSearch">
+              搜索
+            </n-button>
+          </n-input-group>
 
-            <!-- 高级搜索条件 -->
+          <!-- 高级搜索条件 - 点击展开后显示 -->
+          <n-space v-show="!searchPanelCollapsed" vertical :size="12">
             <n-space :size="16" wrap>
               <n-select v-model:value="searchParams.library" :options="libraryOptions" placeholder="选择文件库" clearable
                 filterable style="min-width: 180px" @search="handleLibrarySearch" />
@@ -136,7 +146,7 @@
           <!-- 右侧添加按钮 -->
           <n-tooltip trigger="hover">
             <template #trigger>
-              <n-button type="primary" round @click="showAddFileModal" class="add-path-button">
+              <n-button type="primary" @click="showAddFileModal" class="add-path-button">
                 <template #icon>
                   <n-icon :component="FolderAdd20Regular" />
                 </template>
@@ -1871,14 +1881,26 @@ onUnmounted(() => {
 }
 
 .search-container {
-  padding: 16px;
-  padding-top: 8px;
-  flex-shrink: 0;
+  padding: 0 16px 16px;
 }
 
 .toolbar-container {
   padding: 0 16px 12px;
   flex-shrink: 0;
+}
+
+/* 工具栏左侧样式调整 */
+.toolbar-left {
+  padding-left: 16px;
+  /* 增加左侧内边距 */
+}
+
+/* 工具栏占位元素样式 */
+.toolbar-placeholder {
+  width: 40px;
+  /* 预留图标位置宽度 */
+  height: 32px;
+  /* 与按钮高度一致 */
 }
 
 .search-card {
@@ -1908,7 +1930,7 @@ onUnmounted(() => {
   flex: 1;
   width: 100%;
   overflow: hidden;
-  padding: 0 16px;
+  padding: 0 16px 16px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -2045,12 +2067,9 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-:deep(.n-input) {
-  border-radius: 20px 0 0 20px !important;
-}
-
+:deep(.n-input),
 :deep(.n-button) {
-  border-radius: 0 20px 20px 0 !important;
+  border-radius: 16px !important;
 }
 
 /* 选择器样式 */
@@ -2071,48 +2090,70 @@ onUnmounted(() => {
 
 /* 任务列表样式 */
 .task-item {
-  padding: 12px 16px;
-  transition: all 0.3s ease;
-  border-radius: 8px;
+  padding: 12px;
   margin-bottom: 8px;
-  background-color: #fff;
+  border-radius: 8px;
+  background-color: var(--n-color);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
 }
 
 .task-item:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transform: translateY(-1px);
 }
 
 .task-item-completed {
   opacity: 0.8;
-  background-color: #f8f8f8;
+  background-color: var(--n-color-hover);
 }
 
+/* 使用flex布局和gap控制间距 */
 .task-content {
-  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 统一控制子元素间距 */
 }
 
+/* 头部布局优化 */
 .task-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
+  align-items: flex-start;
+  /* 顶部对齐 */
+  gap: 8px;
+  /* 元素间间距 */
 }
 
+.task-filename {
+  flex: 1;
+  min-width: 0;
+  /* 防止flex item溢出 */
+  word-break: break-word;
+  /* 更好的断词 */
+  line-height: 1.5;
+  /* 合适的行高 */
+}
+
+/* 进度条样式优化 */
 .task-progress {
-  margin: 8px 0;
+  margin-block: 0;
+  /* 使用逻辑属性 */
+  margin-inline: 0;
+  padding-top: 8px;
 }
 
+/* 消息样式 */
 .task-message {
   display: flex;
   align-items: center;
   font-size: 13px;
-  margin-top: 4px;
+  color: var(--n-text-color);
+  gap: 6px;
+  /* 图标和文本间距 */
 }
 
 .task-message-icon {
-  margin-right: 6px;
-  color: #888;
+  flex-shrink: 0;
 }
 </style>
