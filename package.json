@@ -30,6 +30,7 @@
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@types/node": "^22.14.0",
     "@types/three": "^0.177.0",
+    "@vicons/antd": "^0.13.0",
     "@vicons/fa": "^0.13.0",
     "@vicons/fluent": "^0.13.0",
     "@vicons/tabler": "^0.13.0",

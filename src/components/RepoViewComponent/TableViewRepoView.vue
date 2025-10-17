@@ -1,5 +1,64 @@
 <template>
   <div class="main-content-wrapper">
+    <!-- 顶部工具栏 -->
+    <div class="top-toolbar">
+      <n-space justify="space-between" align="center">
+        <!-- 左侧按钮组 -->
+        <n-space>
+          <!-- 任务列表图标按钮 -->
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text @click="toggleTaskList" :type="progresses.length > 0 ? 'primary' : 'default'">
+                <template #icon>
+                  <n-icon :component="TaskListIcon" />
+                </template>
+                <n-badge v-if="progresses.length > 0" :value="progresses.length" />
+              </n-button>
+            </template>
+            转换任务列表
+          </n-tooltip>
+        </n-space>
+
+        <!-- 右侧按钮组 -->
+        <n-space>
+          <!-- 其他按钮... -->
+        </n-space>
+      </n-space>
+    </div>
+
+    <!-- 任务列表抽屉 -->
+    <n-drawer v-model:show="showTaskList" width="400" placement="right">
+      <n-drawer-content title="文件转换任务" closable>
+        <n-list hoverable>
+          <n-list-item v-for="(progress, index) in progresses" :key="index" class="task-item"
+            :class="{ 'task-item-completed': progress.current >= 100 }">
+            <div class="task-content">
+              <div class="task-header">
+                <n-text strong>{{ progress.fileName }}</n-text>
+                <n-tag v-if="progress.current < 100" size="small" type="info" round>
+                  转换中
+                </n-tag>
+                <n-tag v-else size="small" type="success" round>
+                  已完成
+                </n-tag>
+              </div>
+
+              <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
+                :status="progress.current >= 100 ? 'success' : 'info'" :height="8" :border-radius="4"
+                :fill-border-radius="4" class="task-progress" />
+
+              <n-text depth="3" class="task-message">
+                <n-icon size="14" class="task-message-icon">
+                  <InfoCircleFilled />
+                </n-icon>
+                {{ progress.message }}
+              </n-text>
+            </div>
+          </n-list-item>
+        </n-list>
+      </n-drawer-content>
+    </n-drawer>
+
     <!-- 搜索栏 -->
     <div class="search-container">
       <n-card class="search-card" :bordered="false">
@@ -91,21 +150,10 @@
     </div>
 
     <div class="table-container">
-      <n-data-table ref="table" :columns="columns" :data="filteredData" :max-height="500" virtual-scroll
+      <n-data-table ref="table" :columns="columns" :data="filteredData" :max-height="tableHeight" virtual-scroll
         virtual-scroll-x :scroll-x="scrollX" :min-row-height="85" :height-for-row="heightForRow" :header-height="85"
         :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
         :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" striped />
-    </div>
-
-    <!-- 进度条容器 - 固定在底部 -->
-    <div class="progress-container-wrapper">
-      <div class="progress-container">
-        <n-card v-for="(progress, index) in progresses" :key="index">
-          <n-text strong>{{ progress.fileName }}</n-text>
-          <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'" status="info" />
-          <n-text depth="3">{{ progress.message }}</n-text>
-        </n-card>
-      </div>
     </div>
 
     <!-- 右键菜单 -->
@@ -201,8 +249,23 @@ import {
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
-import { Library, Settings } from '@vicons/ionicons5'
+import { List20Regular as TaskListIcon } from '@vicons/fluent'
 import { listen } from '@tauri-apps/api/event';
+import { InfoCircleFilled } from '@vicons/antd'
+
+// 添加表格高度计算
+const tableHeight = computed(() => {
+  const headerHeight = 85 // 表头高度
+  const rowHeight = 85 // 单行高度
+  const pageSize = pagination.value.pageSize || 15
+  return headerHeight + (rowHeight * pageSize)
+})
+
+// 添加任务列表状态
+const showTaskList = ref(false)
+const toggleTaskList = () => {
+  showTaskList.value = !showTaskList.value
+}
 
 // 搜索图标
 const SearchIcon = {
@@ -266,7 +329,7 @@ const searchParams = ref({
   fileType: null
 });
 
-const searchPanelCollapsed = ref(false);
+const searchPanelCollapsed = ref(true);
 const toggleSearchPanel = () => {
   searchPanelCollapsed.value = !searchPanelCollapsed.value;
 };
@@ -378,7 +441,7 @@ const newFileForm = ref({
   library: '', // 所属库名字
   importFileCreateTime: '',
   importFileSize: 0,
-  convetToHtmlFilename: '',
+  convetToMarkdownFilename: '',
   knowledgeRepo: '', // 知识库名字
   newNoteForm: newNoteForm,
 })
@@ -405,19 +468,19 @@ const startProgressListener = async (filePath) => {
   const progressIndex = progresses.value.length - 1
 
   const unlisten = await listen('conversion_progress', (event) => {
-    // 使用Vue的响应式更新方式
     progresses.value[progressIndex] = {
       ...progresses.value[progressIndex],
       current: event.payload.current,
       message: event.payload.message
     }
-    console.log('conversion_progress', event.payload.current, event.payload.message)
 
-    // 转换完成后移除进度条
+    // 转换完成后3秒自动移除
     if (event.payload.current >= 100) {
       setTimeout(() => {
-        progresses.value = progresses.value.filter((_, i) => i !== progressIndex)
-      }, 1000)
+        if (progresses.value[progressIndex]?.current >= 100) {
+          progresses.value.splice(progressIndex, 1)
+        }
+      }, 3000)
     }
   })
 
@@ -912,13 +975,12 @@ const addFile = async () => {
       });
 
       console.log('isConverted', isConverted);
-      console.log('>>>>>>>>> addedNoteInfo', addedNoteInfo);
+      console.log('addedNoteInfo', addedNoteInfo);
+      console.log('currentForm: ', currentData.value);
 
-      if (isConverted && addedNoteInfo.notConverted ||
-        (!currentForm.value.convetToMarkdownFilename ||
-          currentForm.value.convetToMarkdownFilename.trim() === '')) {
+      if (isConverted || addedNoteInfo.notConverted) {
         console.log('isConverted', isConverted);
-        console.log('convetToMarkdownFilename', currentForm.value.convetToMarkdownFilename);
+        console.log('convetToMarkdownFilename: ', currentForm.value.convetToMarkdownFilename);
         message.success('已存在转换文件，无需转换');
         // 关闭对话框并清空表单
         isAddFileModalVisible.value = false;
@@ -1058,8 +1120,7 @@ const resetForm = () => {
     library: '', // 所属库名字
     importFileCreateTime: '',
     importFileSize: 0,
-    convetToHtmlFilename: '',
-    convetToMarkdownFilename: "",
+    convetToMarkdownFilename: '',
     knowledgeRepo: '',
     newNoteForm: {
       id: 0,
@@ -1805,16 +1866,19 @@ onUnmounted(() => {
 .main-content-wrapper {
   display: flex;
   flex-direction: column;
-  width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: #f5f7fa;
 }
 
 .search-container {
   padding: 16px;
-  width: 100%;
-  box-sizing: border-box;
+  padding-top: 8px;
+  flex-shrink: 0;
+}
+
+.toolbar-container {
+  padding: 0 16px 12px;
+  flex-shrink: 0;
 }
 
 .search-card {
@@ -1844,16 +1908,19 @@ onUnmounted(() => {
   flex: 1;
   width: 100%;
   overflow: hidden;
-  padding: 0 16px 16px;
+  padding: 0 16px;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .data-table {
+  flex: 1;
   width: 100% !important;
   height: 100%;
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .actions {
@@ -2000,5 +2067,52 @@ onUnmounted(() => {
   --n-border-hover: 1px solid #c0c4cc;
   --n-border-focus: 1px solid #409EFF;
   --n-border-radius: 8px;
+}
+
+/* 任务列表样式 */
+.task-item {
+  padding: 12px 16px;
+  transition: all 0.3s ease;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background-color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.task-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.task-item-completed {
+  opacity: 0.8;
+  background-color: #f8f8f8;
+}
+
+.task-content {
+  width: 100%;
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.task-progress {
+  margin: 8px 0;
+}
+
+.task-message {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.task-message-icon {
+  margin-right: 6px;
+  color: #888;
 }
 </style>
