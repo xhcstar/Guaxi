@@ -8,9 +8,10 @@
           <!-- 任务列表图标按钮 -->
           <n-tooltip trigger="hover">
             <template #trigger>
-              <n-button text @click="toggleTaskList" :type="progresses.length > 0 ? 'primary' : 'default'">
+              <n-button text @click="toggleTaskList" :type="progresses.length > 0 ? 'primary' : 'default'"
+                class="toolbar-button">
                 <template #icon>
-                  <n-icon :component="TaskListIcon" />
+                  <n-icon :component="TasksApp20Regular" />
                 </template>
                 <n-badge v-if="progresses.length > 0" :value="progresses.length" />
               </n-button>
@@ -18,11 +19,57 @@
             转换任务列表
           </n-tooltip>
 
-          <!-- 预留位置1 -->
-          <div class="toolbar-placeholder"></div>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text @click="backupDatabase" :type="progresses.length > 0 ? 'primary' : 'default'"
+                class="toolbar-button">
+                <template #icon>
+                  <n-icon :component="SaveSync20Regular" />
+                </template>
+                <n-badge v-if="progresses.length > 0" :value="progresses.length" />
+              </n-button>
+            </template>
+            备份资料库
+          </n-tooltip>
 
-          <!-- 预留位置2 -->
-          <div class="toolbar-placeholder"></div>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text @click="recoverDatabase" :type="progresses.length > 0 ? 'primary' : 'default'"
+                class="toolbar-button">
+                <template #icon>
+                  <n-icon :component="BoxArrowLeft20Regular" />
+                </template>
+                <n-badge v-if="progresses.length > 0" :value="progresses.length" />
+              </n-button>
+            </template>
+            从备份文件中恢复
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text @click="importItems" :type="progresses.length > 0 ? 'primary' : 'default'"
+                class="toolbar-button">
+                <template #icon>
+                  <n-icon :component="TextBulletListAdd20Filled" />
+                </template>
+                <n-badge v-if="progresses.length > 0" :value="progresses.length" />
+              </n-button>
+            </template>
+            导入指定条目
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text @click="exportItems" :type="progresses.length > 0 ? 'primary' : 'default'"
+                class="toolbar-button">
+                <template #icon>
+                  <n-icon :component="SignOut20Regular" />
+                </template>
+                <n-badge v-if="progresses.length > 0" :value="progresses.length" />
+              </n-button>
+            </template>
+            导出指定条目
+          </n-tooltip>
         </n-space>
 
         <!-- 右侧按钮组 -->
@@ -72,7 +119,7 @@
             <h3 class="search-title">搜索</h3>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-button text @click="toggleSearchPanel">
+                <n-button @click="toggleSearchPanel" class="search-button" secondary>
                   <n-icon :size="20">
                     <svg v-if="searchPanelCollapsed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
                       fill="currentColor">
@@ -95,7 +142,7 @@
                 <n-icon :component="SearchIcon" />
               </template>
             </n-input>
-            <n-button type="primary" @click="handleSearch">
+            <n-button secondary @click="handleSearch" class="search-button">
               搜索
             </n-button>
           </n-input-group>
@@ -146,7 +193,7 @@
           <!-- 右侧添加按钮 -->
           <n-tooltip trigger="hover">
             <template #trigger>
-              <n-button type="primary" @click="showAddFileModal" class="add-path-button">
+              <n-button @click="showAddFileModal" class="add-path-button" secondary>
                 <template #icon>
                   <n-icon :component="FolderAdd20Regular" />
                 </template>
@@ -223,11 +270,10 @@
     <!-- 对话框操作按钮 -->
     <template #action>
       <n-space justify="end">
-        <n-button type="primary" @click="addFile" :style="{ backgroundColor: '#409EFF', borderColor: '#409EFF' }">
+        <n-button type="primary" @click="addFile" class="submit-button">
           提交
         </n-button>
-        <n-button @click="isAddFileModalVisible = false"
-          :style="{ backgroundColor: '#F56C6C', borderColor: '#F56C6C', color: '#FFF' }">
+        <n-button @click="isAddFileModalVisible = false" class="cancel-button">
           取消
         </n-button>
       </n-space>
@@ -246,6 +292,11 @@ import {
   Edit20Regular,
   Share20Regular,
   ArrowMove24Regular,
+  SaveSync20Regular,
+  BoxArrowLeft20Regular,
+  TasksApp20Regular,
+  TextBulletListAdd20Filled,
+  SignOut20Regular,
 } from '@vicons/fluent'
 import { NIcon, NButton, NDropdown, useMessage } from 'naive-ui'
 import ShowOrEdit from './ShowOrEdit.vue'
@@ -259,7 +310,6 @@ import {
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os';
-import { List20Regular as TaskListIcon } from '@vicons/fluent'
 import { listen } from '@tauri-apps/api/event';
 import { InfoCircleFilled } from '@vicons/antd'
 
@@ -1891,8 +1941,8 @@ onUnmounted(() => {
 
 /* 工具栏左侧样式调整 */
 .toolbar-left {
+  padding-top: 5px;
   padding-left: 16px;
-  /* 增加左侧内边距 */
 }
 
 /* 工具栏占位元素样式 */
@@ -1901,6 +1951,113 @@ onUnmounted(() => {
   /* 预留图标位置宽度 */
   height: 32px;
   /* 与按钮高度一致 */
+}
+
+.toolbar-button {
+  color: #5a5a5a;
+  transition: all 0.2s ease;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.toolbar-button:hover {
+  background-color: #f0f4ff;
+  color: #409EFF;
+}
+
+.toolbar-button[type="primary"] {
+  color: #409EFF;
+}
+
+/* 搜索按钮样式 */
+.search-button {
+  background-color: #409EFF;
+  border-color: #409EFF;
+  color: white;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.search-button:hover {
+  background-color: #409EFF;
+  border-color: #409EFF;
+}
+
+/* 操作按钮样式 */
+.action-button {
+  color: #5a5a5a;
+  background-color: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.action-button:hover {
+  background-color: #e8f0fe;
+  border-color: #c6d8ff;
+  color: #409EFF;
+}
+
+/* 添加文件按钮样式 */
+.add-path-button {
+  background-color: #90bfee;
+  border-color: #90bfee;
+  color: white;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.add-path-button:hover {
+  background-color: #90bfee;
+  border-color: #90bfee;
+}
+
+/* 表单提交按钮样式 */
+.submit-button {
+  background-color: #409EFF;
+  border-color: #409EFF;
+  color: white;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.submit-button:hover {
+  background-color: #3385d9;
+  border-color: #3385d9;
+}
+
+/* 表单取消按钮样式 */
+.cancel-button {
+  background-color: #f5f5f5;
+  border-color: #e0e0e0;
+  color: #5a5a5a;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.cancel-button:hover {
+  background-color: #f0f0f0;
+  border-color: #d9d9d9;
+}
+
+/* 图标按钮样式 */
+.n-button.text .n-icon {
+  transition: all 0.2s ease;
+}
+
+.n-button.text:hover .n-icon {
+  color: #77b2ec;
+}
+
+/* 按钮聚焦状态 */
+.n-button:focus {
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
+}
+
+/* 禁用按钮样式 */
+.n-button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .search-card {
