@@ -5,16 +5,8 @@
       :loading="isLoading" :style="inputStyle" @update:value="handleUpdateValue" @blur="handleChange"
       @search="handleSearch" @keyup.enter="handleChange" clearable />
     <!-- 否则使用 n-input -->
-    <!-- <n-input
-      v-else-if="isEdit"
-      ref="inputRef"
-      v-model:value="inputValue"
-      :style="inputStyle"
-      @update:value="handleUpdateValue"
-      @change="handleChange"
-      @blur="handleChange"
-      @keyup.enter="handleChange"
-    /> -->
+    <n-input v-else-if="isEdit" ref="inputRef" v-model:value="inputValue" :style="inputStyle"
+      @update:value="handleUpdateValue" @change="handleChange" @blur="handleChange" @keyup.enter="handleChange" />
     <span v-else>{{ value }}</span>
   </div>
 </template>
@@ -32,7 +24,17 @@ const props = defineProps({
     default: false,
   },
   searchType: String, // 搜索类型，用于区分不同的后端接口
+  readonly: { // 是否只读
+    type: Boolean,
+    default: false
+  },
+  placeholder: {
+    type: String,
+    default: '请输入内容'
+  }
 });
+
+const emit = defineEmits(['update:value']);
 
 const isEdit = ref(false);
 const inputRef = ref(null);
@@ -43,7 +45,7 @@ const isLoading = ref(false); // 是否正在加载
 // 样式
 const style = {
   minHeight: '60px',
-  cursor: 'pointer',
+  cursor: props.readonly ? 'default' : 'pointer',
 };
 
 // 限制 input 宽度
@@ -55,6 +57,7 @@ const inputStyle = {
 
 // 处理点击事件
 const handleOnClick = () => {
+  if (props.readonly) return;
   isEdit.value = true;
   nextTick(() => {
     inputRef.value?.focus(); // 确保焦点设置到输入框
@@ -67,8 +70,13 @@ const handleUpdateValue = (v) => {
 };
 
 const handleChange = () => {
+  if (props.readonly) return;
+
   console.log(`handleChange 被调用，输入值: ${inputValue.value}`);
-  props.onUpdateValue(inputValue.value); // 调用父组件的回调函数
+  if (props.onUpdateValue) {
+    props.onUpdateValue(inputValue.value); // 调用父组件的回调函数
+  }
+  emit('update:value', inputValue.value);
   isEdit.value = false;
 };
 
@@ -133,11 +141,20 @@ const handleClickOutside = (event) => {
 };
 
 onMounted(() => {
-  document.addEventListener('click', handleClickOutside);
+  if (!props.readonly) {
+    document.addEventListener('click', handleClickOutside);
+  }
 });
 
 onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside);
+  if (!props.readonly) {
+    document.removeEventListener('click', handleClickOutside);
+  }
+});
+
+// 监听外部value变化
+watch(() => props.value, (newValue) => {
+  inputValue.value = newValue;
 });
 </script>
 
@@ -148,5 +165,30 @@ onUnmounted(() => {
   justify-content: left;
   padding: 0px;
   margin: 0px;
+  min-height: 60px;
+  width: 100%;
+}
+
+.editable-cell span {
+  width: 100%;
+  word-wrap: break-word;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+:deep(.n-input) {
+  width: 100%;
+}
+
+:deep(.n-auto-complete) {
+  width: 100%;
+}
+
+:deep(.n-input .n-input__input) {
+  border-radius: 8px;
+}
+
+:deep(.n-auto-complete .n-input__input) {
+  border-radius: 8px;
 }
 </style>
