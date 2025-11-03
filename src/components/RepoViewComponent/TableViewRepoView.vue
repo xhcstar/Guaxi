@@ -99,6 +99,7 @@ const {
   showAddFileModal,
   openFileBrowser,
   addFile,
+  handleFileInfoEvent,
   resetForm,
   validateForm,
   validateFilePath,

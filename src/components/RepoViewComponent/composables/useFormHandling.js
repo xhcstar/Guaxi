@@ -418,6 +418,125 @@ export function useFormHandling({
     }
   };
 
+  const addFileFromWeb = async () => {
+    try {
+      // 校验表单
+      const validationError = await validateForm(); // 等待 validateForm 的结果
+      if (validationError) {
+        message.error(validationError); // 确保 validationError 是字符串
+        return; // 终止添加
+      }
+
+      if (!currentForm.value.library || !currentForm.value.importFileName) {
+        message.error(
+          "Library or importFileName path is missing: ",
+          currentForm.value
+        );
+        return;
+      }
+
+      // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
+      const addedNoteInfo = await invoke("add_web_clipper_import_file", {
+        library: currentForm.value.library,
+        filePath: currentForm.value.filePath,
+      });
+
+      // 创建 importfileList
+      const importfileList = createImportFileList(
+        addedNoteInfo,
+        currentForm.value
+      );
+
+      // 将 importfileList 写入数据库
+      console.log("importfileList:", importfileList);
+      const fileId = await addFileToDatabase(importfileList);
+
+      // 添加导入的文件到 store
+      store.addImportedFile({
+        id: fileId,
+        importFileName: currentForm.value.importFileName,
+        description: currentForm.value.description,
+        importedFileTags: currentForm.value.importedFileTags,
+        type: currentForm.value.type,
+        library: currentForm.value.library,
+        importFileCreateTime: currentForm.value.importFileCreateTime,
+        importFileSize: currentForm.value.importFileSize,
+        convetToMarkdownFilename: `${currentForm.value.importFileName.replace(
+          /\.[^/.]+$/,
+          ""
+        )}.md`,
+        knowledgeRepo: currentForm.value.knowledgeRepo,
+        newNoteForm: {
+          description: `${addedNoteInfo.from_filename}的笔记`,
+          noteFileName: addedNoteInfo.note_file_name,
+          notesTags: currentForm.value.importedFileTags.split(","), //导入文件时创建的笔记使用导入文件的标签
+          noteFileType: "md",
+          fromImportedFile: addedNoteInfo.from_filename,
+          fromImportedFileLibrary: addedNoteInfo.library,
+          noteFileCreateTime: addedNoteInfo.create_time,
+          noteFileUpdateTime: addedNoteInfo.update_time,
+          knowledgeRepo: currentForm.value.knowledgeRepo,
+        },
+      });
+
+      // 转换完成后刷新数据
+      console.log("add_file currentDatabase", store.currentDatabase);
+      await store.fetchRepos();
+      await store.fetchFiles(store.currentDatabase);
+
+      // 关闭对话框并清空表单
+      isAddFileModalVisible.value = false;
+      resetForm();
+    } catch (error) {
+      console.error("Error adding file:", error);
+    }
+  };
+
+  const handleFileInfoEvent = async (payload) => {
+    if (!payload) {
+      console.error("事件 payload 为空");
+      return;
+    }
+
+    const fileInfo = payload;
+    console.log("handleFileInfoEvent", payload);
+
+    // 构建表单数据
+    currentForm.value = {
+      id: 0,
+      filePath: fileInfo.file_path,
+      importFileName: fileInfo.file_name,
+      description: fileInfo.description,
+      importedFileTags: fileInfo.tags.join(","),
+      type: fileInfo.file_type,
+      library: fileInfo.file_repo,
+      importFileCreateTime: fileInfo.create_time,
+      importFileSize: fileInfo.file_size,
+      knowledgeRepo: fileInfo.knowledge_repo,
+      newNoteForm: {
+        id: 0,
+        description: `${fileInfo.file_name}的笔记`,
+        noteFileName: `${fileInfo.file_name.replace(/\.[^/.]+$/, "")}_note.md`,
+        notesTags: fileInfo.tags.join(","),
+        noteFileType: "md",
+        fromImportedFile: fileInfo.file_name,
+        fromImportedFileLibrary: fileInfo.file_repo,
+        noteFileCreateTime: new Date().toISOString(),
+        noteFileUpdateTime: new Date().toISOString(),
+        knowledgeRepo: fileInfo.knowledge_repo,
+      },
+    };
+
+    // 调用 addFile 方法
+    try {
+      await addFileFromWeb();
+      message.success("文件添加成功");
+    } catch (error) {
+      console.error("添加文件失败:", error);
+      message.error(`添加文件失败: ${error.message || error}`);
+    }
+  };
+
   // 清空表单
   const resetForm = () => {
     currentForm.value = {
@@ -533,6 +652,7 @@ export function useFormHandling({
     showAddFileModal,
     openFileBrowser,
     addFile,
+    handleFileInfoEvent,
     resetForm,
     validateForm,
     validateFilePath,
