@@ -636,6 +636,17 @@ export function useFormHandling({
     };
   };
 
+  // 修复缺失的方法
+  const handleFormUpdate = (newForm) => {
+    currentForm.value = newForm;
+  };
+
+  const handleModalCancel = () => {
+    isAddFileModalVisible.value = false;
+    resetForm();
+    message.info("已取消添加文件");
+  };
+
   // 返回所有需要的函数和状态
   return {
     // 状态
@@ -659,5 +670,7 @@ export function useFormHandling({
     validateTags,
     createImportFileList,
     addFileToDatabase,
+    handleFormUpdate,
+    handleModalCancel
   };
 }

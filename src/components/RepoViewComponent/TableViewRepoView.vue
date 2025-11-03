@@ -2,8 +2,9 @@
 <template>
   <div class="main-content-wrapper">
     <!-- 顶部工具栏 -->
-    <TopToolbar :progresses="progresses" @toggle-task-list="toggleTaskList" @backup-database="backupDatabase"
-      @recover-database="recoverDatabase" @import-items="importItems" @export-items="exportItems" />
+    <TopToolbar :progresses="progresses" :categorized-progresses="categorizedProgresses"
+      @toggle-task-list="toggleTaskList" @backup-database="backupDatabase" @recover-database="recoverDatabase"
+      @import-items="importItems" @export-items="exportItems" />
 
     <!-- 任务列表抽屉 -->
     <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" />
@@ -79,7 +80,9 @@ const message = useMessage()
 
 // 使用组合式函数
 const {
-  progresses,
+  progresses, // 原始任务数组（保持兼容）
+  categorizedProgresses, // 新增：分类后的任务
+  getProgressCountByType, // 新增：按类型获取任务数量
   showTaskList,
   toggleTaskList,
   startProgressListener,
@@ -100,6 +103,8 @@ const {
   openFileBrowser,
   addFile,
   handleFileInfoEvent,
+  handleFormUpdate,
+  handleModalCancel,
   resetForm,
   validateForm,
   validateFilePath,
@@ -164,6 +169,8 @@ const {
 const backupDatabase = async () => {
   try {
     message.info('开始备份资料库...')
+    // 可以在这里添加备份任务
+    // progresses.value.push({ ...备份任务配置, type: 'backup' })
     await new Promise(resolve => setTimeout(resolve, 1000))
     message.success('资料库备份成功')
   } catch (error) {
@@ -175,6 +182,8 @@ const backupDatabase = async () => {
 const recoverDatabase = async () => {
   try {
     message.info('开始从备份文件中恢复...')
+    // 可以在这里添加恢复任务
+    // progresses.value.push({ ...恢复任务配置, type: 'recovery' })
     await new Promise(resolve => setTimeout(resolve, 1000))
     message.success('资料库恢复成功')
   } catch (error) {
@@ -186,6 +195,8 @@ const recoverDatabase = async () => {
 const importItems = async () => {
   try {
     message.info('开始导入指定条目...')
+    // 可以在这里添加导入任务
+    // progresses.value.push({ ...导入任务配置, type: 'import' })
     await new Promise(resolve => setTimeout(resolve, 1000))
     message.success('条目导入成功')
   } catch (error) {
@@ -197,6 +208,8 @@ const importItems = async () => {
 const exportItems = async () => {
   try {
     message.info('开始导出指定条目...')
+    // 可以在这里添加导出任务
+    // progresses.value.push({ ...导出任务配置, type: 'export' })
     await new Promise(resolve => setTimeout(resolve, 1000))
     message.success('条目导出成功')
   } catch (error) {

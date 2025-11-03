@@ -1,10 +1,71 @@
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { platform } from "@tauri-apps/plugin-os";
 
 export function useProgress({ store, message }) {
   const progresses = ref([]);
   const showTaskList = ref(false);
+
+  // 新增：计算属性 - 按任务类型分类
+  const categorizedProgresses = computed(() => {
+    const tasks = progresses.value || [];
+
+    return {
+      // 所有任务（保持原有接口兼容性）
+      all: tasks,
+      // 转换任务
+      conversion: tasks.filter(
+        (progress) =>
+          progress.type === "conversion" ||
+          progress.taskType === "conversion" ||
+          progress.name?.includes("转换") ||
+          progress.message?.includes("转换") ||
+          progress.fileName?.includes("转换")
+      ),
+      // 备份任务
+      backup: tasks.filter(
+        (progress) =>
+          progress.type === "backup" ||
+          progress.taskType === "backup" ||
+          progress.name?.includes("备份") ||
+          progress.message?.includes("备份") ||
+          progress.fileName?.includes("备份")
+      ),
+      // 恢复任务
+      recovery: tasks.filter(
+        (progress) =>
+          progress.type === "recovery" ||
+          progress.taskType === "recovery" ||
+          progress.name?.includes("恢复") ||
+          progress.message?.includes("恢复") ||
+          progress.fileName?.includes("恢复")
+      ),
+      // 导入任务
+      import: tasks.filter(
+        (progress) =>
+          progress.type === "import" ||
+          progress.taskType === "import" ||
+          progress.name?.includes("导入") ||
+          progress.message?.includes("导入") ||
+          progress.fileName?.includes("导入")
+      ),
+      // 导出任务
+      export: tasks.filter(
+        (progress) =>
+          progress.type === "export" ||
+          progress.taskType === "export" ||
+          progress.name?.includes("导出") ||
+          progress.message?.includes("导出") ||
+          progress.fileName?.includes("导出")
+      ),
+    };
+  });
+
+  // 新增：获取特定类型任务数量的辅助函数
+  const getProgressCountByType = (type) => {
+    return categorizedProgresses.value[type]?.length || 0;
+  };
 
   // 切换任务列表显示
   const toggleTaskList = () => {
@@ -21,6 +82,7 @@ export function useProgress({ store, message }) {
       total: 100,
       message: "开始转换...",
       fileName,
+      type: "conversion", // 新增：标记任务类型
     };
 
     progresses.value.push(newProgress);
@@ -108,6 +170,7 @@ export function useProgress({ store, message }) {
             total: 100,
             message: `开始转换 ${fileName}...`,
             fileName,
+            type: "conversion", // 新增：标记任务类型
           });
 
           // 监听该文件的进度
@@ -194,6 +257,40 @@ export function useProgress({ store, message }) {
     };
   };
 
+  // 新增：获取分类统计信息
+  const getCategorizedStats = () => {
+    const categorized = categorizedProgresses.value;
+    return {
+      conversion: {
+        total: categorized.conversion.length,
+        completed: categorized.conversion.filter((p) => p.current >= 100)
+          .length,
+        inProgress: categorized.conversion.filter((p) => p.current < 100)
+          .length,
+      },
+      backup: {
+        total: categorized.backup.length,
+        completed: categorized.backup.filter((p) => p.current >= 100).length,
+        inProgress: categorized.backup.filter((p) => p.current < 100).length,
+      },
+      recovery: {
+        total: categorized.recovery.length,
+        completed: categorized.recovery.filter((p) => p.current >= 100).length,
+        inProgress: categorized.recovery.filter((p) => p.current < 100).length,
+      },
+      import: {
+        total: categorized.import.length,
+        completed: categorized.import.filter((p) => p.current >= 100).length,
+        inProgress: categorized.import.filter((p) => p.current < 100).length,
+      },
+      export: {
+        total: categorized.export.length,
+        completed: categorized.export.filter((p) => p.current >= 100).length,
+        inProgress: categorized.export.filter((p) => p.current < 100).length,
+      },
+    };
+  };
+
   // 清除所有已完成的任务
   const clearCompletedTasks = () => {
     progresses.value = progresses.value.filter((p) => p.current < 100);
@@ -205,10 +302,12 @@ export function useProgress({ store, message }) {
     const report = {
       timestamp: new Date().toISOString(),
       stats: getConversionStats(),
+      categorizedStats: getCategorizedStats(), // 新增：分类统计
       tasks: progresses.value.map((p) => ({
         fileName: p.fileName,
         progress: p.current,
         message: p.message,
+        type: p.type || "unknown", // 新增：任务类型
         status: p.current >= 100 ? "completed" : "in-progress",
       })),
     };
@@ -247,7 +346,8 @@ export function useProgress({ store, message }) {
   };
 
   return {
-    progresses,
+    // 原有返回属性（保持兼容性）
+    progresses, // 仍然返回原始数组
     showTaskList,
     toggleTaskList,
     startProgressListener,
@@ -259,5 +359,10 @@ export function useProgress({ store, message }) {
     clearCompletedTasks,
     exportConversionReport,
     retryFailedTasks,
+
+    // 新增：分类任务相关属性
+    categorizedProgresses, // 分类后的任务
+    getProgressCountByType, // 按类型获取任务数量
+    getCategorizedStats, // 获取分类统计
   };
 }

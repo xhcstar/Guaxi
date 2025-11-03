@@ -162,15 +162,20 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.importFileName,
             onUpdateValue: async (value) => {
-              const newRow = { ...row };
-              newRow.importFileName = value;
-              const error = validateTableCell(newRow);
+              const error = validateTableCell(row, "importFileName", value);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              row.importFileName = value;
-              await updateImportedFile(row);
+              // 直接更新行数据
+              const updatedRow = { ...row, importFileName: value };
+              try {
+                await updateImportedFile(updatedRow);
+                // 更新成功后同步到原始行
+                Object.assign(row, updatedRow);
+              } catch (error) {
+                console.error("更新失败:", error);
+              }
             },
           }),
       },
@@ -183,15 +188,18 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.description,
             onUpdateValue: async (value) => {
-              const newRow = { ...row };
-              newRow.description = value;
-              const error = validateTableCell(newRow);
+              const error = validateTableCell(row, "description", value);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              row.description = value;
-              await updateImportedFile(row);
+              const updatedRow = { ...row, description: value };
+              try {
+                await updateImportedFile(updatedRow);
+                Object.assign(row, updatedRow);
+              } catch (error) {
+                console.error("更新失败:", error);
+              }
             },
             enableAutoComplete: false,
           }),
@@ -205,21 +213,24 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.importedFileTags,
             onUpdateValue: async (value) => {
-              const newRow = { ...row };
-              newRow.importedFileTags = value;
-              const error = validateTableCell(newRow);
+              const error = validateTableCell(row, "importedFileTags", value);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              row.importedFileTags = value;
-              await updateImportedFile(row);
+              const updatedRow = { ...row, importedFileTags: value };
+              try {
+                await updateImportedFile(updatedRow);
+                Object.assign(row, updatedRow);
+              } catch (error) {
+                console.error("更新失败:", error);
+              }
             },
             enableAutoComplete: true,
             searchType: "importedFileTags",
           }),
       },
-      // 文件类型列
+      // 文件类型列 - 只读
       {
         title: () => h("span", { style: titleStyle }, "文件类型"),
         key: "type",
@@ -239,21 +250,24 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.library,
             onUpdateValue: async (value) => {
-              const newRow = { ...row };
-              newRow.library = value;
-              const error = validateTableCell(newRow);
+              const error = validateTableCell(row, "library", value);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              row.library = value;
-              await updateImportedFile(row);
+              const updatedRow = { ...row, library: value };
+              try {
+                await updateImportedFile(updatedRow);
+                Object.assign(row, updatedRow);
+              } catch (error) {
+                console.error("更新失败:", error);
+              }
             },
             enableAutoComplete: true,
             searchType: "libraries",
           }),
       },
-      // 入库时间列
+      // 入库时间列 - 只读
       {
         title: () => h("span", { style: titleStyle }, "入库时间"),
         key: "importFileCreateTime",
@@ -264,7 +278,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             readonly: true,
           }),
       },
-      // 文件大小列
+      // 文件大小列 - 只读
       {
         title: () => h("span", { style: titleStyle }, "文件大小"),
         key: "importFileSize",
@@ -275,7 +289,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             readonly: true,
           }),
       },
-      // 笔记文件名列
+      // 笔记相关列 - 全部只读
       {
         title: () => h("span", { style: titleStyle }, "笔记文件名"),
         key: "newNoteForm.noteFileName",
@@ -286,7 +300,6 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             readonly: true,
           }),
       },
-      // 笔记描述列
       {
         title: () => h("span", { style: titleStyle }, "笔记描述"),
         key: "newNoteForm.description",
@@ -297,7 +310,6 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             readonly: true,
           }),
       },
-      // 笔记标签列
       {
         title: () => h("span", { style: titleStyle }, "笔记标签"),
         key: "newNoteForm.notesTags",
@@ -308,7 +320,6 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             readonly: true,
           }),
       },
-      // 笔记创建时间列
       {
         title: () => h("span", { style: titleStyle }, "笔记创建时间"),
         key: "newNoteForm.noteFileCreateTime",
@@ -319,7 +330,6 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             readonly: true,
           }),
       },
-      // 笔记修改时间列
       {
         title: () => h("span", { style: titleStyle }, "笔记修改时间"),
         key: "newNoteForm.noteFileUpdateTime",

@@ -3,9 +3,9 @@
     :closable="false" class="add-file-modal" style="width: 90%; max-width: 800px;">
     <n-form :model="form" :rules="rules" label-placement="left" label-width="auto" label-align="right" size="medium"
       ref="formRef" class="custom-form">
-      <!-- 表单内容保持不变 -->
       <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title" :path="column.key"
         :label-style="{ fontWeight: 'bold', color: '#333', fontSize: '15px' }" class="form-item">
+
         <!-- 文件路径 - 带选择文件按钮 -->
         <template v-if="column.key === 'filePath'">
           <n-input-group>
@@ -19,9 +19,9 @@
           </n-input-group>
         </template>
 
-        <!-- 只读字段 -->
+        <!-- 只读字段 - 修复：使用 :value 而不是 v-model，移除 @update:value -->
         <template v-else-if="['importFileName', 'type', 'importFileSize', 'importFileCreateTime'].includes(column.key)">
-          <n-input v-model:value="form[column.key]" :placeholder="`${column.title}`" readonly clearable />
+          <n-input :value="getDisplayValue(form[column.key])" :placeholder="`${column.title}`" readonly clearable />
         </template>
 
         <!-- 描述 - 多行文本 -->
@@ -124,6 +124,12 @@ const emit = defineEmits([
 const formRef = ref(null)
 const submitting = ref(false)
 
+// 获取显示值的方法
+const getDisplayValue = (value) => {
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
 // 处理表单值更新
 const handleValueUpdate = (key, value) => {
   const newForm = { ...props.form, [key]: value }
@@ -155,11 +161,6 @@ const handleSubmit = async () => {
   try {
     submitting.value = true
 
-    // 验证表单
-    if (formRef.value) {
-      await formRef.value.validate()
-    }
-
     emit('submit')
   } catch (errors) {
     console.error('表单验证失败:', errors)
@@ -168,7 +169,7 @@ const handleSubmit = async () => {
   }
 }
 
-// 处理取消 - 修复这里
+// 处理取消
 const handleCancel = () => {
   console.log('取消按钮被点击')
   // 发出 cancel 事件
