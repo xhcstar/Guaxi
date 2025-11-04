@@ -1,14 +1,24 @@
 import { ref, computed } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 
-export function useSearch({ store, message }) {
-  // 搜索参数
+export const useSearch = ({ store, message, externalState = {} }) => {
+  // 使用外部状态或创建默认状态
+  const isLibraryLoading = externalState.isLibraryLoading || ref(false);
+  const isImportedFileTagLoading =
+    externalState.isImportedFileTagLoading || ref(false);
+
+  // 添加库选项和标签选项状态
+  const libraryOptions = ref([]);
+  const importedFileTagOptions = ref([]);
+
   const searchParams = ref({
     keyword: "",
-    library: null,
-    tags: [],
-    dateRange: null,
-    knowledgeRepo: null,
-    fileType: null,
+    fileType: "",
+    knowledgeRepo: "",
+    library: "",
+    importedFileTags: "",
+    importFileCreateTime: null,
+    importFileSize: null,
   });
 
   // 搜索面板状态
@@ -55,19 +65,21 @@ export function useSearch({ store, message }) {
     }
 
     // 标签筛选
-    if (searchParams.value.tags && searchParams.value.tags.length > 0) {
+    if (searchParams.value.importedFileTags) {
       data = data.filter((item) => {
-        const itemTags = item.importedFileTags?.split(",") || [];
-        return searchParams.value.tags.some((tag) => itemTags.includes(tag));
+        const itemTags = item.importedFileTags?.toLowerCase() || "";
+        return itemTags.includes(
+          searchParams.value.importedFileTags.toLowerCase()
+        );
       });
     }
 
     // 日期范围筛选
     if (
-      searchParams.value.dateRange &&
-      searchParams.value.dateRange.length === 2
+      searchParams.value.importFileCreateTime &&
+      searchParams.value.importFileCreateTime.length === 2
     ) {
-      const [start, end] = searchParams.value.dateRange;
+      const [start, end] = searchParams.value.importFileCreateTime;
       data = data.filter((item) => {
         const itemDate = new Date(item.importFileCreateTime).getTime();
         return itemDate >= start && itemDate <= end;
@@ -100,26 +112,54 @@ export function useSearch({ store, message }) {
   };
 
   // 库搜索
-  const handleLibrarySearch = (query) => {
-    console.log("库搜索:", query);
-    // 这里可以调用后端搜索接口
+  const handleLibrarySearch = async (query) => {
+    console.log("handleLibrarySearch 被调用，搜索关键字:", query);
+    isLibraryLoading.value = true;
+    try {
+      const libraries = await invoke("search_libraries", { query });
+      console.log("handleLibrarySearch 返回结果:", libraries);
+
+      // 关键修改：将搜索结果保存到 libraryOptions
+      libraryOptions.value = libraries.map((lib) => ({
+        label: lib,
+        value: lib,
+      }));
+    } catch (error) {
+      console.error("搜索所属库失败:", error);
+    } finally {
+      isLibraryLoading.value = false;
+    }
   };
 
-  // 标签搜索
-  const handleImportedFileTagSearch = (query) => {
-    console.log("标签搜索:", query);
-    // 这里可以调用后端搜索接口
+  const handleImportedFileTagSearch = async (query) => {
+    console.log("handleImportedFileTagSearch 被调用，搜索关键字:", query);
+    isImportedFileTagLoading.value = true;
+    try {
+      const tags = await invoke("search_imported_files_tags", { query });
+      console.log("handleImportedFileTagSearch 返回结果:", tags);
+
+      // 关键修改：将搜索结果保存到 importedFileTagOptions
+      importedFileTagOptions.value = tags.map((tag) => ({
+        label: tag,
+        value: tag,
+      }));
+    } catch (error) {
+      console.error("搜索导入文件标签失败:", error);
+    } finally {
+      isImportedFileTagLoading.value = false;
+    }
   };
 
   // 清除搜索条件
   const clearSearch = () => {
     searchParams.value = {
       keyword: "",
-      library: null,
-      tags: [],
-      dateRange: null,
-      knowledgeRepo: null,
-      fileType: null,
+      fileType: "",
+      knowledgeRepo: "",
+      library: "",
+      importedFileTags: "",
+      importFileCreateTime: null,
+      importFileSize: null,
     };
     message.info("已清除所有搜索条件");
   };
@@ -211,6 +251,11 @@ export function useSearch({ store, message }) {
     fileTypeOptions,
     knowledgeRepoOptions,
     filteredData,
+    // 关键修改：返回库选项和标签选项
+    libraryOptions,
+    importedFileTagOptions,
+    isLibraryLoading,
+    isImportedFileTagLoading,
     handleSearch,
     toggleSearchPanel,
     handleLibrarySearch,
@@ -225,4 +270,4 @@ export function useSearch({ store, message }) {
     addToSearchHistory,
     loadFromSearchHistory,
   };
-}
+};

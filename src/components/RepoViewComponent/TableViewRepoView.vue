@@ -144,11 +144,21 @@ const {
   fileTypeOptions,
   knowledgeRepoOptions,
   filteredData,
+  // 关键修改：获取库选项和标签选项
+  libraryOptions: searchLibraryOptions, // 重命名避免冲突
+  importedFileTagOptions: searchImportedFileTagOptions, // 重命名避免冲突
   handleSearch,
   toggleSearchPanel,
   handleLibrarySearch,
   handleImportedFileTagSearch
-} = useSearch({ store, message })
+} = useSearch({
+  store,
+  message,
+  externalState: {
+    isLibraryLoading: isLibraryLoading,
+    isImportedFileTagLoading: isImportedFileTagLoading
+  }
+})
 
 // 使用表格配置
 const {
