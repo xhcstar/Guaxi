@@ -16,18 +16,16 @@
       :library-options="libraryOptions" :imported-file-tag-options="importedFileTagOptions" @search="handleSearch"
       @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch" />
 
+    <!-- 表格工具栏 -->
     <div class="toolbar-container">
-      <n-space vertical :size="12" class="container">
-        <!-- 工具栏 -->
-        <TableToolbar @sort="sortTitle" @clear-filters="clearFilters" @add-file="showAddFileModal" />
-      </n-space>
+      <TableToolbar @sort="sortTitle" @clear-filters="clearFilters" @add-file="showAddFileModal" />
     </div>
 
-    <div class="table-container">
-      <!-- 数据表格 -->
-      <DataTable ref="tableRef" :columns="columns" :data="filteredData" :table-height="tableHeight" :scroll-x="scrollX"
-        :pagination="pagination" :row-key="rowKey" :row-props="rowProps" @update:checked-row-keys="handleCheckboxUpdate"
-        @row-contextmenu="handleRowContextMenu" />
+    <!-- 数据表格容器 -->
+    <div class="table-container" ref="tableContainerRef">
+      <DataTable ref="tableRef" :columns="columns" :data="filteredData" :table-height="dynamicTableHeight"
+        :scroll-x="scrollX" :pagination="pagination" :row-key="rowKey" :row-props="rowProps"
+        @update:checked-row-keys="handleCheckboxUpdate" @row-contextmenu="handleRowContextMenu" />
     </div>
 
     <!-- 右键菜单 -->
@@ -46,11 +44,9 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick, h } from 'vue'
-import { NIcon, NButton, NDropdown, useMessage, NDataTable, NProgress, NTag, NText, NBadge, NCard, NList, NListItem, NDrawer, NDrawerContent, NModal, NForm, NFormItem, NInput, NInputGroup, NAutoComplete, NSelect, NDatePicker, NSpace, NTooltip } from 'naive-ui'
-import { platform } from '@tauri-apps/plugin-os'
-import { listen } from '@tauri-apps/api/event'
+import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+
 
 // Stores
 import { repoStore } from '../../stores/repoStore'
@@ -77,6 +73,20 @@ import { useTableConfig } from './composables/useTableConfig.js'
 const store = repoStore()
 const eventStore = useEventStore()
 const message = useMessage()
+const containerHeight = ref(0)
+const handleWindowResize = () => {
+  nextTick(() => {
+    const container = document.querySelector('.table-container')
+    if (container) {
+      containerHeight.value = container.clientHeight
+    }
+  })
+}
+
+const dynamicTableHeight = computed(() => {
+  // 返回实际可用高度，不做额外减法
+  return containerHeight.value > 0 ? containerHeight.value : 400
+})
 
 // 使用组合式函数
 const {
@@ -289,6 +299,25 @@ onMounted(async () => {
   await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
   document.addEventListener('click', handleGlobalClick, true)
 
+  // 计算表格容器高度 - 使用更准确的方式
+  const calculateHeight = () => {
+    nextTick(() => {
+      const container = document.querySelector('.table-container')
+      if (container) {
+        const rect = container.getBoundingClientRect()
+        containerHeight.value = rect.height
+        console.log('Table container height:', containerHeight.value)
+      }
+    })
+  }
+
+  calculateHeight()
+
+  // 监听窗口大小变化
+  window.addEventListener('resize', () => {
+    calculateHeight()
+  })
+
   try {
     // 安全初始化
     await eventStore.initGlobalListeners()
@@ -310,11 +339,12 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleGlobalClick, true)
+  window.removeEventListener('resize', handleWindowResize)
+  stopProgressListener()
 })
 </script>
 
 <style scoped>
-/* 样式保持不变 */
 .main-content-wrapper {
   display: flex;
   flex-direction: column;
@@ -322,22 +352,21 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.search-container {
-  padding: 0 16px 16px;
-}
-
 .toolbar-container {
-  padding: 0 16px 12px;
+  padding: 8px 16px;
   flex-shrink: 0;
+  background-color: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
 }
 
 .table-container {
   flex: 1;
   width: 100%;
-  overflow: hidden;
-  padding: 0 16px 16px;
+  overflow: visible;
+  padding: 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 </style>

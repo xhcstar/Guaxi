@@ -1,19 +1,25 @@
 <template>
   <div :style="style" @click="handleOnClick" class="editable-cell">
-    <!-- 使用 n-auto-complete 替换 n-input，当需要自动补全时 -->
+    <!-- 编辑状态：自动补全 -->
     <n-auto-complete v-if="isEdit && enableAutoComplete" ref="inputRef" v-model:value="inputValue" :options="options"
       :loading="isLoading" :style="inputStyle" @update:value="handleUpdateValue" @blur="handleChange"
       @search="handleSearch" @keyup.enter="handleChange" clearable />
-    <!-- 否则使用 n-input -->
+    <!-- 编辑状态：普通输入 -->
     <n-input v-else-if="isEdit" ref="inputRef" v-model:value="inputValue" :style="inputStyle"
       @update:value="handleUpdateValue" @change="handleChange" @blur="handleChange" @keyup.enter="handleChange" />
-    <span v-else>{{ value }}</span>
+    <!-- 展示状态：带 Tooltip 的截断文本 -->
+    <n-tooltip v-else placement="top" trigger="hover" :show-arrow="true">
+      <template #trigger>
+        <span class="cell-content">{{ truncatedValue }}</span>
+      </template>
+      {{ value }}
+    </n-tooltip>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, watch, onMounted, onUnmounted, h } from 'vue';
-import { NInput, NAutoComplete } from 'naive-ui';
+import { ref, nextTick, watch, onMounted, onUnmounted, computed, h } from 'vue';
+import { NInput, NAutoComplete, NTooltip } from 'naive-ui';
 import { invoke } from '@tauri-apps/api/core';
 
 const props = defineProps({
@@ -42,6 +48,12 @@ const inputValue = ref(props.value);
 const options = ref([]); // 自动补全的选项
 const isLoading = ref(false); // 是否正在加载
 
+// 计算截断的文本（最多显示 50 个字符）
+const truncatedValue = computed(() => {
+  const val = String(props.value || '');
+  return val.length > 50 ? val.substring(0, 50) + '...' : val;
+});
+
 // 样式
 const style = {
   minHeight: '60px',
@@ -50,9 +62,9 @@ const style = {
 
 // 限制 input 宽度
 const inputStyle = {
-  width: '100%', // 宽度与单元格一致
+  width: '100%',
   height: '80%',
-  maxWidth: '100%', // 最大宽度，避免过大
+  maxWidth: '100%',
 };
 
 // 处理点击事件
@@ -60,7 +72,7 @@ const handleOnClick = () => {
   if (props.readonly) return;
   isEdit.value = true;
   nextTick(() => {
-    inputRef.value?.focus(); // 确保焦点设置到输入框
+    inputRef.value?.focus();
   });
 };
 
@@ -74,7 +86,7 @@ const handleChange = () => {
 
   console.log(`handleChange 被调用，输入值: ${inputValue.value}`);
   if (props.onUpdateValue) {
-    props.onUpdateValue(inputValue.value); // 调用父组件的回调函数
+    props.onUpdateValue(inputValue.value);
   }
   emit('update:value', inputValue.value);
   isEdit.value = false;
@@ -105,7 +117,6 @@ const handleSearch = async (query) => {
         result = await invoke('search_imported_file_libraries', { query });
         break;
       default:
-        // console.error('未知的搜索类型:', props.searchType);
         return;
     }
 
@@ -162,18 +173,23 @@ watch(() => props.value, (newValue) => {
 .editable-cell {
   display: flex;
   align-items: center;
-  justify-content: left;
+  justify-content: flex-start;
   padding: 0px;
   margin: 0px;
   min-height: 60px;
   width: 100%;
 }
 
-.editable-cell span {
+.cell-content {
   width: 100%;
-  word-wrap: break-word;
-  white-space: normal;
+  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   line-height: 1.5;
+  cursor: pointer;
 }
 
 :deep(.n-input) {
@@ -190,5 +206,9 @@ watch(() => props.value, (newValue) => {
 
 :deep(.n-auto-complete .n-input__input) {
   border-radius: 8px;
+}
+
+:deep(.n-tooltip) {
+  max-width: 100%;
 }
 </style>

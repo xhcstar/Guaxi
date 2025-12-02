@@ -37,7 +37,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
   const rowKey = (row) => row.id;
 
   // 行高函数
-  const heightForRow = () => 85;
+  const heightForRow = () => 40;
 
   // 标题样式
   const titleStyle = {
@@ -282,7 +282,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
       {
         title: () => h("span", { style: titleStyle }, "文件大小"),
         key: "importFileSize",
-        width: 100,
+        width: 120,
         render: (row) =>
           h(ShowOrEdit, {
             value: row.importFileSize,

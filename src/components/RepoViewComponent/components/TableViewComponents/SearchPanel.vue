@@ -1,65 +1,80 @@
 <template>
   <div class="search-container">
     <n-card class="search-card" :bordered="false">
-      <n-space vertical :size="16">
-        <n-space align="center" justify="space-between">
+      <!-- 紧凑型搜索栏头部 -->
+      <div class="search-header">
+        <div class="search-left">
           <h3 class="search-title">搜索</h3>
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-button @click="$emit('update:collapsed', !collapsed)" class="search-button" secondary>
-                <n-icon :size="20">
-                  <svg v-if="collapsed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-                  </svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19 13H5v-2h14v2z" />
-                  </svg>
-                </n-icon>
-              </n-button>
-            </template>
-            {{ collapsed ? '展开高级搜索' : '折叠高级搜索' }}
-          </n-tooltip>
-        </n-space>
+        </div>
+        <div class="search-controls">
+          <n-button-group>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button @click="$emit('search')" class="search-btn" type="primary" size="small">
+                  <template #icon>
+                    <n-icon :component="SearchIcon" :size="16" />
+                  </template>
+                  搜索
+                </n-button>
+              </template>
+              快速搜索
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button @click="$emit('update:collapsed', !collapsed)" class="toggle-btn" size="small" secondary>
+                  <n-icon :size="16">
+                    <svg v-if="collapsed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M7 10l5 5 5-5z" />
+                    </svg>
+                    <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M7 14l5-5 5 5z" />
+                    </svg>
+                  </n-icon>
+                </n-button>
+              </template>
+              {{ collapsed ? '展开高级搜索' : '折叠高级搜索' }}
+            </n-tooltip>
+          </n-button-group>
+        </div>
+      </div>
 
-        <!-- 默认显示关键字搜索栏 -->
-        <n-input-group>
-          <n-input v-model:value="searchParams.keyword" placeholder="输入关键字搜索" clearable>
-            <template #prefix>
-              <n-icon :component="SearchIcon" />
-            </template>
-          </n-input>
-          <n-button secondary @click="$emit('search')" class="search-button">
-            搜索
-          </n-button>
-        </n-input-group>
+      <!-- 关键字搜索输入框 - 始终显示 -->
+      <n-input-group class="keyword-search">
+        <n-input v-model:value="searchParams.keyword" placeholder="输入关键字搜索..." clearable size="small">
+          <template #prefix>
+            <n-icon :component="SearchIcon" :size="16" />
+          </template>
+        </n-input>
+      </n-input-group>
 
-        <!-- 高级搜索条件 - 点击展开后显示 -->
-        <n-space v-show="!collapsed" vertical :size="12">
-          <n-space :size="16" wrap>
-            <n-select v-model:value="searchParams.library" :options="libraryOptions" placeholder="选择文件库" clearable
-              filterable style="min-width: 180px" @search="$emit('library-search', $event)" />
+      <!-- 高级搜索条件 - 根据折叠状态显示 -->
+      <transition name="search-expand" @enter="onEnter" @leave="onLeave">
+        <div v-show="!collapsed" class="advanced-search">
+          <n-space :size="12" wrap>
+            <n-select v-model:value="searchParams.library" :options="libraryOptions" placeholder="文件库" clearable
+              filterable size="small" style="min-width: 140px" @search="$emit('library-search', $event)" />
 
-            <n-select v-model:value="searchParams.tags" :options="importedFileTagOptions" placeholder="选择标签" clearable
-              filterable multiple style="min-width: 180px" @search="$emit('tag-search', $event)" />
+            <n-select v-model:value="searchParams.tags" :options="importedFileTagOptions" placeholder="标签" clearable
+              filterable multiple size="small" style="min-width: 140px" @search="$emit('tag-search', $event)" />
 
-            <n-date-picker v-model:value="searchParams.dateRange" type="daterange" clearable placeholder="选择日期范围"
-              style="min-width: 220px" />
+            <n-date-picker v-model:value="searchParams.dateRange" type="daterange" clearable size="small"
+              placeholder="日期范围" style="min-width: 200px" />
 
-            <n-select v-model:value="searchParams.knowledgeRepo" :options="knowledgeRepoOptions" placeholder="选择知识库"
-              clearable filterable style="min-width: 180px" />
+            <n-select v-model:value="searchParams.knowledgeRepo" :options="knowledgeRepoOptions" placeholder="知识库"
+              clearable filterable size="small" style="min-width: 140px" />
 
-            <n-select v-model:value="searchParams.fileType" :options="fileTypeOptions" placeholder="选择文件类型" clearable
-              style="min-width: 150px" />
+            <n-select v-model:value="searchParams.fileType" :options="fileTypeOptions" placeholder="文件类型" clearable
+              size="small" style="min-width: 120px" />
           </n-space>
-        </n-space>
-      </n-space>
+        </div>
+      </transition>
     </n-card>
   </div>
 </template>
 
 <script setup>
 import { ref, h } from 'vue'
-import { NCard, NSpace, NInputGroup, NInput, NButton, NIcon, NTooltip, NSelect, NDatePicker } from 'naive-ui'
+import { NCard, NSpace, NInputGroup, NInput, NButton, NIcon, NTooltip, NSelect, NDatePicker, NButtonGroup } from 'naive-ui'
 
 defineProps({
   searchParams: {
@@ -90,7 +105,7 @@ defineProps({
 
 defineEmits(['update:search-params', 'update:collapsed', 'search', 'library-search', 'tag-search'])
 
-// 搜索图标组件
+// 搜索图标
 const SearchIcon = {
   render() {
     return h('svg', {
@@ -104,50 +119,130 @@ const SearchIcon = {
     ])
   }
 }
+
+// 动画钩子
+const onEnter = (el) => {
+  el.style.maxHeight = '0px'
+  el.style.opacity = '0'
+  el.offsetHeight
+  el.style.maxHeight = el.scrollHeight + 'px'
+  el.style.opacity = '1'
+}
+
+const onLeave = (el) => {
+  el.style.maxHeight = el.scrollHeight + 'px'
+  el.style.opacity = '1'
+  el.offsetHeight
+  el.style.maxHeight = '0px'
+  el.style.opacity = '0'
+}
 </script>
 
 <style scoped>
 .search-container {
-  padding: 0 16px 16px;
+  padding: 8px 16px 12px;
 }
 
 .search-card {
   border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   transition: all 0.3s ease;
 }
 
 .search-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.search-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 12px;
+}
+
+.search-left {
+  flex: 1;
 }
 
 .search-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   color: #333;
+  line-height: 1;
 }
 
-.search-button {
+.search-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.search-btn {
   background-color: #409EFF;
   border-color: #409EFF;
   color: white;
   border-radius: 6px;
   transition: all 0.2s ease;
+  padding: 4px 12px;
 }
 
-.search-button:hover {
+.search-btn:hover {
   background-color: #3385d9;
   border-color: #3385d9;
 }
 
-:deep(.n-input-group) {
-  border-radius: 20px;
+.toggle-btn {
+  border-radius: 6px;
+  color: #5a5a5a;
+  transition: all 0.2s ease;
+  padding: 4px 8px;
+}
+
+.toggle-btn:hover {
+  background-color: #f0f4ff;
+  color: #409EFF;
+}
+
+.keyword-search {
+  margin-bottom: 8px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
-:deep(.n-input),
-:deep(.n-button) {
-  border-radius: 16px !important;
+.advanced-search {
+  overflow: hidden;
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+  padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+}
+
+/* 平滑展开动画 */
+.search-expand-enter-active,
+.search-expand-leave-active {
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+}
+
+.search-expand-enter-from,
+.search-expand-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+
+:deep(.n-input-group) {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+:deep(.n-input.n-input--small) {
+  height: 32px;
+}
+
+:deep(.n-select) {
+  border-radius: 6px;
+}
+
+:deep(.n-date-picker) {
+  border-radius: 6px;
 }
 </style>

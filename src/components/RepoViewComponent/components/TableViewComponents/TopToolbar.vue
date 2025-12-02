@@ -1,32 +1,32 @@
-<!-- TopToolbar.vue -->
 <template>
   <div class="top-toolbar">
-    <n-space justify="space-between" align="center">
-      <n-space class="toolbar-left">
+    <n-space justify="space-between" align="center" :size="8">
+      <n-space class="toolbar-left" :size="4">
         <!-- 转换任务列表按钮 -->
         <n-tooltip trigger="hover">
           <template #trigger>
-            <n-button text @click="$emit('toggle-task-list')"
+            <n-button text @click="$emit('toggle-task-list')" size="small"
               :type="categorizedProgresses.conversion.length > 0 ? 'primary' : 'default'" class="toolbar-button">
               <template #icon>
-                <n-icon :component="TasksApp20Regular" />
+                <n-icon :component="TasksApp20Regular" :size="18" />
               </template>
               <n-badge v-if="categorizedProgresses.conversion.length > 0"
-                :value="categorizedProgresses.conversion.length" />
+                :value="categorizedProgresses.conversion.length" class="badge" />
             </n-button>
           </template>
-          转换任务列表 ({{ categorizedProgresses.conversion.length }})
+          转换任务 ({{ categorizedProgresses.conversion.length }})
         </n-tooltip>
 
         <!-- 备份任务按钮 -->
         <n-tooltip trigger="hover">
           <template #trigger>
-            <n-button text @click="$emit('backup-database')"
+            <n-button text @click="$emit('backup-database')" size="small"
               :type="categorizedProgresses.backup.length > 0 ? 'primary' : 'default'" class="toolbar-button">
               <template #icon>
-                <n-icon :component="SaveSync20Regular" />
+                <n-icon :component="SaveSync20Regular" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.backup.length > 0" :value="categorizedProgresses.backup.length" />
+              <n-badge v-if="categorizedProgresses.backup.length > 0" :value="categorizedProgresses.backup.length"
+                class="badge" />
             </n-button>
           </template>
           备份资料库 ({{ categorizedProgresses.backup.length }})
@@ -35,51 +35,51 @@
         <!-- 恢复任务按钮 -->
         <n-tooltip trigger="hover">
           <template #trigger>
-            <n-button text @click="$emit('recover-database')"
+            <n-button text @click="$emit('recover-database')" size="small"
               :type="categorizedProgresses.recovery.length > 0 ? 'primary' : 'default'" class="toolbar-button">
               <template #icon>
-                <n-icon :component="BoxArrowLeft20Regular" />
+                <n-icon :component="BoxArrowLeft20Regular" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.recovery.length > 0"
-                :value="categorizedProgresses.recovery.length" />
+              <n-badge v-if="categorizedProgresses.recovery.length > 0" :value="categorizedProgresses.recovery.length"
+                class="badge" />
             </n-button>
           </template>
-          从备份文件中恢复 ({{ categorizedProgresses.recovery.length }})
+          从备份恢复 ({{ categorizedProgresses.recovery.length }})
         </n-tooltip>
 
         <!-- 导入任务按钮 -->
         <n-tooltip trigger="hover">
           <template #trigger>
-            <n-button text @click="$emit('import-items')"
+            <n-button text @click="$emit('import-items')" size="small"
               :type="categorizedProgresses.import.length > 0 ? 'primary' : 'default'" class="toolbar-button">
               <template #icon>
-                <n-icon :component="TextBulletListAdd20Filled" />
+                <n-icon :component="TextBulletListAdd20Filled" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.import.length > 0" :value="categorizedProgresses.import.length" />
+              <n-badge v-if="categorizedProgresses.import.length > 0" :value="categorizedProgresses.import.length"
+                class="badge" />
             </n-button>
           </template>
-          导入指定条目 ({{ categorizedProgresses.import.length }})
+          导入条目 ({{ categorizedProgresses.import.length }})
         </n-tooltip>
 
         <!-- 导出任务按钮 -->
         <n-tooltip trigger="hover">
           <template #trigger>
-            <n-button text @click="$emit('export-items')"
+            <n-button text @click="$emit('export-items')" size="small"
               :type="categorizedProgresses.export.length > 0 ? 'primary' : 'default'" class="toolbar-button">
               <template #icon>
-                <n-icon :component="SignOut20Regular" />
+                <n-icon :component="SignOut20Regular" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.export.length > 0" :value="categorizedProgresses.export.length" />
+              <n-badge v-if="categorizedProgresses.export.length > 0" :value="categorizedProgresses.export.length"
+                class="badge" />
             </n-button>
           </template>
-          导出指定条目 ({{ categorizedProgresses.export.length }})
+          导出条目 ({{ categorizedProgresses.export.length }})
         </n-tooltip>
       </n-space>
 
-      <!-- 右侧按钮组 -->
-      <n-space>
-        <!-- 可以添加其他右侧按钮 -->
-      </n-space>
+      <!-- 右侧空间保留 -->
+      <n-space></n-space>
     </n-space>
   </div>
 </template>
@@ -94,7 +94,6 @@ import {
   SignOut20Regular
 } from '@vicons/fluent'
 
-// 定义属性
 defineProps({
   progresses: {
     type: Array,
@@ -123,23 +122,30 @@ defineEmits([
 </script>
 
 <style scoped>
-/* 样式保持不变 */
 .top-toolbar {
-  padding: 12px 16px;
+  padding: 8px 16px;
   background-color: #fafafa;
   border-bottom: 1px solid #e8e8e8;
+  height: auto;
+  min-height: 40px;
 }
 
 .toolbar-left {
-  padding-left: 8px;
+  display: flex;
+  align-items: center;
 }
 
 .toolbar-button {
   color: #5a5a5a;
   transition: all 0.2s ease;
   border-radius: 6px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   position: relative;
+  height: 32px;
+  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .toolbar-button:hover {
@@ -151,15 +157,21 @@ defineEmits([
   color: #409EFF;
 }
 
-/* 徽章样式优化 */
-.toolbar-button :deep(.n-badge .n-badge-sup) {
+.badge {
+  position: absolute;
   top: -2px;
   right: -2px;
+}
+
+:deep(.n-badge-sup) {
   background-color: #ff4d4f;
   color: white;
-  font-size: 12px;
+  font-size: 11px;
   min-width: 18px;
   height: 18px;
   line-height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

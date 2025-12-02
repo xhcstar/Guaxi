@@ -1,32 +1,43 @@
 <template>
   <n-space justify="space-between" align="center" class="toolbar">
-    <!-- 左侧按钮组 -->
-    <n-space class="actions">
-      <n-button @click="$emit('sort')" class="action-button" secondary>
-        <template #icon>
-          <n-icon :component="SortAscendingIcon" />
+    <!-- 左侧操作按钮 -->
+    <n-space class="actions" :size="8">
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-button @click="$emit('sort')" class="action-button" size="small" secondary>
+            <template #icon>
+              <n-icon :component="SortAscendingIcon" :size="16" />
+            </template>
+            排序
+          </n-button>
         </template>
         按标题排序
-      </n-button>
-      <n-button @click="$emit('clear-filters')" class="action-button" secondary>
-        <template #icon>
-          <n-icon :component="FilterOffIcon" />
+      </n-tooltip>
+
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-button @click="$emit('clear-filters')" class="action-button" size="small" secondary>
+            <template #icon>
+              <n-icon :component="FilterOffIcon" :size="16" />
+            </template>
+            清除筛选
+          </n-button>
         </template>
-        清除筛选
-      </n-button>
+        清除所有筛选条件
+      </n-tooltip>
     </n-space>
 
-    <!-- 右侧添加按钮 -->
+    <!-- 右侧导入按钮 -->
     <n-tooltip trigger="hover">
       <template #trigger>
-        <n-button @click="$emit('add-file')" class="add-path-button" secondary>
+        <n-button @click="$emit('add-file')" class="add-file-button" size="small">
           <template #icon>
-            <n-icon :component="FolderAdd20Regular" />
+            <n-icon :component="FolderAdd20Regular" :size="16" />
           </template>
           导入文件
         </n-button>
       </template>
-      导入新的文件
+      导入新的文件到资料库
     </n-tooltip>
   </n-space>
 </template>
@@ -38,7 +49,6 @@ import { FolderAdd20Regular } from '@vicons/fluent'
 
 defineEmits(['sort', 'clear-filters', 'add-file'])
 
-// 排序图标
 const SortAscendingIcon = {
   render() {
     return h('svg', {
@@ -53,7 +63,6 @@ const SortAscendingIcon = {
   }
 }
 
-// 清除筛选图标
 const FilterOffIcon = {
   render() {
     return h('svg', {
@@ -72,11 +81,13 @@ const FilterOffIcon = {
 <style scoped>
 .toolbar {
   width: 100%;
+  padding: 0;
+  height: auto;
 }
 
 .actions {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
@@ -86,6 +97,8 @@ const FilterOffIcon = {
   border: 1px solid #e0e0e0;
   border-radius: 6px;
   transition: all 0.2s ease;
+  padding: 4px 10px;
+  height: 32px;
 }
 
 .action-button:hover {
@@ -94,26 +107,31 @@ const FilterOffIcon = {
   color: #409EFF;
 }
 
-.add-path-button {
-  background-color: #90bfee;
-  border-color: #90bfee;
+.add-file-button {
+  background: linear-gradient(135deg, #90bfee 0%, #7aa8d6 100%);
+  border: 1px solid #7aa8d6;
   color: white;
   border-radius: 6px;
   transition: all 0.2s ease;
+  padding: 4px 12px;
+  height: 32px;
+  font-weight: 500;
 }
 
-.add-path-button:hover {
-  background-color: #7aa8d6;
-  border-color: #7aa8d6;
+.add-file-button:hover {
+  background: linear-gradient(135deg, #7aa8d6 0%, #6495be 100%);
+  border-color: #6495be;
+  box-shadow: 0 2px 8px rgba(122, 168, 214, 0.3);
 }
 
 @media (max-width: 768px) {
   .actions {
-    flex-direction: column;
+    flex-direction: row;
+    width: 100%;
   }
 
-  .add-path-button {
-    margin-left: 0;
+  .add-file-button {
+    margin-left: auto;
   }
 }
 </style>
