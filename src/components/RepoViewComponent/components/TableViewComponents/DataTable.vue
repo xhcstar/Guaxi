@@ -4,7 +4,7 @@
       virtual-scroll-x :scroll-x="scrollX" :min-row-height="40" :height-for-row="heightForRow" :header-height="50"
       :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
       :row-key="rowKey" @update:checked-row-keys="$emit('update:checked-row-keys', $event)"
-      @row-contextmenu="$emit('row-contextmenu', $event, $event.row)" striped />
+      @row-contextmenu="$emit('row-contextmenu', $event, $event.row)" striped flex-height />
   </div>
 </template>
 
@@ -65,20 +65,40 @@ defineExpose({
   flex: 1;
   width: 100%;
   overflow: hidden;
-  padding: 8px 10px;
+  padding: 8px 8px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
+  /* 确保父容器有明确的高度 */
 }
 
 .data-table {
   flex: 1;
   width: 100%;
   min-height: 0;
+  height: 100%;
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+/* 更精确的样式选择器 */
+:deep(.n-data-table-base) {
+  height: 100% !important;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.n-data-table-wrapper) {
+  flex: 1;
+  min-height: 0;
+}
+
+:deep(.n-data-table-table) {
+  flex: 1;
+  min-height: 0;
 }
 
 :deep(.n-data-table) {
@@ -88,6 +108,8 @@ defineExpose({
   --n-td-color-hover: #f5f7fa;
   --n-td-color-striped: #f9f9f9;
   height: 100% !important;
+  display: flex;
+  flex-direction: column;
 }
 
 :deep(.n-data-table-th) {
