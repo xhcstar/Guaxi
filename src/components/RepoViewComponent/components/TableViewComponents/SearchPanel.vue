@@ -67,7 +67,7 @@
             <n-date-picker v-model:value="searchParams.dateRange" type="daterange" clearable size="small"
               placeholder="日期范围" style="min-width: 200px" />
 
-            <!-- 知识库选择器 - 添加搜索功能 -->
+            <!-- 知识库选择器 -->
             <n-select :key="`repo-${knowledgeRepoOptions.length}-${Date.now()}`"
               v-model:value="searchParams.knowledgeRepo" :options="knowledgeRepoOptions" placeholder="知识库" clearable
               filterable size="small" style="min-width: 140px" @search="$emit('knowledge-repo-search', $event)"
@@ -84,7 +84,7 @@
 </template>
 
 <script setup>
-import { ref, h, watch, nextTick } from 'vue'
+import { ref, h, watch, nextTick, computed } from 'vue'
 import { NCard, NSpace, NInputGroup, NInput, NButton, NIcon, NTooltip, NSelect, NDatePicker, NButtonGroup } from 'naive-ui'
 
 const props = defineProps({
@@ -111,8 +111,29 @@ const props = defineProps({
   importedFileTagOptions: {
     type: Array,
     default: () => []
+  },
+  isLibraryLoading: {
+    type: Boolean,
+    default: false
+  },
+  isTagLoading: {
+    type: Boolean,
+    default: false
+  },
+  isKnowledgeRepoLoading: {
+    type: Boolean,
+    default: false
+  },
+  isFileTypeLoading: {
+    type: Boolean,
+    default: false
   }
 })
+
+const isLoadingLibrary = computed(() => props.isLibraryLoading || props.libraryOptions.length === 0)
+const isLoadingTag = computed(() => props.isTagLoading || props.importedFileTagOptions.length === 0)
+const isLoadingKnowledgeRepo = computed(() => props.isKnowledgeRepoLoading || props.knowledgeRepoOptions.length === 0)
+const isLoadingFileType = computed(() => props.isFileTypeLoading || props.fileTypeOptions.length === 0)
 
 const emit = defineEmits([
   'update:search-params',
@@ -120,7 +141,7 @@ const emit = defineEmits([
   'search',
   'library-search',
   'tag-search',
-  'knowledge-repo-search' // 新增：知识库搜索事件
+  'knowledge-repo-search'
 ])
 
 // 添加高级搜索的 key 用于强制重新渲染

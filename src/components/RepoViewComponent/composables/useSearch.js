@@ -4,9 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const useSearch = ({ store, message, externalState = {} }) => {
   // 使用外部状态或创建默认状态
-  const isLibraryLoading = externalState.isLibraryLoading || ref(false);
-  const isImportedFileTagLoading = externalState.isImportedFileTagLoading || ref(false);
-  const isKnowledgeRepoLoading = ref(false); // 新增：知识库加载状态
+  const isLibraryLoadingAdvanceSearch = externalState.isLibraryLoadingAdvanceSearch || ref(false);
+  const isImportedFileTagLoadingAdvanceSearch = externalState.isImportedFileTagLoadingAdvanceSearch || ref(false);
+  const isKnowledgeRepoLoadingAdvanceSearch = ref(false); // 新增：知识库加载状态
 
   // 添加库选项和标签选项状态 - 添加默认占位符
   const searchLibraryOptions = ref([
@@ -202,7 +202,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
     return new Promise((resolve) => {
       librarySearchTimer = setTimeout(async () => {
-        isLibraryLoading.value = true;
+        isLibraryLoadingAdvanceSearch.value = true;
 
         try {
           let searchQuery = query;
@@ -222,7 +222,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
           searchLibraryOptions.value = [{ label: "搜索失败，请重试", value: "", disabled: true }];
           resolve(searchLibraryOptions.value);
         } finally {
-          isLibraryLoading.value = false;
+          isLibraryLoadingAdvanceSearch.value = false;
         }
       }, isPreload ? 0 : 300);
     });
@@ -238,7 +238,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
     return new Promise((resolve) => {
       tagSearchTimer = setTimeout(async () => {
-        isImportedFileTagLoading.value = true;
+        isImportedFileTagLoadingAdvanceSearch.value = true;
 
         try {
           let searchQuery = query;
@@ -258,7 +258,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
           searchImportedFileTagOptions.value = [{ label: "搜索失败，请重试", value: "", disabled: true }];
           resolve(searchImportedFileTagOptions.value);
         } finally {
-          isImportedFileTagLoading.value = false;
+          isImportedFileTagLoadingAdvanceSearch.value = false;
         }
       }, isPreload ? 0 : 300);
     });
@@ -274,7 +274,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
     return new Promise((resolve) => {
       knowledgeRepoSearchTimer = setTimeout(async () => {
-        isKnowledgeRepoLoading.value = true;
+        isKnowledgeRepoLoadingAdvanceSearch.value = true;
 
         try {
           let searchQuery = query;
@@ -296,7 +296,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
           searchKnowledgeRepoOptions.value = [{ label: "搜索失败，请重试", value: "", disabled: true }];
           resolve(searchKnowledgeRepoOptions.value);
         } finally {
-          isKnowledgeRepoLoading.value = false;
+          isKnowledgeRepoLoadingAdvanceSearch.value = false;
         }
       }, isPreload ? 0 : 300);
     });
@@ -309,8 +309,13 @@ export const useSearch = ({ store, message, externalState = {} }) => {
       !(searchKnowledgeRepoOptions.value.length === 1 && searchKnowledgeRepoOptions.value[0].disabled)) {
       return searchKnowledgeRepoOptions.value;
     }
-    // 否则使用静态选项
-    return knowledgeRepoOptions.value;
+    // 如果静态选项有数据，使用静态选项
+    if (knowledgeRepoOptions.value.length > 0 &&
+      !(knowledgeRepoOptions.value.length === 1 && knowledgeRepoOptions.value[0].disabled)) {
+      return knowledgeRepoOptions.value;
+    }
+    // 否则返回占位符
+    return [{ label: "暂无知识库数据", value: "", disabled: true }];
   });
 
   // 获取文件库选项（确保始终有占位符）
@@ -481,16 +486,16 @@ export const useSearch = ({ store, message, externalState = {} }) => {
     searchLibraryOptions,
     searchImportedFileTagOptions,
     searchKnowledgeRepoOptions,
-    isLibraryLoading,
-    isImportedFileTagLoading,
-    isKnowledgeRepoLoading,
+    isLibraryLoadingAdvanceSearch,
+    isImportedFileTagLoadingAdvanceSearch,
+    isKnowledgeRepoLoadingAdvanceSearch,
     searchHistory,
 
-    // 选项数据 - 使用计算属性确保始终有占位符
+    // 选项数据
     fileTypeOptions,
     knowledgeRepoOptions: getKnowledgeRepoOptions,
-    libraryOptions: getLibraryOptions,
-    importedFileTagOptions: getImportedFileTagOptions,
+    libraryOptions: searchLibraryOptions,
+    importedFileTagOptions: searchImportedFileTagOptions,
     filteredData,
 
     // 搜索方法

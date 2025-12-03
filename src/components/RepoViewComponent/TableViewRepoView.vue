@@ -14,7 +14,9 @@
       :collapsed="searchPanelCollapsed" @update:collapsed="searchPanelCollapsed = $event"
       :file-type-options="fileTypeOptions" :knowledge-repo-options="knowledgeRepoOptions"
       :library-options="searchLibraryOptions" :imported-file-tag-options="searchImportedFileTagOptions"
-      @search="handleSearch" @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch"
+      :is-library-loading="isLibraryLoadingAdvanceSearch" :is-tag-loading="isImportedFileTagLoadingAdvanceSearch"
+      :is-knowledge-repo-loading="isKnowledgeRepoLoadingAdvanceSearch" :is-file-type-loading="false" @search="handleSearch"
+      @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch"
       @knowledge-repo-search="handleKnowledgeRepoSearch" />
 
     <!-- 表格工具栏 -->
@@ -150,6 +152,9 @@ const {
   handleLibrarySearch,
   handleImportedFileTagSearch,
   handleKnowledgeRepoSearch,
+  isLibraryLoadingAdvanceSearch,
+  isImportedFileTagLoadingAdvanceSearch,
+  isKnowledgeRepoLoadingAdvanceSearch,
   initializeSearch
 } = useSearch({ store, message });
 
