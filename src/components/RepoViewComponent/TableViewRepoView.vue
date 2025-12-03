@@ -14,7 +14,8 @@
       :collapsed="searchPanelCollapsed" @update:collapsed="searchPanelCollapsed = $event"
       :file-type-options="fileTypeOptions" :knowledge-repo-options="knowledgeRepoOptions"
       :library-options="searchLibraryOptions" :imported-file-tag-options="searchImportedFileTagOptions"
-      @search="handleSearch" @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch" />
+      @search="handleSearch" @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch"
+      @knowledge-repo-search="handleKnowledgeRepoSearch" />
 
     <!-- 表格工具栏 -->
     <div class="toolbar-container">
@@ -147,15 +148,10 @@ const {
   searchImportedFileTagOptions,
   handleSearch,
   handleLibrarySearch,
-  handleImportedFileTagSearch
-} = useSearch({
-  store,
-  message,
-  externalState: {
-    isLibraryLoading: isLibraryLoading,
-    isImportedFileTagLoading: isImportedFileTagLoading
-  }
-})
+  handleImportedFileTagSearch,
+  handleKnowledgeRepoSearch,
+  initializeSearch
+} = useSearch({ store, message });
 
 const {
   handleLibrarySearchComplete,
@@ -343,6 +339,8 @@ onMounted(async () => {
   } catch (error) {
     console.error('事件系统初始化失败:', error)
   }
+
+  initializeSearch();
 })
 
 onUnmounted(() => {

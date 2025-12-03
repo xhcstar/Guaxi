@@ -1,3 +1,4 @@
+<!-- SearchPanel.vue - 修改知识库选择器部分 -->
 <template>
   <div class="search-container">
     <n-card class="search-card" :bordered="false">
@@ -21,7 +22,7 @@
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-button @click="$emit('update:collapsed', !collapsed)" class="toggle-btn" size="small" secondary>
+                <n-button @click="handleToggleCollapse" class="toggle-btn" size="small" secondary>
                   <n-icon :size="16">
                     <svg v-if="collapsed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
                       <path d="M7 10l5 5 5-5z" />
@@ -40,31 +41,41 @@
 
       <!-- 关键字搜索输入框 - 始终显示 -->
       <n-input-group class="keyword-search">
-        <n-input v-model:value="searchParams.keyword" placeholder="输入关键字搜索..." clearable size="small">
+        <n-input v-model:value="searchParams.keyword" placeholder="输入关键字搜索..." clearable size="small"
+          @keyup.enter="$emit('search')">
           <template #prefix>
             <n-icon :component="SearchIcon" :size="16" />
           </template>
         </n-input>
       </n-input-group>
 
-      <!-- 高级搜索条件 - 根据折叠状态显示 -->
+      <!-- 高级搜索条件 -->
       <transition name="search-expand" @enter="onEnter" @leave="onLeave">
-        <div v-show="!collapsed" class="advanced-search">
+        <div v-if="!collapsed" class="advanced-search" :key="advancedSearchKey">
           <n-space :size="12" wrap>
-            <n-select v-model:value="searchParams.library" :options="libraryOptions" placeholder="文件库" clearable
-              filterable size="small" style="min-width: 140px" @search="$emit('library-search', $event)" />
+            <!-- 文件库选择器 -->
+            <n-select :key="`library-${libraryOptions.length}-${Date.now()}`" v-model:value="searchParams.library"
+              :options="libraryOptions" placeholder="文件库" clearable filterable size="small" style="min-width: 140px"
+              @search="$emit('library-search', $event)" @focus="handleLibraryFocus" />
 
-            <n-select v-model:value="searchParams.tags" :options="importedFileTagOptions" placeholder="标签" clearable
-              filterable multiple size="small" style="min-width: 140px" @search="$emit('tag-search', $event)" />
+            <!-- 标签选择器 -->
+            <n-select :key="`tags-${importedFileTagOptions.length}-${Date.now()}`" v-model:value="searchParams.tags"
+              :options="importedFileTagOptions" placeholder="标签" clearable filterable multiple size="small"
+              style="min-width: 140px" @search="$emit('tag-search', $event)" @focus="handleTagFocus" />
 
+            <!-- 日期选择器 -->
             <n-date-picker v-model:value="searchParams.dateRange" type="daterange" clearable size="small"
               placeholder="日期范围" style="min-width: 200px" />
 
-            <n-select v-model:value="searchParams.knowledgeRepo" :options="knowledgeRepoOptions" placeholder="知识库"
-              clearable filterable size="small" style="min-width: 140px" />
+            <!-- 知识库选择器 - 添加搜索功能 -->
+            <n-select :key="`repo-${knowledgeRepoOptions.length}-${Date.now()}`"
+              v-model:value="searchParams.knowledgeRepo" :options="knowledgeRepoOptions" placeholder="知识库" clearable
+              filterable size="small" style="min-width: 140px" @search="$emit('knowledge-repo-search', $event)"
+              @focus="handleKnowledgeRepoFocus" />
 
-            <n-select v-model:value="searchParams.fileType" :options="fileTypeOptions" placeholder="文件类型" clearable
-              size="small" style="min-width: 120px" />
+            <!-- 文件类型选择器 -->
+            <n-select :key="`filetype-${fileTypeOptions.length}-${Date.now()}`" v-model:value="searchParams.fileType"
+              :options="fileTypeOptions" placeholder="文件类型" clearable size="small" style="min-width: 120px" />
           </n-space>
         </div>
       </transition>
@@ -73,10 +84,10 @@
 </template>
 
 <script setup>
-import { ref, h } from 'vue'
+import { ref, h, watch, nextTick } from 'vue'
 import { NCard, NSpace, NInputGroup, NInput, NButton, NIcon, NTooltip, NSelect, NDatePicker, NButtonGroup } from 'naive-ui'
 
-defineProps({
+const props = defineProps({
   searchParams: {
     type: Object,
     required: true
@@ -103,7 +114,62 @@ defineProps({
   }
 })
 
-defineEmits(['update:search-params', 'update:collapsed', 'search', 'library-search', 'tag-search'])
+const emit = defineEmits([
+  'update:search-params',
+  'update:collapsed',
+  'search',
+  'library-search',
+  'tag-search',
+  'knowledge-repo-search' // 新增：知识库搜索事件
+])
+
+// 添加高级搜索的 key 用于强制重新渲染
+const advancedSearchKey = ref(0)
+
+// 处理折叠/展开切换
+const handleToggleCollapse = () => {
+  const newCollapsed = !props.collapsed
+  emit('update:collapsed', newCollapsed)
+
+  if (!newCollapsed) {
+    nextTick(() => {
+      advancedSearchKey.value += 1
+    })
+  }
+}
+
+// 焦点事件处理
+const handleLibraryFocus = () => {
+  if (props.libraryOptions.length === 0) {
+    emit('library-search', '')
+  }
+}
+
+const handleTagFocus = () => {
+  if (props.importedFileTagOptions.length === 0) {
+    emit('tag-search', '')
+  }
+}
+
+const handleKnowledgeRepoFocus = () => {
+  if (props.knowledgeRepoOptions.length === 0) {
+    emit('knowledge-repo-search', '')
+  }
+}
+
+// 监听选项数据变化
+watch([
+  () => props.libraryOptions,
+  () => props.knowledgeRepoOptions,
+  () => props.fileTypeOptions,
+  () => props.importedFileTagOptions
+], () => {
+  if (!props.collapsed) {
+    nextTick(() => {
+      advancedSearchKey.value += 1
+    })
+  }
+}, { deep: true })
 
 // 搜索图标
 const SearchIcon = {
