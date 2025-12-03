@@ -13,8 +13,8 @@
     <SearchPanel :search-params="searchParams" @update:search-params="searchParams = $event"
       :collapsed="searchPanelCollapsed" @update:collapsed="searchPanelCollapsed = $event"
       :file-type-options="fileTypeOptions" :knowledge-repo-options="knowledgeRepoOptions"
-      :library-options="libraryOptions" :imported-file-tag-options="importedFileTagOptions" @search="handleSearch"
-      @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch" />
+      :library-options="searchLibraryOptions" :imported-file-tag-options="searchImportedFileTagOptions"
+      @search="handleSearch" @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch" />
 
     <!-- 表格工具栏 -->
     <div class="toolbar-container">
@@ -34,11 +34,11 @@
 
     <!-- 添加文件模态框 -->
     <AddFileModal :show="isAddFileModalVisible" @update:show="isAddFileModalVisible = $event" :form="currentForm"
-      @update:form="handleFormUpdate" :rules="rules" :form-columns="formColumns" :library-options="libraryOptions"
-      :imported-file-tag-options="importedFileTagOptions" :is-library-loading="isLibraryLoading"
-      :is-imported-file-tag-loading="isImportedFileTagLoading" @open-file-browser="openFileBrowser"
-      @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch" @submit="addFile"
-      @cancel="handleModalCancel" />
+      @update:form="handleFormUpdate" :rules="rules" :form-columns="formColumns"
+      :library-options="libraryOptionsComplete" :imported-file-tag-options="importedFileTagOptionsComplete"
+      :is-library-loading="isLibraryLoadingComplete" :is-imported-file-tag-loading="isImportedFileTagLoadingComplete"
+      @open-file-browser="openFileBrowser" @library-search="handleLibrarySearchComplete"
+      @tag-search="handleImportedFileTagSearchComplete" @submit="addFile" @cancel="handleModalCancel" />
   </div>
 </template>
 
@@ -67,6 +67,7 @@ import { useFormHandling } from './composables/useFormHandling.js'
 import { useProgress } from './composables/useProgress.js'
 import { useContextMenu } from './composables/useContextMenu.js'
 import { useSearch } from './composables/useSearch.js'
+import { useSearchComplete } from './SearchUtils/useSearchComplete.js'
 import { useTableConfig } from './composables/useTableConfig.js'
 
 // 初始化存储和消息
@@ -114,12 +115,7 @@ const {
   addFile,
   handleFileInfoEvent,
   handleFormUpdate,
-  handleModalCancel,
-  resetForm,
-  validateForm,
-  validateFilePath,
-  createImportFileList,
-  addFileToDatabase
+  handleModalCancel
 } = useFormHandling({
   store,
   message,
@@ -131,21 +127,11 @@ const {
   showDropdown,
   x,
   y,
-  selectedRow,
   contextMenuOptions,
   handleContextMenuSelect,
   onClickoutside,
   rowProps,
-  handleRowContextMenu,
-  handleOpen,
-  handleEdit,
-  handleDelete,
-  handleDeleteAll,
-  handleShare,
-  handleMove,
-  handleExport,
-  handleOpenDirImport,
-  handleOpenDirNote
+  handleRowContextMenu
 } = useContextMenu({ store, message })
 
 const {
@@ -154,11 +140,9 @@ const {
   fileTypeOptions,
   knowledgeRepoOptions,
   filteredData,
-  // 关键修改：获取库选项和标签选项
-  libraryOptions: searchLibraryOptions, // 重命名避免冲突
-  importedFileTagOptions: searchImportedFileTagOptions, // 重命名避免冲突
+  searchLibraryOptions,
+  searchImportedFileTagOptions,
   handleSearch,
-  toggleSearchPanel,
   handleLibrarySearch,
   handleImportedFileTagSearch
 } = useSearch({
@@ -169,6 +153,24 @@ const {
     isImportedFileTagLoading: isImportedFileTagLoading
   }
 })
+
+const {
+  handleLibrarySearchComplete,
+  handleImportedFileTagSearchComplete,
+  handleImportedFileSearchComplete,
+  handleNoteTagSearchComplete,
+  handleImportedFileLibrarySearchComplete,
+  libraryOptionsComplete,
+  importedFileTagOptionsComplete,
+  importedFileLibraryOptionsComplete,
+  noteTagOptionsComplete,
+  importedFileOptionsComplete,
+  isLibraryLoadingComplete,
+  isImportedFileTagLoadingComplete,
+  isImportedFileLibraryLoadingComplete,
+  isNoteTagLoadingComplete,
+  isImportedFileLoadingComplete
+} = useSearchComplete()
 
 // 使用表格配置
 const {
@@ -263,23 +265,23 @@ const handleGlobalClick = (e) => {
 
 // 监听输入值变化并触发搜索
 watch(() => currentForm.value.importedFileTags, (newValue) => {
-  handleImportedFileTagSearch(newValue)
+  handleImportedFileTagSearchComplete(newValue)
 })
 
 watch(() => currentForm.value.notesTags, (newValue) => {
-  handleNoteTagSearch(newValue)
+  handleNoteTagSearchComplete(newValue)
 })
 
 watch(() => currentForm.value.fromImportedFile, (newValue) => {
-  handleImportedFileSearch(newValue)
+  handleImportedFileSearchComplete(newValue)
 })
 
 watch(() => currentForm.value.library, (newValue) => {
-  handleLibrarySearch(newValue)
+  handleLibrarySearchComplete(newValue)
 })
 
 watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
-  handleImportedFileLibrarySearch(newValue)
+  handleImportedFileLibrarySearchComplete(newValue)
 })
 
 watch(() => eventStore.webClipperEvent, (newEvent) => {

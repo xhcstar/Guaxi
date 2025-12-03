@@ -8,8 +8,8 @@ export const useSearch = ({ store, message, externalState = {} }) => {
     externalState.isImportedFileTagLoading || ref(false);
 
   // 添加库选项和标签选项状态
-  const libraryOptions = ref([]);
-  const importedFileTagOptions = ref([]);
+  const searchLibraryOptions = ref([]);
+  const searchImportedFileTagOptions = ref([]);
 
   const searchParams = ref({
     keyword: "",
@@ -119,8 +119,8 @@ export const useSearch = ({ store, message, externalState = {} }) => {
       const libraries = await invoke("search_libraries", { query });
       console.log("handleLibrarySearch 返回结果:", libraries);
 
-      // 关键修改：将搜索结果保存到 libraryOptions
-      libraryOptions.value = libraries.map((lib) => ({
+      // 关键修改：将搜索结果保存到 searchLibraryOptions
+      searchLibraryOptions.value = libraries.map((lib) => ({
         label: lib,
         value: lib,
       }));
@@ -138,8 +138,8 @@ export const useSearch = ({ store, message, externalState = {} }) => {
       const tags = await invoke("search_imported_files_tags", { query });
       console.log("handleImportedFileTagSearch 返回结果:", tags);
 
-      // 关键修改：将搜索结果保存到 importedFileTagOptions
-      importedFileTagOptions.value = tags.map((tag) => ({
+      // 关键修改：将搜索结果保存到 searchImportedFileTagOptions
+      searchImportedFileTagOptions.value = tags.map((tag) => ({
         label: tag,
         value: tag,
       }));
@@ -252,8 +252,8 @@ export const useSearch = ({ store, message, externalState = {} }) => {
     knowledgeRepoOptions,
     filteredData,
     // 关键修改：返回库选项和标签选项
-    libraryOptions,
-    importedFileTagOptions,
+    searchLibraryOptions,
+    searchImportedFileTagOptions,
     isLibraryLoading,
     isImportedFileTagLoading,
     handleSearch,
