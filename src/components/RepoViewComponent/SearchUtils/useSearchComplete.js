@@ -124,6 +124,26 @@ export const useSearchComplete = () => {
     }
   };
 
+  // 知识库搜索功能
+  const knowledgeRepoOptionsComplete = ref([]);
+  const isKnowledgeRepoLoadingComplete = ref(false);
+
+  const handleKnowledgeRepoSearchComplete = async (query) => {
+    console.log("🔍 [useSearchComplete] handleKnowledgeRepoSearchComplete 被调用，搜索关键字:", query);
+    isKnowledgeRepoLoadingComplete.value = true;
+    try {
+      const repos = await invoke("get_knowledge_repos", { query });
+      console.log("✅ [useSearchComplete] handleKnowledgeRepoSearchComplete 返回结果:", repos);
+      // 格式化数据
+      knowledgeRepoOptionsComplete.value = formatOptions(repos);
+      console.log("📖 [useSearchComplete] 格式化后的知识库选项:", knowledgeRepoOptionsComplete.value);
+    } catch (error) {
+      console.error("❌ [useSearchComplete] 搜索知识库失败:", error);
+    } finally {
+      isKnowledgeRepoLoadingComplete.value = false;
+    }
+  };
+
   return {
     noteTagOptionsComplete,
     isNoteTagLoadingComplete,
@@ -143,6 +163,10 @@ export const useSearchComplete = () => {
 
     importedFileLibraryOptionsComplete,
     isImportedFileLibraryLoadingComplete,
-    handleImportedFileLibrarySearchComplete
+    handleImportedFileLibrarySearchComplete,
+
+    knowledgeRepoOptionsComplete,
+    isKnowledgeRepoLoadingComplete,
+    handleKnowledgeRepoSearchComplete
   };
 };

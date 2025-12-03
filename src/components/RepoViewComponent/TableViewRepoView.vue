@@ -35,10 +35,13 @@
     <!-- 添加文件模态框 -->
     <AddFileModal :show="isAddFileModalVisible" @update:show="isAddFileModalVisible = $event" :form="currentForm"
       @update:form="handleFormUpdate" :rules="rules" :form-columns="formColumns"
-      :library-options="libraryOptionsComplete" :imported-file-tag-options="importedFileTagOptionsComplete"
-      :is-library-loading="isLibraryLoadingComplete" :is-imported-file-tag-loading="isImportedFileTagLoadingComplete"
-      @open-file-browser="openFileBrowser" @library-search="handleLibrarySearchComplete"
-      @tag-search="handleImportedFileTagSearchComplete" @submit="addFile" @cancel="handleModalCancel" />
+      :knowledge-repo-options="knowledgeRepoOptionsComplete" :library-options="libraryOptionsComplete"
+      :imported-file-tag-options="importedFileTagOptionsComplete" :is-library-loading="isLibraryLoadingComplete"
+      :is-imported-file-tag-loading="isImportedFileTagLoadingComplete"
+      :is-knowledge-repo-loading="isKnowledgeRepoLoadingComplete" @open-file-browser="openFileBrowser"
+      @library-search-complete="handleLibrarySearchComplete" @tag-search-complete="handleImportedFileTagSearchComplete"
+      @knowledge-repo-search-complete="handleKnowledgeRepoSearchComplete" @submit="addFile"
+      @cancel="handleModalCancel" />
   </div>
 </template>
 
@@ -157,9 +160,6 @@ const {
 const {
   handleLibrarySearchComplete,
   handleImportedFileTagSearchComplete,
-  handleImportedFileSearchComplete,
-  handleNoteTagSearchComplete,
-  handleImportedFileLibrarySearchComplete,
   libraryOptionsComplete,
   importedFileTagOptionsComplete,
   importedFileLibraryOptionsComplete,
@@ -169,7 +169,9 @@ const {
   isImportedFileTagLoadingComplete,
   isImportedFileLibraryLoadingComplete,
   isNoteTagLoadingComplete,
-  isImportedFileLoadingComplete
+  knowledgeRepoOptionsComplete,
+  isKnowledgeRepoLoadingComplete,
+  handleKnowledgeRepoSearchComplete
 } = useSearchComplete()
 
 // 使用表格配置
@@ -284,6 +286,10 @@ watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
   handleImportedFileLibrarySearchComplete(newValue)
 })
 
+watch(() => currentForm.value.knowledgeRepo, (newValue) => {
+  handleKnowledgeRepoSearchComplete(newValue)
+})
+
 watch(() => eventStore.webClipperEvent, (newEvent) => {
   if (newEvent) {
     handleFileInfoEvent({ payload: newEvent })
@@ -342,7 +348,6 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', handleGlobalClick, true)
   window.removeEventListener('resize', handleWindowResize)
-  stopProgressListener()
 })
 </script>
 
