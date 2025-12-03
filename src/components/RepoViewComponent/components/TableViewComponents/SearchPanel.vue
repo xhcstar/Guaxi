@@ -227,7 +227,7 @@ const onLeave = (el) => {
 
 <style scoped>
 .search-container {
-  padding: 8px 16px 12px;
+  padding: 4px 8px ;
 }
 
 .search-card {
@@ -244,8 +244,7 @@ const onLeave = (el) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
-  gap: 12px;
+  margin-bottom: 10px;
 }
 
 .search-left {
@@ -292,7 +291,7 @@ const onLeave = (el) => {
 }
 
 .keyword-search {
-  margin-bottom: 8px;
+  margin-bottom: 2px;
   border-radius: 8px;
   overflow: hidden;
 }

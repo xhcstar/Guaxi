@@ -108,8 +108,8 @@ const FilterOffIcon = {
 }
 
 .add-file-button {
-  background: linear-gradient(135deg, #90bfee 0%, #7aa8d6 100%);
-  border: 1px solid #7aa8d6;
+  background: linear-gradient(135deg, #409EFF 0%, #409EFF 100%);
+  border: 1px solid #409EFF;
   color: white;
   border-radius: 6px;
   transition: all 0.2s ease;
@@ -119,7 +119,7 @@ const FilterOffIcon = {
 }
 
 .add-file-button:hover {
-  background: linear-gradient(135deg, #7aa8d6 0%, #6495be 100%);
+  background: linear-gradient(135deg, #3385d9 0%, #3385d9 100%);
   border-color: #6495be;
   box-shadow: 0 2px 8px rgba(122, 168, 214, 0.3);
 }
