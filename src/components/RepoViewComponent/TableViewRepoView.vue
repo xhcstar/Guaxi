@@ -15,8 +15,8 @@
       :file-type-options="fileTypeOptions" :knowledge-repo-options="knowledgeRepoOptions"
       :library-options="searchLibraryOptions" :imported-file-tag-options="searchImportedFileTagOptions"
       :is-library-loading="isLibraryLoadingAdvanceSearch" :is-tag-loading="isImportedFileTagLoadingAdvanceSearch"
-      :is-knowledge-repo-loading="isKnowledgeRepoLoadingAdvanceSearch" :is-file-type-loading="false" @search="handleSearch"
-      @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch"
+      :is-knowledge-repo-loading="isKnowledgeRepoLoadingAdvanceSearch" :is-file-type-loading="false"
+      @search="handleSearch" @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch"
       @knowledge-repo-search="handleKnowledgeRepoSearch" />
 
     <!-- 表格工具栏 -->
@@ -254,15 +254,14 @@ const initAppHandle = async () => {
 }
 
 const handleGlobalClick = (e) => {
-  // 如果不是右键菜单相关的元素，才关闭菜单
-  const isContextMenu = e.target.closest('.n-dropdown') ||
-    e.target.closest('.custom-context-menu')
+  // 检查是否点击了菜单区域
+  const isContextMenu = e.target.closest('.custom-context-menu-wrapper') ||
+    e.target.closest('.n-dropdown-menu') ||
+    e.target.closest('.n-dropdown')
 
+  // 只在点击菜单外部时关闭
   if (!isContextMenu && showDropdown.value) {
-    console.log('全局点击，关闭菜单')
-    setTimeout(() => {
-      showDropdown.value = false
-    }, 200)
+    showDropdown.value = false
   }
 }
 

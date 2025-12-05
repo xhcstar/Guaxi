@@ -1,11 +1,18 @@
-<!-- components/TableViewComponents/ContextMenu.vue -->
+<!-- filepath: e:\Record\source\Vue\guaxi\src\components\RepoViewComponent/components/TableViewComponents/ContextMenu.vue -->
 <template>
-  <n-dropdown v-if="show" placement="bottom-start" trigger="manual" :x="x" :y="y" :options="options" :show="show"
-    :style="dropdownStyle" @clickoutside="handleClickOutside" @select="handleSelect" class="custom-context-menu" />
+  <div v-if="show" class="custom-context-menu-wrapper" @contextmenu.prevent>
+    <n-dropdown placement="bottom-start" trigger="manual" :options="options" :show="show" :x="x" :y="y"
+      @clickoutside="handleClickOutside" @select="handleSelect">
+      <!-- 为 dropdown 提供一个虚拟触发元素 -->
+      <template #default>
+        <div :style="menuStyle" class="dropdown-trigger" @mousedown.stop />
+      </template>
+    </n-dropdown>
+  </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { NDropdown } from 'naive-ui'
 
 const props = defineProps({
@@ -29,19 +36,21 @@ const props = defineProps({
 
 const emit = defineEmits(['update:show', 'select', 'clickoutside'])
 
-// 下拉菜单样式
-const dropdownStyle = computed(() => ({
-  zIndex: 9999,
-  position: 'fixed'
+// 菜单样式
+const menuStyle = computed(() => ({
+  position: 'absolute',
+  left: `${props.x}px`,
+  top: `${props.y}px`,
+  width: '1px',
+  height: '1px',
+  pointerEvents: 'none'
 }))
 
-// 处理选择
 const handleSelect = (key) => {
   emit('select', key)
   emit('update:show', false)
 }
 
-// 处理点击外部
 const handleClickOutside = () => {
   emit('clickoutside')
   emit('update:show', false)
@@ -49,18 +58,34 @@ const handleClickOutside = () => {
 </script>
 
 <style scoped>
-.custom-context-menu {
+.custom-context-menu-wrapper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   z-index: 9999;
+  pointer-events: none;
+}
+
+.dropdown-trigger {
+  position: fixed;
+  width: 0;
+  height: 0;
+  pointer-events: none;
 }
 
 :deep(.n-dropdown) {
   z-index: 10000 !important;
+  pointer-events: auto;
 }
 
 :deep(.n-dropdown-menu) {
   z-index: 10001 !important;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  pointer-events: auto;
 }
 
 :deep(.n-dropdown-option) {
