@@ -320,22 +320,7 @@ export function useFormHandling({
         library: currentForm.value.library,
         importFileCreateTime: currentForm.value.importFileCreateTime,
         importFileSize: currentForm.value.importFileSize,
-        convetToMarkdownFilename: `${currentForm.value.importFileName.replace(
-          /\.[^/.]+$/,
-          ""
-        )}.md`,
         knowledgeRepo: currentForm.value.knowledgeRepo,
-        newNoteForm: {
-          description: `${addedNoteInfo.from_filename}的笔记`,
-          noteFileName: addedNoteInfo.note_file_name,
-          notesTags: currentForm.value.importedFileTags.split(","), //导入文件时创建的笔记使用导入文件的标签
-          noteFileType: "md",
-          fromImportedFile: addedNoteInfo.from_filename,
-          fromImportedFileLibrary: addedNoteInfo.library,
-          noteFileCreateTime: addedNoteInfo.create_time,
-          noteFileUpdateTime: addedNoteInfo.update_time,
-          knowledgeRepo: currentForm.value.knowledgeRepo,
-        },
       });
 
       // 转换完成后刷新数据
@@ -461,22 +446,7 @@ export function useFormHandling({
         library: currentForm.value.library,
         importFileCreateTime: currentForm.value.importFileCreateTime,
         importFileSize: currentForm.value.importFileSize,
-        convetToMarkdownFilename: `${currentForm.value.importFileName.replace(
-          /\.[^/.]+$/,
-          ""
-        )}.md`,
         knowledgeRepo: currentForm.value.knowledgeRepo,
-        newNoteForm: {
-          description: `${addedNoteInfo.from_filename}的笔记`,
-          noteFileName: addedNoteInfo.note_file_name,
-          notesTags: currentForm.value.importedFileTags.split(","), //导入文件时创建的笔记使用导入文件的标签
-          noteFileType: "md",
-          fromImportedFile: addedNoteInfo.from_filename,
-          fromImportedFileLibrary: addedNoteInfo.library,
-          noteFileCreateTime: addedNoteInfo.create_time,
-          noteFileUpdateTime: addedNoteInfo.update_time,
-          knowledgeRepo: currentForm.value.knowledgeRepo,
-        },
       });
 
       // 转换完成后刷新数据
@@ -513,18 +483,6 @@ export function useFormHandling({
       importFileCreateTime: fileInfo.create_time,
       importFileSize: fileInfo.file_size,
       knowledgeRepo: fileInfo.knowledge_repo,
-      newNoteForm: {
-        id: 0,
-        description: `${fileInfo.file_name}的笔记`,
-        noteFileName: `${fileInfo.file_name.replace(/\.[^/.]+$/, "")}_note.md`,
-        notesTags: fileInfo.tags.join(","),
-        noteFileType: "md",
-        fromImportedFile: fileInfo.file_name,
-        fromImportedFileLibrary: fileInfo.file_repo,
-        noteFileCreateTime: new Date().toISOString(),
-        noteFileUpdateTime: new Date().toISOString(),
-        knowledgeRepo: fileInfo.knowledge_repo,
-      },
     };
 
     // 调用 addFile 方法
@@ -550,18 +508,6 @@ export function useFormHandling({
       importFileSize: 0,
       convetToMarkdownFilename: "",
       knowledgeRepo: "",
-      newNoteForm: {
-        id: 0,
-        description: "",
-        noteFileName: "",
-        notesTags: "",
-        fromImportedFile: "",
-        fromImportedFileLibrary: "",
-        noteFileType: "",
-        noteFileCreateTime: "",
-        noteFileUpdateTime: "",
-        knowledgeRepo: "",
-      },
     };
   };
 
@@ -575,22 +521,7 @@ export function useFormHandling({
       file_type: currentForm.type,
       import_file_create_time: currentForm.importFileCreateTime,
       import_file_size: currentForm.importFileSize,
-      converted_markdown_filename: `${currentForm.importFileName.replace(
-        /\.[^/.]+$/,
-        ""
-      )}.md`,
       knowledge_repo: currentForm.knowledgeRepo,
-      note_file_input: {
-        description: `${addedNoteInfo.from_filename}的笔记`,
-        note_file_name: addedNoteInfo.note_file_name,
-        tags: currentForm.importedFileTags.split(","),
-        note_file_type: "md",
-        from_imported_file: addedNoteInfo.from_filename,
-        from_imported_file_library: addedNoteInfo.library,
-        note_file_create_time: addedNoteInfo.create_time,
-        note_file_update_time: addedNoteInfo.update_time,
-        knowledge_repo: currentForm.knowledgeRepo,
-      },
     };
   };
 

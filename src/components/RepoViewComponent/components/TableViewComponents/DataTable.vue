@@ -1,7 +1,7 @@
 <template>
   <div class="data-table-wrapper">
     <n-data-table ref="tableRef" :columns="columns" :data="data" :max-height="tableHeight" virtual-scroll
-      virtual-scroll-x :scroll-x="scrollX" :min-row-height="40" :height-for-row="heightForRow" :header-height="50"
+      :scroll-x="scrollX" :min-row-height="70" :height-for-row="heightForRow" :header-height="50"
       :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
       :row-key="rowKey" @update:checked-row-keys="$emit('update:checked-row-keys', $event)"
       @row-contextmenu="$emit('row-contextmenu', $event, $event.row)" striped flex-height />
@@ -71,7 +71,6 @@ defineExpose({
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  /* 确保父容器有明确的高度 */
 }
 
 .data-table {
@@ -84,7 +83,23 @@ defineExpose({
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
-/* 更精确的样式选择器 */
+/* 移除或修改单元格padding设置 */
+:deep(.n-data-table-td) {
+  padding: 2px, 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  position: relative;
+}
+
+/* 确保单元格内容完全填充 */
+:deep(.n-data-table-td .n-data-table-td__cell) {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+
 :deep(.n-data-table-base) {
   height: 100% !important;
   display: flex;
@@ -115,14 +130,7 @@ defineExpose({
 :deep(.n-data-table-th) {
   font-weight: 600;
   color: #333;
-  padding: 16px;
-}
-
-:deep(.n-data-table-td) {
-  padding: 12px 16px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 10px;
 }
 
 :deep(.n-data-table-tr--hover) {

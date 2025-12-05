@@ -1,7 +1,6 @@
 // useTableConfig.js
 import { ref, computed, h } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useMessage } from "naive-ui";
 
 export function useTableConfig({ store, message, ShowOrEdit }) {
   const tableRef = ref(null);
@@ -9,9 +8,9 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
 
   // 分页配置
   const pagination = ref({
-    pageSize: 15,
+    pageSize: 10,
     showSizePicker: true,
-    pageSizes: [10, 15, 20, 50, 100],
+    pageSizes: [10, 20, 50, 100],
     showQuickJumper: true,
     prefix: (info) => `共 ${info.itemCount} 条记录`,
   });
@@ -19,8 +18,8 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
   // 表格高度计算
   const tableHeight = computed(() => {
     const headerHeight = 85;
-    const rowHeight = 85;
-    const pageSize = pagination.value.pageSize || 15;
+    const rowHeight = 100;
+    const pageSize = pagination.value.pageSize || 10;
     return headerHeight + rowHeight * pageSize;
   });
 
@@ -107,22 +106,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
         file_type: row.type,
         import_file_create_time: row.importFileCreateTime,
         import_file_size: row.importFileSize,
-        converted_markdown_filename: `${row.importFileName.replace(
-          /\.[^/.]+$/,
-          ""
-        )}.md`,
         knowledge_repo: row.knowledgeRepo,
-        note_file_input: {
-          description: `${row.newNoteForm.description}`,
-          note_file_name: row.newNoteForm.noteFileName,
-          tags: row.newNoteForm.notesTags.split(","),
-          note_file_type: "md",
-          from_imported_file: row.importFileName,
-          from_imported_file_library: row.library,
-          note_file_create_time: row.newNoteForm.noteFileCreateTime,
-          note_file_update_time: row.newNoteForm.noteFileUpdateTime,
-          knowledge_repo: row.newNoteForm.knowledgeRepo,
-        },
       };
 
       console.log("row.id:", row.id);
@@ -141,13 +125,25 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
     }
   };
 
+  const tagColorMap = new Map();
+  const tagColors = ['success', 'warning', 'error', 'info', 'default'];
+  let colorIndex = 0;
+
+  const getTagColor = (tag) => {
+    if (!tagColorMap.has(tag)) {
+      tagColorMap.set(tag, tagColors[colorIndex % tagColors.length]);
+      colorIndex++;
+    }
+    return tagColorMap.get(tag);
+  };
+
   // 动态生成列配置
   const columns = computed(() => {
     const columnDefinitions = [
       // 选择列
       {
         type: "selection",
-        width: 60,
+        width: 30,
         fixed: "left",
         align: "center",
         key: "selection",
@@ -204,11 +200,10 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             enableAutoComplete: false,
           }),
       },
-      // 文件标签列
       {
         title: () => h("span", { style: titleStyle }, "文件标签"),
         key: "importedFileTags",
-        width: 150,
+        width: 200,
         render: (row) =>
           h(ShowOrEdit, {
             value: row.importedFileTags,
@@ -228,22 +223,13 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             },
             enableAutoComplete: true,
             searchType: "importedFileTags",
-          }),
-      },
-      // 文件类型列 - 只读
-      {
-        title: () => h("span", { style: titleStyle }, "文件类型"),
-        key: "type",
-        width: 120,
-        render: (row) =>
-          h(ShowOrEdit, {
-            value: row.type,
-            readonly: true,
+            displayMode: "tags",
+            getTagColor: getTagColor
           }),
       },
       // 文件库列
       {
-        title: () => h("span", { style: titleStyle }, "文件库"),
+        title: () => h("span", { style: titleStyle }, "所属文件库"),
         key: "library",
         width: 150,
         render: (row) =>
@@ -278,6 +264,17 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
             readonly: true,
           }),
       },
+      // 文件类型列 - 只读
+      {
+        title: () => h("span", { style: titleStyle }, "文件类型"),
+        key: "type",
+        width: 120,
+        render: (row) =>
+          h(ShowOrEdit, {
+            value: row.type,
+            readonly: true,
+          }),
+      },
       // 文件大小列 - 只读
       {
         title: () => h("span", { style: titleStyle }, "文件大小"),
@@ -290,58 +287,58 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           }),
       },
       // 笔记相关列 - 全部只读
-      {
-        title: () => h("span", { style: titleStyle }, "笔记文件名"),
-        key: "newNoteForm.noteFileName",
-        width: 200,
-        render: (row) =>
-          h(ShowOrEdit, {
-            value: row.newNoteForm?.noteFileName,
-            readonly: true,
-          }),
-      },
-      {
-        title: () => h("span", { style: titleStyle }, "笔记描述"),
-        key: "newNoteForm.description",
-        width: 200,
-        render: (row) =>
-          h(ShowOrEdit, {
-            value: row.newNoteForm?.description,
-            readonly: true,
-          }),
-      },
-      {
-        title: () => h("span", { style: titleStyle }, "笔记标签"),
-        key: "newNoteForm.notesTags",
-        width: 150,
-        render: (row) =>
-          h(ShowOrEdit, {
-            value: row.newNoteForm?.notesTags,
-            readonly: true,
-          }),
-      },
-      {
-        title: () => h("span", { style: titleStyle }, "笔记创建时间"),
-        key: "newNoteForm.noteFileCreateTime",
-        width: 170,
-        render: (row) =>
-          h(ShowOrEdit, {
-            value: row.newNoteForm?.noteFileCreateTime,
-            readonly: true,
-          }),
-      },
-      {
-        title: () => h("span", { style: titleStyle }, "笔记修改时间"),
-        key: "newNoteForm.noteFileUpdateTime",
-        width: 170,
-        fixed: "right",
-        align: "left",
-        render: (row) =>
-          h(ShowOrEdit, {
-            value: row.newNoteForm?.noteFileUpdateTime,
-            readonly: true,
-          }),
-      },
+      // {
+      //   title: () => h("span", { style: titleStyle }, "笔记文件名"),
+      //   key: "newNoteForm.noteFileName",
+      //   width: 200,
+      //   render: (row) =>
+      //     h(ShowOrEdit, {
+      //       value: row.newNoteForm?.noteFileName,
+      //       readonly: true,
+      //     }),
+      // },
+      // {
+      //   title: () => h("span", { style: titleStyle }, "笔记描述"),
+      //   key: "newNoteForm.description",
+      //   width: 200,
+      //   render: (row) =>
+      //     h(ShowOrEdit, {
+      //       value: row.newNoteForm?.description,
+      //       readonly: true,
+      //     }),
+      // },
+      // {
+      //   title: () => h("span", { style: titleStyle }, "笔记标签"),
+      //   key: "newNoteForm.notesTags",
+      //   width: 150,
+      //   render: (row) =>
+      //     h(ShowOrEdit, {
+      //       value: row.newNoteForm?.notesTags,
+      //       readonly: true,
+      //     }),
+      // },
+      // {
+      //   title: () => h("span", { style: titleStyle }, "笔记创建时间"),
+      //   key: "newNoteForm.noteFileCreateTime",
+      //   width: 170,
+      //   render: (row) =>
+      //     h(ShowOrEdit, {
+      //       value: row.newNoteForm?.noteFileCreateTime,
+      //       readonly: true,
+      //     }),
+      // },
+      // {
+      //   title: () => h("span", { style: titleStyle }, "笔记修改时间"),
+      //   key: "newNoteForm.noteFileUpdateTime",
+      //   width: 170,
+      //   fixed: "right",
+      //   align: "left",
+      //   render: (row) =>
+      //     h(ShowOrEdit, {
+      //       value: row.newNoteForm?.noteFileUpdateTime,
+      //       readonly: true,
+      //     }),
+      // },
     ];
 
     return columnDefinitions;

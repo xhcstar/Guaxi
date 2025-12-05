@@ -7,6 +7,13 @@
     <!-- 编辑状态：普通输入 -->
     <n-input v-else-if="isEdit" ref="inputRef" v-model:value="inputValue" :style="inputStyle"
       @update:value="handleUpdateValue" @change="handleChange" @blur="handleChange" @keyup.enter="handleChange" />
+    <!-- 标签显示模式 - 只读显示 -->
+    <div v-else-if="displayMode === 'tags' && !isEdit" class="tags-display">
+      <n-tag v-for="tag in tagList" :key="tag" :type="getTagColorFn(tag)" bordered-false
+        :style="{ marginRight: '6px', marginBottom: '4px' }">
+        {{ tag }}
+      </n-tag>
+    </div>
     <!-- 展示状态：带 Tooltip 的截断文本 -->
     <n-tooltip v-else placement="top" trigger="hover" :show-arrow="true">
       <template #trigger>
@@ -37,7 +44,12 @@ const props = defineProps({
   placeholder: {
     type: String,
     default: '请输入内容'
-  }
+  },
+  displayMode: { //显示模式 'text' 或 'tags'
+    type: String,
+    default: 'text'
+  },
+  getTagColor: Function // 获取标签颜色的函数
 });
 
 const emit = defineEmits(['update:value']);
@@ -48,10 +60,21 @@ const inputValue = ref(props.value);
 const options = ref([]); // 自动补全的选项
 const isLoading = ref(false); // 是否正在加载
 
-// 计算截断的文本（最多显示 50 个字符）
+const tagList = computed(() => {
+  if (!props.value) return [];
+  return (typeof props.value === "string"
+    ? props.value.split(",").map(tag => tag.trim())
+    : props.value);
+});
+
+const getTagColorFn = (tag) => {
+  return props.getTagColor ? props.getTagColor(tag) : 'default';
+};
+
+// 计算截断的文本（最多显示 120 个字符）
 const truncatedValue = computed(() => {
   const val = String(props.value || '');
-  return val.length > 50 ? val.substring(0, 50) + '...' : val;
+  return val.length > 120 ? val.substring(0, 120) + '...' : val;
 });
 
 // 样式
@@ -63,7 +86,7 @@ const style = {
 // 限制 input 宽度
 const inputStyle = {
   width: '100%',
-  height: '80%',
+  height: '100%',
   maxWidth: '100%',
 };
 
@@ -71,6 +94,7 @@ const inputStyle = {
 const handleOnClick = () => {
   if (props.readonly) return;
   isEdit.value = true;
+  inputValue.value = props.value;
   nextTick(() => {
     inputRef.value?.focus();
   });
@@ -174,15 +198,29 @@ watch(() => props.value, (newValue) => {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 0px;
+  padding: 2px, 20px;
   margin: 0px;
-  min-height: 60px;
+  min-height: 90px;
   width: 100%;
+  height: 100%;
+}
+
+.tags-display {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  cursor: pointer;
+  min-height: 30px;
+  align-items: center;
+  padding: 0;
+  width: 100%;
+  height: 50%;
 }
 
 .cell-content {
   width: 100%;
   word-break: break-word;
+  white-space: normal;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;

@@ -53,20 +53,7 @@ export const repoStore = defineStore("repoStore", {
           importFileCreateTime: file.import_file_create_time,
           importFileSize: file.import_file_size,
           convetToHtmlFilename: "",
-          convetToMarkdownFilename: file.converted_markdown_filename,
           knowledgeRepo: file.knowledge_repo,
-          newNoteForm: {
-            // id: file.note_file.id || 0, // 如果没有 id，则默认为 0,
-            description: file.note_file.description,
-            noteFileName: file.note_file.note_file_name,
-            noteFileType: file.note_file.note_file_type,
-            notesTags: file.note_file.tags.join(","), // 将 tags 数组转换为字符串
-            fromImportedFile: file.note_file.from_imported_file,
-            fromImportedFileLibrary: file.note_file.from_imported_file_library,
-            noteFileCreateTime: file.note_file.note_file_create_time,
-            noteFileUpdateTime: file.note_file.note_file_update_time,
-            knowledgeRepo: file.note_file.knowledge_repo,
-          },
         }));
         console.log("文件数据获取成功", this.files);
       } catch (error) {
