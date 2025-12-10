@@ -357,9 +357,9 @@ pub async fn update_notes_file(
             .unwrap_or(0)
     };
 
-    let existing_note_id: Option<i32> = if let Some(fid) = parsed_id {
+    let existing_note_id: Option<i32> = if imported_id_val != 0 {
         conn
-            .query_row("SELECT id FROM notes WHERE imported_file_id = ?", params![fid], |row| row.get(0))
+            .query_row("SELECT id FROM notes WHERE imported_file_id = ?", params![imported_id_val], |row| row.get(0))
             .optional()
             .map_err(|e| e.to_string())?
     } else {
