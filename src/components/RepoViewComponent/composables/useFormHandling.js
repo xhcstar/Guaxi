@@ -288,7 +288,7 @@ export function useFormHandling({
       }
 
       // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
-      const addedNoteInfo = await invoke("add_repo_import_file", {
+      const addResultInfo = await invoke("add_repo_import_file", {
         library: currentForm.value.library,
         filePath: currentForm.value.filePath,
       }).catch((error) => {
@@ -302,7 +302,6 @@ export function useFormHandling({
 
       // 创建 importfileList
       const importfileList = createImportFileList(
-        addedNoteInfo,
         currentForm.value
       );
 
@@ -341,10 +340,10 @@ export function useFormHandling({
         });
 
         console.log("isConverted", isConverted);
-        console.log("addedNoteInfo", addedNoteInfo);
+        console.log("addResultInfo", addResultInfo);
         console.log("currentForm: ", currentForm.value);
 
-        if (isConverted || addedNoteInfo.notConverted) {
+        if (isConverted || addResultInfo.notConverted) {
           console.log("isConverted", isConverted);
           console.log(
             "convetToMarkdownFilename: ",
@@ -421,14 +420,13 @@ export function useFormHandling({
       }
 
       // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
-      const addedNoteInfo = await invoke("add_web_clipper_import_file", {
+      const addResultInfo = await invoke("add_web_clipper_import_file", {
         library: currentForm.value.library,
         filePath: currentForm.value.filePath,
       });
 
       // 创建 importfileList
       const importfileList = createImportFileList(
-        addedNoteInfo,
         currentForm.value
       );
 
@@ -512,7 +510,7 @@ export function useFormHandling({
   };
 
   // 创建导入文件列表
-  const createImportFileList = (addedNoteInfo, currentForm) => {
+  const createImportFileList = (currentForm) => {
     return {
       import_file_name: currentForm.importFileName,
       description: currentForm.description,

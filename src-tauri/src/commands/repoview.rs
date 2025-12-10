@@ -4,6 +4,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use tracing::{error, info};
+use sha2::{Digest, Sha256};
+use hex;
 
 pub mod repofileproc;
 pub mod sql_constants;
@@ -33,6 +35,7 @@ pub struct NoteInput {
     note_file_create_time: String,
     note_file_update_time: String,
     knowledge_repo: String,
+    imported_file_id: i32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -128,10 +131,15 @@ pub fn setup_db() -> Result<(), String> {
         original_filetype TEXT NOT NULL,
         library TEXT,
         description TEXT,
-        knowledge_repo TEXT NOT NULL
+        knowledge_repo TEXT NOT NULL,
+        hash TEXT,
+        revision_count INTEGER NOT NULL DEFAULT 1
     ",
     )
     .map_err(|e| e.to_string())?;
+
+    let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN hash TEXT", []);
+    let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 1", []);
 
     // 创建标签表（如果不存在）
     create_table_if_not_exists(
@@ -171,10 +179,17 @@ pub fn setup_db() -> Result<(), String> {
         from_imported_file_library TEXT,
         note_file_create_time TEXT,
         note_file_update_time TEXT,
-        knowledge_repo TEXT NOT NULL
+        knowledge_repo TEXT NOT NULL,
+        imported_file_id INTEGER,
+        hash TEXT,
+        revision_count INTEGER NOT NULL DEFAULT 1
     ",
     )
     .map_err(|e| e.to_string())?;
+
+    let _ = conn.execute("ALTER TABLE notes ADD COLUMN imported_file_id INTEGER", []);
+    let _ = conn.execute("ALTER TABLE notes ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 1", []);
+    let _ = conn.execute("ALTER TABLE notes ADD COLUMN hash TEXT", []);
 
     // 创建标签表
     create_table_if_not_exists(
@@ -314,11 +329,18 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
     let mut conn = init_db().map_err(|e: rusqlite::Error| e.to_string())?;
     let tx = conn.transaction().map_err(|e: rusqlite::Error| e.to_string())?;
 
-    // 插入 imported_files 记录
+    let mut hasher = Sha256::new();
+    hasher.update(file.import_file_name.as_bytes());
+    hasher.update(file.description.as_bytes());
+    hasher.update(file.library.as_bytes());
+    hasher.update(file.file_type.as_bytes());
+    hasher.update(file.import_file_size.to_le_bytes());
+    let hash = hex::encode(hasher.finalize());
+
     tx.execute(
         "INSERT INTO imported_files (original_filename, description, library, original_filetype, 
-        create_time, original_filesize, knowledge_repo) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)",
+        create_time, original_filesize, knowledge_repo, hash) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             file.import_file_name,
             file.description,
@@ -327,6 +349,7 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
             file.import_file_create_time,
             file.import_file_size,
             file.knowledge_repo,
+            hash,
         ],
     ).map_err(|e: rusqlite::Error| e.to_string())?;
     
@@ -412,10 +435,17 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
         .query_row("SELECT original_filename FROM imported_files WHERE id = ?", params![id], |row| row.get(0))
         .map_err(|e| e.to_string())?;
 
-    // 更新 imported_files 记录
+    let mut hasher = Sha256::new();
+    hasher.update(file.import_file_name.as_bytes());
+    hasher.update(file.description.as_bytes());
+    hasher.update(file.library.as_bytes());
+    hasher.update(file.file_type.as_bytes());
+    hasher.update(file.import_file_size.to_le_bytes());
+    let hash = hex::encode(hasher.finalize());
+
     tx.execute(
         "UPDATE imported_files SET original_filename = ?, description = ?, library = ?, original_filetype = ?, 
-        create_time = ?, original_filesize = ?, knowledge_repo = ? WHERE id = ?",
+        create_time = ?, original_filesize = ?, knowledge_repo = ?, hash = ?, revision_count = revision_count + 1 WHERE id = ?",
         params![
             file.import_file_name,
             file.description,
@@ -424,6 +454,7 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
             file.import_file_create_time,
             file.import_file_size,
             file.knowledge_repo,
+            hash,
             id
         ],
     ).map_err(|e| e.to_string())?;
@@ -470,19 +501,32 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
 
         if let Some(note_id) = existing_note_id {
             // 更新现有笔记
+            let mut hasher = Sha256::new();
+            hasher.update(note_input.description.as_bytes());
+            hasher.update(note_input.note_file_name.as_bytes());
+            hasher.update(note_input.note_file_type.as_bytes());
+            hasher.update(file.import_file_name.as_bytes());
+            hasher.update(file.library.as_bytes());
+            hasher.update(note_input.note_file_create_time.as_bytes());
+            hasher.update(note_input.note_file_update_time.as_bytes());
+            hasher.update(note_input.knowledge_repo.as_bytes());
+            for t in note_input.tags.iter() { hasher.update(t.as_bytes()); }
+            let note_hash = hex::encode(hasher.finalize());
+
             tx.execute(
                 "UPDATE notes SET description = ?, note_file_name = ?, note_file_type = ?, 
                 from_imported_file = ?, from_imported_file_library = ?, note_file_create_time = ?, 
-                note_file_update_time = ?, knowledge_repo = ? WHERE id = ?",
+                note_file_update_time = ?, knowledge_repo = ?, hash = ?, revision_count = revision_count + 1 WHERE id = ?",
                 params![
                     note_input.description,
                     note_input.note_file_name,
                     note_input.note_file_type,
-                    file.import_file_name, // 更新为新的导入文件名
+                    file.import_file_name,
                     file.library,
                     note_input.note_file_create_time,
                     note_input.note_file_update_time,
                     note_input.knowledge_repo,
+                    note_hash,
                     note_id
                 ],
             ).map_err(|e| e.to_string())?;
@@ -513,10 +557,22 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
             }
         } else {
             // 创建新笔记
+            let mut hasher = Sha256::new();
+            hasher.update(note_input.description.as_bytes());
+            hasher.update(note_input.note_file_name.as_bytes());
+            hasher.update(note_input.note_file_type.as_bytes());
+            hasher.update(file.import_file_name.as_bytes());
+            hasher.update(file.library.as_bytes());
+            hasher.update(note_input.note_file_create_time.as_bytes());
+            hasher.update(note_input.note_file_update_time.as_bytes());
+            hasher.update(note_input.knowledge_repo.as_bytes());
+            for t in note_input.tags.iter() { hasher.update(t.as_bytes()); }
+            let note_hash = hex::encode(hasher.finalize());
+
             tx.execute(
                 "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, 
                 from_imported_file_library, note_file_create_time, note_file_update_time, 
-                knowledge_repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                knowledge_repo, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     note_input.description,
                     note_input.note_file_name,
@@ -525,7 +581,8 @@ pub fn update_imported_file(id: i32, file: ImportedFileInput) -> Result<(), Stri
                     file.library,
                     note_input.note_file_create_time,
                     note_input.note_file_update_time,
-                    note_input.knowledge_repo
+                    note_input.knowledge_repo,
+                    note_hash
                 ],
             ).map_err(|e| e.to_string())?;
 
@@ -654,11 +711,23 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
         .transaction()
         .map_err(|e: rusqlite::Error| e.to_string())?;
 
+    let mut hasher = Sha256::new();
+    hasher.update(note.description.as_bytes());
+    hasher.update(note.note_file_name.as_bytes());
+    hasher.update(note.note_file_type.as_bytes());
+    hasher.update(note.from_imported_file.as_bytes());
+    hasher.update(note.from_imported_file_library.as_bytes());
+    hasher.update(note.note_file_create_time.as_bytes());
+    hasher.update(note.note_file_update_time.as_bytes());
+    hasher.update(note.knowledge_repo.as_bytes());
+    for t in note.tags.iter() { hasher.update(t.as_bytes()); }
+    let note_hash = hex::encode(hasher.finalize());
+
     // 插入 notes 记录
     tx.execute(
         "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, 
         from_imported_file_library, note_file_create_time, note_file_update_time, 
-        knowledge_repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        knowledge_repo, imported_file_id, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             note.description,
             note.note_file_name,
@@ -667,7 +736,9 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
             note.from_imported_file_library,
             note.note_file_create_time,
             note.note_file_update_time,
-            note.knowledge_repo
+            note.knowledge_repo,
+            note.imported_file_id,
+            note_hash,
         ],
     ).map_err(|e: rusqlite::Error| e.to_string())?;
 
@@ -722,11 +793,23 @@ pub fn update_note(id: i32, note: NoteInput) -> Result<(), String> {
     let mut conn = init_db().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
+    let mut hasher = Sha256::new();
+    hasher.update(note.description.as_bytes());
+    hasher.update(note.note_file_name.as_bytes());
+    hasher.update(note.note_file_type.as_bytes());
+    hasher.update(note.from_imported_file.as_bytes());
+    hasher.update(note.from_imported_file_library.as_bytes());
+    hasher.update(note.note_file_create_time.as_bytes());
+    hasher.update(note.note_file_update_time.as_bytes());
+    hasher.update(note.knowledge_repo.as_bytes());
+    for t in note.tags.iter() { hasher.update(t.as_bytes()); }
+    let note_hash = hex::encode(hasher.finalize());
+
     // 更新 notes 记录
     tx.execute(
         "UPDATE notes SET description = ?, note_file_name = ?, note_file_type = ?, 
         from_imported_file = ?, from_imported_file_library = ?, note_file_create_time = ?, 
-        note_file_update_time = ?, knowledge_repo = ? WHERE id = ?",
+        note_file_update_time = ?, knowledge_repo = ?, imported_file_id = ?, hash = ?, revision_count = revision_count + 1 WHERE id = ?",
         params![
             note.description,
             note.note_file_name,
@@ -736,6 +819,8 @@ pub fn update_note(id: i32, note: NoteInput) -> Result<(), String> {
             note.note_file_create_time,
             note.note_file_update_time,
             note.knowledge_repo,
+            note.imported_file_id,
+            note_hash,
             id
         ]
     ).map_err(|e| e.to_string())?;

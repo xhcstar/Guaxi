@@ -15,12 +15,7 @@ pub struct FileInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ImportNoteInfo {
-    create_time: String,
-    update_time: String,
-    library: String,
-    note_file_name: String,
-    from_filename: String,
+pub struct AddResultInfo {
     not_converted: Option<bool>,
 }
 
@@ -57,7 +52,7 @@ pub fn get_file_info(file_path: String) -> Result<FileInfo, String> {
 }
 
 #[tauri::command]
-pub fn add_repo_import_file(library: String, file_path: String) -> Result<ImportNoteInfo, String> {
+pub fn add_repo_import_file(library: String, file_path: String) -> Result<AddResultInfo, String> {
     info!(
         "add_repo_import_file: library: {} file_path: {}",
         library, file_path
@@ -183,27 +178,12 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
     let create_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     info!("create_time: {}", create_time);
 
-    // 在 notes 目录下创建文件，文件名为“去掉后缀的文件名-note-当前时间.md”
-    let note_file_name = format!(
-        "{}-note-{}.md",
-        file_stem,
-        Local::now().format("%Y_%m_%d_%H_%M_%S")
-    );
-    let note_file_path = notes_dir.join(&note_file_name);
-    fs::File::create(&note_file_path).map_err(|e| e.to_string())?;
-    info!("Created note file: {}", note_file_path.display());
-
     // 首次创建时，update_time 与 create_time 相同
     let update_time = create_time.clone();
     info!("update_time: {}", update_time);
 
     // 返回创建的 note 文件信息
-    let import_note_info = ImportNoteInfo {
-        create_time,
-        update_time,
-        library, // 直接返回传入的库名称，例如 "qw"
-        note_file_name: note_file_name,
-        from_filename: file_name.to_string(),
+    let import_note_info = AddResultInfo {
         not_converted: if file_extension == "txt" {
             Some(true)
         } else {
@@ -220,7 +200,7 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<Import
 pub fn add_web_clipper_import_file(
     library: String,
     file_path: String,
-) -> Result<ImportNoteInfo, String> {
+) -> Result<AddResultInfo, String> {
     info!(
         "add_repo_import_file: library: {} file_path: {}",
         library, file_path
@@ -313,16 +293,6 @@ pub fn add_web_clipper_import_file(
     let create_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     info!("create_time: {}", create_time);
 
-    // 在 notes 目录下创建文件，文件名为“去掉后缀的文件名-note-当前时间.md”
-    let note_file_name = format!(
-        "{}-note-{}.md",
-        file_stem,
-        Local::now().format("%Y_%m_%d_%H_%M_%S")
-    );
-    let note_file_path = notes_dir.join(&note_file_name);
-    fs::File::create(&note_file_path).map_err(|e| e.to_string())?;
-    info!("Created note file: {}", note_file_path.display());
-
     // 首次创建时，update_time 与 create_time 相同
     let update_time = create_time.clone();
     info!("update_time: {}", update_time);
@@ -330,12 +300,7 @@ pub fn add_web_clipper_import_file(
     fs::remove_file(&file_path).map_err(|e| e.to_string())?;
 
     // 返回创建的 note 文件信息
-    let import_note_info = ImportNoteInfo {
-        create_time,
-        update_time,
-        library, // 直接返回传入的库名称，例如 "qw"
-        note_file_name: note_file_name,
-        from_filename: file_name.to_string(),
+    let import_note_info = AddResultInfo {
         not_converted: if file_extension == "txt" {
             Some(true)
         } else {
