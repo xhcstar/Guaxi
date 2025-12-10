@@ -1,12 +1,13 @@
 <template>
-  <div :style="style" @click="handleOnClick" class="editable-cell">
+  <div :style="style" @dblclick="handleOnDoubleClick" class="editable-cell" :class="{ 'is-edit': isEdit }">
     <!-- 编辑状态：自动补全 -->
     <n-auto-complete v-if="isEdit && enableAutoComplete" ref="inputRef" v-model:value="inputValue" :options="options"
       :loading="isLoading" :style="inputStyle" @update:value="handleUpdateValue" @blur="handleChange"
       @search="handleSearch" @keyup.enter="handleChange" clearable />
     <!-- 编辑状态：普通输入 -->
-    <n-input v-else-if="isEdit" ref="inputRef" v-model:value="inputValue" :style="inputStyle"
-      @update:value="handleUpdateValue" @change="handleChange" @blur="handleChange" @keyup.enter="handleChange" />
+    <n-input v-else-if="isEdit" ref="inputRef" v-model:value="inputValue" :style="inputStyle" type="textarea"
+      :autosize="{ minRows: 3, maxRows: 10 }" @update:value="handleUpdateValue" @change="handleChange"
+      @blur="handleChange" @keydown.ctrl.enter="handleChange" />
     <!-- 标签显示模式 - 只读显示 -->
     <div v-else-if="displayMode === 'tags' && !isEdit" class="tags-display">
       <n-tag v-for="tag in tagList" :key="tag" :type="getTagColorFn(tag)" bordered-false
@@ -90,8 +91,7 @@ const inputStyle = {
   maxWidth: '100%',
 };
 
-// 处理点击事件
-const handleOnClick = () => {
+const handleOnDoubleClick = () => {
   if (props.readonly) return;
   isEdit.value = true;
   inputValue.value = props.value;
@@ -205,6 +205,10 @@ watch(() => props.value, (newValue) => {
   height: 100%;
 }
 
+.editable-cell.is-edit {
+  align-self: stretch;
+}
+
 .tags-display {
   display: flex;
   flex-wrap: wrap;
@@ -232,17 +236,27 @@ watch(() => props.value, (newValue) => {
 
 :deep(.n-input) {
   width: 100%;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 :deep(.n-auto-complete) {
   width: 100%;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 :deep(.n-input .n-input__input) {
+  height: 100%;
   border-radius: 8px;
 }
 
+:deep(.n-input .n-input__textarea-el) {
+  height: 100%;
+}
+
 :deep(.n-auto-complete .n-input__input) {
+  height: 100%;
   border-radius: 8px;
 }
 

@@ -100,6 +100,11 @@ defineExpose({
   box-sizing: border-box;
 }
 
+:deep(.n-data-table-td .n-data-table-td__cell .editable-cell.is-edit) {
+  height: 100%;
+  align-self: stretch;
+}
+
 :deep(.n-data-table-base) {
   height: 100% !important;
   display: flex;
