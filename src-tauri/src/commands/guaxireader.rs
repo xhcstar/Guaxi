@@ -98,6 +98,7 @@ pub async fn create_reader_window(
         .into(),
     );
 
+    info!("file_data: {:?}", file_data);
     info!("url: {}", url);
     info!(
         "正在打开文件: {} (路径: {})",

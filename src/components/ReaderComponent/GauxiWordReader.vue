@@ -1148,7 +1148,7 @@ const updateBackendNotes = async (action, cardData) => {
         timestamp: cardData.timestamp || new Date().toISOString()
       },
       filePath: await ensureNotesPath(),
-      importFileId: props.importFileId || null,
+      importFileId: Number(props.importFileId) || 0,
       importFileName: props.fileName || '',
     };
 

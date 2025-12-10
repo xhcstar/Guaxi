@@ -1393,7 +1393,7 @@ const updateBackendNotes = async (action, cardData) => {
     const items = Array.isArray(cardData.items) ? cardData.items : [];
 
     // 3. 构建与后端匹配的数据结构
-    const payload = {
+        const payload = {
       action,
       data: {
         id: cardData.id,
@@ -1409,7 +1409,7 @@ const updateBackendNotes = async (action, cardData) => {
         timestamp: cardData.timestamp || new Date().toISOString()
       },
       filePath: await ensureNotesPath(), // 确保路径已初始化
-      importFileId: props.importFileId || null,
+      importFileId: Number(props.importFileId) || 0,
       importFileName: props.fileName || '',
     };
 

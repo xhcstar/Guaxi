@@ -2,7 +2,7 @@
   <n-message-provider>
     <div class="guaxi-reader">
       <component :is="readerComponent" v-if="readerComponent" :filePath="filePath" :fileType="fileType"
-        :fileName="fileName" :library="library" :importFileId="importFileId" @close=" emit('close')" />
+        :fileName="fileName" :library="library" :importFileId="Number(importFileId) || 0" @close=" emit('close')" />
       <div v-else class="unknown-type">
         不支持的文件类型: {{ fileType }}
         <p>文件名: {{ fileData?.name || '未知' }}</p>
