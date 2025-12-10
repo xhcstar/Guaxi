@@ -137,6 +137,16 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
     return tagColorMap.get(tag);
   };
 
+  // 文件大小显示格式化（从字节换算为 KB 或 MB，仅用于展示）
+  const formatFileSize = (bytes) => {
+    if (bytes == null || isNaN(bytes)) return '';
+    const b = Number(bytes);
+    const KB = 1024;
+    const MB = KB * 1024;
+    if (b < MB) return (b / KB).toFixed(2) + ' KB';
+    return (b / MB).toFixed(2) + ' MB';
+  };
+
   // 动态生成列配置
   const columns = computed(() => {
     const columnDefinitions = [
@@ -282,7 +292,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
         width: 120,
         render: (row) =>
           h(ShowOrEdit, {
-            value: row.importFileSize,
+            value: formatFileSize(row.importFileSize),
             readonly: true,
           }),
       },
