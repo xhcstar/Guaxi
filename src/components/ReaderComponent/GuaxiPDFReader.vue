@@ -146,6 +146,14 @@ const props = defineProps({
   fileName: {
     type: String,
     required: true,
+  },
+  library: {
+    type: String,
+    required: true,
+  },
+  importFileId: {
+    type: Number,
+    default: null,
   }
 })
 

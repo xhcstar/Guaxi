@@ -221,6 +221,10 @@ const props = defineProps({
   library: {
     type: String,
     required: true
+  },
+  importFileId: {
+    type: Number,
+    default: null,
   }
 })
 
@@ -1143,7 +1147,9 @@ const updateBackendNotes = async (action, cardData) => {
         })),
         timestamp: cardData.timestamp || new Date().toISOString()
       },
-      filePath: await ensureNotesPath()
+      filePath: await ensureNotesPath(),
+      importFileId: props.importFileId || null,
+      importFileName: props.fileName || '',
     };
 
     await invoke('update_notes_file', payload);

@@ -38,6 +38,34 @@ pub struct NoteInput {
     imported_file_id: i32,
 }
 
+impl NoteInput {
+    pub fn new(
+        description: String,
+        note_file_name: String,
+        tags: Vec<String>,
+        note_file_type: String,
+        from_imported_file: String,
+        from_imported_file_library: String,
+        note_file_create_time: String,
+        note_file_update_time: String,
+        knowledge_repo: String,
+        imported_file_id: i32,
+    ) -> Self {
+        Self {
+            description,
+            note_file_name,
+            tags,
+            note_file_type,
+            from_imported_file,
+            from_imported_file_library,
+            note_file_create_time,
+            note_file_update_time,
+            knowledge_repo,
+            imported_file_id,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ImportedFile {
     id: i32,

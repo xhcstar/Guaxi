@@ -240,6 +240,10 @@ const props = defineProps({
   library: {
     type: String,
     required: true
+  },
+  importFileId: {
+    type: Number,
+    default: null,
   }
 })
 
@@ -1404,7 +1408,9 @@ const updateBackendNotes = async (action, cardData) => {
         })),
         timestamp: cardData.timestamp || new Date().toISOString()
       },
-      filePath: await ensureNotesPath() // 确保路径已初始化
+      filePath: await ensureNotesPath(), // 确保路径已初始化
+      importFileId: props.importFileId || null,
+      importFileName: props.fileName || '',
     };
 
     // 4. 调试日志

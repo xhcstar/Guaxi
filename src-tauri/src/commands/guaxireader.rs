@@ -9,6 +9,8 @@ use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 use urlencoding::encode;
+use rusqlite::{params, OptionalExtension};
+use crate::commands::repoview::{init_db, add_note, update_note, NoteInput};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SvgSaveResult {
@@ -34,6 +36,8 @@ pub struct FileData {
     base_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_file_id: Option<u64>,
 }
 
 // 窗口数据存储
@@ -84,11 +88,12 @@ pub async fn create_reader_window(
     // 构建URL查询参数
     let url = WebviewUrl::App(
         format!(
-            "/reader?filePath={}&fileType={}&fileName={}&library={}",
+            "/reader?filePath={}&fileType={}&fileName={}&library={}&importFileId={}",
             encode(&file_data.file_path),
             encode(&file_data.file_type),
             encode(&file_data.file_name),
             encode(&file_data.library),
+            encode(&file_data.import_file_id.unwrap_or(0).to_string()),
         )
         .into(),
     );
@@ -302,6 +307,8 @@ pub async fn update_notes_file(
     action: String,
     data: serde_json::Value,
     file_path: String,
+    import_file_id: i32,
+    import_file_name: String,
 ) -> Result<(), String> {
     // 读取现有数据
     let mut notes = load_notes_file(file_path.clone())
@@ -332,10 +339,95 @@ pub async fn update_notes_file(
 
     // 异步写入文件
     let json = serde_json::to_string_pretty(&notes).map_err(|e| e.to_string())?;
+    tokio::fs::write(&file_path, json).await.map_err(|e| e.to_string())?;
 
-    tokio::fs::write(&file_path, json)
-        .await
-        .map_err(|e| e.to_string())?;
+    let conn = init_db().map_err(|e| e.to_string())?;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let imported_id_val: i32 = if import_file_id != 0 {
+        import_file_id
+    } else {
+        conn
+            .query_row(
+                "SELECT id FROM imported_files WHERE original_filename = ?",
+                params![import_file_name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(0)
+    };
+
+    let existing_note_id: Option<i32> = if let Some(fid) = parsed_id {
+        conn
+            .query_row("SELECT id FROM notes WHERE imported_file_id = ?", params![fid], |row| row.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?
+    } else {
+        conn
+            .query_row(
+                "SELECT id FROM notes WHERE from_imported_file = ?",
+                params![import_file_name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+    };
+
+    if let Some(note_id) = existing_note_id {
+        let (note_file_create_time, note_file_update_time) = {
+            let md = fs::metadata(&file_path).map_err(|e| e.to_string())?;
+            let created = md.created().ok();
+            let modified = md.modified().ok();
+            let cstr = created
+                .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            let ustr = modified
+                .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| cstr.clone());
+            (cstr, ustr)
+        };
+
+        let ni = NoteInput::new(
+            format!("{}的摘录笔记", import_file_name),
+            file_path.clone(),
+            Vec::new(),
+            "json".to_string(),
+            import_file_name.clone(),
+            "".to_string(),
+            note_file_create_time,
+            note_file_update_time,
+            "".to_string(),
+            imported_id_val,
+        );
+        update_note(note_id, ni)?;
+    } else {
+        let (note_file_create_time, note_file_update_time) = {
+            let md = fs::metadata(&file_path).map_err(|e| e.to_string())?;
+            let created = md.created().ok();
+            let modified = md.modified().ok();
+            let cstr = created
+                .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            let ustr = modified
+                .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| cstr.clone());
+            (cstr, ustr)
+        };
+
+        let ni = NoteInput::new(
+            format!("{}的摘录笔记", import_file_name),
+            file_path.clone(),
+            Vec::new(),
+            "json".to_string(),
+            import_file_name.clone(),
+            "".to_string(),
+            note_file_create_time,
+            note_file_update_time,
+            "".to_string(),
+            imported_id_val,
+        );
+        let _ = add_note(ni)?;
+    }
 
     Ok(())
 }

@@ -61,6 +61,7 @@ export const routes = [
       fileType: route.query.fileType,
       fileName: route.query.fileName,
       library: route.query.library,
+      importFileId: route.query.import_file_id,
     })
   },
   {

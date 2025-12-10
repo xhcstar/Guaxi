@@ -136,6 +136,7 @@ export function useContextMenu({ store, message }) {
     try {
       const rowFileType = row.type?.toLowerCase() || "";
       const rowFileName = row.importFileName || "";
+      const importFileId = row.id || null;
 
       const fileType = mapFileType(rowFileType);
       if (!fileType) {
@@ -178,6 +179,7 @@ export function useContextMenu({ store, message }) {
           file_name: rowFileName,
           file_path: readFilePath,
           library: row.library,
+          import_file_id: importFileId,
         },
       });
 
@@ -189,6 +191,7 @@ export function useContextMenu({ store, message }) {
           name: rowFileName,
           path: readFilePath,
           library: row.library,
+          import_file_id: importFileId,
         },
       });
     } catch (error) {
