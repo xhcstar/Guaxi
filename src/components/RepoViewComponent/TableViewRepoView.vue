@@ -75,6 +75,7 @@ import { useContextMenu } from './composables/useContextMenu.js'
 import { useSearch } from './composables/useSearch.js'
 import { useSearchComplete } from './SearchUtils/useSearchComplete.js'
 import { useTableConfig } from './composables/useTableConfig.js'
+import { useFileOperations } from './composables/useFileOperations.js'
 
 // 初始化存储和消息
 const store = repoStore()
@@ -190,56 +191,38 @@ const {
   checkedRowKeys
 } = useTableConfig({ store, message, ShowOrEdit })
 
+const { backupDatabase: backupDatabaseOp, recoverDatabase: recoverDatabaseOp, importItems: importItemsOp, exportItems: exportItemsOp } = useFileOperations({ store, message })
+
 // 文件操作实现
 const backupDatabase = async () => {
   try {
-    message.info('开始备份资料库...')
-    // 可以在这里添加备份任务
-    // progresses.value.push({ ...备份任务配置, type: 'backup' })
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    message.success('资料库备份成功')
+    await backupDatabaseOp()
   } catch (error) {
     console.error('备份失败:', error)
-    message.error('资料库备份失败')
   }
 }
 
 const recoverDatabase = async () => {
   try {
-    message.info('开始从备份文件中恢复...')
-    // 可以在这里添加恢复任务
-    // progresses.value.push({ ...恢复任务配置, type: 'recovery' })
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    message.success('资料库恢复成功')
+    await recoverDatabaseOp()
   } catch (error) {
     console.error('恢复失败:', error)
-    message.error('资料库恢复失败')
   }
 }
 
 const importItems = async () => {
   try {
-    message.info('开始导入指定条目...')
-    // 可以在这里添加导入任务
-    // progresses.value.push({ ...导入任务配置, type: 'import' })
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    message.success('条目导入成功')
+    await importItemsOp()
   } catch (error) {
     console.error('导入失败:', error)
-    message.error('条目导入失败')
   }
 }
 
 const exportItems = async () => {
   try {
-    message.info('开始导出指定条目...')
-    // 可以在这里添加导出任务
-    // progresses.value.push({ ...导出任务配置, type: 'export' })
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    message.success('条目导出成功')
+    await exportItemsOp(checkedRowKeys.value)
   } catch (error) {
     console.error('导出失败:', error)
-    message.error('条目导出失败')
   }
 }
 

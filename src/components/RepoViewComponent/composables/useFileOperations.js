@@ -1,15 +1,17 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 export function useFileOperations({ store, message }) {
   // 备份数据库
   const backupDatabase = async () => {
     try {
       message.info("开始备份资料库...");
+      const backupDir = await open({ directory: true, multiple: false });
 
-      // 调用后端备份接口
       const result = await invoke("backup_database", {
         databaseType: store.currentDatabase,
+        outputDir: backupDir || null,
       });
 
       if (result.success) {
@@ -28,16 +30,17 @@ export function useFileOperations({ store, message }) {
   const recoverDatabase = async () => {
     try {
       message.info("开始从备份文件中恢复...");
-
-      // 调用后端恢复接口
+      const backupPath = await open({ multiple: false, directory: false, filters: [{ name: "Zip", extensions: ["zip"] }] });
+      if (!backupPath) {
+        message.warning("请选择备份文件");
+        return;
+      }
       const result = await invoke("recover_database", {
         databaseType: store.currentDatabase,
+        backupPath: backupPath,
       });
-
       if (result.success) {
         message.success("资料库恢复成功");
-
-        // 刷新数据
         await store.fetchFiles(store.currentDatabase);
         await store.fetchRepos();
       } else {
@@ -53,17 +56,17 @@ export function useFileOperations({ store, message }) {
   const importItems = async () => {
     try {
       message.info("开始导入指定条目...");
-
-      // 调用后端导入接口
+      const importPath = await open({ multiple: false });
+      if (!importPath) {
+        message.warning("请选择导入包或目录");
+        return;
+      }
       const result = await invoke("import_items", {
         databaseType: store.currentDatabase,
-        importPath: "", // 可以从文件选择器获取
+        importPath: importPath,
       });
-
       if (result.success) {
         message.success(`成功导入 ${result.importedCount} 个条目`);
-
-        // 刷新数据
         await store.fetchFiles(store.currentDatabase);
       } else {
         throw new Error(result.error || "导入失败");
@@ -75,17 +78,23 @@ export function useFileOperations({ store, message }) {
   };
 
   // 导出条目
-  const exportItems = async () => {
+  const exportItems = async (itemIds) => {
     try {
       message.info("开始导出指定条目...");
-
-      // 调用后端导出接口
+      if (!itemIds || itemIds.length === 0) {
+        message.warning("请选择要导出的条目");
+        return;
+      }
+      const exportPath = await open({ directory: true, multiple: false });
+      if (!exportPath) {
+        message.warning("请选择导出目录");
+        return;
+      }
       const result = await invoke("export_items", {
         databaseType: store.currentDatabase,
-        exportPath: "", // 可以从文件选择器获取
-        itemIds: [], // 选中的条目ID
+        exportPath: exportPath,
+        itemIds: itemIds,
       });
-
       if (result.success) {
         message.success(`成功导出 ${result.exportedCount} 个条目`);
         console.log("导出文件路径:", result.exportPath);
