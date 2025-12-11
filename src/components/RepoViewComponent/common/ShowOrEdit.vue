@@ -107,12 +107,17 @@ const handleUpdateValue = (v) => {
 
 const handleChange = () => {
   if (props.readonly) return;
-
+  const prev = typeof props.value === 'string' ? props.value.trim() : props.value;
+  const next = typeof inputValue.value === 'string' ? inputValue.value.trim() : inputValue.value;
+  if (prev === next) {
+    isEdit.value = false;
+    return;
+  }
   console.log(`handleChange 被调用，输入值: ${inputValue.value}`);
   if (props.onUpdateValue) {
-    props.onUpdateValue(inputValue.value);
+    props.onUpdateValue(next);
   }
-  emit('update:value', inputValue.value);
+  emit('update:value', next);
   isEdit.value = false;
 };
 

@@ -168,16 +168,17 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.importFileName,
             onUpdateValue: async (value) => {
-              const error = validateTableCell(row, "importFileName", value);
+              const nv = typeof value === "string" ? value.trim() : value;
+              const ov = typeof row.importFileName === "string" ? row.importFileName.trim() : row.importFileName;
+              if (nv === ov) return;
+              const error = validateTableCell(row, "importFileName", nv);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              // 直接更新行数据
-              const updatedRow = { ...row, importFileName: value };
+              const updatedRow = { ...row, importFileName: nv };
               try {
                 await updateImportedFile(updatedRow);
-                // 更新成功后同步到原始行
                 Object.assign(row, updatedRow);
               } catch (error) {
                 console.error("更新失败:", error);
@@ -194,12 +195,15 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.description,
             onUpdateValue: async (value) => {
-              const error = validateTableCell(row, "description", value);
+              const nv = typeof value === "string" ? value.trim() : value;
+              const ov = typeof row.description === "string" ? row.description.trim() : row.description;
+              if (nv === ov) return;
+              const error = validateTableCell(row, "description", nv);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              const updatedRow = { ...row, description: value };
+              const updatedRow = { ...row, description: nv };
               try {
                 await updateImportedFile(updatedRow);
                 Object.assign(row, updatedRow);
@@ -218,12 +222,20 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.importedFileTags,
             onUpdateValue: async (value) => {
-              const error = validateTableCell(row, "importedFileTags", value);
+              const normalize = (v) => {
+                if (Array.isArray(v)) return v.map(t => String(t).trim()).filter(Boolean).join(",");
+                if (typeof v === "string") return v.split(",").map(t => t.trim()).filter(Boolean).join(",");
+                return "";
+              };
+              const nv = normalize(value);
+              const ov = normalize(row.importedFileTags);
+              if (nv === ov) return;
+              const error = validateTableCell(row, "importedFileTags", nv);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              const updatedRow = { ...row, importedFileTags: value };
+              const updatedRow = { ...row, importedFileTags: nv };
               try {
                 await updateImportedFile(updatedRow);
                 Object.assign(row, updatedRow);
@@ -246,12 +258,15 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           h(ShowOrEdit, {
             value: row.library,
             onUpdateValue: async (value) => {
-              const error = validateTableCell(row, "library", value);
+              const nv = typeof value === "string" ? value.trim() : value;
+              const ov = typeof row.library === "string" ? row.library.trim() : row.library;
+              if (nv === ov) return;
+              const error = validateTableCell(row, "library", nv);
               if (error) {
                 if (message) message.error(error);
                 return;
               }
-              const updatedRow = { ...row, library: value };
+              const updatedRow = { ...row, library: nv };
               try {
                 await updateImportedFile(updatedRow);
                 Object.assign(row, updatedRow);
