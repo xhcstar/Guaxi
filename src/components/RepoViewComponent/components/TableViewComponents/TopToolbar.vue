@@ -18,19 +18,21 @@
         </n-tooltip>
 
         <!-- 备份任务按钮 -->
-        <n-tooltip trigger="hover">
-          <template #trigger>
-            <n-button text @click="$emit('backup-database')" size="small"
-              :type="categorizedProgresses.backup.length > 0 ? 'primary' : 'default'" class="toolbar-button">
-              <template #icon>
-                <n-icon :component="SaveSync20Regular" :size="18" />
-              </template>
-              <n-badge v-if="categorizedProgresses.backup.length > 0" :value="categorizedProgresses.backup.length"
-                class="badge" />
-            </n-button>
-          </template>
-          备份资料库 ({{ categorizedProgresses.backup.length }})
-        </n-tooltip>
+        <n-dropdown trigger="click" :options="backupOptions" @select="(key) => $emit('backup-database', key)">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text size="small"
+                :type="categorizedProgresses.backup.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+                <template #icon>
+                  <n-icon :component="SaveSync20Regular" :size="18" />
+                </template>
+                <n-badge v-if="categorizedProgresses.backup.length > 0" :value="categorizedProgresses.backup.length"
+                  class="badge" />
+              </n-button>
+            </template>
+            备份资料库 ({{ categorizedProgresses.backup.length }})
+          </n-tooltip>
+        </n-dropdown>
 
         <!-- 恢复任务按钮 -->
         <n-tooltip trigger="hover">
@@ -85,7 +87,7 @@
 </template>
 
 <script setup>
-import { NIcon, NButton, NTooltip, NBadge, NSpace } from 'naive-ui'
+import { NIcon, NButton, NTooltip, NBadge, NSpace, NDropdown } from 'naive-ui'
 import {
   TasksApp20Regular,
   SaveSync20Regular,
@@ -119,6 +121,11 @@ defineEmits([
   'import-items',
   'export-items'
 ])
+
+const backupOptions = [
+  { label: '备份当前库', key: 'current' },
+  { label: '备份所有库', key: 'all' }
+]
 </script>
 
 <style scoped>

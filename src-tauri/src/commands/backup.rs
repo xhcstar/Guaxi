@@ -114,13 +114,18 @@ fn zip_dir(
 
 fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare(
+    let files_sql = if repo.eq_ignore_ascii_case("ALL") {
         "SELECT id, original_filename, description, library, original_filetype,
          create_time, original_filesize, knowledge_repo, hash, revision_count
-         FROM imported_files WHERE knowledge_repo = ?",
-    ).map_err(|e| e.to_string())?;
+         FROM imported_files"
+    } else {
+        "SELECT id, original_filename, description, library, original_filetype,
+         create_time, original_filesize, knowledge_repo, hash, revision_count
+         FROM imported_files WHERE knowledge_repo = ?"
+    };
+    let mut stmt = conn.prepare(files_sql).map_err(|e| e.to_string())?;
     let mut files: Vec<ImportedFileExport> = Vec::new();
-    let rows = stmt.query_map(params![repo], |row| {
+    let mapper = |row: &rusqlite::Row| {
         Ok((
             row.get::<_, i32>(0)?,
             row.get::<_, String>(1)?,
@@ -133,7 +138,12 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
             row.get::<_, Option<String>>(8)?,
             row.get::<_, Option<i32>>(9)?,
         ))
-    }).map_err(|e| e.to_string())?;
+    };
+    let rows = if repo.eq_ignore_ascii_case("ALL") {
+        stmt.query_map([], mapper)
+    } else {
+        stmt.query_map(params![repo], mapper)
+    }.map_err(|e| e.to_string())?;
     for r in rows {
         let (id, name, desc, lib, ty, ctime, size, kr, hash, rev) = r.map_err(|e| e.to_string())?;
         let mut ts = conn.prepare(
@@ -161,54 +171,56 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
         });
     }
 
+    let mut notes: Vec<NoteExport> = Vec::new();
     let mut stmt = conn.prepare(
         "SELECT id, description, note_file_name, note_file_type,
          from_imported_file, from_imported_file_library, note_file_create_time,
-         note_file_update_time, knowledge_repo, hash, revision_count
-         FROM notes WHERE knowledge_repo = ?",
+         note_file_update_time, knowledge_repo, hash, revision_count, imported_file_id
+         FROM notes WHERE imported_file_id = ?"
     ).map_err(|e| e.to_string())?;
-    let mut notes: Vec<NoteExport> = Vec::new();
-    let rows = stmt.query_map(params![repo], |row| {
-        Ok((
-            row.get::<_, i32>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, String>(5)?,
-            row.get::<_, String>(6)?,
-            row.get::<_, String>(7)?,
-            row.get::<_, String>(8)?,
-            row.get::<_, Option<String>>(9)?,
-            row.get::<_, Option<i32>>(10)?,
-        ))
-    }).map_err(|e| e.to_string())?;
-    for r in rows {
-        let (id, desc, nfn, nft, fif, fifl, c, u, kr, hash, rev) = r.map_err(|e| e.to_string())?;
-        let mut ts = conn.prepare(
-            "SELECT nt.name FROM notes_tags nt
-             JOIN notes_tags_relations ntr ON nt.id = ntr.tag_id
-             WHERE ntr.note_id = ?",
-        ).map_err(|e| e.to_string())?;
-        let tags = ts
-            .query_map(params![id], |row| Ok(row.get::<_, String>(0)?))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<String>, _>>()
-            .map_err(|e| e.to_string())?;
-        notes.push(NoteExport {
-            id,
-            description: desc,
-            note_file_name: nfn,
-            tags,
-            note_file_type: nft,
-            from_imported_file: fif,
-            from_imported_file_library: fifl,
-            note_file_create_time: c,
-            note_file_update_time: u,
-            knowledge_repo: kr,
-            hash,
-            revision_count: rev,
-        });
+    for f in files.iter() {
+        let rows = stmt.query_map(params![f.id.to_string()], |row| {
+            Ok((
+                row.get::<_, i32>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<i32>>(10)?,
+            ))
+        }).map_err(|e| e.to_string())?;
+        for r in rows {
+            let (id, desc, nfn, nft, fif, fifl, c, u, kr, hash, rev) = r.map_err(|e| e.to_string())?;
+            let mut ts = conn.prepare(
+                "SELECT nt.name FROM notes_tags nt
+                 JOIN notes_tags_relations ntr ON nt.id = ntr.tag_id
+                 WHERE ntr.note_id = ?",
+            ).map_err(|e| e.to_string())?;
+            let note_tags = ts
+                .query_map(params![id], |row| Ok(row.get::<_, String>(0)?))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(|e| e.to_string())?;
+            notes.push(NoteExport {
+                id,
+                description: desc,
+                note_file_name: nfn,
+                tags: note_tags,
+                note_file_type: nft,
+                from_imported_file: fif,
+                from_imported_file_library: fifl,
+                note_file_create_time: c,
+                note_file_update_time: u,
+                knowledge_repo: kr,
+                hash,
+                revision_count: rev,
+            });
+        }
     }
 
     Ok(BackupManifest {
@@ -246,9 +258,9 @@ pub fn backup_database(databaseType: String, outputDir: Option<String>) -> Resul
     let f = std::fs::File::create(&backup_zip_path).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(f);
     let json_bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
-    start_file(&mut zip, "data/importfiles.json", &json_bytes)?;
+    start_file(&mut zip, "data/manifest.json", &json_bytes)?;
     let notes_bytes = serde_json::to_vec(&manifest.notes).map_err(|e| e.to_string())?;
-    start_file(&mut zip, "data/notes.json", &notes_bytes)?;
+    start_file(&mut zip, "data/notes-meta.json", &notes_bytes)?;
 
     let libraries_root = get_libraries_root();
     let base = PathBuf::from(&libraries_root).join("Libraries");
@@ -570,7 +582,9 @@ pub fn import_items(databaseType: String, importPath: String) -> Result<ImportRe
     }
     let data = fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
     let mut manifest: BackupManifest = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    let notes_path = temp.join("data").join("notes.json");
+    let notes_path1 = temp.join("data").join("notes.json");
+    let notes_path2 = temp.join("data").join("notes-meta.json");
+    let notes_path = if notes_path1.exists() { notes_path1 } else { notes_path2 };
     if notes_path.exists() {
         let notes_data = fs::read_to_string(&notes_path).map_err(|e| e.to_string())?;
         let notes: Vec<NoteExport> = serde_json::from_str(&notes_data).map_err(|e| e.to_string())?;

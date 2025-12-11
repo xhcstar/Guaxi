@@ -194,9 +194,9 @@ const {
 const { backupDatabase: backupDatabaseOp, recoverDatabase: recoverDatabaseOp, importItems: importItemsOp, exportItems: exportItemsOp } = useFileOperations({ store, message })
 
 // 文件操作实现
-const backupDatabase = async () => {
+const backupDatabase = async (scope = 'current') => {
   try {
-    await backupDatabaseOp()
+    await backupDatabaseOp(scope)
   } catch (error) {
     console.error('备份失败:', error)
   }
