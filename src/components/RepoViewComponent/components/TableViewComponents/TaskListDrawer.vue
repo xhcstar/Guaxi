@@ -8,7 +8,7 @@
             <div class="task-header">
               <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
               <n-tag v-if="progress.current < 100" size="small" type="info" class="task-tag">
-                转换中
+                {{ progress.type === 'backup' ? '备份中' : '转换中' }}
               </n-tag>
               <n-tag v-else size="small" type="success" class="task-tag">
                 已完成

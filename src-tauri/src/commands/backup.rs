@@ -3,6 +3,7 @@ use super::repoview::init_db;
 use chrono::Local;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use tauri::{Emitter, Window};
 
 use std::fs;
 use std::io::{Seek, Write};
@@ -62,14 +63,37 @@ struct NoteExport {
     imported_file_id: Option<i32>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct BackupManifest {
+#[derive(Serialize, Deserialize)
+]struct BackupManifest {
     version: u32,
     knowledge_repo: String,
     exported_at: String,
     imported_files: Vec<ImportedFileExport>,
     notes: Vec<NoteExport>,
 }
+
+#[derive(serde::Serialize, Clone)]
+struct BackupProgress {
+    current: u32,
+    total: u32,
+    message: String,
+    databaseType: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ImportedFilesTag { id: i32, name: String }
+
+#[derive(Serialize, Deserialize)]
+struct ImportedFilesTagRel { file_id: i32, tag_id: i32 }
+
+#[derive(Serialize, Deserialize)]
+struct NotesTag { id: i32, name: String }
+
+#[derive(Serialize, Deserialize)]
+struct NotesTagRel { note_id: i32, tag_id: i32 }
+
+#[derive(Serialize, Deserialize)]
+struct NoteLink { id: i32, source_note_id: i32, target_note_id: i32, context: Option<String> }
 
 fn exe_dir() -> Result<PathBuf, String> {
     let p = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -244,43 +268,130 @@ fn file_stem(name: &str) -> String {
 }
 
 #[tauri::command]
-pub fn backup_database(databaseType: String, outputDir: Option<String>) -> Result<BackupResult, String> {
-    let manifest = collect_repo_data(&databaseType)?;
-    let target_dir = if let Some(dir) = outputDir {
-        PathBuf::from(dir)
-    } else {
-        let exe = exe_dir()?;
-        let backups_dir = exe.join("backups");
-        if !backups_dir.exists() {
-            fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
+pub async fn backup_database(databaseType: String, outputDir: Option<String>, window: Window) -> Result<BackupResult, String> {
+    let win = window.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 0, total: 100, message: "开始备份...".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
+
+        let manifest = collect_repo_data(&databaseType)?;
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 10, total: 100, message: "已收集元数据".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
+
+        let target_dir = if let Some(dir) = outputDir {
+            PathBuf::from(dir)
+        } else {
+            let exe = exe_dir()?;
+            let backups_dir = exe.join("backups");
+            if !backups_dir.exists() {
+                fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
+            }
+            backups_dir
+        };
+        let fname = format!("repo-{}-{}.zip", databaseType, Local::now().format("%Y%m%d_%H%M%S"));
+        let backup_zip_path = target_dir.join(&fname);
+        let f = std::fs::File::create(&backup_zip_path).map_err(|e| e.to_string())?;
+        let mut zip = ZipWriter::new(f);
+
+        let json_bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
+        start_file(&mut zip, "data/manifest.json", &json_bytes)?;
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 20, total: 100, message: "已写入 manifest.json".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
+
+        let notes_bytes = serde_json::to_vec(&manifest.notes).map_err(|e| e.to_string())?;
+        start_file(&mut zip, "data/notes-meta.json", &notes_bytes)?;
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 30, total: 100, message: "已写入 notes-meta.json".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
+
+        // 备份剩余的数据库表
+        let conn = init_db().map_err(|e| e.to_string())?;
+
+        let mut stmt = conn.prepare("SELECT id, name FROM imported_files_tags").map_err(|e| e.to_string())?;
+        let itags = stmt
+            .query_map([], |row| Ok(ImportedFilesTag { id: row.get(0)?, name: row.get(1)? }))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<ImportedFilesTag>, _>>()
+            .map_err(|e| e.to_string())?;
+        start_file(&mut zip, "data/imported_files_tags.json", &serde_json::to_vec(&itags).map_err(|e| e.to_string())?)?;
+
+        let mut stmt = conn.prepare("SELECT file_id, tag_id FROM imported_files_tags_relations").map_err(|e| e.to_string())?;
+        let itrels = stmt
+            .query_map([], |row| Ok(ImportedFilesTagRel { file_id: row.get(0)?, tag_id: row.get(1)? }))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<ImportedFilesTagRel>, _>>()
+            .map_err(|e| e.to_string())?;
+        start_file(&mut zip, "data/imported_files_tags_relations.json", &serde_json::to_vec(&itrels).map_err(|e| e.to_string())?)?;
+
+        let mut stmt = conn.prepare("SELECT id, name FROM notes_tags").map_err(|e| e.to_string())?;
+        let ntags = stmt
+            .query_map([], |row| Ok(NotesTag { id: row.get(0)?, name: row.get(1)? }))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<NotesTag>, _>>()
+            .map_err(|e| e.to_string())?;
+        start_file(&mut zip, "data/notes_tags.json", &serde_json::to_vec(&ntags).map_err(|e| e.to_string())?)?;
+
+        let mut stmt = conn.prepare("SELECT note_id, tag_id FROM notes_tags_relations").map_err(|e| e.to_string())?;
+        let ntrels = stmt
+            .query_map([], |row| Ok(NotesTagRel { note_id: row.get(0)?, tag_id: row.get(1)? }))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<NotesTagRel>, _>>()
+            .map_err(|e| e.to_string())?;
+        start_file(&mut zip, "data/notes_tags_relations.json", &serde_json::to_vec(&ntrels).map_err(|e| e.to_string())?)?;
+
+        let mut stmt = conn.prepare("SELECT id, source_note_id, target_note_id, context FROM notes_links").map_err(|e| e.to_string())?;
+        let nlinks = stmt
+            .query_map([], |row| Ok(NoteLink { id: row.get(0)?, source_note_id: row.get(1)?, target_note_id: row.get(2)?, context: row.get::<_, Option<String>>(3)? }))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<NoteLink>, _>>()
+            .map_err(|e| e.to_string())?;
+        start_file(&mut zip, "data/notes_links.json", &serde_json::to_vec(&nlinks).map_err(|e| e.to_string())?)?;
+
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 60, total: 100, message: "已备份数据库表".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
+
+        let libraries_root = get_libraries_root();
+        let base = PathBuf::from(&libraries_root).join("Libraries");
+        let prefix = PathBuf::from("repo");
+        let repo_name = databaseType.trim();
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 70, total: 100, message: "开始打包库文件".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
+
+        if repo_name.is_empty() || repo_name.eq_ignore_ascii_case("ALL") {
+            zip_dir(&mut zip, &base, &PathBuf::new(), &prefix)?;
+        } else {
+            let rel = PathBuf::from(repo_name);
+            zip_dir(&mut zip, &base, &rel, &prefix)?;
         }
-        backups_dir
-    };
-    let fname = format!("repo-{}-{}.zip", databaseType, Local::now().format("%Y%m%d_%H%M%S"));
-    let backup_zip_path = target_dir.join(&fname);
-    let f = std::fs::File::create(&backup_zip_path).map_err(|e| e.to_string())?;
-    let mut zip = ZipWriter::new(f);
-    let json_bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
-    start_file(&mut zip, "data/manifest.json", &json_bytes)?;
-    let notes_bytes = serde_json::to_vec(&manifest.notes).map_err(|e| e.to_string())?;
-    start_file(&mut zip, "data/notes-meta.json", &notes_bytes)?;
 
-    let libraries_root = get_libraries_root();
-    let base = PathBuf::from(&libraries_root).join("Libraries");
-    let prefix = PathBuf::from("repo");
-    let repo_name = databaseType.trim();
-    if repo_name.is_empty() || repo_name.eq_ignore_ascii_case("ALL") {
-        zip_dir(&mut zip, &base, &PathBuf::new(), &prefix)?;
-    } else {
-        let rel = PathBuf::from(repo_name);
-        zip_dir(&mut zip, &base, &rel, &prefix)?;
-    }
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 95, total: 100, message: "库文件打包完成".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
 
-    zip.finish().map_err(|e| e.to_string())?;
-    Ok(BackupResult {
-        success: true,
-        backupPath: backup_zip_path.to_string_lossy().to_string(),
-    })
+        zip.finish().map_err(|e| e.to_string())?;
+
+        win.emit(
+            "backup_progress",
+            BackupProgress { current: 100, total: 100, message: "备份完成".to_string(), databaseType: databaseType.clone() },
+        ).map_err(|e| e.to_string())?;
+
+        Ok(BackupResult {
+            success: true,
+            backupPath: backup_zip_path.to_string_lossy().to_string(),
+        })
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

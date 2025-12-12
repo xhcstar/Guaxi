@@ -12,12 +12,18 @@ export function useFileOperations({ store, message }) {
         message.warning("请选择备份目录");
         return;
       }
-      const loading = message.loading("正在备份，请稍候...", { duration: 0 });
+      const loading = null;
       const databaseType = scope === "all" ? "ALL" : store.currentDatabase;
-      invoke("backup_database", {
-        databaseType,
-        outputDir: backupDir || null,
-      })
+      invoke(
+        "backup_database",
+        {
+          databaseType,
+          outputDir: backupDir || null,
+        },
+        {
+          target: "main",
+        }
+      )
         .then((result) => {
           if (result.success) {
             message.success("资料库备份成功");
@@ -29,9 +35,6 @@ export function useFileOperations({ store, message }) {
         .catch((error) => {
           console.error("备份失败:", error);
           message.error(`资料库备份失败: ${error.message || error}`);
-        })
-        .finally(() => {
-          try { loading?.destroy?.(); } catch (_) {}
         });
     } catch (error) {
       console.error("备份失败:", error);

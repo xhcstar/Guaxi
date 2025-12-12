@@ -7,6 +7,39 @@ export function useProgress({ store, message }) {
   const progresses = ref([]);
   const showTaskList = ref(false);
 
+  listen("backup_progress", (event) => {
+    const db = event.payload.databaseType || "资料库";
+    let idx = progresses.value.findIndex(
+      (p) => p.type === "backup" && p.fileName === db
+    );
+    if (idx === -1) {
+      progresses.value.push({
+        show: true,
+        current: 0,
+        total: 100,
+        message: "开始备份...",
+        fileName: db,
+        type: "backup",
+      });
+      idx = progresses.value.length - 1;
+    }
+    progresses.value[idx] = {
+      ...progresses.value[idx],
+      current: event.payload.current,
+      message: event.payload.message,
+    };
+    if (event.payload.current >= 100) {
+      setTimeout(() => {
+        const i = progresses.value.findIndex(
+          (p) => p.type === "backup" && p.fileName === db
+        );
+        if (i !== -1 && progresses.value[i]?.current >= 100) {
+          progresses.value.splice(i, 1);
+        }
+      }, 3000);
+    }
+  });
+
   // 新增：计算属性 - 按任务类型分类
   const categorizedProgresses = computed(() => {
     const tasks = progresses.value || [];
