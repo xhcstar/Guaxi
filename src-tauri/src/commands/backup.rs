@@ -59,6 +59,7 @@ struct NoteExport {
     knowledge_repo: String,
     hash: Option<String>,
     revision_count: Option<i32>,
+    imported_file_id: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -192,10 +193,11 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
                 row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, Option<i32>>(10)?,
+                row.get::<_, Option<i32>>(11)?,
             ))
         }).map_err(|e| e.to_string())?;
         for r in rows {
-            let (id, desc, nfn, nft, fif, fifl, c, u, kr, hash, rev) = r.map_err(|e| e.to_string())?;
+            let (id, desc, nfn, nft, fif, fifl, c, u, kr, hash, rev, fifid) = r.map_err(|e| e.to_string())?;
             let mut ts = conn.prepare(
                 "SELECT nt.name FROM notes_tags nt
                  JOIN notes_tags_relations ntr ON nt.id = ntr.tag_id
@@ -219,6 +221,7 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
                 knowledge_repo: kr,
                 hash,
                 revision_count: rev,
+                imported_file_id: fifid,
             });
         }
     }
