@@ -6,15 +6,15 @@
         <n-tooltip trigger="hover">
           <template #trigger>
             <n-button text @click="$emit('toggle-task-list')" size="small"
-              :type="categorizedProgresses.conversion.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+              :type="categorizedProgresses.all.length > 0 ? 'primary' : 'default'" class="toolbar-button">
               <template #icon>
                 <n-icon :component="TasksApp20Regular" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.conversion.length > 0"
-                :value="categorizedProgresses.conversion.length" class="badge" />
+              <n-badge v-if="categorizedProgresses.all.length > 0"
+                :value="categorizedProgresses.all.length" class="badge" />
             </n-button>
           </template>
-          转换任务 ({{ categorizedProgresses.conversion.length }})
+          任务列表 ({{ categorizedProgresses.all.length }})
         </n-tooltip>
 
         <!-- 备份任务按钮 -->
@@ -26,8 +26,7 @@
                 <template #icon>
                   <n-icon :component="SaveSync20Regular" :size="18" />
                 </template>
-                <n-badge v-if="categorizedProgresses.backup.length > 0" :value="categorizedProgresses.backup.length"
-                  class="badge" />
+
               </n-button>
             </template>
             备份资料库 ({{ categorizedProgresses.backup.length }})
@@ -42,8 +41,7 @@
               <template #icon>
                 <n-icon :component="BoxArrowLeft20Regular" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.recovery.length > 0" :value="categorizedProgresses.recovery.length"
-                class="badge" />
+
             </n-button>
           </template>
           从备份恢复 ({{ categorizedProgresses.recovery.length }})
@@ -57,8 +55,7 @@
               <template #icon>
                 <n-icon :component="TextBulletListAdd20Filled" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.import.length > 0" :value="categorizedProgresses.import.length"
-                class="badge" />
+
             </n-button>
           </template>
           导入条目 ({{ categorizedProgresses.import.length }})
@@ -72,8 +69,7 @@
               <template #icon>
                 <n-icon :component="SignOut20Regular" :size="18" />
               </template>
-              <n-badge v-if="categorizedProgresses.export.length > 0" :value="categorizedProgresses.export.length"
-                class="badge" />
+
             </n-button>
           </template>
           导出条目 ({{ categorizedProgresses.export.length }})

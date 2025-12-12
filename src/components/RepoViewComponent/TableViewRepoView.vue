@@ -7,7 +7,7 @@
       @import-items="importItems" @export-items="exportItems" />
 
     <!-- 任务列表抽屉 -->
-    <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" />
+    <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" />
 
     <!-- 搜索栏 -->
     <SearchPanel :search-params="searchParams" @update:search-params="searchParams = $event"
