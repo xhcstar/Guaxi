@@ -308,6 +308,25 @@ fn file_stem(name: &str) -> String {
         .to_string()
 }
 
+fn infer_library_from_note_path(p: &str) -> Option<String> {
+    let path = Path::new(p);
+    let mut it = path.components();
+    while let Some(c) = it.next() {
+        if c.as_os_str().to_string_lossy() == "Libraries" {
+            return it.next().and_then(|x| x.as_os_str().to_str()).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+fn rel_path_after_libraries(p: &str) -> Option<String> {
+    let s = p.replace('\\', "/");
+    if let Some(pos) = s.find("Libraries/") {
+        return Some(s[pos + "Libraries/".len()..].to_string());
+    }
+    None
+}
+
 #[tauri::command]
 pub async fn backup_database(
     databaseType: String,
@@ -791,22 +810,41 @@ fn upsert_imported_file(
 }
 
 fn resolve_imported_file_id(conn: &rusqlite::Connection, note: &NoteExport) -> Result<Option<i32>, String> {
-    conn
+    let lib = if note.from_imported_file_library.is_empty() {
+        infer_library_from_note_path(&note.note_file_name).unwrap_or_default()
+    } else {
+        note.from_imported_file_library.clone()
+    };
+    let found: Option<i32> = conn
         .query_row(
             "SELECT id FROM imported_files WHERE original_filename = ? AND library = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
-            params![note.from_imported_file, note.from_imported_file_library, note.knowledge_repo],
+            params![note.from_imported_file, lib, note.knowledge_repo],
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if found.is_some() { return Ok(found); }
+    if lib.is_empty() {
+        let any: Option<i32> = conn
+            .query_row(
+                "SELECT id FROM imported_files WHERE original_filename = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+                params![note.from_imported_file, note.knowledge_repo],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        return Ok(any);
+    }
+    Ok(None)
 }
 
 fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), String> {
-    let mapped_imported_file_id = resolve_imported_file_id(conn, src)?;
+    let mapped_imported_file_id = resolve_imported_file_id(conn, src)?; if mapped_imported_file_id.is_none() { return Err("missing imported_file_id".to_string()); }
+    let suffix = rel_path_after_libraries(&src.note_file_name).unwrap_or_else(|| src.note_file_name.clone());
     let existing: Option<(i32, Option<i32>, Option<String>)> = conn
         .query_row(
-            "SELECT id, revision_count, note_file_update_time FROM notes WHERE hash = ?",
-            params![&src.hash],
+            "SELECT id, revision_count, note_file_update_time FROM notes WHERE knowledge_repo = ? AND note_file_name LIKE '%' || ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+            params![&src.knowledge_repo, &suffix],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
@@ -1065,6 +1103,9 @@ pub async fn import_items(databaseType: String, importPath: String) -> Result<Im
         if n.knowledge_repo.is_empty() {
             n.knowledge_repo = databaseType.clone();
         }
+        if n.from_imported_file_library.is_empty() {
+            if let Some(lib) = infer_library_from_note_path(&n.note_file_name) { n.from_imported_file_library = lib; }
+        }
     }
     let src_repo_root = temp.join("repo");
 
@@ -1125,7 +1166,7 @@ pub async fn recover_database(
             manifest.notes = notes;
         }
         for f in manifest.imported_files.iter_mut() { if f.knowledge_repo.is_empty() { f.knowledge_repo = databaseType.clone(); } }
-        for n in manifest.notes.iter_mut() { if n.knowledge_repo.is_empty() { n.knowledge_repo = databaseType.clone(); } }
+        for n in manifest.notes.iter_mut() { if n.knowledge_repo.is_empty() { n.knowledge_repo = databaseType.clone(); } if n.from_imported_file_library.is_empty() { if let Some(lib) = infer_library_from_note_path(&n.note_file_name) { n.from_imported_file_library = lib; } } }
         let src_repo_root = temp.join("repo");
         win.emit(
             "recovery_progress",
