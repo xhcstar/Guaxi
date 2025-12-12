@@ -675,7 +675,19 @@ pub fn delete_imported_file(id: i32) -> Result<(), String> {
 
     // 删除导入文件记录
     tx.execute("DELETE FROM imported_files WHERE id = ?", params![id])
-        .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM notes WHERE imported_file_id = ?",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
