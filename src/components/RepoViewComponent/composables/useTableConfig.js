@@ -94,7 +94,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
     try {
       const importedFileTags =
         typeof row.importedFileTags === "string"
-          ? row.importedFileTags.split(",")
+          ? row.importedFileTags.split(",").map((tag) => tag.trim()) 
           : row.importedFileTags;
 
       console.log("updateImportedFile row:", row);
