@@ -12,6 +12,7 @@ use walkdir::WalkDir;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 use tracing::{debug, error, info};
+use sha2::{Digest, Sha256};
 
 #[derive(Serialize)]
 pub struct BackupResult {
@@ -550,7 +551,7 @@ pub async fn backup_database(
 }
 
 #[tauri::command]
-pub fn export_items(
+pub async fn export_items(
     databaseType: String,
     exportPath: String,
     itemIds: Vec<i32>,
@@ -659,16 +660,23 @@ fn upsert_imported_file(
     conn: &rusqlite::Connection,
     src: &ImportedFileExport,
 ) -> Result<(), String> {
-    let existing: Option<(i32, Option<i32>)> = conn
+    // Match by natural key: filename + library + repo
+    let existing: Option<(i32, Option<i32>, String, Option<String>)> = conn
         .query_row(
-            "SELECT id, revision_count FROM imported_files WHERE hash = ?",
-            params![&src.hash],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            "SELECT id, revision_count, create_time, hash FROM imported_files WHERE original_filename = ? AND library = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+            params![src.import_file_name, src.library, src.knowledge_repo],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    if let Some((id, rev)) = existing {
-        if src.revision_count.unwrap_or(1) > rev.unwrap_or(1) {
+
+    if let Some((id, rev, old_ctime, old_hash)) = existing {
+        let src_rev = src.revision_count.unwrap_or(1);
+        let old_rev = rev.unwrap_or(1);
+        let newer_by_rev = src_rev > old_rev;
+        let newer_by_time = !newer_by_rev && src.import_file_create_time >= old_ctime;
+        let hash_diff = match (&src.hash, &old_hash) { (Some(a), Some(b)) => a != b, _ => false };
+        if newer_by_rev || newer_by_time {
             conn.execute(
                 "UPDATE imported_files SET original_filename = ?, description = ?, library = ?, original_filetype = ?, 
                  create_time = ?, original_filesize = ?, knowledge_repo = ?, hash = ?, revision_count = ? WHERE id = ?",
@@ -688,8 +696,7 @@ fn upsert_imported_file(
             conn.execute(
                 "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
                 params![id],
-            )
-            .map_err(|e| e.to_string())?;
+            ).map_err(|e| e.to_string())?;
             for tag in src.tags.iter() {
                 let tag_id = conn
                     .query_row(
@@ -698,21 +705,53 @@ fn upsert_imported_file(
                         |row| row.get(0),
                     )
                     .or_else(|_| {
-                        conn.execute(
-                            "INSERT INTO imported_files_tags (name) VALUES (?)",
-                            params![tag],
-                        )?;
+                        conn.execute("INSERT INTO imported_files_tags (name) VALUES (?)", params![tag])?;
                         Ok(conn.last_insert_rowid())
                     })
                     .map_err(|e: rusqlite::Error| e.to_string())?;
                 conn.execute(
                     "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
                     params![id, tag_id],
-                )
-                .map_err(|e| e.to_string())?;
+                ).map_err(|e| e.to_string())?;
+            }
+        } else if src_rev == old_rev && hash_diff {
+            conn.execute(
+                "INSERT INTO imported_files (original_filename, description, library, original_filetype, 
+             create_time, original_filesize, knowledge_repo, hash, revision_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    src.import_file_name,
+                    src.description,
+                    src.library,
+                    src.file_type,
+                    src.import_file_create_time,
+                    src.import_file_size,
+                    src.knowledge_repo,
+                    src.hash,
+                    src.revision_count.unwrap_or(1),
+                ],
+            ).map_err(|e| e.to_string())?;
+            let file_id = conn.last_insert_rowid() as i32;
+            for tag in src.tags.iter() {
+                let tag_id = conn
+                    .query_row(
+                        "SELECT id FROM imported_files_tags WHERE name = ?",
+                        params![tag],
+                        |row| row.get(0),
+                    )
+                    .or_else(|_| {
+                        conn.execute("INSERT INTO imported_files_tags (name) VALUES (?)", params![tag])?;
+                        Ok(conn.last_insert_rowid())
+                    })
+                    .map_err(|e: rusqlite::Error| e.to_string())?;
+                conn.execute(
+                    "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
+                    params![file_id, tag_id],
+                ).map_err(|e| e.to_string())?;
             }
         }
     } else {
+        // Insert new row when not found by natural key
         conn.execute(
             "INSERT INTO imported_files (original_filename, description, library, original_filetype, 
              create_time, original_filesize, knowledge_repo, hash, revision_count)
@@ -738,24 +777,32 @@ fn upsert_imported_file(
                     |row| row.get(0),
                 )
                 .or_else(|_| {
-                    conn.execute(
-                        "INSERT INTO imported_files_tags (name) VALUES (?)",
-                        params![tag],
-                    )?;
+                    conn.execute("INSERT INTO imported_files_tags (name) VALUES (?)", params![tag])?;
                     Ok(conn.last_insert_rowid())
                 })
                 .map_err(|e: rusqlite::Error| e.to_string())?;
             conn.execute(
                 "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
                 params![file_id, tag_id],
-            )
-            .map_err(|e| e.to_string())?;
+            ).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
 }
 
+fn resolve_imported_file_id(conn: &rusqlite::Connection, note: &NoteExport) -> Result<Option<i32>, String> {
+    conn
+        .query_row(
+            "SELECT id FROM imported_files WHERE original_filename = ? AND library = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+            params![note.from_imported_file, note.from_imported_file_library, note.knowledge_repo],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
 fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), String> {
+    let mapped_imported_file_id = resolve_imported_file_id(conn, src)?;
     let existing: Option<(i32, Option<i32>, Option<String>)> = conn
         .query_row(
             "SELECT id, revision_count, note_file_update_time FROM notes WHERE hash = ?",
@@ -790,7 +837,7 @@ fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), Stri
                     src.knowledge_repo,
                     src.hash,
                     src.revision_count.unwrap_or(1),
-                    src.imported_file_id,
+                    mapped_imported_file_id,
                     id
                 ],
             ).map_err(|e| e.to_string())?;
@@ -835,7 +882,7 @@ fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), Stri
                 src.knowledge_repo,
                 src.hash,
                 src.revision_count.unwrap_or(1),
-                src.imported_file_id,
+                mapped_imported_file_id,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -880,20 +927,80 @@ fn copy_library_tree(
         if p.is_file() {
             let rel = p.strip_prefix(&src).map_err(|e| e.to_string())?;
             let target = dst.join(rel);
-            let mut need_copy = true;
+            let rel_str = rel.to_string_lossy();
+            // Detect markdown note files for auto-merge
+            let is_markdown_note = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+                && rel_str.to_lowercase().contains("notes");
+
             if target.exists() {
-                let sm = fs::metadata(p).map_err(|e| e.to_string())?;
-                let dm = fs::metadata(&target).map_err(|e| e.to_string())?;
-                let newer = sm
-                    .modified()
-                    .ok()
-                    .zip(dm.modified().ok())
-                    .map(|(a, b)| a > b)
-                    .unwrap_or(false);
-                let diff_size = sm.len() != dm.len();
-                need_copy = newer || diff_size;
-            }
-            if need_copy {
+                let src_bytes = fs::read(p).map_err(|e| e.to_string())?;
+                let dst_bytes = fs::read(&target).map_err(|e| e.to_string())?;
+                let mut hs = Sha256::new();
+                hs.update(&src_bytes);
+                let sh = hs.finalize();
+                let mut hd = Sha256::new();
+                hd.update(&dst_bytes);
+                let dh = hd.finalize();
+                // Skip identical content
+                if sh == dh {
+                    continue;
+                }
+                if is_markdown_note {
+                    // Auto-merge markdown notes; choose primary by last modified time
+                    let sm = fs::metadata(p).map_err(|e| e.to_string())?;
+                    let dm = fs::metadata(&target).map_err(|e| e.to_string())?;
+                    let src_newer = sm
+                        .modified()
+                        .ok()
+                        .zip(dm.modified().ok())
+                        .map(|(a, b)| a >= b)
+                        .unwrap_or(true);
+                    let src_str = String::from_utf8_lossy(&src_bytes);
+                    let dst_str = String::from_utf8_lossy(&dst_bytes);
+                    let (primary, secondary) = if src_newer {
+                        (src_str, dst_str)
+                    } else {
+                        (dst_str, src_str)
+                    };
+                    let merged = merge_markdown_content(&primary, &secondary);
+                    let older_path = if src_newer { &target } else { p };
+                    let conflict_base = dst.join("__conflicts");
+                    let conflict_target = conflict_base.join(rel);
+                    if let Some(parent) = conflict_target.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+                    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+                    let base = conflict_target.file_name().and_then(|n| n.to_str()).unwrap_or("conflict").to_string();
+                    let conflict_name = format!("{}-{}", base, ts);
+                    let conflict_path = conflict_target.with_file_name(conflict_name);
+                    fs::copy(older_path, &conflict_path).map_err(|e| e.to_string())?;
+                    if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+                    fs::write(&target, merged.as_bytes()).map_err(|e| e.to_string())?;
+                } else {
+                    // Prefer newer file by modified time for non-markdown
+                    let sm = fs::metadata(p).map_err(|e| e.to_string())?;
+                    let dm = fs::metadata(&target).map_err(|e| e.to_string())?;
+                    let overwrite = sm
+                        .modified()
+                        .ok()
+                        .zip(dm.modified().ok())
+                        .map(|(a, b)| a > b)
+                        .unwrap_or(true);
+                    if overwrite {
+                        let conflict_base = dst.join("__conflicts");
+                        let conflict_target = conflict_base.join(rel);
+                        if let Some(parent) = conflict_target.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+                        let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+                        let base = conflict_target.file_name().and_then(|n| n.to_str()).unwrap_or("conflict").to_string();
+                        let conflict_name = format!("{}-{}", base, ts);
+                        let conflict_path = conflict_target.with_file_name(conflict_name);
+                        fs::copy(&target, &conflict_path).map_err(|e| e.to_string())?;
+                        if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+                        fs::copy(p, &target).map_err(|e| e.to_string())?;
+                    }
+                }
+            } else {
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
@@ -904,8 +1011,19 @@ fn copy_library_tree(
     Ok(())
 }
 
+fn merge_markdown_content(dst: &str, src: &str) -> String {
+    if dst.trim() == src.trim() {
+        dst.to_string()
+    } else {
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        format!("{}\n\n<!-- merged at {} -->\n{}\n", dst, ts, src)
+    }
+}
+
+
+
 #[tauri::command]
-pub fn import_items(databaseType: String, importPath: String) -> Result<ImportResult, String> {
+pub async fn import_items(databaseType: String, importPath: String) -> Result<ImportResult, String> {
     let exe = exe_dir()?;
     let temp = exe
         .join("tmp")
@@ -948,6 +1066,7 @@ pub fn import_items(databaseType: String, importPath: String) -> Result<ImportRe
             n.knowledge_repo = databaseType.clone();
         }
     }
+    let src_repo_root = temp.join("repo");
 
     let conn = init_db().map_err(|e| e.to_string())?;
     for f in manifest.imported_files.iter() {
@@ -959,7 +1078,6 @@ pub fn import_items(databaseType: String, importPath: String) -> Result<ImportRe
 
     let libraries_root = get_libraries_root();
     let dst_base = PathBuf::from(&libraries_root);
-    let src_repo_root = temp.join("repo");
     for f in manifest.imported_files.iter() {
         copy_library_tree(&src_repo_root, &dst_base, &f.library, &f.import_file_name)?;
     }
@@ -1008,6 +1126,7 @@ pub async fn recover_database(
         }
         for f in manifest.imported_files.iter_mut() { if f.knowledge_repo.is_empty() { f.knowledge_repo = databaseType.clone(); } }
         for n in manifest.notes.iter_mut() { if n.knowledge_repo.is_empty() { n.knowledge_repo = databaseType.clone(); } }
+        let src_repo_root = temp.join("repo");
         win.emit(
             "recovery_progress",
             RecoveryProgress { current: 35, total: 100, message: "已解析配置".to_string(), databaseType: databaseType.clone() },
@@ -1061,8 +1180,7 @@ pub async fn recover_database(
             RecoveryProgress { current: 60, total: 100, message: "已写入数据库".to_string(), databaseType: databaseType.clone() },
         ).map_err(|e| e.to_string())?;
 
-        let dst_base = if let Some(root) = &targetLibrariesRoot { PathBuf::from(root) } else { PathBuf::from(get_libraries_root()) };
-        let src_repo_root = temp.join("repo");
+        let dst_base = if let Some(root) = &targetLibrariesRoot { PathBuf::from(root).join("Libraries") } else { PathBuf::from(get_libraries_root()).join("Libraries") };
         win.emit(
             "recovery_progress",
             RecoveryProgress { current: 80, total: 100, message: "开始恢复文件".to_string(), databaseType: databaseType.clone() },
