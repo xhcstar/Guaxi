@@ -72,12 +72,31 @@ struct NoteExport {
 }
 
 #[derive(Serialize, Deserialize)]
+struct DeviceExport {
+    device_uuid: String,
+    name: Option<String>,
+    is_active: i32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DeletionEventExport {
+    object_type: String,
+    object_uuid: String,
+    device_uuid: String,
+    deleted_at: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct BackupManifest {
     version: u32,
     knowledge_repo: String,
     exported_at: String,
     imported_files: Vec<ImportedFileExport>,
     notes: Vec<NoteExport>,
+    #[serde(default)]
+    devices: Vec<DeviceExport>,
+    #[serde(default)]
+    deletion_events: Vec<DeletionEventExport>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -307,13 +326,58 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
         }
     }
 
+    let (devices, deletion_events) = load_devices_and_deletion_events(&conn)?;
+
     Ok(BackupManifest {
         version: 1,
         knowledge_repo: repo.to_string(),
         exported_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         imported_files: files,
         notes,
+        devices,
+        deletion_events,
     })
+}
+
+fn load_devices_and_deletion_events(
+    conn: &rusqlite::Connection,
+) -> Result<(Vec<DeviceExport>, Vec<DeletionEventExport>), String> {
+    let mut devices: Vec<DeviceExport> = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT device_uuid, name, is_active FROM devices")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(DeviceExport {
+                device_uuid: row.get(0)?,
+                name: row.get(1)?,
+                is_active: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    for r in rows {
+        devices.push(r.map_err(|e| e.to_string())?);
+    }
+
+    let mut deletion_events: Vec<DeletionEventExport> = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT object_type, object_uuid, device_uuid, deleted_at FROM deletion_events")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(DeletionEventExport {
+                object_type: row.get(0)?,
+                object_uuid: row.get(1)?,
+                device_uuid: row.get(2)?,
+                deleted_at: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    for r in rows {
+        deletion_events.push(r.map_err(|e| e.to_string())?);
+    }
+
+    Ok((devices, deletion_events))
 }
 
 fn file_stem(name: &str) -> String {
@@ -636,6 +700,7 @@ pub async fn export_items(
         files.push(row);
     }
 
+    let (devices, deletion_events) = load_devices_and_deletion_events(&conn)?;
     let notes: Vec<NoteExport> = Vec::new();
     let manifest = BackupManifest {
         version: 1,
@@ -643,6 +708,8 @@ pub async fn export_items(
         exported_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         imported_files: files,
         notes,
+        devices,
+        deletion_events,
     };
 
     let fname = format!(
@@ -1071,6 +1138,62 @@ fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), Stri
     Ok(())
 }
 
+fn upsert_device(conn: &rusqlite::Connection, src: &DeviceExport) -> Result<(), String> {
+    let existing: Option<(i32, Option<String>, i32)> = conn
+        .query_row(
+            "SELECT id, name, is_active FROM devices WHERE device_uuid = ?",
+            params![src.device_uuid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    if let Some((id, _name, _active)) = existing {
+        conn
+            .execute(
+                "UPDATE devices SET name = COALESCE(?, name), is_active = ? WHERE id = ?",
+                params![src.name, src.is_active, id],
+            )
+            .map_err(|e| e.to_string())?;
+    } else {
+        conn
+            .execute(
+                "INSERT INTO devices (device_uuid, name, is_active) VALUES (?, ?, ?)",
+                params![src.device_uuid, src.name, src.is_active],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn upsert_deletion_event(
+    conn: &rusqlite::Connection,
+    src: &DeletionEventExport,
+) -> Result<(), String> {
+    let existing: Option<i32> = conn
+        .query_row(
+            "SELECT id FROM deletion_events WHERE object_type = ? AND object_uuid = ? AND device_uuid = ?",
+            params![src.object_type, src.object_uuid, src.device_uuid],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    conn
+        .execute(
+            "INSERT INTO deletion_events (object_type, object_uuid, device_uuid, deleted_at) VALUES (?, ?, ?, ?)",
+            params![src.object_type, src.object_uuid, src.device_uuid, src.deleted_at],
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 fn copy_library_tree(
     src_root: &Path,
     dst_root: &Path,
@@ -1094,7 +1217,7 @@ fn copy_library_tree(
             let is_markdown_note = p
                 .extension()
                 .and_then(|e| e.to_str())
-                .map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+                .map_or(false, |ext| ext.eq_ignore_ascii_case("json"))
                 && rel_str.to_lowercase().contains("notes");
 
             if target.exists() {
@@ -1182,7 +1305,27 @@ fn merge_markdown_content(dst: &str, src: &str) -> String {
     }
 }
 
-
+pub fn gc_conflict_files() -> Result<(), String> {
+    let libraries_root = get_libraries_root();
+    let base = PathBuf::from(&libraries_root).join("Libraries");
+    if !base.exists() {
+        return Ok(());
+    }
+    for entry in WalkDir::new(&base).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir()
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |name| name == "__conflicts")
+        {
+            if let Err(e) = fs::remove_dir_all(path) {
+                error!("Failed to remove conflict directory {:?}: {}", path, e);
+            }
+        }
+    }
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn import_items(databaseType: String, importPath: String) -> Result<ImportResult, String> {
@@ -1221,6 +1364,12 @@ pub async fn import_items(databaseType: String, importPath: String) -> Result<Im
     let src_repo_root = temp.join("repo");
 
     let conn = init_db().map_err(|e| e.to_string())?;
+    for d in manifest.devices.iter() {
+        upsert_device(&conn, d)?;
+    }
+    for e in manifest.deletion_events.iter() {
+        upsert_deletion_event(&conn, e)?;
+    }
     for f in manifest.imported_files.iter() {
         upsert_imported_file(&conn, f)?;
     }
@@ -1283,6 +1432,8 @@ pub async fn recover_database(
         ).map_err(|e| e.to_string())?;
 
         let conn = init_db().map_err(|e| e.to_string())?;
+        for d in manifest.devices.iter() { upsert_device(&conn, d)?; }
+        for e in manifest.deletion_events.iter() { upsert_deletion_event(&conn, e)?; }
         for f in manifest.imported_files.iter() { upsert_imported_file(&conn, f)?; }
         for n in manifest.notes.iter() { upsert_note(&conn, n)?; }
 

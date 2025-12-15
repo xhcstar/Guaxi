@@ -5,6 +5,7 @@ use tauri::Emitter;
 use tracing::info;
 use tracing_subscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tokio::time::{sleep, Duration};
 
 mod commands;
 mod guaxiservices;
@@ -29,6 +30,20 @@ async fn app_init() {
     }
 }
 
+fn start_background_gc() {
+    tokio::spawn(async {
+        loop {
+            sleep(Duration::from_secs(3600)).await;
+            if let Err(e) = commands::repoview::gc_deleted_items() {
+                eprintln!("Background GC (database) failed: {}", e);
+            }
+            if let Err(e) = commands::backup::gc_conflict_files() {
+                eprintln!("Background GC (conflicts) failed: {}", e);
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     // 初始化日志订阅器，输出到终端和文件
@@ -46,6 +61,7 @@ async fn main() {
     // 示例日志输出
     info!("Project started!");
     app_init().await;
+    start_background_gc();
     let file_watcher = FileWatcher::new();
 
     let shared_state = SharedState::new();
@@ -113,6 +129,7 @@ async fn main() {
             commands::repoview::search_libraries,
             commands::repoview::search_imported_file_libraries,
             commands::repoview::get_knowledge_repos,
+            commands::repoview::gc_deleted_items,
             commands::backup::backup_database,
             commands::backup::recover_database,
             commands::backup::import_items,

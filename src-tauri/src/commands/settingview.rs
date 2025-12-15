@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use tracing::info;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Library {
@@ -24,8 +25,10 @@ pub struct AppConfig {
     appearance: AppearanceConfig,
     libraries_repo_config: LibraryConfig,
     active_repo_path: Option<String>,
-    repopathlist: Vec<String>, // 新增字段
+    repopathlist: Vec<String>,
     libraries_root: String,
+    #[serde(default)]
+    device_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -78,8 +81,9 @@ impl Default for AppConfig {
                 library: vec![],
             },
             active_repo_path: None,
-            repopathlist: Vec::new(), // 默认值为空列表
+            repopathlist: Vec::new(),
             libraries_root: "".to_string(),
+            device_id: Uuid::new_v4().to_string(),
         }
     }
 }
@@ -120,7 +124,10 @@ pub fn load_config() -> AppConfig {
 
     if !config_path.exists() {
         // 如果配置文件不存在，创建默认配置
-        let default_config = AppConfig::default();
+        let mut default_config = AppConfig::default();
+        if default_config.device_id.is_empty() {
+            default_config.device_id = Uuid::new_v4().to_string();
+        }
         fs::write(
             &config_path,
             serde_json::to_string(&default_config).unwrap(),
@@ -131,7 +138,12 @@ pub fn load_config() -> AppConfig {
 
     // 读取配置文件
     let config_data = fs::read_to_string(&config_path).expect("无法读取配置文件");
-    serde_json::from_str(&config_data).expect("无法解析配置文件")
+    let mut config: AppConfig = serde_json::from_str(&config_data).expect("无法解析配置文件");
+    if config.device_id.is_empty() {
+        config.device_id = Uuid::new_v4().to_string();
+        save_config(&config);
+    }
+    config
 }
 
 pub fn save_config(config: &AppConfig) {
@@ -236,4 +248,13 @@ pub fn set_libraries_root(path: String) {
     let mut config = load_config();
     config.libraries_root = path;
     save_config(&config);
+}
+
+pub fn get_device_id() -> String {
+    let mut config = load_config();
+    if config.device_id.is_empty() {
+        config.device_id = Uuid::new_v4().to_string();
+        save_config(&config);
+    }
+    config.device_id.clone()
 }

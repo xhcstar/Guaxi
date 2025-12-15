@@ -279,6 +279,19 @@ export function useFileOperations({ store, message }) {
     }
   };
 
+  const gcDeletedItems = async () => {
+    try {
+      message.info("开始执行垃圾回收...");
+      await invoke("gc_deleted_items");
+      message.success("垃圾回收完成");
+      await store.fetchFiles(store.currentDatabase);
+      await store.fetchRepos();
+    } catch (error) {
+      console.error("垃圾回收失败:", error);
+      message.error(`垃圾回收失败: ${error.message || error}`);
+    }
+  };
+
   return {
     backupDatabase,
     recoverDatabase,
@@ -290,5 +303,6 @@ export function useFileOperations({ store, message }) {
     getFileStatistics,
     cleanupTempFiles,
     validateFileIntegrity,
+    gcDeletedItems,
   };
 }

@@ -7,6 +7,8 @@ use tracing::{error, info};
 use sha2::{Digest, Sha256};
 use hex;
 use uuid::Uuid;
+use chrono::Local;
+use crate::commands::settingview::get_device_id;
 
 pub mod repofileproc;
 pub mod sql_constants;
@@ -173,6 +175,7 @@ pub fn setup_db() -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN hash TEXT", []);
     let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN deleted_at TEXT", []);
 
     // 创建标签表（如果不存在）
     create_table_if_not_exists(
@@ -229,6 +232,7 @@ pub fn setup_db() -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE notes ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("ALTER TABLE notes ADD COLUMN hash TEXT", []);
     let _ = conn.execute("ALTER TABLE notes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE notes ADD COLUMN deleted_at TEXT", []);
 
     // 创建标签表
     create_table_if_not_exists(
@@ -267,6 +271,46 @@ pub fn setup_db() -> Result<(), String> {
         FOREIGN KEY(source_note_id) REFERENCES notes(id),
         FOREIGN KEY(target_note_id) REFERENCES notes(id)
     ",
+    )
+    .map_err(|e| e.to_string())?;
+
+    create_table_if_not_exists(
+        &conn,
+        "devices",
+        "
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_uuid TEXT NOT NULL UNIQUE,
+        name TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1
+    ",
+    )
+    .map_err(|e| e.to_string())?;
+
+    create_table_if_not_exists(
+        &conn,
+        "deletion_events",
+        "
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        object_type TEXT NOT NULL,
+        object_uuid TEXT NOT NULL,
+        device_uuid TEXT NOT NULL,
+        deleted_at TEXT NOT NULL
+    ",
+    )
+    .map_err(|e| e.to_string())?;
+
+    let device_uuid = get_device_id();
+    let device_name = env::var("COMPUTERNAME").unwrap_or_else(|_| "local".to_string());
+
+    conn.execute(
+        "INSERT OR IGNORE INTO devices (device_uuid, name, is_active) VALUES (?, ?, 1)",
+        params![device_uuid, device_name],
+    )
+    .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE devices SET is_active = 1, name = ? WHERE device_uuid = ?",
+        params![device_name, device_uuid],
     )
     .map_err(|e| e.to_string())?;
 
@@ -682,17 +726,54 @@ pub fn delete_imported_file(id: i32) -> Result<(), String> {
 
     info!("Soft deleting imported_file id={}", id);
 
+    let device_uuid = get_device_id();
+    let deleted_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let file_uuid: String = tx
+        .query_row(
+            "SELECT uuid FROM imported_files WHERE id = ?",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
     tx.execute(
-        "UPDATE imported_files SET deleted = 1, revision_count = revision_count + 1 WHERE id = ?",
-        params![id],
+        "UPDATE imported_files SET deleted = 1, deleted_at = ?, revision_count = revision_count + 1 WHERE id = ?",
+        params![deleted_at, id],
     )
     .map_err(|e| e.to_string())?;
 
     tx.execute(
-        "UPDATE notes SET deleted = 1, revision_count = revision_count + 1 WHERE imported_file_id = ?",
-        params![id],
+        "UPDATE notes SET deleted = 1, deleted_at = ?, revision_count = revision_count + 1 WHERE imported_file_id = ?",
+        params![deleted_at, id],
     )
     .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "INSERT OR IGNORE INTO deletion_events (object_type, object_uuid, device_uuid, deleted_at) VALUES ('imported_file', ?, ?, ?)",
+        params![file_uuid, device_uuid, deleted_at],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let note_uuids: Vec<String> = {
+        let mut stmt = tx
+            .prepare("SELECT uuid FROM notes WHERE imported_file_id = ?")
+            .map_err(|e| e.to_string())?;
+        let note_uuids_iter = stmt
+            .query_map(params![id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        note_uuids_iter
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+
+    for nu in note_uuids {
+        tx.execute(
+            "INSERT OR IGNORE INTO deletion_events (object_type, object_uuid, device_uuid, deleted_at) VALUES ('note', ?, ?, ?)",
+            params![nu, device_uuid, deleted_at],
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
@@ -936,9 +1017,26 @@ pub fn delete_note(id: i32) -> Result<(), String> {
 
     info!("Soft deleting note id={}", id);
 
+    let device_uuid = get_device_id();
+    let deleted_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let note_uuid: String = tx
+        .query_row(
+            "SELECT uuid FROM notes WHERE id = ?",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
     tx.execute(
-        "UPDATE notes SET deleted = 1, revision_count = revision_count + 1 WHERE id = ?",
-        params![id],
+        "UPDATE notes SET deleted = 1, deleted_at = ?, revision_count = revision_count + 1 WHERE id = ?",
+        params![deleted_at, id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "INSERT OR IGNORE INTO deletion_events (object_type, object_uuid, device_uuid, deleted_at) VALUES ('note', ?, ?, ?)",
+        params![note_uuid, device_uuid, deleted_at],
     )
     .map_err(|e| e.to_string())?;
 
@@ -1039,4 +1137,94 @@ pub fn get_knowledge_repos() -> Result<Vec<String>, String> {
         .map_err(|e| e.to_string())?;
 
     Ok(repos)
+}
+
+#[tauri::command]
+pub fn gc_deleted_items() -> Result<(), String> {
+    let mut conn = init_db().map_err(|e| e.to_string())?;
+
+    let devices: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT device_uuid FROM devices WHERE is_active = 1")
+            .map_err(|e| e.to_string())?;
+        let device_iter = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        device_iter
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+    if devices.is_empty() {
+        return Ok(());
+    }
+    let active_count = devices.len() as i64;
+
+    let uuids: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT uuid FROM imported_files WHERE deleted = 1 AND uuid IS NOT NULL AND uuid IN (
+                    SELECT de.object_uuid FROM deletion_events de
+                    JOIN devices d ON de.device_uuid = d.device_uuid
+                    WHERE de.object_type = 'imported_file' AND d.is_active = 1
+                    GROUP BY de.object_uuid
+                    HAVING COUNT(DISTINCT de.device_uuid) >= ?
+                )",
+            )
+            .map_err(|e| e.to_string())?;
+        let uuid_iter = stmt
+            .query_map(params![active_count], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        uuid_iter
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+
+    for u in uuids {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let (file_id, library, original_filename): (i32, String, String) = tx
+            .query_row(
+                "SELECT id, library, original_filename FROM imported_files WHERE uuid = ?",
+                params![u],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let libraries_root = crate::commands::settingview::get_libraries_root();
+        let base = PathBuf::from(&libraries_root).join("Libraries");
+        let stem = std::path::Path::new(&original_filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if !stem.is_empty() {
+            let dir_path = base.join(&library).join(&stem);
+            if dir_path.exists() {
+                let _ = fs::remove_dir_all(&dir_path);
+            }
+        }
+
+        tx.execute(
+            "DELETE FROM notes_links WHERE source_note_id IN (SELECT id FROM notes WHERE imported_file_id = ?) OR target_note_id IN (SELECT id FROM notes WHERE imported_file_id = ?)",
+            params![file_id, file_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM notes WHERE imported_file_id = ?",
+            params![file_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
+            params![file_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM imported_files WHERE id = ?",
+            params![file_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
