@@ -29,12 +29,18 @@ pub struct AppConfig {
     libraries_root: String,
     #[serde(default)]
     device_id: String,
+    #[serde(default = "default_gc_cycle_seconds")]
+    pub gc_cycle_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ServerConfig {
     host: String,
     port: u16,
+}
+
+fn default_gc_cycle_seconds() -> u64 {
+    3600
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -84,6 +90,7 @@ impl Default for AppConfig {
             repopathlist: Vec::new(),
             libraries_root: "".to_string(),
             device_id: Uuid::new_v4().to_string(),
+            gc_cycle_seconds: default_gc_cycle_seconds(),
         }
     }
 }
@@ -149,6 +156,19 @@ pub fn load_config() -> AppConfig {
 pub fn save_config(config: &AppConfig) {
     let config_path = get_config_path();
     fs::write(&config_path, serde_json::to_string(config).unwrap()).expect("无法写入配置文件");
+}
+
+#[tauri::command]
+pub fn get_gc_cycle_seconds() -> u64 {
+    let config = load_config();
+    config.gc_cycle_seconds
+}
+
+#[tauri::command]
+pub fn set_gc_cycle_seconds(seconds: u64) {
+    let mut config = load_config();
+    config.gc_cycle_seconds = seconds;
+    save_config(&config);
 }
 
 #[tauri::command]

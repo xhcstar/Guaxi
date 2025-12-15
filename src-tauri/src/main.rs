@@ -33,7 +33,9 @@ async fn app_init() {
 fn start_background_gc() {
     tokio::spawn(async {
         loop {
-            sleep(Duration::from_secs(3600)).await;
+            let config = commands::settingview::load_config();
+            let interval = config.gc_cycle_seconds.max(60);
+            sleep(Duration::from_secs(interval)).await;
             if let Err(e) = commands::repoview::gc_deleted_items() {
                 eprintln!("Background GC (database) failed: {}", e);
             }
@@ -115,6 +117,8 @@ async fn main() {
             commands::settingview::set_libraries_repo_config,
             commands::settingview::get_libraries_root,
             commands::settingview::set_libraries_root,
+            commands::settingview::get_gc_cycle_seconds,
+            commands::settingview::set_gc_cycle_seconds,
             commands::repoview::get_imported_files,
             commands::repoview::add_imported_file,
             commands::repoview::delete_imported_file,
