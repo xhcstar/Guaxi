@@ -1,10 +1,11 @@
 use super::repoview::{init_db, setup_db};
 use super::settingview::get_libraries_root;
-use chrono::Local;
+use chrono::{DateTime, FixedOffset, Local};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Window};
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
@@ -1234,7 +1235,6 @@ fn copy_library_tree(
                     continue;
                 }
                 if is_markdown_note {
-                    // Auto-merge markdown notes; choose primary by last modified time
                     let sm = fs::metadata(p).map_err(|e| e.to_string())?;
                     let dm = fs::metadata(&target).map_err(|e| e.to_string())?;
                     let src_newer = sm
@@ -1245,12 +1245,7 @@ fn copy_library_tree(
                         .unwrap_or(true);
                     let src_str = String::from_utf8_lossy(&src_bytes);
                     let dst_str = String::from_utf8_lossy(&dst_bytes);
-                    let (primary, secondary) = if src_newer {
-                        (src_str, dst_str)
-                    } else {
-                        (dst_str, src_str)
-                    };
-                    let merged = merge_markdown_content(&primary, &secondary);
+                    let merged = merge_note_json_content(&dst_str, &src_str);
                     let older_path = if src_newer { &target } else { p };
                     let conflict_base = dst.join("__conflicts");
                     let conflict_target = conflict_base.join(rel);
@@ -1296,13 +1291,74 @@ fn copy_library_tree(
     Ok(())
 }
 
-fn merge_markdown_content(dst: &str, src: &str) -> String {
-    if dst.trim() == src.trim() {
-        dst.to_string()
-    } else {
-        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-        format!("{}\n\n<!-- merged at {} -->\n{}\n", dst, ts, src)
+fn merge_note_json_content(a: &str, b: &str) -> String {
+    fn parse_root(s: &str) -> Option<serde_json::Value> {
+        serde_json::from_str::<serde_json::Value>(s).ok()
     }
+
+    fn parse_ts(card: &serde_json::Value) -> Option<DateTime<FixedOffset>> {
+        card.get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+    }
+
+    let va = parse_root(a);
+    let vb = parse_root(b);
+
+    let (ra, rb) = match (va, vb) {
+        (Some(ra), Some(rb)) => (ra, rb),
+        (Some(_), None) => return a.to_string(),
+        (None, Some(_)) => return b.to_string(),
+        (None, None) => return a.to_string(),
+    };
+
+    let mut cards_map: HashMap<String, (serde_json::Value, Option<DateTime<FixedOffset>>)> = HashMap::new();
+
+    let mut push_cards = |root: &serde_json::Value| {
+        if let Some(cards) = root.get("cards").and_then(|v| v.as_array()) {
+            for card in cards {
+                if let Some(id) = card.get("id").and_then(|v| v.as_str()) {
+                    let ts = parse_ts(card);
+                    match cards_map.get(id) {
+                        None => {
+                            cards_map.insert(id.to_string(), (card.clone(), ts));
+                        }
+                        Some((_, existing_ts)) => {
+                            let replace = match (existing_ts, ts) {
+                                (Some(e), Some(t)) => t >= *e,
+                                (None, Some(_)) => true,
+                                _ => false,
+                            };
+                            if replace {
+                                cards_map.insert(id.to_string(), (card.clone(), ts));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    push_cards(&ra);
+    push_cards(&rb);
+
+    let mut merged_cards: Vec<serde_json::Value> = cards_map.into_values().map(|(v, _)| v).collect();
+
+    merged_cards.sort_by(|a, b| {
+        let tsa = parse_ts(a);
+        let tsb = parse_ts(b);
+        match (tsa, tsb) {
+            (Some(ta), Some(tb)) => ta.cmp(&tb),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+
+    let mut obj = serde_json::Map::new();
+    obj.insert("cards".to_string(), serde_json::Value::Array(merged_cards));
+    let root = serde_json::Value::Object(obj);
+    serde_json::to_string_pretty(&root).unwrap_or_else(|_| a.to_string())
 }
 
 pub fn gc_conflict_files() -> Result<(), String> {
