@@ -1072,18 +1072,19 @@ const handleFileRemoved = async (filePath) => {
 // 清理函数
 const cleanupFileWatcher = async () => {
   try {
-    // 先停止后端监控
     await invoke('stop_file_watching')
 
-    // 然后清理前端监听器
     if (unlistenRef.value && typeof unlistenRef.value === 'function') {
       await unlistenRef.value()
       unlistenRef.value = null
     }
     console.log('文件监控已停止')
   } catch (error) {
+    if (error && error.message && error.message.includes('unregisterListener')) {
+      console.warn('文件监控已经停止，无需重复停止')
+      return
+    }
     console.error('停止文件监控失败:', error)
-    throw error // 重新抛出错误以便外部捕获
   }
 }
 
