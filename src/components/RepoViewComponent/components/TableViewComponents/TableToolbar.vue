@@ -2,17 +2,19 @@
   <n-space justify="space-between" align="center" class="toolbar">
     <!-- 左侧操作按钮 -->
     <n-space class="actions" :size="8">
-      <n-tooltip trigger="hover">
-        <template #trigger>
-          <n-button @click="$emit('sort')" class="action-button" size="small" secondary>
-            <template #icon>
-              <n-icon :component="SortAscendingIcon" :size="16" />
-            </template>
-            排序
-          </n-button>
-        </template>
-        按标题排序
-      </n-tooltip>
+      <n-dropdown :options="sortOptions" trigger="click" @select="handleSortSelect">
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button class="action-button" size="small" secondary>
+              <template #icon>
+                <n-icon :component="SortAscendingIcon" :size="16" />
+              </template>
+              排序
+            </n-button>
+          </template>
+          选择排序方式
+        </n-tooltip>
+      </n-dropdown>
 
       <n-tooltip trigger="hover">
         <template #trigger>
@@ -44,10 +46,20 @@
 
 <script setup>
 import { h } from 'vue'
-import { NButton, NIcon, NTooltip, NSpace } from 'naive-ui'
+import { NButton, NIcon, NTooltip, NSpace, NDropdown } from 'naive-ui'
 import { FolderAdd20Regular } from '@vicons/fluent'
 
-defineEmits(['sort', 'clear-filters', 'add-file'])
+const emit = defineEmits(['sort', 'clear-filters', 'add-file'])
+
+const sortOptions = [
+  { label: '按文件名排序', key: 'name' },
+  { label: '按所属文件库排序', key: 'library' },
+  { label: '按入库时间排序', key: 'date' },
+]
+
+const handleSortSelect = (key) => {
+  emit('sort', key)
+}
 
 const SortAscendingIcon = {
   render() {

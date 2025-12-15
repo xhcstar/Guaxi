@@ -8,6 +8,15 @@ export const repoStore = defineStore("repoStore", {
     repos: [], // 存储知识库列表
     currentDatabase: "", // 默认选中的数据库
     librariesRoot: "",
+    searchParams: {
+      keyword: "",
+      fileType: "",
+      knowledgeRepo: "",
+      library: "",
+      importedFileTags: "",
+      importFileCreateTime: null,
+      importFileSize: null,
+    },
   }),
   actions: {
     async fetchRepos() {
@@ -71,6 +80,22 @@ export const repoStore = defineStore("repoStore", {
     // 添加导入的笔记
     addImportedNote(note) {
       this.notes.push(note);
+    },
+
+    setSearchParams(params) {
+      this.searchParams = { ...this.searchParams, ...params };
+    },
+
+    resetSearchParams() {
+      this.searchParams = {
+        keyword: "",
+        fileType: "",
+        knowledgeRepo: "",
+        library: "",
+        importedFileTags: "",
+        importFileCreateTime: null,
+        importFileSize: null,
+      };
     },
 
     set_librariesRoot(path) {

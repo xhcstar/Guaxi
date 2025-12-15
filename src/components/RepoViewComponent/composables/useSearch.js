@@ -22,17 +22,14 @@ export const useSearch = ({ store, message, externalState = {} }) => {
   // 搜索历史状态
   const searchHistory = ref(JSON.parse(localStorage.getItem("searchHistory") || "[]"));
 
-  // 搜索面板状态
+  // 搜索面板状态（与全局 store.searchParams 绑定）
   const searchPanelCollapsed = ref(true);
 
-  const searchParams = ref({
-    keyword: "",
-    fileType: "",
-    knowledgeRepo: "",
-    library: "",
-    importedFileTags: "",
-    importFileCreateTime: null,
-    importFileSize: null,
+  const searchParams = computed({
+    get: () => store.searchParams,
+    set: (value) => {
+      store.searchParams = value;
+    },
   });
 
   // 文件类型选项 - 确保始终有数据

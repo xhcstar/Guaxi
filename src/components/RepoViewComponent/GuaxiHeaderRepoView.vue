@@ -9,7 +9,7 @@
     <!-- 中间：搜索框 -->
     <div class="header-center">
       <div class="search-container">
-        <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索文件或内容..." round clearable
+        <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索资料库，支持 lib:xxx、tag:yyy" round clearable
           @keyup.enter="handleSearchEnter" @focus="showSearchOptions" @blur="handleSearchBlur">
           <template #prefix>
             <n-icon :component="Search32Filled" />
@@ -34,9 +34,11 @@
 
 <script setup>
 import { computed, ref, h } from "vue";
-import { NIcon, NDropdown } from 'naive-ui'
+import { NIcon, NDropdown, useMessage } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { repoStore } from '../../stores/repoStore'
+import { useSearch } from './composables/useSearch.js'
 import {
   Screenshot24Regular,
   Search32Filled,
@@ -54,8 +56,11 @@ const rightSiderStore = useRightSiderStore()
 const viewKey = 'repo'
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
+const store = repoStore()
+const message = useMessage()
+const { handleSearch: handleTableSearch } = useSearch({ store, message })
 const searchInputRef = ref(null)
-const searchType = ref('file')
+const searchType = ref('keyword')
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
 };
@@ -104,16 +109,36 @@ const dropdownStyle = computed(() => ({
   maxWidth: '400px'
 }))
 
-// 搜索选项
+// 搜索选项（按表格列名进行搜索）
 const searchOptions = [
   {
-    label: '搜索文件',
-    key: 'file',
-    icon: () => h(NIcon, null, { default: () => h(DocumentSearch20Filled) })
+    label: '按文件名搜索',
+    key: 'fileName',
+    icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
   },
   {
-    label: '搜索关键字',
-    key: 'note',
+    label: '按文件描述搜索',
+    key: 'description',
+    icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
+  },
+  {
+    label: '按文件标签搜索',
+    key: 'tags',
+    icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
+  },
+  {
+    label: '按所属文件库搜索',
+    key: 'library',
+    icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
+  },
+  {
+    label: '按知识库搜索',
+    key: 'knowledgeRepo',
+    icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
+  },
+  {
+    label: '按文件类型搜索',
+    key: 'fileType',
     icon: () => h(NIcon, null, { default: () => h(DocumentSearch24Regular) })
   }
 ]
@@ -153,11 +178,7 @@ const handleSearchEnter = () => {
       type: searchType.value
     })
 
-    if (searchType.value === 'file') {
-      handleSearchFiles()
-    } else {
-      handleSearchNotes()
-    }
+    handleSearchImported()
   }
 }
 
@@ -174,57 +195,82 @@ const handleSearchSelect = (key) => {
   searchInputRef.value?.focus()
 }
 
-async function handleSearchFiles() {
+async function handleSearchImported() {
   try {
-    const results = await invoke('fd_search', {
-      pattern: searchQuery.value,
-      path: fileTreeStore.activeRepoPath
-    });
+    const raw = searchQuery.value.trim()
 
-    rightSiderStore.setSearchResults({
-      fileResults: results.map(item => ({
-        path: item.path,
-        file_name: item.file_name,
-        preview: item.preview,
-        line_number: item.line_number,
-        matches: item.matches
-      })),
-      noteResults: [],
-      searchQuery: searchQuery.value
-    });
+    let keyword = ""
+    let library = ""
+    let importedFileTags = ""
+    let fileType = ""
+    let knowledgeRepo = ""
 
-    // 添加这行代码：如果右侧边栏是折叠状态，则展开它
-    if (siderStore.isRightSiderCollapsed) {
-      siderStore.toggleRightSider();
+    if (!raw) {
+      store.setSearchParams({
+        keyword: "",
+        fileType: "",
+        knowledgeRepo: "",
+        library: "",
+        importedFileTags: "",
+        importFileCreateTime: null,
+        importFileSize: null,
+      })
+    } else if (searchType.value === 'keyword') {
+      const parts = raw.split(/\s+/).filter((p) => p.length > 0)
+      let keywordParts = []
+
+      for (const part of parts) {
+        const idx = part.indexOf(':')
+        if (idx <= 0) {
+          keywordParts.push(part)
+          continue
+        }
+        const key = part.slice(0, idx).toLowerCase()
+        const value = part.slice(idx + 1)
+        if (!value) {
+          keywordParts.push(part)
+          continue
+        }
+        if (key === 'lib' || key === 'library') {
+          library = value
+        } else if (key === 'tag' || key === 'tags') {
+          importedFileTags = value
+        } else if (key === 'type' || key === 'ft' || key === 'filetype') {
+          fileType = value
+        } else if (key === 'repo' || key === 'knowledge' || key === 'kr') {
+          knowledgeRepo = value
+        } else {
+          keywordParts.push(part)
+        }
+      }
+
+      keyword = keywordParts.join(' ')
+    } else if (searchType.value === 'library') {
+      library = raw
+    } else if (searchType.value === 'tags') {
+      importedFileTags = raw
+    } else if (searchType.value === 'fileType') {
+      fileType = raw
+    } else if (searchType.value === 'knowledgeRepo') {
+      knowledgeRepo = raw
+    } else if (searchType.value === 'fileName' || searchType.value === 'description') {
+      keyword = raw
+    } else {
+      keyword = raw
     }
+
+    store.setSearchParams({
+      keyword,
+      fileType,
+      knowledgeRepo,
+      library,
+      importedFileTags,
+      importFileCreateTime: null,
+      importFileSize: null,
+    })
+    handleTableSearch()
   } catch (err) {
-    console.error('[Search] File search failed:', err);
-  }
-}
-
-async function handleSearchNotes() {
-  try {
-    const results = await invoke('rg_search', {
-      pattern: searchQuery.value,
-      path: fileTreeStore.activeRepoPath
-    });
-
-    const validResults = results.filter(item =>
-      item.preview && item.line_number && !item.path.includes('.git')
-    );
-
-    rightSiderStore.setSearchResults({
-      fileResults: [],
-      noteResults: validResults,
-      searchQuery: searchQuery.value
-    });
-
-    // 确保这行代码存在
-    if (siderStore.isRightSiderCollapsed) {
-      siderStore.toggleRightSider();
-    }
-  } catch (err) {
-    console.error('[Search] Note search failed:', err);
+    console.error('[Search] Imported files search failed:', err);
   }
 }
 </script>

@@ -10,23 +10,15 @@
     <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" />
 
     <!-- 搜索栏 -->
-    <SearchPanel :search-params="searchParams" @update:search-params="searchParams = $event"
-      :collapsed="searchPanelCollapsed" @update:collapsed="searchPanelCollapsed = $event"
-      :file-type-options="fileTypeOptions" :knowledge-repo-options="knowledgeRepoOptions"
-      :library-options="searchLibraryOptions" :imported-file-tag-options="searchImportedFileTagOptions"
-      :is-library-loading="isLibraryLoadingAdvanceSearch" :is-tag-loading="isImportedFileTagLoadingAdvanceSearch"
-      :is-knowledge-repo-loading="isKnowledgeRepoLoadingAdvanceSearch" :is-file-type-loading="false"
-      @search="handleSearch" @library-search="handleLibrarySearch" @tag-search="handleImportedFileTagSearch"
-      @knowledge-repo-search="handleKnowledgeRepoSearch" />
 
     <!-- 表格工具栏 -->
     <div class="toolbar-container">
-      <TableToolbar @sort="sortTitle" @clear-filters="clearFilters" @add-file="showAddFileModal" />
+      <TableToolbar @sort="handleSort" @clear-filters="handleClearFilters" @add-file="showAddFileModal" />
     </div>
 
     <!-- 数据表格容器 -->
     <div class="table-container" ref="tableContainerRef">
-      <DataTable ref="tableRef" :columns="columns" :data="filteredData" :table-height="dynamicTableHeight"
+      <DataTable ref="tableRef" :columns="columns" :data="sortedData" :table-height="dynamicTableHeight"
         :scroll-x="scrollX" :pagination="pagination" :row-key="rowKey" :row-props="rowProps"
         @update:checked-row-keys="handleCheckboxUpdate" @row-contextmenu="handleRowContextMenu" />
     </div>
@@ -61,7 +53,6 @@ import { useEventStore } from '../../stores/eventsStore'
 // Components
 import TopToolbar from './components/TableViewComponents/TopToolbar.vue'
 import TaskListDrawer from './components/TableViewComponents/TaskListDrawer.vue'
-import SearchPanel from './components/TableViewComponents/SearchPanel.vue'
 import TableToolbar from './components/TableViewComponents/TableToolbar.vue'
 import DataTable from './components/TableViewComponents/DataTable.vue'
 import ContextMenu from './components/TableViewComponents/ContextMenu.vue'
@@ -156,6 +147,7 @@ const {
   isLibraryLoadingAdvanceSearch,
   isImportedFileTagLoadingAdvanceSearch,
   isKnowledgeRepoLoadingAdvanceSearch,
+  clearSearch,
   initializeSearch
 } = useSearch({ store, message });
 
@@ -188,10 +180,53 @@ const {
   handleCheckboxUpdate,
   sortTitle,
   clearFilters,
+  resetTableState,
   checkedRowKeys
 } = useTableConfig({ store, message, ShowOrEdit })
 
 const { backupDatabase: backupDatabaseOp, recoverDatabase: recoverDatabaseOp, importItems: importItemsOp, exportItems: exportItemsOp } = useFileOperations({ store, message })
+
+const sortMode = ref(null)
+
+const textCollator = new Intl.Collator(['zh-Hans-CN-u-co-pinyin', 'en'], {
+  sensitivity: 'base',
+  numeric: true,
+})
+
+const sortedData = computed(() => {
+  const data = [...filteredData.value]
+  if (!sortMode.value) {
+    return data
+  }
+
+  if (sortMode.value === 'name') {
+    return data.sort((a, b) => textCollator.compare(a.importFileName || '', b.importFileName || ''))
+  }
+
+  if (sortMode.value === 'library') {
+    return data.sort((a, b) => textCollator.compare(a.library || '', b.library || ''))
+  }
+
+  if (sortMode.value === 'date') {
+    return data.sort((a, b) => {
+      const ta = a.importFileCreateTime ? new Date(a.importFileCreateTime).getTime() : 0
+      const tb = b.importFileCreateTime ? new Date(b.importFileCreateTime).getTime() : 0
+      return ta - tb
+    })
+  }
+
+  return data
+})
+
+const handleSort = (mode) => {
+  sortMode.value = mode
+}
+
+const handleClearFilters = () => {
+  sortMode.value = null
+  clearSearch()
+  resetTableState()
+}
 
 // 文件操作实现
 const backupDatabase = async (scope = 'current') => {
