@@ -106,6 +106,9 @@ const mode = ref('edit');
 const renderedHtml = ref('');
 const previewContainer = ref(null);
 const editorContainer = ref(null);
+const scrollRatio = ref(0);
+const pendingPreviewScrollRestore = ref(false);
+const pendingPreviewScrollLine = ref(null);
 let editor = null;
 const selectedFile = computed(() => fileTreeStore.selectedFile)
 // 定义 rawContent 变量
@@ -516,17 +519,95 @@ const handleKeyDown = (e) => {
   }
 };
 
+const captureScrollPosition = () => {
+  if (mode.value === 'edit' && editor) {
+    const top = editor.getScrollTop();
+    const height = editor.getScrollHeight();
+    scrollRatio.value = height ? top / height : 0;
+  } else if (mode.value === 'preview' && previewContainer.value) {
+    const el = previewContainer.value;
+    const height = el.scrollHeight;
+    scrollRatio.value = height ? el.scrollTop / height : 0;
+  } else {
+    scrollRatio.value = 0;
+  }
+};
+
+const restoreScrollPosition = () => {
+  if (mode.value === 'preview') {
+    pendingPreviewScrollRestore.value = true;
+  } else if (mode.value === 'edit' && editor) {
+    nextTick(() => {
+      const height = editor.getScrollHeight();
+      const targetTop = height * scrollRatio.value;
+      editor.setScrollTop(targetTop);
+    });
+  }
+};
+
+const scrollPreviewToLine = (lineNumber) => {
+  if (!previewContainer.value || !lineNumber) return;
+
+  const container = previewContainer.value;
+  const elements = Array.from(
+    container.querySelectorAll('[data-md-start-line]')
+  );
+
+  if (!elements.length) return;
+
+  let target = elements[0];
+  let minDelta = Infinity;
+
+  elements.forEach((el) => {
+    const start = Number(el.dataset.mdStartLine || 0);
+    const end = Number(el.dataset.mdEndLine || start);
+    if (!start && !end) return;
+
+    let delta = 0;
+    if (lineNumber < start) {
+      delta = start - lineNumber;
+    } else if (lineNumber > end) {
+      delta = lineNumber - end;
+    } else {
+      delta = 0;
+    }
+
+    if (delta < minDelta) {
+      minDelta = delta;
+      target = el;
+    }
+  });
+
+  if (!target) return;
+
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const offset = targetRect.top - containerRect.top;
+  container.scrollTop += offset - container.clientHeight * 0.2;
+};
+
 // 切换模式
 const toggleMode = debounce(async () => {
-  mode.value = mode.value === 'edit' ? 'preview' : 'edit';
+  const isEdit = mode.value === 'edit';
+
+  if (isEdit && editor) {
+    const pos = editor.getPosition();
+    pendingPreviewScrollLine.value =
+      (pos && pos.lineNumber) || editorStore.cursorPosition.lineNumber || 1;
+  }
+
+  captureScrollPosition();
+  mode.value = isEdit ? 'preview' : 'edit';
 
   if (mode.value === 'edit') {
     await nextTick();
     if (!editor) {
       initEditor();
     }
+    restoreScrollPosition();
   } else {
-    await renderDebounced(rawContent.value);
+    renderDebounced(rawContent.value);
+    restoreScrollPosition();
   }
 }, 150);
 
@@ -635,6 +716,16 @@ watch(renderedHtml, () => {
   nextTick(() => {
     if (previewContainer.value) {
       addCopyButtons(previewContainer.value);
+      if (pendingPreviewScrollRestore.value) {
+        const el = previewContainer.value;
+        const height = el.scrollHeight;
+        el.scrollTop = height * scrollRatio.value;
+        pendingPreviewScrollRestore.value = false;
+      }
+      if (pendingPreviewScrollLine.value) {
+        scrollPreviewToLine(pendingPreviewScrollLine.value);
+        pendingPreviewScrollLine.value = null;
+      }
     }
   });
 });
