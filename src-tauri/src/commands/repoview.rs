@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use sha2::{Digest, Sha256};
 use hex;
+use uuid::Uuid;
 
 pub mod repofileproc;
 pub mod sql_constants;
@@ -153,6 +154,7 @@ pub fn setup_db() -> Result<(), String> {
         "imported_files",
         "
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT,
         original_filesize INTEGER,
         create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         original_filename TEXT NOT NULL,
@@ -161,13 +163,16 @@ pub fn setup_db() -> Result<(), String> {
         description TEXT,
         knowledge_repo TEXT NOT NULL,
         hash TEXT,
-        revision_count INTEGER NOT NULL DEFAULT 1
+        revision_count INTEGER NOT NULL DEFAULT 1,
+        deleted INTEGER NOT NULL DEFAULT 0
     ",
     )
     .map_err(|e| e.to_string())?;
 
+    let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN uuid TEXT", []);
     let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN hash TEXT", []);
     let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 1", []);
+    let _ = conn.execute("ALTER TABLE imported_files ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0", []);
 
     // 创建标签表（如果不存在）
     create_table_if_not_exists(
@@ -200,6 +205,7 @@ pub fn setup_db() -> Result<(), String> {
         "notes",
         "
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT,
         description TEXT,
         note_file_name TEXT NOT NULL,
         note_file_type TEXT,
@@ -209,15 +215,20 @@ pub fn setup_db() -> Result<(), String> {
         note_file_update_time TEXT,
         knowledge_repo TEXT NOT NULL,
         imported_file_id INTEGER,
+        imported_file_uuid TEXT,
         hash TEXT,
-        revision_count INTEGER NOT NULL DEFAULT 1
+        revision_count INTEGER NOT NULL DEFAULT 1,
+        deleted INTEGER NOT NULL DEFAULT 0
     ",
     )
     .map_err(|e| e.to_string())?;
 
+    let _ = conn.execute("ALTER TABLE notes ADD COLUMN uuid TEXT", []);
     let _ = conn.execute("ALTER TABLE notes ADD COLUMN imported_file_id INTEGER", []);
+    let _ = conn.execute("ALTER TABLE notes ADD COLUMN imported_file_uuid TEXT", []);
     let _ = conn.execute("ALTER TABLE notes ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("ALTER TABLE notes ADD COLUMN hash TEXT", []);
+    let _ = conn.execute("ALTER TABLE notes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0", []);
 
     // 创建标签表
     create_table_if_not_exists(
@@ -273,7 +284,7 @@ pub fn get_imported_files(knowledge_repo: Option<String>) -> Result<Vec<Imported
             "SELECT id, original_filename, description, library, original_filetype, 
             create_time, original_filesize, knowledge_repo 
             FROM imported_files 
-            WHERE knowledge_repo = ?",
+            WHERE knowledge_repo = ? AND deleted = 0",
         )
         .map_err(|e| e.to_string())?;
     let files = stmt
@@ -357,6 +368,8 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
     let mut conn = init_db().map_err(|e: rusqlite::Error| e.to_string())?;
     let tx = conn.transaction().map_err(|e: rusqlite::Error| e.to_string())?;
 
+    let uuid = Uuid::new_v4().to_string();
+
     let mut hasher = Sha256::new();
     hasher.update(file.import_file_name.as_bytes());
     hasher.update(file.description.as_bytes());
@@ -366,10 +379,11 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
     let hash = hex::encode(hasher.finalize());
 
     tx.execute(
-        "INSERT INTO imported_files (original_filename, description, library, original_filetype, 
+        "INSERT INTO imported_files (uuid, original_filename, description, library, original_filetype, 
         create_time, original_filesize, knowledge_repo, hash) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
+            uuid,
             file.import_file_name,
             file.description,
             file.library,
@@ -666,25 +680,16 @@ pub fn delete_imported_file(id: i32) -> Result<(), String> {
     let mut conn = init_db().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    // 删除导入文件的标签关联
-    tx.execute(
-        "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
-        params![id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    // 删除导入文件记录
-    tx.execute("DELETE FROM imported_files WHERE id = ?", params![id])
-    .map_err(|e| e.to_string())?;
+    info!("Soft deleting imported_file id={}", id);
 
     tx.execute(
-        "DELETE FROM notes WHERE imported_file_id = ?",
+        "UPDATE imported_files SET deleted = 1, revision_count = revision_count + 1 WHERE id = ?",
         params![id],
     )
     .map_err(|e| e.to_string())?;
 
     tx.execute(
-        "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
+        "UPDATE notes SET deleted = 1, revision_count = revision_count + 1 WHERE imported_file_id = ?",
         params![id],
     )
     .map_err(|e| e.to_string())?;
@@ -702,7 +707,8 @@ pub fn get_notes() -> Result<Vec<Note>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, description, note_file_name, note_file_type, from_imported_file, 
-            from_imported_file_library, note_file_create_time, note_file_update_time, knowledge_repo, FROM notes",
+            from_imported_file_library, note_file_create_time, note_file_update_time, knowledge_repo 
+            FROM notes WHERE deleted = 0",
         )
         .map_err(|e| e.to_string())?;
     let notes = stmt
@@ -751,6 +757,8 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
         .transaction()
         .map_err(|e: rusqlite::Error| e.to_string())?;
 
+    let uuid = Uuid::new_v4().to_string();
+
     let mut hasher = Sha256::new();
     hasher.update(note.description.as_bytes());
     hasher.update(note.note_file_name.as_bytes());
@@ -763,12 +771,22 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
     for t in note.tags.iter() { hasher.update(t.as_bytes()); }
     let note_hash = hex::encode(hasher.finalize());
 
+    let imported_file_uuid: Option<String> = tx
+        .query_row(
+            "SELECT uuid FROM imported_files WHERE id = ?",
+            params![note.imported_file_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
     // 插入 notes 记录
     tx.execute(
-        "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, 
+        "INSERT INTO notes (uuid, description, note_file_name, note_file_type, from_imported_file, 
         from_imported_file_library, note_file_create_time, note_file_update_time, 
-        knowledge_repo, imported_file_id, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        knowledge_repo, imported_file_id, imported_file_uuid, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
+            uuid,
             note.description,
             note.note_file_name,
             note.note_file_type,
@@ -778,6 +796,7 @@ pub fn add_note(note: NoteInput) -> Result<i32, String> {
             note.note_file_update_time,
             note.knowledge_repo,
             note.imported_file_id,
+            imported_file_uuid,
             note_hash,
         ],
     ).map_err(|e: rusqlite::Error| e.to_string())?;
@@ -833,6 +852,15 @@ pub fn update_note(id: i32, note: NoteInput) -> Result<(), String> {
     let mut conn = init_db().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
+    let imported_file_uuid: Option<String> = tx
+        .query_row(
+            "SELECT uuid FROM imported_files WHERE id = ?",
+            params![note.imported_file_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
     let mut hasher = Sha256::new();
     hasher.update(note.description.as_bytes());
     hasher.update(note.note_file_name.as_bytes());
@@ -849,7 +877,7 @@ pub fn update_note(id: i32, note: NoteInput) -> Result<(), String> {
     tx.execute(
         "UPDATE notes SET description = ?, note_file_name = ?, note_file_type = ?, 
         from_imported_file = ?, from_imported_file_library = ?, note_file_create_time = ?, 
-        note_file_update_time = ?, knowledge_repo = ?, imported_file_id = ?, hash = ?, revision_count = revision_count + 1 WHERE id = ?",
+        note_file_update_time = ?, knowledge_repo = ?, imported_file_id = ?, imported_file_uuid = ?, hash = ?, revision_count = revision_count + 1 WHERE id = ?",
         params![
             note.description,
             note.note_file_name,
@@ -860,6 +888,7 @@ pub fn update_note(id: i32, note: NoteInput) -> Result<(), String> {
             note.note_file_update_time,
             note.knowledge_repo,
             note.imported_file_id,
+            imported_file_uuid,
             note_hash,
             id
         ]
@@ -905,16 +934,13 @@ pub fn delete_note(id: i32) -> Result<(), String> {
     let mut conn = init_db().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    // 删除笔记的标签关联
+    info!("Soft deleting note id={}", id);
+
     tx.execute(
-        "DELETE FROM notes_tags_relations WHERE note_id = ?",
+        "UPDATE notes SET deleted = 1, revision_count = revision_count + 1 WHERE id = ?",
         params![id],
     )
     .map_err(|e| e.to_string())?;
-
-    // 删除笔记记录
-    tx.execute("DELETE FROM notes WHERE id = ?", params![id])
-        .map_err(|e| e.to_string())?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
@@ -958,7 +984,7 @@ pub fn search_imported_files_tags(query: String) -> Result<Vec<String>, String> 
 pub fn search_imported_files(query: String) -> Result<Vec<String>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT original_filename FROM imported_files WHERE original_filename LIKE ?")
+        .prepare("SELECT original_filename FROM imported_files WHERE original_filename LIKE ? AND deleted = 0")
         .map_err(|e| e.to_string())?;
     let files = stmt
         .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
@@ -972,7 +998,7 @@ pub fn search_imported_files(query: String) -> Result<Vec<String>, String> {
 pub fn search_libraries(query: String) -> Result<Vec<String>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT DISTINCT library FROM imported_files WHERE library LIKE ?")
+        .prepare("SELECT DISTINCT library FROM imported_files WHERE library LIKE ? AND deleted = 0")
         .map_err(|e| e.to_string())?;
     let libraries = stmt
         .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
@@ -988,7 +1014,7 @@ pub fn search_imported_file_libraries(query: String) -> Result<Vec<String>, Stri
 
     // 查询 imported_files 表中的 library 字段
     let mut stmt = conn
-        .prepare("SELECT DISTINCT library FROM imported_files WHERE library LIKE ?")
+        .prepare("SELECT DISTINCT library FROM imported_files WHERE library LIKE ? AND deleted = 0")
         .map_err(|e| e.to_string())?;
     let libraries = stmt
         .query_map(params![format!("%{}%", query)], |row| Ok(row.get(0)?))
@@ -1003,7 +1029,7 @@ pub fn search_imported_file_libraries(query: String) -> Result<Vec<String>, Stri
 pub fn get_knowledge_repos() -> Result<Vec<String>, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT DISTINCT knowledge_repo FROM imported_files")
+        .prepare("SELECT DISTINCT knowledge_repo FROM imported_files WHERE deleted = 0")
         .map_err(|e| e.to_string())?;
     
     let repos = stmt

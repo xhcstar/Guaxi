@@ -468,6 +468,11 @@ export function useFormHandling({
 
     const fileInfo = payload;
     console.log("handleFileInfoEvent", payload);
+    if (!fileInfo || !fileInfo.file_path) {
+      console.error("fileInfo 或 file_path 为空:", fileInfo)
+      message.error("Web Clipper 传来的文件路径为空，无法导入")
+      return
+    }
 
     // 构建表单数据
     currentForm.value = {

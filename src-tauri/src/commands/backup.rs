@@ -1,4 +1,4 @@
-use super::repoview::init_db;
+use super::repoview::{init_db, setup_db};
 use super::settingview::get_libraries_root;
 use chrono::Local;
 use rusqlite::{params, OptionalExtension};
@@ -13,6 +13,7 @@ use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 use tracing::{debug, error, info};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 #[derive(Serialize)]
 pub struct BackupResult {
@@ -36,6 +37,7 @@ pub struct ImportResult {
 #[derive(Serialize, Deserialize)]
 struct ImportedFileExport {
     id: i32,
+    uuid: Option<String>,
     import_file_name: String,
     description: String,
     library: String,
@@ -46,11 +48,13 @@ struct ImportedFileExport {
     knowledge_repo: String,
     hash: Option<String>,
     revision_count: Option<i32>,
+    deleted: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct NoteExport {
     id: i32,
+    uuid: Option<String>,
     description: String,
     note_file_name: String,
     tags: Vec<String>,
@@ -63,6 +67,8 @@ struct NoteExport {
     hash: Option<String>,
     revision_count: Option<i32>,
     imported_file_id: Option<i32>,
+    imported_file_uuid: Option<String>,
+    deleted: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -171,12 +177,12 @@ fn zip_dir(
 fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
     let conn = init_db().map_err(|e| e.to_string())?;
     let files_sql = if repo.eq_ignore_ascii_case("ALL") {
-        "SELECT id, original_filename, description, library, original_filetype,
-         create_time, original_filesize, knowledge_repo, hash, revision_count
+        "SELECT id, uuid, original_filename, description, library, original_filetype,
+         create_time, original_filesize, knowledge_repo, hash, revision_count, deleted
          FROM imported_files"
     } else {
-        "SELECT id, original_filename, description, library, original_filetype,
-         create_time, original_filesize, knowledge_repo, hash, revision_count
+        "SELECT id, uuid, original_filename, description, library, original_filetype,
+         create_time, original_filesize, knowledge_repo, hash, revision_count, deleted
          FROM imported_files WHERE knowledge_repo = ?"
     };
     let mut stmt = conn.prepare(files_sql).map_err(|e| e.to_string())?;
@@ -184,15 +190,17 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
     let mapper = |row: &rusqlite::Row| {
         Ok((
             row.get::<_, i32>(0)?,
-            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, String>(4)?,
             row.get::<_, String>(5)?,
-            row.get::<_, u64>(6)?,
-            row.get::<_, String>(7)?,
-            row.get::<_, Option<String>>(8)?,
-            row.get::<_, Option<i32>>(9)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, u64>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<i32>>(10)?,
+            row.get::<_, Option<i32>>(11)?,
         ))
     };
     let rows = if repo.eq_ignore_ascii_case("ALL") {
@@ -202,7 +210,7 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
     }
     .map_err(|e| e.to_string())?;
     for r in rows {
-        let (id, name, desc, lib, ty, ctime, size, kr, hash, rev) = r.map_err(|e| e.to_string())?;
+        let (id, uuid, name, desc, lib, ty, ctime, size, kr, hash, rev, deleted) = r.map_err(|e| e.to_string())?;
         let mut ts = conn
             .prepare(
                 "SELECT ift.name FROM imported_files_tags ift
@@ -217,6 +225,7 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
             .map_err(|e| e.to_string())?;
         files.push(ImportedFileExport {
             id,
+            uuid,
             import_file_name: name,
             description: desc,
             library: lib,
@@ -227,15 +236,16 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
             knowledge_repo: kr,
             hash,
             revision_count: rev,
+            deleted,
         });
     }
 
     let mut notes: Vec<NoteExport> = Vec::new();
     let mut stmt = conn
         .prepare(
-            "SELECT id, description, note_file_name, note_file_type,
+            "SELECT id, uuid, description, note_file_name, note_file_type,
          from_imported_file, from_imported_file_library, note_file_create_time,
-         note_file_update_time, knowledge_repo, hash, revision_count, imported_file_id
+         note_file_update_time, knowledge_repo, hash, revision_count, imported_file_id, imported_file_uuid, deleted
          FROM notes WHERE imported_file_id = ?",
         )
         .map_err(|e| e.to_string())?;
@@ -244,7 +254,7 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
             .query_map(params![f.id.to_string()], |row| {
                 Ok((
                     row.get::<_, i32>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
@@ -252,14 +262,17 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Option<i32>>(10)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, Option<String>>(10)?,
                     row.get::<_, Option<i32>>(11)?,
+                    row.get::<_, Option<i32>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<i32>>(14)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
         for r in rows {
-            let (id, desc, nfn, nft, fif, fifl, c, u, kr, hash, rev, fifid) =
+            let (id, uuid, desc, nfn, nft, fif, fifl, c, u, kr, hash, rev, fifid, imported_file_uuid, deleted) =
                 r.map_err(|e| e.to_string())?;
             let mut ts = conn
                 .prepare(
@@ -275,6 +288,7 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
                 .map_err(|e| e.to_string())?;
             notes.push(NoteExport {
                 id,
+                uuid,
                 description: desc,
                 note_file_name: nfn,
                 tags: note_tags,
@@ -287,6 +301,8 @@ fn collect_repo_data(repo: &str) -> Result<BackupManifest, String> {
                 hash,
                 revision_count: rev,
                 imported_file_id: fifid,
+                imported_file_uuid,
+                deleted,
             });
         }
     }
@@ -580,23 +596,25 @@ pub async fn export_items(
     for id in itemIds.iter() {
         let row = conn
             .query_row(
-                "SELECT id, original_filename, description, library, original_filetype,
-             create_time, original_filesize, knowledge_repo, hash, revision_count
+                "SELECT id, uuid, original_filename, description, library, original_filetype,
+             create_time, original_filesize, knowledge_repo, hash, revision_count, deleted
              FROM imported_files WHERE id = ?",
                 params![id],
                 |row| {
                     Ok(ImportedFileExport {
                         id: row.get(0)?,
-                        import_file_name: row.get(1)?,
-                        description: row.get(2)?,
-                        library: row.get(3)?,
+                        uuid: row.get(1)?,
+                        import_file_name: row.get(2)?,
+                        description: row.get(3)?,
+                        library: row.get(4)?,
                         tags: Vec::new(),
-                        file_type: row.get(4)?,
-                        import_file_create_time: row.get(5)?,
-                        import_file_size: row.get(6)?,
-                        knowledge_repo: row.get(7)?,
-                        hash: row.get(8)?,
-                        revision_count: row.get(9)?,
+                        file_type: row.get(5)?,
+                        import_file_create_time: row.get(6)?,
+                        import_file_size: row.get(7)?,
+                        knowledge_repo: row.get(8)?,
+                        hash: row.get(9)?,
+                        revision_count: row.get(10)?,
+                        deleted: row.get(11)?,
                     })
                 },
             )
@@ -679,27 +697,57 @@ fn upsert_imported_file(
     conn: &rusqlite::Connection,
     src: &ImportedFileExport,
 ) -> Result<(), String> {
-    // Match by natural key: filename + library + repo
-    let existing: Option<(i32, Option<i32>, String, Option<String>)> = conn
+    let src_uuid = src
+        .uuid
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let src_rev = src.revision_count.unwrap_or(1);
+    let src_deleted = src.deleted.unwrap_or(0);
+
+    debug!(
+        "upsert_imported_file uuid={} name={} repo={} rev={} deleted={}",
+        src_uuid,
+        src.import_file_name,
+        src.knowledge_repo,
+        src_rev,
+        src_deleted
+    );
+
+    let existing: Option<(i32, Option<i32>, String, Option<String>, i32)> = conn
         .query_row(
-            "SELECT id, revision_count, create_time, hash FROM imported_files WHERE original_filename = ? AND library = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
-            params![src.import_file_name, src.library, src.knowledge_repo],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            "SELECT id, revision_count, create_time, hash, deleted FROM imported_files WHERE uuid = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+            params![src_uuid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
 
-    if let Some((id, rev, old_ctime, old_hash)) = existing {
-        let src_rev = src.revision_count.unwrap_or(1);
+    let mut target_id: Option<i32> = None;
+
+    if let Some((id, rev, old_ctime, old_hash, old_deleted)) = existing {
         let old_rev = rev.unwrap_or(1);
         let newer_by_rev = src_rev > old_rev;
         let newer_by_time = !newer_by_rev && src.import_file_create_time >= old_ctime;
-        let hash_diff = match (&src.hash, &old_hash) { (Some(a), Some(b)) => a != b, _ => false };
-        if newer_by_rev || newer_by_time {
+        let hash_diff = match (&src.hash, &old_hash) {
+            (Some(a), Some(b)) => a != b,
+            _ => false,
+        };
+        let deleted_changed = src_deleted != old_deleted;
+        if newer_by_rev || newer_by_time || hash_diff || deleted_changed {
+            debug!(
+                "upsert_imported_file update uuid={} id={} src_rev={} old_rev={} deleted_old={} deleted_new={}",
+                src_uuid,
+                id,
+                src_rev,
+                old_rev,
+                old_deleted,
+                src_deleted
+            );
             conn.execute(
-                "UPDATE imported_files SET original_filename = ?, description = ?, library = ?, original_filetype = ?, 
-                 create_time = ?, original_filesize = ?, knowledge_repo = ?, hash = ?, revision_count = ? WHERE id = ?",
+                "UPDATE imported_files SET uuid = ?, original_filename = ?, description = ?, library = ?, original_filetype = ?, 
+                 create_time = ?, original_filesize = ?, knowledge_repo = COALESCE(NULLIF(?, ''), knowledge_repo), hash = ?, revision_count = ?, deleted = ? WHERE id = ?",
                 params![
+                    src_uuid,
                     src.import_file_name,
                     src.description,
                     src.library,
@@ -708,37 +756,35 @@ fn upsert_imported_file(
                     src.import_file_size,
                     src.knowledge_repo,
                     src.hash,
-                    src.revision_count.unwrap_or(1),
+                    src_rev,
+                    src_deleted,
                     id
                 ],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        target_id = Some(id);
+    } else {
+        let natural_existing: Option<i32> = conn
+            .query_row(
+                "SELECT id FROM imported_files WHERE original_filename = ? AND library = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+                params![src.import_file_name, src.library, src.knowledge_repo],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if let Some(id) = natural_existing {
+            debug!(
+                "upsert_imported_file bind uuid={} to existing id={} via natural key",
+                src_uuid,
+                id
+            );
             conn.execute(
-                "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
-                params![id],
-            ).map_err(|e| e.to_string())?;
-            for tag in src.tags.iter() {
-                let tag_id = conn
-                    .query_row(
-                        "SELECT id FROM imported_files_tags WHERE name = ?",
-                        params![tag],
-                        |row| row.get(0),
-                    )
-                    .or_else(|_| {
-                        conn.execute("INSERT INTO imported_files_tags (name) VALUES (?)", params![tag])?;
-                        Ok(conn.last_insert_rowid())
-                    })
-                    .map_err(|e: rusqlite::Error| e.to_string())?;
-                conn.execute(
-                    "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
-                    params![id, tag_id],
-                ).map_err(|e| e.to_string())?;
-            }
-        } else if src_rev == old_rev && hash_diff {
-            conn.execute(
-                "INSERT INTO imported_files (original_filename, description, library, original_filetype, 
-             create_time, original_filesize, knowledge_repo, hash, revision_count)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "UPDATE imported_files SET uuid = ?, original_filename = ?, description = ?, library = ?, original_filetype = ?, 
+                 create_time = ?, original_filesize = ?, knowledge_repo = COALESCE(NULLIF(?, ''), knowledge_repo), hash = ?, revision_count = ?, deleted = ? WHERE id = ?",
                 params![
+                    src_uuid,
                     src.import_file_name,
                     src.description,
                     src.library,
@@ -747,47 +793,49 @@ fn upsert_imported_file(
                     src.import_file_size,
                     src.knowledge_repo,
                     src.hash,
-                    src.revision_count.unwrap_or(1),
+                    src_rev,
+                    src_deleted,
+                    id
                 ],
-            ).map_err(|e| e.to_string())?;
-            let file_id = conn.last_insert_rowid() as i32;
-            for tag in src.tags.iter() {
-                let tag_id = conn
-                    .query_row(
-                        "SELECT id FROM imported_files_tags WHERE name = ?",
-                        params![tag],
-                        |row| row.get(0),
-                    )
-                    .or_else(|_| {
-                        conn.execute("INSERT INTO imported_files_tags (name) VALUES (?)", params![tag])?;
-                        Ok(conn.last_insert_rowid())
-                    })
-                    .map_err(|e: rusqlite::Error| e.to_string())?;
-                conn.execute(
-                    "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
-                    params![file_id, tag_id],
-                ).map_err(|e| e.to_string())?;
-            }
-        }
-    } else {
-        // Insert new row when not found by natural key
-        conn.execute(
-            "INSERT INTO imported_files (original_filename, description, library, original_filetype, 
-             create_time, original_filesize, knowledge_repo, hash, revision_count)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
+            )
+            .map_err(|e| e.to_string())?;
+            target_id = Some(id);
+        } else {
+            debug!(
+                "upsert_imported_file insert uuid={} name={} repo={}",
+                src_uuid,
                 src.import_file_name,
-                src.description,
-                src.library,
-                src.file_type,
-                src.import_file_create_time,
-                src.import_file_size,
-                src.knowledge_repo,
-                src.hash,
-                src.revision_count.unwrap_or(1),
-            ],
-        ).map_err(|e| e.to_string())?;
-        let file_id = conn.last_insert_rowid() as i32;
+                src.knowledge_repo
+            );
+            conn.execute(
+                "INSERT INTO imported_files (uuid, original_filename, description, library, original_filetype, 
+                 create_time, original_filesize, knowledge_repo, hash, revision_count, deleted)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    src_uuid,
+                    src.import_file_name,
+                    src.description,
+                    src.library,
+                    src.file_type,
+                    src.import_file_create_time,
+                    src.import_file_size,
+                    src.knowledge_repo,
+                    src.hash,
+                    src_rev,
+                    src_deleted,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            target_id = Some(conn.last_insert_rowid() as i32);
+        }
+    }
+
+    if let Some(file_id) = target_id {
+        conn.execute(
+            "DELETE FROM imported_files_tags_relations WHERE file_id = ?",
+            params![file_id],
+        )
+        .map_err(|e| e.to_string())?;
         for tag in src.tags.iter() {
             let tag_id = conn
                 .query_row(
@@ -803,13 +851,29 @@ fn upsert_imported_file(
             conn.execute(
                 "INSERT INTO imported_files_tags_relations (file_id, tag_id) VALUES (?, ?)",
                 params![file_id, tag_id],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
+
     Ok(())
 }
 
 fn resolve_imported_file_id(conn: &rusqlite::Connection, note: &NoteExport) -> Result<Option<i32>, String> {
+    if let Some(ref file_uuid) = note.imported_file_uuid {
+        let by_uuid: Option<i32> = conn
+            .query_row(
+                "SELECT id FROM imported_files WHERE uuid = ?",
+                params![file_uuid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if by_uuid.is_some() {
+            return Ok(by_uuid);
+        }
+    }
+
     let lib = if note.from_imported_file_library.is_empty() {
         infer_library_from_note_path(&note.note_file_name).unwrap_or_default()
     } else {
@@ -823,7 +887,9 @@ fn resolve_imported_file_id(conn: &rusqlite::Connection, note: &NoteExport) -> R
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    if found.is_some() { return Ok(found); }
+    if found.is_some() {
+        return Ok(found);
+    }
     if lib.is_empty() {
         let any: Option<i32> = conn
             .query_row(
@@ -839,18 +905,53 @@ fn resolve_imported_file_id(conn: &rusqlite::Connection, note: &NoteExport) -> R
 }
 
 fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), String> {
-    let mapped_imported_file_id = resolve_imported_file_id(conn, src)?; if mapped_imported_file_id.is_none() { return Err("missing imported_file_id".to_string()); }
-    let suffix = rel_path_after_libraries(&src.note_file_name).unwrap_or_else(|| src.note_file_name.clone());
-    let existing: Option<(i32, Option<i32>, Option<String>)> = conn
-        .query_row(
-            "SELECT id, revision_count, note_file_update_time FROM notes WHERE knowledge_repo = ? AND note_file_name LIKE '%' || ? ORDER BY revision_count DESC, id DESC LIMIT 1",
-            params![&src.knowledge_repo, &suffix],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    if let Some((id, rev, old_update)) = existing {
-        let newer_by_rev = src.revision_count.unwrap_or(1) > rev.unwrap_or(1);
+    let mapped_imported_file_id = resolve_imported_file_id(conn, src)?;
+    if mapped_imported_file_id.is_none() {
+        return Err("missing imported_file_id".to_string());
+    }
+    let imported_file_id = mapped_imported_file_id;
+
+    let src_uuid = src
+        .uuid
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let src_rev = src.revision_count.unwrap_or(1);
+    let src_deleted = src.deleted.unwrap_or(0);
+
+    debug!(
+        "upsert_note uuid={} file={} repo={} rev={} deleted={}",
+        src_uuid,
+        src.note_file_name,
+        src.knowledge_repo,
+        src_rev,
+        src_deleted
+    );
+
+    let existing: Option<(i32, Option<i32>, Option<String>, i32)> = if let Some(ref u) = src.uuid {
+        conn
+            .query_row(
+                "SELECT id, revision_count, note_file_update_time, deleted FROM notes WHERE uuid = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+                params![u],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+    } else {
+        let suffix = rel_path_after_libraries(&src.note_file_name)
+            .unwrap_or_else(|| src.note_file_name.clone());
+        conn
+            .query_row(
+                "SELECT id, revision_count, note_file_update_time, deleted FROM notes WHERE knowledge_repo = ? AND note_file_name LIKE '%' || ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+                params![&src.knowledge_repo, &suffix],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+    };
+
+    if let Some((id, rev, old_update, old_deleted)) = existing {
+        let old_rev = rev.unwrap_or(1);
+        let newer_by_rev = src_rev > old_rev;
         let newer_by_time = if newer_by_rev {
             false
         } else {
@@ -859,12 +960,23 @@ fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), Stri
                 None => true,
             }
         };
-        if newer_by_rev || newer_by_time {
+        let deleted_changed = src_deleted != old_deleted;
+        if newer_by_rev || newer_by_time || deleted_changed {
+            debug!(
+                "upsert_note update uuid={} id={} src_rev={} old_rev={} deleted_old={} deleted_new={}",
+                src_uuid,
+                id,
+                src_rev,
+                old_rev,
+                old_deleted,
+                src_deleted
+            );
             conn.execute(
-                "UPDATE notes SET description = ?, note_file_name = ?, note_file_type = ?, 
-                 from_imported_file = ?, from_imported_file_library = ?, note_file_create_time = ?, 
-                 note_file_update_time = ?, knowledge_repo = ?, hash = ?, revision_count = ?, imported_file_id = ? WHERE id = ?",
+                "UPDATE notes SET uuid = ?, description = ?, note_file_name = ?, note_file_type = ?, 
+                 from_imported_file = ?, from_imported_file_library = COALESCE(NULLIF(?, ''), from_imported_file_library), note_file_create_time = ?, 
+                 note_file_update_time = ?, knowledge_repo = COALESCE(NULLIF(?, ''), knowledge_repo), hash = ?, revision_count = ?, imported_file_id = ?, imported_file_uuid = ?, deleted = ? WHERE id = ?",
                 params![
+                    src_uuid,
                     src.description,
                     src.note_file_name,
                     src.note_file_type,
@@ -874,11 +986,14 @@ fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), Stri
                     src.note_file_update_time,
                     src.knowledge_repo,
                     src.hash,
-                    src.revision_count.unwrap_or(1),
-                    mapped_imported_file_id,
+                    src_rev,
+                    imported_file_id,
+                    src.imported_file_uuid,
+                    src_deleted,
                     id
                 ],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             conn.execute(
                 "DELETE FROM notes_tags_relations WHERE note_id = ?",
                 params![id],
@@ -904,12 +1019,19 @@ fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), Stri
             }
         }
     } else {
+        debug!(
+            "upsert_note insert uuid={} file={} repo={}",
+            src_uuid,
+            src.note_file_name,
+            src.knowledge_repo
+        );
         conn.execute(
-            "INSERT INTO notes (description, note_file_name, note_file_type, from_imported_file, 
+            "INSERT INTO notes (uuid, description, note_file_name, note_file_type, from_imported_file, 
              from_imported_file_library, note_file_create_time, note_file_update_time, 
-             knowledge_repo, hash, revision_count, imported_file_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             knowledge_repo, hash, revision_count, imported_file_id, imported_file_uuid, deleted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
+                src_uuid,
                 src.description,
                 src.note_file_name,
                 src.note_file_type,
@@ -919,8 +1041,10 @@ fn upsert_note(conn: &rusqlite::Connection, src: &NoteExport) -> Result<(), Stri
                 src.note_file_update_time,
                 src.knowledge_repo,
                 src.hash,
-                src.revision_count.unwrap_or(1),
-                mapped_imported_file_id,
+                src_rev,
+                imported_file_id,
+                src.imported_file_uuid,
+                src_deleted,
             ],
         )
         .map_err(|e| e.to_string())?;

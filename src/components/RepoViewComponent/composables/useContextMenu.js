@@ -333,7 +333,7 @@ export function useContextMenu({ store, message }) {
   // 方法：在系统文件资源管理器中打开笔记文件所在目录
   const handleOpenDirNote = async (row) => {
     try {
-      if (!row.newNoteForm?.noteFileName || !row.library) {
+      if (!row.importFileName || !row.library) {
         message.error("缺少必要信息：笔记文件名或库名");
         return;
       }
@@ -346,11 +346,12 @@ export function useContextMenu({ store, message }) {
       let dirPath = "";
 
       if (osPlatform === "windows") {
-        dirPath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\markdown`;
+        dirPath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\notes`;
       } else {
-        dirPath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/markdown`;
+        dirPath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/notes`;
       }
 
+      console.log("笔记文件所在目录:", dirPath);
       await invoke("open_in_file_explorer", { path: dirPath });
       console.log("在文件资源管理器中打开笔记文件目录:", dirPath);
     } catch (error) {
