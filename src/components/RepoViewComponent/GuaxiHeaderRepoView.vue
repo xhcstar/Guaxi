@@ -9,7 +9,7 @@
     <!-- 中间：搜索框 -->
     <div class="header-center">
       <div class="search-container">
-        <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索资料库，支持 lib:xxx、tag:yyy" round clearable
+        <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索导入文件" round clearable
           @keyup.enter="handleSearchEnter" @focus="showSearchOptions" @blur="handleSearchBlur">
           <template #prefix>
             <n-icon :component="Search32Filled" />
