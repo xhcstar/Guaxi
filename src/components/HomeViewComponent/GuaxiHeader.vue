@@ -73,10 +73,7 @@ const toggleRightSider = () => {
 function openOutlinePanel() {
   rightSiderStore.setPanel('outline')
   rightSiderStore.open()
-  // 主动展开右侧边栏
-  if (siderStore.isRightSiderCollapsed[viewKey]) {
-    siderStore.toggleRightSider(viewKey);
-  }
+  siderStore.setRightSiderCollapsed(viewKey, false)
 }
 
 async function CaptureScreenshot() {
@@ -304,10 +301,7 @@ async function handleSearchFiles() {
 
     // 打开搜索结果面板
     rightSiderStore.setPanel('search');
-    // 如果右侧边栏折叠，展开它
-    if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.setRightSiderCollapsed(viewKey, false);
-    }
+    siderStore.setRightSiderCollapsed(viewKey, false);
   } catch (error) {
     console.error('[Search] File search failed:', error);
     rightSiderStore.setSearchResults({
@@ -359,10 +353,7 @@ async function handleSearchNotes() {
 
     // 打开搜索结果面板
     rightSiderStore.setPanel('search');
-    // 如果右侧边栏折叠，展开它
-    if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.setRightSiderCollapsed(viewKey, false);
-    }
+    siderStore.setRightSiderCollapsed(viewKey, false);
 
     console.log('[Search] Note search completed', {
       results: validResults.length
@@ -399,9 +390,7 @@ async function handleSearchExcerpts() {
     });
 
     rightSiderStore.panel = 'search';
-    if (!siderStore.isRightSiderCollapsed[viewKey]) {
-      siderStore.setRightSiderCollapsed(viewKey, false); // 确保右侧边栏展开
-    }
+    siderStore.setRightSiderCollapsed(viewKey, false);
 
   } catch (err) {
     console.error('[Search] Excerpt search failed:', err);
