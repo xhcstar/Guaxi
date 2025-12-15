@@ -160,6 +160,8 @@ import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMark
 import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
+import { initTextmate } from '../../monaco/textmateLoader'
+import { initLspClient } from '../../monaco/lspClient'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -169,6 +171,10 @@ import 'monaco-editor/esm/vs/basic-languages/html/html.contribution'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
 import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
+import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution'
+import 'monaco-editor/esm/vs/basic-languages/java/java.contribution'
+import 'monaco-editor/esm/vs/basic-languages/lua/lua.contribution'
+import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution'
 
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -299,6 +305,7 @@ const initEditor = () => {
     'ts': 'typescript',
     'css': 'css',
     'html': 'html',
+    'htm': 'html',
     'md': 'markdown',
     'py': 'python',
     'cpp': 'cpp',
@@ -309,14 +316,68 @@ const initEditor = () => {
     'sh': 'shell',
     'jsx': 'javascript',
     'tsx': 'javascript',
-    'htm': 'html',
+    'json': 'json',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'lua': 'lua',
+    'java': 'java',
+    'toml': 'ini',
   };
   const language = languageMap[fileExt] || 'markdown';
+
+  monaco.editor.defineTheme('one-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: '9e9e9e' },
+      { token: 'keyword', foreground: '9c27b0' },
+      { token: 'string', foreground: '2e7d32' },
+      { token: 'number', foreground: 'ef6c00' },
+      { token: 'regexp', foreground: '00897b' },
+      { token: 'type', foreground: '6a1b9a' },
+      { token: 'delimiter', foreground: '2f3337' },
+      { token: 'variable', foreground: 'e53935' },
+      { token: 'parameter', foreground: '3949ab' },
+      { token: 'function', foreground: '1565c0' },
+      { token: 'constant', foreground: '00838f' },
+      { token: 'class', foreground: '283593' },
+      { token: 'identifier', foreground: '2f3337' },
+      { token: 'tag', foreground: 'd32f2f' },
+      { token: 'attribute.name', foreground: '6d4c41' },
+      { token: 'meta.embedded', foreground: '455a64' }
+    ],
+    colors: {
+      'editor.background': '#ffffff',
+      'editor.foreground': '#2f3337',
+      'editorLineNumber.foreground': '#b0b3ba',
+      'editorLineNumber.activeForeground': '#2f3337',
+      'editorCursor.foreground': '#1565c0',
+      'editor.selectionBackground': '#cfe8ff',
+      'editor.inactiveSelectionBackground': '#e3f2fd',
+      'editor.lineHighlightBackground': '#f2f5fb',
+      'editorBracketMatch.background': '#e1f5fe',
+      'editorBracketMatch.border': '#90caf9',
+      'editor.selectionHighlightBackground': '#ffe0b2',
+      'editor.foldBackground': '#f7f9fc',
+      'editorWhitespace.foreground': '#d0d0d5',
+      'editorIndentGuide.background': '#e0e0e0',
+      'editorIndentGuide.activeBackground': '#b0bec5',
+      'editorHoverWidget.background': '#ffffff',
+      'editorHoverWidget.border': '#e0e0e0',
+      'editorSuggestWidget.background': '#ffffff',
+      'editorSuggestWidget.border': '#e0e0e0',
+      'editorSuggestWidget.foreground': '#2f3337',
+      'editorSuggestWidget.selectedBackground': '#e3f2fd',
+      'editorWidget.background': '#ffffff',
+      'editorWidget.border': '#e0e0e0',
+      'scrollbar.shadow': '#00000033'
+    }
+  });
 
   editor = monaco.editor.create(editorContainer.value, {
     value: rawContent.value,
     language: language,
-    theme: 'vs',
+    theme: 'one-light',
     automaticLayout: true,  // 自动布局
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
@@ -397,6 +458,9 @@ const initEditor = () => {
     },
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
+
+  initTextmate(editor, language);
+  initLspClient(editor, language, selectedFile.value?.path || '');
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
@@ -1032,6 +1096,12 @@ watch(selectedFile, async (newFile) => {
   if (newFile) {
     const fileExt = newFile.path?.split('.').pop() || 'markdown';
     const languageMap = {
+      'js': 'javascript',
+      'ts': 'typescript',
+      'css': 'css',
+      'html': 'html',
+      'htm': 'html',
+      'md': 'markdown',
       'py': 'python',
       'cpp': 'cpp',
       'c': 'cpp',
@@ -1039,14 +1109,14 @@ watch(selectedFile, async (newFile) => {
       'hpp': 'cpp',
       'rs': 'rust',
       'sh': 'shell',
-      'js': 'javascript',
       'jsx': 'javascript',
-      'ts': 'javascript',
       'tsx': 'javascript',
-      'html': 'html',
-      'htm': 'html',
-      'css': 'css',
-      'md': 'markdown'
+      'json': 'json',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+      'lua': 'lua',
+      'java': 'java',
+      'toml': 'ini',
     };
 
     const language = languageMap[fileExt] || 'markdown';

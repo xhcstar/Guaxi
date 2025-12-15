@@ -43,6 +43,7 @@
     "resources": [
       "scripts/**/*",
       "libs/**/*",
+      "utils/lsp/*",
       "utils/platforms/*",
       "utils/Qt*",
       "utils/ScreenShotTool*"

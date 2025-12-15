@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 import markdownItMathjax from "markdown-it-mathjax3";
 import mermaid from "mermaid";
 import hljs from "highlight.js";
-import "highlight.js/styles/github.css";
+import "highlight.js/styles/atom-one-light.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
 import { nextTick } from "vue";
 

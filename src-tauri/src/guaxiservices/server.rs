@@ -1,9 +1,10 @@
 use crate::guaxiservices::chrome_extension_service;
 use crate::guaxiservices::markdown_image_process;
+use crate::guaxiservices::lsp;
 use crate::state::SharedState;
 use actix_cors::Cors;
 use actix_web::web::{Data, JsonConfig, PayloadConfig}; // 添加 Data 导入
-use actix_web::{App, HttpServer};
+use actix_web::{web, App, HttpServer};
 
 pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
     let server = HttpServer::new(move || {
@@ -19,6 +20,7 @@ pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
             .wrap(cors) // 应用CORS中间件
             .configure(markdown_image_process::config)
             .configure(|cfg| chrome_extension_service::config(cfg, Data::new(state.clone()))) // 使用正确的 Data 类型
+            .route("/lsp/{language}", web::get().to(lsp::lsp_ws_route))
             .app_data(JsonConfig::default().limit(10 * 1024 * 1024)) // 10MB限制
             .app_data(PayloadConfig::default().limit(10 * 1024 * 1024)) // 10MB限制
     })
