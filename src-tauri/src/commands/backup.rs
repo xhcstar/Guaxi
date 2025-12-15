@@ -1449,7 +1449,6 @@ pub async fn import_items(databaseType: String, importPath: String) -> Result<Im
 pub async fn recover_database(
     databaseType: String,
     backupPath: String,
-    targetLibrariesRoot: Option<String>,
     window: Window,
 ) -> Result<ImportResult, String> {
     let win = window.clone();
@@ -1537,7 +1536,7 @@ pub async fn recover_database(
             RecoveryProgress { current: 60, total: 100, message: "已写入数据库".to_string(), databaseType: databaseType.clone() },
         ).map_err(|e| e.to_string())?;
 
-        let dst_base = if let Some(root) = &targetLibrariesRoot { PathBuf::from(root).join("Libraries") } else { PathBuf::from(get_libraries_root()).join("Libraries") };
+        let dst_base = PathBuf::from(get_libraries_root()).join("Libraries");
         win.emit(
             "recovery_progress",
             RecoveryProgress { current: 80, total: 100, message: "开始恢复文件".to_string(), databaseType: databaseType.clone() },

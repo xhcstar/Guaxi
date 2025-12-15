@@ -51,17 +51,11 @@ export function useFileOperations({ store, message }) {
         message.warning("请选择备份文件");
         return;
       }
-      const targetRoot = await open({ directory: true, multiple: false });
-      if (!targetRoot) {
-        message.warning("请选择恢复目标 Libraries 根目录");
-        return;
-      }
       const result = await invoke(
         "recover_database",
         {
           databaseType: store.currentDatabase,
           backupPath: backupPath,
-          targetLibrariesRoot: targetRoot,
         },
         {
           target: "main",
