@@ -1094,19 +1094,6 @@ pub async fn import_items(databaseType: String, importPath: String) -> Result<Im
             serde_json::from_str(&notes_data).map_err(|e| e.to_string())?;
         manifest.notes = notes;
     }
-    for f in manifest.imported_files.iter_mut() {
-        if f.knowledge_repo.is_empty() {
-            f.knowledge_repo = databaseType.clone();
-        }
-    }
-    for n in manifest.notes.iter_mut() {
-        if n.knowledge_repo.is_empty() {
-            n.knowledge_repo = databaseType.clone();
-        }
-        if n.from_imported_file_library.is_empty() {
-            if let Some(lib) = infer_library_from_note_path(&n.note_file_name) { n.from_imported_file_library = lib; }
-        }
-    }
     let src_repo_root = temp.join("repo");
 
     let conn = init_db().map_err(|e| e.to_string())?;
@@ -1165,8 +1152,6 @@ pub async fn recover_database(
             let notes: Vec<NoteExport> = serde_json::from_str(&notes_data).map_err(|e| e.to_string())?;
             manifest.notes = notes;
         }
-        for f in manifest.imported_files.iter_mut() { if f.knowledge_repo.is_empty() { f.knowledge_repo = databaseType.clone(); } }
-        for n in manifest.notes.iter_mut() { if n.knowledge_repo.is_empty() { n.knowledge_repo = databaseType.clone(); } if n.from_imported_file_library.is_empty() { if let Some(lib) = infer_library_from_note_path(&n.note_file_name) { n.from_imported_file_library = lib; } } }
         let src_repo_root = temp.join("repo");
         win.emit(
             "recovery_progress",
