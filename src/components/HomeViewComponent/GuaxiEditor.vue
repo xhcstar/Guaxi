@@ -13,6 +13,88 @@
     </div>
     <!-- 工具栏 -->
     <div class="toolbar">
+      <div class="toolbar-editing-actions">
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertHeading(1)">
+              H1
+            </n-button>
+          </template>
+          插入一级标题
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertHeading(2)">
+              H2
+            </n-button>
+          </template>
+          插入二级标题
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleBold">
+              B
+            </n-button>
+          </template>
+          加粗
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleItalic">
+              I
+            </n-button>
+          </template>
+          斜体
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertUnorderedList">
+              <n-icon size="16" :component="ListOutline" />
+            </n-button>
+          </template>
+          插入列表
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertTable">
+              <n-icon size="16" :component="GridOutline" />
+            </n-button>
+          </template>
+          插入表格
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertImage">
+              <n-icon size="16" :component="ImagesOutline" />
+            </n-button>
+          </template>
+          插入图片
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertCodeBlockFromToolbar">
+              <n-icon size="16" :component="CodeSlashOutline" />
+            </n-button>
+          </template>
+          插入代码块
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="setFontSize">
+              <n-icon size="16" :component="TextOutline" />
+            </n-button>
+          </template>
+          设置字号
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="setFontColor">
+              <n-icon size="16" :component="ColorPaletteOutline" />
+            </n-button>
+          </template>
+          设置字体颜色
+        </n-tooltip>
+      </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
         <!-- 添加 Git 操作按钮 -->
@@ -71,7 +153,7 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
-import { EyeOutline, LogoVimeo, CloseOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, TextOutline, ListOutline, ImagesOutline, CodeSlashOutline, ColorPaletteOutline, GridOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -86,6 +168,7 @@ import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution'
 import 'monaco-editor/esm/vs/basic-languages/html/html.contribution'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
 import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
+import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -123,6 +206,83 @@ const message = useMessage()
 const vimMode = ref(false);
 const vimStatusBar = ref(null);
 let vimModeInstance = null;
+
+let markdownFeaturesRegistered = false;
+
+const registerMarkdownLanguageFeatures = () => {
+  if (markdownFeaturesRegistered) return;
+  markdownFeaturesRegistered = true;
+
+  const createSnippet = (label, insertText, detail) => ({
+    label,
+    kind: monaco.languages.CompletionItemKind.Snippet,
+    insertText,
+    insertTextRules:
+      monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    detail
+  });
+
+  monaco.languages.registerCompletionItemProvider('markdown', {
+    triggerCharacters: ['#', '-', '*', '`', '[', '!', '|'],
+    provideCompletionItems(model, position) {
+      const suggestions = [];
+      const lineContent = model.getLineContent(position.lineNumber);
+      const beforeCursor = lineContent.slice(0, position.column - 1);
+      const trimmed = beforeCursor.trim();
+
+      if (!trimmed) {
+        suggestions.push(
+          createSnippet('H1 标题', '# ${1:标题}\n\n', '插入一级标题'),
+          createSnippet('H2 标题', '## ${1:标题}\n\n', '插入二级标题'),
+          createSnippet(
+            '无序列表',
+            '- ${1:列表项}\n- ${2:列表项}\n',
+            '插入无序列表'
+          ),
+          createSnippet(
+            '有序列表',
+            '1. ${1:第一项}\n2. ${2:第二项}\n',
+            '插入有序列表'
+          ),
+          createSnippet(
+            '任务列表',
+            '- [ ] ${1:任务}\n- [ ] ${2:任务}\n',
+            '插入任务列表'
+          ),
+          createSnippet(
+            '表格',
+            '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n',
+            '插入表格'
+          ),
+          createSnippet(
+            '代码块',
+            '```${1:language}\n${2:代码}\n```\n',
+            '插入代码块'
+          )
+        );
+      }
+
+      suggestions.push(
+        createSnippet('加粗', '**${1:文本}**', '加粗文本'),
+        createSnippet('斜体', '*${1:文本}*', '斜体文本'),
+        createSnippet('内联代码', '`${1:code}`', '内联代码'),
+        createSnippet(
+          '链接',
+          '[${1:描述}](${2:链接})',
+          '插入链接'
+        ),
+        createSnippet(
+          '图片',
+          '![${1:描述}](${2:路径})',
+          '插入图片'
+        ),
+        createSnippet('引用', '> ${1:引用内容}\n', '插入引用')
+      );
+
+      return { suggestions };
+    }
+  });
+};
 
 const tabBarRef = ref(null)
 // 初始化编辑器
@@ -240,6 +400,8 @@ const initEditor = () => {
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
+
+  registerMarkdownLanguageFeatures();
 
   if (vimMode.value) {
     nextTick(() => {
@@ -424,7 +586,9 @@ const setupEditorListeners = () => {
   // 监听内容变化（用于问题检测）
   editor.onDidChangeModelContent(debounce(() => {
     const content = editor.getValue();
-    const problems = analyzeContentForProblems(content);
+    const model = editor.getModel();
+    const languageId = model?.getLanguageId() || 'plaintext';
+    const problems = analyzeContentForProblems(content, model, languageId);
     editorStore.setProblems(problems);
 
     // 更新原始内容
@@ -451,22 +615,127 @@ const setupEditorListeners = () => {
 };
 
 // 内容问题分析
-function analyzeContentForProblems(content) {
-  // 这里实现实际的问题检测逻辑
+function analyzeContentForProblems(content, model, languageId) {
+  if (!content) {
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'markdown-lint', []);
+    }
+    return { errors: 0, warnings: 0 };
+  }
+
+  if (languageId === 'markdown') {
+    return analyzeMarkdown(content, model);
+  }
+
   let errors = 0;
   let warnings = 0;
 
-  // 示例：简单分析常见问题
   const lines = content.split('\n');
-  lines.forEach(line => {
-    // 检查未闭合的括号
+  lines.forEach((line) => {
     const openBraces = (line.match(/\(/g) || []).length;
     const closeBraces = (line.match(/\)/g) || []).length;
     if (openBraces !== closeBraces) errors++;
 
-    // 检查长行
     if (line.length > 120) warnings++;
   });
+
+  if (model) {
+    monaco.editor.setModelMarkers(model, 'markdown-lint', []);
+  }
+
+  return { errors, warnings };
+}
+
+function analyzeMarkdown(content, model) {
+  let errors = 0;
+  let warnings = 0;
+  const markers = [];
+  const lines = content.split('\n');
+
+  const pushMarker = (lineNumber, message, severity) => {
+    if (!model) return;
+    const maxColumn = model.getLineMaxColumn(lineNumber) || 1;
+    markers.push({
+      severity:
+        severity === 'error'
+          ? monaco.MarkerSeverity.Error
+          : monaco.MarkerSeverity.Warning,
+      message,
+      startLineNumber: lineNumber,
+      startColumn: 1,
+      endLineNumber: lineNumber,
+      endColumn: maxColumn
+    });
+    if (severity === 'error') {
+      errors++;
+    } else {
+      warnings++;
+    }
+  };
+
+  let lastHeadingLevel = 0;
+  const headingTexts = new Map();
+  const tokens = md.parse(content, {});
+
+  tokens.forEach((token, idx) => {
+    if (token.type !== 'heading_open') return;
+
+    const level = Number(token.tag.slice(1));
+    const nextToken = tokens[idx + 1];
+    const lineNumber = token.map ? token.map[0] + 1 : 1;
+
+    if (!nextToken || !nextToken.content || !nextToken.content.trim()) {
+      pushMarker(lineNumber, '标题内容为空', 'warning');
+    }
+
+    if (lastHeadingLevel && level > lastHeadingLevel + 1) {
+      pushMarker(
+        lineNumber,
+        `标题级别从 H${lastHeadingLevel} 跳到 H${level}`,
+        'warning'
+      );
+    }
+
+    const text = nextToken?.content?.trim();
+    if (text) {
+      const existed = headingTexts.get(text);
+      if (existed) {
+        pushMarker(
+          lineNumber,
+          `标题与第 ${existed} 行重复`,
+          'warning'
+        );
+      } else {
+        headingTexts.set(text, lineNumber);
+      }
+    }
+
+    lastHeadingLevel = level;
+  });
+
+  const fenceLines = [];
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      fenceLines.push(index + 1);
+    }
+
+    const openBracket = (line.match(/\[/g) || []).length;
+    const linkStart = (line.match(/\]\(/g) || []).length;
+    const closeParen = (line.match(/\)/g) || []).length;
+    if (openBracket && (linkStart === 0 || closeParen < linkStart)) {
+      pushMarker(index + 1, '可能存在不完整的链接语法', 'warning');
+    }
+  });
+
+  if (fenceLines.length % 2 !== 0) {
+    const lineNumber = fenceLines[fenceLines.length - 1];
+    pushMarker(lineNumber, '代码块未正确闭合', 'error');
+  }
+
+  if (model) {
+    monaco.editor.setModelMarkers(model, 'markdown-lint', markers);
+  }
 
   return { errors, warnings };
 }
@@ -475,6 +744,119 @@ function analyzeContentForProblems(content) {
 function countLines(text) {
   return text.split(/\r\n|\n|\r/).length;
 }
+
+const ensureMarkdownEditor = () => {
+  if (!editor) {
+    message.warning('没有可编辑的文档');
+    return false;
+  }
+  const model = editor.getModel();
+  if (!model) return false;
+  const languageId = model.getLanguageId();
+  if (languageId !== 'markdown') {
+    message.warning('当前工具栏功能仅在 Markdown 文件中可用');
+    return false;
+  }
+  return true;
+};
+
+const wrapSelection = (prefix, suffix, placeholder = '') => {
+  if (!ensureMarkdownEditor()) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  const selectedText = model.getValueInRange(selection);
+  const finalText = prefix + (selectedText || placeholder) + suffix;
+
+  editor.executeEdits('markdown-toolbar', [
+    {
+      range: selection,
+      text: finalText,
+      forceMoveMarkers: true
+    }
+  ]);
+
+  if (!selectedText && placeholder) {
+    const startLineNumber = selection.startLineNumber;
+    const startColumn = selection.startColumn + prefix.length;
+    const endColumn = startColumn + placeholder.length;
+    editor.setSelection(
+      new monaco.Selection(
+        startLineNumber,
+        startColumn,
+        startLineNumber,
+        endColumn
+      )
+    );
+  }
+
+  editor.focus();
+};
+
+const insertBlockSnippet = (snippet) => {
+  if (!ensureMarkdownEditor()) return;
+  const position = editor.getPosition();
+  const range = new monaco.Range(
+    position.lineNumber,
+    1,
+    position.lineNumber,
+    1
+  );
+
+  editor.executeEdits('markdown-toolbar', [
+    {
+      range,
+      text: snippet,
+      forceMoveMarkers: true
+    }
+  ]);
+
+  editor.focus();
+};
+
+const insertHeading = (level) => {
+  const hashes = '#'.repeat(level);
+  insertBlockSnippet(`${hashes} 标题\n`);
+};
+
+const toggleBold = () => {
+  wrapSelection('**', '**', '粗体文本');
+};
+
+const toggleItalic = () => {
+  wrapSelection('*', '*', '斜体文本');
+};
+
+const insertUnorderedList = () => {
+  insertBlockSnippet('- 列表项1\n- 列表项2\n');
+};
+
+const insertTable = () => {
+  insertBlockSnippet('| 列1 | 列2 |\n| --- | --- |\n| 内容1 | 内容2 |\n');
+};
+
+const insertImage = () => {
+  insertBlockSnippet('![图片描述](路径或URL)\n');
+};
+
+const insertCodeBlockFromToolbar = () => {
+  insertBlockSnippet('```language\n代码\n```\n');
+};
+
+const setFontSize = () => {
+  wrapSelection(
+    '<span style="font-size: 20px;">',
+    '</span>',
+    '大号文字'
+  );
+};
+
+const setFontColor = () => {
+  wrapSelection(
+    '<span style="color: #ff0000;">',
+    '</span>',
+    '彩色文字'
+  );
+};
 
 // 更新编辑器内容
 const updateEditorContent = (content) => {
@@ -990,6 +1372,26 @@ onUnmounted(() => {
   /* 允许工具栏缩小 */
   z-index: 10;
   /* 确保在最上层 */
+}
+
+.toolbar-editing-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.toolbar-editing-actions :deep(.n-button) {
+  padding: 0 4px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar-editing-actions :deep(.n-button:hover) {
+  background-color: rgba(0, 0, 0, 0.04);
 }
 
 .toolbar-spacer {
