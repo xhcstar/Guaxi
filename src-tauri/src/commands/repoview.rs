@@ -96,6 +96,31 @@ pub struct ImportedFileInput {
     note_file_input: Option<NoteInput>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Resource {
+    id: i32,
+    uuid: String,
+    device_uuid: String,
+    resource_type: String,
+    file_name: String,
+    relative_path: String,
+    absolute_path: String,
+    owner_file_path: String,
+    created_at: String,
+    extra: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ResourceInput {
+    resource_type: String,
+    file_name: String,
+    relative_path: String,
+    absolute_path: String,
+    owner_file_path: String,
+    created_at: String,
+    extra: Option<String>,
+}
+
 
 
 // 创建数据库文件路径
@@ -295,6 +320,24 @@ pub fn setup_db() -> Result<(), String> {
         object_uuid TEXT NOT NULL,
         device_uuid TEXT NOT NULL,
         deleted_at TEXT NOT NULL
+    ",
+    )
+    .map_err(|e| e.to_string())?;
+
+    create_table_if_not_exists(
+        &conn,
+        "resources",
+        "
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT NOT NULL,
+        device_uuid TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        absolute_path TEXT NOT NULL,
+        owner_file_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        extra TEXT
     ",
     )
     .map_err(|e| e.to_string())?;
@@ -1227,4 +1270,75 @@ pub fn gc_deleted_items() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn add_resource(resource: ResourceInput) -> Result<(), String> {
+    let mut conn = init_db().map_err(|e| e.to_string())?;
+
+    let uuid = Uuid::new_v4().to_string();
+    let device_uuid = get_device_id();
+    let created_at = if resource.created_at.is_empty() {
+        Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        resource.created_at
+    };
+
+    conn
+        .execute(
+            "INSERT INTO resources (uuid, device_uuid, resource_type, file_name, relative_path, absolute_path, owner_file_path, created_at, extra)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                uuid,
+                device_uuid,
+                resource.resource_type,
+                resource.file_name,
+                resource.relative_path,
+                resource.absolute_path,
+                resource.owner_file_path,
+                created_at,
+                resource.extra
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_resources_by_owner(owner_file_path: String) -> Result<Vec<Resource>, String> {
+    let conn = init_db().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, uuid, device_uuid, resource_type, file_name, relative_path, absolute_path, owner_file_path, created_at, extra
+             FROM resources
+             WHERE owner_file_path = ?
+             ORDER BY created_at",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![owner_file_path], |row| {
+            Ok(Resource {
+                id: row.get(0)?,
+                uuid: row.get(1)?,
+                device_uuid: row.get(2)?,
+                resource_type: row.get(3)?,
+                file_name: row.get(4)?,
+                relative_path: row.get(5)?,
+                absolute_path: row.get(6)?,
+                owner_file_path: row.get(7)?,
+                created_at: row.get(8)?,
+                extra: row.get(9)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut resources = Vec::new();
+    for r in rows {
+        resources.push(r.map_err(|e| e.to_string())?);
+    }
+
+    Ok(resources)
 }

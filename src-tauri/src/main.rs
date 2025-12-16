@@ -28,6 +28,10 @@ async fn app_init() {
         Ok(_) => println!("Library config initialized successfully."),
         Err(e) => eprintln!("Failed to initialize library config: {}", e),
     }
+    match commands::settingview::init_resource_root() {
+        Ok(_) => println!("Resource root initialized successfully."),
+        Err(e) => eprintln!("Failed to initialize resource root: {}", e),
+    }
 }
 
 fn start_background_gc() {
@@ -119,6 +123,8 @@ async fn main() {
             commands::settingview::set_libraries_repo_config,
             commands::settingview::get_libraries_root,
             commands::settingview::set_libraries_root,
+            commands::settingview::get_image_bed_root,
+            commands::settingview::set_image_bed_root,
             commands::settingview::get_gc_cycle_seconds,
             commands::settingview::set_gc_cycle_seconds,
             commands::settingview::get_lsp_syntax_highlight_enabled,
@@ -138,6 +144,8 @@ async fn main() {
             commands::repoview::search_imported_file_libraries,
             commands::repoview::get_knowledge_repos,
             commands::repoview::gc_deleted_items,
+            commands::repoview::add_resource,
+            commands::repoview::get_resources_by_owner,
             commands::backup::backup_database,
             commands::backup::recover_database,
             commands::backup::import_items,

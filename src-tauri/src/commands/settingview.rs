@@ -27,6 +27,8 @@ pub struct AppConfig {
     active_repo_path: Option<String>,
     repopathlist: Vec<String>,
     libraries_root: String,
+    #[serde(default = "default_image_bed_root")]
+    image_bed_root: String,
     #[serde(default)]
     device_id: String,
     #[serde(default = "default_gc_cycle_seconds")]
@@ -43,6 +45,15 @@ pub struct ServerConfig {
 
 fn default_gc_cycle_seconds() -> u64 {
     3600
+}
+
+fn default_image_bed_root() -> String {
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("ResourceRepo").to_string_lossy().to_string()
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -91,6 +102,7 @@ impl Default for AppConfig {
             active_repo_path: None,
             repopathlist: Vec::new(),
             libraries_root: "".to_string(),
+            image_bed_root: default_image_bed_root(),
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
@@ -284,6 +296,32 @@ pub fn set_libraries_root(path: String) {
     let mut config = load_config();
     config.libraries_root = path;
     save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_image_bed_root() -> String {
+    let config = load_config();
+    config.image_bed_root
+}
+
+#[tauri::command]
+pub fn set_image_bed_root(path: String) {
+    let mut config = load_config();
+    config.image_bed_root = path;
+    save_config(&config);
+}
+
+pub fn init_resource_root() -> Result<(), String> {
+    let mut config = load_config();
+    if config.image_bed_root.trim().is_empty() {
+        config.image_bed_root = default_image_bed_root();
+        save_config(&config);
+    }
+    let root_path = PathBuf::from(&config.image_bed_root);
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn get_device_id() -> String {

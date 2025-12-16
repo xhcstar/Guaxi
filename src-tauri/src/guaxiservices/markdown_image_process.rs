@@ -1,3 +1,4 @@
+use crate::commands::settingview::get_image_bed_root;
 use actix_web::{get, post, web, HttpResponse};
 use mime_guess;
 use regex::Regex;
@@ -99,6 +100,42 @@ async fn serve_image(path: web::Path<String>) -> HttpResponse {
     }
 }
 
+#[get("/markdown/api/bed/{rel:.*}")]
+async fn serve_bed_image(rel: web::Path<String>) -> HttpResponse {
+    let root = PathBuf::from(get_image_bed_root());
+    let rel_raw = rel.into_inner();
+
+    let decoded_rel = match decode(&rel_raw) {
+        Ok(v) => v.into_owned(),
+        Err(_) => return HttpResponse::BadRequest().body("Invalid path encoding"),
+    };
+
+    let safe_rel = decoded_rel.replace('\\', "/");
+    let candidate = root.join(&safe_rel);
+
+    let root_canon = match root.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    let file_canon = match candidate.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+
+    if !file_canon.starts_with(&root_canon) {
+        return HttpResponse::Forbidden().finish();
+    }
+
+    match fs::read(&file_canon) {
+        Ok(content) => HttpResponse::Ok()
+            .content_type(mime_guess::from_path(&file_canon).first_or_octet_stream())
+            .body(content),
+        Err(_) => HttpResponse::NotFound().finish(),
+    }
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(process_markdown).service(serve_image);
+    cfg.service(process_markdown)
+        .service(serve_image)
+        .service(serve_bed_image);
 }
