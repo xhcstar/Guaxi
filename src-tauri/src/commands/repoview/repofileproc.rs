@@ -102,7 +102,7 @@ pub fn add_repo_import_file(library: String, file_path: String) -> Result<AddRes
     info!("file_extension: {}", file_extension);
 
     match file_extension {
-        "txt" | "pdf" | "doc" | "docx" | "epub" | "html" | "png" | "jpg" | "jpeg" | "pptx"
+        "txt" | "pdf" | "word" | "epub" | "html" | "png" | "jpg" | "jpeg" | "pptx"
         | "ppt" => {}
         _ => {
             return Err("UnsupportedFileType".to_string());

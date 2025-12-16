@@ -33,16 +33,19 @@
         <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
           <n-icon :component="AddOutline" />
         </button>
+
+        <n-dropdown trigger="click" :options="viewModeOptions" @select="handleViewModeSelect">
+          <n-button class="layout-switch" text title="切换布局">
+            <template #icon>
+              <n-icon :component="OptionsOutline" />
+            </template>
+          </n-button>
+        </n-dropdown>
+
         <!-- 显示/隐藏笔记按钮 -->
         <button class="toggle-notes" @click="toggleNotesPanel" :title="showNotes ? '隐藏笔记' : '显示笔记'">
           <n-icon :component="DocumentTextOutline" />
           <span class="btn-text">{{ showNotes ? '隐藏笔记' : '显示笔记' }}</span>
-        </button>
-
-        <!-- 导出笔记按钮 -->
-        <button class="export-notes" @click="exportNotes" title="导出笔记">
-          <n-icon :component="DownloadOutline" />
-          <span class="btn-text">导出笔记</span>
         </button>
 
         <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'"
@@ -59,7 +62,7 @@
     <!-- 主内容区 -->
     <div class="epub-main-content">
       <!-- 左侧epub文档预览区域 -->
-      <div class="epub-source-panel" :style="{ width: leftPanelWidth }">
+      <div class="epub-source-panel" v-show="viewMode !== 'full-right'" :style="{ width: leftPanelWidth }">
         <div class="epub-source-container">
           <div ref="epubPreviewContainer" class="epub-preview-container"></div>
           <!-- 加载状态 -->
@@ -70,11 +73,11 @@
       </div>
 
       <!-- 可拖动的中间线 -->
-      <div class="resize-handle" @mousedown="startResize"></div>
+      <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
-        @mouseleave="handleMarkdownLeave">
+      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick"
+        @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
             <div class="markdown-line">
@@ -99,6 +102,9 @@
               </div>
             </div>
           </template>
+        </div>
+        <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
+          <GuaxiOutline />
         </div>
       </div>
     </div>
@@ -186,7 +192,10 @@ import { platform } from '@tauri-apps/plugin-os';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
-import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
+import { NCard, NButton, NIcon, NText, useMessage, NDropdown } from 'naive-ui'
+import MarkdownIt from 'markdown-it'
+import { useOutlineStore } from '../../stores/outlineStore'
+import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
@@ -200,7 +209,8 @@ import {
   CloseOutline,
   LanguageOutline,
   SaveOutline,
-  ExitOutline
+  ExitOutline,
+  OptionsOutline
 } from '@vicons/ionicons5'
 
 // 组件属性定义
@@ -232,6 +242,8 @@ const props = defineProps({
 const message = useMessage()
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
+const outlineStore = useOutlineStore()
+const md = new MarkdownIt()
 const markdownContainer = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
@@ -246,6 +258,24 @@ const leftPanelWidth = ref('50%');
 const currentPage = ref(1)
 const totalPages = ref(0)
 const jumpPage = ref(1)
+const viewMode = ref('split')
+const previousLeftWidth = ref(leftPanelWidth.value)
+const showOutline = ref(false)
+
+const viewModeOptions = [
+  { label: '左右分栏', key: 'split' },
+  { label: '仅左侧', key: 'full-left' },
+  { label: '仅右侧', key: 'full-right' },
+  { label: '大纲', key: 'outline' }
+]
+
+const handleViewModeSelect = (key) => {
+  if (key === 'outline') {
+    showOutline.value = !showOutline.value
+  } else {
+    setViewMode(key)
+  }
+}
 
 const epubPreviewContainer = ref(null)
 const isLoading = ref(false)
@@ -387,6 +417,23 @@ const loadEpubDocument = async () => {
   }
 };
 
+const setViewMode = (mode) => {
+  if (mode === viewMode.value) return;
+
+  if (mode === 'split') {
+    leftPanelWidth.value = previousLeftWidth.value || '50%';
+  } else if (mode === 'full-left') {
+    previousLeftWidth.value = leftPanelWidth.value;
+    leftPanelWidth.value = '100%';
+  } else if (mode === 'full-right') {
+    if (viewMode.value === 'full-left') {
+      leftPanelWidth.value = previousLeftWidth.value || '50%';
+    }
+  }
+
+  viewMode.value = mode;
+};
+
 const adjustContainerHeight = (rendition) => {
   if (!rendition || !epubPreviewContainer.value) return;
 
@@ -474,6 +521,38 @@ const renderNoteContent = async (markdown) => {
     return `<div class="render-error">${e.message}</div>`;
   }
 };
+
+function generateOutlineFromMarkdown(content) {
+  if (!content) {
+    outlineStore.setOutline([]);
+    return;
+  }
+  const tokens = md.parse(content, {});
+  const result = [];
+  tokens.forEach((token, idx) => {
+    if (token.type === 'heading_open') {
+      const level = Number(token.tag.slice(1));
+      const nextToken = tokens[idx + 1];
+      if (nextToken && nextToken.type === 'inline') {
+        result.push({
+          level,
+          text: nextToken.content,
+          line: result.length
+        });
+      }
+    }
+  });
+  outlineStore.setOutline(result);
+}
+
+function jumpToHeading(index) {
+  if (!markdownContainer.value) return;
+  const headings = markdownContainer.value.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  const target = headings[index];
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
 
 async function convertMarkdownToLines(content, options = {}) {
   const processedContent = await processImages(content, options.libraryBasePath);
@@ -1061,16 +1140,7 @@ const loadMarkdownPage = async () => {
     markdownLines.value = await convertMarkdownToLines(markdownContent.value,
       { libraryBasePath: mdDir }
     );
-
-    // 渲染完整Markdown
-    // markdownHtml.value = await renderMarkdown(markdownContent.value, {
-    //   preserveOriginal: false,
-    //   basePath: mdDir,
-    //   mermaid: true,
-    //   math: true,
-    //   codeHighlight: true,
-    //   theme: 'default'
-    // });
+    generateOutlineFromMarkdown(markdownContent.value);
 
   } catch (error) {
     console.error('加载Markdown失败:', error);
@@ -1078,7 +1148,7 @@ const loadMarkdownPage = async () => {
       raw: '',
       html: `<div class="error">加载错误: ${error.message}</div>`
     }];
-    // markdownHtml.value = `<div class="error">加载错误: ${error.message}</div>`;
+    outlineStore.setOutline([]);
   }
 };
 
@@ -1526,6 +1596,7 @@ const handleMouseMove = (e) => {
 
   // 限制调整范围
   leftPanelWidth.value = `${Math.max(30, Math.min(70, newWidth))}%`;
+  previousLeftWidth.value = leftPanelWidth.value;
 
   e.preventDefault();
   e.stopPropagation();
@@ -1787,6 +1858,9 @@ const exitEditMode = (index) => {
 };
 
 const handleEnterKey = (index, event) => {
+  if (event.isComposing) {
+    return;
+  }
   if (!event.shiftKey) {
     event.preventDefault();
     document.execCommand('insertHTML', false, '<div><br></div>');
@@ -1806,6 +1880,7 @@ const handleKeyUp = (e) => {
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
+  outlineStore.setJumpToLine(jumpToHeading)
 
   await Promise.all([
     (async () => {
@@ -1857,6 +1932,8 @@ onBeforeUnmount(() => {
     epubInstance.value.rendition?.destroy();
     epubInstance.value.book?.destroy();
   }
+
+  outlineStore.setOutline([]);
 });
 
 const handleResize = () => {
@@ -2109,7 +2186,8 @@ button:disabled {
   background: white;
   display: flex;
   flex-direction: column;
-  transition: pointer-events 0.1s ease; /* 添加平滑过渡 */
+  transition: pointer-events 0.1s ease;
+  /* 添加平滑过渡 */
 }
 
 /* 确保EPUB内容行高一致 */
@@ -2152,8 +2230,15 @@ button:disabled {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 20px;
+  padding: 5px;
   background-color: #ffffff;
+  display: flex;
+}
+
+.outline-panel-wrapper {
+  width: 260px;
+  border-left: 1px solid #e0e0e0;
+  box-sizing: border-box;
 }
 
 /* Markdown内容样式 */

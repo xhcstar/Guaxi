@@ -41,16 +41,19 @@
         <button class="zoom-in" @click="zoomIn" :disabled="zoomLevel >= 2" title="放大">
           <n-icon :component="AddOutline" />
         </button>
+
+        <n-dropdown trigger="click" :options="viewModeOptions" @select="handleViewModeSelect">
+          <n-button class="layout-switch" text title="切换布局">
+            <template #icon>
+              <n-icon :component="OptionsOutline" />
+            </template>
+          </n-button>
+        </n-dropdown>
+
         <!-- 显示/隐藏笔记按钮 -->
         <button class="toggle-notes" @click="toggleNotesPanel" :title="showNotes ? '隐藏笔记' : '显示笔记'">
           <n-icon :component="DocumentTextOutline" />
           <span class="btn-text">{{ showNotes ? '隐藏笔记' : '显示笔记' }}</span>
-        </button>
-
-        <!-- 导出笔记按钮 -->
-        <button class="export-notes" @click="exportNotes" title="导出笔记">
-          <n-icon :component="DownloadOutline" />
-          <span class="btn-text">导出笔记</span>
         </button>
 
         <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'"
@@ -67,7 +70,7 @@
     <!-- 主内容区 -->
     <div class="pdf-main-content">
       <!-- 修改PDF渲染区域 -->
-      <div class="pdf-render-panel" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
+      <div class="pdf-render-panel" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
         @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag"
         :style="{ cursor: isDragging ? 'grabbing' : 'grab' }">
 
@@ -89,10 +92,10 @@
       </div>
 
       <!-- 可拖动的中间线 -->
-      <div class="resize-handle" @mousedown="startResize"></div>
+      <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
+      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
         @mouseleave="handleMarkdownLeave">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
@@ -118,6 +121,9 @@
               </div>
             </div>
           </template>
+        </div>
+        <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
+          <GuaxiOutline />
         </div>
       </div>
     </div>
@@ -204,8 +210,11 @@ import { platform } from '@tauri-apps/plugin-os';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
-import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
+import { NCard, NButton, NIcon, NText, useMessage, NDropdown } from 'naive-ui'
 import usePdfRenderer from './usePdfRenderer'
+import MarkdownIt from 'markdown-it'
+import { useOutlineStore } from '../../stores/outlineStore'
+import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
@@ -219,7 +228,8 @@ import {
   CloseOutline,
   LanguageOutline,
   SaveOutline,
-  ExitOutline
+  ExitOutline,
+  OptionsOutline
 } from '@vicons/ionicons5'
 
 // 1. 组件属性定义
@@ -251,6 +261,8 @@ const props = defineProps({
 const message = useMessage()
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
+const outlineStore = useOutlineStore()
+const md = new MarkdownIt()
 const markdownContainer = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
@@ -279,11 +291,61 @@ const currentPage = ref(1)
 const totalPages = ref(0)
 const jumpPage = ref(1)
 const elements = ref([])
+const viewMode = ref('split')
+const previousLeftWidth = ref(leftPanelWidth.value)
+const showOutline = ref(false)
+
+const viewModeOptions = [
+  { label: '左右分栏', key: 'split' },
+  { label: '仅左侧', key: 'full-left' },
+  { label: '仅右侧', key: 'full-right' },
+  { label: '大纲', key: 'outline' }
+]
+
+const handleViewModeSelect = (key) => {
+  if (key === 'outline') {
+    showOutline.value = !showOutline.value
+  } else {
+    setViewMode(key)
+  }
+}
 
 // 5. Markdown相关
 const markdownContent = ref('')
 const markdownLines = ref([]);
 const markdownFilePath = ref('')
+
+function generateOutlineFromMarkdown(content) {
+  if (!content) {
+    outlineStore.setOutline([]);
+    return;
+  }
+  const tokens = md.parse(content, {});
+  const result = [];
+  tokens.forEach((token, idx) => {
+    if (token.type === 'heading_open') {
+      const level = Number(token.tag.slice(1));
+      const nextToken = tokens[idx + 1];
+      if (nextToken && nextToken.type === 'inline') {
+        result.push({
+          level,
+          text: nextToken.content,
+          line: result.length
+        });
+      }
+    }
+  });
+  outlineStore.setOutline(result);
+}
+
+function jumpToHeading(index) {
+  if (!markdownContainer.value) return;
+  const headings = markdownContainer.value.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  const target = headings[index];
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
 
 // 6. 笔记相关
 const showNotes = ref(false)
@@ -1126,6 +1188,7 @@ const loadMarkdownPage = async (pageNum) => {
       { libraryBasePath: mdDir }
     );
     console.log("markdownLines.value:", markdownLines.value);
+    generateOutlineFromMarkdown(markdownContent.value);
 
   } catch (error) {
     console.error('加载Markdown失败:', error);
@@ -1133,6 +1196,7 @@ const loadMarkdownPage = async (pageNum) => {
       raw: '',
       html: `<div class="error">加载错误: ${error.message}</div>`
     }];
+    outlineStore.setOutline([]);
   }
 };
 
@@ -1693,10 +1757,10 @@ const handleMouseMove = (e) => {
   const dx = e.clientX - startX.value;
   let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
 
-  // 限制最小宽度
   newLeftWidth = Math.max(30, Math.min(70, newLeftWidth));
 
   leftPanelWidth.value = `${newLeftWidth}%`;
+  previousLeftWidth.value = leftPanelWidth.value;
 };
 
 // 停止拖动
@@ -1792,6 +1856,23 @@ const fitToWidth = () => {
     isFitting = false;
   }
 }
+
+const setViewMode = (mode) => {
+  if (mode === viewMode.value) return;
+
+  if (mode === 'split') {
+    leftPanelWidth.value = previousLeftWidth.value || '50%';
+  } else if (mode === 'full-left') {
+    previousLeftWidth.value = leftPanelWidth.value;
+    leftPanelWidth.value = '100%';
+  } else if (mode === 'full-right') {
+    if (viewMode.value === 'full-left') {
+      leftPanelWidth.value = previousLeftWidth.value || '50%';
+    }
+  }
+
+  viewMode.value = mode;
+};
 
 // 29. 防抖函数
 const debounce = (fn, delay) => {
@@ -2068,6 +2149,9 @@ const exitEditMode = (index) => {
 
 // 4. 处理回车键行为
 const handleEnterKey = (index, event) => {
+  if (event.isComposing) {
+    return;
+  }
   // 默认行为下插入div而不是br
   if (!event.shiftKey) {
     event.preventDefault();
@@ -2090,6 +2174,7 @@ const handleKeyUp = (e) => {
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
+  outlineStore.setJumpToLine(jumpToHeading)
 
   // 并行加载但不包括fitToWidth
   await Promise.all([
@@ -2137,6 +2222,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousemove', handleMouseMove);
   document.removeEventListener('mouseup', stopResize);
   window.removeEventListener('keyup', handleKeyUp);
+  outlineStore.setOutline([]);
 });
 
 const handleResize = () => {
@@ -2444,6 +2530,13 @@ button:disabled {
   overflow-y: auto;
   padding: 5px;
   background-color: #ffffff;
+  display: flex;
+}
+
+.outline-panel-wrapper {
+  width: 260px;
+  border-left: 1px solid #e0e0e0;
+  box-sizing: border-box;
 }
 
 /* 51. Markdown内容样式 */
