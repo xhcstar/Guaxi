@@ -1398,7 +1398,15 @@ function generateOutline(content) {
   outlineStore.setOutline(result)
 }
 
+const generateOutlineDebounced = debounce((content) => {
+  generateOutline(content)
+}, 200)
+
 function jumpToLine(line) {
+  if (mode.value === 'preview') {
+    scrollPreviewToLine(line)
+    return
+  }
   if (editor) {
     editor.revealLineInCenter(line)
     editor.setPosition({ lineNumber: line, column: 1 })
@@ -1408,7 +1416,7 @@ function jumpToLine(line) {
 
 // 监听 activeTab 和内容变化，生成大纲
 watch([() => fileTreeStore.activeTab, activeTabContent], ([tabPath, content]) => {
-  generateOutline(content)
+  generateOutlineDebounced(content)
 }, { immediate: true })
 
 

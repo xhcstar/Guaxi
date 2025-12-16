@@ -189,6 +189,8 @@ import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
+import MarkdownIt from 'markdown-it'
+import { useOutlineStore } from '../../stores/outlineStore'
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
@@ -234,6 +236,8 @@ const props = defineProps({
 const message = useMessage()
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
+const outlineStore = useOutlineStore()
+const md = new MarkdownIt()
 const markdownContainer = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
@@ -411,6 +415,38 @@ async function convertMarkdownToLines(content, options = {}) {
       html: `<div class="render-error">${error.message}</div>`,
       skipTranslation: true
     }];
+  }
+}
+
+function generateOutlineFromMarkdown(content) {
+  if (!content) {
+    outlineStore.setOutline([]);
+    return;
+  }
+  const tokens = md.parse(content, {});
+  const result = [];
+  tokens.forEach((token, idx) => {
+    if (token.type === 'heading_open') {
+      const level = Number(token.tag.slice(1));
+      const nextToken = tokens[idx + 1];
+      if (nextToken && nextToken.type === 'inline') {
+        result.push({
+          level,
+          text: nextToken.content,
+          line: result.length
+        });
+      }
+    }
+  });
+  outlineStore.setOutline(result);
+}
+
+function jumpToHeading(index) {
+  if (!markdownContainer.value) return;
+  const headings = markdownContainer.value.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  const target = headings[index];
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
 
@@ -910,16 +946,7 @@ const loadMarkdownPage = async () => {
     markdownLines.value = await convertMarkdownToLines(markdownContent.value,
       { libraryBasePath: mdDir }
     );
-
-    // 渲染完整Markdown
-    markdownHtml.value = await renderMarkdown(markdownContent.value, {
-      preserveOriginal: false,
-      basePath: mdDir,
-      mermaid: true,
-      math: true,
-      codeHighlight: true,
-      theme: 'default'
-    });
+    generateOutlineFromMarkdown(markdownContent.value);
 
   } catch (error) {
     console.error('加载Markdown失败:', error);
@@ -927,7 +954,7 @@ const loadMarkdownPage = async () => {
       raw: '',
       html: `<div class="error">加载错误: ${error.message}</div>`
     }];
-    markdownHtml.value = `<div class="error">加载错误: ${error.message}</div>`;
+    outlineStore.setOutline([]);
   }
 };
 
@@ -1648,6 +1675,7 @@ const handleKeyUp = (e) => {
 onMounted(async () => {
   await store.get_librariesRoot()
   await updateMarkdownPath()
+  outlineStore.setJumpToLine(jumpToHeading)
 
   await Promise.all([
     (async () => {
@@ -1688,6 +1716,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousemove', handleMouseMove);
   document.removeEventListener('mouseup', stopResize);
   window.removeEventListener('keyup', handleKeyUp);
+  outlineStore.setOutline([]);
 });
 
 const handleResize = () => {
