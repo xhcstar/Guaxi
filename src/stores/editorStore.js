@@ -252,7 +252,7 @@ export const useEditorStore = defineStore("editor", {
 
       // 如果编辑器实例存在，确保光标可见
       if (this.editorInstance) {
-        this.editorInstance.revealPositionInCenter(position);
+        this.editorInstance.revealPositionInCenterIfOutsideViewport(position);
       }
     },
 

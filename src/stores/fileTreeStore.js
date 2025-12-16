@@ -11,6 +11,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     activeTab: null,
     // 新增：用于跟踪仓库展开状态的Map
     expandedRepos: new Map(), // key: repoPath, value: boolean
+    currentRequestPath: null,
   }),
   actions: {
     // 新增：切换仓库展开状态
@@ -75,6 +76,10 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 获取文件树数据
     async fetchFileTree(path) {
       console.log("开始获取文件树数据，路径:", path);
+      if (!path) {
+        this.fileTree = [];
+        return;
+      }
       if (this.currentRequestPath === path) return; // 防止重复请求
 
       this.currentRequestPath = path;

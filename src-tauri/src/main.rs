@@ -62,7 +62,7 @@ async fn main() {
 
     // 示例日志输出
     info!("Project started!");
-    app_init().await;
+    tokio::spawn(app_init());
     start_background_gc();
     let file_watcher = FileWatcher::new();
 

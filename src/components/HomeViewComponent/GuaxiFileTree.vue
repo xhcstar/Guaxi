@@ -217,11 +217,10 @@ const loadRepoTree = async (path) => {
 }
 
 const refreshAll = async () => {
-  // console.log('[Action] 刷新所有仓库')
-  for (const path of fileTreeStore.repopathlist) {
-    console.log('[Refresh] 刷新仓库:', path)
-    await loadRepoTree(path)
-  }
+  const activePath = fileTreeStore.activeRepoPath
+  if (!activePath) return
+  console.log('[Refresh] 刷新仓库:', activePath)
+  await loadRepoTree(activePath)
 }
 
 const normalizeTreeIds = (tree) => {
@@ -1122,15 +1121,15 @@ const initializeRepositories = async () => {
   console.log('[Init] 开始初始化知识库')
 
   try {
-    // 1. 从知识库商店加载知识库列表
-    const knowledgeBases = await knowledgeBaseStore.fetchKnowledgeBases()
+    let knowledgeBases = knowledgeBaseStore.knowledgeBases
+    if (!knowledgeBases || knowledgeBases.length === 0) {
+      knowledgeBases = await knowledgeBaseStore.fetchKnowledgeBases()
+    }
     console.log('[Load] 获取知识库列表:', knowledgeBases)
 
-    // 2. 同步路径到filetreestore
     const paths = knowledgeBases.map(kb => kb.location)
     fileTreeStore.setRepopathlist(paths)
 
-    // 3. 设置默认激活路径（优先保持当前选中，否则选第一个）
     const currentActive = fileTreeStore.activeRepoPath
     const defaultActive = paths.length > 0 ? paths[0] : null
 
@@ -1138,7 +1137,6 @@ const initializeRepositories = async () => {
       fileTreeStore.setActiveRepoPath(defaultActive)
       console.log('[Set] 设置默认激活路径:', defaultActive)
     } else if (currentActive && !paths.includes(currentActive)) {
-      // 当前选中路径不在新列表中时，重置为第一个
       fileTreeStore.setActiveRepoPath(defaultActive)
       console.warn('[Warn] 重置无效激活路径:', currentActive, '→', defaultActive)
     }
@@ -1148,7 +1146,6 @@ const initializeRepositories = async () => {
     console.error('[Error] 初始化知识库失败:', error)
     throw error
   } finally {
-    // 确保文件监控被正确设置
     if (fileTreeStore.activeRepoPath) {
       await setupFileWatcher()
     }
