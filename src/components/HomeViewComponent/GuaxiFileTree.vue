@@ -125,10 +125,17 @@ const contextMenuOptions = ref([
     key: 'move',
     icon: () => h(NIcon, null, { default: () => h(MoveOutline) })
   },
+  {
+    label: '在文件浏览器中打开',
+    key: 'openInExplorer',
+    icon: () => h(NIcon, null, { default: () => h(FolderOutline) })
+  },
 ])
 
 const isHiddenPath = (path) => {
-  return path.split('/').some(part => part.startsWith('.'));
+  if (!path) return false;
+  const normalized = normalizePath(path);
+  return normalized.split('/').some(part => part.startsWith('.'));
 };
 
 // 修改后的handleAddFile函数
@@ -235,11 +242,9 @@ const loadFileTree = async () => {
     fileTree.value = [];
     console.log('当前仓库路径:', fileTreeStore.activeRepoPath);
     await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath);
-    
-    // 过滤隐藏目录
-    const filteredTree = fileTreeStore.fileTree.filter(node => !isHiddenPath(node.id));
-    
-    // 先 normalize，再排序
+
+    const filteredTree = filterHiddenTree(fileTreeStore.fileTree);
+
     fileTree.value = [...sortFileTree(normalizeTreeIds(filteredTree))];
   } catch (error) {
     console.error('获取文件树数据失败', error);
@@ -247,23 +252,35 @@ const loadFileTree = async () => {
   }
 };
 
+const filterHiddenTree = (tree) => {
+  if (!tree || !Array.isArray(tree)) return [];
+  return tree
+    .filter(item => !isHiddenPath(item.id))
+    .map(item => {
+      const next = { ...item };
+      if (item.children) {
+        next.children = filterHiddenTree(item.children);
+      }
+      return next;
+    });
+};
+
 // 对文件树数据进行排序（先文件后目录）
 const sortFileTree = (tree) => {
-  if (!tree || !Array.isArray(tree)) return [];  // Add null check
+  if (!tree || !Array.isArray(tree)) return [];
 
-  return tree.map(item => {
-    if (item.children) {
-      item.children = sortFileTree(item.children);
-    }
-    return item;
-  }).sort((a, b) => {
-    // Directories first, then files
-    if (a.type === 'directory' && b.type !== 'directory') return -1;
-    if (a.type !== 'directory' && b.type === 'directory') return 1;
-
-    // Alphabetical sorting
-    return a.name.localeCompare(b.name);
-  });
+  return tree
+    .map(item => {
+      if (item.children) {
+        item.children = sortFileTree(item.children);
+      }
+      return item;
+    })
+    .sort((a, b) => {
+      if (a.type === 'directory' && b.type !== 'directory') return -1;
+      if (a.type !== 'directory' && b.type === 'directory') return 1;
+      return a.name.localeCompare(b.name);
+    });
 };
 
 // 渲染文件树图标
@@ -337,8 +354,8 @@ const handleSelect = async (keys) => {
   } else {
     try {
       await fileTreeStore.fetchFileTree(selectedNode.id);
-      selectedNode.children = [...fileTreeStore.fileTree];
-      sortFileTree(selectedNode.children);
+      const filteredChildren = filterHiddenTree(fileTreeStore.fileTree);
+      selectedNode.children = sortFileTree(normalizeTreeIds(filteredChildren));
     } catch (error) {
       console.error('加载子目录内容失败:', error);
     }
@@ -423,6 +440,17 @@ const handleContextMenuSelect = async (key) => {
       case 'move':
         if (selectedNode.value) {
           moveNode(selectedNode.value);
+        }
+        break;
+      case 'openInExplorer':
+        if (selectedNode.value) {
+          const nodePath = normalizePath(selectedNode.value.id);
+          const targetPath = selectedNode.value.is_directory
+            ? nodePath
+            : nodePath.split('/').slice(0, -1).join('/');
+          if (targetPath) {
+            await invoke('open_in_file_explorer', { path: targetPath });
+          }
         }
         break;
     }
@@ -877,8 +905,9 @@ const refreshDirectory = async (directoryId) => {
       // 重新加载目录内容
       await fileTreeStore.fetchFileTree(directoryId);
 
-      // 保留原有节点的展开状态和内容
-      const newChildren = fileTreeStore.fileTree.map(newNode => {
+      const filteredTree = filterHiddenTree(fileTreeStore.fileTree);
+
+      const newChildren = filteredTree.map(newNode => {
         const existingNode = findNodeById([directoryNode], newNode.id);
         return existingNode || newNode;
       });
