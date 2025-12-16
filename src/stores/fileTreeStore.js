@@ -9,6 +9,9 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     activeRepoPath: null, // 当前激活的笔记库路径
     openTabs: [],
     activeTab: null,
+    layoutMode: 'single',
+    splitIndex: null,
+    activeRegion: 'left',
     // 新增：用于跟踪仓库展开状态的Map
     expandedRepos: new Map(), // key: repoPath, value: boolean
     currentRequestPath: null,
@@ -58,10 +61,32 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     },
     // 关闭标签页
     closeTab(path) {
-      this.openTabs = this.openTabs.filter((tab) => tab.path !== path);
+      const index = this.openTabs.findIndex((tab) => tab.path === path);
+      if (index === -1) return;
+
+      this.openTabs.splice(index, 1);
+
       if (this.activeTab === path) {
-        const nextTab = this.openTabs.length > 0 ? this.openTabs[0] : null;
-        this.setActiveTab(nextTab ? nextTab.path : null);
+        if (this.openTabs.length > 0) {
+          const nextIndex = Math.min(index, this.openTabs.length - 1);
+          const nextTab = this.openTabs[nextIndex];
+          this.setActiveTab(nextTab ? nextTab.path : null);
+        } else {
+          this.setActiveTab(null);
+        }
+      }
+
+      if (this.layoutMode !== 'single' && this.splitIndex != null) {
+        if (index < this.splitIndex) {
+          this.splitIndex = Math.max(0, this.splitIndex - 1);
+        }
+        const leftCount = this.splitIndex ?? 0;
+        const rightCount = this.openTabs.length - leftCount;
+        if (leftCount === 0 || rightCount === 0) {
+          this.layoutMode = 'single';
+          this.splitIndex = null;
+          this.activeRegion = 'left';
+        }
       }
     },
 
@@ -95,8 +120,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       const fileName = path.split(/[\\/]/).pop();
 
       // 检查是否已存在相同路径的标签页
-      const existingTab = this.openTabs.find((tab) => tab.path === path);
-      if (existingTab) {
+      const existingIndex = this.openTabs.findIndex((tab) => tab.path === path);
+      if (existingIndex !== -1) {
         this.setActiveTab(path);
         return;
       }
@@ -108,12 +133,22 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         return;
       }
 
-      this.openTabs.push({
+      const newTab = {
         path,
         fileName,
         content: fileContent,
         preview: this.generatePreview(fileContent),
-      });
+      };
+
+      if (this.layoutMode === 'single' || this.splitIndex == null) {
+        this.openTabs.push(newTab);
+      } else if (this.activeRegion === 'left') {
+        const insertIndex = this.splitIndex;
+        this.openTabs.splice(insertIndex, 0, newTab);
+        this.splitIndex += 1;
+      } else {
+        this.openTabs.push(newTab);
+      }
 
       this.setActiveTab(path);
     },
@@ -176,14 +211,56 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     setActiveTab(path) {
       this.activeTab = path;
       if (path) {
-        const tab = this.openTabs.find((t) => t.path === path);
+        const index = this.openTabs.findIndex((t) => t.path === path);
+        const tab = index !== -1 ? this.openTabs[index] : null;
         if (tab) {
           this.selectedFile = { path: tab.path, content: tab.content };
+        }
+        if (this.layoutMode !== 'single' && this.splitIndex != null && index !== -1) {
+          this.activeRegion = index < this.splitIndex ? 'left' : 'right';
+        } else {
+          this.activeRegion = 'left';
         }
       } else {
         this.selectedFile = null;
       }
     },
+    setLayoutMode(mode) {
+      if (mode === this.layoutMode) return;
+      this.layoutMode = mode;
+      if (mode === 'single') {
+        this.splitIndex = null;
+        this.activeRegion = 'left';
+      } else if (this.splitIndex == null) {
+        const idx = this.activeTab
+          ? this.openTabs.findIndex((t) => t.path === this.activeTab)
+          : -1;
+        this.splitIndex = idx > 0 ? idx : 0;
+      }
+    },
+
+    setActiveRegion(region) {
+      this.activeRegion = region;
+    },
+
+    splitCurrentTab(mode) {
+      if (!this.activeTab || this.openTabs.length === 0) return;
+      const idx = this.openTabs.findIndex((t) => t.path === this.activeTab);
+      if (idx === -1) return;
+
+      if (this.layoutMode === 'single') {
+        this.layoutMode = mode;
+        if (this.openTabs.length === 1) {
+          this.splitIndex = 1;
+        } else {
+          this.splitIndex = idx;
+        }
+        this.activeRegion = 'right';
+      } else {
+        this.layoutMode = mode;
+      }
+    },
+
     // 更新 repopathlist 并保存到配置文件
     async updateRepopathlist(paths) {
       console.log("更新笔记库路径列表:", paths);

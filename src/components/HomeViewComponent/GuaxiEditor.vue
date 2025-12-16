@@ -2,13 +2,33 @@
   <div class="editor-container">
     <!-- 标签页栏 -->
     <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
-      <div v-for="tab in fileTreeStore.openTabs" :key="tab.path"
-        :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
-        @mousedown.middle="closeTab(tab.path)">
-        <span>{{ tab.fileName }}</span>
-        <n-icon size="14" @click.stop="closeTab(tab.path)">
-          <CloseOutline />
-        </n-icon>
+      <div class="tab-region tab-region-left">
+        <div
+          v-for="tab in leftTabs"
+          :key="tab.path"
+          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
+          @click="switchTab(tab.path)"
+          @mousedown.middle="closeTab(tab.path)"
+        >
+          <span>{{ tab.fileName }}</span>
+          <n-icon size="14" @click.stop="closeTab(tab.path)">
+            <CloseOutline />
+          </n-icon>
+        </div>
+      </div>
+      <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right">
+        <div
+          v-for="tab in rightTabs"
+          :key="tab.path"
+          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
+          @click="switchTab(tab.path)"
+          @mousedown.middle="closeTab(tab.path)"
+        >
+          <span>{{ tab.fileName }}</span>
+          <n-icon size="14" @click.stop="closeTab(tab.path)">
+            <CloseOutline />
+          </n-icon>
+        </div>
       </div>
     </div>
     <!-- 工具栏 -->
@@ -117,6 +137,7 @@
           </template>
           {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
         </n-tooltip>
+
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleMode">
@@ -130,8 +151,16 @@
 
     <!-- 编辑器 -->
     <div v-show="selectedFile && mode === 'edit'" class="editor-wrapper">
-      <div ref="editorContainer" class="editor-container">
-        <!-- 编辑器内容将在这里渲染 -->
+      <div class="editor-split-wrapper" :class="layoutMode">
+        <div ref="editorContainer" class="editor-container">
+          <!-- 编辑器内容将在这里渲染 -->
+        </div>
+        <div
+          v-if="layoutMode !== 'single'"
+          ref="secondaryEditorContainer"
+          class="editor-container"
+        >
+        </div>
       </div>
       <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
       <GuaxiEditorStatusBar class="editor-status-bar" />
@@ -192,19 +221,39 @@ const gitPanel = ref(null)
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 const mode = ref('edit');
+const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const previewContainer = ref(null);
 const editorContainer = ref(null);
+const secondaryEditorContainer = ref(null);
 const scrollRatio = ref(0);
 const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
 let editor = null;
+let secondaryEditor = null;
 const selectedFile = computed(() => fileTreeStore.selectedFile)
 // 定义 rawContent 变量
 const rawContent = ref(selectedFile.value?.content || '')
 // 1. 获取当前激活tab对象和内容
 const activeTab = computed(() => fileTreeStore.openTabs.find(tab => tab.path === fileTreeStore.activeTab));
 const activeTabContent = computed(() => activeTab.value?.content || '');
+
+const leftTabs = computed(() => {
+  if (layoutMode.value === 'single' || fileTreeStore.splitIndex == null) {
+    return fileTreeStore.openTabs;
+  }
+  return fileTreeStore.openTabs.slice(0, fileTreeStore.splitIndex);
+});
+
+const rightTabs = computed(() => {
+  if (layoutMode.value === 'single' || fileTreeStore.splitIndex == null) {
+    return [];
+  }
+  if (fileTreeStore.openTabs.length === 1) {
+    return fileTreeStore.openTabs;
+  }
+  return fileTreeStore.openTabs.slice(fileTreeStore.splitIndex);
+});
 
 
 const message = useMessage()
@@ -569,6 +618,38 @@ const initEditor = () => {
   setupEditorListeners();
 };
 
+const ensureSecondaryEditor = () => {
+  if (!secondaryEditorContainer.value || !editor || secondaryEditor) return;
+  const model = editor.getModel();
+  if (!model) return;
+  const baseOptions = editor.getRawOptions ? editor.getRawOptions() : {};
+  secondaryEditor = monaco.editor.create(secondaryEditorContainer.value, {
+    ...baseOptions,
+    model
+  });
+};
+
+const disposeSecondaryEditor = () => {
+  if (secondaryEditor) {
+    secondaryEditor.dispose();
+    secondaryEditor = null;
+  }
+};
+
+watch(
+  () => fileTreeStore.layoutMode,
+  (mode) => {
+    if (mode === 'single') {
+      disposeSecondaryEditor();
+    } else {
+      nextTick(() => {
+        ensureSecondaryEditor();
+      });
+    }
+  },
+  { immediate: true }
+);
+
 
 // Git 服务
 const gitService = ref(null)
@@ -657,16 +738,18 @@ const setupEditorListeners = () => {
   });
 
   // 监听内容变化（用于问题检测）
-  editor.onDidChangeModelContent(debounce(() => {
-    const content = editor.getValue();
-    const model = editor.getModel();
-    const languageId = model?.getLanguageId() || 'plaintext';
-    const problems = analyzeContentForProblems(content, model, languageId);
-    editorStore.setProblems(problems);
+  const model = editor.getModel();
+  if (model) {
+    model.onDidChangeContent(debounce(() => {
+      const content = model.getValue();
+      const languageId = model.getLanguageId() || 'plaintext';
+      const problems = analyzeContentForProblems(content, model, languageId);
+      editorStore.setProblems(problems);
 
-    // 更新原始内容
-    rawContent.value = content;
-  }, 300));
+      // 更新原始内容
+      rawContent.value = content;
+    }, 300));
+  }
 
   // 监听语言变化
   editor.onDidChangeModelLanguage(() => {
@@ -1427,6 +1510,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
+  if (secondaryEditor) {
+    secondaryEditor.dispose();
+    secondaryEditor = null;
+  }
   editor?.dispose();
   editor = null;
   editorStore.setEditorInstance(null); // 清除store中的引用
@@ -1536,16 +1623,32 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
+.editor-split-wrapper {
+  flex: 1;
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.editor-split-wrapper.single,
+.editor-split-wrapper.vertical {
+  flex-direction: row;
+}
+
+.editor-split-wrapper.horizontal {
+  flex-direction: column;
+}
+
 .editor-container {
   display: flex;
   flex-direction: column;
-  height: calc(100% - 28px);
+  flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   width: 100%;
   box-sizing: border-box;
   position: relative;
-  min-width: 0;
 }
 
 .vim-status-bar {
@@ -1627,6 +1730,15 @@ onUnmounted(() => {
   background: #f5f5f5;
   border-bottom: 1px solid #ddd;
   overflow-x: auto;
+}
+
+.tab-region {
+  display: flex;
+  flex: 1;
+}
+
+.tab-region-right {
+  border-left: 1px solid #ddd;
 }
 
 .tab-bar::-webkit-scrollbar {
