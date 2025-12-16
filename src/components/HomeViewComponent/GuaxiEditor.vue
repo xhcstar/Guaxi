@@ -459,8 +459,17 @@ const initEditor = () => {
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
 
-  initTextmate(editor, language);
-  initLspClient(editor, language, selectedFile.value?.path || '');
+  invoke('get_lsp_syntax_highlight_enabled')
+    .then((result) => {
+      const enableLspSyntaxHighlight = !!result
+      if (enableLspSyntaxHighlight) {
+        initTextmate(editor, language);
+        initLspClient(editor, language, selectedFile.value?.path || '');
+      }
+    })
+    .catch((error) => {
+      console.error('加载 LSP 语法高亮配置失败:', error)
+    });
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);

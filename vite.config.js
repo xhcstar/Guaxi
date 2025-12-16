@@ -30,7 +30,7 @@ export default defineConfig(async () => ({
           entry: "monaco-editor/esm/vs/language/typescript/ts.worker",
         },
         {
-          label: "editor",
+          label: "editorWorkerService",
           entry: "monaco-editor/esm/vs/editor/editor.worker",
         },
       ],

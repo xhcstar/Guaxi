@@ -16,10 +16,6 @@ struct LspCommandConfig {
 }
 
 fn resolve_lsp_binary(name: &str) -> String {
-    if cfg!(debug_assertions) {
-        return name.to_string();
-    }
-
     let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let base_dir = exe_path
         .parent()
@@ -27,7 +23,11 @@ fn resolve_lsp_binary(name: &str) -> String {
         .to_path_buf();
 
     #[cfg(target_os = "windows")]
-    let file_name = format!("{}.exe", name);
+    let file_name = if std::path::Path::new(name).extension().is_some() {
+        name.to_string()
+    } else {
+        format!("{}.exe", name)
+    };
     #[cfg(not(target_os = "windows"))]
     let file_name = name.to_string();
 
@@ -49,11 +49,11 @@ fn lsp_command_for_language(language: &str) -> Option<LspCommandConfig> {
             args: vec![],
         }),
         "python" => Some(LspCommandConfig {
-            program: resolve_lsp_binary("pyright-langserver"),
+            program: resolve_lsp_binary("pyright-ls"),
             args: vec!["--stdio".to_string()],
         }),
         "shell" => Some(LspCommandConfig {
-            program: resolve_lsp_binary("bash-language-server"),
+            program: resolve_lsp_binary("bash-ls"),
             args: vec!["start".to_string()],
         }),
         "lua" => Some(LspCommandConfig {
@@ -65,15 +65,15 @@ fn lsp_command_for_language(language: &str) -> Option<LspCommandConfig> {
             args: vec![],
         }),
         "javascript" | "typescript" => Some(LspCommandConfig {
-            program: resolve_lsp_binary("typescript-language-server"),
+            program: resolve_lsp_binary("typescript-ls"),
             args: vec!["--stdio".to_string()],
         }),
         "html" => Some(LspCommandConfig {
-            program: resolve_lsp_binary("vscode-html-language-server"),
+            program: resolve_lsp_binary("html-ls"),
             args: vec!["--stdio".to_string()],
         }),
         "markdown" => Some(LspCommandConfig {
-            program: resolve_lsp_binary("markdown-language-server"),
+            program: resolve_lsp_binary("markdown-ls"),
             args: vec!["--stdio".to_string()],
         }),
         "latex" => Some(LspCommandConfig {
@@ -107,6 +107,7 @@ impl Actor for LspWsSession {
         if let Some(cfg) = lsp_command_for_language(&self.language) {
             let addr = ctx.address();
             actix::spawn(async move {
+                let program_for_log = cfg.program.clone();
                 let mut cmd = Command::new(cfg.program);
                 cmd.args(cfg.args)
                     .stdin(Stdio::piped())
@@ -140,15 +141,17 @@ impl Actor for LspWsSession {
 
                         addr.do_send(LspChildStarted { child, stdin: stdin_arc });
                     }
-                    Err(_) => {
-                        let _ = addr.try_send(LspStdoutMessage {
-                            data: "LSP process start failed".to_string(),
-                        });
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to start LSP process ({}): {:?}",
+                            program_for_log, e
+                        );
+                        let _ = addr.try_send(LspProcessFailed);
                     }
                 }
             });
         } else {
-            ctx.text(format!("Unsupported language: {}", self.language));
+            eprintln!("Unsupported language for LSP: {}", self.language);
             ctx.close(None);
         }
 
@@ -197,6 +200,21 @@ impl Handler<LspStdoutMessage> for LspWsSession {
 
     fn handle(&mut self, msg: LspStdoutMessage, ctx: &mut Self::Context) {
         ctx.text(msg.data);
+    }
+}
+
+struct LspProcessFailed;
+
+impl Message for LspProcessFailed {
+    type Result = ();
+}
+
+impl Handler<LspProcessFailed> for LspWsSession {
+    type Result = ();
+
+    fn handle(&mut self, _msg: LspProcessFailed, ctx: &mut Self::Context) {
+        ctx.close(None);
+        ctx.stop();
     }
 }
 

@@ -119,6 +119,8 @@ async fn main() {
             commands::settingview::set_libraries_root,
             commands::settingview::get_gc_cycle_seconds,
             commands::settingview::set_gc_cycle_seconds,
+            commands::settingview::get_lsp_syntax_highlight_enabled,
+            commands::settingview::set_lsp_syntax_highlight_enabled,
             commands::repoview::get_imported_files,
             commands::repoview::add_imported_file,
             commands::repoview::delete_imported_file,

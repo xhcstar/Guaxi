@@ -31,6 +31,8 @@ pub struct AppConfig {
     device_id: String,
     #[serde(default = "default_gc_cycle_seconds")]
     pub gc_cycle_seconds: u64,
+    #[serde(default)]
+    lsp_syntax_highlight_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -91,6 +93,7 @@ impl Default for AppConfig {
             libraries_root: "".to_string(),
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
+            lsp_syntax_highlight_enabled: false,
         }
     }
 }
@@ -168,6 +171,19 @@ pub fn get_gc_cycle_seconds() -> u64 {
 pub fn set_gc_cycle_seconds(seconds: u64) {
     let mut config = load_config();
     config.gc_cycle_seconds = seconds;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_lsp_syntax_highlight_enabled() -> bool {
+    let config = load_config();
+    config.lsp_syntax_highlight_enabled
+}
+
+#[tauri::command]
+pub fn set_lsp_syntax_highlight_enabled(enabled: bool) {
+    let mut config = load_config();
+    config.lsp_syntax_highlight_enabled = enabled;
     save_config(&config);
 }
 
