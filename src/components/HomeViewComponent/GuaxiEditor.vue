@@ -146,6 +146,15 @@
           </template>
           {{ mode === 'edit' ? '编辑模式' : '阅读模式' }}
         </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text @click="exportMarkdownToPdf">
+              <n-icon :component="DownloadOutline" />
+            </n-button>
+          </template>
+          导出为 PDF
+        </n-tooltip>
       </div>
     </div>
 
@@ -182,7 +191,7 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage } from 'naive-ui'
-import { EyeOutline, LogoVimeo, CloseOutline, TextOutline, ListOutline, ImagesOutline, CodeSlashOutline, ColorPaletteOutline, GridOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, TextOutline, ListOutline, ImagesOutline, CodeSlashOutline, ColorPaletteOutline, GridOutline, DownloadOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -1314,6 +1323,185 @@ const toggleVimMode = () => {
       }
     }
   });
+};
+
+const buildPrintHtml = (bodyHtml, title) => {
+  const now = new Date();
+  const dateStr = now.toLocaleString();
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>${title}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 16mm;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+
+  body {
+    font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+    color: #000000;
+  }
+
+  .export-root {
+    box-sizing: border-box;
+    padding: 12px 8px 24px 8px;
+  }
+
+  .export-header {
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .export-title {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+    word-break: break-all;
+  }
+
+  .export-meta {
+    font-size: 12px;
+    color: #666666;
+  }
+
+  .export-content {
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  .export-content code,
+  .export-content pre {
+    font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  }
+
+  .export-content pre {
+    background: #f5f5f5;
+    padding: 10px 12px;
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+
+  .export-content table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  .export-content table th,
+  .export-content table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+  }
+
+  .export-content img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  @media print {
+    body {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="export-root">
+    <div class="export-header">
+      <div class="export-title">${title}</div>
+      <div class="export-meta">导出时间：${dateStr}</div>
+    </div>
+    <div class="export-content">${bodyHtml}</div>
+  </div>
+</body>
+</html>`;
+};
+
+const createPrintIframeAndPrint = (html) => {
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.visibility = 'hidden';
+  iframe.srcdoc = html;
+  document.body.appendChild(iframe);
+
+  const cleanup = () => {
+    if (iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe);
+    }
+  };
+
+  iframe.onload = () => {
+    try {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }
+    } finally {
+      setTimeout(cleanup, 1000);
+    }
+  };
+};
+
+const exportMarkdownToPdf = async () => {
+  if (!selectedFile.value || !selectedFile.value.path) {
+    message.warning('当前没有选中的 Markdown 文件');
+    return;
+  }
+
+  const ext = selectedFile.value.path.split('.').pop()?.toLowerCase() || '';
+  if (ext !== 'md') {
+    message.warning('仅支持将 Markdown 文件导出为 PDF');
+    return;
+  }
+
+  const contentFromEditor = mode.value === 'edit' && editor ? editor.getValue() : rawContent.value;
+  const content = contentFromEditor || '';
+
+  if (!content.trim()) {
+    message.warning('当前 Markdown 内容为空，无法导出');
+    return;
+  }
+
+  try {
+    const basePath = selectedFile.value.path ? await dirname(selectedFile.value.path) : '';
+    const html = await renderMarkdown(content, {
+      basePath,
+      mermaid: true,
+      math: true,
+      codeHighlight: true,
+      theme: 'default'
+    });
+
+    if (!html || !html.trim()) {
+      message.error('Markdown 渲染失败，无法导出为 PDF');
+      return;
+    }
+
+    const path = selectedFile.value.path || '';
+    const parts = path.split(/[/\\]/);
+    const fileName = parts[parts.length - 1] || '未命名文档';
+    const printHtml = buildPrintHtml(html, fileName);
+
+    createPrintIframeAndPrint(printHtml);
+  } catch (error) {
+    console.error('导出 Markdown 为 PDF 失败:', error);
+    message.error('导出 Markdown 为 PDF 失败');
+  }
 };
 
 const switchTab = (path) => {
