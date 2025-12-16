@@ -209,9 +209,6 @@ export const useEditorStore = defineStore("editor", {
     // 更新光标位置
     setCursorPosition(position) {
       this.cursorPosition = position;
-      if (this.editorInstance) {
-        this.editorInstance.revealPositionInCenter(position);
-      }
     },
 
     // 更新问题计数
