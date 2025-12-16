@@ -1243,10 +1243,9 @@ const switchTab = (path) => {
     }
   }
 
-  fileTreeStore.activeTab = path;
+  fileTreeStore.setActiveTab(path);
   const tab = fileTreeStore.openTabs.find(t => t.path === path);
   if (tab) {
-    fileTreeStore.selectedFile = { path: tab.path, content: tab.content };
     updateEditorContent(tab.content);
   }
 };
@@ -1266,8 +1265,7 @@ const closeTab = (path) => {
     }
   } else {
     // 完全清空状态
-    fileTreeStore.activeTab = null;
-    fileTreeStore.selectedFile = null;
+    fileTreeStore.setActiveTab(null);
     // 强制清空编辑器
     if (editor) {
       editor.setValue('');

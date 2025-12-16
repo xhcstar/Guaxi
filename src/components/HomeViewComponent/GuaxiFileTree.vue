@@ -336,7 +336,7 @@ const handleSelect = async (keys) => {
       const existingTab = fileTreeStore.openTabs.find(tab => tab.path === selectedNode.id);
       if (existingTab) {
         console.log('文件已在标签页中打开，激活标签页');
-        fileTreeStore.activeTab = selectedNode.id;
+        fileTreeStore.setActiveTab(selectedNode.id);
         return;
       }
 
@@ -658,14 +658,7 @@ const handleBlur = async () => {
       // 同步内容（如果内容有变化）
       fileTreeStore.openTabs[tabIndex].content = node.content || fileTreeStore.openTabs[tabIndex].content;
       if (fileTreeStore.activeTab === oldId) {
-        fileTreeStore.activeTab = newId;
-      }
-      // 如果编辑器当前打开的就是这个文件，也同步 selectedFile
-      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === oldId) {
-        fileTreeStore.selectedFile = {
-          path: newId,
-          content: fileTreeStore.openTabs[tabIndex].content
-        };
+        fileTreeStore.setActiveTab(newId);
       }
     }
   } catch (error) {
@@ -989,13 +982,7 @@ const handleFileRenamed = async (oldPath, newPath) => {
       fileTreeStore.openTabs[tabIndex].fileName = newPath.split(/[\\/]/).pop();
 
       if (fileTreeStore.activeTab === normalizedOldPath) {
-        fileTreeStore.activeTab = normalizedNewPath;
-      }
-      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedOldPath) {
-        fileTreeStore.selectedFile = {
-          path: normalizedNewPath,
-          content: fileTreeStore.openTabs[tabIndex].content
-        };
+        fileTreeStore.setActiveTab(normalizedNewPath);
       }
     }
 
@@ -1085,14 +1072,8 @@ const handleFileRemoved = async (filePath) => {
     }
   }
 
-  // 删除后关闭标签页
+  // 删除后关闭标签页，并同步激活标签和选中文件
   fileTreeStore.closeTab(normalizedPath);
-  if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedPath) {
-    fileTreeStore.selectedFile = null;
-  }
-  if (fileTreeStore.activeTab === normalizedPath) {
-    fileTreeStore.activeTab = null;
-  }
 
   await refreshDirectory(parentPath || fileTreeStore.activeRepoPath);
 };

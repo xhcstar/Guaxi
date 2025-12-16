@@ -40,23 +40,19 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       // 获取文件内容（如果未加载）
       if (!this.openTabs.some((tab) => tab.path === result.path)) {
         const content = await this.fetchFileContent(result.path);
-        this.openFileInTab(result.path, content);
+        await this.openFileInTab(result.path, content);
       }
 
-      // 激活标签页
-      this.activeTab = result.path;
-      this.selectedFile = {
-        path: result.path,
-        content: this.openTabs.find((tab) => tab.path === result.path).content,
-      };
+      // 激活标签页并同步 selectedFile
+      this.setActiveTab(result.path);
+      const active = this.openTabs.find((tab) => tab.path === result.path);
 
-      // console.log("this.selectedFile.content:", this.selectedFile.content);
       // 返回需要高亮的信息
       return {
         path: result.path,
         lineNumber: result.line_number,
         matches: result.matches,
-        content: this.selectedFile.content,
+        content: active ? active.content : this.selectedFile?.content || "",
         text: result.searchText, // 这里改为 text
       };
     },
@@ -64,8 +60,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     closeTab(path) {
       this.openTabs = this.openTabs.filter((tab) => tab.path !== path);
       if (this.activeTab === path) {
-        this.activeTab =
-          this.openTabs.length > 0 ? this.openTabs[0].path : null;
+        const nextTab = this.openTabs.length > 0 ? this.openTabs[0] : null;
+        this.setActiveTab(nextTab ? nextTab.path : null);
       }
     },
 
@@ -101,7 +97,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       // 检查是否已存在相同路径的标签页
       const existingTab = this.openTabs.find((tab) => tab.path === path);
       if (existingTab) {
-        this.activeTab = path;
+        this.setActiveTab(path);
         return;
       }
 
@@ -119,8 +115,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         preview: this.generatePreview(fileContent),
       });
 
-      this.activeTab = path;
-      this.selectedFile = { path, content: fileContent };
+      this.setActiveTab(path);
     },
 
     // 获取文件内容
@@ -175,6 +170,19 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 更新笔记库路径列表
     setRepopathlist(paths) {
       this.repopathlist = paths;
+    },
+
+    // 新增：统一设置激活标签并同步 selectedFile
+    setActiveTab(path) {
+      this.activeTab = path;
+      if (path) {
+        const tab = this.openTabs.find((t) => t.path === path);
+        if (tab) {
+          this.selectedFile = { path: tab.path, content: tab.content };
+        }
+      } else {
+        this.selectedFile = null;
+      }
     },
     // 更新 repopathlist 并保存到配置文件
     async updateRepopathlist(paths) {
