@@ -16,6 +16,8 @@ use svg::node::element::{Rectangle, Text as SvgText};
 use svg::Document;
 use std::path::PathBuf;
 use fs_extra::file::CopyOptions;
+use regex::Regex;
+use reqwest::Client;
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -603,6 +605,193 @@ fn parse_progress(line: &str) -> Option<u32> {
     }
 
     None
+}
+
+#[tauri::command]
+pub async fn export_markdown_pdf_pandoc(
+    input_path: String,
+    output_path: String,
+) -> Result<(), String> {
+    export_markdown_pandoc(input_path, output_path, "pdf".to_string()).await
+}
+
+#[tauri::command]
+pub async fn export_markdown_pandoc(
+    input_path: String,
+    output_path: String,
+    format: String,
+) -> Result<(), String> {
+    info!(
+        "Exporting markdown via pandoc: input={}, output={}, format={}",
+        input_path, output_path, format
+    );
+
+    let current_exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current exe path: {}", e))?;
+
+    let exe_dir = current_exe
+        .parent()
+        .ok_or("Failed to get parent directory of exe")?;
+
+    let pandoc_path = exe_dir.join("utils").join("pandoc.exe");
+    let pandoc_path_str = pandoc_path
+        .to_str()
+        .ok_or("Failed to convert pandoc path to string")?;
+
+    if !pandoc_path.exists() {
+        return Err(format!(
+            "pandoc executable not found at: {}",
+            pandoc_path_str
+        ));
+    }
+
+    let (processed_md_path, tmp_dir) = preprocess_markdown(&input_path).await?;
+
+    let input_dir = Path::new(&input_path)
+        .parent()
+        .unwrap_or(exe_dir);
+    let input_dir_str = input_dir
+        .to_str()
+        .ok_or("Failed to convert input dir to string")?;
+
+    let lua_filter_path = exe_dir
+        .join("utils")
+        .join("horizontalrule.lua");
+    let use_lua_filter = lua_filter_path.exists();
+    let lua_filter_str = if use_lua_filter {
+        Some(
+            lua_filter_path
+                .to_str()
+                .ok_or("Failed to convert lua filter path to string")?
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let mut cmd = Command::new(pandoc_path_str);
+    cmd.current_dir(input_dir)
+        .arg(&processed_md_path)
+        .arg("-o")
+        .arg(&output_path)
+        .arg("--from")
+        .arg("markdown+hard_line_breaks+raw_html+implicit_figures")
+        .arg("--resource-path")
+        .arg(input_dir_str)
+        .arg("--highlight-style=tango");
+
+    if format == "pdf" {
+        cmd.arg("--pdf-engine=xelatex")
+            .arg("-V")
+            .arg("mainfont=Microsoft YaHei")
+            .arg("-V")
+            .arg("CJKmainfont=Microsoft YaHei")
+            .arg("-V")
+            .arg("monofont=Consolas");
+    } else if format == "tex" {
+        cmd.arg("-t").arg("latex");
+    } else if format == "txt" {
+        cmd.arg("-t").arg("plain");
+    }
+
+    if let Some(lua) = lua_filter_str {
+        cmd.arg("--lua-filter").arg(lua);
+    }
+
+    let status = cmd
+        .status()
+        .map_err(|e| format!("Failed to execute pandoc: {}", e))?;
+
+    if let Err(e) = std::fs::remove_file(&processed_md_path) {
+        error!("Failed to remove temp markdown file: {:?}", e);
+    }
+    if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
+        error!("Failed to remove temp directory: {:?}", e);
+    }
+
+    if status.success() {
+        info!("Pandoc export succeeded: {}", output_path);
+        Ok(())
+    } else {
+        Err(format!("Pandoc export failed with status: {:?}", status.code()))
+    }
+}
+
+async fn preprocess_markdown(
+    input_path: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let content = std::fs::read_to_string(input_path)
+        .map_err(|e| format!("读取 Markdown 失败: {}", e))?;
+
+    let tmp_base = std::env::temp_dir().join("guaxi_pandoc");
+    std::fs::create_dir_all(&tmp_base)
+        .map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    let tmp_dir = tmp_base.join(format!("{}", now.as_millis()));
+    std::fs::create_dir_all(&tmp_dir)
+        .map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+    let re = Regex::new(r#"!\[([^\]]*)\]\((https?://[^)\s]+)(?:\s+\"[^\"]*\")?\)"#)
+        .map_err(|e| e.to_string())?;
+    let client = Client::new();
+
+    let mut result = String::with_capacity(content.len());
+    let mut last_end = 0;
+    let mut idx = 0;
+
+    for caps in re.captures_iter(&content) {
+        if let Some(m) = caps.get(0) {
+            result.push_str(&content[last_end..m.start()]);
+            let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let url = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            idx += 1;
+            let ext = url
+                .split('?')
+                .next()
+                .and_then(|u| u.rsplit('.').next())
+                .filter(|e| !e.is_empty() && e.len() <= 5)
+                .unwrap_or("png");
+            let filename = format!("remote_img_{}.{}", idx, ext);
+            let local_path = tmp_dir.join(&filename);
+
+            match client.get(url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        match resp.bytes().await {
+                            Ok(bytes) => {
+                                if let Err(e) = std::fs::write(&local_path, bytes) {
+                                    error!("保存远程图片失败: {:?}", e);
+                                }
+                            }
+                            Err(e) => {
+                                error!("读取远程图片数据失败: {:?}", e);
+                            }
+                        }
+                    } else {
+                        error!("下载远程图片失败: {:?}", resp.status());
+                    }
+                }
+                Err(e) => {
+                    error!("请求远程图片失败: {:?}", e);
+                }
+            }
+
+            let path_str = local_path.to_string_lossy().replace('\\', "/");
+            result.push_str(&format!("![{}]({})", alt, path_str));
+            last_end = m.end();
+        }
+    }
+
+    result.push_str(&content[last_end..]);
+
+    let processed_md_path = tmp_dir.join("processed.md");
+    std::fs::write(&processed_md_path, &result)
+        .map_err(|e| format!("写入临时 Markdown 失败: {}", e))?;
+
+    Ok((processed_md_path, tmp_dir))
 }
 
 fn initialize_python() -> Result<(), String> {

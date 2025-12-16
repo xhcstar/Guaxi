@@ -147,14 +147,20 @@
           {{ mode === 'edit' ? '编辑模式' : '阅读模式' }}
         </n-tooltip>
 
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="exportMarkdownToPdf">
-              <n-icon :component="DownloadOutline" />
-            </n-button>
-          </template>
-          导出为 PDF
-        </n-tooltip>
+        <n-dropdown
+          trigger="click"
+          :options="exportOptions"
+          @select="handleExportSelect"
+        >
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text>
+                <n-icon :component="DownloadOutline" />
+              </n-button>
+            </template>
+            导出
+          </n-tooltip>
+        </n-dropdown>
       </div>
     </div>
 
@@ -190,7 +196,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide } from 
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
-import { NTooltip, NIcon, useMessage } from 'naive-ui'
+import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
 import { EyeOutline, LogoVimeo, CloseOutline, TextOutline, ListOutline, ImagesOutline, CodeSlashOutline, ColorPaletteOutline, GridOutline, DownloadOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname } from '@tauri-apps/api/path'
@@ -220,6 +226,7 @@ import { GitBranchOutline } from '@vicons/ionicons5'
 import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
 import { invoke } from '@tauri-apps/api/core'
+import { save } from '@tauri-apps/plugin-dialog'
 
 const outlineStore = useOutlineStore()
 // 添加 GitPanel 组件引用
@@ -1457,7 +1464,17 @@ const createPrintIframeAndPrint = (html) => {
   };
 };
 
-const exportMarkdownToPdf = async () => {
+const exportOptions = [
+  { label: '导出为 PDF', key: 'pdf' },
+  { label: '导出为 Word (.docx)', key: 'docx' },
+  { label: '导出为 HTML (.html)', key: 'html' },
+  { label: '导出为 LaTeX (.tex)', key: 'tex' },
+  { label: '导出为 EPUB (.epub)', key: 'epub' },
+  { label: '导出为 ODT (.odt)', key: 'odt' },
+  { label: '导出为 纯文本 (.txt)', key: 'txt' }
+];
+
+const handleExportSelect = async (format) => {
   if (!selectedFile.value || !selectedFile.value.path) {
     message.warning('当前没有选中的 Markdown 文件');
     return;
@@ -1465,42 +1482,95 @@ const exportMarkdownToPdf = async () => {
 
   const ext = selectedFile.value.path.split('.').pop()?.toLowerCase() || '';
   if (ext !== 'md') {
-    message.warning('仅支持将 Markdown 文件导出为 PDF');
+    message.warning('仅支持对 Markdown 文件进行导出');
     return;
   }
 
-  const contentFromEditor = mode.value === 'edit' && editor ? editor.getValue() : rawContent.value;
-  const content = contentFromEditor || '';
+  if (mode.value === 'edit' && editor) {
+    saveContent();
+  }
 
-  if (!content.trim()) {
-    message.warning('当前 Markdown 内容为空，无法导出');
-    return;
+  const path = selectedFile.value.path || '';
+
+  const formatExtMap = {
+    pdf: 'pdf',
+    docx: 'docx',
+    html: 'html',
+    tex: 'tex',
+    epub: 'epub',
+    odt: 'odt',
+    txt: 'txt'
+  };
+
+  const extName = formatExtMap[format] || format;
+
+  let filterName = '';
+  switch (format) {
+    case 'pdf':
+      filterName = 'PDF 文件';
+      break;
+    case 'docx':
+      filterName = 'Word 文件';
+      break;
+    case 'html':
+      filterName = 'HTML 文件';
+      break;
+    case 'tex':
+      filterName = 'LaTeX 文件';
+      break;
+    case 'epub':
+      filterName = 'EPUB 文件';
+      break;
+    case 'odt':
+      filterName = 'ODT 文件';
+      break;
+    case 'txt':
+      filterName = '文本文件';
+      break;
+    default:
+      filterName = '导出文件';
   }
 
   try {
-    const basePath = selectedFile.value.path ? await dirname(selectedFile.value.path) : '';
-    const html = await renderMarkdown(content, {
-      basePath,
-      mermaid: true,
-      math: true,
-      codeHighlight: true,
-      theme: 'default'
+    let defaultPath = path;
+    if (path.toLowerCase().endsWith('.md')) {
+      defaultPath = path.slice(0, -3) + '.' + extName;
+    } else {
+      defaultPath = path + '.' + extName;
+    }
+
+    const outputPath = await save({
+      defaultPath,
+      filters: [
+        {
+          name: filterName,
+          extensions: [extName]
+        }
+      ]
     });
 
-    if (!html || !html.trim()) {
-      message.error('Markdown 渲染失败，无法导出为 PDF');
+    if (!outputPath) {
+      message.info('已取消导出');
       return;
     }
 
-    const path = selectedFile.value.path || '';
-    const parts = path.split(/[/\\]/);
-    const fileName = parts[parts.length - 1] || '未命名文档';
-    const printHtml = buildPrintHtml(html, fileName);
+    if (format === 'pdf') {
+      await invoke('export_markdown_pdf_pandoc', {
+        inputPath: path,
+        outputPath
+      });
+    } else {
+      await invoke('export_markdown_pandoc', {
+        inputPath: path,
+        outputPath,
+        format
+      });
+    }
 
-    createPrintIframeAndPrint(printHtml);
+    message.success(`已导出为 ${filterName}`);
   } catch (error) {
-    console.error('导出 Markdown 为 PDF 失败:', error);
-    message.error('导出 Markdown 为 PDF 失败');
+    console.error('导出 Markdown 失败:', error);
+    message.error('导出 Markdown 失败');
   }
 };
 

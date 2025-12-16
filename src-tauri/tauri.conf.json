@@ -46,7 +46,9 @@
       "utils/lsp/*",
       "utils/platforms/*",
       "utils/Qt*",
-      "utils/ScreenShotTool*"
+      "utils/ScreenShotTool*",
+      "utils/pandoc*",
+      "utils/horizontalrule.lua"
     ]
   }
 }
