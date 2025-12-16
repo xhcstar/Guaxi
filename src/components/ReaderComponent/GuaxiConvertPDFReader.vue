@@ -141,8 +141,7 @@
           :bordered="true" :segmented="{
             content: true,
             footer: 'soft'
-          }" header-style="padding: 12px 16px;" content-style="padding: 0;" @mouseenter="activeCardIndex = index"
-          @mouseleave="activeCardIndex = -1">
+          }" header-style="padding: 12px 16px;" content-style="padding: 0;">
           <template #header-extra>
             <div class="card-actions" v-if="activeCardIndex === index">
               <n-button v-if="card.type !== 'composite'" size="tiny" type="primary" @click.stop="saveCardEdit(index)">
@@ -158,10 +157,12 @@
           </template>
 
           <!-- 根据笔记类型使用不同的渲染方式 -->
-          <div v-if="card.type !== 'composite'" class="note-content" :contenteditable="activeCardIndex === index"
-            @keydown.enter="handleEnterKey(index, $event)" @keydown.meta.s.prevent="saveCardEdit(index)"
-            @keydown.ctrl.s.prevent="saveCardEdit(index)" v-html="noteHtmls[index]"
-            :ref="el => setContentEditableRef(index, el)"></div>
+          <div v-if="card.type !== 'composite' && activeCardIndex !== index" class="note-content"
+            :contenteditable="false" v-html="noteHtmls[index]" @click="enterEditMode(index)"></div>
+
+          <div v-else-if="card.type !== 'composite' && activeCardIndex === index" class="note-content"
+            contenteditable="true" @keydown.meta.s.prevent="saveCardEdit(index)"
+            @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></div>
 
           <!-- 添加复合笔记的专用渲染 -->
           <div v-else class="composite-note-content">
@@ -2147,19 +2148,24 @@ const exitEditMode = (index) => {
   activeCardIndex.value = -1;
 };
 
-// 4. 处理回车键行为
-const handleEnterKey = (index, event) => {
-  if (event.isComposing) {
-    return;
+const enterEditMode = async (index) => {
+  activeCardIndex.value = index;
+  await nextTick();
+  const editableDiv = contentEditables.value[index];
+  if (editableDiv) {
+    if (!editableDiv.innerHTML || editableDiv.innerHTML.trim() === '') {
+      editableDiv.innerHTML = noteHtmls.value[index] || '';
+    }
+    editableDiv.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editableDiv);
+    range.collapse(false);
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
   }
-  // 默认行为下插入div而不是br
-  if (!event.shiftKey) {
-    event.preventDefault();
-    document.execCommand('insertHTML', false, '<div><br></div>');
-  }
-
-  // 触发防抖保存
-  debouncedSave(index);
 };
 
 const debouncedSave = debounce(saveCardEdit, 500);
