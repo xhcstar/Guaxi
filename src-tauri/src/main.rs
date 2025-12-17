@@ -163,6 +163,7 @@ async fn main() {
             commands::guaxireader::save_svg_file,
             commands::guaxireader::load_existing_notes,
             commands::guaxiscreencap::take_screenshot,
+            commands::guaxiscreencap::take_screenshot_markdown,
             commands::guaxiscreencap::create_screenshot_dir,
             commands::searcher::fd_search,
             commands::searcher::rg_search,

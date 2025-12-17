@@ -51,6 +51,7 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useEditorStore } from '../../stores/editorStore'
 import { useMessage } from 'naive-ui';
 import {
   Screenshot24Regular,
@@ -63,13 +64,13 @@ import {
   NotebookSection24Regular
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
-import { sep } from '@tauri-apps/api/path'
 
 
 const rightSiderStore = useRightSiderStore()
 const settingsStore = useSettingsStore()
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
+const editorStore = useEditorStore()
 const searchInputRef = ref(null)
 const searchType = ref('file')
 
@@ -106,29 +107,29 @@ function openOutlinePanel() {
 
 async function CaptureScreenshot() {
   try {
-    const originalPath = fileTreeStore.selectedFile.path
-    console.log("[Screenshot] Original path:", originalPath)
+    const originalPath = fileTreeStore.selectedFile?.path
+    if (!originalPath) {
+      message.warning('请先打开一个文件')
+      return
+    }
 
-    const pathSeparator = await sep()
+    const result = await invoke('take_screenshot_markdown', {
+      ownerFilePath: originalPath,
+      alt: 'screenshot'
+    })
 
-    const dirPath = originalPath.substring(0, originalPath.lastIndexOf(pathSeparator))
-    const fileName = originalPath.substring(
-      originalPath.lastIndexOf(pathSeparator) + 1,
-      originalPath.lastIndexOf('.')
-    )
+    const markdown = result?.markdown
+    if (typeof markdown !== 'string' || !markdown) {
+      throw new Error('后端未返回 markdown')
+    }
 
-    const imagesDir = `${dirPath}${pathSeparator}images`
-    console.log("[Screenshot] Images directory:", imagesDir)
-    await invoke('create_screenshot_dir', { path: imagesDir })
-
-    const screenshotPath = `${imagesDir}${pathSeparator}${fileName}.png`
-    console.log("[Screenshot] Will be saved to:", screenshotPath)
-
-    await invoke('take_screenshot', { path: screenshotPath })
-
-    console.log("[Screenshot] Saved successfully:", screenshotPath)
+    const inserted = await editorStore.insertContent(`${markdown}\n`)
+    if (!inserted) {
+      throw new Error('插入失败：编辑器未就绪')
+    }
   } catch (err) {
     console.error('[Screenshot] Failed:', err)
+    message.error('截图失败')
   }
 }
 

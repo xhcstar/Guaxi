@@ -121,7 +121,27 @@ pub struct ResourceInput {
     extra: Option<String>,
 }
 
-
+impl ResourceInput {
+    pub fn new(
+        resource_type: String,
+        file_name: String,
+        relative_path: String,
+        absolute_path: String,
+        owner_file_path: String,
+        created_at: String,
+        extra: Option<String>,
+    ) -> Self {
+        Self {
+            resource_type,
+            file_name,
+            relative_path,
+            absolute_path,
+            owner_file_path,
+            created_at,
+            extra,
+        }
+    }
+}
 
 // 创建数据库文件路径
 pub fn create_db_file() -> Result<PathBuf, String> {
