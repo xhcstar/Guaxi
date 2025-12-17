@@ -163,6 +163,7 @@ async fn main() {
             commands::guaxireader::save_svg_file,
             commands::guaxireader::load_existing_notes,
             commands::guaxiscreencap::take_screenshot,
+            commands::guaxiscreencap::trigger_screenshot_tool_once,
             commands::guaxiscreencap::take_screenshot_markdown,
             commands::guaxiscreencap::create_screenshot_dir,
             commands::searcher::fd_search,
@@ -220,8 +221,7 @@ async fn main() {
                                 // 创建异步任务处理截图
                                 let app_handle = app.clone();
                                 tauri::async_runtime::spawn(async move {
-                                    match commands::guaxiscreencap::take_screenshot("".to_string())
-                                        .await
+                                    match commands::guaxiscreencap::trigger_screenshot_tool_once().await
                                     {
                                         Ok(_) => info!("截图成功"),
                                         Err(e) => eprintln!("截图失败: {}", e),

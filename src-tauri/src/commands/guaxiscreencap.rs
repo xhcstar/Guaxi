@@ -19,6 +19,51 @@ pub struct ScreenshotMarkdownResult {
 }
 
 #[tauri::command]
+pub async fn trigger_screenshot_tool_once() -> Result<(), String> {
+    info!("[screenshot] trigger_screenshot_tool_once called");
+
+    let current_exe =
+        env::current_exe().map_err(|e| format!("Failed to get current executable path: {}", e))?;
+    let utils_path = current_exe
+        .parent()
+        .ok_or("Failed to get parent directory of the executable")?
+        .join("utils")
+        .join("ScreenShotTool.exe");
+
+    info!(utils_path = %utils_path.display(), "[screenshot] ScreenShotTool path");
+
+    if !utils_path.exists() {
+        error!(utils_path = %utils_path.display(), "[screenshot] ScreenShotTool.exe not found");
+        return Err(format!(
+            "ScreenShotTool.exe not found at path: {}",
+            utils_path.display()
+        ));
+    }
+
+    info!("[screenshot] spawning ScreenShotTool with --once");
+    let start = Instant::now();
+    let output = Command::new(&utils_path)
+        .arg("--once")
+        .output()
+        .map_err(|e| format!("Failed to execute ScreenShotTool.exe: {}", e))?;
+
+    info!(
+        status = ?output.status.code(),
+        stdout_len = output.stdout.len(),
+        stderr_len = output.stderr.len(),
+        elapsed_ms = start.elapsed().as_millis(),
+        "[screenshot] ScreenShotTool finished (--once)"
+    );
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("ScreenShotTool.exe failed with error: {}", stderr))
+    }
+}
+
+#[tauri::command]
 pub async fn take_screenshot(path: String) -> Result<String, String> {
     info!("[screenshot] take_screenshot called");
     if path.trim().is_empty() {
