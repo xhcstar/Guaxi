@@ -108,14 +108,32 @@ function openOutlinePanel() {
 async function CaptureScreenshot() {
   try {
     const originalPath = fileTreeStore.selectedFile?.path
+    console.debug('[Screenshot] Triggered', {
+      activeTab: fileTreeStore.activeTab,
+      selectedPath: originalPath
+    })
+
     if (!originalPath) {
       message.warning('请先打开一个文件')
+      console.warn('[Screenshot] Aborted: no selected file path')
       return
     }
+
+    console.debug('[Screenshot] Invoking take_screenshot_markdown', {
+      ownerFilePath: originalPath,
+      alt: 'screenshot'
+    })
 
     const result = await invoke('take_screenshot_markdown', {
       ownerFilePath: originalPath,
       alt: 'screenshot'
+    })
+
+    console.debug('[Screenshot] Backend returned', {
+      relative_path: result?.relative_path,
+      absolute_path: result?.absolute_path,
+      url: result?.url,
+      markdown_len: typeof result?.markdown === 'string' ? result.markdown.length : null
     })
 
     const markdown = result?.markdown
@@ -123,7 +141,10 @@ async function CaptureScreenshot() {
       throw new Error('后端未返回 markdown')
     }
 
+    console.debug('[Screenshot] Inserting markdown into editor')
     const inserted = await editorStore.insertContent(`${markdown}\n`)
+    console.debug('[Screenshot] Insert result', { inserted })
+
     if (!inserted) {
       throw new Error('插入失败：编辑器未就绪')
     }

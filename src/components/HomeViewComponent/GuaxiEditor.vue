@@ -358,8 +358,14 @@ const registerMarkdownLanguageFeatures = () => {
 const tabBarRef = ref(null)
 // 初始化编辑器
 const initEditor = () => {
+  console.debug('[Editor] initEditor called', {
+    hasContainer: !!editorContainer.value,
+    selectedPath: selectedFile.value?.path,
+    activeTab: fileTreeStore.activeTab
+  })
+
   if (!editorContainer.value) {
-    console.error('编辑器容器未找到');
+    console.error('[Editor] 编辑器容器未找到');
     return;
   }
 
@@ -538,6 +544,7 @@ const initEditor = () => {
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
+  console.debug('[Editor] Monaco editor instance registered')
 
   registerMarkdownLanguageFeatures();
 
@@ -1575,6 +1582,12 @@ const handleExportSelect = async (format) => {
 };
 
 const switchTab = (path) => {
+  console.debug('[Editor] switchTab', {
+    from: fileTreeStore.activeTab,
+    to: path,
+    hasEditor: !!editor
+  })
+
   // 保存当前编辑内容
   if (editor && fileTreeStore.activeTab) {
     const currentContent = editor.getValue();
