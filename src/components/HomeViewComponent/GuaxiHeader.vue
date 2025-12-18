@@ -2,7 +2,12 @@
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
     <div class="header-left">
-      <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+        </template>
+        切换左侧边栏
+      </n-tooltip>
       <div class="logo-text">Guaxi</div>
     </div>
 
@@ -20,21 +25,50 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="openOutlinePanel"></n-icon>
-      <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
-      <n-icon class="header-icon" size="20" @click="splitVertical">
-        <svg viewBox="0 0 16 16" width="16" height="16">
-          <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
-          <line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1" />
-        </svg>
-      </n-icon>
-      <n-icon class="header-icon" size="20" @click="splitHorizontal">
-        <svg viewBox="0 0 16 16" width="16" height="16">
-          <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
-          <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1" />
-        </svg>
-      </n-icon>
-      <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="openOutlinePanel"></n-icon>
+        </template>
+        大纲
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
+        </template>
+        截图并插入
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon class="header-icon" size="20" @click="splitVertical">
+            <svg viewBox="0 0 16 16" width="16" height="16">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
+              <line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1" />
+            </svg>
+          </n-icon>
+        </template>
+        纵向分屏
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon class="header-icon" size="20" @click="splitHorizontal">
+            <svg viewBox="0 0 16 16" width="16" height="16">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
+              <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1" />
+            </svg>
+          </n-icon>
+        </template>
+        横向分屏
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
+        </template>
+        切换右侧边栏
+      </n-tooltip>
     </div>
   </div>
 
@@ -46,7 +80,7 @@
 
 <script setup>
 import { computed, ref, h, onMounted, nextTick } from "vue";
-import { NIcon, NDropdown } from 'naive-ui'
+import { NIcon, NDropdown, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
