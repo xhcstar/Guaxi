@@ -8,10 +8,10 @@
           :key="tab.path"
           :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
           @click="switchTab(tab.path)"
-          @mousedown.middle="closeTab(tab.path)"
+          @mousedown.middle="closeTab(tab.path, 'left')"
         >
           <span>{{ tab.fileName }}</span>
-          <n-icon size="14" @click.stop="closeTab(tab.path)">
+          <n-icon size="14" @click.stop="closeTab(tab.path, 'left')">
             <CloseOutline />
           </n-icon>
         </div>
@@ -22,10 +22,10 @@
           :key="tab.path"
           :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
           @click="switchTab(tab.path)"
-          @mousedown.middle="closeTab(tab.path)"
+          @mousedown.middle="closeTab(tab.path, 'right')"
         >
           <span>{{ tab.fileName }}</span>
-          <n-icon size="14" @click.stop="closeTab(tab.path)">
+          <n-icon size="14" @click.stop="closeTab(tab.path, 'right')">
             <CloseOutline />
           </n-icon>
         </div>
@@ -1604,8 +1604,20 @@ const switchTab = (path) => {
   }
 };
 
-const closeTab = (path) => {
-  // 保存当前内容
+const closeTab = (path, region) => {
+  if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.openTabs.length === 1) {
+    if (editor && fileTreeStore.activeTab === path) {
+      const content = editor.getValue();
+      fileTreeStore.updateTabContent(path, content);
+    }
+
+    fileTreeStore.setLayoutMode('single');
+    if (fileTreeStore.activeTab !== path) {
+      fileTreeStore.setActiveTab(path);
+    }
+    return;
+  }
+
   if (editor && fileTreeStore.activeTab === path) {
     const content = editor.getValue();
     fileTreeStore.updateTabContent(path, content);
@@ -1618,15 +1630,11 @@ const closeTab = (path) => {
       updateEditorContent(tab.content);
     }
   } else {
-    // 完全清空状态
     fileTreeStore.setActiveTab(null);
-    // 强制清空编辑器
     if (editor) {
       editor.setValue('');
-      editor.getModel().setValue(''); // 确保模型也被清空
+      editor.getModel().setValue('');
     }
-    // 隐藏编辑器区域
-    // mode.value = 'preview';
     renderedHtml.value = '';
   }
 };
