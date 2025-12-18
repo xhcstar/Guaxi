@@ -1,5 +1,5 @@
 <template>
-  <div class="editor-container">
+  <div class="editor-container guaxi-editor">
     <!-- 标签页栏 -->
     <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
       <div class="tab-region tab-region-left">
@@ -1887,11 +1887,12 @@ onUnmounted(() => {
 
 .editor-wrapper {
   position: relative;
-  height: calc(100% - 60px);
-  /* 减去顶部工具栏和标签栏高度 */
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .editor-split-wrapper {
@@ -1947,12 +1948,8 @@ onUnmounted(() => {
 }
 
 .preview {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: 40px;
-  height: calc(100% - 25px);
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 12px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
