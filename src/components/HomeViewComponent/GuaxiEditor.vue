@@ -33,27 +33,22 @@
     </div>
     <!-- 工具栏 -->
     <div class="toolbar">
-      <div class="toolbar-editing-actions">
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertHeading(1)">
-              H1
-            </n-button>
-          </template>
-          插入一级标题
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertHeading(2)">
-              H2
-            </n-button>
-          </template>
-          插入二级标题
-        </n-tooltip>
+      <div v-if="editorStore.language === 'markdown'" class="toolbar-editing-actions">
+        <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny">
+                <Icon icon="lucide:heading" width="16" height="16" />
+              </n-button>
+            </template>
+            标题
+          </n-tooltip>
+        </n-dropdown>
+
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text size="tiny" @click="toggleBold">
-              B
+              <Icon icon="lucide:bold" width="16" height="16" />
             </n-button>
           </template>
           加粗
@@ -61,58 +56,117 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text size="tiny" @click="toggleItalic">
-              I
+              <Icon icon="lucide:italic" width="16" height="16" />
             </n-button>
           </template>
           斜体
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
-            <n-button text size="tiny" @click="insertUnorderedList">
-              <n-icon size="16" :component="ListOutline" />
+            <n-button text size="tiny" @click="toggleStrikethrough">
+              <Icon icon="lucide:strikethrough" width="16" height="16" />
             </n-button>
           </template>
-          插入列表
+          删除线
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
-            <n-button text size="tiny" @click="insertTable">
-              <n-icon size="16" :component="GridOutline" />
+            <n-button text size="tiny" @click="insertLink">
+              <Icon icon="lucide:link" width="16" height="16" />
             </n-button>
           </template>
-          插入表格
+          链接
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
-            <n-button text size="tiny" @click="insertImage">
-              <n-icon size="16" :component="ImagesOutline" />
+            <n-button text size="tiny" @click="toggleBlockquote">
+              <Icon icon="lucide:quote" width="16" height="16" />
             </n-button>
           </template>
-          插入图片
+          引用
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleInlineCode">
+              <Icon icon="lucide:code" width="16" height="16" />
+            </n-button>
+          </template>
+          行内代码
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text size="tiny" @click="insertCodeBlockFromToolbar">
-              <n-icon size="16" :component="CodeSlashOutline" />
+              <Icon icon="lucide:square-terminal" width="16" height="16" />
             </n-button>
           </template>
-          插入代码块
+          代码块
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleUnorderedList">
+              <Icon icon="lucide:list" width="16" height="16" />
+            </n-button>
+          </template>
+          无序列表
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
-            <n-button text size="tiny" @click="setFontSize">
-              <n-icon size="16" :component="TextOutline" />
+            <n-button text size="tiny" @click="toggleOrderedList">
+              <Icon icon="lucide:list-ordered" width="16" height="16" />
             </n-button>
           </template>
-          设置字号
+          有序列表
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
-            <n-button text size="tiny" @click="setFontColor">
-              <n-icon size="16" :component="ColorPaletteOutline" />
+            <n-button text size="tiny" @click="toggleTaskList">
+              <Icon icon="lucide:list-checks" width="16" height="16" />
             </n-button>
           </template>
-          设置字体颜色
+          任务列表
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertTable">
+              <Icon icon="lucide:table" width="16" height="16" />
+            </n-button>
+          </template>
+          表格
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertImage">
+              <Icon icon="lucide:image" width="16" height="16" />
+            </n-button>
+          </template>
+          图片
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertHorizontalRule">
+              <Icon icon="lucide:minus" width="16" height="16" />
+            </n-button>
+          </template>
+          分隔线
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="undo">
+              <Icon icon="lucide:undo" width="16" height="16" />
+            </n-button>
+          </template>
+          撤销
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="redo">
+              <Icon icon="lucide:redo" width="16" height="16" />
+            </n-button>
+          </template>
+          重做
         </n-tooltip>
       </div>
       <div class="toolbar-spacer"></div>
@@ -165,7 +219,106 @@
     </div>
 
     <!-- 编辑器 -->
-    <div v-show="selectedFile && mode === 'edit'" class="editor-wrapper">
+    <div v-show="selectedFile && mode === 'edit'" class="editor-wrapper" ref="editorWrapperRef">
+      <div
+        v-show="tableToolbarVisible"
+        class="floating-table-toolbar"
+        :style="tableToolbarStyle"
+        @mousedown.prevent
+      >
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="addTableRowBelow">
+              <Icon icon="mdi:table-row-plus-after" width="16" height="16" />
+            </n-button>
+          </template>
+          新增行
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="deleteTableRow">
+              <Icon icon="mdi:table-row-remove" width="16" height="16" />
+            </n-button>
+          </template>
+          删除行
+        </n-tooltip>
+        <div class="floating-table-toolbar-divider"></div>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="addTableColumnRight">
+              <Icon icon="mdi:table-column-plus-after" width="16" height="16" />
+            </n-button>
+          </template>
+          新增列
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="deleteTableColumn">
+              <Icon icon="mdi:table-column-remove" width="16" height="16" />
+            </n-button>
+          </template>
+          删除列
+        </n-tooltip>
+        <div class="floating-table-toolbar-divider"></div>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="setTableColumnAlign('left')">
+              <Icon icon="lucide:align-left" width="16" height="16" />
+            </n-button>
+          </template>
+          左对齐
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="setTableColumnAlign('center')">
+              <Icon icon="lucide:align-center" width="16" height="16" />
+            </n-button>
+          </template>
+          居中
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="setTableColumnAlign('right')">
+              <Icon icon="lucide:align-right" width="16" height="16" />
+            </n-button>
+          </template>
+          右对齐
+        </n-tooltip>
+        <div class="floating-table-toolbar-divider"></div>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="formatTable">
+              <Icon icon="lucide:sparkles" width="16" height="16" />
+            </n-button>
+          </template>
+          格式化
+        </n-tooltip>
+      </div>
+      <div
+        v-show="floatingToolbarVisible"
+        class="floating-md-toolbar"
+        :style="floatingToolbarStyle"
+        @mousedown.prevent
+      >
+        <n-button text size="tiny" @click="toggleBold">
+          <Icon icon="lucide:bold" width="16" height="16" />
+        </n-button>
+        <n-button text size="tiny" @click="toggleItalic">
+          <Icon icon="lucide:italic" width="16" height="16" />
+        </n-button>
+        <n-button text size="tiny" @click="toggleStrikethrough">
+          <Icon icon="lucide:strikethrough" width="16" height="16" />
+        </n-button>
+        <n-button text size="tiny" @click="insertLink">
+          <Icon icon="lucide:link" width="16" height="16" />
+        </n-button>
+        <n-button text size="tiny" @click="toggleInlineCode">
+          <Icon icon="lucide:code" width="16" height="16" />
+        </n-button>
+        <n-button text size="tiny" @click="toggleBlockquote">
+          <Icon icon="lucide:quote" width="16" height="16" />
+        </n-button>
+      </div>
       <div class="editor-split-wrapper" :class="layoutMode">
         <div ref="editorContainer" class="editor-container">
           <!-- 编辑器内容将在这里渲染 -->
@@ -197,7 +350,8 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
-import { EyeOutline, LogoVimeo, CloseOutline, TextOutline, ListOutline, ImagesOutline, CodeSlashOutline, ColorPaletteOutline, GridOutline, DownloadOutline } from '@vicons/ionicons5'
+import { Icon } from '@iconify/vue'
+import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -242,6 +396,12 @@ const renderedHtml = ref('');
 const previewContainer = ref(null);
 const editorContainer = ref(null);
 const secondaryEditorContainer = ref(null);
+const editorWrapperRef = ref(null);
+const floatingToolbarVisible = ref(false);
+const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
+const tableToolbarVisible = ref(false);
+const tableToolbarStyle = ref({ left: '0px', top: '0px' });
+const activeTableContext = ref(null);
 const scrollRatio = ref(0);
 const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
@@ -273,6 +433,16 @@ const rightTabs = computed(() => {
 
 
 const message = useMessage()
+
+const headingOptions = [
+  { label: '正文', key: 0 },
+  { label: 'H1', key: 1 },
+  { label: 'H2', key: 2 },
+  { label: 'H3', key: 3 },
+  { label: 'H4', key: 4 },
+  { label: 'H5', key: 5 },
+  { label: 'H6', key: 6 }
+]
 
 const vimMode = ref(false);
 const vimStatusBar = ref(null);
@@ -336,6 +506,7 @@ const registerMarkdownLanguageFeatures = () => {
       suggestions.push(
         createSnippet('加粗', '**${1:文本}**', '加粗文本'),
         createSnippet('斜体', '*${1:文本}*', '斜体文本'),
+        createSnippet('删除线', '~~${1:文本}~~', '删除线'),
         createSnippet('内联代码', '`${1:code}`', '内联代码'),
         createSnippet(
           '链接',
@@ -347,7 +518,8 @@ const registerMarkdownLanguageFeatures = () => {
           '![${1:描述}](${2:路径})',
           '插入图片'
         ),
-        createSnippet('引用', '> ${1:引用内容}\n', '插入引用')
+        createSnippet('引用', '> ${1:引用内容}\n', '插入引用'),
+        createSnippet('分隔线', '\n---\n', '插入分隔线')
       );
 
       return { suggestions };
@@ -544,6 +716,7 @@ const initEditor = () => {
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
+  editorStore.setLanguage(language);
   console.debug('[Editor] Monaco editor instance registered')
 
   registerMarkdownLanguageFeatures();
@@ -755,33 +928,43 @@ const handleWheelScroll = (e) => {
 const setupEditorListeners = () => {
   if (!editor) return;
 
-  // 监听光标位置变化
-  editor.onDidChangeCursorPosition(e => {
+  editor.onDidChangeCursorPosition((e) => {
     editorStore.setCursorPosition(e.position);
+    updateTableToolbar();
   });
 
-  // 监听内容变化（用于问题检测）
   const model = editor.getModel();
   if (model) {
-    model.onDidChangeContent(debounce(() => {
-      const content = model.getValue();
-      const languageId = model.getLanguageId() || 'plaintext';
-      const problems = analyzeContentForProblems(content, model, languageId);
-      editorStore.setProblems(problems);
-
-      // 更新原始内容
-      rawContent.value = content;
-    }, 300));
+    model.onDidChangeContent(
+      debounce(() => {
+        const content = model.getValue();
+        const languageId = model.getLanguageId() || 'plaintext';
+        const problems = analyzeContentForProblems(content, model, languageId);
+        editorStore.setProblems(problems);
+        rawContent.value = content;
+        updateTableToolbar();
+      }, 300)
+    );
   }
 
-  // 监听语言变化
+  editor.onDidScrollChange(() => {
+    if (tableToolbarVisible.value) {
+      updateTableToolbar();
+    }
+  });
+
   editor.onDidChangeModelLanguage(() => {
     const language = editor.getModel()?.getLanguageId() || 'plaintext';
     editorStore.setLanguage(language);
+    updateTableToolbar();
   });
 
-  // 监听选择变化
-  editor.onDidChangeCursorSelection(e => {
+  editor.onDidBlurEditorWidget(() => {
+    floatingToolbarVisible.value = false;
+    tableToolbarVisible.value = false;
+  });
+
+  editor.onDidChangeCursorSelection((e) => {
     const model = editor.getModel();
     if (!model) return;
 
@@ -790,6 +973,44 @@ const setupEditorListeners = () => {
       ? `Selected ${countLines(selectedText)} lines, ${selectedText.length} chars`
       : null;
     editorStore.setSelectionStatus(status);
+
+    if (model.getLanguageId() !== 'markdown') {
+      floatingToolbarVisible.value = false;
+      tableToolbarVisible.value = false;
+      return;
+    }
+
+    const isEmpty = e.selection.isEmpty();
+    if (isEmpty || !selectedText.trim()) {
+      floatingToolbarVisible.value = false;
+      return;
+    }
+
+    const wrapperEl = editorWrapperRef.value;
+    const editorEl = editorContainer.value;
+    if (!wrapperEl || !editorEl) {
+      floatingToolbarVisible.value = false;
+      return;
+    }
+
+    const pos = e.selection.getStartPosition();
+    const visiblePos = editor.getScrolledVisiblePosition(pos);
+    if (!visiblePos) {
+      floatingToolbarVisible.value = false;
+      return;
+    }
+
+    const wrapperRect = wrapperEl.getBoundingClientRect();
+    const editorRect = editorEl.getBoundingClientRect();
+
+    const left = editorRect.left - wrapperRect.left + visiblePos.left;
+    const top = editorRect.top - wrapperRect.top + visiblePos.top - 36;
+
+    floatingToolbarStyle.value = {
+      left: `${Math.max(8, left)}px`,
+      top: `${Math.max(8, top)}px`
+    };
+    floatingToolbarVisible.value = true;
   });
 };
 
@@ -992,9 +1213,41 @@ const insertBlockSnippet = (snippet) => {
   editor.focus();
 };
 
-const insertHeading = (level) => {
-  const hashes = '#'.repeat(level);
-  insertBlockSnippet(`${hashes} 标题\n`);
+const toggleHeading = (level) => {
+  if (!ensureMarkdownEditor()) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  const startLine = selection.startLineNumber;
+  const endLine = selection.endLineNumber;
+  const edits = [];
+
+  for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+    const text = model.getLineContent(lineNumber);
+    const content = text.replace(/^#{1,6}\s+/, '');
+
+    let next = content;
+    if (level > 0) {
+      const sameLevel = new RegExp(`^#{${level}}\\s+`).test(text);
+      next = sameLevel ? content : `${'#'.repeat(level)} ${content || '标题'}`;
+    }
+
+    edits.push({
+      range: new monaco.Range(lineNumber, 1, lineNumber, model.getLineMaxColumn(lineNumber)),
+      text: next,
+      forceMoveMarkers: true
+    });
+  }
+
+  editor.executeEdits('markdown-toolbar', edits);
+  editor.focus();
+};
+
+const handleHeadingSelect = (key) => {
+  const level = Number(key);
+  if (Number.isNaN(level)) return;
+  toggleHeading(level);
 };
 
 const toggleBold = () => {
@@ -1005,12 +1258,389 @@ const toggleItalic = () => {
   wrapSelection('*', '*', '斜体文本');
 };
 
-const insertUnorderedList = () => {
-  insertBlockSnippet('- 列表项1\n- 列表项2\n');
+const toggleStrikethrough = () => {
+  wrapSelection('~~', '~~', '删除线');
+};
+
+const toggleInlineCode = () => {
+  wrapSelection('`', '`', 'code');
+};
+
+const insertLink = () => {
+  wrapSelection('[', '](https://)', '链接文字');
+};
+
+const toggleLinePrefix = (prefix, pattern, buildLine) => {
+  if (!ensureMarkdownEditor()) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  const startLine = selection.startLineNumber;
+  const endLine = selection.endLineNumber;
+  const lines = [];
+  let allMatch = true;
+
+  for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+    const text = model.getLineContent(lineNumber);
+    lines.push(text);
+    if (!pattern.test(text)) allMatch = false;
+  }
+
+  const edits = lines.map((text, index) => {
+    const lineNumber = startLine + index;
+    const next = allMatch
+      ? text.replace(pattern, '')
+      : (buildLine ? buildLine(text, index) : `${prefix}${text}`);
+
+    return {
+      range: new monaco.Range(lineNumber, 1, lineNumber, model.getLineMaxColumn(lineNumber)),
+      text: next,
+      forceMoveMarkers: true
+    };
+  });
+
+  editor.executeEdits('markdown-toolbar', edits);
+  editor.focus();
+};
+
+const toggleBlockquote = () => {
+  toggleLinePrefix('> ', /^>\s+/, null);
+};
+
+const toggleUnorderedList = () => {
+  toggleLinePrefix('- ', /^-\s+/, null);
+};
+
+const toggleOrderedList = () => {
+  toggleLinePrefix(
+    '1. ',
+    /^\d+\.\s+/,
+    (text, index) => `${index + 1}. ${text}`
+  );
+};
+
+const toggleTaskList = () => {
+  toggleLinePrefix('- [ ] ', /^-\s\[( |x|X)\]\s+/, null);
+};
+
+const isPotentialTableLine = (line) => {
+  const trimmed = (line || '').trim();
+  if (!trimmed) return false;
+  const pipeCount = (trimmed.match(/\|/g) || []).length;
+  return pipeCount >= 2;
+};
+
+const isTableSeparatorLine = (line) => {
+  const trimmed = (line || '').trim();
+  if (!trimmed) return false;
+  return /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(trimmed);
+};
+
+const normalizeTableRowCells = (line) => {
+  const raw = (line || '').trim();
+  let text = raw;
+  if (!text.startsWith('|')) text = `| ${text}`;
+  if (!text.endsWith('|')) text = `${text} |`;
+  const parts = text.split('|');
+  return parts.slice(1, -1).map((c) => c.trim());
+};
+
+const buildTableRow = (cells) => {
+  return `| ${cells.map((c) => (c ?? '').trim()).join(' | ')} |`;
+};
+
+const normalizeSeparatorCell = (cell, align) => {
+  const base = (cell || '').trim();
+  const hasMin = base.replace(/:/g, '').replace(/-/g, '').length === 0;
+  if (!hasMin) return '---';
+
+  if (align === 'left') return ':---';
+  if (align === 'center') return ':---:';
+  if (align === 'right') return '---:';
+  return '---';
+};
+
+const getColumnIndexFromCursor = (line, column, colCount) => {
+  const text = line || '';
+  const positions = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '|') positions.push(i);
+  }
+  if (positions.length < 2) return 0;
+
+  const cursor = Math.max(0, Math.min(text.length, (column || 1) - 1));
+
+  if (cursor <= positions[0]) return 0;
+  if (cursor > positions[positions.length - 1]) return Math.max(0, (colCount || positions.length - 1) - 1);
+
+  for (let i = 0; i < positions.length - 1; i += 1) {
+    if (cursor > positions[i] && cursor <= positions[i + 1]) {
+      return Math.max(0, Math.min((colCount || positions.length - 1) - 1, i));
+    }
+  }
+
+  return 0;
+};
+
+const detectTableContext = () => {
+  if (!editor) return null;
+  const model = editor.getModel();
+  if (!model) return null;
+  if (model.getLanguageId() !== 'markdown') return null;
+
+  const pos = editor.getPosition();
+  if (!pos) return null;
+
+  const lineNumber = pos.lineNumber;
+  const lineText = model.getLineContent(lineNumber);
+  if (!isPotentialTableLine(lineText)) return null;
+
+  const total = model.getLineCount();
+  let start = lineNumber;
+  while (start > 1 && isPotentialTableLine(model.getLineContent(start - 1))) {
+    start -= 1;
+  }
+
+  let end = lineNumber;
+  while (end < total && isPotentialTableLine(model.getLineContent(end + 1))) {
+    end += 1;
+  }
+
+  let separatorLine = -1;
+  for (let i = start; i <= end; i += 1) {
+    if (isTableSeparatorLine(model.getLineContent(i))) {
+      separatorLine = i;
+      break;
+    }
+  }
+
+  if (separatorLine === -1 || separatorLine === start) return null;
+
+  const tableStart = separatorLine - 1;
+
+  const rawLines = [];
+  for (let i = tableStart; i <= end; i += 1) {
+    rawLines.push(model.getLineContent(i));
+  }
+
+  const rows = rawLines.map((l) => normalizeTableRowCells(l));
+  const colCount = rows.reduce((m, r) => Math.max(m, r.length), 0) || 1;
+  const padded = rows.map((r) => {
+    const next = [...r];
+    while (next.length < colCount) next.push('');
+    return next;
+  });
+
+  const activeRowIndex = lineNumber - tableStart;
+  const cursorColIndex = getColumnIndexFromCursor(rawLines[Math.max(0, Math.min(rawLines.length - 1, activeRowIndex))], pos.column, colCount);
+
+  return {
+    startLine: tableStart,
+    endLine: end,
+    separatorLine,
+    colCount,
+    rows: padded,
+    activeRowIndex,
+    activeColIndex: cursorColIndex
+  };
+};
+
+const updateTableToolbar = () => {
+  if (!editor) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const model = editor.getModel();
+  if (!model || model.getLanguageId() !== 'markdown') {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const ctx = detectTableContext();
+  if (!ctx) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const wrapperEl = editorWrapperRef.value;
+  const editorEl = editorContainer.value;
+  if (!wrapperEl || !editorEl) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const wrapperRect = wrapperEl.getBoundingClientRect();
+  const editorRect = editorEl.getBoundingClientRect();
+
+  const anchorPos = new monaco.Position(ctx.startLine, 1);
+  const visiblePos = editor.getScrolledVisiblePosition(anchorPos);
+  if (!visiblePos) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  tableToolbarStyle.value = {
+    left: `${Math.max(8, editorRect.left - wrapperRect.left + 8)}px`,
+    top: `${Math.max(8, editorRect.top - wrapperRect.top + visiblePos.top - 36)}px`
+  };
+
+  activeTableContext.value = ctx;
+  tableToolbarVisible.value = true;
+};
+
+const applyTableEdits = (nextRows, nextActiveRowIndex, nextActiveColIndex) => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const ctx = activeTableContext.value;
+  if (!model || !ctx) return;
+
+  const textLines = nextRows.map((cells, idx) => {
+    if (idx === 1) {
+      const normalized = cells.map((c) => normalizeSeparatorCell(c, null));
+      return buildTableRow(normalized);
+    }
+    return buildTableRow(cells);
+  });
+
+  const range = new monaco.Range(ctx.startLine, 1, ctx.endLine, model.getLineMaxColumn(ctx.endLine));
+  editor.executeEdits('md-table-toolbar', [
+    {
+      range,
+      text: textLines.join('\n'),
+      forceMoveMarkers: true
+    }
+  ]);
+
+  const row = Math.max(2, Math.min(textLines.length - 1, nextActiveRowIndex));
+  const col = Math.max(0, Math.min((nextRows[0]?.length || 1) - 1, nextActiveColIndex));
+  const targetLine = ctx.startLine + row;
+  editor.setPosition(new monaco.Position(targetLine, 3));
+  editor.focus();
+
+  nextTick(() => {
+    updateTableToolbar();
+  });
+};
+
+const addTableRowBelow = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const insertAt = ctx.activeRowIndex <= 1 ? 2 : Math.min(ctx.rows.length, ctx.activeRowIndex + 1);
+  const empty = Array.from({ length: ctx.colCount }, () => '');
+
+  const nextRows = [...ctx.rows];
+  nextRows.splice(insertAt, 0, empty);
+
+  applyTableEdits(nextRows, insertAt, ctx.activeColIndex);
+};
+
+const deleteTableRow = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  if (ctx.activeRowIndex <= 1) {
+    message.warning('无法删除表头或分隔行');
+    return;
+  }
+
+  const nextRows = [...ctx.rows];
+  if (nextRows.length <= 2) return;
+
+  nextRows.splice(ctx.activeRowIndex, 1);
+  const nextRow = Math.min(nextRows.length - 1, ctx.activeRowIndex);
+
+  applyTableEdits(nextRows, nextRow, ctx.activeColIndex);
+};
+
+const addTableColumnRight = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const insertAt = Math.min(ctx.colCount, ctx.activeColIndex + 1);
+  const nextRows = ctx.rows.map((row, rowIndex) => {
+    const next = [...row];
+    if (rowIndex === 1) {
+      next.splice(insertAt, 0, '---');
+    } else {
+      next.splice(insertAt, 0, '');
+    }
+    return next;
+  });
+
+  const nextCol = insertAt;
+  applyTableEdits(nextRows, ctx.activeRowIndex, nextCol);
+};
+
+const deleteTableColumn = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  if (ctx.colCount <= 1) {
+    message.warning('至少保留 1 列');
+    return;
+  }
+
+  const removeAt = Math.max(0, Math.min(ctx.colCount - 1, ctx.activeColIndex));
+  const nextRows = ctx.rows.map((row) => {
+    const next = [...row];
+    next.splice(removeAt, 1);
+    return next;
+  });
+
+  const nextCol = Math.max(0, Math.min(ctx.colCount - 2, removeAt));
+  applyTableEdits(nextRows, ctx.activeRowIndex, nextCol);
+};
+
+const setTableColumnAlign = (align) => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const col = Math.max(0, Math.min(ctx.colCount - 1, ctx.activeColIndex));
+  const nextRows = ctx.rows.map((row, rowIndex) => {
+    if (rowIndex !== 1) return row;
+    const next = [...row];
+    next[col] = normalizeSeparatorCell(next[col], align);
+    return next;
+  });
+
+  applyTableEdits(nextRows, ctx.activeRowIndex, ctx.activeColIndex);
+};
+
+const formatTable = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const nextRows = ctx.rows.map((row, rowIndex) => {
+    if (rowIndex === 1) {
+      return row.map((c) => normalizeSeparatorCell(c, null));
+    }
+    return row.map((c) => (c ?? '').trim());
+  });
+
+  applyTableEdits(nextRows, ctx.activeRowIndex, ctx.activeColIndex);
 };
 
 const insertTable = () => {
+  if (!ensureMarkdownEditor()) return;
+
+  const pos = editor.getPosition();
   insertBlockSnippet('| 列1 | 列2 |\n| --- | --- |\n| 内容1 | 内容2 |\n');
+
+  if (pos) {
+    nextTick(() => {
+      editor.setPosition(new monaco.Position(pos.lineNumber + 2, 3));
+      editor.focus();
+      updateTableToolbar();
+    });
+  }
 };
 
 const insertImage = () => {
@@ -1018,23 +1648,23 @@ const insertImage = () => {
 };
 
 const insertCodeBlockFromToolbar = () => {
-  insertBlockSnippet('```language\n代码\n```\n');
+  wrapSelection('```\n', '\n```\n', '代码');
 };
 
-const setFontSize = () => {
-  wrapSelection(
-    '<span style="font-size: 20px;">',
-    '</span>',
-    '大号文字'
-  );
+const insertHorizontalRule = () => {
+  insertBlockSnippet('---\n');
 };
 
-const setFontColor = () => {
-  wrapSelection(
-    '<span style="color: #ff0000;">',
-    '</span>',
-    '彩色文字'
-  );
+const undo = () => {
+  if (!editor) return;
+  editor.focus();
+  editor.trigger('toolbar', 'undo', null);
+};
+
+const redo = () => {
+  if (!editor) return;
+  editor.focus();
+  editor.trigger('toolbar', 'redo', null);
 };
 
 // 更新编辑器内容
@@ -1832,6 +2462,50 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
+.floating-md-toolbar {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background-color: var(--toolbar-bg, #f8f8f8);
+  border: 1px solid var(--divider-color, #e0e0e0);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.floating-md-toolbar :deep(.n-button) {
+  padding: 0 4px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.floating-table-toolbar {
+  position: absolute;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background-color: var(--toolbar-bg, #f8f8f8);
+  border: 1px solid var(--divider-color, #e0e0e0);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.floating-table-toolbar :deep(.n-button) {
+  padding: 0 4px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.floating-table-toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background-color: var(--divider-color, #e0e0e0);
+  margin: 0 2px;
+}
 .toolbar-editing-actions :deep(.n-button) {
   padding: 0 4px;
   height: 22px;
@@ -2003,6 +2677,9 @@ onUnmounted(() => {
 .tab-bar {
   display: flex;
   height: 30px;
+  min-height: 30px;
+  flex: 0 0 30px;
+  flex-shrink: 0;
   background: #f5f5f5;
   border-bottom: 1px solid #ddd;
   overflow-x: auto;
