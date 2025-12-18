@@ -359,6 +359,7 @@ import { dirname } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
+import 'vditor/dist/method'
 import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
@@ -416,6 +417,9 @@ const realtimeVditorReady = ref(false);
 const pendingRealtimeVditorValue = ref(null);
 let realtimeVditor = null;
 let settingRealtimeVditorValue = false;
+const syncRealtimeValueToRawContent = debounce((value) => {
+  rawContent.value = value;
+}, 120);
 let editor = null;
 let secondaryEditor = null;
 const selectedFile = computed(() => fileTreeStore.selectedFile)
@@ -2088,12 +2092,36 @@ const initRealtimeVditor = async () => {
     realtimeVditor = new Vditor(realtimeVditorId, {
       mode: 'ir',
       cache: { enable: false },
-      toolbarConfig: { hide: true },
-      toolbar: [],
+      preview: {
+        delay: 200,
+        hljs: { enable: false }
+      },
+      toolbarConfig: { hide: false },
+      toolbar: [
+        'headings',
+        'bold',
+        'italic',
+        'strike',
+        'link',
+        '|',
+        'list',
+        'ordered-list',
+        'check',
+        '|',
+        'quote',
+        'line',
+        'code',
+        'inline-code',
+        '|',
+        'table',
+        '|',
+        'undo',
+        'redo'
+      ],
       value: desiredValue,
       input: (value) => {
         if (settingRealtimeVditorValue) return;
-        rawContent.value = value;
+        syncRealtimeValueToRawContent(value);
       },
       after: () => {
         realtimeVditorReady.value = true;
@@ -2136,6 +2164,7 @@ const initRealtimeVditor = async () => {
 };
 
 const destroyRealtimeVditor = () => {
+  syncRealtimeValueToRawContent.cancel();
   if (!realtimeVditor) return;
   try {
     realtimeVditor.destroy();
@@ -2950,7 +2979,7 @@ onUnmounted(() => {
 }
 
 .realtime-vditor :deep(.vditor-toolbar) {
-  display: none;
+  display: flex;
 }
 
 .editor-wrapper {
