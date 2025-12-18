@@ -221,10 +221,9 @@
     </div>
 
     <div v-if="selectedFile" class="editor-content" :class="previewMode">
-      <div v-if="previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
-      <template v-else>
-        <div v-show="showPreview" v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"></div>
-        <div v-show="showEditor" class="editor-wrapper" ref="editorWrapperRef">
+      <div v-show="previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
+      <div v-show="previewMode !== 'realtime' && showPreview" v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"></div>
+      <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
         <div
           v-show="tableToolbarVisible"
           class="floating-table-toolbar"
@@ -338,7 +337,6 @@
       <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
-      </template>
 
     </div>
     <!-- 添加 GitPanel 组件 -->
@@ -414,6 +412,8 @@ const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
 const pendingRealtimeScrollRestore = ref(false);
 const realtimeVditorId = 'realtime-vditor';
+const realtimeVditorReady = ref(false);
+const pendingRealtimeVditorValue = ref(null);
 let realtimeVditor = null;
 let settingRealtimeVditorValue = false;
 let editor = null;
@@ -1978,9 +1978,17 @@ watch(selectedFile, async (newFile) => {
     rawContent.value = newFile.content || '';
 
     if (previewMode.value === 'realtime' && realtimeVditor) {
-      settingRealtimeVditorValue = true;
-      realtimeVditor.setValue(rawContent.value || '');
-      settingRealtimeVditorValue = false;
+      const nextValue = rawContent.value || '';
+      if (!realtimeVditorReady.value) {
+        pendingRealtimeVditorValue.value = nextValue;
+      } else {
+        settingRealtimeVditorValue = true;
+        try {
+          realtimeVditor.setValue(nextValue);
+        } finally {
+          settingRealtimeVditorValue = false;
+        }
+      }
     }
 
     if (editor) {
@@ -2071,30 +2079,59 @@ const initRealtimeVditor = async () => {
 
   await nextTick();
 
+  const desiredValue = rawContent.value || '';
+
   if (!realtimeVditor) {
+    realtimeVditorReady.value = false;
+    pendingRealtimeVditorValue.value = null;
+
     realtimeVditor = new Vditor(realtimeVditorId, {
       mode: 'ir',
       cache: { enable: false },
       toolbarConfig: { hide: true },
       toolbar: [],
-      value: rawContent.value || '',
+      value: desiredValue,
       input: (value) => {
         if (settingRealtimeVditorValue) return;
         rawContent.value = value;
       },
       after: () => {
+        realtimeVditorReady.value = true;
+
+        if (pendingRealtimeVditorValue.value != null && realtimeVditor) {
+          const v = pendingRealtimeVditorValue.value;
+          pendingRealtimeVditorValue.value = null;
+          settingRealtimeVditorValue = true;
+          try {
+            realtimeVditor.setValue(v);
+          } finally {
+            settingRealtimeVditorValue = false;
+          }
+        }
+
         if (pendingRealtimeScrollRestore.value) {
           restoreScrollPosition();
         }
       }
     });
-  } else {
-    settingRealtimeVditorValue = true;
-    realtimeVditor.setValue(rawContent.value || '');
+
+    return;
+  }
+
+  if (!realtimeVditorReady.value) {
+    pendingRealtimeVditorValue.value = desiredValue;
+    return;
+  }
+
+  settingRealtimeVditorValue = true;
+  try {
+    realtimeVditor.setValue(desiredValue);
+  } finally {
     settingRealtimeVditorValue = false;
-    if (pendingRealtimeScrollRestore.value) {
-      restoreScrollPosition();
-    }
+  }
+
+  if (pendingRealtimeScrollRestore.value) {
+    restoreScrollPosition();
   }
 };
 
@@ -2104,6 +2141,8 @@ const destroyRealtimeVditor = () => {
     realtimeVditor.destroy();
   } finally {
     realtimeVditor = null;
+    realtimeVditorReady.value = false;
+    pendingRealtimeVditorValue.value = null;
   }
 };
 
@@ -2166,7 +2205,6 @@ const handlePreviewModeSelect = async (key) => {
     pendingRealtimeScrollRestore.value = true;
     previewMode.value = 'realtime';
     await setMainMode('edit');
-    await initRealtimeVditor();
   }
 };
 
