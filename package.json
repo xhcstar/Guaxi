@@ -64,6 +64,7 @@
     "three": "^0.177.0",
     "three-stdlib": "^2.36.0",
     "typescript": "~5.6.2",
+    "vditor": "^3.11.2",
     "vfonts": "^0.0.3",
     "vite": "^6.0.3",
     "vite-plugin-monaco-editor": "^1.1.0",

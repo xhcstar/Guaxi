@@ -33,7 +33,7 @@
     </div>
     <!-- 工具栏 -->
     <div class="toolbar">
-      <div v-if="editorStore.language === 'markdown'" class="toolbar-editing-actions">
+      <div v-if="editorStore.language === 'markdown' && previewMode !== 'realtime'" class="toolbar-editing-actions">
         <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -221,8 +221,10 @@
     </div>
 
     <div v-if="selectedFile" class="editor-content" :class="previewMode">
-      <div v-show="showPreview" v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"></div>
-      <div v-show="showEditor" class="editor-wrapper" ref="editorWrapperRef">
+      <div v-if="previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
+      <template v-else>
+        <div v-show="showPreview" v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"></div>
+        <div v-show="showEditor" class="editor-wrapper" ref="editorWrapperRef">
         <div
           v-show="tableToolbarVisible"
           class="floating-table-toolbar"
@@ -336,6 +338,7 @@
       <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
+      </template>
 
     </div>
     <!-- 添加 GitPanel 组件 -->
@@ -356,6 +359,8 @@ import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline } from '@vicons/io
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import Vditor from 'vditor'
+import 'vditor/dist/index.css'
 import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
@@ -407,6 +412,10 @@ const activeTableContext = ref(null);
 const scrollRatio = ref(0);
 const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
+const pendingRealtimeScrollRestore = ref(false);
+const realtimeVditorId = 'realtime-vditor';
+let realtimeVditor = null;
+let settingRealtimeVditorValue = false;
 let editor = null;
 let secondaryEditor = null;
 const selectedFile = computed(() => fileTreeStore.selectedFile)
@@ -1704,17 +1713,29 @@ const updateEditorContent = (content) => {
 
 // 保存内容
 const saveContent = async () => {
-  if (selectedFile.value && editor) {
-    const content = editor.getValue();
-    await fileTreeStore.updateFileContent(selectedFile.value.path, content);
+  if (!selectedFile.value) return;
+
+  const content =
+    previewMode.value === 'realtime' && realtimeVditor
+      ? realtimeVditor.getValue()
+      : editor
+        ? editor.getValue()
+        : rawContent.value;
+
+  await fileTreeStore.updateFileContent(selectedFile.value.path, content);
+  message.info('修改已保存');
+  if (vimMode.value) {
     message.info('修改已保存');
-    // 如果是vim模式，也显示保存提示
-    if (vimMode.value) {
-      message.info('修改已保存');
-    }
-    if (previewMode.value === 'split' && canPreview.value) {
-      renderDebounced(content);
-    }
+  }
+
+  rawContent.value = content;
+
+  if (previewMode.value !== 'realtime' && editor) {
+    updateEditorContent(content);
+  }
+
+  if (previewMode.value === 'split' && canPreview.value) {
+    renderDebounced(content);
   }
 };
 
@@ -1726,7 +1747,22 @@ const handleKeyDown = (e) => {
   }
 };
 
+const getRealtimeScrollElement = () => {
+  const root = document.getElementById(realtimeVditorId);
+  if (!root) return null;
+  return root.querySelector('.vditor-content') || root;
+};
+
 const captureScrollPosition = () => {
+  if (previewMode.value === 'realtime') {
+    const el = getRealtimeScrollElement();
+    if (el) {
+      const height = el.scrollHeight;
+      scrollRatio.value = height ? el.scrollTop / height : 0;
+      return;
+    }
+  }
+
   if (mode.value === 'edit' && editor) {
     const top = editor.getScrollTop();
     const height = editor.getScrollHeight();
@@ -1740,7 +1776,23 @@ const captureScrollPosition = () => {
   }
 };
 
+const restoreRealtimeScroll = () => {
+  const el = getRealtimeScrollElement();
+  if (!el) {
+    pendingRealtimeScrollRestore.value = true;
+    return;
+  }
+  const height = el.scrollHeight;
+  el.scrollTop = height * scrollRatio.value;
+  pendingRealtimeScrollRestore.value = false;
+};
+
 const restoreScrollPosition = () => {
+  if (previewMode.value === 'realtime') {
+    restoreRealtimeScroll();
+    return;
+  }
+
   if (mode.value === 'preview') {
     pendingPreviewScrollRestore.value = true;
   } else if (mode.value === 'edit' && editor) {
@@ -1924,6 +1976,13 @@ watch(selectedFile, async (newFile) => {
 
     // 更新内容
     rawContent.value = newFile.content || '';
+
+    if (previewMode.value === 'realtime' && realtimeVditor) {
+      settingRealtimeVditorValue = true;
+      realtimeVditor.setValue(rawContent.value || '');
+      settingRealtimeVditorValue = false;
+    }
+
     if (editor) {
       updateEditorContent(newFile.content || '');
     } else {
@@ -1976,11 +2035,13 @@ const previewModeIcon = computed(() => {
 
 const showEditor = computed(() => {
   if (!selectedFile.value) return false;
+  if (previewMode.value === 'realtime') return false;
   return previewMode.value === 'toggle' ? mode.value === 'edit' : true;
 });
 
 const showPreview = computed(() => {
   if (!selectedFile.value || !canPreview.value) return false;
+  if (previewMode.value === 'realtime') return false;
   return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
 });
 
@@ -1997,7 +2058,6 @@ watch(
 
 const shouldAutoRenderPreview = computed(() => {
   if (!selectedFile.value || !canPreview.value) return false;
-  if (previewMode.value === 'realtime') return true;
   return previewMode.value === 'toggle' && mode.value === 'preview';
 });
 
@@ -2005,7 +2065,60 @@ const refreshPreview = () => {
   renderDebounced(rawContent.value);
 };
 
+const initRealtimeVditor = async () => {
+  if (!selectedFile.value || !canPreview.value) return;
+  if (previewMode.value !== 'realtime') return;
+
+  await nextTick();
+
+  if (!realtimeVditor) {
+    realtimeVditor = new Vditor(realtimeVditorId, {
+      mode: 'ir',
+      cache: { enable: false },
+      toolbarConfig: { hide: true },
+      toolbar: [],
+      value: rawContent.value || '',
+      input: (value) => {
+        if (settingRealtimeVditorValue) return;
+        rawContent.value = value;
+      },
+      after: () => {
+        if (pendingRealtimeScrollRestore.value) {
+          restoreScrollPosition();
+        }
+      }
+    });
+  } else {
+    settingRealtimeVditorValue = true;
+    realtimeVditor.setValue(rawContent.value || '');
+    settingRealtimeVditorValue = false;
+    if (pendingRealtimeScrollRestore.value) {
+      restoreScrollPosition();
+    }
+  }
+};
+
+const destroyRealtimeVditor = () => {
+  if (!realtimeVditor) return;
+  try {
+    realtimeVditor.destroy();
+  } finally {
+    realtimeVditor = null;
+  }
+};
+
 const handlePreviewModeSelect = async (key) => {
+  if (previewMode.value === 'realtime') {
+    captureScrollPosition();
+    if (realtimeVditor) {
+      const content = realtimeVditor.getValue();
+      rawContent.value = content;
+      if (editor) {
+        updateEditorContent(content);
+      }
+    }
+  }
+
   if (key === 'edit') {
     previewMode.value = 'toggle';
     await setMainMode('edit');
@@ -2024,7 +2137,7 @@ const handlePreviewModeSelect = async (key) => {
     return;
   }
 
-  if (key === 'split' || key === 'realtime') {
+  if (key === 'split') {
     if (!canPreview.value) {
       message.warning('仅 Markdown 文件支持预览');
       previewMode.value = 'toggle';
@@ -2033,14 +2146,35 @@ const handlePreviewModeSelect = async (key) => {
       return;
     }
 
-    previewMode.value = key;
+    previewMode.value = 'split';
     await setMainMode('edit');
     await nextTick();
     refreshPreview();
+    return;
+  }
+
+  if (key === 'realtime') {
+    if (!canPreview.value) {
+      message.warning('仅 Markdown 文件支持预览');
+      previewMode.value = 'toggle';
+      await setMainMode('edit');
+      renderedHtml.value = '';
+      return;
+    }
+
+    captureScrollPosition();
+    pendingRealtimeScrollRestore.value = true;
+    previewMode.value = 'realtime';
+    await setMainMode('edit');
+    await initRealtimeVditor();
   }
 };
 
-watch(previewMode, async (nextMode) => {
+watch(previewMode, async (nextMode, prevMode) => {
+  if (prevMode === 'realtime' && nextMode !== 'realtime') {
+    destroyRealtimeVditor();
+  }
+
   if (nextMode === 'toggle') return;
 
   if (!canPreview.value) {
@@ -2048,6 +2182,12 @@ watch(previewMode, async (nextMode) => {
     previewMode.value = 'toggle';
     await setMainMode('edit');
     renderedHtml.value = '';
+    return;
+  }
+
+  if (nextMode === 'realtime') {
+    pendingRealtimeScrollRestore.value = true;
+    await initRealtimeVditor();
     return;
   }
 
@@ -2576,6 +2716,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
+  destroyRealtimeVditor();
   if (secondaryEditor) {
     secondaryEditor.dispose();
     secondaryEditor = null;
@@ -2751,36 +2892,27 @@ onUnmounted(() => {
 }
 
 .editor-content.realtime {
-  position: relative;
   flex-direction: column;
 }
 
-.editor-content.realtime .preview,
-.editor-content.realtime .editor-wrapper {
-  position: absolute;
-  inset: 0;
+.realtime-vditor {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
-.editor-content.realtime .preview {
-  z-index: 1;
+.realtime-vditor :deep(.vditor) {
+  height: 100%;
+  border: none;
 }
 
-.editor-content.realtime .editor-wrapper {
-  z-index: 2;
+.realtime-vditor :deep(.vditor-content) {
+  height: 100%;
 }
 
-.editor-content.realtime .monaco-editor,
-.editor-content.realtime .monaco-editor-background,
-.editor-content.realtime .monaco-editor .margin {
-  background-color: transparent !important;
-}
-
-.editor-content.realtime .monaco-editor .view-lines {
-  opacity: 0;
-}
-
-.editor-content.realtime .monaco-editor .cursor {
-  opacity: 1 !important;
+.realtime-vditor :deep(.vditor-toolbar) {
+  display: none;
 }
 
 .editor-wrapper {
