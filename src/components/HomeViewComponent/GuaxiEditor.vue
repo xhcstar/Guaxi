@@ -175,7 +175,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleGitPanel">
-              <n-icon>
+              <n-icon width="16" height="16" >
                 <GitBranchOutline />
               </n-icon>
             </n-button>
@@ -186,20 +186,22 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleVimMode">
-              <n-icon :component="vimMode ? LogoVimeo : Edit16Filled" />
+              <n-icon :component="vimMode ? LogoVimeo : Edit16Filled" width="16" height="16" />
             </n-button>
           </template>
           {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
         </n-tooltip>
 
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="toggleMode">
-              <n-icon :component="mode === 'edit' ? DocumentEdit16Regular : EyeOutline" />
-            </n-button>
-          </template>
-          {{ mode === 'edit' ? '编辑模式' : '阅读模式' }}
-        </n-tooltip>
+        <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text>
+                <Icon :icon="previewModeIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            {{ previewModeLabel }}
+          </n-tooltip>
+        </n-dropdown>
 
         <n-dropdown
           trigger="click"
@@ -209,7 +211,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text>
-                <n-icon :component="DownloadOutline" />
+                <n-icon :component="DownloadOutline" width="16" height="16" />
               </n-button>
             </template>
             导出
@@ -218,14 +220,15 @@
       </div>
     </div>
 
-    <!-- 编辑器 -->
-    <div v-show="selectedFile && mode === 'edit'" class="editor-wrapper" ref="editorWrapperRef">
-      <div
-        v-show="tableToolbarVisible"
-        class="floating-table-toolbar"
-        :style="tableToolbarStyle"
-        @mousedown.prevent
-      >
+    <div v-if="selectedFile" class="editor-content" :class="previewMode">
+      <div v-show="showPreview" v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"></div>
+      <div v-show="showEditor" class="editor-wrapper" ref="editorWrapperRef">
+        <div
+          v-show="tableToolbarVisible"
+          class="floating-table-toolbar"
+          :style="tableToolbarStyle"
+          @mousedown.prevent
+        >
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text size="tiny" @click="addTableRowBelow">
@@ -331,11 +334,9 @@
         </div>
       </div>
       <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
-      <GuaxiEditorStatusBar class="editor-status-bar" />
-    </div>
+        <GuaxiEditorStatusBar class="editor-status-bar" />
+      </div>
 
-    <!-- 阅读模式 -->
-    <div v-show="selectedFile && mode === 'preview'" v-html="renderedHtml" class="preview" ref="previewContainer">
     </div>
     <!-- 添加 GitPanel 组件 -->
     <!--
@@ -391,6 +392,7 @@ const gitPanel = ref(null)
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 const mode = ref('edit');
+const previewMode = ref('toggle');
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const previewContainer = ref(null);
@@ -947,10 +949,21 @@ const setupEditorListeners = () => {
     );
   }
 
+  const syncRealtimePreviewScroll = debounce(() => {
+    if (!editor) return;
+    if (!showPreview.value) return;
+    if (previewMode.value !== 'realtime') return;
+
+    const ranges = editor.getVisibleRanges();
+    const topLine = ranges?.[0]?.startLineNumber || editor.getPosition()?.lineNumber || 1;
+    scrollPreviewToLine(topLine);
+  }, 50);
+
   editor.onDidScrollChange(() => {
     if (tableToolbarVisible.value) {
       updateTableToolbar();
     }
+    syncRealtimePreviewScroll();
   });
 
   editor.onDidChangeModelLanguage(() => {
@@ -1690,14 +1703,17 @@ const updateEditorContent = (content) => {
 };
 
 // 保存内容
-const saveContent = () => {
+const saveContent = async () => {
   if (selectedFile.value && editor) {
     const content = editor.getValue();
-    fileTreeStore.updateFileContent(selectedFile.value.path, content);
+    await fileTreeStore.updateFileContent(selectedFile.value.path, content);
     message.info('修改已保存');
     // 如果是vim模式，也显示保存提示
     if (vimMode.value) {
       message.info('修改已保存');
+    }
+    if (previewMode.value === 'split' && canPreview.value) {
+      renderDebounced(content);
     }
   }
 };
@@ -1777,34 +1793,64 @@ const scrollPreviewToLine = (lineNumber) => {
   container.scrollTop += offset - container.clientHeight * 0.2;
 };
 
-// 切换模式
-const toggleMode = debounce(async () => {
-  const isEdit = mode.value === 'edit';
+const syncEditorToLine = (lineNumber, { focus = true } = {}) => {
+  if (!lineNumber) return;
+  if (!editor) {
+    initEditor();
+  }
+  if (!editor) return;
 
-  if (isEdit && editor) {
+  editor.revealLineInCenter(lineNumber);
+  editor.setPosition({ lineNumber, column: 1 });
+  if (focus) {
+    editor.focus();
+  }
+};
+
+const handlePreviewClick = (e) => {
+  const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
+  if (!base) return;
+  const hit = base.closest('[data-md-start-line]');
+  if (!hit) return;
+
+  const line = Number(hit.dataset.mdStartLine || 1);
+  const shouldFocus = showEditor.value;
+  syncEditorToLine(line, { focus: shouldFocus });
+};
+
+const setMainMode = async (nextMode) => {
+  if (nextMode !== 'edit' && nextMode !== 'preview') return;
+  if (mode.value === nextMode) return;
+
+  if (mode.value === 'edit' && nextMode === 'preview' && editor) {
     const pos = editor.getPosition();
     pendingPreviewScrollLine.value =
       (pos && pos.lineNumber) || editorStore.cursorPosition.lineNumber || 1;
   }
 
   captureScrollPosition();
-  mode.value = isEdit ? 'preview' : 'edit';
+  mode.value = nextMode;
+
+  await nextTick();
 
   if (mode.value === 'edit') {
-    await nextTick();
     if (!editor) {
       initEditor();
     }
+    if (editor) {
+      editor.layout();
+    }
     restoreScrollPosition();
-  } else {
-    renderDebounced(rawContent.value);
-    restoreScrollPosition();
+    return;
   }
-}, 150);
+
+  renderDebounced(rawContent.value);
+  restoreScrollPosition();
+};
 
 // 防抖渲染
 const renderDebounced = debounce(async (content) => {
-  if (!selectedFile.value || !mode.value || !content) {
+  if (!selectedFile.value || !mode.value || !content || !canPreview.value) {
     renderedHtml.value = '';
     return;
   }
@@ -1835,6 +1881,13 @@ const renderDebounced = debounce(async (content) => {
     `;
   }
 }, 300);
+
+const canPreview = computed(() => {
+  const path = selectedFile.value?.path || '';
+  const ext = path.split('.').pop()?.toLowerCase();
+  if (ext === 'md' || ext === 'markdown') return true;
+  return editorStore.language === 'markdown';
+});
 
 // 监听文件选择
 watch(selectedFile, async (newFile) => {
@@ -1885,8 +1938,7 @@ watch(selectedFile, async (newFile) => {
       return
     }
 
-    // 如果是预览模式立即渲染
-    if (mode.value === 'preview') {
+    if (canPreview.value && (mode.value === 'preview' || previewMode.value !== 'toggle')) {
       renderDebounced(newFile.content)
     }
 
@@ -1901,9 +1953,114 @@ watch(selectedFile, async (newFile) => {
   }
 }, { immediate: true });
 
-// 监听内容变化
-watch([rawContent, mode], () => {
-  if (mode.value === 'preview') {
+const previewModeOptions = [
+  { label: '编辑模式', key: 'edit' },
+  { label: '预览模式', key: 'preview' },
+  { label: '分屏预览', key: 'split' },
+  { label: '实时预览', key: 'realtime' }
+];
+
+const previewModeLabel = computed(() => {
+  if (previewMode.value === 'toggle') {
+    return mode.value === 'edit' ? '编辑模式' : '预览模式';
+  }
+  return previewMode.value === 'split' ? '分屏预览' : '实时预览';
+});
+
+const previewModeIcon = computed(() => {
+  if (previewMode.value === 'toggle') {
+    return mode.value === 'edit' ? 'lucide:file-pen-line' : 'lucide:eye';
+  }
+  return previewMode.value === 'split' ? 'lucide:columns-2' : 'lucide:sparkles';
+});
+
+const showEditor = computed(() => {
+  if (!selectedFile.value) return false;
+  return previewMode.value === 'toggle' ? mode.value === 'edit' : true;
+});
+
+const showPreview = computed(() => {
+  if (!selectedFile.value || !canPreview.value) return false;
+  return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
+});
+
+watch(
+  () => editorStore.cursorPosition?.lineNumber,
+  (line) => {
+    if (!line) return;
+    if (showPreview.value) {
+      scrollPreviewToLine(line);
+    }
+  },
+  { flush: 'post' }
+);
+
+const shouldAutoRenderPreview = computed(() => {
+  if (!selectedFile.value || !canPreview.value) return false;
+  if (previewMode.value === 'realtime') return true;
+  return previewMode.value === 'toggle' && mode.value === 'preview';
+});
+
+const refreshPreview = () => {
+  renderDebounced(rawContent.value);
+};
+
+const handlePreviewModeSelect = async (key) => {
+  if (key === 'edit') {
+    previewMode.value = 'toggle';
+    await setMainMode('edit');
+    return;
+  }
+
+  if (key === 'preview') {
+    if (!canPreview.value) {
+      message.warning('仅 Markdown 文件支持预览');
+      previewMode.value = 'toggle';
+      await setMainMode('edit');
+      return;
+    }
+    previewMode.value = 'toggle';
+    await setMainMode('preview');
+    return;
+  }
+
+  if (key === 'split' || key === 'realtime') {
+    if (!canPreview.value) {
+      message.warning('仅 Markdown 文件支持预览');
+      previewMode.value = 'toggle';
+      await setMainMode('edit');
+      renderedHtml.value = '';
+      return;
+    }
+
+    previewMode.value = key;
+    await setMainMode('edit');
+    await nextTick();
+    refreshPreview();
+  }
+};
+
+watch(previewMode, async (nextMode) => {
+  if (nextMode === 'toggle') return;
+
+  if (!canPreview.value) {
+    message.warning('仅 Markdown 文件支持预览');
+    previewMode.value = 'toggle';
+    await setMainMode('edit');
+    renderedHtml.value = '';
+    return;
+  }
+
+  await nextTick();
+  if (!editor) {
+    initEditor();
+  }
+
+  refreshPreview();
+});
+
+watch([rawContent, shouldAutoRenderPreview], () => {
+  if (shouldAutoRenderPreview.value) {
     renderDebounced(rawContent.value);
   }
 });
@@ -2565,6 +2722,65 @@ onUnmounted(() => {
 
 .mode-toggle:hover {
   background-color: var(--hover-color, #f0f0f0);
+}
+
+.editor-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.editor-content.toggle {
+  flex-direction: column;
+}
+
+.editor-content.split {
+  flex-direction: row;
+}
+
+.editor-content.split .preview,
+.editor-content.split .editor-wrapper {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 0;
+}
+
+.editor-content.split .editor-wrapper {
+  border-left: 1px solid var(--divider-color, #e0e0e0);
+}
+
+.editor-content.realtime {
+  position: relative;
+  flex-direction: column;
+}
+
+.editor-content.realtime .preview,
+.editor-content.realtime .editor-wrapper {
+  position: absolute;
+  inset: 0;
+}
+
+.editor-content.realtime .preview {
+  z-index: 1;
+}
+
+.editor-content.realtime .editor-wrapper {
+  z-index: 2;
+}
+
+.editor-content.realtime .monaco-editor,
+.editor-content.realtime .monaco-editor-background,
+.editor-content.realtime .monaco-editor .margin {
+  background-color: transparent !important;
+}
+
+.editor-content.realtime .monaco-editor .view-lines {
+  opacity: 0;
+}
+
+.editor-content.realtime .monaco-editor .cursor {
+  opacity: 1 !important;
 }
 
 .editor-wrapper {
