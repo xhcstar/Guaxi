@@ -1189,11 +1189,12 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  margin-bottom: 8px;
-  background-color: #ffffff;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  padding: 12px 14px;
+  margin-bottom: 0;
+  background-color: var(--n-card-color, #fffe);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .title-container {
@@ -1204,37 +1205,25 @@ onUnmounted(() => {
 }
 
 .repo-title-header {
-  font-size: 18px !important;
-  /* 使用!important确保覆盖其他样式 */
+  font-size: 15px !important;
   font-weight: 600;
-  color: #191b1b;
-  letter-spacing: 0.5px;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+  color: var(--n-text-color, rgba(0, 0, 0, 0.9));
   display: flex;
   align-items: center;
   margin: 0;
-  /* 移除可能影响大小的外边距 */
   padding: 0;
-  /* 移除可能影响大小的内边距 */
   line-height: 1.2;
-  /* 设置合适的行高 */
 }
 
 .repo-title {
-  font-size: 15px !important;
-  /* 使用!important确保覆盖其他样式 */
-  font-weight: 600;
-  color: #191b1b;
-  letter-spacing: 0.5px;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+  font-size: 13px !important;
+  font-weight: 500;
+  color: var(--n-text-color, rgba(0, 0, 0, 0.9));
   display: flex;
   align-items: center;
   margin: 0;
-  /* 移除可能影响大小的外边距 */
   padding: 0;
-  /* 移除可能影响大小的内边距 */
   line-height: 1.2;
-  /* 设置合适的行高 */
 }
 
 /* 刷新按钮样式调整 */
@@ -1255,10 +1244,11 @@ onUnmounted(() => {
   height: calc(100% - var(--scrollbar-height, 42px));
   display: flex;
   flex-direction: column;
-  background-color: var(--n-color-embedded);
+  background-color: var(--n-card-color, #fff);
+  border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
 }
 
 .toolbar {
@@ -1280,7 +1270,15 @@ onUnmounted(() => {
 .repo-scroll-container {
   flex: 1;
   height: 0;
-  background-color: #ffffff;
+  background-color: transparent;
+}
+
+:deep(.repo-scroll-container .n-scrollbar-rail) {
+  width: 6px;
+}
+
+:deep(.repo-scroll-container .n-scrollbar-rail__scrollbar) {
+  border-radius: 3px;
 }
 
 .repo-list {
@@ -1304,8 +1302,8 @@ onUnmounted(() => {
 
 /* 鼠标悬停效果 - 添加发光边框和背景 */
 .repo-list-item:hover {
-  background-color: rgba(24, 144, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(24, 144, 255, 0.2);
+  background-color: rgba(0, 0, 0, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 /* 鼠标悬停时的文字和图标效果 */
@@ -1323,17 +1321,16 @@ onUnmounted(() => {
 
 /* 选中状态效果*/
 .repo-list-item.active {
-  background-color: rgba(24, 144, 255, 0.16);
-  /* 比原来更深一点 */
+  background-color: rgba(0, 0, 0, 0.04);
   border-left: 3px solid #1890ff;
-  box-shadow: inset 0 0 8px rgba(24, 144, 255, 0.13);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.08);
 }
 
 /* 暗色模式下选中状态更明显 */
 .dark-mode .repo-list-item.active {
-  background-color: rgba(24, 144, 255, 0.22);
+  background-color: rgba(255, 255, 255, 0.06);
   border-left: 3px solid #8ab4f8;
-  box-shadow: inset 0 0 8px rgba(138, 180, 248, 0.18);
+  box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.08);
 }
 
 /* 选中状态下的文字和图标 */
@@ -1388,9 +1385,44 @@ onUnmounted(() => {
   width: 100%;
 }
 
-/* 节点悬停效果 */
-.n-tree-node:hover {
-  background: rgba(0, 0, 0, 0.05);
+:deep(.tree-component .n-tree-node) {
+  padding: 0;
+}
+
+:deep(.tree-component .n-tree-node-content) {
+  margin: 2px 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+:deep(.tree-component .n-tree-node-content__text) {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+:deep(.tree-component .n-tree-node-content:hover) {
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.03), #ffffff);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.18), 0 2px 12px 0 rgba(7, 118, 161, 0.1);
+  transform: scale(1.01);
+}
+
+:deep(.tree-component .n-tree-node--selected .n-tree-node-content) {
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.045), #ffffff);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.26), 0 2px 12px 0 rgba(7, 118, 161, 0.14);
+  animation: file-tree-select-pop 160ms ease-out;
+}
+
+@keyframes file-tree-select-pop {
+  from {
+    transform: scale(1);
+  }
+  60% {
+    transform: scale(1.02);
+  }
+  to {
+    transform: scale(1.01);
+  }
 }
 
 /* 编辑输入框样式 */
@@ -1419,16 +1451,12 @@ onUnmounted(() => {
 
 /* 暗色模式适配 */
 .dark-mode .file-tree-container {
-  background-color: var(--n-color-embedded);
-}
-
-.dark-mode .toolbar {
-  background-color: rgba(30, 30, 30, 0.7) !important;
-  border-bottom: 1px solid #333 !important;
+  background-color: var(--n-card-color, #1a1a1a);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .dark-mode .repo-scroll-container {
-  background-color: #1a1a1a;
+  background-color: transparent;
 }
 
 /* 选中状态下的 action/refresh 图标 */
