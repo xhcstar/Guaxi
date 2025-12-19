@@ -6,6 +6,8 @@ use lazy_static::lazy_static;
 use lru::LruCache;
 use parking_lot::RwLock;
 use rayon::prelude::*;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
@@ -185,33 +187,31 @@ pub async fn fd_search(
 
     info!("Total files: {:?}", file_paths);
 
-    // 使用rayon的par_iter()进行并行处理
-    let results: Vec<SearchResult> = file_paths
+    let mut results: Vec<SearchResult> = file_paths
         .par_iter()
-        .filter_map(|entry| {
+        .map_init(|| SkimMatcherV2::default(), |matcher, entry| {
             if let Some(id) = &search_id {
                 if SEARCH_MANAGER.is_cancelled(id) {
                     return None;
                 }
             }
 
-            if let Some(file_name) = entry.path().file_name() {
-                let file_name = file_name.to_string_lossy();
-                if file_name.contains(&pattern) {
-                    // 修改3：确保只返回文件名搜索结果
-                    return Some(SearchResult {
-                        path: entry.path().to_string_lossy().to_string(),
-                        file_name: file_name.into_owned(),
-                        preview: None,
-                        line_number: None,
-                        matches: vec![],
-                        score: 0,
-                    });
-                }
-            }
-            None
+            let file_name = entry.path().file_name()?.to_string_lossy().to_string();
+            let score = matcher.fuzzy_match(&file_name, &pattern)?;
+
+            Some(SearchResult {
+                path: entry.path().to_string_lossy().to_string(),
+                file_name,
+                preview: None,
+                line_number: None,
+                matches: vec![],
+                score: score as u32,
+            })
         })
+        .filter_map(|x| x)
         .collect();
+
+    results.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.file_name.cmp(&b.file_name)));
 
     // 更新缓存（使用写锁）
     {

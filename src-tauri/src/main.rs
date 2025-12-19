@@ -199,6 +199,12 @@ async fn main() {
             commands::git::get_commit_file_diff,
             commands::git::get_commit_files,
             commands::serverview::init_backend_services,
+            commands::markdowncheck::markdown_format,
+            commands::markdowncheck::markdown_batch_format,
+            commands::markdowncheck::get_default_format_options,
+            commands::markdowncheck::validate_markdown,
+            commands::markdowncheck::markdown_clean,
+            commands::markdowncheck::markdown_stats,
         ])
         .setup(|app| {
             // 直接启动服务而不使用spawn

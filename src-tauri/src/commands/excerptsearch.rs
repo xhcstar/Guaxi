@@ -2,6 +2,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExcerptNote {
@@ -88,30 +90,57 @@ fn find_notes_dirs(libraries_path: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 fn search_notes_in_dir(notes_dir: &Path, pattern: &str) -> std::io::Result<Vec<ExcerptNote>> {
-    let mut results = Vec::new();
-
-    for entry in std::fs::read_dir(notes_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.extension().map_or(false, |ext| ext == "json") {
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            // 只匹配文件名（不再检查文件内容）
-            if pattern.is_empty() || file_name.contains(pattern) {
+    if pattern.is_empty() {
+        let mut results = Vec::new();
+        for entry in std::fs::read_dir(notes_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json") {
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
                 results.push(ExcerptNote {
                     file_path: path.to_string_lossy().into_owned(),
                     file_name,
                 });
             }
         }
+        return Ok(results);
     }
 
-    Ok(results)
+    let matcher = SkimMatcherV2::default();
+    let mut scored: Vec<(i64, ExcerptNote)> = Vec::new();
+
+    for entry in std::fs::read_dir(notes_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if !path.extension().map_or(false, |ext| ext == "json") {
+            continue;
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        if let Some(score) = matcher.fuzzy_match(&file_name, pattern) {
+            scored.push((
+                score,
+                ExcerptNote {
+                    file_path: path.to_string_lossy().into_owned(),
+                    file_name,
+                },
+            ));
+        }
+    }
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.file_name.cmp(&b.1.file_name)));
+
+    Ok(scored.into_iter().map(|(_, note)| note).collect())
 }
 
 #[tauri::command]
