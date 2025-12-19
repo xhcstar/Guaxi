@@ -5,14 +5,31 @@
       <div class="title-container">
         <n-text class="repo-title-header">知识库编辑</n-text>
       </div>
-      <n-tooltip trigger="hover">
-        <template #trigger>
-          <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshAll">
-            <n-icon :component="RefreshIcon" size="16" />
-          </n-icon-wrapper>
-        </template>
-        刷新所有目录
-      </n-tooltip>
+      <div class="header-actions">
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper
+              :size="18"
+              :border-radius="6"
+              class="browser-icon"
+              :class="{ active: browserPreviewEnabled }"
+              @click="toggleBrowserPreview"
+            >
+              <n-icon :component="GlobeOutline" size="16" />
+            </n-icon-wrapper>
+          </template>
+          {{ browserPreviewEnabled ? '浏览器预览：已开启' : '浏览器预览：已关闭' }}
+        </n-tooltip>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshAll">
+              <n-icon :component="RefreshIcon" size="16" />
+            </n-icon-wrapper>
+          </template>
+          刷新所有目录
+        </n-tooltip>
+      </div>
     </div>
 
     <n-scrollbar class="repo-scroll-container">
@@ -63,12 +80,13 @@
 
 <script setup>
 import { NTree, NIcon, useMessage } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { h, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
 import { NList, NListItem, NCollapseTransition, NText, NTooltip, NIconWrapper } from 'naive-ui'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
@@ -78,6 +96,32 @@ import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, Fold
 const message = useMessage();
 // 处理文件树容器的右键点击事件
 const treeRef = ref(null)
+
+const BROWSER_PREVIEW_URL = 'http://localhost:8888/browser/knowledge-bases'
+const browserPreviewEnabled = ref(
+  JSON.parse(localStorage.getItem('guaxi_browser_preview_enabled') || 'false')
+)
+
+const toggleBrowserPreview = async () => {
+  const next = !browserPreviewEnabled.value
+  browserPreviewEnabled.value = next
+  localStorage.setItem('guaxi_browser_preview_enabled', JSON.stringify(next))
+
+  if (!next) return
+
+  try {
+    await openUrl(BROWSER_PREVIEW_URL)
+  } catch (e) {
+    browserPreviewEnabled.value = false
+    localStorage.setItem('guaxi_browser_preview_enabled', JSON.stringify(false))
+    message.error('打开浏览器失败，请确认已启用 opener 插件')
+  }
+}
+
+const isMarkdownFilePath = (p) => {
+  const v = String(p || '').toLowerCase()
+  return v.endsWith('.md') || v.endsWith('.markdown')
+}
 
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
@@ -129,6 +173,12 @@ const contextMenuOptions = ref([
     label: '在文件浏览器中打开',
     key: 'openInExplorer',
     icon: () => h(NIcon, null, { default: () => h(FolderOutline) })
+  },
+  {
+    label: '在浏览器中查看',
+    key: 'openInBrowser',
+    disabled: true,
+    icon: () => h(NIcon, null, { default: () => h(GlobeOutline) })
   },
 ])
 
@@ -409,6 +459,14 @@ const nodeProps = ({ option }) => ({
     e.preventDefault()
     e.stopPropagation()
     selectedNode.value = option
+
+    const nodePath = normalizePath(option.id)
+    const canOpenInBrowser = !option.is_directory && isMarkdownFilePath(nodePath)
+    const openInBrowserOpt = contextMenuOptions.value.find(o => o.key === 'openInBrowser')
+    if (openInBrowserOpt) {
+      openInBrowserOpt.disabled = !canOpenInBrowser
+    }
+
     isContextMenuVisible.value = true
     contextMenuPosition.value = { x: e.clientX, y: e.clientY }
     console.log('节点右键菜单触发:', option.name)
@@ -450,6 +508,17 @@ const handleContextMenuSelect = async (key) => {
           if (targetPath) {
             await invoke('open_in_file_explorer', { path: targetPath });
           }
+        }
+        break;
+      case 'openInBrowser':
+        if (selectedNode.value && !selectedNode.value.is_directory) {
+          const nodePath = normalizePath(selectedNode.value.id)
+          if (!isMarkdownFilePath(nodePath)) {
+            message.warning('仅支持 Markdown 文件')
+            break
+          }
+          const url = `http://localhost:8888/browser/preview?path=${encodeURIComponent(nodePath)}`
+          await openUrl(url)
         }
         break;
     }
@@ -1197,6 +1266,12 @@ onUnmounted(() => {
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .title-container {
   display: flex;
   align-items: center;
@@ -1461,7 +1536,8 @@ onUnmounted(() => {
 
 /* 选中状态下的 action/refresh 图标 */
 .repo-list-item.active .action-icon,
-.repo-list-item.active .refresh-icon {
+.repo-list-item.active .refresh-icon,
+.repo-list-item.active .browser-icon {
   color: var(--n-color-primary, #1890ff);
   background-color: var(--n-color-primary-suppl, #e6f7ff);
 }
@@ -1475,7 +1551,8 @@ onUnmounted(() => {
 
 /* 暗色模式下 action/refresh 图标 */
 .dark-mode .action-icon,
-.dark-mode .refresh-icon {
+.dark-mode .refresh-icon,
+.dark-mode .browser-icon {
   color: #444a57;
   background-color: transparent;
 }
@@ -1484,8 +1561,11 @@ onUnmounted(() => {
 .dark-mode .action-icon.active,
 .dark-mode .refresh-icon:hover,
 .dark-mode .refresh-icon.active,
+.dark-mode .browser-icon:hover,
+.dark-mode .browser-icon.active,
 .dark-mode .repo-list-item.active .action-icon,
-.dark-mode .repo-list-item.active .refresh-icon {
+.dark-mode .repo-list-item.active .refresh-icon,
+.dark-mode .repo-list-item.active .browser-icon {
   color: #8ab4f8;
   background-color: rgba(65, 105, 225, 0.13);
 }
@@ -1505,7 +1585,8 @@ onUnmounted(() => {
 
 /* Action/refresh 图标基础样式（合并） */
 .action-icon,
-.refresh-icon {
+.refresh-icon,
+.browser-icon {
   color: var(--n-text-color-disabled, #bfbfbf);
   /* 平时较淡，与背景接近 */
   background-color: transparent;
@@ -1517,7 +1598,9 @@ onUnmounted(() => {
 .action-icon:hover,
 .action-icon.active,
 .refresh-icon:hover,
-.refresh-icon.active {
+.refresh-icon.active,
+.browser-icon:hover,
+.browser-icon.active {
   color: var(--n-color-primary, #1890ff);
   /* 选中时主色 */
   background-color: var(--n-color-primary-suppl, #e6f7ff);
