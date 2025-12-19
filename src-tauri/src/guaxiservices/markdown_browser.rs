@@ -1,10 +1,10 @@
 use crate::commands::knowledgebase::get_knowledge_base_list;
-use tracing::{error, info, warn};
-use urlencoding::{decode, encode};
+use actix_web::{get, web, App, HttpResponse, HttpServer};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use actix_web::{get, web, App, HttpResponse, HttpServer};
+use tracing::{error, info, warn};
+use urlencoding::{decode, encode};
 fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -383,23 +383,29 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
     code {{ font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; }}
     img {{ max-width: 100%; }}
     a {{ color: #0969da; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
+    th, td {{ border: 1px solid rgba(0,0,0,0.16); padding: 6px 10px; }}
+    thead th {{ background: rgba(0,0,0,0.04); }}
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"></script>
-  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
-window.MathJax = {{
-  tex: {{
-    inlineMath: [['$', '$'], ['\\(', '\\)']],
-    displayMath: [['$$', '$$'], ['\\[', '\\]']],
-    processEscapes: true,
-    tags: 'ams'
-    }},
-  svg: {{
-    fontCache: 'global'
-    }}
+  <link rel="stylesheet" href="/browser/assets/highlightjs/styles/atom-one-light.css" />
+  <script>
+    window.MathJax = {{
+      tex: {{
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true,
+        tags: 'ams'
+        }},
+      svg: {{
+        fontCache: 'global'
+      }}
     }};
-</script>
-</head>
+  </script>
+  <script src="/browser/assets/markdown-it/markdown-it.min.js"></script>
+  <script src="/browser/assets/mermaid/mermaid.min.js"></script>
+  <script id="MathJax-script" src="/browser/assets/mathjax/tex-svg.js"></script>
+  <script src="/browser/assets/highlightjs/highlight.min.js"></script>
+  </head>
 <body>
   <div class="topbar">
     <div class="title">{title}</div>
@@ -493,6 +499,19 @@ window.MathJax = {{
         }} catch (_) {{
         }}
       }}
+
+      if (window.hljs) {{
+        try {{
+          const codeBlocks = contentEl.querySelectorAll('pre code');
+          codeBlocks.forEach((codeEl) => {{
+            try {{
+              window.hljs.highlightElement(codeEl);
+            }} catch (_) {{
+            }}
+          }});
+        }} catch (_) {{
+        }}
+      }}
     }}
 
     loadAndRender().catch((e) => {{
@@ -514,11 +533,56 @@ window.MathJax = {{
         .body(html)
 }
 
+#[get("/browser/assets/markdown-it/markdown-it.min.js")]
+async fn browser_asset_markdown_it() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/markdown-it.min.js"))
+}
+
+#[get("/browser/assets/mermaid/mermaid.min.js")]
+async fn browser_asset_mermaid() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/mermaid.min.js"))
+}
+
+#[get("/browser/assets/mathjax/tex-svg.js")]
+async fn browser_asset_mathjax() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/tex-svg.js"))
+}
+
+#[get("/browser/assets/highlightjs/highlight.min.js")]
+async fn browser_asset_highlight_js() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("application/javascript; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/highlight.min.js"))
+}
+
+#[get("/browser/assets/highlightjs/styles/atom-one-light.css")]
+async fn browser_asset_highlight_css() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/css; charset=utf-8")
+        .append_header(("Cache-Control", "no-store"))
+        .body(include_str!("../../assets/vendor/atom-one-light.css"))
+}
+
 pub fn browser_preview_config(cfg: &mut web::ServiceConfig) {
     cfg.service(favicon)
         .service(browser_index)
         .service(browser_knowledge_bases)
         .service(browser_knowledge_base_files)
         .service(browser_raw)
+        .service(browser_asset_markdown_it)
+        .service(browser_asset_mermaid)
+        .service(browser_asset_mathjax)
+        .service(browser_asset_highlight_js)
+        .service(browser_asset_highlight_css)
         .service(browser_preview);
 }

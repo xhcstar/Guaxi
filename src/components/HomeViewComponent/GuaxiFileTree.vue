@@ -98,14 +98,11 @@ const message = useMessage();
 const treeRef = ref(null)
 
 const BROWSER_PREVIEW_URL = 'http://localhost:8888/browser/knowledge-bases'
-const browserPreviewEnabled = ref(
-  JSON.parse(localStorage.getItem('guaxi_browser_preview_enabled') || 'false')
-)
+const browserPreviewEnabled = ref(false)
 
 const toggleBrowserPreview = async () => {
   const next = !browserPreviewEnabled.value
   browserPreviewEnabled.value = next
-  localStorage.setItem('guaxi_browser_preview_enabled', JSON.stringify(next))
 
   if (!next) return
 
@@ -113,7 +110,6 @@ const toggleBrowserPreview = async () => {
     await openUrl(BROWSER_PREVIEW_URL)
   } catch (e) {
     browserPreviewEnabled.value = false
-    localStorage.setItem('guaxi_browser_preview_enabled', JSON.stringify(false))
     message.error('打开浏览器失败，请确认已启用 opener 插件')
   }
 }
