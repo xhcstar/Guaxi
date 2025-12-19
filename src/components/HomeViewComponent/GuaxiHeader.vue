@@ -96,7 +96,7 @@
       </div>
 
       <div v-if="historyItems.length" class="search-dd-section">
-        <div class="search-dd-section-title">最近/高频</div>
+        <div class="search-dd-section-title">最近搜索</div>
         <div
           v-for="item in historyItems"
           :key="`history:${item._historyKey}`"
@@ -705,7 +705,7 @@ const dropdownOptions = computed(() => {
   if (!q) {
     const options = []
     if (historyItems.length > 0) {
-      options.push({ label: '最近/高频', key: '__recent_title__', disabled: true })
+      options.push({ label: '最近搜索', key: '__recent_title__', disabled: true })
       for (const e of historyItems) {
         options.push({
           key: `history:${e.type}:${encodeURIComponent(e.query)}`,
@@ -720,7 +720,7 @@ const dropdownOptions = computed(() => {
   const options = [...typeOptions, { type: 'divider', key: '__divider__' }]
 
   if (historyItems.length > 0) {
-    options.push({ label: '最近/高频', key: '__recent_title__', disabled: true })
+    options.push({ label: '最近搜索', key: '__recent_title__', disabled: true })
     for (const e of historyItems) {
       options.push({
         key: `history:${e.type}:${encodeURIComponent(e.query)}`,
