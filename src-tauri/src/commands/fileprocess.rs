@@ -13,24 +13,71 @@ pub struct FileNode {
 
 // 辅助函数：规范化路径分隔符
 fn normalize_path(path: &str) -> PathBuf {
-    PathBuf::from(path.replace('\\', "/"))
+    use std::path::Component;
+
+    let mut s = path.trim().replace('\\', "/");
+
+    if s.starts_with('/') && s.len() >= 4 {
+        let bytes = s.as_bytes();
+        if bytes[2] == b':' && bytes[3] == b'/' {
+            s = s[1..].to_string();
+        }
+    }
+
+    let mut out = PathBuf::new();
+    let mut anchored = false;
+    let mut depth = 0usize;
+
+    for comp in Path::new(&s).components() {
+        match comp {
+            Component::Prefix(p) => {
+                out.push(p.as_os_str());
+                anchored = true;
+                depth = 0;
+            }
+            Component::RootDir => {
+                out.push(Path::new("/"));
+                anchored = true;
+                depth = 0;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if depth > 0 {
+                    out.pop();
+                    depth -= 1;
+                } else if !anchored {
+                    out.push("..");
+                }
+            }
+            Component::Normal(part) => {
+                out.push(part);
+                depth += 1;
+            }
+        }
+    }
+
+    out
 }
 
 #[tauri::command]
 pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
+    let raw_path = path.clone();
     let path = normalize_path(&path);
     let dir = Path::new(&path);
 
-    // 使用 .display() 方法格式化路径
-    info!("get_file_tree: {}", dir.display());
-    info!("get_file_tree: {:?}", dir);
+    info!("get_file_tree input: {}", raw_path);
+    info!("get_file_tree normalized: {}", dir.display());
+    info!("get_file_tree normalized(debug): {:?}", dir);
 
     if !dir.is_dir() {
+        warn!("get_file_tree: not a directory: {}", dir.display());
         return Err("路径不是目录".to_string());
     }
 
     let mut nodes = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+    for entry in fs::read_dir(dir)
+        .map_err(|e| format!("read_dir failed: {} ({})", e, dir.display()))?
+    {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         let is_directory = path.is_dir();

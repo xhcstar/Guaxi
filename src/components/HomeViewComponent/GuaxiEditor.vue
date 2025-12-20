@@ -43,7 +43,7 @@
               <Icon icon="lucide:bold" width="16" height="16" />
             </n-button>
           </template>
-          加粗
+          加粗 (Ctrl+B)
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
@@ -51,7 +51,7 @@
               <Icon icon="lucide:italic" width="16" height="16" />
             </n-button>
           </template>
-          斜体
+          斜体 (Ctrl+I)
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
@@ -59,7 +59,7 @@
               <Icon icon="lucide:strikethrough" width="16" height="16" />
             </n-button>
           </template>
-          删除线
+          删除线 (Ctrl+Shift+X)
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
@@ -67,7 +67,7 @@
               <Icon icon="lucide:link" width="16" height="16" />
             </n-button>
           </template>
-          链接
+          链接 (Ctrl+K)
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
@@ -125,7 +125,7 @@
               <Icon icon="lucide:table" width="16" height="16" />
             </n-button>
           </template>
-          表格
+          表格 (Ctrl+Alt+T)
         </n-tooltip>
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
@@ -191,7 +191,7 @@
                 <Icon :icon="previewModeIcon" width="16" height="16" />
               </n-button>
             </template>
-            {{ previewModeLabel }}
+            {{ previewModeLabel }} (Ctrl+1/2/3/4)
           </n-tooltip>
         </n-dropdown>
 
@@ -220,7 +220,7 @@
                 <Icon icon="mdi:table-row-plus-after" width="16" height="16" />
               </n-button>
             </template>
-            新增行
+            新增行 (Ctrl+Alt+↓)
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -228,7 +228,7 @@
                 <Icon icon="mdi:table-row-remove" width="16" height="16" />
               </n-button>
             </template>
-            删除行
+            删除行 (Ctrl+Alt+Shift+↓)
           </n-tooltip>
           <div class="floating-table-toolbar-divider"></div>
           <n-tooltip placement="top" trigger="hover">
@@ -237,7 +237,7 @@
                 <Icon icon="mdi:table-column-plus-after" width="16" height="16" />
               </n-button>
             </template>
-            新增列
+            新增列 (Ctrl+Alt+→)
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -245,7 +245,7 @@
                 <Icon icon="mdi:table-column-remove" width="16" height="16" />
               </n-button>
             </template>
-            删除列
+            删除列 (Ctrl+Alt+Shift+→)
           </n-tooltip>
           <div class="floating-table-toolbar-divider"></div>
           <n-tooltip placement="top" trigger="hover">
@@ -290,7 +290,7 @@
                 <Icon icon="lucide:bold" width="16" height="16" />
               </n-button>
             </template>
-            加粗
+            加粗 (Ctrl+B)
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -298,7 +298,7 @@
                 <Icon icon="lucide:italic" width="16" height="16" />
               </n-button>
             </template>
-            斜体
+            斜体 (Ctrl+I)
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -306,7 +306,7 @@
                 <Icon icon="lucide:strikethrough" width="16" height="16" />
               </n-button>
             </template>
-            删除线
+            删除线 (Ctrl+Shift+X)
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -314,7 +314,7 @@
                 <Icon icon="lucide:link" width="16" height="16" />
               </n-button>
             </template>
-            链接
+            链接 (Ctrl+K)
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -366,7 +366,7 @@ import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
-import { dirname } from '@tauri-apps/api/path'
+import { dirname, homeDir } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
@@ -785,6 +785,303 @@ let vimModeInstance = null;
 
 let markdownFeaturesRegistered = false;
 
+let filesystemPathCompletionRegistered = false;
+const filesystemPathCompletionCache = new Map();
+const filesystemPathCompletionInflight = new Map();
+let filesystemPathCompletionDocPath = '';
+let filesystemPathCompletionDocDir = '';
+let filesystemPathCompletionHomeDir = '';
+
+const normalizeFsPath = (p) => {
+  let s = (p || '').replace(/\\/g, '/');
+  // Fix Windows drive path like `/C:/...` which may break relative completion like `../`
+  if (/^\/[a-zA-Z]:\//.test(s)) {
+    s = s.slice(1);
+  }
+  return s;
+};
+
+const joinFsPath = (base, sub) => {
+  const a = normalizeFsPath(base).replace(/\/+$/, '');
+  const b = normalizeFsPath(sub).replace(/^\/+/, '');
+  if (!a) return b;
+  if (!b) return a;
+  return `${a}/${b}`;
+};
+
+const getFilesystemCompletionDocDir = async () => {
+  const p = selectedFile.value?.path || '';
+  if (!p) return fileTreeStore.activeRepoPath || '';
+  if (p === filesystemPathCompletionDocPath && filesystemPathCompletionDocDir) {
+    return filesystemPathCompletionDocDir;
+  }
+  filesystemPathCompletionDocPath = p;
+  try {
+    filesystemPathCompletionDocDir = await dirname(p);
+  } catch {
+    filesystemPathCompletionDocDir = fileTreeStore.activeRepoPath || '';
+  }
+  return filesystemPathCompletionDocDir;
+};
+
+const getFilesystemCompletionHomeDir = async () => {
+  if (filesystemPathCompletionHomeDir) return filesystemPathCompletionHomeDir;
+  try {
+    filesystemPathCompletionHomeDir = await homeDir();
+  } catch {
+    filesystemPathCompletionHomeDir = '';
+  }
+  return filesystemPathCompletionHomeDir;
+};
+
+const isFilesystemPathContext = (beforeCursor) => {
+  const s = beforeCursor || '';
+  if (/\]\(\s*$/.test(s)) return true;
+  if (/!\[[^\]]*\]\(\s*$/.test(s)) return true;
+  if (/(src|href)=['"]\s*$/.test(s)) return true;
+  if (/\(\s*$/.test(s)) return true;
+  return false;
+};
+
+const extractPathToken = (beforeCursor) => {
+  if (!beforeCursor) return '';
+  let i = beforeCursor.length - 1;
+  while (i >= 0) {
+    const ch = beforeCursor[i];
+    if (
+      /\s/.test(ch) ||
+      ch === '"' ||
+      ch === "'" ||
+      ch === ')' ||
+      ch === '(' ||
+      ch === '[' ||
+      ch === ']' ||
+      ch === '<' ||
+      ch === '>' ||
+      ch === '`' ||
+      ch === '{' ||
+      ch === '}'
+    ) {
+      break;
+    }
+    i -= 1;
+  }
+  return beforeCursor.slice(i + 1);
+};
+
+const splitTokenDirAndPartial = (token) => {
+  if (!token) return { dirPrefix: '', partial: '' };
+  if (token === '~') return { dirPrefix: '~/', partial: '' };
+
+  const lastSlash = Math.max(token.lastIndexOf('/'), token.lastIndexOf('\\'));
+  if (lastSlash >= 0) {
+    return {
+      dirPrefix: token.slice(0, lastSlash + 1),
+      partial: token.slice(lastSlash + 1)
+    };
+  }
+  if (/^[a-zA-Z]:$/.test(token)) {
+    return { dirPrefix: `${token}/`, partial: '' };
+  }
+  return { dirPrefix: '', partial: token };
+};
+
+const listDirCached = async (dirPath) => {
+  const key = normalizeFsPath(dirPath);
+  const now = Date.now();
+  const cached = filesystemPathCompletionCache.get(key);
+  if (cached && now - cached.ts < 2000) return cached.nodes;
+
+  const inflight = filesystemPathCompletionInflight.get(key);
+  if (inflight) return inflight;
+
+  const p = invoke('get_file_tree', { path: key })
+    .then((nodes) => {
+      const safe = Array.isArray(nodes) ? nodes : [];
+      filesystemPathCompletionCache.set(key, { ts: Date.now(), nodes: safe });
+      return safe;
+    })
+    .catch(() => [])
+    .finally(() => {
+      filesystemPathCompletionInflight.delete(key);
+    });
+
+  filesystemPathCompletionInflight.set(key, p);
+  return p;
+};
+
+const registerFilesystemPathCompletionFeatures = () => {
+  if (filesystemPathCompletionRegistered) return;
+  filesystemPathCompletionRegistered = true;
+
+  const languages = [
+    'markdown',
+    'javascript',
+    'typescript',
+    'python',
+    'cpp',
+    'rust',
+    'shell',
+    'html',
+    'css',
+    'yaml',
+    'java',
+    'lua',
+    'ini',
+    'json'
+  ];
+
+  languages.forEach((language) => {
+    monaco.languages.registerCompletionItemProvider(language, {
+      triggerCharacters: ['/', '\\', '.', ':'],
+      async provideCompletionItems(model, position) {
+        const lineContent = model.getLineContent(position.lineNumber);
+        const beforeCursor = lineContent.slice(0, position.column - 1);
+        const token = extractPathToken(beforeCursor);
+        const pathContext = isFilesystemPathContext(beforeCursor);
+
+        const looksLikePath =
+          (!!token &&
+            (/[\\/]/.test(token) ||
+              token.startsWith('.') ||
+              token.startsWith('~') ||
+              /^[a-zA-Z]:/.test(token))) ||
+          pathContext;
+        if (!looksLikePath) return { suggestions: [] };
+
+        const replaceRange = new monaco.Range(
+          position.lineNumber,
+          Math.max(1, position.column - (token ? token.length : 0)),
+          position.lineNumber,
+          position.column
+        );
+
+        // Align with nvim-cmp: typing '.' / '..' should suggest './' / '../'
+        if (token === '.' || token === '..') {
+          const suggestions = [];
+          if (token === '.') {
+            suggestions.push(
+              {
+                label: './',
+                kind: monaco.languages.CompletionItemKind.Folder,
+                insertText: './',
+                range: replaceRange,
+                detail: '当前目录'
+              },
+              {
+                label: '../',
+                kind: monaco.languages.CompletionItemKind.Folder,
+                insertText: '../',
+                range: replaceRange,
+                detail: '父目录'
+              }
+            );
+          } else {
+            suggestions.push({
+              label: '../',
+              kind: monaco.languages.CompletionItemKind.Folder,
+              insertText: '../',
+              range: replaceRange,
+              detail: '父目录'
+            });
+          }
+          return { suggestions };
+        }
+
+        const { dirPrefix, partial } = splitTokenDirAndPartial(token);
+
+        const tokenStartsAbsolute =
+          /^[a-zA-Z]:[\\/]/.test(token) || token.startsWith('/');
+        const prefixIsAbsolute =
+          /^[a-zA-Z]:[\\/]/.test(dirPrefix) || dirPrefix.startsWith('/');
+        const isHomePrefix = dirPrefix.startsWith('~/') || dirPrefix.startsWith('~\\');
+
+        let dirPath = dirPrefix;
+        if (!dirPath) {
+          dirPath = tokenStartsAbsolute ? '' : await getFilesystemCompletionDocDir();
+        } else if (isHomePrefix) {
+          const base = await getFilesystemCompletionHomeDir();
+          if (!base) return { suggestions: [] };
+          dirPath = joinFsPath(base, dirPrefix.slice(2));
+          if (!dirPrefix.endsWith('/') && !dirPrefix.endsWith('\\')) {
+            dirPath = `${dirPath}/`;
+          }
+        } else if (!prefixIsAbsolute) {
+          const base = await getFilesystemCompletionDocDir();
+          dirPath = joinFsPath(base, dirPath);
+        }
+
+        dirPath = normalizeFsPath(dirPath);
+        if (!dirPath) return { suggestions: [] };
+
+        if (tokenStartsAbsolute && !dirPrefix && token === '/') {
+          dirPath = '/';
+        }
+
+        const nodes = await listDirCached(dirPath);
+        if (!nodes.length) return { suggestions: [] };
+
+        const lowerPartial = (partial || '').toLowerCase();
+        const matching = nodes
+          .filter((n) => {
+            const name = String(n?.name || '');
+            if (!name) return false;
+            if (!lowerPartial) return true;
+            return name.toLowerCase().startsWith(lowerPartial);
+          })
+          .slice(0, 50);
+
+        if (!matching.length) {
+          console.debug('[PathCompletion] no match', {
+            token,
+            dirPrefix,
+            partial,
+            dirPath,
+            nodeCount: nodes.length
+          });
+          return { suggestions: [] };
+        }
+
+        const partialLen = (partial || '').length;
+        const replaceRangeForPartial = new monaco.Range(
+          position.lineNumber,
+          Math.max(1, position.column - partialLen),
+          position.lineNumber,
+          position.column
+        );
+
+        console.debug('[PathCompletion] suggest', {
+          token,
+          dirPrefix,
+          partial,
+          dirPath,
+          nodeCount: nodes.length,
+          matchCount: matching.length
+        });
+
+        const suggestions = matching.map((n) => {
+          const name = String(n?.name || '');
+          const isDir = !!n?.is_directory;
+          const suffix = isDir ? '/' : '';
+
+          return {
+            label: `${name}${suffix}`,
+            kind: isDir
+              ? monaco.languages.CompletionItemKind.Folder
+              : monaco.languages.CompletionItemKind.File,
+            insertText: `${name}${suffix}`,
+            range: replaceRangeForPartial,
+            detail: isDir ? '目录' : '文件',
+            sortText: isDir ? `0_${name}` : `1_${name}`
+          };
+        });
+
+        return { suggestions };
+      }
+    });
+  });
+};
+
 const registerMarkdownLanguageFeatures = () => {
   if (markdownFeaturesRegistered) return;
   markdownFeaturesRegistered = true;
@@ -798,149 +1095,54 @@ const registerMarkdownLanguageFeatures = () => {
     detail
   });
 
+  const markdownSnippets = [
+    createSnippet('h1', '# ${1:标题}\n\n', '插入一级标题'),
+    createSnippet('h2', '## ${1:标题}\n\n', '插入二级标题'),
+    createSnippet('h3', '### ${1:标题}\n\n', '插入三级标题'),
+    createSnippet('h4', '#### ${1:标题}\n\n', '插入四级标题'),
+    createSnippet('h5', '##### ${1:标题}\n\n', '插入五级标题'),
+    createSnippet('h6', '###### ${1:标题}\n\n', '插入六级标题'),
+    createSnippet('ul', '- ${1:列表项}\n- ${2:列表项}\n', '插入无序列表'),
+    createSnippet('ol', '1. ${1:第一项}\n2. ${2:第二项}\n', '插入有序列表'),
+    createSnippet('taskl', '- [ ] ${1:任务}\n- [ ] ${2:任务}\n', '插入任务列表'),
+    createSnippet('table', '| ${1:表头1} | ${2:表头2} |\n| --- | --- |\n| ${3:内容1} | ${4:内容2} |\n', '插入表格'),
+    createSnippet('code', '```${1:language}\n${2:代码}\n```\n', '插入代码块'),
+    createSnippet('toc', '${1:目录}\n\n${2:目录内容}\n', '插入目录'),
+
+    createSnippet('bold', '**${1:文本}**', '加粗文本'),
+    createSnippet('italic', '*${1:文本}*', '斜体文本'),
+    createSnippet('strikeout', '~~${1:文本}~~', '删除线'),
+    createSnippet('inlineCode', '`${1:code}`', '内联代码'),
+    createSnippet('link', '[${1:描述}](${2:链接})', '插入链接'),
+    createSnippet('image', '![${1:描述}](${2:路径})', '插入图片'),
+    createSnippet('quote', '> ${1:引用内容}\n', '插入引用'),
+    createSnippet('hr', '\n---\n', '插入分隔线')
+  ];
+
   monaco.languages.registerCompletionItemProvider('markdown', {
-    triggerCharacters: ['#', '-', '*', '`', '[', '!', '|'],
     provideCompletionItems(model, position) {
-      const suggestions = [];
       const lineContent = model.getLineContent(position.lineNumber);
       const beforeCursor = lineContent.slice(0, position.column - 1);
-      const trimmed = beforeCursor.trim();
 
-      if (!trimmed) {
-        suggestions.push(
-          createSnippet('h1', '# ${1:标题}\n\n', '插入一级标题'),
-          createSnippet('h2', '## ${1:标题}\n\n', '插入二级标题'),
-          createSnippet('h3', '### ${1:标题}\n\n', '插入三级标题'),
-          createSnippet('h4', '#### ${1:标题}\n\n', '插入四级标题'),
-          createSnippet('h5', '##### ${1:标题}\n\n', '插入五级标题'),
-          createSnippet('h6', '###### ${1:标题}\n\n', '插入六级标题'),
-          createSnippet(
-            'ul',
-            '- ${1:列表项}\n- ${2:列表项}\n',
-            '插入无序列表'
-          ),
-          createSnippet(
-            'ol',
-            '1. ${1:第一项}\n2. ${2:第二项}\n',
-            '插入有序列表'
-          ),
-          createSnippet(
-            'taskl',
-            '- [ ] ${1:任务}\n- [ ] ${2:任务}\n',
-            '插入任务列表'
-          ),
-          createSnippet(
-            'table',
-            '| ${1:表头1} | ${2:表头2} |\n| --- | --- |\n| ${3:内容1} | ${4:内容2} |\n',
-            '插入表格'
-          ),
-          createSnippet(
-            'table2',
-            '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n',
-            '插入表格'
-          ),
-          createSnippet(
-            'table3',
-            '| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} |\n',
-            '插入三列表格'
-          ),
-          createSnippet(
-            'table4',
-            '| 列1 | 列2 | 列3 | 列4 |\n| --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} |\n',
-            '插入四列表格'
-          ),
-          createSnippet(
-            'table5',
-            '| 列1 | 列2 | 列3 | 列4 | 列5 |\n| --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} |\n',
-            '插入五列表格'
-          ),
-          createSnippet(
-            'table6',
-            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 |\n| --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} |\n',
-            '插入六列表格'
-          ),
-          createSnippet(
-            'table7',
-            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 |\n| --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} |\n',
-            '插入七列表格'
-          ),
-          createSnippet(
-            'table8',
-            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} |\n',
-            '插入八列表格'
-          ),
-          createSnippet(
-            'table9',
-            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 | 列9 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} | ${9:值9} |\n',
-            '插入九列表格'
-          ),
-          createSnippet(
-            'code',
-            '```${1:language}\n${2:代码}\n```\n',
-            '插入代码块'
-          ),
-          createSnippet(
-            'toc',
-            '${1:目录}\n\n${2:目录内容}\n',
-            '插入目录'
-          ),
-        );
-      }
+      const token = extractPathToken(beforeCursor);
+      const pathContext = isFilesystemPathContext(beforeCursor);
+      const inPathLike =
+        pathContext ||
+        (!!token &&
+          (token.includes('/') ||
+            token.includes('\\') ||
+            token.startsWith('.') ||
+            token.startsWith('~') ||
+            /^[a-zA-Z]:/.test(token)));
+      if (inPathLike) return { suggestions: [] };
 
-      suggestions.push(
-        createSnippet('bold', '**${1:文本}**', '加粗文本'),
-        createSnippet('italic', '*${1:文本}*', '斜体文本'),
-        createSnippet('strikeout', '~~${1:文本}~~', '删除线'),
-        createSnippet('inlineCode', '`${1:code}`', '内联代码'),
-        createSnippet('red', '<font color="red">${1:红色文字}</font>', '设置红色文本'),
-        createSnippet(
-          'blue',
-          '<font color="blue">${1:蓝色文字}</font>',
-          '设置蓝色文本'
-        ),
-        createSnippet(
-          'green',
-          '<font color="green">${1:绿色文字}</font>',
-          '设置绿色文本'
-        ),
-        createSnippet(
-          'yellow',
-          '<font color="yellow">${1:黄色文字}</font>',
-          '设置黄色文本'
-        ),
-        createSnippet(
-          'orange',
-          '<font color="orange">${1:橙色文字}</font>',
-          '设置橙色文本'
-        ),
-        createSnippet(
-          'purple',
-          '<font color="purple">${1:紫色文字}</font>',
-          '设置紫色文本'
-        ),
-        createSnippet(
-          'cyan',
-          '<font color="cyan">${1:青色文字}</font>',
-          '设置青色文本'
-        ),
-        createSnippet(
-          'purple',
-          '<font color="purple">${1:紫色文字}</font>',
-          '设置紫色文本'
-        ),
-        createSnippet(
-          'link',
-          '[${1:描述}](${2:链接})',
-          '插入链接'
-        ),
-        createSnippet(
-          'image',
-          '![${1:描述}](${2:路径})',
-          '插入图片'
-        ),
-        createSnippet('quote', '> ${1:引用内容}\n', '插入引用'),
-        createSnippet('hr', '\n---\n', '插入分隔线')
-      );
+      const word = model.getWordUntilPosition(position)?.word || '';
+      if (!word) return { suggestions: [] };
+
+      const lower = word.toLowerCase();
+      const suggestions = markdownSnippets
+        .filter((s) => String(s.label || '').toLowerCase().startsWith(lower))
+        .slice(0, 50);
 
       return { suggestions };
     }
@@ -1140,6 +1342,7 @@ const initEditor = () => {
   console.debug('[Editor] Monaco editor instance registered')
 
   registerMarkdownLanguageFeatures();
+  registerFilesystemPathCompletionFeatures();
 
   if (vimMode.value) {
     nextTick(() => {
@@ -1218,6 +1421,75 @@ const initEditor = () => {
       label: '跳转到下一编辑位置',
       keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.RightArrow],
       run: () => navigateToNextEditLocation()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleBold',
+      label: '加粗',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB],
+      run: () => toggleBold()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleItalic',
+      label: '斜体',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI],
+      run: () => toggleItalic()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleStrikethrough',
+      label: '删除线',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyX],
+      run: () => toggleStrikethrough()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleInlineCode',
+      label: '内联代码',
+      run: () => toggleInlineCode()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.insertLink',
+      label: '插入链接',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+      run: () => insertLink()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.insertTable',
+      label: '插入表格',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyT],
+      run: () => insertTable()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.addRowBelow',
+      label: '表格：下方插入行',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.DownArrow],
+      run: () => addTableRowBelow()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.deleteRow',
+      label: '表格：删除当前行',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow],
+      run: () => deleteTableRow()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.addColumnRight',
+      label: '表格：右侧插入列',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.RightArrow],
+      run: () => addTableColumnRight()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.deleteColumn',
+      label: '表格：删除当前列',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.RightArrow],
+      run: () => deleteTableColumn()
     });
 
     editor.onContextMenu((e) => {
@@ -1393,6 +1665,61 @@ const setupEditorListeners = () => {
     const language = editor.getModel()?.getLanguageId() || 'plaintext';
     editorStore.setLanguage(language);
     updateTableToolbar();
+  });
+
+  editor.onDidType((text) => {
+    if (!editor) return;
+    const ch = text ? text[text.length - 1] : '';
+    if (!ch) return;
+
+    const model = editor.getModel();
+    const pos = editor.getPosition();
+    if (!model || !pos) return;
+
+    const lineContent = model.getLineContent(pos.lineNumber);
+    const beforeCursor = lineContent.slice(0, pos.column - 1);
+    const token = extractPathToken(beforeCursor);
+    const pathContext = isFilesystemPathContext(beforeCursor);
+
+    const isPathLike =
+      pathContext ||
+      (!!token &&
+        (token.includes('/') ||
+          token.includes('\\') ||
+          token.startsWith('.') ||
+          token.startsWith('~') ||
+          /^[a-zA-Z]:/.test(token)));
+
+    if (!isPathLike) return;
+
+    if (!/[0-9a-zA-Z._\-~\/\\:]/.test(ch)) return;
+
+    console.debug('[PathCompletion] triggerSuggest', {
+      ch,
+      token,
+      pathContext
+    });
+    editor.trigger('guaxi-path', 'editor.action.triggerSuggest', {});
+  });
+
+  const isSuggestWidgetVisible = () => {
+    const dom = editor?.getDomNode?.();
+    if (!dom) return false;
+    return !!dom.querySelector('.suggest-widget.visible');
+  };
+
+  editor.onKeyDown((e) => {
+    if (e.keyCode !== monaco.KeyCode.Tab) return;
+    if (!isSuggestWidgetVisible()) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    editor.trigger(
+      'guaxi-suggest',
+      e.shiftKey ? 'selectPrevSuggestion' : 'selectNextSuggestion',
+      null
+    );
   });
 
   editor.onDidBlurEditorWidget(() => {
@@ -2266,6 +2593,32 @@ const handleKeyDown = (e) => {
     return;
   }
 
+  if (e.ctrlKey && !e.altKey && !e.metaKey) {
+    if (e.key === '1') {
+      e.preventDefault();
+      handlePreviewModeSelect('edit');
+      return;
+    }
+
+    if (e.key === '2') {
+      e.preventDefault();
+      handlePreviewModeSelect('preview');
+      return;
+    }
+
+    if (e.key === '3') {
+      e.preventDefault();
+      handlePreviewModeSelect('split');
+      return;
+    }
+
+    if (e.key === '4') {
+      e.preventDefault();
+      handlePreviewModeSelect('realtime');
+      return;
+    }
+  }
+
   if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
     const target = e.target;
     const tagName = (target?.tagName || '').toLowerCase();
@@ -2564,10 +2917,10 @@ watch(selectedFile, async (newFile) => {
 }, { immediate: true });
 
 const previewModeOptions = [
-  { label: '编辑模式', key: 'edit' },
-  { label: '预览模式', key: 'preview' },
-  { label: '分屏预览', key: 'split' },
-  { label: '实时预览', key: 'realtime' }
+  { label: '编辑模式 (Ctrl+1)', key: 'edit' },
+  { label: '预览模式 (Ctrl+2)', key: 'preview' },
+  { label: '分屏预览 (Ctrl+3)', key: 'split' },
+  { label: '实时预览 (Ctrl+4)', key: 'realtime' }
 ];
 
 const previewModeLabel = computed(() => {
