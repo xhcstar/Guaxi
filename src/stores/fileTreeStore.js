@@ -1,6 +1,34 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 
+const classifyReadFileError = (error) => {
+  const msg = String(error?.message || error || "");
+  const lower = msg.toLowerCase();
+
+  if (
+    lower.includes("stream did not contain valid utf-8") ||
+    lower.includes("invalid utf") ||
+    lower.includes("utf-8") ||
+    lower.includes("the data is invalid")
+  ) {
+    return "UNSUPPORTED";
+  }
+
+  if (
+    lower.includes("os error 2") ||
+    lower.includes("os error 3") ||
+    lower.includes("not found") ||
+    lower.includes("no such file") ||
+    lower.includes("cannot find the file") ||
+    lower.includes("系统找不到") ||
+    lower.includes("文件不存在")
+  ) {
+    return "NOT_FOUND";
+  }
+
+  return "READ_FAILED";
+};
+
 export const useFileTreeStore = defineStore("fileTreeStore", {
   state: () => ({
     fileTree: [],
@@ -42,8 +70,14 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       console.log("打开搜索结果:", result);
       // 获取文件内容（如果未加载）
       if (!this.openTabs.some((tab) => tab.path === result.path)) {
-        const content = await this.fetchFileContent(result.path);
-        await this.openFileInTab(result.path, content);
+        const res = await this.fetchFileContent(result.path);
+        if (res?.ok) {
+          await this.openFileInTab(result.path, res.content, {
+            unsupported: !!res.unsupported,
+          });
+        } else {
+          throw new Error(res?.code || "READ_FAILED");
+        }
       }
 
       // 激活标签页并同步 selectedFile
@@ -117,7 +151,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     },
 
     // 修改 openFileInTab 方法，防止重复打开
-    async openFileInTab(path, content) {
+    async openFileInTab(path, content, options = {}) {
       const fileName = path.split(/[\\/]/).pop();
 
       // 检查是否已存在相同路径的标签页
@@ -127,14 +161,18 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         return;
       }
 
+      let fileContent = content;
+      let unsupported = !!options.unsupported;
+
       // 如果未提供内容，则获取内容
-      const fileContent =
-        content !== undefined && content !== null
-          ? content
-          : await this.fetchFileContent(path);
-      if (fileContent === null) {
-        console.error("获取文件内容失败，不创建标签页");
-        return;
+      if (fileContent === undefined || fileContent === null) {
+        const res = await this.fetchFileContent(path);
+        if (!res?.ok) {
+          console.error("获取文件内容失败，不创建标签页");
+          return;
+        }
+        fileContent = res.content;
+        unsupported = !!res.unsupported;
       }
 
       const newTab = {
@@ -142,6 +180,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         fileName,
         content: fileContent,
         preview: this.generatePreview(fileContent),
+        unsupported,
       };
 
       if (this.layoutMode === 'single' || this.splitIndex == null) {
@@ -159,15 +198,27 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
     // 获取文件内容
     async fetchFileContent(path) {
-      //   console.log('开始获取文件内容，路径:', path)
       try {
         const content = await invoke("read_file_content", { path });
-        // console.log('获取文件内容成功:', content)
-        this.selectedFile = { path, content };
-        return content;
+        this.selectedFile = { path, content, unsupported: false };
+        return { ok: true, content, unsupported: false };
       } catch (error) {
+        const code = classifyReadFileError(error);
+        const errorMessage = String(error?.message || error || "");
+
+        if (code === "UNSUPPORTED") {
+          const placeholder = `该文件为二进制文件或包含非 UTF-8 内容，当前不支持在编辑器中打开。\n\n路径：${path}\n\n你仍可通过右键菜单“在文件浏览器中打开”来查看该文件。`;
+          this.selectedFile = {
+            path,
+            content: placeholder,
+            unsupported: true,
+            error: errorMessage,
+          };
+          return { ok: true, content: placeholder, unsupported: true };
+        }
+
         console.error("获取文件内容失败:", error);
-        return null;
+        return { ok: false, code, error: errorMessage };
       }
     },
 
@@ -218,7 +269,11 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         const index = this.openTabs.findIndex((t) => t.path === path);
         const tab = index !== -1 ? this.openTabs[index] : null;
         if (tab) {
-          this.selectedFile = { path: tab.path, content: tab.content };
+          this.selectedFile = {
+            path: tab.path,
+            content: tab.content,
+            unsupported: !!tab.unsupported,
+          };
         }
         if (this.layoutMode !== 'single' && this.splitIndex != null && index !== -1) {
           this.activeRegion = index < this.splitIndex ? 'left' : 'right';

@@ -1271,6 +1271,7 @@ const initEditor = () => {
     value: rawContent.value,
     language: language,
     theme: 'one-light',
+    readOnly: !!activeTab.value?.unsupported,
     automaticLayout: true,  // 自动布局
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
@@ -2590,12 +2591,21 @@ const updateEditorContent = (content) => {
       editor.setValue(content);
     }
     rawContent.value = content;
+
+    editor.updateOptions({
+      readOnly: !!activeTab.value?.unsupported,
+    });
   }
 };
 
 // 保存内容
 const saveContent = async () => {
   if (!selectedFile.value) return;
+
+  if (activeTab.value?.unsupported) {
+    message.warning('不支持编辑/保存该文件类型');
+    return;
+  }
 
   const content =
     previewMode.value === 'realtime' && realtimeVditor

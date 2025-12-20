@@ -644,9 +644,14 @@ const handleSelect = async (keys) => {
       }
 
       // 获取文件内容
-      const content = await fileTreeStore.fetchFileContent(selectedNode.id)
-      if (content !== null) {
-        await fileTreeStore.openFileInTab(selectedNode.id, content)
+      const res = await fileTreeStore.fetchFileContent(selectedNode.id)
+      if (res?.ok) {
+        await fileTreeStore.openFileInTab(selectedNode.id, res.content, {
+          unsupported: !!res.unsupported
+        })
+        if (res.unsupported) {
+          message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
+        }
       } else {
         message.warning('文件不存在或已被删除')
         await handleFileRemoved(selectedNode.id)
@@ -976,23 +981,10 @@ const handleBlur = async () => {
 
   // 以下是原有重命名逻辑
   try {
-    let oldContent = '';
-    if (!node.is_directory) {
-      try {
-        oldContent = await fileTreeStore.fetchFileContent(oldId);
-      } catch (error) {
-        console.error('获取旧文件内容失败:', error);
-      }
-    }
-
     if (node.is_directory) {
       await invoke('rename_directory', { oldPath: oldId, newPath: newId });
     } else {
-      await invoke('create_file_with_content', {
-        path: newId,
-        content: oldContent
-      });
-      await invoke('delete_path', { path: oldId });
+      await invoke('rename_path', { oldPath: oldId, newPath: newId });
     }
 
     // 更新标签页
