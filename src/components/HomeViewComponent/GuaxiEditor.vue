@@ -304,24 +304,54 @@
         :style="floatingToolbarStyle"
         @mousedown.prevent
       >
-        <n-button text size="tiny" @click="toggleBold">
-          <Icon icon="lucide:bold" width="16" height="16" />
-        </n-button>
-        <n-button text size="tiny" @click="toggleItalic">
-          <Icon icon="lucide:italic" width="16" height="16" />
-        </n-button>
-        <n-button text size="tiny" @click="toggleStrikethrough">
-          <Icon icon="lucide:strikethrough" width="16" height="16" />
-        </n-button>
-        <n-button text size="tiny" @click="insertLink">
-          <Icon icon="lucide:link" width="16" height="16" />
-        </n-button>
-        <n-button text size="tiny" @click="toggleInlineCode">
-          <Icon icon="lucide:code" width="16" height="16" />
-        </n-button>
-        <n-button text size="tiny" @click="toggleBlockquote">
-          <Icon icon="lucide:quote" width="16" height="16" />
-        </n-button>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleBold">
+              <Icon icon="lucide:bold" width="16" height="16" />
+            </n-button>
+          </template>
+          加粗
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleItalic">
+              <Icon icon="lucide:italic" width="16" height="16" />
+            </n-button>
+          </template>
+          斜体
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleStrikethrough">
+              <Icon icon="lucide:strikethrough" width="16" height="16" />
+            </n-button>
+          </template>
+          删除线
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="insertLink">
+              <Icon icon="lucide:link" width="16" height="16" />
+            </n-button>
+          </template>
+          链接
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleInlineCode">
+              <Icon icon="lucide:code" width="16" height="16" />
+            </n-button>
+          </template>
+          行内代码
+        </n-tooltip>
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text size="tiny" @click="toggleBlockquote">
+              <Icon icon="lucide:quote" width="16" height="16" />
+            </n-button>
+          </template>
+          引用
+        </n-tooltip>
       </div>
       <div class="editor-split-wrapper" :class="layoutMode">
         <div ref="editorContainer" class="editor-container">
@@ -334,6 +364,17 @@
         >
         </div>
       </div>
+
+      <n-dropdown
+        v-model:show="editorContextMenuVisible"
+        :options="editorContextMenuOptions"
+        placement="bottom-start"
+        :x="editorContextMenuPosition.x"
+        :y="editorContextMenuPosition.y"
+        @select="handleEditorContextMenuSelect"
+        @clickoutside="handleEditorContextMenuClickoutside"
+      />
+
       <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
@@ -347,7 +388,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
@@ -379,6 +420,9 @@ import 'monaco-editor/esm/vs/basic-languages/java/java.contribution'
 import 'monaco-editor/esm/vs/basic-languages/lua/lua.contribution'
 import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution'
 
+import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
+import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess.js'
+
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { GitBranchOutline } from '@vicons/ionicons5'
@@ -405,6 +449,187 @@ const secondaryEditorContainer = ref(null);
 const editorWrapperRef = ref(null);
 const floatingToolbarVisible = ref(false);
 const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
+
+const editorContextMenuVisible = ref(false);
+const editorContextMenuPosition = ref({ x: 0, y: 0 });
+const editorContextMenuOptions = ref([]);
+
+const handleEditorContextMenuClickoutside = () => {
+  editorContextMenuVisible.value = false;
+};
+
+const writeClipboardText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readClipboardText = async () => {
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return null;
+  }
+};
+
+const clipboardCopy = async () => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection || selection.isEmpty()) return;
+  const text = model.getValueInRange(selection);
+  if (!text) return;
+  const ok = await writeClipboardText(text);
+  if (!ok) message.warning('复制失败：无剪贴板权限');
+};
+
+const clipboardCut = async () => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection || selection.isEmpty()) return;
+
+  const text = model.getValueInRange(selection);
+  if (!text) return;
+
+  const ok = await writeClipboardText(text);
+  if (!ok) {
+    message.warning('剪切失败：无剪贴板权限');
+    return;
+  }
+
+  editor.executeEdits('clipboard-cut', [
+    {
+      range: selection,
+      text: '',
+      forceMoveMarkers: true
+    }
+  ]);
+};
+
+const clipboardPaste = async () => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  const text = await readClipboardText();
+  if (text == null) {
+    message.warning('粘贴失败：无剪贴板权限');
+    return;
+  }
+
+  editor.executeEdits('clipboard-paste', [
+    {
+      range: selection,
+      text,
+      forceMoveMarkers: true
+    }
+  ]);
+};
+
+const runEditorAction = async (actionId) => {
+  if (!editor) return;
+  editor.focus();
+
+  if (actionId === 'editor.action.clipboardCopyAction') {
+    const action = editor.getAction?.(actionId);
+    if (action) {
+      await action.run();
+      return;
+    }
+    await clipboardCopy();
+    return;
+  }
+
+  if (actionId === 'editor.action.clipboardCutAction') {
+    const action = editor.getAction?.(actionId);
+    if (action) {
+      await action.run();
+      return;
+    }
+    await clipboardCut();
+    return;
+  }
+
+  if (actionId === 'editor.action.clipboardPasteAction') {
+    const action = editor.getAction?.(actionId);
+    if (action) {
+      await action.run();
+      return;
+    }
+    await clipboardPaste();
+    return;
+  }
+
+  const action = editor.getAction?.(actionId);
+  if (action) {
+    await action.run();
+    return;
+  }
+
+  try {
+    editor.trigger('contextmenu', actionId, null);
+  } catch {
+    message.warning('该命令当前不可用');
+  }
+};
+
+const buildEditorContextMenuOptions = () => {
+  const model = editor?.getModel?.();
+  const isMarkdown = (model?.getLanguageId?.() || '') === 'markdown';
+  const selection = editor?.getSelection?.();
+  const hasSelection = !!selection && !selection.isEmpty();
+
+  return [
+    { label: '剪切', key: 'editor.action.clipboardCutAction' },
+    { label: '复制', key: 'editor.action.clipboardCopyAction' },
+    { label: '粘贴', key: 'editor.action.clipboardPasteAction' },
+    { type: 'divider' },
+
+    { label: 'Markdown 格式化（全文）', key: 'guaxi.markdown.formatDocument', disabled: !isMarkdown },
+    { label: 'Markdown 格式化（选中）', key: 'guaxi.markdown.formatSelection', disabled: !isMarkdown || !hasSelection },
+    { type: 'divider' },
+
+    { label: '跳转到上次编辑位置 (Alt+←)', key: 'guaxi.edit.navigateBack' },
+    { label: '跳转到下一编辑位置 (Alt+→)', key: 'guaxi.edit.navigateForward' },
+    { type: 'divider' },
+
+    { label: '插入Markdown模板', key: 'insert.md.template' },
+    { type: 'divider' },
+
+    { label: '命令面板', key: 'editor.action.quickCommand' }
+  ];
+};
+
+const handleEditorContextMenuSelect = async (key) => {
+  editorContextMenuVisible.value = false;
+
+  if (key === 'guaxi.markdown.formatDocument') {
+    await formatMarkdownDocument();
+    return;
+  }
+
+  if (key === 'guaxi.markdown.formatSelection') {
+    await formatMarkdownSelection();
+    return;
+  }
+
+  if (key === 'guaxi.edit.navigateBack') {
+    await navigateToPreviousEditLocation();
+    return;
+  }
+
+  if (key === 'guaxi.edit.navigateForward') {
+    await navigateToNextEditLocation();
+    return;
+  }
+
+  await runEditorAction(key);
+};
 const tableToolbarVisible = ref(false);
 const tableToolbarStyle = ref({ left: '0px', top: '0px' });
 const activeTableContext = ref(null);
@@ -422,6 +647,131 @@ const syncRealtimeValueToRawContent = debounce((value) => {
 }, 120);
 let editor = null;
 let secondaryEditor = null;
+
+const editLocationBackStack = ref([]);
+const editLocationForwardStack = ref([]);
+let lastRecordedEditLocationKey = null;
+let lastRecordedEditLocationAt = 0;
+let suppressEditLocationRecording = false;
+const maxEditLocationHistory = 200;
+
+const getCurrentEditLocation = () => {
+  if (!editor) return null;
+  const path = fileTreeStore.activeTab || selectedFile.value?.path;
+  const position = editor.getPosition();
+  if (!path || !position) return null;
+  return {
+    path,
+    lineNumber: position.lineNumber,
+    column: position.column
+  };
+};
+
+const isSameEditLocation = (a, b) => {
+  if (!a || !b) return false;
+  return a.path === b.path && a.lineNumber === b.lineNumber && a.column === b.column;
+};
+
+const recordEditLocationFromEditor = () => {
+  if (!editor) return;
+  if (suppressEditLocationRecording) return;
+
+  const loc = getCurrentEditLocation();
+  if (!loc) return;
+
+  const now = Date.now();
+  const key = `${loc.path}:${loc.lineNumber}:${loc.column}`;
+  if (key === lastRecordedEditLocationKey && now - lastRecordedEditLocationAt < 500) return;
+
+  const back = editLocationBackStack.value;
+  const last = back[back.length - 1];
+  if (last && isSameEditLocation(last, loc)) {
+    lastRecordedEditLocationKey = key;
+    lastRecordedEditLocationAt = now;
+    return;
+  }
+
+  back.push({ ...loc, ts: now });
+  if (back.length > maxEditLocationHistory) back.shift();
+  editLocationForwardStack.value = [];
+
+  lastRecordedEditLocationKey = key;
+  lastRecordedEditLocationAt = now;
+};
+
+const goToEditLocation = async (loc) => {
+  if (!loc) return false;
+
+  suppressEditLocationRecording = true;
+  try {
+    if (fileTreeStore.activeTab !== loc.path) {
+      await fileTreeStore.openFileInTab(loc.path);
+    }
+
+    await nextTick();
+
+    if (!editor) return false;
+    const pos = new monaco.Position(loc.lineNumber, loc.column);
+    editor.focus();
+    editor.setPosition(pos);
+    editor.revealPositionInCenterIfOutsideViewport(pos);
+    return true;
+  } finally {
+    suppressEditLocationRecording = false;
+  }
+};
+
+const navigateToPreviousEditLocation = async () => {
+  if (!editor) return;
+
+  const current = getCurrentEditLocation();
+  if (!current) return;
+
+  const back = editLocationBackStack.value;
+  const forward = editLocationForwardStack.value;
+
+  if (back.length === 0) {
+    back.push({ ...current, ts: Date.now() });
+    return;
+  }
+
+  const last = back[back.length - 1];
+  if (!isSameEditLocation(last, current)) {
+    forward.push({ ...current, ts: Date.now() });
+    await goToEditLocation(last);
+    return;
+  }
+
+  if (back.length < 2) {
+    message.info('没有上一个编辑位置');
+    return;
+  }
+
+  const popped = back.pop();
+  forward.push(popped);
+  const target = back[back.length - 1];
+  await goToEditLocation(target);
+};
+
+const navigateToNextEditLocation = async () => {
+  if (!editor) return;
+
+  const forward = editLocationForwardStack.value;
+  if (forward.length === 0) {
+    return;
+  }
+
+  const target = forward.pop();
+  const back = editLocationBackStack.value;
+  const last = back[back.length - 1];
+  if (!last || !isSameEditLocation(last, target)) {
+    back.push(target);
+    if (back.length > maxEditLocationHistory) back.shift();
+  }
+
+  await goToEditLocation(target);
+};
+
 const selectedFile = computed(() => fileTreeStore.selectedFile)
 // 定义 rawContent 变量
 const rawContent = ref(selectedFile.value?.content || '')
@@ -789,36 +1139,40 @@ const initEditor = () => {
       }
     });
 
-    // 2. 覆盖默认上下文菜单
+    editor.addAction({
+      id: 'guaxi.markdown.formatDocument',
+      label: 'Markdown 格式化（全文）',
+      run: () => formatMarkdownDocument()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.formatSelection',
+      label: 'Markdown 格式化（选中）',
+      run: () => formatMarkdownSelection()
+    });
+
+    editor.addAction({
+      id: 'guaxi.edit.navigateBack',
+      label: '跳转到上次编辑位置',
+      keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow],
+      run: () => navigateToPreviousEditLocation()
+    });
+
+    editor.addAction({
+      id: 'guaxi.edit.navigateForward',
+      label: '跳转到下一编辑位置',
+      keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.RightArrow],
+      run: () => navigateToNextEditLocation()
+    });
+
     editor.onContextMenu((e) => {
       e.event.preventDefault();
-
-      // 获取鼠标位置
       const { posx, posy } = e.event;
 
-      // 3. 定义完整的菜单结构
-      const menuItems = [
-        // 基础编辑操作
-        { id: 'editor.action.clipboardCutAction', label: '剪切' },
-        { id: 'editor.action.clipboardCopyAction', label: '复制' },
-        { id: 'editor.action.clipboardPasteAction', label: '粘贴' },
-        { type: 'separator' },
-
-        // 自定义功能
-        { id: 'insert.md.template', label: '插入Markdown模板' },
-        { type: 'separator' },
-
-        // 其他功能
-        { id: 'editor.action.quickCommand', label: '命令面板' }
-      ];
-
-      // 4. 触发菜单显示
       editor.focus();
-      editor.trigger('', 'editor.action.showContextMenu', {
-        anchor: { x: posx, y: posy },
-        menuItems,
-        domNode: editorContainer.value
-      });
+      editorContextMenuPosition.value = { x: posx, y: posy };
+      editorContextMenuOptions.value = buildEditorContextMenuOptions();
+      editorContextMenuVisible.value = true;
     });
 
     outlineStore.setJumpToLine(jumpToLine)
@@ -957,6 +1311,7 @@ const setupEditorListeners = () => {
         const problems = analyzeContentForProblems(content, model, languageId);
         editorStore.setProblems(problems);
         rawContent.value = content;
+        recordEditLocationFromEditor();
         updateTableToolbar();
       }, 300)
     );
@@ -1184,6 +1539,111 @@ const ensureMarkdownEditor = () => {
     return false;
   }
   return true;
+};
+
+const invokeMarkdownFormat = async (content) => {
+  const response = await invoke('markdown_format', {
+    request: {
+      content,
+      options: {
+        max_line_width: 0,
+        indent_width: 2,
+        list_indent: 2,
+        format_tables: true,
+        format_lists: true,
+        preserve_code_blocks: true,
+        remove_extra_blank_lines: true,
+        fix_extra_whitespace: false
+      }
+    }
+  });
+
+  const success = response?.success;
+  const formatted = response?.formatted_content ?? response?.formattedContent;
+  const error = response?.error;
+
+  if (!success || typeof formatted !== 'string') {
+    throw new Error(typeof error === 'string' ? error : 'Markdown 格式化失败');
+  }
+
+  return formatted;
+};
+
+const formatMarkdownDocument = async () => {
+  if (!ensureMarkdownEditor()) return;
+
+  const model = editor.getModel();
+  if (!model) return;
+
+  const original = model.getValue();
+
+  try {
+    suppressEditLocationRecording = true;
+    const formatted = await invokeMarkdownFormat(original);
+
+    if (formatted === original) {
+      message.info('无需格式化');
+      return;
+    }
+
+    editor.executeEdits('markdown-format', [
+      {
+        range: model.getFullModelRange(),
+        text: formatted,
+        forceMoveMarkers: true
+      }
+    ]);
+
+    editor.focus();
+  } catch (e) {
+    console.error('Markdown 格式化失败:', e);
+    message.error(e instanceof Error ? e.message : 'Markdown 格式化失败');
+  } finally {
+    suppressEditLocationRecording = false;
+  }
+};
+
+const formatMarkdownSelection = async () => {
+  if (!ensureMarkdownEditor()) return;
+
+  const model = editor.getModel();
+  if (!model) return;
+
+  const selection = editor.getSelection();
+  if (!selection || selection.isEmpty()) {
+    message.info('请先选择需要格式化的内容');
+    return;
+  }
+
+  const selectedText = model.getValueInRange(selection);
+  if (!selectedText.trim()) {
+    message.info('请先选择需要格式化的内容');
+    return;
+  }
+
+  try {
+    suppressEditLocationRecording = true;
+
+    let formatted = await invokeMarkdownFormat(selectedText);
+    if (!selectedText.endsWith('\n')) {
+      formatted = formatted.replace(/\n$/, '');
+    }
+
+    editor.executeEdits('markdown-format-selection', [
+      {
+        range: selection,
+        text: formatted,
+        forceMoveMarkers: true
+      }
+    ]);
+
+    editor.focus();
+  } catch (e) {
+    console.error('Markdown 格式化失败:', e);
+    message.error(e instanceof Error ? e.message : 'Markdown 格式化失败');
+  } finally {
+    suppressEditLocationRecording = false;
+  }
 };
 
 const wrapSelection = (prefix, suffix, placeholder = '') => {
@@ -1748,6 +2208,30 @@ const handleKeyDown = (e) => {
   if (e.ctrlKey && e.key === 's') {
     e.preventDefault();
     saveContent();
+    return;
+  }
+
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    const target = e.target;
+    const tagName = (target?.tagName || '').toLowerCase();
+    const isEditable =
+      tagName === 'input' ||
+      tagName === 'textarea' ||
+      target?.isContentEditable;
+
+    if (isEditable) return;
+
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      navigateToPreviousEditLocation();
+      return;
+    }
+
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      navigateToNextEditLocation();
+      return;
+    }
   }
 };
 

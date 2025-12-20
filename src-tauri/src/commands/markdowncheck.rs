@@ -1,8 +1,6 @@
 // src-tauri/src/commands/markdowncheck.rs
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use tauri::command;
-use tracing;
 
 // ==================== 错误类型定义 ====================
 #[derive(Debug)]
@@ -57,7 +55,7 @@ pub struct MarkdownFormatOptions {
 impl Default for MarkdownFormatOptions {
     fn default() -> Self {
         Self {
-            max_line_width: 80,
+            max_line_width: 120,
             indent_width: 2,
             list_indent: 2,
             format_tables: true,
@@ -67,6 +65,230 @@ impl Default for MarkdownFormatOptions {
             fix_extra_whitespace: true,
         }
     }
+}
+
+// ==================== 生产级 Markdown 格式化器（Comrak） ====================
+fn format_markdown_production(
+    content: &str,
+    options: &MarkdownFormatOptions,
+) -> Result<String, MarkdownError> {
+    let line_ending = detect_line_ending(content);
+
+    if !options.format_lists {
+        let formatted = SimpleMarkdownFormatter::new(options.clone()).format(content)?;
+        return Ok(apply_line_ending(&formatted, line_ending));
+    }
+
+    let formatted = format_with_comrak(content, options)?;
+    let normalized = postprocess_markdown(&formatted, options);
+    Ok(apply_line_ending(&normalized, line_ending))
+}
+
+fn detect_line_ending(content: &str) -> &'static str {
+    if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+fn apply_line_ending(content: &str, line_ending: &str) -> String {
+    if line_ending == "\n" {
+        return content.to_string();
+    }
+
+    let normalized = content.replace("\r\n", "\n");
+    normalized.replace("\n", line_ending)
+}
+
+fn format_with_comrak(content: &str, options: &MarkdownFormatOptions) -> Result<String, MarkdownError> {
+    use comrak::{format_commonmark, parse_document, Arena, Options};
+
+    let arena = Arena::new();
+    let mut comrak_options = Options::default();
+
+    comrak_options.parse.smart = true;
+
+    comrak_options.extension.autolink = true;
+    comrak_options.extension.strikethrough = true;
+    comrak_options.extension.table = options.format_tables;
+    comrak_options.extension.tasklist = true;
+    comrak_options.extension.footnotes = true;
+    comrak_options.extension.description_lists = true;
+    comrak_options.extension.front_matter_delimiter = Some("---".to_string());
+
+    comrak_options.render.width = if options.max_line_width == 0 { 0 } else { options.max_line_width };
+
+    let root = parse_document(&arena, content, &comrak_options);
+    let mut out = String::with_capacity(content.len().saturating_add(128));
+
+    format_commonmark(root, &comrak_options, &mut out)
+        .map_err(|e| MarkdownError::FormatError(e.to_string()))?;
+
+    Ok(out)
+}
+
+fn unescape_heading_dots(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let leading_len = line.len() - trimmed.len();
+
+    let bytes = trimmed.as_bytes();
+    let mut hash_count = 0usize;
+    while hash_count < bytes.len() && bytes[hash_count] == b'#' {
+        hash_count += 1;
+    }
+
+    if hash_count == 0 || hash_count > 6 {
+        return None;
+    }
+
+    if hash_count >= bytes.len() || bytes[hash_count] != b' ' {
+        return None;
+    }
+
+    let prefix_end = leading_len + hash_count + 1;
+    if prefix_end > line.len() {
+        return None;
+    }
+
+    let (prefix, rest) = line.split_at(prefix_end);
+    let unescaped = rest.replace("\\.", ".");
+    if unescaped == rest {
+        return None;
+    }
+
+    Some(format!("{}{}", prefix, unescaped))
+}
+
+fn postprocess_markdown(formatted: &str, options: &MarkdownFormatOptions) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut blank_run = 0usize;
+    let mut in_fence = false;
+    let mut fence = "";
+
+    for raw in formatted.lines() {
+        let trimmed_start = raw.trim_start();
+        let is_fence = trimmed_start.starts_with("```") || trimmed_start.starts_with("~~~");
+
+        if is_fence {
+            if in_fence {
+                if trimmed_start.starts_with(fence) {
+                    in_fence = false;
+                    fence = "";
+                }
+            } else {
+                in_fence = true;
+                fence = if trimmed_start.starts_with("~~~") { "~~~" } else { "```" };
+            }
+            blank_run = 0;
+            out.push(raw.to_string());
+            continue;
+        }
+
+        if in_fence {
+            if options.preserve_code_blocks {
+                out.push(raw.to_string());
+            } else {
+                out.push(raw.trim_end().to_string());
+            }
+            continue;
+        }
+
+        let mut line = raw.to_string();
+
+        if let Some(unescaped) = unescape_heading_dots(&line) {
+            line = unescaped;
+        }
+
+        if options.fix_extra_whitespace {
+            line = line.trim_end().to_string();
+
+            if line.contains('\t') {
+                let mut prefix = String::new();
+                let mut idx = 0usize;
+                for (i, ch) in line.char_indices() {
+                    if ch == ' ' {
+                        prefix.push(' ');
+                        idx = i + ch.len_utf8();
+                        continue;
+                    }
+                    if ch == '\t' {
+                        prefix.push_str(&" ".repeat(options.indent_width.max(1)));
+                        idx = i + ch.len_utf8();
+                        continue;
+                    }
+                    break;
+                }
+
+                if idx > 0 {
+                    line = format!("{}{}", prefix, &line[idx..]);
+                }
+            }
+        }
+
+        if options.list_indent != 2 {
+            if let Some((indent, rest)) = split_leading_spaces(&line) {
+                if is_list_marker(rest) {
+                    let level = indent.len() / 2;
+                    let next_indent = " ".repeat(level.saturating_mul(options.list_indent.max(1)));
+                    line = format!("{}{}", next_indent, rest);
+                }
+            }
+        }
+
+        let is_blank = line.trim().is_empty();
+        if is_blank {
+            if options.remove_extra_blank_lines {
+                blank_run += 1;
+                if blank_run > 1 {
+                    continue;
+                }
+            }
+            out.push(String::new());
+            continue;
+        }
+
+        blank_run = 0;
+        out.push(line);
+    }
+
+    let mut result = out.join("\n");
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+fn split_leading_spaces(line: &str) -> Option<(String, &str)> {
+    let mut n = 0usize;
+    for c in line.chars() {
+        if c == ' ' {
+            n += 1;
+        } else {
+            break;
+        }
+    }
+    Some((" ".repeat(n), &line[n..]))
+}
+
+fn is_list_marker(rest: &str) -> bool {
+    let s = rest.trim_start();
+    if s.starts_with("- ") || s.starts_with("* ") || s.starts_with("+ ") {
+        return true;
+    }
+    let mut chars = s.chars();
+    let mut seen_digit = false;
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() {
+            seen_digit = true;
+            continue;
+        }
+        if seen_digit && c == '.' {
+            return chars.next() == Some(' ');
+        }
+        break;
+    }
+    false
 }
 
 // ==================== 简单的 Markdown 格式化器 ====================
@@ -432,13 +654,23 @@ pub async fn markdown_format(request: FormatRequest) -> Result<FormatResponse, M
     let start_time = Instant::now();
 
     let options = request.options.unwrap_or_default();
-    let formatter = SimpleMarkdownFormatter::new(options);
+    let options_for_format = options.clone();
 
-    match formatter.format(&request.content) {
+    let original_content = request.content;
+    let original_length = original_content.len();
+    let content_for_format = original_content.clone();
+
+    let format_result = tauri::async_runtime::spawn_blocking(move || {
+        format_markdown_production(&content_for_format, &options_for_format)
+    })
+    .await
+    .map_err(|e| MarkdownError::InternalError(e.to_string()))?;
+
+    match format_result {
         Ok(formatted_content) => {
             let processing_time = start_time.elapsed().as_millis();
             let stats = FormatStats {
-                original_length: request.content.len(),
+                original_length,
                 formatted_length: formatted_content.len(),
                 line_count: formatted_content.lines().count(),
                 processing_time_ms: processing_time,
@@ -446,7 +678,7 @@ pub async fn markdown_format(request: FormatRequest) -> Result<FormatResponse, M
 
             tracing::info!(
                 "Markdown格式化成功: {} 字符 -> {} 字符",
-                request.content.len(),
+                original_length,
                 formatted_content.len()
             );
 
@@ -461,7 +693,7 @@ pub async fn markdown_format(request: FormatRequest) -> Result<FormatResponse, M
             tracing::error!("Markdown格式化失败: {}", e);
             Ok(FormatResponse {
                 success: false,
-                formatted_content: request.content,
+                formatted_content: original_content,
                 error: Some(e.to_string()),
                 stats: None,
             })
