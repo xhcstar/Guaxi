@@ -1589,6 +1589,7 @@ onUnmounted(() => {
   transition: color 0.2s, background-color 0.2s;
   border-radius: 4px;
   padding: 2px;
+  cursor: pointer;
 }
 
 .action-icon:hover,

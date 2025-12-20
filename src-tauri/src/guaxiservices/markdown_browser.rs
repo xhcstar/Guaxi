@@ -374,7 +374,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
   <style>
-    body {{ font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif; margin: 0; color: #1f2328; }}
+    body {{ font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace; BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif; line-height: 1.5; word-wrap: break-word; margin: 0; color: #1f2328; }}
     .topbar {{ position: sticky; top: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(0,0,0,0.08); padding: 10px 14px; }}
     .title {{ font-weight: 600; font-size: 13px; word-break: break-all; }}
     .sub {{ margin-top: 4px; font-size: 12px; color: rgba(31,35,40,0.6); word-break: break-all; }}
