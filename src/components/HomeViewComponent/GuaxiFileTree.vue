@@ -233,6 +233,7 @@ watch(
 
 // 文件树数据
 const fileTree = ref([])
+const isTreeLoading = ref(false)
 
 // 右键菜单状态
 const isContextMenuVisible = ref(false)
@@ -516,8 +517,8 @@ const normalizeTreeIds = (tree) => {
 // 加载文件树数据
 const loadFileTree = async () => {
   console.log('[API] 加载文件树');
+  isTreeLoading.value = true
   try {
-    fileTree.value = [];
     console.log('当前仓库路径:', fileTreeStore.activeRepoPath);
     await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath);
 
@@ -527,6 +528,8 @@ const loadFileTree = async () => {
   } catch (error) {
     console.error('获取文件树数据失败', error);
     fileTree.value = [];
+  } finally {
+    isTreeLoading.value = false
   }
 };
 
@@ -591,6 +594,10 @@ const handleSelect = async (keys) => {
 
   // 1. 处理空选中情况
   if (!keys || keys.length === 0) {
+    if (isTreeLoading.value) {
+      console.log('空选中（加载中），忽略本次清空事件');
+      return;
+    }
     console.log('空选中，清空选中状态');
     lastSelectedKey.value = null;
     selectedKeys.value = [];
@@ -606,10 +613,14 @@ const handleSelect = async (keys) => {
     return;
   }
 
-  // 2. 防抖处理 - 只有当新key与上次相同时才跳过
+  // 2. 防抖处理 - 仅当已存在标签页时忽略重复选中
   if (normalizedKey === normalizePath(lastSelectedKey.value)) {
-    console.log('忽略重复选中:', normalizedKey);
-    return;
+    const existingTab = fileTreeStore.openTabs.find(tab => normalizePath(tab.path) === normalizedKey)
+    if (existingTab) {
+      console.log('忽略重复选中（已打开标签页）:', normalizedKey);
+      fileTreeStore.setActiveTab(existingTab.path)
+      return;
+    }
   }
 
   // 3. 更新选中状态
