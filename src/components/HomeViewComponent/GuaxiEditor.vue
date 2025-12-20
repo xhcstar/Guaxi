@@ -1,31 +1,30 @@
 <template>
   <div class="editor-container guaxi-editor">
-    <!-- 标签页栏 -->
-    <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
-      <div class="tab-region tab-region-left">
-        <div v-for="tab in leftTabs" :key="tab.path"
-          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
-          @mousedown.middle="closeTab(tab.path, 'left')">
-          <span>{{ tab.fileName }}</span>
-          <n-icon size="14" @click.stop="closeTab(tab.path, 'left')">
-            <CloseOutline />
-          </n-icon>
+    <div class="editor-header" ref="editorHeaderRef">
+      <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
+        <div class="tab-region tab-region-left">
+          <div v-for="tab in leftTabs" :key="tab.path"
+            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
+            @mousedown.middle="closeTab(tab.path, 'left')">
+            <span>{{ tab.fileName }}</span>
+            <n-icon size="14" @click.stop="closeTab(tab.path, 'left')">
+              <CloseOutline />
+            </n-icon>
+          </div>
+        </div>
+        <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right">
+          <div v-for="tab in rightTabs" :key="tab.path"
+            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
+            @mousedown.middle="closeTab(tab.path, 'right')">
+            <span>{{ tab.fileName }}</span>
+            <n-icon size="14" @click.stop="closeTab(tab.path, 'right')">
+              <CloseOutline />
+            </n-icon>
+          </div>
         </div>
       </div>
-      <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right">
-        <div v-for="tab in rightTabs" :key="tab.path"
-          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
-          @mousedown.middle="closeTab(tab.path, 'right')">
-          <span>{{ tab.fileName }}</span>
-          <n-icon size="14" @click.stop="closeTab(tab.path, 'right')">
-            <CloseOutline />
-          </n-icon>
-        </div>
-      </div>
-    </div>
-    <!-- 工具栏 -->
-    <div class="toolbar">
-      <div v-if="editorStore.language === 'markdown' && previewMode !== 'realtime'" class="toolbar-editing-actions">
+      <div class="toolbar">
+        <div v-if="previewMode !== 'realtime'" class="toolbar-editing-actions">
         <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -206,6 +205,7 @@
           </n-tooltip>
         </n-dropdown>
       </div>
+    </div>
     </div>
 
     <div v-if="selectedFile" class="editor-content" :class="previewMode">
@@ -417,6 +417,7 @@ const previewContainer = ref(null);
 const editorContainer = ref(null);
 const secondaryEditorContainer = ref(null);
 const editorWrapperRef = ref(null);
+const editorHeaderRef = ref(null);
 const floatingToolbarVisible = ref(false);
 const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
 
@@ -1769,9 +1770,13 @@ const setupEditorListeners = () => {
     const left = editorRect.left - wrapperRect.left + visiblePos.left;
     const top = editorRect.top - wrapperRect.top + visiblePos.top - 36;
 
+    const headerEl = editorHeaderRef.value;
+    const headerHeight = headerEl ? headerEl.getBoundingClientRect().height : 0;
+    const minTop = headerHeight + 8;
+
     floatingToolbarStyle.value = {
       left: `${Math.max(8, left)}px`,
-      top: `${Math.max(8, top)}px`
+      top: `${Math.max(minTop, top)}px`
     };
     floatingToolbarVisible.value = true;
   });
@@ -2354,9 +2359,13 @@ const updateTableToolbar = () => {
     return;
   }
 
+  const headerEl = editorHeaderRef.value;
+  const headerHeight = headerEl ? headerEl.getBoundingClientRect().height : 0;
+  const minTop = headerHeight + 8;
+
   tableToolbarStyle.value = {
     left: `${Math.max(8, editorRect.left - wrapperRect.left + 8)}px`,
-    top: `${Math.max(8, editorRect.top - wrapperRect.top + visiblePos.top - 36)}px`
+    top: `${Math.max(minTop, editorRect.top - wrapperRect.top + visiblePos.top - 36)}px`
   };
 
   activeTableContext.value = ctx;
@@ -3692,6 +3701,12 @@ onUnmounted(() => {
 
 
 <style scoped>
+.editor-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -3701,15 +3716,11 @@ onUnmounted(() => {
   height: 30px;
   background-color: var(--toolbar-bg, #f8f8f8);
   border-bottom: 1px solid var(--divider-color, #e0e0e0);
-  position: sticky;
-  /* 改为粘性定位 */
-  top: 0;
+  position: relative;
   width: 100%;
   box-sizing: border-box;
   min-width: 0;
   /* 允许工具栏缩小 */
-  z-index: 10;
-  /* 确保在最上层 */
 }
 
 .toolbar-editing-actions {
@@ -3717,11 +3728,12 @@ onUnmounted(() => {
   gap: 4px;
   align-items: center;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .floating-md-toolbar {
   position: absolute;
-  z-index: 20;
+  z-index: 9;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -3740,7 +3752,7 @@ onUnmounted(() => {
 
 .floating-table-toolbar {
   position: absolute;
-  z-index: 19;
+  z-index: 9;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -3771,6 +3783,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .toolbar-editing-actions :deep(.n-button:hover) {
@@ -3796,6 +3809,10 @@ onUnmounted(() => {
   /* 关键修复6: 防止按钮被压缩 */
 }
 
+.toolbar-actions :deep(.n-button) {
+  flex-shrink: 0;
+}
+
 .mode-toggle {
   cursor: pointer;
   padding: 2px 6px;
@@ -3814,6 +3831,30 @@ onUnmounted(() => {
 @media (max-width: 600px) {
   .toolbar {
     padding: 4px;
+    height: 30px;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    overflow: hidden;
+    contain: paint;
+  }
+
+  .toolbar-spacer {
+    display: none;
+  }
+
+  .toolbar-editing-actions {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow: hidden;
+    contain: paint;
+    -webkit-mask-image: linear-gradient(to right, #000 0%, #000 85%, transparent 100%);
+    mask-image: linear-gradient(to right, #000 0%, #000 85%, transparent 100%);
+  }
+
+  .toolbar-actions {
+    flex: 0 0 auto;
+    margin-left: 8px;
   }
 
   .mode-toggle {
@@ -3873,6 +3914,23 @@ onUnmounted(() => {
 
 .realtime-vditor :deep(.vditor-toolbar) {
   display: flex;
+  flex-direction: row !important;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.realtime-vditor :deep(.vditor-toolbar > *) {
+  flex: 0 0 auto;
+}
+
+.realtime-vditor :deep(.vditor-toolbar::-webkit-scrollbar) {
+  height: 4px;
+}
+
+.realtime-vditor :deep(.vditor-toolbar::-webkit-scrollbar-thumb) {
+  background-color: rgba(0, 0, 0, 0.25);
+  border-radius: 999px;
 }
 
 .editor-wrapper {
@@ -3911,6 +3969,7 @@ onUnmounted(() => {
   width: 100%;
   box-sizing: border-box;
   position: relative;
+  isolation: isolate;
 }
 
 .vim-status-bar {
@@ -3988,9 +4047,11 @@ onUnmounted(() => {
   min-height: 30px;
   flex: 0 0 30px;
   flex-shrink: 0;
+  align-items: center;
   background: #f5f5f5;
   border-bottom: 1px solid #ddd;
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .tab-region {
@@ -4023,6 +4084,15 @@ onUnmounted(() => {
   border-right: 1px solid #ddd;
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tab-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .tab-item.active {
