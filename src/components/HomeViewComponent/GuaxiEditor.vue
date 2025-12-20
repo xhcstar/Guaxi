@@ -3,13 +3,9 @@
     <!-- 标签页栏 -->
     <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
       <div class="tab-region tab-region-left">
-        <div
-          v-for="tab in leftTabs"
-          :key="tab.path"
-          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
-          @click="switchTab(tab.path)"
-          @mousedown.middle="closeTab(tab.path, 'left')"
-        >
+        <div v-for="tab in leftTabs" :key="tab.path"
+          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
+          @mousedown.middle="closeTab(tab.path, 'left')">
           <span>{{ tab.fileName }}</span>
           <n-icon size="14" @click.stop="closeTab(tab.path, 'left')">
             <CloseOutline />
@@ -17,13 +13,9 @@
         </div>
       </div>
       <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right">
-        <div
-          v-for="tab in rightTabs"
-          :key="tab.path"
-          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]"
-          @click="switchTab(tab.path)"
-          @mousedown.middle="closeTab(tab.path, 'right')"
-        >
+        <div v-for="tab in rightTabs" :key="tab.path"
+          :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
+          @mousedown.middle="closeTab(tab.path, 'right')">
           <span>{{ tab.fileName }}</span>
           <n-icon size="14" @click.stop="closeTab(tab.path, 'right')">
             <CloseOutline />
@@ -175,7 +167,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <n-button text @click="toggleGitPanel">
-              <n-icon width="16" height="16" >
+              <n-icon width="16" height="16">
                 <GitBranchOutline />
               </n-icon>
             </n-button>
@@ -203,11 +195,7 @@
           </n-tooltip>
         </n-dropdown>
 
-        <n-dropdown
-          trigger="click"
-          :options="exportOptions"
-          @select="handleExportSelect"
-        >
+        <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text>
@@ -222,160 +210,142 @@
 
     <div v-if="selectedFile" class="editor-content" :class="previewMode">
       <div v-show="previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
-      <div v-show="previewMode !== 'realtime' && showPreview" v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"></div>
+      <div v-show="previewMode !== 'realtime' && showPreview" v-html="renderedHtml" class="preview"
+        ref="previewContainer" @click="handlePreviewClick"></div>
       <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
-        <div
-          v-show="tableToolbarVisible"
-          class="floating-table-toolbar"
-          :style="tableToolbarStyle"
-          @mousedown.prevent
-        >
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="addTableRowBelow">
-              <Icon icon="mdi:table-row-plus-after" width="16" height="16" />
-            </n-button>
-          </template>
-          新增行
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="deleteTableRow">
-              <Icon icon="mdi:table-row-remove" width="16" height="16" />
-            </n-button>
-          </template>
-          删除行
-        </n-tooltip>
-        <div class="floating-table-toolbar-divider"></div>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="addTableColumnRight">
-              <Icon icon="mdi:table-column-plus-after" width="16" height="16" />
-            </n-button>
-          </template>
-          新增列
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="deleteTableColumn">
-              <Icon icon="mdi:table-column-remove" width="16" height="16" />
-            </n-button>
-          </template>
-          删除列
-        </n-tooltip>
-        <div class="floating-table-toolbar-divider"></div>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="setTableColumnAlign('left')">
-              <Icon icon="lucide:align-left" width="16" height="16" />
-            </n-button>
-          </template>
-          左对齐
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="setTableColumnAlign('center')">
-              <Icon icon="lucide:align-center" width="16" height="16" />
-            </n-button>
-          </template>
-          居中
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="setTableColumnAlign('right')">
-              <Icon icon="lucide:align-right" width="16" height="16" />
-            </n-button>
-          </template>
-          右对齐
-        </n-tooltip>
-        <div class="floating-table-toolbar-divider"></div>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="formatTable">
-              <Icon icon="lucide:sparkles" width="16" height="16" />
-            </n-button>
-          </template>
-          格式化
-        </n-tooltip>
-      </div>
-      <div
-        v-show="floatingToolbarVisible"
-        class="floating-md-toolbar"
-        :style="floatingToolbarStyle"
-        @mousedown.prevent
-      >
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleBold">
-              <Icon icon="lucide:bold" width="16" height="16" />
-            </n-button>
-          </template>
-          加粗
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleItalic">
-              <Icon icon="lucide:italic" width="16" height="16" />
-            </n-button>
-          </template>
-          斜体
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleStrikethrough">
-              <Icon icon="lucide:strikethrough" width="16" height="16" />
-            </n-button>
-          </template>
-          删除线
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertLink">
-              <Icon icon="lucide:link" width="16" height="16" />
-            </n-button>
-          </template>
-          链接
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleInlineCode">
-              <Icon icon="lucide:code" width="16" height="16" />
-            </n-button>
-          </template>
-          行内代码
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleBlockquote">
-              <Icon icon="lucide:quote" width="16" height="16" />
-            </n-button>
-          </template>
-          引用
-        </n-tooltip>
-      </div>
-      <div class="editor-split-wrapper" :class="layoutMode">
-        <div ref="editorContainer" class="editor-container">
-          <!-- 编辑器内容将在这里渲染 -->
+        <div v-show="tableToolbarVisible" class="floating-table-toolbar" :style="tableToolbarStyle" @mousedown.prevent>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="addTableRowBelow">
+                <Icon icon="mdi:table-row-plus-after" width="16" height="16" />
+              </n-button>
+            </template>
+            新增行
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="deleteTableRow">
+                <Icon icon="mdi:table-row-remove" width="16" height="16" />
+              </n-button>
+            </template>
+            删除行
+          </n-tooltip>
+          <div class="floating-table-toolbar-divider"></div>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="addTableColumnRight">
+                <Icon icon="mdi:table-column-plus-after" width="16" height="16" />
+              </n-button>
+            </template>
+            新增列
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="deleteTableColumn">
+                <Icon icon="mdi:table-column-remove" width="16" height="16" />
+              </n-button>
+            </template>
+            删除列
+          </n-tooltip>
+          <div class="floating-table-toolbar-divider"></div>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="setTableColumnAlign('left')">
+                <Icon icon="lucide:align-left" width="16" height="16" />
+              </n-button>
+            </template>
+            左对齐
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="setTableColumnAlign('center')">
+                <Icon icon="lucide:align-center" width="16" height="16" />
+              </n-button>
+            </template>
+            居中
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="setTableColumnAlign('right')">
+                <Icon icon="lucide:align-right" width="16" height="16" />
+              </n-button>
+            </template>
+            右对齐
+          </n-tooltip>
+          <div class="floating-table-toolbar-divider"></div>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="formatTable">
+                <Icon icon="lucide:sparkles" width="16" height="16" />
+              </n-button>
+            </template>
+            格式化
+          </n-tooltip>
         </div>
-        <div
-          v-if="layoutMode !== 'single'"
-          ref="secondaryEditorContainer"
-          class="editor-container"
-        >
+        <div v-show="floatingToolbarVisible" class="floating-md-toolbar" :style="floatingToolbarStyle"
+          @mousedown.prevent>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleBold">
+                <Icon icon="lucide:bold" width="16" height="16" />
+              </n-button>
+            </template>
+            加粗
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleItalic">
+                <Icon icon="lucide:italic" width="16" height="16" />
+              </n-button>
+            </template>
+            斜体
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleStrikethrough">
+                <Icon icon="lucide:strikethrough" width="16" height="16" />
+              </n-button>
+            </template>
+            删除线
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertLink">
+                <Icon icon="lucide:link" width="16" height="16" />
+              </n-button>
+            </template>
+            链接
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleInlineCode">
+                <Icon icon="lucide:code" width="16" height="16" />
+              </n-button>
+            </template>
+            行内代码
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleBlockquote">
+                <Icon icon="lucide:quote" width="16" height="16" />
+              </n-button>
+            </template>
+            引用
+          </n-tooltip>
         </div>
-      </div>
+        <div class="editor-split-wrapper" :class="layoutMode">
+          <div ref="editorContainer" class="editor-container">
+            <!-- 编辑器内容将在这里渲染 -->
+          </div>
+          <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container">
+          </div>
+        </div>
 
-      <n-dropdown
-        v-model:show="editorContextMenuVisible"
-        :options="editorContextMenuOptions"
-        placement="bottom-start"
-        :x="editorContextMenuPosition.x"
-        :y="editorContextMenuPosition.y"
-        @select="handleEditorContextMenuSelect"
-        @clickoutside="handleEditorContextMenuClickoutside"
-      />
+        <n-dropdown v-model:show="editorContextMenuVisible" :options="editorContextMenuOptions" placement="bottom-start"
+          :x="editorContextMenuPosition.x" :y="editorContextMenuPosition.y" @select="handleEditorContextMenuSelect"
+          @clickoutside="handleEditorContextMenuClickoutside" />
 
-      <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
+        <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
 
@@ -838,53 +808,138 @@ const registerMarkdownLanguageFeatures = () => {
 
       if (!trimmed) {
         suggestions.push(
-          createSnippet('H1 标题', '# ${1:标题}\n\n', '插入一级标题'),
-          createSnippet('H2 标题', '## ${1:标题}\n\n', '插入二级标题'),
+          createSnippet('h1', '# ${1:标题}\n\n', '插入一级标题'),
+          createSnippet('h2', '## ${1:标题}\n\n', '插入二级标题'),
+          createSnippet('h3', '### ${1:标题}\n\n', '插入三级标题'),
+          createSnippet('h4', '#### ${1:标题}\n\n', '插入四级标题'),
+          createSnippet('h5', '##### ${1:标题}\n\n', '插入五级标题'),
+          createSnippet('h6', '###### ${1:标题}\n\n', '插入六级标题'),
           createSnippet(
-            '无序列表',
+            'ul',
             '- ${1:列表项}\n- ${2:列表项}\n',
             '插入无序列表'
           ),
           createSnippet(
-            '有序列表',
+            'ol',
             '1. ${1:第一项}\n2. ${2:第二项}\n',
             '插入有序列表'
           ),
           createSnippet(
-            '任务列表',
+            'taskl',
             '- [ ] ${1:任务}\n- [ ] ${2:任务}\n',
             '插入任务列表'
           ),
           createSnippet(
-            '表格',
+            'table',
+            '| ${1:表头1} | ${2:表头2} |\n| --- | --- |\n| ${3:内容1} | ${4:内容2} |\n',
+            '插入表格'
+          ),
+          createSnippet(
+            'table2',
             '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n',
             '插入表格'
           ),
           createSnippet(
-            '代码块',
+            'table3',
+            '| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} |\n',
+            '插入三列表格'
+          ),
+          createSnippet(
+            'table4',
+            '| 列1 | 列2 | 列3 | 列4 |\n| --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} |\n',
+            '插入四列表格'
+          ),
+          createSnippet(
+            'table5',
+            '| 列1 | 列2 | 列3 | 列4 | 列5 |\n| --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} |\n',
+            '插入五列表格'
+          ),
+          createSnippet(
+            'table6',
+            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 |\n| --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} |\n',
+            '插入六列表格'
+          ),
+          createSnippet(
+            'table7',
+            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 |\n| --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} |\n',
+            '插入七列表格'
+          ),
+          createSnippet(
+            'table8',
+            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} |\n',
+            '插入八列表格'
+          ),
+          createSnippet(
+            'table9',
+            '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 | 列9 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} | ${9:值9} |\n',
+            '插入九列表格'
+          ),
+          createSnippet(
+            'code',
             '```${1:language}\n${2:代码}\n```\n',
             '插入代码块'
-          )
+          ),
+          createSnippet(
+            'toc',
+            '${1:目录}\n\n${2:目录内容}\n',
+            '插入目录'
+          ),
         );
       }
 
       suggestions.push(
-        createSnippet('加粗', '**${1:文本}**', '加粗文本'),
-        createSnippet('斜体', '*${1:文本}*', '斜体文本'),
-        createSnippet('删除线', '~~${1:文本}~~', '删除线'),
-        createSnippet('内联代码', '`${1:code}`', '内联代码'),
+        createSnippet('bold', '**${1:文本}**', '加粗文本'),
+        createSnippet('italic', '*${1:文本}*', '斜体文本'),
+        createSnippet('strikeout', '~~${1:文本}~~', '删除线'),
+        createSnippet('inlineCode', '`${1:code}`', '内联代码'),
+        createSnippet('red', '<font color="red">${1:红色文字}</font>', '设置红色文本'),
         createSnippet(
-          '链接',
+          'blue',
+          '<font color="blue">${1:蓝色文字}</font>',
+          '设置蓝色文本'
+        ),
+        createSnippet(
+          'green',
+          '<font color="green">${1:绿色文字}</font>',
+          '设置绿色文本'
+        ),
+        createSnippet(
+          'yellow',
+          '<font color="yellow">${1:黄色文字}</font>',
+          '设置黄色文本'
+        ),
+        createSnippet(
+          'orange',
+          '<font color="orange">${1:橙色文字}</font>',
+          '设置橙色文本'
+        ),
+        createSnippet(
+          'purple',
+          '<font color="purple">${1:紫色文字}</font>',
+          '设置紫色文本'
+        ),
+        createSnippet(
+          'cyan',
+          '<font color="cyan">${1:青色文字}</font>',
+          '设置青色文本'
+        ),
+        createSnippet(
+          'purple',
+          '<font color="purple">${1:紫色文字}</font>',
+          '设置紫色文本'
+        ),
+        createSnippet(
+          'link',
           '[${1:描述}](${2:链接})',
           '插入链接'
         ),
         createSnippet(
-          '图片',
+          'image',
           '![${1:描述}](${2:路径})',
           '插入图片'
         ),
-        createSnippet('引用', '> ${1:引用内容}\n', '插入引用'),
-        createSnippet('分隔线', '\n---\n', '插入分隔线')
+        createSnippet('quote', '> ${1:引用内容}\n', '插入引用'),
+        createSnippet('hr', '\n---\n', '插入分隔线')
       );
 
       return { suggestions };
@@ -3355,6 +3410,7 @@ onUnmounted(() => {
   background-color: var(--divider-color, #e0e0e0);
   margin: 0 2px;
 }
+
 .toolbar-editing-actions :deep(.n-button) {
   padding: 0 4px;
   height: 22px;
