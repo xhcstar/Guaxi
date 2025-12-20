@@ -32,6 +32,10 @@ async fn app_init() {
         Ok(_) => println!("Resource root initialized successfully."),
         Err(e) => eprintln!("Failed to initialize resource root: {}", e),
     }
+    match commands::settingview::init_template_root() {
+        Ok(_) => println!("Template root initialized successfully."),
+        Err(e) => eprintln!("Failed to initialize template root: {}", e),
+    }
 }
 
 fn start_background_gc() {
@@ -126,6 +130,16 @@ async fn main() {
             commands::settingview::set_libraries_root,
             commands::settingview::get_image_bed_root,
             commands::settingview::set_image_bed_root,
+            commands::settingview::get_template_repo_path,
+            commands::settingview::set_template_repo_path,
+            commands::templateview::create_template_manager_window,
+            commands::templateview::emit_template_insert,
+            commands::templateview::list_templates,
+            commands::templateview::read_template,
+            commands::templateview::save_template,
+            commands::templateview::rename_template,
+            commands::templateview::delete_template,
+            commands::templateview::import_template_from_file,
             commands::settingview::get_gc_cycle_seconds,
             commands::settingview::set_gc_cycle_seconds,
             commands::settingview::get_lsp_syntax_highlight_enabled,

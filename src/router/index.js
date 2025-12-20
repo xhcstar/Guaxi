@@ -9,6 +9,7 @@ import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
+import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
 
 
 export const routes = [
@@ -71,6 +72,11 @@ export const routes = [
     props: (route) => ({  // 关键：显式传递查询参数作为props
       workspacePath: route.query.workspacePath,
     })
+  },
+  {
+    path: '/templates',
+    name: 'templates',
+    component: GuaxiTemplateManager,
   },
 ];
 

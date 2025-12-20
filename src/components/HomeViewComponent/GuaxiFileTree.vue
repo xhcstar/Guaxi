@@ -75,11 +75,31 @@
     <n-dropdown v-model:show="isContextMenuVisible" :options="contextMenuOptions" placement="bottom-start"
       :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect"
       @clickoutside="handleClickoutside" />
+
+    <n-modal v-model:show="importTemplateModalVisible" preset="dialog" title="导入到模板库" :mask-closable="false">
+      <div style="width: 420px;">
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="模板名称">
+            <n-input v-model:value="importTemplateName" placeholder="例如：会议纪要" />
+          </n-form-item>
+          <n-form-item label="模板类型">
+            <n-input v-model:value="importTemplateType" placeholder="例如：会议 / 日记 / TODO" />
+          </n-form-item>
+          <n-form-item label="来源文件">
+            <n-input :value="importTemplateSourcePath" disabled />
+          </n-form-item>
+        </n-form>
+        <n-space justify="end">
+          <n-button @click="importTemplateModalVisible = false">取消</n-button>
+          <n-button type="primary" :loading="importTemplateLoading" @click="confirmImportAsTemplate">导入</n-button>
+        </n-space>
+      </div>
+    </n-modal>
   </div>
 </template>
 
 <script setup>
-import { NTree, NIcon, useMessage } from 'naive-ui'
+import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
@@ -138,6 +158,63 @@ const unlistenRef = ref(null)
 
 const selectedKeys = ref([]); // 新增：存储当前选中的节点keys
 
+const importTemplateModalVisible = ref(false)
+const importTemplateLoading = ref(false)
+const importTemplateName = ref('')
+const importTemplateType = ref('未分类')
+const importTemplateSourcePath = ref('')
+
+const basename = (p) => String(p || '').split(/[\\/]/).pop() || ''
+const stemname = (p) => {
+  const b = basename(p)
+  const idx = b.lastIndexOf('.')
+  return idx > 0 ? b.slice(0, idx) : b
+}
+
+const openImportTemplateModal = async () => {
+  const node = selectedNode.value
+  if (!node || node.is_directory) return
+
+  const nodePath = normalizePath(node.id)
+  if (!isMarkdownFilePath(nodePath)) {
+    message.warning('仅支持 Markdown 文件')
+    return
+  }
+
+  importTemplateSourcePath.value = nodePath
+  importTemplateName.value = stemname(nodePath)
+  importTemplateType.value = '未分类'
+  importTemplateModalVisible.value = true
+}
+
+const confirmImportAsTemplate = async () => {
+  const sourcePath = importTemplateSourcePath.value
+  const name = importTemplateName.value.trim()
+  const templateType = importTemplateType.value.trim() || '未分类'
+
+  if (!sourcePath) return
+  if (!name) {
+    message.warning('请输入模板名称')
+    return
+  }
+
+  try {
+    importTemplateLoading.value = true
+    await invoke('import_template_from_file', {
+      sourcePath,
+      name,
+      templateType
+    })
+    message.success('已导入到模板库')
+    importTemplateModalVisible.value = false
+  } catch (error) {
+    console.error('导入模板失败:', error)
+    message.error('导入模板失败')
+  } finally {
+    importTemplateLoading.value = false
+  }
+}
+
 // 右键菜单选项
 const contextMenuOptions = ref([
   {
@@ -149,6 +226,12 @@ const contextMenuOptions = ref([
     label: '新建文件夹',
     key: 'addFolder',
     icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) })
+  },
+  {
+    label: '导入到模板库',
+    key: 'importAsTemplate',
+    disabled: true,
+    icon: () => h(NIcon, null, { default: () => h(DocumentTextOutline) })
   },
   {
     label: '重命名',
@@ -463,6 +546,12 @@ const nodeProps = ({ option }) => ({
       openInBrowserOpt.disabled = !canOpenInBrowser
     }
 
+    const canImportAsTemplate = !option.is_directory && isMarkdownFilePath(nodePath)
+    const importOpt = contextMenuOptions.value.find(o => o.key === 'importAsTemplate')
+    if (importOpt) {
+      importOpt.disabled = !canImportAsTemplate
+    }
+
     isContextMenuVisible.value = true
     contextMenuPosition.value = { x: e.clientX, y: e.clientY }
     console.log('节点右键菜单触发:', option.name)
@@ -479,6 +568,9 @@ const handleContextMenuSelect = async (key) => {
         break;
       case 'addFolder':
         await addNode(selectedNode.value?.id, true);
+        break;
+      case 'importAsTemplate':
+        await openImportTemplateModal();
         break;
       case 'rename':
         if (selectedNode.value) {

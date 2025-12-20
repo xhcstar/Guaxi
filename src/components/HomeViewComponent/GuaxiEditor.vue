@@ -399,6 +399,7 @@ import { GitBranchOutline } from '@vicons/ionicons5'
 import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { save } from '@tauri-apps/plugin-dialog'
 
 const outlineStore = useOutlineStore()
@@ -769,6 +770,32 @@ const rightTabs = computed(() => {
 
 
 const message = useMessage()
+
+let unlistenTemplateInsert = null
+
+onMounted(async () => {
+  try {
+    unlistenTemplateInsert = await listen('template_insert_event', async (event) => {
+      const content = typeof event?.payload?.content === 'string' ? event.payload.content : ''
+      if (!content) return
+
+      const text = content.endsWith('\n') ? content : `${content}\n`
+      const inserted = await editorStore.insertContent(text)
+      if (!inserted) {
+        message.warning('插入模板失败：请先打开一个文件')
+      }
+    })
+  } catch (e) {
+    console.error('注册模板插入事件失败:', e)
+  }
+})
+
+onUnmounted(() => {
+  if (typeof unlistenTemplateInsert === 'function') {
+    unlistenTemplateInsert()
+    unlistenTemplateInsert = null
+  }
+})
 
 const headingOptions = [
   { label: '正文', key: 0 },

@@ -6,6 +6,7 @@ pub mod guaxireader;
 pub mod repoview;
 pub mod serverview;
 pub mod settingview;
+pub mod templateview;
 pub mod statisticview;
 pub mod guaxiscreencap;
 pub mod translator;

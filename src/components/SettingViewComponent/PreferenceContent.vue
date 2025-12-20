@@ -50,6 +50,26 @@
             </n-form-item>
           </n-form>
         </div>
+
+        <n-divider />
+
+        <div>
+          <h3>模板库</h3>
+          <p class="description">
+            用于存放 Markdown 模板文件。未配置时启动会自动在程序同级目录创建 Template 文件夹并写入配置。
+          </p>
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+            <n-form-item label="模板库路径">
+              <n-input v-model:value="templateRepoPath" :disabled="loading" placeholder="模板库路径" />
+            </n-form-item>
+            <n-form-item label="操作">
+              <n-space>
+                <n-button :disabled="loading" @click="handleTemplateRepoPick">浏览文件夹...</n-button>
+                <n-button :disabled="loading" type="primary" @click="handleTemplateRepoSave">保存</n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </div>
       </n-space>
     </n-card>
   </div>
@@ -57,19 +77,22 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NAlert, NSwitch } from 'naive-ui'
+import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NAlert, NSwitch, NInput, NButton } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
+const templateRepoPath = ref('')
 const loading = ref(false)
 
 onMounted(async () => {
   try {
     loading.value = true
-    const [seconds, enabled] = await Promise.all([
+    const [seconds, enabled, tplPath] = await Promise.all([
       invoke('get_gc_cycle_seconds'),
-      invoke('get_lsp_syntax_highlight_enabled')
+      invoke('get_lsp_syntax_highlight_enabled'),
+      invoke('get_template_repo_path')
     ])
 
     if (typeof seconds === 'number' && seconds > 0) {
@@ -79,10 +102,12 @@ onMounted(async () => {
     }
 
     lspHighlightEnabled.value = !!enabled
+    templateRepoPath.value = typeof tplPath === 'string' ? tplPath : ''
   } catch (error) {
     console.error('加载偏好设置失败:', error)
     gcCycleHours.value = 1
     lspHighlightEnabled.value = false
+    templateRepoPath.value = ''
   } finally {
     loading.value = false
   }
@@ -109,6 +134,36 @@ const handleLspHighlightChange = async (value) => {
     await invoke('set_lsp_syntax_highlight_enabled', { enabled: value })
   } catch (error) {
     console.error('更新 LSP 语法高亮配置失败:', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleTemplateRepoPick = async () => {
+  try {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false
+    })
+
+    if (!selectedPath) return
+
+    loading.value = true
+    await invoke('set_template_repo_path', { path: selectedPath })
+    templateRepoPath.value = selectedPath
+  } catch (error) {
+    console.error('更新模板库路径失败:', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleTemplateRepoSave = async () => {
+  try {
+    loading.value = true
+    await invoke('set_template_repo_path', { path: templateRepoPath.value })
+  } catch (error) {
+    console.error('更新模板库路径失败:', error)
   } finally {
     loading.value = false
   }

@@ -34,6 +34,13 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
+          <Icon class="header-icon" icon="mdi:file-document-edit-outline" width="20" height="20" @click="openTemplateManager" />
+        </template>
+        模板管理
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
           <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
         </template>
         截图并插入
@@ -262,6 +269,23 @@ function openOutlinePanel() {
   rightSiderStore.setPanel('outline')
   rightSiderStore.open()
   siderStore.setRightSiderCollapsed(viewKey, false)
+}
+
+async function openTemplateManager() {
+  try {
+    await invoke('create_template_manager_window', {
+      label: 'template_manager',
+      title: '模板管理器'
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('模板管理器窗口已打开')
+      return
+    }
+    console.error('打开模板管理器失败:', err)
+    message.error('打开模板管理器失败')
+  }
 }
 
 async function CaptureScreenshot() {
