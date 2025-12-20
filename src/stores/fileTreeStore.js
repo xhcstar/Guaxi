@@ -95,13 +95,14 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       return content.length > 50 ? content.substring(0, 50) + "..." : content;
     },
     // 获取文件树数据
-    async fetchFileTree(path) {
+    async fetchFileTree(path, options = {}) {
+      const { force = false } = options || {};
       console.log("开始获取文件树数据，路径:", path);
       if (!path) {
         this.fileTree = [];
         return;
       }
-      if (this.currentRequestPath === path) return; // 防止重复请求
+      if (!force && this.currentRequestPath === path) return; // 防止重复请求
 
       this.currentRequestPath = path;
       try {
@@ -127,7 +128,10 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       }
 
       // 如果未提供内容，则获取内容
-      const fileContent = content || (await this.fetchFileContent(path));
+      const fileContent =
+        content !== undefined && content !== null
+          ? content
+          : await this.fetchFileContent(path);
       if (fileContent === null) {
         console.error("获取文件内容失败，不创建标签页");
         return;
