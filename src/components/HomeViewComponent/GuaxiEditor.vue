@@ -3747,25 +3747,34 @@ onUnmounted(() => {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  /* 改为固定右对齐 */
+  justify-content: flex-start;
   padding: 4px 8px;
   height: 30px;
+  min-height: 30px;
   background-color: var(--toolbar-bg, #f8f8f8);
   border-bottom: 1px solid var(--divider-color, #e0e0e0);
   position: relative;
   width: 100%;
   box-sizing: border-box;
   min-width: 0;
-  /* 允许工具栏缩小 */
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 .toolbar-editing-actions {
   display: flex;
   gap: 4px;
   align-items: center;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
   min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.toolbar-editing-actions::-webkit-scrollbar {
+  height: 0;
 }
 
 .floating-md-toolbar {
@@ -3883,7 +3892,8 @@ onUnmounted(() => {
     flex: 1 1 auto;
     min-width: 0;
     flex-wrap: nowrap;
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
     contain: paint;
     -webkit-mask-image: linear-gradient(to right, #000 0%, #000 85%, transparent 100%);
     mask-image: linear-gradient(to right, #000 0%, #000 85%, transparent 100%);
