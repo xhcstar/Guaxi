@@ -43,12 +43,22 @@
             {{ getRepoName(activeRepoPathItem) }}
           </div>
           <div class="repo-actions">
-            <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(activeRepoPathItem)">
-              <n-icon :component="FileAddIcon" size="14" />
-            </n-icon-wrapper>
-            <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(activeRepoPathItem)">
-              <n-icon :component="FolderAddIcon" size="14" />
-            </n-icon-wrapper>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(activeRepoPathItem)">
+                  <n-icon :component="FileAddIcon" size="14" />
+                </n-icon-wrapper>
+              </template>
+              新建文件
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(activeRepoPathItem)">
+                  <n-icon :component="FolderAddIcon" size="14" />
+                </n-icon-wrapper>
+              </template>
+              新建文件夹
+            </n-tooltip>
             <n-icon size="15" class="expand-icon">
               <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(activeRepoPathItem)" />
               <chevron-forward-icon v-else />
@@ -77,12 +87,22 @@
                 {{ getRepoName(path) }}
               </div>
               <div class="repo-actions">
-                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
-                  <n-icon :component="FileAddIcon" size="14" />
-                </n-icon-wrapper>
-                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(path)">
-                  <n-icon :component="FolderAddIcon" size="14" />
-                </n-icon-wrapper>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
+                      <n-icon :component="FileAddIcon" size="14" />
+                    </n-icon-wrapper>
+                  </template>
+                  新建文件
+                </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(path)">
+                      <n-icon :component="FolderAddIcon" size="14" />
+                    </n-icon-wrapper>
+                  </template>
+                  新建文件夹
+                </n-tooltip>
                 <n-icon size="15" class="expand-icon">
                   <chevron-forward-icon />
                 </n-icon>
