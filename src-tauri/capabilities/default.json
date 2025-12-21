@@ -5,7 +5,8 @@
   "windows": [
     "main",
     "reader-*",
-    "template_manager"
+    "template_manager",
+    "knowledge_base_manager"
   ],
   "permissions": [
     "core:default",

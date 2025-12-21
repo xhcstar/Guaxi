@@ -10,6 +10,7 @@ import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
 import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
+import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
 
 
 export const routes = [
@@ -77,6 +78,11 @@ export const routes = [
     path: '/templates',
     name: 'templates',
     component: GuaxiTemplateManager,
+  },
+  {
+    path: '/kb-manager',
+    name: 'kb-manager',
+    component: GuaxiKnowledgeBaseManager,
   },
 ];
 

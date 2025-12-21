@@ -4,6 +4,19 @@
     <div class="list-header">
       <div class="title-container">
         <n-text class="repo-title-header">知识库编辑</n-text>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper
+              :size="18"
+              :border-radius="6"
+              class="kb-manager-icon"
+              @click="openKnowledgeBaseManager"
+            >
+              <n-icon :component="SettingsOutline" size="16" />
+            </n-icon-wrapper>
+          </template>
+          知识库管理器
+        </n-tooltip>
       </div>
       <div class="header-actions">
         <n-tooltip trigger="hover">
@@ -142,7 +155,7 @@
 
 <script setup>
 import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { h, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
@@ -173,6 +186,23 @@ const toggleBrowserPreview = async () => {
   } catch (e) {
     browserPreviewEnabled.value = false
     message.error('打开浏览器失败，请确认已启用 opener 插件')
+  }
+}
+
+const openKnowledgeBaseManager = async () => {
+  try {
+    await invoke('create_knowledge_base_manager_window', {
+      label: 'knowledge_base_manager',
+      title: '知识库管理器'
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('知识库管理器窗口已打开')
+      return
+    }
+    console.error('打开知识库管理器失败:', err)
+    message.error('打开知识库管理器失败')
   }
 }
 
@@ -1640,6 +1670,18 @@ onUnmounted(() => {
   align-items: center;
   height: auto;
   /* 确保高度自适应 */
+  gap: 6px;
+}
+
+.kb-manager-icon {
+  color: var(--n-text-color-secondary);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 4px;
+}
+
+.kb-manager-icon:hover {
+  color: var(--n-color-primary);
 }
 
 .repo-title-header {

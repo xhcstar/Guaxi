@@ -9,6 +9,8 @@ use std::env;
 #[derive(Deserialize)]
 pub struct KnowledgeBaseInput {
     pub knowledge_base_name: String,
+    #[serde(default)]
+    pub knowledge_base_type: Option<String>,
     pub knowledge_base_tags: String,
     pub knowledge_base_description: String,
 }
@@ -108,17 +110,27 @@ pub fn create_knowledge_base(input: KnowledgeBaseInput) -> Result<(), String> {
 
     // 6. 写入元数据到json文件
     let now = Local::now().to_rfc3339();
+    let kb_type = input
+        .knowledge_base_type
+        .clone()
+        .unwrap_or_else(|| "未分类".to_string());
+
     let meta = serde_json::json!({
         "knowledge_base_name": input.knowledge_base_name,
+        "knowledge_base_type": kb_type,
         "knowledge_base_tags": input.knowledge_base_tags,
         "knowledge_base_description": input.knowledge_base_description,
         "knowledge_base_created_at": now,
+        "knowledge_base_modified_at": now,
         "knowledge_base_location": kb_dir.to_string_lossy(),
         "knowledge_base_owner": "当前用户",
         "knowledge_base_shared": false
     });
     let meta_file = kb_meta_dir.join("meta.json");
     fs::write(meta_file, serde_json::to_string_pretty(&meta).unwrap()).map_err(|e| e.to_string())?;
+
+    // 额外：为“知识库管理器”生成根目录元数据（KnowledgeBases/.meta/xxx_meta/xxx_meta.json）
+    crate::commands::kbmeta::init_kb_meta_for_new_kb(&input.knowledge_base_name, &kb_dir, &now)?;
 
     // 7. 写入数据库
     let conn = init_db().map_err(|e| e.to_string())?;

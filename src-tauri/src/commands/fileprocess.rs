@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+use crate::commands::kbmeta;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileNode {
     id: String,
@@ -103,34 +105,80 @@ pub fn read_file_content(path: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn write_file_content(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, content).map_err(|e| e.to_string())
+    let path = normalize_path(&path);
+    fs::write(&path, &content).map_err(|e| e.to_string())?;
+
+    if let Err(e) = kbmeta::after_write_file(&path, &content) {
+        warn!(error = %e, path = %path.display(), "kbmeta after_write_file failed");
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 pub fn create_directory(path: String) -> Result<(), String> {
-    fs::create_dir_all(&path).map_err(|e| e.to_string())
+    let path = normalize_path(&path);
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+
+    if let Err(e) = kbmeta::after_create_path(&path, true, None) {
+        warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 pub fn create_file(path: String) -> Result<(), String> {
+    let path = normalize_path(&path);
+
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+
     fs::File::create(&path)
         .map_err(|e| e.to_string())
-        .map(|_| ())
+        .map(|_| ())?;
+
+    if let Err(e) = kbmeta::after_create_path(&path, false, None) {
+        warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 pub fn delete_path(path: String) -> Result<(), String> {
-    if fs::metadata(&path).map_err(|e| e.to_string())?.is_dir() {
-        fs::remove_dir_all(&path).map_err(|e| e.to_string())
+    let path = normalize_path(&path);
+    let is_dir = fs::metadata(&path).map_err(|e| e.to_string())?.is_dir();
+
+    if is_dir {
+        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
     } else {
-        fs::remove_file(&path).map_err(|e| e.to_string())
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
+
+    if let Err(e) = kbmeta::after_delete_path(&path, is_dir) {
+        warn!(error = %e, path = %path.display(), "kbmeta after_delete_path failed");
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 pub fn move_path(source_path: String, destination_path: String) -> Result<(), String> {
-    info!("move_path: {} -> {}", source_path, destination_path);
-    std::fs::rename(source_path, destination_path).map_err(|e| e.to_string())
+    let source_path = normalize_path(&source_path);
+    let destination_path = normalize_path(&destination_path);
+
+    info!("move_path: {} -> {}", source_path.display(), destination_path.display());
+    std::fs::rename(&source_path, &destination_path).map_err(|e| e.to_string())?;
+
+    if let Err(e) = kbmeta::after_move_path(&source_path, &destination_path) {
+        warn!(error = %e, src = %source_path.display(), dst = %destination_path.display(), "kbmeta after_move_path failed");
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -140,7 +188,7 @@ pub async fn create_file_with_content(
 ) -> Result<(), String> {
     let content = content.unwrap_or_default(); // 处理null情况
 
-    let path = PathBuf::from(path.replace('\\', "/")); // 统一路径格式
+    let path = normalize_path(&path.to_string());
 
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -148,7 +196,11 @@ pub async fn create_file_with_content(
         }
     }
 
-    fs::write(&path, content).map_err(|e| format!("写入文件失败: {}", e))?;
+    fs::write(&path, &content).map_err(|e| format!("写入文件失败: {}", e))?;
+
+    if let Err(e) = kbmeta::after_create_path(&path, false, Some(&content)) {
+        warn!(error = %e, path = %path.display(), "kbmeta after_create_path failed");
+    }
 
     Ok(())
 }
@@ -193,6 +245,10 @@ pub fn rename_directory(old_path: String, new_path: String) -> Result<(), String
     // 4. 执行重命名
     fs::rename(&old_path, &new_path).map_err(|e| format!("重命名目录失败: {}", e))?;
 
+    if let Err(e) = kbmeta::after_move_path(&old_path, &new_path) {
+        warn!(error = %e, src = %old_path.display(), dst = %new_path.display(), "kbmeta after_move_path failed");
+    }
+
     info!(
         "Directory renamed successfully: {:?} -> {:?}",
         old_path, new_path
@@ -231,6 +287,10 @@ pub fn rename_path(old_path: String, new_path: String) -> Result<(), String> {
 
     // 4. 执行重命名
     fs::rename(&old_path, &new_path).map_err(|e| format!("重命名失败: {}", e))?;
+
+    if let Err(e) = kbmeta::after_move_path(&old_path, &new_path) {
+        warn!(error = %e, src = %old_path.display(), dst = %new_path.display(), "kbmeta after_move_path failed");
+    }
 
     info!(
         "Path renamed successfully: {:?} -> {:?}",

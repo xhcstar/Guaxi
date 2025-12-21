@@ -13,6 +13,7 @@ pub mod translator;
 pub mod translator_free;
 pub mod searcher;
 pub mod knowledgebase;
+pub mod kbmeta;
 pub mod excerptsearch;
 pub mod git;
 pub mod markdown_reader_doc_process;
