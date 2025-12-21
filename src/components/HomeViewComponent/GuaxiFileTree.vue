@@ -119,7 +119,7 @@
       @clickoutside="handleClickoutside" />
 
     <n-modal v-model:show="importTemplateModalVisible" preset="dialog" title="导入到模板库" :mask-closable="false">
-      <div style="width: 420px;">
+      <div class="import-template-modal-content">
         <n-form label-placement="left" label-width="auto" :show-require-mark="false">
           <n-form-item label="模板名称">
             <n-input v-model:value="importTemplateName" placeholder="例如：会议纪要" />
@@ -1671,6 +1671,32 @@ onUnmounted(() => {
   overflow: hidden;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
   font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+}
+
+.import-template-modal-content {
+  width: 420px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+:deep(.import-template-modal-content .n-form),
+:deep(.import-template-modal-content .n-form-item) {
+  max-width: 100%;
+}
+
+:deep(.import-template-modal-content .n-form-item-blank) {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+:deep(.import-template-modal-content .n-input),
+:deep(.import-template-modal-content .n-input-wrapper) {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+:deep(.import-template-modal-content .n-input__input-el) {
+  min-width: 0;
 }
 
 .toolbar {
