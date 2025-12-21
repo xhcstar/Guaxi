@@ -1056,10 +1056,22 @@ const rightTabs = computed(() => {
 const message = useMessage()
 
 let unlistenTemplateInsert = null
+let templateInsertListenerUnmounted = false
+
+const safeUnlistenTemplateInsert = () => {
+  if (typeof unlistenTemplateInsert !== 'function') return
+  try {
+    unlistenTemplateInsert()
+  } catch (e) {
+    console.debug('反注册模板插入事件失败:', e)
+  }
+  unlistenTemplateInsert = null
+}
 
 onMounted(async () => {
+  templateInsertListenerUnmounted = false
   try {
-    unlistenTemplateInsert = await listen('template_insert_event', async (event) => {
+    const unlisten = await listen('template_insert_event', async (event) => {
       const content = typeof event?.payload?.content === 'string' ? event.payload.content : ''
       if (!content) return
 
@@ -1069,16 +1081,25 @@ onMounted(async () => {
         message.warning('插入模板失败：请先打开一个文件')
       }
     })
+
+    if (templateInsertListenerUnmounted) {
+      try {
+        unlisten()
+      } catch (e) {
+        console.debug('反注册模板插入事件失败:', e)
+      }
+      return
+    }
+
+    unlistenTemplateInsert = unlisten
   } catch (e) {
     console.error('注册模板插入事件失败:', e)
   }
 })
 
 onUnmounted(() => {
-  if (typeof unlistenTemplateInsert === 'function') {
-    unlistenTemplateInsert()
-    unlistenTemplateInsert = null
-  }
+  templateInsertListenerUnmounted = true
+  safeUnlistenTemplateInsert()
 })
 
 const headingOptions = [
@@ -1698,6 +1719,8 @@ const initEditor = () => {
     activeTab: fileTreeStore.activeTab
   })
 
+  if (!selectedFile.value) return
+
   if (!editorContainer.value) {
     if (!initEditorPending) {
       initEditorPending = true;
@@ -1708,7 +1731,7 @@ const initEditor = () => {
         }
       });
     }
-    console.error('[Editor] 编辑器容器未找到');
+    console.debug('[Editor] editor container not ready');
     return;
   }
 
