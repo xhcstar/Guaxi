@@ -1670,6 +1670,7 @@ onUnmounted(() => {
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .toolbar {
@@ -1897,6 +1898,7 @@ onUnmounted(() => {
 :deep(.tree-component .n-tree-node-content__text) {
   font-size: 13px;
   line-height: 1.35;
+  font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 :deep(.tree-component .n-tree-node-content:hover) {
