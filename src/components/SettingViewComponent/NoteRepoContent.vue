@@ -147,6 +147,72 @@
         <n-divider />
 
         <div>
+          <h3>知识库远程仓库</h3>
+          <p class="description">
+            配置后将应用到 KnowledgeBases 根目录下的 Git 仓库，可用于后续 git push / git pull。
+          </p>
+
+          <n-alert type="info" v-if="knowledgeBasesRemoteUrl" style="max-width: 95%;">
+            当前远程仓库：{{ knowledgeBasesRemoteUrl }}
+          </n-alert>
+          <n-alert type="warning" v-else style="max-width: 95%;">
+            未配置远程仓库地址
+          </n-alert>
+
+          <n-form
+            label-placement="left"
+            label-width="auto"
+            :show-require-mark="false"
+            style="margin-top: 8px"
+          >
+            <n-form-item label="远程仓库地址">
+              <n-input
+                v-model:value="knowledgeBasesRemoteUrl"
+                :disabled="loading"
+                placeholder="https://..."
+              />
+            </n-form-item>
+            <n-form-item label="远程仓库用户名">
+              <n-input
+                v-model:value="knowledgeBasesRemoteUsername"
+                :disabled="loading"
+                placeholder="可选"
+              />
+            </n-form-item>
+            <n-form-item label="Git 用户名">
+              <n-input
+                v-model:value="knowledgeBasesGitUsername"
+                :disabled="loading"
+                placeholder="用于提交, 例如: Your Name"
+              />
+            </n-form-item>
+            <n-form-item label="Git Email">
+              <n-input
+                v-model:value="knowledgeBasesGitEmail"
+                :disabled="loading"
+                placeholder="用于提交, 例如: you@example.com"
+              />
+            </n-form-item>
+            <n-form-item label="访问秘钥">
+              <n-input
+                v-model:value="knowledgeBasesRemoteToken"
+                :disabled="loading"
+                type="password"
+                :placeholder="knowledgeBasesRemoteHasToken ? '已配置（留空可保持不变）' : '请输入访问秘钥'"
+                show-password-on="click"
+              />
+            </n-form-item>
+            <n-form-item label="操作">
+              <n-space>
+                <n-button :disabled="loading" type="primary" @click="handleKnowledgeBasesRemoteSave">保存并应用</n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>模板库</h3>
           <p class="description">
             用于存放 Markdown 模板文件。未配置时启动会自动在程序同级目录创建 Template 文件夹并写入配置。
@@ -274,6 +340,14 @@ const knowledgeBasesRoot = ref('');
 // 模板库路径
 const templateRepoPath = ref('');
 
+// 知识库远程仓库配置
+const knowledgeBasesRemoteUrl = ref('');
+const knowledgeBasesRemoteUsername = ref('');
+const knowledgeBasesRemoteToken = ref('');
+const knowledgeBasesRemoteHasToken = ref(false);
+const knowledgeBasesGitUsername = ref('');
+const knowledgeBasesGitEmail = ref('');
+
 const loading = ref(false);
 
 // 打开文件浏览器选择文件库根目录
@@ -311,6 +385,24 @@ onMounted(async () => {
   } catch (error) {
     console.error('加载知识库根目录失败:', error);
     knowledgeBasesRoot.value = '';
+  }
+
+  try {
+    const remoteConfig = await invoke('get_knowledge_bases_remote_config');
+    knowledgeBasesRemoteUrl.value = remoteConfig?.remote_url ? String(remoteConfig.remote_url) : '';
+    knowledgeBasesRemoteUsername.value = remoteConfig?.username ? String(remoteConfig.username) : '';
+    knowledgeBasesRemoteHasToken.value = !!remoteConfig?.has_token;
+    knowledgeBasesRemoteToken.value = '';
+    knowledgeBasesGitUsername.value = remoteConfig?.git_username ? String(remoteConfig.git_username) : '';
+    knowledgeBasesGitEmail.value = remoteConfig?.git_email ? String(remoteConfig.git_email) : '';
+  } catch (error) {
+    console.error('加载知识库远程仓库配置失败:', error);
+    knowledgeBasesRemoteUrl.value = '';
+    knowledgeBasesRemoteUsername.value = '';
+    knowledgeBasesRemoteHasToken.value = false;
+    knowledgeBasesRemoteToken.value = '';
+    knowledgeBasesGitUsername.value = '';
+    knowledgeBasesGitEmail.value = '';
   }
 
   try {
@@ -418,6 +510,26 @@ const handleTemplateRepoSave = async () => {
     await invoke('set_template_repo_path', { path: templateRepoPath.value });
   } catch (error) {
     console.error('更新模板库路径失败:', error);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleKnowledgeBasesRemoteSave = async () => {
+  try {
+    loading.value = true;
+    await invoke('set_knowledge_bases_remote_config', {
+      remote_url: knowledgeBasesRemoteUrl.value,
+      username: knowledgeBasesRemoteUsername.value,
+      token: knowledgeBasesRemoteToken.value,
+      git_username: knowledgeBasesGitUsername.value,
+      git_email: knowledgeBasesGitEmail.value,
+    });
+
+    knowledgeBasesRemoteHasToken.value = knowledgeBasesRemoteHasToken.value || !!knowledgeBasesRemoteToken.value.trim();
+    knowledgeBasesRemoteToken.value = '';
+  } catch (error) {
+    console.error('保存知识库远程仓库配置失败:', error);
   } finally {
     loading.value = false;
   }

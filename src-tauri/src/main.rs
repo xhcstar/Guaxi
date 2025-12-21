@@ -136,6 +136,8 @@ async fn main() {
             commands::settingview::set_image_bed_root,
             commands::settingview::get_template_repo_path,
             commands::settingview::set_template_repo_path,
+            commands::settingview::get_knowledge_bases_remote_config,
+            commands::settingview::set_knowledge_bases_remote_config,
             commands::settingview::get_knowledge_bases_root,
             commands::settingview::set_knowledge_bases_root,
             commands::templateview::create_template_manager_window,

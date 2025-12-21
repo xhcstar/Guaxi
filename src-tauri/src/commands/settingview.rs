@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
-use tracing::info;
+use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 use uuid::Uuid;
+
+use git2::{Cred, CredentialType, PushOptions, RemoteCallbacks, Repository, Signature};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Library {
@@ -33,6 +35,16 @@ pub struct AppConfig {
     template_repo_path: String,
     #[serde(default)]
     knowledge_bases_root: String,
+    #[serde(default)]
+    knowledge_bases_remote_url: String,
+    #[serde(default)]
+    knowledge_bases_remote_username: String,
+    #[serde(default)]
+    knowledge_bases_remote_token: String,
+    #[serde(default)]
+    knowledge_bases_git_username: String,
+    #[serde(default)]
+    knowledge_bases_git_email: String,
     #[serde(default)]
     device_id: String,
     #[serde(default = "default_gc_cycle_seconds")]
@@ -79,6 +91,167 @@ fn default_knowledge_bases_root() -> String {
         .join("KnowledgeBases")
         .to_string_lossy()
         .to_string()
+}
+
+const KNOWLEDGE_BASES_REMOTE_URL: &str = "https://gitee.com/xhcstar/knowledge-bases.git";
+
+fn normalize_knowledge_bases_root(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return PathBuf::new();
+    }
+    let p = PathBuf::from(trimmed);
+    match p.file_name().and_then(|n| n.to_str()) {
+        Some("KnowledgeBases") => p,
+        _ => p.join("KnowledgeBases"),
+    }
+}
+
+fn schedule_knowledge_bases_git_init(root: PathBuf) {
+    if root.as_os_str().is_empty() {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let root_for_job = root.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || ensure_knowledge_bases_git_repo(&root_for_job)).await;
+
+        match result {
+            Ok(Ok(_)) => {
+                info!(
+                    root = root.to_string_lossy().as_ref(),
+                    "KnowledgeBases git repo ready"
+                );
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    root = root.to_string_lossy().as_ref(),
+                    error = e.as_str(),
+                    "KnowledgeBases git repo init failed"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    root = root.to_string_lossy().as_ref(),
+                    error = e.to_string().as_str(),
+                    "KnowledgeBases git repo init task failed"
+                );
+            }
+        }
+    });
+}
+
+fn ensure_knowledge_bases_git_repo(root: &Path) -> Result<(), String> {
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+
+    let repo = if root.join(".git").exists() {
+        Repository::open(root).map_err(|e| e.to_string())?
+    } else {
+        Repository::init(root).map_err(|e| e.to_string())?
+    };
+
+    let config = load_config();
+
+    let git_username_cfg = config.knowledge_bases_git_username.trim().to_string();
+    let git_email_cfg = config.knowledge_bases_git_email.trim().to_string();
+    let git_username = if git_username_cfg.is_empty() {
+        "Guaxi".to_string()
+    } else {
+        git_username_cfg
+    };
+    let git_email = if git_email_cfg.is_empty() {
+        "guaxi@localhost".to_string()
+    } else {
+        git_email_cfg
+    };
+
+    let mut repo_cfg = repo.config().map_err(|e| e.to_string())?;
+    repo_cfg
+        .set_str("user.name", git_username.as_str())
+        .map_err(|e| e.to_string())?;
+    repo_cfg
+        .set_str("user.email", git_email.as_str())
+        .map_err(|e| e.to_string())?;
+
+    if repo.head().is_err() {
+        let readme_rel = Path::new("README.md");
+        let readme_abs = root.join(readme_rel);
+        if !readme_abs.exists() {
+            fs::write(&readme_abs, "# knowledge-bases\n")
+                .map_err(|e| e.to_string())?;
+        }
+
+        let mut index = repo.index().map_err(|e| e.to_string())?;
+        index.add_path(readme_rel).map_err(|e| e.to_string())?;
+        index.write().map_err(|e| e.to_string())?;
+
+        let tree_id = index.write_tree().map_err(|e| e.to_string())?;
+        let tree = repo.find_tree(tree_id).map_err(|e| e.to_string())?;
+
+        let sig = Signature::now(git_username.as_str(), git_email.as_str())
+            .map_err(|e| e.to_string())?;
+        repo.commit(
+            Some("refs/heads/master"),
+            &sig,
+            &sig,
+            "first commit",
+            &tree,
+            &[],
+        )
+        .map_err(|e| e.to_string())?;
+        repo.set_head("refs/heads/master").map_err(|e| e.to_string())?;
+    }
+    let remote_url = if config.knowledge_bases_remote_url.trim().is_empty() {
+        KNOWLEDGE_BASES_REMOTE_URL.to_string()
+    } else {
+        config.knowledge_bases_remote_url.trim().to_string()
+    };
+
+    if repo.find_remote("origin").is_err() {
+        repo.remote("origin", &remote_url)
+            .map_err(|e| e.to_string())?;
+    } else if let Ok(origin) = repo.find_remote("origin") {
+        let cur = origin.url().unwrap_or_default();
+        if cur.trim() != remote_url.as_str() {
+            repo.remote_set_url("origin", remote_url.as_str())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    let token = config.knowledge_bases_remote_token.trim().to_string();
+    if token.is_empty() {
+        return Ok(());
+    }
+
+    let mut remote = repo.find_remote("origin").map_err(|e| e.to_string())?;
+    let username_cfg = config.knowledge_bases_remote_username.trim().to_string();
+
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(move |_url, username_from_url, allowed| {
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            let username = if !username_cfg.is_empty() {
+                username_cfg.clone()
+            } else {
+                username_from_url
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "git".to_string())
+            };
+            return Cred::userpass_plaintext(&username, &token);
+        }
+        Cred::default()
+    });
+
+    let mut push_options = PushOptions::new();
+    push_options.remote_callbacks(callbacks);
+
+    remote
+        .push(
+            &["refs/heads/master:refs/heads/master"],
+            Some(&mut push_options),
+        )
+        .map_err(|e| format!("git push failed: {}", e))?;
+
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -130,6 +303,11 @@ impl Default for AppConfig {
             image_bed_root: default_image_bed_root(),
             template_repo_path: "".to_string(),
             knowledge_bases_root: "".to_string(),
+            knowledge_bases_remote_url: "".to_string(),
+            knowledge_bases_remote_username: "".to_string(),
+            knowledge_bases_remote_token: "".to_string(),
+            knowledge_bases_git_username: "".to_string(),
+            knowledge_bases_git_email: "".to_string(),
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
@@ -356,6 +534,69 @@ pub fn set_template_repo_path(path: String) -> Result<(), String> {
     init_template_root()
 }
 
+#[derive(Serialize)]
+pub struct KnowledgeBasesRemoteConfig {
+    pub remote_url: String,
+    pub username: String,
+    pub has_token: bool,
+    pub git_username: String,
+    pub git_email: String,
+}
+
+#[tauri::command]
+pub fn get_knowledge_bases_remote_config() -> KnowledgeBasesRemoteConfig {
+    let config = load_config();
+    KnowledgeBasesRemoteConfig {
+        remote_url: config.knowledge_bases_remote_url,
+        username: config.knowledge_bases_remote_username,
+        has_token: !config.knowledge_bases_remote_token.trim().is_empty(),
+        git_username: config.knowledge_bases_git_username,
+        git_email: config.knowledge_bases_git_email,
+    }
+}
+
+#[tauri::command]
+pub fn set_knowledge_bases_remote_config(
+    remote_url: String,
+    username: String,
+    token: String,
+    git_username: String,
+    git_email: String,
+) -> Result<(), String> {
+    let mut config = load_config();
+    config.knowledge_bases_remote_url = remote_url;
+    config.knowledge_bases_remote_username = username;
+    if !token.is_empty() {
+        config.knowledge_bases_remote_token = token;
+    }
+    config.knowledge_bases_git_username = git_username;
+    config.knowledge_bases_git_email = git_email;
+    save_config(&config);
+
+    let root = get_knowledge_bases_root();
+    let root_path = PathBuf::from(root);
+    schedule_knowledge_bases_git_init(root_path);
+    Ok(())
+}
+
+pub fn is_knowledge_bases_root_path(path: &str) -> bool {
+    let kb = get_knowledge_bases_root();
+    let kb_canon = PathBuf::from(kb).canonicalize().ok();
+    let path_canon = PathBuf::from(path).canonicalize().ok();
+    match (kb_canon, path_canon) {
+        (Some(a), Some(b)) => b.starts_with(a),
+        _ => false,
+    }
+}
+
+pub fn get_knowledge_bases_remote_username_token() -> (String, String) {
+    let config = load_config();
+    (
+        config.knowledge_bases_remote_username.trim().to_string(),
+        config.knowledge_bases_remote_token.trim().to_string(),
+    )
+}
+
 #[tauri::command]
 pub fn get_knowledge_bases_root() -> String {
     if let Err(e) = init_knowledge_bases_root() {
@@ -367,7 +608,11 @@ pub fn get_knowledge_bases_root() -> String {
 
 #[tauri::command]
 pub fn set_knowledge_bases_root(path: String) -> Result<(), String> {
-    let root_path = PathBuf::from(&path);
+    let mut root_path = normalize_knowledge_bases_root(&path);
+    if root_path.as_os_str().is_empty() {
+        root_path = PathBuf::from(default_knowledge_bases_root());
+    }
+
     if !root_path.exists() {
         fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
     }
@@ -377,41 +622,47 @@ pub fn set_knowledge_bases_root(path: String) -> Result<(), String> {
     }
 
     let mut config = load_config();
-    config.knowledge_bases_root = path;
+    config.knowledge_bases_root = root_path.to_string_lossy().to_string();
     save_config(&config);
+
+    schedule_knowledge_bases_git_init(root_path);
     Ok(())
 }
 
 pub fn init_knowledge_bases_root() -> Result<(), String> {
     let mut config = load_config();
-    let default_root = default_knowledge_bases_root();
+    let default_root = PathBuf::from(default_knowledge_bases_root());
 
     let configured = config.knowledge_bases_root.trim().to_string();
-    let mut effective = if configured.is_empty() {
+    let mut root_path = if configured.is_empty() {
         default_root.clone()
     } else {
-        configured
+        let normalized = normalize_knowledge_bases_root(&configured);
+        if normalized.as_os_str().is_empty() {
+            default_root.clone()
+        } else {
+            normalized
+        }
     };
 
-    let effective_path = PathBuf::from(&effective);
-    if !effective_path.exists() || !effective_path.is_dir() {
-        effective = default_root.clone();
-        config.knowledge_bases_root = effective.clone();
-        save_config(&config);
-    } else if config.knowledge_bases_root.trim().is_empty() {
-        config.knowledge_bases_root = effective.clone();
-        save_config(&config);
-    }
-
-    let root_path = PathBuf::from(&effective);
-    if !root_path.exists() {
+    if let Err(e) = fs::create_dir_all(&root_path) {
+        warn!(error = e.to_string().as_str(), "create KnowledgeBases root failed, fallback to default");
+        root_path = default_root.clone();
         fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
     }
+
     let meta_path = root_path.join(".meta");
     if !meta_path.exists() {
         fs::create_dir_all(&meta_path).map_err(|e| e.to_string())?;
     }
 
+    let effective = root_path.to_string_lossy().to_string();
+    if config.knowledge_bases_root.trim() != effective {
+        config.knowledge_bases_root = effective;
+        save_config(&config);
+    }
+
+    schedule_knowledge_bases_git_init(root_path);
     Ok(())
 }
 

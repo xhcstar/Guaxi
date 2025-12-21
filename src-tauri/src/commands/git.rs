@@ -1,7 +1,7 @@
 use git2::{
-    build::CheckoutBuilder, BranchType, Delta, DiffFormat, DiffOptions, FetchOptions, IndexEntry,
-    Oid, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags, StatusOptions, StatusShow,
-    Tree,
+    build::CheckoutBuilder, BranchType, Cred, CredentialType, Delta, DiffFormat, DiffOptions,
+    FetchOptions, IndexEntry, Oid, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags,
+    StatusOptions, StatusShow, Tree,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -9,6 +9,8 @@ use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info, warn};
 use urlencoding::encode;
+
+use super::settingview;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitCommit {
@@ -269,15 +271,41 @@ pub fn git_push(path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
+    let is_kb_repo = settingview::is_knowledge_bases_root_path(&path);
+    let (kb_username, kb_token) = if is_kb_repo {
+        settingview::get_knowledge_bases_remote_username_token()
+    } else {
+        (String::new(), String::new())
+    };
+
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|_url, username, _| {
-        let key_path = std::env::var("HOME")
-            .map(|home| PathBuf::from(home).join(".ssh").join("id_rsa"))
-            .unwrap_or_else(|_| PathBuf::from("id_rsa"));
+    callbacks.credentials(move |_url, username_from_url, allowed| {
+        if is_kb_repo
+            && !kb_token.is_empty()
+            && allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+        {
+            let username = if !kb_username.is_empty() {
+                kb_username.clone()
+            } else {
+                username_from_url
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "git".to_string())
+            };
+            return Cred::userpass_plaintext(&username, &kb_token);
+        }
 
-        debug!("Using SSH key at: {:?}", key_path);
+        if allowed.contains(CredentialType::SSH_KEY) {
+            let key_path = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".ssh").join("id_rsa"))
+                .unwrap_or_else(|_| PathBuf::from("id_rsa"));
 
-        git2::Cred::ssh_key(username.unwrap(), None, &key_path, None)
+            let username = username_from_url.unwrap_or("git");
+            debug!("Using SSH key at: {:?}", key_path);
+            return Cred::ssh_key(username, None, &key_path, None);
+        }
+
+        Cred::default()
     });
 
     let mut push_options = PushOptions::new();
@@ -314,15 +342,41 @@ pub fn git_pull(path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
+    let is_kb_repo = settingview::is_knowledge_bases_root_path(&path);
+    let (kb_username, kb_token) = if is_kb_repo {
+        settingview::get_knowledge_bases_remote_username_token()
+    } else {
+        (String::new(), String::new())
+    };
+
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|_url, username, _| {
-        let key_path = std::env::var("HOME")
-            .map(|home| PathBuf::from(home).join(".ssh").join("id_rsa"))
-            .unwrap_or_else(|_| PathBuf::from("id_rsa"));
+    callbacks.credentials(move |_url, username_from_url, allowed| {
+        if is_kb_repo
+            && !kb_token.is_empty()
+            && allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+        {
+            let username = if !kb_username.is_empty() {
+                kb_username.clone()
+            } else {
+                username_from_url
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "git".to_string())
+            };
+            return Cred::userpass_plaintext(&username, &kb_token);
+        }
 
-        debug!("Using SSH key at: {:?}", key_path);
+        if allowed.contains(CredentialType::SSH_KEY) {
+            let key_path = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".ssh").join("id_rsa"))
+                .unwrap_or_else(|_| PathBuf::from("id_rsa"));
 
-        git2::Cred::ssh_key(username.unwrap(), None, &key_path, None)
+            let username = username_from_url.unwrap_or("git");
+            debug!("Using SSH key at: {:?}", key_path);
+            return Cred::ssh_key(username, None, &key_path, None);
+        }
+
+        Cred::default()
     });
 
     let mut fetch_options = FetchOptions::new();
