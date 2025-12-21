@@ -37,6 +37,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     activeRepoPath: null, // 当前激活的笔记库路径
     openTabs: [],
     activeTab: null,
+    activeTabLeft: null,
+    activeTabRight: null,
     layoutMode: 'single',
     splitIndex: null,
     activeRegion: 'left',
@@ -94,20 +96,60 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       };
     },
     // 关闭标签页
-    closeTab(path) {
+    closeTab(path, region) {
       const index = this.openTabs.findIndex((tab) => tab.path === path);
       if (index === -1) return;
 
+      const beforeSplitIndex = this.splitIndex;
+      const beforeLayoutMode = this.layoutMode;
+      const inferredRegion =
+        beforeLayoutMode !== 'single' && beforeSplitIndex != null
+          ? index < beforeSplitIndex
+            ? 'left'
+            : 'right'
+          : 'left';
+
+      const closingRegion = region || inferredRegion;
+
       this.openTabs.splice(index, 1);
 
-      if (this.activeTab === path) {
-        if (this.openTabs.length > 0) {
+      const leftCountAfter =
+        this.layoutMode !== 'single' && beforeSplitIndex != null
+          ? Math.max(0, Math.min(beforeSplitIndex, this.openTabs.length))
+          : this.openTabs.length;
+
+      const pickNextInRegion = (targetRegion) => {
+        if (this.openTabs.length === 0) return null;
+        if (this.layoutMode === 'single' || beforeSplitIndex == null) {
           const nextIndex = Math.min(index, this.openTabs.length - 1);
-          const nextTab = this.openTabs[nextIndex];
-          this.setActiveTab(nextTab ? nextTab.path : null);
-        } else {
-          this.setActiveTab(null);
+          return this.openTabs[nextIndex]?.path || null;
         }
+
+        if (targetRegion === 'left') {
+          const lastLeftIndex = Math.max(0, leftCountAfter - 1);
+          const nextIndex = Math.min(index, lastLeftIndex);
+          return this.openTabs[nextIndex]?.path || null;
+        }
+
+        const start = Math.max(0, leftCountAfter);
+        if (start >= this.openTabs.length) return null;
+        const nextIndex = Math.min(Math.max(index, start), this.openTabs.length - 1);
+        return this.openTabs[nextIndex]?.path || this.openTabs[start]?.path || null;
+      };
+
+      if (closingRegion === 'left' && this.activeTabLeft === path) {
+        this.activeTabLeft = pickNextInRegion('left');
+      }
+      if (closingRegion === 'right' && this.activeTabRight === path) {
+        this.activeTabRight = pickNextInRegion('right');
+      }
+
+      if (this.activeTab === path) {
+        const nextFocused =
+          closingRegion === 'right'
+            ? this.activeTabRight || this.activeTabLeft
+            : this.activeTabLeft || this.activeTabRight;
+        this.setActiveTab(nextFocused, nextFocused ? closingRegion : 'left');
       }
 
       if (this.layoutMode !== 'single' && this.splitIndex != null) {
@@ -120,6 +162,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
           this.layoutMode = 'single';
           this.splitIndex = null;
           this.activeRegion = 'left';
+          this.activeTabRight = null;
+          this.activeTabLeft = this.activeTab;
         }
       }
     },
@@ -157,7 +201,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       // 检查是否已存在相同路径的标签页
       const existingIndex = this.openTabs.findIndex((tab) => tab.path === path);
       if (existingIndex !== -1) {
-        this.setActiveTab(path);
+        this.setActiveTab(path, this.layoutMode === 'single' ? 'left' : this.activeRegion);
         return;
       }
 
@@ -272,25 +316,52 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     },
 
     // 新增：统一设置激活标签并同步 selectedFile
-    setActiveTab(path) {
+    setActiveTab(path, region) {
       this.activeTab = path;
-      if (path) {
-        const index = this.openTabs.findIndex((t) => t.path === path);
-        const tab = index !== -1 ? this.openTabs[index] : null;
-        if (tab) {
-          this.selectedFile = {
-            path: tab.path,
-            content: tab.content,
-            unsupported: !!tab.unsupported,
-          };
+
+      if (!path) {
+        this.selectedFile = null;
+        if (this.layoutMode === 'single') {
+          this.activeTabLeft = null;
+          this.activeTabRight = null;
         }
-        if (this.layoutMode !== 'single' && this.splitIndex != null && index !== -1) {
-          this.activeRegion = index < this.splitIndex ? 'left' : 'right';
-        } else {
-          this.activeRegion = 'left';
+        return;
+      }
+
+      const index = this.openTabs.findIndex((t) => t.path === path);
+      const tab = index !== -1 ? this.openTabs[index] : null;
+
+      if (tab) {
+        this.selectedFile = {
+          path: tab.path,
+          content: tab.content,
+          unsupported: !!tab.unsupported,
+        };
+      }
+
+      let targetRegion = region || this.activeRegion || 'left';
+      if (this.layoutMode !== 'single' && this.splitIndex != null && index !== -1) {
+        targetRegion = index < this.splitIndex ? 'left' : 'right';
+      }
+
+      this.activeRegion = targetRegion;
+
+      if (this.layoutMode === 'single') {
+        this.activeTabLeft = path;
+        this.activeTabRight = null;
+        return;
+      }
+
+      if (targetRegion === 'left') {
+        this.activeTabLeft = path;
+        if (!this.activeTabRight && this.splitIndex != null) {
+          this.activeTabRight = this.openTabs[this.splitIndex]?.path || null;
         }
       } else {
-        this.selectedFile = null;
+        this.activeTabRight = path;
+        if (!this.activeTabLeft && this.splitIndex != null) {
+          this.activeTabLeft = this.openTabs[Math.max(0, this.splitIndex - 1)]?.path || this.openTabs[0]?.path || null;
+        }
       }
     },
     setLayoutMode(mode) {
@@ -299,11 +370,20 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       if (mode === 'single') {
         this.splitIndex = null;
         this.activeRegion = 'left';
+        this.activeTabLeft = this.activeTab;
+        this.activeTabRight = null;
       } else if (this.splitIndex == null) {
         const idx = this.activeTab
           ? this.openTabs.findIndex((t) => t.path === this.activeTab)
           : -1;
         this.splitIndex = idx > 0 ? idx : 0;
+
+        this.activeTabLeft = this.openTabs[Math.max(0, this.splitIndex - 1)]?.path || this.openTabs[0]?.path || null;
+        this.activeTabRight = this.openTabs[this.splitIndex]?.path || null;
+
+        if (this.activeTab) {
+          this.setActiveTab(this.activeTab);
+        }
       }
     },
 
@@ -317,16 +397,20 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       if (idx === -1) return;
 
       if (this.layoutMode === 'single') {
+        const [tab] = this.openTabs.splice(idx, 1);
+        this.openTabs.push(tab);
+
         this.layoutMode = mode;
-        if (this.openTabs.length === 1) {
-          this.splitIndex = 1;
-        } else {
-          this.splitIndex = idx;
-        }
-        this.activeRegion = 'right';
-      } else {
-        this.layoutMode = mode;
+        this.splitIndex = Math.max(0, this.openTabs.length - 1);
+
+        this.activeTabRight = tab.path;
+        this.activeTabLeft = this.openTabs[Math.max(0, this.splitIndex - 1)]?.path || this.openTabs[0]?.path || null;
+
+        this.setActiveTab(tab.path, 'right');
+        return;
       }
+
+      this.layoutMode = mode;
     },
 
     // 更新 repopathlist 并保存到配置文件

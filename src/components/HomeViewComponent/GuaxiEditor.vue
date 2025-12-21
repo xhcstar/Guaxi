@@ -2,9 +2,9 @@
   <div class="editor-container guaxi-editor">
     <div class="editor-header" ref="editorHeaderRef">
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
-        <div class="tab-region tab-region-left">
+        <div class="tab-region tab-region-left" ref="tabRegionLeftRef">
           <div v-for="tab in leftTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path)"
+            :class="['tab-item', { 'active': fileTreeStore.activeTabLeft === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path, 'left')"
             @mousedown.middle="closeTab(tab.path, 'left')">
             <span class="tab-title">{{ tab.fileName }}</span>
             <span class="tab-affordance">
@@ -15,9 +15,9 @@
             </span>
           </div>
         </div>
-        <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right">
+        <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right" ref="tabRegionRightRef">
           <div v-for="tab in rightTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path)"
+            :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path, 'right')"
             @mousedown.middle="closeTab(tab.path, 'right')">
             <span class="tab-title">{{ tab.fileName }}</span>
             <span class="tab-affordance">
@@ -349,10 +349,10 @@
           </n-tooltip>
         </div>
         <div class="editor-split-wrapper" :class="layoutMode">
-          <div ref="editorContainer" class="editor-container">
+          <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
           </div>
-          <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container">
+          <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container" @mousedown="activateRegion('right')">
           </div>
         </div>
 
@@ -1196,6 +1196,8 @@ const registerMarkdownLanguageFeatures = () => {
 };
 
 const tabBarRef = ref(null)
+const tabRegionLeftRef = ref(null)
+const tabRegionRightRef = ref(null)
 // 初始化编辑器
 const initEditor = () => {
   console.debug('[Editor] initEditor called', {
@@ -1567,14 +1569,66 @@ const initEditor = () => {
 };
 
 const ensureSecondaryEditor = () => {
-  if (!secondaryEditorContainer.value || !editor || secondaryEditor) return;
-  const model = editor.getModel();
-  if (!model) return;
-  const baseOptions = editor.getRawOptions ? editor.getRawOptions() : {};
+  if (!secondaryEditorContainer.value || secondaryEditor) return;
+
+  const rightPath = fileTreeStore.activeTabRight;
+  const rightTab = rightPath ? fileTreeStore.openTabs.find((t) => t.path === rightPath) : null;
+
+  const fileExt = rightPath?.split('.').pop() || 'markdown';
+  const languageMap = {
+    'js': 'javascript',
+    'ts': 'typescript',
+    'css': 'css',
+    'html': 'html',
+    'htm': 'html',
+    'md': 'markdown',
+    'py': 'python',
+    'cpp': 'cpp',
+    'c': 'cpp',
+    'h': 'cpp',
+    'hpp': 'cpp',
+    'rs': 'rust',
+    'sh': 'shell',
+    'jsx': 'javascript',
+    'tsx': 'javascript',
+    'json': 'json',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'lua': 'lua',
+    'java': 'java',
+    'toml': 'ini',
+  };
+  const language = languageMap[fileExt] || 'markdown';
+
+  const baseOptions = editor?.getRawOptions ? editor.getRawOptions() : {};
+
   secondaryEditor = monaco.editor.create(secondaryEditorContainer.value, {
     ...baseOptions,
-    model
+    value: rightTab?.content || '',
+    language,
+    readOnly: !!rightTab?.unsupported,
+    automaticLayout: true,
   });
+
+  secondaryEditor.onDidFocusEditorText(() => {
+    if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeTabRight) {
+      fileTreeStore.setActiveTab(fileTreeStore.activeTabRight, 'right');
+    }
+  });
+
+  const model = secondaryEditor.getModel();
+  if (model) {
+    model.onDidChangeContent(
+      debounce(() => {
+        if (fileTreeStore.activeRegion !== 'right') return;
+        const path = fileTreeStore.activeTab;
+        if (!path) return;
+        const content = model.getValue();
+        rawContent.value = content;
+        fileTreeStore.updateTabContent(path, content);
+      }, 120)
+    );
+  }
 };
 
 const disposeSecondaryEditor = () => {
@@ -1668,17 +1722,28 @@ const toggleGitPanel = async () => {
 }
 
 const handleWheelScroll = (e) => {
-  if (!tabBarRef.value) return
+  const target = e?.target;
+  const inRight = !!(target && target.closest && target.closest('.tab-region-right'));
+  const container =
+    fileTreeStore.layoutMode !== 'single' && inRight
+      ? tabRegionRightRef.value
+      : tabRegionLeftRef.value;
+
+  if (!container) return;
 
   // 阻止默认的垂直滚动行为
   e.preventDefault()
 
   // 水平滚动（乘以一个系数可以调整滚动速度）
-  tabBarRef.value.scrollLeft += e.deltaY * 0.5
+  container.scrollLeft += e.deltaY * 0.5
 }
 
 const setupEditorListeners = () => {
   if (!editor) return;
+
+  editor.onDidFocusEditorText(() => {
+    activateRegion('left');
+  });
 
   editor.onDidChangeCursorPosition((e) => {
     editorStore.setCursorPosition(e.position);
@@ -2601,6 +2666,25 @@ const redo = () => {
   editor.trigger('toolbar', 'redo', null);
 };
 
+const getActiveEditor = () => {
+  if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeRegion === 'right') {
+    return secondaryEditor;
+  }
+  return editor;
+};
+
+const activateRegion = (region) => {
+  if (fileTreeStore.layoutMode === 'single') return;
+
+  const desired = region === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
+  if (desired) {
+    fileTreeStore.setActiveTab(desired, region);
+    return;
+  }
+
+  fileTreeStore.setActiveRegion(region);
+};
+
 // 更新编辑器内容
 const updateEditorContent = (content) => {
   const nextContent = content ?? '';
@@ -2610,20 +2694,25 @@ const updateEditorContent = (content) => {
     initEditor();
   }
 
-  if (!editor) return;
+  if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeRegion === 'right') {
+    ensureSecondaryEditor();
+  }
+
+  const targetEditor = getActiveEditor();
+  if (!targetEditor) return;
 
   // 当内容为空时，确保完全重置编辑器
   if (!nextContent) {
-    editor.setValue('');
-    const model = editor.getModel();
+    targetEditor.setValue('');
+    const model = targetEditor.getModel();
     if (model) {
       model.setValue('');
     }
   } else {
-    editor.setValue(nextContent);
+    targetEditor.setValue(nextContent);
   }
 
-  editor.updateOptions({
+  targetEditor.updateOptions({
     readOnly: !!activeTab.value?.unsupported,
   });
 };
@@ -2637,11 +2726,12 @@ const saveContent = async () => {
     return;
   }
 
+  const targetEditor = getActiveEditor();
   const content =
     previewMode.value === 'realtime' && realtimeVditor
       ? realtimeVditor.getValue()
-      : editor
-        ? editor.getValue()
+      : targetEditor
+        ? targetEditor.getValue()
         : rawContent.value;
 
   await fileTreeStore.updateFileContent(selectedFile.value.path, content);
@@ -2652,7 +2742,7 @@ const saveContent = async () => {
 
   rawContent.value = content;
 
-  if (previewMode.value !== 'realtime' && editor) {
+  if (previewMode.value !== 'realtime' && targetEditor) {
     updateEditorContent(content);
   }
 
@@ -2962,8 +3052,9 @@ watch(selectedFile, async (newFile) => {
 
     updateEditorContent(rawContent.value);
 
-    if (editor) {
-      const model = editor.getModel();
+    const targetEditor = getActiveEditor();
+    if (targetEditor) {
+      const model = targetEditor.getModel();
       if (model) {
         monaco.editor.setModelLanguage(model, language);
       }
@@ -2983,6 +3074,10 @@ watch(selectedFile, async (newFile) => {
     if (editor) {
       editor.setValue('');
       editor.getModel().setValue('');
+    }
+    if (secondaryEditor) {
+      secondaryEditor.setValue('');
+      secondaryEditor.getModel().setValue('');
     }
     renderedHtml.value = '';
     return;
@@ -3540,57 +3635,70 @@ const handleExportSelect = async (format) => {
   }
 };
 
-const switchTab = (path) => {
+const switchTab = (path, region) => {
+  const targetRegion = region || 'left';
+
   console.debug('[Editor] switchTab', {
-    from: fileTreeStore.activeTab,
+    from: targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft,
     to: path,
-    hasEditor: !!editor
+    region: targetRegion,
+    hasEditor: !!editor,
+    hasSecondary: !!secondaryEditor,
   })
 
-  const currentPath = fileTreeStore.activeTab;
+  const currentPath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
   if (currentPath) {
+    const currentEditor = targetRegion === 'right' ? secondaryEditor : editor;
     const currentContent =
-      previewMode.value === 'realtime' && realtimeVditor
+      targetRegion === fileTreeStore.activeRegion && previewMode.value === 'realtime' && realtimeVditor
         ? realtimeVditor.getValue()
-        : editor
-          ? editor.getValue()
+        : currentEditor
+          ? currentEditor.getValue()
           : rawContent.value;
     fileTreeStore.updateTabContent(currentPath, currentContent);
   }
 
-  fileTreeStore.setActiveTab(path);
+  fileTreeStore.setActiveTab(path, targetRegion);
   const tab = fileTreeStore.openTabs.find((t) => t.path === path);
-  if (tab) {
-    rawContent.value = tab.content;
-    if (previewMode.value === 'realtime' && realtimeVditor) {
-      initRealtimeVditor();
-    }
-    if (editor) {
-      updateEditorContent(tab.content);
-    }
+  if (!tab) return;
+
+  rawContent.value = tab.content;
+
+  if (previewMode.value === 'realtime' && realtimeVditor) {
+    initRealtimeVditor();
   }
+
+  if (fileTreeStore.layoutMode !== 'single' && targetRegion === 'right') {
+    ensureSecondaryEditor();
+  }
+
+  updateEditorContent(tab.content);
 };
 
 const closeTab = (path, region) => {
+  const targetRegion = region || 'left';
+  const regionActivePath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
+  const regionEditor = targetRegion === 'right' ? secondaryEditor : editor;
+
   if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.openTabs.length === 1) {
-    if (editor && fileTreeStore.activeTab === path) {
-      const content = editor.getValue();
+    if (regionEditor && regionActivePath === path) {
+      const content = regionEditor.getValue();
       fileTreeStore.updateTabContent(path, content);
     }
 
     fileTreeStore.setLayoutMode('single');
     if (fileTreeStore.activeTab !== path) {
-      fileTreeStore.setActiveTab(path);
+      fileTreeStore.setActiveTab(path, 'left');
     }
     return;
   }
 
-  if (editor && fileTreeStore.activeTab === path) {
-    const content = editor.getValue();
+  if (regionEditor && regionActivePath === path) {
+    const content = regionEditor.getValue();
     fileTreeStore.updateTabContent(path, content);
   }
 
-  fileTreeStore.closeTab(path);
+  fileTreeStore.closeTab(path, targetRegion);
   if (fileTreeStore.openTabs.length > 0) {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
     if (tab) {
@@ -3601,6 +3709,10 @@ const closeTab = (path, region) => {
     if (editor) {
       editor.setValue('');
       editor.getModel().setValue('');
+    }
+    if (secondaryEditor) {
+      secondaryEditor.setValue('');
+      secondaryEditor.getModel().setValue('');
     }
     renderedHtml.value = '';
   }
@@ -4132,30 +4244,32 @@ onUnmounted(() => {
   align-items: center;
   background: #f5f5f5;
   border-bottom: 1px solid #ddd;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
 }
 
 .tab-region {
   display: flex;
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .tab-region-right {
   border-left: 1px solid #ddd;
 }
 
-.tab-bar::-webkit-scrollbar {
+.tab-region::-webkit-scrollbar {
   width: 3px;
   height: 4px;
 }
 
-.tab-bar::-webkit-scrollbar-thumb {
+.tab-region::-webkit-scrollbar-thumb {
   background-color: rgba(0, 0, 0, 0.2);
   border-radius: 3px;
 }
 
-.tab-bar::-webkit-scrollbar-thumb:hover {
+.tab-region::-webkit-scrollbar-thumb:hover {
   background-color: rgba(0, 0, 0, 0.4);
 }
 
