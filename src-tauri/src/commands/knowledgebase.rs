@@ -329,6 +329,49 @@ struct FileMetaFileLite {
     structure_nodes: Vec<FileStructureNodeLite>,
 }
 
+#[derive(Deserialize)]
+struct FileStructureNodeTagsLite {
+    attrs: serde_json::Value,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct FileMetaFileTagsLite {
+    #[serde(default)]
+    file_tags: Vec<String>,
+    #[serde(default)]
+    structure_nodes: Vec<FileStructureNodeTagsLite>,
+}
+
+fn load_file_meta_tags(meta_dir: &Path, rel: &str) -> (Vec<String>, HashMap<String, Vec<String>>) {
+    if !meta_dir.exists() {
+        return (Vec::new(), HashMap::new());
+    }
+
+    let key = sanitize_meta_stem(&rel.replace('/', "__"));
+    let p = meta_dir.join(format!("{key}_meta.json"));
+
+    let Ok(s) = fs::read_to_string(&p) else {
+        return (Vec::new(), HashMap::new());
+    };
+    let Ok(m) = serde_json::from_str::<FileMetaFileTagsLite>(&s) else {
+        return (Vec::new(), HashMap::new());
+    };
+
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for n in m.structure_nodes {
+        let Some(sid) = n.attrs.get("stable_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !n.tags.is_empty() {
+            out.insert(sid.to_string(), n.tags);
+        }
+    }
+
+    (m.file_tags, out)
+}
+
 fn load_kb_structure_relations(kb_name: &str) -> HashMap<String, Vec<String>> {
     let root = PathBuf::from(crate::commands::settingview::get_knowledge_bases_root());
     let meta_dir = root
@@ -552,6 +595,9 @@ pub struct GraphNode {
     pub stable_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -598,6 +644,10 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
     let structure_relations = load_kb_structure_relations(&kb_name);
     let mut stable_to_node_id: HashMap<String, String> = HashMap::new();
 
+    let kb_meta_dir = PathBuf::from(crate::commands::settingview::get_knowledge_bases_root())
+        .join(".meta")
+        .join(format!("{}_meta", sanitize_meta_stem(&kb_name)));
+
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
 
@@ -612,6 +662,7 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
         end_line: None,
         stable_id: None,
         depth: Some(0),
+        tags: Vec::new(),
     });
 
     fn dir_id(rel: &str) -> String {
@@ -635,6 +686,7 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
         cur: &Path,
         parent_id: &str,
         parent_depth: u32,
+        meta_dir: &Path,
         nodes: &mut Vec<GraphNode>,
         edges: &mut Vec<GraphEdge>,
         stable_to_node_id: &mut HashMap<String, String>,
@@ -668,6 +720,7 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
                     end_line: None,
                     stable_id: None,
                     depth: Some(parent_depth + 1),
+                    tags: Vec::new(),
                 });
                 edges.push(GraphEdge {
                     from: parent_id.to_string(),
@@ -675,9 +728,24 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
                     strength: 0.7,
                     r#type: Some("contains".to_string()),
                 });
-                walk_dir(base, &path, &id, parent_depth + 1, nodes, edges, stable_to_node_id)?;
+                walk_dir(
+                    base,
+                    &path,
+                    &id,
+                    parent_depth + 1,
+                    meta_dir,
+                    nodes,
+                    edges,
+                    stable_to_node_id,
+                )?;
                 continue;
             }
+
+            let (file_tags, stable_tags) = if is_markdown_path(&path) {
+                load_file_meta_tags(meta_dir, &rel)
+            } else {
+                (Vec::new(), HashMap::new())
+            };
 
             let id = file_id(&rel);
             nodes.push(GraphNode {
@@ -691,6 +759,7 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
                 end_line: None,
                 stable_id: None,
                 depth: Some(parent_depth + 1),
+                tags: file_tags,
             });
             edges.push(GraphEdge {
                 from: parent_id.to_string(),
@@ -733,6 +802,10 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
                     end_line: None,
                     stable_id: Some(sec.stable_id.clone()),
                     depth: Some(parent_depth + 2),
+                    tags: stable_tags
+                        .get(&sec.stable_id)
+                        .cloned()
+                        .unwrap_or_default(),
                 });
                 edges.push(GraphEdge {
                     from: id.clone(),
@@ -758,6 +831,10 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
                     end_line: Some(p.end_line),
                     stable_id: Some(p.stable_id.clone()),
                     depth: Some(parent_depth + 3),
+                    tags: stable_tags
+                        .get(&p.stable_id)
+                        .cloned()
+                        .unwrap_or_default(),
                 });
 
                 let parent = p
@@ -793,6 +870,7 @@ pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, Str
         &kb_path,
         &kb_id,
         0,
+        &kb_meta_dir,
         &mut nodes,
         &mut edges,
         &mut stable_to_node_id,

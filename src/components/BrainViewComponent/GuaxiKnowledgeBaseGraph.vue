@@ -112,35 +112,7 @@
       </n-card>
     </div>
 
-    <div class="filter-panel">
-      <n-card title="筛选" size="small">
-        <n-checkbox-group v-model:value="visibleTypes" @update:value="applyTypeVisibility">
-          <n-space vertical>
-            <n-checkbox v-for="opt in typeFilterOptions" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
-            </n-checkbox>
-          </n-space>
-        </n-checkbox-group>
-      </n-card>
-    </div>
 
-    <!-- Search panel for finding nodes -->
-    <div class="search-panel">
-      <n-card title="搜索节点" size="small">
-        <n-input v-model:value="searchQuery" placeholder="搜索节点..." clearable @update:value="searchNodes">
-          <template #prefix>
-            <n-icon>
-              <SearchOutline />
-            </n-icon>
-          </template>
-        </n-input>
-        <n-list v-if="searchResults.length > 0" class="search-results">
-          <n-list-item v-for="result in searchResults" :key="result.id" @click="focusOnNode(result)">
-            <n-thing :title="result.name" :description="result.path" />
-          </n-list-item>
-        </n-list>
-      </n-card>
-    </div>
   </div>
 </template>
 
@@ -173,13 +145,11 @@ import { storeToRefs } from 'pinia';
 // UI components from Naive UI
 import {
   NButton, NSpace, NIcon, NCard, NText, NAlert, NSpin,
-  NSelect, NSlider, NProgress, NTag, NButtonGroup,
-  NInput, NList, NListItem, NThing,
-  NCheckboxGroup, NCheckbox
+  NSelect, NSlider, NProgress, NTag, NButtonGroup
 } from 'naive-ui';
 
 // Icons from Ionicons
-import { CompassOutline, SyncOutline, MoonOutline, SearchOutline } from '@vicons/ionicons5';
+import { CompassOutline, SyncOutline, MoonOutline } from '@vicons/ionicons5';
 
 // Initialize Pinia store
 const store = useKnowledgeBaseStore();
@@ -188,7 +158,7 @@ const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
 
 // Destructure store properties with reactivity
-const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store);
+const { knowledgeBases, selectedKnowledgeBase, visibleTypes, selectedTags, searchQuery, focusTarget } = storeToRefs(store);
 
 // Computed property for currently selected knowledge base
 const selectedKB = computed(() => {
@@ -213,19 +183,7 @@ const showError = ref(false); // Error display state
 const errorMessage = ref(''); // Error message content
 const currentLayout = ref('force'); // Current graph layout type
 const performanceLevel = ref(1); // Performance quality level
-const searchQuery = ref(''); // Search query text
-const searchResults = ref([]); // Search results array
 const pendingKnowledgeBaseChange = ref(null); // Pending KB change
-
-const typeFilterOptions = [
-  { label: '知识库', value: 'knowledge-base' },
-  { label: '目录', value: 'directory' },
-  { label: '文件', value: 'file' },
-  { label: '标题', value: 'section' },
-  { label: '段落', value: 'paragraph' }
-];
-
-const visibleTypes = ref(typeFilterOptions.map(o => o.value));
 
 // Computed property to check if current KB is valid
 const hasValidKnowledgeBase = computed(() => {
@@ -424,43 +382,64 @@ const toggleDarkMode = () => {
   log(`已切换至${darkMode.value ? '暗黑' : '亮色'}模式`);
 };
 
-/**
- * Search nodes by name or path
- * @param {string} query - Search term
- */
-const searchNodes = (query) => {
-  if (!query || !nodes.length) {
-    searchResults.value = [];
-    return;
+const normalize = (v) => String(v || '').toLowerCase();
+
+const resolveGraphNode = (nodeLike) => {
+  if (!nodeLike) return null;
+  if (nodeLike.mesh && nodeLike.userData) return nodeLike;
+
+  const id = nodeLike.id ?? nodeLike.userData?.id;
+  const stableId = nodeLike.stable_id ?? nodeLike.userData?.stable_id;
+  const path =
+    nodeLike.path ??
+    nodeLike.file_path ??
+    nodeLike.userData?.path ??
+    nodeLike.userData?.file_path;
+
+  return (
+    nodes.find((n) => {
+      const ud = n?.userData || {};
+      if (id != null && String(ud.id) === String(id)) return true;
+      if (stableId && String(ud.stable_id || '') === String(stableId)) return true;
+      if (path && String(ud.path || ud.file_path || '') === String(path)) return true;
+      return false;
+    }) || null
+  );
+};
+
+const nodePassesFilters = (n) => {
+  const ud = n?.userData || {};
+
+  const allowedTypes = new Set(Array.isArray(visibleTypes.value) ? visibleTypes.value : []);
+  if (!allowedTypes.has(ud.type)) return false;
+
+  const selTags = Array.isArray(selectedTags.value) ? selectedTags.value : [];
+  if (selTags.length > 0) {
+    const ts = Array.isArray(ud.tags) ? ud.tags : [];
+    if (!selTags.some((t) => ts.includes(t))) return false;
   }
 
-  const lowerQuery = query.toLowerCase();
-  searchResults.value = nodes.filter(node =>
-    node.userData?.name?.toLowerCase().includes(lowerQuery) ||
-    node.userData?.path?.toLowerCase().includes(lowerQuery) ||
-    String(node.userData?.stable_id || '').toLowerCase().includes(lowerQuery)
-  );
+  const q = normalize(searchQuery.value).trim();
+  if (!q) return true;
 
-  log(`搜索"${query}"找到${searchResults.value.length}个结果`);
+  const hay = `${ud.name || ''} ${ud.path || ''} ${ud.file_path || ''} ${ud.stable_id || ''} ${(Array.isArray(ud.tags) ? ud.tags.join(',') : '')}`;
+  return normalize(hay).includes(q);
 };
 
-const applyTypeVisibility = () => {
-  const allowed = new Set(visibleTypes.value || []);
-
-  nodes.forEach(n => {
-    if (n?.mesh) {
-      n.mesh.visible = allowed.has(n.userData?.type);
-    }
+const applyGraphVisibility = () => {
+  nodes.forEach((n) => {
+    const ok = nodePassesFilters(n);
+    if (n?.mesh) n.mesh.visible = ok;
   });
 
-  edges.forEach(e => {
-    const fromType = e?.userData?.from?.userData?.type;
-    const toType = e?.userData?.to?.userData?.type;
-    e.visible = allowed.has(fromType) && allowed.has(toType);
+  edges.forEach((e) => {
+    const from = e?.userData?.from;
+    const to = e?.userData?.to;
+    e.visible = !!from && !!to && !!from.mesh?.visible && !!to.mesh?.visible;
   });
 };
 
-watch(visibleTypes, () => applyTypeVisibility(), { deep: true });
+watch([visibleTypes, selectedTags, searchQuery], () => applyGraphVisibility(), { deep: true });
 
 /**
  * Find node by its position in 3D space
@@ -523,20 +502,16 @@ const getNodeTypeName = (type) => {
  * Focus camera on specific node
  * @param {Object} node - Node to focus on
  */
-const focusOnNode = (node) => {
+const focusOnNode = (nodeLike) => {
+  const node = resolveGraphNode(nodeLike);
   if (!node || !camera || !controls) return;
 
-  const targetPosition = node.mesh
-    ? node.mesh.position.clone()
-    : new THREE.Vector3(0, 0, 0);
+  const targetPosition = node.mesh?.position?.clone?.() || new THREE.Vector3(0, 0, 0);
 
-  // Calculate camera position
   const direction = new THREE.Vector3(0, 0, 1);
   const distance = 30;
-  const cameraPosition = targetPosition.clone()
-    .add(direction.multiplyScalar(distance));
+  const cameraPosition = targetPosition.clone().add(direction.multiplyScalar(distance));
 
-  // Animate camera movement
   gsap.to(camera.position, {
     x: cameraPosition.x,
     y: cameraPosition.y,
@@ -545,7 +520,6 @@ const focusOnNode = (node) => {
     ease: "power2.inOut"
   });
 
-  // Animate controls target
   gsap.to(controls.target, {
     x: targetPosition.x,
     y: targetPosition.y,
@@ -554,33 +528,30 @@ const focusOnNode = (node) => {
     ease: "power2.inOut"
   });
 
-  log(`已聚焦到节点: ${node.name}`);
+  log(`已聚焦到节点: ${node.userData?.name || ''}`);
 };
 
 /**
  * Highlight connected nodes and edges
  * @param {Object} node - Node to highlight connections for
  */
-const highlightConnectedNodes = (node) => {
+const highlightConnectedNodes = (nodeLike) => {
+  const node = resolveGraphNode(nodeLike);
   if (!node) return;
 
   resetNodeHighlights();
 
-  // Highlight current node
   if (node.mesh) {
     node.mesh.material.color.setHex(0xff0000);
     node.mesh.material.emissive.setHex(0x333333);
   }
 
-  // Highlight connected edges and nodes
-  edges.forEach(edge => {
+  edges.forEach((edge) => {
     if (edge.userData.from === node || edge.userData.to === node) {
       edge.material.color.setHex(0xff0000);
       edge.material.opacity = 1;
 
-      const otherNode = edge.userData.from === node
-        ? edge.userData.to
-        : edge.userData.from;
+      const otherNode = edge.userData.from === node ? edge.userData.to : edge.userData.from;
 
       if (otherNode.mesh) {
         otherNode.mesh.material.color.setHex(0xff9900);
@@ -589,7 +560,7 @@ const highlightConnectedNodes = (node) => {
     }
   });
 
-  log(`已高亮${node.name}的连接节点`);
+  log(`已高亮${node.userData?.name || ''}的连接节点`);
 };
 
 /**
@@ -779,7 +750,7 @@ const createNodesAndEdges = async (data) => {
     }
   });
 
-  applyTypeVisibility();
+  applyGraphVisibility();
   log(`创建了${nodes.length}个节点和${edges.length}条边`);
 };
 /**
@@ -1399,6 +1370,29 @@ watch(
   { immediate: true, deep: true }
 );
 
+watch(
+  focusTarget,
+  (target) => {
+    if (!target || !nodes.length) return;
+    const mode = target.mode || 'id';
+    const value = String(target.value || '');
+    if (!value) return;
+
+    const hit = nodes.find((n) => {
+      const ud = n?.userData || {};
+      if (mode === 'path') return String(ud.path || ud.file_path || '') === value;
+      if (mode === 'stable_id') return String(ud.stable_id || '') === value;
+      return String(ud.id) === value;
+    });
+
+    if (hit) {
+      focusOnNode(hit);
+      selectedNode.value = { ...hit.userData, object: hit.mesh };
+    }
+  },
+  { deep: true }
+);
+
 /**
  * Handle canvas click events
  * @param {MouseEvent} event - Click event
@@ -1769,41 +1763,6 @@ onBeforeUnmount(() => {
   opacity: 0.6;
 }
 
-/* Search panel styling */
-.search-panel {
-  position: absolute;
-  top: 120px;
-  right: 20px;
-  width: 240px;
-  z-index: 10;
-  background-color: rgba(255, 255, 255, 0.9);
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.filter-panel {
-  position: absolute;
-  top: 120px;
-  left: 120px;
-  width: 140px;
-  z-index: 6;
-  background-color: rgba(255, 255, 255, 0.9);
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-/* Dark mode search panel */
-.dark-mode .search-panel,
-.dark-mode .filter-panel {
-  background-color: rgba(30, 30, 30, 0.9);
-}
-
-/* Search results list */
-.search-results {
-  max-height: 300px;
-  overflow-y: auto;
-  margin-top: 8px;
-}
 
 /* Node label styling (deep selector for dynamically created elements) */
 :deep(.node-label) {

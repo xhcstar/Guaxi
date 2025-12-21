@@ -10,11 +10,16 @@
       <GuaxiCenterBrainView />
 
       <!-- <n-layout has-sider sider-placement="right"> -->
-      <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-        :collapsed-width="0" bordered content-style="padding: 0px;">
-        <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
-          <GuaxiRightContentBrainView />
-        </div>
+      <n-layout-sider
+        v-model:collapsed="isRightSiderCollapsed"
+        :width="rightSiderbarWidth"
+        collapse-mode="width"
+        :collapsed-width="0"
+        bordered
+        content-style="padding: 0px; position: relative;"
+      >
+        <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar"></div>
+        <GuaxiRightContentBrainView />
       </n-layout-sider>
       <!-- </n-layout> -->
     </n-layout>
@@ -140,13 +145,14 @@ onBeforeUnmount(() => {
 }
 
 .sider-resize-handle-right {
-  position: relative;
+  position: absolute;
   top: 0;
   left: 0;
   width: 3px;
   height: 100%;
   cursor: ew-resize;
   background-color: #f8fdfa;
+  z-index: 2;
 }
 </style>
 
