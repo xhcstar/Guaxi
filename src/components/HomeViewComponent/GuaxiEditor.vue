@@ -348,7 +348,7 @@
             引用
           </n-tooltip>
         </div>
-        <div class="editor-split-wrapper" :class="layoutMode">
+        <div class="editor-split-wrapper" :class="[layoutMode, { 'vim-enabled': vimMode }]">
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
           </div>
@@ -1094,6 +1094,31 @@ const headingOptions = [
 const vimMode = ref(false);
 const vimStatusBar = ref(null);
 let vimModeInstance = null;
+
+const applyVimOverlayInsets = () => {
+  const baseTop = 8;
+  const baseBottom = 8;
+  const vimH = vimMode.value
+    ? Math.ceil(vimStatusBar.value?.getBoundingClientRect?.()?.height || 0)
+    : 0;
+  const bottom = baseBottom + (vimH ? vimH + 6 : 0);
+
+  const opt = {
+    padding: {
+      top: baseTop,
+      bottom
+    }
+  };
+
+  if (editor) {
+    editor.updateOptions(opt);
+    editor.layout();
+  }
+  if (secondaryEditor) {
+    secondaryEditor.updateOptions(opt);
+    secondaryEditor.layout();
+  }
+};
 
 let markdownFeaturesRegistered = false;
 
@@ -1893,6 +1918,7 @@ const initEditor = () => {
           }
         });
       }
+      applyVimOverlayInsets();
     });
   }
 
@@ -3893,6 +3919,8 @@ const toggleVimMode = () => {
         });
       }
     }
+
+    applyVimOverlayInsets();
   });
 };
 
@@ -4655,6 +4683,11 @@ onUnmounted(() => {
   display: flex;
   width: 100%;
   height: 100%;
+}
+
+.editor-split-wrapper.vim-enabled {
+  box-sizing: border-box;
+  padding-bottom: 0;
 }
 
 .editor-split-wrapper.single,
