@@ -54,6 +54,8 @@
             {{ getNodeTypeName(selectedNode.type) }}
           </n-tag>
           <n-text v-if="selectedNode.path">路径: {{ selectedNode.path }}</n-text>
+          <n-text v-if="selectedNode.stable_id">stable_id: {{ selectedNode.stable_id }}</n-text>
+          <n-text v-if="selectedNode.start_line">行: {{ selectedNode.start_line }}</n-text>
           <n-text v-if="selectedNode.from">从: {{ selectedNode.from.name }}</n-text>
           <n-text v-if="selectedNode.to">到: {{ selectedNode.to.name }}</n-text>
           <n-button-group size="small">
@@ -63,8 +65,11 @@
             <n-button @click="highlightConnectedNodes(selectedNode)">
               高亮连接
             </n-button>
-            <n-button v-if="selectedNode.type === 'file'" @click="openFile(selectedNode.path)">
-              打开文件
+            <n-button
+              v-if="selectedNode.path && ['file', 'section', 'paragraph'].includes(selectedNode.type)"
+              @click="openNode(selectedNode)"
+            >
+              打开
             </n-button>
           </n-button-group>
         </n-space>
@@ -88,6 +93,14 @@
             <n-text>文件</n-text>
           </div>
           <div class="legend-item">
+            <div class="legend-color section"></div>
+            <n-text>标题</n-text>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color paragraph"></div>
+            <n-text>段落</n-text>
+          </div>
+          <div class="legend-item">
             <div class="legend-line strong-link"></div>
             <n-text>强连接</n-text>
           </div>
@@ -96,6 +109,18 @@
             <n-text>弱连接</n-text>
           </div>
         </n-space>
+      </n-card>
+    </div>
+
+    <div class="filter-panel">
+      <n-card title="筛选" size="small">
+        <n-checkbox-group v-model:value="visibleTypes" @update:value="applyTypeVisibility">
+          <n-space vertical>
+            <n-checkbox v-for="opt in typeFilterOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </n-checkbox>
+          </n-space>
+        </n-checkbox-group>
       </n-card>
     </div>
 
@@ -122,6 +147,7 @@
 <script setup>
 // Vue composition API imports
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue';
+import { useRouter } from 'vue-router';
 
 // Three.js core and extensions
 import * as THREE from 'three';
@@ -140,13 +166,16 @@ import { invoke } from '@tauri-apps/api/core';
 
 // Pinia store for state management
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
+import { useFileTreeStore } from '../../stores/fileTreeStore';
+import { useEditorStore } from '../../stores/editorStore';
 import { storeToRefs } from 'pinia';
 
 // UI components from Naive UI
 import {
   NButton, NSpace, NIcon, NCard, NText, NAlert, NSpin,
   NSelect, NSlider, NProgress, NTag, NButtonGroup,
-  NInput, NList, NListItem, NThing
+  NInput, NList, NListItem, NThing,
+  NCheckboxGroup, NCheckbox
 } from 'naive-ui';
 
 // Icons from Ionicons
@@ -154,6 +183,9 @@ import { CompassOutline, SyncOutline, MoonOutline, SearchOutline } from '@vicons
 
 // Initialize Pinia store
 const store = useKnowledgeBaseStore();
+const router = useRouter();
+const fileTreeStore = useFileTreeStore();
+const editorStore = useEditorStore();
 
 // Destructure store properties with reactivity
 const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store);
@@ -184,6 +216,16 @@ const performanceLevel = ref(1); // Performance quality level
 const searchQuery = ref(''); // Search query text
 const searchResults = ref([]); // Search results array
 const pendingKnowledgeBaseChange = ref(null); // Pending KB change
+
+const typeFilterOptions = [
+  { label: '知识库', value: 'knowledge-base' },
+  { label: '目录', value: 'directory' },
+  { label: '文件', value: 'file' },
+  { label: '标题', value: 'section' },
+  { label: '段落', value: 'paragraph' }
+];
+
+const visibleTypes = ref(typeFilterOptions.map(o => o.value));
 
 // Computed property to check if current KB is valid
 const hasValidKnowledgeBase = computed(() => {
@@ -395,11 +437,30 @@ const searchNodes = (query) => {
   const lowerQuery = query.toLowerCase();
   searchResults.value = nodes.filter(node =>
     node.userData?.name?.toLowerCase().includes(lowerQuery) ||
-    node.userData?.path?.toLowerCase().includes(lowerQuery)
+    node.userData?.path?.toLowerCase().includes(lowerQuery) ||
+    String(node.userData?.stable_id || '').toLowerCase().includes(lowerQuery)
   );
 
   log(`搜索"${query}"找到${searchResults.value.length}个结果`);
 };
+
+const applyTypeVisibility = () => {
+  const allowed = new Set(visibleTypes.value || []);
+
+  nodes.forEach(n => {
+    if (n?.mesh) {
+      n.mesh.visible = allowed.has(n.userData?.type);
+    }
+  });
+
+  edges.forEach(e => {
+    const fromType = e?.userData?.from?.userData?.type;
+    const toType = e?.userData?.to?.userData?.type;
+    e.visible = allowed.has(fromType) && allowed.has(toType);
+  });
+};
+
+watch(visibleTypes, () => applyTypeVisibility(), { deep: true });
 
 /**
  * Find node by its position in 3D space
@@ -434,6 +495,8 @@ const getNodeTagType = (type) => {
     case 'knowledge-base': return 'warning';
     case 'directory': return 'info';
     case 'file': return 'success';
+    case 'section': return 'primary';
+    case 'paragraph': return 'default';
     case 'edge': return 'error';
     default: return 'default';
   }
@@ -449,6 +512,8 @@ const getNodeTypeName = (type) => {
     case 'knowledge-base': return '知识库';
     case 'directory': return '目录';
     case 'file': return '文件';
+    case 'section': return '标题';
+    case 'paragraph': return '段落';
     case 'edge': return '连接';
     default: return '未知';
   }
@@ -531,11 +596,30 @@ const highlightConnectedNodes = (node) => {
  * Open file associated with node
  * @param {string} path - File path to open
  */
-const openFile = (path) => {
+const openNode = async (node) => {
+  const path = node?.file_path || node?.path;
   if (!path) return;
 
-  log(`尝试打开文件: ${path}`);
-  // Implementation would use Tauri or Electron APIs here
+  const lineNumber = Number(node?.start_line || 1);
+
+  try {
+    await fileTreeStore.openFileInTab(path);
+    const content = fileTreeStore.selectedFile?.content || '';
+
+    editorStore.setFile({
+      path,
+      content,
+      highlightInfo: {
+        lineNumber,
+        matches: [{ start: 0, end: 1000000 }],
+        text: node?.name || ''
+      }
+    });
+
+    await router.push({ name: 'home' });
+  } catch (e) {
+    warn('打开节点失败:', e);
+  }
 };
 
 /**
@@ -695,6 +779,7 @@ const createNodesAndEdges = async (data) => {
     }
   });
 
+  applyTypeVisibility();
   log(`创建了${nodes.length}个节点和${edges.length}条边`);
 };
 /**
@@ -1123,20 +1208,23 @@ const initOctree = async (meshes) => {
 // 确保亮色模式返回明亮的颜色
 const getNodeColor = (type) => {
   const lightColors = {
-    'knowledge-base': 0xFFA500, // 亮橙色
-    'directory': 0x1E90FF,     // 亮蓝色
-    'file': 0x32CD32,          // 亮绿色
-    'default': 0x777777        // 中灰色
+    'knowledge-base': 0xFFA500,
+    'directory': 0x1E90FF,
+    'file': 0x32CD32,
+    'section': 0x9B59B6,
+    'paragraph': 0xE67E22,
+    'default': 0x777777
   };
 
   const darkColors = {
     'knowledge-base': 0xF39C12,
     'directory': 0x3498DB,
     'file': 0x2ECC71,
+    'section': 0x8E44AD,
+    'paragraph': 0xD35400,
     'default': 0xCCCCCC
   };
 
-  // 亮色模式下使用更鲜艳的颜色
   return darkMode.value ? darkColors[type] || darkColors.default
     : lightColors[type] || lightColors.default;
 }
@@ -1662,6 +1750,14 @@ onBeforeUnmount(() => {
   background-color: #2ecc71;
 }
 
+.legend-color.section {
+  background-color: #8e44ad;
+}
+
+.legend-color.paragraph {
+  background-color: #d35400;
+}
+
 /* Strong connection line */
 .legend-line.strong-link {
   background-color: #ff5555;
@@ -1685,8 +1781,20 @@ onBeforeUnmount(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
+.filter-panel {
+  position: absolute;
+  top: 120px;
+  left: 120px;
+  width: 140px;
+  z-index: 6;
+  background-color: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
 /* Dark mode search panel */
-.dark-mode .search-panel {
+.dark-mode .search-panel,
+.dark-mode .filter-panel {
   background-color: rgba(30, 30, 30, 0.9);
 }
 

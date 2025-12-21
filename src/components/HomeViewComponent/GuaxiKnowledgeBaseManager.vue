@@ -105,8 +105,8 @@
                 <n-collapse v-if="fileDraft.structure_nodes?.length">
                   <n-collapse-item
                     v-for="(n, idx) in fileDraft.structure_nodes"
-                    :key="`${n.level}-${n.title}-${idx}`"
-                    :title="`H${n.level} ${n.title}`"
+                    :key="n.stable_id || `${n.level}-${n.title}-${idx}`"
+                    :title="n.display_title || n.title"
                   >
                     <n-form-item label="标签">
                       <n-dynamic-tags v-model:value="n.tags" />
@@ -119,7 +119,7 @@
                     </n-form-item>
                   </n-collapse-item>
                 </n-collapse>
-                <div v-else class="empty">该文件没有可扫描的 Markdown 标题</div>
+                <div v-else class="empty">该文件没有可扫描的 Markdown 结构</div>
               </n-form-item>
             </n-form>
           </div>
@@ -194,13 +194,32 @@ const makeFileDraft = (meta) => {
   d.file_tags = Array.isArray(d.file_tags) ? d.file_tags : []
   d.related_nodes = Array.isArray(d.related_nodes) ? d.related_nodes : []
   const nodes = Array.isArray(d.structure_nodes) ? d.structure_nodes : []
-  d.structure_nodes = nodes.map(n => ({
-    title: String(n?.title || ''),
-    level: Number(n?.level || 0),
-    tags: Array.isArray(n?.tags) ? n.tags : [],
-    related_nodes: Array.isArray(n?.related_nodes) ? n.related_nodes : [],
-    attrs_json: JSON.stringify(n?.attrs ?? {}, null, 2)
-  })).filter(n => n.title && n.level)
+
+  d.structure_nodes = nodes.map(n => {
+    const title = String(n?.title || '')
+    const level = Number(n?.level || 0)
+    const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
+    const kind = String(attrs?.kind || (level > 0 ? 'section' : 'paragraph'))
+    const stable_id = typeof attrs?.stable_id === 'string' ? attrs.stable_id : ''
+    const start = attrs?.start_line
+    const end = attrs?.end_line
+
+    const display_title = kind === 'paragraph'
+      ? `P L${start ?? ''}-${end ?? ''} ${title}`
+      : `H${level} ${title}`
+
+    return {
+      title,
+      level,
+      kind,
+      stable_id,
+      tags: Array.isArray(n?.tags) ? n.tags : [],
+      related_nodes: Array.isArray(n?.related_nodes) ? n.related_nodes : [],
+      attrs_json: JSON.stringify(n?.attrs ?? {}, null, 2),
+      display_title
+    }
+  }).filter(n => n.title)
+
   return d
 }
 
@@ -346,7 +365,8 @@ const saveCurrent = async () => {
           try {
             attrs = JSON.parse(raw)
           } catch (e) {
-            throw new Error(`结构节点属性 JSON 不正确: H${n.level} ${n.title}`)
+            const prefix = n?.kind === 'paragraph' ? 'P' : `H${n.level}`
+            throw new Error(`结构节点属性 JSON 不正确: ${prefix} ${n.title}`)
           }
         }
         return {

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 use chrono::Local;
 use rusqlite::{params, Connection};
 use std::env;
@@ -225,14 +227,331 @@ pub fn get_knowledge_base_tree(root_path: String) -> Result<FileNode, String> {
 }
 
 
+const MAX_MD_BYTES: u64 = 1024 * 1024;
+const MAX_SECTIONS_PER_FILE: usize = 200;
+const MAX_PARAGRAPHS_PER_FILE: usize = 300;
+
+fn is_hidden_name(name: &str) -> bool {
+    name.starts_with('.')
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+        .unwrap_or(false)
+}
+
+fn rel_path_from(root: &Path, abs: &Path) -> String {
+    abs.strip_prefix(root)
+        .unwrap_or(abs)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn excerpt_one_line(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut count: usize = 0;
+    let mut last_space = false;
+
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if out.is_empty() || last_space {
+                continue;
+            }
+            out.push(' ');
+            count += 1;
+            last_space = true;
+        } else {
+            out.push(ch);
+            count += 1;
+            last_space = false;
+        }
+
+        if count >= max_chars {
+            break;
+        }
+    }
+
+    out.trim().to_string()
+}
+
+fn sanitize_meta_stem(name: &str) -> String {
+    let trimmed = name.trim().trim_matches(|c| c == ' ' || c == '.');
+    if trimmed.is_empty() {
+        return "_".to_string();
+    }
+
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        let ok = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ' ' | '@' | '+' | '=');
+        if ok {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+
+    let out2 = out.trim().trim_matches(|c| c == ' ' || c == '.').to_string();
+    if out2.is_empty() { "_".to_string() } else { out2 }
+}
+
+fn normalize_related_ref(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+
+    let t = t
+        .strip_prefix("para_")
+        .or_else(|| t.strip_prefix("section_"))
+        .or_else(|| t.strip_prefix("node_"))
+        .unwrap_or(t)
+        .trim();
+
+    if t.is_empty() { None } else { Some(t.to_string()) }
+}
+
+#[derive(Deserialize)]
+struct FileStructureNodeLite {
+    attrs: serde_json::Value,
+    related_nodes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct FileMetaFileLite {
+    structure_nodes: Vec<FileStructureNodeLite>,
+}
+
+fn load_kb_structure_relations(kb_name: &str) -> HashMap<String, Vec<String>> {
+    let root = PathBuf::from(crate::commands::settingview::get_knowledge_bases_root());
+    let meta_dir = root
+        .join(".meta")
+        .join(format!("{}_meta", sanitize_meta_stem(kb_name)));
+
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    if !meta_dir.exists() {
+        return out;
+    }
+
+    let kb_meta_file = format!("{}_meta.json", sanitize_meta_stem(kb_name));
+
+    let Ok(entries) = fs::read_dir(&meta_dir) else {
+        return out;
+    };
+
+    for ent in entries.flatten() {
+        let p = ent.path();
+        if !p.is_file() {
+            continue;
+        }
+        let fname = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if fname.is_empty() || fname == kb_meta_file {
+            continue;
+        }
+
+        let Ok(s) = fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(m) = serde_json::from_str::<FileMetaFileLite>(&s) else {
+            continue;
+        };
+
+        for n in m.structure_nodes {
+            let kind = n
+                .attrs
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if kind != "paragraph" && kind != "section" {
+                continue;
+            }
+
+            let Some(from_sid) = n.attrs.get("stable_id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+
+            let tos: Vec<String> = n
+                .related_nodes
+                .iter()
+                .filter_map(|x| normalize_related_ref(x))
+                .collect();
+
+            if tos.is_empty() {
+                continue;
+            }
+
+            out.entry(from_sid.to_string())
+                .or_default()
+                .extend(tos);
+        }
+    }
+
+    out
+}
+
+#[derive(Clone)]
+struct MdSection {
+    level: u8,
+    title: String,
+    start_line: u32,
+    stable_id: String,
+}
+
+#[derive(Clone)]
+struct MdParagraph {
+    start_line: u32,
+    end_line: u32,
+    excerpt: String,
+    stable_id: String,
+    parent_section: Option<String>,
+}
+
+fn parse_markdown_structure(file_rel: &str, content: &str) -> (Vec<MdSection>, Vec<MdParagraph>) {
+    let mut sections: Vec<MdSection> = Vec::new();
+    let mut paragraphs: Vec<MdParagraph> = Vec::new();
+
+    let mut in_fence = false;
+
+    let mut para_lines: Vec<String> = Vec::new();
+    let mut para_start_line: u32 = 0;
+    let mut last_section: Option<String> = None;
+
+    let mut flush_para = |end_line: u32,
+                          para_lines: &mut Vec<String>,
+                          para_start_line: &mut u32,
+                          last_section: &Option<String>,
+                          paragraphs: &mut Vec<MdParagraph>| {
+        if para_lines.is_empty() {
+            return;
+        }
+
+        let text = para_lines.join("\n").trim().to_string();
+        para_lines.clear();
+        if text.is_empty() {
+            return;
+        }
+
+        let excerpt = excerpt_one_line(&text, 80);
+        if excerpt.is_empty() {
+            return;
+        }
+
+        let stable_id = sha256_hex(&format!("{}\nP\nL{}\n{}", file_rel, *para_start_line, text));
+        paragraphs.push(MdParagraph {
+            start_line: *para_start_line,
+            end_line,
+            excerpt,
+            stable_id,
+            parent_section: last_section.clone(),
+        });
+
+        *para_start_line = 0;
+    };
+
+    for (idx, line) in content.lines().enumerate() {
+        let line_num = (idx + 1) as u32;
+        let l = line.trim_end();
+        let lt = l.trim_start();
+
+        if lt.starts_with("```") {
+            flush_para(
+                line_num.saturating_sub(1),
+                &mut para_lines,
+                &mut para_start_line,
+                &last_section,
+                &mut paragraphs,
+            );
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+
+        let hashes = lt.chars().take_while(|c| *c == '#').count();
+        if hashes >= 1 && hashes <= 6 {
+            let rest = lt[hashes..].trim();
+            if !rest.is_empty() {
+                flush_para(
+                    line_num.saturating_sub(1),
+                    &mut para_lines,
+                    &mut para_start_line,
+                    &last_section,
+                    &mut paragraphs,
+                );
+
+                let stable_id = sha256_hex(&format!(
+                    "{}\nH{}\nL{}\n{}",
+                    file_rel,
+                    hashes,
+                    line_num,
+                    rest
+                ));
+                last_section = Some(stable_id.clone());
+                sections.push(MdSection {
+                    level: hashes as u8,
+                    title: rest.to_string(),
+                    start_line: line_num,
+                    stable_id,
+                });
+                continue;
+            }
+        }
+
+        if lt.trim().is_empty() {
+            flush_para(
+                line_num.saturating_sub(1),
+                &mut para_lines,
+                &mut para_start_line,
+                &last_section,
+                &mut paragraphs,
+            );
+            continue;
+        }
+
+        if para_lines.is_empty() {
+            para_start_line = line_num;
+        }
+        para_lines.push(l.to_string());
+    }
+
+    flush_para(
+        content.lines().count() as u32,
+        &mut para_lines,
+        &mut para_start_line,
+        &last_section,
+        &mut paragraphs,
+    );
+
+    (sections, paragraphs)
+}
+
 // 添加图形数据结构体
 #[derive(Serialize)]
 pub struct GraphNode {
     pub id: String,
     pub name: String,
-    pub r#type: String,  // 使用 r#type 因为 type 是 Rust 关键字
+    pub r#type: String,
     pub path: Option<String>,
     pub size: Option<f64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -240,7 +559,7 @@ pub struct GraphEdge {
     pub from: String,
     pub to: String,
     pub strength: f64,
-    pub r#type: Option<String>,  // 使用 r#type 因为 type 是 Rust 关键字
+    pub r#type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -252,82 +571,256 @@ pub struct GraphData {
 /// 获取知识库图形数据命令
 #[tauri::command]
 pub fn get_knowledge_graph_data(knowledge_base_id: i32) -> Result<GraphData, String> {
-    // 1. 获取知识库路径
     let db_path = create_db_file().map_err(|e| e.to_string())?;
     let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
-    
-    let kb_path: String = conn.query_row(
-        "SELECT location FROM knowledge_bases WHERE id = ?",
-        [knowledge_base_id],
-        |row| row.get(0),
-    ).map_err(|e| e.to_string())?;
-    
+
+    let kb_path: String = conn
+        .query_row(
+            "SELECT location FROM knowledge_bases WHERE id = ?",
+            [knowledge_base_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
     let kb_path = PathBuf::from(kb_path);
     if !kb_path.exists() {
         return Err("知识库路径不存在".to_string());
     }
 
-    // 2. 构建图形数据
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
+    let kb_id = format!("kb_{}", knowledge_base_id);
+    let kb_name = kb_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let kb_abs = kb_path.to_string_lossy().to_string();
 
-    // 添加知识库根节点
+    let structure_relations = load_kb_structure_relations(&kb_name);
+    let mut stable_to_node_id: HashMap<String, String> = HashMap::new();
+
+    let mut nodes: Vec<GraphNode> = Vec::new();
+    let mut edges: Vec<GraphEdge> = Vec::new();
+
     nodes.push(GraphNode {
-        id: format!("kb_{}", knowledge_base_id),
-        name: kb_path.file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string(),
+        id: kb_id.clone(),
+        name: kb_name,
         r#type: "knowledge-base".to_string(),
-        path: Some(kb_path.to_string_lossy().to_string()),
+        path: Some(kb_abs),
         size: Some(1.0),
+        file_path: None,
+        start_line: None,
+        end_line: None,
+        stable_id: None,
+        depth: Some(0),
     });
 
-    // 遍历知识库目录结构，添加文件和目录节点
-    if let Ok(entries) = fs::read_dir(&kb_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_dir = path.is_dir();
-            
-            // 跳过隐藏文件/目录
-            if path.file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-            {
+    fn dir_id(rel: &str) -> String {
+        format!("dir_{}", sha256_hex(rel))
+    }
+
+    fn file_id(rel: &str) -> String {
+        format!("file_{}", sha256_hex(rel))
+    }
+
+    fn section_id(stable_id: &str) -> String {
+        format!("section_{}", stable_id)
+    }
+
+    fn para_id(stable_id: &str) -> String {
+        format!("para_{}", stable_id)
+    }
+
+    fn walk_dir(
+        base: &Path,
+        cur: &Path,
+        parent_id: &str,
+        parent_depth: u32,
+        nodes: &mut Vec<GraphNode>,
+        edges: &mut Vec<GraphEdge>,
+        stable_to_node_id: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        let mut entries: Vec<PathBuf> = fs::read_dir(cur)
+            .map_err(|e| e.to_string())?
+            .filter_map(|e| e.ok().map(|x| x.path()))
+            .collect();
+
+        entries.sort_by(|a, b| a.to_string_lossy().to_lowercase().cmp(&b.to_string_lossy().to_lowercase()));
+
+        for path in entries {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.is_empty() || is_hidden_name(name) || name == ".meta" {
                 continue;
             }
 
-            let node_id = format!("node_{}", nodes.len());
-            nodes.push(GraphNode {
-                id: node_id.clone(),
-                name: path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
-                r#type: if is_dir { "directory" } else { "file" }.to_string(),
-                path: Some(path.to_string_lossy().to_string()),
-                size: Some(if is_dir { 0.5 } else { 0.3 }),
-            });
+            let rel = rel_path_from(base, &path);
+            let abs_str = path.to_string_lossy().to_string();
 
-            // 添加连接到知识库根节点的边
+            if path.is_dir() {
+                let id = dir_id(&rel);
+                nodes.push(GraphNode {
+                    id: id.clone(),
+                    name: name.to_string(),
+                    r#type: "directory".to_string(),
+                    path: Some(abs_str),
+                    size: Some(0.5),
+                    file_path: None,
+                    start_line: None,
+                    end_line: None,
+                    stable_id: None,
+                    depth: Some(parent_depth + 1),
+                });
+                edges.push(GraphEdge {
+                    from: parent_id.to_string(),
+                    to: id.clone(),
+                    strength: 0.7,
+                    r#type: Some("contains".to_string()),
+                });
+                walk_dir(base, &path, &id, parent_depth + 1, nodes, edges, stable_to_node_id)?;
+                continue;
+            }
+
+            let id = file_id(&rel);
+            nodes.push(GraphNode {
+                id: id.clone(),
+                name: name.to_string(),
+                r#type: "file".to_string(),
+                path: Some(abs_str.clone()),
+                size: Some(0.3),
+                file_path: Some(abs_str.clone()),
+                start_line: None,
+                end_line: None,
+                stable_id: None,
+                depth: Some(parent_depth + 1),
+            });
             edges.push(GraphEdge {
-                from: format!("kb_{}", knowledge_base_id),
-                to: node_id,
-                strength: if is_dir { 0.7 } else { 0.5 },
+                from: parent_id.to_string(),
+                to: id.clone(),
+                strength: 0.5,
                 r#type: Some("contains".to_string()),
             });
+
+            if !is_markdown_path(&path) {
+                continue;
+            }
+
+            let too_large = fs::metadata(&path)
+                .ok()
+                .map(|m| m.len() > MAX_MD_BYTES)
+                .unwrap_or(false);
+            if too_large {
+                continue;
+            }
+
+            let content = match fs::read_to_string(&path) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let (sections, paragraphs) = parse_markdown_structure(&rel, &content);
+
+            for sec in sections.iter().take(MAX_SECTIONS_PER_FILE) {
+                let sec_node_id = section_id(&sec.stable_id);
+                stable_to_node_id.insert(sec.stable_id.clone(), sec_node_id.clone());
+
+                nodes.push(GraphNode {
+                    id: sec_node_id.clone(),
+                    name: sec.title.clone(),
+                    r#type: "section".to_string(),
+                    path: Some(abs_str.clone()),
+                    size: Some(0.22),
+                    file_path: Some(abs_str.clone()),
+                    start_line: Some(sec.start_line),
+                    end_line: None,
+                    stable_id: Some(sec.stable_id.clone()),
+                    depth: Some(parent_depth + 2),
+                });
+                edges.push(GraphEdge {
+                    from: id.clone(),
+                    to: sec_node_id,
+                    strength: 0.45,
+                    r#type: Some("contains".to_string()),
+                });
+            }
+
+            let mut prev_para: Option<String> = None;
+            for p in paragraphs.iter().take(MAX_PARAGRAPHS_PER_FILE) {
+                let p_node_id = para_id(&p.stable_id);
+                stable_to_node_id.insert(p.stable_id.clone(), p_node_id.clone());
+
+                nodes.push(GraphNode {
+                    id: p_node_id.clone(),
+                    name: p.excerpt.clone(),
+                    r#type: "paragraph".to_string(),
+                    path: Some(abs_str.clone()),
+                    size: Some(0.16),
+                    file_path: Some(abs_str.clone()),
+                    start_line: Some(p.start_line),
+                    end_line: Some(p.end_line),
+                    stable_id: Some(p.stable_id.clone()),
+                    depth: Some(parent_depth + 3),
+                });
+
+                let parent = p
+                    .parent_section
+                    .as_ref()
+                    .map(|sid| section_id(sid))
+                    .unwrap_or_else(|| id.clone());
+
+                edges.push(GraphEdge {
+                    from: parent,
+                    to: p_node_id.clone(),
+                    strength: 0.28,
+                    r#type: Some("contains".to_string()),
+                });
+
+                if let Some(prev) = prev_para.take() {
+                    edges.push(GraphEdge {
+                        from: prev,
+                        to: p_node_id.clone(),
+                        strength: 0.12,
+                        r#type: Some("next".to_string()),
+                    });
+                }
+                prev_para = Some(p_node_id);
+            }
         }
+
+        Ok(())
     }
 
-    // 3. 添加一些示例关系边（实际应用中应该从数据库或分析中获取）
-    if nodes.len() > 1 {
-        edges.push(GraphEdge {
-            from: nodes[1].id.clone(),
-            to: nodes[2 % nodes.len()].id.clone(),
-            strength: 0.8,
-            r#type: Some("reference".to_string()),
-        });
+    walk_dir(
+        &kb_path,
+        &kb_path,
+        &kb_id,
+        0,
+        &mut nodes,
+        &mut edges,
+        &mut stable_to_node_id,
+    )?;
+
+    let mut added: HashSet<(String, String)> = HashSet::new();
+    for (from_sid, tos) in structure_relations {
+        let Some(from_id) = stable_to_node_id.get(&from_sid) else {
+            continue;
+        };
+        for to_sid in tos {
+            let Some(to_id) = stable_to_node_id.get(&to_sid) else {
+                continue;
+            };
+            if from_id == to_id {
+                continue;
+            }
+            let key = (from_id.clone(), to_id.clone());
+            if !added.insert(key) {
+                continue;
+            }
+            edges.push(GraphEdge {
+                from: from_id.clone(),
+                to: to_id.clone(),
+                strength: 0.26,
+                r#type: Some("related".to_string()),
+            });
+        }
     }
 
     Ok(GraphData { nodes, edges })

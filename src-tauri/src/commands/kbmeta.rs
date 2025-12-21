@@ -1,5 +1,6 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -268,15 +269,124 @@ fn is_markdown_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn scan_markdown_structure(content: &str) -> Vec<FileStructureNode> {
+fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn excerpt_one_line(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut count: usize = 0;
+    let mut last_space = false;
+
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if out.is_empty() || last_space {
+                continue;
+            }
+            out.push(' ');
+            count += 1;
+            last_space = true;
+        } else {
+            out.push(ch);
+            count += 1;
+            last_space = false;
+        }
+
+        if count >= max_chars {
+            break;
+        }
+    }
+
+    out.trim().to_string()
+}
+
+fn merge_attrs(scanned: &serde_json::Value, user: &serde_json::Value) -> serde_json::Value {
+    let Some(s_obj) = scanned.as_object() else {
+        return scanned.clone();
+    };
+
+    let mut out = serde_json::Map::new();
+    for (k, v) in s_obj.iter() {
+        out.insert(k.clone(), v.clone());
+    }
+
+    let Some(u_obj) = user.as_object() else {
+        return serde_json::Value::Object(out);
+    };
+
+    let reserved = ["stable_id", "kind", "start_line", "end_line", "parent_section"];
+    for (k, v) in u_obj.iter() {
+        if reserved.iter().any(|x| x == k) {
+            continue;
+        }
+        out.insert(k.clone(), v.clone());
+    }
+
+    serde_json::Value::Object(out)
+}
+
+fn scan_markdown_structure(file_rel: &str, content: &str) -> Vec<FileStructureNode> {
     let mut out: Vec<FileStructureNode> = Vec::new();
+
     let mut in_fence = false;
 
-    for line in content.lines() {
+    let mut para_lines: Vec<String> = Vec::new();
+    let mut para_start_line: u32 = 0;
+    let mut last_section: Option<String> = None;
+
+    let mut flush_para = |end_line: u32,
+                          para_lines: &mut Vec<String>,
+                          para_start_line: &mut u32,
+                          last_section: &Option<String>,
+                          out: &mut Vec<FileStructureNode>| {
+        if para_lines.is_empty() {
+            return;
+        }
+
+        let text = para_lines.join("\n").trim().to_string();
+        para_lines.clear();
+        if text.is_empty() {
+            return;
+        }
+
+        let excerpt = excerpt_one_line(&text, 80);
+        if excerpt.is_empty() {
+            return;
+        }
+
+        let stable_id = sha256_hex(&format!("{}\nP\nL{}\n{}", file_rel, *para_start_line, text));
+        out.push(FileStructureNode {
+            title: excerpt,
+            level: 0,
+            tags: Vec::new(),
+            attrs: serde_json::json!({
+                "kind": "paragraph",
+                "stable_id": stable_id,
+                "start_line": *para_start_line,
+                "end_line": end_line,
+                "parent_section": last_section.clone()
+            }),
+            related_nodes: Vec::new(),
+        });
+
+        *para_start_line = 0;
+    };
+
+    for (idx, line) in content.lines().enumerate() {
+        let line_num = (idx + 1) as u32;
         let l = line.trim_end();
         let lt = l.trim_start();
 
         if lt.starts_with("```") {
+            flush_para(
+                line_num.saturating_sub(1),
+                &mut para_lines,
+                &mut para_start_line,
+                &last_section,
+                &mut out,
+            );
             in_fence = !in_fence;
             continue;
         }
@@ -288,16 +398,62 @@ fn scan_markdown_structure(content: &str) -> Vec<FileStructureNode> {
         if hashes >= 1 && hashes <= 6 {
             let rest = lt[hashes..].trim();
             if !rest.is_empty() {
+                flush_para(
+                    line_num.saturating_sub(1),
+                    &mut para_lines,
+                    &mut para_start_line,
+                    &last_section,
+                    &mut out,
+                );
+
+                let stable_id = sha256_hex(&format!(
+                    "{}\nH{}\nL{}\n{}",
+                    file_rel,
+                    hashes,
+                    line_num,
+                    rest
+                ));
+                last_section = Some(stable_id.clone());
+
                 out.push(FileStructureNode {
                     title: rest.to_string(),
                     level: hashes as u8,
                     tags: Vec::new(),
-                    attrs: serde_json::json!({}),
+                    attrs: serde_json::json!({
+                        "kind": "section",
+                        "stable_id": stable_id,
+                        "start_line": line_num
+                    }),
                     related_nodes: Vec::new(),
                 });
+                continue;
             }
         }
+
+        if lt.trim().is_empty() {
+            flush_para(
+                line_num.saturating_sub(1),
+                &mut para_lines,
+                &mut para_start_line,
+                &last_section,
+                &mut out,
+            );
+            continue;
+        }
+
+        if para_lines.is_empty() {
+            para_start_line = line_num;
+        }
+        para_lines.push(l.to_string());
     }
+
+    flush_para(
+        content.lines().count() as u32,
+        &mut para_lines,
+        &mut para_start_line,
+        &last_section,
+        &mut out,
+    );
 
     out
 }
@@ -414,16 +570,22 @@ fn upsert_file_meta_for_abs(
     let mut structure_nodes: Vec<FileStructureNode> = Vec::new();
     if is_markdown_path(abs) {
         let content = fs::read_to_string(abs).unwrap_or_default();
-        let scanned = scan_markdown_structure(&content);
+        let scanned = scan_markdown_structure(&rel, &content);
         for mut n in scanned {
             if let Some(prev) = base_ref.and_then(|m| {
+                let sid = n.attrs.get("stable_id").and_then(|v| v.as_str());
+                if let Some(sid) = sid {
+                    if let Some(x) = m.structure_nodes.iter().find(|x| x.attrs.get("stable_id").and_then(|v| v.as_str()) == Some(sid)) {
+                        return Some(x);
+                    }
+                }
                 m.structure_nodes
                     .iter()
                     .find(|x| x.level == n.level && x.title == n.title)
             }) {
                 n.tags = prev.tags.clone();
-                n.attrs = prev.attrs.clone();
                 n.related_nodes = prev.related_nodes.clone();
+                n.attrs = merge_attrs(&n.attrs, &prev.attrs);
             }
             structure_nodes.push(n);
         }
@@ -554,13 +716,18 @@ pub fn after_write_file(path: &Path, content: &str) -> Result<(), String> {
         let (created_fs, modified_fs) = file_times(path);
         let created_at = existing.as_ref().map(|m| m.created_at.clone()).unwrap_or(created_fs);
 
-        let mut scanned = scan_markdown_structure(content);
+        let mut scanned = scan_markdown_structure(&rel, content);
         if let Some(old) = existing.as_ref() {
             for n in scanned.iter_mut() {
-                if let Some(prev) = old.structure_nodes.iter().find(|x| x.level == n.level && x.title == n.title) {
+                let sid = n.attrs.get("stable_id").and_then(|v| v.as_str());
+                let prev = sid
+                    .and_then(|sid| old.structure_nodes.iter().find(|x| x.attrs.get("stable_id").and_then(|v| v.as_str()) == Some(sid)))
+                    .or_else(|| old.structure_nodes.iter().find(|x| x.level == n.level && x.title == n.title));
+
+                if let Some(prev) = prev {
                     n.tags = prev.tags.clone();
-                    n.attrs = prev.attrs.clone();
                     n.related_nodes = prev.related_nodes.clone();
+                    n.attrs = merge_attrs(&n.attrs, &prev.attrs);
                 }
             }
         }
@@ -623,7 +790,7 @@ pub fn after_create_path(path: &Path, is_dir: bool, content: Option<&str>) -> Re
                 .to_string();
 
             let structure_nodes = if is_markdown_path(path) {
-                scan_markdown_structure(content.unwrap_or(""))
+                scan_markdown_structure(&rel, content.unwrap_or(""))
             } else {
                 Vec::new()
             };
@@ -949,12 +1116,12 @@ pub fn kbmeta_read_file_meta(knowledge_base_name: String, rel_path: String) -> R
 
     let meta = FileMetaFile {
         file_name,
-        rel_path: rel,
+        rel_path: rel.clone(),
         created_at,
         modified_at,
         file_tags: Vec::new(),
         related_nodes: Vec::new(),
-        structure_nodes: if is_markdown_path(&abs) { scan_markdown_structure(&content) } else { Vec::new() },
+        structure_nodes: if is_markdown_path(&abs) { scan_markdown_structure(&rel, &content) } else { Vec::new() },
     };
 
     write_file_meta_file(&meta_path, &meta)?;
@@ -989,12 +1156,17 @@ pub fn kbmeta_save_file_meta(knowledge_base_name: String, rel_path: String, meta
     let mut structure_nodes = Vec::new();
     if is_markdown_path(&abs) {
         let content = fs::read_to_string(&abs).unwrap_or_default();
-        let scanned = scan_markdown_structure(&content);
+        let scanned = scan_markdown_structure(&rel, &content);
         for mut n in scanned {
-            if let Some(user) = meta.structure_nodes.iter().find(|x| x.level == n.level && x.title == n.title) {
+            let sid = n.attrs.get("stable_id").and_then(|v| v.as_str());
+            let user = sid
+                .and_then(|sid| meta.structure_nodes.iter().find(|x| x.attrs.get("stable_id").and_then(|v| v.as_str()) == Some(sid)))
+                .or_else(|| meta.structure_nodes.iter().find(|x| x.level == n.level && x.title == n.title));
+
+            if let Some(user) = user {
                 n.tags = user.tags.clone();
-                n.attrs = user.attrs.clone();
                 n.related_nodes = user.related_nodes.clone();
+                n.attrs = merge_attrs(&n.attrs, &user.attrs);
             }
             structure_nodes.push(n);
         }
