@@ -1,7 +1,9 @@
 <template>
-  <n-card>
-    <component :is="currentComponent" />
-  </n-card>
+  <div class="setting-content">
+    <n-card class="setting-card">
+      <component :is="currentComponent" />
+    </n-card>
+  </div>
 </template>
 
 <script setup>
@@ -31,3 +33,26 @@ const currentComponent = computed(() => {
   }
 });
 </script>
+
+<style scoped>
+.setting-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.setting-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.setting-card :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+</style>

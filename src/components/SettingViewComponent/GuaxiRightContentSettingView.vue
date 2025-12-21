@@ -8,12 +8,14 @@
 import SideNavigatorSettingView from "./SideNavigatorSettingView.vue";
 </script>
 
-<style scope>
+<style scoped>
 .right-sider-content {
-  flex-grow: 1;
+  height: 100%;
   padding: 0px;
   margin-left: 5px;
   margin-top: 2px;
-  width: 100vh;
+  width: 100%;
+  overflow: auto;
+  box-sizing: border-box;
 }
 </style>

@@ -147,6 +147,31 @@
         <n-divider />
 
         <div>
+          <h3>模板库</h3>
+          <p class="description">
+            用于存放 Markdown 模板文件。未配置时启动会自动在程序同级目录创建 Template 文件夹并写入配置。
+          </p>
+          <n-form
+            label-placement="left"
+            label-width="auto"
+            :show-require-mark="false"
+            style="margin-top: 8px"
+          >
+            <n-form-item label="模板库路径">
+              <n-input v-model:value="templateRepoPath" :disabled="loading" placeholder="模板库路径" />
+            </n-form-item>
+            <n-form-item label="操作">
+              <n-space>
+                <n-button :disabled="loading" @click="handleTemplateRepoPick">浏览文件夹...</n-button>
+                <n-button :disabled="loading" type="primary" @click="handleTemplateRepoSave">保存</n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>资源库根目录</h3>
           <p class="description">
             用于存放截图、图片等资源的根目录。未配置时将使用程序所在目录下的 ResourceRepo 文件夹。
@@ -246,6 +271,9 @@ const resourceRoot = ref('');
 // 知识库根目录
 const knowledgeBasesRoot = ref('');
 
+// 模板库路径
+const templateRepoPath = ref('');
+
 const loading = ref(false);
 
 // 打开文件浏览器选择文件库根目录
@@ -283,6 +311,14 @@ onMounted(async () => {
   } catch (error) {
     console.error('加载知识库根目录失败:', error);
     knowledgeBasesRoot.value = '';
+  }
+
+  try {
+    const tplPath = await invoke('get_template_repo_path');
+    templateRepoPath.value = typeof tplPath === 'string' ? tplPath : '';
+  } catch (error) {
+    console.error('加载模板库路径失败:', error);
+    templateRepoPath.value = '';
   }
 
   try {
@@ -352,6 +388,36 @@ const handleKnowledgeBasesRootPick = async () => {
     }
   } catch (error) {
     console.error('更新知识库根目录失败:', error);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleTemplateRepoPick = async () => {
+  try {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+    });
+
+    if (!selectedPath) return;
+
+    loading.value = true;
+    await invoke('set_template_repo_path', { path: selectedPath });
+    templateRepoPath.value = selectedPath;
+  } catch (error) {
+    console.error('更新模板库路径失败:', error);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleTemplateRepoSave = async () => {
+  try {
+    loading.value = true;
+    await invoke('set_template_repo_path', { path: templateRepoPath.value });
+  } catch (error) {
+    console.error('更新模板库路径失败:', error);
   } finally {
     loading.value = false;
   }
