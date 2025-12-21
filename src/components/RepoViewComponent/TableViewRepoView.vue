@@ -377,6 +377,7 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
 }
 
 .toolbar-container {
