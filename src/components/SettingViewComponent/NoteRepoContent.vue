@@ -2,75 +2,19 @@
   <div class="preference-wrapper">
     <n-card title="笔记库与资源库">
       <n-space vertical size="large" style="width: 100%">
+
         <div>
-          <h3>笔记库列表</h3>
-          <p class="description">
-            管理当前可用的笔记库路径，选择一个作为激活笔记库进行阅读和编辑。
-          </p>
-
-          <n-alert type="info" v-if="activeRepoPath" style="max-width: 95%;">
-            当前激活的笔记库路径：{{ activeRepoPath }}
-          </n-alert>
-          <n-alert type="warning" v-else style="max-width: 95%;">
-            未选择笔记库路径
-          </n-alert>
-
-          <n-list hoverable style="max-width: 95%; margin-top: 8px;">
-            <n-list-item v-for="path in repopathlist" :key="path">
-              <template #prefix>
-                <n-icon :component="Folder20Regular" :size="24" />
-              </template>
-              <n-text strong>{{ path }}</n-text>
-              <template #suffix>
-                <n-space :wrap="false">
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <n-button text @click="handleActivate(path)" :disabled="path === activeRepoPath">
-                        <n-icon
-                          :component="CheckmarkCircle20Regular"
-                          :size="24"
-                          v-if="path === activeRepoPath"
-                          style="color: #52c41a;"
-                        />
-                        <n-icon
-                          :component="CheckmarkCircle32Regular"
-                          :size="24"
-                          v-else
-                          style="color: #52c41a;"
-                        />
-                      </n-button>
-                    </template>
-                    {{ path === activeRepoPath ? '已激活' : '激活' }}
-                  </n-tooltip>
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <n-button text @click="handleRemove(path)">
-                        <n-icon :component="Delete20Regular" :size="24" />
-                      </n-button>
-                    </template>
-                    移除
-                  </n-tooltip>
-                </n-space>
-              </template>
-            </n-list-item>
-          </n-list>
-
-          <n-space style="margin-top: 8px">
+          <div class="section-header">
+            <h3>文件库根目录</h3>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-button text @click="handleOpenFileBrowser">
-                  <n-icon :component="FolderAdd20Regular" :size="24" />
+                <n-button text @click="handleOpenFileBrowserForLibraryRoot">
+                  <n-icon :component="librariesRoot ? DocumentEdit16Regular : FolderAdd20Regular" :size="22" />
                 </n-button>
               </template>
-              添加新的笔记库路径
+              {{ librariesRoot ? '更改文件库根目录' : '添加文件库根目录' }}
             </n-tooltip>
-          </n-space>
-        </div>
-
-        <n-divider />
-
-        <div>
-          <h3>文件库根目录</h3>
+          </div>
           <p class="description">
             用于存放导入的文件库数据。建议选择一个稳定且有足够空间的磁盘目录。
           </p>
@@ -88,31 +32,9 @@
                 <n-icon :component="Folder20Regular" :size="24" />
               </template>
               <n-text strong>{{ librariesRoot }}</n-text>
-              <template #suffix>
-                <n-space :wrap="false">
-                  <n-tooltip trigger="hover">
-                    <template #trigger>
-                      <n-button text @click="handleOpenFileBrowserForLibraryRoot">
-                        <n-icon :component="FolderAdd20Regular" :size="24" />
-                      </n-button>
-                    </template>
-                    更改路径
-                  </n-tooltip>
-                </n-space>
-              </template>
             </n-list-item>
           </n-list>
 
-          <n-space style="margin-top: 8px">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <n-button text @click="handleOpenFileBrowserForLibraryRoot">
-                  <n-icon :component="FolderAdd20Regular" :size="24" />
-                </n-button>
-              </template>
-              {{ librariesRoot ? '更改文件库根目录' : '添加文件库根目录' }}
-            </n-tooltip>
-          </n-space>
         </div>
 
         <n-divider />
@@ -130,16 +52,54 @@
             未配置知识库根目录，将使用默认位置。
           </n-alert>
 
-          <n-form
-            label-placement="left"
-            label-width="auto"
-            :show-require-mark="false"
-            style="margin-top: 8px"
-          >
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false" style="margin-top: 8px">
             <n-form-item label="选择知识库根目录">
               <n-button :disabled="loading" @click="handleKnowledgeBasesRootPick">
                 浏览文件夹...
               </n-button>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+        <div>
+          <h3>资源库根目录</h3>
+          <p class="description">
+            用于存放截图、图片等资源的根目录。未配置时将使用程序所在目录下的 ResourceRepo 文件夹。
+          </p>
+
+          <n-alert v-if="resourceRoot" type="info" :show-icon="true" class="tip" style="max-width: 95%;">
+            当前资源库根目录：{{ resourceRoot }}
+          </n-alert>
+          <n-alert v-else type="warning" :show-icon="true" class="tip" style="max-width: 95%;">
+            未配置资源库根目录，将使用默认位置。
+          </n-alert>
+
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false" style="margin-top: 8px">
+            <n-form-item label="选择资源库根目录">
+              <n-button :disabled="loading" @click="handleResourceRootPick">
+                浏览文件夹...
+              </n-button>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
+          <h3>模板库</h3>
+          <p class="description">
+            用于存放 Markdown 模板文件。未配置时启动会自动在程序同级目录创建 Template 文件夹并写入配置。
+          </p>
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false" style="margin-top: 8px">
+            <n-form-item label="模板库路径">
+              <n-input v-model:value="templateRepoPath" :disabled="loading" placeholder="模板库路径" />
+            </n-form-item>
+            <n-form-item label="操作">
+              <n-space>
+                <n-button :disabled="loading" @click="handleTemplateRepoPick">浏览文件夹...</n-button>
+                <n-button :disabled="loading" type="primary" @click="handleTemplateRepoSave">保存</n-button>
+              </n-space>
             </n-form-item>
           </n-form>
         </div>
@@ -159,48 +119,24 @@
             未配置远程仓库地址
           </n-alert>
 
-          <n-form
-            label-placement="left"
-            label-width="auto"
-            :show-require-mark="false"
-            style="margin-top: 8px"
-          >
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false" style="margin-top: 8px">
             <n-form-item label="远程仓库地址">
-              <n-input
-                v-model:value="knowledgeBasesRemoteUrl"
-                :disabled="loading"
-                placeholder="https://..."
-              />
+              <n-input v-model:value="knowledgeBasesRemoteUrl" :disabled="loading" placeholder="https://..." />
             </n-form-item>
             <n-form-item label="远程仓库用户名">
-              <n-input
-                v-model:value="knowledgeBasesRemoteUsername"
-                :disabled="loading"
-                placeholder="可选"
-              />
+              <n-input v-model:value="knowledgeBasesRemoteUsername" :disabled="loading" placeholder="可选" />
             </n-form-item>
             <n-form-item label="Git 用户名">
-              <n-input
-                v-model:value="knowledgeBasesGitUsername"
-                :disabled="loading"
-                placeholder="用于提交, 例如: Your Name"
-              />
+              <n-input v-model:value="knowledgeBasesGitUsername" :disabled="loading"
+                placeholder="用于提交, 例如: Your Name" />
             </n-form-item>
             <n-form-item label="Git Email">
-              <n-input
-                v-model:value="knowledgeBasesGitEmail"
-                :disabled="loading"
-                placeholder="用于提交, 例如: you@example.com"
-              />
+              <n-input v-model:value="knowledgeBasesGitEmail" :disabled="loading"
+                placeholder="用于提交, 例如: you@example.com" />
             </n-form-item>
             <n-form-item label="访问秘钥">
-              <n-input
-                v-model:value="knowledgeBasesRemoteToken"
-                :disabled="loading"
-                type="password"
-                :placeholder="knowledgeBasesRemoteHasToken ? '已配置（留空可保持不变）' : '请输入访问秘钥'"
-                show-password-on="click"
-              />
+              <n-input v-model:value="knowledgeBasesRemoteToken" :disabled="loading" type="password"
+                :placeholder="knowledgeBasesRemoteHasToken ? '已配置（留空可保持不变）' : '请输入访问秘钥'" show-password-on="click" />
             </n-form-item>
             <n-form-item label="操作">
               <n-space>
@@ -209,91 +145,14 @@
             </n-form-item>
           </n-form>
         </div>
-
-        <n-divider />
-
-        <div>
-          <h3>模板库</h3>
-          <p class="description">
-            用于存放 Markdown 模板文件。未配置时启动会自动在程序同级目录创建 Template 文件夹并写入配置。
-          </p>
-          <n-form
-            label-placement="left"
-            label-width="auto"
-            :show-require-mark="false"
-            style="margin-top: 8px"
-          >
-            <n-form-item label="模板库路径">
-              <n-input v-model:value="templateRepoPath" :disabled="loading" placeholder="模板库路径" />
-            </n-form-item>
-            <n-form-item label="操作">
-              <n-space>
-                <n-button :disabled="loading" @click="handleTemplateRepoPick">浏览文件夹...</n-button>
-                <n-button :disabled="loading" type="primary" @click="handleTemplateRepoSave">保存</n-button>
-              </n-space>
-            </n-form-item>
-          </n-form>
-        </div>
-
-        <n-divider />
-
-        <div>
-          <h3>资源库根目录</h3>
-          <p class="description">
-            用于存放截图、图片等资源的根目录。未配置时将使用程序所在目录下的 ResourceRepo 文件夹。
-          </p>
-
-          <n-alert
-            v-if="resourceRoot"
-            type="info"
-            :show-icon="true"
-            class="tip"
-            style="max-width: 95%;"
-          >
-            当前资源库根目录：{{ resourceRoot }}
-          </n-alert>
-          <n-alert
-            v-else
-            type="warning"
-            :show-icon="true"
-            class="tip"
-            style="max-width: 95%;"
-          >
-            未配置资源库根目录，将使用默认位置。
-          </n-alert>
-
-          <n-form
-            label-placement="left"
-            label-width="auto"
-            :show-require-mark="false"
-            style="margin-top: 8px"
-          >
-            <n-form-item label="选择资源库根目录">
-              <n-button :disabled="loading" @click="handleResourceRootPick">
-                浏览文件夹...
-              </n-button>
-            </n-form-item>
-          </n-form>
-        </div>
       </n-space>
     </n-card>
 
-    <n-modal v-model:show="showAddPathModal">
-      <n-card style="width: 400px;" title="添加笔记库路径">
-        <n-input v-model:value="newRepoPath" placeholder="输入新的笔记库路径" clearable />
-        <template #footer>
-          <n-space justify="end">
-            <n-button @click="showAddPathModal = false">取消</n-button>
-            <n-button type="primary" @click="handleAdd">添加</n-button>
-          </n-space>
-        </template>
-      </n-card>
-    </n-modal>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, onMounted } from 'vue';
 import {
   NCard,
   NList,
@@ -304,7 +163,6 @@ import {
   NInput,
   NSpace,
   NAlert,
-  NModal,
   NTooltip,
   NDivider,
   NForm,
@@ -312,21 +170,14 @@ import {
 } from 'naive-ui';
 import {
   FolderAdd20Regular,
-  CheckmarkCircle20Regular,
-  CheckmarkCircle32Regular,
-  Delete20Regular,
   Folder20Regular,
+  DocumentEdit16Regular,
 } from '@vicons/fluent';
-import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { repoStore } from '../../stores/repoStore'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 
-const fileTreeStore = useFileTreeStore();
 const store = repoStore();
-const newRepoPath = ref('');
-const showAddPathModal = ref(false);
-const activeRepoPath = ref(null);
 
 // 文件库根目录
 const librariesRoot = ref('');
@@ -369,15 +220,8 @@ const handleOpenFileBrowserForLibraryRoot = async () => {
   }
 };
 
-// 获取笔记库路径列表
-const repopathlist = computed(() => fileTreeStore.repopathlist);
-
-// 加载激活的笔记库路径及配置
+// 加载配置
 onMounted(async () => {
-  activeRepoPath.value = await invoke('get_active_repo_path');
-  const paths = await invoke('get_repopathlist');
-  fileTreeStore.setRepopathlist(paths);
-  console.log('加载激活的笔记库路径：', fileTreeStore.repopathlist);
   librariesRoot.value = await invoke('get_libraries_root');
 
   try {
@@ -429,43 +273,6 @@ onMounted(async () => {
   }
 });
 
-// 激活笔记库路径
-const handleActivate = async (path) => {
-  await invoke('set_active_repo_path', { path });
-  activeRepoPath.value = path;
-  fileTreeStore.setActiveRepoPath(path);
-};
-
-// 移除笔记库路径
-const handleRemove = (path) => {
-  fileTreeStore.removeRepoPath(path);
-};
-
-// 添加新的笔记库路径
-const handleAdd = async () => {
-  if (newRepoPath.value) {
-    fileTreeStore.addRepoPath(newRepoPath.value);
-    newRepoPath.value = '';
-    showAddPathModal.value = false;
-  }
-};
-
-// 打开文件浏览器选择笔记库路径
-const handleOpenFileBrowser = async () => {
-  try {
-    const selectedPath = await open({
-      directory: true,
-      multiple: false,
-    });
-
-    if (selectedPath) {
-      newRepoPath.value = selectedPath;
-      showAddPathModal.value = true;
-    }
-  } catch (error) {
-    console.error('打开文件浏览器失败:', error);
-  }
-};
 
 const handleKnowledgeBasesRootPick = async () => {
   try {
@@ -558,6 +365,18 @@ const handleResourceRootPick = async () => {
 <style scoped>
 .preference-wrapper {
   width: 100%;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 95%;
+}
+
+.section-header h3 {
+  margin: 0;
 }
 
 .description {

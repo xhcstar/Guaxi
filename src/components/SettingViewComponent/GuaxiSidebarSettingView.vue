@@ -90,6 +90,7 @@ const navigateTo = (path) => {
 .sider-container {
   display: flex;
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
 }
 
 .sider-icon-container {

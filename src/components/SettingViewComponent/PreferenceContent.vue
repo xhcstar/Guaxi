@@ -122,6 +122,7 @@ const handleLspHighlightChange = async (value) => {
 <style scoped>
 .preference-wrapper {
   width: 100%;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
 }
 
 .description {
