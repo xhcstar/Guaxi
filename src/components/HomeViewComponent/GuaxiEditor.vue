@@ -637,6 +637,271 @@ const syncRealtimeValueToRawContent = debounce((value) => {
 }, 120);
 let editor = null;
 let secondaryEditor = null;
+let editorEffectsLeft = null;
+let editorEffectsRight = null;
+
+const createEditorEffects = (targetEditor) => {
+  const host = targetEditor?.getDomNode?.();
+  if (!host) return null;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'guaxi-editor-effects';
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'guaxi-editor-effects-canvas';
+
+  const cursor = document.createElement('div');
+  cursor.className = 'guaxi-editor-smooth-cursor';
+
+  overlay.appendChild(canvas);
+  overlay.appendChild(cursor);
+  host.appendChild(overlay);
+
+  const ctx = canvas.getContext('2d');
+  const palette = [
+    'rgba(255, 208, 0, 0.95)',
+    'rgba(255, 105, 180, 0.95)',
+    'rgba(0, 220, 255, 0.95)',
+    'rgba(140, 255, 120, 0.95)',
+    'rgba(255, 90, 90, 0.95)',
+    'rgba(180, 120, 255, 0.95)'
+  ];
+
+  const state = {
+    host,
+    overlay,
+    canvas,
+    ctx,
+    dpr: 1,
+    w: 0,
+    h: 0,
+    particles: [],
+    raf: 0,
+    lastTs: 0,
+    cx: 0,
+    cy: 0,
+    tx: 0,
+    ty: 0,
+    ch: 18,
+    tch: 18,
+    cursorVisible: false,
+    ro: null,
+    resizeHandler: null
+  };
+
+  const resize = () => {
+    const rect = host.getBoundingClientRect();
+    const w = Math.max(1, Math.floor(rect.width));
+    const h = Math.max(1, Math.floor(rect.height));
+    const dpr = window.devicePixelRatio || 1;
+
+    if (w === state.w && h === state.h && dpr === state.dpr) return;
+
+    state.w = w;
+    state.h = h;
+    state.dpr = dpr;
+
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    canvas.width = Math.max(1, Math.floor(w * dpr));
+    canvas.height = Math.max(1, Math.floor(h * dpr));
+
+    if (ctx) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+  };
+
+  const step = (ts) => {
+    const dt = Math.min(0.034, Math.max(0, (ts - (state.lastTs || ts)) / 1000));
+    state.lastTs = ts;
+
+    resize();
+
+    const dx = state.tx - state.cx;
+    const dy = state.ty - state.cy;
+    const dh = state.tch - state.ch;
+
+    const follow = 1 - Math.pow(1 - 0.35, dt * 60);
+    state.cx += dx * follow;
+    state.cy += dy * follow;
+    state.ch += dh * follow;
+
+    if (state.cursorVisible) {
+      cursor.style.opacity = '1';
+      cursor.style.height = `${Math.max(8, state.ch)}px`;
+      cursor.style.transform = `translate3d(${state.cx}px, ${state.cy}px, 0)`;
+    } else {
+      cursor.style.opacity = '0';
+    }
+
+    const g = 900;
+    const drag = Math.pow(0.04, dt);
+
+    if (state.particles.length) {
+      for (let i = state.particles.length - 1; i >= 0; i -= 1) {
+        const p = state.particles[i];
+        p.life -= dt;
+        if (p.life <= 0) {
+          state.particles.splice(i, 1);
+          continue;
+        }
+        p.vy += g * dt;
+        p.vx *= drag;
+        p.vy *= drag;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      }
+    }
+
+    if (ctx) {
+      ctx.clearRect(0, 0, state.w, state.h);
+      if (state.particles.length) {
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < state.particles.length; i += 1) {
+          const p = state.particles[i];
+          const a = Math.max(0, Math.min(1, p.life / p.ttl));
+          ctx.globalAlpha = a;
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+
+    // When there's nothing to animate, stop the RAF loop to reduce idle overhead.
+    // 1) no particles and cursor not visible -> stop
+    // 2) no particles and cursor already very close to target -> stop
+    if (!state.particles.length) {
+      if (!state.cursorVisible) {
+        state.raf = 0;
+        return;
+      }
+
+      const rdx = state.tx - state.cx;
+      const rdy = state.ty - state.cy;
+      const rdh = state.tch - state.ch;
+
+      // Pixel-level settle threshold (CSS pixels)
+      const settlePosEps = 0.25;
+      const settleHeightEps = 0.25;
+      const settled =
+        Math.abs(rdx) < settlePosEps &&
+        Math.abs(rdy) < settlePosEps &&
+        Math.abs(rdh) < settleHeightEps;
+
+      if (settled) {
+        // Snap to target so the last rendered frame is exact.
+        state.cx = state.tx;
+        state.cy = state.ty;
+        state.ch = state.tch;
+
+        cursor.style.opacity = '1';
+        cursor.style.height = `${Math.max(8, state.ch)}px`;
+        cursor.style.transform = `translate3d(${state.cx}px, ${state.cy}px, 0)`;
+
+        state.raf = 0;
+        return;
+      }
+    }
+
+    state.raf = requestAnimationFrame(step);
+  };
+
+  const ensureLoop = () => {
+    if (state.raf) return;
+    state.lastTs = performance.now();
+    state.raf = requestAnimationFrame(step);
+  };
+
+  const updateCursorTarget = () => {
+    const model = targetEditor.getModel();
+    const pos = targetEditor.getPosition();
+    if (!model || !pos) {
+      state.cursorVisible = false;
+      ensureLoop();
+      return;
+    }
+
+    const visible = targetEditor.getScrolledVisiblePosition(pos);
+    if (!visible) {
+      state.cursorVisible = false;
+      ensureLoop();
+      return;
+    }
+
+    state.cursorVisible = true;
+    state.tx = visible.left;
+    state.ty = visible.top;
+    state.tch = visible.height || 18;
+    ensureLoop();
+  };
+
+  const spawnExplosionAtCursor = (text) => {
+    const ch = text ? text[text.length - 1] : '';
+    if (!ch || ch === '\n' || ch === '\r' || ch === '\t') return;
+
+    const model = targetEditor.getModel();
+    const pos = targetEditor.getPosition();
+    if (!model || !pos) return;
+
+    const visible = targetEditor.getScrolledVisiblePosition(pos);
+    if (!visible) return;
+
+    const x = visible.left;
+    const y = visible.top + (visible.height || 18) * 0.7;
+
+    const n = Math.min(48, 18 + Math.floor(Math.random() * 10));
+    for (let i = 0; i < n; i += 1) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 80 + Math.random() * 340;
+      state.particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s - (120 + Math.random() * 160),
+        size: 0.8 + Math.random() * 2.2,
+        ttl: 0.55 + Math.random() * 0.35,
+        life: 0.55 + Math.random() * 0.35,
+        color: palette[(Math.random() * palette.length) | 0]
+      });
+    }
+
+    ensureLoop();
+  };
+
+  resize();
+
+  if (typeof ResizeObserver !== 'undefined') {
+    state.ro = new ResizeObserver(() => resize());
+    state.ro.observe(host);
+  } else {
+    state.resizeHandler = () => resize();
+    window.addEventListener('resize', state.resizeHandler);
+  }
+
+  // Don't start RAF loop until there's something to animate (cursor move / particles).
+  return {
+    updateCursorTarget,
+    spawnExplosionAtCursor,
+    destroy() {
+      if (state.raf) cancelAnimationFrame(state.raf);
+      state.raf = 0;
+      if (state.ro) state.ro.disconnect();
+      state.ro = null;
+      if (state.resizeHandler) {
+        window.removeEventListener('resize', state.resizeHandler);
+        state.resizeHandler = null;
+      }
+      if (state.overlay?.parentNode) state.overlay.parentNode.removeChild(state.overlay);
+      state.particles = [];
+      state.cursorVisible = false;
+    }
+  };
+};
+
 let initEditorPending = false;
 
 const editLocationBackStack = ref([]);
@@ -1601,6 +1866,13 @@ const initEditor = () => {
   editorStore.setLanguage(language);
   console.debug('[Editor] Monaco editor instance registered')
 
+  if (editorEffectsLeft) {
+    editorEffectsLeft.destroy();
+    editorEffectsLeft = null;
+  }
+  editorEffectsLeft = createEditorEffects(editor);
+  editorEffectsLeft?.updateCursorTarget();
+
   registerMarkdownLanguageFeatures();
   registerFilesystemPathCompletionFeatures();
 
@@ -1812,10 +2084,30 @@ const ensureSecondaryEditor = () => {
     automaticLayout: true,
   });
 
+  if (editorEffectsRight) {
+    editorEffectsRight.destroy();
+    editorEffectsRight = null;
+  }
+  editorEffectsRight = createEditorEffects(secondaryEditor);
+  editorEffectsRight?.updateCursorTarget();
+
   secondaryEditor.onDidFocusEditorText(() => {
     if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeTabRight) {
       fileTreeStore.setActiveTab(fileTreeStore.activeTabRight, 'right');
     }
+  });
+
+  secondaryEditor.onDidChangeCursorPosition(() => {
+    editorEffectsRight?.updateCursorTarget();
+  });
+
+  secondaryEditor.onDidScrollChange(() => {
+    editorEffectsRight?.updateCursorTarget();
+  });
+
+  secondaryEditor.onDidType((text) => {
+    editorEffectsRight?.spawnExplosionAtCursor(text);
+    editorEffectsRight?.updateCursorTarget();
   });
 
   const model = secondaryEditor.getModel();
@@ -1834,6 +2126,10 @@ const ensureSecondaryEditor = () => {
 };
 
 const disposeSecondaryEditor = () => {
+  if (editorEffectsRight) {
+    editorEffectsRight.destroy();
+    editorEffectsRight = null;
+  }
   if (secondaryEditor) {
     secondaryEditor.dispose();
     secondaryEditor = null;
@@ -1950,6 +2246,7 @@ const setupEditorListeners = () => {
   editor.onDidChangeCursorPosition((e) => {
     editorStore.setCursorPosition(e.position);
     updateTableToolbar();
+    editorEffectsLeft?.updateCursorTarget();
   });
 
   const model = editor.getModel();
@@ -1983,6 +2280,7 @@ const setupEditorListeners = () => {
     if (tableToolbarVisible.value) {
       updateTableToolbar();
     }
+    editorEffectsLeft?.updateCursorTarget();
     syncRealtimePreviewScroll();
   });
 
@@ -1996,6 +2294,9 @@ const setupEditorListeners = () => {
     if (!editor) return;
     const ch = text ? text[text.length - 1] : '';
     if (!ch) return;
+
+    editorEffectsLeft?.spawnExplosionAtCursor(text);
+    editorEffectsLeft?.updateCursorTarget();
 
     const model = editor.getModel();
     const pos = editor.getPosition();
@@ -4071,9 +4372,19 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
   destroyRealtimeVditor();
+
+  if (editorEffectsRight) {
+    editorEffectsRight.destroy();
+    editorEffectsRight = null;
+  }
   if (secondaryEditor) {
     secondaryEditor.dispose();
     secondaryEditor = null;
+  }
+
+  if (editorEffectsLeft) {
+    editorEffectsLeft.destroy();
+    editorEffectsLeft = null;
   }
   editor?.dispose();
   editor = null;
@@ -4366,6 +4677,34 @@ onUnmounted(() => {
   box-sizing: border-box;
   position: relative;
   isolation: isolate;
+}
+
+:deep(.guaxi-editor-effects) {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  overflow: hidden;
+}
+
+:deep(.guaxi-editor-effects-canvas) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+:deep(.guaxi-editor-smooth-cursor) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(0, 173, 255, 0.85);
+  box-shadow:
+    0 0 10px rgba(0, 173, 255, 0.55),
+    0 0 20px rgba(255, 105, 180, 0.25);
+  opacity: 0;
+  will-change: transform, height, opacity;
 }
 
 .vim-status-bar {
