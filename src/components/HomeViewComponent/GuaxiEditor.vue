@@ -4,8 +4,8 @@
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
         <div class="tab-region tab-region-left" ref="tabRegionLeftRef">
           <div v-for="tab in leftTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTabLeft === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path, 'left')"
-            @mousedown.middle="closeTab(tab.path, 'left')">
+            :class="['tab-item', { 'active': fileTreeStore.activeTabLeft === tab.path, 'dirty': !!tab.dirty }]"
+            @click="switchTab(tab.path, 'left')" @mousedown.middle="closeTab(tab.path, 'left')">
             <span class="tab-title">{{ tab.fileName }}</span>
             <span class="tab-affordance">
               <span class="tab-dirty-dot" v-show="tab.dirty" />
@@ -17,8 +17,8 @@
         </div>
         <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right" ref="tabRegionRightRef">
           <div v-for="tab in rightTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path, 'right')"
-            @mousedown.middle="closeTab(tab.path, 'right')">
+            :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]"
+            @click="switchTab(tab.path, 'right')" @mousedown.middle="closeTab(tab.path, 'right')">
             <span class="tab-title">{{ tab.fileName }}</span>
             <span class="tab-affordance">
               <span class="tab-dirty-dot" v-show="tab.dirty" />
@@ -31,196 +31,196 @@
       </div>
       <div class="toolbar">
         <div v-if="previewMode !== 'realtime'" class="toolbar-editing-actions">
-        <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
+          <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text size="tiny">
+                  <Icon icon="lucide:heading" width="16" height="16" />
+                </n-button>
+              </template>
+              标题
+            </n-tooltip>
+          </n-dropdown>
+
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny">
-                <Icon icon="lucide:heading" width="16" height="16" />
+              <n-button text size="tiny" @click="toggleBold">
+                <Icon icon="lucide:bold" width="16" height="16" />
               </n-button>
             </template>
-            标题
+            加粗 (Ctrl+B)
           </n-tooltip>
-        </n-dropdown>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleItalic">
+                <Icon icon="lucide:italic" width="16" height="16" />
+              </n-button>
+            </template>
+            斜体 (Ctrl+I)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleStrikethrough">
+                <Icon icon="lucide:strikethrough" width="16" height="16" />
+              </n-button>
+            </template>
+            删除线 (Ctrl+Shift+X)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertLink">
+                <Icon icon="lucide:link" width="16" height="16" />
+              </n-button>
+            </template>
+            链接 (Ctrl+K)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleBlockquote">
+                <Icon icon="lucide:quote" width="16" height="16" />
+              </n-button>
+            </template>
+            引用
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleInlineCode">
+                <Icon icon="lucide:code" width="16" height="16" />
+              </n-button>
+            </template>
+            行内代码
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertCodeBlockFromToolbar">
+                <Icon icon="lucide:square-terminal" width="16" height="16" />
+              </n-button>
+            </template>
+            代码块
+          </n-tooltip>
 
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleBold">
-              <Icon icon="lucide:bold" width="16" height="16" />
-            </n-button>
-          </template>
-          加粗 (Ctrl+B)
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleItalic">
-              <Icon icon="lucide:italic" width="16" height="16" />
-            </n-button>
-          </template>
-          斜体 (Ctrl+I)
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleStrikethrough">
-              <Icon icon="lucide:strikethrough" width="16" height="16" />
-            </n-button>
-          </template>
-          删除线 (Ctrl+Shift+X)
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertLink">
-              <Icon icon="lucide:link" width="16" height="16" />
-            </n-button>
-          </template>
-          链接 (Ctrl+K)
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleBlockquote">
-              <Icon icon="lucide:quote" width="16" height="16" />
-            </n-button>
-          </template>
-          引用
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleInlineCode">
-              <Icon icon="lucide:code" width="16" height="16" />
-            </n-button>
-          </template>
-          行内代码
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertCodeBlockFromToolbar">
-              <Icon icon="lucide:square-terminal" width="16" height="16" />
-            </n-button>
-          </template>
-          代码块
-        </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleUnorderedList">
+                <Icon icon="lucide:list" width="16" height="16" />
+              </n-button>
+            </template>
+            无序列表
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleOrderedList">
+                <Icon icon="lucide:list-ordered" width="16" height="16" />
+              </n-button>
+            </template>
+            有序列表
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleTaskList">
+                <Icon icon="lucide:list-checks" width="16" height="16" />
+              </n-button>
+            </template>
+            任务列表
+          </n-tooltip>
 
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleUnorderedList">
-              <Icon icon="lucide:list" width="16" height="16" />
-            </n-button>
-          </template>
-          无序列表
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleOrderedList">
-              <Icon icon="lucide:list-ordered" width="16" height="16" />
-            </n-button>
-          </template>
-          有序列表
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="toggleTaskList">
-              <Icon icon="lucide:list-checks" width="16" height="16" />
-            </n-button>
-          </template>
-          任务列表
-        </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertTable">
+                <Icon icon="lucide:table" width="16" height="16" />
+              </n-button>
+            </template>
+            表格 (Ctrl+Alt+T)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertImage">
+                <Icon icon="lucide:image" width="16" height="16" />
+              </n-button>
+            </template>
+            图片
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertHorizontalRule">
+                <Icon icon="lucide:minus" width="16" height="16" />
+              </n-button>
+            </template>
+            分隔线
+          </n-tooltip>
 
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertTable">
-              <Icon icon="lucide:table" width="16" height="16" />
-            </n-button>
-          </template>
-          表格 (Ctrl+Alt+T)
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertImage">
-              <Icon icon="lucide:image" width="16" height="16" />
-            </n-button>
-          </template>
-          图片
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="insertHorizontalRule">
-              <Icon icon="lucide:minus" width="16" height="16" />
-            </n-button>
-          </template>
-          分隔线
-        </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="undo">
+                <Icon icon="lucide:undo" width="16" height="16" />
+              </n-button>
+            </template>
+            撤销
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="redo">
+                <Icon icon="lucide:redo" width="16" height="16" />
+              </n-button>
+            </template>
+            重做
+          </n-tooltip>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-actions">
+          <!-- 添加 Git 操作按钮 -->
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="toggleGitPanel">
+                <n-icon width="16" height="16">
+                  <GitBranchOutline />
+                </n-icon>
+              </n-button>
+            </template>
+            Git 操作
+          </n-tooltip>
 
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="undo">
-              <Icon icon="lucide:undo" width="16" height="16" />
-            </n-button>
-          </template>
-          撤销
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text size="tiny" @click="redo">
-              <Icon icon="lucide:redo" width="16" height="16" />
-            </n-button>
-          </template>
-          重做
-        </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="toggleVimMode">
+                <n-icon :component="vimMode ? LogoVimeo : Edit16Filled" width="16" height="16" />
+              </n-button>
+            </template>
+            {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="saveContent">
+                <n-icon :component="SaveOutline" width="16" height="16" />
+              </n-button>
+            </template>
+            保存 (Ctrl+S)
+          </n-tooltip>
+
+          <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text>
+                  <Icon :icon="previewModeIcon" width="16" height="16" />
+                </n-button>
+              </template>
+              {{ previewModeLabel }} (Ctrl+1/2/3/4)
+            </n-tooltip>
+          </n-dropdown>
+
+          <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text>
+                  <n-icon :component="DownloadOutline" width="16" height="16" />
+                </n-button>
+              </template>
+              导出
+            </n-tooltip>
+          </n-dropdown>
+        </div>
       </div>
-      <div class="toolbar-spacer"></div>
-      <div class="toolbar-actions">
-        <!-- 添加 Git 操作按钮 -->
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="toggleGitPanel">
-              <n-icon width="16" height="16">
-                <GitBranchOutline />
-              </n-icon>
-            </n-button>
-          </template>
-          Git 操作
-        </n-tooltip>
-
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="toggleVimMode">
-              <n-icon :component="vimMode ? LogoVimeo : Edit16Filled" width="16" height="16" />
-            </n-button>
-          </template>
-          {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
-        </n-tooltip>
-
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="saveContent">
-              <n-icon :component="SaveOutline" width="16" height="16" />
-            </n-button>
-          </template>
-          保存 (Ctrl+S)
-        </n-tooltip>
-
-        <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
-          <n-tooltip placement="top" trigger="hover">
-            <template #trigger>
-              <n-button text>
-                <Icon :icon="previewModeIcon" width="16" height="16" />
-              </n-button>
-            </template>
-            {{ previewModeLabel }} (Ctrl+1/2/3/4)
-          </n-tooltip>
-        </n-dropdown>
-
-        <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
-          <n-tooltip placement="top" trigger="hover">
-            <template #trigger>
-              <n-button text>
-                <n-icon :component="DownloadOutline" width="16" height="16" />
-              </n-button>
-            </template>
-            导出
-          </n-tooltip>
-        </n-dropdown>
-      </div>
-    </div>
     </div>
 
     <div v-if="selectedFile" class="editor-content" :class="previewMode">
@@ -352,7 +352,8 @@
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
           </div>
-          <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container" @mousedown="activateRegion('right')">
+          <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container"
+            @mousedown="activateRegion('right')">
           </div>
         </div>
 
@@ -1154,7 +1155,6 @@ const registerMarkdownLanguageFeatures = () => {
     createSnippet('table', '| ${1:表头1} | ${2:表头2} |\n| --- | --- |\n| ${3:内容1} | ${4:内容2} |\n', '插入表格'),
     createSnippet('code', '```${1:language}\n${2:代码}\n```\n', '插入代码块'),
     createSnippet('toc', '${1:目录}\n\n${2:目录内容}\n', '插入目录'),
-
     createSnippet('bold', '**${1:文本}**', '加粗文本'),
     createSnippet('italic', '*${1:文本}*', '斜体文本'),
     createSnippet('strikeout', '~~${1:文本}~~', '删除线'),
@@ -1162,8 +1162,175 @@ const registerMarkdownLanguageFeatures = () => {
     createSnippet('link', '[${1:描述}](${2:链接})', '插入链接'),
     createSnippet('image', '![${1:描述}](${2:路径})', '插入图片'),
     createSnippet('quote', '> ${1:引用内容}\n', '插入引用'),
-    createSnippet('hr', '\n---\n', '插入分隔线')
+    createSnippet('hr', '\n---\n', '插入分隔线'),
+    createSnippet('table2', '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n', '插入表格'), 
+    createSnippet('table3', '| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} |\n', '插入三列表格'), 
+    createSnippet('table4', '| 列1 | 列2 | 列3 | 列4 |\n| --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} |\n', '插入四列表格'), 
+    createSnippet('table5', '| 列1 | 列2 | 列3 | 列4 | 列5 |\n| --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} |\n', '插入五列表格'), 
+    createSnippet('table6', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 |\n| --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} |\n', '插入六列表格'), 
+    createSnippet('table7', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 |\n| --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} |\n', '插入七列表格'), 
+    createSnippet('table8', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} |\n', '插入八列表格'), 
+    createSnippet('table9', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 | 列9 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} | ${9:值9} |\n', '插入九列表格'), 
+    createSnippet('red', '<font color="red">${1:红色文字}</font>', '设置红色文本'),
+    createSnippet('blue','<font color="blue">${1:蓝色文字}</font>','设置蓝色文本'),
+    createSnippet('green','<font color="green">${1:绿色文字}</font>','设置绿色文本'),
+    createSnippet('yellow','<font color="yellow">${1:黄色文字}</font>','设置黄色文本'),
+    createSnippet('orange','<font color="orange">${1:橙色文字}</font>','设置橙色文本'),
+    createSnippet('purple','<font color="purple">${1:紫色文字}</font>','设置紫色文本'),
+    createSnippet('cyan','<font color="cyan">${1:青色文字}</font>','设置青色文本'),
+    createSnippet('purple','<font color="purple">${1:紫色文字}</font>','设置紫色文本'),
   ];
+
+  const createLatexSnippet = (key, insertText, detail, label) => ({
+    key: String(key || '').toLowerCase(),
+    label: label || `\\${key}`,
+    kind: monaco.languages.CompletionItemKind.Snippet,
+    insertText,
+    insertTextRules:
+      monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    detail
+  });
+
+  const latexSnippets = [
+    createLatexSnippet('frac', '\\frac{${1:a}}{${2:b}}', '分式'),
+    createLatexSnippet('sqrt', '\\sqrt{${1:x}}', '平方根'),
+    createLatexSnippet('sqrtn', '\\sqrt[${1:n}]{${2:x}}', 'n 次方根', '\\sqrt[n]{x}'),
+    createLatexSnippet('sum', '\\sum_{${1:i=1}}^{${2:n}} ${3:expr}', '求和'),
+    createLatexSnippet('prod', '\\prod_{${1:i=1}}^{${2:n}} ${3:expr}', '连乘'),
+    createLatexSnippet('int', '\\int_{${1:a}}^{${2:b}} ${3:f(x)}\\,d${4:x}', '积分'),
+    createLatexSnippet('lim', '\\lim_{${1:n}\\to\\infty} ${2:expr}', '极限'),
+    createLatexSnippet('cdot', '\\cdot', '点乘'),
+    createLatexSnippet('times', '\\times', '乘号'),
+    createLatexSnippet('pm', '\\pm', '正负号'),
+    createLatexSnippet('to', '\\to', '趋于'),
+    createLatexSnippet('infty', '\\infty', '无穷'),
+
+    createLatexSnippet('left', '\\left(${1:expr}\\right)', '自动伸缩括号'),
+    createLatexSnippet('text', '\\text{${1:text}}', '文本'),
+    createLatexSnippet('mathbf', '\\mathbf{${1:x}}', '粗体'),
+    createLatexSnippet('mathbb', '\\mathbb{${1:R}}', '黑板粗体'),
+    createLatexSnippet('mathcal', '\\mathcal{${1:L}}', '花体'),
+
+    createLatexSnippet('begin', '\\begin{${1:env}}\n  ${0}\n\\end{${1:env}}', '环境'),
+    createLatexSnippet('aligned', '\\begin{aligned}\n  ${0}\n\\end{aligned}', 'aligned 环境', '\\begin{aligned}...\\end{aligned}'),
+    createLatexSnippet('align', '\\begin{align}\n  ${0}\n\\end{align}', 'align 环境', '\\begin{align}...\\end{align}'),
+    createLatexSnippet('cases', '\\begin{cases}\n  ${1:expr} & ${2:cond}\\\\\n  ${3:expr} & ${4:cond}\n\\end{cases}', 'cases 环境', '\\begin{cases}...\\end{cases}'),
+
+    createLatexSnippet('alpha', '\\alpha', '希腊字母 α'),
+    createLatexSnippet('beta', '\\beta', '希腊字母 β'),
+    createLatexSnippet('gamma', '\\gamma', '希腊字母 γ'),
+    createLatexSnippet('delta', '\\delta', '希腊字母 δ'),
+    createLatexSnippet('epsilon', '\\epsilon', '希腊字母 ε'),
+    createLatexSnippet('theta', '\\theta', '希腊字母 θ'),
+    createLatexSnippet('lambda', '\\lambda', '希腊字母 λ'),
+    createLatexSnippet('mu', '\\mu', '希腊字母 μ'),
+    createLatexSnippet('pi', '\\pi', '希腊字母 π'),
+    createLatexSnippet('sigma', '\\sigma', '希腊字母 σ'),
+    createLatexSnippet('phi', '\\phi', '希腊字母 φ'),
+    createLatexSnippet('omega', '\\omega', '希腊字母 ω'),
+
+    createLatexSnippet('leq', '\\leq', '≤'),
+    createLatexSnippet('geq', '\\geq', '≥'),
+    createLatexSnippet('neq', '\\neq', '≠'),
+    createLatexSnippet('approx', '\\approx', '≈'),
+    createLatexSnippet('equiv', '\\equiv', '≡'),
+    createLatexSnippet('subseteq', '\\subseteq', '⊆'),
+    createLatexSnippet('supseteq', '\\supseteq', '⊇'),
+    createLatexSnippet('in', '\\in', '∈'),
+    createLatexSnippet('notin', '\\notin', '∉')
+  ];
+
+  const isInMarkdownMath = (model, position) => {
+    const maxScanLines = 250;
+    const startLine = Math.max(1, position.lineNumber - maxScanLines + 1);
+
+    let inFence = false;
+    let fenceChar = '';
+    let fenceLen = 0;
+
+    let inDollar = false;
+    let inDisplay = false;
+    let inParen = false;
+    let inBracket = false;
+
+    for (let lineNumber = startLine; lineNumber <= position.lineNumber; lineNumber += 1) {
+      let text = model.getLineContent(lineNumber);
+      if (lineNumber === position.lineNumber) {
+        text = text.slice(0, position.column - 1);
+      }
+
+      const fence = /^\s*(`{3,}|~{3,})/.exec(text);
+      if (fence) {
+        const mark = fence[1];
+        if (!inFence) {
+          inFence = true;
+          fenceChar = mark[0];
+          fenceLen = mark.length;
+        } else if (mark[0] === fenceChar && mark.length >= fenceLen) {
+          inFence = false;
+          fenceChar = '';
+          fenceLen = 0;
+        }
+        continue;
+      }
+      if (inFence) continue;
+
+      for (let i = 0; i < text.length;) {
+        const ch = text[i];
+
+        if (ch === '\\') {
+          const next = text[i + 1];
+          if (next === '(') {
+            inParen = true;
+            i += 2;
+            continue;
+          }
+          if (next === ')') {
+            inParen = false;
+            i += 2;
+            continue;
+          }
+          if (next === '[') {
+            inBracket = true;
+            i += 2;
+            continue;
+          }
+          if (next === ']') {
+            inBracket = false;
+            i += 2;
+            continue;
+          }
+          i += 1;
+          continue;
+        }
+
+        if (ch === '$') {
+          const prev = i > 0 ? text[i - 1] : '';
+          if (prev === '\\') {
+            i += 1;
+            continue;
+          }
+
+          const next = text[i + 1];
+          if (next === '$') {
+            inDisplay = !inDisplay;
+            i += 2;
+            continue;
+          }
+
+          if (!inDisplay) {
+            inDollar = !inDollar;
+          }
+          i += 1;
+          continue;
+        }
+
+        i += 1;
+      }
+    }
+
+    return inDisplay || inDollar || inParen || inBracket;
+  };
 
   monaco.languages.registerCompletionItemProvider('markdown', {
     provideCompletionItems(model, position) {
@@ -1189,6 +1356,41 @@ const registerMarkdownLanguageFeatures = () => {
       const suggestions = markdownSnippets
         .filter((s) => String(s.label || '').toLowerCase().startsWith(lower))
         .slice(0, 50);
+
+      return { suggestions };
+    }
+  });
+
+  monaco.languages.registerCompletionItemProvider('markdown', {
+    triggerCharacters: ['\\'],
+    provideCompletionItems(model, position) {
+      if (!isInMarkdownMath(model, position)) return { suggestions: [] };
+
+      const lineContent = model.getLineContent(position.lineNumber);
+      const beforeCursor = lineContent.slice(0, position.column - 1);
+
+      const match = /\\[A-Za-z]*$/.exec(beforeCursor);
+      if (!match) return { suggestions: [] };
+
+      const typed = match[0].slice(1);
+      const prefix = typed.toLowerCase();
+
+      const startColumn = Math.max(1, position.column - match[0].length);
+      const range = new monaco.Range(
+        position.lineNumber,
+        startColumn,
+        position.lineNumber,
+        position.column
+      );
+
+      const suggestions = latexSnippets
+        .filter((s) => !prefix || String(s.key || '').startsWith(prefix))
+        .slice(0, 80)
+        .map((s, index) => ({
+          ...s,
+          range,
+          sortText: `0_${String(index).padStart(3, '0')}_${String(s.key || '')}`
+        }));
 
       return { suggestions };
     }
