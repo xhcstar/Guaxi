@@ -4,22 +4,28 @@
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
         <div class="tab-region tab-region-left">
           <div v-for="tab in leftTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
+            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path)"
             @mousedown.middle="closeTab(tab.path, 'left')">
-            <span>{{ tab.fileName }}</span>
-            <n-icon size="14" @click.stop="closeTab(tab.path, 'left')">
-              <CloseOutline />
-            </n-icon>
+            <span class="tab-title">{{ tab.fileName }}</span>
+            <span class="tab-affordance">
+              <span class="tab-dirty-dot" v-show="tab.dirty" />
+              <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'left')">
+                <CloseOutline />
+              </n-icon>
+            </span>
           </div>
         </div>
         <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right">
           <div v-for="tab in rightTabs" :key="tab.path"
-            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
+            :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path, 'dirty': !!tab.dirty }]" @click="switchTab(tab.path)"
             @mousedown.middle="closeTab(tab.path, 'right')">
-            <span>{{ tab.fileName }}</span>
-            <n-icon size="14" @click.stop="closeTab(tab.path, 'right')">
-              <CloseOutline />
-            </n-icon>
+            <span class="tab-title">{{ tab.fileName }}</span>
+            <span class="tab-affordance">
+              <span class="tab-dirty-dot" v-show="tab.dirty" />
+              <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'right')">
+                <CloseOutline />
+              </n-icon>
+            </span>
           </div>
         </div>
       </div>
@@ -181,6 +187,15 @@
             </n-button>
           </template>
           {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <n-button text @click="saveContent">
+              <n-icon :component="SaveOutline" width="16" height="16" />
+            </n-button>
+          </template>
+          保存 (Ctrl+S)
         </n-tooltip>
 
         <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
@@ -364,7 +379,7 @@ import { useEditorStore } from '../../stores/editorStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
 import { Icon } from '@iconify/vue'
-import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline, SaveOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -616,9 +631,12 @@ let realtimeVditor = null;
 let settingRealtimeVditorValue = false;
 const syncRealtimeValueToRawContent = debounce((value) => {
   rawContent.value = value;
+  const path = fileTreeStore.activeTab;
+  if (path) fileTreeStore.updateTabContent(path, value);
 }, 120);
 let editor = null;
 let secondaryEditor = null;
+let initEditorPending = false;
 
 const editLocationBackStack = ref([]);
 const editLocationForwardStack = ref([]);
@@ -1187,6 +1205,15 @@ const initEditor = () => {
   })
 
   if (!editorContainer.value) {
+    if (!initEditorPending) {
+      initEditorPending = true;
+      nextTick(() => {
+        initEditorPending = false;
+        if (!editor && editorContainer.value) {
+          initEditor();
+        }
+      });
+    }
     console.error('[Editor] 编辑器容器未找到');
     return;
   }
@@ -1667,6 +1694,8 @@ const setupEditorListeners = () => {
         const problems = analyzeContentForProblems(content, model, languageId);
         editorStore.setProblems(problems);
         rawContent.value = content;
+        const path = fileTreeStore.activeTab;
+        if (path) fileTreeStore.updateTabContent(path, content);
         recordEditLocationFromEditor();
         updateTableToolbar();
       }, 300)
@@ -2574,28 +2603,29 @@ const redo = () => {
 
 // 更新编辑器内容
 const updateEditorContent = (content) => {
-  if (!editor && content) {
+  const nextContent = content ?? '';
+  rawContent.value = nextContent;
+
+  if (!editor) {
     initEditor();
-    return;
   }
 
-  if (editor) {
-    // 当内容为空时，确保完全重置编辑器
-    if (!content) {
-      editor.setValue('');
-      const model = editor.getModel();
-      if (model) {
-        model.setValue('');
-      }
-    } else {
-      editor.setValue(content);
+  if (!editor) return;
+
+  // 当内容为空时，确保完全重置编辑器
+  if (!nextContent) {
+    editor.setValue('');
+    const model = editor.getModel();
+    if (model) {
+      model.setValue('');
     }
-    rawContent.value = content;
-
-    editor.updateOptions({
-      readOnly: !!activeTab.value?.unsupported,
-    });
+  } else {
+    editor.setValue(nextContent);
   }
+
+  editor.updateOptions({
+    readOnly: !!activeTab.value?.unsupported,
+  });
 };
 
 // 保存内容
@@ -2912,9 +2942,6 @@ watch(selectedFile, async (newFile) => {
     };
 
     const language = languageMap[fileExt] || 'markdown';
-    if (editor) {
-      monaco.editor.setModelLanguage(editor.getModel(), language);
-    }
 
     // 更新内容
     rawContent.value = newFile.content || '';
@@ -2933,13 +2960,13 @@ watch(selectedFile, async (newFile) => {
       }
     }
 
+    updateEditorContent(rawContent.value);
+
     if (editor) {
-      updateEditorContent(newFile.content || '');
-    } else {
-      nextTick(() => {
-        initEditor();
-        updateEditorContent(newFile.content || '');
-      });
+      const model = editor.getModel();
+      if (model) {
+        monaco.editor.setModelLanguage(model, language);
+      }
     }
 
     if (!selectedFile.value || !mode.value) {
@@ -3520,19 +3547,27 @@ const switchTab = (path) => {
     hasEditor: !!editor
   })
 
-  // 保存当前编辑内容
-  if (editor && fileTreeStore.activeTab) {
-    const currentContent = editor.getValue();
-    const tabIndex = fileTreeStore.openTabs.findIndex(tab => tab.path === fileTreeStore.activeTab);
-    if (tabIndex !== -1) {
-      fileTreeStore.openTabs[tabIndex].content = currentContent;
-    }
+  const currentPath = fileTreeStore.activeTab;
+  if (currentPath) {
+    const currentContent =
+      previewMode.value === 'realtime' && realtimeVditor
+        ? realtimeVditor.getValue()
+        : editor
+          ? editor.getValue()
+          : rawContent.value;
+    fileTreeStore.updateTabContent(currentPath, currentContent);
   }
 
   fileTreeStore.setActiveTab(path);
-  const tab = fileTreeStore.openTabs.find(t => t.path === path);
+  const tab = fileTreeStore.openTabs.find((t) => t.path === path);
   if (tab) {
-    updateEditorContent(tab.content);
+    rawContent.value = tab.content;
+    if (previewMode.value === 'realtime' && realtimeVditor) {
+      initRealtimeVditor();
+    }
+    if (editor) {
+      updateEditorContent(tab.content);
+    }
   }
 };
 
@@ -4127,28 +4162,78 @@ onUnmounted(() => {
 .tab-item {
   display: flex;
   align-items: center;
-  padding: 0 15px;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
   border-right: 1px solid #ddd;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
   flex-shrink: 0;
+  color: rgba(0, 0, 0, 0.85);
 }
 
-.tab-item span {
+.tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  max-width: 240px;
+}
+
+.tab-affordance {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.tab-close {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+}
+
+.tab-dirty-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(74, 163, 255, 0.7);
+}
+
+.tab-item:hover .tab-close,
+.tab-item.active:not(.dirty) .tab-close {
+  opacity: 1;
+}
+
+.tab-item.dirty:hover .tab-dirty-dot {
+  opacity: 0;
+}
+
+.tab-item:hover .tab-affordance {
+  background: rgba(74, 163, 255, 0.12);
+}
+
+.tab-item:hover .tab-close {
+  color: rgba(74, 163, 255, 0.95);
 }
 
 .tab-item.active {
   background: #fff;
-  border-bottom: 2px solid #b6bdbe;
+  border-bottom: 2px solid var(--primary-color, #18a058);
+  color: rgba(0, 0, 0, 0.95);
 }
 
 .tab-item:hover {
-  background: #eee;
+  background: rgba(74, 163, 255, 0.08);
 }
 
 /* Git 行变更装饰器样式 */

@@ -179,6 +179,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         path,
         fileName,
         content: fileContent,
+        savedContent: fileContent,
+        dirty: false,
         preview: this.generatePreview(fileContent),
         unsupported,
       };
@@ -224,13 +226,19 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
     // 更新文件内容
     async updateFileContent(path, content) {
-      //   console.log('开始更新文件内容，路径:', path)
       try {
         await invoke("write_file_content", { path, content });
-        // console.log('更新文件内容成功')
+
+        const tabIndex = this.openTabs.findIndex((tab) => tab.path === path);
+        if (tabIndex !== -1) {
+          this.openTabs[tabIndex].content = content;
+          this.openTabs[tabIndex].savedContent = content;
+          this.openTabs[tabIndex].dirty = false;
+          this.openTabs[tabIndex].preview = this.generatePreview(content);
+        }
+
         if (this.selectedFile && this.selectedFile.path === path) {
           this.selectedFile.content = content;
-          //   console.log('更新 selectedFile 内容成功')
         } else {
           console.warn("当前选中的文件与更新的文件不匹配，未更新 selectedFile");
         }
@@ -242,10 +250,11 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     updateTabContent(path, content) {
       const tabIndex = this.openTabs.findIndex((tab) => tab.path === path);
       if (tabIndex !== -1) {
-        this.openTabs[tabIndex].content = content;
-        this.openTabs[tabIndex].preview = this.generatePreview(content);
+        const tab = this.openTabs[tabIndex];
+        tab.content = content;
+        tab.preview = this.generatePreview(content);
+        tab.dirty = (tab.savedContent ?? "") !== content;
 
-        // 如果当前选中的文件是这个标签页，也更新它
         if (this.selectedFile && this.selectedFile.path === path) {
           this.selectedFile.content = content;
         }

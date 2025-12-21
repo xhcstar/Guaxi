@@ -515,12 +515,13 @@ const normalizeTreeIds = (tree) => {
 };
 
 // 加载文件树数据
-const loadFileTree = async () => {
+const loadFileTree = async (options = {}) => {
+  const { force = false } = options || {}
   console.log('[API] 加载文件树');
   isTreeLoading.value = true
   try {
     console.log('当前仓库路径:', fileTreeStore.activeRepoPath);
-    await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath);
+    await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath, { force });
 
     const filteredTree = filterHiddenTree(fileTreeStore.fileTree);
 
@@ -1019,7 +1020,7 @@ const handleBlur = async () => {
     editName.value = '';
     // 根目录下刷新整个树，否则刷新父目录
     if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
-      await loadFileTree();
+      await loadFileTree({ force: true });
     } else {
       await refreshDirectory(parentPath);
     }
@@ -1155,43 +1156,61 @@ const handleKeydown = async (e) => {
 
 const moveNode = async (node) => {
   const targetDirectoryPath = await selectTargetPath();
+  if (!targetDirectoryPath) return;
 
-  if (targetDirectoryPath) {
-    try {
-      const fileName = node.name; // 获取文件名
-      const destinationPath = `${normalizePath(targetDirectoryPath)}/${fileName}`; // 构建目标路径
+  const sourcePath = normalizePath(node.id);
+  const targetDir = normalizePath(targetDirectoryPath);
+  const destinationPath = normalizePath(`${targetDir}/${node.name}`);
+  const sourceParentPath = sourcePath.split('/').slice(0, -1).join('/') || normalizePath(fileTreeStore.activeRepoPath);
 
-      console.log('源路径:', node.id);
-      console.log('目标路径:', destinationPath);
+  try {
+    console.log('源路径:', sourcePath);
+    console.log('目标路径:', destinationPath);
 
-      await invoke('move_path', { sourcePath: normalizePath(node.id), destinationPath });
+    await invoke('move_path', { sourcePath, destinationPath });
 
-      // 更新文件树
-      const parentNode = findParentNode(fileTree.value, node.id);
-      if (parentNode) {
-        parentNode.children = parentNode.children.filter((child) => child.id !== node.id);
-      }
-
-      const targetNode = findNodeById(fileTree.value, normalizePath(targetDirectoryPath));
-      if (targetNode && targetNode.is_directory) {
-        targetNode.children.push(node);
-        node.id = destinationPath; // 更新节点路径
-      }
-
-      // 刷新源目录和目标目录
-      const sourceDirectoryId = findParentNode(fileTree.value, node.id)?.id;
-      console.log('源节点 ID:', node.id, '源目录 ID:', fileTree.value);
-      if (sourceDirectoryId) {
-        await refreshDirectory(sourceDirectoryId);
-      }
-
-      if (targetDirectoryPath) {
-        await refreshDirectory(targetDirectoryPath);
-      }
-      console.log('移动成功');
-    } catch (error) {
-      console.error('移动失败:', error);
+    const parentNode = findParentNode(fileTree.value, sourcePath);
+    if (parentNode?.children?.length) {
+      parentNode.children = parentNode.children.filter(
+        (child) => normalizePath(child.id) !== sourcePath
+      );
+    } else {
+      fileTree.value = fileTree.value.filter((n) => normalizePath(n.id) !== sourcePath);
     }
+
+    const targetNode = findNodeById(fileTree.value, targetDir);
+    if (targetNode && targetNode.is_directory) {
+      if (!Array.isArray(targetNode.children)) targetNode.children = [];
+      node.id = destinationPath;
+      targetNode.children.push(node);
+    } else {
+      node.id = destinationPath;
+      await loadFileTree({ force: true });
+    }
+
+    const tabIndex = fileTreeStore.openTabs.findIndex((tab) => normalizePath(tab.path) === sourcePath);
+    if (tabIndex !== -1) {
+      const tab = fileTreeStore.openTabs[tabIndex];
+      tab.path = destinationPath;
+      tab.fileName = destinationPath.split('/').pop();
+      if (fileTreeStore.activeTab && normalizePath(fileTreeStore.activeTab) === sourcePath) {
+        fileTreeStore.setActiveTab(destinationPath);
+      }
+    }
+
+    if (selectedKeys.value?.length && normalizePath(selectedKeys.value[0]) === sourcePath) {
+      selectedKeys.value = [destinationPath];
+      lastSelectedKey.value = destinationPath;
+    }
+
+    await refreshDirectory(sourceParentPath);
+    await refreshDirectory(targetDir);
+
+    console.log('移动成功');
+  } catch (error) {
+    console.error('移动失败:', error);
+    await refreshDirectory(sourceParentPath);
+    await refreshDirectory(targetDir);
   }
 };
 
@@ -1220,7 +1239,7 @@ const refreshDirectory = async (directoryId) => {
   }
 
   if (!normalizedId || !activeRepo || normalizedId === activeRepo) {
-    await loadFileTree()
+    await loadFileTree({ force: true })
     return
   }
 
@@ -1232,13 +1251,13 @@ const refreshDirectory = async (directoryId) => {
   }
 
   if (!targetDir || targetDir === activeRepo) {
-    await loadFileTree()
+    await loadFileTree({ force: true })
     return
   }
 
   const directoryNode = findNodeById(fileTree.value, targetDir)
   if (!directoryNode || !directoryNode.is_directory) {
-    await loadFileTree()
+    await loadFileTree({ force: true })
     return
   }
 
