@@ -27,6 +27,13 @@
     <div class="header-right">
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
+          <n-icon class="header-icon" size="20" :component="BookAdd20Regular" @click="openCreateKnowledgeBase" />
+        </template>
+        新建知识库
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
           <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="openOutlinePanel"></n-icon>
         </template>
         大纲
@@ -205,6 +212,8 @@
       </div>
     </div>
   </teleport>
+
+  <CreateKnowledgeBaseForm />
 </template>
 
 <script setup>
@@ -215,6 +224,9 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useEditorStore } from '../../stores/editorStore'
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+import CreateKnowledgeBaseForm from '../BrainViewComponent/CreateKnowledgeBaseForm.vue'
+
 import { useMessage } from 'naive-ui';
 import { debounce } from 'lodash-es'
 import { Icon } from '@iconify/vue'
@@ -226,7 +238,8 @@ import {
   DocumentSearch24Regular,
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
-  NotebookSection24Regular
+  NotebookSection24Regular,
+  BookAdd20Regular
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -236,6 +249,7 @@ const settingsStore = useSettingsStore()
 const siderStore = useSiderStore();
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
+const knowledgeBaseStore = useKnowledgeBaseStore()
 const searchInputRef = ref(null)
 const searchContainerRef = ref(null)
 const searchType = ref('file')
@@ -269,6 +283,10 @@ function openOutlinePanel() {
   rightSiderStore.setPanel('outline')
   rightSiderStore.open()
   siderStore.setRightSiderCollapsed(viewKey, false)
+}
+
+const openCreateKnowledgeBase = () => {
+  knowledgeBaseStore.toggleForm(true)
 }
 
 async function openTemplateManager() {

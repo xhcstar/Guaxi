@@ -1493,6 +1493,23 @@ const cleanupFileWatcher = async () => {
   }
 }
 
+const syncRepoPathsFromKnowledgeBases = (knowledgeBases) => {
+  const list = Array.isArray(knowledgeBases) ? knowledgeBases : []
+  const paths = list.map(kb => kb.location)
+  fileTreeStore.setRepopathlist(paths)
+
+  const currentActive = fileTreeStore.activeRepoPath
+  const defaultActive = paths.length > 0 ? paths[0] : null
+
+  if (!currentActive && defaultActive) {
+    fileTreeStore.setActiveRepoPath(defaultActive)
+  } else if (currentActive && !paths.includes(currentActive)) {
+    fileTreeStore.setActiveRepoPath(defaultActive)
+  }
+
+  return paths
+}
+
 // 新增初始化函数
 const initializeRepositories = async () => {
   console.log('[Init] 开始初始化知识库')
@@ -1504,18 +1521,10 @@ const initializeRepositories = async () => {
     }
     console.log('[Load] 获取知识库列表:', knowledgeBases)
 
-    const paths = knowledgeBases.map(kb => kb.location)
-    fileTreeStore.setRepopathlist(paths)
+    const paths = syncRepoPathsFromKnowledgeBases(knowledgeBases)
 
-    const currentActive = fileTreeStore.activeRepoPath
-    const defaultActive = paths.length > 0 ? paths[0] : null
-
-    if (!currentActive && defaultActive) {
-      fileTreeStore.setActiveRepoPath(defaultActive)
-      console.log('[Set] 设置默认激活路径:', defaultActive)
-    } else if (currentActive && !paths.includes(currentActive)) {
-      fileTreeStore.setActiveRepoPath(defaultActive)
-      console.warn('[Warn] 重置无效激活路径:', currentActive, '→', defaultActive)
+    if (!fileTreeStore.activeRepoPath && paths.length > 0) {
+      console.log('[Set] 设置默认激活路径:', paths[0])
     }
 
     return paths
@@ -1528,6 +1537,14 @@ const initializeRepositories = async () => {
     }
   }
 }
+
+watch(
+  () => knowledgeBaseStore.knowledgeBases,
+  (list) => {
+    syncRepoPathsFromKnowledgeBases(list)
+  },
+  { deep: true }
+)
 
 // 初始化时获取文件树数据
 onMounted(async () => {

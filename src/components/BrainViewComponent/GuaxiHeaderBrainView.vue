@@ -8,7 +8,6 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="BookAdd20Regular" @click="handleAddClick" />
       <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
@@ -17,19 +16,16 @@
 
 <script setup>
 import { useSiderStore } from '../../stores/useSiderStore'
-import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 
 
 import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
-  BookAdd20Regular,
   Screenshot24Regular
 } from '@vicons/fluent'
 
 const viewKey = 'brain'
 const siderStore = useSiderStore();
-const knowledgeBaseStore = useKnowledgeBaseStore()
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
@@ -37,12 +33,6 @@ const toggleLeftSider = () => {
 
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
-};
-
-const handleAddClick = () => {
-  console.log('点击添加按钮，当前store状态:', knowledgeBaseStore.showForm);
-  knowledgeBaseStore.toggleForm(true);
-  console.log('调用toggleForm后store状态:', knowledgeBaseStore.showForm);
 };
 </script>
 

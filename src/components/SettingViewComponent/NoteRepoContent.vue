@@ -118,6 +118,35 @@
         <n-divider />
 
         <div>
+          <h3>知识库根目录</h3>
+          <p class="description">
+            用于存放知识库数据。未配置时将使用程序同级目录下的 KnowledgeBases 文件夹。
+          </p>
+
+          <n-alert type="info" v-if="knowledgeBasesRoot" style="max-width: 95%;">
+            当前知识库根目录：{{ knowledgeBasesRoot }}
+          </n-alert>
+          <n-alert type="warning" v-else style="max-width: 95%;">
+            未配置知识库根目录，将使用默认位置。
+          </n-alert>
+
+          <n-form
+            label-placement="left"
+            label-width="auto"
+            :show-require-mark="false"
+            style="margin-top: 8px"
+          >
+            <n-form-item label="选择知识库根目录">
+              <n-button :disabled="loading" @click="handleKnowledgeBasesRootPick">
+                浏览文件夹...
+              </n-button>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>资源库根目录</h3>
           <p class="description">
             用于存放截图、图片等资源的根目录。未配置时将使用程序所在目录下的 ResourceRepo 文件夹。
@@ -213,6 +242,10 @@ const librariesRoot = ref('');
 
 // 资源库根目录
 const resourceRoot = ref('');
+
+// 知识库根目录
+const knowledgeBasesRoot = ref('');
+
 const loading = ref(false);
 
 // 打开文件浏览器选择文件库根目录
@@ -244,6 +277,13 @@ onMounted(async () => {
   fileTreeStore.setRepopathlist(paths);
   console.log('加载激活的笔记库路径：', fileTreeStore.repopathlist);
   librariesRoot.value = await invoke('get_libraries_root');
+
+  try {
+    knowledgeBasesRoot.value = await invoke('get_knowledge_bases_root');
+  } catch (error) {
+    console.error('加载知识库根目录失败:', error);
+    knowledgeBasesRoot.value = '';
+  }
 
   try {
     loading.value = true;
@@ -296,6 +336,24 @@ const handleOpenFileBrowser = async () => {
     }
   } catch (error) {
     console.error('打开文件浏览器失败:', error);
+  }
+};
+
+const handleKnowledgeBasesRootPick = async () => {
+  try {
+    loading.value = true;
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+    });
+    if (selectedPath) {
+      await invoke('set_knowledge_bases_root', { path: selectedPath });
+      knowledgeBasesRoot.value = selectedPath;
+    }
+  } catch (error) {
+    console.error('更新知识库根目录失败:', error);
+  } finally {
+    loading.value = false;
   }
 };
 

@@ -36,6 +36,10 @@ async fn app_init() {
         Ok(_) => println!("Template root initialized successfully."),
         Err(e) => eprintln!("Failed to initialize template root: {}", e),
     }
+    match commands::settingview::init_knowledge_bases_root() {
+        Ok(_) => println!("KnowledgeBases root initialized successfully."),
+        Err(e) => eprintln!("Failed to initialize KnowledgeBases root: {}", e),
+    }
 }
 
 fn start_background_gc() {
@@ -132,6 +136,8 @@ async fn main() {
             commands::settingview::set_image_bed_root,
             commands::settingview::get_template_repo_path,
             commands::settingview::set_template_repo_path,
+            commands::settingview::get_knowledge_bases_root,
+            commands::settingview::set_knowledge_bases_root,
             commands::templateview::create_template_manager_window,
             commands::templateview::emit_template_insert,
             commands::templateview::list_templates,

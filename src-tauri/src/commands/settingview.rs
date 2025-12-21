@@ -32,6 +32,8 @@ pub struct AppConfig {
     #[serde(default)]
     template_repo_path: String,
     #[serde(default)]
+    knowledge_bases_root: String,
+    #[serde(default)]
     device_id: String,
     #[serde(default = "default_gc_cycle_seconds")]
     pub gc_cycle_seconds: u64,
@@ -65,6 +67,18 @@ fn default_template_repo_path() -> String {
         .expect("无法获取可执行文件所在目录")
         .to_path_buf();
     exe_dir.join("Template").to_string_lossy().to_string()
+}
+
+fn default_knowledge_bases_root() -> String {
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir
+        .join("KnowledgeBases")
+        .to_string_lossy()
+        .to_string()
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -115,6 +129,7 @@ impl Default for AppConfig {
             libraries_root: "".to_string(),
             image_bed_root: default_image_bed_root(),
             template_repo_path: "".to_string(),
+            knowledge_bases_root: "".to_string(),
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
@@ -339,6 +354,65 @@ pub fn set_template_repo_path(path: String) -> Result<(), String> {
     config.template_repo_path = path;
     save_config(&config);
     init_template_root()
+}
+
+#[tauri::command]
+pub fn get_knowledge_bases_root() -> String {
+    if let Err(e) = init_knowledge_bases_root() {
+        info!("init_knowledge_bases_root failed: {}", e);
+    }
+    let config = load_config();
+    config.knowledge_bases_root
+}
+
+#[tauri::command]
+pub fn set_knowledge_bases_root(path: String) -> Result<(), String> {
+    let root_path = PathBuf::from(&path);
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
+    }
+    let meta_path = root_path.join(".meta");
+    if !meta_path.exists() {
+        fs::create_dir_all(&meta_path).map_err(|e| e.to_string())?;
+    }
+
+    let mut config = load_config();
+    config.knowledge_bases_root = path;
+    save_config(&config);
+    Ok(())
+}
+
+pub fn init_knowledge_bases_root() -> Result<(), String> {
+    let mut config = load_config();
+    let default_root = default_knowledge_bases_root();
+
+    let configured = config.knowledge_bases_root.trim().to_string();
+    let mut effective = if configured.is_empty() {
+        default_root.clone()
+    } else {
+        configured
+    };
+
+    let effective_path = PathBuf::from(&effective);
+    if !effective_path.exists() || !effective_path.is_dir() {
+        effective = default_root.clone();
+        config.knowledge_bases_root = effective.clone();
+        save_config(&config);
+    } else if config.knowledge_bases_root.trim().is_empty() {
+        config.knowledge_bases_root = effective.clone();
+        save_config(&config);
+    }
+
+    let root_path = PathBuf::from(&effective);
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
+    }
+    let meta_path = root_path.join(".meta");
+    if !meta_path.exists() {
+        fs::create_dir_all(&meta_path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 pub fn init_resource_root() -> Result<(), String> {

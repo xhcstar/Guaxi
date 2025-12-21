@@ -82,23 +82,16 @@ pub fn create_knowledge_base(input: KnowledgeBaseInput) -> Result<(), String> {
     // 确保数据库和表存在
     setup_db()?; 
 
-    // 1. 获取软件当前目录
-    let exe_dir = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .ok_or("无法获取可执行文件所在目录")?
-        .to_path_buf();
+    let root = crate::commands::settingview::get_knowledge_bases_root();
+    let root_dir = PathBuf::from(root);
 
-    // 2. 创建总目录 KnowledgeBases
-    let root_dir = exe_dir.join("KnowledgeBases");
     if !root_dir.exists() {
-        fs::create_dir(&root_dir).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&root_dir).map_err(|e| e.to_string())?;
     }
 
-    // 3. 创建隐藏的元数据目录 .meta
     let meta_dir = root_dir.join(".meta");
     if !meta_dir.exists() {
-        fs::create_dir(&meta_dir).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
     }
 
     // 4. 创建知识库目录
