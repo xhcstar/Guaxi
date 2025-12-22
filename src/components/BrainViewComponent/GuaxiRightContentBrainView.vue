@@ -13,6 +13,8 @@
           <n-text v-if="Array.isArray(selectedGraphNode.tags) && selectedGraphNode.tags.length">标签: {{ selectedGraphNode.tags.join(', ') }}</n-text>
           <n-button-group size="small">
             <n-button @click="focusSelected">聚焦</n-button>
+            <n-button @click="highlightSelected">高亮连接</n-button>
+            <n-button v-if="canOpenSelected" @click="openSelected">打开</n-button>
             <n-button @click="clearSelected">清除</n-button>
           </n-button-group>
         </n-space>
@@ -64,7 +66,10 @@
 <script setup>
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRouter } from 'vue-router'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { useEditorStore } from '../../stores/editorStore'
 
 import {
   NCard,
@@ -86,6 +91,10 @@ import {
 import { SearchOutline } from '@vicons/ionicons5'
 
 const store = useKnowledgeBaseStore()
+const router = useRouter()
+const fileTreeStore = useFileTreeStore()
+const editorStore = useEditorStore()
+
 const { searchQuery, visibleTypes, selectedTags, graphNodes, tagOptions, selectedGraphNode } = storeToRefs(store)
 
 const typeOptions = [
@@ -157,12 +166,55 @@ const getNodeTagType = (type) => {
   }
 }
 
+const canOpenSelected = computed(() => {
+  const n = selectedGraphNode.value
+  if (!n) return false
+  const path = n.path || n.file_path
+  if (!path) return false
+  return ['file', 'section', 'paragraph'].includes(n.type)
+})
+
 const focusSelected = () => {
   const n = selectedGraphNode.value
   if (!n) return
   if (n.id != null) store.requestFocus({ mode: 'id', value: n.id })
   else if (n.stable_id) store.requestFocus({ mode: 'stable_id', value: n.stable_id })
   else if (n.path || n.file_path) store.requestFocus({ mode: 'path', value: n.path || n.file_path })
+}
+
+const highlightSelected = () => {
+  const n = selectedGraphNode.value
+  if (!n) return
+  store.setSelectedGraphNode({ ...n, __highlight_ts: Date.now() })
+}
+
+const openSelected = async () => {
+  const n = selectedGraphNode.value
+  if (!n) return
+
+  const path = n?.file_path || n?.path
+  if (!path) return
+
+  const lineNumber = Number(n?.start_line || 1)
+
+  try {
+    await fileTreeStore.openFileInTab(path)
+    const content = fileTreeStore.selectedFile?.content || ''
+
+    editorStore.setFile({
+      path,
+      content,
+      highlightInfo: {
+        lineNumber,
+        matches: [{ start: 0, end: 1000000 }],
+        text: n?.name || ''
+      }
+    })
+
+    await router.push({ name: 'home' })
+  } catch (e) {
+    console.error('打开节点失败:', e)
+  }
 }
 
 const clearSelected = () => {

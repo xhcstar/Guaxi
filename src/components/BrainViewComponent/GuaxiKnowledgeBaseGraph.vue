@@ -46,34 +46,6 @@
       <n-progress type="circle" :percentage="loadingProgress" :indicator-placement="'inside'" :show-indicator="false" />
     </div>
 
-    <!-- Node information panel shown when a node is selected -->
-    <div v-if="selectedNode" class="node-info-panel">
-      <n-card :title="selectedNode.name || '连接线'" size="small">
-        <n-space vertical>
-          <n-tag :type="getNodeTagType(selectedNode.type)" size="small">
-            {{ getNodeTypeName(selectedNode.type) }}
-          </n-tag>
-          <n-text v-if="selectedNode.path">路径: {{ selectedNode.path }}</n-text>
-          <n-text v-if="selectedNode.stable_id">stable_id: {{ selectedNode.stable_id }}</n-text>
-          <n-text v-if="selectedNode.start_line">行: {{ selectedNode.start_line }}</n-text>
-          <n-text v-if="selectedNode.from">从: {{ selectedNode.from.name }}</n-text>
-          <n-text v-if="selectedNode.to">到: {{ selectedNode.to.name }}</n-text>
-          <n-button-group size="small">
-            <n-button @click="focusOnNode(selectedNode.type === 'edge' ? selectedNode.from : selectedNode)">
-              聚焦
-            </n-button>
-            <n-button @click="highlightConnectedNodes(selectedNode)">
-              高亮连接
-            </n-button>
-            <n-button v-if="selectedNode.path && ['file', 'section', 'paragraph'].includes(selectedNode.type)"
-              @click="openNode(selectedNode)">
-              打开
-            </n-button>
-          </n-button-group>
-        </n-space>
-      </n-card>
-    </div>
-
     <!-- Legend panel explaining node and edge types -->
     <div class="legend-panel">
       <n-card title="图例" size="small">
@@ -163,7 +135,7 @@ import { storeToRefs } from 'pinia';
 // UI components from Naive UI
 import {
   NButton, NSpace, NIcon, NCard, NText, NAlert, NSpin,
-  NSelect, NSlider, NProgress, NTag, NButtonGroup
+  NSelect, NSlider, NProgress
 } from 'naive-ui';
 
 // Icons from Ionicons
@@ -176,7 +148,7 @@ const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
 
 // Destructure store properties with reactivity
-const { knowledgeBases, selectedKnowledgeBase, visibleTypes, selectedTags, searchQuery, focusTarget } = storeToRefs(store);
+const { knowledgeBases, selectedKnowledgeBase, visibleTypes, selectedTags, searchQuery, focusTarget, selectedGraphNode } = storeToRefs(store);
 
 // Computed property for currently selected knowledge base
 const selectedKB = computed(() => {
@@ -1796,6 +1768,24 @@ watch(
 );
 
 watch(
+  selectedGraphNode,
+  (n) => {
+    if (!n) {
+      selectedNode.value = null;
+      resetNodeHighlights();
+      return;
+    }
+
+    const hit = resolveGraphNode(n);
+    if (!hit) return;
+
+    selectedNode.value = { ...hit.userData, object: hit.mesh };
+    highlightConnectedNodes(hit);
+  },
+  { deep: true }
+);
+
+watch(
   focusTarget,
   (target) => {
     if (!target || !nodes.length) return;
@@ -2091,22 +2081,6 @@ onBeforeUnmount(() => {
   z-index: 1000;
 }
 
-/* Node info panel styling */
-.node-info-panel {
-  position: absolute;
-  bottom: 50px;
-  right: 20px;
-  max-width: 300px;
-  z-index: 10;
-  background-color: rgba(255, 255, 255, 0.9);
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-/* Dark mode node info panel */
-.dark-mode .node-info-panel {
-  background-color: rgba(30, 30, 30, 0.9);
-}
 
 /* 修改 legend-panel 的样式 */
 .legend-panel {
