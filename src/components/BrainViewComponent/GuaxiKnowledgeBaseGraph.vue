@@ -499,8 +499,9 @@ const ensureViewInBounds = (options = {}) => {
   let center = sphere.center.clone();
   let radius = Math.max(1, sphere.radius);
 
-  // Shift center Y down so content appears higher in view
-  center.y -= radius * 0.25;
+  const isTree = currentLayout?.value === 'tree';
+  const bias = isTree ? 0.15 : -0.55;
+  center.y += radius * bias;
 
   if (mode === 'auto' || mode === 'node') {
     const sel = selectedNode.value;
@@ -549,10 +550,11 @@ const frameAllNodes = (options = {}) => {
   if (!sphere) return;
 
   const center = sphere.center.clone();
-  
-  // Adjust center Y to shift content up visually (camera looks lower)
   const radius = Math.max(1, sphere.radius);
-  center.y -= radius * 0.25;
+
+  const isTree = currentLayout?.value === 'tree';
+  const bias = isTree ? 0.15 : -0.55;
+  center.y += radius * bias;
 
   const dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
@@ -1398,9 +1400,9 @@ const treeLayout = () => {
   countLeaves(rootId);
 
   // 4. Place nodes
-  const radiusStep = performanceLevel.value === 0 ? 18 : performanceLevel.value === 2 ? 42 : 28;
-  const levelGap = performanceLevel.value === 0 ? 14 : performanceLevel.value === 2 ? 32 : 22;
-  const minArc = performanceLevel.value === 0 ? 8 : performanceLevel.value === 2 ? 16 : 12;
+  const radiusStep = performanceLevel.value === 0 ? 12 : performanceLevel.value === 2 ? 24 : 18;
+  const levelGap = performanceLevel.value === 0 ? 10 : performanceLevel.value === 2 ? 22 : 16;
+  const minArc = performanceLevel.value === 0 ? 5 : performanceLevel.value === 2 ? 13 : 9;
 
   const countByDepth = new Map();
   for (const [, d] of depthById) countByDepth.set(d, (countByDepth.get(d) || 0) + 1);
@@ -1992,12 +1994,14 @@ const animate = () => {
 
   if (followEnabled && controls && camera && !isUserInteracting.value && nodes.length) {
     const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
-    const center = sphere?.center || controls.target;
-    
-    // Safety check for invalid center
-    if (!center || !isFiniteVec3(center)) return;
+    if (!sphere || !sphere.center || !isFiniteVec3(sphere.center)) return;
 
-    const radius = Math.max(1, sphere?.radius || 1);
+    const radius = Math.max(1, sphere.radius || 1);
+
+    const isTree = currentLayout?.value === 'tree';
+    const bias = isTree ? 0.15 : -0.55;
+    const center = sphere.center.clone();
+    center.y += radius * bias;
 
     const maxOffset = radius * 0.22;
     const dist = Math.max(1, camera.position.distanceTo(controls.target));
