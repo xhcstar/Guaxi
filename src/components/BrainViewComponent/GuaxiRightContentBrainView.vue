@@ -66,7 +66,6 @@
 <script setup>
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRouter } from 'vue-router'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
@@ -91,7 +90,6 @@ import {
 import { SearchOutline } from '@vicons/ionicons5'
 
 const store = useKnowledgeBaseStore()
-const router = useRouter()
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 
@@ -211,7 +209,7 @@ const openSelected = async () => {
       }
     })
 
-    await router.push({ name: 'home' })
+    window.location.hash = '/'
   } catch (e) {
     console.error('打开节点失败:', e)
   }

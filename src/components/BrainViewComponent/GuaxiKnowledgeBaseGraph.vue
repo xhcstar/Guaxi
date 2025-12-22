@@ -110,7 +110,6 @@
 <script setup>
 // Vue composition API imports
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
 
 // Three.js core and extensions
 import * as THREE from 'three';
@@ -143,7 +142,6 @@ import { CompassOutline, SyncOutline, MoonOutline, EyeOutline } from '@vicons/io
 
 // Initialize Pinia store
 const store = useKnowledgeBaseStore();
-const router = useRouter();
 const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
 
@@ -337,6 +335,11 @@ const initThreeJS = () => {
     controls.enableZoom = true;
     controls.zoomSpeed = 0.9;
     controls.enablePan = true;
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.PAN,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.ROTATE
+    };
     controls.screenSpacePanning = false;
     controls.minDistance = 10;
     controls.maxDistance = 4000;
@@ -350,13 +353,13 @@ const initThreeJS = () => {
 
     controls.addEventListener('end', () => {
       isUserInteracting.value = false;
-      ensureViewInBounds();
+      ensureViewInBounds({ recenter: false });
     });
 
     controls.addEventListener('change', () => {
       if (ensureViewTimer) clearTimeout(ensureViewTimer);
       ensureViewTimer = setTimeout(() => {
-        if (!isUserInteracting.value) ensureViewInBounds();
+        if (!isUserInteracting.value) ensureViewInBounds({ recenter: false });
       }, 160);
     });
   } else {
@@ -409,6 +412,7 @@ const ensureViewInBounds = (options = {}) => {
   if (!camera || !controls) return;
 
   const mode = options.mode || 'auto';
+  const recenter = options.recenter !== false;
 
   let sphere = getVisibleBoundingSphere();
   if (!sphere) return;
@@ -430,10 +434,12 @@ const ensureViewInBounds = (options = {}) => {
   controls.minDistance = minD;
   controls.maxDistance = Math.max(Number(controls.maxDistance) || 0, maxD);
 
-  const targetDelta = center.clone().sub(controls.target);
-  if (targetDelta.lengthSq() > 1e-6) {
-    controls.target.add(targetDelta);
-    camera.position.add(targetDelta);
+  if (recenter) {
+    const targetDelta = center.clone().sub(controls.target);
+    if (targetDelta.lengthSq() > 1e-6) {
+      controls.target.add(targetDelta);
+      camera.position.add(targetDelta);
+    }
   }
 
   const dir = camera.position.clone().sub(controls.target);
@@ -687,7 +693,7 @@ const focusOnNode = (nodeLike) => {
     }
   }
 
-  ensureViewInBounds({ mode: 'graph' });
+  ensureViewInBounds({ mode: 'graph', recenter: false });
 
   const dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
@@ -707,7 +713,7 @@ const focusOnNode = (nodeLike) => {
     onUpdate: () => controls.update(),
     onComplete: () => {
       isUserInteracting.value = false;
-      ensureViewInBounds({ mode: 'node' });
+      ensureViewInBounds({ mode: 'node', recenter: false });
     }
   })
     .to(camera.position, { x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z }, 0)
@@ -772,7 +778,7 @@ const openNode = async (node) => {
       }
     });
 
-    await router.push({ name: 'home' });
+    window.location.hash = '/';
   } catch (e) {
     warn('打开节点失败:', e);
   }
