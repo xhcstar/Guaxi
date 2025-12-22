@@ -277,6 +277,15 @@ const _followDesired = new THREE.Vector3();
 const _followPrev = new THREE.Vector3();
 const _followDelta = new THREE.Vector3();
 
+const _keepOff = new THREE.Vector3();
+const _keepDesiredTarget = new THREE.Vector3();
+const _keepDelta = new THREE.Vector3();
+
+const isFiniteVec3 = (v) => {
+  const x = v?.x, y = v?.y, z = v?.z;
+  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
+};
+
 /**
  * Initialize Three.js scene, renderer, camera and controls
  */
@@ -364,13 +373,13 @@ const initThreeJS = () => {
 
     controls.addEventListener('end', () => {
       isUserInteracting.value = false;
-      ensureViewInBounds({ recenter: false });
+      ensureViewInBounds({ mode: 'graph', recenter: true, useTargetPositions: true });
     });
 
     controls.addEventListener('change', () => {
       if (ensureViewTimer) clearTimeout(ensureViewTimer);
       ensureViewTimer = setTimeout(() => {
-        if (!isUserInteracting.value) ensureViewInBounds({ recenter: false });
+        if (!isUserInteracting.value) ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
       }, 160);
     });
   } else {
@@ -453,7 +462,9 @@ const ensureViewInBounds = (options = {}) => {
   const recenter = options.recenter !== false;
 
   const useTargetPositions = options.useTargetPositions === true;
-  let sphere = useTargetPositions ? getVisibleTargetBoundingSphere() : getVisibleBoundingSphere();
+  let sphere = useTargetPositions
+    ? (getVisibleTargetBoundingSphere() || getVisibleBoundingSphere())
+    : getVisibleBoundingSphere();
   if (!sphere) return;
 
   let center = sphere.center.clone();
@@ -1737,6 +1748,13 @@ let animationFrameId = null;
 const animate = () => {
   animationFrameId = requestAnimationFrame(animate);
 
+  if (controls && camera) {
+    if (!isFiniteVec3(camera.position) || !isFiniteVec3(controls.target)) {
+      resetCamera();
+      return;
+    }
+  }
+
   let moved = false;
   for (const node of nodes) {
     const mesh = node?.mesh;
@@ -1806,6 +1824,20 @@ const animate = () => {
     if (_followDelta.lengthSq() > 1e-10) {
       controls.target.add(_followDelta);
       camera.position.add(_followDelta);
+    }
+  }
+
+  if (controls && camera && nodes.length) {
+    const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
+    if (sphere?.center && Number.isFinite(sphere.radius) && sphere.radius > 0) {
+      const maxTargetOffset = Math.max(30, sphere.radius * 3.0);
+      _keepOff.copy(controls.target).sub(sphere.center);
+      if (_keepOff.lengthSq() > maxTargetOffset * maxTargetOffset) {
+        _keepDesiredTarget.copy(sphere.center).add(_keepOff.clampLength(0, maxTargetOffset));
+        _keepDelta.copy(_keepDesiredTarget).sub(controls.target);
+        controls.target.add(_keepDelta);
+        camera.position.add(_keepDelta);
+      }
     }
   }
 
