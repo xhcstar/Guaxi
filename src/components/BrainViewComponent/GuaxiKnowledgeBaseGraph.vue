@@ -500,7 +500,7 @@ const ensureViewInBounds = (options = {}) => {
   let radius = Math.max(1, sphere.radius);
 
   const isTree = currentLayout?.value === 'tree';
-  const bias = isTree ? 0.15 : -0.55;
+  const bias = isTree ? 0.15 : -0.50;
   center.y += radius * bias;
 
   if (mode === 'auto' || mode === 'node') {
@@ -553,7 +553,7 @@ const frameAllNodes = (options = {}) => {
   const radius = Math.max(1, sphere.radius);
 
   const isTree = currentLayout?.value === 'tree';
-  const bias = isTree ? 0.15 : -0.55;
+  const bias = isTree ? 0.15 : -0.50;
   center.y += radius * bias;
 
   const dir = camera.position.clone().sub(controls.target);
