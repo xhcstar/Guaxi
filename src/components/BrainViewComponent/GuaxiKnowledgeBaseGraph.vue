@@ -428,7 +428,7 @@ const ensureViewInBounds = (options = {}) => {
   const minD = Math.max(2, radius * 0.08);
   const maxD = Math.max(minD + 20, radius * 25);
   controls.minDistance = minD;
-  controls.maxDistance = maxD;
+  controls.maxDistance = Math.max(Number(controls.maxDistance) || 0, maxD);
 
   const targetDelta = center.clone().sub(controls.target);
   if (targetDelta.lengthSq() > 1e-6) {
@@ -1687,6 +1687,8 @@ watch(currentLayout, async (newLayout) => {
   if (scene && nodes.length > 0) {
     await applyLayout(newLayout);
     frameAllNodes();
+    setTimeout(() => frameAllNodes(), 450);
+    setTimeout(() => frameAllNodes(), 1100);
   }
 });
 
