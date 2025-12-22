@@ -181,6 +181,16 @@ const glowEnabled = ref(true);
 const glowStrength = ref(0.9);
 const glowSize = ref(16);
 
+// Track active D3 simulation
+let activeSimulation = null;
+
+const stopActiveSimulation = () => {
+  if (activeSimulation) {
+    activeSimulation.stop();
+    activeSimulation = null;
+  }
+};
+
 // Computed property to check if current KB is valid
 const hasValidKnowledgeBase = computed(() => {
   return isValidKnowledgeBase(selectedKB.value);
@@ -1074,6 +1084,7 @@ const getControlPoint = (start, end) => {
  * Apply force-directed layout to nodes
  */
 const forceDirectedLayout = () => {
+  stopActiveSimulation();
   log('应用力导向布局');
 
   if (!nodes.length) return;
@@ -1168,6 +1179,8 @@ const forceDirectedLayout = () => {
       return base + Math.max(1, depth) * ringStep;
     }, 0.35));
 
+  activeSimulation = simulation;
+
   simulation.on('tick', () => {
     for (const d of nodeDatas) {
       const n = byId.get(String(d.id));
@@ -1183,6 +1196,7 @@ const forceDirectedLayout = () => {
  * Apply hierarchical layout to nodes
  */
 const hierarchicalLayout = () => {
+  stopActiveSimulation();
   log('应用层次布局');
 
   // Simple hierarchical layout based on depth
@@ -1200,6 +1214,7 @@ const hierarchicalLayout = () => {
  * Apply spherical layout to nodes
  */
 const sphericalLayout = () => {
+  stopActiveSimulation();
   log('应用球形布局');
 
   if (!nodes.length) return;
@@ -1273,6 +1288,7 @@ const sphericalLayout = () => {
  * Apply tree layout to nodes
  */
 const treeLayout = () => {
+  stopActiveSimulation();
   log('应用树状布局');
 
   if (!nodes.length) return;
@@ -2225,6 +2241,7 @@ const isValidKnowledgeBase = (kb) => {
 
 // Clean up on component unmount
 onBeforeUnmount(() => {
+  stopActiveSimulation();
   log('开始组件卸载清理');
 
   if (animationFrameId) {
