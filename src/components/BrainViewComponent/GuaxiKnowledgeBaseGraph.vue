@@ -34,6 +34,10 @@
         <!-- Performance level slider -->
         <n-slider v-model:value="performanceLevel" :step="1" :min="0" :max="2" :marks="performanceMarks"
           style="width: 150px" />
+
+        <n-switch v-model:value="glowEnabled" size="small">星光</n-switch>
+        <n-slider v-model:value="glowStrength" :min="0" :max="2.5" :step="0.05" :disabled="!glowEnabled" style="width: 120px" />
+        <n-slider v-model:value="glowSize" :min="6" :max="44" :step="1" :disabled="!glowEnabled" style="width: 110px" />
       </n-space>
     </div>
 
@@ -134,7 +138,7 @@ import { storeToRefs } from 'pinia';
 // UI components from Naive UI
 import {
   NButton, NSpace, NIcon, NCard, NText, NAlert, NSpin,
-  NSelect, NSlider, NProgress
+  NSelect, NSlider, NProgress, NSwitch
 } from 'naive-ui';
 
 // Icons from Ionicons
@@ -173,6 +177,9 @@ const currentLayout = ref('force'); // Current graph layout type
 const performanceLevel = ref(1); // Performance quality level
 const pendingKnowledgeBaseChange = ref(null); // Pending KB change
 const isUserInteracting = ref(false);
+const glowEnabled = ref(true);
+const glowStrength = ref(0.9);
+const glowSize = ref(16);
 
 // Computed property to check if current KB is valid
 const hasValidKnowledgeBase = computed(() => {
@@ -393,8 +400,18 @@ const initThreeJS = () => {
     0.4,
     0.85
   );
+  bloomPass.enabled = glowEnabled.value;
+  bloomPass.strength = (Number(glowStrength.value) || 0) * 1.1;
   composer.addPass(bloomPass);
   console.log('bloomPass', bloomPass);
+
+  watch([glowEnabled, glowStrength, glowSize], () => {
+    if (!bloomPass) return;
+    bloomPass.enabled = !!glowEnabled.value;
+    bloomPass.strength = glowEnabled.value ? (Number(glowStrength.value) || 0) * 1.1 : 0;
+
+    nodes.forEach((n) => applyStarGlow(n));
+  });
 
   setupLighting();
   console.log('setupLighting', setupLighting)
@@ -583,11 +600,12 @@ const toggleDarkMode = () => {
 
   nodes.forEach(node => {
     if (node.mesh?.material) {
-      node.mesh.material.color.setHex(getNodeColor(node.userData.type));
-      node.mesh.material.emissive.setHex(darkMode.value ? 0x111111 : 0x000000);
-      node.mesh.material.emissiveIntensity = darkMode.value ? 0.2 : 0.15;
+      const c = getNodeColor(node.userData.type);
+      node.userData.originalColor = c;
+      node.mesh.material.color.setHex(c);
       node.mesh.material.needsUpdate = true;
     }
+    applyStarGlow(node);
   });
 
   // 更新边材质
@@ -935,8 +953,10 @@ const createNodesAndEdges = async (data) => {
       color: nodeData.originalColor,
       metalness: 0.2,
       roughness: 0.5,
-      emissive: darkMode.value ? 0x111111 : 0x000000,
-      emissiveIntensity: darkMode.value ? 0.2 : 0.15
+      emissive: glowEnabled.value ? nodeData.originalColor : (darkMode.value ? 0x111111 : 0x000000),
+      emissiveIntensity: glowEnabled.value
+        ? (darkMode.value ? (0.7 + (Number(glowStrength.value) || 0) * 0.9) : (0.55 + (Number(glowStrength.value) || 0) * 0.75))
+        : (darkMode.value ? 0.2 : 0.15)
     });
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -944,11 +964,14 @@ const createNodesAndEdges = async (data) => {
     mesh.userData = nodeData;
     scene.add(mesh);
 
-    nodes.push({
+    const graphNode = {
       mesh,
       userData: nodeData,
       targetPosition: new THREE.Vector3(0, 0, 0)
-    });
+    };
+
+    nodes.push(graphNode);
+    applyStarGlow(graphNode);
 
     if (typeof CSS2DObject !== 'undefined') {
       const label = document.createElement('div');
@@ -1503,13 +1526,9 @@ const resetNodeHighlights = () => {
     if (node.mesh && node.mesh.material) {
       const c = node.userData.originalColor ?? getNodeColor(node.userData?.type);
       node.mesh.material.color.setHex(c);
-      if (node.mesh.material.emissive) {
-        node.mesh.material.emissive.setHex(darkMode.value ? 0x111111 : 0x000000);
-      }
-      if (typeof node.mesh.material.emissiveIntensity === 'number') {
-        node.mesh.material.emissiveIntensity = darkMode.value ? 0.2 : 0.15;
-      }
+      node.mesh.material.needsUpdate = true;
     }
+    applyStarGlow(node);
   });
 
   edges.forEach(edge => {
@@ -1542,9 +1561,19 @@ const highlightNode = (object) => {
     // 高亮当前节点
     object.material.color.setHex(0xff0000);
 
-    // 如果有 emissive 属性则设置
     if (object.material.emissive) {
-      object.material.emissive.setHex(0x333333);
+      object.material.emissive.setHex(0xff0000);
+    }
+    if (typeof object.material.emissiveIntensity === 'number') {
+      object.material.emissiveIntensity = Math.max(object.material.emissiveIntensity || 0, 1.6);
+    }
+
+    const sp = object.userData?.__starGlowSprite;
+    if (sp?.material) {
+      sp.visible = true;
+      sp.material.color.setHex(0xff0000);
+      sp.material.opacity = Math.min(1, 0.9);
+      sp.material.needsUpdate = true;
     }
 
     // 高亮连接的边
@@ -1689,6 +1718,103 @@ const getNodeColor = (type) => {
   return darkMode.value ? darkColors[type] || darkColors.default
     : lightColors[type] || lightColors.default;
 }
+
+let starGlowTexture = null;
+
+const getStarGlowTexture = () => {
+  if (starGlowTexture) return starGlowTexture;
+
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    starGlowTexture = new THREE.Texture();
+    starGlowTexture.needsUpdate = true;
+    return starGlowTexture;
+  }
+
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.2, 'rgba(255,255,255,0.9)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.25)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+
+  starGlowTexture = new THREE.CanvasTexture(canvas);
+  starGlowTexture.needsUpdate = true;
+  return starGlowTexture;
+};
+
+const getStarGlowScale = (type) => {
+  const base = Math.max(1, Number(glowSize.value) || 16);
+  switch (type) {
+    case 'knowledge-base': return base * 2.4;
+    case 'directory': return base * 2.0;
+    case 'file': return base * 1.8;
+    case 'section': return base * 1.7;
+    case 'paragraph': return base * 1.6;
+    default: return base * 1.7;
+  }
+};
+
+const applyStarGlow = (node) => {
+  const mesh = node?.mesh;
+  const mat = mesh?.material;
+  if (!mesh || !mat) return;
+
+  const ud = node?.userData || mesh.userData || {};
+  const type = ud.type;
+  const c = getNodeColor(type);
+
+  if (mat.emissive) {
+    mat.emissive.setHex(glowEnabled.value ? c : (darkMode.value ? 0x111111 : 0x000000));
+  }
+  if (typeof mat.emissiveIntensity === 'number') {
+    const s = Math.max(0, Number(glowStrength.value) || 0);
+    mat.emissiveIntensity = glowEnabled.value ? (darkMode.value ? (0.7 + s * 0.9) : (0.55 + s * 0.75)) : (darkMode.value ? 0.2 : 0.15);
+  }
+  mat.needsUpdate = true;
+
+  const existing = mesh.userData?.__starGlowSprite || null;
+  if (!glowEnabled.value) {
+    if (existing) existing.visible = false;
+    return;
+  }
+
+  let sprite = existing;
+  if (!sprite) {
+    const sm = new THREE.SpriteMaterial({
+      map: getStarGlowTexture(),
+      color: c,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false
+    });
+    sprite = new THREE.Sprite(sm);
+    sprite.renderOrder = 999;
+    mesh.add(sprite);
+    mesh.userData.__starGlowSprite = sprite;
+  }
+
+  sprite.visible = true;
+  const strength = Math.max(0, Number(glowStrength.value) || 0);
+  if (sprite.material) {
+    sprite.material.color.setHex(c);
+    sprite.material.opacity = Math.min(1, 0.35 + strength * 0.28);
+    sprite.material.needsUpdate = true;
+  }
+
+  const s = getStarGlowScale(type);
+  sprite.scale.set(s, s, 1);
+};
 
 /**
  * Apply selected layout algorithm
