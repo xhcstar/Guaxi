@@ -442,6 +442,7 @@ const getVisibleBoundingSphere = () => {
   for (const n of nodes) {
     const mesh = n?.mesh;
     if (!mesh || !mesh.visible) continue;
+    if (!isFiniteVec3(mesh.position)) continue; // Skip invalid positions
     box.expandByObject(mesh);
     hasAny = true;
   }
@@ -465,6 +466,7 @@ const getVisibleTargetBoundingSphere = () => {
     const mesh = n?.mesh;
     const p = n?.targetPosition;
     if (!mesh || !mesh.visible || !p) continue;
+    if (!isFiniteVec3(p)) continue; // Skip invalid positions
     box.expandByPoint(p);
     hasAny = true;
   }
@@ -496,6 +498,9 @@ const ensureViewInBounds = (options = {}) => {
 
   let center = sphere.center.clone();
   let radius = Math.max(1, sphere.radius);
+
+  // Shift center Y down so content appears higher in view
+  center.y -= radius * 0.25;
 
   if (mode === 'auto' || mode === 'node') {
     const sel = selectedNode.value;
@@ -544,7 +549,10 @@ const frameAllNodes = (options = {}) => {
   if (!sphere) return;
 
   const center = sphere.center.clone();
+  
+  // Adjust center Y to shift content up visually (camera looks lower)
   const radius = Math.max(1, sphere.radius);
+  center.y -= radius * 0.25;
 
   const dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
@@ -602,7 +610,7 @@ const toggleAutoRotate = () => {
 const toggleDarkMode = () => {
   darkMode.value = !darkMode.value;
 
-  // 更新场景背景和雾
+  // Update scene background and fog
   if (scene) {
     scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xbbbbbb);
     scene.fog.color.copy(scene.background);
@@ -613,6 +621,14 @@ const toggleDarkMode = () => {
       const c = getNodeColor(node.userData.type);
       node.userData.originalColor = c;
       node.mesh.material.color.setHex(c);
+      
+      // Update emissive intensity for brightness control
+      const baseIntensity = darkMode.value ? 0.3 : 0.2;
+      const glowBonus = (Number(glowStrength.value) || 0) * 0.5;
+      const intensity = glowEnabled.value ? (baseIntensity + glowBonus) : (darkMode.value ? 0.2 : 0.15);
+      
+      node.mesh.material.emissiveIntensity = intensity;
+      node.mesh.material.emissive.setHex(glowEnabled.value ? c : (darkMode.value ? 0x111111 : 0x000000));
       node.mesh.material.needsUpdate = true;
     }
     applyStarGlow(node);
@@ -965,7 +981,7 @@ const createNodesAndEdges = async (data) => {
       roughness: 0.5,
       emissive: glowEnabled.value ? nodeData.originalColor : (darkMode.value ? 0x111111 : 0x000000),
       emissiveIntensity: glowEnabled.value
-        ? (darkMode.value ? (0.7 + (Number(glowStrength.value) || 0) * 0.9) : (0.55 + (Number(glowStrength.value) || 0) * 0.75))
+        ? (darkMode.value ? (0.2 + (Number(glowStrength.value) || 0) * 0.3) : (0.2 + (Number(glowStrength.value) || 0) * 0.3))
         : (darkMode.value ? 0.2 : 0.15)
     });
 
@@ -1185,7 +1201,12 @@ const forceDirectedLayout = () => {
     for (const d of nodeDatas) {
       const n = byId.get(String(d.id));
       if (!n) continue;
-      n.targetPosition.set(d.x || 0, d.y || 0, d.z || 0);
+      
+      const x = Number.isFinite(d.x) ? d.x : 0;
+      const y = Number.isFinite(d.y) ? d.y : 0;
+      const z = Number.isFinite(d.z) ? d.z : 0;
+      
+      n.targetPosition.set(x, y, z);
     }
   });
 
@@ -1306,94 +1327,120 @@ const treeLayout = () => {
 
   const rootId = String(rootNode?.userData?.id ?? '__i_0');
 
-  const children = new Map();
-  for (const [id] of byId) children.set(id, []);
-
+  // 1. Build potential parent-child map from data
+  const potentialChildren = new Map();
   for (const [id, n] of byId) {
     const pidRaw = n?.userData?.parentId;
-    const pid = pidRaw == null ? null : String(pidRaw);
-    if (!pid || pid === id) continue;
-    if (children.has(pid)) children.get(pid).push(id);
-  }
-
-  for (const [id, n] of byId) {
-    if (id === rootId) continue;
-    if (n?.userData?.parentId == null) {
-      const arr = children.get(rootId);
-      if (arr && !arr.includes(id)) arr.push(id);
+    const pid = (pidRaw === null || pidRaw === undefined || pidRaw === '') ? null : String(pidRaw);
+    
+    if (pid && byId.has(pid) && pid !== id) {
+      if (!potentialChildren.has(pid)) potentialChildren.set(pid, []);
+      potentialChildren.get(pid).push(id);
     }
   }
 
-  const leaf = new Map();
-  const visiting = new Set();
+  // 2. Build strict tree structure using BFS to prevent cycles and ensure connectivity
+  const finalChildren = new Map();
+  const visited = new Set([rootId]);
+  const queue = [rootId];
+  const depthById = new Map([[rootId, 0]]);
+
+  // Helper to add node to tree
+  const addToTree = (parentId, childId) => {
+    if (!finalChildren.has(parentId)) finalChildren.set(parentId, []);
+    finalChildren.get(parentId).push(childId);
+    visited.add(childId);
+    queue.push(childId);
+    depthById.set(childId, (depthById.get(parentId) || 0) + 1);
+  };
+
+  // Process queue and handle orphans
+  while (visited.size < nodes.length) {
+    // Standard BFS
+    while (queue.length > 0) {
+      const currId = queue.shift();
+      const kids = potentialChildren.get(currId) || [];
+      for (const kidId of kids) {
+        if (!visited.has(kidId)) {
+          addToTree(currId, kidId);
+        }
+      }
+    }
+
+    // If we still have unvisited nodes, they are orphans or disconnected cycles
+    // Attach one to root and resume BFS
+    if (visited.size < nodes.length) {
+      let foundOrphan = false;
+      for (const [id] of byId) {
+        if (!visited.has(id)) {
+          addToTree(rootId, id);
+          foundOrphan = true;
+          break; // Break to let BFS process this new subtree
+        }
+      }
+      if (!foundOrphan) break; // Should not happen if size check passes
+    }
+  }
+
+  // 3. Calculate leaf counts for layout spacing
+  const leafCounts = new Map();
   const countLeaves = (id) => {
-    if (leaf.has(id)) return leaf.get(id);
-    if (visiting.has(id)) return 1;
-    visiting.add(id);
-    const ch = children.get(id) || [];
+    const ch = finalChildren.get(id) || [];
     if (!ch.length) {
-      leaf.set(id, 1);
+      leafCounts.set(id, 1);
       return 1;
     }
     let sum = 0;
     for (const cid of ch) sum += countLeaves(cid);
-    sum = Math.max(1, sum);
-    leaf.set(id, sum);
+    leafCounts.set(id, sum);
     return sum;
   };
-
   countLeaves(rootId);
 
-  const depthById = new Map();
-  const q = [[rootId, 0]];
-  while (q.length) {
-    const [id, d] = q.shift();
-    if (depthById.has(id)) continue;
-    depthById.set(id, d);
-    const ch = children.get(id) || [];
-    for (const cid of ch) q.push([cid, d + 1]);
-  }
-
-  const countByDepth = new Map();
-  for (const [, d] of depthById) {
-    countByDepth.set(d, (countByDepth.get(d) || 0) + 1);
-  }
-
+  // 4. Place nodes
   const radiusStep = performanceLevel.value === 0 ? 18 : performanceLevel.value === 2 ? 42 : 28;
   const levelGap = performanceLevel.value === 0 ? 14 : performanceLevel.value === 2 ? 32 : 22;
   const minArc = performanceLevel.value === 0 ? 8 : performanceLevel.value === 2 ? 16 : 12;
 
+  const countByDepth = new Map();
+  for (const [, d] of depthById) countByDepth.set(d, (countByDepth.get(d) || 0) + 1);
+
   const place = (id, start, end) => {
     const n = byId.get(id);
     const depth = depthById.get(id) ?? 0;
-    const a = (start + end) / 2;
-
-    const countAtDepth = countByDepth.get(depth) || 1;
-    const minR = (countAtDepth * minArc) / (Math.PI * 2);
-    const r = depth === 0 ? 0 : Math.max(depth * radiusStep, minR);
-
+    
+    // Position calculation
     if (n?.targetPosition) {
-      n.targetPosition.set(
-        r * Math.cos(a),
-        depth * levelGap,
-        r * Math.sin(a)
-      );
+      if (depth === 0) {
+        n.targetPosition.set(0, 0, 0);
+      } else {
+        const a = (start + end) / 2;
+        const countAtDepth = countByDepth.get(depth) || 1;
+        const minR = (countAtDepth * minArc) / (Math.PI * 2);
+        const r = Math.max(depth * radiusStep, minR);
+        
+        n.targetPosition.set(
+          r * Math.cos(a),
+          -depth * levelGap, // Grow downwards for better camera visibility
+          r * Math.sin(a)
+        );
+      }
     }
 
-    const ch = children.get(id) || [];
+    const ch = finalChildren.get(id) || [];
     if (!ch.length) return;
 
-    const total = ch.reduce((acc, cid) => acc + (leaf.get(cid) || 1), 0) || 1;
-    let cur = start;
+    const totalLeaves = leafCounts.get(id) || 1;
+    let curAngle = start;
+    
     for (const cid of ch) {
-      const w = (leaf.get(cid) || 1) / total;
-      const next = cur + (end - start) * w;
-      place(cid, cur, next);
-      cur = next;
+      const weight = (leafCounts.get(cid) || 1) / totalLeaves;
+      const angleSpan = (end - start) * weight;
+      place(cid, curAngle, curAngle + angleSpan);
+      curAngle += angleSpan;
     }
   };
 
-  rootNode?.targetPosition?.set(0, 0, 0);
   place(rootId, 0, Math.PI * 2);
 };
 
@@ -1905,10 +1952,14 @@ const animate = () => {
 
     const d2 = mesh.position.distanceToSquared(target);
     if (d2 > 1e-4) {
-      mesh.position.lerp(target, 0.12);
-      moved = true;
+      if (isFiniteVec3(target)) {
+        mesh.position.lerp(target, 0.12);
+        moved = true;
+      }
     } else if (d2 > 0) {
-      mesh.position.copy(target);
+      if (isFiniteVec3(target)) {
+        mesh.position.copy(target);
+      }
     }
   }
 
@@ -1923,15 +1974,15 @@ const animate = () => {
       if (sel && sel.type !== 'edge') {
         const gn = resolveGraphNode(sel);
         const p = gn?.mesh?.position;
-        if (p) center = p;
+        if (p && isFiniteVec3(p)) center = p;
       }
 
       const sphere = center ? null : getVisibleBoundingSphere();
       const target = center || sphere?.center;
-      if (target) {
+      if (target && isFiniteVec3(target)) {
         const delta = target.clone().sub(controls.target);
         const k = 0.08;
-        if (delta.lengthSq() > 1e-6) {
+        if (delta.lengthSq() > 1e-6 && isFiniteVec3(delta)) {
           controls.target.addScaledVector(delta, k);
           camera.position.addScaledVector(delta, k);
         }
@@ -1942,6 +1993,10 @@ const animate = () => {
   if (followEnabled && controls && camera && !isUserInteracting.value && nodes.length) {
     const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
     const center = sphere?.center || controls.target;
+    
+    // Safety check for invalid center
+    if (!center || !isFiniteVec3(center)) return;
+
     const radius = Math.max(1, sphere?.radius || 1);
 
     const maxOffset = radius * 0.22;
@@ -1959,11 +2014,13 @@ const animate = () => {
       .multiplyScalar(dist * 0.07)
       .clampLength(0, maxOffset);
 
-    followCurrentOffset.lerp(_followDesired, 0.1);
+    if (isFiniteVec3(_followDesired)) {
+        followCurrentOffset.lerp(_followDesired, 0.1);
+    }
 
     _followDelta.copy(center).add(followCurrentOffset).sub(controls.target);
 
-    if (_followDelta.lengthSq() > 1e-10) {
+    if (_followDelta.lengthSq() > 1e-10 && isFiniteVec3(_followDelta)) {
       controls.target.add(_followDelta);
       camera.position.add(_followDelta);
     }
@@ -1971,14 +2028,16 @@ const animate = () => {
 
   if (controls && camera && nodes.length) {
     const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
-    if (sphere?.center && Number.isFinite(sphere.radius) && sphere.radius > 0) {
+    if (sphere?.center && isFiniteVec3(sphere.center) && Number.isFinite(sphere.radius) && sphere.radius > 0) {
       const maxTargetOffset = Math.max(30, sphere.radius * 3.0);
       _keepOff.copy(controls.target).sub(sphere.center);
       if (_keepOff.lengthSq() > maxTargetOffset * maxTargetOffset) {
         _keepDesiredTarget.copy(sphere.center).add(_keepOff.clampLength(0, maxTargetOffset));
         _keepDelta.copy(_keepDesiredTarget).sub(controls.target);
-        controls.target.add(_keepDelta);
-        camera.position.add(_keepDelta);
+        if (isFiniteVec3(_keepDelta)) {
+          controls.target.add(_keepDelta);
+          camera.position.add(_keepDelta);
+        }
       }
     }
   }
