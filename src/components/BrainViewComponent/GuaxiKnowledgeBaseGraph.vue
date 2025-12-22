@@ -266,6 +266,17 @@ class GraphOctree {
 let containerResizeObserver = null;
 const mouse = new THREE.Vector2(); // Mouse position tracker
 
+const followPointer = new THREE.Vector2(0, 0);
+const followCurrentOffset = new THREE.Vector3(0, 0, 0);
+let followEnabled = true;
+
+const _followForward = new THREE.Vector3();
+const _followRight = new THREE.Vector3();
+const _followUp = new THREE.Vector3();
+const _followDesired = new THREE.Vector3();
+const _followPrev = new THREE.Vector3();
+const _followDelta = new THREE.Vector3();
+
 /**
  * Initialize Three.js scene, renderer, camera and controls
  */
@@ -408,13 +419,41 @@ const getVisibleBoundingSphere = () => {
   return sphere;
 };
 
+const getVisibleTargetBoundingSphere = () => {
+  if (!nodes.length) return null;
+
+  const box = new THREE.Box3();
+  let hasAny = false;
+
+  for (const n of nodes) {
+    const mesh = n?.mesh;
+    const p = n?.targetPosition;
+    if (!mesh || !mesh.visible || !p) continue;
+    box.expandByPoint(p);
+    hasAny = true;
+  }
+
+  if (!hasAny) return null;
+
+  const pad = 4;
+  box.min.addScalar(-pad);
+  box.max.addScalar(pad);
+
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+
+  if (!Number.isFinite(sphere.radius) || sphere.radius <= 0) sphere.radius = 1;
+  return sphere;
+};
+
 const ensureViewInBounds = (options = {}) => {
   if (!camera || !controls) return;
 
   const mode = options.mode || 'auto';
   const recenter = options.recenter !== false;
 
-  let sphere = getVisibleBoundingSphere();
+  const useTargetPositions = options.useTargetPositions === true;
+  let sphere = useTargetPositions ? getVisibleTargetBoundingSphere() : getVisibleBoundingSphere();
   if (!sphere) return;
 
   let center = sphere.center.clone();
@@ -459,10 +498,11 @@ const ensureViewInBounds = (options = {}) => {
 /**
  * Frame all nodes in view
  */
-const frameAllNodes = () => {
+const frameAllNodes = (options = {}) => {
   if (!camera || !controls || !nodes.length) return;
 
-  const sphere = getVisibleBoundingSphere();
+  const useTargetPositions = options.useTargetPositions === true;
+  const sphere = useTargetPositions ? getVisibleTargetBoundingSphere() : getVisibleBoundingSphere();
   if (!sphere) return;
 
   const center = sphere.center.clone();
@@ -472,8 +512,12 @@ const frameAllNodes = () => {
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
   dir.normalize();
 
-  const fov = THREE.MathUtils.degToRad(camera.fov || 60);
-  const distance = (radius / Math.max(1e-6, Math.sin(fov / 2))) * 1.15;
+  const vFov = THREE.MathUtils.degToRad(camera.fov || 60);
+  const aspect = Number(camera.aspect) > 0 ? Number(camera.aspect) : (container.value?.clientWidth && container.value?.clientHeight ? (container.value.clientWidth / container.value.clientHeight) : 1);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+  const fitFov = Math.min(vFov, hFov);
+
+  const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * 1.18;
   const cameraPosition = center.clone().add(dir.multiplyScalar(distance));
 
   gsap.timeline({
@@ -490,9 +534,14 @@ const frameAllNodes = () => {
 const resetCamera = () => {
   if (!camera || !controls) return;
 
-  camera.position.set(0, 0, 100);
+  camera.position.set(120, -140, 160);
   controls.target.set(0, 0, 0);
   controls.update();
+
+  if (nodes.length) {
+    frameAllNodes({ useTargetPositions: true });
+    setTimeout(() => ensureViewInBounds({ mode: 'graph', recenter: true, useTargetPositions: true }), 150);
+  }
 
   log('相机已重置');
 };
@@ -1133,24 +1182,57 @@ const sphericalLayout = () => {
   const m = others.length;
   if (!m) return;
 
-  const sorted = others.slice().sort((a, b) =>
-    String(a?.userData?.id ?? '').localeCompare(String(b?.userData?.id ?? ''), 'en')
-  );
+  const forceSphere = (radiusFn, strength = 0.9) => {
+    let ns = [];
+    function f(alpha) {
+      for (const d of ns) {
+        const r = radiusFn(d);
+        const x = d.x || 0, y = d.y || 0, z = d.z || 0;
+        const dist = Math.sqrt(x * x + y * y + z * z) || 1e-6;
+        const k = (r - dist) / dist * strength * alpha;
+        d.vx = (d.vx || 0) + x * k;
+        d.vy = (d.vy || 0) + y * k;
+        d.vz = (d.vz || 0) + z * k;
+      }
+    }
+    f.initialize = (_) => { ns = _ || []; };
+    return f;
+  };
 
-  const offset = 2 / m;
-  const inc = Math.PI * (3 - Math.sqrt(5));
-
-  sorted.forEach((node, i) => {
-    const y = (i * offset - 1) + offset / 2;
-    const r = Math.sqrt(1 - y * y);
-    const phi = i * inc;
-
-    node.targetPosition.set(
-      radius * Math.cos(phi) * r,
-      radius * y,
-      radius * Math.sin(phi) * r
-    );
+  const thetaInc = 2.399963229728653;
+  const nodeDatas = others.map((n, i) => {
+    const u = (i + 0.5) / m;
+    const phi = Math.acos(1 - 2 * u);
+    const theta = (i + 1) * thetaInc;
+    return {
+      id: String(n?.userData?.id ?? i),
+      x: radius * Math.cos(theta) * Math.sin(phi),
+      y: radius * Math.sin(theta) * Math.sin(phi),
+      z: radius * Math.cos(phi)
+    };
   });
+
+  const collisionRadius = performanceLevel.value === 0 ? 5 : performanceLevel.value === 2 ? 8 : 6;
+  const chargeStrength = performanceLevel.value === 0 ? -20 : performanceLevel.value === 2 ? -40 : -28;
+  const ticks = performanceLevel.value === 0 ? 60 : performanceLevel.value === 2 ? 140 : 100;
+
+  const simulation = d3.forceSimulation(nodeDatas)
+    .numDimensions(3)
+    .alpha(1)
+    .alphaDecay(0.08)
+    .velocityDecay(0.45)
+    .force('charge', d3.forceManyBody().strength(chargeStrength))
+    .force('collision', d3.forceCollide().radius(collisionRadius))
+    .force('sphere', forceSphere(() => radius, 0.9));
+
+  for (let k = 0; k < ticks; k++) simulation.tick();
+  simulation.stop();
+
+  for (let i = 0; i < m; i++) {
+    const n = others[i];
+    const d = nodeDatas[i];
+    n?.targetPosition?.set(d.x || 0, d.y || 0, d.z || 0);
+  }
 };
 
 /**
@@ -1222,14 +1304,24 @@ const treeLayout = () => {
     for (const cid of ch) q.push([cid, d + 1]);
   }
 
+  const countByDepth = new Map();
+  for (const [, d] of depthById) {
+    countByDepth.set(d, (countByDepth.get(d) || 0) + 1);
+  }
+
   const radiusStep = performanceLevel.value === 0 ? 18 : performanceLevel.value === 2 ? 42 : 28;
   const levelGap = performanceLevel.value === 0 ? 14 : performanceLevel.value === 2 ? 32 : 22;
+  const minArc = performanceLevel.value === 0 ? 8 : performanceLevel.value === 2 ? 16 : 12;
 
   const place = (id, start, end) => {
     const n = byId.get(id);
     const depth = depthById.get(id) ?? 0;
     const a = (start + end) / 2;
-    const r = depth === 0 ? 0 : depth * radiusStep;
+
+    const countAtDepth = countByDepth.get(depth) || 1;
+    const minR = (countAtDepth * minArc) / (Math.PI * 2);
+    const r = depth === 0 ? 0 : Math.max(depth * radiusStep, minR);
+
     if (n?.targetPosition) {
       n.targetPosition.set(
         r * Math.cos(a),
@@ -1331,12 +1423,14 @@ const setupEventListeners = () => {
     if (!rect || rect.width <= 0 || rect.height <= 0) return false;
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    followPointer.x = mouse.x;
+    followPointer.y = mouse.y;
     return true;
   };
 
   renderer.domElement.addEventListener('mousemove', (event) => {
-    if (selectedNode.value) return;
     if (!setMouseFromEvent(event)) return;
+    if (selectedNode.value) return;
 
     raycaster.setFromCamera(mouse, camera);
 
@@ -1353,6 +1447,13 @@ const setupEventListeners = () => {
       resetNodeHighlights();
     }
   });
+
+  renderer.domElement.addEventListener('wheel', (event) => {
+    setMouseFromEvent(event);
+    setTimeout(() => {
+      ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
+    }, 0);
+  }, { passive: true });
 
   renderer.domElement.addEventListener('click', (event) => {
     if (!setMouseFromEvent(event)) return;
@@ -1587,12 +1688,10 @@ const applyLayout = async (layoutType) => {
 
   console.log(`应用布局: ${layoutType}`);
 
-  // 停止当前所有动画
   nodes.forEach(node => {
     node.targetPosition = node.mesh.position.clone();
   });
 
-  // 使用Promise确保布局完成
   await new Promise(resolve => {
     setTimeout(() => {
       switch (layoutType) {
@@ -1615,12 +1714,19 @@ const applyLayout = async (layoutType) => {
     }, 0);
   });
 
-  // 更新所有边
   edges.forEach(edge => {
     if (edge.userData?.update) {
       edge.userData.update();
     }
   });
+
+  await nextTick();
+  frameAllNodes({ useTargetPositions: true });
+
+  setTimeout(() => {
+    frameAllNodes({ useTargetPositions: true });
+    ensureViewInBounds({ mode: 'graph', recenter: true });
+  }, 120);
 };
 
 /**
@@ -1673,6 +1779,36 @@ const animate = () => {
     }
   }
 
+  if (followEnabled && controls && camera && !isUserInteracting.value && nodes.length) {
+    const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
+    const center = sphere?.center || controls.target;
+    const radius = Math.max(1, sphere?.radius || 1);
+
+    const maxOffset = radius * 0.22;
+    const dist = Math.max(1, camera.position.distanceTo(controls.target));
+
+    _followPrev.copy(followCurrentOffset);
+
+    _followRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    _followUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+
+    _followDesired
+      .copy(_followRight)
+      .multiplyScalar(followPointer.x)
+      .addScaledVector(_followUp, followPointer.y)
+      .multiplyScalar(dist * 0.07)
+      .clampLength(0, maxOffset);
+
+    followCurrentOffset.lerp(_followDesired, 0.1);
+
+    _followDelta.copy(center).add(followCurrentOffset).sub(controls.target);
+
+    if (_followDelta.lengthSq() > 1e-10) {
+      controls.target.add(_followDelta);
+      camera.position.add(_followDelta);
+    }
+  }
+
   controls?.update?.();
 
   if (composer) composer.render();
@@ -1692,9 +1828,9 @@ const startAnimate = () => {
 watch(currentLayout, async (newLayout) => {
   if (scene && nodes.length > 0) {
     await applyLayout(newLayout);
-    frameAllNodes();
-    setTimeout(() => frameAllNodes(), 450);
-    setTimeout(() => frameAllNodes(), 1100);
+    frameAllNodes({ useTargetPositions: true });
+    setTimeout(() => frameAllNodes({ useTargetPositions: true }), 450);
+    setTimeout(() => frameAllNodes({ useTargetPositions: true }), 1100);
   }
 });
 
