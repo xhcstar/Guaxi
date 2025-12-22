@@ -65,10 +65,8 @@
             <n-button @click="highlightConnectedNodes(selectedNode)">
               高亮连接
             </n-button>
-            <n-button
-              v-if="selectedNode.path && ['file', 'section', 'paragraph'].includes(selectedNode.type)"
-              @click="openNode(selectedNode)"
-            >
+            <n-button v-if="selectedNode.path && ['file', 'section', 'paragraph'].includes(selectedNode.type)"
+              @click="openNode(selectedNode)">
               打开
             </n-button>
           </n-button-group>
@@ -110,6 +108,27 @@
           </div>
         </n-space>
       </n-card>
+
+      <div class="navigation-tools">
+        <n-button size="tiny" @click="frameAllNodes">
+          <template #icon><n-icon>
+              <EyeOutline />
+            </n-icon></template>
+          适配视野
+        </n-button>
+        <n-button size="tiny" @click="resetCamera">
+          <template #icon><n-icon>
+              <CompassOutline />
+            </n-icon></template>
+          重置视角
+        </n-button>
+        <n-button size="tiny" @click="toggleAutoRotate">
+          <template #icon><n-icon>
+              <SyncOutline />
+            </n-icon></template>
+          {{ autoRotate ? '停止旋转' : '自动旋转' }}
+        </n-button>
+      </div>
     </div>
 
 
@@ -128,7 +147,6 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
-import { Octree } from 'three/addons/math/Octree.js';
 import { gsap } from "gsap";
 import Stats from 'three/examples/jsm/libs/stats.module';
 import * as d3 from 'd3-force-3d';
@@ -149,7 +167,7 @@ import {
 } from 'naive-ui';
 
 // Icons from Ionicons
-import { CompassOutline, SyncOutline, MoonOutline } from '@vicons/ionicons5';
+import { CompassOutline, SyncOutline, MoonOutline, EyeOutline } from '@vicons/ionicons5';
 
 // Initialize Pinia store
 const store = useKnowledgeBaseStore();
@@ -184,6 +202,7 @@ const errorMessage = ref(''); // Error message content
 const currentLayout = ref('force'); // Current graph layout type
 const performanceLevel = ref(1); // Performance quality level
 const pendingKnowledgeBaseChange = ref(null); // Pending KB change
+const isUserInteracting = ref(false);
 
 // Computed property to check if current KB is valid
 const hasValidKnowledgeBase = computed(() => {
@@ -209,6 +228,72 @@ const performanceMarks = {
 let scene, camera, renderer, controls, raycaster, composer, labelRenderer;
 let nodes = [], edges = [], octree;
 let buildGraphRunId = 0;
+let ensureViewTimer = null;
+
+class GraphOctree {
+  constructor(cellSize = 8) {
+    this.cellSize = Math.max(1, Number(cellSize) || 8);
+    this.cells = new Map();
+  }
+
+  _cellKeyFromVec3(v) {
+    const cs = this.cellSize;
+    const ix = Math.round(v.x / cs);
+    const iy = Math.round(v.y / cs);
+    const iz = Math.round(v.z / cs);
+    return `${ix}|${iy}|${iz}`;
+  }
+
+  addGraphNode(mesh) {
+    if (!mesh?.position) return;
+    const key = this._cellKeyFromVec3(mesh.position);
+    let arr = this.cells.get(key);
+    if (!arr) {
+      arr = [];
+      this.cells.set(key, arr);
+    }
+    arr.push(mesh);
+  }
+
+  clear() {
+    this.cells.clear();
+  }
+
+  search(position, radius = 5) {
+    if (!position) return [];
+    const r = Math.max(0, Number(radius) || 0);
+    const cs = this.cellSize;
+    const steps = Math.max(0, Math.ceil(r / cs));
+
+    const ix0 = Math.round(position.x / cs);
+    const iy0 = Math.round(position.y / cs);
+    const iz0 = Math.round(position.z / cs);
+
+    const hits = [];
+    const r2 = r * r;
+
+    for (let dx = -steps; dx <= steps; dx++) {
+      for (let dy = -steps; dy <= steps; dy++) {
+        for (let dz = -steps; dz <= steps; dz++) {
+          const key = `${ix0 + dx}|${iy0 + dy}|${iz0 + dz}`;
+          const arr = this.cells.get(key);
+          if (!arr) continue;
+          for (const mesh of arr) {
+            const p = mesh?.position;
+            if (!p) continue;
+            const d2 = position.distanceToSquared(p);
+            if (d2 <= r2) hits.push({ mesh, d2 });
+          }
+        }
+      }
+    }
+
+    hits.sort((a, b) => a.d2 - b.d2);
+    return hits.map(h => h.mesh);
+  }
+}
+
+let containerResizeObserver = null;
 const mouse = new THREE.Vector2(); // Mouse position tracker
 
 /**
@@ -277,13 +362,31 @@ const initThreeJS = () => {
     controls.autoRotateSpeed = 0.5;
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
-    controls.minDistance = 20;
-    controls.maxDistance = 500;
+    controls.enableZoom = true;
+    controls.zoomSpeed = 0.9;
+    controls.enablePan = true;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 10;
+    controls.maxDistance = 4000;
 
-    // 确保 controls 已创建再设置 target
     controls.target.set(0, 0, 0);
     controls.update();
-    console.log('controls', controls);
+
+    controls.addEventListener('start', () => {
+      isUserInteracting.value = true;
+    });
+
+    controls.addEventListener('end', () => {
+      isUserInteracting.value = false;
+      ensureViewInBounds();
+    });
+
+    controls.addEventListener('change', () => {
+      if (ensureViewTimer) clearTimeout(ensureViewTimer);
+      ensureViewTimer = setTimeout(() => {
+        if (!isUserInteracting.value) ensureViewInBounds();
+      }, 160);
+    });
   } else {
     console.error('初始化控制器失败: camera或renderer.domElement未定义');
   }
@@ -291,33 +394,116 @@ const initThreeJS = () => {
   // Add bloom effect for glowing highlights
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    1.5, // Strength
-    0.4, // Radius
-    0.85 // Threshold
+    1.5,
+    0.4,
+    0.85
   );
   composer.addPass(bloomPass);
   console.log('bloomPass', bloomPass);
 
-  // 6. Add orbit controls for camera interaction
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.autoRotate = autoRotate.value;
-  controls.autoRotateSpeed = 0.5;
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.05;
-  controls.minDistance = 20;
-  controls.maxDistance = 500;
-
-  console.log('OrbitControls controls', controls)
-  // 7. Set up scene lighting
   setupLighting();
   console.log('setupLighting', setupLighting)
-  // 8. Initialize raycasting for mouse interaction
   raycaster = new THREE.Raycaster();
 
   console.log('raycaster', raycaster)
   // 9. Set up event listeners
   setupEventListeners();
   console.log('setupEventListeners', setupEventListeners)
+};
+
+const getVisibleBoundingSphere = () => {
+  if (!nodes.length) return null;
+
+  const box = new THREE.Box3();
+  let hasAny = false;
+
+  for (const n of nodes) {
+    const mesh = n?.mesh;
+    if (!mesh || !mesh.visible) continue;
+    box.expandByObject(mesh);
+    hasAny = true;
+  }
+
+  if (!hasAny) return null;
+
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+
+  if (!Number.isFinite(sphere.radius) || sphere.radius <= 0) sphere.radius = 1;
+  return sphere;
+};
+
+const ensureViewInBounds = (options = {}) => {
+  if (!camera || !controls) return;
+
+  const mode = options.mode || 'auto';
+
+  let sphere = getVisibleBoundingSphere();
+  if (!sphere) return;
+
+  let center = sphere.center.clone();
+  let radius = Math.max(1, sphere.radius);
+
+  if (mode === 'auto' || mode === 'node') {
+    const sel = selectedNode.value;
+    if (sel && sel.type !== 'edge') {
+      const gn = resolveGraphNode(sel);
+      const p = gn?.mesh?.position;
+      if (p) center = p.clone();
+    }
+  }
+
+  const minD = Math.max(2, radius * 0.08);
+  const maxD = Math.max(minD + 20, radius * 25);
+  controls.minDistance = minD;
+  controls.maxDistance = maxD;
+
+  const targetDelta = center.clone().sub(controls.target);
+  if (targetDelta.lengthSq() > 1e-6) {
+    controls.target.add(targetDelta);
+    camera.position.add(targetDelta);
+  }
+
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1);
+
+  let dist = dir.length();
+  const clamped = THREE.MathUtils.clamp(dist, minD * 1.02, maxD * 0.98);
+
+  if (Math.abs(clamped - dist) > 1e-3) {
+    dir.normalize().multiplyScalar(clamped);
+    camera.position.copy(controls.target.clone().add(dir));
+  }
+
+  controls.update();
+};
+
+/**
+ * Frame all nodes in view
+ */
+const frameAllNodes = () => {
+  if (!camera || !controls || !nodes.length) return;
+
+  const sphere = getVisibleBoundingSphere();
+  if (!sphere) return;
+
+  const center = sphere.center.clone();
+  const radius = Math.max(1, sphere.radius);
+
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+  dir.normalize();
+
+  const fov = THREE.MathUtils.degToRad(camera.fov || 60);
+  const distance = (radius / Math.max(1e-6, Math.sin(fov / 2))) * 1.15;
+  const cameraPosition = center.clone().add(dir.multiplyScalar(distance));
+
+  gsap.timeline({
+    defaults: { duration: 0.6, ease: 'power2.out' },
+    onUpdate: () => controls.update()
+  })
+    .to(camera.position, { x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z }, 0)
+    .to(controls.target, { x: center.x, y: center.y, z: center.z }, 0);
 };
 
 /**
@@ -516,27 +702,44 @@ const focusOnNode = (nodeLike) => {
   const node = resolveGraphNode(nodeLike);
   if (!node || !camera || !controls) return;
 
-  const targetPosition = node.mesh?.position?.clone?.() || new THREE.Vector3(0, 0, 0);
+  const p = node.mesh?.position?.clone?.() || new THREE.Vector3(0, 0, 0);
 
-  const direction = new THREE.Vector3(0, 0, 1);
-  const distance = 30;
-  const cameraPosition = targetPosition.clone().add(direction.multiplyScalar(distance));
+  let nodeRadius = 2;
+  const geo = node.mesh?.geometry;
+  if (geo?.computeBoundingSphere) {
+    if (!geo.boundingSphere) geo.computeBoundingSphere();
+    const r = geo.boundingSphere?.radius;
+    if (Number.isFinite(r) && r > 0) {
+      const s = node.mesh?.scale?.x;
+      nodeRadius = r * (Number.isFinite(s) && s > 0 ? s : 1);
+    }
+  }
 
-  gsap.to(camera.position, {
-    x: cameraPosition.x,
-    y: cameraPosition.y,
-    z: cameraPosition.z,
-    duration: 1,
-    ease: "power2.inOut"
-  });
+  ensureViewInBounds({ mode: 'graph' });
 
-  gsap.to(controls.target, {
-    x: targetPosition.x,
-    y: targetPosition.y,
-    z: targetPosition.z,
-    duration: 1,
-    ease: "power2.inOut"
-  });
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+  dir.normalize();
+
+  const fov = THREE.MathUtils.degToRad(camera.fov || 60);
+  const fit = (nodeRadius / Math.max(1e-6, Math.sin(fov / 2))) * 2.4;
+  const desired = Math.max(controls.minDistance || 0, 30, fit);
+  const distance = THREE.MathUtils.clamp(desired, 2, controls.maxDistance || 100000);
+
+  const cameraPosition = p.clone().add(dir.multiplyScalar(distance));
+
+  isUserInteracting.value = true;
+
+  gsap.timeline({
+    defaults: { duration: 0.7, ease: 'power2.inOut' },
+    onUpdate: () => controls.update(),
+    onComplete: () => {
+      isUserInteracting.value = false;
+      ensureViewInBounds({ mode: 'node' });
+    }
+  })
+    .to(camera.position, { x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z }, 0)
+    .to(controls.target, { x: p.x, y: p.y, z: p.z }, 0);
 
   log(`已聚焦到节点: ${node.userData?.name || ''}`);
 };
@@ -618,9 +821,8 @@ const clearScene = () => {
 
   octree = null;
 
-  while (scene.children.length > 0) {
-    const obj = scene.children[0];
-
+  const toRemove = scene.children.filter((obj) => !obj?.isLight);
+  for (const obj of toRemove) {
     obj.traverse?.((child) => {
       const el = child?.element;
       if (el?.parentNode) el.parentNode.removeChild(el);
@@ -770,7 +972,6 @@ const createNodesAndEdges = async (data) => {
             positions[4] = toNode.mesh.position.y;
             positions[5] = toNode.mesh.position.z;
             line.geometry.attributes.position.needsUpdate = true;
-            line.geometry.computeBoundingSphere();
           }
         }
       };
@@ -1139,11 +1340,25 @@ const handleWindowResize = () => {
 const setupEventListeners = () => {
   window.addEventListener('resize', handleWindowResize);
 
+  if (typeof ResizeObserver !== 'undefined' && container.value) {
+    containerResizeObserver?.disconnect?.();
+    containerResizeObserver = new ResizeObserver(() => {
+      handleWindowResize();
+    });
+    containerResizeObserver.observe(container.value);
+  }
+
+  const setMouseFromEvent = (event) => {
+    const rect = renderer?.domElement?.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    return true;
+  };
+
   renderer.domElement.addEventListener('mousemove', (event) => {
     if (selectedNode.value) return;
-
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    if (!setMouseFromEvent(event)) return;
 
     raycaster.setFromCamera(mouse, camera);
 
@@ -1162,8 +1377,7 @@ const setupEventListeners = () => {
   });
 
   renderer.domElement.addEventListener('click', (event) => {
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    if (!setMouseFromEvent(event)) return;
 
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(scene.children, true);
@@ -1178,10 +1392,8 @@ const setupEventListeners = () => {
     }
   });
 
-  // Double click to focus on node
   renderer.domElement.addEventListener('dblclick', (event) => {
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    if (!setMouseFromEvent(event)) return;
 
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(scene.children, true);
@@ -1263,11 +1475,14 @@ const highlightNode = (object) => {
  */
 const selectNode = (object) => {
   if (object.userData?.type === 'edge') {
+    const fromNode = object.userData?.from?.userData || findNodeByPosition(object.geometry.attributes.position.array.slice(0, 3));
+    const toNode = object.userData?.to?.userData || findNodeByPosition(object.geometry.attributes.position.array.slice(3, 6));
+
     selectedNode.value = {
       type: 'edge',
       name: '连接线',
-      from: findNodeByPosition(object.geometry.attributes.position.array.slice(0, 3)),
-      to: findNodeByPosition(object.geometry.attributes.position.array.slice(3, 6)),
+      from: fromNode,
+      to: toNode,
       object: object
     };
     store.setSelectedGraphNode(null);
@@ -1297,6 +1512,7 @@ const buildGraph = async () => {
 
   try {
     clearScene();
+    setupLighting();
 
     const treeData = await fetchGraphData();
     if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
@@ -1329,7 +1545,7 @@ const buildGraph = async () => {
   } finally {
     if (runId === buildGraphRunId) {
       isLoading.value = false;
-      resetCamera();
+      frameAllNodes();
     }
   }
 };
@@ -1340,53 +1556,23 @@ const buildGraph = async () => {
  */
 const initOctree = async (meshes) => {
   if (!meshes || meshes.length === 0) {
-    console.warn('没有网格数据可用于初始化八叉树');
-    octree = {
-      search: () => [],
-      addGraphNode: () => { },
-      clear: () => { }
-    };
+    octree = new GraphOctree();
     return;
   }
 
   try {
     console.time('八叉树初始化耗时');
 
-    // 创建新的八叉树实例
-    octree = new Octree();
-
-    // 检查八叉树方法是否可用
-    if (typeof octree.addGraphNode === 'function') {
-      // 标准初始化流程
-      meshes.forEach(mesh => {
-        if (mesh.geometry) {
-          // 确保几何体有边界框
-          if (!mesh.geometry.boundingBox) {
-            mesh.geometry.computeBoundingBox();
-          }
-          octree.addGraphNode(mesh);
-        }
-      });
-    } else {
-      // 降级处理
-      console.warn('八叉树缺少addGraphNode方法，使用简化版本');
-      octree = {
-        search: () => [],
-        addGraphNode: () => { },
-        clear: () => { }
-      };
+    octree = new GraphOctree();
+    for (const mesh of meshes) {
+      octree.addGraphNode(mesh);
     }
 
     console.timeEnd('八叉树初始化耗时');
     console.log(`八叉树初始化完成，共处理${meshes.length}个网格`);
   } catch (e) {
     console.error('八叉树初始化失败:', e);
-    // 降级处理
-    octree = {
-      search: () => [],
-      addGraphNode: () => console.warn('八叉树功能不可用'),
-      clear: () => { }
-    };
+    octree = new GraphOctree();
   }
 };
 
@@ -1467,28 +1653,52 @@ let animationFrameId = null;
 const animate = () => {
   animationFrameId = requestAnimationFrame(animate);
 
-  // 平滑过渡节点位置
-  nodes.forEach(node => {
-    if (node.mesh && node.targetPosition) {
-      node.mesh.position.lerp(node.targetPosition, 0.1);
+  let moved = false;
+  for (const node of nodes) {
+    const mesh = node?.mesh;
+    const target = node?.targetPosition;
+    if (!mesh || !target) continue;
+
+    const d2 = mesh.position.distanceToSquared(target);
+    if (d2 > 1e-4) {
+      mesh.position.lerp(target, 0.12);
+      moved = true;
+    } else if (d2 > 0) {
+      mesh.position.copy(target);
     }
-  });
-
-  // 更新边位置
-  edges.forEach(edge => {
-    if (edge.userData?.update) {
-      edge.userData.update();
-    }
-  });
-
-  if (controls) controls.update();
-
-  // 使用composer进行渲染（如果存在）
-  if (composer) {
-    composer.render();
-  } else {
-    renderer.render(scene, camera);
   }
+
+  if (moved) {
+    for (const edge of edges) {
+      edge.userData?.update?.();
+    }
+
+    if (controls && !isUserInteracting.value) {
+      let center = null;
+      const sel = selectedNode.value;
+      if (sel && sel.type !== 'edge') {
+        const gn = resolveGraphNode(sel);
+        const p = gn?.mesh?.position;
+        if (p) center = p;
+      }
+
+      const sphere = center ? null : getVisibleBoundingSphere();
+      const target = center || sphere?.center;
+      if (target) {
+        const delta = target.clone().sub(controls.target);
+        const k = 0.08;
+        if (delta.lengthSq() > 1e-6) {
+          controls.target.addScaledVector(delta, k);
+          camera.position.addScaledVector(delta, k);
+        }
+      }
+    }
+  }
+
+  controls?.update?.();
+
+  if (composer) composer.render();
+  else renderer.render(scene, camera);
 
   labelRenderer?.render(scene, camera);
 };
@@ -1501,9 +1711,10 @@ const startAnimate = () => {
   animate();
 };
 
-watch(currentLayout, (newLayout) => {
+watch(currentLayout, async (newLayout) => {
   if (scene && nodes.length > 0) {
-    applyLayout(newLayout);
+    await applyLayout(newLayout);
+    frameAllNodes();
   }
 });
 
@@ -1731,6 +1942,8 @@ onBeforeUnmount(() => {
 
   // 1. Remove event listeners
   window.removeEventListener('resize', handleWindowResize);
+  containerResizeObserver?.disconnect?.();
+  containerResizeObserver = null;
   if (renderer?.domElement) {
     renderer.domElement.removeEventListener('click', handleCanvasClick);
   }
@@ -1839,10 +2052,9 @@ onBeforeUnmount(() => {
 
 /* Graph container styling */
 .graph-container {
-  flex-grow: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
-  height: calc(100% - 40px);
-  background: linear-gradient(to bottom, #f0f0f0, #e0e0e0);
   background: transparent;
   position: relative;
   z-index: 1;
@@ -1900,18 +2112,26 @@ onBeforeUnmount(() => {
 .legend-panel {
   position: absolute;
   top: 120px;
-  /* 下移避免遮挡工具栏 */
   left: 10px;
-  width: 95px;
-  /* 缩小宽度 */
+  width: 140px;
   z-index: 5;
-  /* 确保在工具栏下方 */
   background-color: rgba(255, 255, 255, 0.9);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transform: scale(0.9);
-  /* 整体缩小 */
+  transform: scale(0.95);
   transform-origin: top left;
+}
+
+.navigation-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.navigation-tools :deep(.n-button) {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 /* 调整图例项的大小 */
