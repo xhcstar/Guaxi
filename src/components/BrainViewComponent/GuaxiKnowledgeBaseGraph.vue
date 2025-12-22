@@ -208,6 +208,7 @@ const performanceMarks = {
 // Three.js variables (non-reactive)
 let scene, camera, renderer, controls, raycaster, composer, labelRenderer;
 let nodes = [], edges = [], octree;
+let buildGraphRunId = 0;
 const mouse = new THREE.Vector2(); // Mouse position tracker
 
 /**
@@ -608,9 +609,29 @@ const openNode = async (node) => {
 const clearScene = () => {
   if (!scene) return;
 
-  // Remove all objects and dispose resources
+  selectedNode.value = null;
+  store.setSelectedGraphNode(null);
+
+  if (labelRenderer?.domElement) {
+    labelRenderer.domElement.innerHTML = '';
+  }
+
+  octree = null;
+
   while (scene.children.length > 0) {
     const obj = scene.children[0];
+
+    obj.traverse?.((child) => {
+      const el = child?.element;
+      if (el?.parentNode) el.parentNode.removeChild(el);
+
+      if (child?.geometry) child.geometry.dispose();
+      if (child?.material) {
+        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material.dispose();
+      }
+    });
+
     if (obj.geometry) obj.geometry.dispose();
     if (obj.material) {
       if (Array.isArray(obj.material)) {
@@ -622,7 +643,6 @@ const clearScene = () => {
     scene.remove(obj);
   }
 
-  // Reset node and edge collections
   nodes = [];
   edges = [];
 
@@ -1268,37 +1288,38 @@ const selectNode = (object) => {
  * Build the complete knowledge graph
  */
 const buildGraph = async () => {
+  const runId = ++buildGraphRunId;
+  const kbId = selectedKB.value?.id;
+
   console.log('开始构建知识图谱...');
   isLoading.value = true;
   loadingProgress.value = 0;
 
   try {
-    // 1. Clear existing scene
     clearScene();
 
-    // 2. Fetch graph data
     const treeData = await fetchGraphData();
+    if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
     loadingProgress.value = 30;
 
     console.log('获取知识图谱数据成功！');
     loadingProgress.value = 60;
 
-    // 3. Create nodes and edges
     await createNodesAndEdges(treeData);
+    if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
     loadingProgress.value = 70;
     console.log('创建节点和边成功！');
 
-    // 4. Apply selected layout
     await applyLayout(currentLayout.value);
+    if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
     loadingProgress.value = 90;
     console.log('应用布局成功！');
 
-    // 5. Initialize octree for spatial queries
     const meshes = nodes.map(n => n.mesh).filter(Boolean);
     console.log('准备初始化八叉树，网格数量:', meshes.length);
     await initOctree(meshes);
+    if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
 
-    // 6. Start animation loop
     startAnimate();
     console.log('开始动画循环！');
     loadingProgress.value = 100;
@@ -1306,8 +1327,10 @@ const buildGraph = async () => {
     showError.value = true;
     errorMessage.value = `构建失败: ${err.message}`;
   } finally {
-    isLoading.value = false;
-    resetCamera();
+    if (runId === buildGraphRunId) {
+      isLoading.value = false;
+      resetCamera();
+    }
   }
 };
 
