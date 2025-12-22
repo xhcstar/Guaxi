@@ -356,12 +356,11 @@ const toggleDarkMode = () => {
     scene.fog.color.copy(scene.background);
   }
 
-  // 更新节点材质
   nodes.forEach(node => {
     if (node.mesh?.material) {
       node.mesh.material.color.setHex(getNodeColor(node.userData.type));
-      node.mesh.material.emissive.setHex(darkMode.value ? 0x000000 : 0x222222);
-      node.mesh.material.emissiveIntensity = darkMode.value ? 0.1 : 0.3;
+      node.mesh.material.emissive.setHex(darkMode.value ? 0x111111 : 0x000000);
+      node.mesh.material.emissiveIntensity = darkMode.value ? 0.2 : 0.15;
       node.mesh.material.needsUpdate = true;
     }
   });
@@ -383,6 +382,14 @@ const toggleDarkMode = () => {
 };
 
 const normalize = (v) => String(v || '').toLowerCase();
+const normalizePath = (v) => String(v || '').replace(/\\/g, '/');
+
+const MAX_LABEL_LEN = 14;
+const truncateLabel = (v) => {
+  const s = String(v || '');
+  if (s.length <= MAX_LABEL_LEN) return s;
+  return `${s.slice(0, MAX_LABEL_LEN)}…`;
+};
 
 const resolveGraphNode = (nodeLike) => {
   if (!nodeLike) return null;
@@ -396,12 +403,14 @@ const resolveGraphNode = (nodeLike) => {
     nodeLike.userData?.path ??
     nodeLike.userData?.file_path;
 
+  const pathNorm = path ? normalizePath(path) : '';
+
   return (
     nodes.find((n) => {
       const ud = n?.userData || {};
       if (id != null && String(ud.id) === String(id)) return true;
       if (stableId && String(ud.stable_id || '') === String(stableId)) return true;
-      if (path && String(ud.path || ud.file_path || '') === String(path)) return true;
+      if (pathNorm && normalizePath(ud.path || ud.file_path || '') === pathNorm) return true;
       return false;
     }) || null
   );
@@ -422,7 +431,7 @@ const nodePassesFilters = (n) => {
   const q = normalize(searchQuery.value).trim();
   if (!q) return true;
 
-  const hay = `${ud.name || ''} ${ud.path || ''} ${ud.file_path || ''} ${ud.stable_id || ''} ${(Array.isArray(ud.tags) ? ud.tags.join(',') : '')}`;
+  const hay = `${ud.name || ''} ${normalizePath(ud.path || '')} ${normalizePath(ud.file_path || '')} ${ud.stable_id || ''} ${(Array.isArray(ud.tags) ? ud.tags.join(',') : '')}`;
   return normalize(hay).includes(q);
 };
 
@@ -660,12 +669,14 @@ const createNodesAndEdges = async (data) => {
   data.nodes.forEach(nodeData => {
     const geometry = new THREE.SphereGeometry(2, 32, 32);
 
+    nodeData.originalColor = getNodeColor(nodeData.type);
+
     const material = new THREE.MeshStandardMaterial({
-      color: getNodeColor(nodeData.type),
+      color: nodeData.originalColor,
       metalness: 0.2,
       roughness: 0.5,
-      emissive: darkMode.value ? 0x111111 : 0x888888, // 亮色模式下使用浅灰色自发光
-      emissiveIntensity: darkMode.value ? 0.2 : 0.5   // 亮色模式下增加自发光强度
+      emissive: darkMode.value ? 0x111111 : 0x000000,
+      emissiveIntensity: darkMode.value ? 0.2 : 0.15
     });
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -679,11 +690,11 @@ const createNodesAndEdges = async (data) => {
       targetPosition: new THREE.Vector3(0, 0, 0)
     });
 
-    // 添加标签
     if (typeof CSS2DObject !== 'undefined') {
       const label = document.createElement('div');
       label.className = 'node-label';
-      label.textContent = nodeData.name;
+      label.textContent = truncateLabel(nodeData.name);
+      label.title = String(nodeData.name || '');
       const labelObj = new CSS2DObject(label);
       labelObj.position.set(0, 10, 0);
       mesh.add(labelObj);
@@ -714,7 +725,7 @@ const createNodesAndEdges = async (data) => {
 
 
       const material = new THREE.LineBasicMaterial({
-        color: darkMode.value ? 0x888888 : 0x1565C0, // 暗色用浅灰，亮色用深蓝
+        color: darkMode.value ? 0x888888 : 0x1565C0,
         linewidth: darkMode.value ? 1 : 2,
         transparent: true,
         opacity: darkMode.value ? 0.8 : 1,
@@ -783,31 +794,107 @@ const getControlPoint = (start, end) => {
 const forceDirectedLayout = () => {
   log('应用力导向布局');
 
-  // 构建 d3-force-3d 节点和边数据
-  const nodeDatas = nodes.map(n => n.userData);
-  const edgeDatas = edges.map(e => ({
-    source: e.userData.from.userData.id,
-    target: e.userData.to.userData.id
-  }));
+  if (!nodes.length) return;
 
-  const simulation = d3.forceSimulation(nodeDatas)
-    .force('charge', d3.forceManyBody().strength(-100))
-    .force('link', d3.forceLink(edgeDatas).id(d => d.id).distance(50))
-    .force('center', d3.forceCenter(0, 0, 0))
-    .force('collision', d3.forceCollide().radius(10));
-
-  simulation.on('tick', () => {
-    nodes.forEach((node, i) => {
-      const d = nodeDatas[i];
-      node.targetPosition.set(
-        d.x || 0,
-        d.y || 0,
-        d.z || 0
-      );
-    });
+  const byId = new Map();
+  nodes.forEach((n, idx) => {
+    const id = n?.userData?.id ?? `__i_${idx}`;
+    byId.set(String(id), n);
   });
 
-  setTimeout(() => simulation.stop(), 1000);
+  const rootNode =
+    nodes.find(n => n?.userData?.type === 'knowledge-base') ||
+    nodes.find(n => n?.userData?.parentId == null) ||
+    nodes[0];
+
+  const rootId = String(rootNode?.userData?.id ?? '__i_0');
+
+  const ringStep = performanceLevel.value === 0 ? 22 : performanceLevel.value === 2 ? 55 : 38;
+  const base = performanceLevel.value === 0 ? 20 : performanceLevel.value === 2 ? 45 : 32;
+
+  const nodeDatas = nodes.map((n, idx) => {
+    const id = n?.userData?.id ?? `__i_${idx}`;
+    const depth = Number.isFinite(n?.userData?.depth) ? Number(n.userData.depth) : (n?.userData?.parentId ? 1 : 0);
+    const d = { ...n.userData, id, depth };
+
+    const r = String(id) === rootId ? 0 : (base + Math.max(1, depth) * ringStep);
+    const i = idx + 1;
+    const theta = i * 2.399963229728653;
+    const u = (i % 997) / 997;
+    const phi = Math.acos(1 - 2 * u);
+
+    d.x = r * Math.cos(theta) * Math.sin(phi);
+    d.y = r * Math.sin(theta) * Math.sin(phi);
+    d.z = r * Math.cos(phi);
+
+    if (String(id) === rootId) {
+      d.fx = 0; d.fy = 0; d.fz = 0;
+      d.x = 0; d.y = 0; d.z = 0;
+    }
+
+    return d;
+  });
+
+  const ndById = new Map(nodeDatas.map(d => [String(d.id), d]));
+
+  const edgeDatas = (edges || [])
+    .map(e => ({
+      source: e?.userData?.from?.userData?.id,
+      target: e?.userData?.to?.userData?.id
+    }))
+    .filter(l => l.source != null && l.target != null)
+    .map(l => ({ source: String(l.source), target: String(l.target) }));
+
+  const forceSphere = (radiusFn, strength = 0.35) => {
+    let ns = [];
+    function f(alpha) {
+      for (const d of ns) {
+        if (d.fx != null || d.fy != null || d.fz != null) continue;
+        const r = radiusFn(d);
+        const x = d.x || 0, y = d.y || 0, z = d.z || 0;
+        const dist = Math.sqrt(x * x + y * y + z * z) || 1e-6;
+        const k = (r - dist) / dist * strength * alpha;
+        d.vx = (d.vx || 0) + x * k;
+        d.vy = (d.vy || 0) + y * k;
+        d.vz = (d.vz || 0) + z * k;
+      }
+    }
+    f.initialize = (_) => { ns = _ || []; };
+    return f;
+  };
+
+  const simulation = d3.forceSimulation(nodeDatas)
+    .numDimensions(3)
+    .alpha(1)
+    .alphaDecay(0.06)
+    .velocityDecay(0.35)
+    .force('link', d3.forceLink(edgeDatas)
+      .id(d => String(d.id))
+      .distance(l => {
+        const t = String(l?.target?.id ?? l?.target);
+        const td = ndById.get(t);
+        const depth = Number.isFinite(td?.depth) ? td.depth : 1;
+        return base + Math.max(1, depth) * ringStep;
+      })
+      .strength(0.9)
+    )
+    .force('charge', d3.forceManyBody().strength(d => (String(d.id) === rootId ? -120 : -28)))
+    .force('collision', d3.forceCollide().radius(d => (String(d.id) === rootId ? 10 : 6)))
+    .force('orbit', forceSphere(d => {
+      if (String(d.id) === rootId) return 0;
+      const depth = Number.isFinite(d.depth) ? d.depth : 1;
+      return base + Math.max(1, depth) * ringStep;
+    }, 0.35));
+
+  simulation.on('tick', () => {
+    for (const d of nodeDatas) {
+      const n = byId.get(String(d.id));
+      if (!n) continue;
+      n.targetPosition.set(d.x || 0, d.y || 0, d.z || 0);
+    }
+  });
+
+  setTimeout(() => simulation.stop(), 1200);
 };
 
 /**
@@ -833,16 +920,36 @@ const hierarchicalLayout = () => {
 const sphericalLayout = () => {
   log('应用球形布局');
 
-  const radius = 50;
-  // Position nodes on a sphere using Fibonacci spiral
-  nodes.forEach((node, i) => {
-    const phi = Math.acos(-1 + (2 * i) / nodes.length);
-    const theta = Math.sqrt(nodes.length * Math.PI) * phi;
+  if (!nodes.length) return;
+
+  const rootNode =
+    nodes.find(n => n?.userData?.type === 'knowledge-base') ||
+    nodes.find(n => n?.userData?.parentId == null) ||
+    nodes[0];
+
+  const radius = performanceLevel.value === 0 ? 45 : performanceLevel.value === 2 ? 110 : 75;
+  rootNode?.targetPosition?.set(0, 0, 0);
+
+  const others = nodes.filter(n => n !== rootNode);
+  const m = others.length;
+  if (!m) return;
+
+  const sorted = others.slice().sort((a, b) =>
+    String(a?.userData?.id ?? '').localeCompare(String(b?.userData?.id ?? ''), 'en')
+  );
+
+  const offset = 2 / m;
+  const inc = Math.PI * (3 - Math.sqrt(5));
+
+  sorted.forEach((node, i) => {
+    const y = (i * offset - 1) + offset / 2;
+    const r = Math.sqrt(1 - y * y);
+    const phi = i * inc;
 
     node.targetPosition.set(
-      radius * Math.cos(theta) * Math.sin(phi),
-      radius * Math.sin(theta) * Math.sin(phi),
-      radius * Math.cos(phi)
+      radius * Math.cos(phi) * r,
+      radius * y,
+      radius * Math.sin(phi) * r
     );
   });
 };
@@ -853,26 +960,100 @@ const sphericalLayout = () => {
 const treeLayout = () => {
   log('应用树状布局');
 
-  // Simple tree layout with parent-child relationships
-  const rootNodes = nodes.filter(n => !n.userData.parentId);
-  const childNodes = nodes.filter(n => n.userData.parentId);
+  if (!nodes.length) return;
 
-  // Position root nodes in a row
-  rootNodes.forEach((node, i) => {
-    node.targetPosition.set(i * 30 - 50, 0, 0);
+  const byId = new Map();
+  nodes.forEach((n, idx) => {
+    const id = n?.userData?.id ?? `__i_${idx}`;
+    byId.set(String(id), n);
   });
 
-  // Position child nodes below their parents
-  childNodes.forEach((node, i) => {
-    const parent = nodes.find(n => n.userData.id === node.userData.parentId);
-    if (parent) {
-      node.targetPosition.set(
-        parent.targetPosition.x + (i % 3) * 10 - 10,
-        parent.targetPosition.y - 20,
-        parent.targetPosition.z + Math.floor(i / 3) * 10 - 10
+  const rootNode =
+    nodes.find(n => n?.userData?.type === 'knowledge-base') ||
+    nodes.find(n => n?.userData?.parentId == null) ||
+    nodes[0];
+
+  const rootId = String(rootNode?.userData?.id ?? '__i_0');
+
+  const children = new Map();
+  for (const [id] of byId) children.set(id, []);
+
+  for (const [id, n] of byId) {
+    const pidRaw = n?.userData?.parentId;
+    const pid = pidRaw == null ? null : String(pidRaw);
+    if (!pid || pid === id) continue;
+    if (children.has(pid)) children.get(pid).push(id);
+  }
+
+  for (const [id, n] of byId) {
+    if (id === rootId) continue;
+    if (n?.userData?.parentId == null) {
+      const arr = children.get(rootId);
+      if (arr && !arr.includes(id)) arr.push(id);
+    }
+  }
+
+  const leaf = new Map();
+  const visiting = new Set();
+  const countLeaves = (id) => {
+    if (leaf.has(id)) return leaf.get(id);
+    if (visiting.has(id)) return 1;
+    visiting.add(id);
+    const ch = children.get(id) || [];
+    if (!ch.length) {
+      leaf.set(id, 1);
+      return 1;
+    }
+    let sum = 0;
+    for (const cid of ch) sum += countLeaves(cid);
+    sum = Math.max(1, sum);
+    leaf.set(id, sum);
+    return sum;
+  };
+
+  countLeaves(rootId);
+
+  const depthById = new Map();
+  const q = [[rootId, 0]];
+  while (q.length) {
+    const [id, d] = q.shift();
+    if (depthById.has(id)) continue;
+    depthById.set(id, d);
+    const ch = children.get(id) || [];
+    for (const cid of ch) q.push([cid, d + 1]);
+  }
+
+  const radiusStep = performanceLevel.value === 0 ? 18 : performanceLevel.value === 2 ? 42 : 28;
+  const levelGap = performanceLevel.value === 0 ? 14 : performanceLevel.value === 2 ? 32 : 22;
+
+  const place = (id, start, end) => {
+    const n = byId.get(id);
+    const depth = depthById.get(id) ?? 0;
+    const a = (start + end) / 2;
+    const r = depth === 0 ? 0 : depth * radiusStep;
+    if (n?.targetPosition) {
+      n.targetPosition.set(
+        r * Math.cos(a),
+        depth * levelGap,
+        r * Math.sin(a)
       );
     }
-  });
+
+    const ch = children.get(id) || [];
+    if (!ch.length) return;
+
+    const total = ch.reduce((acc, cid) => acc + (leaf.get(cid) || 1), 0) || 1;
+    let cur = start;
+    for (const cid of ch) {
+      const w = (leaf.get(cid) || 1) / total;
+      const next = cur + (end - start) * w;
+      place(cid, cur, next);
+      cur = next;
+    }
+  };
+
+  rootNode?.targetPosition?.set(0, 0, 0);
+  place(rootId, 0, Math.PI * 2);
 };
 
 /**
@@ -938,15 +1119,14 @@ const handleWindowResize = () => {
 const setupEventListeners = () => {
   window.addEventListener('resize', handleWindowResize);
 
-  // Mouse move for hover effects
   renderer.domElement.addEventListener('mousemove', (event) => {
+    if (selectedNode.value) return;
+
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-    // 高亮悬停的节点
     raycaster.setFromCamera(mouse, camera);
 
-    // 只检测 mesh 和 line 对象，忽略标签等辅助对象
     const interactableObjects = scene.children.filter(obj =>
       obj.isMesh || obj.isLine
     );
@@ -961,7 +1141,6 @@ const setupEventListeners = () => {
     }
   });
 
-  // Click for node selection
   renderer.domElement.addEventListener('click', (event) => {
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -974,6 +1153,8 @@ const setupEventListeners = () => {
       selectNode(clickedObject);
     } else {
       selectedNode.value = null;
+      store.setSelectedGraphNode(null);
+      resetNodeHighlights();
     }
   });
 
@@ -997,18 +1178,22 @@ const setupEventListeners = () => {
  */
 const resetNodeHighlights = () => {
   nodes.forEach(node => {
-    if (node.mesh && node.mesh.material && node.userData.originalColor !== undefined) {
-      node.mesh.material.color.setHex(node.userData.originalColor);
+    if (node.mesh && node.mesh.material) {
+      const c = node.userData.originalColor ?? getNodeColor(node.userData?.type);
+      node.mesh.material.color.setHex(c);
       if (node.mesh.material.emissive) {
-        node.mesh.material.emissive.setHex(0x000000);
+        node.mesh.material.emissive.setHex(darkMode.value ? 0x111111 : 0x000000);
+      }
+      if (typeof node.mesh.material.emissiveIntensity === 'number') {
+        node.mesh.material.emissiveIntensity = darkMode.value ? 0.2 : 0.15;
       }
     }
   });
 
   edges.forEach(edge => {
     if (edge.material) {
-      edge.material.color.setHex(0x888888);
-      edge.material.opacity = 0.6;
+      edge.material.color.setHex(darkMode.value ? 0x888888 : 0x1565C0);
+      edge.material.opacity = darkMode.value ? 0.8 : 1;
     }
   });
 };
@@ -1065,12 +1250,18 @@ const selectNode = (object) => {
       to: findNodeByPosition(object.geometry.attributes.position.array.slice(3, 6)),
       object: object
     };
-  } else {
-    selectedNode.value = {
-      ...object.userData,
-      object: object
-    };
+    store.setSelectedGraphNode(null);
+    resetNodeHighlights();
+    return;
   }
+
+  selectedNode.value = {
+    ...object.userData,
+    object: object
+  };
+
+  store.setSelectedGraphNode({ ...object.userData });
+  highlightConnectedNodes(object.userData);
 };
 
 /**
@@ -1380,7 +1571,7 @@ watch(
 
     const hit = nodes.find((n) => {
       const ud = n?.userData || {};
-      if (mode === 'path') return String(ud.path || ud.file_path || '') === value;
+      if (mode === 'path') return normalizePath(ud.path || ud.file_path || '') === normalizePath(value);
       if (mode === 'stable_id') return String(ud.stable_id || '') === value;
       return String(ud.id) === value;
     });
@@ -1388,6 +1579,8 @@ watch(
     if (hit) {
       focusOnNode(hit);
       selectedNode.value = { ...hit.userData, object: hit.mesh };
+      store.setSelectedGraphNode({ ...hit.userData });
+      highlightConnectedNodes(hit);
     }
   },
   { deep: true }

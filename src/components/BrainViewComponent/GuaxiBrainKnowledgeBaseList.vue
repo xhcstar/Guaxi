@@ -161,9 +161,10 @@ const refreshList = async () => {
 
 // 转换树形数据结构
 function convertToTreeNode(node) {
+  const key = String(node.path || '').replace(/\\/g, '/');
   return {
     label: node.name,
-    key: node.path,
+    key,
     isLeaf: !node.is_dir,
     prefix: () => h(
       NIcon,

@@ -1,6 +1,24 @@
 <template>
   <div class="right-sider-content">
     <n-space vertical :size="12" class="panel">
+      <n-card title="节点信息" size="small">
+        <n-space v-if="selectedGraphNode" vertical>
+          <n-tag :type="getNodeTagType(selectedGraphNode.type)" size="small">
+            {{ typeLabel(selectedGraphNode.type) }}
+          </n-tag>
+          <n-text v-if="selectedGraphNode.path">路径: {{ selectedGraphNode.path }}</n-text>
+          <n-text v-if="selectedGraphNode.file_path">file_path: {{ selectedGraphNode.file_path }}</n-text>
+          <n-text v-if="selectedGraphNode.stable_id">stable_id: {{ selectedGraphNode.stable_id }}</n-text>
+          <n-text v-if="selectedGraphNode.start_line">行: {{ selectedGraphNode.start_line }}</n-text>
+          <n-text v-if="Array.isArray(selectedGraphNode.tags) && selectedGraphNode.tags.length">标签: {{ selectedGraphNode.tags.join(', ') }}</n-text>
+          <n-button-group size="small">
+            <n-button @click="focusSelected">聚焦</n-button>
+            <n-button @click="clearSelected">清除</n-button>
+          </n-button-group>
+        </n-space>
+        <n-text v-else depth="3">点击图谱中的节点查看属性</n-text>
+      </n-card>
+
       <n-card title="搜索" size="small">
         <n-input v-model:value="searchQueryModel" placeholder="搜索节点..." clearable>
           <template #prefix>
@@ -59,13 +77,16 @@ import {
   NList,
   NListItem,
   NThing,
-  NText
+  NText,
+  NTag,
+  NButton,
+  NButtonGroup
 } from 'naive-ui'
 
 import { SearchOutline } from '@vicons/ionicons5'
 
 const store = useKnowledgeBaseStore()
-const { searchQuery, visibleTypes, selectedTags, graphNodes, tagOptions } = storeToRefs(store)
+const { searchQuery, visibleTypes, selectedTags, graphNodes, tagOptions, selectedGraphNode } = storeToRefs(store)
 
 const typeOptions = [
   { label: '知识库', value: 'knowledge-base' },
@@ -125,6 +146,29 @@ const typeLabel = (t) => {
   return found ? found.label : String(t || '')
 }
 
+const getNodeTagType = (type) => {
+  switch (type) {
+    case 'knowledge-base': return 'warning'
+    case 'directory': return 'info'
+    case 'file': return 'success'
+    case 'section': return 'primary'
+    case 'paragraph': return 'default'
+    default: return 'default'
+  }
+}
+
+const focusSelected = () => {
+  const n = selectedGraphNode.value
+  if (!n) return
+  if (n.id != null) store.requestFocus({ mode: 'id', value: n.id })
+  else if (n.stable_id) store.requestFocus({ mode: 'stable_id', value: n.stable_id })
+  else if (n.path || n.file_path) store.requestFocus({ mode: 'path', value: n.path || n.file_path })
+}
+
+const clearSelected = () => {
+  store.setSelectedGraphNode(null)
+}
+
 const resultDesc = (n) => {
   const parts = []
   if (n?.type) parts.push(typeLabel(n.type))
@@ -135,8 +179,10 @@ const resultDesc = (n) => {
 }
 
 const focusNode = (n) => {
-  if (!n?.id) return
-  store.requestFocus({ mode: 'id', value: n.id })
+  if (!n) return
+  if (n.id != null) store.requestFocus({ mode: 'id', value: n.id })
+  else if (n.stable_id) store.requestFocus({ mode: 'stable_id', value: n.stable_id })
+  else if (n.path) store.requestFocus({ mode: 'path', value: n.path })
 }
 </script>
 

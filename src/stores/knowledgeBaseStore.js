@@ -24,6 +24,8 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     searchQuery: "",
     visibleTypes: ["knowledge-base", "directory", "file", "section", "paragraph"],
     selectedTags: [],
+
+    selectedGraphNode: null,
   }),
 
   actions: {
@@ -103,6 +105,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
         this.tagOptions = [];
         this.searchQuery = "";
         this.selectedTags = [];
+        this.selectedGraphNode = null;
         return;
       }
 
@@ -115,6 +118,11 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
       this.focusTarget = null;
       this.searchQuery = "";
       this.selectedTags = [];
+      this.selectedGraphNode = null;
+    },
+
+    setSelectedGraphNode(node) {
+      this.selectedGraphNode = node || null;
     },
 
     /**
@@ -167,7 +175,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     },
 
     setSelectedTreeNodeKey(key) {
-      const v = key == null ? null : String(key);
+      const v = key == null ? null : String(key).replace(/\\/g, "/");
       this.selectedTreeNodeKey = v;
       if (v) {
         this.requestFocus({ mode: "path", value: v });
