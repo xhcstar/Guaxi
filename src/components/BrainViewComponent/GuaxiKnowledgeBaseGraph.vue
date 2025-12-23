@@ -200,8 +200,7 @@ const hasValidKnowledgeBase = computed(() => {
 const layoutOptions = [
   { label: '力导向布局', value: 'force' },
   { label: '层次布局', value: 'hierarchical' },
-  { label: '球形布局', value: 'spherical' },
-  { label: '树状布局', value: 'tree' }
+  { label: '球形布局', value: 'spherical' }
 ];
 
 // Performance level marks for slider
@@ -213,27 +212,21 @@ const performanceMarks = {
 
 const layoutViewConfig = {
   force: {
-    biasY: 0,
+    biasY: -0.75,
     minDistanceFactor: 0.08,
     maxDistanceFactor: 20,
     maxRadius: 800
   },
   hierarchical: {
-    biasY: 0.28,
+    biasY: -0.6,
     minDistanceFactor: 0.08,
     maxDistanceFactor: 18,
     maxRadius: 800
   },
   spherical: {
-    biasY: 0,
+    biasY: -0.6,
     minDistanceFactor: 0.12,
     maxDistanceFactor: 14,
-    maxRadius: 600
-  },
-  tree: {
-    biasY: 0.22,
-    minDistanceFactor: 0.06,
-    maxDistanceFactor: 12,
     maxRadius: 600
   }
 };
@@ -465,7 +458,7 @@ const initThreeJS = () => {
     0.1, // Near clip
     10000 // Far clip
   );
-  camera.position.set(120, -140, 160); // Initial camera position (match resetCamera)
+  camera.position.set(120, 140, 160); // Initial camera position (match resetCamera)
 
   console.log('[initThreeJS]', 'camera', camera);
   // 3. Create WebGL renderer with performance settings
@@ -510,8 +503,7 @@ const initThreeJS = () => {
 
   if (camera && renderer?.domElement) {
     controls = new OrbitControls(camera, renderer.domElement);
-    controls.autoRotate = autoRotate.value;
-    controls.autoRotateSpeed = 0.5;
+    controls.autoRotate = false;
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.enableZoom = true;
@@ -658,7 +650,7 @@ const ensureViewInBounds = (options = {}) => {
   let center = sphere.center.clone();
   const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
   const rawBiasOff = radius * bias;
-  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -220, 220);
+  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -1200, 1200);
   if (Math.abs(rawBiasOff - biasOff) > 1e-6) {
     warn('视野偏置已钳制', { rawBiasOff, biasOff, radius, bias, layout: currentLayout?.value });
   }
@@ -723,7 +715,7 @@ const frameAllNodes = (options = {}) => {
   const center = sphere.center.clone();
   const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
   const rawBiasOff = radius * bias;
-  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -220, 220);
+  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -1200, 1200);
   if (Math.abs(rawBiasOff - biasOff) > 1e-6) {
     warn('Frame 视野偏置已钳制', { rawBiasOff, biasOff, radius, bias, layout: currentLayout?.value });
   }
@@ -751,33 +743,66 @@ const frameAllNodes = (options = {}) => {
 };
 
 /**
- * Reset camera to default position and orientation
+ * Reset camera to default position and orientation (Animated)
  */
 const resetCamera = () => {
   if (!camera || !controls) return;
 
-  camera.position.set(120, -140, 160);
-  controls.target.set(0, 0, 0);
-  controls.update();
-
-  if (nodes.length) {
-    frameAllNodes({ useTargetPositions: true });
-    setTimeout(() => ensureViewInBounds({ mode: 'graph', recenter: true, useTargetPositions: true }), 150);
+  const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
+  if (!sphere) {
+    // If no nodes, just reset to origin
+    gsap.timeline({
+      defaults: { duration: 0.8, ease: 'power2.inOut' },
+      onUpdate: () => controls.update()
+    })
+      .to(controls.target, { x: 0, y: 0, z: 0 }, 0)
+      .to(camera.position, { x: 120, y: 140, z: 160 }, 0);
+    return;
   }
 
-  log('相机已重置');
+  // Calculate layout-specific params
+  const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
+  const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
+  const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
+  
+  const radius = THREE.MathUtils.clamp(sphere.radius, minRadius, maxRadius);
+  
+  const center = sphere.center.clone();
+  const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
+  const biasOff = THREE.MathUtils.clamp(radius * bias, -1200, 1200);
+  center.y += biasOff;
+
+  // Standard reset direction (120, 140, 160)
+  const dir = new THREE.Vector3(120, 140, 160).normalize();
+  
+  // Calculate fit distance
+  const vFov = THREE.MathUtils.degToRad(camera.fov || 60);
+  const aspect = Number(camera.aspect) > 0 ? Number(camera.aspect) : (container.value?.clientWidth / container.value?.clientHeight) || 1;
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+  const fitFov = Math.min(vFov, hFov);
+  
+  const padding = Number(cfg.framePadding) > 0 ? cfg.framePadding : 1.18;
+  const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * padding;
+  
+  const finalCamPos = center.clone().add(dir.multiplyScalar(distance));
+
+  // Animate
+  gsap.timeline({
+    defaults: { duration: 0.8, ease: 'power2.inOut' },
+    onUpdate: () => controls.update()
+  })
+    .to(controls.target, { x: center.x, y: center.y, z: center.z }, 0)
+    .to(camera.position, { x: finalCamPos.x, y: finalCamPos.y, z: finalCamPos.z }, 0);
+
+  log('相机已重置 (Animated)');
 };
 
 /**
  * Toggle auto-rotation of the graph
  */
 const toggleAutoRotate = () => {
-  if (!controls) return;
-
   autoRotate.value = !autoRotate.value;
-  controls.autoRotate = autoRotate.value;
-
-  log(`自动旋转已${autoRotate.value ? '开启' : '关闭'}`);
+  log(`节点自转已${autoRotate.value ? '开启' : '关闭'}`);
 };
 
 /**
@@ -1517,180 +1542,6 @@ const sphericalLayout = () => {
 };
 
 /**
- * Apply tree layout to nodes
- */
-const treeLayout = () => {
-  stopActiveSimulation();
-  log('应用树状布局(分层树：围绕父节点展开 + 防重叠)');
-
-  if (!nodes.length) return;
-
-  const byId = new Map();
-  nodes.forEach((n, idx) => {
-    const id = String(n?.userData?.id ?? `__i_${idx}`);
-    byId.set(id, n);
-  });
-
-  const rootNode =
-    nodes.find(n => n?.userData?.type === 'knowledge-base') ||
-    nodes.find(n => n?.userData?.parentId == null) ||
-    nodes[0];
-  const rootId = String(rootNode?.userData?.id ?? '__i_0');
-
-  // 1) 构建父子关系与 depth
-  const parentById = new Map();
-  const childrenById = new Map();
-  for (const [id, n] of byId) {
-    const pidRaw = n?.userData?.parentId;
-    const pid = (pidRaw === null || pidRaw === undefined || pidRaw === '') ? null : String(pidRaw);
-    if (pid && byId.has(pid) && pid !== id) {
-      parentById.set(id, pid);
-      if (!childrenById.has(pid)) childrenById.set(pid, []);
-      childrenById.get(pid).push(id);
-    }
-  }
-
-  const depthById = new Map([[rootId, 0]]);
-  const q = [rootId];
-  while (q.length) {
-    const pid = q.shift();
-    const kids = childrenById.get(pid) || [];
-    for (const cid of kids) {
-      if (depthById.has(cid)) continue;
-      depthById.set(cid, (depthById.get(pid) || 0) + 1);
-      q.push(cid);
-    }
-  }
-
-  // 孤立节点挂到 root，避免堆叠在原点
-  for (const [id] of byId) {
-    if (id === rootId) continue;
-    if (!depthById.has(id)) {
-      depthById.set(id, 1);
-      parentById.set(id, rootId);
-      if (!childrenById.has(rootId)) childrenById.set(rootId, []);
-      childrenById.get(rootId).push(id);
-    }
-  }
-
-  let maxDepth = 0;
-  for (const [, d] of depthById) maxDepth = Math.max(maxDepth, d);
-
-  // 2) 初始位置：子节点围绕父节点分布在更外层（不是所有节点落在同一个全局圆环）
-  const golden = 2.399963229728653;
-  const stepY = performanceLevel.value === 0 ? 46 : performanceLevel.value === 2 ? 78 : 58;
-  const baseChildR = performanceLevel.value === 0 ? 18 : performanceLevel.value === 2 ? 42 : 30;
-  const stepChildR = performanceLevel.value === 0 ? 16 : performanceLevel.value === 2 ? 34 : 24;
-  const countSpread = performanceLevel.value === 0 ? 9 : performanceLevel.value === 2 ? 14 : 11;
-
-  const nodeDatas = [];
-  const links = [];
-  const placed = new Map();
-  placed.set(rootId, { x: 0, y: 0, z: 0 });
-
-  const stack = [rootId];
-  while (stack.length) {
-    const pid = stack.shift();
-    const p = placed.get(pid) || { x: 0, y: 0, z: 0 };
-    const depth = depthById.get(pid) ?? 0;
-    const kids = childrenById.get(pid) || [];
-
-    const k = kids.length;
-    const childBase = baseChildR + (depth + 1) * stepChildR * (1 + depth * 0.35);
-    const discR = Math.max(childBase, Math.sqrt(Math.max(1, k)) * countSpread * 2.2);
-
-    for (let i = 0; i < k; i++) {
-      const cid = kids[i];
-      const cd = depthById.get(cid) ?? (depth + 1);
-
-      const t = (i + 0.5) / k;
-      const minChildR = Math.min(20 + depth * 6, discR * 0.45);
-      const r = Math.max(minChildR, discR * Math.sqrt(t));
-      const a = (i + 1) * golden + (depth + 1) * 0.35;
-
-      const x = p.x + Math.cos(a) * r;
-      const z = p.z + Math.sin(a) * r;
-      const y = -cd * stepY;
-
-      placed.set(cid, { x, y, z });
-      stack.push(cid);
-      links.push({ source: pid, target: cid, depth: cd, dist: r });
-    }
-  }
-
-  for (const [id] of byId) {
-    const depth = depthById.get(id) ?? 0;
-    const p = placed.get(id) || { x: 0, y: -depth * stepY, z: 0 };
-    nodeDatas.push({ id, depth, x: p.x, y: p.y, z: p.z, fx: id === rootId ? 0 : undefined, fy: id === rootId ? 0 : undefined, fz: id === rootId ? 0 : undefined });
-  }
-
-  // 3) 松弛：让节点更均匀、减少重叠，同时保持“层层分开”的层级平面
-  const forceLevelY = (strength = 0.35) => {
-    let ns = [];
-    function f(alpha) {
-      for (const d of ns) {
-        if (d.fy != null) continue;
-        const depth = Number.isFinite(d.depth) ? d.depth : 0;
-        const ty = -depth * stepY;
-        const y = d.y || 0;
-        d.vy = (d.vy || 0) + (ty - y) * strength * alpha;
-      }
-    }
-    f.initialize = (_) => { ns = _ || []; };
-    return f;
-  };
-
-  const dynamicRadius = () => {
-    if (nodes.length > 1800) return 3;
-    if (nodes.length > 900) return 5;
-    return 8;
-  };
-
-  const collisionRadius = (d) => (String(d.id) === rootId ? 14 : dynamicRadius());
-  const chargeStrength = performanceLevel.value === 0 ? -16 : performanceLevel.value === 2 ? -44 : -28;
-
-  const durationMs = performanceLevel.value === 0 ? 650 : performanceLevel.value === 2 ? 1400 : 950;
-
-  const simulation = d3.forceSimulation(nodeDatas)
-    .numDimensions(3)
-    .alpha(1)
-    .alphaDecay(0.12)
-    .velocityDecay(0.58)
-    .force('link', d3.forceLink(links)
-      .id(d => String(d.id))
-      .distance(l => Math.max(12, Number(l?.dist) || 22))
-      .strength(0.8)
-    )
-    .force('charge', d3.forceManyBody().strength(chargeStrength))
-    .force('collision', d3.forceCollide().radius(collisionRadius))
-    .force('levelY', forceLevelY(0.35));
-
-  activeSimulation = simulation;
-  log('树状布局仿真开始', { nodes: nodes.length, maxDepth, durationMs, collisionR: dynamicRadius() });
-
-  simulation.on('tick', () => {
-    for (const d of nodeDatas) {
-      const n = byId.get(String(d.id));
-      if (!n?.targetPosition) continue;
-      const x = Number.isFinite(d.x) ? d.x : 0;
-      const y = Number.isFinite(d.y) ? d.y : 0;
-      const z = Number.isFinite(d.z) ? d.z : 0;
-      n.targetPosition.set(x, y, z);
-    }
-  });
-
-  setTimeout(() => {
-    if (activeSimulation === simulation) {
-      simulation.stop();
-      activeSimulation = null;
-    } else {
-      simulation.stop();
-    }
-    log('树状布局仿真结束', { nodes: nodes.length, maxDepth });
-  }, durationMs);
-};
-
-/**
  * Set up lighting for the scene
  */
 const setupLighting = () => {
@@ -2157,9 +2008,6 @@ const applyLayout = async (layoutType) => {
         case 'spherical':
           sphericalLayout();
           break;
-        case 'tree':
-          treeLayout();
-          break;
         default:
           forceDirectedLayout();
       }
@@ -2186,6 +2034,108 @@ const applyLayout = async (layoutType) => {
  * Animation loop for continuous rendering
  */
 let animationFrameId = null;
+let autoSpinLastTime = performance.now();
+
+const _autoSpinAxis = new THREE.Vector3(0, 1, 0);
+const _autoSpinCenter = new THREE.Vector3();
+const _autoSpinTmp = new THREE.Vector3();
+const _autoSpinQuat = new THREE.Quaternion();
+
+const applyAutoSpin = (dt) => {
+  if (!autoRotate.value) return false;
+  if (!nodes.length) return false;
+  if (isUserInteracting.value) return false;
+
+  const angle = dt * 0.05;
+  if (!Number.isFinite(angle) || Math.abs(angle) < 1e-8) return false;
+
+  // 计算所有节点的几何中心（质心）
+  // 使用 targetPosition 计算更稳定，避免动画过程中的抖动
+  let cx = 0, cy = 0, cz = 0;
+  let count = 0;
+  for (const n of nodes) {
+    const p = n.targetPosition;
+    if (p && isFiniteVec3(p)) {
+      cx += p.x;
+      cy += p.y;
+      cz += p.z;
+      count++;
+    }
+  }
+
+  if (count > 0) {
+    _autoSpinCenter.set(cx / count, cy / count, cz / count);
+  } else {
+    _autoSpinCenter.set(0, 0, 0);
+  }
+
+  _autoSpinQuat.setFromAxisAngle(_autoSpinAxis, angle);
+
+  for (const n of nodes) {
+    const mesh = n?.mesh;
+    const tp = n?.targetPosition;
+
+    if (mesh && isFiniteVec3(mesh.position)) {
+      _autoSpinTmp.copy(mesh.position).sub(_autoSpinCenter).applyQuaternion(_autoSpinQuat).add(_autoSpinCenter);
+      mesh.position.copy(_autoSpinTmp);
+    }
+
+    if (tp && isFiniteVec3(tp)) {
+      _autoSpinTmp.copy(tp).sub(_autoSpinCenter).applyQuaternion(_autoSpinQuat).add(_autoSpinCenter);
+      tp.copy(_autoSpinTmp);
+    }
+  }
+
+  return true;
+};
+
+const updateNodeLabels = () => {
+  if (!camera || !nodes.length) return;
+  const isCrowded = nodes.length > 80;
+  const camPos = camera.position;
+  
+  for (const node of nodes) {
+    const mesh = node?.mesh;
+    if (!mesh || !mesh.visible) continue;
+    
+    const label = mesh.children.find(c => c.isCSS2DObject);
+    if (!label) continue;
+    
+    // 如果节点很少，总是显示
+    if (!isCrowded) {
+        if (!label.visible) label.visible = true;
+        label.element.style.opacity = '1';
+        continue;
+    }
+
+    const type = node.userData?.type;
+    // 重要节点始终显示 (知识库、目录)
+    const isImportant = type === 'knowledge-base' || type === 'directory' || type === 'file';
+    // 选中节点始终显示
+    const isSelected = selectedNode.value && String(selectedNode.value.id) === String(node.userData.id);
+    // 高亮节点(红色)始终显示
+    const isHighlighted = mesh.material.color.getHex() === 0xff0000;
+    
+    if (isImportant || isSelected || isHighlighted) {
+      label.visible = true;
+      label.element.style.opacity = '1';
+      label.element.style.zIndex = isSelected || isHighlighted ? '100' : '10';
+    } else {
+      const d = mesh.position.distanceTo(camPos);
+      const maxDist = 100; // 可见距离阈值
+      
+      if (d < maxDist) {
+        label.visible = true;
+        // 随距离渐变
+        const op = Math.max(0.1, 1 - (d / maxDist) * 0.9);
+        label.element.style.opacity = op.toFixed(2);
+        label.element.style.zIndex = '1';
+      } else {
+        label.visible = false;
+      }
+    }
+  }
+};
 
 const animate = () => {
   animationFrameId = requestAnimationFrame(animate);
@@ -2198,9 +2148,13 @@ const animate = () => {
     }
   }
 
+  const now = performance.now();
+  const dt = Math.min(0.05, Math.max(0, (now - autoSpinLastTime) / 1000));
+  autoSpinLastTime = now;
+
   applyRoamMovement();
 
-  let moved = false;
+  let moved = applyAutoSpin(dt);
   for (const node of nodes) {
     const mesh = node?.mesh;
     const target = node?.targetPosition;
@@ -2230,6 +2184,7 @@ const animate = () => {
   if (composer) composer.render();
   else renderer.render(scene, camera);
 
+  updateNodeLabels();
   labelRenderer?.render(scene, camera);
 };
 
@@ -2238,6 +2193,7 @@ const startAnimate = () => {
     cancelAnimationFrame(animationFrameId);
     animationFrameId = null;
   }
+  autoSpinLastTime = performance.now();
   animate();
 };
 
