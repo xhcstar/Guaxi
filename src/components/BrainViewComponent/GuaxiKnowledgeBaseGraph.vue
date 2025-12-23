@@ -3,43 +3,112 @@
   <div class="knowledge-graph-container" :class="{ 'dark-mode': darkMode }">
     <!-- Toolbar section with graph controls -->
     <div class="toolbar">
-      <n-space>
-        <!-- Reset camera view button -->
-        <n-button size="small" @click="resetCamera">
-          <template #icon><n-icon>
-              <CompassOutline />
-            </n-icon></template>
-          重置视角
-        </n-button>
+    <n-space align="center" size="small">
+      <!-- Reset camera view button -->
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-button size="small" secondary circle @click="resetCamera">
+            <template #icon><n-icon>
+                <CompassOutline />
+              </n-icon></template>
+          </n-button>
+        </template>
+        重置视角
+      </n-tooltip>
 
-        <!-- Toggle auto-rotation button -->
-        <n-button size="small" @click="toggleAutoRotate">
-          <template #icon><n-icon>
-              <SyncOutline />
-            </n-icon></template>
-          {{ autoRotate ? '停止旋转' : '自动旋转' }}
-        </n-button>
+      <!-- Toggle auto-rotation button -->
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-button size="small" secondary circle :type="autoRotate ? 'primary' : 'default'" @click="toggleAutoRotate">
+            <template #icon><n-icon>
+                <SyncOutline />
+              </n-icon></template>
+          </n-button>
+        </template>
+        {{ autoRotate ? '停止旋转' : '自动旋转' }}
+      </n-tooltip>
 
-        <!-- Toggle dark mode button -->
-        <n-button size="small" @click="toggleDarkMode">
-          <template #icon><n-icon>
-              <MoonOutline />
-            </n-icon></template>
-          {{ darkMode ? '亮色模式' : '暗色模式' }}
-        </n-button>
+      <!-- Toggle dark mode button -->
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-button size="small" secondary circle @click="toggleDarkMode">
+            <template #icon><n-icon>
+                <MoonOutline />
+              </n-icon></template>
+          </n-button>
+        </template>
+        {{ darkMode ? '亮色模式' : '暗色模式' }}
+      </n-tooltip>
 
-        <!-- Layout selection dropdown -->
-        <n-select v-model:value="currentLayout" :options="layoutOptions" size="small" style="width: 120px" />
+      <!-- Layout selection popover -->
+      <n-popover trigger="click" placement="bottom">
+        <template #trigger>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button size="small" secondary circle>
+                <template #icon><n-icon>
+                    <LayersOutline />
+                  </n-icon></template>
+              </n-button>
+            </template>
+            布局设置
+          </n-tooltip>
+        </template>
+        <div style="width: 160px; padding: 4px;">
+          <div style="margin-bottom: 8px; font-weight: 500; font-size: 12px;">布局模式</div>
+          <n-select v-model:value="currentLayout" :options="layoutOptions" size="small" />
+        </div>
+      </n-popover>
 
-        <!-- Performance level slider -->
-        <n-slider v-model:value="performanceLevel" :step="1" :min="0" :max="2" :marks="performanceMarks"
-          style="width: 150px" />
+      <!-- Performance level popover -->
+      <n-popover trigger="click" placement="bottom">
+        <template #trigger>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button size="small" secondary circle>
+                <template #icon><n-icon>
+                    <SpeedometerOutline />
+                  </n-icon></template>
+              </n-button>
+            </template>
+            性能设置
+          </n-tooltip>
+        </template>
+        <div style="width: 200px; padding: 4px;">
+          <div style="margin-bottom: 8px; font-weight: 500; font-size: 12px;">渲染质量</div>
+          <n-slider v-model:value="performanceLevel" :step="1" :min="0" :max="2" :marks="performanceMarks" />
+        </div>
+      </n-popover>
 
-        <n-switch v-model:value="glowEnabled" size="small">星光</n-switch>
-        <n-slider v-model:value="glowStrength" :min="0" :max="2.5" :step="0.05" :disabled="!glowEnabled" style="width: 120px" />
-        <n-slider v-model:value="glowSize" :min="6" :max="44" :step="1" :disabled="!glowEnabled" style="width: 110px" />
-      </n-space>
-    </div>
+      <!-- Glow effect popover -->
+      <n-popover trigger="click" placement="bottom">
+        <template #trigger>
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button size="small" secondary circle :type="glowEnabled ? 'primary' : 'default'">
+                <template #icon><n-icon>
+                    <SparklesOutline />
+                  </n-icon></template>
+              </n-button>
+            </template>
+            视觉特效
+          </n-tooltip>
+        </template>
+        <div style="width: 220px; padding: 4px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span style="font-weight: 500; font-size: 12px;">星光特效</span>
+            <n-switch v-model:value="glowEnabled" size="small" />
+          </div>
+          <div v-if="glowEnabled">
+            <div style="font-size: 11px; color: #666; margin-bottom: 4px;">强度</div>
+            <n-slider v-model:value="glowStrength" :min="0" :max="2.5" :step="0.05" />
+            <div style="font-size: 11px; color: #666; margin: 12px 0 4px;">光晕大小</div>
+            <n-slider v-model:value="glowSize" :min="6" :max="44" :step="1" />
+          </div>
+        </div>
+      </n-popover>
+    </n-space>
+  </div>
 
     <!-- Three.js rendering container -->
     <div ref="container" class="graph-container"></div>
@@ -138,11 +207,19 @@ import { storeToRefs } from 'pinia';
 // UI components from Naive UI
 import {
   NButton, NSpace, NIcon, NCard, NText, NAlert, NSpin,
-  NSelect, NSlider, NProgress, NSwitch
+  NSelect, NSlider, NProgress, NSwitch, NTooltip, NPopover
 } from 'naive-ui';
 
 // Icons from Ionicons
-import { CompassOutline, SyncOutline, MoonOutline, EyeOutline } from '@vicons/ionicons5';
+import { 
+  CompassOutline, 
+  SyncOutline, 
+  MoonOutline, 
+  EyeOutline,
+  LayersOutline,
+  SpeedometerOutline,
+  SparklesOutline
+} from '@vicons/ionicons5';
 
 // Initialize Pinia store
 const store = useKnowledgeBaseStore();
@@ -199,7 +276,6 @@ const hasValidKnowledgeBase = computed(() => {
 // Layout options for dropdown
 const layoutOptions = [
   { label: '力导向布局', value: 'force' },
-  { label: '层次布局', value: 'hierarchical' },
   { label: '球形布局', value: 'spherical' }
 ];
 
@@ -215,12 +291,6 @@ const layoutViewConfig = {
     biasY: -0.75,
     minDistanceFactor: 0.08,
     maxDistanceFactor: 20,
-    maxRadius: 800
-  },
-  hierarchical: {
-    biasY: -0.6,
-    minDistanceFactor: 0.08,
-    maxDistanceFactor: 18,
     maxRadius: 800
   },
   spherical: {
@@ -534,15 +604,12 @@ const initThreeJS = () => {
 
     controls.addEventListener('end', () => {
       isUserInteracting.value = false;
-      ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
+      // 交互结束时，更新一下控制器的边界限制，但不要强制重置位置
+      ensureViewInBounds({ mode: 'graph', recenter: false });
     });
 
-    controls.addEventListener('change', () => {
-      if (ensureViewTimer) clearTimeout(ensureViewTimer);
-      ensureViewTimer = setTimeout(() => {
-        if (!isUserInteracting.value) ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
-      }, 160);
-    });
+    // 移除 change 事件监听，避免死循环导致的视角漂移
+    // controls.addEventListener('change', () => { ... });
   } else {
     console.error('初始化控制器失败: camera或renderer.domElement未定义');
   }
@@ -630,16 +697,15 @@ const getVisibleTargetBoundingSphere = () => {
 
 const ensureViewInBounds = (options = {}) => {
   if (!camera || !controls) return;
+  const { mode = 'graph', recenter = false, useTargetPositions = false } = options;
 
-  const mode = options.mode || 'auto';
-  const recenter = options.recenter !== false;
-  const useTargetPositions = options.useTargetPositions === true;
-
-  let sphere = useTargetPositions
-    ? (getVisibleTargetBoundingSphere() || getVisibleBoundingSphere())
+  // 1. 获取包围球
+  const sphere = useTargetPositions 
+    ? (getVisibleTargetBoundingSphere() || getVisibleBoundingSphere()) 
     : getVisibleBoundingSphere();
-  if (!sphere) return;
+  if (!sphere) return; // 没有可见节点，不做处理
 
+  // 2. 计算合适的距离范围
   const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
   const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
   const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
@@ -647,51 +713,43 @@ const ensureViewInBounds = (options = {}) => {
   let radius = Math.max(1, sphere.radius);
   radius = THREE.MathUtils.clamp(radius, minRadius, maxRadius);
 
+  // 3. 计算中心点偏置
   let center = sphere.center.clone();
   const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
-  const rawBiasOff = radius * bias;
-  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -1200, 1200);
-  if (Math.abs(rawBiasOff - biasOff) > 1e-6) {
-    warn('视野偏置已钳制', { rawBiasOff, biasOff, radius, bias, layout: currentLayout?.value });
-  }
+  const biasOff = THREE.MathUtils.clamp(radius * bias, -1200, 1200);
   center.y += biasOff;
 
+  // 4. 特殊模式下的中心点调整
   if (mode === 'auto' || mode === 'node') {
     const sel = selectedNode.value;
     if (sel && sel.type !== 'edge') {
       const gn = resolveGraphNode(sel);
       const p = gn?.mesh?.position;
-      if (p) center = p.clone();
+      if (p && isFiniteVec3(p)) center = p.clone();
     }
   }
 
+  // 5. 设置控制器的距离限制
   const minFactor = Number(cfg.minDistanceFactor) > 0 ? cfg.minDistanceFactor : 0.08;
   const maxFactor = Number(cfg.maxDistanceFactor) > 0 ? cfg.maxDistanceFactor : 20;
 
   const minD = Math.max(2, Math.min(radius * minFactor, 12));
   const maxD = Math.max(minD + 20, radius * maxFactor);
+  
   controls.minDistance = minD;
   controls.maxDistance = Math.max(Number(controls.maxDistance) || 0, maxD);
 
+  // 6. 如果需要重置中心，平滑移动 Target
   if (recenter) {
     const targetDelta = center.clone().sub(controls.target);
-    if (targetDelta.lengthSq() > 1e-6) {
+    if (targetDelta.lengthSq() > 1e-6 && isFiniteVec3(targetDelta)) {
       controls.target.add(targetDelta);
       camera.position.add(targetDelta);
     }
   }
 
-  const dir = camera.position.clone().sub(controls.target);
-  if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1);
-
-  let dist = dir.length();
-  const clamped = THREE.MathUtils.clamp(dist, minD * 1.02, maxD * 0.98);
-
-  if (Math.abs(clamped - dist) > 1e-3) {
-    dir.normalize().multiplyScalar(clamped);
-    camera.position.copy(controls.target.clone().add(dir));
-  }
-
+  // 7. 让 OrbitControls 自动处理距离约束，不再手动强制设置 camera.position
+  // 这样可以避免与 controls.update() 的冲突和死循环
   controls.update();
 };
 
@@ -747,6 +805,10 @@ const frameAllNodes = (options = {}) => {
  */
 const resetCamera = () => {
   if (!camera || !controls) return;
+
+  // 强制修复可能损坏的坐标 (NaN/Infinity)
+  if (!isFiniteVec3(camera.position)) camera.position.set(120, 140, 160);
+  if (!isFiniteVec3(controls.target)) controls.target.set(0, 0, 0);
 
   const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
   if (!sphere) {
@@ -837,9 +899,8 @@ const toggleDarkMode = () => {
   // 更新边材质
   edges.forEach(edge => {
     if (edge.material) {
-      edge.material.color.setHex(darkMode.value ? 0x888888 : 0x1565C0);
-      edge.material.linewidth = darkMode.value ? 1 : 2;
-      edge.material.opacity = darkMode.value ? 0.8 : 0.9;
+      edge.material.color.setHex(darkMode.value ? 0x445566 : 0xB0BEC5); // 更暗淡的蓝灰色
+      edge.material.opacity = darkMode.value ? 0.25 : 0.3;
       edge.material.needsUpdate = true;
     }
   });
@@ -1234,12 +1295,13 @@ const createNodesAndEdges = async (data) => {
 
 
       const material = new THREE.LineBasicMaterial({
-        color: darkMode.value ? 0x888888 : 0x1565C0,
-        linewidth: darkMode.value ? 1 : 2,
+        color: darkMode.value ? 0x445566 : 0xB0BEC5, // 更暗淡的蓝灰色
+        linewidth: 1,
         transparent: true,
-        opacity: darkMode.value ? 0.8 : 1,
+        opacity: darkMode.value ? 0.25 : 0.3,
         depthTest: true,
-        depthWrite: true
+        depthWrite: false, // 避免遮挡节点
+        blending: THREE.NormalBlending
       });
 
       const line = new THREE.Line(geometry, material);
@@ -1411,60 +1473,6 @@ const forceDirectedLayout = () => {
   });
 
   setTimeout(() => simulation.stop(), 1200);
-};
-
-/**
- * Apply hierarchical layout to nodes
- */
-const hierarchicalLayout = () => {
-  stopActiveSimulation();
-  log('应用层次布局(千层饼：同级同平面 + 均匀铺开)');
-
-  if (!nodes.length) return;
-
-  // 规则：
-  // - 同一 depth 的节点放在同一平面(y 固定)，像“千层饼”
-  // - 在 xz 平面用黄金角(向日葵)均匀铺开，并随该层节点数自适应半径，减少重叠
-  const golden = 2.399963229728653;
-  const layerY = performanceLevel.value === 0 ? 34 : performanceLevel.value === 2 ? 64 : 46;
-  const minDisc = performanceLevel.value === 0 ? 30 : performanceLevel.value === 2 ? 85 : 55;
-  const spacing = performanceLevel.value === 0 ? 10 : performanceLevel.value === 2 ? 18 : 13;
-
-  const byDepth = new Map();
-  nodes.forEach((node, idx) => {
-    const ud = node?.userData || {};
-    const depth = Number.isFinite(ud.depth) ? Number(ud.depth) : (ud.parentId ? 1 : 0);
-    if (!byDepth.has(depth)) byDepth.set(depth, []);
-    byDepth.get(depth).push({ node, idx });
-  });
-
-  for (const [depth, arr] of byDepth) {
-    const k = arr.length;
-    const y = -depth * layerY;
-
-    // 同层节点越多，圆盘半径越大
-    const discR = Math.max(minDisc + depth * spacing * 1.1, Math.sqrt(Math.max(1, k)) * spacing * 2.2);
-
-    for (let i = 0; i < k; i++) {
-      const { node, idx } = arr[i];
-      if (!node?.targetPosition) continue;
-
-      if (depth === 0) {
-        node.targetPosition.set(0, 0, 0);
-        continue;
-      }
-
-      const t = (i + 0.5) / k;
-      const r = discR * Math.sqrt(t);
-      const a = (idx + 1) * golden + depth * 0.37;
-
-      const x = Math.cos(a) * r;
-      const z = Math.sin(a) * r;
-      node.targetPosition.set(x, y, z);
-    }
-  }
-
-  log('层次布局完成', { layers: byDepth.size, nodes: nodes.length });
 };
 
 /**
@@ -1698,8 +1706,8 @@ const resetNodeHighlights = () => {
 
   edges.forEach(edge => {
     if (edge.material) {
-      edge.material.color.setHex(darkMode.value ? 0x888888 : 0x1565C0);
-      edge.material.opacity = darkMode.value ? 0.8 : 1;
+      edge.material.color.setHex(darkMode.value ? 0x445566 : 0xB0BEC5);
+      edge.material.opacity = darkMode.value ? 0.25 : 0.3;
     }
   });
 };
@@ -2001,9 +2009,6 @@ const applyLayout = async (layoutType) => {
       switch (layoutType) {
         case 'force':
           forceDirectedLayout();
-          break;
-        case 'hierarchical':
-          hierarchicalLayout();
           break;
         case 'spherical':
           sphericalLayout();
@@ -2546,20 +2551,21 @@ onBeforeUnmount(() => {
 
 /* Toolbar styling */
 .toolbar {
-  padding: 8px 16px;
+  padding: 8px 12px;
   z-index: 10;
-  background-color: var(--toolbar-bg, rgba(255, 255, 255, 0.9));
-  border-bottom: 1px solid var(--toolbar-border, #e0e0e0);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background-color: var(--toolbar-bg, rgba(255, 255, 255, 0.85));
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--toolbar-border, rgba(0, 0, 0, 0.05));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-/* 暗色模式下的工具栏 */
 .dark-mode .toolbar {
-  padding: 8px 16px;
-  z-index: 10;
-  background-color: var(--toolbar-bg, rgba(255, 255, 255, 0.9));
-  border-bottom: 1px solid var(--toolbar-border, #e0e0e0);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background-color: var(--toolbar-bg, rgba(30, 30, 30, 0.8));
+  border-bottom: 1px solid var(--toolbar-border, rgba(255, 255, 255, 0.1));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 /* Graph container styling */
