@@ -213,7 +213,7 @@ const performanceMarks = {
 
 const layoutViewConfig = {
   force: {
-    biasY: -0.5,
+    biasY: -1,
     minDistanceFactor: 0.08,
     maxDistanceFactor: 20,
     maxRadius: 800
@@ -225,7 +225,7 @@ const layoutViewConfig = {
     maxRadius: 800
   },
   spherical: {
-    biasY: -0.5,
+    biasY: -1,
     minDistanceFactor: 0.12,
     maxDistanceFactor: 14,
     maxRadius: 600
@@ -314,6 +314,124 @@ const followPointer = new THREE.Vector2(0, 0);
 const followCurrentOffset = new THREE.Vector3(0, 0, 0);
 let followEnabled = true;
 
+// 漫游控制（键盘）
+// - WASD: 前后左右
+// - Q/E: 下/上
+// - Shift: 加速
+// - F: 聚焦选中节点
+// - R: 重置视角
+// - Space: 切换自动旋转
+// - Esc: 取消选择
+// - G: 切换漫游开关
+const roamEnabled = ref(true);
+const roamBaseSpeed = ref(220);
+const roamBoostMultiplier = ref(3);
+const roamKeysDown = new Set();
+let roamLastTs = 0;
+
+const shouldIgnoreKeyEvent = (event) => {
+  const el = event?.target;
+  if (!el) return false;
+  const tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return !!el.isContentEditable;
+};
+
+const handleKeyDown = (event) => {
+  if (!event || shouldIgnoreKeyEvent(event)) return;
+
+  if (event.code === 'Escape') {
+    selectedNode.value = null;
+    store.setSelectedGraphNode(null);
+    resetNodeHighlights();
+    log('键盘: 取消选择');
+    return;
+  }
+
+  if (event.code === 'Space') {
+    event.preventDefault();
+    toggleAutoRotate();
+    return;
+  }
+
+  if (event.code === 'KeyR') {
+    resetCamera();
+    log('键盘: 重置视角');
+    return;
+  }
+
+  if (event.code === 'KeyG') {
+    roamEnabled.value = !roamEnabled.value;
+    roamKeysDown.clear();
+    log(`键盘: 漫游已${roamEnabled.value ? '开启' : '关闭'}`);
+    return;
+  }
+
+  if (event.code === 'KeyF') {
+    if (selectedNode.value) {
+      focusOnNode(selectedNode.value);
+      log('键盘: 聚焦到选中节点');
+    }
+    return;
+  }
+
+  if (event.repeat) return;
+  roamKeysDown.add(event.code);
+};
+
+const handleKeyUp = (event) => {
+  if (!event) return;
+  roamKeysDown.delete(event.code);
+};
+
+const applyRoamMovement = () => {
+  if (!roamEnabled.value || !camera || !controls) return;
+
+  const now = performance.now();
+  if (!roamLastTs) {
+    roamLastTs = now;
+    return;
+  }
+
+  const dt = Math.min(0.05, Math.max(0, (now - roamLastTs) / 1000));
+  roamLastTs = now;
+  if (dt <= 0 || roamKeysDown.size === 0) return;
+
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.normalize();
+
+  const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+  const up = camera.up.clone().normalize();
+
+  const move = new THREE.Vector3(0, 0, 0);
+  if (roamKeysDown.has('KeyW')) move.add(forward);
+  if (roamKeysDown.has('KeyS')) move.sub(forward);
+  if (roamKeysDown.has('KeyD')) move.add(right);
+  if (roamKeysDown.has('KeyA')) move.sub(right);
+  if (roamKeysDown.has('KeyE')) move.add(up);
+  if (roamKeysDown.has('KeyQ')) move.sub(up);
+
+  if (move.lengthSq() < 1e-8) return;
+  move.normalize();
+
+  const dist = camera.position.distanceTo(controls.target);
+  const base = Math.max(10, Number(roamBaseSpeed.value) || 220);
+  const scaled = base * THREE.MathUtils.clamp(dist / 300, 0.25, 4);
+  const boost = (roamKeysDown.has('ShiftLeft') || roamKeysDown.has('ShiftRight'))
+    ? Math.max(1, Number(roamBoostMultiplier.value) || 3)
+    : 1;
+
+  const step = scaled * boost * dt;
+  move.multiplyScalar(step);
+
+  camera.position.add(move);
+  controls.target.add(move);
+  controls.update();
+
+  ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
+};
+
 const _followForward = new THREE.Vector3();
 const _followRight = new THREE.Vector3();
 const _followUp = new THREE.Vector3();
@@ -347,7 +465,7 @@ const initThreeJS = () => {
     0.1, // Near clip
     10000 // Far clip
   );
-  camera.position.set(0, 0, 100); // Initial camera position
+  camera.position.set(120, -140, 160); // Initial camera position (match resetCamera)
 
   console.log('[initThreeJS]', 'camera', camera);
   // 3. Create WebGL renderer with performance settings
@@ -398,12 +516,19 @@ const initThreeJS = () => {
     controls.dampingFactor = 0.05;
     controls.enableZoom = true;
     controls.zoomSpeed = 0.9;
+
+    // 漫游式交互：左键旋转，右键平移，滚轮缩放
     controls.enablePan = true;
+    controls.panSpeed = 0.75;
     controls.mouseButtons = {
-      LEFT: THREE.MOUSE.PAN,
+      LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.ROTATE
+      RIGHT: THREE.MOUSE.PAN
     };
+
+    // 键盘漫游由自定义逻辑处理，避免和 OrbitControls 自带键盘互相干扰
+    controls.enableKeys = false;
+
     controls.screenSpacePanning = false;
     controls.minDistance = 10;
     controls.maxDistance = 4000;
@@ -417,7 +542,7 @@ const initThreeJS = () => {
 
     controls.addEventListener('end', () => {
       isUserInteracting.value = false;
-      ensureViewInBounds({ mode: 'graph', recenter: true, useTargetPositions: true });
+      ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
     });
 
     controls.addEventListener('change', () => {
@@ -546,7 +671,7 @@ const ensureViewInBounds = (options = {}) => {
   const minFactor = Number(cfg.minDistanceFactor) > 0 ? cfg.minDistanceFactor : 0.08;
   const maxFactor = Number(cfg.maxDistanceFactor) > 0 ? cfg.maxDistanceFactor : 20;
 
-  const minD = Math.max(2, radius * minFactor);
+  const minD = Math.max(2, Math.min(radius * minFactor, 12));
   const maxD = Math.max(minD + 20, radius * maxFactor);
   controls.minDistance = minD;
   controls.maxDistance = Math.max(Number(controls.maxDistance) || 0, maxD);
@@ -579,7 +704,7 @@ const ensureViewInBounds = (options = {}) => {
 const frameAllNodes = (options = {}) => {
   if (!camera || !controls || !nodes.length) return;
 
-  const useTargetPositions = options.useTargetPositions === true;
+  const useTargetPositions = options.useTargetPositions !== false;
   const sphere = useTargetPositions ? getVisibleTargetBoundingSphere() : getVisibleBoundingSphere();
   if (!sphere) return;
 
@@ -837,7 +962,7 @@ const focusOnNode = (nodeLike) => {
     }
   }
 
-  ensureViewInBounds({ mode: 'graph', recenter: false });
+  ensureViewInBounds({ mode: 'node', recenter: false });
 
   const dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
@@ -1551,6 +1676,10 @@ const handleWindowResize = () => {
 const setupEventListeners = () => {
   window.addEventListener('resize', handleWindowResize);
 
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+  log('已绑定键盘事件');
+
   if (typeof ResizeObserver !== 'undefined' && container.value) {
     containerResizeObserver?.disconnect?.();
     containerResizeObserver = new ResizeObserver(() => {
@@ -1590,7 +1719,8 @@ const setupEventListeners = () => {
   });
 
   renderer.domElement.addEventListener('wheel', (event) => {
-    setMouseFromEvent(event);
+    if (!setMouseFromEvent(event) || !camera || !controls) return;
+
     setTimeout(() => {
       ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
     }, 0);
@@ -1985,10 +2115,13 @@ const animate = () => {
 
   if (controls && camera) {
     if (!isFiniteVec3(camera.position) || !isFiniteVec3(controls.target)) {
+      warn('相机向量异常，已触发重置', { camera: camera.position, target: controls.target });
       resetCamera();
       return;
     }
   }
+
+  applyRoamMovement();
 
   let moved = false;
   for (const node of nodes) {
@@ -2283,6 +2416,9 @@ onBeforeUnmount(() => {
 
   // 1. Remove event listeners
   window.removeEventListener('resize', handleWindowResize);
+  window.removeEventListener('keydown', handleKeyDown);
+  window.removeEventListener('keyup', handleKeyUp);
+  roamKeysDown.clear();
   containerResizeObserver?.disconnect?.();
   containerResizeObserver = null;
   if (renderer?.domElement) {
