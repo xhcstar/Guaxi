@@ -213,25 +213,25 @@ const performanceMarks = {
 
 const layoutViewConfig = {
   force: {
-    biasY: -1,
+    biasY: 0,
     minDistanceFactor: 0.08,
     maxDistanceFactor: 20,
     maxRadius: 800
   },
   hierarchical: {
-    biasY: -0.3,
+    biasY: 0.28,
     minDistanceFactor: 0.08,
     maxDistanceFactor: 18,
     maxRadius: 800
   },
   spherical: {
-    biasY: -1,
+    biasY: 0,
     minDistanceFactor: 0.12,
     maxDistanceFactor: 14,
     maxRadius: 600
   },
   tree: {
-    biasY: -0.4,
+    biasY: 0.22,
     minDistanceFactor: 0.06,
     maxDistanceFactor: 12,
     maxRadius: 600
@@ -657,7 +657,12 @@ const ensureViewInBounds = (options = {}) => {
 
   let center = sphere.center.clone();
   const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
-  center.y += radius * bias;
+  const rawBiasOff = radius * bias;
+  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -220, 220);
+  if (Math.abs(rawBiasOff - biasOff) > 1e-6) {
+    warn('视野偏置已钳制', { rawBiasOff, biasOff, radius, bias, layout: currentLayout?.value });
+  }
+  center.y += biasOff;
 
   if (mode === 'auto' || mode === 'node') {
     const sel = selectedNode.value;
@@ -717,7 +722,12 @@ const frameAllNodes = (options = {}) => {
 
   const center = sphere.center.clone();
   const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
-  center.y += radius * bias;
+  const rawBiasOff = radius * bias;
+  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -220, 220);
+  if (Math.abs(rawBiasOff - biasOff) > 1e-6) {
+    warn('Frame 视野偏置已钳制', { rawBiasOff, biasOff, radius, bias, layout: currentLayout?.value });
+  }
+  center.y += biasOff;
 
   const dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
@@ -1383,17 +1393,53 @@ const forceDirectedLayout = () => {
  */
 const hierarchicalLayout = () => {
   stopActiveSimulation();
-  log('应用层次布局');
+  log('应用层次布局(千层饼：同级同平面 + 均匀铺开)');
 
-  // Simple hierarchical layout based on depth
-  nodes.forEach((node, i) => {
-    const depth = node.userData.depth || 1;
-    node.targetPosition.set(
-      (i % 10) * 20 - 100,
-      depth * 30 - 50,
-      0
-    );
+  if (!nodes.length) return;
+
+  // 规则：
+  // - 同一 depth 的节点放在同一平面(y 固定)，像“千层饼”
+  // - 在 xz 平面用黄金角(向日葵)均匀铺开，并随该层节点数自适应半径，减少重叠
+  const golden = 2.399963229728653;
+  const layerY = performanceLevel.value === 0 ? 34 : performanceLevel.value === 2 ? 64 : 46;
+  const minDisc = performanceLevel.value === 0 ? 30 : performanceLevel.value === 2 ? 85 : 55;
+  const spacing = performanceLevel.value === 0 ? 10 : performanceLevel.value === 2 ? 18 : 13;
+
+  const byDepth = new Map();
+  nodes.forEach((node, idx) => {
+    const ud = node?.userData || {};
+    const depth = Number.isFinite(ud.depth) ? Number(ud.depth) : (ud.parentId ? 1 : 0);
+    if (!byDepth.has(depth)) byDepth.set(depth, []);
+    byDepth.get(depth).push({ node, idx });
   });
+
+  for (const [depth, arr] of byDepth) {
+    const k = arr.length;
+    const y = -depth * layerY;
+
+    // 同层节点越多，圆盘半径越大
+    const discR = Math.max(minDisc + depth * spacing * 1.1, Math.sqrt(Math.max(1, k)) * spacing * 2.2);
+
+    for (let i = 0; i < k; i++) {
+      const { node, idx } = arr[i];
+      if (!node?.targetPosition) continue;
+
+      if (depth === 0) {
+        node.targetPosition.set(0, 0, 0);
+        continue;
+      }
+
+      const t = (i + 0.5) / k;
+      const r = discR * Math.sqrt(t);
+      const a = (idx + 1) * golden + depth * 0.37;
+
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      node.targetPosition.set(x, y, z);
+    }
+  }
+
+  log('层次布局完成', { layers: byDepth.size, nodes: nodes.length });
 };
 
 /**
@@ -1475,142 +1521,173 @@ const sphericalLayout = () => {
  */
 const treeLayout = () => {
   stopActiveSimulation();
-  log('应用树状布局');
+  log('应用树状布局(分层树：围绕父节点展开 + 防重叠)');
 
   if (!nodes.length) return;
 
   const byId = new Map();
   nodes.forEach((n, idx) => {
-    const id = n?.userData?.id ?? `__i_${idx}`;
-    byId.set(String(id), n);
+    const id = String(n?.userData?.id ?? `__i_${idx}`);
+    byId.set(id, n);
   });
 
   const rootNode =
     nodes.find(n => n?.userData?.type === 'knowledge-base') ||
     nodes.find(n => n?.userData?.parentId == null) ||
     nodes[0];
-
   const rootId = String(rootNode?.userData?.id ?? '__i_0');
 
-  const potentialChildren = new Map();
+  // 1) 构建父子关系与 depth
+  const parentById = new Map();
+  const childrenById = new Map();
   for (const [id, n] of byId) {
     const pidRaw = n?.userData?.parentId;
     const pid = (pidRaw === null || pidRaw === undefined || pidRaw === '') ? null : String(pidRaw);
     if (pid && byId.has(pid) && pid !== id) {
-      if (!potentialChildren.has(pid)) potentialChildren.set(pid, []);
-      potentialChildren.get(pid).push(id);
+      parentById.set(id, pid);
+      if (!childrenById.has(pid)) childrenById.set(pid, []);
+      childrenById.get(pid).push(id);
     }
   }
 
-  const finalChildren = new Map();
-  const visited = new Set([rootId]);
-  const queue = [rootId];
   const depthById = new Map([[rootId, 0]]);
-
-  const addToTree = (parentId, childId) => {
-    if (!finalChildren.has(parentId)) finalChildren.set(parentId, []);
-    finalChildren.get(parentId).push(childId);
-    visited.add(childId);
-    queue.push(childId);
-    depthById.set(childId, (depthById.get(parentId) || 0) + 1);
-  };
-
-  while (visited.size < nodes.length) {
-    while (queue.length > 0) {
-      const currId = queue.shift();
-      const kids = potentialChildren.get(currId) || [];
-      for (const kidId of kids) {
-        if (!visited.has(kidId)) {
-          addToTree(currId, kidId);
-        }
-      }
-    }
-
-    if (visited.size < nodes.length) {
-      let foundOrphan = false;
-      for (const [id] of byId) {
-        if (!visited.has(id)) {
-          addToTree(rootId, id);
-          foundOrphan = true;
-          break;
-        }
-      }
-      if (!foundOrphan) break;
+  const q = [rootId];
+  while (q.length) {
+    const pid = q.shift();
+    const kids = childrenById.get(pid) || [];
+    for (const cid of kids) {
+      if (depthById.has(cid)) continue;
+      depthById.set(cid, (depthById.get(pid) || 0) + 1);
+      q.push(cid);
     }
   }
 
-  const leafCounts = new Map();
-  const countLeaves = (id) => {
-    const ch = finalChildren.get(id) || [];
-    if (!ch.length) {
-      leafCounts.set(id, 1);
-      return 1;
+  // 孤立节点挂到 root，避免堆叠在原点
+  for (const [id] of byId) {
+    if (id === rootId) continue;
+    if (!depthById.has(id)) {
+      depthById.set(id, 1);
+      parentById.set(id, rootId);
+      if (!childrenById.has(rootId)) childrenById.set(rootId, []);
+      childrenById.get(rootId).push(id);
     }
-    let sum = 0;
-    for (const cid of ch) sum += countLeaves(cid);
-    leafCounts.set(id, sum);
-    return sum;
-  };
-  countLeaves(rootId);
+  }
 
   let maxDepth = 0;
-  for (const [, d] of depthById) {
-    if (d > maxDepth) maxDepth = d;
+  for (const [, d] of depthById) maxDepth = Math.max(maxDepth, d);
+
+  // 2) 初始位置：子节点围绕父节点分布在更外层（不是所有节点落在同一个全局圆环）
+  const golden = 2.399963229728653;
+  const stepY = performanceLevel.value === 0 ? 46 : performanceLevel.value === 2 ? 78 : 58;
+  const baseChildR = performanceLevel.value === 0 ? 18 : performanceLevel.value === 2 ? 42 : 30;
+  const stepChildR = performanceLevel.value === 0 ? 16 : performanceLevel.value === 2 ? 34 : 24;
+  const countSpread = performanceLevel.value === 0 ? 9 : performanceLevel.value === 2 ? 14 : 11;
+
+  const nodeDatas = [];
+  const links = [];
+  const placed = new Map();
+  placed.set(rootId, { x: 0, y: 0, z: 0 });
+
+  const stack = [rootId];
+  while (stack.length) {
+    const pid = stack.shift();
+    const p = placed.get(pid) || { x: 0, y: 0, z: 0 };
+    const depth = depthById.get(pid) ?? 0;
+    const kids = childrenById.get(pid) || [];
+
+    const k = kids.length;
+    const childBase = baseChildR + (depth + 1) * stepChildR * (1 + depth * 0.35);
+    const discR = Math.max(childBase, Math.sqrt(Math.max(1, k)) * countSpread * 2.2);
+
+    for (let i = 0; i < k; i++) {
+      const cid = kids[i];
+      const cd = depthById.get(cid) ?? (depth + 1);
+
+      const t = (i + 0.5) / k;
+      const minChildR = Math.min(20 + depth * 6, discR * 0.45);
+      const r = Math.max(minChildR, discR * Math.sqrt(t));
+      const a = (i + 1) * golden + (depth + 1) * 0.35;
+
+      const x = p.x + Math.cos(a) * r;
+      const z = p.z + Math.sin(a) * r;
+      const y = -cd * stepY;
+
+      placed.set(cid, { x, y, z });
+      stack.push(cid);
+      links.push({ source: pid, target: cid, depth: cd, dist: r });
+    }
   }
 
-  const normX = new Map();
-  const normY = new Map();
-
-  const placeNorm = (id, start, end) => {
+  for (const [id] of byId) {
     const depth = depthById.get(id) ?? 0;
-    if (depth === 0) {
-      normX.set(id, 0);
-      normY.set(id, 0);
-    } else {
-      const mid = (start + end) / 2;
-      const x = (mid - 0.5) * 2;
-      const y = -depth;
-      normX.set(id, x);
-      normY.set(id, y);
+    const p = placed.get(id) || { x: 0, y: -depth * stepY, z: 0 };
+    nodeDatas.push({ id, depth, x: p.x, y: p.y, z: p.z, fx: id === rootId ? 0 : undefined, fy: id === rootId ? 0 : undefined, fz: id === rootId ? 0 : undefined });
+  }
+
+  // 3) 松弛：让节点更均匀、减少重叠，同时保持“层层分开”的层级平面
+  const forceLevelY = (strength = 0.35) => {
+    let ns = [];
+    function f(alpha) {
+      for (const d of ns) {
+        if (d.fy != null) continue;
+        const depth = Number.isFinite(d.depth) ? d.depth : 0;
+        const ty = -depth * stepY;
+        const y = d.y || 0;
+        d.vy = (d.vy || 0) + (ty - y) * strength * alpha;
+      }
     }
-
-    const ch = finalChildren.get(id) || [];
-    if (!ch.length) return;
-
-    const totalLeaves = leafCounts.get(id) || 1;
-    let cursor = start;
-
-    for (const cid of ch) {
-      const w = leafCounts.get(cid) || 1;
-      const span = (w / totalLeaves) * (end - start);
-      const next = cursor + span;
-      placeNorm(cid, cursor, next);
-      cursor = next;
-    }
+    f.initialize = (_) => { ns = _ || []; };
+    return f;
   };
 
-  placeNorm(rootId, 0, 1);
+  const dynamicRadius = () => {
+    if (nodes.length > 1800) return 3;
+    if (nodes.length > 900) return 5;
+    return 8;
+  };
 
-  let maxAbsX = 0;
-  for (const [id] of byId) {
-    const x = normX.get(id) || 0;
-    const ax = Math.abs(x);
-    if (ax > maxAbsX) maxAbsX = ax;
-  }
+  const collisionRadius = (d) => (String(d.id) === rootId ? 14 : dynamicRadius());
+  const chargeStrength = performanceLevel.value === 0 ? -16 : performanceLevel.value === 2 ? -44 : -28;
 
-  const baseWidth = performanceLevel.value === 0 ? 60 : performanceLevel.value === 2 ? 120 : 90;
-  const baseDepth = performanceLevel.value === 0 ? 40 : performanceLevel.value === 2 ? 80 : 60;
+  const durationMs = performanceLevel.value === 0 ? 650 : performanceLevel.value === 2 ? 1400 : 950;
 
-  const sx = maxAbsX > 0 ? baseWidth / maxAbsX : baseWidth;
-  const sy = maxDepth > 0 ? baseDepth / maxDepth : baseDepth;
+  const simulation = d3.forceSimulation(nodeDatas)
+    .numDimensions(3)
+    .alpha(1)
+    .alphaDecay(0.12)
+    .velocityDecay(0.58)
+    .force('link', d3.forceLink(links)
+      .id(d => String(d.id))
+      .distance(l => Math.max(12, Number(l?.dist) || 22))
+      .strength(0.8)
+    )
+    .force('charge', d3.forceManyBody().strength(chargeStrength))
+    .force('collision', d3.forceCollide().radius(collisionRadius))
+    .force('levelY', forceLevelY(0.35));
 
-  for (const [id, n] of byId) {
-    const tx = normX.get(id) || 0;
-    const ty = normY.get(id) || 0;
-    if (n?.targetPosition) {
-      n.targetPosition.set(tx * sx, ty * sy, 0);
+  activeSimulation = simulation;
+  log('树状布局仿真开始', { nodes: nodes.length, maxDepth, durationMs, collisionR: dynamicRadius() });
+
+  simulation.on('tick', () => {
+    for (const d of nodeDatas) {
+      const n = byId.get(String(d.id));
+      if (!n?.targetPosition) continue;
+      const x = Number.isFinite(d.x) ? d.x : 0;
+      const y = Number.isFinite(d.y) ? d.y : 0;
+      const z = Number.isFinite(d.z) ? d.z : 0;
+      n.targetPosition.set(x, y, z);
     }
-  }
+  });
+
+  setTimeout(() => {
+    if (activeSimulation === simulation) {
+      simulation.stop();
+      activeSimulation = null;
+    } else {
+      simulation.stop();
+    }
+    log('树状布局仿真结束', { nodes: nodes.length, maxDepth });
+  }, durationMs);
 };
 
 /**
@@ -2167,9 +2244,11 @@ const startAnimate = () => {
 watch(currentLayout, async (newLayout) => {
   if (scene && nodes.length > 0) {
     await applyLayout(newLayout);
-    frameAllNodes({ useTargetPositions: true });
-    setTimeout(() => frameAllNodes({ useTargetPositions: true }), 450);
-    setTimeout(() => frameAllNodes({ useTargetPositions: true }), 1100);
+
+    if (!isUserInteracting.value) {
+      ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
+      setTimeout(() => ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true }), 450);
+    }
   }
 });
 
