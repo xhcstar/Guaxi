@@ -211,6 +211,33 @@ const performanceMarks = {
   2: '质量优先'
 };
 
+const layoutViewConfig = {
+  force: {
+    biasY: -0.5,
+    minDistanceFactor: 0.08,
+    maxDistanceFactor: 20,
+    maxRadius: 800
+  },
+  hierarchical: {
+    biasY: -0.35,
+    minDistanceFactor: 0.08,
+    maxDistanceFactor: 18,
+    maxRadius: 800
+  },
+  spherical: {
+    biasY: 0,
+    minDistanceFactor: 0.12,
+    maxDistanceFactor: 14,
+    maxRadius: 600
+  },
+  tree: {
+    biasY: 0.2,
+    minDistanceFactor: 0.06,
+    maxDistanceFactor: 12,
+    maxRadius: 600
+  }
+};
+
 // Three.js variables (non-reactive)
 let scene, camera, renderer, controls, raycaster, composer, labelRenderer;
 let nodes = [], edges = [], octree;
@@ -489,18 +516,22 @@ const ensureViewInBounds = (options = {}) => {
 
   const mode = options.mode || 'auto';
   const recenter = options.recenter !== false;
-
   const useTargetPositions = options.useTargetPositions === true;
+
   let sphere = useTargetPositions
     ? (getVisibleTargetBoundingSphere() || getVisibleBoundingSphere())
     : getVisibleBoundingSphere();
   if (!sphere) return;
 
-  let center = sphere.center.clone();
-  let radius = Math.max(1, sphere.radius);
+  const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
+  const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
+  const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
 
-  const isTree = currentLayout?.value === 'tree';
-  const bias = isTree ? 0.15 : -0.50;
+  let radius = Math.max(1, sphere.radius);
+  radius = THREE.MathUtils.clamp(radius, minRadius, maxRadius);
+
+  let center = sphere.center.clone();
+  const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
   center.y += radius * bias;
 
   if (mode === 'auto' || mode === 'node') {
@@ -512,8 +543,11 @@ const ensureViewInBounds = (options = {}) => {
     }
   }
 
-  const minD = Math.max(2, radius * 0.08);
-  const maxD = Math.max(minD + 20, radius * 25);
+  const minFactor = Number(cfg.minDistanceFactor) > 0 ? cfg.minDistanceFactor : 0.08;
+  const maxFactor = Number(cfg.maxDistanceFactor) > 0 ? cfg.maxDistanceFactor : 20;
+
+  const minD = Math.max(2, radius * minFactor);
+  const maxD = Math.max(minD + 20, radius * maxFactor);
   controls.minDistance = minD;
   controls.maxDistance = Math.max(Number(controls.maxDistance) || 0, maxD);
 
@@ -549,11 +583,15 @@ const frameAllNodes = (options = {}) => {
   const sphere = useTargetPositions ? getVisibleTargetBoundingSphere() : getVisibleBoundingSphere();
   if (!sphere) return;
 
-  const center = sphere.center.clone();
-  const radius = Math.max(1, sphere.radius);
+  const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
+  const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
+  const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
 
-  const isTree = currentLayout?.value === 'tree';
-  const bias = isTree ? 0.15 : -0.50;
+  const rawRadius = Math.max(1, sphere.radius);
+  const radius = THREE.MathUtils.clamp(rawRadius, minRadius, maxRadius);
+
+  const center = sphere.center.clone();
+  const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
   center.y += radius * bias;
 
   const dir = camera.position.clone().sub(controls.target);
@@ -565,7 +603,8 @@ const frameAllNodes = (options = {}) => {
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
   const fitFov = Math.min(vFov, hFov);
 
-  const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * 1.18;
+  const padding = Number(cfg.framePadding) > 0 ? cfg.framePadding : 1.18;
+  const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * padding;
   const cameraPosition = center.clone().add(dir.multiplyScalar(distance));
 
   gsap.timeline({
@@ -1329,25 +1368,21 @@ const treeLayout = () => {
 
   const rootId = String(rootNode?.userData?.id ?? '__i_0');
 
-  // 1. Build potential parent-child map from data
   const potentialChildren = new Map();
   for (const [id, n] of byId) {
     const pidRaw = n?.userData?.parentId;
     const pid = (pidRaw === null || pidRaw === undefined || pidRaw === '') ? null : String(pidRaw);
-    
     if (pid && byId.has(pid) && pid !== id) {
       if (!potentialChildren.has(pid)) potentialChildren.set(pid, []);
       potentialChildren.get(pid).push(id);
     }
   }
 
-  // 2. Build strict tree structure using BFS to prevent cycles and ensure connectivity
   const finalChildren = new Map();
   const visited = new Set([rootId]);
   const queue = [rootId];
   const depthById = new Map([[rootId, 0]]);
 
-  // Helper to add node to tree
   const addToTree = (parentId, childId) => {
     if (!finalChildren.has(parentId)) finalChildren.set(parentId, []);
     finalChildren.get(parentId).push(childId);
@@ -1356,9 +1391,7 @@ const treeLayout = () => {
     depthById.set(childId, (depthById.get(parentId) || 0) + 1);
   };
 
-  // Process queue and handle orphans
   while (visited.size < nodes.length) {
-    // Standard BFS
     while (queue.length > 0) {
       const currId = queue.shift();
       const kids = potentialChildren.get(currId) || [];
@@ -1369,22 +1402,19 @@ const treeLayout = () => {
       }
     }
 
-    // If we still have unvisited nodes, they are orphans or disconnected cycles
-    // Attach one to root and resume BFS
     if (visited.size < nodes.length) {
       let foundOrphan = false;
       for (const [id] of byId) {
         if (!visited.has(id)) {
           addToTree(rootId, id);
           foundOrphan = true;
-          break; // Break to let BFS process this new subtree
+          break;
         }
       }
-      if (!foundOrphan) break; // Should not happen if size check passes
+      if (!foundOrphan) break;
     }
   }
 
-  // 3. Calculate leaf counts for layout spacing
   const leafCounts = new Map();
   const countLeaves = (id) => {
     const ch = finalChildren.get(id) || [];
@@ -1399,51 +1429,64 @@ const treeLayout = () => {
   };
   countLeaves(rootId);
 
-  // 4. Place nodes
-  const radiusStep = performanceLevel.value === 0 ? 12 : performanceLevel.value === 2 ? 24 : 18;
-  const levelGap = performanceLevel.value === 0 ? 10 : performanceLevel.value === 2 ? 22 : 16;
-  const minArc = performanceLevel.value === 0 ? 5 : performanceLevel.value === 2 ? 13 : 9;
+  let maxDepth = 0;
+  for (const [, d] of depthById) {
+    if (d > maxDepth) maxDepth = d;
+  }
 
-  const countByDepth = new Map();
-  for (const [, d] of depthById) countByDepth.set(d, (countByDepth.get(d) || 0) + 1);
+  const normX = new Map();
+  const normY = new Map();
 
-  const place = (id, start, end) => {
-    const n = byId.get(id);
+  const placeNorm = (id, start, end) => {
     const depth = depthById.get(id) ?? 0;
-    
-    // Position calculation
-    if (n?.targetPosition) {
-      if (depth === 0) {
-        n.targetPosition.set(0, 0, 0);
-      } else {
-        const a = (start + end) / 2;
-        const countAtDepth = countByDepth.get(depth) || 1;
-        const minR = (countAtDepth * minArc) / (Math.PI * 2);
-        const r = Math.max(depth * radiusStep, minR);
-        
-        n.targetPosition.set(
-          r * Math.cos(a),
-          -depth * levelGap, // Grow downwards for better camera visibility
-          r * Math.sin(a)
-        );
-      }
+    if (depth === 0) {
+      normX.set(id, 0);
+      normY.set(id, 0);
+    } else {
+      const mid = (start + end) / 2;
+      const x = (mid - 0.5) * 2;
+      const y = -depth;
+      normX.set(id, x);
+      normY.set(id, y);
     }
 
     const ch = finalChildren.get(id) || [];
     if (!ch.length) return;
 
     const totalLeaves = leafCounts.get(id) || 1;
-    let curAngle = start;
-    
+    let cursor = start;
+
     for (const cid of ch) {
-      const weight = (leafCounts.get(cid) || 1) / totalLeaves;
-      const angleSpan = (end - start) * weight;
-      place(cid, curAngle, curAngle + angleSpan);
-      curAngle += angleSpan;
+      const w = leafCounts.get(cid) || 1;
+      const span = (w / totalLeaves) * (end - start);
+      const next = cursor + span;
+      placeNorm(cid, cursor, next);
+      cursor = next;
     }
   };
 
-  place(rootId, 0, Math.PI * 2);
+  placeNorm(rootId, 0, 1);
+
+  let maxAbsX = 0;
+  for (const [id] of byId) {
+    const x = normX.get(id) || 0;
+    const ax = Math.abs(x);
+    if (ax > maxAbsX) maxAbsX = ax;
+  }
+
+  const baseWidth = performanceLevel.value === 0 ? 60 : performanceLevel.value === 2 ? 120 : 90;
+  const baseDepth = performanceLevel.value === 0 ? 40 : performanceLevel.value === 2 ? 80 : 60;
+
+  const sx = maxAbsX > 0 ? baseWidth / maxAbsX : baseWidth;
+  const sy = maxDepth > 0 ? baseDepth / maxDepth : baseDepth;
+
+  for (const [id, n] of byId) {
+    const tx = normX.get(id) || 0;
+    const ty = normY.get(id) || 0;
+    if (n?.targetPosition) {
+      n.targetPosition.set(tx * sx, ty * sy, 0);
+    }
+  }
 };
 
 /**
