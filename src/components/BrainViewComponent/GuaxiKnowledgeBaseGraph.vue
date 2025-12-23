@@ -219,19 +219,19 @@ const layoutViewConfig = {
     maxRadius: 800
   },
   hierarchical: {
-    biasY: -0.35,
+    biasY: -0.3,
     minDistanceFactor: 0.08,
     maxDistanceFactor: 18,
     maxRadius: 800
   },
   spherical: {
-    biasY: 0,
+    biasY: -0.5,
     minDistanceFactor: 0.12,
     maxDistanceFactor: 14,
     maxRadius: 600
   },
   tree: {
-    biasY: 0.2,
+    biasY: -0.4,
     minDistanceFactor: 0.06,
     maxDistanceFactor: 12,
     maxRadius: 600
