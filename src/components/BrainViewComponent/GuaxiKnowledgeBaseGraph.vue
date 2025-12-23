@@ -155,12 +155,6 @@
       </n-card>
 
       <div class="navigation-tools">
-        <n-button size="tiny" @click="frameAllNodes">
-          <template #icon><n-icon>
-              <EyeOutline />
-            </n-icon></template>
-          适配视野
-        </n-button>
         <n-button size="tiny" @click="resetCamera">
           <template #icon><n-icon>
               <CompassOutline />
