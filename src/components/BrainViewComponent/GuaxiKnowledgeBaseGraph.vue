@@ -762,6 +762,9 @@ const ensureViewInBounds = (options = {}) => {
     }
   }
 
+  // 更新相机的剪裁面，确保视野内的物体不被剪裁
+  updateCameraClipping(center, radius);
+
   // 7. 让 OrbitControls 自动处理距离约束，不再手动强制设置 camera.position
   // 这样可以避免与 controls.update() 的冲突和死循环
   controls.update();
@@ -867,10 +870,15 @@ const resetCamera = () => {
   
   const finalCamPos = center.clone().add(dir.multiplyScalar(distance));
 
+  updateCameraClipping(center, radius);
+
   // Animate
   gsap.timeline({
     defaults: { duration: 0.8, ease: 'power2.inOut' },
-    onUpdate: () => controls.update()
+    onUpdate: () => {
+      controls.update();
+      updateCameraClipping(center, radius);
+    }
   })
     .to(controls.target, { x: center.x, y: center.y, z: center.z }, 0)
     .to(camera.position, { x: finalCamPos.x, y: finalCamPos.y, z: finalCamPos.z }, 0);
