@@ -438,14 +438,14 @@ const initThreeJS = () => {
     0.85
   );
   bloomPass.enabled = glowEnabled.value;
-  bloomPass.strength = (Number(glowStrength.value) || 0) * 1.1;
+  bloomPass.strength = (Number(glowStrength.value) || 0) * 0.5;
   composer.addPass(bloomPass);
   console.log('bloomPass', bloomPass);
 
   watch([glowEnabled, glowStrength, glowSize], () => {
     if (!bloomPass) return;
     bloomPass.enabled = !!glowEnabled.value;
-    bloomPass.strength = glowEnabled.value ? (Number(glowStrength.value) || 0) * 1.1 : 0;
+    bloomPass.strength = glowEnabled.value ? (Number(glowStrength.value) || 0) * 0.6 : 0;
 
     nodes.forEach((n) => applyStarGlow(n));
   });
@@ -662,12 +662,11 @@ const toggleDarkMode = () => {
       const c = getNodeColor(node.userData.type);
       node.userData.originalColor = c;
       node.mesh.material.color.setHex(c);
-      
-      // Update emissive intensity for brightness control
-      const baseIntensity = darkMode.value ? 0.3 : 0.2;
-      const glowBonus = (Number(glowStrength.value) || 0) * 0.5;
-      const intensity = glowEnabled.value ? (baseIntensity + glowBonus) : (darkMode.value ? 0.2 : 0.15);
-      
+
+      const baseIntensity = darkMode.value ? 0.1 : 0.08;
+      const glowBonus = (Number(glowStrength.value) || 0) * 0.06;
+      const intensity = glowEnabled.value ? (baseIntensity + glowBonus) : (darkMode.value ? 0.06 : 0.05);
+
       node.mesh.material.emissiveIntensity = intensity;
       node.mesh.material.emissive.setHex(glowEnabled.value ? c : (darkMode.value ? 0x111111 : 0x000000));
       node.mesh.material.needsUpdate = true;
@@ -1022,8 +1021,8 @@ const createNodesAndEdges = async (data) => {
       roughness: 0.5,
       emissive: glowEnabled.value ? nodeData.originalColor : (darkMode.value ? 0x111111 : 0x000000),
       emissiveIntensity: glowEnabled.value
-        ? (darkMode.value ? (0.2 + (Number(glowStrength.value) || 0) * 0.3) : (0.2 + (Number(glowStrength.value) || 0) * 0.3))
-        : (darkMode.value ? 0.2 : 0.15)
+        ? (darkMode.value ? (0.09 + (Number(glowStrength.value) || 0) * 0.09) : (0.07 + (Number(glowStrength.value) || 0) * 0.07))
+        : (darkMode.value ? 0.06 : 0.05)
     });
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -1862,12 +1861,12 @@ const getStarGlowTexture = () => {
 const getStarGlowScale = (type) => {
   const base = Math.max(1, Number(glowSize.value) || 16);
   switch (type) {
-    case 'knowledge-base': return base * 2.4;
-    case 'directory': return base * 2.0;
-    case 'file': return base * 1.8;
-    case 'section': return base * 1.7;
-    case 'paragraph': return base * 1.6;
-    default: return base * 1.7;
+    case 'knowledge-base': return base * 1.4;
+    case 'directory': return base * 1.2;
+    case 'file': return base * 1.1;
+    case 'section': return base * 1.05;
+    case 'paragraph': return base * 1.0;
+    default: return base * 1.05;
   }
 };
 
@@ -1885,7 +1884,9 @@ const applyStarGlow = (node) => {
   }
   if (typeof mat.emissiveIntensity === 'number') {
     const s = Math.max(0, Number(glowStrength.value) || 0);
-    mat.emissiveIntensity = glowEnabled.value ? (darkMode.value ? (0.7 + s * 0.9) : (0.55 + s * 0.75)) : (darkMode.value ? 0.2 : 0.15);
+    mat.emissiveIntensity = glowEnabled.value
+      ? (darkMode.value ? (0.11 + s * 0.11) : (0.08 + s * 0.08))
+      : (darkMode.value ? 0.06 : 0.05);
   }
   mat.needsUpdate = true;
 
@@ -1916,7 +1917,7 @@ const applyStarGlow = (node) => {
   const strength = Math.max(0, Number(glowStrength.value) || 0);
   if (sprite.material) {
     sprite.material.color.setHex(c);
-    sprite.material.opacity = Math.min(1, 0.35 + strength * 0.28);
+    sprite.material.opacity = Math.min(1, 0.12 + strength * 0.14);
     sprite.material.needsUpdate = true;
   }
 
