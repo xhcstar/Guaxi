@@ -506,6 +506,25 @@ const isFiniteVec3 = (v) => {
   return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
 };
 
+const updateCameraClipping = (center, radius) => {
+  if (!camera) return;
+
+  const r = Number.isFinite(radius) && radius > 0 ? radius : 1;
+  const c = center && isFiniteVec3(center) ? center : new THREE.Vector3(0, 0, 0);
+
+  const dist = camera.position.distanceTo(c);
+  // 动态调整远剪裁面，确保能看到整个场景
+  const far = THREE.MathUtils.clamp(dist + r * 8, 2000, 5_000_000);
+  // 动态调整近剪裁面，避免过近导致闪烁，但也不能太远
+  const near = Math.max(0.05, far / 200_000);
+
+  if (Math.abs((camera.near || 0) - near) > 1e-6 || Math.abs((camera.far || 0) - far) > 1e-6) {
+    camera.near = near;
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  }
+};
+
 /**
  * Initialize Three.js scene, renderer, camera and controls
  */
@@ -787,9 +806,14 @@ const frameAllNodes = (options = {}) => {
   const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * padding;
   const cameraPosition = center.clone().add(dir.multiplyScalar(distance));
 
+  updateCameraClipping(center, radius);
+
   gsap.timeline({
     defaults: { duration: 0.6, ease: 'power2.out' },
-    onUpdate: () => controls.update()
+    onUpdate: () => {
+      controls.update();
+      updateCameraClipping(center, radius);
+    }
   })
     .to(camera.position, { x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z }, 0)
     .to(controls.target, { x: center.x, y: center.y, z: center.z }, 0);
@@ -1066,11 +1090,16 @@ const focusOnNode = (nodeLike) => {
 
   const cameraPosition = p.clone().add(dir.multiplyScalar(distance));
 
+  updateCameraClipping(p, Math.max(1, nodeRadius));
+
   isUserInteracting.value = true;
 
   gsap.timeline({
     defaults: { duration: 0.7, ease: 'power2.inOut' },
-    onUpdate: () => controls.update(),
+    onUpdate: () => {
+      controls.update();
+      updateCameraClipping(p, Math.max(1, nodeRadius));
+    },
     onComplete: () => {
       isUserInteracting.value = false;
       ensureViewInBounds({ mode: 'node', recenter: false });
