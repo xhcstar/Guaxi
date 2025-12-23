@@ -270,6 +270,7 @@ const hasValidKnowledgeBase = computed(() => {
 // Layout options for dropdown
 const layoutOptions = [
   { label: '力导向布局', value: 'force' },
+  { label: '层次布局', value: 'hierarchical' },
   { label: '球形布局', value: 'spherical' }
 ];
 
@@ -691,15 +692,16 @@ const getVisibleTargetBoundingSphere = () => {
 
 const ensureViewInBounds = (options = {}) => {
   if (!camera || !controls) return;
-  const { mode = 'graph', recenter = false, useTargetPositions = false } = options;
 
-  // 1. 获取包围球
-  const sphere = useTargetPositions 
-    ? (getVisibleTargetBoundingSphere() || getVisibleBoundingSphere()) 
+  const mode = options.mode || 'auto';
+  const recenter = options.recenter !== false;
+  const useTargetPositions = options.useTargetPositions === true;
+
+  let sphere = useTargetPositions
+    ? (getVisibleTargetBoundingSphere() || getVisibleBoundingSphere())
     : getVisibleBoundingSphere();
-  if (!sphere) return; // 没有可见节点，不做处理
+  if (!sphere) return;
 
-  // 2. 计算合适的距离范围
   const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
   const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
   const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
@@ -707,36 +709,35 @@ const ensureViewInBounds = (options = {}) => {
   let radius = Math.max(1, sphere.radius);
   radius = THREE.MathUtils.clamp(radius, minRadius, maxRadius);
 
-  // 3. 计算中心点偏置
   let center = sphere.center.clone();
   const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
-  const biasOff = THREE.MathUtils.clamp(radius * bias, -1200, 1200);
+  const rawBiasOff = radius * bias;
+  const biasOff = THREE.MathUtils.clamp(rawBiasOff, -1200, 1200);
+  if (Math.abs(rawBiasOff - biasOff) > 1e-6) {
+    warn('视野偏置已钳制', { rawBiasOff, biasOff, radius, bias, layout: currentLayout?.value });
+  }
   center.y += biasOff;
 
-  // 4. 特殊模式下的中心点调整
   if (mode === 'auto' || mode === 'node') {
     const sel = selectedNode.value;
     if (sel && sel.type !== 'edge') {
       const gn = resolveGraphNode(sel);
       const p = gn?.mesh?.position;
-      if (p && isFiniteVec3(p)) center = p.clone();
+      if (p) center = p.clone();
     }
   }
 
-  // 5. 设置控制器的距离限制
   const minFactor = Number(cfg.minDistanceFactor) > 0 ? cfg.minDistanceFactor : 0.08;
   const maxFactor = Number(cfg.maxDistanceFactor) > 0 ? cfg.maxDistanceFactor : 20;
 
   const minD = Math.max(2, Math.min(radius * minFactor, 12));
   const maxD = Math.max(minD + 20, radius * maxFactor);
-  
   controls.minDistance = minD;
   controls.maxDistance = Math.max(Number(controls.maxDistance) || 0, maxD);
 
-  // 6. 如果需要重置中心，平滑移动 Target
   if (recenter) {
     const targetDelta = center.clone().sub(controls.target);
-    if (targetDelta.lengthSq() > 1e-6 && isFiniteVec3(targetDelta)) {
+    if (targetDelta.lengthSq() > 1e-6) {
       controls.target.add(targetDelta);
       camera.position.add(targetDelta);
     }
@@ -1289,8 +1290,8 @@ const createNodesAndEdges = async (data) => {
 
 
       const material = new THREE.LineBasicMaterial({
-        color: darkMode.value ? 0x445566 : 0xB0BEC5, // 更暗淡的蓝灰色
-        linewidth: 1,
+        color: darkMode.value ? 0x888888 : 0x1565C0, // 更暗淡的蓝灰色
+        linewidth: darkMode.value ? 1 : 2,
         transparent: true,
         opacity: darkMode.value ? 0.25 : 0.3,
         depthTest: true,
@@ -1467,6 +1468,60 @@ const forceDirectedLayout = () => {
   });
 
   setTimeout(() => simulation.stop(), 1200);
+};
+
+/**
+ * Apply hierarchical layout to nodes
+ */
+const hierarchicalLayout = () => {
+  stopActiveSimulation();
+  log('应用层次布局(千层饼：同级同平面 + 均匀铺开)');
+
+  if (!nodes.length) return;
+
+  // 规则：
+  // - 同一 depth 的节点放在同一平面(y 固定)，像“千层饼”
+  // - 在 xz 平面用黄金角(向日葵)均匀铺开，并随该层节点数自适应半径，减少重叠
+  const golden = 2.399963229728653;
+  const layerY = performanceLevel.value === 0 ? 34 : performanceLevel.value === 2 ? 64 : 46;
+  const minDisc = performanceLevel.value === 0 ? 30 : performanceLevel.value === 2 ? 85 : 55;
+  const spacing = performanceLevel.value === 0 ? 10 : performanceLevel.value === 2 ? 18 : 13;
+
+  const byDepth = new Map();
+  nodes.forEach((node, idx) => {
+    const ud = node?.userData || {};
+    const depth = Number.isFinite(ud.depth) ? Number(ud.depth) : (ud.parentId ? 1 : 0);
+    if (!byDepth.has(depth)) byDepth.set(depth, []);
+    byDepth.get(depth).push({ node, idx });
+  });
+
+  for (const [depth, arr] of byDepth) {
+    const k = arr.length;
+    const y = -depth * layerY;
+
+    // 同层节点越多，圆盘半径越大
+    const discR = Math.max(minDisc + depth * spacing * 1.1, Math.sqrt(Math.max(1, k)) * spacing * 2.2);
+
+    for (let i = 0; i < k; i++) {
+      const { node, idx } = arr[i];
+      if (!node?.targetPosition) continue;
+
+      if (depth === 0) {
+        node.targetPosition.set(0, 0, 0);
+        continue;
+      }
+
+      const t = (i + 0.5) / k;
+      const r = discR * Math.sqrt(t);
+      const a = (idx + 1) * golden + depth * 0.37;
+
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      node.targetPosition.set(x, y, z);
+    }
+  }
+
+  log('层次布局完成', { layers: byDepth.size, nodes: nodes.length });
 };
 
 /**
@@ -2003,6 +2058,9 @@ const applyLayout = async (layoutType) => {
       switch (layoutType) {
         case 'force':
           forceDirectedLayout();
+          break;
+        case 'hierarchical':
+          hierarchicalLayout();
           break;
         case 'spherical':
           sphericalLayout();
