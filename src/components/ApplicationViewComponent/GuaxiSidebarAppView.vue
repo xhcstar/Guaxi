@@ -120,8 +120,10 @@ const navigateTo = (path) => {
 <style scope>
 .sider-container {
   display: flex;
+  width: 100%;
   height: 100%;
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
 }
 
 .sider-icon-container {
@@ -129,20 +131,25 @@ const navigateTo = (path) => {
   flex-direction: column;
   gap: 50px;
   align-items: center;
-  /* 使图标在容器中居中 */
   width: var(--sider-width, 36px);
+  min-width: var(--sider-width, 36px);
+  padding: 20px 0;
   border-right: 2px solid #aab4ae;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
   margin-top: 10px;
   height: 100%;
+  box-sizing: border-box;
 }
 
 .app-category-list {
   flex: 1;
-  padding: 12px 8px;
+  padding: 16px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   font-size: 13px;
+  background: rgba(255, 255, 255, 0.95);
 }
 
 .app-category-item {
@@ -150,20 +157,22 @@ const navigateTo = (path) => {
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   color: #444;
-  transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease, box-shadow 0.15s ease;
 }
 
 .app-category-item:hover {
   background: rgba(0, 0, 0, 0.04);
   transform: translateX(2px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
 }
 
 .app-category-item.active {
   background: linear-gradient(135deg, #667eea, #764ba2);
   color: #fff;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
 
 .app-category-dot {

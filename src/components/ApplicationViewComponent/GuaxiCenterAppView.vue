@@ -58,7 +58,7 @@ const handleClick = (app) => {
 <style scope>
 .app-center {
   flex-grow: 1;
-  padding: 12px 16px;
+  padding: 16px 20px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -66,16 +66,22 @@ const handleClick = (app) => {
 .app-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 18px;
 }
 
 .app-card {
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .app-card:hover {
   transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+  border-color: rgba(102, 126, 234, 0.35);
 }
 
 .app-card-header {
