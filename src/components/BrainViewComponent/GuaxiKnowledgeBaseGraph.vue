@@ -543,6 +543,7 @@ const applyRoamMovement = () => {
   controls.update();
 
   ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
+  clampViewToGraphBounds({ useTargetPositions: true, soft: true });
 };
 
 const _followForward = new THREE.Vector3();
@@ -673,8 +674,8 @@ const initThreeJS = () => {
 
     controls.addEventListener('end', () => {
       isUserInteracting.value = false;
-      // 交互结束时，更新一下控制器的边界限制，但不要强制重置位置
-      ensureViewInBounds({ mode: 'graph', recenter: false });
+      ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
+      clampViewToGraphBounds({ useTargetPositions: true, soft: true });
     });
 
     // 移除 change 事件监听，避免死循环导致的视角漂移
@@ -807,7 +808,7 @@ const ensureViewInBounds = (options = {}) => {
   const minD = Math.max(2, Math.min(radius * minFactor, 12));
   const maxD = Math.max(minD + 20, radius * maxFactor);
   controls.minDistance = minD;
-  controls.maxDistance = Math.max(Number(controls.maxDistance) || 0, maxD);
+  controls.maxDistance = maxD;
 
   if (recenter) {
     const targetDelta = center.clone().sub(controls.target);
@@ -823,6 +824,60 @@ const ensureViewInBounds = (options = {}) => {
   // 7. 让 OrbitControls 自动处理距离约束，不再手动强制设置 camera.position
   // 这样可以避免与 controls.update() 的冲突和死循环
   controls.update();
+};
+
+const clampViewToGraphBounds = (options = {}) => {
+  if (!camera || !controls || !nodes.length) return;
+
+  const useTargetPositions = options.useTargetPositions !== false;
+  const soft = options.soft !== false;
+
+  const sphere = useTargetPositions
+    ? (getVisibleTargetBoundingSphere() || getVisibleBoundingSphere())
+    : getVisibleBoundingSphere();
+  if (!sphere) return;
+
+  const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
+  const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
+  const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
+
+  const rawRadius = Math.max(1, sphere.radius);
+  const radius = THREE.MathUtils.clamp(rawRadius, minRadius, maxRadius);
+  const center = sphere.center.clone();
+
+  const maxCamDist = Math.max(80, radius * 6);
+  const maxTargetDist = Math.max(30, radius * 2.2);
+
+  let changed = false;
+
+  _keepOff.copy(controls.target).sub(center);
+  const tLen = _keepOff.length();
+  if (tLen > maxTargetDist && tLen > 1e-6) {
+    _keepOff.multiplyScalar(maxTargetDist / tLen);
+    _keepDesiredTarget.copy(center).add(_keepOff);
+    _keepDelta.copy(_keepDesiredTarget).sub(controls.target);
+    if (soft) _keepDelta.multiplyScalar(0.35);
+    controls.target.add(_keepDelta);
+    camera.position.add(_keepDelta);
+    changed = true;
+  }
+
+  _followDelta.copy(camera.position).sub(center);
+  const cLen = _followDelta.length();
+  if (cLen > maxCamDist && cLen > 1e-6) {
+    _followDelta.multiplyScalar(maxCamDist / cLen);
+    _followDesired.copy(center).add(_followDelta);
+    _followPrev.copy(_followDesired).sub(camera.position);
+    if (soft) _followPrev.multiplyScalar(0.35);
+    camera.position.add(_followPrev);
+    controls.target.add(_followPrev);
+    changed = true;
+  }
+
+  if (changed) {
+    updateCameraClipping(center, radius);
+    controls.update();
+  }
 };
 
 /**
@@ -1215,6 +1270,7 @@ const focusOnNode = (nodeLike) => {
       activeCameraTween = null;
       isUserInteracting.value = false;
       ensureViewInBounds({ mode: 'node', recenter: false });
+      clampViewToGraphBounds({ useTargetPositions: true, soft: false });
     }
   })
     .to(camera.position, { x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z }, 0)
@@ -1849,6 +1905,7 @@ const setupEventListeners = () => {
 
     setTimeout(() => {
       ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
+      clampViewToGraphBounds({ useTargetPositions: true, soft: true });
     }, 0);
   }, { passive: true });
 
@@ -2225,7 +2282,8 @@ const applyLayout = async (layoutType) => {
 
   setTimeout(() => {
     frameAllNodes({ useTargetPositions: true, captureBaseline: true });
-    ensureViewInBounds({ mode: 'graph', recenter: true });
+    ensureViewInBounds({ mode: 'graph', recenter: true, useTargetPositions: true });
+    clampViewToGraphBounds({ useTargetPositions: true, soft: false });
   }, 120);
 };
 
