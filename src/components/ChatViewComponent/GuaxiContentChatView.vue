@@ -119,7 +119,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   background-color: #ffffff; /* 示例背景色 */
-  overflow-y: auto; /* 如果内容超出，允许垂直滚动 */
+  overflow: hidden;
   margin: 0;
   padding: 0;
 }
@@ -127,6 +127,9 @@ onBeforeUnmount(() => {
 .center-container {
   flex-grow: 1;
   padding: 0px;
+  height: 100%;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .sider-resize-handle {

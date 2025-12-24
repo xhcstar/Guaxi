@@ -42,6 +42,20 @@
 
         <n-divider />
 
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="ChatRecord 保存路径">
+            <n-input v-model:value="chatRecordRoot" :disabled="loading" placeholder="默认：软件同级目录\ChatRecord" />
+          </n-form-item>
+          <n-form-item label="操作">
+            <n-space>
+              <n-button :disabled="loading" @click="pickChatRecordRoot">浏览文件夹...</n-button>
+              <n-button :disabled="loading" type="primary" @click="saveChatRecordRoot">保存</n-button>
+            </n-space>
+          </n-form-item>
+        </n-form>
+
+        <n-divider />
+
         <div class="status">
           <div class="status-title">当前状态</div>
           <n-list hoverable style="max-width: 100%">
@@ -74,10 +88,14 @@
 
 <script setup>
 import { reactive, ref, onMounted } from 'vue'
-import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NList, NListItem } from 'naive-ui'
+import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NList, NListItem, useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 
 const loading = ref(false)
+const message = useMessage()
+
+const chatRecordRoot = ref('')
 
 const form = reactive({
   chatgpt_api_key: '',
@@ -96,6 +114,9 @@ const loadConfig = async () => {
     form.qwen_api_key = typeof cfg?.qwen_api_key === 'string' ? cfg.qwen_api_key : ''
     form.kimi_api_key = typeof cfg?.kimi_api_key === 'string' ? cfg.kimi_api_key : ''
     form.doubao_api_key = typeof cfg?.doubao_api_key === 'string' ? cfg.doubao_api_key : ''
+
+    const root = await invoke('get_chat_record_root')
+    chatRecordRoot.value = typeof root === 'string' ? root : ''
   } catch (e) {
     console.error('加载大模型配置失败:', e)
   } finally {
@@ -115,8 +136,34 @@ const saveConfig = async () => {
         doubao_api_key: form.doubao_api_key,
       },
     })
+    message.success('已保存大模型秘钥')
   } catch (e) {
     console.error('保存大模型配置失败:', e)
+    message.error('保存大模型秘钥失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const pickChatRecordRoot = async () => {
+  try {
+    const selected = await open({ directory: true, multiple: false })
+    if (selected) chatRecordRoot.value = String(selected)
+  } catch (e) {
+    console.error('选择 ChatRecord 目录失败:', e)
+  }
+}
+
+const saveChatRecordRoot = async () => {
+  loading.value = true
+  try {
+    await invoke('set_chat_record_root', { path: chatRecordRoot.value })
+    const root = await invoke('get_chat_record_root')
+    chatRecordRoot.value = typeof root === 'string' ? root : chatRecordRoot.value
+    message.success('已保存 ChatRecord 路径')
+  } catch (e) {
+    console.error('保存 ChatRecord 路径失败:', e)
+    message.error('保存 ChatRecord 路径失败')
   } finally {
     loading.value = false
   }

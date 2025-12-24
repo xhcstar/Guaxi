@@ -47,7 +47,9 @@ import { addCopyButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
 
 
 const chatStore = useChatStore();
-const messageInput = ref(""); // 用户输入的消息
+const messageInput = ref("");
+const inputHistory = ref([]);
+const historyIndex = ref(-1);
 let unsubscribe = null;
 const messageRefs = ref([]);
 
@@ -58,8 +60,38 @@ const activeChat = computed(() =>
 );
 
 // 当前会话的消息记录
-const activeChatMessages = computed(() => activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []);
+const activeChatMessages = computed(() =>
+  activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || { topicid: chatStore.selectedTopic, topic: [] }
+);
 
+const autosaveTimer = ref(null);
+
+const saveSessionSnapshot = async () => {
+  try {
+    const content = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    await invoke('save_chat_session', {
+      request: {
+        model_id: chatStore.selectedModel,
+        model_name: activeChat.value?.name || '',
+        topic_id: chatStore.selectedTopic,
+        session_id: chatStore.sendChatSessionId || null,
+        content,
+      },
+    });
+  } catch (e) {
+    console.error('自动保存会话失败:', e);
+  }
+};
+
+const scheduleAutosave = () => {
+  if (autosaveTimer.value) {
+    clearTimeout(autosaveTimer.value);
+  }
+  autosaveTimer.value = setTimeout(() => {
+    autosaveTimer.value = null;
+    saveSessionSnapshot();
+  }, 800);
+};
 
 // 滚动到最新消息
 const messageContainer = ref(null);
@@ -93,36 +125,67 @@ const askDeepSeek = async (question) => {
 const sendMessage = async () => {
   if (!messageInput.value.trim() || !activeChat.value) return;
 
-  let question = messageInput.value.trim();
+  const question = messageInput.value.trim();
+
+  inputHistory.value.push(question);
+  historyIndex.value = inputHistory.value.length;
+
   activeChatMessages.value.topic.push({
     msgid: activeChatMessages.value.topic.length + 1,
     sender: "me",
     content: question,
   });
 
-  messageInput.value = ""; // 清空输入框
-  scrollToBottom(); // 滚动到底部
+  messageInput.value = "";
+  scrollToBottom();
   chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
   chatStore.accumulatedMessage = '';
 
-  // 更新当前会话的消息记录
   try {
-    let answer = await askDeepSeek(question); // 等待 Promise 解析
-    console.log('answer:', answer);
-    // chatStore.updateChatSession(answer);
+    await askDeepSeek(question);
   } catch (error) {
     console.error('Error during askDeepSeek:', error);
   }
-  scrollToBottom(); // 滚动到底部
+  scrollToBottom();
+  scheduleAutosave();
 };
 
 const handleKeydown = (event) => {
-  if (event.key === 'Enter') {
-    if (event.shiftKey) {
-      // Shift + Enter 换行，什么都不做
-      return;
+  const el = event?.target;
+
+  if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey) {
+    const hasSelectionApi = el && typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number';
+    if (hasSelectionApi) {
+      const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
+      const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+
+      if (event.key === 'ArrowUp' && atStart && inputHistory.value.length > 0) {
+        event.preventDefault();
+        if (historyIndex.value === -1) {
+          historyIndex.value = inputHistory.value.length;
+        }
+        historyIndex.value = Math.max(0, historyIndex.value - 1);
+        messageInput.value = inputHistory.value[historyIndex.value] ?? '';
+        requestAnimationFrame(() => {
+          el.selectionStart = el.selectionEnd = el.value.length;
+        });
+        return;
+      }
+
+      if (event.key === 'ArrowDown' && atEnd && inputHistory.value.length > 0 && historyIndex.value !== -1) {
+        event.preventDefault();
+        historyIndex.value = Math.min(inputHistory.value.length, historyIndex.value + 1);
+        messageInput.value = historyIndex.value >= inputHistory.value.length ? '' : (inputHistory.value[historyIndex.value] ?? '');
+        requestAnimationFrame(() => {
+          el.selectionStart = el.selectionEnd = el.value.length;
+        });
+        return;
+      }
     }
-    // 阻止默认行为并发送消息
+  }
+
+  if (event.key === 'Enter') {
+    if (event.shiftKey) return;
     event.preventDefault();
     sendMessage();
   }
@@ -172,6 +235,7 @@ const stopResize = () => {
 onMounted(() => {
   unsubscribe = listen("modle-streaming-respond-output", (event) => {
     chatStore.collectChatSessionStream(event.payload);
+    scheduleAutosave();
   }).then((unsubFn) => {
     unsubscribe = unsubFn;
   }).catch((err) => {
@@ -183,6 +247,10 @@ onMounted(() => {
 onUnmounted(() => {
   if (unsubscribe && typeof unsubscribe === 'function') {
     unsubscribe(); // 清理监听器
+  }
+  if (autosaveTimer.value) {
+    clearTimeout(autosaveTimer.value);
+    autosaveTimer.value = null;
   }
 });
 
@@ -216,6 +284,7 @@ const setMessageRef = (el, index) => {
   flex-direction: column;
   padding: 0;
   box-sizing: border-box;
+  min-height: 0;
 }
 
 .chat-header {
@@ -234,13 +303,11 @@ const setMessageRef = (el, index) => {
 }
 
 .message-list {
-  flex-grow: 1;
-  max-height: calc(100% - 80px - 80px);
-  /* 限制消息区域的最大高度 */
+  flex: 1 1 auto;
   overflow-y: auto;
-  /* 超出时显示滚动条 */
   padding: 15px;
   background-color: #ffffff;
+  min-height: 0;
 }
 
 .message-item {
@@ -283,18 +350,15 @@ const setMessageRef = (el, index) => {
 }
 
 .input-area {
-  margin-top: 1px;
-  padding-top: 1px;
+  flex: 0 0 auto;
   border-top: 1px solid #ddd;
   position: relative;
+  background-color: #ffffff;
   padding-bottom: 2px;
   height: 80px;
-  /* 固定输入区域的高度 */
   min-height: 80px;
-  /* 设置最小高度 */
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  /* 使用等宽字体 */
 }
 
 .chat-input-height-handle {

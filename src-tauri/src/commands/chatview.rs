@@ -4,10 +4,14 @@ use rand::Rng;
 use regex::Regex;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use crate::commands::settingview;
+use serde_json::{json, Value};
 use std::convert::TryFrom;
-use tauri::{AppHandle, Emitter};
+use std::fs;
+use std::path::PathBuf;
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info};
+use url::Url;
 // use std::error::Error;
 
 enum ChatModel {
@@ -18,6 +22,8 @@ enum ChatModel {
     DOUBAO,
     LOCALQWEN,
     LOCALDEEPSEEK,
+    YUANBAO_WEB,
+    CHATGPT_WEB,
 }
 
 impl TryFrom<i32> for ChatModel {
@@ -32,6 +38,8 @@ impl TryFrom<i32> for ChatModel {
             4 => Ok(ChatModel::DOUBAO),
             5 => Ok(ChatModel::LOCALQWEN),
             6 => Ok(ChatModel::LOCALDEEPSEEK),
+            7 => Ok(ChatModel::YUANBAO_WEB),
+            8 => Ok(ChatModel::CHATGPT_WEB),
             _ => Err("Invalid ChatModel ID".to_string()),
         }
     }
@@ -104,7 +112,11 @@ pub async fn get_answer_from_deepseek(
     question: &str,
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
-    let api_key = "REDACTED_DEEPSEEK_API_KEY";
+    let api_key = settingview::get_llm_config().deepseek_api_key;
+    if api_key.trim().is_empty() {
+        return Err("DeepSeek API Key 未配置".to_string());
+    }
+
     let url = "https://api.deepseek.com/chat/completions";
     let session_id;
 
@@ -209,6 +221,54 @@ pub async fn get_answer_from_deepseek(
     Ok(chatrsp)
 }
 
+fn normalize_math_symbols(mut content: String) -> String {
+    let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+    let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+    if !content.is_empty() {
+        content = re_block.replace_all(&content, "$").to_string();
+        content = re_inline.replace_all(&content, "$").to_string();
+    }
+    content
+}
+
+async fn openai_compat_chat(
+    url: &str,
+    api_key: &str,
+    model: &str,
+    question: &str,
+) -> Result<String, String> {
+    let request_body = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": question}],
+    });
+
+    let client = Client::new();
+    let response = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Upstream error: {} {}", status, body));
+    }
+
+    let data = response.text().await.map_err(|e| e.to_string())?;
+    let mut chat_response: DeepSeekResponse = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+
+    let content = chat_response
+        .choices
+        .get_mut(0)
+        .map(|c| normalize_math_symbols(c.message.content.clone()))
+        .unwrap_or_else(|| "No answer received.".to_string());
+
+    Ok(content)
+}
+
 pub async fn get_answer_from_chatgpt(
     question: &str,
     sessionid: &str,
@@ -217,7 +277,30 @@ pub async fn get_answer_from_chatgpt(
         "get_answer_from_chatgpt: Received request: {} {}",
         question, sessionid
     );
-    Err("Function not implemented yet".to_string())
+
+    let api_key = settingview::get_llm_config().chatgpt_api_key;
+    if api_key.trim().is_empty() {
+        return Err("ChatGPT API Key 未配置".to_string());
+    }
+
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
+    let answer_content = openai_compat_chat(
+        "https://api.openai.com/v1/chat/completions",
+        &api_key,
+        "gpt-4o-mini",
+        question,
+    )
+    .await?;
+
+    Ok(ChatResponse {
+        answer: answer_content,
+        sessionid: session_id,
+    })
 }
 
 pub async fn get_answer_from_kimi(question: &str, sessionid: &str) -> Result<ChatResponse, String> {
@@ -225,7 +308,30 @@ pub async fn get_answer_from_kimi(question: &str, sessionid: &str) -> Result<Cha
         "get_answer_from_kimi: Received request: {} {}",
         question, sessionid
     );
-    Err("Function not implemented yet".to_string())
+
+    let api_key = settingview::get_llm_config().kimi_api_key;
+    if api_key.trim().is_empty() {
+        return Err("Kimi API Key 未配置".to_string());
+    }
+
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
+    let answer_content = openai_compat_chat(
+        "https://api.moonshot.cn/v1/chat/completions",
+        &api_key,
+        "moonshot-v1-8k",
+        question,
+    )
+    .await?;
+
+    Ok(ChatResponse {
+        answer: answer_content,
+        sessionid: session_id,
+    })
 }
 
 pub async fn get_answer_from_qwen(question: &str, sessionid: &str) -> Result<ChatResponse, String> {
@@ -233,7 +339,30 @@ pub async fn get_answer_from_qwen(question: &str, sessionid: &str) -> Result<Cha
         "get_answer_from_qwen: Received request: {} {}",
         question, sessionid
     );
-    Err("Function not implemented yet".to_string())
+
+    let api_key = settingview::get_llm_config().qwen_api_key;
+    if api_key.trim().is_empty() {
+        return Err("Qwen API Key 未配置".to_string());
+    }
+
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
+    let answer_content = openai_compat_chat(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        &api_key,
+        "qwen-plus",
+        question,
+    )
+    .await?;
+
+    Ok(ChatResponse {
+        answer: answer_content,
+        sessionid: session_id,
+    })
 }
 
 pub async fn get_answer_from_doubao(
@@ -244,7 +373,30 @@ pub async fn get_answer_from_doubao(
         "get_answer_from_doubao: Received request: {} {}",
         question, sessionid
     );
-    Err("Function not implemented yet".to_string())
+
+    let api_key = settingview::get_llm_config().doubao_api_key;
+    if api_key.trim().is_empty() {
+        return Err("豆包 API Key 未配置".to_string());
+    }
+
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
+    let answer_content = openai_compat_chat(
+        "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+        &api_key,
+        "doubao-pro-32k",
+        question,
+    )
+    .await?;
+
+    Ok(ChatResponse {
+        answer: answer_content,
+        sessionid: session_id,
+    })
 }
 
 pub async fn get_answer_from_local_deepseek(
@@ -360,6 +512,9 @@ pub async fn get_answer_from_chatgpt_stream(
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
+    let rsp = get_answer_from_chatgpt(question, sessionid).await?;
+    app.emit("modle-streaming-respond-output", &rsp.answer)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 pub async fn get_answer_from_deepseek_stream(
@@ -367,7 +522,11 @@ pub async fn get_answer_from_deepseek_stream(
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
-    let api_key = "REDACTED_DEEPSEEK_API_KEY";
+    let api_key = settingview::get_llm_config().deepseek_api_key;
+    if api_key.trim().is_empty() {
+        return Err("DeepSeek API Key 未配置".to_string());
+    }
+
     let url = "https://api.deepseek.com/chat/completions";
     let session_id;
 
@@ -490,7 +649,11 @@ pub async fn get_answer_from_kimi_stream(
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
-    let api_key = "REDACTED_MOONSHOT_API_KEY";
+    let api_key = settingview::get_llm_config().kimi_api_key;
+    if api_key.trim().is_empty() {
+        return Err("Kimi API Key 未配置".to_string());
+    }
+
     let url = "https://api.moonshot.cn/v1/chat/completions";
     let session_id;
 
@@ -608,6 +771,9 @@ pub async fn get_answer_from_doubao_stream(
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
+    let rsp = get_answer_from_doubao(question, sessionid).await?;
+    app.emit("modle-streaming-respond-output", &rsp.answer)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -616,6 +782,9 @@ pub async fn get_answer_from_qwen_stream(
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
+    let rsp = get_answer_from_qwen(question, sessionid).await?;
+    app.emit("modle-streaming-respond-output", &rsp.answer)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -858,11 +1027,204 @@ pub async fn get_answer_from_local_qwen(
     question: &str,
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
+    let url = "http://localhost:11434/api/chat";
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
     info!(
         "get_answer_from_local_qwen: Received request: {} {}",
         question, sessionid
     );
-    Err("Function not implemented yet".to_string())
+
+    let request_body = json!({
+        "model": "qwen3:8b",
+        "messages": [{"role": "user", "content": question}],
+        "stream": false,
+        "session_id": session_id
+    });
+
+    let client = ClientBuilder::new()
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(url)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Error calling Local Qwen API: {:?}", response.status()));
+    }
+
+    let data = response.text().await.map_err(|e| e.to_string())?;
+    let answer_content = collect_content_from_local_deepseek(&data).await?;
+
+    Ok(ChatResponse {
+        answer: normalize_math_symbols(answer_content),
+        sessionid: request_body["session_id"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+fn sanitize_filename_component(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if s.is_empty() {
+        return s;
+    }
+    for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|'] {
+        s = s.replace(ch, "_");
+    }
+    s
+}
+
+fn ensure_chat_record_root() -> Result<PathBuf, String> {
+    let root = PathBuf::from(settingview::get_chat_record_root());
+    if !root.exists() {
+        fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    }
+    Ok(root)
+}
+
+#[derive(Deserialize)]
+pub struct ExportChatSessionRequest {
+    pub model_id: Option<i32>,
+    pub model_name: Option<String>,
+    pub topic_id: Option<i32>,
+    pub session_id: Option<String>,
+    pub content: Value,
+}
+
+#[tauri::command]
+pub async fn export_chat_session(request: ExportChatSessionRequest) -> Result<String, String> {
+    let root = ensure_chat_record_root()?;
+
+    let model = sanitize_filename_component(
+        request
+            .model_name
+            .as_deref()
+            .unwrap_or("chat"),
+    );
+    let sid = sanitize_filename_component(request.session_id.as_deref().unwrap_or(""));
+
+    let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let file_name = if sid.trim().is_empty() {
+        format!("{}_{}.json", ts, model)
+    } else {
+        format!("{}_{}_{}.json", ts, model, sid)
+    };
+
+    let file_path = root.join(file_name);
+
+    let payload = json!({
+        "exported_at": Utc::now().to_rfc3339(),
+        "model_id": request.model_id,
+        "model_name": model,
+        "topic_id": request.topic_id,
+        "session_id": request.session_id,
+        "content": request.content,
+    });
+
+    let data = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    fs::write(&file_path, data).map_err(|e| e.to_string())?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[derive(Deserialize)]
+pub struct SaveChatSessionRequest {
+    pub model_id: Option<i32>,
+    pub model_name: Option<String>,
+    pub topic_id: Option<i32>,
+    pub session_id: Option<String>,
+    pub content: Value,
+}
+
+#[tauri::command]
+pub async fn save_chat_session(request: SaveChatSessionRequest) -> Result<String, String> {
+    let root = ensure_chat_record_root()?;
+    let sessions_dir = root.join("sessions");
+    if !sessions_dir.exists() {
+        fs::create_dir_all(&sessions_dir).map_err(|e| e.to_string())?;
+    }
+
+    let model = sanitize_filename_component(
+        request
+            .model_name
+            .as_deref()
+            .unwrap_or("chat"),
+    );
+
+    let sid_raw = if let Some(sid) = request.session_id.as_deref() {
+        sid.to_string()
+    } else {
+        format!(
+            "model{}_topic{}",
+            request.model_id.unwrap_or(-1),
+            request.topic_id.unwrap_or(-1)
+        )
+    };
+    let sid = sanitize_filename_component(&sid_raw);
+
+    let file_name = if model.trim().is_empty() {
+        format!("{}.json", sid)
+    } else {
+        format!("{}_{}.json", sid, model)
+    };
+
+    let file_path = sessions_dir.join(file_name);
+
+    let payload = json!({
+        "saved_at": Utc::now().to_rfc3339(),
+        "model_id": request.model_id,
+        "model_name": request.model_name,
+        "topic_id": request.topic_id,
+        "session_id": request.session_id,
+        "content": request.content,
+    });
+
+    let data = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    fs::write(&file_path, data).map_err(|e| e.to_string())?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+fn web_model_url(provider: &str) -> Option<&'static str> {
+    match provider {
+        "yuanbao" => Some("https://yuanbao.tencent.com"),
+        "chatgpt" => Some("https://chatgpt.com"),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> Result<(), String> {
+    let provider_key = provider.trim().to_lowercase();
+    let url = web_model_url(&provider_key).ok_or("Unsupported provider".to_string())?;
+
+    let label = format!("web-model-{}", provider_key);
+    if let Some(w) = app.get_webview_window(&label) {
+        w.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+        w.set_focus().ok();
+        return Ok(());
+    }
+
+    let external = Url::parse(url).map_err(|e| e.to_string())?;
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(external))
+        .title(url)
+        .inner_size(1100.0, 780.0)
+        .min_inner_size(820.0, 560.0)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("创建窗口失败: {}", e))?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -943,6 +1305,24 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
                 }
                 Err(err) => Err(format!("Error calling Local Model API: {}", err)),
             }
+        }
+        ChatModel::YUANBAO_WEB => {
+            open_web_model_window(app.clone(), "yuanbao".to_string()).await?;
+            app.emit(
+                "modle-streaming-respond-output",
+                "该模型为网页模式，已打开腾讯元宝（请在新窗口内对话）。",
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        ChatModel::CHATGPT_WEB => {
+            open_web_model_window(app.clone(), "chatgpt".to_string()).await?;
+            app.emit(
+                "modle-streaming-respond-output",
+                "该模型为网页模式，已打开 ChatGPT 网页（请在新窗口内对话）。",
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
         }
     }
 }
@@ -1042,5 +1422,21 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
                 Err(err) => Err(format!("Error calling Local Model API: {}", err)),
             }
         }
+        ChatModel::YUANBAO_WEB => Ok(ChatResponse {
+            answer: "该模型为网页模式，请调用 open_web_model_window(provider='yuanbao') 进行对话。".to_string(),
+            sessionid: if request.sessionid.is_empty() {
+                generate_session_id()
+            } else {
+                request.sessionid
+            },
+        }),
+        ChatModel::CHATGPT_WEB => Ok(ChatResponse {
+            answer: "该模型为网页模式，请调用 open_web_model_window(provider='chatgpt') 进行对话。".to_string(),
+            sessionid: if request.sessionid.is_empty() {
+                generate_session_id()
+            } else {
+                request.sessionid
+            },
+        }),
     }
 }

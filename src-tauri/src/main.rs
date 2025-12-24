@@ -35,6 +35,10 @@ async fn app_init() {
         Ok(_) => println!("Template root initialized successfully."),
         Err(e) => eprintln!("Failed to initialize template root: {}", e),
     }
+    match commands::settingview::init_chat_record_root() {
+        Ok(_) => println!("ChatRecord root initialized successfully."),
+        Err(e) => eprintln!("Failed to initialize ChatRecord root: {}", e),
+    }
     match commands::settingview::init_knowledge_bases_root() {
         Ok(_) => println!("KnowledgeBases root initialized successfully."),
         Err(e) => eprintln!("Failed to initialize KnowledgeBases root: {}", e),
@@ -159,6 +163,11 @@ async fn main() {
             commands::settingview::set_lsp_syntax_highlight_enabled,
             commands::settingview::get_llm_config,
             commands::settingview::set_llm_config,
+            commands::settingview::get_chat_record_root,
+            commands::settingview::set_chat_record_root,
+            commands::chatview::save_chat_session,
+            commands::chatview::export_chat_session,
+            commands::chatview::open_web_model_window,
             commands::repoview::get_imported_files,
             commands::repoview::add_imported_file,
             commands::repoview::delete_imported_file,

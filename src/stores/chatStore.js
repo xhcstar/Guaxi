@@ -152,6 +152,46 @@ export const useChatStore = defineStore("chatStore", {
           },
         ],
       },
+
+      {
+        id: 7,
+        name: "腾讯元宝(网页)",
+        ModelAvatar: qwenImg,
+        MeAvatar: meImg,
+        MessagesList: [
+          {
+            topicid: 0,
+            topic: [
+              {
+                msgid: 0,
+                sender: "腾讯元宝(网页)",
+                chatSessionId: "",
+                content: "该模型为网页模式，请点击右上角按钮打开腾讯元宝窗口进行对话。",
+              },
+            ],
+          },
+        ],
+      },
+
+      {
+        id: 8,
+        name: "ChatGPT(网页)",
+        ModelAvatar: chatgptImg,
+        MeAvatar: meImg,
+        MessagesList: [
+          {
+            topicid: 0,
+            topic: [
+              {
+                msgid: 0,
+                sender: "ChatGPT(网页)",
+                chatSessionId: "",
+                content: "该模型为网页模式，请点击右上角按钮打开 ChatGPT 网页窗口进行对话。",
+              },
+            ],
+          },
+        ],
+      },
     ],
 
     activeChatId: 0,
@@ -166,6 +206,8 @@ export const useChatStore = defineStore("chatStore", {
         { name: "Qwen", selectedModel: "2" },
         { name: "Kimi", selectedModel: "3" },
         { name: "豆包", selectedModel: "4" },
+        { name: "腾讯元宝(网页)", selectedModel: "7" },
+        { name: "ChatGPT(网页)", selectedModel: "8" },
       ],
 
       localModel: [

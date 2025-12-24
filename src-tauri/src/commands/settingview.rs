@@ -33,6 +33,8 @@ pub struct AppConfig {
     image_bed_root: String,
     #[serde(default)]
     template_repo_path: String,
+    #[serde(default = "default_chat_record_root")]
+    chat_record_root: String,
     #[serde(default)]
     knowledge_bases_root: String,
     #[serde(default)]
@@ -95,6 +97,15 @@ fn default_template_repo_path() -> String {
         .expect("无法获取可执行文件所在目录")
         .to_path_buf();
     exe_dir.join("Template").to_string_lossy().to_string()
+}
+
+fn default_chat_record_root() -> String {
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("ChatRecord").to_string_lossy().to_string()
 }
 
 fn default_knowledge_bases_root() -> String {
@@ -318,6 +329,7 @@ impl Default for AppConfig {
             libraries_root: "".to_string(),
             image_bed_root: default_image_bed_root(),
             template_repo_path: "".to_string(),
+            chat_record_root: default_chat_record_root(),
             knowledge_bases_root: "".to_string(),
             knowledge_bases_remote_url: "".to_string(),
             knowledge_bases_remote_username: "".to_string(),
@@ -432,6 +444,32 @@ pub fn set_llm_config(llm_config: LlmConfig) {
     let mut config = load_config();
     config.llm_config = llm_config;
     save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_chat_record_root() -> String {
+    if let Err(e) = init_chat_record_root() {
+        warn!(error = e.as_str(), "init_chat_record_root failed");
+    }
+    let config = load_config();
+    config.chat_record_root
+}
+
+#[tauri::command]
+pub fn set_chat_record_root(path: String) -> Result<(), String> {
+    let mut root_path = PathBuf::from(path);
+    if root_path.as_os_str().is_empty() {
+        root_path = PathBuf::from(default_chat_record_root());
+    }
+
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
+    }
+
+    let mut config = load_config();
+    config.chat_record_root = root_path.to_string_lossy().to_string();
+    save_config(&config);
+    Ok(())
 }
 
 #[tauri::command]
@@ -716,6 +754,19 @@ pub fn init_template_root() -> Result<(), String> {
         save_config(&config);
     }
     let root_path = PathBuf::from(&config.template_repo_path);
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn init_chat_record_root() -> Result<(), String> {
+    let mut config = load_config();
+    if config.chat_record_root.trim().is_empty() {
+        config.chat_record_root = default_chat_record_root();
+        save_config(&config);
+    }
+    let root_path = PathBuf::from(&config.chat_record_root);
     if !root_path.exists() {
         fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
     }
