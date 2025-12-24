@@ -1,11 +1,9 @@
 <template>
   <div class="tree-column">
-    <TreeViewErrorView />
   </div>
 </template>
 
 <script setup>
-import TreeViewErrorView from "./TreeViewErrorView.vue";
 
 </script>
 
