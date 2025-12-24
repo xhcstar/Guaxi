@@ -251,6 +251,60 @@ const isUserInteracting = ref(false);
 const glowEnabled = ref(true);
 const glowStrength = ref(0.9);
 const glowSize = ref(16);
+const isFocusMode = ref(false);
+
+let activeCameraTween = null;
+let initialViewSnapshot = null;
+
+const killActiveCameraTween = () => {
+  if (activeCameraTween) {
+    activeCameraTween.kill();
+    activeCameraTween = null;
+  }
+};
+
+const captureInitialSnapshot = (pose) => {
+  if (!camera || !controls || !nodes.length || !pose) return;
+  const cam = pose.cameraPosition;
+  const target = pose.target;
+  if (!cam || !target || !isFiniteVec3(cam) || !isFiniteVec3(target)) return;
+
+  initialViewSnapshot = {
+    cameraPosition: cam.clone(),
+    target: target.clone(),
+    minDistance: Number.isFinite(controls.minDistance) ? controls.minDistance : undefined,
+    maxDistance: Number.isFinite(controls.maxDistance) ? controls.maxDistance : undefined,
+    layout: currentLayout.value
+  };
+
+  for (const n of nodes) {
+    const tp = n?.targetPosition;
+    if (tp && isFiniteVec3(tp)) {
+      n.__initialTargetPosition = tp.clone();
+    } else if (n?.mesh?.position && isFiniteVec3(n.mesh.position)) {
+      n.__initialTargetPosition = n.mesh.position.clone();
+    } else {
+      n.__initialTargetPosition = null;
+    }
+  }
+};
+
+const restoreInitialNodes = () => {
+  if (!nodes.length) return false;
+  let restored = false;
+  for (const n of nodes) {
+    const p = n?.__initialTargetPosition;
+    const mesh = n?.mesh;
+    if (!p || !isFiniteVec3(p) || !mesh) continue;
+    if (n?.targetPosition) n.targetPosition.copy(p);
+    if (mesh?.position) mesh.position.copy(p);
+    restored = true;
+  }
+  if (restored) {
+    for (const e of edges) e?.userData?.update?.();
+  }
+  return restored;
+};
 
 // Track active D3 simulation
 let activeSimulation = null;
@@ -400,6 +454,7 @@ const handleKeyDown = (event) => {
 
   if (event.code === 'Escape') {
     selectedNode.value = null;
+    isFocusMode.value = false;
     store.setSelectedGraphNode(null);
     resetNodeHighlights();
     log('键盘: 取消选择');
@@ -776,7 +831,10 @@ const ensureViewInBounds = (options = {}) => {
 const frameAllNodes = (options = {}) => {
   if (!camera || !controls || !nodes.length) return;
 
+  killActiveCameraTween();
+
   const useTargetPositions = options.useTargetPositions !== false;
+  const captureBaseline = options.captureBaseline === true;
   const sphere = useTargetPositions ? getVisibleTargetBoundingSphere() : getVisibleBoundingSphere();
   if (!sphere) return;
 
@@ -811,11 +869,18 @@ const frameAllNodes = (options = {}) => {
 
   updateCameraClipping(center, radius);
 
-  gsap.timeline({
+  if (captureBaseline) {
+    captureInitialSnapshot({ cameraPosition, target: center });
+  }
+
+  activeCameraTween = gsap.timeline({
     defaults: { duration: 0.6, ease: 'power2.out' },
     onUpdate: () => {
       controls.update();
       updateCameraClipping(center, radius);
+    },
+    onComplete: () => {
+      activeCameraTween = null;
     }
   })
     .to(camera.position, { x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z }, 0)
@@ -828,56 +893,91 @@ const frameAllNodes = (options = {}) => {
 const resetCamera = () => {
   if (!camera || !controls) return;
 
-  // 强制修复可能损坏的坐标 (NaN/Infinity)
+  killActiveCameraTween();
+  isFocusMode.value = false;
+
+  if (initialViewSnapshot?.cameraPosition && initialViewSnapshot?.target) {
+    restoreInitialNodes();
+
+    const target = initialViewSnapshot.target.clone();
+    const camPos = initialViewSnapshot.cameraPosition.clone();
+
+    if (!isFiniteVec3(target)) target.set(0, 0, 0);
+    if (!isFiniteVec3(camPos)) camPos.set(120, 140, 160);
+
+    if (Number.isFinite(initialViewSnapshot.minDistance)) controls.minDistance = initialViewSnapshot.minDistance;
+    if (Number.isFinite(initialViewSnapshot.maxDistance)) controls.maxDistance = initialViewSnapshot.maxDistance;
+
+    const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
+    if (sphere) updateCameraClipping(target, sphere.radius);
+
+    activeCameraTween = gsap.timeline({
+      defaults: { duration: 0.8, ease: 'power2.inOut' },
+      onUpdate: () => {
+        controls.update();
+        if (sphere) updateCameraClipping(target, sphere.radius);
+      },
+      onComplete: () => {
+        activeCameraTween = null;
+      }
+    })
+      .to(controls.target, { x: target.x, y: target.y, z: target.z }, 0)
+      .to(camera.position, { x: camPos.x, y: camPos.y, z: camPos.z }, 0);
+
+    log('相机已重置 (Snapshot)');
+    return;
+  }
+
   if (!isFiniteVec3(camera.position)) camera.position.set(120, 140, 160);
   if (!isFiniteVec3(controls.target)) controls.target.set(0, 0, 0);
 
   const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
   if (!sphere) {
-    // If no nodes, just reset to origin
-    gsap.timeline({
+    activeCameraTween = gsap.timeline({
       defaults: { duration: 0.8, ease: 'power2.inOut' },
-      onUpdate: () => controls.update()
+      onUpdate: () => controls.update(),
+      onComplete: () => {
+        activeCameraTween = null;
+      }
     })
       .to(controls.target, { x: 0, y: 0, z: 0 }, 0)
       .to(camera.position, { x: 120, y: 140, z: 160 }, 0);
     return;
   }
 
-  // Calculate layout-specific params
   const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
   const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
   const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
-  
+
   const radius = THREE.MathUtils.clamp(sphere.radius, minRadius, maxRadius);
-  
+
   const center = sphere.center.clone();
   const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
   const biasOff = THREE.MathUtils.clamp(radius * bias, -1200, 1200);
   center.y += biasOff;
 
-  // Standard reset direction (120, 140, 160)
   const dir = new THREE.Vector3(120, 140, 160).normalize();
-  
-  // Calculate fit distance
+
   const vFov = THREE.MathUtils.degToRad(camera.fov || 60);
   const aspect = Number(camera.aspect) > 0 ? Number(camera.aspect) : (container.value?.clientWidth / container.value?.clientHeight) || 1;
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
   const fitFov = Math.min(vFov, hFov);
-  
+
   const padding = Number(cfg.framePadding) > 0 ? cfg.framePadding : 1.18;
   const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * padding;
-  
+
   const finalCamPos = center.clone().add(dir.multiplyScalar(distance));
 
   updateCameraClipping(center, radius);
 
-  // Animate
-  gsap.timeline({
+  activeCameraTween = gsap.timeline({
     defaults: { duration: 0.8, ease: 'power2.inOut' },
     onUpdate: () => {
       controls.update();
       updateCameraClipping(center, radius);
+    },
+    onComplete: () => {
+      activeCameraTween = null;
     }
   })
     .to(controls.target, { x: center.x, y: center.y, z: center.z }, 0)
@@ -1072,6 +1172,9 @@ const focusOnNode = (nodeLike) => {
   const node = resolveGraphNode(nodeLike);
   if (!node || !camera || !controls) return;
 
+  killActiveCameraTween();
+  isFocusMode.value = true;
+
   const p = node.mesh?.position?.clone?.() || new THREE.Vector3(0, 0, 0);
 
   let nodeRadius = 2;
@@ -1102,13 +1205,14 @@ const focusOnNode = (nodeLike) => {
 
   isUserInteracting.value = true;
 
-  gsap.timeline({
+  activeCameraTween = gsap.timeline({
     defaults: { duration: 0.7, ease: 'power2.inOut' },
     onUpdate: () => {
       controls.update();
       updateCameraClipping(p, Math.max(1, nodeRadius));
     },
     onComplete: () => {
+      activeCameraTween = null;
       isUserInteracting.value = false;
       ensureViewInBounds({ mode: 'node', recenter: false });
     }
@@ -1759,6 +1863,7 @@ const setupEventListeners = () => {
       selectNode(clickedObject);
     } else {
       selectedNode.value = null;
+      isFocusMode.value = false;
       store.setSelectedGraphNode(null);
       resetNodeHighlights();
     }
@@ -2119,7 +2224,7 @@ const applyLayout = async (layoutType) => {
   frameAllNodes({ useTargetPositions: true });
 
   setTimeout(() => {
-    frameAllNodes({ useTargetPositions: true });
+    frameAllNodes({ useTargetPositions: true, captureBaseline: true });
     ensureViewInBounds({ mode: 'graph', recenter: true });
   }, 120);
 };
@@ -2139,6 +2244,7 @@ const applyAutoSpin = (dt) => {
   if (!autoRotate.value) return false;
   if (!nodes.length) return false;
   if (isUserInteracting.value) return false;
+  if (isFocusMode.value) return false;
 
   const angle = dt * 0.05;
   if (!Number.isFinite(angle) || Math.abs(angle) < 1e-8) return false;
@@ -2384,6 +2490,7 @@ watch(
   (n) => {
     if (!n) {
       selectedNode.value = null;
+      isFocusMode.value = false;
       resetNodeHighlights();
       return;
     }
