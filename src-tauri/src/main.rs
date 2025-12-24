@@ -17,9 +17,8 @@ use guaxiservices::server::start_backend_services;
 use state::SharedState;
 
 async fn app_init() {
-    // 在启动时加载配置文件
-    let config = commands::settingview::load_config();
-    info!("Loaded config: {:?}", config);
+    commands::settingview::load_config();
+    info!("Config loaded");
     match commands::repoview::setup_db() {
         Ok(_) => println!("Database initialized successfully."),
         Err(e) => eprintln!("Failed to initialize database: {}", e),
@@ -158,6 +157,8 @@ async fn main() {
             commands::settingview::set_gc_cycle_seconds,
             commands::settingview::get_lsp_syntax_highlight_enabled,
             commands::settingview::set_lsp_syntax_highlight_enabled,
+            commands::settingview::get_llm_config,
+            commands::settingview::set_llm_config,
             commands::repoview::get_imported_files,
             commands::repoview::add_imported_file,
             commands::repoview::delete_imported_file,

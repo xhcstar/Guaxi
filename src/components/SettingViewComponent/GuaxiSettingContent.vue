@@ -13,6 +13,7 @@ import NoteRepoContent from './NoteRepoContent.vue';
 import PreferenceContent from './PreferenceContent.vue';
 import ServerContent from './ServerContent.vue';
 import AboutContent from './AboutContent.vue';
+import LLMModalSetting from './LLMModalSetting.vue';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -28,6 +29,8 @@ const currentComponent = computed(() => {
       return ServerContent;
     case 'about':
       return AboutContent;
+    case 'llm':
+      return LLMModalSetting;
     default:
       return null;
   }

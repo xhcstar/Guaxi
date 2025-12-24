@@ -51,12 +51,28 @@ pub struct AppConfig {
     pub gc_cycle_seconds: u64,
     #[serde(default)]
     lsp_syntax_highlight_enabled: bool,
+    #[serde(default)]
+    llm_config: LlmConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ServerConfig {
     host: String,
     port: u16,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct LlmConfig {
+    #[serde(default)]
+    pub chatgpt_api_key: String,
+    #[serde(default)]
+    pub deepseek_api_key: String,
+    #[serde(default)]
+    pub qwen_api_key: String,
+    #[serde(default)]
+    pub kimi_api_key: String,
+    #[serde(default)]
+    pub doubao_api_key: String,
 }
 
 fn default_gc_cycle_seconds() -> u64 {
@@ -311,6 +327,7 @@ impl Default for AppConfig {
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
+            llm_config: LlmConfig::default(),
         }
     }
 }
@@ -401,6 +418,19 @@ pub fn get_lsp_syntax_highlight_enabled() -> bool {
 pub fn set_lsp_syntax_highlight_enabled(enabled: bool) {
     let mut config = load_config();
     config.lsp_syntax_highlight_enabled = enabled;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_llm_config() -> LlmConfig {
+    let config = load_config();
+    config.llm_config
+}
+
+#[tauri::command]
+pub fn set_llm_config(llm_config: LlmConfig) {
+    let mut config = load_config();
+    config.llm_config = llm_config;
     save_config(&config);
 }
 

@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
-    selectedMenu: "笔记库", // 默认选中的菜单项
+    selectedMenu: "noterepo",
     librariesRoot: "",
   }),
   actions: {
