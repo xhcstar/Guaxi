@@ -248,19 +248,19 @@ const formatTime = (timeString) => {
   max-width: none;
 }
 
-.article-content ::v-deep p {
+.article-content :deep(p) {
   margin-bottom: 1.5em;
   text-align: justify;
 }
 
-.article-content ::v-deep h2 {
+.article-content :deep(h2) {
   font-size: 1.5rem;
   font-weight: 600;
   margin: 2em 0 1em;
   color: #1a1a1a;
 }
 
-.article-content ::v-deep h3 {
+.article-content :deep(h3) {
   font-size: 1.25rem;
   font-weight: 600;
   margin: 1.5em 0 0.5em;
