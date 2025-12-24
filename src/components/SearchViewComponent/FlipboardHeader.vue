@@ -3,12 +3,17 @@
     <div class="header-content">
       <!-- 左侧品牌和菜单 -->
       <div class="header-left">
-        <n-icon
-          size="20"
-          class="header-icon"
-          :component="PanelLeftContract24Regular"
-          @click="toggleLeftSidebar"
-        />
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-icon
+              size="20"
+              class="header-icon"
+              :component="PanelLeftContract24Regular"
+              @click="toggleLeftSidebar"
+            />
+          </template>
+          切换左侧边栏
+        </n-tooltip>
         <div class="logo">
           <span class="logo-text">FlipGuaxi</span>
         </div>

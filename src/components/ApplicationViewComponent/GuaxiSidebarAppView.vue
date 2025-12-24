@@ -74,11 +74,42 @@
         </svg>
       </n-icon>
     </div>
-    
+    <div class="app-category-list">
+      <div
+        v-for="category in categories"
+        :key="category.key"
+        :class="['app-category-item', { active: category.key === selectedCategory }]"
+        @click="handleSelect(category.key)"
+      >
+        <div class="app-category-dot"></div>
+        <span class="app-category-name">{{ category.label }}</span>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
+
+const categories = [
+  { key: 'tools', label: '工具类' },
+  { key: 'language', label: '语言类' },
+  { key: 'music', label: '音乐类' },
+  { key: 'work', label: '工作类' },
+  { key: 'life', label: '生活类' }
+]
+
+const props = defineProps({
+  selectedCategory: {
+    type: String,
+    default: ''
+  }
+})
+
+const emit = defineEmits(['update:selectedCategory'])
+
+const handleSelect = (key) => {
+  emit('update:selectedCategory', key)
+}
 
 const navigateTo = (path) => {
   window.location.hash = path; // 修改 hash，实现导航
@@ -89,6 +120,7 @@ const navigateTo = (path) => {
 <style scope>
 .sider-container {
   display: flex;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -102,5 +134,46 @@ const navigateTo = (path) => {
   border-right: 2px solid #aab4ae;
   margin-top: 10px;
   height: 100%;
+}
+
+.app-category-list {
+  flex: 1;
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.app-category-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #444;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease;
+}
+
+.app-category-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+  transform: translateX(2px);
+}
+
+.app-category-item.active {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+}
+
+.app-category-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.app-category-name {
+  white-space: nowrap;
 }
 </style>
