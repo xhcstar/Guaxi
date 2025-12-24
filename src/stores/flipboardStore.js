@@ -1,7 +1,10 @@
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
+let store
+
 export const useFlipboardStore = () => {
+  if (store) return store
   // 状态
   const articles = ref([])
   const categories = ref([])
@@ -287,7 +290,7 @@ export const useFlipboardStore = () => {
     }
   }
 
-  return {
+  store = {
     // 状态
     articles,
     categories,
@@ -325,4 +328,6 @@ export const useFlipboardStore = () => {
     refreshArticles,
     init
   }
+
+  return store
 }

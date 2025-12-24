@@ -3,13 +3,13 @@
     <div class="header-content">
       <!-- 左侧品牌和菜单 -->
       <div class="header-left">
-        <n-button text @click="toggleLeftSidebar" class="menu-btn">
-          <n-icon size="20">
-            <MenuIcon />
-          </n-icon>
-        </n-button>
+        <n-icon
+          size="20"
+          class="header-icon"
+          :component="PanelLeftContract24Regular"
+          @click="toggleLeftSidebar"
+        />
         <div class="logo">
-          <span class="logo-icon">📚</span>
           <span class="logo-text">FlipGuaxi</span>
         </div>
       </div>
@@ -60,9 +60,10 @@
 <script setup>
 import { computed } from 'vue'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
+import { useSiderStore } from '../../stores/useSiderStore'
+import { PanelLeftContract24Regular } from '@vicons/fluent'
 import {
   SearchOutline,
-  MenuOutline,
   GridOutline,
   ListOutline,
   NewspaperOutline,
@@ -70,13 +71,14 @@ import {
 } from '@vicons/ionicons5'
 
 const SearchIcon = SearchOutline
-const MenuIcon = MenuOutline
 const GridIcon = GridOutline
 const ListIcon = ListOutline
 const MagazineIcon = NewspaperOutline
 const RefreshIcon = RefreshOutline
 
 const store = useFlipboardStore()
+const siderStore = useSiderStore()
+const viewKey = 'search'
 
 const searchQuery = computed(() => store.searchQuery.value)
 const currentView = computed(() => store.currentView.value)
@@ -101,8 +103,7 @@ const refreshArticles = () => {
 }
 
 const toggleLeftSidebar = () => {
-  // 这个功能需要在父组件中实现
-  console.log('Toggle left sidebar')
+  siderStore.toggleLeftSider(viewKey)
 }
 </script>
 
@@ -129,17 +130,24 @@ const toggleLeftSidebar = () => {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
-.menu-btn {
-  color: #666;
-  transition: color 0.2s ease;
+.header-icon {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.menu-btn:hover {
-  color: #333;
+.header-icon:hover {
+  opacity: 0.8;
+  transform: scale(1.05);
+  background-color: rgba(0, 0, 0, 0.05);
 }
 
 .logo {

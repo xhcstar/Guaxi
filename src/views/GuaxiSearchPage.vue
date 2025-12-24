@@ -2,43 +2,27 @@
   <div class="flipboard-app">
     <!-- 顶部导航栏 -->
     <FlipboardHeader />
-    
+
     <!-- 主内容区域 -->
     <div class="flipboard-main">
       <!-- 左侧分类导航 -->
-      <div 
-        class="sidebar-container"
-        :class="{ collapsed: isLeftSiderCollapsed }"
-        :style="{ width: isLeftSiderCollapsed ? '0' : leftSiderbarWidth + 'px' }"
-      >
-        <FlipboardSidebar 
-          :categories="categories"
-          :active-category="selectedCategory"
-          @category-change="handleCategoryChange"
-        />
+      <div class="sidebar-container" :class="{ collapsed: isLeftSiderCollapsed }"
+        :style="{ width: isLeftSiderCollapsed ? '0' : leftSiderbarWidth + 'px' }">
+
+        <SearchViewSidebar />
         <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
       </div>
 
       <!-- 中间内容区域 -->
       <div class="content-area">
-        <FlipboardMagazineView 
-          :articles="filteredArticles"
-          :current-view="currentView"
-          :is-loading="isLoading"
-          @article-select="handleArticleSelect"
-        />
+        <FlipboardMagazineView :articles="filteredArticles" :current-view="currentView" :is-loading="isLoading"
+          @article-select="handleArticleSelect" />
       </div>
 
       <!-- 右侧阅读面板 -->
-      <div 
-        class="reader-panel"
-        :class="{ collapsed: isRightSiderCollapsed }"
-        :style="{ width: isRightSiderCollapsed ? '0' : rightSiderbarWidth + 'px' }"
-      >
-        <FlipboardDetailView 
-          :current-article="currentArticle"
-          :is-loading="isLoading"
-        />
+      <div class="reader-panel" :class="{ collapsed: isRightSiderCollapsed }"
+        :style="{ width: isRightSiderCollapsed ? '0' : rightSiderbarWidth + 'px' }">
+        <FlipboardDetailView :current-article="currentArticle" :is-loading="isLoading" />
         <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar"></div>
       </div>
     </div>
@@ -48,19 +32,28 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from "vue"
 import { useFlipboardStore } from '../stores/flipboardStore.js'
+import { useSiderStore } from '../stores/useSiderStore'
+import SearchViewSidebar from '../components/SearchViewComponent/SearchViewSidebar.vue'
 import FlipboardHeader from "../components/SearchViewComponent/FlipboardHeader.vue"
-import FlipboardSidebar from "../components/SearchViewComponent/FlipboardSidebar.vue"
 import FlipboardMagazineView from "../components/SearchViewComponent/FlipboardMagazineView.vue"
 import FlipboardDetailView from "../components/SearchViewComponent/FlipboardDetailView.vue"
 
 // 使用 store
 const store = useFlipboardStore()
+const siderStore = useSiderStore()
+const viewKey = 'search'
 
 // 布局状态
 const leftSiderbarWidth = ref(280)
 const rightSiderbarWidth = ref(500)
-const isLeftSiderCollapsed = ref(false)
-const isRightSiderCollapsed = ref(false)
+const isLeftSiderCollapsed = computed({
+  get: () => siderStore.isLeftSiderCollapsed[viewKey] ?? false,
+  set: (val) => siderStore.setLeftSiderCollapsed(viewKey, val)
+})
+const isRightSiderCollapsed = computed({
+  get: () => siderStore.isRightSiderCollapsed[viewKey] ?? true,
+  set: (val) => siderStore.setRightSiderCollapsed(viewKey, val)
+})
 
 // 拖拽状态
 const leftSidebarresizing = ref(false)
@@ -71,17 +64,11 @@ const rightSidebarStartX = ref(0)
 const rightSidebarStartWidth = ref(0)
 
 // 计算属性
-const categories = computed(() => store.categories.value)
-const selectedCategory = computed(() => store.selectedCategory.value)
 const filteredArticles = computed(() => store.filteredArticles.value)
 const currentArticle = computed(() => store.currentArticle.value)
 const currentView = computed(() => store.currentView.value)
 const isLoading = computed(() => store.isLoading.value)
 
-// 事件处理
-const handleCategoryChange = (categoryId) => {
-  store.fetchArticles(categoryId)
-}
 
 const handleArticleSelect = async (article) => {
   try {
