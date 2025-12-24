@@ -918,7 +918,8 @@ const frameAllNodes = (options = {}) => {
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
   const fitFov = Math.min(vFov, hFov);
 
-  const padding = Number(cfg.framePadding) > 0 ? cfg.framePadding : 1.18;
+  const rawPad = Number(cfg.framePadding) > 0 ? cfg.framePadding : 1.18;
+  const padding = Math.max(rawPad, 1.26);
   const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * padding;
   const cameraPosition = center.clone().add(dir.multiplyScalar(distance));
 
@@ -954,23 +955,61 @@ const resetCamera = () => {
   if (initialViewSnapshot?.cameraPosition && initialViewSnapshot?.target) {
     restoreInitialNodes();
 
+    if (Number.isFinite(initialViewSnapshot.minDistance)) controls.minDistance = initialViewSnapshot.minDistance;
+    if (Number.isFinite(initialViewSnapshot.maxDistance)) controls.maxDistance = initialViewSnapshot.maxDistance;
+
+    const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
+    if (sphere) {
+      const cfg = layoutViewConfig[currentLayout?.value] || layoutViewConfig.force;
+      const maxRadius = Number(cfg.maxRadius) > 0 ? cfg.maxRadius : Infinity;
+      const minRadius = Number(cfg.minRadius) > 0 ? cfg.minRadius : 1;
+
+      const radius = THREE.MathUtils.clamp(sphere.radius, minRadius, maxRadius);
+      const center = sphere.center.clone();
+
+      const dir = new THREE.Vector3(120, 140, 160).normalize();
+
+      const vFov = THREE.MathUtils.degToRad(camera.fov || 60);
+      const aspect = Number(camera.aspect) > 0 ? Number(camera.aspect) : (container.value?.clientWidth / container.value?.clientHeight) || 1;
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+      const fitFov = Math.min(vFov, hFov);
+
+      const rawPad = Number(cfg.framePadding) > 0 ? cfg.framePadding : 1.18;
+      const padding = Math.max(rawPad, 1.26);
+      const distance = (radius / Math.max(1e-6, Math.sin(fitFov / 2))) * padding;
+
+      const finalCamPos = center.clone().add(dir.multiplyScalar(distance));
+
+      updateCameraClipping(center, radius);
+
+      activeCameraTween = gsap.timeline({
+        defaults: { duration: 0.85, ease: 'power2.inOut' },
+        onUpdate: () => {
+          controls.update();
+          updateCameraClipping(center, radius);
+        },
+        onComplete: () => {
+          activeCameraTween = null;
+          clampViewToGraphBounds({ useTargetPositions: true, soft: false });
+        }
+      })
+        .to(controls.target, { x: center.x, y: center.y, z: center.z }, 0)
+        .to(camera.position, { x: finalCamPos.x, y: finalCamPos.y, z: finalCamPos.z }, 0);
+
+      log('相机已重置 (Snapshot+Center)');
+      return;
+    }
+
     const target = initialViewSnapshot.target.clone();
     const camPos = initialViewSnapshot.cameraPosition.clone();
 
     if (!isFiniteVec3(target)) target.set(0, 0, 0);
     if (!isFiniteVec3(camPos)) camPos.set(120, 140, 160);
 
-    if (Number.isFinite(initialViewSnapshot.minDistance)) controls.minDistance = initialViewSnapshot.minDistance;
-    if (Number.isFinite(initialViewSnapshot.maxDistance)) controls.maxDistance = initialViewSnapshot.maxDistance;
-
-    const sphere = getVisibleTargetBoundingSphere() || getVisibleBoundingSphere();
-    if (sphere) updateCameraClipping(target, sphere.radius);
-
     activeCameraTween = gsap.timeline({
       defaults: { duration: 0.8, ease: 'power2.inOut' },
       onUpdate: () => {
         controls.update();
-        if (sphere) updateCameraClipping(target, sphere.radius);
       },
       onComplete: () => {
         activeCameraTween = null;
@@ -1007,9 +1046,6 @@ const resetCamera = () => {
   const radius = THREE.MathUtils.clamp(sphere.radius, minRadius, maxRadius);
 
   const center = sphere.center.clone();
-  const bias = Number.isFinite(cfg.biasY) ? cfg.biasY : 0;
-  const biasOff = THREE.MathUtils.clamp(radius * bias, -1200, 1200);
-  center.y += biasOff;
 
   const dir = new THREE.Vector3(120, 140, 160).normalize();
 
@@ -1033,6 +1069,7 @@ const resetCamera = () => {
     },
     onComplete: () => {
       activeCameraTween = null;
+      clampViewToGraphBounds({ useTargetPositions: true, soft: false });
     }
   })
     .to(controls.target, { x: center.x, y: center.y, z: center.z }, 0)
