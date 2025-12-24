@@ -1,11 +1,11 @@
 <template>
   <div class="right-sider-content">
-    <SideNavigatorAppView />
+
   </div>
 </template>
 
 <script setup>
-import SideNavigatorAppView from "./SideNavigatorAppView.vue";
+
 </script>
 
 <style scope>

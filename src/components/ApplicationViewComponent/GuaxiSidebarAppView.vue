@@ -74,12 +74,12 @@
         </svg>
       </n-icon>
     </div>
-    <GuaxiSidbarTreeAppView />
+    
   </div>
 </template>
 
 <script setup>
-import GuaxiSidbarTreeAppView from "./GuaxiSidbarTreeAppView.vue"
+
 const navigateTo = (path) => {
   window.location.hash = path; // 修改 hash，实现导航
 };
