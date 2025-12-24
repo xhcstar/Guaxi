@@ -177,6 +177,9 @@ export const useChatStore = defineStore("chatStore", {
     lastMessage: null,
     lastMessageTime: 0,
     accumulatedMessage: "",
+
+    streamTargetModelId: null,
+    streamTargetTopicId: null,
   }),
   actions: {
     // 更新激活的会话 ID
@@ -190,6 +193,13 @@ export const useChatStore = defineStore("chatStore", {
 
     setModelTopic(topicId) {
       this.selectedTopic = topicId;
+    },
+
+    setStreamTarget(modelId, topicId) {
+      this.streamTargetModelId = modelId;
+      this.streamTargetTopicId = topicId;
+      this.lastMessage = null;
+      this.lastMessageTime = 0;
     },
 
     updateChatSession(answer) {
@@ -236,10 +246,13 @@ export const useChatStore = defineStore("chatStore", {
     },
 
     updateMessageContent() {
+      const modelId = this.streamTargetModelId ?? this.selectedModel;
+      const topicId = this.streamTargetTopicId ?? this.selectedTopic;
+
       this.SelectModelchatSessions.find((session) => {
-        if (session.id === this.selectedModel) {
+        if (session.id === modelId) {
           session.MessagesList.find((topicitem) => {
-            if (topicitem.topicid === this.selectedTopic) {
+            if (topicitem.topicid === topicId) {
               const latestTopic = topicitem.topic[topicitem.topic.length - 1];
               if (latestTopic && latestTopic.sender !== "me") {
                 this.renderDebounced(this.accumulatedMessage).then(
@@ -248,13 +261,11 @@ export const useChatStore = defineStore("chatStore", {
                   }
                 );
               } else {
-                console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>> accumulatedMessage", this.accumulatedMessage);
                 topicitem.topic.push({
                   msgid: topicitem.topic.length,
                   sender: session.name,
                   content: this.accumulatedMessage,
                 });
-                this.accumulatedMessage = "";
               }
             }
           });

@@ -102,6 +102,7 @@ const sendMessage = async () => {
 
   messageInput.value = ""; // 清空输入框
   scrollToBottom(); // 滚动到底部
+  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
   chatStore.accumulatedMessage = '';
 
   // 更新当前会话的消息记录
