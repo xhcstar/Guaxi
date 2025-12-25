@@ -53,9 +53,6 @@ const chatStore = useChatStore();
 const message = useMessage();
 const activeChat = computed(() => chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel));
 
-// 当前会话的消息记录
-const activeChatMessages = computed(() => activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []);
-
 const showMenu = ref(false);
 const menuTop = ref(0);
 const menuLeft = ref(0);
@@ -63,13 +60,6 @@ const selectedChat = ref(null);
 
 const selectChat = (id) => {
   chatStore.setModelTopic(id);
-};
-
-// 格式化时间戳
-const formatTimestamp = (timestamp) => {
-  if (!timestamp) return "";
-  const date = new Date(timestamp);
-  return `${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
 };
 
 // 新建聊天逻辑（可自定义实现）

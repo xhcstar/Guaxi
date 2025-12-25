@@ -19,9 +19,16 @@
 
     <div class="input-area">
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
-      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keydown="handleKeydown" style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;" />
-      <n-button @click="sendMessage" color="#dbe7e4"
+      <n-input
+        type="textarea"
+        :placeholder="isWebModel ? '网页模式：请点击右上角按钮打开网页窗口进行对话（聊天内容可记录后保存）' : '请输入您的问题...'"
+        :disabled="isWebModel"
+        v-model:value="messageInput"
+        @keydown="handleKeydown"
+        style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;"
+      />
+      <n-button @click="sendMessage" :disabled="isWebModel" color="#dbe7e4"
         style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
           <n-icon>
@@ -39,7 +46,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -50,7 +57,8 @@ const chatStore = useChatStore();
 const messageInput = ref("");
 const inputHistory = ref([]);
 const historyIndex = ref(-1);
-let unsubscribe = null;
+let unsubscribeStream = null;
+let unsubscribeWebModel = null;
 const messageRefs = ref([]);
 
 
@@ -65,6 +73,15 @@ const activeChatMessages = computed(() =>
 );
 
 const autosaveTimer = ref(null);
+
+const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
+
+const openCurrentWebModel = async () => {
+  const modelId = chatStore.selectedModel;
+  if (modelId !== 7 && modelId !== 8) return;
+  const provider = modelId === 7 ? 'yuanbao' : 'chatgpt';
+  await invoke('open_web_model_window', { provider });
+};
 
 const saveSessionSnapshot = async () => {
   try {
@@ -123,6 +140,15 @@ const askDeepSeek = async (question) => {
 
 // 发送消息
 const sendMessage = async () => {
+  if (isWebModel.value) {
+    try {
+      await openCurrentWebModel();
+    } catch (e) {
+      console.error('打开网页模型失败:', e);
+    }
+    return;
+  }
+
   if (!messageInput.value.trim() || !activeChat.value) return;
 
   const question = messageInput.value.trim();
@@ -233,20 +259,52 @@ const stopResize = () => {
 };
 
 onMounted(() => {
-  unsubscribe = listen("modle-streaming-respond-output", (event) => {
+  listen("modle-streaming-respond-output", (event) => {
     chatStore.collectChatSessionStream(event.payload);
     scheduleAutosave();
-  }).then((unsubFn) => {
-    unsubscribe = unsubFn;
-  }).catch((err) => {
-    console.error('监听事件失败:', err);
-    unsubscribe = null;
-  });
+  })
+    .then((unsubFn) => {
+      unsubscribeStream = unsubFn;
+    })
+    .catch((err) => {
+      console.error('监听事件失败:', err);
+      unsubscribeStream = null;
+    });
+
+  listen("web-model-chat-push", (event) => {
+    const payload = event.payload || {};
+    const modelId = payload.model_id;
+    const topicId = payload.topic_id;
+    const sessionId = payload.session_id;
+    const messages = payload.messages;
+
+    chatStore.appendMessagesToTopic({
+      modelId,
+      topicId,
+      sessionId,
+      messages,
+    });
+
+    if (modelId === chatStore.selectedModel && topicId === chatStore.selectedTopic) {
+      scrollToBottom();
+      scheduleAutosave();
+    }
+  })
+    .then((unsubFn) => {
+      unsubscribeWebModel = unsubFn;
+    })
+    .catch((err) => {
+      console.error('监听 web-model-chat-push 失败:', err);
+      unsubscribeWebModel = null;
+    });
 });
 
 onUnmounted(() => {
-  if (unsubscribe && typeof unsubscribe === 'function') {
-    unsubscribe(); // 清理监听器
+  if (unsubscribeStream && typeof unsubscribeStream === 'function') {
+    unsubscribeStream();
+  }
+  if (unsubscribeWebModel && typeof unsubscribeWebModel === 'function') {
+    unsubscribeWebModel();
   }
   if (autosaveTimer.value) {
     clearTimeout(autosaveTimer.value);

@@ -84,6 +84,11 @@ async fn collect_content_from_local_deepseek(data: &str) -> Result<String, Strin
 
     // 分割每一行
     for line in data.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
         // 解析每一行的 JSON
         let response: LocalDeepSeekResponse =
             serde_json::from_str(line).map_err(|e| e.to_string())?;
@@ -94,6 +99,59 @@ async fn collect_content_from_local_deepseek(data: &str) -> Result<String, Strin
 
     // 返回完整的回答
     Ok(full_answer)
+}
+
+fn stream_extract_content(line: &str) -> Option<String> {
+    let mut s = line.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    if let Some(rest) = s.strip_prefix("data:") {
+        s = rest.trim();
+    }
+
+    if s.is_empty() || s == "[DONE]" {
+        return None;
+    }
+
+    let v: Value = serde_json::from_str(s).ok()?;
+
+    if let Some(c) = v.pointer("/message/content").and_then(|v| v.as_str()) {
+        if !c.is_empty() {
+            return Some(c.to_string());
+        }
+    }
+
+    if let Some(c) = v
+        .pointer("/choices/0/delta/content")
+        .and_then(|v| v.as_str())
+    {
+        if !c.is_empty() {
+            return Some(c.to_string());
+        }
+    }
+
+    if let Some(c) = v
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+    {
+        if !c.is_empty() {
+            return Some(c.to_string());
+        }
+    }
+
+    None
+}
+
+fn drain_complete_lines(buf: &mut String) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Some(idx) = buf.find('\n') {
+        let line = buf[..idx].to_string();
+        buf.drain(..=idx);
+        lines.push(line);
+    }
+    lines
 }
 
 fn generate_session_id() -> String {
@@ -574,6 +632,7 @@ pub async fn get_answer_from_deepseek_stream(
     }
 
     let mut stream = response.bytes_stream();
+    let mut carry = String::new();
     let mut buffer = String::new();
 
     // 流式输出数据
@@ -622,6 +681,13 @@ pub async fn get_answer_from_deepseek_stream(
     }
 
     // 流结束后，处理剩余的缓冲区数据
+    let tail = carry.trim();
+    if !tail.is_empty() {
+        if let Some(content) = stream_extract_content(tail) {
+            buffer.push_str(&content);
+        }
+    }
+
     if !buffer.is_empty() {
         // 替换 `\[` 和 `\]` 及相关换行符
         let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
@@ -698,6 +764,7 @@ pub async fn get_answer_from_kimi_stream(
     }
 
     let mut stream = response.bytes_stream();
+    let mut carry = String::new();
     let mut buffer = String::new();
 
     info!("get_answer_from_kimi_stream: Receive Streaming data");
@@ -744,6 +811,13 @@ pub async fn get_answer_from_kimi_stream(
     }
 
     // 流结束后，处理剩余的缓冲区数据
+    let tail = carry.trim();
+    if !tail.is_empty() {
+        if let Some(content) = stream_extract_content(tail) {
+            buffer.push_str(&content);
+        }
+    }
+
     if !buffer.is_empty() {
         // 替换 `\[` 和 `\]` 及相关换行符
         let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
@@ -804,6 +878,7 @@ pub async fn get_answer_from_local_qwen_stream(
         "model": "qwen3:8b",
         "messages": [{"role": "user", "content": question}],
         "stream": true,  // 启用流式传输
+        "session_id": session_id,
     });
 
     info!(
@@ -826,48 +901,42 @@ pub async fn get_answer_from_local_qwen_stream(
 
     if !response.status().is_success() {
         return Err(format!(
-            "Error calling DeepSeek API: {:?}",
+            "Error calling Local Qwen API: {:?}",
             response.status()
         ));
     }
 
     let mut stream = response.bytes_stream();
+    let mut carry = String::new();
     let mut buffer = String::new();
 
     // 流式输出数据
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(data) => {
-                let chunk_str = String::from_utf8_lossy(&data).to_string();
-                let mut answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
+                carry.push_str(&String::from_utf8_lossy(&data));
 
-                buffer.push_str(&answer_content);
-                debug!(
-                    "get_answer_from_local_qwen_stream: origin buffer: {:?}",
-                    buffer
-                );
+                for line in drain_complete_lines(&mut carry) {
+                    if let Some(content) = stream_extract_content(&line) {
+                        buffer.push_str(&content);
+                    }
+                }
+
+                if buffer.is_empty() {
+                    continue;
+                }
+
                 if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
                     continue;
                 }
-                debug!("get_answer_from_local_qwen_stream: buffer: {:?}", buffer);
-                // 替换 `\[` 和 `\]` 及相关换行符
-                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-                // 替换 \( 和 \) 及相关换行符
-                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-                // 对 content 进行替换
-                if !buffer.is_empty() {
-                    buffer = re_block.replace_all(&buffer, "$$").to_string();
-                    buffer = re_inline.replace_all(&buffer, "$").to_string();
-                }
 
-                // info!("Answer replaced for math symble: {}", buffer);
+                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
+                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+                buffer = re_block.replace_all(&buffer, "$").to_string();
+                buffer = re_inline.replace_all(&buffer, "$").to_string();
+
                 app.emit("modle-streaming-respond-output", &buffer)
                     .map_err(|e| e.to_string())?;
-                debug!(
-                    "get_answer_from_local_qwen_stream: Streaming data: {:?}",
-                    buffer
-                );
-                debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
 
                 buffer.clear();
             }
@@ -916,6 +985,7 @@ pub async fn get_answer_from_local_deepseek_stream(
         "model": "deepseek-r1:8b",
         "messages": [{"role": "user", "content": question}],
         "stream": true,  // 启用流式传输
+        "session_id": session_id,
     });
 
     info!(
@@ -944,6 +1014,7 @@ pub async fn get_answer_from_local_deepseek_stream(
     }
 
     let mut stream = response.bytes_stream();
+    let mut carry = String::new();
     let mut buffer = String::new();
     let mut last_emitted = String::new(); // 新增：记录上次发送的内容
 
@@ -951,30 +1022,40 @@ pub async fn get_answer_from_local_deepseek_stream(
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(data) => {
-                let chunk_str = String::from_utf8_lossy(&data).to_string();
-                let mut answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
+                carry.push_str(&String::from_utf8_lossy(&data));
 
-                buffer.push_str(&answer_content);
+                for line in drain_complete_lines(&mut carry) {
+                    if let Some(content) = stream_extract_content(&line) {
+                        buffer.push_str(&content);
+                    }
+                }
+
                 debug!(
                     "get_answer_from_local_deepseek_stream: origin buffer: {:?}",
                     buffer
                 );
 
+                if buffer.is_empty() {
+                    continue;
+                }
+
                 // 跳过特定字符的情况保持不变
                 if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
                     continue;
                 }
+
                 debug!(
                     "get_answer_from_local_deepseek_stream: buffer: {:?}",
                     buffer
                 );
+
                 // 替换 `\[` 和 `\]` 及相关换行符
                 let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
                 // 替换 \( 和 \) 及相关换行符
                 let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
                 // 对 content 进行替换
                 if !buffer.is_empty() {
-                    buffer = re_block.replace_all(&buffer, "$$").to_string();
+                    buffer = re_block.replace_all(&buffer, "$").to_string();
                     buffer = re_inline.replace_all(&buffer, "$").to_string();
                 }
 
@@ -1201,6 +1282,108 @@ fn web_model_url(provider: &str) -> Option<&'static str> {
     }
 }
 
+fn web_model_capture_init_script(provider: &str) -> String {
+    let provider = provider.trim().to_lowercase();
+    format!(
+        r#"(() => {{
+  try {{
+    const PROVIDER = {provider:?};
+    const ENDPOINT = 'http://127.0.0.1:8888/api/web-model-chat';
+
+    if (window.__GUAXI_WEB_CAPTURE_INSTALLED__) return;
+    window.__GUAXI_WEB_CAPTURE_INSTALLED__ = true;
+
+    function getSessionId() {{
+      const k = `guaxi_web_session_${{PROVIDER}}`;
+      let v = null;
+      try {{ v = localStorage.getItem(k); }} catch (e) {{}}
+      if (!v) {{
+        v = `${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`;
+        try {{ localStorage.setItem(k, v); }} catch (e) {{}}
+      }}
+      return v;
+    }}
+
+    function textOf(el) {{
+      if (!el) return '';
+      const t = (el.innerText || el.textContent || '').trim();
+      return t;
+    }}
+
+    function collectChatgptMessages() {{
+      const nodes = Array.from(document.querySelectorAll('[data-message-author-role]'));
+      const out = [];
+      for (const n of nodes) {{
+        const role = (n.getAttribute('data-message-author-role') || '').toLowerCase();
+        const content = textOf(n);
+        if (!content) continue;
+        out.push({{ role: role === 'user' ? 'user' : 'assistant', content }});
+      }}
+      return out;
+    }}
+
+    function collectGenericMessages() {{
+      const candidates = Array.from(document.querySelectorAll('main, [role="main"], body'));
+      const root = candidates.find(Boolean) || document.body;
+      const blocks = Array.from(root.querySelectorAll('div, p, li'));
+      const out = [];
+      for (const b of blocks) {{
+        const content = textOf(b);
+        if (!content) continue;
+        if (content.length < 6) continue;
+        if (content.length > 2000) continue;
+        out.push({{ role: 'assistant', content }});
+      }}
+      return out.slice(-20);
+    }}
+
+    function collectMessages() {{
+      if (PROVIDER === 'chatgpt') {{
+        const msgs = collectChatgptMessages();
+        return msgs.length ? msgs : collectGenericMessages();
+      }}
+      return collectGenericMessages();
+    }}
+
+    let lastSig = '';
+    let timer = null;
+
+    async function push() {{
+      try {{
+        const messages = collectMessages();
+        const sig = JSON.stringify(messages.slice(-6));
+        if (!messages.length || sig === lastSig) return;
+        lastSig = sig;
+
+        await fetch(ENDPOINT, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{
+            provider: PROVIDER,
+            session_id: getSessionId(),
+            messages
+          }})
+        }});
+      }} catch (e) {{}}
+    }}
+
+    const observer = new MutationObserver(() => {{
+      if (timer) return;
+      timer = setTimeout(() => {{
+        timer = null;
+        push();
+      }}, 800);
+    }});
+
+    observer.observe(document.documentElement, {{ childList: true, subtree: true, characterData: true }});
+
+    setInterval(push, 3500);
+    push();
+  }} catch (e) {{}}
+}})();"#
+    )
+}
+
 #[tauri::command]
 pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> Result<(), String> {
     let provider_key = provider.trim().to_lowercase();
@@ -1214,10 +1397,13 @@ pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> R
     }
 
     let external = Url::parse(url).map_err(|e| e.to_string())?;
+    let init_script = web_model_capture_init_script(&provider_key);
+
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(external))
         .title(url)
         .inner_size(1100.0, 780.0)
         .min_inner_size(820.0, 560.0)
+        .initialization_script(init_script.as_str())
         .visible(false)
         .build()
         .map_err(|e| format!("创建窗口失败: {}", e))?;

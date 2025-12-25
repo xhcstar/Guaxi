@@ -244,6 +244,42 @@ export const useChatStore = defineStore("chatStore", {
       this.lastMessageTime = 0;
     },
 
+    appendMessagesToTopic({ modelId, topicId, sessionId, messages }) {
+      const targetModelId = typeof modelId === 'number' ? modelId : this.selectedModel;
+      const targetTopicId = typeof topicId === 'number' ? topicId : this.selectedTopic;
+      const safeMessages = Array.isArray(messages) ? messages : [];
+
+      this.SelectModelchatSessions.find((session) => {
+        if (session.id !== targetModelId) return;
+
+        let topicitem = session.MessagesList.find((t) => t.topicid === targetTopicId);
+        if (!topicitem) {
+          topicitem = {
+            topicid: targetTopicId,
+            topic: [],
+          };
+          session.MessagesList.push(topicitem);
+        }
+
+        safeMessages.forEach((m) => {
+          const role = (m?.role || '').toString().toLowerCase();
+          const sender = role === 'user' ? 'me' : session.name;
+          const content = (m?.content ?? '').toString();
+
+          topicitem.topic.push({
+            msgid: topicitem.topic.length + 1,
+            sender,
+            chatSessionId: sessionId || '',
+            content,
+          });
+        });
+
+        if (sessionId && targetModelId === this.selectedModel && targetTopicId === this.selectedTopic) {
+          this.sendChatSessionId = sessionId;
+        }
+      });
+    },
+
     updateChatSession(answer) {
       // console.log("answer", answer);
       // console.log("this.selectedModel", this.selectedModel);
