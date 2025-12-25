@@ -8,7 +8,7 @@ use actix_web::web::{Data, JsonConfig, PayloadConfig};
 use actix_web::{web, App, HttpResponse, HttpServer};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -31,6 +31,8 @@ struct WebModelChatPushRequest {
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
     messages: Vec<WebModelChatMessage>,
 }
 
@@ -47,6 +49,8 @@ async fn web_model_chat_push(
     req: web::Json<WebModelChatPushRequest>,
 ) -> HttpResponse {
     let provider = req.provider.trim().to_lowercase();
+    let status = req.status.as_deref().map(|s| s.trim().to_lowercase());
+
     let model_id = req
         .model_id
         .or_else(|| provider_to_model_id(&provider));
@@ -65,10 +69,23 @@ async fn web_model_chat_push(
         "model_id": model_id,
         "topic_id": topic_id,
         "session_id": req.session_id,
+        "status": status,
         "messages": req.messages,
     });
 
     if let Some(app_handle) = state.get_app_handle() {
+        if let Some(status) = payload.get("status").and_then(|v| v.as_str()) {
+            let label = format!("web-model-{}", payload.get("provider").and_then(|v| v.as_str()).unwrap_or(""));
+            if let Some(w) = app_handle.get_webview_window(&label) {
+                if status == "need_login" {
+                    let _ = w.show();
+                    w.set_focus().ok();
+                } else if status == "ready" {
+                    let _ = w.hide();
+                }
+            }
+        }
+
         if let Err(e) = app_handle.emit("web-model-chat-push", payload) {
             warn!("emit web-model-chat-push failed: {}", e);
             return HttpResponse::InternalServerError().json(json!({
