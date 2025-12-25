@@ -45,7 +45,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, computed, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -74,6 +74,19 @@ const activeChatMessages = computed(() =>
 const autosaveTimer = ref(null);
 
 const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
+
+watch(
+  () => chatStore.selectedModel,
+  async (modelId) => {
+    if (modelId !== 7 && modelId !== 8) return;
+    const provider = modelId === 7 ? 'yuanbao' : 'chatgpt';
+    try {
+      await invoke('prepare_web_model_window', { provider });
+    } catch (e) {
+      console.error('预加载网页模型窗口失败:', e);
+    }
+  }
+);
 
 const getTopicSessionId = (topic) => {
   const items = Array.isArray(topic) ? topic : [];

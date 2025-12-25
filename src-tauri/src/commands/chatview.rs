@@ -1348,58 +1348,198 @@ pub async fn web_model_send_message(
     window.__GUAXI_TOPIC_ID__ = {topic_id};
     window.__GUAXI_SESSION_ID__ = {session_id};
 
+    const provider = {provider};
     const text = {content};
+
+    function findInput() {{
+      const sendBtn = document.querySelector('#yuanbao-send-btn');
+      if (provider === 'yuanbao' && sendBtn) {{
+        const scope = (sendBtn.closest('form') || sendBtn.closest('main, [role="main"], body') || document.body);
+        return (
+          scope.querySelector('textarea') ||
+          scope.querySelector('[contenteditable="true"]') ||
+          scope.querySelector('[role="textbox"]') ||
+          document.querySelector('textarea') ||
+          document.querySelector('[contenteditable="true"]') ||
+          document.querySelector('[role="textbox"]')
+        );
+    }}
+
+      return (
+        document.querySelector('#prompt-textarea') ||
+        document.querySelector('textarea') ||
+        document.querySelector('[contenteditable="true"]') ||
+        document.querySelector('[role="textbox"]')
+      );
+    }}
+
+    function setNativeValue(el, value) {{
+      try {{
+        const proto = el instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc && typeof desc.set === 'function') {{
+          desc.set.call(el, value);
+          return true;
+        }}
+      }} catch (e) {{}}
+      try {{
+        el.value = value;
+        return true;
+      }} catch (e) {{}}
+      return false;
+    }}
 
     function setValue(el) {{
       if (!el) return false;
+
+      try {{ el.focus(); }} catch (e) {{}}
+
       if (typeof el.value === 'string') {{
-        el.focus();
-        el.value = text;
-        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        if (!setNativeValue(el, text)) return false;
+        try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: text }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+        try {{ el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch (e) {{}}
         return true;
       }}
+
       if (el.isContentEditable) {{
-        el.focus();
-        el.innerText = text;
-        el.dispatchEvent(new InputEvent('input', {{ bubbles: true }}));
+        try {{
+          el.textContent = '';
+          if (document.execCommand) {{
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, text);
+          }} else {{
+            el.textContent = text;
+          }}
+        }} catch (e) {{
+          try {{ el.textContent = text; }} catch (e2) {{ return false; }}
+        }}
+
+        try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: text }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
         return true;
       }}
+
       return false;
     }}
 
-    function clickSend() {{
-      const candidates = [
-        'button[data-testid="send-button"]',
-        'button[aria-label="Send"]',
-        'button[aria-label="发送"]',
-        'button[type="submit"]'
-      ];
-      for (const sel of candidates) {{
-        const b = document.querySelector(sel);
-        if (b && !b.disabled) {{ b.click(); return true; }}
+    function isDisabled(el) {{
+      if (!el) return true;
+      if (el.disabled) return true;
+      const aria = (el.getAttribute && el.getAttribute('aria-disabled')) || '';
+      if (aria.toString().toLowerCase() === 'true') return true;
+      return false;
+    }}
+
+    function click(el) {{
+      if (!el) return false;
+      if (isDisabled(el)) return false;
+      try {{ el.click(); return true; }} catch (e) {{}}
+      try {{
+        el.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true, view: window }}));
+        return true;
+      }} catch (e) {{}}
+      return false;
+    }}
+
+    function bestSendButton(input) {{
+      const root = (input && (input.closest('form') || input.closest('main, [role="main"], body'))) || document.body;
+      const inputRect = input && input.getBoundingClientRect ? input.getBoundingClientRect() : null;
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], a'));
+
+      let best = null;
+      let bestScore = 0;
+
+      for (const b of nodes) {{
+        if (!b || isDisabled(b)) continue;
+
+        const label = ((b.getAttribute && (b.getAttribute('aria-label') || b.getAttribute('title') || b.getAttribute('data-testid') || b.getAttribute('id'))) || '').toString();
+        const txt = ((b.innerText || b.textContent) || '').toString().trim();
+        const cls = (b.className || '').toString();
+        const type = (b.getAttribute && b.getAttribute('type')) || '';
+
+        let score = 0;
+        if ((b.id || '') === 'yuanbao-send-btn') score += 220;
+        if (/send|发送|提交|确定/i.test(label)) score += 90;
+        if (/send|发送|提交|确定/i.test(txt)) score += 80;
+        if (/send/i.test(cls)) score += 35;
+        if (type.toString().toLowerCase() === 'submit') score += 70;
+        if (label.toString().toLowerCase().includes('send')) score += 30;
+        if (label.includes('发送')) score += 30;
+        if (b.querySelector && b.querySelector('svg')) score += 5;
+
+        if (inputRect && b.getBoundingClientRect) {{
+          const r = b.getBoundingClientRect();
+          const dx = (r.left - inputRect.right);
+          const dy = Math.abs(r.top - inputRect.top);
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (Number.isFinite(dist)) score -= Math.min(50, dist / 10);
+          if (r.width <= 80 && r.height <= 80) score += 5;
+        }}
+
+        if (score > bestScore) {{
+          bestScore = score;
+          best = b;
+        }}
       }}
+
+      return bestScore > 10 ? best : null;
+    }}
+
+    function trySubmitForm(input) {{
+      const form = input && (input.form || (input.closest && input.closest('form')));
+      if (!form) return false;
+      try {{
+        if (typeof form.requestSubmit === 'function') {{
+          form.requestSubmit();
+          return true;
+        }}
+      }} catch (e) {{}}
+      try {{
+        form.dispatchEvent(new Event('submit', {{ bubbles: true, cancelable: true }}));
+        return true;
+      }} catch (e) {{}}
       return false;
     }}
 
-    const input =
-      document.querySelector('#prompt-textarea') ||
-      document.querySelector('textarea') ||
-      document.querySelector('[contenteditable="true"]');
+    function tryEnter(input) {{
+      try {{
+        const down = new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }});
+        const up = new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }});
+        input.dispatchEvent(down);
+        input.dispatchEvent(up);
+        return true;
+      }} catch (e) {{}}
+      return false;
+    }}
 
-    if (!setValue(input)) return;
+    function sendNow() {{
+      const input = findInput();
+      if (!setValue(input)) return;
 
-    if (clickSend()) return;
+      if (trySubmitForm(input)) return;
 
-    try {{
-      const evt = new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true }});
-      input.dispatchEvent(evt);
-    }} catch (e) {{}}
+      if (provider === 'yuanbao') {{
+        const ybtn = document.querySelector('#yuanbao-send-btn');
+        if (ybtn && click(ybtn)) return;
+      }}
+
+      const btn = bestSendButton(input);
+      if (btn && click(btn)) return;
+
+      tryEnter(input);
+    }}
+
+    sendNow();
+    setTimeout(sendNow, 120);
+    setTimeout(sendNow, 420);
+    setTimeout(sendNow, 900);
   }} catch (e) {{}}
 }})();"#,
         model_id = request.model_id,
         topic_id = request.topic_id,
         session_id = session_json,
+        provider = serde_json::to_string(&provider_key).unwrap_or_else(|_| "\"\"".to_string()),
         content = content_json
     );
 
@@ -1418,6 +1558,13 @@ pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> R
         w.set_focus().ok();
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn prepare_web_model_window(app: tauri::AppHandle, provider: String) -> Result<(), String> {
+    let provider_key = provider.trim().to_lowercase();
+    ensure_web_model_window(&app, &provider_key).await?;
     Ok(())
 }
 

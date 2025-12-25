@@ -168,6 +168,7 @@ async fn main() {
             commands::chatview::save_chat_session,
             commands::chatview::export_chat_session,
             commands::chatview::open_web_model_window,
+            commands::chatview::prepare_web_model_window,
             commands::chatview::web_model_send_message,
             commands::repoview::get_imported_files,
             commands::repoview::add_imported_file,
@@ -256,10 +257,12 @@ async fn main() {
             commands::flipboard::get_recommendations,
             commands::flipboard::get_popular_articles,
         ])
-        .setup(|app| {
-            // 直接启动服务而不使用spawn
-            tauri::async_runtime::spawn(async {
-                if let Err(e) = start_backend_services(shared_state).await {
+        .setup(move |app| {
+            shared_state.set_app_handle(app.handle().clone());
+
+            let state_for_server = shared_state.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = start_backend_services(state_for_server).await {
                     eprintln!("Failed to start backend services: {}", e);
                 }
             });
