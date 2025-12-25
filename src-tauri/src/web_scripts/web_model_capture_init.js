@@ -78,17 +78,13 @@
 
         if (tag === 'pre') {
           const codeEl = el.querySelector && el.querySelector('code');
-          const code = normalize((codeEl ? codeEl.textContent : el.textContent) || '');
-          if (!code) return '';
-          return `\n\n\
-\
-\
-\
-`.replace(/\n\n\s*$/, '') + `\n\n\
-\
-\
-\
-`;
+          let code = (codeEl ? codeEl.textContent : el.textContent) || '';
+          code = String(code)
+            .replace(/\r\n/g, '\n')
+            .replace(/\r/g, '\n')
+            .replace(/\n+$/, '');
+          if (!code.trim()) return '';
+          return `\n\n\`\`\`\n${code}\n\`\`\`\n\n`;
         }
 
         if (tag === 'code') {
@@ -207,8 +203,12 @@
       if (!input) return false;
 
       if (PROVIDER === 'yuanbao') {
-        const sendBtn = document.querySelector('#yuanbao-send-btn');
-        if (sendBtn) return true;
+        try {
+          if (input.disabled) return false;
+          const aria = (input.getAttribute && input.getAttribute('aria-disabled')) || '';
+          if (aria.toString().toLowerCase() === 'true') return false;
+          if (Object.prototype.hasOwnProperty.call(input, 'readOnly') && input.readOnly) return false;
+        } catch (e) { }
         return true;
       }
 
@@ -376,10 +376,16 @@
         if (seenContainers.has(container)) continue;
         seenContainers.add(container);
 
-        const content = (PROVIDER === 'yuanbao') ? markdownOf(container) : textOf(container);
+        let content = (PROVIDER === 'yuanbao') ? markdownOf(container) : textOf(container);
         if (!content) continue;
         if (content.length < 10) continue;
-        if (content.length > 4000) continue;
+        if (content.length > 4000) {
+          if (PROVIDER === 'yuanbao') {
+            content = content.slice(-4000);
+          } else {
+            continue;
+          }
+        }
 
         if (PROVIDER === 'yuanbao' && looksLikeYuanbaoUi(content)) continue;
 
