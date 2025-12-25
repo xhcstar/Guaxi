@@ -4,6 +4,7 @@ import { debounce } from "lodash-es";
 import chatgptImg from '@/assets/chatgpt.png';
 import deepseekImg from '@/assets/deepseek.png';
 import qwenImg from '@/assets/qwen.png';
+import yuanbao from '@/assets/yuanbao.png';
 import kimiImg from '@/assets/kimi.png';
 import doubaoImg from '@/assets/doubao.png';
 import localQwenImg from '@/assets/local_qwen.png';
@@ -156,7 +157,7 @@ export const useChatStore = defineStore("chatStore", {
       {
         id: 7,
         name: "腾讯元宝(网页)",
-        ModelAvatar: qwenImg,
+        ModelAvatar: yuanbao,
         MeAvatar: meImg,
         MessagesList: [
           {
@@ -166,7 +167,7 @@ export const useChatStore = defineStore("chatStore", {
                 msgid: 0,
                 sender: "腾讯元宝(网页)",
                 chatSessionId: "",
-                content: "该模型为网页模式，请点击右上角按钮打开腾讯元宝窗口进行对话。",
+                content: "您好，我是腾讯元宝，有什么可以帮忙的吗？",
               },
             ],
           },
@@ -186,7 +187,7 @@ export const useChatStore = defineStore("chatStore", {
                 msgid: 0,
                 sender: "ChatGPT(网页)",
                 chatSessionId: "",
-                content: "该模型为网页模式，请点击右上角按钮打开 ChatGPT 网页窗口进行对话。",
+                content: "您好，我是 ChatGPT，有什么可以帮忙的吗？",
               },
             ],
           },
@@ -264,14 +265,39 @@ export const useChatStore = defineStore("chatStore", {
         safeMessages.forEach((m) => {
           const role = (m?.role || '').toString().toLowerCase();
           const sender = role === 'user' ? 'me' : session.name;
-          const content = (m?.content ?? '').toString();
+          const raw = (m?.content ?? '').toString();
+          const messageId = (m?.message_id ?? m?.messageId ?? '').toString();
 
-          topicitem.topic.push({
+          const applyContent = (target) => {
+            if (sender === 'me') {
+              target.content = raw;
+              return;
+            }
+
+            this.renderDebounced(raw).then((rendered) => {
+              target.content = rendered;
+            });
+          };
+
+          if (messageId) {
+            const existing = topicitem.topic.find((x) => x?.messageId === messageId && x?.sender === sender);
+            if (existing) {
+              existing.chatSessionId = sessionId || existing.chatSessionId || '';
+              applyContent(existing);
+              return;
+            }
+          }
+
+          const next = {
             msgid: topicitem.topic.length + 1,
             sender,
             chatSessionId: sessionId || '',
-            content,
-          });
+            content: raw,
+            messageId: messageId || '',
+          };
+
+          applyContent(next);
+          topicitem.topic.push(next);
         });
 
         if (sessionId && targetModelId === this.selectedModel && targetTopicId === this.selectedTopic) {

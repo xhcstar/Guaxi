@@ -21,14 +21,13 @@
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
       <n-input
         type="textarea"
-        :placeholder="isWebModel ? '网页模式：请点击右上角按钮打开网页窗口进行对话（聊天内容可记录后保存）' : '请输入您的问题...'"
-        :disabled="isWebModel"
+        placeholder="请输入您的问题..."
         v-model:value="messageInput"
         @keydown="handleKeydown"
         style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;"
       />
-      <n-button @click="sendMessage" :disabled="isWebModel" color="#dbe7e4"
+      <n-button @click="sendMessage" color="#dbe7e4"
         style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
           <n-icon>
@@ -76,11 +75,21 @@ const autosaveTimer = ref(null);
 
 const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
 
-const openCurrentWebModel = async () => {
-  const modelId = chatStore.selectedModel;
-  if (modelId !== 7 && modelId !== 8) return;
-  const provider = modelId === 7 ? 'yuanbao' : 'chatgpt';
-  await invoke('open_web_model_window', { provider });
+const getTopicSessionId = (topic) => {
+  const items = Array.isArray(topic) ? topic : [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const sid = items[i]?.chatSessionId;
+    if (typeof sid === 'string' && sid.trim()) return sid;
+  }
+  return '';
+};
+
+const ensureTopicSessionId = (topic) => {
+  const existing = getTopicSessionId(topic);
+  if (existing) return existing;
+  const sid = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  chatStore.sendChatSessionId = sid;
+  return sid;
 };
 
 const saveSessionSnapshot = async () => {
@@ -140,30 +149,62 @@ const askDeepSeek = async (question) => {
 
 // 发送消息
 const sendMessage = async () => {
-  if (isWebModel.value) {
-    try {
-      await openCurrentWebModel();
-    } catch (e) {
-      console.error('打开网页模型失败:', e);
-    }
-    return;
-  }
-
   if (!messageInput.value.trim() || !activeChat.value) return;
+
+  const isWeb = isWebModel.value;
 
   const question = messageInput.value.trim();
 
   inputHistory.value.push(question);
   historyIndex.value = inputHistory.value.length;
 
-  activeChatMessages.value.topic.push({
-    msgid: activeChatMessages.value.topic.length + 1,
+  const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+
+  let provider = '';
+  let sessionId = '';
+  if (isWeb) {
+    provider = chatStore.selectedModel === 7 ? 'yuanbao' : 'chatgpt';
+    sessionId = ensureTopicSessionId(topic);
+  }
+
+  if (
+    topic.length === 1 &&
+    topic[0]?.sender !== 'me' &&
+    typeof topic[0]?.content === 'string' &&
+    topic[0].content.includes('网页模式')
+  ) {
+    topic.splice(0, 1);
+  }
+
+  topic.push({
+    msgid: topic.length + 1,
     sender: "me",
+    chatSessionId: sessionId || chatStore.sendChatSessionId || '',
     content: question,
   });
 
   messageInput.value = "";
   scrollToBottom();
+
+  if (isWeb) {
+    try {
+      await invoke('web_model_send_message', {
+        request: {
+          provider,
+          model_id: chatStore.selectedModel,
+          topic_id: chatStore.selectedTopic,
+          session_id: sessionId,
+          content: question,
+        },
+      });
+    } catch (e) {
+      console.error('发送到网页模型失败:', e);
+    }
+
+    scheduleAutosave();
+    return;
+  }
+
   chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
   chatStore.accumulatedMessage = '';
 
@@ -172,6 +213,7 @@ const sendMessage = async () => {
   } catch (error) {
     console.error('Error during askDeepSeek:', error);
   }
+
   scrollToBottom();
   scheduleAutosave();
 };

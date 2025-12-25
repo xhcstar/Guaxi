@@ -1294,14 +1294,17 @@ fn web_model_capture_init_script(provider: &str) -> String {
     window.__GUAXI_WEB_CAPTURE_INSTALLED__ = true;
 
     function getSessionId() {{
+      const v = (window.__GUAXI_SESSION_ID__ || '').toString().trim();
+      if (v) return v;
+
       const k = `guaxi_web_session_${{PROVIDER}}`;
-      let v = null;
-      try {{ v = localStorage.getItem(k); }} catch (e) {{}}
-      if (!v) {{
-        v = `${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`;
-        try {{ localStorage.setItem(k, v); }} catch (e) {{}}
+      let stored = null;
+      try {{ stored = localStorage.getItem(k); }} catch (e) {{}}
+      if (!stored) {{
+        stored = `${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`;
+        try {{ localStorage.setItem(k, stored); }} catch (e) {{}}
       }}
-      return v;
+      return stored;
     }}
 
     function textOf(el) {{
@@ -1313,55 +1316,113 @@ fn web_model_capture_init_script(provider: &str) -> String {
     function collectChatgptMessages() {{
       const nodes = Array.from(document.querySelectorAll('[data-message-author-role]'));
       const out = [];
-      for (const n of nodes) {{
+      for (let i = 0; i < nodes.length; i++) {{
+        const n = nodes[i];
         const role = (n.getAttribute('data-message-author-role') || '').toLowerCase();
         const content = textOf(n);
         if (!content) continue;
-        out.push({{ role: role === 'user' ? 'user' : 'assistant', content }});
+        const message_id = (n.getAttribute('data-message-id') || n.id || `${{role}}-${{i}}`).toString();
+        out.push({{ role: role === 'user' ? 'user' : 'assistant', content, message_id }});
       }}
       return out;
     }}
 
     function collectGenericMessages() {{
-      const candidates = Array.from(document.querySelectorAll('main, [role="main"], body'));
-      const root = candidates.find(Boolean) || document.body;
-      const blocks = Array.from(root.querySelectorAll('div, p, li'));
+      const BAD = [
+        '深度思考',
+        '联网搜索',
+        '工具',
+        '下载电脑版',
+        '内容由AI生成',
+        '文件拖动到此处即可上传',
+        '支持文件格式',
+      ];
+
+      const input = document.querySelector('#prompt-textarea, textarea, [contenteditable="true"]');
+      const root = (input && input.closest('main, [role="main"], body')) || document.querySelector('main, [role="main"], body') || document.body;
+
+      const blocks = Array.from(root.querySelectorAll('p, li, div'));
       const out = [];
-      for (const b of blocks) {{
+      const seen = new Set();
+
+      for (let i = 0; i < blocks.length; i++) {{
+        const b = blocks[i];
+
+        if (
+          b.closest('nav, header, footer, aside, form, button, [role="navigation"], [role="toolbar"], [role="menu"], [role="dialog"], [aria-label*="工具"], [aria-label*="Tool"]')
+        ) {{
+          continue;
+        }}
+
         const content = textOf(b);
         if (!content) continue;
-        if (content.length < 6) continue;
+        if (content.length < 10) continue;
         if (content.length > 2000) continue;
-        out.push({{ role: 'assistant', content }});
+
+        if (BAD.some((k) => content.includes(k)) && content.length < 80) continue;
+
+        if (/^([\u4e00-\u9fa5A-Za-z0-9]+\s+){{1,8}}[\u4e00-\u9fa5A-Za-z0-9]+$/.test(content) && content.length < 60) {{
+          continue;
+        }}
+
+        if (seen.has(content)) continue;
+        seen.add(content);
+
+        const message_id = `generic-${{i}}`;
+        out.push({{ role: 'assistant', content, message_id }});
       }}
+
       return out.slice(-20);
     }}
 
     function collectMessages() {{
       if (PROVIDER === 'chatgpt') {{
-        const msgs = collectChatgptMessages();
-        return msgs.length ? msgs : collectGenericMessages();
+        return collectChatgptMessages();
       }}
       return collectGenericMessages();
     }}
 
     let lastSig = '';
+    let lastSessionId = '';
+    let lastSentLen = 0;
     let timer = null;
 
     async function push() {{
       try {{
+        const session_id = getSessionId();
+        if (!session_id) return;
+
+        if (session_id !== lastSessionId) {{
+          lastSessionId = session_id;
+          lastSentLen = 0;
+          lastSig = '';
+        }}
+
         const messages = collectMessages();
+        if (!messages.length) return;
+
+        if (lastSentLen > messages.length) {{
+          lastSentLen = 0;
+        }}
+
         const sig = JSON.stringify(messages.slice(-6));
-        if (!messages.length || sig === lastSig) return;
+        if (sig === lastSig) return;
+
+        const delta = messages.slice(lastSentLen);
+        if (!delta.length) return;
+
         lastSig = sig;
+        lastSentLen = messages.length;
 
         await fetch(ENDPOINT, {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{
             provider: PROVIDER,
-            session_id: getSessionId(),
-            messages
+            model_id: window.__GUAXI_MODEL_ID__,
+            topic_id: window.__GUAXI_TOPIC_ID__,
+            session_id,
+            messages: delta
           }})
         }});
       }} catch (e) {{}}
@@ -1384,22 +1445,18 @@ fn web_model_capture_init_script(provider: &str) -> String {
     )
 }
 
-#[tauri::command]
-pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> Result<(), String> {
-    let provider_key = provider.trim().to_lowercase();
-    let url = web_model_url(&provider_key).ok_or("Unsupported provider".to_string())?;
-
+async fn ensure_web_model_window(app: &tauri::AppHandle, provider_key: &str) -> Result<(), String> {
+    let url = web_model_url(provider_key).ok_or("Unsupported provider".to_string())?;
     let label = format!("web-model-{}", provider_key);
-    if let Some(w) = app.get_webview_window(&label) {
-        w.show().map_err(|e| format!("显示窗口失败: {}", e))?;
-        w.set_focus().ok();
+
+    if app.get_webview_window(&label).is_some() {
         return Ok(());
     }
 
     let external = Url::parse(url).map_err(|e| e.to_string())?;
-    let init_script = web_model_capture_init_script(&provider_key);
+    let init_script = web_model_capture_init_script(provider_key);
 
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(external))
+    WebviewWindowBuilder::new(app, &label, WebviewUrl::External(external))
         .title(url)
         .inner_size(1100.0, 780.0)
         .min_inner_size(820.0, 560.0)
@@ -1408,8 +1465,111 @@ pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> R
         .build()
         .map_err(|e| format!("创建窗口失败: {}", e))?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct WebModelSendRequest {
+    provider: String,
+    model_id: i32,
+    topic_id: i32,
+    session_id: String,
+    content: String,
+}
+
+#[tauri::command]
+pub async fn web_model_send_message(
+    app: tauri::AppHandle,
+    request: WebModelSendRequest,
+) -> Result<(), String> {
+    let provider_key = request.provider.trim().to_lowercase();
+    ensure_web_model_window(&app, &provider_key).await?;
+
+    let label = format!("web-model-{}", provider_key);
+    let w = app
+        .get_webview_window(&label)
+        .ok_or("web model window not found".to_string())?;
+
+    let content_json = serde_json::to_string(&request.content).map_err(|e| e.to_string())?;
+    let session_json = serde_json::to_string(&request.session_id).map_err(|e| e.to_string())?;
+
+    let js = format!(
+        r#"(() => {{
+  try {{
+    window.__GUAXI_MODEL_ID__ = {model_id};
+    window.__GUAXI_TOPIC_ID__ = {topic_id};
+    window.__GUAXI_SESSION_ID__ = {session_id};
+
+    const text = {content};
+
+    function setValue(el) {{
+      if (!el) return false;
+      if (typeof el.value === 'string') {{
+        el.focus();
+        el.value = text;
+        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        return true;
+      }}
+      if (el.isContentEditable) {{
+        el.focus();
+        el.innerText = text;
+        el.dispatchEvent(new InputEvent('input', {{ bubbles: true }}));
+        return true;
+      }}
+      return false;
+    }}
+
+    function clickSend() {{
+      const candidates = [
+        'button[data-testid="send-button"]',
+        'button[aria-label="Send"]',
+        'button[aria-label="发送"]',
+        'button[type="submit"]'
+      ];
+      for (const sel of candidates) {{
+        const b = document.querySelector(sel);
+        if (b && !b.disabled) {{ b.click(); return true; }}
+      }}
+      return false;
+    }}
+
+    const input =
+      document.querySelector('#prompt-textarea') ||
+      document.querySelector('textarea') ||
+      document.querySelector('[contenteditable="true"]');
+
+    if (!setValue(input)) return;
+
+    if (clickSend()) return;
+
+    try {{
+      const evt = new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true }});
+      input.dispatchEvent(evt);
+    }} catch (e) {{}}
+  }} catch (e) {{}}
+}})();"#,
+        model_id = request.model_id,
+        topic_id = request.topic_id,
+        session_id = session_json,
+        content = content_json
+    );
+
+    w.eval(js.as_str()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> Result<(), String> {
+    let provider_key = provider.trim().to_lowercase();
+    ensure_web_model_window(&app, &provider_key).await?;
+
+    let label = format!("web-model-{}", provider_key);
+    if let Some(w) = app.get_webview_window(&label) {
+        w.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+        w.set_focus().ok();
+    }
+
     Ok(())
 }
 
@@ -1493,21 +1653,45 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
             }
         }
         ChatModel::YUANBAO_WEB => {
-            open_web_model_window(app.clone(), "yuanbao".to_string()).await?;
-            app.emit(
-                "modle-streaming-respond-output",
-                "该模型为网页模式，已打开腾讯元宝（请在新窗口内对话）。",
+            let session_id = if request.sessionid.trim().is_empty() {
+                generate_session_id()
+            } else {
+                request.sessionid.to_string()
+            };
+
+            web_model_send_message(
+                app,
+                WebModelSendRequest {
+                    provider: "yuanbao".to_string(),
+                    model_id: request.modelid,
+                    topic_id: request.topicid,
+                    session_id,
+                    content: request.question.to_string(),
+                },
             )
-            .map_err(|e| e.to_string())?;
+            .await?;
+
             Ok(())
         }
         ChatModel::CHATGPT_WEB => {
-            open_web_model_window(app.clone(), "chatgpt".to_string()).await?;
-            app.emit(
-                "modle-streaming-respond-output",
-                "该模型为网页模式，已打开 ChatGPT 网页（请在新窗口内对话）。",
+            let session_id = if request.sessionid.trim().is_empty() {
+                generate_session_id()
+            } else {
+                request.sessionid.to_string()
+            };
+
+            web_model_send_message(
+                app,
+                WebModelSendRequest {
+                    provider: "chatgpt".to_string(),
+                    model_id: request.modelid,
+                    topic_id: request.topicid,
+                    session_id,
+                    content: request.question.to_string(),
+                },
             )
-            .map_err(|e| e.to_string())?;
+            .await?;
+
             Ok(())
         }
     }

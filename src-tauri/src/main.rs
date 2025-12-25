@@ -168,6 +168,7 @@ async fn main() {
             commands::chatview::save_chat_session,
             commands::chatview::export_chat_session,
             commands::chatview::open_web_model_window,
+            commands::chatview::web_model_send_message,
             commands::repoview::get_imported_files,
             commands::repoview::add_imported_file,
             commands::repoview::delete_imported_file,
