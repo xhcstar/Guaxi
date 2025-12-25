@@ -17,17 +17,19 @@
     </div>
 
     <div class="chat-list">
-      <div v-for="curtopic in activeChat.MessagesList" :key="curtopic.topicid" class="chat-item"
-        :class="{ active: activeChat.id === chatStore.selectedModel }" @click="selectChat(curtopic.topicid)"
+      <div v-for="curtopic in (activeChat?.MessagesList || [])" :key="curtopic.topicid" class="chat-item"
+        :class="{ active: curtopic.topicid === chatStore.selectedTopic }" @click="selectChat(curtopic.topicid)"
         @contextmenu="showContextMenu($event, curtopic)">
-        <n-avatar :src="activeChat.ModelAvatar" size="medium" round />
+        <div class="chat-avatar">
+          <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
+        </div>
         <div class="chat-info">
           <div class="chat-title">
-            {{ activeChat.name }}
+            {{ activeChat?.name }}
             <!-- <span class="chat-timestamp">{{ formatTimestamp(curmodel.MessagesList.at(0)) }}</span> -->
           </div>
           <div class="chat-last-message">
-            {{ curtopic.topic.at(0).content }}
+            {{ curtopic.topic?.[0]?.content || '' }}
           </div>
         </div>
       </div>
@@ -35,6 +37,7 @@
 
     <!-- 右键菜单 -->
     <div v-if="showMenu" class="context-menu" :style="{ top: menuTop, left: menuLeft }">
+      <div class="menu-item" @click="saveChatItem">保存对话</div>
       <div class="menu-item" @click="deleteChatItem">删除会话</div>
     </div>
   </div>
@@ -43,9 +46,11 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from "vue"
 import { useChatStore } from "../../stores/chatStore";
-import { NAvatar, NButton } from "naive-ui";
+import { useMessage } from "naive-ui";
+import { invoke } from '@tauri-apps/api/core';
 
 const chatStore = useChatStore();
+const message = useMessage();
 const activeChat = computed(() => chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel));
 
 // 当前会话的消息记录
@@ -81,14 +86,64 @@ const showContextMenu = (event, chat) => {
   menuLeft.value = event.clientX + "px";
 };
 
+const getTopicSessionId = (topic) => {
+  const items = Array.isArray(topic) ? topic : [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const sid = items[i]?.chatSessionId;
+    if (typeof sid === 'string' && sid.trim()) return sid;
+  }
+  return '';
+};
+
+const saveChatItem = async () => {
+  try {
+    if (!selectedChat.value || !activeChat.value) return;
+
+    const content = Array.isArray(selectedChat.value?.topic) ? selectedChat.value.topic : [];
+    const sessionId = getTopicSessionId(content);
+
+    const filePath = await invoke('export_chat_session', {
+      request: {
+        model_id: activeChat.value.id,
+        model_name: activeChat.value?.name || '',
+        topic_id: selectedChat.value.topicid,
+        session_id: sessionId,
+        content,
+      }
+    })
+
+    message.success(`已保存到: ${filePath}`)
+  } catch (e) {
+    console.error('保存对话失败:', e)
+    message.error('保存对话失败')
+  } finally {
+    showMenu.value = false;
+  }
+};
+
 // 删除聊天条目
 const deleteChatItem = () => {
-  if (activeChatMessages.value) {
-    activeChat.value.MessagesList = activeChat.value.MessagesList.filter(
-      (chat) => chat !== activeChatMessages.value
-    );
+  if (!selectedChat.value || !activeChat.value) {
+    showMenu.value = false;
+    return;
   }
-  showMenu.value = false; // 隐藏菜单
+
+  const deleteTopicId = selectedChat.value.topicid;
+  activeChat.value.MessagesList = (activeChat.value.MessagesList || []).filter(
+    (topic) => topic?.topicid !== deleteTopicId
+  );
+
+  if (chatStore.selectedTopic === deleteTopicId) {
+    const fallbackTopicId = activeChat.value.MessagesList?.[0]?.topicid;
+    if (typeof fallbackTopicId === 'number') {
+      chatStore.setModelTopic(fallbackTopicId);
+    } else {
+      chatStore.addChatSession();
+      chatStore.setModelTopic(activeChat.value.MessagesList.length - 1);
+    }
+  }
+
+  showMenu.value = false;
 };
 
 // 监听全局点击事件，点击其他地方关闭菜单
@@ -153,8 +208,13 @@ onUnmounted(() => {
   background-color: #f5f5f5;
 }
 
+.chat-avatar {
+  flex: 0 0 auto;
+}
+
 .chat-info {
-  flex-grow: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   margin-left: 10px;
   display: flex;
   flex-direction: column;
@@ -164,8 +224,9 @@ onUnmounted(() => {
   font-size: 14px;
   font-weight: bold;
   color: #333;
-  display: flex;
-  justify-content: space-between;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-timestamp {

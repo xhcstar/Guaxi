@@ -20,17 +20,14 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="showNotes"></n-icon>
-      <n-icon class="header-icon" size="20" :component="Share20Regular" @click="exportChatSession"></n-icon>
       <n-icon class="header-icon" size="20" :component="Open20Regular" @click="openWebModel"></n-icon>
-      <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from "vue";
+
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -42,7 +39,7 @@ import {
   Search20Filled,
   TextBulletListLtr20Filled,
   Screenshot24Regular,
-  Share20Regular,
+
   Open20Regular,
 } from '@vicons/fluent'
 
@@ -51,13 +48,6 @@ const siderStore = useSiderStore();
 const chatStore = useChatStore();
 const message = useMessage();
 
-const activeChat = computed(() =>
-  chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel)
-);
-
-const activeChatMessages = computed(() =>
-  activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []
-);
 
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
@@ -79,24 +69,6 @@ const CaptureScreenshot = () => {
   console.log('截图功能点击');
 };
 
-const exportChatSession = async () => {
-  try {
-    const content = activeChatMessages.value?.topic || []
-    const filePath = await invoke('export_chat_session', {
-      request: {
-        model_id: chatStore.selectedModel,
-        model_name: activeChat.value?.name || '',
-        topic_id: chatStore.selectedTopic,
-        session_id: chatStore.sendChatSessionId || '',
-        content,
-      }
-    })
-    message.success(`已导出到: ${filePath}`)
-  } catch (e) {
-    console.error('导出会话失败:', e)
-    message.error('导出会话失败')
-  }
-}
 
 const openWebModel = async () => {
   try {
