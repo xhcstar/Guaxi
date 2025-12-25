@@ -31,6 +31,8 @@ struct WebModelChatPushRequest {
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     messages: Vec<WebModelChatMessage>,
@@ -69,6 +71,7 @@ async fn web_model_chat_push(
         "model_id": model_id,
         "topic_id": topic_id,
         "session_id": req.session_id,
+        "title": req.title,
         "status": status,
         "messages": req.messages,
     });

@@ -25,7 +25,7 @@
         </div>
         <div class="chat-info">
           <div class="chat-title">
-            {{ activeChat?.name }}
+            {{ curtopic?.title || activeChat?.name }}
             <!-- <span class="chat-timestamp">{{ formatTimestamp(curmodel.MessagesList.at(0)) }}</span> -->
           </div>
           <div class="chat-last-message">

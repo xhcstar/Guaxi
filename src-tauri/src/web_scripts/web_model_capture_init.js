@@ -217,6 +217,15 @@
         if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
       } catch (e) { }
 
+      // Avoid mis-detecting need_login when the window/tab is hidden and layout metrics become 0.
+      try {
+        if (document && document.visibilityState && document.visibilityState !== 'visible') return true;
+      } catch (e) { }
+
+      if (PROVIDER === 'chatgpt') {
+        return true;
+      }
+
       const rect = input.getBoundingClientRect?.();
       if (rect && (rect.width === 0 || rect.height === 0)) return false;
 

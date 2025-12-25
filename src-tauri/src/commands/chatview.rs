@@ -1363,7 +1363,17 @@ pub async fn web_model_send_message(
           document.querySelector('[contenteditable="true"]') ||
           document.querySelector('[role="textbox"]')
         );
-    }}
+      }}
+
+      if (provider === 'chatgpt') {{
+        return (
+          document.querySelector('#prompt-textarea') ||
+          document.querySelector('textarea[data-testid="prompt-textarea" i]') ||
+          document.querySelector('textarea') ||
+          document.querySelector('[contenteditable="true"]') ||
+          document.querySelector('[role="textbox"]')
+        );
+      }}
 
       return (
         document.querySelector('#prompt-textarea') ||
@@ -1459,6 +1469,9 @@ pub async fn web_model_send_message(
         const type = (b.getAttribute && b.getAttribute('type')) || '';
 
         let score = 0;
+
+        if (/语音|voice|speech/i.test(label) || /语音|voice|speech/i.test(txt) || /speech|voice/i.test(cls)) score -= 200;
+
         if ((b.id || '') === 'yuanbao-send-btn') score += 220;
         if (/send|发送|提交|确定/i.test(label)) score += 90;
         if (/send|发送|提交|确定/i.test(txt)) score += 80;

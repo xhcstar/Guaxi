@@ -189,12 +189,21 @@ const sendMessage = async () => {
     topic.splice(0, 1);
   }
 
-  topic.push({
+  const myMsg = {
     msgid: topic.length + 1,
     sender: "me",
     chatSessionId: sessionId || chatStore.sendChatSessionId || '',
+    raw: question,
     content: question,
-  });
+  };
+
+  topic.push(myMsg);
+  const renderedP = chatStore.renderDebounced(question);
+  if (renderedP && typeof renderedP.then === 'function') {
+    renderedP.then((rendered) => {
+      myMsg.content = rendered;
+    });
+  }
 
   messageInput.value = "";
   scrollToBottom();
@@ -331,12 +340,14 @@ onMounted(() => {
     const modelId = payload.model_id;
     const topicId = payload.topic_id;
     const sessionId = payload.session_id;
+    const title = payload.title;
     const messages = payload.messages;
 
     chatStore.appendMessagesToTopic({
       modelId,
       topicId,
       sessionId,
+      title,
       messages,
     });
 
