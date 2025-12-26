@@ -88,6 +88,15 @@ watch(
   }
 );
 
+watch(
+  [() => chatStore.selectedModel, () => chatStore.selectedTopic],
+  () => {
+    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    chatStore.sendChatSessionId = getTopicSessionId(topic) || '';
+  },
+  { immediate: true }
+);
+
 const getTopicSessionId = (topic) => {
   const items = Array.isArray(topic) ? topic : [];
   for (let i = items.length - 1; i >= 0; i--) {
@@ -99,8 +108,7 @@ const getTopicSessionId = (topic) => {
 
 const ensureTopicSessionId = (topic) => {
   const existing = getTopicSessionId(topic);
-  if (existing) return existing;
-  const sid = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const sid = existing || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   chatStore.sendChatSessionId = sid;
   return sid;
 };
@@ -108,12 +116,13 @@ const ensureTopicSessionId = (topic) => {
 const saveSessionSnapshot = async () => {
   try {
     const content = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    const sid = getTopicSessionId(content) || chatStore.sendChatSessionId || null;
     await invoke('save_chat_session', {
       request: {
         model_id: chatStore.selectedModel,
         model_name: activeChat.value?.name || '',
         topic_id: chatStore.selectedTopic,
-        session_id: chatStore.sendChatSessionId || null,
+        session_id: sid,
         content,
       },
     });
@@ -142,13 +151,13 @@ const scrollToBottom = () => {
   });
 };
 
-const askDeepSeek = async (question) => {
+const askDeepSeek = async (question, sessionId) => {
   try {
     const request = {
       "modelid": chatStore.selectedModel,
       "question": question,
       "topicid": chatStore.selectedTopic,
-      "sessionid": chatStore.sendChatSessionId,
+      "sessionid": sessionId,
     };
     console.log('Request:', request);
     // const response = await invoke('get_chat_answer', { request });
@@ -173,11 +182,11 @@ const sendMessage = async () => {
 
   const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
 
+  const sessionId = ensureTopicSessionId(topic);
+
   let provider = '';
-  let sessionId = '';
   if (isWeb) {
     provider = chatStore.selectedModel === 7 ? 'yuanbao' : 'chatgpt';
-    sessionId = ensureTopicSessionId(topic);
   }
 
   if (
@@ -192,7 +201,7 @@ const sendMessage = async () => {
   const myMsg = {
     msgid: topic.length + 1,
     sender: "me",
-    chatSessionId: sessionId || chatStore.sendChatSessionId || '',
+    chatSessionId: sessionId,
     raw: question,
     content: question,
   };
@@ -231,7 +240,7 @@ const sendMessage = async () => {
   chatStore.accumulatedMessage = '';
 
   try {
-    await askDeepSeek(question);
+    await askDeepSeek(question, sessionId);
   } catch (error) {
     console.error('Error during askDeepSeek:', error);
   }
@@ -325,6 +334,13 @@ const stopResize = () => {
 onMounted(() => {
   listen("modle-streaming-respond-output", (event) => {
     chatStore.collectChatSessionStream(event.payload);
+
+    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    const latest = topic[topic.length - 1];
+    if (latest && latest.sender !== 'me' && !latest.chatSessionId) {
+      latest.chatSessionId = chatStore.sendChatSessionId || '';
+    }
+
     scheduleAutosave();
   })
     .then((unsubFn) => {

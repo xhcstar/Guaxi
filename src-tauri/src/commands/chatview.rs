@@ -289,6 +289,76 @@ fn normalize_math_symbols(mut content: String) -> String {
     content
 }
 
+async fn openai_compat_sse_stream(
+    app: &AppHandle,
+    url: &str,
+    api_key: &str,
+    request_body: Value,
+) -> Result<(), String> {
+    let client = Client::new();
+    let response = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Upstream error: {} {}", status, body));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut carry = String::new();
+    let mut buffer = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(data) => {
+                carry.push_str(&String::from_utf8_lossy(&data));
+
+                for line in drain_complete_lines(&mut carry) {
+                    if let Some(content) = stream_extract_content(&line) {
+                        buffer.push_str(&content);
+                    }
+                }
+
+                if buffer.is_empty() {
+                    continue;
+                }
+
+                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
+                    continue;
+                }
+
+                let out = normalize_math_symbols(buffer.clone());
+                app.emit("modle-streaming-respond-output", &out)
+                    .map_err(|e| e.to_string())?;
+
+                buffer.clear();
+            }
+            Err(e) => return Err(format!("Error while reading stream: {}", e)),
+        }
+    }
+
+    let tail = carry.trim();
+    if !tail.is_empty() {
+        if let Some(content) = stream_extract_content(tail) {
+            buffer.push_str(&content);
+        }
+    }
+
+    if !buffer.is_empty() {
+        let out = normalize_math_symbols(buffer);
+        app.emit("modle-streaming-respond-output", &out)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 async fn openai_compat_chat(
     url: &str,
     api_key: &str,
@@ -570,10 +640,29 @@ pub async fn get_answer_from_chatgpt_stream(
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
-    let rsp = get_answer_from_chatgpt(question, sessionid).await?;
-    app.emit("modle-streaming-respond-output", &rsp.answer)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    info!(
+        "get_answer_from_chatgpt_stream: Received request: {} {}",
+        question, sessionid
+    );
+
+    let api_key = settingview::get_llm_config().chatgpt_api_key;
+    if api_key.trim().is_empty() {
+        return Err("ChatGPT API Key 未配置".to_string());
+    }
+
+    let request_body = json!({
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": question}],
+        "stream": true,
+    });
+
+    openai_compat_sse_stream(
+        &app,
+        "https://api.openai.com/v1/chat/completions",
+        &api_key,
+        request_body,
+    )
+    .await
 }
 pub async fn get_answer_from_deepseek_stream(
     app: AppHandle,
@@ -585,24 +674,10 @@ pub async fn get_answer_from_deepseek_stream(
         return Err("DeepSeek API Key 未配置".to_string());
     }
 
-    let url = "https://api.deepseek.com/chat/completions";
-    let session_id;
-
     info!(
         "get_answer_from_deepseek_stream: Received request: {:?} {}",
         question, sessionid
     );
-
-    if sessionid.is_empty() {
-        session_id = generate_session_id();
-        info!("get_answer_from_deepseek_stream: sessionid is empty, generating a new one.");
-    } else {
-        session_id = sessionid.to_string();
-        info!(
-            "get_answer_from_deepseek_stream: session_id: {}",
-            session_id
-        );
-    }
 
     let request_body = json!({
         "model": "deepseek-chat",
@@ -610,104 +685,13 @@ pub async fn get_answer_from_deepseek_stream(
         "stream": true,
     });
 
-    info!(
-        "get_answer_from_deepseek_stream: request_body: {:?} ",
-        request_body
-    );
-
-    let client = Client::new();
-    let response = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Error calling DeepSeek API: {:?}",
-            response.status()
-        ));
-    }
-
-    let mut stream = response.bytes_stream();
-    let mut carry = String::new();
-    let mut buffer = String::new();
-
-    // 流式输出数据
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(data) => {
-                let chunk_str = String::from_utf8_lossy(&data).to_string();
-                let mut answer_content = collect_content_from_local_deepseek(&chunk_str).await?;
-
-                buffer.push_str(&answer_content);
-                debug!(
-                    "get_answer_from_local_deepseek_stream: origin buffer: {:?}",
-                    buffer
-                );
-                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
-                    continue;
-                }
-                debug!(
-                    "get_answer_from_local_deepseek_stream: buffer: {:?}",
-                    buffer
-                );
-                // 替换 `\[` 和 `\]` 及相关换行符
-                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-                // 替换 \( 和 \) 及相关换行符
-                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-                // 对 content 进行替换
-                if !buffer.is_empty() {
-                    buffer = re_block.replace_all(&buffer, "$$").to_string();
-                    buffer = re_inline.replace_all(&buffer, "$").to_string();
-                }
-
-                app.emit("modle-streaming-respond-output", &buffer)
-                    .map_err(|e| e.to_string())?;
-                info!(
-                    "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
-                    buffer
-                );
-                debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
-
-                buffer.clear();
-            }
-            Err(e) => {
-                return Err(format!("Error while reading stream: {}", e));
-            }
-        }
-    }
-
-    // 流结束后，处理剩余的缓冲区数据
-    let tail = carry.trim();
-    if !tail.is_empty() {
-        if let Some(content) = stream_extract_content(tail) {
-            buffer.push_str(&content);
-        }
-    }
-
-    if !buffer.is_empty() {
-        // 替换 `\[` 和 `\]` 及相关换行符
-        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-        // 替换 \( 和 \) 及相关换行符
-        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-
-        buffer = re_block.replace_all(&buffer, "$$").to_string();
-        buffer = re_inline.replace_all(&buffer, "$").to_string();
-
-        // 触发事件处理剩余数据
-        app.emit("modle-streaming-respond-output", &buffer)
-            .map_err(|e| e.to_string())?;
-        debug!(
-            "get_answer_from_local_deepseek_stream: Emitting remaining buffered data: {}",
-            buffer
-        );
-        debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
-    }
-
-    Ok(())
+    openai_compat_sse_stream(
+        &app,
+        "https://api.deepseek.com/chat/completions",
+        &api_key,
+        request_body,
+    )
+    .await
 }
 
 pub async fn get_answer_from_kimi_stream(
@@ -720,124 +704,25 @@ pub async fn get_answer_from_kimi_stream(
         return Err("Kimi API Key 未配置".to_string());
     }
 
-    let url = "https://api.moonshot.cn/v1/chat/completions";
-    let session_id;
-
     info!(
         "get_answer_from_kimi_stream: Received request: {:?} {}",
         question, sessionid
     );
 
-    if sessionid.is_empty() {
-        session_id = generate_session_id();
-        info!("get_answer_from_kimi_stream: sessionid is empty, generating a new one.");
-    } else {
-        session_id = sessionid.to_string();
-        info!("get_answer_from_kimi_stream: session_id: {}", session_id);
-    }
-
     let request_body = json!({
         "model": "moonshot-v1-8k",
         "messages": [{"role": "user", "content": question}],
-        "temperature": 0.3
+        "temperature": 0.3,
+        "stream": true,
     });
 
-    info!(
-        "get_answer_from_kimi_stream: request_body: {:?} ",
-        request_body
-    );
-
-    let client = Client::new();
-    let response = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    info!("Construct response");
-
-    if !response.status().is_success() {
-        info!("Error calling kimi API:");
-        return Err(format!("Error calling kimi API: {:?}", response.status()));
-    }
-
-    let mut stream = response.bytes_stream();
-    let mut carry = String::new();
-    let mut buffer = String::new();
-
-    info!("get_answer_from_kimi_stream: Receive Streaming data");
-    // 流式输出数据
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(data) => {
-                let chunk_str = String::from_utf8_lossy(&data).to_string();
-                info!("get_answer_from_kimi_stream: data chunk_str: {:?}", data);
-                let mut answer_content: DeepSeekResponse =
-                    serde_json::from_str(&chunk_str).expect("Failed to parse JSON");
-
-                info!(
-                    "get_chat_answer: chat_response {} ",
-                    answer_content.choices[0].message.content
-                );
-                buffer.push_str(&answer_content.choices[0].message.content);
-                info!("get_answer_from_kimi_stream: origin buffer: {:?}", buffer);
-                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
-                    continue;
-                }
-                info!("get_answer_from_kimi_stream: buffer: {:?}", buffer);
-                // 替换 `\[` 和 `\]` 及相关换行符
-                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-                // 替换 \( 和 \) 及相关换行符
-                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-                // 对 content 进行替换
-                if !buffer.is_empty() {
-                    buffer = re_block.replace_all(&buffer, "$$").to_string();
-                    buffer = re_inline.replace_all(&buffer, "$").to_string();
-                }
-
-                app.emit("modle-streaming-respond-output", &buffer)
-                    .map_err(|e| e.to_string())?;
-                info!("get_answer_from_kimi_stream: Streaming data: {:?}", buffer);
-                info!("get_answer_from_kimi_stream: emit event modle-streaming-respond-output");
-
-                buffer.clear();
-            }
-            Err(e) => {
-                return Err(format!("Error while reading stream: {}", e));
-            }
-        }
-    }
-
-    // 流结束后，处理剩余的缓冲区数据
-    let tail = carry.trim();
-    if !tail.is_empty() {
-        if let Some(content) = stream_extract_content(tail) {
-            buffer.push_str(&content);
-        }
-    }
-
-    if !buffer.is_empty() {
-        // 替换 `\[` 和 `\]` 及相关换行符
-        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-        // 替换 \( 和 \) 及相关换行符
-        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-
-        buffer = re_block.replace_all(&buffer, "$$").to_string();
-        buffer = re_inline.replace_all(&buffer, "$").to_string();
-
-        // 触发事件处理剩余数据
-        app.emit("modle-streaming-respond-output", &buffer)
-            .map_err(|e| e.to_string())?;
-        info!(
-            "get_answer_from_kimi_stream: Emitting remaining buffered data: {}",
-            buffer
-        );
-        info!("get_answer_from_kimi_stream: emit event modle-streaming-respond-output");
-    }
-
-    Ok(())
+    openai_compat_sse_stream(
+        &app,
+        "https://api.moonshot.cn/v1/chat/completions",
+        &api_key,
+        request_body,
+    )
+    .await
 }
 
 pub async fn get_answer_from_doubao_stream(
