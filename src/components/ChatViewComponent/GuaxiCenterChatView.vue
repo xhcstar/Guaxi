@@ -88,15 +88,6 @@ watch(
   }
 );
 
-watch(
-  [() => chatStore.selectedModel, () => chatStore.selectedTopic],
-  () => {
-    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
-    chatStore.sendChatSessionId = getTopicSessionId(topic) || '';
-  },
-  { immediate: true }
-);
-
 const getTopicSessionId = (topic) => {
   const items = Array.isArray(topic) ? topic : [];
   for (let i = items.length - 1; i >= 0; i--) {
@@ -105,6 +96,15 @@ const getTopicSessionId = (topic) => {
   }
   return '';
 };
+
+watch(
+  [() => chatStore.selectedModel, () => chatStore.selectedTopic],
+  () => {
+    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    chatStore.sendChatSessionId = getTopicSessionId(topic) || '';
+  },
+  { immediate: true }
+);
 
 const ensureTopicSessionId = (topic) => {
   const existing = getTopicSessionId(topic);
