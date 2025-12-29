@@ -15,6 +15,14 @@
         </div>
       </div>
 
+      <div v-if="isGenerating && activeChat" class="message-item message-left">
+        <n-avatar :src="activeChat.ModelAvatar" size="medium" round />
+        <div class="message-bubble loading-bubble">
+          <n-spin size="small" />
+          <span class="loading-text">正在生成...</span>
+        </div>
+      </div>
+
     </div>
 
     <div class="input-area">
@@ -23,11 +31,12 @@
         type="textarea"
         placeholder="请输入您的问题..."
         v-model:value="messageInput"
+        :disabled="isGenerating"
         @keydown="handleKeydown"
         style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;"
       />
-      <n-button @click="sendMessage" color="#dbe7e4"
+      <n-button @click="sendMessage" color="#dbe7e4" :disabled="isGenerating"
         style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
           <n-icon>
@@ -74,6 +83,29 @@ const activeChatMessages = computed(() =>
 const autosaveTimer = ref(null);
 
 const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
+
+const isGenerating = ref(false);
+const generatingTimer = ref(null);
+const GENERATING_IDLE_MS = 1200;
+
+const stopGenerating = () => {
+  isGenerating.value = false;
+  if (generatingTimer.value) {
+    clearTimeout(generatingTimer.value);
+    generatingTimer.value = null;
+  }
+};
+
+const bumpGenerating = () => {
+  isGenerating.value = true;
+  if (generatingTimer.value) {
+    clearTimeout(generatingTimer.value);
+  }
+  generatingTimer.value = setTimeout(() => {
+    generatingTimer.value = null;
+    isGenerating.value = false;
+  }, GENERATING_IDLE_MS);
+};
 
 watch(
   () => chatStore.selectedModel,
@@ -177,6 +209,9 @@ const sendMessage = async () => {
 
   const question = messageInput.value.trim();
 
+  stopGenerating();
+  bumpGenerating();
+
   inputHistory.value.push(question);
   historyIndex.value = inputHistory.value.length;
 
@@ -230,8 +265,11 @@ const sendMessage = async () => {
       });
     } catch (e) {
       console.error('发送到网页模型失败:', e);
+      stopGenerating();
+      return;
     }
 
+    scrollToBottom();
     scheduleAutosave();
     return;
   }
@@ -243,6 +281,8 @@ const sendMessage = async () => {
     await askDeepSeek(question, sessionId);
   } catch (error) {
     console.error('Error during askDeepSeek:', error);
+  } finally {
+    stopGenerating();
   }
 
   scrollToBottom();
@@ -333,6 +373,7 @@ const stopResize = () => {
 
 onMounted(() => {
   listen("modle-streaming-respond-output", (event) => {
+    bumpGenerating();
     chatStore.collectChatSessionStream(event.payload);
 
     const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
@@ -368,6 +409,7 @@ onMounted(() => {
     });
 
     if (modelId === chatStore.selectedModel && topicId === chatStore.selectedTopic) {
+      bumpGenerating();
       scrollToBottom();
       scheduleAutosave();
     }
@@ -392,6 +434,7 @@ onUnmounted(() => {
     clearTimeout(autosaveTimer.value);
     autosaveTimer.value = null;
   }
+  stopGenerating();
 });
 
 const setMessageRef = (el, index) => {
@@ -499,6 +542,17 @@ const setMessageRef = (el, index) => {
   min-height: 80px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+}
+
+.loading-bubble {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loading-text {
+  font-size: 14px;
+  color: #555;
 }
 
 .chat-input-height-handle {
