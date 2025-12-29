@@ -1,18 +1,21 @@
 <template>
-  <div class="app-layout">
-    <div class="main-header">
-      <GuaxiHeaderSettingView />
+  <n-message-provider placement="bottom">
+    <div class="app-layout">
+      <div class="main-header">
+        <GuaxiHeaderSettingView />
+      </div>
+      <div class="main-content">
+        <GuaxiContentSettingView />
+      </div>
     </div>
-    <div class="main-content">
-      <GuaxiContentSettingView />
-    </div>
-  </div>
+  </n-message-provider>
 </template>
 
 
 <script setup>
 import GuaxiHeaderSettingView from "../components/SettingViewComponent/GuaxiHeaderSettingView.vue";
 import GuaxiContentSettingView from "../components/SettingViewComponent/GuaxiContentSettingView.vue";
+import { NMessageProvider } from 'naive-ui'
 
 </script>
 
