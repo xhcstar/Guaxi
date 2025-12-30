@@ -15,6 +15,32 @@
             <span class="typing-dots"><i></i><i></i><i></i></span>
           </div>
           <div v-else class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
+
+          <div v-if="!message.isPlaceholder && message.sender !== 'me'" class="message-actions">
+            <button class="message-action-btn" type="button" title="复制" @click="copyMessage(message)">
+              <n-icon>
+                <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm4 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h12v14z" fill="currentColor" />
+                </svg>
+              </n-icon>
+            </button>
+
+            <button class="message-action-btn" type="button" title="分享" @click="shareMessage(message)">
+              <n-icon>
+                <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7a2.5 2.5 0 0 0 0-1.39l7.02-4.11A2.99 2.99 0 1 0 14 5a2.9 2.9 0 0 0 .05.52L7.03 9.63a3 3 0 1 0 0 4.74l7.02 4.11c-.03.17-.05.34-.05.52a3 3 0 1 0 3-2.92z" fill="currentColor" />
+                </svg>
+              </n-icon>
+            </button>
+
+            <button class="message-action-btn" type="button" title="重新生成" :disabled="isGenerating" @click="regenerateFrom(index)">
+              <n-icon>
+                <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 13.65-6.65z" fill="currentColor" />
+                </svg>
+              </n-icon>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -221,6 +247,126 @@ const scrollToBottom = () => {
 
 const jumpToBottom = () => {
   scrollToBottom();
+};
+
+const stripHtml = (html) => {
+  const s = (html ?? '').toString();
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.innerHTML = s.replace(/<br\s*\/?\s*>/gi, '\n');
+  return (div.textContent || div.innerText || '').toString();
+};
+
+const messageToText = (message) => {
+  if (!message) return '';
+  const raw = (message.raw ?? '').toString();
+  if (raw.trim()) return raw;
+  return stripHtml(message.content);
+};
+
+const writeClipboard = async (text) => {
+  const value = (text ?? '').toString();
+  if (!value) return;
+
+  if (navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (e) {}
+  }
+
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager');
+    await mod.writeText(value);
+  } catch (e) {
+    console.error('写入剪贴板失败:', e);
+  }
+};
+
+const copyMessage = async (message) => {
+  await writeClipboard(messageToText(message));
+};
+
+const shareMessage = async (message) => {
+  const text = messageToText(message);
+  if (!text) return;
+
+  const api = navigator?.share;
+  if (typeof api === 'function') {
+    try {
+      await api({ text });
+      return;
+    } catch (e) {}
+  }
+
+  await writeClipboard(text);
+};
+
+const regenerateFrom = async (assistantIndex) => {
+  if (isGenerating.value || !activeChat.value) return;
+  const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+
+  let question = '';
+  for (let i = assistantIndex - 1; i >= 0; i--) {
+    const m = topic[i];
+    if (m && m.sender === 'me') {
+      question = messageToText(m);
+      break;
+    }
+  }
+  if (!question.trim()) return;
+
+  const isWeb = isWebModel.value;
+  const sessionId = ensureTopicSessionId(topic);
+
+  startGenerating();
+
+  topic.push({
+    msgid: topic.length + 1,
+    sender: activeChat.value.name,
+    chatSessionId: sessionId,
+    raw: '',
+    content: '',
+    isPlaceholder: true,
+  });
+
+  scrollToBottom();
+
+  if (isWeb) {
+    let provider = '';
+    if (chatStore.selectedModel === 7) provider = 'yuanbao';
+    if (chatStore.selectedModel === 8) provider = 'chatgpt';
+
+    try {
+      await invoke('web_model_send_message', {
+        request: {
+          provider,
+          model_id: chatStore.selectedModel,
+          topic_id: chatStore.selectedTopic,
+          session_id: sessionId,
+          content: question,
+        },
+      });
+    } catch (e) {
+      console.error('重新生成（网页模式）失败:', e);
+      stopGenerating();
+    }
+
+    scheduleAutosave();
+    return;
+  }
+
+  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
+  chatStore.accumulatedMessage = '';
+
+  try {
+    await askDeepSeek(question, sessionId);
+  } catch (e) {
+    console.error('重新生成失败:', e);
+    stopGenerating();
+  }
+
+  scheduleAutosave();
 };
 
 const askDeepSeek = async (question, sessionId) => {
@@ -677,6 +823,40 @@ const setMessageRef = (el, index) => {
     transform: translateY(-3px);
     opacity: 1;
   }
+}
+
+.message-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.message-left .message-actions {
+  justify-content: flex-start;
+}
+
+.message-item:hover .message-actions {
+  opacity: 1;
+}
+
+.message-action-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.95);
+  color: rgba(0, 0, 0, 0.7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.message-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .chat-input-height-handle {
