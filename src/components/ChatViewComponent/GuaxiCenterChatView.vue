@@ -5,22 +5,26 @@
       <span class="chat-title">{{ activeChat?.name || "未选择会话" }}</span>
     </div>
 
-    <div class="message-list" ref="messageContainer">
+    <div class="message-list" ref="messageContainer" @scroll="updateIsAtBottom">
       <div v-for="(message, index) in activeChatMessages.topic" :key="message.msgid" class="message-item"
         :class="message.sender === 'me' ? 'message-right' : 'message-left'">
         <n-avatar v-if="message.sender === 'me'" :src="activeChat.MeAvatar" size="medium" round />
         <n-avatar v-else :src="activeChat.ModelAvatar" size="medium" round />
         <div class="message-bubble">
-          <div class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
+          <div v-if="message.isPlaceholder" class="message-content" :ref="el => setMessageRef(el, index)">
+            <span class="typing-dots"><i></i><i></i><i></i></span>
+          </div>
+          <div v-else class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
         </div>
       </div>
 
-      <div v-if="isGenerating && activeChat" class="message-item message-left">
-        <n-avatar :src="activeChat.ModelAvatar" size="medium" round />
-        <div class="message-bubble loading-bubble">
-          <n-spin size="small" />
-          <span class="loading-text">正在生成...</span>
-        </div>
+      <div v-show="showJumpToBottom" class="jump-to-bottom" @click="jumpToBottom">
+        <n-spin v-if="isGenerating" size="small" />
+        <n-icon v-else>
+          <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 16.5l-6-6 1.4-1.4L12 13.7l4.6-4.6L18 10.5l-6 6z" fill="currentColor" />
+          </svg>
+        </n-icon>
       </div>
 
     </div>
@@ -85,11 +89,22 @@ const autosaveTimer = ref(null);
 const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
 
 const isGenerating = ref(false);
+const waitingFirstToken = ref(false);
 const generatingTimer = ref(null);
-const GENERATING_IDLE_MS = 1200;
+const GENERATING_IDLE_MS = 2500;
 
 const stopGenerating = () => {
   isGenerating.value = false;
+  waitingFirstToken.value = false;
+  if (generatingTimer.value) {
+    clearTimeout(generatingTimer.value);
+    generatingTimer.value = null;
+  }
+};
+
+const startGenerating = () => {
+  isGenerating.value = true;
+  waitingFirstToken.value = true;
   if (generatingTimer.value) {
     clearTimeout(generatingTimer.value);
     generatingTimer.value = null;
@@ -98,12 +113,14 @@ const stopGenerating = () => {
 
 const bumpGenerating = () => {
   isGenerating.value = true;
+  waitingFirstToken.value = false;
   if (generatingTimer.value) {
     clearTimeout(generatingTimer.value);
   }
   generatingTimer.value = setTimeout(() => {
     generatingTimer.value = null;
     isGenerating.value = false;
+    waitingFirstToken.value = false;
   }, GENERATING_IDLE_MS);
 };
 
@@ -181,14 +198,29 @@ const normalizeMathDelimiters = (text) => {
     .replace(/\\\)/g, '$');
 };
 
-// 滚动到最新消息
+const isAtBottom = ref(true);
+const showJumpToBottom = computed(() => !isAtBottom.value);
+
 const messageContainer = ref(null);
+
+const updateIsAtBottom = () => {
+  const el = messageContainer.value;
+  if (!el) return;
+  const threshold = 40;
+  isAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+};
+
 const scrollToBottom = () => {
   nextTick(() => {
-    if (messageContainer.value) {
-      messageContainer.value.scrollTop = messageContainer.value.scrollHeight;
-    }
+    const el = messageContainer.value;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    updateIsAtBottom();
   });
+};
+
+const jumpToBottom = () => {
+  scrollToBottom();
 };
 
 const askDeepSeek = async (question, sessionId) => {
@@ -217,8 +249,7 @@ const sendMessage = async () => {
 
   const question = messageInput.value.trim();
 
-  stopGenerating();
-  bumpGenerating();
+  startGenerating();
 
   inputHistory.value.push(question);
   historyIndex.value = inputHistory.value.length;
@@ -256,6 +287,18 @@ const sendMessage = async () => {
   };
 
   topic.push(myMsg);
+
+  if (!isWeb) {
+    topic.push({
+      msgid: topic.length + 1,
+      sender: activeChat.value.name,
+      chatSessionId: sessionId,
+      raw: '',
+      content: '',
+      isPlaceholder: true,
+    });
+  }
+
   console.log('topic', topic);
 
   messageInput.value = "";
@@ -290,7 +333,6 @@ const sendMessage = async () => {
     await askDeepSeek(question, sessionId);
   } catch (error) {
     console.error('Error during askDeepSeek:', error);
-  } finally {
     stopGenerating();
   }
 
@@ -381,17 +423,32 @@ const stopResize = () => {
 };
 
 onMounted(() => {
+  nextTick(() => {
+    updateIsAtBottom();
+  });
+
   listen("modle-streaming-respond-output", (event) => {
+    const shouldFollow = isAtBottom.value;
     bumpGenerating();
     const payload = typeof event.payload === 'string' ? normalizeMathDelimiters(event.payload) : event.payload;
     chatStore.collectChatSessionStream(payload);
 
     const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
     const latest = topic[topic.length - 1];
-    if (latest && latest.sender !== 'me' && !latest.chatSessionId) {
-      latest.chatSessionId = chatStore.sendChatSessionId || '';
+    if (latest && latest.sender !== 'me') {
+      if (!latest.chatSessionId) {
+        latest.chatSessionId = chatStore.sendChatSessionId || '';
+      }
+      if (latest.isPlaceholder && typeof payload === 'string' && payload.length > 0) {
+        latest.isPlaceholder = false;
+      }
     }
 
+    if (shouldFollow) {
+      scrollToBottom();
+    } else {
+      nextTick(updateIsAtBottom);
+    }
     scheduleAutosave();
   })
     .then((unsubFn) => {
@@ -403,6 +460,7 @@ onMounted(() => {
     });
 
   listen("web-model-chat-push", (event) => {
+    const shouldFollow = isAtBottom.value;
     const payload = event.payload || {};
     const modelId = payload.model_id;
     const topicId = payload.topic_id;
@@ -427,7 +485,11 @@ onMounted(() => {
 
     if (modelId === chatStore.selectedModel && topicId === chatStore.selectedTopic) {
       bumpGenerating();
-      scrollToBottom();
+      if (shouldFollow) {
+        scrollToBottom();
+      } else {
+        nextTick(updateIsAtBottom);
+      }
       scheduleAutosave();
     }
   })
@@ -508,6 +570,7 @@ const setMessageRef = (el, index) => {
   padding: 15px;
   background-color: #ffffff;
   min-height: 0;
+  position: relative;
 }
 
 .message-item {
@@ -561,15 +624,59 @@ const setMessageRef = (el, index) => {
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
 }
 
-.loading-bubble {
+.jump-to-bottom {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  cursor: pointer;
+  color: rgba(0, 0, 0, 0.7);
+  z-index: 3;
 }
 
-.loading-text {
-  font-size: 14px;
-  color: #555;
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 14px;
+}
+
+.typing-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  animation: typingDot 1.2s infinite ease-in-out;
+}
+
+.typing-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typingDot {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
 }
 
 .chat-input-height-handle {
