@@ -275,9 +275,10 @@ export const useChatStore = defineStore("chatStore", {
 
           const applyContent = (target) => {
             target.raw = raw;
-            this.renderDebounced(raw).then((rendered) => {
-              target.content = rendered;
-            });
+            if (sender === 'me') {
+              target.content = plainToHtml(raw);
+              return;
+            }
           };
 
           if (messageId) {
@@ -408,6 +409,7 @@ export const useChatStore = defineStore("chatStore", {
 
           let rendered = '';
           try {
+            console.log('toRender', toRender);
             rendered = await renderMarkdown(toRender, {
               basePath: "",
               mermaid: true,

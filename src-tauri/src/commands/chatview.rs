@@ -245,19 +245,12 @@ pub async fn get_answer_from_deepseek(
         chat_response.choices[0].message.content
     );
 
-    // 替换 `\[` 和 `\]` 及相关换行符
-    let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-    // 替换 \( 和 \) 及相关换行符
-    let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-
-    // 对 content 进行替换
     if let Some(message) = chat_response
         .choices
         .get_mut(0)
         .map(|choice| &mut choice.message)
     {
-        message.content = re_block.replace_all(&message.content, "$$").to_string();
-        message.content = re_inline.replace_all(&message.content, "$").to_string();
+        message.content = normalize_math_symbols(message.content.clone());
     }
 
     info!(
@@ -279,14 +272,49 @@ pub async fn get_answer_from_deepseek(
     Ok(chatrsp)
 }
 
-fn normalize_math_symbols(mut content: String) -> String {
-    let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-    let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-    if !content.is_empty() {
-        content = re_block.replace_all(&content, "$").to_string();
-        content = re_inline.replace_all(&content, "$").to_string();
+fn excerpt_for_log(s: &str) -> String {
+    const LIMIT: usize = 400;
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= LIMIT {
+            out.push('…');
+            break;
+        }
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
     }
-    content
+    out
+}
+
+fn normalize_math_symbols(content: String) -> String {
+    if content.is_empty() {
+        return content;
+    }
+
+    let raw = content;
+    let out = raw
+        .replace("\\[", "$")
+        .replace("\\]", "$")
+        .replace("\\(", "$")
+        .replace("\\)", "$");
+
+    if raw.contains("\\[")
+        || raw.contains("\\]")
+        || raw.contains("\\(")
+        || raw.contains("\\)")
+        || raw.contains("```")
+    {
+        info!(
+            "normalize_math_symbols: raw={} out={}",
+            excerpt_for_log(&raw),
+            excerpt_for_log(&out)
+        );
+    }
+
+    out
 }
 
 async fn openai_compat_sse_stream(
@@ -815,12 +843,8 @@ pub async fn get_answer_from_local_qwen_stream(
                     continue;
                 }
 
-                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-                buffer = re_block.replace_all(&buffer, "$").to_string();
-                buffer = re_inline.replace_all(&buffer, "$").to_string();
-
-                app.emit("modle-streaming-respond-output", &buffer)
+                let out = normalize_math_symbols(buffer.clone());
+                app.emit("modle-streaming-respond-output", &out)
                     .map_err(|e| e.to_string())?;
 
                 buffer.clear();
@@ -833,20 +857,13 @@ pub async fn get_answer_from_local_qwen_stream(
 
     // 流结束后，处理剩余的缓冲区数据
     if !buffer.is_empty() {
-        // 替换 `\[` 和 `\]` 及相关换行符
-        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-        // 替换 \( 和 \) 及相关换行符
-        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+        let out = normalize_math_symbols(buffer);
 
-        buffer = re_block.replace_all(&buffer, "$$").to_string();
-        buffer = re_inline.replace_all(&buffer, "$").to_string();
-
-        // 触发事件处理剩余数据
-        app.emit("modle-streaming-respond-output", &buffer)
+        app.emit("modle-streaming-respond-output", &out)
             .map_err(|e| e.to_string())?;
         debug!(
             "get_answer_from_local_qwen_stream: Emitting remaining buffered data: {}",
-            buffer
+            out
         );
         debug!("get_answer_from_local_qwen_stream: emit event modle-streaming-respond-output");
     }
@@ -934,24 +951,15 @@ pub async fn get_answer_from_local_deepseek_stream(
                     buffer
                 );
 
-                // 替换 `\[` 和 `\]` 及相关换行符
-                let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-                // 替换 \( 和 \) 及相关换行符
-                let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-                // 对 content 进行替换
-                if !buffer.is_empty() {
-                    buffer = re_block.replace_all(&buffer, "$").to_string();
-                    buffer = re_inline.replace_all(&buffer, "$").to_string();
-                }
+                let out = normalize_math_symbols(buffer.clone());
 
-                // 新增：只有内容变化时才发送
-                if buffer != last_emitted && !buffer.is_empty() {
-                    app.emit("modle-streaming-respond-output", &buffer)
+                if out != last_emitted && !out.is_empty() {
+                    app.emit("modle-streaming-respond-output", &out)
                         .map_err(|e| e.to_string())?;
-                    last_emitted = buffer.clone(); // 更新最后发送的内容
+                    last_emitted = out.clone();
                     debug!(
                         "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
-                        buffer
+                        out
                     );
                 }
 
@@ -965,21 +973,14 @@ pub async fn get_answer_from_local_deepseek_stream(
 
     // 流结束后，处理剩余的缓冲区数据
     if !buffer.is_empty() {
-        // 替换 `\[` 和 `\]` 及相关换行符
-        let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-        // 替换 \( 和 \) 及相关换行符
-        let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
+        let out = normalize_math_symbols(buffer);
 
-        buffer = re_block.replace_all(&buffer, "$$").to_string();
-        buffer = re_inline.replace_all(&buffer, "$").to_string();
-
-        if buffer != last_emitted && !buffer.is_empty() {
-            // 触发事件处理剩余数据
-            app.emit("modle-streaming-respond-output", &buffer)
+        if out != last_emitted && !out.is_empty() {
+            app.emit("modle-streaming-respond-output", &out)
                 .map_err(|e| e.to_string())?;
             debug!(
                 "get_answer_from_local_deepseek_stream: Emitting remaining buffered data: {}",
-                buffer
+                out
             );
         }
 

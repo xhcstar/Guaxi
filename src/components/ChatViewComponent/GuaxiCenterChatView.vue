@@ -173,6 +173,14 @@ const scheduleAutosave = () => {
   }, 800);
 };
 
+const normalizeMathDelimiters = (text) => {
+  return (text ?? '').toString()
+    .replace(/\\\[/g, '$$')
+    .replace(/\\\]/g, '$$')
+    .replace(/\\\(/g, '$')
+    .replace(/\\\)/g, '$');
+};
+
 // 滚动到最新消息
 const messageContainer = ref(null);
 const scrollToBottom = () => {
@@ -238,16 +246,17 @@ const sendMessage = async () => {
     sender: "me",
     chatSessionId: sessionId,
     raw: question,
-    content: question,
+    content: question
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/\r?\n/g, '<br/>'),
   };
 
   topic.push(myMsg);
-  const renderedP = chatStore.renderDebounced(question);
-  if (renderedP && typeof renderedP.then === 'function') {
-    renderedP.then((rendered) => {
-      myMsg.content = rendered;
-    });
-  }
+  console.log('topic', topic);
 
   messageInput.value = "";
   scrollToBottom();
@@ -374,7 +383,8 @@ const stopResize = () => {
 onMounted(() => {
   listen("modle-streaming-respond-output", (event) => {
     bumpGenerating();
-    chatStore.collectChatSessionStream(event.payload);
+    const payload = typeof event.payload === 'string' ? normalizeMathDelimiters(event.payload) : event.payload;
+    chatStore.collectChatSessionStream(payload);
 
     const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
     const latest = topic[topic.length - 1];
@@ -400,12 +410,19 @@ onMounted(() => {
     const title = payload.title;
     const messages = payload.messages;
 
+    const normalizedMessages = Array.isArray(messages)
+      ? messages.map((m) => ({
+        ...m,
+        content: normalizeMathDelimiters(m?.content),
+      }))
+      : messages;
+
     chatStore.appendMessagesToTopic({
       modelId,
       topicId,
       sessionId,
       title,
-      messages,
+      messages: normalizedMessages,
     });
 
     if (modelId === chatStore.selectedModel && topicId === chatStore.selectedTopic) {

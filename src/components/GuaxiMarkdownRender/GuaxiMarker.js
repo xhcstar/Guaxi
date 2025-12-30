@@ -146,7 +146,7 @@ function escapeRegExp(string) {
 // }
 
 export const renderMarkdown = async (content, options) => {
-  // console.log("原始内容:", content);
+  console.log("原始内容:", content);
   const {
     preserveOriginal = false, // 新增参数，控制是否保留原始内容
     mermaid: enableMermaid = true,
