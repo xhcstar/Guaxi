@@ -1142,6 +1142,7 @@ pub struct ExportChatSessionRequest {
     pub model_name: Option<String>,
     pub topic_id: Option<i32>,
     pub session_id: Option<String>,
+    pub topic_title: Option<String>,
     pub content: Value,
 }
 
@@ -1172,6 +1173,7 @@ pub async fn export_chat_session(request: ExportChatSessionRequest) -> Result<St
         "model_name": model,
         "topic_id": request.topic_id,
         "session_id": request.session_id,
+        "topic_title": request.topic_title,
         "content": request.content,
     });
 
@@ -1187,6 +1189,7 @@ pub struct SaveChatSessionRequest {
     pub model_name: Option<String>,
     pub topic_id: Option<i32>,
     pub session_id: Option<String>,
+    pub topic_title: Option<String>,
     pub content: Value,
 }
 
@@ -1230,6 +1233,7 @@ pub async fn save_chat_session(request: SaveChatSessionRequest) -> Result<String
         "model_name": request.model_name,
         "topic_id": request.topic_id,
         "session_id": request.session_id,
+        "topic_title": request.topic_title,
         "content": request.content,
     });
 

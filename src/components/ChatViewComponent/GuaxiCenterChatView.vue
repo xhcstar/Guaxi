@@ -2,7 +2,17 @@
   <div class="chat-container">
     <div class="chat-header">
       <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
-      <span class="chat-title">{{ activeChat?.name || "未选择会话" }}</span>
+      <div class="chat-header-title">
+        <n-input
+          v-if="isEditingTitle"
+          size="small"
+          v-model:value="editingTitle"
+          class="chat-title-input"
+          @keydown.enter.prevent="commitTitle"
+          @blur="commitTitle"
+        />
+        <span v-else class="chat-title" @dblclick="beginEditTitle">{{ displayTitle }}</span>
+      </div>
     </div>
 
     <div class="message-list" ref="messageContainer" @scroll="updateIsAtBottom">
@@ -110,6 +120,88 @@ const activeChatMessages = computed(() =>
   activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || { topicid: chatStore.selectedTopic, topic: [] }
 );
 
+const displayTitle = computed(() => {
+  const t = (activeChatMessages.value?.title ?? '').toString().trim();
+  if (t) return t;
+  return activeChat.value?.name || '未选择会话';
+});
+
+const isEditingTitle = ref(false);
+const editingTitle = ref('');
+
+const beginEditTitle = () => {
+  if (!activeChat.value) return;
+  const current = (activeChatMessages.value?.title ?? '').toString().trim();
+  editingTitle.value = current || '';
+  isEditingTitle.value = true;
+  nextTick(() => {
+    const el = document.querySelector('.chat-title-input input');
+    if (el && typeof el.focus === 'function') {
+      el.focus();
+      if (typeof el.select === 'function') el.select();
+    }
+  });
+};
+
+const commitTitle = () => {
+  if (!isEditingTitle.value) return;
+  isEditingTitle.value = false;
+
+  const nextTitle = (editingTitle.value ?? '').toString().trim();
+  if (!activeChatMessages.value) return;
+
+  if (nextTitle) {
+    activeChatMessages.value.title = nextTitle;
+    activeChatMessages.value.__titleLocked = true;
+  } else {
+    activeChatMessages.value.title = '';
+    activeChatMessages.value.__titleLocked = false;
+  }
+
+  scheduleAutosave();
+};
+
+const pickAutoTitle = (raw) => {
+  let s = (raw ?? '').toString();
+  if (!s.trim()) return '';
+
+  s = s.replace(/```[\s\S]*?```/g, ' ');
+  s = s.replace(/`[^`]*`/g, ' ');
+  s = s.replace(/\[\s*\S*?\]/g, ' ');
+
+  const lines = s.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  let first = lines[0] || '';
+
+  first = first.replace(/^#{1,6}\s+/, '');
+  first = first.replace(/^>\s+/, '');
+  first = first.replace(/^[-*+]\s+/, '');
+
+  const sentence = first.split(/([。！？.!?])\s/)[0] || first;
+  const title = sentence.replace(/\s+/g, ' ').trim();
+
+  const MAX = 24;
+  if (title.length <= MAX) return title;
+  return title.slice(0, MAX).trimEnd() + '…';
+};
+
+const streamTitleBuffer = new Map();
+
+const maybeAutoSetTitle = (sessionId) => {
+  const topic = activeChatMessages.value;
+  if (!topic) return;
+  if (topic.__titleLocked) return;
+
+  const current = (topic.title ?? '').toString().trim();
+  if (current) return;
+
+  const buf = streamTitleBuffer.get(sessionId) || '';
+  const nextTitle = pickAutoTitle(buf);
+  if (!nextTitle) return;
+
+  topic.title = nextTitle;
+  topic.__titleLocked = false;
+};
+
 const autosaveTimer = ref(null);
 
 const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
@@ -192,12 +284,14 @@ const saveSessionSnapshot = async () => {
   try {
     const content = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
     const sid = getTopicSessionId(content) || chatStore.sendChatSessionId || null;
+    const topicTitle = (activeChatMessages.value?.title ?? '').toString().trim() || null;
     await invoke('save_chat_session', {
       request: {
         model_id: chatStore.selectedModel,
         model_name: activeChat.value?.name || '',
         topic_id: chatStore.selectedTopic,
         session_id: sid,
+        topic_title: topicTitle,
         content,
       },
     });
@@ -588,6 +682,14 @@ onMounted(() => {
       if (latest.isPlaceholder && typeof payload === 'string' && payload.length > 0) {
         latest.isPlaceholder = false;
       }
+
+      const sid = (latest.chatSessionId || '').toString().trim();
+      if (sid && typeof payload === 'string' && payload) {
+        const prev = streamTitleBuffer.get(sid) || '';
+        const next = (prev + payload).slice(0, 800);
+        streamTitleBuffer.set(sid, next);
+        maybeAutoSetTitle(sid);
+      }
     }
 
     if (shouldFollow) {
@@ -687,34 +789,54 @@ const setMessageRef = (el, index) => {
 .chat-container {
   width: 100%;
   height: 100%;
-  border: 1px solid #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.06);
   display: flex;
   flex-direction: column;
   padding: 0;
   box-sizing: border-box;
   min-height: 0;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
 }
 
 .chat-header {
   display: flex;
   align-items: center;
-  padding: 7px 15px;
-  border-bottom: 1px solid #ffffff;
-  background-color: #ffffff;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(12px);
+}
+
+.chat-header-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .chat-title {
-  margin-left: 10px;
   font-size: 14px;
-  font-weight: bold;
-  color: #333;
+  font-weight: 650;
+  color: rgba(15, 23, 42, 0.92);
+  cursor: text;
+  user-select: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-title-input {
+  max-width: 420px;
 }
 
 .message-list {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 15px;
-  background-color: #ffffff;
+  padding: 16px;
+  background: radial-gradient(1200px 600px at 20% 0%, rgba(45, 212, 191, 0.10) 0%, rgba(45, 212, 191, 0) 60%),
+    radial-gradient(1000px 500px at 90% 10%, rgba(99, 102, 241, 0.08) 0%, rgba(99, 102, 241, 0) 55%),
+    #ffffff;
   min-height: 0;
   position: relative;
 }
@@ -736,10 +858,11 @@ const setMessageRef = (el, index) => {
 .message-bubble {
   max-width: 70%;
   min-width: 0;
-  padding: 8px;
-  border-radius: 20px;
-  margin: 0 5px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 10px 12px;
+  border-radius: 16px;
+  margin: 0 6px;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.06);
   box-sizing: border-box;
 }
 
@@ -748,20 +871,18 @@ const setMessageRef = (el, index) => {
 }
 
 .message-left .message-bubble {
-  background-color: #fdfffe;
+  background: rgba(255, 255, 255, 0.92);
   font-size: 16px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  /* 使用等宽字体 */
-  border-top-left-radius: 0;
+  border-top-left-radius: 6px;
 }
 
 .message-right .message-bubble {
-  background-color: #45d6a6;
+  background: linear-gradient(135deg, #2dd4bf 0%, #22c55e 100%);
   font-size: 16px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  /* 使用等宽字体 */
-  color: white;
-  border-top-right-radius: 0;
+  color: rgba(255, 255, 255, 0.98);
+  border-top-right-radius: 6px;
 }
 
 .input-area {
