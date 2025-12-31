@@ -3,14 +3,8 @@
     <div class="chat-header">
       <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
       <div class="chat-header-title">
-        <n-input
-          v-if="isEditingTitle"
-          size="small"
-          v-model:value="editingTitle"
-          class="chat-title-input"
-          @keydown.enter.prevent="commitTitle"
-          @blur="commitTitle"
-        />
+        <n-input v-if="isEditingTitle" size="small" v-model:value="editingTitle" class="chat-title-input"
+          @keydown.enter.prevent="commitTitle" @blur="commitTitle" />
         <span v-else class="chat-title" @dblclick="beginEditTitle">{{ displayTitle }}</span>
       </div>
     </div>
@@ -30,7 +24,9 @@
             <button class="message-action-btn" type="button" title="复制" @click="copyMessage(message)">
               <n-icon>
                 <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm4 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h12v14z" fill="currentColor" />
+                  <path
+                    d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm4 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h12v14z"
+                    fill="currentColor" />
                 </svg>
               </n-icon>
             </button>
@@ -38,15 +34,19 @@
             <button class="message-action-btn" type="button" title="分享" @click="shareMessage(message)">
               <n-icon>
                 <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7a2.5 2.5 0 0 0 0-1.39l7.02-4.11A2.99 2.99 0 1 0 14 5a2.9 2.9 0 0 0 .05.52L7.03 9.63a3 3 0 1 0 0 4.74l7.02 4.11c-.03.17-.05.34-.05.52a3 3 0 1 0 3-2.92z" fill="currentColor" />
+                  <path
+                    d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7a2.5 2.5 0 0 0 0-1.39l7.02-4.11A2.99 2.99 0 1 0 14 5a2.9 2.9 0 0 0 .05.52L7.03 9.63a3 3 0 1 0 0 4.74l7.02 4.11c-.03.17-.05.34-.05.52a3 3 0 1 0 3-2.92z"
+                    fill="currentColor" />
                 </svg>
               </n-icon>
             </button>
 
-            <button class="message-action-btn" type="button" title="重新生成" :disabled="isGenerating" @click="regenerateFrom(index)">
+            <button class="message-action-btn" type="button" title="重新生成" :disabled="isGenerating"
+              @click="regenerateFrom(index)">
               <n-icon>
                 <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 13.65-6.65z" fill="currentColor" />
+                  <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 13.65-6.65z"
+                    fill="currentColor" />
                 </svg>
               </n-icon>
             </button>
@@ -67,15 +67,9 @@
 
     <div class="input-area">
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
-      <n-input
-        type="textarea"
-        placeholder="请输入您的问题..."
-        v-model:value="messageInput"
-        :disabled="isGenerating"
-        @keydown="handleKeydown"
-        style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;"
-      />
+      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" :disabled="isGenerating"
+        @keydown="handleKeydown" style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;" />
       <n-button @click="sendMessage" color="#dbe7e4" :disabled="isGenerating"
         style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
@@ -366,7 +360,7 @@ const writeClipboard = async (text) => {
     try {
       await navigator.clipboard.writeText(value);
       return;
-    } catch (e) {}
+    } catch (e) { }
   }
 
   try {
@@ -390,7 +384,7 @@ const shareMessage = async (message) => {
     try {
       await api({ text });
       return;
-    } catch (e) {}
+    } catch (e) { }
   }
 
   await writeClipboard(text);
@@ -670,7 +664,16 @@ onMounted(() => {
   listen("modle-streaming-respond-output", (event) => {
     const shouldFollow = isAtBottom.value;
     bumpGenerating();
+    const rawPayload = typeof event.payload === 'string' ? event.payload : '';
     const payload = typeof event.payload === 'string' ? normalizeMathDelimiters(event.payload) : event.payload;
+    if (rawPayload && (rawPayload.includes('$') || rawPayload.includes('`') || rawPayload.includes('```') || rawPayload.includes('\\[') || rawPayload.includes('\\]') || rawPayload.includes('\\(') || rawPayload.includes('\\)'))) {
+      console.info('[modle-streaming-respond-output raw]', rawPayload.slice(0, 400));
+    }
+
+    if (typeof payload === 'string' && payload && (payload.includes('$') || payload.includes('`') || payload.includes('```'))) {
+      console.info('[modle-streaming-respond-output normalized]', payload.slice(0, 400));
+    }
+
     chatStore.collectChatSessionStream(payload);
 
     const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
@@ -939,6 +942,7 @@ const setMessageRef = (el, index) => {
 }
 
 @keyframes typingDot {
+
   0%,
   80%,
   100% {

@@ -1,10 +1,10 @@
+use crate::commands::settingview;
 use chrono::Utc;
 use futures_util::StreamExt;
 use rand::Rng;
 use regex::Regex;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
-use crate::commands::settingview;
 use serde_json::{json, Value};
 use std::convert::TryFrom;
 use std::fs;
@@ -157,6 +157,8 @@ fn drain_complete_lines(buf: &mut String) -> Vec<String> {
 #[derive(Default)]
 struct CodeFenceTracker {
     in_fence: bool,
+    at_line_start: bool,
+    leading_spaces: usize,
     tick_run: usize,
     last_char: Option<char>,
 }
@@ -165,15 +167,39 @@ impl CodeFenceTracker {
     fn push(&mut self, s: &str) {
         for ch in s.chars() {
             self.last_char = Some(ch);
-            if ch == '`' {
-                self.tick_run += 1;
-                if self.tick_run == 3 {
-                    self.in_fence = !self.in_fence;
-                    self.tick_run = 0;
-                }
-            } else {
+
+            if ch == '\n' {
+                self.at_line_start = true;
+                self.leading_spaces = 0;
                 self.tick_run = 0;
+                continue;
             }
+
+            if self.at_line_start {
+                if ch == ' ' {
+                    if self.leading_spaces < 3 {
+                        self.leading_spaces += 1;
+                        continue;
+                    }
+                    self.at_line_start = false;
+                    self.tick_run = 0;
+                    continue;
+                }
+
+                if ch == '`' {
+                    self.tick_run += 1;
+                    if self.tick_run == 3 {
+                        self.in_fence = !self.in_fence;
+                    }
+                    continue;
+                }
+
+                self.at_line_start = false;
+                self.tick_run = 0;
+                continue;
+            }
+
+            self.tick_run = 0;
         }
     }
 
@@ -188,9 +214,9 @@ impl CodeFenceTracker {
         };
 
         Some(if needs_newline {
-            "\n```".to_string()
+            "\n```\n".to_string()
         } else {
-            "```".to_string()
+            "```\n".to_string()
         })
     }
 }
@@ -330,6 +356,25 @@ fn excerpt_for_log(s: &str) -> String {
     out
 }
 
+fn log_model_reply(tag: &str, session_id: &str, raw: &str) {
+    let raw_trimmed = raw.trim();
+    if raw_trimmed.is_empty() {
+        return;
+    }
+
+    let norm = normalize_math_symbols(raw.to_string());
+
+    info!(
+        "model_reply tag={} session_id={} raw_len={} norm_len={} raw_excerpt={} norm_excerpt={} ",
+        tag,
+        session_id,
+        raw.len(),
+        norm.len(),
+        excerpt_for_log(raw_trimmed),
+        excerpt_for_log(norm.trim())
+    );
+}
+
 fn normalize_math_symbols(content: String) -> String {
     if content.is_empty() {
         return content;
@@ -379,9 +424,22 @@ async fn openai_compat_sse_stream(
         return Err(format!("Upstream error: {} {}", status, body));
     }
 
+    let model = request_body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let session_id = request_body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let tag = format!("openai_compat_sse_stream model={} url={}", model, url);
     let mut stream = response.bytes_stream();
     let mut carry = String::new();
     let mut buffer = String::new();
+    let mut full_raw = String::new();
     let mut fence = CodeFenceTracker::default();
 
     while let Some(chunk) = stream.next().await {
@@ -391,6 +449,18 @@ async fn openai_compat_sse_stream(
 
                 for line in drain_complete_lines(&mut carry) {
                     if let Some(content) = stream_extract_content(&line) {
+                        if content.contains('$')
+                            || content.contains('`')
+                            || content.contains("\\[")
+                            || content.contains("\\]")
+                            || content.contains("\\(")
+                            || content.contains("\\)")
+                            || content.contains("```")
+                        {
+                            info!("{}: piece={}", tag, excerpt_for_log(&content));
+                        }
+
+                        full_raw.push_str(&content);
                         fence.push(&content);
                         buffer.push_str(&content);
                     }
@@ -417,6 +487,18 @@ async fn openai_compat_sse_stream(
     let tail = carry.trim();
     if !tail.is_empty() {
         if let Some(content) = stream_extract_content(tail) {
+            if content.contains('$')
+                || content.contains('`')
+                || content.contains("\\[")
+                || content.contains("\\]")
+                || content.contains("\\(")
+                || content.contains("\\)")
+                || content.contains("```")
+            {
+                info!("{}: tail_piece={}", tag, excerpt_for_log(&content));
+            }
+
+            full_raw.push_str(&content);
             fence.push(&content);
             buffer.push_str(&content);
         }
@@ -432,6 +514,8 @@ async fn openai_compat_sse_stream(
         app.emit("modle-streaming-respond-output", &closer)
             .map_err(|e| e.to_string())?;
     }
+
+    log_model_reply(&tag, &session_id, &full_raw);
 
     Ok(())
 }
@@ -463,7 +547,8 @@ async fn openai_compat_chat(
     }
 
     let data = response.text().await.map_err(|e| e.to_string())?;
-    let mut chat_response: DeepSeekResponse = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    let mut chat_response: DeepSeekResponse =
+        serde_json::from_str(&data).map_err(|e| e.to_string())?;
 
     let content = chat_response
         .choices
@@ -871,6 +956,7 @@ pub async fn get_answer_from_local_qwen_stream(
     let mut stream = response.bytes_stream();
     let mut carry = String::new();
     let mut buffer = String::new();
+    let mut full_raw = String::new();
     let mut fence = CodeFenceTracker::default();
 
     // 流式输出数据
@@ -881,6 +967,21 @@ pub async fn get_answer_from_local_qwen_stream(
 
                 for line in drain_complete_lines(&mut carry) {
                     if let Some(content) = stream_extract_content(&line) {
+                        if content.contains('$')
+                            || content.contains('`')
+                            || content.contains("\\[")
+                            || content.contains("\\]")
+                            || content.contains("\\(")
+                            || content.contains("\\)")
+                            || content.contains("```")
+                        {
+                            info!(
+                                "get_answer_from_local_qwen_stream: piece={}",
+                                excerpt_for_log(&content)
+                            );
+                        }
+
+                        full_raw.push_str(&content);
                         fence.push(&content);
                         buffer.push_str(&content);
                     }
@@ -932,6 +1033,8 @@ pub async fn get_answer_from_local_qwen_stream(
             .map_err(|e| e.to_string())?;
     }
 
+    log_model_reply("local_qwen_stream model=qwen3:8b", &session_id, &full_raw);
+
     Ok(())
 }
 
@@ -982,6 +1085,7 @@ pub async fn get_answer_from_local_deepseek_stream(
     let mut stream = response.bytes_stream();
     let mut carry = String::new();
     let mut buffer = String::new();
+    let mut full_raw = String::new();
     let mut last_emitted = String::new(); // 新增：记录上次发送的内容
     let mut fence = CodeFenceTracker::default();
 
@@ -993,6 +1097,21 @@ pub async fn get_answer_from_local_deepseek_stream(
 
                 for line in drain_complete_lines(&mut carry) {
                     if let Some(content) = stream_extract_content(&line) {
+                        if content.contains('$')
+                            || content.contains('`')
+                            || content.contains("\\[")
+                            || content.contains("\\]")
+                            || content.contains("\\(")
+                            || content.contains("\\)")
+                            || content.contains("```")
+                        {
+                            info!(
+                                "get_answer_from_local_deepseek_stream: piece={}",
+                                excerpt_for_log(&content)
+                            );
+                        }
+
+                        full_raw.push_str(&content);
                         fence.push(&content);
                         buffer.push_str(&content);
                     }
@@ -1066,6 +1185,12 @@ pub async fn get_answer_from_local_deepseek_stream(
             .map_err(|e| e.to_string())?;
     }
 
+    log_model_reply(
+        "local_deepseek_stream model=deepseek-r1:8b",
+        &session_id,
+        &full_raw,
+    );
+
     Ok(())
 }
 
@@ -1105,7 +1230,10 @@ pub async fn get_answer_from_local_qwen(
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!("Error calling Local Qwen API: {:?}", response.status()));
+        return Err(format!(
+            "Error calling Local Qwen API: {:?}",
+            response.status()
+        ));
     }
 
     let data = response.text().await.map_err(|e| e.to_string())?;
@@ -1113,7 +1241,10 @@ pub async fn get_answer_from_local_qwen(
 
     Ok(ChatResponse {
         answer: normalize_math_symbols(answer_content),
-        sessionid: request_body["session_id"].as_str().unwrap_or("").to_string(),
+        sessionid: request_body["session_id"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -1150,12 +1281,7 @@ pub struct ExportChatSessionRequest {
 pub async fn export_chat_session(request: ExportChatSessionRequest) -> Result<String, String> {
     let root = ensure_chat_record_root()?;
 
-    let model = sanitize_filename_component(
-        request
-            .model_name
-            .as_deref()
-            .unwrap_or("chat"),
-    );
+    let model = sanitize_filename_component(request.model_name.as_deref().unwrap_or("chat"));
     let sid = sanitize_filename_component(request.session_id.as_deref().unwrap_or(""));
 
     let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
@@ -1201,12 +1327,7 @@ pub async fn save_chat_session(request: SaveChatSessionRequest) -> Result<String
         fs::create_dir_all(&sessions_dir).map_err(|e| e.to_string())?;
     }
 
-    let model = sanitize_filename_component(
-        request
-            .model_name
-            .as_deref()
-            .unwrap_or("chat"),
-    );
+    let model = sanitize_filename_component(request.model_name.as_deref().unwrap_or("chat"));
 
     let sid_raw = if let Some(sid) = request.session_id.as_deref() {
         sid.to_string()
@@ -1544,7 +1665,10 @@ pub async fn open_web_model_window(app: tauri::AppHandle, provider: String) -> R
 }
 
 #[tauri::command]
-pub async fn prepare_web_model_window(app: tauri::AppHandle, provider: String) -> Result<(), String> {
+pub async fn prepare_web_model_window(
+    app: tauri::AppHandle,
+    provider: String,
+) -> Result<(), String> {
     let provider_key = provider.trim().to_lowercase();
     ensure_web_model_window(&app, &provider_key).await?;
     Ok(())
@@ -1770,7 +1894,8 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::YUANBAO_WEB => Ok(ChatResponse {
-            answer: "该模型为网页模式，请调用 open_web_model_window(provider='yuanbao') 进行对话。".to_string(),
+            answer: "该模型为网页模式，请调用 open_web_model_window(provider='yuanbao') 进行对话。"
+                .to_string(),
             sessionid: if request.sessionid.is_empty() {
                 generate_session_id()
             } else {
@@ -1778,7 +1903,8 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             },
         }),
         ChatModel::CHATGPT_WEB => Ok(ChatResponse {
-            answer: "该模型为网页模式，请调用 open_web_model_window(provider='chatgpt') 进行对话。".to_string(),
+            answer: "该模型为网页模式，请调用 open_web_model_window(provider='chatgpt') 进行对话。"
+                .to_string(),
             sessionid: if request.sessionid.is_empty() {
                 generate_session_id()
             } else {
