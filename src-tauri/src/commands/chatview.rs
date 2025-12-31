@@ -375,6 +375,10 @@ fn log_model_reply(tag: &str, session_id: &str, raw: &str) {
     );
 }
 
+fn local_math_system_prompt() -> &'static str {
+    "当输出数学公式时：行内公式用 $...$，块级公式用 $$...$$。不要用反引号 `...` 包裹任何数学公式或公式片段。$$或者$周围不要添加不必要的`等符号。"
+}
+
 fn normalize_math_symbols(content: String) -> String {
     if content.is_empty() {
         return content;
@@ -711,7 +715,10 @@ pub async fn get_answer_from_local_deepseek(
 
     let request_body = json!({
         "model": "deepseek-r1:8b",
-        "messages": [{"role": "user", "content": question}],
+        "messages": [
+            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "user", "content": question}
+        ],
         "stream": false,
         "session_id": session_id
     });
@@ -923,7 +930,10 @@ pub async fn get_answer_from_local_qwen_stream(
 
     let request_body = json!({
         "model": "qwen3:8b",
-        "messages": [{"role": "user", "content": question}],
+        "messages": [
+            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "user", "content": question}
+        ],
         "stream": true,  // 启用流式传输
         "session_id": session_id,
     });
@@ -1052,7 +1062,10 @@ pub async fn get_answer_from_local_deepseek_stream(
 
     let request_body = json!({
         "model": "deepseek-r1:8b",
-        "messages": [{"role": "user", "content": question}],
+        "messages": [
+            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "user", "content": question}
+        ],
         "stream": true,  // 启用流式传输
         "session_id": session_id,
     });
@@ -1212,7 +1225,10 @@ pub async fn get_answer_from_local_qwen(
 
     let request_body = json!({
         "model": "qwen3:8b",
-        "messages": [{"role": "user", "content": question}],
+        "messages": [
+            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "user", "content": question}
+        ],
         "stream": false,
         "session_id": session_id
     });
