@@ -735,10 +735,16 @@ const setMessageRef = (el, index) => {
 
 .message-bubble {
   max-width: 70%;
+  min-width: 0;
   padding: 8px;
   border-radius: 20px;
   margin: 0 5px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+}
+
+.message-content {
+  min-width: 0;
 }
 
 .message-left .message-bubble {
@@ -909,10 +915,26 @@ const setMessageRef = (el, index) => {
   background: #f6f8fa !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
 }
 
 .hljs code {
   font-family: inherit !important;
+  display: block;
+  white-space: pre;
+}
+
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
+}
+
+pre code {
+  display: block;
+  white-space: pre;
 }
 
 /* 代码块复制按钮 */

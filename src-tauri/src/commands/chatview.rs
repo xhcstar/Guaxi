@@ -154,6 +154,47 @@ fn drain_complete_lines(buf: &mut String) -> Vec<String> {
     lines
 }
 
+#[derive(Default)]
+struct CodeFenceTracker {
+    in_fence: bool,
+    tick_run: usize,
+    last_char: Option<char>,
+}
+
+impl CodeFenceTracker {
+    fn push(&mut self, s: &str) {
+        for ch in s.chars() {
+            self.last_char = Some(ch);
+            if ch == '`' {
+                self.tick_run += 1;
+                if self.tick_run == 3 {
+                    self.in_fence = !self.in_fence;
+                    self.tick_run = 0;
+                }
+            } else {
+                self.tick_run = 0;
+            }
+        }
+    }
+
+    fn closing_delta(&self) -> Option<String> {
+        if !self.in_fence {
+            return None;
+        }
+
+        let needs_newline = match self.last_char {
+            Some('\n') | None => false,
+            _ => true,
+        };
+
+        Some(if needs_newline {
+            "\n```".to_string()
+        } else {
+            "```".to_string()
+        })
+    }
+}
+
 fn generate_session_id() -> String {
     // 获取当前时间戳（秒级）
     let timestamp = Utc::now().timestamp();
@@ -341,6 +382,7 @@ async fn openai_compat_sse_stream(
     let mut stream = response.bytes_stream();
     let mut carry = String::new();
     let mut buffer = String::new();
+    let mut fence = CodeFenceTracker::default();
 
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -349,6 +391,7 @@ async fn openai_compat_sse_stream(
 
                 for line in drain_complete_lines(&mut carry) {
                     if let Some(content) = stream_extract_content(&line) {
+                        fence.push(&content);
                         buffer.push_str(&content);
                     }
                 }
@@ -374,6 +417,7 @@ async fn openai_compat_sse_stream(
     let tail = carry.trim();
     if !tail.is_empty() {
         if let Some(content) = stream_extract_content(tail) {
+            fence.push(&content);
             buffer.push_str(&content);
         }
     }
@@ -381,6 +425,11 @@ async fn openai_compat_sse_stream(
     if !buffer.is_empty() {
         let out = normalize_math_symbols(buffer);
         app.emit("modle-streaming-respond-output", &out)
+            .map_err(|e| e.to_string())?;
+    }
+
+    if let Some(closer) = fence.closing_delta() {
+        app.emit("modle-streaming-respond-output", &closer)
             .map_err(|e| e.to_string())?;
     }
 
@@ -822,6 +871,7 @@ pub async fn get_answer_from_local_qwen_stream(
     let mut stream = response.bytes_stream();
     let mut carry = String::new();
     let mut buffer = String::new();
+    let mut fence = CodeFenceTracker::default();
 
     // 流式输出数据
     while let Some(chunk) = stream.next().await {
@@ -831,6 +881,7 @@ pub async fn get_answer_from_local_qwen_stream(
 
                 for line in drain_complete_lines(&mut carry) {
                     if let Some(content) = stream_extract_content(&line) {
+                        fence.push(&content);
                         buffer.push_str(&content);
                     }
                 }
@@ -855,6 +906,14 @@ pub async fn get_answer_from_local_qwen_stream(
         }
     }
 
+    let tail = carry.trim();
+    if !tail.is_empty() {
+        if let Some(content) = stream_extract_content(tail) {
+            fence.push(&content);
+            buffer.push_str(&content);
+        }
+    }
+
     // 流结束后，处理剩余的缓冲区数据
     if !buffer.is_empty() {
         let out = normalize_math_symbols(buffer);
@@ -866,6 +925,11 @@ pub async fn get_answer_from_local_qwen_stream(
             out
         );
         debug!("get_answer_from_local_qwen_stream: emit event modle-streaming-respond-output");
+    }
+
+    if let Some(closer) = fence.closing_delta() {
+        app.emit("modle-streaming-respond-output", &closer)
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -919,6 +983,7 @@ pub async fn get_answer_from_local_deepseek_stream(
     let mut carry = String::new();
     let mut buffer = String::new();
     let mut last_emitted = String::new(); // 新增：记录上次发送的内容
+    let mut fence = CodeFenceTracker::default();
 
     // 流式输出数据
     while let Some(chunk) = stream.next().await {
@@ -928,6 +993,7 @@ pub async fn get_answer_from_local_deepseek_stream(
 
                 for line in drain_complete_lines(&mut carry) {
                     if let Some(content) = stream_extract_content(&line) {
+                        fence.push(&content);
                         buffer.push_str(&content);
                     }
                 }
@@ -971,6 +1037,14 @@ pub async fn get_answer_from_local_deepseek_stream(
         }
     }
 
+    let tail = carry.trim();
+    if !tail.is_empty() {
+        if let Some(content) = stream_extract_content(tail) {
+            fence.push(&content);
+            buffer.push_str(&content);
+        }
+    }
+
     // 流结束后，处理剩余的缓冲区数据
     if !buffer.is_empty() {
         let out = normalize_math_symbols(buffer);
@@ -985,6 +1059,11 @@ pub async fn get_answer_from_local_deepseek_stream(
         }
 
         debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
+    }
+
+    if let Some(closer) = fence.closing_delta() {
+        app.emit("modle-streaming-respond-output", &closer)
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())
