@@ -2,6 +2,7 @@ pub mod chatview;
 pub mod docprocess;
 pub mod file_watcher;
 pub mod fileprocess;
+pub mod life_album;
 pub mod guaxireader;
 pub mod repoview;
 pub mod serverview;

@@ -6,7 +6,8 @@
     "main",
     "reader-*",
     "template_manager",
-    "knowledge_base_manager"
+    "knowledge_base_manager",
+    "app-*"
   ],
   "permissions": [
     "core:default",

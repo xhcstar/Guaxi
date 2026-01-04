@@ -32,6 +32,8 @@ pub struct AppConfig {
     #[serde(default = "default_image_bed_root")]
     image_bed_root: String,
     #[serde(default)]
+    life_album_album_dir: String,
+    #[serde(default)]
     template_repo_path: String,
     #[serde(default = "default_chat_record_root")]
     chat_record_root: String,
@@ -328,6 +330,7 @@ impl Default for AppConfig {
             repopathlist: Vec::new(),
             libraries_root: "".to_string(),
             image_bed_root: default_image_bed_root(),
+            life_album_album_dir: "".to_string(),
             template_repo_path: "".to_string(),
             chat_record_root: default_chat_record_root(),
             knowledge_bases_root: "".to_string(),
@@ -582,6 +585,32 @@ pub fn set_image_bed_root(path: String) {
     let mut config = load_config();
     config.image_bed_root = path;
     save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_life_album_album_dir() -> String {
+    let config = load_config();
+    config.life_album_album_dir
+}
+
+#[tauri::command]
+pub fn set_life_album_album_dir(path: String) -> Result<(), String> {
+    let p = PathBuf::from(path.trim());
+    if p.as_os_str().is_empty() {
+        let mut config = load_config();
+        config.life_album_album_dir = "".to_string();
+        save_config(&config);
+        return Ok(());
+    }
+
+    if !p.is_dir() {
+        return Err("路径不是目录".to_string());
+    }
+
+    let mut config = load_config();
+    config.life_album_album_dir = p.to_string_lossy().to_string();
+    save_config(&config);
+    Ok(())
 }
 
 #[tauri::command]
