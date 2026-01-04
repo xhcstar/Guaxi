@@ -1,4 +1,4 @@
-use tracing::{info, debug, error};
+use tracing::{error, info};
 use std::path::Path;
 use std::fs;
 

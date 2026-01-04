@@ -39,7 +39,16 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      path: "path-browserify",
     },
+  },
+
+  worker: {
+    format: "es",
+  },
+
+  build: {
+    chunkSizeWarningLimit: 20000,
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

@@ -1,9 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::Emitter;
 use tracing::info;
-use tracing_subscriber;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tokio::time::{sleep, Duration};
 

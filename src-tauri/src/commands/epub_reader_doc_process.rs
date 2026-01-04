@@ -1,4 +1,4 @@
-use tracing::{info, debug, error};
+use tracing::info;
 
 #[tauri::command]
 pub async fn read_epub_file(path: String) -> Result<Vec<u8>, String> {
