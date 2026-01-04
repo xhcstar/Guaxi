@@ -2,7 +2,6 @@ use crate::commands::settingview;
 use chrono::Utc;
 use futures_util::StreamExt;
 use rand::Rng;
-use regex::Regex;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,6 +13,7 @@ use tracing::{debug, error, info};
 use url::Url;
 // use std::error::Error;
 
+#[allow(non_camel_case_types)]
 enum ChatModel {
     CHATGPT,
     DEEPSEEK,

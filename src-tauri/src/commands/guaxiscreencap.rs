@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use urlencoding::encode;
 
 #[derive(Debug, Serialize)]
@@ -119,6 +119,7 @@ pub async fn take_screenshot(path: String) -> Result<String, String> {
     }
 }
 
+#[allow(unused_assignments)]
 #[tauri::command]
 pub async fn take_screenshot_markdown(
     owner_file_path: String,

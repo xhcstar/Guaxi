@@ -441,6 +441,7 @@ fn load_kb_structure_relations(kb_name: &str) -> HashMap<String, Vec<String>> {
 
 #[derive(Clone)]
 struct MdSection {
+    #[allow(dead_code)]
     level: u8,
     title: String,
     start_line: u32,
@@ -466,11 +467,11 @@ fn parse_markdown_structure(file_rel: &str, content: &str) -> (Vec<MdSection>, V
     let mut para_start_line: u32 = 0;
     let mut last_section: Option<String> = None;
 
-    let mut flush_para = |end_line: u32,
-                          para_lines: &mut Vec<String>,
-                          para_start_line: &mut u32,
-                          last_section: &Option<String>,
-                          paragraphs: &mut Vec<MdParagraph>| {
+    let flush_para = |end_line: u32,
+                       para_lines: &mut Vec<String>,
+                       para_start_line: &mut u32,
+                       last_section: &Option<String>,
+                       paragraphs: &mut Vec<MdParagraph>| {
         if para_lines.is_empty() {
             return;
         }

@@ -1,4 +1,4 @@
-use super::repoview::{init_db, setup_db};
+use super::repoview::init_db;
 use super::settingview::get_libraries_root;
 use chrono::{DateTime, FixedOffset, Local};
 use rusqlite::{params, OptionalExtension};
@@ -7,21 +7,23 @@ use tauri::{Emitter, Window};
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Seek, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+#[allow(non_snake_case)]
 #[derive(Serialize)]
 pub struct BackupResult {
     pub success: bool,
     pub backupPath: String,
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize)]
 pub struct ExportResult {
     pub success: bool,
@@ -29,6 +31,7 @@ pub struct ExportResult {
     pub exportedCount: usize,
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize)]
 pub struct ImportResult {
     pub success: bool,
@@ -100,6 +103,7 @@ struct BackupManifest {
     deletion_events: Vec<DeletionEventExport>,
 }
 
+#[allow(non_snake_case)]
 #[derive(serde::Serialize, Clone)]
 struct BackupProgress {
     current: u32,
@@ -140,6 +144,7 @@ struct NoteLink {
     context: Option<String>,
 }
 
+#[allow(non_snake_case)]
 #[derive(serde::Serialize, Clone)]
 struct RecoveryProgress {
     current: u32,
@@ -408,6 +413,7 @@ fn rel_path_after_libraries(p: &str) -> Option<String> {
     None
 }
 
+#[allow(non_snake_case)]
 #[tauri::command]
 pub async fn backup_database(
     databaseType: String,
@@ -650,6 +656,7 @@ pub async fn backup_database(
     .map_err(|e| e.to_string())?
 }
 
+#[allow(non_snake_case)]
 #[tauri::command]
 pub async fn export_items(
     databaseType: String,
@@ -790,113 +797,114 @@ fn upsert_imported_file(
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let mut target_id: Option<i32> = None;
-
-    if let Some((id, rev, old_ctime, old_hash, old_deleted)) = existing {
-        let old_rev = rev.unwrap_or(1);
-        let newer_by_rev = src_rev > old_rev;
-        let newer_by_time = !newer_by_rev && src.import_file_create_time >= old_ctime;
-        let hash_diff = match (&src.hash, &old_hash) {
-            (Some(a), Some(b)) => a != b,
-            _ => false,
-        };
-        let deleted_changed = src_deleted != old_deleted;
-        if newer_by_rev || newer_by_time || hash_diff || deleted_changed {
-            debug!(
-                "upsert_imported_file update uuid={} id={} src_rev={} old_rev={} deleted_old={} deleted_new={}",
-                src_uuid,
-                id,
-                src_rev,
-                old_rev,
-                old_deleted,
-                src_deleted
-            );
-            conn.execute(
-                "UPDATE imported_files SET uuid = ?, original_filename = ?, description = ?, library = ?, original_filetype = ?, 
-                 create_time = ?, original_filesize = ?, knowledge_repo = COALESCE(NULLIF(?, ''), knowledge_repo), hash = ?, revision_count = ?, deleted = ? WHERE id = ?",
-                params![
+    let target_id = match existing {
+        Some((id, rev, old_ctime, old_hash, old_deleted)) => {
+            let old_rev = rev.unwrap_or(1);
+            let newer_by_rev = src_rev > old_rev;
+            let newer_by_time = !newer_by_rev && src.import_file_create_time >= old_ctime;
+            let hash_diff = match (&src.hash, &old_hash) {
+                (Some(a), Some(b)) => a != b,
+                _ => false,
+            };
+            let deleted_changed = src_deleted != old_deleted;
+            if newer_by_rev || newer_by_time || hash_diff || deleted_changed {
+                debug!(
+                    "upsert_imported_file update uuid={} id={} src_rev={} old_rev={} deleted_old={} deleted_new={}",
                     src_uuid,
-                    src.import_file_name,
-                    src.description,
-                    src.library,
-                    src.file_type,
-                    src.import_file_create_time,
-                    src.import_file_size,
-                    src.knowledge_repo,
-                    src.hash,
+                    id,
                     src_rev,
-                    src_deleted,
-                    id
-                ],
-            )
-            .map_err(|e| e.to_string())?;
+                    old_rev,
+                    old_deleted,
+                    src_deleted
+                );
+                conn.execute(
+                    "UPDATE imported_files SET uuid = ?, original_filename = ?, description = ?, library = ?, original_filetype = ?, 
+                 create_time = ?, original_filesize = ?, knowledge_repo = COALESCE(NULLIF(?, ''), knowledge_repo), hash = ?, revision_count = ?, deleted = ? WHERE id = ?",
+                    params![
+                        src_uuid,
+                        src.import_file_name,
+                        src.description,
+                        src.library,
+                        src.file_type,
+                        src.import_file_create_time,
+                        src.import_file_size,
+                        src.knowledge_repo,
+                        src.hash,
+                        src_rev,
+                        src_deleted,
+                        id
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            Some(id)
         }
-        target_id = Some(id);
-    } else {
-        let natural_existing: Option<i32> = conn
-            .query_row(
-                "SELECT id FROM imported_files WHERE original_filename = ? AND library = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
-                params![src.import_file_name, src.library, src.knowledge_repo],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
+        None => {
+            let natural_existing: Option<i32> = conn
+                .query_row(
+                    "SELECT id FROM imported_files WHERE original_filename = ? AND library = ? AND knowledge_repo = ? ORDER BY revision_count DESC, id DESC LIMIT 1",
+                    params![src.import_file_name, src.library, src.knowledge_repo],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
 
-        if let Some(id) = natural_existing {
-            debug!(
-                "upsert_imported_file bind uuid={} to existing id={} via natural key",
-                src_uuid,
-                id
-            );
-            conn.execute(
-                "UPDATE imported_files SET uuid = ?, original_filename = ?, description = ?, library = ?, original_filetype = ?, 
+            if let Some(id) = natural_existing {
+                debug!(
+                    "upsert_imported_file bind uuid={} to existing id={} via natural key",
+                    src_uuid,
+                    id
+                );
+                conn.execute(
+                    "UPDATE imported_files SET uuid = ?, original_filename = ?, description = ?, library = ?, original_filetype = ?, 
                  create_time = ?, original_filesize = ?, knowledge_repo = COALESCE(NULLIF(?, ''), knowledge_repo), hash = ?, revision_count = ?, deleted = ? WHERE id = ?",
-                params![
+                    params![
+                        src_uuid,
+                        src.import_file_name,
+                        src.description,
+                        src.library,
+                        src.file_type,
+                        src.import_file_create_time,
+                        src.import_file_size,
+                        src.knowledge_repo,
+                        src.hash,
+                        src_rev,
+                        src_deleted,
+                        id
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+                Some(id)
+            } else {
+                debug!(
+                    "upsert_imported_file insert uuid={} name={} repo={}",
                     src_uuid,
                     src.import_file_name,
-                    src.description,
-                    src.library,
-                    src.file_type,
-                    src.import_file_create_time,
-                    src.import_file_size,
-                    src.knowledge_repo,
-                    src.hash,
-                    src_rev,
-                    src_deleted,
-                    id
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            target_id = Some(id);
-        } else {
-            debug!(
-                "upsert_imported_file insert uuid={} name={} repo={}",
-                src_uuid,
-                src.import_file_name,
-                src.knowledge_repo
-            );
-            conn.execute(
-                "INSERT INTO imported_files (uuid, original_filename, description, library, original_filetype, 
+                    src.knowledge_repo
+                );
+                conn.execute(
+                    "INSERT INTO imported_files (uuid, original_filename, description, library, original_filetype, 
                  create_time, original_filesize, knowledge_repo, hash, revision_count, deleted)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    src_uuid,
-                    src.import_file_name,
-                    src.description,
-                    src.library,
-                    src.file_type,
-                    src.import_file_create_time,
-                    src.import_file_size,
-                    src.knowledge_repo,
-                    src.hash,
-                    src_rev,
-                    src_deleted,
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            target_id = Some(conn.last_insert_rowid() as i32);
+                    params![
+                        src_uuid,
+                        src.import_file_name,
+                        src.description,
+                        src.library,
+                        src.file_type,
+                        src.import_file_create_time,
+                        src.import_file_size,
+                        src.knowledge_repo,
+                        src.hash,
+                        src_rev,
+                        src_deleted,
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+                Some(conn.last_insert_rowid() as i32)
+            }
         }
-    }
+    };
 
     if let Some(file_id) = target_id {
         conn.execute(
@@ -1383,8 +1391,9 @@ pub fn gc_conflict_files() -> Result<(), String> {
     Ok(())
 }
 
+#[allow(non_snake_case)]
 #[tauri::command]
-pub async fn import_items(databaseType: String, importPath: String) -> Result<ImportResult, String> {
+pub async fn import_items(_databaseType: String, importPath: String) -> Result<ImportResult, String> {
     let exe = exe_dir()?;
     let temp = exe
         .join("tmp")
@@ -1445,6 +1454,7 @@ pub async fn import_items(databaseType: String, importPath: String) -> Result<Im
     })
 }
 
+#[allow(non_snake_case)]
 #[tauri::command]
 pub async fn recover_database(
     databaseType: String,

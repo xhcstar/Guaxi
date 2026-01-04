@@ -15,7 +15,6 @@ use base64::engine::general_purpose;
 use svg::node::element::{Rectangle, Text as SvgText};
 use svg::Document;
 use std::path::PathBuf;
-use fs_extra::file::CopyOptions;
 use regex::Regex;
 use reqwest::Client;
 
@@ -57,6 +56,7 @@ struct ConversionProgress {
 pub struct PdfRenderRequest {
     filepath: String,
     curpage: usize,
+    #[allow(dead_code)]
     lastpage: usize,
     #[serde(default)]
     mode: String, // "vector"|"hybrid"|"image"(默认)
@@ -877,6 +877,7 @@ fn handle_pdf(filepath: String, curpage: u32) -> Result<(String, u32), String> {
 }
 
 /// 处理 Markdown 文件
+#[allow(dead_code)]
 fn handle_md(filepath: String, curpage: u32) -> Result<(String, u32), String> {
     // TODO: 实现 Markdown 文件处理逻辑
     // 初始化 Python 解释器
@@ -955,6 +956,7 @@ fn handle_md(filepath: String, curpage: u32) -> Result<(String, u32), String> {
 }
 
 /// 处理文本文件
+#[allow(dead_code)]
 fn handle_txt(filepath: String, curpage: u32) -> Result<(String, u32), String> {
     // TODO: 实现文本文件处理逻辑
     // 初始化 Python 解释器
@@ -1033,6 +1035,7 @@ fn handle_txt(filepath: String, curpage: u32) -> Result<(String, u32), String> {
 }
 
 /// 处理 Word 文件
+#[allow(dead_code)]
 fn handle_docx(filepath: String, curpage: u32) -> Result<(String, u32), String> {
     // TODO: 实现 Word 文件处理逻辑
     // 初始化 Python 解释器
