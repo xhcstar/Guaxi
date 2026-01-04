@@ -41,7 +41,7 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
-          <Icon class="header-icon" icon="mdi:file-document-edit-outline" width="20" height="20" @click="openTemplateManager" />
+          <n-icon class="header-icon" size="20" :component="Box20Regular" @click="openTemplateManager" />
         </template>
         模板管理
       </n-tooltip>
@@ -239,7 +239,8 @@ import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
   NotebookSection24Regular,
-  BookAdd20Regular
+  BookAdd20Regular,
+  Box20Regular
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 
