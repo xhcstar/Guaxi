@@ -1,4 +1,5 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { computed, h } from 'vue'
+import { createRouter, createWebHistory, useRoute } from 'vue-router'
 import GuaxiHomePage from '../views/GuaxiHomePage.vue'
 import GuaxiChatPage from '../views/GuaxiChatPage.vue'
 import GuaxiBrainPage from '../views/GuaxiBrainPage.vue'
@@ -11,6 +12,40 @@ import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
 import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
 import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
+
+import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumApp.vue'
+import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
+import LanguageTranslatorApp from '../components/ApplicationViewComponent/apps/LanguageTranslatorApp.vue'
+import PlaceholderApp from '../components/ApplicationViewComponent/apps/PlaceholderApp.vue'
+
+const APP_COMPONENT_MAP = {
+  'life-album': LifeAlbumApp,
+  'music-player': MusicPlayerApp,
+  'language-translator': LanguageTranslatorApp,
+}
+
+const GuaxiAppWindow = {
+  name: 'GuaxiAppWindow',
+  setup() {
+    const route = useRoute()
+    const appId = computed(() => String(route.params?.appId || ''))
+    const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
+
+    return () =>
+      h(
+        'div',
+        {
+          style: {
+            height: '100vh',
+            padding: '16px',
+            boxSizing: 'border-box',
+            background: '#f5f5f5',
+          },
+        },
+        [h(Comp.value)],
+      )
+  },
+}
 
 
 export const routes = [
@@ -83,6 +118,11 @@ export const routes = [
     path: '/kb-manager',
     name: 'kb-manager',
     component: GuaxiKnowledgeBaseManager,
+  },
+  {
+    path: '/app/:appId',
+    name: 'app-window',
+    component: GuaxiAppWindow,
   },
 ];
 

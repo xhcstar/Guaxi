@@ -148,6 +148,7 @@ async fn main() {
             commands::kbmeta::kbmeta_read_file_meta,
             commands::kbmeta::kbmeta_save_file_meta,
             commands::templateview::create_template_manager_window,
+            commands::templateview::open_application_window,
             commands::templateview::emit_template_insert,
             commands::templateview::list_templates,
             commands::templateview::read_template,
