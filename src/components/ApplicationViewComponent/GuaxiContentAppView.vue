@@ -28,8 +28,8 @@
 
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, createApp, h } from "vue"
-import naive from "naive-ui"
+import { ref, computed, onBeforeUnmount } from "vue"
+import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiSidebarAppView from "./GuaxiSidebarAppView.vue"
 import GuaxiCenterAppView from "./GuaxiCenterAppView.vue"
@@ -120,11 +120,11 @@ const apps = [
   },
   {
     id: 'work-timer',
-    name: '专注计时',
+    name: '简历生成',
     category: 'work',
     categoryLabel: '工作类',
-    description: '番茄钟计时，提高专注效率',
-    icon: '⏱️',
+    description: '根据模板快速生成与导出简历',
+    icon: '📝',
     color: 'linear-gradient(135deg, #fddb92, #d1fdff)',
     component: PlaceholderApp
   }
@@ -132,39 +132,15 @@ const apps = [
 
 const selectedCategory = ref('life');
 
-const handleOpenApp = (app) => {
-  const win = window.open('', '_blank', 'width=1024,height=720')
-  if (!win) return
-
-  win.document.title = app.name
-  win.document.body.style.margin = '0'
-  win.document.body.style.height = '100vh'
-  win.document.body.style.background = '#f5f5f5'
-
-  const container = win.document.createElement('div')
-  container.id = 'guaxi-app-window-root'
-  container.style.height = '100vh'
-  container.style.boxSizing = 'border-box'
-  win.document.body.appendChild(container)
-
-  const component = app.component || PlaceholderApp
-
-  const appInstance = createApp({
-    render() {
-      return h('div', {
-        style: {
-          height: '100%',
-          padding: '16px',
-          boxSizing: 'border-box'
-        }
-      }, [
-        h(component)
-      ])
-    }
-  })
-
-  appInstance.use(naive)
-  appInstance.mount(container)
+const handleOpenApp = async (app) => {
+  try {
+    await invoke('open_application_window', {
+      appId: app.id,
+      title: app.name,
+    })
+  } catch (err) {
+    console.error('打开应用窗口失败:', err)
+  }
 }
 
 const leftSiderbarWidth = ref(350); // 默认宽度

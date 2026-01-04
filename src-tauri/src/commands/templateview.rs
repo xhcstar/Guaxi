@@ -116,6 +116,41 @@ pub async fn create_template_manager_window(
 }
 
 #[tauri::command]
+pub async fn open_application_window(
+    app: tauri::AppHandle,
+    app_id: String,
+    title: String,
+) -> Result<(), String> {
+    let app_id = app_id.trim().to_string();
+    if app_id.is_empty() {
+        return Err("app_id 不能为空".to_string());
+    }
+
+    let label = format!("app-{}", app_id);
+
+    if let Some(w) = app.get_webview_window(&label) {
+        w.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+        w.set_focus().ok();
+        return Ok(());
+    }
+
+    let url = WebviewUrl::App(format!("/app/{}", app_id).into());
+
+    let window = WebviewWindowBuilder::new(&app, &label, url)
+        .title(&title)
+        .inner_size(1024.0, 720.0)
+        .min_inner_size(820.0, 560.0)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("创建窗口失败: {}", e))?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    window.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+    window.set_focus().ok();
+    Ok(())
+}
+
+#[tauri::command]
 pub fn emit_template_insert(app: AppHandle, content: String) -> Result<(), String> {
     let payload = serde_json::json!({ "content": content });
     app.emit("template_insert_event", payload).map_err(|e| e.to_string())
