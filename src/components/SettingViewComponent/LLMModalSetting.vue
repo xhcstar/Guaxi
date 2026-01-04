@@ -3,7 +3,7 @@
     <n-card title="大模型" size="small">
       <n-space vertical size="large" style="width: 100%">
         <n-alert type="info" :show-icon="true">
-          访问秘钥将写入本地配置文件（`config/guaxi_config.json`），用于后端调用对应大模型服务。
+          配置大模型秘钥，访问秘钥用于调用对应大模型服务。
         </n-alert>
 
         <n-form label-placement="left" label-width="auto" :show-require-mark="false">
@@ -60,23 +60,23 @@
           <div class="status-title">当前状态</div>
           <n-list hoverable style="max-width: 100%">
             <n-list-item>
-              <template #prefix>ChatGPT</template>
+              <template #prefix><span class="status-prefix">ChatGPT</span></template>
               <template #suffix>{{ form.chatgpt_api_key?.trim() ? '已配置' : '未配置' }}</template>
             </n-list-item>
             <n-list-item>
-              <template #prefix>DeepSeek</template>
+              <template #prefix><span class="status-prefix">DeepSeek</span></template>
               <template #suffix>{{ form.deepseek_api_key?.trim() ? '已配置' : '未配置' }}</template>
             </n-list-item>
             <n-list-item>
-              <template #prefix>Qwen</template>
+              <template #prefix><span class="status-prefix">Qwen</span></template>
               <template #suffix>{{ form.qwen_api_key?.trim() ? '已配置' : '未配置' }}</template>
             </n-list-item>
             <n-list-item>
-              <template #prefix>Kimi</template>
+              <template #prefix><span class="status-prefix">Kimi</span></template>
               <template #suffix>{{ form.kimi_api_key?.trim() ? '已配置' : '未配置' }}</template>
             </n-list-item>
             <n-list-item>
-              <template #prefix>豆包</template>
+              <template #prefix><span class="status-prefix">豆包</span></template>
               <template #suffix>{{ form.doubao_api_key?.trim() ? '已配置' : '未配置' }}</template>
             </n-list-item>
           </n-list>
@@ -181,5 +181,11 @@ onMounted(loadConfig)
 .status-title {
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+.status-prefix {
+  display: inline-block;
+  min-width: 72px;
+  white-space: nowrap;
 }
 </style>

@@ -37,6 +37,7 @@
 
     <!-- 右键菜单 -->
     <div v-if="showMenu" class="context-menu" :style="{ top: menuTop, left: menuLeft }">
+      <div class="menu-item" @click="renameChatItem">重命名</div>
       <div class="menu-item" @click="saveChatItem">保存对话</div>
       <div class="menu-item" @click="deleteChatItem">删除会话</div>
     </div>
@@ -85,12 +86,59 @@ const getTopicSessionId = (topic) => {
   return '';
 };
 
+const persistSelectedChat = async () => {
+  if (!selectedChat.value || !activeChat.value) return;
+
+  const content = Array.isArray(selectedChat.value?.topic) ? selectedChat.value.topic : [];
+  const sessionId = getTopicSessionId(content);
+  const topicTitle = (selectedChat.value?.title ?? '').toString().trim() || null;
+
+  await invoke('save_chat_session', {
+    request: {
+      model_id: activeChat.value.id,
+      model_name: activeChat.value?.name || '',
+      topic_id: selectedChat.value.topicid,
+      session_id: sessionId || null,
+      topic_title: topicTitle,
+      content,
+    },
+  });
+};
+
+const renameChatItem = async () => {
+  try {
+    if (!selectedChat.value || !activeChat.value) return;
+
+    const current = (selectedChat.value?.title ?? '').toString().trim();
+    const nextTitle = window.prompt('重命名会话', current || '');
+    if (nextTitle === null) return;
+
+    const t = nextTitle.toString().trim();
+    if (t) {
+      selectedChat.value.title = t;
+      selectedChat.value.__titleLocked = true;
+    } else {
+      selectedChat.value.title = '';
+      selectedChat.value.__titleLocked = false;
+    }
+
+    await persistSelectedChat();
+    message.success('已更新会话名称');
+  } catch (e) {
+    console.error('重命名失败:', e);
+    message.error('重命名失败');
+  } finally {
+    showMenu.value = false;
+  }
+};
+
 const saveChatItem = async () => {
   try {
     if (!selectedChat.value || !activeChat.value) return;
 
     const content = Array.isArray(selectedChat.value?.topic) ? selectedChat.value.topic : [];
     const sessionId = getTopicSessionId(content);
+    const topicTitle = (selectedChat.value?.title ?? '').toString().trim() || null;
 
     const filePath = await invoke('export_chat_session', {
       request: {
@@ -98,6 +146,7 @@ const saveChatItem = async () => {
         model_name: activeChat.value?.name || '',
         topic_id: selectedChat.value.topicid,
         session_id: sessionId,
+        topic_title: topicTitle,
         content,
       }
     })
@@ -161,8 +210,8 @@ onUnmounted(() => {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  border: 1px solid #ddd;
-  background: #fff;
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   overflow-y: auto;
 }
 
@@ -170,9 +219,10 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 15px;
-  border-bottom: 1px solid #ddd;
-  background-color: #f8f9fa;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
   gap: 8px;
 }
 
@@ -184,18 +234,21 @@ onUnmounted(() => {
 .chat-item {
   display: flex;
   align-items: center;
-  padding: 10px 15px;
+  padding: 10px 12px;
   cursor: pointer;
-  border-bottom: 1px solid #f1f1f1;
-  transition: background-color 0.3s ease;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+  border-radius: 12px;
+  margin: 6px 10px;
+  border: 1px solid transparent;
 }
 
 .chat-item.active {
-  background-color: #e6f7ff;
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.25);
 }
 
 .chat-item:hover {
-  background-color: #f5f5f5;
+  background: rgba(15, 23, 42, 0.04);
 }
 
 .chat-avatar {
@@ -237,21 +290,23 @@ onUnmounted(() => {
 /* 右键菜单 */
 .context-menu {
   position: absolute;
-  background: white;
-  border: 1px solid #ccc;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-  padding: 5px 0;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  border-radius: 10px;
+  padding: 6px;
   z-index: 1000;
+  min-width: 140px;
 }
 
 .menu-item {
-  padding: 10px 20px;
+  padding: 9px 12px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  border-radius: 8px;
 }
 
 .menu-item:hover {
-  background: #f2f2f2;
+  background: rgba(15, 23, 42, 0.06);
 }
 </style>

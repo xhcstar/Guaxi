@@ -40,7 +40,7 @@ async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
         .map(PathBuf::from)
         .unwrap_or_default();
     // info!("Received Markdown content: {}", req.content);
-    info!("Base path: {:?}", base_path);
+    // info!("Base path: {:?}", base_path);
     let mut mappings = Vec::new();
     let mut processed = req.content.clone();
 
