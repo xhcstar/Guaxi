@@ -1,5 +1,5 @@
 use super::super::settingview::get_libraries_root;
-use chrono::{DateTime, Local};
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};

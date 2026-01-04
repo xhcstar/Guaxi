@@ -272,11 +272,10 @@ async fn main() {
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
                         .with_shortcuts(["ctrl+alt+z"])?
-                        .with_handler(|app, shortcut, event| {
+                        .with_handler(|_app, shortcut, event| {
                             if event.state == ShortcutState::Pressed {
                                 info!("Shortcut pressed: {:?}", shortcut);
                                 // 创建异步任务处理截图
-                                let app_handle = app.clone();
                                 tauri::async_runtime::spawn(async move {
                                     match commands::guaxiscreencap::trigger_screenshot_tool_once().await
                                     {

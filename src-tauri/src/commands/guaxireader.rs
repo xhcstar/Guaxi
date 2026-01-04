@@ -1,6 +1,5 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -216,7 +215,7 @@ pub fn save_notes_to_file_no_append(
 }
 
 #[tauri::command]
-pub fn load_existing_notes(notes_dir: String, file_name: String) -> Result<NoteResponse, String> {
+pub fn load_existing_notes(notes_dir: String, _file_name: String) -> Result<NoteResponse, String> {
     use std::fs;
 
     // 确保笔记目录存在
@@ -343,7 +342,6 @@ pub async fn update_notes_file(
     tokio::fs::write(&file_path, json).await.map_err(|e| e.to_string())?;
 
     let conn = init_db().map_err(|e| e.to_string())?;
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let imported_id_val: i32 = if import_file_id != 0 {
         import_file_id
     } else {

@@ -46,6 +46,7 @@ pub struct CommitFile {
     deletions: usize,
 }
 
+#[allow(dead_code)]
 #[tauri::command]
 pub fn is_git_repository(path: String) -> bool {
     match Repository::discover(&path) {
@@ -478,6 +479,7 @@ pub fn create_branch(path: String, branch_name: String) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 #[tauri::command]
 pub fn get_staged_files(path: String) -> Result<Vec<GitChange>, String> {
     info!("Getting staged files for path: {}", path);
@@ -580,7 +582,7 @@ pub fn unstage_file(path: String, file_path: String) -> Result<(), String> {
     // 如果文件在HEAD中存在，则恢复到HEAD版本
     if let Ok(entry) = head_tree.get_path(Path::new(&file_path)) {
         // 创建 IndexEntry
-        let mut index_entry = IndexEntry {
+        let index_entry = IndexEntry {
             ctime: git2::IndexTime::new(0, 0),
             mtime: git2::IndexTime::new(0, 0),
             dev: 0,

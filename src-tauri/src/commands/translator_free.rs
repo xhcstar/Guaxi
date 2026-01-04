@@ -17,6 +17,7 @@ pub struct TranslationResult {
     pub error: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct TranslationResponse {
     pub text: String,

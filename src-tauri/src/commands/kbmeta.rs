@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct KbStats {
@@ -336,11 +336,11 @@ fn scan_markdown_structure(file_rel: &str, content: &str) -> Vec<FileStructureNo
     let mut para_start_line: u32 = 0;
     let mut last_section: Option<String> = None;
 
-    let mut flush_para = |end_line: u32,
-                          para_lines: &mut Vec<String>,
-                          para_start_line: &mut u32,
-                          last_section: &Option<String>,
-                          out: &mut Vec<FileStructureNode>| {
+    let flush_para = |end_line: u32,
+                       para_lines: &mut Vec<String>,
+                       para_start_line: &mut u32,
+                       last_section: &Option<String>,
+                       out: &mut Vec<FileStructureNode>| {
         if para_lines.is_empty() {
             return;
         }

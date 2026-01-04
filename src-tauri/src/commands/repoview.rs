@@ -1294,7 +1294,7 @@ pub fn gc_deleted_items() -> Result<(), String> {
 
 #[tauri::command]
 pub fn add_resource(resource: ResourceInput) -> Result<(), String> {
-    let mut conn = init_db().map_err(|e| e.to_string())?;
+    let conn = init_db().map_err(|e| e.to_string())?;
 
     let uuid = Uuid::new_v4().to_string();
     let device_uuid = get_device_id();

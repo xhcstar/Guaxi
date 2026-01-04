@@ -43,10 +43,13 @@ struct GuaxiWebClipperChunkedMeta {
     pub total_chunks: usize,
     #[serde(rename = "originalLength")]
     pub original_length: usize,
+    #[allow(dead_code)]
     #[serde(default)]
     pub knowledge_base: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub tags: Vec<String>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub file_repo: String,
 }
@@ -86,6 +89,7 @@ pub struct ExtensionRequest {
     pub url: String,
     pub title: String,
     pub html: String,
+    #[allow(dead_code)]
     pub timestamp: String,
     pub mode: String,
 }
@@ -95,6 +99,7 @@ pub struct ExtensionRequest {
 struct ChunkedMeta {
     pub url: String,
     pub title: String,
+    #[allow(dead_code)]
     pub timestamp: String,
     pub mode: String,
     #[serde(rename = "fileId", alias = "file_id")]
@@ -117,6 +122,7 @@ pub struct ExtensionResponse {
 struct UploadState {
     meta: ChunkedMeta,
     received_chunks: usize,
+    #[allow(dead_code)]
     temp_file: Option<File>,
     received_bytes: usize, // 跟踪已接收字节数
 }
@@ -713,7 +719,7 @@ fn cleanup_temp_file(file_id: &str) {
 // 处理html文件信息并触发事件
 fn process_and_emit_browser_saved_html_info(
     meta: &ChunkedMeta,
-    file_content: &[u8],
+    _file_content: &[u8],
     save_path: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {
@@ -1090,7 +1096,7 @@ fn save_webclipper_final_file(meta: &ChunkedMeta, content: &[u8]) -> Result<Path
 
 fn process_and_emit_webclipper_info(
     meta: &ChunkedMeta,
-    file_content: &[u8],
+    _file_content: &[u8],
     save_path: &Path,
     app_handle: &AppHandle,
 ) -> Result<(), String> {

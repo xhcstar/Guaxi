@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 // ==================== 错误类型定义 ====================
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum MarkdownError {
     FormatError(String),
@@ -933,6 +934,7 @@ pub async fn markdown_stats(content: String) -> Result<MarkdownStats, MarkdownEr
 }
 
 // 快速格式化接口 - 使用默认选项
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn markdown_format_quick(content: String) -> Result<FormatResponse, MarkdownError> {
     let request = FormatRequest {

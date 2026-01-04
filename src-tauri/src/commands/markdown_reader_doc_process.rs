@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use serde::Serialize;
+use tracing::info;
 
 #[derive(Debug, Serialize)]
 pub struct MarkdownResponse {

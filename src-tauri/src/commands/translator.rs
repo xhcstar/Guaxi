@@ -20,6 +20,7 @@ pub struct TranslationResult {
 }
 
 // 单条翻译结果结构（兼容旧版）
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct TranslationResponse {
     pub text: String,
@@ -52,6 +53,7 @@ impl From<serde_json::Error> for TranslationError {
 }
 
 // 腾讯批量翻译响应结构
+#[allow(non_snake_case)]
 #[derive(Debug, Deserialize)]
 struct TencentBatchResponse {
     Response: TencentBatchResponseInner,
@@ -63,10 +65,12 @@ struct TencentBatchResponse {
 struct TencentBatchResponseInner {
     #[serde(rename = "TargetTextList", default)]
     target_text_list: Vec<String>,
+    #[allow(dead_code)]
     #[serde(rename = "RequestId", default)]
     request_id: String,
 }
 
+#[allow(non_snake_case)]
 #[derive(Debug, Deserialize)]
 struct TencentError {
     #[serde(default)]
@@ -325,6 +329,7 @@ async fn try_tencent_batch_translate(
 }
 
 // 兼容旧版的单条翻译接口
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn translate_single_text(
     text: String,

@@ -1,6 +1,6 @@
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcher;
-use grep_searcher::{sinks, Searcher, SearcherBuilder};
+use grep_searcher::{sinks, SearcherBuilder};
 use ignore::WalkBuilder;
 use lazy_static::lazy_static;
 use lru::LruCache;
@@ -8,13 +8,13 @@ use parking_lot::RwLock;
 use rayon::prelude::*;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use std::time::Instant;
+use tracing::info;
 
 // 辅助函数：字节索引转字符索引
 fn byte_to_char_indices(line: &str, start: usize, end: usize) -> (usize, usize) {
@@ -136,7 +136,7 @@ pub async fn fd_search(
     search_id: Option<String>,
 ) -> Result<(Vec<SearchResult>, bool), String> {
     info!("fd_search called with pattern: {}, path: {}", pattern, path);
-    let start_time = Instant::now();
+    let _start_time = Instant::now();
     let path = Path::new(&path);
 
     if !path.exists() {

@@ -1,13 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::command;
-use chrono::{DateTime, Utc};
-use reqwest;
-use rss::Channel;
-use std::error::Error;
+use chrono::Utc;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
-use serde_json::Value;
 
 // 全局状态
 static ARTICLES: Lazy<Mutex<Vec<Article>>> = Lazy::new(|| Mutex::new(Vec::new()));
@@ -47,6 +42,7 @@ pub struct FeedSource {
     pub enabled: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchQuery {
     pub query: String,
@@ -321,12 +317,13 @@ pub async fn add_feed(url: String, name: String, category: String) -> Result<(),
 }
 
 #[command]
-pub async fn fetch_rss_feed(url: String) -> Result<Vec<Article>, String> {
+pub async fn fetch_rss_feed(_url: String) -> Result<Vec<Article>, String> {
     // 在实际应用中，这里会从RSS源获取真实数据
     // 由于网络请求需要异步处理，这里返回模拟数据
     Ok(Vec::new())
 }
 
+#[allow(deprecated)]
 #[command]
 pub async fn get_featured_articles() -> Result<Vec<Article>, String> {
     let articles_lock = ARTICLES.lock().unwrap();
