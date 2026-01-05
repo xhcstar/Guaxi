@@ -1,11 +1,11 @@
 <template>
   <div class="right-sider-content">
-    <SideNavigatorErrorView />
+
   </div>
 </template>
 
 <script setup>
-import SideNavigatorErrorView from "./SideNavigatorErrorView.vue";
+
 </script>
 
 <style scope>

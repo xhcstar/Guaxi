@@ -1,23 +1,23 @@
 <template>
   <div class="guaxi-content">
-    <n-layout has-sider>
-      <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
-        :collapsed-width="0" bordered content-style="padding: 0px;">
+    <div class="brain-layout">
+      <aside class="brain-sider brain-sider-left"
+        :style="{ width: isLeftSiderCollapsed ? '0px' : leftSiderbarWidth + 'px' }">
         <GuaxiSidebarBrainView />
-        <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
-      </n-layout-sider>
+        <div v-show="!isLeftSiderCollapsed" class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+      </aside>
 
-      <GuaxiCenterBrainView />
+      <main class="brain-center">
+        <GuaxiCenterBrainView />
+      </main>
 
-      <!-- <n-layout has-sider sider-placement="right"> -->
-      <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-        :collapsed-width="0" bordered content-style="padding: 0px;">
-        <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
-          <GuaxiRightContentBrainView />
+      <aside class="brain-sider brain-sider-right"
+        :style="{ width: isRightSiderCollapsed ? '0px' : rightSiderbarWidth + 'px' }">
+        <div v-show="!isRightSiderCollapsed" class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
         </div>
-      </n-layout-sider>
-      <!-- </n-layout> -->
-    </n-layout>
+        <GuaxiRightContentBrainView />
+      </aside>
+    </div>
   </div>
 </template>
 
@@ -107,27 +107,59 @@ onBeforeUnmount(() => {
 
 
 <style scoped>
-.n-layout-sider {
-  background: rgba(239, 243, 239, 0.3);
-}
-
-.n-layout-content {
-  background: rgba(239, 243, 239, 0.3);
-}
-
 .guaxi-content {
   flex: 1 1 auto;
-  /* 填充剩余空间 */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background-color: #ffffff;
-  /* 示例背景色 */
-  overflow-y: auto;
-  /* 如果内容超出，允许垂直滚动 */
+  overflow: hidden;
   margin: 0;
   padding: 0;
   height: 100%;
 }
+
+.brain-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+.brain-center {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(239, 243, 239, 0.3);
+}
+
+.brain-sider {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: rgba(239, 243, 239, 0.3);
+}
+
+.sider-resize-handle {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.n-layout-content__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 
 .sider-resize-handle {
   position: absolute;
@@ -140,13 +172,14 @@ onBeforeUnmount(() => {
 }
 
 .sider-resize-handle-right {
-  position: relative;
+  position: absolute;
   top: 0;
   left: 0;
   width: 3px;
   height: 100%;
   cursor: ew-resize;
   background-color: #f8fdfa;
+  z-index: 2;
 }
 </style>
 

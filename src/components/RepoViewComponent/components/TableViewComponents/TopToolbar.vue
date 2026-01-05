@@ -1,0 +1,180 @@
+<template>
+  <div class="top-toolbar">
+    <n-space justify="space-between" align="center" :size="8">
+      <n-space class="toolbar-left" :size="4">
+        <!-- 转换任务列表按钮 -->
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button text @click="$emit('toggle-task-list')" size="small"
+              :type="categorizedProgresses.all.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+              <template #icon>
+                <n-icon :component="TasksApp20Regular" :size="18" />
+              </template>
+              <n-badge v-if="categorizedProgresses.all.length > 0"
+                :value="categorizedProgresses.all.length" class="badge" />
+            </n-button>
+          </template>
+          任务列表 ({{ categorizedProgresses.all.length }})
+        </n-tooltip>
+
+        <!-- 备份任务按钮 -->
+        <n-dropdown trigger="click" :options="backupOptions" @select="(key) => $emit('backup-database', key)">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button text size="small"
+                :type="categorizedProgresses.backup.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+                <template #icon>
+                  <n-icon :component="SaveSync20Regular" :size="18" />
+                </template>
+
+              </n-button>
+            </template>
+            备份资料库 ({{ categorizedProgresses.backup.length }})
+          </n-tooltip>
+        </n-dropdown>
+
+        <!-- 恢复任务按钮 -->
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button text @click="$emit('recover-database')" size="small"
+              :type="categorizedProgresses.recovery.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+              <template #icon>
+                <n-icon :component="BoxArrowLeft20Regular" :size="18" />
+              </template>
+
+            </n-button>
+          </template>
+          从备份恢复 ({{ categorizedProgresses.recovery.length }})
+        </n-tooltip>
+
+        <!-- 导入任务按钮 -->
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button text @click="$emit('import-items')" size="small"
+              :type="categorizedProgresses.import.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+              <template #icon>
+                <n-icon :component="TextBulletListAdd20Filled" :size="18" />
+              </template>
+
+            </n-button>
+          </template>
+          导入条目 ({{ categorizedProgresses.import.length }})
+        </n-tooltip>
+
+        <!-- 导出任务按钮 -->
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button text @click="$emit('export-items')" size="small"
+              :type="categorizedProgresses.export.length > 0 ? 'primary' : 'default'" class="toolbar-button">
+              <template #icon>
+                <n-icon :component="SignOut20Regular" :size="18" />
+              </template>
+
+            </n-button>
+          </template>
+          导出条目 ({{ categorizedProgresses.export.length }})
+        </n-tooltip>
+      </n-space>
+
+      <!-- 右侧空间保留 -->
+      <n-space></n-space>
+    </n-space>
+  </div>
+</template>
+
+<script setup>
+import { NIcon, NButton, NTooltip, NBadge, NSpace, NDropdown } from 'naive-ui'
+import {
+  TasksApp20Regular,
+  SaveSync20Regular,
+  BoxArrowLeft20Regular,
+  TextBulletListAdd20Filled,
+  SignOut20Regular
+} from '@vicons/fluent'
+
+defineProps({
+  progresses: {
+    type: Array,
+    default: () => []
+  },
+  categorizedProgresses: {
+    type: Object,
+    default: () => ({
+      all: [],
+      conversion: [],
+      backup: [],
+      recovery: [],
+      import: [],
+      export: []
+    })
+  }
+})
+
+defineEmits([
+  'toggle-task-list',
+  'backup-database',
+  'recover-database',
+  'import-items',
+  'export-items'
+])
+
+const backupOptions = [
+  { label: '备份当前库', key: 'current' },
+  { label: '备份所有库', key: 'all' }
+]
+</script>
+
+<style scoped>
+.top-toolbar {
+  padding: 8px 16px;
+  background-color: #fafafa;
+  border-bottom: 1px solid #e8e8e8;
+  height: auto;
+  min-height: 40px;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+}
+
+.toolbar-button {
+  color: #5a5a5a;
+  transition: all 0.2s ease;
+  border-radius: 6px;
+  padding: 4px 6px;
+  position: relative;
+  height: 32px;
+  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar-button:hover {
+  background-color: #f0f4ff;
+  color: #409EFF;
+}
+
+.toolbar-button[type="primary"] {
+  color: #409EFF;
+}
+
+.badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+}
+
+:deep(.n-badge-sup) {
+  background-color: #ff4d4f;
+  color: white;
+  font-size: 11px;
+  min-width: 18px;
+  height: 18px;
+  line-height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+</style>

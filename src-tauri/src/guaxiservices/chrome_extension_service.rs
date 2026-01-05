@@ -14,6 +14,43 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tracing::{error, info, warn};
 
+
+#[derive(Debug, Deserialize)]
+pub struct GuaxiWebClipperRequest {
+    pub url: String,
+    pub title: String,
+    pub description: String,
+    pub content: String,
+    pub timestamp: String,
+    pub mode: String,
+    #[serde(rename = "knowledgeBase")]
+    pub knowledge_base: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(rename = "fileRepo")]
+    pub file_repo: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuaxiWebClipperChunkedMeta {
+    pub url: String,
+    pub title: String,
+    pub timestamp: String,
+    pub mode: String,
+    #[serde(rename = "fileId")]
+    pub file_id: String,
+    #[serde(rename = "totalChunks")]
+    pub total_chunks: usize,
+    #[serde(rename = "originalLength")]
+    pub original_length: usize,
+    #[serde(default)]
+    pub knowledge_base: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub file_repo: String,
+}
+
 // 文件信息结构
 #[derive(Serialize, Debug)]
 struct BrowserSavedHtmlInfo {
@@ -23,6 +60,21 @@ struct BrowserSavedHtmlInfo {
     modify_time: u64,
     file_type: String,
     knowledge_repo: String,
+    file_repo: String,
+    tags: Vec<String>,
+    description: String,
+    file_size: u64,
+}
+
+#[derive(Serialize, Debug)]
+struct GuaxiWebClipperInfo {
+    file_name: String,
+    file_path: String,
+    create_time: String,
+    modify_time: String,
+    file_type: String,
+    knowledge_repo: String,
+    file_repo: String,
     tags: Vec<String>,
     description: String,
     file_size: u64,
@@ -82,7 +134,11 @@ pub fn config(cfg: &mut web::ServiceConfig, state: web::Data<SharedState>) {
                 .service(handle_extension_data)
                 .service(handle_chunked_meta)
                 .service(handle_chunk_upload)
-                .service(handle_chunked_complete),
+                .service(handle_chunked_complete)
+                .service(handle_webclipper_save)
+                .service(handle_webclipper_meta)
+                .service(handle_webclipper_chunk)
+                .service(handle_webclipper_complete),
         );
 }
 
@@ -700,6 +756,7 @@ fn process_and_emit_browser_saved_html_info(
         tags: vec!["webpage".to_string()],
         description: meta.title.clone(),
         file_size: file_metadata.len(),
+        file_repo: "default".to_string(),
     };
 
     info!("File info: {:?}", file_info);
@@ -712,5 +769,394 @@ fn process_and_emit_browser_saved_html_info(
         )
         .map_err(|e| format!("Failed to emit event: {}", e))?;
     info!("Emitted add_browser_saved_html_file_event with file info: {:?}", file_info);
+    Ok(())
+}
+
+
+// GuaxiWebClipper普通保存接口
+#[post("/webclipper/save")]
+async fn handle_webclipper_save(req: web::Json<GuaxiWebClipperRequest>, state: web::Data<SharedState>) -> impl Responder {
+    info!("Received GuaxiWebClipper data for URL: {}", req.url);
+    info!("Title: {}, Description: {}, Mode: {}, knowledgeBase: {}, fileRepo: {}, tags: {:?}, timestamp: {}", 
+        req.title, req.description, req.mode, req.knowledge_base, req.file_repo, req.tags, req.timestamp);
+
+    if req.content.is_empty() {
+        return HttpResponse::BadRequest().json(error_response("Empty content"));
+    }
+
+    let save_dir = match prepare_webclipper_save_dir() {
+        Ok(dir) => dir,
+        Err(e) => return e,
+    };
+
+    let (filename, result) = match save_webclipper_content(&req, &save_dir) {
+        Ok(res) => res,
+        Err(e) => return e,
+    };
+
+    let save_path = save_dir.join(&filename);
+    let save_path_ref = save_path.as_path();
+    // 处理文件信息并触发事件
+    if let Some(app_handle) = state.get_app_handle() {
+        if let Err(e) = process_and_emit_webclipper_info_for_md(req, &save_path_ref, &app_handle) {
+            error!("Failed to emit event: {}", e);
+        }
+    }
+
+    match result {
+        Ok(_) => HttpResponse::Ok().json(success_response(
+            "Content saved successfully",
+            Some(save_dir.join(filename)),
+        )),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(error_response(&format!("Failed to save content: {}", e))),
+    }
+}
+
+// GuaxiWebClipper元数据接口
+#[post("/webclipper/save_meta")]
+async fn handle_webclipper_meta(
+    req: web::Json<GuaxiWebClipperChunkedMeta>,
+    store: web::Data<UploadStore>,
+) -> impl Responder {
+    // 验证必填字段
+    if req.url.is_empty() {
+        return HttpResponse::BadRequest().json(error_response("URL cannot be empty"));
+    }
+    if req.title.is_empty() {
+        return HttpResponse::BadRequest().json(error_response("Title cannot be empty"));
+    }
+    if req.file_id.is_empty() {
+        return HttpResponse::BadRequest().json(error_response("File ID cannot be empty"));
+    }
+    if req.total_chunks == 0 || req.original_length == 0 {
+        return HttpResponse::BadRequest().json(error_response("Invalid chunk parameters"));
+    }
+
+    // 创建临时目录
+    let temp_dir = PathBuf::from(get_libraries_root()).join("temp_webclipper");
+    if let Err(e) = fs::create_dir_all(&temp_dir) {
+        return HttpResponse::InternalServerError()
+            .json(error_response(&format!("Failed to create temp dir: {}", e)));
+    }
+
+    // 创建临时文件
+    let temp_path = temp_dir.join(&req.file_id);
+    let temp_file = match OpenOptions::new().create(true).write(true).open(&temp_path) {
+        Ok(file) => file,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(error_response(&format!("Failed to create temp file: {}", e)));
+        }
+    };
+
+    // 存储上传状态
+    let mut store = store.lock().unwrap();
+    store.insert(
+        req.file_id.clone(),
+        UploadState {
+            meta: ChunkedMeta {
+                url: req.url.clone(),
+                title: req.title.clone(),
+                timestamp: req.timestamp.clone(),
+                mode: req.mode.clone(),
+                file_id: req.file_id.clone(),
+                total_chunks: req.total_chunks,
+                original_length: req.original_length,
+            },
+            received_chunks: 0,
+            temp_file: Some(temp_file),
+            received_bytes: 0,
+        },
+    );
+
+    HttpResponse::Ok().json(success_response("Meta received", None))
+}
+
+// GuaxiWebClipper分块上传接口
+#[post("/webclipper/save_chunk")]
+async fn handle_webclipper_chunk(
+    req: HttpRequest,
+    chunk: web::Bytes,
+    store: web::Data<UploadStore>,
+) -> HttpResponse {
+    // 验证头信息
+    let file_id = match req.headers().get("X-File-ID") {
+        Some(header) => header.to_str().unwrap_or(""),
+        None => return HttpResponse::BadRequest().json(error_response("Missing X-File-ID header")),
+    };
+
+    let chunk_index: usize = match req.headers().get("X-Chunk-Index").and_then(|h| h.to_str().ok()) {
+        Some(idx) => idx.parse().unwrap_or(0),
+        None => return HttpResponse::BadRequest().json(error_response("Missing X-Chunk-Index header")),
+    };
+
+    // 获取上传状态
+    let mut store = match store.lock() {
+        Ok(store) => store,
+        Err(_) => return HttpResponse::InternalServerError().json(error_response("Failed to lock store")),
+    };
+
+    let state = match store.get_mut(file_id) {
+        Some(state) => state,
+        None => return HttpResponse::NotFound().json(error_response("Upload session not found")),
+    };
+
+    // 检查分块顺序
+    if chunk_index != state.received_chunks {
+        return HttpResponse::BadRequest().json(error_response(&format!(
+            "Expected chunk {}, got {}",
+            state.received_chunks, chunk_index
+        )));
+    }
+
+    // 写入文件
+    let temp_path = get_webclipper_temp_path(file_id);
+    if let Err(e) = fs::write(&temp_path, &chunk) {
+        return HttpResponse::InternalServerError()
+            .json(error_response(&format!("Failed to write chunk: {}", e)));
+    }
+
+    state.received_chunks += 1;
+    state.received_bytes += chunk.len();
+
+    HttpResponse::Ok().json(json!({
+        "success": true,
+        "received_bytes": state.received_bytes
+    }))
+}
+
+// GuaxiWebClipper完成上传接口
+#[post("/webclipper/complete")]
+async fn handle_webclipper_complete(
+    req: HttpRequest,
+    store: web::Data<UploadStore>,
+    state: web::Data<SharedState>,
+) -> HttpResponse {
+    // 验证头信息
+    let file_id = match req.headers().get("X-File-ID") {
+        Some(header) => header.to_str().unwrap_or(""),
+        None => return HttpResponse::BadRequest().json(error_response("Missing X-File-ID header")),
+    };
+
+    let expected_length: usize = match req.headers().get("X-Expected-Length").and_then(|h| h.to_str().ok()) {
+        Some(len) => len.parse().unwrap_or(0),
+        None => return HttpResponse::BadRequest().json(error_response("Missing X-Expected-Length header")),
+    };
+
+    let expected_checksum = match req.headers().get("X-Checksum") {
+        Some(header) => header.to_str().unwrap_or(""),
+        None => return HttpResponse::BadRequest().json(error_response("Missing X-Checksum header")),
+    };
+
+    // 获取上传状态
+    let (meta, temp_path) = {
+        let mut store = match store.lock() {
+            Ok(store) => store,
+            Err(_) => return HttpResponse::InternalServerError().json(error_response("Failed to lock store")),
+        };
+
+        let state = match store.remove(file_id) {
+            Some(state) => state,
+            None => return HttpResponse::NotFound().json(error_response("Upload session not found")),
+        };
+        (state.meta, get_webclipper_temp_path(file_id))
+    };
+
+    // 验证文件
+    let file_content = match validate_webclipper_file(&temp_path, expected_length, expected_checksum) {
+        Ok(content) => content,
+        Err(res) => return res,
+    };
+
+    // 保存最终文件
+    let save_path = match save_webclipper_final_file(&meta, &file_content) {
+        Ok(path) => path,
+        Err(e) => return e,
+    };
+
+    // 清理临时文件
+    let _ = fs::remove_file(&temp_path);
+
+    // 处理文件信息并触发事件
+    if let Some(app_handle) = state.get_app_handle() {
+        if let Err(e) = process_and_emit_webclipper_info(&meta, &file_content, &save_path, &app_handle) {
+            error!("Failed to emit event: {}", e);
+        }
+    }
+
+    HttpResponse::Ok().json(ExtensionResponse {
+        success: true,
+        message: "File saved successfully".to_string(),
+        saved_path: Some(save_path.to_string_lossy().into_owned()),
+    })
+}
+
+// GuaxiWebClipper专用辅助函数
+fn prepare_webclipper_save_dir() -> Result<PathBuf, HttpResponse> {
+    let save_dir = PathBuf::from(get_libraries_root()).join("collect_webclipper");
+    fs::create_dir_all(&save_dir).map_err(|e| {
+        HttpResponse::InternalServerError().json(error_response(&format!(
+            "Failed to create directory: {}", e
+        )))
+    })?;
+    Ok(save_dir)
+}
+
+fn save_webclipper_content(
+    req: &GuaxiWebClipperRequest,
+    save_dir: &Path,
+) -> Result<(String, std::io::Result<()>), HttpResponse> {
+    let sanitized_title = sanitize_filename(&req.title);
+    let filename = format!("{}_{}.md", sanitized_title, Local::now().format("%Y%m%d_%H%M%S"));
+    let path = save_dir.join(&filename);
+    
+    let result = File::create(&path).and_then(|mut f| f.write_all(req.content.as_bytes()));
+    Ok((filename, result))
+}
+
+fn get_webclipper_temp_path(file_id: &str) -> PathBuf {
+    PathBuf::from(get_libraries_root())
+        .join("temp_webclipper")
+        .join(file_id)
+}
+
+fn validate_webclipper_file(
+    path: &Path,
+    expected_length: usize,
+    expected_checksum: &str,
+) -> Result<Vec<u8>, HttpResponse> {
+    let metadata = fs::metadata(path).map_err(|e| {
+        HttpResponse::InternalServerError().json(error_response(&format!(
+            "Failed to get file metadata: {}", e
+        )))
+    })?;
+
+    if metadata.len() as usize != expected_length {
+        return Err(HttpResponse::BadRequest().json(error_response(&format!(
+            "Size mismatch: expected {}, got {}", expected_length, metadata.len()
+        ))));
+    }
+
+    let content = fs::read(path).map_err(|e| {
+        HttpResponse::InternalServerError().json(error_response(&format!(
+            "Failed to read file: {}", e
+        )))
+    })?;
+
+    let actual_checksum = calculate_sha256(&content);
+    if actual_checksum != expected_checksum {
+        return Err(HttpResponse::BadRequest().json(error_response(&format!(
+            "Checksum mismatch: expected {}, got {}", expected_checksum, actual_checksum
+        ))));
+    }
+
+    Ok(content)
+}
+
+fn save_webclipper_final_file(meta: &ChunkedMeta, content: &[u8]) -> Result<PathBuf, HttpResponse> {
+    let save_dir = PathBuf::from(get_libraries_root()).join("collect_webclipper");
+    fs::create_dir_all(&save_dir).map_err(|e| {
+        HttpResponse::InternalServerError().json(error_response(&format!(
+            "Failed to create save dir: {}", e
+        )))
+    })?;
+
+    let filename = format!(
+        "{}_{}.html",
+        sanitize_filename(&meta.title),
+        Local::now().format("%Y%m%d_%H%M%S")
+    );
+    let path = save_dir.join(filename);
+
+    // 原子写入
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, content).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        HttpResponse::InternalServerError().json(error_response(&format!(
+            "Failed to write file: {}", e
+        )))
+    })?;
+
+    fs::rename(&temp_path, &path).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        HttpResponse::InternalServerError().json(error_response(&format!(
+            "Failed to rename file: {}", e
+        )))
+    })?;
+
+    Ok(path)
+}
+
+fn process_and_emit_webclipper_info(
+    meta: &ChunkedMeta,
+    file_content: &[u8],
+    save_path: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    let file_metadata = fs::metadata(save_path).map_err(|e| format!("Failed to get file metadata: {}", e))?;
+
+    let file_info = BrowserSavedHtmlInfo {
+        file_name: save_path.file_name().unwrap().to_string_lossy().into_owned(),
+        file_path: save_path.to_string_lossy().into_owned(),
+        create_time: file_metadata.created().ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        modify_time: file_metadata.modified().ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        file_type: "md".to_string(),
+        knowledge_repo: "default".to_string(),
+        tags: vec!["webpage".to_string()],
+        description: meta.title.clone(),
+        file_size: file_metadata.len(),
+        file_repo: "default".to_string(),
+    };
+
+    app_handle
+        .emit(
+            "add_web_clipper_file_event",
+            serde_json::to_value(&file_info)
+                .map_err(|e| format!("Failed to serialize file info: {}", e))?,
+        )
+        .map_err(|e| format!("Failed to emit event: {}", e))?;
+
+    info!("Emitted add_web_clipper_file_event with file info: {:?}", file_info);
+
+    Ok(())
+}
+
+fn process_and_emit_webclipper_info_for_md(
+    req: web::Json<GuaxiWebClipperRequest>,
+    save_path: &Path,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    let file_metadata = fs::metadata(save_path).map_err(|e| format!("Failed to get file metadata: {}", e))?;
+
+    let file_info = GuaxiWebClipperInfo {
+        file_name: save_path.file_name().unwrap().to_string_lossy().into_owned(),
+        file_path: save_path.to_string_lossy().into_owned(),
+        create_time: req.timestamp.clone(),
+        modify_time: req.timestamp.clone(),
+        file_type: "md".to_string(),
+        knowledge_repo: req.knowledge_base.clone(),
+        tags: req.tags.clone(),
+        description: req.description.clone(),
+        file_size: file_metadata.len(),
+        file_repo: req.file_repo.clone(),
+    };
+
+    app_handle
+        .emit(
+            "add_web_clipper_file_event",
+            serde_json::to_value(&file_info)
+                .map_err(|e| format!("Failed to serialize file info: {}", e))?,
+        )
+        .map_err(|e| format!("Failed to emit event: {}", e))?;
+
+    info!("Emitted add_web_clipper_file_event with file info: {:?}", file_info);
+
     Ok(())
 }

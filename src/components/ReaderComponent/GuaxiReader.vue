@@ -1,14 +1,14 @@
 <template>
-	<n-message-provider>
-		<div class="guaxi-reader">
-			<component :is="readerComponent" v-if="readerComponent" :filePath="filePath" :fileType="fileType"
-				:fileName="fileName" :library="library" @close=" emit('close')" />
-			<div v-else class="unknown-type">
-				不支持的文件类型: {{ fileType }}
-				<p>文件名: {{ fileData?.name || '未知' }}</p>
-			</div>
-		</div>
-	</n-message-provider>
+  <n-message-provider>
+    <div class="guaxi-reader">
+      <component :is="readerComponent" v-if="readerComponent" :filePath="filePath" :fileType="fileType"
+        :fileName="fileName" :library="library" :importFileId="Number(importFileId) || 0" @close=" emit('close')" />
+      <div v-else class="unknown-type">
+        不支持的文件类型: {{ fileType }}
+        <p>文件名: {{ fileData?.name || '未知' }}</p>
+      </div>
+    </div>
+  </n-message-provider>
 </template>
 
 <script setup>
@@ -23,23 +23,27 @@ import GuaxiTextReader from './GuaxiTextReader.vue'
 // import { Base64 } from 'js-base64'
 
 const props = defineProps({
-	filePath: {
-		type: String,
-		required: true,
-	},
-	fileType: {
-		type: String,
-		required: true,
-		validator: (value) => ['pdf', 'md', 'html', 'epub', 'doc', 'txt'].includes(value)
-	},
-	fileName: {
-		type: String,
-		required: true,
-	},
-	library: {
-		type: String,
-		required: true,
-	}
+  filePath: {
+    type: String,
+    required: true,
+  },
+  fileType: {
+    type: String,
+    required: true,
+    validator: (value) => ['pdf', 'md', 'html', 'epub', 'doc', 'txt', 'docx', 'word'].includes(value)
+  },
+  fileName: {
+    type: String,
+    required: true,
+  },
+  library: {
+    type: String,
+    required: true,
+  },
+  importFileId: {
+    type: Number,
+    default: null,
+  }
 })
 
 // Base64 解码文件路径
@@ -57,28 +61,28 @@ const props = defineProps({
 
 // 更严格的组件选择逻辑
 const readerComponent = computed(() => {
-	const { fileType, filePath, fileName, library } = props
-	console.log('readerComponent', fileType, filePath, fileName, library)
+  const { fileType, filePath, fileName, library } = props
+  console.log('readerComponent', fileType, filePath, fileName, library)
 
-	if (!fileType || !fileName) {
-		console.error('Missing required props')
-		return null
-	}
+  if (!fileType || !fileName) {
+    console.error('Missing required props')
+    return null
+  }
 
-	const typeMap = {
-		pdf: GuaxiConvertPDFReader,
-		md: GuaxiMarkdownReader,
-		markdown: GuaxiMarkdownReader,
-		html: GuaxiHtmlReader,
-		htm: GuaxiHtmlReader,
-		epub: GuaxiEpubReader,
-		doc: GuaxiWordReader,
-		docx: GuaxiWordReader,
-		word: GuaxiWordReader,
-		txt: GuaxiTextReader
-	}
+  const typeMap = {
+    pdf: GuaxiConvertPDFReader,
+    md: GuaxiMarkdownReader,
+    markdown: GuaxiMarkdownReader,
+    html: GuaxiHtmlReader,
+    htm: GuaxiHtmlReader,
+    epub: GuaxiEpubReader,
+    doc: GuaxiWordReader,
+    docx: GuaxiWordReader,
+    word: GuaxiWordReader,
+    txt: GuaxiTextReader
+  }
 
-	return typeMap[fileType] || null
+  return typeMap[fileType] || null
 })
 
 const emit = defineEmits(['close'])
@@ -87,29 +91,29 @@ const emit = defineEmits(['close'])
 
 <style scoped>
 .guaxi-reader {
-	position: fixed;
-	top: 0;
-	left: 0;
-	right: 0;
-	bottom: 0;
-	background: white;
-	z-index: 1000;
-	overflow: auto;
-	display: flex;
-	flex-direction: column;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: white;
+  z-index: 1000;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .unknown-type {
-	padding: 20px;
-	color: red;
-	font-size: 18px;
-	text-align: center;
-	margin: auto;
+  padding: 20px;
+  color: red;
+  font-size: 18px;
+  text-align: center;
+  margin: auto;
 }
 
 .unknown-type p {
-	color: #666;
-	font-size: 14px;
-	margin-top: 10px;
+  color: #666;
+  font-size: 14px;
+  margin-top: 10px;
 }
 </style>

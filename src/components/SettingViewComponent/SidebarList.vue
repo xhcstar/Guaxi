@@ -14,7 +14,7 @@
 import { ref, h } from 'vue';
 import { NMenu, NIcon } from 'naive-ui';
 import { InformationCircleOutline } from '@vicons/ionicons5';
-import { FolderAdd20Regular, Image28Regular, Server24Regular } from '@vicons/fluent';
+import { FolderAdd20Regular, Image28Regular, Server24Regular, Key24Regular } from '@vicons/fluent';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -36,6 +36,11 @@ const menuOptions = [
     label: '服务器',
     key: 'server',
     icon: () => h(NIcon, { component: Server24Regular, size: 24 }),
+  },
+  {
+    label: '大模型',
+    key: 'llm',
+    icon: () => h(NIcon, { component: Key24Regular, size: 24 }),
   },
   {
     label: '关于',

@@ -136,11 +136,27 @@ const onMouseDownRightSidebar = (event) => {
 
 <style scoped>
 .guaxi-content {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 0;
+  width: 100%;
   background-color: #ffffff;
+  overflow: hidden;
+}
+
+.guaxi-content :deep(.n-layout) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.guaxi-content :deep(.n-layout-content) {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .n-layout-sider {

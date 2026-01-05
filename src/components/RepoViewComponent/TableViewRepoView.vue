@@ -1,1505 +1,400 @@
+<!-- TableViewRepoView.vue -->
 <template>
   <div class="main-content-wrapper">
+    <!-- 顶部工具栏 -->
+    <TopToolbar :progresses="progresses" :categorized-progresses="categorizedProgresses"
+      @toggle-task-list="toggleTaskList" @backup-database="backupDatabase" @recover-database="recoverDatabase"
+      @import-items="importItems" @export-items="exportItems" />
+
+    <!-- 任务列表抽屉 -->
+    <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" />
+
+    <!-- 搜索栏 -->
+
+    <!-- 表格工具栏 -->
     <div class="toolbar-container">
-      <n-space vertical :size="12" class="container">
-        <!-- 工具栏 -->
-        <n-space justify="space-between" align="center" class="toolbar">
-          <!-- 左侧按钮组 -->
-          <n-space class="actions">
-            <n-button @click="sortTitle" class="action-button">按标题排序（升序）</n-button>
-            <n-button @click="filterLibrary" class="action-button">过滤所属库(Library1)</n-button>
-            <n-button @click="clearFilters" class="action-button">清除过滤器</n-button>
-            <n-button @click="clearSorter" class="action-button">清除排序</n-button>
-          </n-space>
-          <!-- 右侧添加按钮 -->
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-button text class="add-path-button" @click="showAddFileModal">
-                <n-icon :component="FolderAdd20Regular" :size="24" />
-              </n-button>
-            </template>
-            导入新的文件
-          </n-tooltip>
-        </n-space>
-      </n-space>
+      <TableToolbar @sort="handleSort" @clear-filters="handleClearFilters" @add-file="showAddFileModal" />
     </div>
 
-    <div class="table-container">
-      <n-data-table ref="table" :columns="columns" :data="currentData" :max-height="500" virtual-scroll virtual-scroll-x
-        :scroll-x="scrollX" :min-row-height="85" :height-for-row="heightForRow" :header-height="85"
-        :pagination="pagination" :single-line="false" class="data-table" :row-props="rowProps" :multiple="true"
-        :row-key="rowKey" @update:checked-row-keys="handleCheckboxUpdate" />
-    </div>
-
-    <!-- 进度条容器 - 固定在底部 -->
-    <div class="progress-container-wrapper">
-      <div class="progress-container">
-        <n-card v-for="(progress, index) in progresses" :key="index">
-          <n-text strong>{{ progress.fileName }}</n-text>
-          <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'" status="info" />
-          <n-text depth="3">{{ progress.message }}</n-text>
-        </n-card>
-      </div>
+    <!-- 数据表格容器 -->
+    <div class="table-container" ref="tableContainerRef">
+      <DataTable ref="tableRef" :columns="columns" :data="sortedData" :table-height="dynamicTableHeight"
+        :scroll-x="scrollX" :pagination="pagination" :row-key="rowKey" :row-props="rowProps"
+        @update:checked-row-keys="handleCheckboxUpdate" @row-contextmenu="handleRowContextMenu" />
     </div>
 
     <!-- 右键菜单 -->
-    <n-dropdown placement="bottom-start" trigger="manual" :x="x" :y="y" :options="contextMenuOptions"
-      :show="showDropdown" :on-clickoutside="onClickoutside" @select="handleContextMenuSelect"
-      class="custom-dropdown" />
+    <ContextMenu :show="showDropdown" @update:show="showDropdown = $event" :x="x" :y="y" :options="contextMenuOptions"
+      @select="handleContextMenuSelect" @clickoutside="onClickoutside" />
+
+    <!-- 添加文件模态框 -->
+    <AddFileModal :show="isAddFileModalVisible" @update:show="isAddFileModalVisible = $event" :form="currentForm"
+      @update:form="handleFormUpdate" :rules="rules" :form-columns="formColumns"
+      :knowledge-repo-options="knowledgeRepoOptionsComplete" :library-options="libraryOptionsComplete"
+      :imported-file-tag-options="importedFileTagOptionsComplete" :is-library-loading="isLibraryLoadingComplete"
+      :is-imported-file-tag-loading="isImportedFileTagLoadingComplete"
+      :is-knowledge-repo-loading="isKnowledgeRepoLoadingComplete" @open-file-browser="openFileBrowser"
+      @library-search-complete="handleLibrarySearchComplete" @tag-search-complete="handleImportedFileTagSearchComplete"
+      @knowledge-repo-search-complete="handleKnowledgeRepoSearchComplete" @submit="addFile"
+      @cancel="handleModalCancel" />
   </div>
-
-  <n-modal v-model:show="isAddFileModalVisible" title="添加文件" preset="dialog" :mask-closable="false" :closable="false">
-    <n-form :model="currentForm" :rules="rules" label-placement="left" label-width="auto" label-align="right"
-      size="medium" class="custom-form">
-      <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title" :path="column.key"
-        :label-style="{ fontWeight: 'bold', color: '#333', fontSize: '15px' }">
-        <!-- 根据列类型渲染不同的输入组件 -->
-        <template v-if="column.key === 'filePath'">
-          <n-input v-model:value="currentForm[column.key]" placeholder="请输入文件路径" :input-style="{ borderRadius: '8px' }">
-            <template #suffix>
-              <n-tooltip trigger="hover">
-                <template #trigger>
-                  <n-button text class="FolderAdd20Regular" @click="openFileBrowser" :style="{ color: '#409EFF' }">
-                    <n-icon :component="FolderAdd20Regular" :size="20" />
-                  </n-button>
-                </template>
-                选择导入文件
-              </n-tooltip>
-            </template>
-          </n-input>
-        </template>
-        <template v-else-if="column.key === 'importFileCreateTime' || column.key === 'importFileName' || column.key === 'type'
-          || column.key === 'importFileSize'">
-          <n-input v-model:value="currentForm[column.key]" :placeholder="`${column.title}`" disabled
-            :input-style="{ borderRadius: '8px' }" />
-        </template>
-        <template v-else-if="column.key === 'knowledgeRepo'">
-          <n-input v-model:value="currentForm[column.key]" :placeholder="`${column.title}`"
-            :input-style="{ borderRadius: '8px' }" />
-        </template>
-        <!-- 导入文件标签 -->
-        <template v-else-if="column.key === 'importedFileTags'">
-          <n-auto-complete v-model:value="currentForm[column.key]" :options="importedFileTagOptions"
-            :loading="isImportedFileTagLoading" placeholder="请输入导入文件标签" clearable
-            :input-style="{ borderRadius: '8px' }" />
-        </template>
-        <!-- 所属库 -->
-        <template v-else-if="column.key === 'library'">
-          <n-auto-complete v-model:value="currentForm[column.key]" :options="libraryOptions" :loading="isLibraryLoading"
-            placeholder="请输入所属文件库" clearable :input-style="{ borderRadius: '8px' }" />
-        </template>
-        <template v-else>
-          <n-input v-model:value="currentForm[column.key]"
-            :placeholder="column.key === 'tags' ? `如有多个标签请以逗号隔开` : `请输入${column.title}`"
-            :input-style="{ borderRadius: '8px' }" />
-        </template>
-      </n-form-item>
-    </n-form>
-
-    <!-- 对话框操作按钮 -->
-    <template #action>
-      <n-space justify="end">
-        <n-button type="primary" @click="addFile" :style="{ backgroundColor: '#409EFF', borderColor: '#409EFF' }">
-          提交
-        </n-button>
-        <n-button @click="isAddFileModalVisible = false"
-          :style="{ backgroundColor: '#F56C6C', borderColor: '#F56C6C', color: '#FFF' }">
-          取消
-        </n-button>
-      </n-space>
-    </template>
-  </n-modal>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed, h, nextTick, watch } from 'vue'
-import { repoStore } from '../../stores/repoStore'
-import {
-  FolderAdd20Regular,
-  Delete20Regular,
-  Open20Regular,
-  Edit20Regular,
-  Share20Regular,
-  ArrowMove24Regular,
-} from '@vicons/fluent'
-import { NIcon, NButton, NDropdown, useMessage } from 'naive-ui'
-import ShowOrEdit from './ShowOrEdit.vue'
-import {
-  useNoteTagsSearch,
-  useImportedFileTagsSearch,
-  useImportedFileLibrarySearch,
-  useImportedFilesSearch,
-  useLibrariesSearch,
-} from './SearchUtils/useSearch'
-import { open } from '@tauri-apps/plugin-dialog'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick, h } from 'vue'
+import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
-import { platform } from '@tauri-apps/plugin-os';
-import { Library, Settings } from '@vicons/ionicons5'
-import { listen } from '@tauri-apps/api/event';
-// import { Window } from '@tauri-apps/api/window';
-// import { Webview } from "@tauri-apps/api/webview"
 
-// 引入 Pinia store
+
+// Stores
+import { repoStore } from '../../stores/repoStore'
+import { useEventStore } from '../../stores/eventsStore'
+
+// Components
+import TopToolbar from './components/TableViewComponents/TopToolbar.vue'
+import TaskListDrawer from './components/TableViewComponents/TaskListDrawer.vue'
+import TableToolbar from './components/TableViewComponents/TableToolbar.vue'
+import DataTable from './components/TableViewComponents/DataTable.vue'
+import ContextMenu from './components/TableViewComponents/ContextMenu.vue'
+import AddFileModal from './components/TableViewComponents/AddFileModal.vue'
+import ShowOrEdit from './common/ShowOrEdit.vue'
+
+// Composables
+import { useFormHandling } from './composables/useFormHandling.js'
+import { useProgress } from './composables/useProgress.js'
+import { useContextMenu } from './composables/useContextMenu.js'
+import { useSearch } from './composables/useSearch.js'
+import { useSearchComplete } from './SearchUtils/useSearchComplete.js'
+import { useTableConfig } from './composables/useTableConfig.js'
+import { useFileOperations } from './composables/useFileOperations.js'
+
+// 初始化存储和消息
 const store = repoStore()
-
-// 获取 message 实例
-const message = useMessage();
-// 添加文件对话框状态
-const isAddFileModalVisible = ref(false)
-// 表格实例
-const tableRef = ref(null)
-// 分页配置
-const pagination = ref({ pageSize: 15 })
-
-let unlistenBrowserExtension = null;
-
-
-const newNoteForm = {
-  id: 0,
-  filePath: '',
-  description: '',
-  noteFileName: '',
-  notesTags: '', // 所属库名字
-  fromImportedFile: '',
-  fromImportedFileLibrary: '',
-  noteFileType: '',
-  noteFileCreateTime: '',
-  noteFileUpdateTime: '', // 笔记特有的字段
-  knowledgeRepo: '', // 知识库名字
-}
-
-// 用于 importFileDB 库的表单
-const newFileForm = ref({
-  id: 0,
-  filePath: '',
-  importFileName: '',
-  description: '',
-  importedFileTags: '',
-  type: '',
-  library: '', // 所属库名字
-  importFileCreateTime: '',
-  importFileSize: 0,
-  convetToHtmlFilename: '',
-  knowledgeRepo: '', // 知识库名字
-  newNoteForm: newNoteForm,
-})
-
-// 当前表单（根据数据库类型动态切换）
-const currentForm = computed(() => {
-  return newFileForm.value
-})
-
-// 进度条相关状态
-const progresses = ref([])
-const startProgressListener = async (filePath) => {
-  const fileName = filePath.split(/[\\/]/).pop() || '未知文件'
-
-  const newProgress = {
-    show: true,
-    current: 0,
-    total: 100,
-    message: '开始转换...',
-    fileName,
-  }
-
-  progresses.value.push(newProgress)
-  const progressIndex = progresses.value.length - 1
-
-  const unlisten = await listen('conversion_progress', (event) => {
-    // 使用Vue的响应式更新方式
-    progresses.value[progressIndex] = {
-      ...progresses.value[progressIndex],
-      current: event.payload.current,
-      message: event.payload.message
-    }
-    console.log('conversion_progress', event.payload.current, event.payload.message)
-
-    // 转换完成后移除进度条
-    if (event.payload.current >= 100) {
-      setTimeout(() => {
-        progresses.value = progresses.value.filter((_, i) => i !== progressIndex)
-      }, 1000)
+const eventStore = useEventStore()
+const message = useMessage()
+const containerHeight = ref(0)
+const handleWindowResize = () => {
+  nextTick(() => {
+    const container = document.querySelector('.table-container')
+    if (container) {
+      containerHeight.value = container.clientHeight
     }
   })
-
-  return unlisten
 }
 
-const convertFile = async (inputPath, outputDir) => {
-  try {
-    await invoke('convert_to_markdown', {
-      request: {
-        input_path: inputPath,
-        output_dir: outputDir
-      }
-    }, {
-      target: 'main'
-    })
-  } catch (error) {
-    console.error('Conversion failed:', error)
-    throw error
-  }
-}
-
-// 自定义校验函数：检查文件路径是否合法（根据系统类型动态选择匹配方式）
-const validateFilePath = async (rule, value) => {
-  console.log('validateFilePath', value); // 添加日志
-
-  // 检查是否为空
-  if (!value || value.trim() === '') {
-    return new Error('文件路径不能为空');
-  }
-
-  // 获取当前操作系统类型
-  const osPlatform = await platform();
-
-  // Windows 路径正则表达式
-  const windowsPathRegex = /^([a-zA-Z]:\\|\\\\)([^\\/:*?"<>|\r\n]+\\?)*$/;
-  // Linux 路径正则表达式
-  const linuxPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
-  // macOS 路径正则表达式（与 Linux 相同）
-  const macPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
-
-  console.log('osPlatform', osPlatform);
-  // 根据系统类型选择匹配方式
-  if (osPlatform === 'windows') {
-    if (!windowsPathRegex.test(value)) {
-      return new Error('Windows 文件路径不合法，请检查路径格式');
-    }
-  } else if (osPlatform === 'linux') {
-    if (!linuxPathRegex.test(value)) {
-      return new Error('Linux 文件路径不合法，请检查路径格式');
-    }
-  } else if (osPlatform === 'macos') {
-    if (!macPathRegex.test(value)) {
-      return new Error('macOS 文件路径不合法，请检查路径格式');
-    }
-  } else {
-    return new Error('不支持的操作系统');
-  }
-
-  return true; // 校验通过
-};
-
-// 自定义校验函数：检查标签是否合法（单个字符串或以逗号分隔的字符串）
-const validateTags = (rule, value) => {
-  console.log('validateTags', value); // 添加日志
-
-  // 检查是否为空
-  if (!value || value.trim() === '') {
-    return new Error('标签不能为空');
-  }
-
-  // 检查是否为单个字符串或以逗号分隔的字符串
-  const tags = value.split(',').map(tag => tag.trim());
-  if (tags.some(tag => !tag)) {
-    return new Error('标签不能为空或以多个逗号分隔');
-  }
-
-  return true; // 校验通过
-};
-
-// 校验表单
-const validateForm = async () => {
-  const form = currentForm.value;
-  console.log('>>>>>>>>>>>> validateForm', currentForm.value);
-
-  // 校验文件路径
-  if (!form.filePath || form.filePath.trim() === '') {
-    return '文件路径不能为空';
-  }
-
-  // 获取当前操作系统类型
-  const osPlatform = await platform();
-
-  console.log('osPlatform', osPlatform);
-  // Windows 路径正则表达式
-  const windowsPathRegex = /^([a-zA-Z]:\\|\\\\)([^\\/:*?"<>|\r\n]+\\?)*$/;
-  // Linux 路径正则表达式
-  const linuxPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
-  // macOS 路径正则表达式（与 Linux 相同）
-  const macPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
-
-  // 根据系统类型选择匹配方式
-  if (osPlatform === 'windows') {
-    if (!windowsPathRegex.test(form.filePath)) {
-      return 'Windows 文件路径不合法，请检查路径格式';
-    }
-  } else if (osPlatform === 'linux') {
-    if (!linuxPathRegex.test(form.filePath)) {
-      return 'Linux 文件路径不合法，请检查路径格式';
-    }
-  } else if (osPlatform === 'macos') {
-    if (!macPathRegex.test(form.filePath)) {
-      return 'macOS 文件路径不合法，请检查路径格式';
-    }
-  } else {
-    return '不支持的操作系统';
-  }
-
-  // 校验标签
-  if (!form.importedFileTags || form.importedFileTags.trim() === '') {
-    console.log('>>>>>>>>>>>>> form', form.importedFileTags);
-    console.log('>>>>>>>>>>>>> form.importedFileTags', form.importedFileTags);
-    currentForm.value.importedFileTags = "default"; // 设置默认值
-  } else {
-    const tags = form.importedFileTags.split(',').map(tag => tag.trim());
-    if (tags.some(tag => !tag)) {
-      return '多个标签没有以逗号分隔';
-    }
-  }
-
-  // 校验描述
-  if (!form.description || form.description.trim() === '') {
-    return '描述不能为空';
-  }
-  if (form.description.length > 240) {
-    return '描述不能超过 240 个字符';
-  }
-
-  // 校验所属库
-  if (!form.library || (typeof form.library === 'string' && form.library.trim() === '')) {
-    currentForm.value.library = 'default'; // 设置默认值
-    return '所属库不能为空';
-  }
-
-  // 校验入库时间
-  if (!form.importFileCreateTime || form.importFileCreateTime.trim() === '') {
-    return '入库时间不能为空';
-  }
-
-  // 校验文件大小
-  if (!form.importFileSize || form.importFileSize <= 0) {
-    return '文件大小不能为空';
-  }
-
-  // 校验通过
-  return null;
-};
-
-// 校验table cell
-const validateTableCell = (row) => {
-  console.log('validateTableCell', row);
-  console.log('store.currentDatabase', store.currentDatabase);
-
-  // 校验标签
-
-  if (!row.importedFileTags || row.importedFileTags.trim() === '') {
-    console.log('row.importedFileTags', row.importedFileTags);
-    row.importedFileTags = "default"; // 设置默认值
-  } else {
-    const tags = row.importedFileTags.split(',').map(tag => tag.trim());
-    if (tags.some(tag => !tag)) {
-      return '多个标签没有以逗号分隔';
-    }
-  }
-
-  // 校验描述
-  if (!row.description || row.description.trim() === '') {
-    return '描述不能为空';
-  }
-  if (row.description.length > 240) {
-    return '描述不能超过 240 个字符';
-  }
-
-  // 校验所属库
-  if (!row.library || (typeof row.library === 'string' && row.library.trim() === '')) {
-    row.library = 'default'; // 设置默认值
-    return '所属库不能为空';
-  }
-
-  // 校验入库时间
-  if (!row.importFileCreateTime || row.importFileCreateTime.trim() === '') {
-    return '入库时间不能为空';
-  }
-
-  // 校验文件大小
-  if (!row.importFileSize || row.importFileSize <= 0) {
-    return '文件大小不能为空';
-  }
-
-  // 校验通过
-  return null;
-};
-
-// 表单校验规则
-const rules = {
-  filePath: [
-    { validator: validateFilePath, required: true, message: '文件路径不能为空', trigger: ['input', 'blur'] },
-  ],
-  importedFileTags: [
-    { validator: validateTags, required: true, message: '标签不能为空', trigger: ['input', 'blur'] },
-  ],
-  description: [
-    { required: true, message: '描述不能为空', trigger: ['input', 'blur'] },
-    { max: 240, message: '描述不能超过240个字符', trigger: ['input', 'blur'] },
-  ],
-  library: [
-    { required: true, message: '所属库不能为空', trigger: ['input', 'blur'] },
-  ],
-  importFileCreateTime: [
-    { required: true, message: '入库时间不能为空', trigger: ['input', 'blur'] },
-  ],
-  importFileSize: [
-    { required: true, message: '文件大小不能为空', trigger: ['input', 'blur'] },
-  ],
-  knowledgeRepo: [
-    { required: true, message: '知识库不能为空', trigger: ['input', 'blur'] },
-  ],
-};
-
-// 动态生成表单列配置
-const formColumns = computed(() => {
-  const columns = [
-    { key: 'filePath', title: '文件路径' },
-    { key: 'importFileName', title: '文件名' },
-    { key: 'description', title: '文件描述' },
-    { key: 'knowledgeRepo', title: '知识库' },
-    { key: 'library', title: '文件库' },
-    { key: 'importedFileTags', title: '文件标签' },
-    { key: 'type', title: '文件类型' },
-    { key: 'importFileCreateTime', title: '入库时间' },
-    { key: 'importFileSize', title: '文件大小' },
-  ]
-  return columns
+const dynamicTableHeight = computed(() => {
+  // 返回实际可用高度，不做额外减法
+  return containerHeight.value > 0 ? containerHeight.value : 400
 })
 
-// 打开文件浏览器并获取文件信息
-const openFileBrowser = async () => {
-  try {
-    const filePath = await open({
-      filters: [{ name: 'All Files', extensions: ['*'] }],
-    })
-    if (filePath) {
-      // 更新文件路径
-      currentForm.value.filePath = filePath
-
-      // 调用后台接口获取文件信息
-      const fileInfo = await invoke('get_file_info', { filePath })
-      console.log('File Info:', fileInfo)
-
-      // 根据当前数据库类型更新表单数据
-      currentForm.value.importFileName = fileInfo.file_name
-      currentForm.value.type = fileInfo.file_type
-      currentForm.value.importFileCreateTime = fileInfo.create_time
-      currentForm.value.importFileSize = fileInfo.file_size
-    }
-  } catch (error) {
-    console.error('Error opening file browser:', error)
-  }
-}
-
-// 显示添加文件对话框
-const showAddFileModal = () => {
-  isAddFileModalVisible.value = true
-}
-
-const createImportFileList = (addedNoteInfo, currentForm) => {
-  return {
-    import_file_name: currentForm.importFileName,
-    description: currentForm.description,
-    library: currentForm.library,
-    tags: currentForm.importedFileTags.split(','),
-    file_type: currentForm.type,
-    import_file_create_time: currentForm.importFileCreateTime,
-    import_file_size: currentForm.importFileSize,
-    converted_markdown_filename: `${currentForm.importFileName.replace(/\.[^/.]+$/, '')}.md`,
-    knowledge_repo: currentForm.knowledgeRepo,
-    note_file_input: {
-      description: `${addedNoteInfo.from_filename}的笔记`,
-      note_file_name: addedNoteInfo.note_file_name,
-      tags: currentForm.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
-      note_file_type: 'md',
-      from_imported_file: addedNoteInfo.from_filename,
-      from_imported_file_library: addedNoteInfo.library,
-      note_file_create_time: addedNoteInfo.create_time,
-      note_file_update_time: addedNoteInfo.update_time,
-      knowledge_repo: currentForm.knowledgeRepo,
-    }
-  }
-};
-
-// 提取添加文件到数据库的逻辑
-const addFileToDatabase = async (fileInfo) => {
-  try {
-    console.log('Adding info into table imported_files database:', fileInfo);
-    const fileId = await invoke('add_imported_file', {
-      file: fileInfo,
-    });
-    console.log('File info successfully added to database, id: ', fileId);
-    return fileId;
-  } catch (error) {
-    console.error('Error adding info into table imported_files database:', error);
-    throw error;
-  }
-};
-
-// 提取添加笔记到数据库的逻辑
-const addNoteToDatabase = async (noteInfo) => {
-  try {
-    console.log('Adding info into table notes database:', noteInfo);
-    const noteId = await invoke('add_note', {
-      note: noteInfo,
-    });
-    console.log('Note info successfully added to database, id: ', noteId);
-    return noteId;
-  } catch (error) {
-    console.error('Error adding info into table notes database:', error);
-    throw error;
-  }
-};
-
-// 构建文件路径
-const buildConvertOutputFilePath = async (fileName, library) => {
-  const fileNameWithoutExt = fileName.replace(/\.[^/.]+$/, "");
-  const osPlatform = await platform(); // 使用Tauri API获取操作系统类型
-
-  const basePath = osPlatform === 'windows'
-    ? `${store.librariesRoot}\\Libraries\\${library}\\${fileNameWithoutExt}\\markdown`
-    : `${store.librariesRoot}/Libraries/${library}/${fileNameWithoutExt}/markdown`;
-
-  const fullPath = osPlatform === 'windows'
-    ? `${basePath}\\${fileNameWithoutExt}\\${fileNameWithoutExt}.md`
-    : `${basePath}/${fileNameWithoutExt}/${fileNameWithoutExt}.md`;
-
-  console.log('basePath:', basePath);
-  console.log('fullPath:', fullPath);
-
-  return {
-    outputDir: basePath,
-    fileToCheck: fullPath
-  };
-};
-
-const addFile = async () => {
-  try {
-    // 校验表单
-    const validationError = await validateForm(); // 等待 validateForm 的结果
-    if (validationError) {
-      message.error(validationError); // 确保 validationError 是字符串
-      return; // 终止添加
-    }
-
-    if (!currentForm.value.library || !currentForm.value.importFileName) {
-      message.error('Library or importFileName path is missing: ', currentForm.value);
-      return;
-    }
-
-    // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
-    const addedNoteInfo = await invoke('add_repo_import_file', {
-      library: currentForm.value.library,
-      filePath: currentForm.value.filePath,
-    });
-
-    // 创建 importfileList
-    const importfileList = createImportFileList(addedNoteInfo, currentForm.value);
-
-    // 将 importfileList 写入数据库
-    console.log('importfileList:', importfileList);
-    const fileId = await addFileToDatabase(importfileList);
-
-    // 添加导入的文件到 store
-    store.addImportedFile({
-      id: fileId,
-      importFileName: currentForm.value.importFileName,
-      description: currentForm.value.description,
-      importedFileTags: currentForm.value.importedFileTags,
-      type: currentForm.value.type,
-      library: currentForm.value.library,
-      importFileCreateTime: currentForm.value.importFileCreateTime,
-      importFileSize: currentForm.value.importFileSize,
-      convetToMarkdownFilename: `${currentForm.value.importFileName.replace(/\.[^/.]+$/, "")}.md`,
-      knowledgeRepo: currentForm.value.knowledgeRepo,
-      newNoteForm: {
-        description: `${addedNoteInfo.from_filename}的笔记`,
-        noteFileName: addedNoteInfo.note_file_name,
-        notesTags: currentForm.value.importedFileTags.split(','), //导入文件时创建的笔记使用导入文件的标签
-        noteFileType: 'md',
-        fromImportedFile: addedNoteInfo.from_filename,
-        fromImportedFileLibrary: addedNoteInfo.library,
-        noteFileCreateTime: addedNoteInfo.create_time,
-        noteFileUpdateTime: addedNoteInfo.update_time,
-        knowledgeRepo: currentForm.value.knowledgeRepo,
-      }
-    });
-
-    // 转换完成后刷新数据
-    console.log('add_file currentDatabase', store.currentDatabase);
-    await store.fetchRepos()
-    await store.fetchFiles(store.currentDatabase)
-
-    try {
-      // 构建输出目录路径
-      const { outputDir, fileToCheck } = await buildConvertOutputFilePath(
-        currentForm.value.importFileName,
-        currentForm.value.library
-      );
-
-      // 检查文件是否已转换
-      const isConverted = await invoke('check_file_converted', {
-        outputDir: fileToCheck
-      });
-
-      if (isConverted && (!currentForm.value.convetToMarkdownFilename ||
-        currentForm.value.convetToMarkdownFilename.trim() === '')) {
-        console.log('isConverted', isConverted);
-        console.log('convetToMarkdownFilename', currentForm.value.convetToMarkdownFilename);
-        message.success('已存在转换文件，无需转换');
-        // 关闭对话框并清空表单
-        isAddFileModalVisible.value = false;
-        resetForm();
-        return;
-      }
-
-      // 开始监听进度事件
-      const unlisten = await startProgressListener(currentForm.value.filePath)
-
-      // 立即关闭表单对话框
-      isAddFileModalVisible.value = false
-
-      // 开始转换流程
-      await convertFile(currentForm.value.filePath, outputDir)
-
-      // 转换完成后刷新数据
-      console.log('add_file currentDatabase', store.currentDatabase);
-      await store.fetchFiles(store.currentDatabase)
-      resetForm()
-
-      // 转换完成后取消监听
-      unlisten()
-    } catch (error) {
-      // 更新进度条状态为失败
-      const fileName = currentForm.value.filePath.split(/[\\/]/).pop() || '未知文件'
-      const progressIndex = progresses.value.findIndex(p => p.fileName === fileName)
-      if (progressIndex !== -1) {
-        progresses.value[progressIndex] = {
-          ...progresses.value[progressIndex],
-          message: `转换失败: ${error.message || error}`,
-          current: 100
-        }
-        // 3秒后自动移除失败的进度条
-        setTimeout(() => {
-          progresses.value = progresses.value.filter((_, i) => i !== progressIndex)
-        }, 3000)
-      }
-      message.error(`添加文件失败: ${error}`)
-    }
-
-    // 关闭对话框并清空表单
-    isAddFileModalVisible.value = false;
-    resetForm();
-  } catch (error) {
-    console.error('Error adding file:', error);
-  }
-};
-
-// 更新导入文件
-const updateImportedFile = async (row) => {
-  try {
-    // 将 tags 字段转换为数组
-    const importedFileTags = typeof row.importedFileTags === 'string' ? row.importedFileTags.split(',') : row.importedFileTags;
-
-    console.log('updateImportedFile row:', row);
-    // 确保 file 是一个对象
-    const file = {
-      import_file_name: row.importFileName,
-      description: row.description,
-      library: row.library,
-      tags: importedFileTags,
-      file_type: row.type,
-      import_file_create_time: row.importFileCreateTime,
-      import_file_size: row.importFileSize,
-      converted_markdown_filename: `${row.importFileName.replace(/\.[^/.]+$/, '')}.md`,
-      knowledge_repo: row.knowledgeRepo,
-      note_file_input: {
-        description: `${row.newNoteForm.description}`,
-        note_file_name: row.newNoteForm.noteFileName,
-        tags: row.newNoteForm.notesTags.split(','), // 使用新表单中的标签
-        note_file_type: 'md',
-        from_imported_file: row.importFileName,
-        from_imported_file_library: row.library,
-        note_file_create_time: row.newNoteForm.noteFileCreateTime,
-        note_file_update_time: row.newNoteForm.noteFileUpdateTime,
-        knowledge_repo: row.newNoteForm.knowledgeRepo,
-      }
-    };
-
-    // 打印日志：row.id 和 file
-    console.log('row.id:', row.id);
-    console.log('file:', JSON.stringify(file, null, 2));
-
-    // 调用后端接口
-    await invoke('update_imported_file', {
-      id: row.id,
-      file: file, // 传递正确的 file 对象
-    });
-    console.log('更新导入文件成功:', row);
-  } catch (error) {
-    console.error('更新导入文件失败:', error);
-  }
-};
-
-// 更新笔记
-const updateNote = async (row) => {
-  try {
-    // 将 tags 字段转换为数组
-    const notesTags = typeof row.notesTags === 'string' ? row.notesTags.split(',') : row.notesTags;
-
-    // 确保 note 是一个对象
-    const note = {
-      description: row.description,
-      note_file_name: row.noteFileName,
-      note_file_type: row.noteFileType,
-      from_imported_file: row.fromImportedFile,
-      from_imported_file_library: row.fromImportedFileLibrary,
-      note_file_create_time: row.noteFileCreateTime,
-      note_file_update_time: row.noteFileUpdateTime,
-      tags: notesTags, // 传递转换后的 tags 数组
-    };
-
-    // 打印日志：row.id 和 note
-    console.log('row.id:', row.id);
-    console.log('note:', JSON.stringify(note, null, 2));
-
-    // 调用后端接口
-    await invoke('update_note', {
-      id: row.id,
-      note: note, // 传递正确的 note 对象
-    });
-    console.log('更新笔记成功:', row);
-  } catch (error) {
-    console.error('更新笔记失败:', error);
-  }
-};
-
-// 清空表单
-const resetForm = () => {
-  newFileForm.value = {
-    id: 0,
-    importFileName: '',
-    description: '',
-    importedFileTags: '',
-    type: '',
-    library: '', // 所属库名字
-    importFileCreateTime: '',
-    importFileSize: 0,
-    convetToHtmlFilename: '',
-    convetToMarkdownFilename: "",
-    importFileSize: '',
-    knowledgeRepo: '',
-    newNoteForm: {
-      id: 0,
-      description: '',
-      noteFileName: '',
-      notesTags: '', // 所属库名字
-      fromImportedFile: '',
-      fromImportedFileLibrary: '',
-      noteFileType: '',
-      noteFileCreateTime: '',
-      noteFileUpdateTime: '', // 笔记特有的字段
-      knowledgeRepo: '',
-    }
-  }
-}
-
-// 根据当前数据库类型选择数据
-const currentData = computed(() => {
-  console.log('store.files:', store.files)
-  return store.files
-})
-
-// 右键菜单状态
-const showDropdown = ref(false)
-const x = ref(0)
-const y = ref(0)
-const selectedRow = ref(null)
-
-// 右键菜单选项
-const contextMenuOptions = [
-  {
-    label: '打开',
-    key: 'open',
-    icon: () => h(NIcon, { component: Open20Regular, size: 16 }),
-  },
-  {
-    label: '编辑',
-    key: 'edit',
-    icon: () => h(NIcon, { component: Edit20Regular, size: 16 }),
-  },
-  {
-    label: '分享',
-    key: 'share',
-    icon: () => h(NIcon, { component: Share20Regular, size: 16 }),
-  },
-  {
-    label: '删除',
-    key: 'delete',
-    icon: () => h(NIcon, { component: Delete20Regular, size: 16 }),
-  },
-  {
-    label: '移动',
-    key: 'move',
-    icon: () => h(NIcon, { component: ArrowMove24Regular, size: 16 }),
-  },
-]
-
-// 处理右键菜单点击
-const handleContextMenuSelect = (key) => {
-  if (!selectedRow.value) return
-
-  switch (key) {
-    case 'open':
-      handleOpen(selectedRow.value)
-      break
-    case 'edit':
-      handleEdit(selectedRow.value)
-      break
-    case 'share':
-      handleShare(selectedRow.value)
-      break
-    case 'delete':
-      handleDelete(selectedRow.value)
-      break
-    case 'move':
-      handleMove(selectedRow.value)
-      break
-  }
-
-  showDropdown.value = false
-}
-
-// 处理点击外部关闭菜单
-const onClickoutside = () => {
-  showDropdown.value = false
-}
-
-// 行属性配置：右键点击触发菜单
-const rowProps = (row) => {
-  return {
-    onContextmenu: (e) => {
-      e.preventDefault()
-      selectedRow.value = row
-      showDropdown.value = false
-      nextTick(() => {
-        showDropdown.value = true
-        x.value = e.clientX
-        y.value = e.clientY
-      })
-    },
-  }
-}
-
-// 方法：打开文件
-const handleOpen = async (row) => {
-  // 1. 确定文件类型和文件名
-  const rowFileType = row.type?.toLowerCase() || ''
-
-  const rowFileName = row.importFileName || ''
-
-  // 2. 映射文件类型
-  const fileType = mapFileType(rowFileType)
-  if (!fileType) {
-    console.warn('未知文件类型:', rowFileType, row)
-    return
-  }
-
-  // 获取不带后缀的文件名
-  const baseFileName = rowFileName.includes('.')
-    ? rowFileName.substring(0, rowFileName.lastIndexOf('.'))
-    : rowFileName
-
-  // 3. 准备窗口参数
-  const windowLabel = `reader-${row.id}-${Date.now()}` // 唯一窗口标识
-  const windowTitle = `${rowFileName || '未命名文件'}` // 使用不带后缀的文件名
-
-  const osPlatform = await platform()
-  let ReadFilePath = ''
-
-  console.log('store.librariesRoot:', store.librariesRoot)
-
-  if (store.currentDatabase.length > 0) {
-    if (osPlatform === 'windows') {
-      ReadFilePath = `${store.librariesRoot}\\Libraries\\${row.library}\\${baseFileName}\\${rowFileType}\\${rowFileName}`
-    } else if (osPlatform === 'linux') {
-      ReadFilePath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/${rowFileType}/${rowFileName}`
-    } else {
-      console.error('未知的操作系统平台:', osPlatform)
-    }
-  } else {
-    console.error('未知的数据库类型:', store.currentDatabase)
-  }
-
-  try {
-    // 4. 调用 Rust 命令创建窗口
-    await invoke('create_reader_window', {
-      label: windowLabel,
-      title: windowTitle,
-      fileData: {
-        file_type: fileType,
-        file_name: rowFileName,
-        file_path: ReadFilePath,
-        library: row.library,
-      }
-    })
-
-    console.log('窗口创建参数:', {
-      label: windowLabel,
-      title: windowTitle,
-      fileData: {
-        type: fileType,
-        name: rowFileName,
-        path: ReadFilePath,
-        library: row.library,
-      }
-    })
-  } catch (error) {
-    console.error('创建窗口失败:', error)
-    alert(`无法打开文件: ${error.message || '未知错误'}`)
-  }
-}
-
-// 文件类型映射函数
-function mapFileType(rawType) {
-  const typeMap = {
-    'pdf': 'pdf',
-    'md': 'markdown',
-    'markdown': 'markdown',
-    'html': 'html',
-    'htm': 'html',
-    'epub': 'epub',
-    'doc': 'word',
-    'docx': 'word',
-    'word': 'word',
-    'txt': 'txt'
-  }
-  return typeMap[rawType] || null
-}
-
-const handleDelete = async (row) => {
-  try {
-    // 调用删除导入文件的接口
-    await invoke('delete_imported_file', { id: row.id });
-    console.log('删除导入文件成功', row);
-
-    // 刷新数据
-    await store.fetchFiles(store.currentDatabase);
-    await store.fetchRepos()
-  } catch (error) {
-    console.error('删除失败:', error);
-  }
-};
-
-// 方法：编辑文件或笔记
-const handleEdit = async (row) => {
-  try {
-    if (store.currentDatabase === 'importFileDB') {
-      // 调用更新导入文件的接口
-      const updatedFile = {
-        id: row.id,
-        import_file_name: row.importFileName,
-        description: row.description,
-        library: row.library,
-        file_type: row.type,
-        import_file_create_time: row.importFileCreateTime,
-        import_file_size: row.importFileSize,
-        tags: row.importedFileTags.split(','), // 将字符串转换为数组
-      };
-      await invoke('update_imported_file', { id: row.id, file: updatedFile });
-      console.log('更新导入文件成功', row);
-    } else {
-      // 调用更新笔记的接口
-      const updatedNote = {
-        id: row.id,
-        description: row.description,
-        note_file_name: row.noteFileName,
-        note_file_type: row.type,
-        from_imported_file: row.fromImportedFile,
-        from_imported_file_library: row.fromImportedFileLibrary,
-        note_file_create_time: row.noteFileCreateTime,
-        note_file_update_time: row.noteFileUpdateTime,
-        tags: row.notesTags.split(','), // 将字符串转换为数组
-      };
-      await invoke('update_note', { id: row.id, note: updatedNote });
-      console.log('更新笔记成功', row);
-    }
-
-    // 刷新数据
-    await store.fetchFiles(store.currentDatabase);
-  } catch (error) {
-    console.error('编辑失败:', error);
-  }
-};
-
-// 方法：分享文件
-const handleShare = (row) => {
-  console.log('分享', row)
-}
-
-// 方法：移动文件
-const handleMove = (row) => {
-  console.log('移动', row)
-}
-
-const heightForRow = () => 85;
-
-// 标题样式
-const titleStyle = {
-  fontSize: '17px',
-  fontWeight: 'bold',
-  color: '#000000',
-};
-
-// 计算表格总宽度（动态计算方式）
-const scrollX = computed(() => {
-  let totalWidth = 0;
-  columns.value.forEach(column => {
-    totalWidth += column.width;
-  });
-  return totalWidth;
-});
-
-// 动态生成列配置
-const columns = computed(() => {
-  const columnDefinitions = [
-    // 选择列
-    {
-      type: 'selection',
-      width: 60,
-      fixed: 'left',
-      align: 'center',
-      key: 'selection'
-    },
-    // 文件名列
-    {
-      title: () => h('span', { style: titleStyle }, '文件名'),
-      key: 'importFileName',
-      width: 200,
-      fixed: 'left',
-      render: renderEditableCell('importFileName')
-    },
-    // 文件描述列
-    {
-      title: () => h('span', { style: titleStyle }, '文件描述'),
-      key: 'description',
-      width: 200,
-      render: renderEditableCell('description', true, 'description')
-    },
-    // 文件标签列
-    {
-      title: () => h('span', { style: titleStyle }, '文件标签'),
-      key: 'importedFileTags',
-      width: 150,
-      render: renderEditableCell('importedFileTags', true, 'importedFileTags')
-    },
-    // 文件类型列
-    {
-      title: () => h('span', { style: titleStyle }, '文件类型'),
-      key: 'type',
-      width: 120,
-      render: renderReadonlyCell('type')
-    },
-    // 文件库列
-    {
-      title: () => h('span', { style: titleStyle }, '文件库'),
-      key: 'library',
-      width: 150,
-      filterOptions: [
-        { label: 'Library1', value: 'Library1' },
-        { label: 'Library2', value: 'Library2' },
-      ],
-      filter: (value, row) => row.library === value,
-      render: renderEditableCell('library', true, 'libraries')
-    },
-    // 入库时间列
-    {
-      title: () => h('span', { style: titleStyle }, '入库时间'),
-      key: 'importFileCreateTime',
-      width: 170,
-      render: renderReadonlyCell('importFileCreateTime')
-    },
-    // 文件大小列
-    {
-      title: () => h('span', { style: titleStyle }, '文件大小'),
-      key: 'importFileSize',
-      width: 100,
-      render: renderReadonlyCell('importFileSize')
-    },
-    // 笔记文件名列
-    {
-      title: () => h('span', { style: titleStyle }, '笔记文件名'),
-      key: 'newNoteForm.noteFileName',
-      width: 200,
-      render: renderReadonlyCell('newNoteForm.noteFileName')
-    },
-    // 笔记描述列
-    {
-      title: () => h('span', { style: titleStyle }, '笔记描述'),
-      key: 'newNoteForm.description',
-      width: 200,
-      render: renderReadonlyCell('newNoteForm.description')
-    },
-    // 笔记标签列
-    {
-      title: () => h('span', { style: titleStyle }, '笔记标签'),
-      key: 'newNoteForm.notesTags',
-      width: 150,
-      render: renderReadonlyCell('newNoteForm.notesTags')
-    },
-    // 笔记创建时间列
-    {
-      title: () => h('span', { style: titleStyle }, '笔记创建时间'),
-      key: 'newNoteForm.noteFileCreateTime',
-      width: 170,
-      render: renderReadonlyCell('newNoteForm.noteFileCreateTime')
-    },
-    // 笔记修改时间列
-    {
-      title: () => h('span', { style: titleStyle }, '笔记修改时间'),
-      key: 'newNoteForm.noteFileUpdateTime',
-      width: 170,
-      fixed: 'right',
-      align: 'left',
-      render: renderReadonlyCell('newNoteForm.noteFileUpdateTime')
-    }
-  ];
-
-  return columnDefinitions;
-});
-
-// 渲染可编辑单元格的工厂函数
-const renderEditableCell = (field, enableAutoComplete = false, searchType = '') => {
-  console.log('renderEditableCell', field, enableAutoComplete, searchType);
-  return (row) => h(ShowOrEdit, {
-    value: getNestedValue(row, field),
-    onUpdateValue: async (v) => {
-      const newRow = { ...row };
-      setNestedValue(newRow, field, v);
-      const error = validateTableCell(newRow);
-      if (error) {
-        message.error(error);
-        return;
-      }
-      setNestedValue(row, field, v);
-      await updateImportedFile(row);
-    },
-    enableAutoComplete,
-    searchType
-  });
-};
-
-// 渲染只读单元格的工厂函数
-const renderReadonlyCell = (field) => {
-  return (row) => h(ShowOrEdit, {
-    value: getNestedValue(row, field),
-    readonly: true
-  });
-};
-
-// 辅助函数：获取嵌套对象属性
-const getNestedValue = (obj, path) => {
-  return path.split('.').reduce((o, p) => o?.[p], obj);
-};
-
-// 辅助函数：设置嵌套对象属性
-const setNestedValue = (obj, path, value) => {
-  const parts = path.split('.');
-  const last = parts.pop();
-  let current = obj;
-
-  for (const part of parts) {
-    current[part] = current[part] || {};
-    current = current[part];
-  }
-
-  current[last] = value;
-};
-
-// 方法：按标题排序
-const sortTitle = () => {
-  tableRef.value.sort('title', 'ascend')
-}
-
-// 方法：过滤所属库
-const filterLibrary = () => {
-  tableRef.value.filter({
-    library: ['Library1'],
-  })
-}
-
-// 方法：清除过滤器
-const clearFilters = () => {
-  tableRef.value.filter(null)
-}
-
-// 方法：清除排序
-const clearSorter = () => {
-  tableRef.value.sort(null)
-}
-
-// 选中的行
-const checkedRowKeys = ref([])
-// 定义 row-key 函数
-const rowKey = (row) => row.id
-
-// 处理选中行
-const handleCheckboxUpdate = (rowKeys) => {
-  checkedRowKeys.value = rowKeys
-  console.log('选中的行 keys:', rowKeys)
-}
-
-
-// TableViewRepoView.vue
-const handleFileInfoEvent = async (event) => {
-  console.log('handleFileInfoEvent', event);
-  const fileInfo = event.payload;
-  
-  // 构建表单数据
-  newFileForm.value = {
-    id: 0,
-    filePath: fileInfo.file_path,
-    importFileName: fileInfo.file_name,
-    description: fileInfo.description,
-    importedFileTags: fileInfo.tags.join(','),
-    type: fileInfo.file_type,
-    library: 'default',
-    importFileCreateTime: new Date(fileInfo.create_time * 1000).toISOString(),
-    importFileSize: fileInfo.file_size,
-    knowledgeRepo: fileInfo.knowledge_repo,
-    newNoteForm: {
-      id: 0,
-      description: `${fileInfo.file_name}的笔记`,
-      noteFileName: `${fileInfo.file_name.replace(/\.[^/.]+$/, "")}_note.md`,
-      notesTags: fileInfo.tags.join(','),
-      noteFileType: 'md',
-      fromImportedFile: fileInfo.file_name,
-      fromImportedFileLibrary: 'default',
-      noteFileCreateTime: new Date().toISOString(),
-      noteFileUpdateTime: new Date().toISOString(),
-      knowledgeRepo: fileInfo.knowledge_repo,
-    }
-  };
-  
-  // 调用 addFile 方法
-  try {
-    await addFile();
-    message.success('文件添加成功');
-  } catch (error) {
-    console.error('添加文件失败:', error);
-    message.error(`添加文件失败: ${error.message || error}`);
-  }
-};
-
-// 引入搜索逻辑
+// 使用组合式函数
 const {
-  noteTagOptions,
-  isNoteTagLoading,
-  handleNoteTagSearch,
-} = useNoteTagsSearch();
+  progresses, // 原始任务数组（保持兼容）
+  categorizedProgresses, // 新增：分类后的任务
+  getProgressCountByType, // 新增：按类型获取任务数量
+  showTaskList,
+  toggleTaskList,
+  startProgressListener,
+  stopProgressListener,
+  convertFile
+} = useProgress({ store, message })
 
 const {
-  importedFileTagOptions,
-  isImportedFileTagLoading,
-  handleImportedFileTagSearch,
-} = useImportedFileTagsSearch();
-
-const {
-  importedFileOptions,
-  isImportedFileLoading,
-  handleImportedFileSearch,
-} = useImportedFilesSearch();
-
-const {
+  isAddFileModalVisible,
+  currentForm,
+  rules,
+  formColumns,
   libraryOptions,
+  importedFileTagOptions,
   isLibraryLoading,
-  handleLibrarySearch,
-} = useLibrariesSearch();
+  isImportedFileTagLoading,
+  showAddFileModal,
+  openFileBrowser,
+  addFile,
+  handleFileInfoEvent,
+  handleFormUpdate,
+  handleModalCancel
+} = useFormHandling({
+  store,
+  message,
+  startProgressListener,
+  convertFile
+})
 
 const {
-  importedFileLibraryOptions,
-  isImportedFileLibraryLoading,
-  handleImportedFileLibrarySearch,
-} = useImportedFileLibrarySearch();
+  showDropdown,
+  x,
+  y,
+  contextMenuOptions,
+  handleContextMenuSelect,
+  onClickoutside,
+  rowProps,
+  handleRowContextMenu
+} = useContextMenu({ store, message })
 
-// 监听输入值变化并触发搜索
-watch(() => currentForm.value.importedFileTags, (newValue) => {
-  handleImportedFileTagSearch(newValue);
-});
+const {
+  searchParams,
+  searchPanelCollapsed,
+  fileTypeOptions,
+  knowledgeRepoOptions,
+  filteredData,
+  searchLibraryOptions,
+  searchImportedFileTagOptions,
+  handleSearch,
+  handleLibrarySearch,
+  handleImportedFileTagSearch,
+  handleKnowledgeRepoSearch,
+  isLibraryLoadingAdvanceSearch,
+  isImportedFileTagLoadingAdvanceSearch,
+  isKnowledgeRepoLoadingAdvanceSearch,
+  clearSearch,
+  initializeSearch
+} = useSearch({ store, message });
 
-watch(() => currentForm.value.notesTags, (newValue) => {
-  handleNoteTagSearch(newValue);
-});
+const {
+  handleLibrarySearchComplete,
+  handleImportedFileTagSearchComplete,
+  libraryOptionsComplete,
+  importedFileTagOptionsComplete,
+  importedFileLibraryOptionsComplete,
+  noteTagOptionsComplete,
+  importedFileOptionsComplete,
+  isLibraryLoadingComplete,
+  isImportedFileTagLoadingComplete,
+  isImportedFileLibraryLoadingComplete,
+  isNoteTagLoadingComplete,
+  knowledgeRepoOptionsComplete,
+  isKnowledgeRepoLoadingComplete,
+  handleKnowledgeRepoSearchComplete
+} = useSearchComplete()
 
-watch(() => currentForm.value.fromImportedFile, (newValue) => {
-  handleImportedFileSearch(newValue);
-});
+// 使用表格配置
+const {
+  tableRef,
+  tableHeight,
+  pagination,
+  scrollX,
+  rowKey,
+  columns,
+  heightForRow,
+  handleCheckboxUpdate,
+  sortTitle,
+  clearFilters,
+  resetTableState,
+  checkedRowKeys
+} = useTableConfig({ store, message, ShowOrEdit })
 
-watch(() => currentForm.value.library, (newValue) => {
-  handleLibrarySearch(newValue);
-});
+const { backupDatabase: backupDatabaseOp, recoverDatabase: recoverDatabaseOp, importItems: importItemsOp, exportItems: exportItemsOp } = useFileOperations({ store, message })
 
-watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
-  handleImportedFileLibrarySearch(newValue);
-});
+const sortMode = ref(null)
+
+const textCollator = new Intl.Collator(['zh-Hans-CN-u-co-pinyin', 'en'], {
+  sensitivity: 'base',
+  numeric: true,
+})
+
+const sortedData = computed(() => {
+  const data = [...filteredData.value]
+  if (!sortMode.value) {
+    return data
+  }
+
+  if (sortMode.value === 'name') {
+    return data.sort((a, b) => textCollator.compare(a.importFileName || '', b.importFileName || ''))
+  }
+
+  if (sortMode.value === 'library') {
+    return data.sort((a, b) => textCollator.compare(a.library || '', b.library || ''))
+  }
+
+  if (sortMode.value === 'date') {
+    return data.sort((a, b) => {
+      const ta = a.importFileCreateTime ? new Date(a.importFileCreateTime).getTime() : 0
+      const tb = b.importFileCreateTime ? new Date(b.importFileCreateTime).getTime() : 0
+      return ta - tb
+    })
+  }
+
+  return data
+})
+
+const handleSort = (mode) => {
+  sortMode.value = mode
+}
+
+const handleClearFilters = () => {
+  sortMode.value = null
+  clearSearch()
+  resetTableState()
+}
+
+// 文件操作实现
+const backupDatabase = async (scope = 'current') => {
+  try {
+    await backupDatabaseOp(scope)
+  } catch (error) {
+    console.error('备份失败:', error)
+  }
+}
+
+const recoverDatabase = async () => {
+  try {
+    await recoverDatabaseOp()
+  } catch (error) {
+    console.error('恢复失败:', error)
+  }
+}
+
+const importItems = async () => {
+  try {
+    await importItemsOp()
+  } catch (error) {
+    console.error('导入失败:', error)
+  }
+}
+
+const exportItems = async () => {
+  try {
+    await exportItemsOp(checkedRowKeys.value)
+  } catch (error) {
+    console.error('导出失败:', error)
+  }
+}
 
 const initAppHandle = async () => {
   try {
-    await invoke('init_backend_services');
-    console.log('AppHandle initialized successfully');
+    await invoke('init_backend_services')
+    console.log('AppHandle initialized successfully')
   } catch (error) {
-    console.error('Failed to initialize AppHandle:', error);
-    message.error('初始化应用句柄失败，部分功能可能受限');
+    console.error('Failed to initialize AppHandle:', error)
+    message.error('初始化应用句柄失败，部分功能可能受限')
   }
-};
+}
+
+const handleGlobalClick = (e) => {
+  // 检查是否点击了菜单区域
+  const isContextMenu = e.target.closest('.custom-context-menu-wrapper') ||
+    e.target.closest('.n-dropdown-menu') ||
+    e.target.closest('.n-dropdown')
+
+  // 只在点击菜单外部时关闭
+  if (!isContextMenu && showDropdown.value) {
+    showDropdown.value = false
+  }
+}
+
+// 监听输入值变化并触发搜索
+watch(() => currentForm.value.importedFileTags, (newValue) => {
+  handleImportedFileTagSearchComplete(newValue)
+})
+
+watch(() => currentForm.value.notesTags, (newValue) => {
+  handleNoteTagSearchComplete(newValue)
+})
+
+watch(() => currentForm.value.fromImportedFile, (newValue) => {
+  handleImportedFileSearchComplete(newValue)
+})
+
+watch(() => currentForm.value.library, (newValue) => {
+  handleLibrarySearchComplete(newValue)
+})
+
+watch(() => currentForm.value.fromImportedFileLibrary, (newValue) => {
+  handleImportedFileLibrarySearchComplete(newValue)
+})
+
+watch(() => currentForm.value.knowledgeRepo, (newValue) => {
+  handleKnowledgeRepoSearchComplete(newValue)
+})
+
+watch(() => eventStore.webClipperEvent, (newEvent) => {
+  if (newEvent) {
+    handleFileInfoEvent({ payload: newEvent })
+    // 处理完后清除事件
+    eventStore.webClipperEvent = null
+  }
+})
 
 // 组件挂载时获取默认数据
 onMounted(async () => {
   // 初始化 AppHandle
-  await initAppHandle();
+  await initAppHandle()
 
   store.get_librariesRoot()
   await store.fetchFiles(store.currentDatabase) // 默认加载数据库 1 的数据
+  document.addEventListener('click', handleGlobalClick, true)
 
-  // 监听 Tauri 事件
-  unlistenBrowserExtension = await listen('add_browser_saved_html_file_event', handleFileInfoEvent);
+  // 计算表格容器高度 - 使用更准确的方式
+  const calculateHeight = () => {
+    nextTick(() => {
+      const container = document.querySelector('.table-container')
+      if (container) {
+        const rect = container.getBoundingClientRect()
+        containerHeight.value = rect.height
+        console.log('Table container height:', containerHeight.value)
+      }
+    })
+  }
+
+  calculateHeight()
+
+  // 监听窗口大小变化
+  window.addEventListener('resize', () => {
+    calculateHeight()
+  })
+
+  try {
+    // 安全初始化
+    await eventStore.initGlobalListeners()
+
+    // 订阅事件（带自动注册）
+    const unsubscribe = eventStore.subscribe(
+      'add_web_clipper_file_event',
+      (payload) => {
+        console.log('处理事件:', payload)
+        handleFileInfoEvent(payload)
+      }
+    )
+
+    onUnmounted(unsubscribe)
+  } catch (error) {
+    console.error('事件系统初始化失败:', error)
+  }
+
+  initializeSearch();
 })
 
 onUnmounted(() => {
-  // 移除 Tauri 事件监听
-  if (unlistenBrowserExtension) {
-    unlistenBrowserExtension();
-  }
+  document.removeEventListener('click', handleGlobalClick, true)
+  window.removeEventListener('resize', handleWindowResize)
 })
-
 </script>
 
 <style scoped>
 .main-content-wrapper {
   display: flex;
   flex-direction: column;
-  width: 100%;
   height: 100%;
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
 }
 
 .toolbar-container {
-  padding: 16px;
-  width: 100%;
-  box-sizing: border-box;
+  padding: 8px 16px;
+  flex-shrink: 0;
+  background-color: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
 }
 
 .table-container {
   flex: 1;
   width: 100%;
-  overflow: hidden;
-}
-
-.data-table {
-  width: 100% !important;
-  height: 100%;
-}
-
-.actions {
+  overflow: visible;
+  padding: 0;
+  box-sizing: border-box;
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  /* 允许按钮换行 */
-}
-
-.add-path-button {
-  margin-left: auto;
-  white-space: nowrap;
-  /* 防止按钮文本换行 */
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .actions {
-    flex-direction: column;
-    /* 小屏幕时按钮堆叠显示 */
-  }
-
-  .add-path-button {
-    margin-left: 0;
-    /* 小屏幕时取消自动左边距 */
-  }
-}
-
-/* 行悬停效果 */
-.hovered-row {
-  background-color: #9ae4f1;
-  /* 淡绿色 */
-}
-
-/* 右键菜单样式 */
-.custom-dropdown .n-dropdown-menu {
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  padding: 8px 0;
-}
-
-.custom-dropdown .n-dropdown-option {
-  padding: 8px 16px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  color: #333;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.custom-dropdown .n-dropdown-option:hover {
-  background-color: #e8f5e9;
-  /* 淡绿色 */
-}
-
-.custom-dropdown .n-dropdown-option .n-icon {
-  color: #666;
-}
-
-.custom-form {
-  padding: 16px;
-}
-
-.custom-form .n-form-item {
-  margin-bottom: 16px;
-}
-
-.custom-form .n-input {
-  width: 100%;
-}
-
-.n-auto-complete {
-  width: 100%;
-  /* 确保宽度足够 */
-}
-
-.progress-container {
-  position: fixed;
-  bottom: 0px;
-  right: 20px;
-  width: 350px;
-  max-height: 50vh;
-  overflow-y: auto;
-  z-index: 1000;
-  background-color: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(56, 54, 54, 0.884);
-  padding: 0px;
-}
-
-.progress-container .n-card {
-  margin-bottom: 12px;
-}
-
-:deep(.n-progress .n-progress-graph-line-fill) {
-  background-color: #409EFF !important;
-}
-
-:deep(.n-progress .n-progress-content) {
-  position: absolute;
-  right: 5%;
-  top: 50%;
-  transform: translateY(-50%);
+  flex-direction: column;
+  min-height: 0;
 }
 </style>

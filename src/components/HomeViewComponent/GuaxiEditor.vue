@@ -1,62 +1,370 @@
 <template>
-  <div class="editor-container">
-    <!-- 标签页栏 -->
-    <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
-      <div v-for="tab in fileTreeStore.openTabs" :key="tab.path"
-        :class="['tab-item', { 'active': fileTreeStore.activeTab === tab.path }]" @click="switchTab(tab.path)"
-        @mousedown.middle="closeTab(tab.path)">
-        <span>{{ tab.fileName }}</span>
-        <n-icon size="14" @click.stop="closeTab(tab.path)">
-          <CloseOutline />
-        </n-icon>
-      </div>
-    </div>
-    <!-- 工具栏 -->
-    <div class="toolbar">
-      <div class="toolbar-spacer"></div>
-      <div class="toolbar-actions">
-        <!-- 添加 Git 操作按钮 -->
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="toggleGitPanel">
-              <n-icon>
-                <GitBranchOutline />
+  <div class="editor-container guaxi-editor">
+    <div class="editor-header" ref="editorHeaderRef">
+      <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
+        <div class="tab-region tab-region-left" ref="tabRegionLeftRef">
+          <div v-for="tab in leftTabs" :key="tab.path"
+            :class="['tab-item', { 'active': fileTreeStore.activeTabLeft === tab.path, 'dirty': !!tab.dirty }]"
+            @click="switchTab(tab.path, 'left')" @mousedown.middle="closeTab(tab.path, 'left')">
+            <span class="tab-title">{{ tab.fileName }}</span>
+            <span class="tab-affordance">
+              <span class="tab-dirty-dot" v-show="tab.dirty" />
+              <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'left')">
+                <CloseOutline />
               </n-icon>
-            </n-button>
-          </template>
-          Git 操作
-        </n-tooltip>
+            </span>
+          </div>
+        </div>
+        <div v-if="layoutMode !== 'single'" class="tab-region tab-region-right" ref="tabRegionRightRef">
+          <div v-for="tab in rightTabs" :key="tab.path"
+            :class="['tab-item', { 'active': fileTreeStore.activeTabRight === tab.path, 'dirty': !!tab.dirty }]"
+            @click="switchTab(tab.path, 'right')" @mousedown.middle="closeTab(tab.path, 'right')">
+            <span class="tab-title">{{ tab.fileName }}</span>
+            <span class="tab-affordance">
+              <span class="tab-dirty-dot" v-show="tab.dirty" />
+              <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path, 'right')">
+                <CloseOutline />
+              </n-icon>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div v-if="previewMode !== 'realtime'" class="toolbar-editing-actions">
+          <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text size="tiny">
+                  <Icon icon="lucide:heading" width="16" height="16" />
+                </n-button>
+              </template>
+              标题
+            </n-tooltip>
+          </n-dropdown>
 
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="toggleVimMode">
-              <n-icon :component="vimMode ? LogoVimeo : Edit16Filled" />
-            </n-button>
-          </template>
-          {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
-        </n-tooltip>
-        <n-tooltip placement="top" trigger="hover">
-          <template #trigger>
-            <n-button text @click="toggleMode">
-              <n-icon :component="mode === 'edit' ? DocumentEdit16Regular : EyeOutline" />
-            </n-button>
-          </template>
-          {{ mode === 'edit' ? '编辑模式' : '阅读模式' }}
-        </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleBold">
+                <Icon icon="lucide:bold" width="16" height="16" />
+              </n-button>
+            </template>
+            加粗 (Ctrl+B)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleItalic">
+                <Icon icon="lucide:italic" width="16" height="16" />
+              </n-button>
+            </template>
+            斜体 (Ctrl+I)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleStrikethrough">
+                <Icon icon="lucide:strikethrough" width="16" height="16" />
+              </n-button>
+            </template>
+            删除线 (Ctrl+Shift+X)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertLink">
+                <Icon icon="lucide:link" width="16" height="16" />
+              </n-button>
+            </template>
+            链接 (Ctrl+K)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleBlockquote">
+                <Icon icon="lucide:quote" width="16" height="16" />
+              </n-button>
+            </template>
+            引用
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleInlineCode">
+                <Icon icon="lucide:code" width="16" height="16" />
+              </n-button>
+            </template>
+            行内代码
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertCodeBlockFromToolbar">
+                <Icon icon="lucide:square-terminal" width="16" height="16" />
+              </n-button>
+            </template>
+            代码块
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleUnorderedList">
+                <Icon icon="lucide:list" width="16" height="16" />
+              </n-button>
+            </template>
+            无序列表
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleOrderedList">
+                <Icon icon="lucide:list-ordered" width="16" height="16" />
+              </n-button>
+            </template>
+            有序列表
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleTaskList">
+                <Icon icon="lucide:list-checks" width="16" height="16" />
+              </n-button>
+            </template>
+            任务列表
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertTable">
+                <Icon icon="lucide:table" width="16" height="16" />
+              </n-button>
+            </template>
+            表格 (Ctrl+Alt+T)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertImage">
+                <Icon icon="lucide:image" width="16" height="16" />
+              </n-button>
+            </template>
+            图片
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertHorizontalRule">
+                <Icon icon="lucide:minus" width="16" height="16" />
+              </n-button>
+            </template>
+            分隔线
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="undo">
+                <Icon icon="lucide:undo" width="16" height="16" />
+              </n-button>
+            </template>
+            撤销
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="redo">
+                <Icon icon="lucide:redo" width="16" height="16" />
+              </n-button>
+            </template>
+            重做
+          </n-tooltip>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-actions">
+          <!-- 添加 Git 操作按钮 -->
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="toggleGitPanel">
+                <n-icon width="16" height="16">
+                  <GitBranchOutline />
+                </n-icon>
+              </n-button>
+            </template>
+            Git 操作
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="toggleVimMode">
+                <n-icon :component="vimMode ? LogoVimeo : Edit16Filled" width="16" height="16" />
+              </n-button>
+            </template>
+            {{ vimMode ? '禁用Vim模式' : '启用Vim模式' }}
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="saveContent">
+                <n-icon :component="SaveOutline" width="16" height="16" />
+              </n-button>
+            </template>
+            保存 (Ctrl+S)
+          </n-tooltip>
+
+          <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text>
+                  <Icon :icon="previewModeIcon" width="16" height="16" />
+                </n-button>
+              </template>
+              {{ previewModeLabel }} (Ctrl+1/2/3/4)
+            </n-tooltip>
+          </n-dropdown>
+
+          <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text>
+                  <n-icon :component="DownloadOutline" width="16" height="16" />
+                </n-button>
+              </template>
+              导出
+            </n-tooltip>
+          </n-dropdown>
+        </div>
       </div>
     </div>
 
-    <!-- 编辑器 -->
-    <div v-show="selectedFile && mode === 'edit'" class="editor-wrapper">
-      <div ref="editorContainer" class="editor-container">
-        <!-- 编辑器内容将在这里渲染 -->
-      </div>
-      <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
-      <GuaxiEditorStatusBar class="editor-status-bar" />
-    </div>
+    <div v-if="selectedFile" class="editor-content" :class="previewMode">
+      <div v-show="previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
+      <div v-show="previewMode !== 'realtime' && showPreview" v-html="renderedHtml" class="preview"
+        ref="previewContainer" @click="handlePreviewClick"></div>
+      <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
+        <div v-show="tableToolbarVisible" class="floating-table-toolbar" :style="tableToolbarStyle" @mousedown.prevent>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="addTableRowBelow">
+                <Icon icon="mdi:table-row-plus-after" width="16" height="16" />
+              </n-button>
+            </template>
+            新增行 (Ctrl+Alt+↓)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="deleteTableRow">
+                <Icon icon="mdi:table-row-remove" width="16" height="16" />
+              </n-button>
+            </template>
+            删除行 (Ctrl+Alt+Shift+↓)
+          </n-tooltip>
+          <div class="floating-table-toolbar-divider"></div>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="addTableColumnRight">
+                <Icon icon="mdi:table-column-plus-after" width="16" height="16" />
+              </n-button>
+            </template>
+            新增列 (Ctrl+Alt+→)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="deleteTableColumn">
+                <Icon icon="mdi:table-column-remove" width="16" height="16" />
+              </n-button>
+            </template>
+            删除列 (Ctrl+Alt+Shift+→)
+          </n-tooltip>
+          <div class="floating-table-toolbar-divider"></div>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="setTableColumnAlign('left')">
+                <Icon icon="lucide:align-left" width="16" height="16" />
+              </n-button>
+            </template>
+            左对齐
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="setTableColumnAlign('center')">
+                <Icon icon="lucide:align-center" width="16" height="16" />
+              </n-button>
+            </template>
+            居中
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="setTableColumnAlign('right')">
+                <Icon icon="lucide:align-right" width="16" height="16" />
+              </n-button>
+            </template>
+            右对齐
+          </n-tooltip>
+          <div class="floating-table-toolbar-divider"></div>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="formatTable">
+                <Icon icon="lucide:sparkles" width="16" height="16" />
+              </n-button>
+            </template>
+            格式化
+          </n-tooltip>
+        </div>
+        <div v-show="floatingToolbarVisible" class="floating-md-toolbar" :style="floatingToolbarStyle"
+          @mousedown.prevent>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleBold">
+                <Icon icon="lucide:bold" width="16" height="16" />
+              </n-button>
+            </template>
+            加粗 (Ctrl+B)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleItalic">
+                <Icon icon="lucide:italic" width="16" height="16" />
+              </n-button>
+            </template>
+            斜体 (Ctrl+I)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleStrikethrough">
+                <Icon icon="lucide:strikethrough" width="16" height="16" />
+              </n-button>
+            </template>
+            删除线 (Ctrl+Shift+X)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertLink">
+                <Icon icon="lucide:link" width="16" height="16" />
+              </n-button>
+            </template>
+            链接 (Ctrl+K)
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleInlineCode">
+                <Icon icon="lucide:code" width="16" height="16" />
+              </n-button>
+            </template>
+            行内代码
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="toggleBlockquote">
+                <Icon icon="lucide:quote" width="16" height="16" />
+              </n-button>
+            </template>
+            引用
+          </n-tooltip>
+        </div>
+        <div class="editor-split-wrapper" :class="[layoutMode, { 'vim-enabled': vimMode }]">
+          <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
+            <!-- 编辑器内容将在这里渲染 -->
+          </div>
+          <div v-if="layoutMode !== 'single'" ref="secondaryEditorContainer" class="editor-container"
+            @mousedown="activateRegion('right')">
+          </div>
+        </div>
 
-    <!-- 阅读模式 -->
-    <div v-show="selectedFile && mode === 'preview'" v-html="renderedHtml" class="preview" ref="previewContainer">
+        <n-dropdown v-model:show="editorContextMenuVisible" :options="editorContextMenuOptions" placement="bottom-start"
+          :x="editorContextMenuPosition.x" :y="editorContextMenuPosition.y" @select="handleEditorContextMenuSelect"
+          @clickoutside="handleEditorContextMenuClickoutside" />
+
+        <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
+        <GuaxiEditorStatusBar class="editor-status-bar" />
+      </div>
+
     </div>
     <!-- 添加 GitPanel 组件 -->
     <!--
@@ -66,18 +374,24 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
-import { NTooltip, NIcon, useMessage } from 'naive-ui'
-import { EyeOutline, LogoVimeo, CloseOutline } from '@vicons/ionicons5'
+import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
+import { Icon } from '@iconify/vue'
+import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline, SaveOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
-import { dirname } from '@tauri-apps/api/path'
+import { dirname, homeDir } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import Vditor from 'vditor'
+import 'vditor/dist/index.css'
+import 'vditor/dist/method'
 import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
+import { initTextmate } from '../../monaco/textmateLoader'
+import { initLspClient } from '../../monaco/lspClient'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -86,6 +400,14 @@ import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution'
 import 'monaco-editor/esm/vs/basic-languages/html/html.contribution'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
 import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
+import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
+import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution'
+import 'monaco-editor/esm/vs/basic-languages/java/java.contribution'
+import 'monaco-editor/esm/vs/basic-languages/lua/lua.contribution'
+import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution'
+
+import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
+import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess.js'
 
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -93,6 +415,8 @@ import { GitBranchOutline } from '@vicons/ionicons5'
 import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { save } from '@tauri-apps/plugin-dialog'
 
 const outlineStore = useOutlineStore()
 // 添加 GitPanel 组件引用
@@ -103,10 +427,607 @@ const gitPanel = ref(null)
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 const mode = ref('edit');
+const previewMode = ref('toggle');
+const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const previewContainer = ref(null);
 const editorContainer = ref(null);
+const secondaryEditorContainer = ref(null);
+const editorWrapperRef = ref(null);
+const editorHeaderRef = ref(null);
+const floatingToolbarVisible = ref(false);
+const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
+
+const editorContextMenuVisible = ref(false);
+const editorContextMenuPosition = ref({ x: 0, y: 0 });
+const editorContextMenuOptions = ref([]);
+
+const handleEditorContextMenuClickoutside = () => {
+  editorContextMenuVisible.value = false;
+};
+
+const writeClipboardText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readClipboardText = async () => {
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return null;
+  }
+};
+
+const clipboardCopy = async () => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection || selection.isEmpty()) return;
+  const text = model.getValueInRange(selection);
+  if (!text) return;
+  const ok = await writeClipboardText(text);
+  if (!ok) message.warning('复制失败：无剪贴板权限');
+};
+
+const clipboardCut = async () => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection || selection.isEmpty()) return;
+
+  const text = model.getValueInRange(selection);
+  if (!text) return;
+
+  const ok = await writeClipboardText(text);
+  if (!ok) {
+    message.warning('剪切失败：无剪贴板权限');
+    return;
+  }
+
+  editor.executeEdits('clipboard-cut', [
+    {
+      range: selection,
+      text: '',
+      forceMoveMarkers: true
+    }
+  ]);
+};
+
+const clipboardPaste = async () => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  const text = await readClipboardText();
+  if (text == null) {
+    message.warning('粘贴失败：无剪贴板权限');
+    return;
+  }
+
+  editor.executeEdits('clipboard-paste', [
+    {
+      range: selection,
+      text,
+      forceMoveMarkers: true
+    }
+  ]);
+};
+
+const runEditorAction = async (actionId) => {
+  if (!editor) return;
+  editor.focus();
+
+  if (actionId === 'editor.action.clipboardCopyAction') {
+    const action = editor.getAction?.(actionId);
+    if (action) {
+      await action.run();
+      return;
+    }
+    await clipboardCopy();
+    return;
+  }
+
+  if (actionId === 'editor.action.clipboardCutAction') {
+    const action = editor.getAction?.(actionId);
+    if (action) {
+      await action.run();
+      return;
+    }
+    await clipboardCut();
+    return;
+  }
+
+  if (actionId === 'editor.action.clipboardPasteAction') {
+    const action = editor.getAction?.(actionId);
+    if (action) {
+      await action.run();
+      return;
+    }
+    await clipboardPaste();
+    return;
+  }
+
+  const action = editor.getAction?.(actionId);
+  if (action) {
+    await action.run();
+    return;
+  }
+
+  try {
+    editor.trigger('contextmenu', actionId, null);
+  } catch {
+    message.warning('该命令当前不可用');
+  }
+};
+
+const buildEditorContextMenuOptions = () => {
+  const model = editor?.getModel?.();
+  const isMarkdown = (model?.getLanguageId?.() || '') === 'markdown';
+  const selection = editor?.getSelection?.();
+  const hasSelection = !!selection && !selection.isEmpty();
+
+  return [
+    { label: '剪切', key: 'editor.action.clipboardCutAction' },
+    { label: '复制', key: 'editor.action.clipboardCopyAction' },
+    { label: '粘贴', key: 'editor.action.clipboardPasteAction' },
+    { type: 'divider' },
+
+    { label: 'Markdown 格式化（全文）', key: 'guaxi.markdown.formatDocument', disabled: !isMarkdown },
+    { label: 'Markdown 格式化（选中）', key: 'guaxi.markdown.formatSelection', disabled: !isMarkdown || !hasSelection },
+    { type: 'divider' },
+
+    { label: '跳转到上次编辑位置 (Alt+←)', key: 'guaxi.edit.navigateBack' },
+    { label: '跳转到下一编辑位置 (Alt+→)', key: 'guaxi.edit.navigateForward' },
+    { type: 'divider' },
+
+    { label: '插入Markdown模板', key: 'insert.md.template' },
+    { type: 'divider' },
+
+    { label: '命令面板', key: 'editor.action.quickCommand' }
+  ];
+};
+
+const handleEditorContextMenuSelect = async (key) => {
+  editorContextMenuVisible.value = false;
+
+  if (key === 'guaxi.markdown.formatDocument') {
+    await formatMarkdownDocument();
+    return;
+  }
+
+  if (key === 'guaxi.markdown.formatSelection') {
+    await formatMarkdownSelection();
+    return;
+  }
+
+  if (key === 'guaxi.edit.navigateBack') {
+    await navigateToPreviousEditLocation();
+    return;
+  }
+
+  if (key === 'guaxi.edit.navigateForward') {
+    await navigateToNextEditLocation();
+    return;
+  }
+
+  await runEditorAction(key);
+};
+const tableToolbarVisible = ref(false);
+const tableToolbarStyle = ref({ left: '0px', top: '0px' });
+const activeTableContext = ref(null);
+const scrollRatio = ref(0);
+const pendingPreviewScrollRestore = ref(false);
+const pendingPreviewScrollLine = ref(null);
+const pendingRealtimeScrollRestore = ref(false);
+const realtimeVditorId = 'realtime-vditor';
+const realtimeVditorReady = ref(false);
+const pendingRealtimeVditorValue = ref(null);
+let realtimeVditor = null;
+let settingRealtimeVditorValue = false;
+const syncRealtimeValueToRawContent = debounce((value) => {
+  rawContent.value = value;
+  const path = fileTreeStore.activeTab;
+  if (path) fileTreeStore.updateTabContent(path, value);
+}, 120);
 let editor = null;
+let secondaryEditor = null;
+let editorEffectsLeft = null;
+let editorEffectsRight = null;
+
+const createEditorEffects = (targetEditor) => {
+  const host = targetEditor?.getDomNode?.();
+  if (!host) return null;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'guaxi-editor-effects';
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'guaxi-editor-effects-canvas';
+
+  const cursor = document.createElement('div');
+  cursor.className = 'guaxi-editor-smooth-cursor';
+
+  overlay.appendChild(canvas);
+  overlay.appendChild(cursor);
+  host.appendChild(overlay);
+
+  const ctx = canvas.getContext('2d');
+  const palette = [
+    'rgba(255, 208, 0, 0.95)',
+    'rgba(255, 105, 180, 0.95)',
+    'rgba(0, 220, 255, 0.95)',
+    'rgba(140, 255, 120, 0.95)',
+    'rgba(255, 90, 90, 0.95)',
+    'rgba(180, 120, 255, 0.95)'
+  ];
+
+  const state = {
+    host,
+    overlay,
+    canvas,
+    ctx,
+    dpr: 1,
+    w: 0,
+    h: 0,
+    particles: [],
+    raf: 0,
+    lastTs: 0,
+    cx: 0,
+    cy: 0,
+    tx: 0,
+    ty: 0,
+    ch: 18,
+    tch: 18,
+    cursorVisible: false,
+    ro: null,
+    resizeHandler: null
+  };
+
+  const resize = () => {
+    const rect = host.getBoundingClientRect();
+    const w = Math.max(1, Math.floor(rect.width));
+    const h = Math.max(1, Math.floor(rect.height));
+    const dpr = window.devicePixelRatio || 1;
+
+    if (w === state.w && h === state.h && dpr === state.dpr) return;
+
+    state.w = w;
+    state.h = h;
+    state.dpr = dpr;
+
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    canvas.width = Math.max(1, Math.floor(w * dpr));
+    canvas.height = Math.max(1, Math.floor(h * dpr));
+
+    if (ctx) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+  };
+
+  const step = (ts) => {
+    const dt = Math.min(0.034, Math.max(0, (ts - (state.lastTs || ts)) / 1000));
+    state.lastTs = ts;
+
+    resize();
+
+    const dx = state.tx - state.cx;
+    const dy = state.ty - state.cy;
+    const dh = state.tch - state.ch;
+
+    const follow = 1 - Math.pow(1 - 0.35, dt * 60);
+    state.cx += dx * follow;
+    state.cy += dy * follow;
+    state.ch += dh * follow;
+
+    if (state.cursorVisible) {
+      cursor.style.opacity = '1';
+      cursor.style.height = `${Math.max(8, state.ch)}px`;
+      cursor.style.transform = `translate3d(${state.cx}px, ${state.cy}px, 0)`;
+    } else {
+      cursor.style.opacity = '0';
+    }
+
+    const g = 900;
+    const drag = Math.pow(0.04, dt);
+
+    if (state.particles.length) {
+      for (let i = state.particles.length - 1; i >= 0; i -= 1) {
+        const p = state.particles[i];
+        p.life -= dt;
+        if (p.life <= 0) {
+          state.particles.splice(i, 1);
+          continue;
+        }
+        p.vy += g * dt;
+        p.vx *= drag;
+        p.vy *= drag;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      }
+    }
+
+    if (ctx) {
+      ctx.clearRect(0, 0, state.w, state.h);
+      if (state.particles.length) {
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < state.particles.length; i += 1) {
+          const p = state.particles[i];
+          const a = Math.max(0, Math.min(1, p.life / p.ttl));
+          ctx.globalAlpha = a;
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+
+    // When there's nothing to animate, stop the RAF loop to reduce idle overhead.
+    // 1) no particles and cursor not visible -> stop
+    // 2) no particles and cursor already very close to target -> stop
+    if (!state.particles.length) {
+      if (!state.cursorVisible) {
+        state.raf = 0;
+        return;
+      }
+
+      const rdx = state.tx - state.cx;
+      const rdy = state.ty - state.cy;
+      const rdh = state.tch - state.ch;
+
+      // Pixel-level settle threshold (CSS pixels)
+      const settlePosEps = 0.25;
+      const settleHeightEps = 0.25;
+      const settled =
+        Math.abs(rdx) < settlePosEps &&
+        Math.abs(rdy) < settlePosEps &&
+        Math.abs(rdh) < settleHeightEps;
+
+      if (settled) {
+        // Snap to target so the last rendered frame is exact.
+        state.cx = state.tx;
+        state.cy = state.ty;
+        state.ch = state.tch;
+
+        cursor.style.opacity = '1';
+        cursor.style.height = `${Math.max(8, state.ch)}px`;
+        cursor.style.transform = `translate3d(${state.cx}px, ${state.cy}px, 0)`;
+
+        state.raf = 0;
+        return;
+      }
+    }
+
+    state.raf = requestAnimationFrame(step);
+  };
+
+  const ensureLoop = () => {
+    if (state.raf) return;
+    state.lastTs = performance.now();
+    state.raf = requestAnimationFrame(step);
+  };
+
+  const updateCursorTarget = () => {
+    const model = targetEditor.getModel();
+    const pos = targetEditor.getPosition();
+    if (!model || !pos) {
+      state.cursorVisible = false;
+      ensureLoop();
+      return;
+    }
+
+    const visible = targetEditor.getScrolledVisiblePosition(pos);
+    if (!visible) {
+      state.cursorVisible = false;
+      ensureLoop();
+      return;
+    }
+
+    state.cursorVisible = true;
+    state.tx = visible.left;
+    state.ty = visible.top;
+    state.tch = visible.height || 18;
+    ensureLoop();
+  };
+
+  const spawnExplosionAtCursor = (text) => {
+    const ch = text ? text[text.length - 1] : '';
+    if (!ch || ch === '\n' || ch === '\r' || ch === '\t') return;
+
+    const model = targetEditor.getModel();
+    const pos = targetEditor.getPosition();
+    if (!model || !pos) return;
+
+    const visible = targetEditor.getScrolledVisiblePosition(pos);
+    if (!visible) return;
+
+    const x = visible.left;
+    const y = visible.top + (visible.height || 18) * 0.7;
+
+    const n = Math.min(48, 18 + Math.floor(Math.random() * 10));
+    for (let i = 0; i < n; i += 1) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 80 + Math.random() * 340;
+      state.particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s - (120 + Math.random() * 160),
+        size: 0.8 + Math.random() * 2.2,
+        ttl: 0.55 + Math.random() * 0.35,
+        life: 0.55 + Math.random() * 0.35,
+        color: palette[(Math.random() * palette.length) | 0]
+      });
+    }
+
+    ensureLoop();
+  };
+
+  resize();
+
+  if (typeof ResizeObserver !== 'undefined') {
+    state.ro = new ResizeObserver(() => resize());
+    state.ro.observe(host);
+  } else {
+    state.resizeHandler = () => resize();
+    window.addEventListener('resize', state.resizeHandler);
+  }
+
+  // Don't start RAF loop until there's something to animate (cursor move / particles).
+  return {
+    updateCursorTarget,
+    spawnExplosionAtCursor,
+    destroy() {
+      if (state.raf) cancelAnimationFrame(state.raf);
+      state.raf = 0;
+      if (state.ro) state.ro.disconnect();
+      state.ro = null;
+      if (state.resizeHandler) {
+        window.removeEventListener('resize', state.resizeHandler);
+        state.resizeHandler = null;
+      }
+      if (state.overlay?.parentNode) state.overlay.parentNode.removeChild(state.overlay);
+      state.particles = [];
+      state.cursorVisible = false;
+    }
+  };
+};
+
+let initEditorPending = false;
+
+const editLocationBackStack = ref([]);
+const editLocationForwardStack = ref([]);
+let lastRecordedEditLocationKey = null;
+let lastRecordedEditLocationAt = 0;
+let suppressEditLocationRecording = false;
+const maxEditLocationHistory = 200;
+
+const getCurrentEditLocation = () => {
+  if (!editor) return null;
+  const path = fileTreeStore.activeTab || selectedFile.value?.path;
+  const position = editor.getPosition();
+  if (!path || !position) return null;
+  return {
+    path,
+    lineNumber: position.lineNumber,
+    column: position.column
+  };
+};
+
+const isSameEditLocation = (a, b) => {
+  if (!a || !b) return false;
+  return a.path === b.path && a.lineNumber === b.lineNumber && a.column === b.column;
+};
+
+const recordEditLocationFromEditor = () => {
+  if (!editor) return;
+  if (suppressEditLocationRecording) return;
+
+  const loc = getCurrentEditLocation();
+  if (!loc) return;
+
+  const now = Date.now();
+  const key = `${loc.path}:${loc.lineNumber}:${loc.column}`;
+  if (key === lastRecordedEditLocationKey && now - lastRecordedEditLocationAt < 500) return;
+
+  const back = editLocationBackStack.value;
+  const last = back[back.length - 1];
+  if (last && isSameEditLocation(last, loc)) {
+    lastRecordedEditLocationKey = key;
+    lastRecordedEditLocationAt = now;
+    return;
+  }
+
+  back.push({ ...loc, ts: now });
+  if (back.length > maxEditLocationHistory) back.shift();
+  editLocationForwardStack.value = [];
+
+  lastRecordedEditLocationKey = key;
+  lastRecordedEditLocationAt = now;
+};
+
+const goToEditLocation = async (loc) => {
+  if (!loc) return false;
+
+  suppressEditLocationRecording = true;
+  try {
+    if (fileTreeStore.activeTab !== loc.path) {
+      await fileTreeStore.openFileInTab(loc.path);
+    }
+
+    await nextTick();
+
+    if (!editor) return false;
+    const pos = new monaco.Position(loc.lineNumber, loc.column);
+    editor.focus();
+    editor.setPosition(pos);
+    editor.revealPositionInCenterIfOutsideViewport(pos);
+    return true;
+  } finally {
+    suppressEditLocationRecording = false;
+  }
+};
+
+const navigateToPreviousEditLocation = async () => {
+  if (!editor) return;
+
+  const current = getCurrentEditLocation();
+  if (!current) return;
+
+  const back = editLocationBackStack.value;
+  const forward = editLocationForwardStack.value;
+
+  if (back.length === 0) {
+    back.push({ ...current, ts: Date.now() });
+    return;
+  }
+
+  const last = back[back.length - 1];
+  if (!isSameEditLocation(last, current)) {
+    forward.push({ ...current, ts: Date.now() });
+    await goToEditLocation(last);
+    return;
+  }
+
+  if (back.length < 2) {
+    message.info('没有上一个编辑位置');
+    return;
+  }
+
+  const popped = back.pop();
+  forward.push(popped);
+  const target = back[back.length - 1];
+  await goToEditLocation(target);
+};
+
+const navigateToNextEditLocation = async () => {
+  if (!editor) return;
+
+  const forward = editLocationForwardStack.value;
+  if (forward.length === 0) {
+    return;
+  }
+
+  const target = forward.pop();
+  const back = editLocationBackStack.value;
+  const last = back[back.length - 1];
+  if (!last || !isSameEditLocation(last, target)) {
+    back.push(target);
+    if (back.length > maxEditLocationHistory) back.shift();
+  }
+
+  await goToEditLocation(target);
+};
+
 const selectedFile = computed(() => fileTreeStore.selectedFile)
 // 定义 rawContent 变量
 const rawContent = ref(selectedFile.value?.content || '')
@@ -114,18 +1035,703 @@ const rawContent = ref(selectedFile.value?.content || '')
 const activeTab = computed(() => fileTreeStore.openTabs.find(tab => tab.path === fileTreeStore.activeTab));
 const activeTabContent = computed(() => activeTab.value?.content || '');
 
+const leftTabs = computed(() => {
+  if (layoutMode.value === 'single' || fileTreeStore.splitIndex == null) {
+    return fileTreeStore.openTabs;
+  }
+  return fileTreeStore.openTabs.slice(0, fileTreeStore.splitIndex);
+});
+
+const rightTabs = computed(() => {
+  if (layoutMode.value === 'single' || fileTreeStore.splitIndex == null) {
+    return [];
+  }
+  if (fileTreeStore.openTabs.length === 1) {
+    return fileTreeStore.openTabs;
+  }
+  return fileTreeStore.openTabs.slice(fileTreeStore.splitIndex);
+});
+
 
 const message = useMessage()
+
+let unlistenTemplateInsert = null
+let templateInsertListenerUnmounted = false
+
+const safeUnlistenTemplateInsert = () => {
+  if (typeof unlistenTemplateInsert !== 'function') return
+  try {
+    unlistenTemplateInsert()
+  } catch (e) {
+    console.debug('反注册模板插入事件失败:', e)
+  }
+  unlistenTemplateInsert = null
+}
+
+onMounted(async () => {
+  templateInsertListenerUnmounted = false
+  try {
+    const unlisten = await listen('template_insert_event', async (event) => {
+      const content = typeof event?.payload?.content === 'string' ? event.payload.content : ''
+      if (!content) return
+
+      const text = content.endsWith('\n') ? content : `${content}\n`
+      const inserted = await editorStore.insertContent(text)
+      if (!inserted) {
+        message.warning('插入模板失败：请先打开一个文件')
+      }
+    })
+
+    if (templateInsertListenerUnmounted) {
+      try {
+        unlisten()
+      } catch (e) {
+        console.debug('反注册模板插入事件失败:', e)
+      }
+      return
+    }
+
+    unlistenTemplateInsert = unlisten
+  } catch (e) {
+    console.error('注册模板插入事件失败:', e)
+  }
+})
+
+onUnmounted(() => {
+  templateInsertListenerUnmounted = true
+  safeUnlistenTemplateInsert()
+})
+
+const headingOptions = [
+  { label: '正文', key: 0 },
+  { label: 'H1', key: 1 },
+  { label: 'H2', key: 2 },
+  { label: 'H3', key: 3 },
+  { label: 'H4', key: 4 },
+  { label: 'H5', key: 5 },
+  { label: 'H6', key: 6 }
+]
 
 const vimMode = ref(false);
 const vimStatusBar = ref(null);
 let vimModeInstance = null;
 
+const applyVimOverlayInsets = () => {
+  const baseTop = 8;
+  const baseBottom = 8;
+  const vimH = vimMode.value
+    ? Math.ceil(vimStatusBar.value?.getBoundingClientRect?.()?.height || 0)
+    : 0;
+  const bottom = baseBottom + (vimH ? vimH + 6 : 0);
+
+  const opt = {
+    padding: {
+      top: baseTop,
+      bottom
+    }
+  };
+
+  if (editor) {
+    editor.updateOptions(opt);
+    editor.layout();
+  }
+  if (secondaryEditor) {
+    secondaryEditor.updateOptions(opt);
+    secondaryEditor.layout();
+  }
+};
+
+let markdownFeaturesRegistered = false;
+
+let filesystemPathCompletionRegistered = false;
+const filesystemPathCompletionCache = new Map();
+const filesystemPathCompletionInflight = new Map();
+let filesystemPathCompletionDocPath = '';
+let filesystemPathCompletionDocDir = '';
+let filesystemPathCompletionHomeDir = '';
+
+const normalizeFsPath = (p) => {
+  let s = (p || '').replace(/\\/g, '/');
+  // Fix Windows drive path like `/C:/...` which may break relative completion like `../`
+  if (/^\/[a-zA-Z]:\//.test(s)) {
+    s = s.slice(1);
+  }
+  return s;
+};
+
+const joinFsPath = (base, sub) => {
+  const a = normalizeFsPath(base).replace(/\/+$/, '');
+  const b = normalizeFsPath(sub).replace(/^\/+/, '');
+  if (!a) return b;
+  if (!b) return a;
+  return `${a}/${b}`;
+};
+
+const getFilesystemCompletionDocDir = async () => {
+  const p = selectedFile.value?.path || '';
+  if (!p) return fileTreeStore.activeRepoPath || '';
+  if (p === filesystemPathCompletionDocPath && filesystemPathCompletionDocDir) {
+    return filesystemPathCompletionDocDir;
+  }
+  filesystemPathCompletionDocPath = p;
+  try {
+    filesystemPathCompletionDocDir = await dirname(p);
+  } catch {
+    filesystemPathCompletionDocDir = fileTreeStore.activeRepoPath || '';
+  }
+  return filesystemPathCompletionDocDir;
+};
+
+const getFilesystemCompletionHomeDir = async () => {
+  if (filesystemPathCompletionHomeDir) return filesystemPathCompletionHomeDir;
+  try {
+    filesystemPathCompletionHomeDir = await homeDir();
+  } catch {
+    filesystemPathCompletionHomeDir = '';
+  }
+  return filesystemPathCompletionHomeDir;
+};
+
+const isFilesystemPathContext = (beforeCursor) => {
+  const s = beforeCursor || '';
+  if (/\]\(\s*$/.test(s)) return true;
+  if (/!\[[^\]]*\]\(\s*$/.test(s)) return true;
+  if (/(src|href)=['"]\s*$/.test(s)) return true;
+  if (/\(\s*$/.test(s)) return true;
+  return false;
+};
+
+const extractPathToken = (beforeCursor) => {
+  if (!beforeCursor) return '';
+  let i = beforeCursor.length - 1;
+  while (i >= 0) {
+    const ch = beforeCursor[i];
+    if (
+      /\s/.test(ch) ||
+      ch === '"' ||
+      ch === "'" ||
+      ch === ')' ||
+      ch === '(' ||
+      ch === '[' ||
+      ch === ']' ||
+      ch === '<' ||
+      ch === '>' ||
+      ch === '`' ||
+      ch === '{' ||
+      ch === '}'
+    ) {
+      break;
+    }
+    i -= 1;
+  }
+  return beforeCursor.slice(i + 1);
+};
+
+const splitTokenDirAndPartial = (token) => {
+  if (!token) return { dirPrefix: '', partial: '' };
+  if (token === '~') return { dirPrefix: '~/', partial: '' };
+
+  const lastSlash = Math.max(token.lastIndexOf('/'), token.lastIndexOf('\\'));
+  if (lastSlash >= 0) {
+    return {
+      dirPrefix: token.slice(0, lastSlash + 1),
+      partial: token.slice(lastSlash + 1)
+    };
+  }
+  if (/^[a-zA-Z]:$/.test(token)) {
+    return { dirPrefix: `${token}/`, partial: '' };
+  }
+  return { dirPrefix: '', partial: token };
+};
+
+const listDirCached = async (dirPath) => {
+  const key = normalizeFsPath(dirPath);
+  const now = Date.now();
+  const cached = filesystemPathCompletionCache.get(key);
+  if (cached && now - cached.ts < 2000) return cached.nodes;
+
+  const inflight = filesystemPathCompletionInflight.get(key);
+  if (inflight) return inflight;
+
+  const p = invoke('get_file_tree', { path: key })
+    .then((nodes) => {
+      const safe = Array.isArray(nodes) ? nodes : [];
+      filesystemPathCompletionCache.set(key, { ts: Date.now(), nodes: safe });
+      return safe;
+    })
+    .catch(() => [])
+    .finally(() => {
+      filesystemPathCompletionInflight.delete(key);
+    });
+
+  filesystemPathCompletionInflight.set(key, p);
+  return p;
+};
+
+const registerFilesystemPathCompletionFeatures = () => {
+  if (filesystemPathCompletionRegistered) return;
+  filesystemPathCompletionRegistered = true;
+
+  const languages = [
+    'markdown',
+    'javascript',
+    'typescript',
+    'python',
+    'cpp',
+    'rust',
+    'shell',
+    'html',
+    'css',
+    'yaml',
+    'java',
+    'lua',
+    'ini',
+    'json'
+  ];
+
+  languages.forEach((language) => {
+    monaco.languages.registerCompletionItemProvider(language, {
+      triggerCharacters: ['/', '\\', '.', ':'],
+      async provideCompletionItems(model, position) {
+        const lineContent = model.getLineContent(position.lineNumber);
+        const beforeCursor = lineContent.slice(0, position.column - 1);
+        const token = extractPathToken(beforeCursor);
+        const pathContext = isFilesystemPathContext(beforeCursor);
+
+        const looksLikePath =
+          (!!token &&
+            (/[\\/]/.test(token) ||
+              token.startsWith('.') ||
+              token.startsWith('~') ||
+              /^[a-zA-Z]:/.test(token))) ||
+          pathContext;
+        if (!looksLikePath) return { suggestions: [] };
+
+        const replaceRange = new monaco.Range(
+          position.lineNumber,
+          Math.max(1, position.column - (token ? token.length : 0)),
+          position.lineNumber,
+          position.column
+        );
+
+        // Align with nvim-cmp: typing '.' / '..' should suggest './' / '../'
+        if (token === '.' || token === '..') {
+          const suggestions = [];
+          if (token === '.') {
+            suggestions.push(
+              {
+                label: './',
+                kind: monaco.languages.CompletionItemKind.Folder,
+                insertText: './',
+                range: replaceRange,
+                detail: '当前目录'
+              },
+              {
+                label: '../',
+                kind: monaco.languages.CompletionItemKind.Folder,
+                insertText: '../',
+                range: replaceRange,
+                detail: '父目录'
+              }
+            );
+          } else {
+            suggestions.push({
+              label: '../',
+              kind: monaco.languages.CompletionItemKind.Folder,
+              insertText: '../',
+              range: replaceRange,
+              detail: '父目录'
+            });
+          }
+          return { suggestions };
+        }
+
+        const { dirPrefix, partial } = splitTokenDirAndPartial(token);
+
+        const tokenStartsAbsolute =
+          /^[a-zA-Z]:[\\/]/.test(token) || token.startsWith('/');
+        const prefixIsAbsolute =
+          /^[a-zA-Z]:[\\/]/.test(dirPrefix) || dirPrefix.startsWith('/');
+        const isHomePrefix = dirPrefix.startsWith('~/') || dirPrefix.startsWith('~\\');
+
+        let dirPath = dirPrefix;
+        if (!dirPath) {
+          dirPath = tokenStartsAbsolute ? '' : await getFilesystemCompletionDocDir();
+        } else if (isHomePrefix) {
+          const base = await getFilesystemCompletionHomeDir();
+          if (!base) return { suggestions: [] };
+          dirPath = joinFsPath(base, dirPrefix.slice(2));
+          if (!dirPrefix.endsWith('/') && !dirPrefix.endsWith('\\')) {
+            dirPath = `${dirPath}/`;
+          }
+        } else if (!prefixIsAbsolute) {
+          const base = await getFilesystemCompletionDocDir();
+          dirPath = joinFsPath(base, dirPath);
+        }
+
+        dirPath = normalizeFsPath(dirPath);
+        if (!dirPath) return { suggestions: [] };
+
+        if (tokenStartsAbsolute && !dirPrefix && token === '/') {
+          dirPath = '/';
+        }
+
+        const nodes = await listDirCached(dirPath);
+        if (!nodes.length) return { suggestions: [] };
+
+        const lowerPartial = (partial || '').toLowerCase();
+        const matching = nodes
+          .filter((n) => {
+            const name = String(n?.name || '');
+            if (!name) return false;
+            if (!lowerPartial) return true;
+            return name.toLowerCase().startsWith(lowerPartial);
+          })
+          .slice(0, 50);
+
+        if (!matching.length) {
+          console.debug('[PathCompletion] no match', {
+            token,
+            dirPrefix,
+            partial,
+            dirPath,
+            nodeCount: nodes.length
+          });
+          return { suggestions: [] };
+        }
+
+        const partialLen = (partial || '').length;
+        const replaceRangeForPartial = new monaco.Range(
+          position.lineNumber,
+          Math.max(1, position.column - partialLen),
+          position.lineNumber,
+          position.column
+        );
+
+        console.debug('[PathCompletion] suggest', {
+          token,
+          dirPrefix,
+          partial,
+          dirPath,
+          nodeCount: nodes.length,
+          matchCount: matching.length
+        });
+
+        const suggestions = matching.map((n) => {
+          const name = String(n?.name || '');
+          const isDir = !!n?.is_directory;
+          const suffix = isDir ? '/' : '';
+
+          return {
+            label: `${name}${suffix}`,
+            kind: isDir
+              ? monaco.languages.CompletionItemKind.Folder
+              : monaco.languages.CompletionItemKind.File,
+            insertText: `${name}${suffix}`,
+            range: replaceRangeForPartial,
+            detail: isDir ? '目录' : '文件',
+            sortText: isDir ? `0_${name}` : `1_${name}`
+          };
+        });
+
+        return { suggestions };
+      }
+    });
+  });
+};
+
+const registerMarkdownLanguageFeatures = () => {
+  if (markdownFeaturesRegistered) return;
+  markdownFeaturesRegistered = true;
+
+  const createSnippet = (label, insertText, detail) => ({
+    label,
+    kind: monaco.languages.CompletionItemKind.Snippet,
+    insertText,
+    insertTextRules:
+      monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    detail
+  });
+
+  const markdownSnippets = [
+    createSnippet('h1', '# ${1:标题}\n\n', '插入一级标题'),
+    createSnippet('h2', '## ${1:标题}\n\n', '插入二级标题'),
+    createSnippet('h3', '### ${1:标题}\n\n', '插入三级标题'),
+    createSnippet('h4', '#### ${1:标题}\n\n', '插入四级标题'),
+    createSnippet('h5', '##### ${1:标题}\n\n', '插入五级标题'),
+    createSnippet('h6', '###### ${1:标题}\n\n', '插入六级标题'),
+    createSnippet('ul', '- ${1:列表项}\n- ${2:列表项}\n', '插入无序列表'),
+    createSnippet('ol', '1. ${1:第一项}\n2. ${2:第二项}\n', '插入有序列表'),
+    createSnippet('taskl', '- [ ] ${1:任务}\n- [ ] ${2:任务}\n', '插入任务列表'),
+    createSnippet('table', '| ${1:表头1} | ${2:表头2} |\n| --- | --- |\n| ${3:内容1} | ${4:内容2} |\n', '插入表格'),
+    createSnippet('code', '```${1:language}\n${2:代码}\n```\n', '插入代码块'),
+    createSnippet('toc', '${1:目录}\n\n${2:目录内容}\n', '插入目录'),
+    createSnippet('bold', '**${1:文本}**', '加粗文本'),
+    createSnippet('italic', '*${1:文本}*', '斜体文本'),
+    createSnippet('strikeout', '~~${1:文本}~~', '删除线'),
+    createSnippet('inlineCode', '`${1:code}`', '内联代码'),
+    createSnippet('link', '[${1:描述}](${2:链接})', '插入链接'),
+    createSnippet('image', '![${1:描述}](${2:路径})', '插入图片'),
+    createSnippet('quote', '> ${1:引用内容}\n', '插入引用'),
+    createSnippet('hr', '\n---\n', '插入分隔线'),
+    createSnippet('table2', '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n', '插入表格'), 
+    createSnippet('table3', '| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} |\n', '插入三列表格'), 
+    createSnippet('table4', '| 列1 | 列2 | 列3 | 列4 |\n| --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} |\n', '插入四列表格'), 
+    createSnippet('table5', '| 列1 | 列2 | 列3 | 列4 | 列5 |\n| --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} |\n', '插入五列表格'), 
+    createSnippet('table6', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 |\n| --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} |\n', '插入六列表格'), 
+    createSnippet('table7', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 |\n| --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} |\n', '插入七列表格'), 
+    createSnippet('table8', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} |\n', '插入八列表格'), 
+    createSnippet('table9', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 | 列9 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} | ${9:值9} |\n', '插入九列表格'), 
+    createSnippet('red', '<font color="red">${1:红色文字}</font>', '设置红色文本'),
+    createSnippet('blue','<font color="blue">${1:蓝色文字}</font>','设置蓝色文本'),
+    createSnippet('green','<font color="green">${1:绿色文字}</font>','设置绿色文本'),
+    createSnippet('yellow','<font color="yellow">${1:黄色文字}</font>','设置黄色文本'),
+    createSnippet('orange','<font color="orange">${1:橙色文字}</font>','设置橙色文本'),
+    createSnippet('purple','<font color="purple">${1:紫色文字}</font>','设置紫色文本'),
+    createSnippet('cyan','<font color="cyan">${1:青色文字}</font>','设置青色文本'),
+    createSnippet('purple','<font color="purple">${1:紫色文字}</font>','设置紫色文本'),
+  ];
+
+  const createLatexSnippet = (key, insertText, detail, label) => ({
+    key: String(key || '').toLowerCase(),
+    label: label || `\\${key}`,
+    kind: monaco.languages.CompletionItemKind.Snippet,
+    insertText,
+    insertTextRules:
+      monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    detail
+  });
+
+  const latexSnippets = [
+    createLatexSnippet('frac', '\\frac{${1:a}}{${2:b}}', '分式'),
+    createLatexSnippet('sqrt', '\\sqrt{${1:x}}', '平方根'),
+    createLatexSnippet('sqrtn', '\\sqrt[${1:n}]{${2:x}}', 'n 次方根', '\\sqrt[n]{x}'),
+    createLatexSnippet('sum', '\\sum_{${1:i=1}}^{${2:n}} ${3:expr}', '求和'),
+    createLatexSnippet('prod', '\\prod_{${1:i=1}}^{${2:n}} ${3:expr}', '连乘'),
+    createLatexSnippet('int', '\\int_{${1:a}}^{${2:b}} ${3:f(x)}\\,d${4:x}', '积分'),
+    createLatexSnippet('lim', '\\lim_{${1:n}\\to\\infty} ${2:expr}', '极限'),
+    createLatexSnippet('cdot', '\\cdot', '点乘'),
+    createLatexSnippet('times', '\\times', '乘号'),
+    createLatexSnippet('pm', '\\pm', '正负号'),
+    createLatexSnippet('to', '\\to', '趋于'),
+    createLatexSnippet('infty', '\\infty', '无穷'),
+
+    createLatexSnippet('left', '\\left(${1:expr}\\right)', '自动伸缩括号'),
+    createLatexSnippet('text', '\\text{${1:text}}', '文本'),
+    createLatexSnippet('mathbf', '\\mathbf{${1:x}}', '粗体'),
+    createLatexSnippet('mathbb', '\\mathbb{${1:R}}', '黑板粗体'),
+    createLatexSnippet('mathcal', '\\mathcal{${1:L}}', '花体'),
+
+    createLatexSnippet('begin', '\\begin{${1:env}}\n  ${0}\n\\end{${1:env}}', '环境'),
+    createLatexSnippet('aligned', '\\begin{aligned}\n  ${0}\n\\end{aligned}', 'aligned 环境', '\\begin{aligned}...\\end{aligned}'),
+    createLatexSnippet('align', '\\begin{align}\n  ${0}\n\\end{align}', 'align 环境', '\\begin{align}...\\end{align}'),
+    createLatexSnippet('cases', '\\begin{cases}\n  ${1:expr} & ${2:cond}\\\\\n  ${3:expr} & ${4:cond}\n\\end{cases}', 'cases 环境', '\\begin{cases}...\\end{cases}'),
+
+    createLatexSnippet('alpha', '\\alpha', '希腊字母 α'),
+    createLatexSnippet('beta', '\\beta', '希腊字母 β'),
+    createLatexSnippet('gamma', '\\gamma', '希腊字母 γ'),
+    createLatexSnippet('delta', '\\delta', '希腊字母 δ'),
+    createLatexSnippet('epsilon', '\\epsilon', '希腊字母 ε'),
+    createLatexSnippet('theta', '\\theta', '希腊字母 θ'),
+    createLatexSnippet('lambda', '\\lambda', '希腊字母 λ'),
+    createLatexSnippet('mu', '\\mu', '希腊字母 μ'),
+    createLatexSnippet('pi', '\\pi', '希腊字母 π'),
+    createLatexSnippet('sigma', '\\sigma', '希腊字母 σ'),
+    createLatexSnippet('phi', '\\phi', '希腊字母 φ'),
+    createLatexSnippet('omega', '\\omega', '希腊字母 ω'),
+
+    createLatexSnippet('leq', '\\leq', '≤'),
+    createLatexSnippet('geq', '\\geq', '≥'),
+    createLatexSnippet('neq', '\\neq', '≠'),
+    createLatexSnippet('approx', '\\approx', '≈'),
+    createLatexSnippet('equiv', '\\equiv', '≡'),
+    createLatexSnippet('subseteq', '\\subseteq', '⊆'),
+    createLatexSnippet('supseteq', '\\supseteq', '⊇'),
+    createLatexSnippet('in', '\\in', '∈'),
+    createLatexSnippet('notin', '\\notin', '∉')
+  ];
+
+  const isInMarkdownMath = (model, position) => {
+    const maxScanLines = 250;
+    const startLine = Math.max(1, position.lineNumber - maxScanLines + 1);
+
+    let inFence = false;
+    let fenceChar = '';
+    let fenceLen = 0;
+
+    let inDollar = false;
+    let inDisplay = false;
+    let inParen = false;
+    let inBracket = false;
+
+    for (let lineNumber = startLine; lineNumber <= position.lineNumber; lineNumber += 1) {
+      let text = model.getLineContent(lineNumber);
+      if (lineNumber === position.lineNumber) {
+        text = text.slice(0, position.column - 1);
+      }
+
+      const fence = /^\s*(`{3,}|~{3,})/.exec(text);
+      if (fence) {
+        const mark = fence[1];
+        if (!inFence) {
+          inFence = true;
+          fenceChar = mark[0];
+          fenceLen = mark.length;
+        } else if (mark[0] === fenceChar && mark.length >= fenceLen) {
+          inFence = false;
+          fenceChar = '';
+          fenceLen = 0;
+        }
+        continue;
+      }
+      if (inFence) continue;
+
+      for (let i = 0; i < text.length;) {
+        const ch = text[i];
+
+        if (ch === '\\') {
+          const next = text[i + 1];
+          if (next === '(') {
+            inParen = true;
+            i += 2;
+            continue;
+          }
+          if (next === ')') {
+            inParen = false;
+            i += 2;
+            continue;
+          }
+          if (next === '[') {
+            inBracket = true;
+            i += 2;
+            continue;
+          }
+          if (next === ']') {
+            inBracket = false;
+            i += 2;
+            continue;
+          }
+          i += 1;
+          continue;
+        }
+
+        if (ch === '$') {
+          const prev = i > 0 ? text[i - 1] : '';
+          if (prev === '\\') {
+            i += 1;
+            continue;
+          }
+
+          const next = text[i + 1];
+          if (next === '$') {
+            inDisplay = !inDisplay;
+            i += 2;
+            continue;
+          }
+
+          if (!inDisplay) {
+            inDollar = !inDollar;
+          }
+          i += 1;
+          continue;
+        }
+
+        i += 1;
+      }
+    }
+
+    return inDisplay || inDollar || inParen || inBracket;
+  };
+
+  monaco.languages.registerCompletionItemProvider('markdown', {
+    provideCompletionItems(model, position) {
+      const lineContent = model.getLineContent(position.lineNumber);
+      const beforeCursor = lineContent.slice(0, position.column - 1);
+
+      const token = extractPathToken(beforeCursor);
+      const pathContext = isFilesystemPathContext(beforeCursor);
+      const inPathLike =
+        pathContext ||
+        (!!token &&
+          (token.includes('/') ||
+            token.includes('\\') ||
+            token.startsWith('.') ||
+            token.startsWith('~') ||
+            /^[a-zA-Z]:/.test(token)));
+      if (inPathLike) return { suggestions: [] };
+
+      const word = model.getWordUntilPosition(position)?.word || '';
+      if (!word) return { suggestions: [] };
+
+      const lower = word.toLowerCase();
+      const suggestions = markdownSnippets
+        .filter((s) => String(s.label || '').toLowerCase().startsWith(lower))
+        .slice(0, 50);
+
+      return { suggestions };
+    }
+  });
+
+  monaco.languages.registerCompletionItemProvider('markdown', {
+    triggerCharacters: ['\\'],
+    provideCompletionItems(model, position) {
+      if (!isInMarkdownMath(model, position)) return { suggestions: [] };
+
+      const lineContent = model.getLineContent(position.lineNumber);
+      const beforeCursor = lineContent.slice(0, position.column - 1);
+
+      const match = /\\[A-Za-z]*$/.exec(beforeCursor);
+      if (!match) return { suggestions: [] };
+
+      const typed = match[0].slice(1);
+      const prefix = typed.toLowerCase();
+
+      const startColumn = Math.max(1, position.column - match[0].length);
+      const range = new monaco.Range(
+        position.lineNumber,
+        startColumn,
+        position.lineNumber,
+        position.column
+      );
+
+      const suggestions = latexSnippets
+        .filter((s) => !prefix || String(s.key || '').startsWith(prefix))
+        .slice(0, 80)
+        .map((s, index) => ({
+          ...s,
+          range,
+          sortText: `0_${String(index).padStart(3, '0')}_${String(s.key || '')}`
+        }));
+
+      return { suggestions };
+    }
+  });
+};
+
 const tabBarRef = ref(null)
+const tabRegionLeftRef = ref(null)
+const tabRegionRightRef = ref(null)
 // 初始化编辑器
 const initEditor = () => {
+  console.debug('[Editor] initEditor called', {
+    hasContainer: !!editorContainer.value,
+    selectedPath: selectedFile.value?.path,
+    activeTab: fileTreeStore.activeTab
+  })
+
+  if (!selectedFile.value) return
+
   if (!editorContainer.value) {
-    console.error('编辑器容器未找到');
+    if (!initEditorPending) {
+      initEditorPending = true;
+      nextTick(() => {
+        initEditorPending = false;
+        if (!editor && editorContainer.value) {
+          initEditor();
+        }
+      });
+    }
+    console.debug('[Editor] editor container not ready');
     return;
   }
 
@@ -136,6 +1742,7 @@ const initEditor = () => {
     'ts': 'typescript',
     'css': 'css',
     'html': 'html',
+    'htm': 'html',
     'md': 'markdown',
     'py': 'python',
     'cpp': 'cpp',
@@ -146,14 +1753,70 @@ const initEditor = () => {
     'sh': 'shell',
     'jsx': 'javascript',
     'tsx': 'javascript',
-    'htm': 'html',
+    'json': 'json',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'lua': 'lua',
+    'java': 'java',
+    'toml': 'ini',
   };
   const language = languageMap[fileExt] || 'markdown';
+
+  monaco.editor.defineTheme('one-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: '9e9e9e' },
+      { token: 'keyword', foreground: '9c27b0' },
+      { token: 'string', foreground: '2e7d32' },
+      { token: 'number', foreground: 'ef6c00' },
+      { token: 'regexp', foreground: '00897b' },
+      { token: 'type', foreground: '6a1b9a' },
+      { token: 'delimiter', foreground: '2f3337' },
+      { token: 'variable', foreground: 'e53935' },
+      { token: 'parameter', foreground: '3949ab' },
+      { token: 'function', foreground: '1565c0' },
+      { token: 'constant', foreground: '00838f' },
+      { token: 'class', foreground: '283593' },
+      { token: 'identifier', foreground: '2f3337' },
+      { token: 'tag', foreground: 'd32f2f' },
+      { token: 'attribute.name', foreground: '6d4c41' },
+      { token: 'meta.embedded', foreground: '455a64' }
+    ],
+    colors: {
+      'editor.background': '#ffffff',
+      'editor.foreground': '#2f3337',
+      'editorLineNumber.foreground': '#b0b3ba',
+      'editorLineNumber.activeForeground': '#2f3337',
+      'editorCursor.foreground': '#1565c0',
+      'editor.selectionBackground': '#cfe8ff',
+      'editor.inactiveSelectionBackground': '#e3f2fd',
+      'editor.lineHighlightBackground': '#f2f5fb',
+      'editorBracketMatch.background': '#e1f5fe',
+      'editorBracketMatch.border': '#90caf9',
+      'editor.selectionHighlightBackground': '#ffe0b2',
+      'editor.foldBackground': '#f7f9fc',
+      'editorWhitespace.foreground': '#d0d0d5',
+      'editorIndentGuide.background': '#e0e0e0',
+      'editorIndentGuide.activeBackground': '#b0bec5',
+      'editorHoverWidget.background': '#ffffff',
+      'editorHoverWidget.border': '#e0e0e0',
+      'editorSuggestWidget.background': '#ffffff',
+      'editorSuggestWidget.border': '#e0e0e0',
+      'editorSuggestWidget.foreground': '#2f3337',
+      'editorSuggestWidget.selectedBackground': '#e3f2fd',
+      'editorWidget.background': '#ffffff',
+      'editorWidget.border': '#e0e0e0',
+      'scrollbar.shadow': '#00000033'
+    }
+  });
 
   editor = monaco.editor.create(editorContainer.value, {
     value: rawContent.value,
     language: language,
-    theme: 'vs',
+    theme: 'one-light',
+    readOnly: !!activeTab.value?.unsupported,
+    autoClosingQuotes: 'always',
     automaticLayout: true,  // 自动布局
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
@@ -235,8 +1898,32 @@ const initEditor = () => {
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
 
+  invoke('get_lsp_syntax_highlight_enabled')
+    .then((result) => {
+      const enableLspSyntaxHighlight = !!result
+      if (enableLspSyntaxHighlight) {
+        initTextmate(editor, language);
+        initLspClient(editor, language, selectedFile.value?.path || '');
+      }
+    })
+    .catch((error) => {
+      console.error('加载 LSP 语法高亮配置失败:', error)
+    });
+
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
+  editorStore.setLanguage(language);
+  console.debug('[Editor] Monaco editor instance registered')
+
+  if (editorEffectsLeft) {
+    editorEffectsLeft.destroy();
+    editorEffectsLeft = null;
+  }
+  editorEffectsLeft = createEditorEffects(editor);
+  editorEffectsLeft?.updateCursorTarget();
+
+  registerMarkdownLanguageFeatures();
+  registerFilesystemPathCompletionFeatures();
 
   if (vimMode.value) {
     nextTick(() => {
@@ -255,6 +1942,7 @@ const initEditor = () => {
           }
         });
       }
+      applyVimOverlayInsets();
     });
   }
 
@@ -291,36 +1979,109 @@ const initEditor = () => {
       }
     });
 
-    // 2. 覆盖默认上下文菜单
+    editor.addAction({
+      id: 'guaxi.markdown.formatDocument',
+      label: 'Markdown 格式化（全文）',
+      run: () => formatMarkdownDocument()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.formatSelection',
+      label: 'Markdown 格式化（选中）',
+      run: () => formatMarkdownSelection()
+    });
+
+    editor.addAction({
+      id: 'guaxi.edit.navigateBack',
+      label: '跳转到上次编辑位置',
+      keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow],
+      run: () => navigateToPreviousEditLocation()
+    });
+
+    editor.addAction({
+      id: 'guaxi.edit.navigateForward',
+      label: '跳转到下一编辑位置',
+      keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.RightArrow],
+      run: () => navigateToNextEditLocation()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleBold',
+      label: '加粗',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB],
+      run: () => toggleBold()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleItalic',
+      label: '斜体',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI],
+      run: () => toggleItalic()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleStrikethrough',
+      label: '删除线',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyX],
+      run: () => toggleStrikethrough()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.toggleInlineCode',
+      label: '内联代码',
+      run: () => toggleInlineCode()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.insertLink',
+      label: '插入链接',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+      run: () => insertLink()
+    });
+
+    editor.addAction({
+      id: 'guaxi.markdown.insertTable',
+      label: '插入表格',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyT],
+      run: () => insertTable()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.addRowBelow',
+      label: '表格：下方插入行',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.DownArrow],
+      run: () => addTableRowBelow()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.deleteRow',
+      label: '表格：删除当前行',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow],
+      run: () => deleteTableRow()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.addColumnRight',
+      label: '表格：右侧插入列',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.RightArrow],
+      run: () => addTableColumnRight()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.deleteColumn',
+      label: '表格：删除当前列',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.RightArrow],
+      run: () => deleteTableColumn()
+    });
+
     editor.onContextMenu((e) => {
       e.event.preventDefault();
-
-      // 获取鼠标位置
       const { posx, posy } = e.event;
 
-      // 3. 定义完整的菜单结构
-      const menuItems = [
-        // 基础编辑操作
-        { id: 'editor.action.clipboardCutAction', label: '剪切' },
-        { id: 'editor.action.clipboardCopyAction', label: '复制' },
-        { id: 'editor.action.clipboardPasteAction', label: '粘贴' },
-        { type: 'separator' },
-
-        // 自定义功能
-        { id: 'insert.md.template', label: '插入Markdown模板' },
-        { type: 'separator' },
-
-        // 其他功能
-        { id: 'editor.action.quickCommand', label: '命令面板' }
-      ];
-
-      // 4. 触发菜单显示
       editor.focus();
-      editor.trigger('', 'editor.action.showContextMenu', {
-        anchor: { x: posx, y: posy },
-        menuItems,
-        domNode: editorContainer.value
-      });
+      editorContextMenuPosition.value = { x: posx, y: posy };
+      editorContextMenuOptions.value = buildEditorContextMenuOptions();
+      editorContextMenuVisible.value = true;
     });
 
     outlineStore.setJumpToLine(jumpToLine)
@@ -330,6 +2091,114 @@ const initEditor = () => {
   registerContextMenu();
   setupEditorListeners();
 };
+
+const ensureSecondaryEditor = () => {
+  if (!secondaryEditorContainer.value || secondaryEditor) return;
+
+  const rightPath = fileTreeStore.activeTabRight;
+  const rightTab = rightPath ? fileTreeStore.openTabs.find((t) => t.path === rightPath) : null;
+
+  const fileExt = rightPath?.split('.').pop() || 'markdown';
+  const languageMap = {
+    'js': 'javascript',
+    'ts': 'typescript',
+    'css': 'css',
+    'html': 'html',
+    'htm': 'html',
+    'md': 'markdown',
+    'py': 'python',
+    'cpp': 'cpp',
+    'c': 'cpp',
+    'h': 'cpp',
+    'hpp': 'cpp',
+    'rs': 'rust',
+    'sh': 'shell',
+    'jsx': 'javascript',
+    'tsx': 'javascript',
+    'json': 'json',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'lua': 'lua',
+    'java': 'java',
+    'toml': 'ini',
+  };
+  const language = languageMap[fileExt] || 'markdown';
+
+  const baseOptions = editor?.getRawOptions ? editor.getRawOptions() : {};
+
+  secondaryEditor = monaco.editor.create(secondaryEditorContainer.value, {
+    ...baseOptions,
+    value: rightTab?.content || '',
+    language,
+    readOnly: !!rightTab?.unsupported,
+    automaticLayout: true,
+  });
+
+  if (editorEffectsRight) {
+    editorEffectsRight.destroy();
+    editorEffectsRight = null;
+  }
+  editorEffectsRight = createEditorEffects(secondaryEditor);
+  editorEffectsRight?.updateCursorTarget();
+
+  secondaryEditor.onDidFocusEditorText(() => {
+    if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeTabRight) {
+      fileTreeStore.setActiveTab(fileTreeStore.activeTabRight, 'right');
+    }
+  });
+
+  secondaryEditor.onDidChangeCursorPosition(() => {
+    editorEffectsRight?.updateCursorTarget();
+  });
+
+  secondaryEditor.onDidScrollChange(() => {
+    editorEffectsRight?.updateCursorTarget();
+  });
+
+  secondaryEditor.onDidType((text) => {
+    editorEffectsRight?.spawnExplosionAtCursor(text);
+    editorEffectsRight?.updateCursorTarget();
+  });
+
+  const model = secondaryEditor.getModel();
+  if (model) {
+    model.onDidChangeContent(
+      debounce(() => {
+        if (fileTreeStore.activeRegion !== 'right') return;
+        const path = fileTreeStore.activeTab;
+        if (!path) return;
+        const content = model.getValue();
+        rawContent.value = content;
+        fileTreeStore.updateTabContent(path, content);
+      }, 120)
+    );
+  }
+};
+
+const disposeSecondaryEditor = () => {
+  if (editorEffectsRight) {
+    editorEffectsRight.destroy();
+    editorEffectsRight = null;
+  }
+  if (secondaryEditor) {
+    secondaryEditor.dispose();
+    secondaryEditor = null;
+  }
+};
+
+watch(
+  () => fileTreeStore.layoutMode,
+  (mode) => {
+    if (mode === 'single') {
+      disposeSecondaryEditor();
+    } else {
+      nextTick(() => {
+        ensureSecondaryEditor();
+      });
+    }
+  },
+  { immediate: true }
+);
 
 
 // Git 服务
@@ -401,41 +2270,140 @@ const toggleGitPanel = async () => {
 }
 
 const handleWheelScroll = (e) => {
-  if (!tabBarRef.value) return
+  const target = e?.target;
+  const inRight = !!(target && target.closest && target.closest('.tab-region-right'));
+  const container =
+    fileTreeStore.layoutMode !== 'single' && inRight
+      ? tabRegionRightRef.value
+      : tabRegionLeftRef.value;
+
+  if (!container) return;
 
   // 阻止默认的垂直滚动行为
   e.preventDefault()
 
   // 水平滚动（乘以一个系数可以调整滚动速度）
-  tabBarRef.value.scrollLeft += e.deltaY * 0.5
+  container.scrollLeft += e.deltaY * 0.5
 }
 
 const setupEditorListeners = () => {
   if (!editor) return;
 
-  // 监听光标位置变化
-  editor.onDidChangeCursorPosition(e => {
-    editorStore.setCursorPosition(e.position);
+  editor.onDidFocusEditorText(() => {
+    activateRegion('left');
   });
 
-  // 监听内容变化（用于问题检测）
-  editor.onDidChangeModelContent(debounce(() => {
-    const content = editor.getValue();
-    const problems = analyzeContentForProblems(content);
-    editorStore.setProblems(problems);
+  editor.onDidChangeCursorPosition((e) => {
+    editorStore.setCursorPosition(e.position);
+    updateTableToolbar();
+    editorEffectsLeft?.updateCursorTarget();
+  });
 
-    // 更新原始内容
-    rawContent.value = content;
-  }, 300));
+  const model = editor.getModel();
+  if (model) {
+    model.onDidChangeContent(
+      debounce(() => {
+        const content = model.getValue();
+        const languageId = model.getLanguageId() || 'plaintext';
+        const problems = analyzeContentForProblems(content, model, languageId);
+        editorStore.setProblems(problems);
+        rawContent.value = content;
+        const path = fileTreeStore.activeTab;
+        if (path) fileTreeStore.updateTabContent(path, content);
+        recordEditLocationFromEditor();
+        updateTableToolbar();
+      }, 300)
+    );
+  }
 
-  // 监听语言变化
+  const syncRealtimePreviewScroll = debounce(() => {
+    if (!editor) return;
+    if (!showPreview.value) return;
+    if (previewMode.value !== 'realtime') return;
+
+    const ranges = editor.getVisibleRanges();
+    const topLine = ranges?.[0]?.startLineNumber || editor.getPosition()?.lineNumber || 1;
+    scrollPreviewToLine(topLine);
+  }, 50);
+
+  editor.onDidScrollChange(() => {
+    if (tableToolbarVisible.value) {
+      updateTableToolbar();
+    }
+    editorEffectsLeft?.updateCursorTarget();
+    syncRealtimePreviewScroll();
+  });
+
   editor.onDidChangeModelLanguage(() => {
     const language = editor.getModel()?.getLanguageId() || 'plaintext';
     editorStore.setLanguage(language);
+    updateTableToolbar();
   });
 
-  // 监听选择变化
-  editor.onDidChangeCursorSelection(e => {
+  editor.onDidType((text) => {
+    if (!editor) return;
+    const ch = text ? text[text.length - 1] : '';
+    if (!ch) return;
+
+    editorEffectsLeft?.spawnExplosionAtCursor(text);
+    editorEffectsLeft?.updateCursorTarget();
+
+    const model = editor.getModel();
+    const pos = editor.getPosition();
+    if (!model || !pos) return;
+
+    const lineContent = model.getLineContent(pos.lineNumber);
+    const beforeCursor = lineContent.slice(0, pos.column - 1);
+    const token = extractPathToken(beforeCursor);
+    const pathContext = isFilesystemPathContext(beforeCursor);
+
+    const isPathLike =
+      pathContext ||
+      (!!token &&
+        (token.includes('/') ||
+          token.includes('\\') ||
+          token.startsWith('.') ||
+          token.startsWith('~') ||
+          /^[a-zA-Z]:/.test(token)));
+
+    if (!isPathLike) return;
+
+    if (!/[0-9a-zA-Z._\-~\/\\:]/.test(ch)) return;
+
+    console.debug('[PathCompletion] triggerSuggest', {
+      ch,
+      token,
+      pathContext
+    });
+    editor.trigger('guaxi-path', 'editor.action.triggerSuggest', {});
+  });
+
+  const isSuggestWidgetVisible = () => {
+    const dom = editor?.getDomNode?.();
+    if (!dom) return false;
+    return !!dom.querySelector('.suggest-widget.visible');
+  };
+
+  editor.onKeyDown((e) => {
+    if (e.keyCode !== monaco.KeyCode.Tab) return;
+    if (!isSuggestWidgetVisible()) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    editor.trigger(
+      'guaxi-suggest',
+      e.shiftKey ? 'selectPrevSuggestion' : 'selectNextSuggestion',
+      null
+    );
+  });
+
+  editor.onDidBlurEditorWidget(() => {
+    floatingToolbarVisible.value = false;
+    tableToolbarVisible.value = false;
+  });
+
+  editor.onDidChangeCursorSelection((e) => {
     const model = editor.getModel();
     if (!model) return;
 
@@ -444,26 +2412,173 @@ const setupEditorListeners = () => {
       ? `Selected ${countLines(selectedText)} lines, ${selectedText.length} chars`
       : null;
     editorStore.setSelectionStatus(status);
+
+    if (model.getLanguageId() !== 'markdown') {
+      floatingToolbarVisible.value = false;
+      tableToolbarVisible.value = false;
+      return;
+    }
+
+    const isEmpty = e.selection.isEmpty();
+    if (isEmpty || !selectedText.trim()) {
+      floatingToolbarVisible.value = false;
+      return;
+    }
+
+    const wrapperEl = editorWrapperRef.value;
+    const editorEl = editorContainer.value;
+    if (!wrapperEl || !editorEl) {
+      floatingToolbarVisible.value = false;
+      return;
+    }
+
+    const pos = e.selection.getStartPosition();
+    const visiblePos = editor.getScrolledVisiblePosition(pos);
+    if (!visiblePos) {
+      floatingToolbarVisible.value = false;
+      return;
+    }
+
+    const wrapperRect = wrapperEl.getBoundingClientRect();
+    const editorRect = editorEl.getBoundingClientRect();
+
+    const left = editorRect.left - wrapperRect.left + visiblePos.left;
+    const top = editorRect.top - wrapperRect.top + visiblePos.top - 36;
+
+    const headerEl = editorHeaderRef.value;
+    const headerHeight = headerEl ? headerEl.getBoundingClientRect().height : 0;
+    const minTop = headerHeight + 8;
+
+    floatingToolbarStyle.value = {
+      left: `${Math.max(8, left)}px`,
+      top: `${Math.max(minTop, top)}px`
+    };
+    floatingToolbarVisible.value = true;
   });
 };
 
 // 内容问题分析
-function analyzeContentForProblems(content) {
-  // 这里实现实际的问题检测逻辑
+function analyzeContentForProblems(content, model, languageId) {
+  if (!content) {
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'markdown-lint', []);
+    }
+    return { errors: 0, warnings: 0 };
+  }
+
+  if (languageId === 'markdown') {
+    return analyzeMarkdown(content, model);
+  }
+
   let errors = 0;
   let warnings = 0;
 
-  // 示例：简单分析常见问题
   const lines = content.split('\n');
-  lines.forEach(line => {
-    // 检查未闭合的括号
+  lines.forEach((line) => {
     const openBraces = (line.match(/\(/g) || []).length;
     const closeBraces = (line.match(/\)/g) || []).length;
     if (openBraces !== closeBraces) errors++;
 
-    // 检查长行
     if (line.length > 120) warnings++;
   });
+
+  if (model) {
+    monaco.editor.setModelMarkers(model, 'markdown-lint', []);
+  }
+
+  return { errors, warnings };
+}
+
+function analyzeMarkdown(content, model) {
+  let errors = 0;
+  let warnings = 0;
+  const markers = [];
+  const lines = content.split('\n');
+
+  const pushMarker = (lineNumber, message, severity) => {
+    if (!model) return;
+    const maxColumn = model.getLineMaxColumn(lineNumber) || 1;
+    markers.push({
+      severity:
+        severity === 'error'
+          ? monaco.MarkerSeverity.Error
+          : monaco.MarkerSeverity.Warning,
+      message,
+      startLineNumber: lineNumber,
+      startColumn: 1,
+      endLineNumber: lineNumber,
+      endColumn: maxColumn
+    });
+    if (severity === 'error') {
+      errors++;
+    } else {
+      warnings++;
+    }
+  };
+
+  let lastHeadingLevel = 0;
+  const headingTexts = new Map();
+  const tokens = md.parse(content, {});
+
+  tokens.forEach((token, idx) => {
+    if (token.type !== 'heading_open') return;
+
+    const level = Number(token.tag.slice(1));
+    const nextToken = tokens[idx + 1];
+    const lineNumber = token.map ? token.map[0] + 1 : 1;
+
+    if (!nextToken || !nextToken.content || !nextToken.content.trim()) {
+      pushMarker(lineNumber, '标题内容为空', 'warning');
+    }
+
+    if (lastHeadingLevel && level > lastHeadingLevel + 1) {
+      pushMarker(
+        lineNumber,
+        `标题级别从 H${lastHeadingLevel} 跳到 H${level}`,
+        'warning'
+      );
+    }
+
+    const text = nextToken?.content?.trim();
+    if (text) {
+      const existed = headingTexts.get(text);
+      if (existed) {
+        pushMarker(
+          lineNumber,
+          `标题与第 ${existed} 行重复`,
+          'warning'
+        );
+      } else {
+        headingTexts.set(text, lineNumber);
+      }
+    }
+
+    lastHeadingLevel = level;
+  });
+
+  const fenceLines = [];
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      fenceLines.push(index + 1);
+    }
+
+    const openBracket = (line.match(/\[/g) || []).length;
+    const linkStart = (line.match(/\]\(/g) || []).length;
+    const closeParen = (line.match(/\)/g) || []).length;
+    if (openBracket && (linkStart === 0 || closeParen < linkStart)) {
+      pushMarker(index + 1, '可能存在不完整的链接语法', 'warning');
+    }
+  });
+
+  if (fenceLines.length % 2 !== 0) {
+    const lineNumber = fenceLines[fenceLines.length - 1];
+    pushMarker(lineNumber, '代码块未正确闭合', 'error');
+  }
+
+  if (model) {
+    monaco.editor.setModelMarkers(model, 'markdown-lint', markers);
+  }
 
   return { errors, warnings };
 }
@@ -473,38 +2588,719 @@ function countLines(text) {
   return text.split(/\r\n|\n|\r/).length;
 }
 
-// 更新编辑器内容
-const updateEditorContent = (content) => {
-  if (!editor && content) {
-    initEditor();
-    return;
+const ensureMarkdownEditor = () => {
+  if (!editor) {
+    message.warning('没有可编辑的文档');
+    return false;
+  }
+  const model = editor.getModel();
+  if (!model) return false;
+  const languageId = model.getLanguageId();
+  if (languageId !== 'markdown') {
+    message.warning('当前工具栏功能仅在 Markdown 文件中可用');
+    return false;
+  }
+  return true;
+};
+
+const invokeMarkdownFormat = async (content) => {
+  const response = await invoke('markdown_format', {
+    request: {
+      content,
+      options: {
+        max_line_width: 0,
+        indent_width: 2,
+        list_indent: 2,
+        format_tables: true,
+        format_lists: true,
+        preserve_code_blocks: true,
+        remove_extra_blank_lines: true,
+        fix_extra_whitespace: false
+      }
+    }
+  });
+
+  const success = response?.success;
+  const formatted = response?.formatted_content ?? response?.formattedContent;
+  const error = response?.error;
+
+  if (!success || typeof formatted !== 'string') {
+    throw new Error(typeof error === 'string' ? error : 'Markdown 格式化失败');
   }
 
-  if (editor) {
-    // 当内容为空时，确保完全重置编辑器
-    if (!content) {
-      editor.setValue('');
-      const model = editor.getModel();
-      if (model) {
-        model.setValue('');
-      }
-    } else {
-      editor.setValue(content);
+  return formatted;
+};
+
+const formatMarkdownDocument = async () => {
+  if (!ensureMarkdownEditor()) return;
+
+  const model = editor.getModel();
+  if (!model) return;
+
+  const original = model.getValue();
+
+  try {
+    suppressEditLocationRecording = true;
+    const formatted = await invokeMarkdownFormat(original);
+
+    if (formatted === original) {
+      message.info('无需格式化');
+      return;
     }
-    rawContent.value = content;
+
+    editor.executeEdits('markdown-format', [
+      {
+        range: model.getFullModelRange(),
+        text: formatted,
+        forceMoveMarkers: true
+      }
+    ]);
+
+    editor.focus();
+  } catch (e) {
+    console.error('Markdown 格式化失败:', e);
+    message.error(e instanceof Error ? e.message : 'Markdown 格式化失败');
+  } finally {
+    suppressEditLocationRecording = false;
   }
 };
 
-// 保存内容
-const saveContent = () => {
-  if (selectedFile.value && editor) {
-    const content = editor.getValue();
-    fileTreeStore.updateFileContent(selectedFile.value.path, content);
-    message.info('修改已保存');
-    // 如果是vim模式，也显示保存提示
-    if (vimMode.value) {
-      message.info('修改已保存');
+const formatMarkdownSelection = async () => {
+  if (!ensureMarkdownEditor()) return;
+
+  const model = editor.getModel();
+  if (!model) return;
+
+  const selection = editor.getSelection();
+  if (!selection || selection.isEmpty()) {
+    message.info('请先选择需要格式化的内容');
+    return;
+  }
+
+  const selectedText = model.getValueInRange(selection);
+  if (!selectedText.trim()) {
+    message.info('请先选择需要格式化的内容');
+    return;
+  }
+
+  try {
+    suppressEditLocationRecording = true;
+
+    let formatted = await invokeMarkdownFormat(selectedText);
+    if (!selectedText.endsWith('\n')) {
+      formatted = formatted.replace(/\n$/, '');
     }
+
+    editor.executeEdits('markdown-format-selection', [
+      {
+        range: selection,
+        text: formatted,
+        forceMoveMarkers: true
+      }
+    ]);
+
+    editor.focus();
+  } catch (e) {
+    console.error('Markdown 格式化失败:', e);
+    message.error(e instanceof Error ? e.message : 'Markdown 格式化失败');
+  } finally {
+    suppressEditLocationRecording = false;
+  }
+};
+
+const wrapSelection = (prefix, suffix, placeholder = '') => {
+  if (!ensureMarkdownEditor()) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  const selectedText = model.getValueInRange(selection);
+  const finalText = prefix + (selectedText || placeholder) + suffix;
+
+  editor.executeEdits('markdown-toolbar', [
+    {
+      range: selection,
+      text: finalText,
+      forceMoveMarkers: true
+    }
+  ]);
+
+  if (!selectedText && placeholder) {
+    const startLineNumber = selection.startLineNumber;
+    const startColumn = selection.startColumn + prefix.length;
+    const endColumn = startColumn + placeholder.length;
+    editor.setSelection(
+      new monaco.Selection(
+        startLineNumber,
+        startColumn,
+        startLineNumber,
+        endColumn
+      )
+    );
+  }
+
+  editor.focus();
+};
+
+const insertBlockSnippet = (snippet) => {
+  if (!ensureMarkdownEditor()) return;
+  const position = editor.getPosition();
+  const range = new monaco.Range(
+    position.lineNumber,
+    1,
+    position.lineNumber,
+    1
+  );
+
+  editor.executeEdits('markdown-toolbar', [
+    {
+      range,
+      text: snippet,
+      forceMoveMarkers: true
+    }
+  ]);
+
+  editor.focus();
+};
+
+const toggleHeading = (level) => {
+  if (!ensureMarkdownEditor()) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  const startLine = selection.startLineNumber;
+  const endLine = selection.endLineNumber;
+  const edits = [];
+
+  for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+    const text = model.getLineContent(lineNumber);
+    const content = text.replace(/^#{1,6}\s+/, '');
+
+    let next = content;
+    if (level > 0) {
+      const sameLevel = new RegExp(`^#{${level}}\\s+`).test(text);
+      next = sameLevel ? content : `${'#'.repeat(level)} ${content || '标题'}`;
+    }
+
+    edits.push({
+      range: new monaco.Range(lineNumber, 1, lineNumber, model.getLineMaxColumn(lineNumber)),
+      text: next,
+      forceMoveMarkers: true
+    });
+  }
+
+  editor.executeEdits('markdown-toolbar', edits);
+  editor.focus();
+};
+
+const handleHeadingSelect = (key) => {
+  const level = Number(key);
+  if (Number.isNaN(level)) return;
+  toggleHeading(level);
+};
+
+const toggleBold = () => {
+  wrapSelection('**', '**', '粗体文本');
+};
+
+const toggleItalic = () => {
+  wrapSelection('*', '*', '斜体文本');
+};
+
+const toggleStrikethrough = () => {
+  wrapSelection('~~', '~~', '删除线');
+};
+
+const toggleInlineCode = () => {
+  wrapSelection('`', '`', 'code');
+};
+
+const insertLink = () => {
+  wrapSelection('[', '](https://)', '链接文字');
+};
+
+const toggleLinePrefix = (prefix, pattern, buildLine) => {
+  if (!ensureMarkdownEditor()) return;
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection) return;
+
+  const startLine = selection.startLineNumber;
+  const endLine = selection.endLineNumber;
+  const lines = [];
+  let allMatch = true;
+
+  for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+    const text = model.getLineContent(lineNumber);
+    lines.push(text);
+    if (!pattern.test(text)) allMatch = false;
+  }
+
+  const edits = lines.map((text, index) => {
+    const lineNumber = startLine + index;
+    const next = allMatch
+      ? text.replace(pattern, '')
+      : (buildLine ? buildLine(text, index) : `${prefix}${text}`);
+
+    return {
+      range: new monaco.Range(lineNumber, 1, lineNumber, model.getLineMaxColumn(lineNumber)),
+      text: next,
+      forceMoveMarkers: true
+    };
+  });
+
+  editor.executeEdits('markdown-toolbar', edits);
+  editor.focus();
+};
+
+const toggleBlockquote = () => {
+  toggleLinePrefix('> ', /^>\s+/, null);
+};
+
+const toggleUnorderedList = () => {
+  toggleLinePrefix('- ', /^-\s+/, null);
+};
+
+const toggleOrderedList = () => {
+  toggleLinePrefix(
+    '1. ',
+    /^\d+\.\s+/,
+    (text, index) => `${index + 1}. ${text}`
+  );
+};
+
+const toggleTaskList = () => {
+  toggleLinePrefix('- [ ] ', /^-\s\[( |x|X)\]\s+/, null);
+};
+
+const isPotentialTableLine = (line) => {
+  const trimmed = (line || '').trim();
+  if (!trimmed) return false;
+  const pipeCount = (trimmed.match(/\|/g) || []).length;
+  return pipeCount >= 2;
+};
+
+const isTableSeparatorLine = (line) => {
+  const trimmed = (line || '').trim();
+  if (!trimmed) return false;
+  return /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(trimmed);
+};
+
+const normalizeTableRowCells = (line) => {
+  const raw = (line || '').trim();
+  let text = raw;
+  if (!text.startsWith('|')) text = `| ${text}`;
+  if (!text.endsWith('|')) text = `${text} |`;
+  const parts = text.split('|');
+  return parts.slice(1, -1).map((c) => c.trim());
+};
+
+const buildTableRow = (cells) => {
+  return `| ${cells.map((c) => (c ?? '').trim()).join(' | ')} |`;
+};
+
+const normalizeSeparatorCell = (cell, align) => {
+  const base = (cell || '').trim();
+  const hasMin = base.replace(/:/g, '').replace(/-/g, '').length === 0;
+  if (!hasMin) return '---';
+
+  if (align === 'left') return ':---';
+  if (align === 'center') return ':---:';
+  if (align === 'right') return '---:';
+  return '---';
+};
+
+const getColumnIndexFromCursor = (line, column, colCount) => {
+  const text = line || '';
+  const positions = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '|') positions.push(i);
+  }
+  if (positions.length < 2) return 0;
+
+  const cursor = Math.max(0, Math.min(text.length, (column || 1) - 1));
+
+  if (cursor <= positions[0]) return 0;
+  if (cursor > positions[positions.length - 1]) return Math.max(0, (colCount || positions.length - 1) - 1);
+
+  for (let i = 0; i < positions.length - 1; i += 1) {
+    if (cursor > positions[i] && cursor <= positions[i + 1]) {
+      return Math.max(0, Math.min((colCount || positions.length - 1) - 1, i));
+    }
+  }
+
+  return 0;
+};
+
+const detectTableContext = () => {
+  if (!editor) return null;
+  const model = editor.getModel();
+  if (!model) return null;
+  if (model.getLanguageId() !== 'markdown') return null;
+
+  const pos = editor.getPosition();
+  if (!pos) return null;
+
+  const lineNumber = pos.lineNumber;
+  const lineText = model.getLineContent(lineNumber);
+  if (!isPotentialTableLine(lineText)) return null;
+
+  const total = model.getLineCount();
+  let start = lineNumber;
+  while (start > 1 && isPotentialTableLine(model.getLineContent(start - 1))) {
+    start -= 1;
+  }
+
+  let end = lineNumber;
+  while (end < total && isPotentialTableLine(model.getLineContent(end + 1))) {
+    end += 1;
+  }
+
+  let separatorLine = -1;
+  for (let i = start; i <= end; i += 1) {
+    if (isTableSeparatorLine(model.getLineContent(i))) {
+      separatorLine = i;
+      break;
+    }
+  }
+
+  if (separatorLine === -1 || separatorLine === start) return null;
+
+  const tableStart = separatorLine - 1;
+
+  const rawLines = [];
+  for (let i = tableStart; i <= end; i += 1) {
+    rawLines.push(model.getLineContent(i));
+  }
+
+  const rows = rawLines.map((l) => normalizeTableRowCells(l));
+  const colCount = rows.reduce((m, r) => Math.max(m, r.length), 0) || 1;
+  const padded = rows.map((r) => {
+    const next = [...r];
+    while (next.length < colCount) next.push('');
+    return next;
+  });
+
+  const activeRowIndex = lineNumber - tableStart;
+  const cursorColIndex = getColumnIndexFromCursor(rawLines[Math.max(0, Math.min(rawLines.length - 1, activeRowIndex))], pos.column, colCount);
+
+  return {
+    startLine: tableStart,
+    endLine: end,
+    separatorLine,
+    colCount,
+    rows: padded,
+    activeRowIndex,
+    activeColIndex: cursorColIndex
+  };
+};
+
+const updateTableToolbar = () => {
+  if (!editor) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const model = editor.getModel();
+  if (!model || model.getLanguageId() !== 'markdown') {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const ctx = detectTableContext();
+  if (!ctx) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const wrapperEl = editorWrapperRef.value;
+  const editorEl = editorContainer.value;
+  if (!wrapperEl || !editorEl) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const wrapperRect = wrapperEl.getBoundingClientRect();
+  const editorRect = editorEl.getBoundingClientRect();
+
+  const anchorPos = new monaco.Position(ctx.startLine, 1);
+  const visiblePos = editor.getScrolledVisiblePosition(anchorPos);
+  if (!visiblePos) {
+    tableToolbarVisible.value = false;
+    activeTableContext.value = null;
+    return;
+  }
+
+  const headerEl = editorHeaderRef.value;
+  const headerHeight = headerEl ? headerEl.getBoundingClientRect().height : 0;
+  const minTop = headerHeight + 8;
+
+  tableToolbarStyle.value = {
+    left: `${Math.max(8, editorRect.left - wrapperRect.left + 8)}px`,
+    top: `${Math.max(minTop, editorRect.top - wrapperRect.top + visiblePos.top - 36)}px`
+  };
+
+  activeTableContext.value = ctx;
+  tableToolbarVisible.value = true;
+};
+
+const applyTableEdits = (nextRows, nextActiveRowIndex, nextActiveColIndex) => {
+  if (!editor) return;
+  const model = editor.getModel();
+  const ctx = activeTableContext.value;
+  if (!model || !ctx) return;
+
+  const textLines = nextRows.map((cells, idx) => {
+    if (idx === 1) {
+      const normalized = cells.map((c) => normalizeSeparatorCell(c, null));
+      return buildTableRow(normalized);
+    }
+    return buildTableRow(cells);
+  });
+
+  const range = new monaco.Range(ctx.startLine, 1, ctx.endLine, model.getLineMaxColumn(ctx.endLine));
+  editor.executeEdits('md-table-toolbar', [
+    {
+      range,
+      text: textLines.join('\n'),
+      forceMoveMarkers: true
+    }
+  ]);
+
+  const row = Math.max(2, Math.min(textLines.length - 1, nextActiveRowIndex));
+  const col = Math.max(0, Math.min((nextRows[0]?.length || 1) - 1, nextActiveColIndex));
+  const targetLine = ctx.startLine + row;
+  editor.setPosition(new monaco.Position(targetLine, 3));
+  editor.focus();
+
+  nextTick(() => {
+    updateTableToolbar();
+  });
+};
+
+const addTableRowBelow = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const insertAt = ctx.activeRowIndex <= 1 ? 2 : Math.min(ctx.rows.length, ctx.activeRowIndex + 1);
+  const empty = Array.from({ length: ctx.colCount }, () => '');
+
+  const nextRows = [...ctx.rows];
+  nextRows.splice(insertAt, 0, empty);
+
+  applyTableEdits(nextRows, insertAt, ctx.activeColIndex);
+};
+
+const deleteTableRow = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  if (ctx.activeRowIndex <= 1) {
+    message.warning('无法删除表头或分隔行');
+    return;
+  }
+
+  const nextRows = [...ctx.rows];
+  if (nextRows.length <= 2) return;
+
+  nextRows.splice(ctx.activeRowIndex, 1);
+  const nextRow = Math.min(nextRows.length - 1, ctx.activeRowIndex);
+
+  applyTableEdits(nextRows, nextRow, ctx.activeColIndex);
+};
+
+const addTableColumnRight = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const insertAt = Math.min(ctx.colCount, ctx.activeColIndex + 1);
+  const nextRows = ctx.rows.map((row, rowIndex) => {
+    const next = [...row];
+    if (rowIndex === 1) {
+      next.splice(insertAt, 0, '---');
+    } else {
+      next.splice(insertAt, 0, '');
+    }
+    return next;
+  });
+
+  const nextCol = insertAt;
+  applyTableEdits(nextRows, ctx.activeRowIndex, nextCol);
+};
+
+const deleteTableColumn = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  if (ctx.colCount <= 1) {
+    message.warning('至少保留 1 列');
+    return;
+  }
+
+  const removeAt = Math.max(0, Math.min(ctx.colCount - 1, ctx.activeColIndex));
+  const nextRows = ctx.rows.map((row) => {
+    const next = [...row];
+    next.splice(removeAt, 1);
+    return next;
+  });
+
+  const nextCol = Math.max(0, Math.min(ctx.colCount - 2, removeAt));
+  applyTableEdits(nextRows, ctx.activeRowIndex, nextCol);
+};
+
+const setTableColumnAlign = (align) => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const col = Math.max(0, Math.min(ctx.colCount - 1, ctx.activeColIndex));
+  const nextRows = ctx.rows.map((row, rowIndex) => {
+    if (rowIndex !== 1) return row;
+    const next = [...row];
+    next[col] = normalizeSeparatorCell(next[col], align);
+    return next;
+  });
+
+  applyTableEdits(nextRows, ctx.activeRowIndex, ctx.activeColIndex);
+};
+
+const formatTable = () => {
+  const ctx = activeTableContext.value;
+  if (!ctx || !ctx.rows?.length) return;
+
+  const nextRows = ctx.rows.map((row, rowIndex) => {
+    if (rowIndex === 1) {
+      return row.map((c) => normalizeSeparatorCell(c, null));
+    }
+    return row.map((c) => (c ?? '').trim());
+  });
+
+  applyTableEdits(nextRows, ctx.activeRowIndex, ctx.activeColIndex);
+};
+
+const insertTable = () => {
+  if (!ensureMarkdownEditor()) return;
+
+  const pos = editor.getPosition();
+  insertBlockSnippet('| 列1 | 列2 |\n| --- | --- |\n| 内容1 | 内容2 |\n');
+
+  if (pos) {
+    nextTick(() => {
+      editor.setPosition(new monaco.Position(pos.lineNumber + 2, 3));
+      editor.focus();
+      updateTableToolbar();
+    });
+  }
+};
+
+const insertImage = () => {
+  insertBlockSnippet('![图片描述](路径或URL)\n');
+};
+
+const insertCodeBlockFromToolbar = () => {
+  wrapSelection('```\n', '\n```\n', '代码');
+};
+
+const insertHorizontalRule = () => {
+  insertBlockSnippet('---\n');
+};
+
+const undo = () => {
+  if (!editor) return;
+  editor.focus();
+  editor.trigger('toolbar', 'undo', null);
+};
+
+const redo = () => {
+  if (!editor) return;
+  editor.focus();
+  editor.trigger('toolbar', 'redo', null);
+};
+
+const getActiveEditor = () => {
+  if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeRegion === 'right') {
+    return secondaryEditor;
+  }
+  return editor;
+};
+
+const activateRegion = (region) => {
+  if (fileTreeStore.layoutMode === 'single') return;
+
+  const desired = region === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
+  if (desired) {
+    fileTreeStore.setActiveTab(desired, region);
+    return;
+  }
+
+  fileTreeStore.setActiveRegion(region);
+};
+
+// 更新编辑器内容
+const updateEditorContent = (content) => {
+  const nextContent = content ?? '';
+  rawContent.value = nextContent;
+
+  if (!editor) {
+    initEditor();
+  }
+
+  if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeRegion === 'right') {
+    ensureSecondaryEditor();
+  }
+
+  const targetEditor = getActiveEditor();
+  if (!targetEditor) return;
+
+  // 当内容为空时，确保完全重置编辑器
+  if (!nextContent) {
+    targetEditor.setValue('');
+    const model = targetEditor.getModel();
+    if (model) {
+      model.setValue('');
+    }
+  } else {
+    targetEditor.setValue(nextContent);
+  }
+
+  targetEditor.updateOptions({
+    readOnly: !!activeTab.value?.unsupported,
+  });
+};
+
+// 保存内容
+const saveContent = async () => {
+  if (!selectedFile.value) return;
+
+  if (activeTab.value?.unsupported) {
+    message.warning('不支持编辑/保存该文件类型');
+    return;
+  }
+
+  const targetEditor = getActiveEditor();
+  const content =
+    previewMode.value === 'realtime' && realtimeVditor
+      ? realtimeVditor.getValue()
+      : targetEditor
+        ? targetEditor.getValue()
+        : rawContent.value;
+
+  await fileTreeStore.updateFileContent(selectedFile.value.path, content);
+  message.info('修改已保存');
+  if (vimMode.value) {
+    message.info('修改已保存');
+  }
+
+  rawContent.value = content;
+
+  if (previewMode.value !== 'realtime' && targetEditor) {
+    updateEditorContent(content);
+  }
+
+  if (previewMode.value === 'split' && canPreview.value) {
+    renderDebounced(content);
   }
 };
 
@@ -513,26 +3309,215 @@ const handleKeyDown = (e) => {
   if (e.ctrlKey && e.key === 's') {
     e.preventDefault();
     saveContent();
+    return;
+  }
+
+  if (e.ctrlKey && !e.altKey && !e.metaKey) {
+    if (e.key === '1') {
+      e.preventDefault();
+      handlePreviewModeSelect('edit');
+      return;
+    }
+
+    if (e.key === '2') {
+      e.preventDefault();
+      handlePreviewModeSelect('preview');
+      return;
+    }
+
+    if (e.key === '3') {
+      e.preventDefault();
+      handlePreviewModeSelect('split');
+      return;
+    }
+
+    if (e.key === '4') {
+      e.preventDefault();
+      handlePreviewModeSelect('realtime');
+      return;
+    }
+  }
+
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    const target = e.target;
+    const tagName = (target?.tagName || '').toLowerCase();
+    const isEditable =
+      tagName === 'input' ||
+      tagName === 'textarea' ||
+      target?.isContentEditable;
+
+    if (isEditable) return;
+
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      navigateToPreviousEditLocation();
+      return;
+    }
+
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      navigateToNextEditLocation();
+      return;
+    }
   }
 };
 
-// 切换模式
-const toggleMode = debounce(async () => {
-  mode.value = mode.value === 'edit' ? 'preview' : 'edit';
+const getRealtimeScrollElement = () => {
+  const root = document.getElementById(realtimeVditorId);
+  if (!root) return null;
+  return root.querySelector('.vditor-content') || root;
+};
+
+const captureScrollPosition = () => {
+  if (previewMode.value === 'realtime') {
+    const el = getRealtimeScrollElement();
+    if (el) {
+      const height = el.scrollHeight;
+      scrollRatio.value = height ? el.scrollTop / height : 0;
+      return;
+    }
+  }
+
+  if (mode.value === 'edit' && editor) {
+    const top = editor.getScrollTop();
+    const height = editor.getScrollHeight();
+    scrollRatio.value = height ? top / height : 0;
+  } else if (mode.value === 'preview' && previewContainer.value) {
+    const el = previewContainer.value;
+    const height = el.scrollHeight;
+    scrollRatio.value = height ? el.scrollTop / height : 0;
+  } else {
+    scrollRatio.value = 0;
+  }
+};
+
+const restoreRealtimeScroll = () => {
+  const el = getRealtimeScrollElement();
+  if (!el) {
+    pendingRealtimeScrollRestore.value = true;
+    return;
+  }
+  const height = el.scrollHeight;
+  el.scrollTop = height * scrollRatio.value;
+  pendingRealtimeScrollRestore.value = false;
+};
+
+const restoreScrollPosition = () => {
+  if (previewMode.value === 'realtime') {
+    restoreRealtimeScroll();
+    return;
+  }
+
+  if (mode.value === 'preview') {
+    pendingPreviewScrollRestore.value = true;
+  } else if (mode.value === 'edit' && editor) {
+    nextTick(() => {
+      const height = editor.getScrollHeight();
+      const targetTop = height * scrollRatio.value;
+      editor.setScrollTop(targetTop);
+    });
+  }
+};
+
+const scrollPreviewToLine = (lineNumber) => {
+  if (!previewContainer.value || !lineNumber) return;
+
+  const container = previewContainer.value;
+  const elements = Array.from(
+    container.querySelectorAll('[data-md-start-line]')
+  );
+
+  if (!elements.length) return;
+
+  let target = elements[0];
+  let minDelta = Infinity;
+
+  elements.forEach((el) => {
+    const start = Number(el.dataset.mdStartLine || 0);
+    const end = Number(el.dataset.mdEndLine || start);
+    if (!start && !end) return;
+
+    let delta = 0;
+    if (lineNumber < start) {
+      delta = start - lineNumber;
+    } else if (lineNumber > end) {
+      delta = lineNumber - end;
+    } else {
+      delta = 0;
+    }
+
+    if (delta < minDelta) {
+      minDelta = delta;
+      target = el;
+    }
+  });
+
+  if (!target) return;
+
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const offset = targetRect.top - containerRect.top;
+  container.scrollTop += offset - container.clientHeight * 0.2;
+};
+
+const syncEditorToLine = (lineNumber, { focus = true } = {}) => {
+  if (!lineNumber) return;
+  if (!editor) {
+    initEditor();
+  }
+  if (!editor) return;
+
+  editor.revealLineInCenter(lineNumber);
+  editor.setPosition({ lineNumber, column: 1 });
+  if (focus) {
+    editor.focus();
+  }
+};
+
+const handlePreviewClick = (e) => {
+  const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
+  if (!base) return;
+  const hit = base.closest('[data-md-start-line]');
+  if (!hit) return;
+
+  const line = Number(hit.dataset.mdStartLine || 1);
+  const shouldFocus = showEditor.value;
+  syncEditorToLine(line, { focus: shouldFocus });
+};
+
+const setMainMode = async (nextMode) => {
+  if (nextMode !== 'edit' && nextMode !== 'preview') return;
+  if (mode.value === nextMode) return;
+
+  if (mode.value === 'edit' && nextMode === 'preview' && editor) {
+    const pos = editor.getPosition();
+    pendingPreviewScrollLine.value =
+      (pos && pos.lineNumber) || editorStore.cursorPosition.lineNumber || 1;
+  }
+
+  captureScrollPosition();
+  mode.value = nextMode;
+
+  await nextTick();
 
   if (mode.value === 'edit') {
-    await nextTick();
     if (!editor) {
       initEditor();
     }
-  } else {
-    await renderDebounced(rawContent.value);
+    if (editor) {
+      editor.layout();
+    }
+    restoreScrollPosition();
+    return;
   }
-}, 150);
+
+  renderDebounced(rawContent.value);
+  restoreScrollPosition();
+};
 
 // 防抖渲染
 const renderDebounced = debounce(async (content) => {
-  if (!selectedFile.value || !mode.value || !content) {
+  if (!selectedFile.value || !mode.value || !content || !canPreview.value) {
     renderedHtml.value = '';
     return;
   }
@@ -564,11 +3549,24 @@ const renderDebounced = debounce(async (content) => {
   }
 }, 300);
 
+const canPreview = computed(() => {
+  const path = selectedFile.value?.path || '';
+  const ext = path.split('.').pop()?.toLowerCase();
+  if (ext === 'md' || ext === 'markdown') return true;
+  return editorStore.language === 'markdown';
+});
+
 // 监听文件选择
 watch(selectedFile, async (newFile) => {
   if (newFile) {
     const fileExt = newFile.path?.split('.').pop() || 'markdown';
     const languageMap = {
+      'js': 'javascript',
+      'ts': 'typescript',
+      'css': 'css',
+      'html': 'html',
+      'htm': 'html',
+      'md': 'markdown',
       'py': 'python',
       'cpp': 'cpp',
       'c': 'cpp',
@@ -576,30 +3574,43 @@ watch(selectedFile, async (newFile) => {
       'hpp': 'cpp',
       'rs': 'rust',
       'sh': 'shell',
-      'js': 'javascript',
       'jsx': 'javascript',
-      'ts': 'javascript',
       'tsx': 'javascript',
-      'html': 'html',
-      'htm': 'html',
-      'css': 'css',
-      'md': 'markdown'
+      'json': 'json',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+      'lua': 'lua',
+      'java': 'java',
+      'toml': 'ini',
     };
 
     const language = languageMap[fileExt] || 'markdown';
-    if (editor) {
-      monaco.editor.setModelLanguage(editor.getModel(), language);
-    }
 
     // 更新内容
     rawContent.value = newFile.content || '';
-    if (editor) {
-      updateEditorContent(newFile.content || '');
-    } else {
-      nextTick(() => {
-        initEditor();
-        updateEditorContent(newFile.content || '');
-      });
+
+    if (previewMode.value === 'realtime' && realtimeVditor) {
+      const nextValue = rawContent.value || '';
+      if (!realtimeVditorReady.value) {
+        pendingRealtimeVditorValue.value = nextValue;
+      } else {
+        settingRealtimeVditorValue = true;
+        try {
+          realtimeVditor.setValue(nextValue);
+        } finally {
+          settingRealtimeVditorValue = false;
+        }
+      }
+    }
+
+    updateEditorContent(rawContent.value);
+
+    const targetEditor = getActiveEditor();
+    if (targetEditor) {
+      const model = targetEditor.getModel();
+      if (model) {
+        monaco.editor.setModelLanguage(model, language);
+      }
     }
 
     if (!selectedFile.value || !mode.value) {
@@ -607,8 +3618,7 @@ watch(selectedFile, async (newFile) => {
       return
     }
 
-    // 如果是预览模式立即渲染
-    if (mode.value === 'preview') {
+    if (canPreview.value && (mode.value === 'preview' || previewMode.value !== 'toggle')) {
       renderDebounced(newFile.content)
     }
 
@@ -618,14 +3628,259 @@ watch(selectedFile, async (newFile) => {
       editor.setValue('');
       editor.getModel().setValue('');
     }
+    if (secondaryEditor) {
+      secondaryEditor.setValue('');
+      secondaryEditor.getModel().setValue('');
+    }
     renderedHtml.value = '';
     return;
   }
 }, { immediate: true });
 
-// 监听内容变化
-watch([rawContent, mode], () => {
-  if (mode.value === 'preview') {
+const previewModeOptions = [
+  { label: '编辑模式 (Ctrl+1)', key: 'edit' },
+  { label: '预览模式 (Ctrl+2)', key: 'preview' },
+  { label: '分屏预览 (Ctrl+3)', key: 'split' },
+  { label: '实时预览 (Ctrl+4)', key: 'realtime' }
+];
+
+const previewModeLabel = computed(() => {
+  if (previewMode.value === 'toggle') {
+    return mode.value === 'edit' ? '编辑模式' : '预览模式';
+  }
+  return previewMode.value === 'split' ? '分屏预览' : '实时预览';
+});
+
+const previewModeIcon = computed(() => {
+  if (previewMode.value === 'toggle') {
+    return mode.value === 'edit' ? 'lucide:file-pen-line' : 'lucide:eye';
+  }
+  return previewMode.value === 'split' ? 'lucide:columns-2' : 'lucide:sparkles';
+});
+
+const showEditor = computed(() => {
+  if (!selectedFile.value) return false;
+  if (previewMode.value === 'realtime') return false;
+  return previewMode.value === 'toggle' ? mode.value === 'edit' : true;
+});
+
+const showPreview = computed(() => {
+  if (!selectedFile.value || !canPreview.value) return false;
+  if (previewMode.value === 'realtime') return false;
+  return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
+});
+
+watch(
+  () => editorStore.cursorPosition?.lineNumber,
+  (line) => {
+    if (!line) return;
+    if (showPreview.value) {
+      scrollPreviewToLine(line);
+    }
+  },
+  { flush: 'post' }
+);
+
+const shouldAutoRenderPreview = computed(() => {
+  if (!selectedFile.value || !canPreview.value) return false;
+  return previewMode.value === 'toggle' && mode.value === 'preview';
+});
+
+const refreshPreview = () => {
+  renderDebounced(rawContent.value);
+};
+
+const initRealtimeVditor = async () => {
+  if (!selectedFile.value || !canPreview.value) return;
+  if (previewMode.value !== 'realtime') return;
+
+  await nextTick();
+
+  const desiredValue = rawContent.value || '';
+
+  if (!realtimeVditor) {
+    realtimeVditorReady.value = false;
+    pendingRealtimeVditorValue.value = null;
+
+    realtimeVditor = new Vditor(realtimeVditorId, {
+      mode: 'ir',
+      cache: { enable: false },
+      preview: {
+        delay: 200,
+        hljs: { enable: false }
+      },
+      toolbarConfig: { hide: false },
+      toolbar: [
+        'headings',
+        'bold',
+        'italic',
+        'strike',
+        'link',
+        '|',
+        'list',
+        'ordered-list',
+        'check',
+        '|',
+        'quote',
+        'line',
+        'code',
+        'inline-code',
+        '|',
+        'table',
+        '|',
+        'undo',
+        'redo'
+      ],
+      value: desiredValue,
+      input: (value) => {
+        if (settingRealtimeVditorValue) return;
+        syncRealtimeValueToRawContent(value);
+      },
+      after: () => {
+        realtimeVditorReady.value = true;
+
+        if (pendingRealtimeVditorValue.value != null && realtimeVditor) {
+          const v = pendingRealtimeVditorValue.value;
+          pendingRealtimeVditorValue.value = null;
+          settingRealtimeVditorValue = true;
+          try {
+            realtimeVditor.setValue(v);
+          } finally {
+            settingRealtimeVditorValue = false;
+          }
+        }
+
+        if (pendingRealtimeScrollRestore.value) {
+          restoreScrollPosition();
+        }
+      }
+    });
+
+    return;
+  }
+
+  if (!realtimeVditorReady.value) {
+    pendingRealtimeVditorValue.value = desiredValue;
+    return;
+  }
+
+  settingRealtimeVditorValue = true;
+  try {
+    realtimeVditor.setValue(desiredValue);
+  } finally {
+    settingRealtimeVditorValue = false;
+  }
+
+  if (pendingRealtimeScrollRestore.value) {
+    restoreScrollPosition();
+  }
+};
+
+const destroyRealtimeVditor = () => {
+  syncRealtimeValueToRawContent.cancel();
+  if (!realtimeVditor) return;
+  try {
+    realtimeVditor.destroy();
+  } finally {
+    realtimeVditor = null;
+    realtimeVditorReady.value = false;
+    pendingRealtimeVditorValue.value = null;
+  }
+};
+
+const handlePreviewModeSelect = async (key) => {
+  if (previewMode.value === 'realtime') {
+    captureScrollPosition();
+    if (realtimeVditor) {
+      const content = realtimeVditor.getValue();
+      rawContent.value = content;
+      if (editor) {
+        updateEditorContent(content);
+      }
+    }
+  }
+
+  if (key === 'edit') {
+    previewMode.value = 'toggle';
+    await setMainMode('edit');
+    return;
+  }
+
+  if (key === 'preview') {
+    if (!canPreview.value) {
+      message.warning('仅 Markdown 文件支持预览');
+      previewMode.value = 'toggle';
+      await setMainMode('edit');
+      return;
+    }
+    previewMode.value = 'toggle';
+    await setMainMode('preview');
+    return;
+  }
+
+  if (key === 'split') {
+    if (!canPreview.value) {
+      message.warning('仅 Markdown 文件支持预览');
+      previewMode.value = 'toggle';
+      await setMainMode('edit');
+      renderedHtml.value = '';
+      return;
+    }
+
+    previewMode.value = 'split';
+    await setMainMode('edit');
+    await nextTick();
+    refreshPreview();
+    return;
+  }
+
+  if (key === 'realtime') {
+    if (!canPreview.value) {
+      message.warning('仅 Markdown 文件支持预览');
+      previewMode.value = 'toggle';
+      await setMainMode('edit');
+      renderedHtml.value = '';
+      return;
+    }
+
+    captureScrollPosition();
+    pendingRealtimeScrollRestore.value = true;
+    previewMode.value = 'realtime';
+    await setMainMode('edit');
+  }
+};
+
+watch(previewMode, async (nextMode, prevMode) => {
+  if (prevMode === 'realtime' && nextMode !== 'realtime') {
+    destroyRealtimeVditor();
+  }
+
+  if (nextMode === 'toggle') return;
+
+  if (!canPreview.value) {
+    message.warning('仅 Markdown 文件支持预览');
+    previewMode.value = 'toggle';
+    await setMainMode('edit');
+    renderedHtml.value = '';
+    return;
+  }
+
+  if (nextMode === 'realtime') {
+    pendingRealtimeScrollRestore.value = true;
+    await initRealtimeVditor();
+    return;
+  }
+
+  await nextTick();
+  if (!editor) {
+    initEditor();
+  }
+
+  refreshPreview();
+});
+
+watch([rawContent, shouldAutoRenderPreview], () => {
+  if (shouldAutoRenderPreview.value) {
     renderDebounced(rawContent.value);
   }
 });
@@ -635,6 +3890,16 @@ watch(renderedHtml, () => {
   nextTick(() => {
     if (previewContainer.value) {
       addCopyButtons(previewContainer.value);
+      if (pendingPreviewScrollRestore.value) {
+        const el = previewContainer.value;
+        const height = el.scrollHeight;
+        el.scrollTop = height * scrollRatio.value;
+        pendingPreviewScrollRestore.value = false;
+      }
+      if (pendingPreviewScrollLine.value) {
+        scrollPreviewToLine(pendingPreviewScrollLine.value);
+        pendingPreviewScrollLine.value = null;
+      }
     }
   });
 });
@@ -678,51 +3943,332 @@ const toggleVimMode = () => {
         });
       }
     }
+
+    applyVimOverlayInsets();
   });
 };
 
-const switchTab = (path) => {
-  // 保存当前编辑内容
-  if (editor && fileTreeStore.activeTab) {
-    const currentContent = editor.getValue();
-    const tabIndex = fileTreeStore.openTabs.findIndex(tab => tab.path === fileTreeStore.activeTab);
-    if (tabIndex !== -1) {
-      fileTreeStore.openTabs[tabIndex].content = currentContent;
-    }
+const buildPrintHtml = (bodyHtml, title) => {
+  const now = new Date();
+  const dateStr = now.toLocaleString();
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>${title}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 16mm;
   }
 
-  fileTreeStore.activeTab = path;
-  const tab = fileTreeStore.openTabs.find(t => t.path === path);
-  if (tab) {
-    fileTreeStore.selectedFile = { path: tab.path, content: tab.content };
-    updateEditorContent(tab.content);
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+
+  body {
+    font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
+    color: #000000;
+  }
+
+  .export-root {
+    box-sizing: border-box;
+    padding: 12px 8px 24px 8px;
+  }
+
+  .export-header {
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .export-title {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+    word-break: break-all;
+  }
+
+  .export-meta {
+    font-size: 12px;
+    color: #666666;
+  }
+
+  .export-content {
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  .export-content code,
+  .export-content pre {
+    font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  }
+
+  .export-content pre {
+    background: #f5f5f5;
+    padding: 10px 12px;
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+
+  .export-content table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  .export-content table th,
+  .export-content table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+  }
+
+  .export-content img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  @media print {
+    body {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="export-root">
+    <div class="export-header">
+      <div class="export-title">${title}</div>
+      <div class="export-meta">导出时间：${dateStr}</div>
+    </div>
+    <div class="export-content">${bodyHtml}</div>
+  </div>
+</body>
+</html>`;
+};
+
+const createPrintIframeAndPrint = (html) => {
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.visibility = 'hidden';
+  iframe.srcdoc = html;
+  document.body.appendChild(iframe);
+
+  const cleanup = () => {
+    if (iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe);
+    }
+  };
+
+  iframe.onload = () => {
+    try {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }
+    } finally {
+      setTimeout(cleanup, 1000);
+    }
+  };
+};
+
+const exportOptions = [
+  { label: '导出为 PDF', key: 'pdf' },
+  { label: '导出为 Word (.docx)', key: 'docx' },
+  { label: '导出为 HTML (.html)', key: 'html' },
+  { label: '导出为 LaTeX (.tex)', key: 'tex' },
+  { label: '导出为 EPUB (.epub)', key: 'epub' },
+  { label: '导出为 ODT (.odt)', key: 'odt' },
+  { label: '导出为 纯文本 (.txt)', key: 'txt' }
+];
+
+const handleExportSelect = async (format) => {
+  if (!selectedFile.value || !selectedFile.value.path) {
+    message.warning('当前没有选中的 Markdown 文件');
+    return;
+  }
+
+  const ext = selectedFile.value.path.split('.').pop()?.toLowerCase() || '';
+  if (ext !== 'md') {
+    message.warning('仅支持对 Markdown 文件进行导出');
+    return;
+  }
+
+  if (mode.value === 'edit' && editor) {
+    saveContent();
+  }
+
+  const path = selectedFile.value.path || '';
+
+  const formatExtMap = {
+    pdf: 'pdf',
+    docx: 'docx',
+    html: 'html',
+    tex: 'tex',
+    epub: 'epub',
+    odt: 'odt',
+    txt: 'txt'
+  };
+
+  const extName = formatExtMap[format] || format;
+
+  let filterName = '';
+  switch (format) {
+    case 'pdf':
+      filterName = 'PDF 文件';
+      break;
+    case 'docx':
+      filterName = 'Word 文件';
+      break;
+    case 'html':
+      filterName = 'HTML 文件';
+      break;
+    case 'tex':
+      filterName = 'LaTeX 文件';
+      break;
+    case 'epub':
+      filterName = 'EPUB 文件';
+      break;
+    case 'odt':
+      filterName = 'ODT 文件';
+      break;
+    case 'txt':
+      filterName = '文本文件';
+      break;
+    default:
+      filterName = '导出文件';
+  }
+
+  try {
+    let defaultPath = path;
+    if (path.toLowerCase().endsWith('.md')) {
+      defaultPath = path.slice(0, -3) + '.' + extName;
+    } else {
+      defaultPath = path + '.' + extName;
+    }
+
+    const outputPath = await save({
+      defaultPath,
+      filters: [
+        {
+          name: filterName,
+          extensions: [extName]
+        }
+      ]
+    });
+
+    if (!outputPath) {
+      message.info('已取消导出');
+      return;
+    }
+
+    if (format === 'pdf') {
+      await invoke('export_markdown_pdf_pandoc', {
+        inputPath: path,
+        outputPath
+      });
+    } else {
+      await invoke('export_markdown_pandoc', {
+        inputPath: path,
+        outputPath,
+        format
+      });
+    }
+
+    message.success(`已导出为 ${filterName}`);
+  } catch (error) {
+    console.error('导出 Markdown 失败:', error);
+    message.error('导出 Markdown 失败');
   }
 };
 
-const closeTab = (path) => {
-  // 保存当前内容
-  if (editor && fileTreeStore.activeTab === path) {
-    const content = editor.getValue();
+const switchTab = (path, region) => {
+  const targetRegion = region || 'left';
+
+  console.debug('[Editor] switchTab', {
+    from: targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft,
+    to: path,
+    region: targetRegion,
+    hasEditor: !!editor,
+    hasSecondary: !!secondaryEditor,
+  })
+
+  const currentPath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
+  if (currentPath) {
+    const currentEditor = targetRegion === 'right' ? secondaryEditor : editor;
+    const currentContent =
+      targetRegion === fileTreeStore.activeRegion && previewMode.value === 'realtime' && realtimeVditor
+        ? realtimeVditor.getValue()
+        : currentEditor
+          ? currentEditor.getValue()
+          : rawContent.value;
+    fileTreeStore.updateTabContent(currentPath, currentContent);
+  }
+
+  fileTreeStore.setActiveTab(path, targetRegion);
+  const tab = fileTreeStore.openTabs.find((t) => t.path === path);
+  if (!tab) return;
+
+  rawContent.value = tab.content;
+
+  if (previewMode.value === 'realtime' && realtimeVditor) {
+    initRealtimeVditor();
+  }
+
+  if (fileTreeStore.layoutMode !== 'single' && targetRegion === 'right') {
+    ensureSecondaryEditor();
+  }
+
+  updateEditorContent(tab.content);
+};
+
+const closeTab = (path, region) => {
+  const targetRegion = region || 'left';
+  const regionActivePath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
+  const regionEditor = targetRegion === 'right' ? secondaryEditor : editor;
+
+  if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.openTabs.length === 1) {
+    if (regionEditor && regionActivePath === path) {
+      const content = regionEditor.getValue();
+      fileTreeStore.updateTabContent(path, content);
+    }
+
+    fileTreeStore.setLayoutMode('single');
+    if (fileTreeStore.activeTab !== path) {
+      fileTreeStore.setActiveTab(path, 'left');
+    }
+    return;
+  }
+
+  if (regionEditor && regionActivePath === path) {
+    const content = regionEditor.getValue();
     fileTreeStore.updateTabContent(path, content);
   }
 
-  fileTreeStore.closeTab(path);
+  fileTreeStore.closeTab(path, targetRegion);
   if (fileTreeStore.openTabs.length > 0) {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
     if (tab) {
       updateEditorContent(tab.content);
     }
   } else {
-    // 完全清空状态
-    fileTreeStore.activeTab = null;
-    fileTreeStore.selectedFile = null;
-    // 强制清空编辑器
+    fileTreeStore.setActiveTab(null);
     if (editor) {
       editor.setValue('');
-      editor.getModel().setValue(''); // 确保模型也被清空
+      editor.getModel().setValue('');
     }
-    // 隐藏编辑器区域
-    // mode.value = 'preview';
+    if (secondaryEditor) {
+      secondaryEditor.setValue('');
+      secondaryEditor.getModel().setValue('');
+    }
     renderedHtml.value = '';
   }
 };
@@ -846,7 +4392,15 @@ function generateOutline(content) {
   outlineStore.setOutline(result)
 }
 
+const generateOutlineDebounced = debounce((content) => {
+  generateOutline(content)
+}, 200)
+
 function jumpToLine(line) {
+  if (mode.value === 'preview') {
+    scrollPreviewToLine(line)
+    return
+  }
   if (editor) {
     editor.revealLineInCenter(line)
     editor.setPosition({ lineNumber: line, column: 1 })
@@ -856,7 +4410,7 @@ function jumpToLine(line) {
 
 // 监听 activeTab 和内容变化，生成大纲
 watch([() => fileTreeStore.activeTab, activeTabContent], ([tabPath, content]) => {
-  generateOutline(content)
+  generateOutlineDebounced(content)
 }, { immediate: true })
 
 
@@ -869,6 +4423,21 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
+  destroyRealtimeVditor();
+
+  if (editorEffectsRight) {
+    editorEffectsRight.destroy();
+    editorEffectsRight = null;
+  }
+  if (secondaryEditor) {
+    secondaryEditor.dispose();
+    secondaryEditor = null;
+  }
+
+  if (editorEffectsLeft) {
+    editorEffectsLeft.destroy();
+    editorEffectsLeft = null;
+  }
   editor?.dispose();
   editor = null;
   editorStore.setEditorInstance(null); // 清除store中的引用
@@ -881,24 +4450,102 @@ onUnmounted(() => {
 
 
 <style scoped>
+.editor-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  /* 改为固定右对齐 */
+  justify-content: flex-start;
   padding: 4px 8px;
   height: 30px;
+  min-height: 30px;
   background-color: var(--toolbar-bg, #f8f8f8);
   border-bottom: 1px solid var(--divider-color, #e0e0e0);
-  position: sticky;
-  /* 改为粘性定位 */
-  top: 0;
+  position: relative;
   width: 100%;
   box-sizing: border-box;
   min-width: 0;
-  /* 允许工具栏缩小 */
-  z-index: 10;
-  /* 确保在最上层 */
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.toolbar-editing-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.toolbar-editing-actions::-webkit-scrollbar {
+  height: 0;
+}
+
+.floating-md-toolbar {
+  position: absolute;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background-color: var(--toolbar-bg, #f8f8f8);
+  border: 1px solid var(--divider-color, #e0e0e0);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.floating-md-toolbar :deep(.n-button) {
+  padding: 0 4px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.floating-table-toolbar {
+  position: absolute;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background-color: var(--toolbar-bg, #f8f8f8);
+  border: 1px solid var(--divider-color, #e0e0e0);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.floating-table-toolbar :deep(.n-button) {
+  padding: 0 4px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.floating-table-toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background-color: var(--divider-color, #e0e0e0);
+  margin: 0 2px;
+}
+
+.toolbar-editing-actions :deep(.n-button) {
+  padding: 0 4px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.toolbar-editing-actions :deep(.n-button:hover) {
+  background-color: rgba(0, 0, 0, 0.04);
 }
 
 .toolbar-spacer {
@@ -920,6 +4567,10 @@ onUnmounted(() => {
   /* 关键修复6: 防止按钮被压缩 */
 }
 
+.toolbar-actions :deep(.n-button) {
+  flex-shrink: 0;
+}
+
 .mode-toggle {
   cursor: pointer;
   padding: 2px 6px;
@@ -938,6 +4589,31 @@ onUnmounted(() => {
 @media (max-width: 600px) {
   .toolbar {
     padding: 4px;
+    height: 30px;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    overflow: hidden;
+    contain: paint;
+  }
+
+  .toolbar-spacer {
+    display: none;
+  }
+
+  .toolbar-editing-actions {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    contain: paint;
+    -webkit-mask-image: linear-gradient(to right, #000 0%, #000 85%, transparent 100%);
+    mask-image: linear-gradient(to right, #000 0%, #000 85%, transparent 100%);
+  }
+
+  .toolbar-actions {
+    flex: 0 0 auto;
+    margin-left: 8px;
   }
 
   .mode-toggle {
@@ -949,25 +4625,143 @@ onUnmounted(() => {
   background-color: var(--hover-color, #f0f0f0);
 }
 
+.editor-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.editor-content.toggle {
+  flex-direction: column;
+}
+
+.editor-content.split {
+  flex-direction: row;
+}
+
+.editor-content.split .preview,
+.editor-content.split .editor-wrapper {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 0;
+}
+
+.editor-content.split .editor-wrapper {
+  border-left: 1px solid var(--divider-color, #e0e0e0);
+}
+
+.editor-content.realtime {
+  flex-direction: column;
+}
+
+.realtime-vditor {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.realtime-vditor :deep(.vditor) {
+  height: 100%;
+  border: none;
+}
+
+.realtime-vditor :deep(.vditor-content) {
+  height: 100%;
+}
+
+.realtime-vditor :deep(.vditor-toolbar) {
+  display: flex;
+  flex-direction: row !important;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.realtime-vditor :deep(.vditor-toolbar > *) {
+  flex: 0 0 auto;
+}
+
+.realtime-vditor :deep(.vditor-toolbar::-webkit-scrollbar) {
+  height: 4px;
+}
+
+.realtime-vditor :deep(.vditor-toolbar::-webkit-scrollbar-thumb) {
+  background-color: rgba(0, 0, 0, 0.25);
+  border-radius: 999px;
+}
+
 .editor-wrapper {
   position: relative;
-  height: calc(100% - 60px);
-  /* 减去顶部工具栏和标签栏高度 */
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-split-wrapper {
+  flex: 1;
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.editor-split-wrapper.vim-enabled {
+  box-sizing: border-box;
+  padding-bottom: 0;
+}
+
+.editor-split-wrapper.single,
+.editor-split-wrapper.vertical {
+  flex-direction: row;
+}
+
+.editor-split-wrapper.horizontal {
   flex-direction: column;
 }
 
 .editor-container {
   display: flex;
   flex-direction: column;
-  height: calc(100% - 28px);
+  flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   width: 100%;
   box-sizing: border-box;
   position: relative;
-  min-width: 0;
+  isolation: isolate;
+}
+
+:deep(.guaxi-editor-effects) {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  overflow: hidden;
+}
+
+:deep(.guaxi-editor-effects-canvas) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+:deep(.guaxi-editor-smooth-cursor) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(0, 173, 255, 0.85);
+  box-shadow:
+    0 0 10px rgba(0, 173, 255, 0.55),
+    0 0 20px rgba(255, 105, 180, 0.25);
+  opacity: 0;
+  will-change: transform, height, opacity;
 }
 
 .vim-status-bar {
@@ -995,12 +4789,8 @@ onUnmounted(() => {
 }
 
 .preview {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: 40px;
-  height: calc(100% - 25px);
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 12px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
@@ -1046,41 +4836,116 @@ onUnmounted(() => {
 .tab-bar {
   display: flex;
   height: 30px;
+  min-height: 30px;
+  flex: 0 0 30px;
+  flex-shrink: 0;
+  align-items: center;
   background: #f5f5f5;
   border-bottom: 1px solid #ddd;
-  overflow-x: auto;
+  overflow: hidden;
 }
 
-.tab-bar::-webkit-scrollbar {
+.tab-region {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.tab-region-right {
+  border-left: 1px solid #ddd;
+}
+
+.tab-region::-webkit-scrollbar {
   width: 3px;
   height: 4px;
 }
 
-.tab-bar::-webkit-scrollbar-thumb {
+.tab-region::-webkit-scrollbar-thumb {
   background-color: rgba(0, 0, 0, 0.2);
   border-radius: 3px;
 }
 
-.tab-bar::-webkit-scrollbar-thumb:hover {
+.tab-region::-webkit-scrollbar-thumb:hover {
   background-color: rgba(0, 0, 0, 0.4);
 }
 
 .tab-item {
   display: flex;
   align-items: center;
-  padding: 0 15px;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
   border-right: 1px solid #ddd;
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 240px;
+}
+
+.tab-affordance {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.tab-close {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+}
+
+.tab-dirty-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(74, 163, 255, 0.7);
+}
+
+.tab-item:hover .tab-close,
+.tab-item.active:not(.dirty) .tab-close {
+  opacity: 1;
+}
+
+.tab-item.dirty:hover .tab-dirty-dot {
+  opacity: 0;
+}
+
+.tab-item:hover .tab-affordance {
+  background: rgba(74, 163, 255, 0.12);
+}
+
+.tab-item:hover .tab-close {
+  color: rgba(74, 163, 255, 0.95);
 }
 
 .tab-item.active {
   background: #fff;
-  border-bottom: 2px solid #b6bdbe;
+  border-bottom: 2px solid var(--primary-color, #18a058);
+  color: rgba(0, 0, 0, 0.95);
 }
 
 .tab-item:hover {
-  background: #eee;
+  background: rgba(74, 163, 255, 0.08);
 }
 
 /* Git 行变更装饰器样式 */

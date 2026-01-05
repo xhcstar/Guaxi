@@ -1,11 +1,11 @@
 <template>
   <div class="right-sider-content">
-    <SideNavigatorChatView />
+
   </div>
 </template>
 
 <script setup>
-import SideNavigatorChatView from "./SideNavigatorChatView.vue";
+  
 </script>
 
 <style scope>

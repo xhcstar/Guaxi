@@ -17,17 +17,19 @@
     </div>
 
     <div class="chat-list">
-      <div v-for="curtopic in activeChat.MessagesList" :key="curtopic.topicid" class="chat-item"
-        :class="{ active: activeChat.id === chatStore.selectedModel }" @click="selectChat(curtopic.topicid)"
+      <div v-for="curtopic in (activeChat?.MessagesList || [])" :key="curtopic.topicid" class="chat-item"
+        :class="{ active: curtopic.topicid === chatStore.selectedTopic }" @click="selectChat(curtopic.topicid)"
         @contextmenu="showContextMenu($event, curtopic)">
-        <n-avatar :src="activeChat.ModelAvatar" size="medium" round />
+        <div class="chat-avatar">
+          <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
+        </div>
         <div class="chat-info">
           <div class="chat-title">
-            {{ activeChat.name }}
+            {{ curtopic?.title || activeChat?.name }}
             <!-- <span class="chat-timestamp">{{ formatTimestamp(curmodel.MessagesList.at(0)) }}</span> -->
           </div>
           <div class="chat-last-message">
-            {{ curtopic.topic.at(0).content }}
+            {{ curtopic.topic?.[0]?.content || '' }}
           </div>
         </div>
       </div>
@@ -35,6 +37,8 @@
 
     <!-- 右键菜单 -->
     <div v-if="showMenu" class="context-menu" :style="{ top: menuTop, left: menuLeft }">
+      <div class="menu-item" @click="renameChatItem">重命名</div>
+      <div class="menu-item" @click="saveChatItem">保存对话</div>
       <div class="menu-item" @click="deleteChatItem">删除会话</div>
     </div>
   </div>
@@ -43,13 +47,12 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from "vue"
 import { useChatStore } from "../../stores/chatStore";
-import { NAvatar, NButton } from "naive-ui";
+import { useMessage } from "naive-ui";
+import { invoke } from '@tauri-apps/api/core';
 
 const chatStore = useChatStore();
+const message = useMessage();
 const activeChat = computed(() => chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel));
-
-// 当前会话的消息记录
-const activeChatMessages = computed(() => activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []);
 
 const showMenu = ref(false);
 const menuTop = ref(0);
@@ -58,13 +61,6 @@ const selectedChat = ref(null);
 
 const selectChat = (id) => {
   chatStore.setModelTopic(id);
-};
-
-// 格式化时间戳
-const formatTimestamp = (timestamp) => {
-  if (!timestamp) return "";
-  const date = new Date(timestamp);
-  return `${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
 };
 
 // 新建聊天逻辑（可自定义实现）
@@ -81,14 +77,112 @@ const showContextMenu = (event, chat) => {
   menuLeft.value = event.clientX + "px";
 };
 
+const getTopicSessionId = (topic) => {
+  const items = Array.isArray(topic) ? topic : [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const sid = items[i]?.chatSessionId;
+    if (typeof sid === 'string' && sid.trim()) return sid;
+  }
+  return '';
+};
+
+const persistSelectedChat = async () => {
+  if (!selectedChat.value || !activeChat.value) return;
+
+  const content = Array.isArray(selectedChat.value?.topic) ? selectedChat.value.topic : [];
+  const sessionId = getTopicSessionId(content);
+  const topicTitle = (selectedChat.value?.title ?? '').toString().trim() || null;
+
+  await invoke('save_chat_session', {
+    request: {
+      model_id: activeChat.value.id,
+      model_name: activeChat.value?.name || '',
+      topic_id: selectedChat.value.topicid,
+      session_id: sessionId || null,
+      topic_title: topicTitle,
+      content,
+    },
+  });
+};
+
+const renameChatItem = async () => {
+  try {
+    if (!selectedChat.value || !activeChat.value) return;
+
+    const current = (selectedChat.value?.title ?? '').toString().trim();
+    const nextTitle = window.prompt('重命名会话', current || '');
+    if (nextTitle === null) return;
+
+    const t = nextTitle.toString().trim();
+    if (t) {
+      selectedChat.value.title = t;
+      selectedChat.value.__titleLocked = true;
+    } else {
+      selectedChat.value.title = '';
+      selectedChat.value.__titleLocked = false;
+    }
+
+    await persistSelectedChat();
+    message.success('已更新会话名称');
+  } catch (e) {
+    console.error('重命名失败:', e);
+    message.error('重命名失败');
+  } finally {
+    showMenu.value = false;
+  }
+};
+
+const saveChatItem = async () => {
+  try {
+    if (!selectedChat.value || !activeChat.value) return;
+
+    const content = Array.isArray(selectedChat.value?.topic) ? selectedChat.value.topic : [];
+    const sessionId = getTopicSessionId(content);
+    const topicTitle = (selectedChat.value?.title ?? '').toString().trim() || null;
+
+    const filePath = await invoke('export_chat_session', {
+      request: {
+        model_id: activeChat.value.id,
+        model_name: activeChat.value?.name || '',
+        topic_id: selectedChat.value.topicid,
+        session_id: sessionId,
+        topic_title: topicTitle,
+        content,
+      }
+    })
+
+    message.success(`已保存到: ${filePath}`)
+  } catch (e) {
+    console.error('保存对话失败:', e)
+    message.error('保存对话失败')
+  } finally {
+    showMenu.value = false;
+  }
+};
+
 // 删除聊天条目
 const deleteChatItem = () => {
-  if (activeChatMessages.value) {
-    activeChat.value.MessagesList = activeChat.value.MessagesList.filter(
-      (chat) => chat !== activeChatMessages.value
-    );
+  if (!selectedChat.value || !activeChat.value) {
+    showMenu.value = false;
+    return;
   }
-  showMenu.value = false; // 隐藏菜单
+
+  const deleteTopicId = selectedChat.value.topicid;
+  activeChat.value.MessagesList = (activeChat.value.MessagesList || []).filter(
+    (topic) => topic?.topicid !== deleteTopicId
+  );
+
+  if (chatStore.selectedTopic === deleteTopicId) {
+    const fallbackTopicId = activeChat.value.MessagesList?.[0]?.topicid;
+    if (typeof fallbackTopicId === 'number') {
+      chatStore.setModelTopic(fallbackTopicId);
+    } else {
+      chatStore.addChatSession();
+      chatStore.setModelTopic(activeChat.value.MessagesList.length - 1);
+    }
+  }
+
+  showMenu.value = false;
 };
 
 // 监听全局点击事件，点击其他地方关闭菜单
@@ -116,8 +210,8 @@ onUnmounted(() => {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  border: 1px solid #ddd;
-  background: #fff;
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   overflow-y: auto;
 }
 
@@ -125,9 +219,10 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 15px;
-  border-bottom: 1px solid #ddd;
-  background-color: #f8f9fa;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
   gap: 8px;
 }
 
@@ -139,22 +234,30 @@ onUnmounted(() => {
 .chat-item {
   display: flex;
   align-items: center;
-  padding: 10px 15px;
+  padding: 10px 12px;
   cursor: pointer;
-  border-bottom: 1px solid #f1f1f1;
-  transition: background-color 0.3s ease;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+  border-radius: 12px;
+  margin: 6px 10px;
+  border: 1px solid transparent;
 }
 
 .chat-item.active {
-  background-color: #e6f7ff;
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.25);
 }
 
 .chat-item:hover {
-  background-color: #f5f5f5;
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.chat-avatar {
+  flex: 0 0 auto;
 }
 
 .chat-info {
-  flex-grow: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   margin-left: 10px;
   display: flex;
   flex-direction: column;
@@ -164,8 +267,9 @@ onUnmounted(() => {
   font-size: 14px;
   font-weight: bold;
   color: #333;
-  display: flex;
-  justify-content: space-between;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-timestamp {
@@ -186,21 +290,23 @@ onUnmounted(() => {
 /* 右键菜单 */
 .context-menu {
   position: absolute;
-  background: white;
-  border: 1px solid #ccc;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-  padding: 5px 0;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  border-radius: 10px;
+  padding: 6px;
   z-index: 1000;
+  min-width: 140px;
 }
 
 .menu-item {
-  padding: 10px 20px;
+  padding: 9px 12px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  border-radius: 8px;
 }
 
 .menu-item:hover {
-  background: #f2f2f2;
+  background: rgba(15, 23, 42, 0.06);
 }
 </style>

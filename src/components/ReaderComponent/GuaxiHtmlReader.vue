@@ -1,5 +1,5 @@
 <template>
-    <div>html阅读器</div>
+  <div>html阅读器</div>
 </template>
 
 <script setup>

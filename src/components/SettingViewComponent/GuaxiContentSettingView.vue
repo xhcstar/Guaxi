@@ -1,23 +1,24 @@
 <template>
   <div class="guaxi-content">
-      <n-layout has-sider>
-        <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
+    <n-layout has-sider class="setting-layout">
+      <n-layout-sider v-model:collapsed="isLeftSiderCollapsed" :width="leftSiderbarWidth" collapse-mode="width"
+        :collapsed-width="0" bordered content-style="padding: 0px;">
+        <GuaxiSidebarSettingView />
+        <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+      </n-layout-sider>
+
+      <n-layout has-sider sider-placement="right" class="setting-layout">
+        <n-layout-content class="setting-main">
+          <GuaxiSettingContent />
+        </n-layout-content>
+
+        <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
           :collapsed-width="0" bordered content-style="padding: 0px;">
-          <GuaxiSidebarSettingView />
-          <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
+          <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar"></div>
+          <GuaxiRightContentSettingView />
         </n-layout-sider>
-
-        <GuaxiSettingContent />
-
-        <n-layout has-sider sider-placement="right">
-          <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-            :collapsed-width="0" bordered content-style="padding: 0px;">
-            <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar">
-              <GuaxiRightContentSettingView />
-            </div>
-          </n-layout-sider>
-        </n-layout>
       </n-layout>
+    </n-layout>
   </div>
 </template>
 
@@ -109,6 +110,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .n-layout-sider {
   background: rgba(239, 243, 239, 0.3);
+  position: relative;
 }
 
 .n-layout-content {
@@ -120,9 +122,22 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   background-color: #ffffff; /* 示例背景色 */
-  overflow-y: auto; /* 如果内容超出，允许垂直滚动 */
+  min-height: 0;
+  overflow: hidden;
   margin: 0;
   padding: 0;
+}
+
+.setting-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.setting-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sider-resize-handle {
@@ -136,7 +151,7 @@ onBeforeUnmount(() => {
 }
 
 .sider-resize-handle-right {
-  position: relative;
+  position: absolute;
   top: 0;
   left: 0;
   width: 3px;

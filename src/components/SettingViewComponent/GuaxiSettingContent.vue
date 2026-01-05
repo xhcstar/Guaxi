@@ -1,7 +1,9 @@
 <template>
-  <n-card>
-    <component :is="currentComponent" />
-  </n-card>
+  <div class="setting-content">
+    <n-card class="setting-card">
+      <component :is="currentComponent" />
+    </n-card>
+  </div>
 </template>
 
 <script setup>
@@ -11,6 +13,7 @@ import NoteRepoContent from './NoteRepoContent.vue';
 import PreferenceContent from './PreferenceContent.vue';
 import ServerContent from './ServerContent.vue';
 import AboutContent from './AboutContent.vue';
+import LLMModalSetting from './LLMModalSetting.vue';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -26,8 +29,33 @@ const currentComponent = computed(() => {
       return ServerContent;
     case 'about':
       return AboutContent;
+    case 'llm':
+      return LLMModalSetting;
     default:
       return null;
   }
 });
 </script>
+
+<style scoped>
+.setting-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.setting-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.setting-card :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+</style>

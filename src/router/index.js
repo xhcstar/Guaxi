@@ -9,6 +9,8 @@ import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
+import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
+import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
 
 
 export const routes = [
@@ -61,6 +63,7 @@ export const routes = [
       fileType: route.query.fileType,
       fileName: route.query.fileName,
       library: route.query.library,
+      importFileId: route.query.importFileId,
     })
   },
   {
@@ -70,6 +73,16 @@ export const routes = [
     props: (route) => ({  // 关键：显式传递查询参数作为props
       workspacePath: route.query.workspacePath,
     })
+  },
+  {
+    path: '/templates',
+    name: 'templates',
+    component: GuaxiTemplateManager,
+  },
+  {
+    path: '/kb-manager',
+    name: 'kb-manager',
+    component: GuaxiKnowledgeBaseManager,
   },
 ];
 

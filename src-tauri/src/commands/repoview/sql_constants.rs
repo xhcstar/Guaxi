@@ -46,59 +46,59 @@
 //     ";
 
 // 创建导入文件表
-pub const CREATE_TABLE_IMPORTED_FILES: &str = "
--- 导入文件表
-CREATE TABLE imported_files (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    original_filesize TEXT,
-    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    original_filepath TEXT NOT NULL,
-    original_filename TEXT NOT NULL,
-    original_filetype TEXT NOT NULL,
-    library TEXT,
-    description TEXT,
-    html_filename TEXT,
-    html_filepath TEXT,
-    html_change_time TIMESTAMP,
-    markdown_filename TEXT,
-    markdown_filepath TEXT,
-    markdown_change_time TIMESTAMP,
-    pdf_filename TEXT,
-    pdf_filepath TEXT,
-    pdf_change_time TIMESTAMP,
-    word_filename TEXT,
-    word_filepath TEXT,
-    word_change_time TIMESTAMP,
-    epub_filename TEXT,
-    epub_filepath TEXT,
-    epub_change_time TIMESTAMP,
-    txt_filename TEXT,
-    txt_filepath TEXT,
-    txt_change_time TIMESTAMP,
-    container_filename TEXT,
-    container_filepath TEXT,
-    container_change_time TIMESTAMP
-);
-";
+// pub const CREATE_TABLE_IMPORTED_FILES: &str = "
+// -- 导入文件表
+// CREATE TABLE imported_files (
+//     id INTEGER PRIMARY KEY AUTOINCREMENT,
+//     original_filesize TEXT,
+//     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+//     original_filepath TEXT NOT NULL,
+//     original_filename TEXT NOT NULL,
+//     original_filetype TEXT NOT NULL,
+//     library TEXT,
+//     description TEXT,
+//     html_filename TEXT,
+//     html_filepath TEXT,
+//     html_change_time TIMESTAMP,
+//     markdown_filename TEXT,
+//     markdown_filepath TEXT,
+//     markdown_change_time TIMESTAMP,
+//     pdf_filename TEXT,
+//     pdf_filepath TEXT,
+//     pdf_change_time TIMESTAMP,
+//     word_filename TEXT,
+//     word_filepath TEXT,
+//     word_change_time TIMESTAMP,
+//     epub_filename TEXT,
+//     epub_filepath TEXT,
+//     epub_change_time TIMESTAMP,
+//     txt_filename TEXT,
+//     txt_filepath TEXT,
+//     txt_change_time TIMESTAMP,
+//     container_filename TEXT,
+//     container_filepath TEXT,
+//     container_change_time TIMESTAMP
+// );
+// ";
 
-pub const CREATE_TABLE_IMPORTED_FILES_TAGS: &str = "
--- 导入文件标签表
-CREATE TABLE imported_file_tags (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE
-);
-";
+// pub const CREATE_TABLE_IMPORTED_FILES_TAGS: &str = "
+// -- 导入文件标签表
+// CREATE TABLE imported_file_tags (
+//     id INTEGER PRIMARY KEY AUTOINCREMENT,
+//     name TEXT NOT NULL UNIQUE
+// );
+// ";
 
-pub const CREATE_TABLE_IMPORTED_FILES_TAG_RELATIONS: &str = "
--- 导入文件与标签的关联表
-CREATE TABLE imported_file_tag_relations (
-    file_id INTEGER NOT NULL,
-    tag_id INTEGER NOT NULL,
-    FOREIGN KEY(file_id) REFERENCES imported_files(id),
-    FOREIGN KEY(tag_id) REFERENCES imported_file_tags(id),
-    PRIMARY KEY(file_id, tag_id)
-);
-";
+// pub const CREATE_TABLE_IMPORTED_FILES_TAG_RELATIONS: &str = "
+// -- 导入文件与标签的关联表
+// CREATE TABLE imported_file_tag_relations (
+//     file_id INTEGER NOT NULL,
+//     tag_id INTEGER NOT NULL,
+//     FOREIGN KEY(file_id) REFERENCES imported_files(id),
+//     FOREIGN KEY(tag_id) REFERENCES imported_file_tags(id),
+//     PRIMARY KEY(file_id, tag_id)
+// );
+// ";
 
 // // 增加操作
 // pub const INSERT_IMPORTED_FILE: &str = "

@@ -1,7 +1,6 @@
 use chrono::Utc;
 use reqwest::Client;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;

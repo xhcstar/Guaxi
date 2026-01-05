@@ -13,6 +13,19 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
       knowledgeBaseTags: "", // 知识库标签
       knowledgeBaseDesc: "", // 知识库描述
     },
+
+    selectedTreeNodeKey: null,
+    focusTarget: null,
+
+    graphNodes: [],
+    graphEdges: [],
+    tagOptions: [],
+
+    searchQuery: "",
+    visibleTypes: ["knowledge-base", "directory", "file", "section", "paragraph"],
+    selectedTags: [],
+
+    selectedGraphNode: null,
   }),
 
   actions: {
@@ -29,17 +42,20 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
         });
 
         console.log("获取图形数据成功:", graphData);
-        // 对数据进行必要的处理
-        return {
+
+        const out = {
           nodes: graphData.nodes.map((node) => ({
             ...node,
-            type: node.type || "unknown", // 确保有 type 字段
+            type: node.type || "unknown",
           })),
           edges: graphData.edges.map((edge) => ({
             ...edge,
-            type: edge.type || "relation", // 确保有 type 字段
+            type: edge.type || "relation",
           })),
         };
+
+        this.setGraphIndex(out);
+        return out;
       } catch (error) {
         console.error("获取图形数据失败:", error);
         throw error;
@@ -82,14 +98,31 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     setSelectedKnowledgeBase(kb) {
       if (!kb) {
         this.selectedKnowledgeBase = null;
+        this.selectedTreeNodeKey = null;
+        this.focusTarget = null;
+        this.graphNodes = [];
+        this.graphEdges = [];
+        this.tagOptions = [];
+        this.searchQuery = "";
+        this.selectedTags = [];
+        this.selectedGraphNode = null;
         return;
       }
 
-      // 深拷贝并标准化路径
       this.selectedKnowledgeBase = {
         ...kb,
         location: kb.location.replace(/\\/g, "/"),
       };
+
+      this.selectedTreeNodeKey = null;
+      this.focusTarget = null;
+      this.searchQuery = "";
+      this.selectedTags = [];
+      this.selectedGraphNode = null;
+    },
+
+    setSelectedGraphNode(node) {
+      this.selectedGraphNode = node || null;
     },
 
     /**
@@ -139,6 +172,57 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
      */
     toggleForm(show) {
       this.showForm = show ?? !this.showForm;
+    },
+
+    setSelectedTreeNodeKey(key) {
+      const v = key == null ? null : String(key).replace(/\\/g, "/");
+      this.selectedTreeNodeKey = v;
+      if (v) {
+        this.requestFocus({ mode: "path", value: v });
+      }
+    },
+
+    requestFocus(target) {
+      if (!target || !target.value) return;
+      this.focusTarget = {
+        mode: target.mode || "id",
+        value: String(target.value),
+        ts: Date.now(),
+      };
+    },
+
+    setSearchQuery(v) {
+      this.searchQuery = String(v || "");
+    },
+
+    setVisibleTypes(types) {
+      this.visibleTypes = Array.isArray(types) ? types.map(String) : [];
+    },
+
+    setSelectedTags(tags) {
+      this.selectedTags = Array.isArray(tags) ? tags.map(String) : [];
+    },
+
+    setGraphIndex(graphData) {
+      const nodes = Array.isArray(graphData?.nodes) ? graphData.nodes : [];
+      const edges = Array.isArray(graphData?.edges) ? graphData.edges : [];
+
+      this.graphNodes = nodes;
+      this.graphEdges = edges;
+
+      const tagSet = new Set();
+      for (const n of nodes) {
+        const ts = n?.tags;
+        if (!Array.isArray(ts)) continue;
+        for (const t of ts) {
+          const s = String(t || "").trim();
+          if (s) tagSet.add(s);
+        }
+      }
+
+      this.tagOptions = Array.from(tagSet)
+        .sort((a, b) => a.localeCompare(b, "zh"))
+        .map((t) => ({ label: t, value: t }));
     },
   },
 });

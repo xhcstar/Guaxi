@@ -74,12 +74,43 @@
         </svg>
       </n-icon>
     </div>
-    <GuaxiSidbarTreeAppView />
+    <div class="app-category-list">
+      <div
+        v-for="category in categories"
+        :key="category.key"
+        :class="['app-category-item', { active: category.key === selectedCategory }]"
+        @click="handleSelect(category.key)"
+      >
+        <div class="app-category-dot"></div>
+        <span class="app-category-name">{{ category.label }}</span>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import GuaxiSidbarTreeAppView from "./GuaxiSidbarTreeAppView.vue"
+
+const categories = [
+  { key: 'tools', label: '工具类' },
+  { key: 'language', label: '语言类' },
+  { key: 'music', label: '音乐类' },
+  { key: 'work', label: '工作类' },
+  { key: 'life', label: '生活类' }
+]
+
+const props = defineProps({
+  selectedCategory: {
+    type: String,
+    default: ''
+  }
+})
+
+const emit = defineEmits(['update:selectedCategory'])
+
+const handleSelect = (key) => {
+  emit('update:selectedCategory', key)
+}
+
 const navigateTo = (path) => {
   window.location.hash = path; // 修改 hash，实现导航
 };
@@ -89,7 +120,10 @@ const navigateTo = (path) => {
 <style scope>
 .sider-container {
   display: flex;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
 }
 
 .sider-icon-container {
@@ -97,10 +131,58 @@ const navigateTo = (path) => {
   flex-direction: column;
   gap: 50px;
   align-items: center;
-  /* 使图标在容器中居中 */
   width: var(--sider-width, 36px);
+  min-width: var(--sider-width, 36px);
+  padding: 20px 0;
   border-right: 2px solid #aab4ae;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
   margin-top: 10px;
   height: 100%;
+  box-sizing: border-box;
+}
+
+.app-category-list {
+  flex: 1;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.app-category-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: #444;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+.app-category-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+  transform: translateX(2px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.app-category-item.active {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.app-category-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.app-category-name {
+  white-space: nowrap;
 }
 </style>

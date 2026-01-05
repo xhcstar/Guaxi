@@ -1,74 +1,167 @@
 <template>
-  <div class="file-tree-container">
+  <div class="file-tree-container" ref="fileTreeContainerRef">
     <!-- 工具栏 -->
     <div class="list-header">
       <div class="title-container">
         <n-text class="repo-title-header">知识库编辑</n-text>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper
+              :size="18"
+              :border-radius="6"
+              class="kb-manager-icon"
+              @click="openKnowledgeBaseManager"
+            >
+              <n-icon :component="SettingsOutline" size="16" />
+            </n-icon-wrapper>
+          </template>
+          知识库管理器
+        </n-tooltip>
       </div>
-      <n-tooltip trigger="hover">
-        <template #trigger>
-          <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshAll">
-            <n-icon :component="RefreshIcon" size="16" />
-          </n-icon-wrapper>
-        </template>
-        刷新所有目录
-      </n-tooltip>
+      <div class="header-actions">
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper
+              :size="18"
+              :border-radius="6"
+              class="browser-icon"
+              :class="{ active: browserPreviewEnabled }"
+              @click="toggleBrowserPreview"
+            >
+              <n-icon :component="GlobeOutline" size="16" />
+            </n-icon-wrapper>
+          </template>
+          {{ browserPreviewEnabled ? '浏览器预览：已开启' : '浏览器预览：已关闭' }}
+        </n-tooltip>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshAll">
+              <n-icon :component="RefreshIcon" size="16" />
+            </n-icon-wrapper>
+          </template>
+          刷新所有目录
+        </n-tooltip>
+      </div>
     </div>
 
-    <n-scrollbar class="repo-scroll-container">
-      <n-list bordered class="repo-list">
-        <n-list-item v-for="path in fileTreeStore.repopathlist" :key="path"
-          :class="{ active: path === fileTreeStore.activeRepoPath }" class="repo-list-item">
-          <div class="repo-item" @click="toggleRepo(path)">
-            <div class="repo-title">
-              <n-icon size="15" class="repo-icon">
-                <FolderIcon />
-              </n-icon>
-              {{ getRepoName(path) }}
-            </div>
-            <div class="repo-actions">
-              <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
-                <n-icon :component="FileAddIcon" size="14" />
-              </n-icon-wrapper>
-              <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(path)">
-                <n-icon :component="FolderAddIcon" size="14" />
-              </n-icon-wrapper>
-              <n-icon size="15" class="expand-icon">
-                <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(path) && path === fileTreeStore.activeRepoPath" />
-                <chevron-forward-icon v-else />
-              </n-icon>
-            </div>
+    <div class="repo-body">
+      <div v-if="activeRepoPathItem" class="active-repo-wrapper"
+        :style="fileTreeStore.isRepoExpanded(activeRepoPathItem) ? { '--active-repo-max-height': activeRepoMaxHeight + 'px' } : undefined">
+        <div class="repo-item" @click="toggleRepo(activeRepoPathItem)">
+          <div class="repo-title">
+            <n-icon size="15" class="repo-icon">
+              <FolderIcon />
+            </n-icon>
+            {{ getRepoName(activeRepoPathItem) }}
           </div>
+          <div class="repo-actions">
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(activeRepoPathItem)">
+                  <n-icon :component="FileAddIcon" size="14" />
+                </n-icon-wrapper>
+              </template>
+              新建文件
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(activeRepoPathItem)">
+                  <n-icon :component="FolderAddIcon" size="14" />
+                </n-icon-wrapper>
+              </template>
+              新建文件夹
+            </n-tooltip>
+            <n-icon size="15" class="expand-icon">
+              <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(activeRepoPathItem)" />
+              <chevron-forward-icon v-else />
+            </n-icon>
+          </div>
+        </div>
 
-          <!-- 将n-collapse-transition移到n-list-item内部，但在repo-item外部 -->
-          <n-collapse-transition>
-            <div v-if="path === fileTreeStore.activeRepoPath && fileTreeStore.isRepoExpanded(path)"
-              class="tree-container">
-              <n-tree ref="treeRef" :data="fileTree" key-field="id" :render-label="renderLabel"
-                :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true"
-                @update:selected-keys="handleSelect" :node-props="nodeProps" virtual-scroll
-                :virtual-scroll-item-height="28" class="tree-component" />
+        <n-collapse-transition>
+          <div v-if="fileTreeStore.isRepoExpanded(activeRepoPathItem)" class="active-tree-container" @wheel.stop>
+            <n-tree ref="treeRef" v-model:expanded-keys="expandedKeys" v-model:selected-keys="selectedKeys" :data="fileTree" key-field="id" :render-label="renderLabel"
+              :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true"
+              @update:selected-keys="handleSelect" :node-props="nodeProps" virtual-scroll
+              :virtual-scroll-item-height="28" class="tree-component" />
+          </div>
+        </n-collapse-transition>
+      </div>
+
+      <n-scrollbar ref="repoScrollbarRef" class="repo-scroll-container">
+        <n-list bordered class="repo-list">
+          <n-list-item v-for="path in inactiveRepoPaths" :key="path" class="repo-list-item">
+            <div class="repo-item" @click="toggleRepo(path)">
+              <div class="repo-title">
+                <n-icon size="15" class="repo-icon">
+                  <FolderIcon />
+                </n-icon>
+                {{ getRepoName(path) }}
+              </div>
+              <div class="repo-actions">
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
+                      <n-icon :component="FileAddIcon" size="14" />
+                    </n-icon-wrapper>
+                  </template>
+                  新建文件
+                </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(path)">
+                      <n-icon :component="FolderAddIcon" size="14" />
+                    </n-icon-wrapper>
+                  </template>
+                  新建文件夹
+                </n-tooltip>
+                <n-icon size="15" class="expand-icon">
+                  <chevron-forward-icon />
+                </n-icon>
+              </div>
             </div>
-          </n-collapse-transition>
-        </n-list-item>
-      </n-list>
-    </n-scrollbar>
+          </n-list-item>
+        </n-list>
+      </n-scrollbar>
+    </div>
 
     <!-- 右键菜单 -->
     <n-dropdown v-model:show="isContextMenuVisible" :options="contextMenuOptions" placement="bottom-start"
       :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect"
       @clickoutside="handleClickoutside" />
+
+    <n-modal v-model:show="importTemplateModalVisible" preset="dialog" title="导入到模板库" :mask-closable="false">
+      <div class="import-template-modal-content">
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="模板名称">
+            <n-input v-model:value="importTemplateName" placeholder="例如：会议纪要" />
+          </n-form-item>
+          <n-form-item label="模板类型">
+            <n-input v-model:value="importTemplateType" placeholder="例如：会议 / 日记 / TODO" />
+          </n-form-item>
+          <n-form-item label="来源文件">
+            <n-input :value="importTemplateSourcePath" disabled />
+          </n-form-item>
+        </n-form>
+        <n-space justify="end">
+          <n-button @click="importTemplateModalVisible = false">取消</n-button>
+          <n-button type="primary" :loading="importTemplateLoading" @click="confirmImportAsTemplate">导入</n-button>
+        </n-space>
+      </div>
+    </n-modal>
   </div>
 </template>
 
 <script setup>
-import { NTree, NIcon, useMessage } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline } from '@vicons/ionicons5'
+import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
-import { h, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { h, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { listen } from '@tauri-apps/api/event'
 import { NList, NListItem, NCollapseTransition, NText, NTooltip, NIconWrapper } from 'naive-ui'
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
@@ -79,13 +172,98 @@ const message = useMessage();
 // 处理文件树容器的右键点击事件
 const treeRef = ref(null)
 
+const BROWSER_PREVIEW_URL = 'http://localhost:8888/browser/knowledge-bases'
+const browserPreviewEnabled = ref(false)
+
+const toggleBrowserPreview = async () => {
+  const next = !browserPreviewEnabled.value
+  browserPreviewEnabled.value = next
+
+  if (!next) return
+
+  try {
+    await openUrl(BROWSER_PREVIEW_URL)
+  } catch (e) {
+    browserPreviewEnabled.value = false
+    message.error('打开浏览器失败，请确认已启用 opener 插件')
+  }
+}
+
+const openKnowledgeBaseManager = async () => {
+  try {
+    await invoke('create_knowledge_base_manager_window', {
+      label: 'knowledge_base_manager',
+      title: '知识库管理器'
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('知识库管理器窗口已打开')
+      return
+    }
+    console.error('打开知识库管理器失败:', err)
+    message.error('打开知识库管理器失败')
+  }
+}
+
+const isMarkdownFilePath = (p) => {
+  const v = String(p || '').toLowerCase()
+  return v.endsWith('.md') || v.endsWith('.markdown')
+}
+
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const lastSelectedKey = ref(null);
 
+const fileTreeContainerRef = ref(null)
+const repoScrollbarRef = ref(null)
+const activeRepoMaxHeight = ref(360)
+const activeRepoResizeObserver = ref(null)
+
+const activeRepoPathItem = computed(() => {
+  const list = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
+  const active = fileTreeStore.activeRepoPath
+  if (!active) return null
+
+  const activeNorm = normalizePath(active)
+  return list.find(p => normalizePath(p) === activeNorm) || null
+})
+
+const inactiveRepoPaths = computed(() => {
+  const list = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
+  const active = activeRepoPathItem.value
+  if (!active) return list
+
+  const activeNorm = normalizePath(active)
+  return list.filter(p => normalizePath(p) !== activeNorm)
+})
+
+const updateActiveRepoMaxHeight = () => {
+  const el = fileTreeContainerRef.value
+  if (!el) return
+
+  const headerEl = el.querySelector('.list-header')
+  const totalHeight = el.getBoundingClientRect().height
+  const headerHeight = headerEl ? headerEl.getBoundingClientRect().height : 0
+  const scrollAreaHeight = totalHeight - headerHeight
+
+  const reservedForInactive = 120
+  activeRepoMaxHeight.value = Math.max(180, Math.floor(scrollAreaHeight - reservedForInactive))
+}
+
+watch(
+  () => fileTreeStore.activeRepoPath,
+  async () => {
+    await nextTick()
+    updateActiveRepoMaxHeight()
+    repoScrollbarRef.value?.scrollTo?.({ top: 0 })
+  }
+)
+
 // 文件树数据
 const fileTree = ref([])
+const isTreeLoading = ref(false)
 
 // 右键菜单状态
 const isContextMenuVisible = ref(false)
@@ -98,6 +276,126 @@ const unlistenRef = ref(null)
 
 const selectedKeys = ref([]); // 新增：存储当前选中的节点keys
 
+const ensureExpandedForDir = (dirPath) => {
+  const active = normalizePath(fileTreeStore.activeRepoPath)
+  const target = normalizePath(dirPath)
+  if (!target) return
+
+  if (!active || !target.startsWith(active)) {
+    if (!expandedKeys.value.includes(target)) expandedKeys.value.push(target)
+    return
+  }
+
+  const rel = target.slice(active.length).replace(/^\/+/, '')
+  if (!rel) return
+
+  const parts = rel.split('/').filter(Boolean)
+  let acc = active
+  for (const part of parts) {
+    acc = `${acc}/${part}`
+    if (!expandedKeys.value.includes(acc)) expandedKeys.value.push(acc)
+  }
+}
+
+const scrollToKey = async (key) => {
+  await nextTick()
+  await new Promise((r) => requestAnimationFrame(r))
+
+  const tree = treeRef.value
+  if (!tree || typeof tree.scrollTo !== 'function') return
+
+  try {
+    await Promise.resolve(tree.scrollTo({ key }))
+  } catch {
+    return
+  }
+}
+
+const safeCssEscape = (v) => {
+  const s = String(v ?? '')
+  try {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(s)
+  } catch {
+    return s.replace(/"/g, '\\"')
+  }
+  return s.replace(/"/g, '\\"')
+}
+
+const focusEditingInput = async (nodeId) => {
+  const id = normalizePath(nodeId)
+  for (let i = 0; i < 8; i += 1) {
+    await nextTick()
+    await new Promise((r) => requestAnimationFrame(r))
+
+    const selector = `.editable-input[data-node-id="${safeCssEscape(id)}"]`
+    const root = fileTreeContainerRef.value
+    const input = (root && root.querySelector(selector)) || document.querySelector(selector)
+    if (input) {
+      input.focus()
+      input.select()
+      return true
+    }
+  }
+  return false
+}
+
+const importTemplateModalVisible = ref(false)
+const importTemplateLoading = ref(false)
+const importTemplateName = ref('')
+const importTemplateType = ref('未分类')
+const importTemplateSourcePath = ref('')
+
+const basename = (p) => String(p || '').split(/[\\/]/).pop() || ''
+const stemname = (p) => {
+  const b = basename(p)
+  const idx = b.lastIndexOf('.')
+  return idx > 0 ? b.slice(0, idx) : b
+}
+
+const openImportTemplateModal = async () => {
+  const node = selectedNode.value
+  if (!node || node.is_directory) return
+
+  const nodePath = normalizePath(node.id)
+  if (!isMarkdownFilePath(nodePath)) {
+    message.warning('仅支持 Markdown 文件')
+    return
+  }
+
+  importTemplateSourcePath.value = nodePath
+  importTemplateName.value = stemname(nodePath)
+  importTemplateType.value = '未分类'
+  importTemplateModalVisible.value = true
+}
+
+const confirmImportAsTemplate = async () => {
+  const sourcePath = importTemplateSourcePath.value
+  const name = importTemplateName.value.trim()
+  const templateType = importTemplateType.value.trim() || '未分类'
+
+  if (!sourcePath) return
+  if (!name) {
+    message.warning('请输入模板名称')
+    return
+  }
+
+  try {
+    importTemplateLoading.value = true
+    await invoke('import_template_from_file', {
+      sourcePath,
+      name,
+      templateType
+    })
+    message.success('已导入到模板库')
+    importTemplateModalVisible.value = false
+  } catch (error) {
+    console.error('导入模板失败:', error)
+    message.error('导入模板失败')
+  } finally {
+    importTemplateLoading.value = false
+  }
+}
+
 // 右键菜单选项
 const contextMenuOptions = ref([
   {
@@ -109,6 +407,12 @@ const contextMenuOptions = ref([
     label: '新建文件夹',
     key: 'addFolder',
     icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) })
+  },
+  {
+    label: '导入到模板库',
+    key: 'importAsTemplate',
+    disabled: true,
+    icon: () => h(NIcon, null, { default: () => h(DocumentTextOutline) })
   },
   {
     label: '重命名',
@@ -125,10 +429,23 @@ const contextMenuOptions = ref([
     key: 'move',
     icon: () => h(NIcon, null, { default: () => h(MoveOutline) })
   },
+  {
+    label: '在文件浏览器中打开',
+    key: 'openInExplorer',
+    icon: () => h(NIcon, null, { default: () => h(FolderOutline) })
+  },
+  {
+    label: '在浏览器中查看',
+    key: 'openInBrowser',
+    disabled: true,
+    icon: () => h(NIcon, null, { default: () => h(GlobeOutline) })
+  },
 ])
 
 const isHiddenPath = (path) => {
-  return path.split('/').some(part => part.startsWith('.'));
+  if (!path) return false;
+  const normalized = normalizePath(path);
+  return normalized.split('/').some(part => part.startsWith('.'));
 };
 
 // 修改后的handleAddFile函数
@@ -210,11 +527,10 @@ const loadRepoTree = async (path) => {
 }
 
 const refreshAll = async () => {
-  // console.log('[Action] 刷新所有仓库')
-  for (const path of fileTreeStore.repopathlist) {
-    console.log('[Refresh] 刷新仓库:', path)
-    await loadRepoTree(path)
-  }
+  const activePath = fileTreeStore.activeRepoPath
+  if (!activePath) return
+  console.log('[Refresh] 刷新仓库:', activePath)
+  await loadRepoTree(activePath)
 }
 
 const normalizeTreeIds = (tree) => {
@@ -229,41 +545,73 @@ const normalizeTreeIds = (tree) => {
 };
 
 // 加载文件树数据
-const loadFileTree = async () => {
+const loadFileTree = async (options = {}) => {
+  const { force = false } = options || {}
   console.log('[API] 加载文件树');
+  isTreeLoading.value = true
   try {
-    fileTree.value = [];
     console.log('当前仓库路径:', fileTreeStore.activeRepoPath);
-    await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath);
-    
-    // 过滤隐藏目录
-    const filteredTree = fileTreeStore.fileTree.filter(node => !isHiddenPath(node.id));
-    
-    // 先 normalize，再排序
+    await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath, { force });
+
+    const filteredTree = filterHiddenTree(fileTreeStore.fileTree);
+
     fileTree.value = [...sortFileTree(normalizeTreeIds(filteredTree))];
   } catch (error) {
     console.error('获取文件树数据失败', error);
     fileTree.value = [];
+  } finally {
+    isTreeLoading.value = false
   }
 };
 
-// 对文件树数据进行排序（先文件后目录）
-const sortFileTree = (tree) => {
-  if (!tree || !Array.isArray(tree)) return [];  // Add null check
+const filterHiddenTree = (tree) => {
+  if (!tree || !Array.isArray(tree)) return [];
+  return tree
+    .filter(item => !isHiddenPath(item.id))
+    .map(item => {
+      const next = { ...item };
+      if (item.children) {
+        next.children = filterHiddenTree(item.children);
+      }
+      return next;
+    });
+};
 
-  return tree.map(item => {
-    if (item.children) {
-      item.children = sortFileTree(item.children);
+const treeNameCollator = (() => {
+  try {
+    if (typeof Intl !== 'undefined' && typeof Intl.Collator === 'function') {
+      return new Intl.Collator('zh-u-co-pinyin', { numeric: true, sensitivity: 'base' })
     }
-    return item;
-  }).sort((a, b) => {
-    // Directories first, then files
-    if (a.type === 'directory' && b.type !== 'directory') return -1;
-    if (a.type !== 'directory' && b.type === 'directory') return 1;
+  } catch {
+    return null
+  }
+  return null
+})()
 
-    // Alphabetical sorting
-    return a.name.localeCompare(b.name);
-  });
+// 对文件树数据进行排序（目录在上，文件在下；英文按字母，中文按拼音）
+const sortFileTree = (tree) => {
+  if (!tree || !Array.isArray(tree)) return [];
+
+  const compareName = (aName, bName) => {
+    const aStr = String(aName || '')
+    const bStr = String(bName || '')
+    if (treeNameCollator) return treeNameCollator.compare(aStr, bStr)
+    return aStr.localeCompare(bStr)
+  }
+
+  return tree
+    .map(item => {
+      if (item.children) {
+        item.children = sortFileTree(item.children);
+      }
+      return item;
+    })
+    .sort((a, b) => {
+      const aIsDir = !!a.is_directory || a.type === 'directory'
+      const bIsDir = !!b.is_directory || b.type === 'directory'
+      if (aIsDir !== bIsDir) return aIsDir ? -1 : 1
+      return compareName(a.name, b.name)
+    });
 };
 
 // 渲染文件树图标
@@ -277,6 +625,10 @@ const handleSelect = async (keys) => {
 
   // 1. 处理空选中情况
   if (!keys || keys.length === 0) {
+    if (isTreeLoading.value) {
+      console.log('空选中（加载中），忽略本次清空事件');
+      return;
+    }
     console.log('空选中，清空选中状态');
     lastSelectedKey.value = null;
     selectedKeys.value = [];
@@ -292,10 +644,14 @@ const handleSelect = async (keys) => {
     return;
   }
 
-  // 2. 防抖处理 - 只有当新key与上次相同时才跳过
+  // 2. 防抖处理 - 仅当已存在标签页时忽略重复选中
   if (normalizedKey === normalizePath(lastSelectedKey.value)) {
-    console.log('忽略重复选中:', normalizedKey);
-    return;
+    const existingTab = fileTreeStore.openTabs.find(tab => normalizePath(tab.path) === normalizedKey)
+    if (existingTab) {
+      console.log('忽略重复选中（已打开标签页）:', normalizedKey);
+      fileTreeStore.setActiveTab(existingTab.path)
+      return;
+    }
   }
 
   // 3. 更新选中状态
@@ -314,31 +670,50 @@ const handleSelect = async (keys) => {
 
   console.log('找到选中节点:', selectedNode);
 
+  if (editingNode.value || selectedNode.isNew) {
+    lastSelectedKey.value = null
+    return
+  }
+
   if (!selectedNode.is_directory) {
     try {
       // 检查是否已存在标签页
       const existingTab = fileTreeStore.openTabs.find(tab => tab.path === selectedNode.id);
       if (existingTab) {
-        console.log('文件已在标签页中打开，激活标签页');
-        fileTreeStore.activeTab = selectedNode.id;
+        console.log('文件已在标签页中打开');
+        fileTreeStore.setActiveTab(selectedNode.id);
         return;
       }
 
       // 获取文件内容
-      const content = await fileTreeStore.fetchFileContent(selectedNode.id);
-      if (content !== null) {
-        await fileTreeStore.openFileInTab(selectedNode.id, content);
+      const res = await fileTreeStore.fetchFileContent(selectedNode.id)
+      if (res?.ok) {
+        await fileTreeStore.openFileInTab(selectedNode.id, res.content, {
+          unsupported: !!res.unsupported
+        })
+        if (res.unsupported) {
+          message.warning('不支持打开该文件类型（仅支持文本/Markdown）')
+        }
       } else {
-        console.error('文件内容获取失败');
+        message.warning('文件不存在或已被删除')
+        await handleFileRemoved(selectedNode.id)
       }
     } catch (error) {
       console.error('处理文件选中时出错:', error);
     }
   } else {
     try {
-      await fileTreeStore.fetchFileTree(selectedNode.id);
-      selectedNode.children = [...fileTreeStore.fileTree];
-      sortFileTree(selectedNode.children);
+      const dirId = normalizePath(selectedNode.id)
+
+      await fileTreeStore.fetchFileTree(dirId, { force: true });
+      const filteredChildren = filterHiddenTree(fileTreeStore.fileTree);
+      selectedNode.children = sortFileTree(normalizeTreeIds(filteredChildren));
+
+      if (!expandedKeys.value.includes(dirId) && Array.isArray(selectedNode.children) && selectedNode.children.length > 0) {
+        ensureExpandedForDir(dirId)
+      }
+
+      await scrollToKey(dirId)
     } catch (error) {
       console.error('加载子目录内容失败:', error);
     }
@@ -382,17 +757,25 @@ const findNodeById = (tree, targetId) => {
 };
 
 const nodeProps = ({ option }) => ({
-  // 处理左键点击
-  onClick: (e) => {
-    e.stopPropagation()
-    // console.log('节点左键点击:', option)
-    handleSelect([option.id]) // 手动触发选中
-  },
   // 处理右键点击
   onContextmenu: (e) => {
     e.preventDefault()
     e.stopPropagation()
     selectedNode.value = option
+
+    const nodePath = normalizePath(option.id)
+    const canOpenInBrowser = !option.is_directory && isMarkdownFilePath(nodePath)
+    const openInBrowserOpt = contextMenuOptions.value.find(o => o.key === 'openInBrowser')
+    if (openInBrowserOpt) {
+      openInBrowserOpt.disabled = !canOpenInBrowser
+    }
+
+    const canImportAsTemplate = !option.is_directory && isMarkdownFilePath(nodePath)
+    const importOpt = contextMenuOptions.value.find(o => o.key === 'importAsTemplate')
+    if (importOpt) {
+      importOpt.disabled = !canImportAsTemplate
+    }
+
     isContextMenuVisible.value = true
     contextMenuPosition.value = { x: e.clientX, y: e.clientY }
     console.log('节点右键菜单触发:', option.name)
@@ -410,6 +793,9 @@ const handleContextMenuSelect = async (key) => {
       case 'addFolder':
         await addNode(selectedNode.value?.id, true);
         break;
+      case 'importAsTemplate':
+        await openImportTemplateModal();
+        break;
       case 'rename':
         if (selectedNode.value) {
           renameNode(selectedNode.value.id);
@@ -423,6 +809,28 @@ const handleContextMenuSelect = async (key) => {
       case 'move':
         if (selectedNode.value) {
           moveNode(selectedNode.value);
+        }
+        break;
+      case 'openInExplorer':
+        if (selectedNode.value) {
+          const nodePath = normalizePath(selectedNode.value.id);
+          const targetPath = selectedNode.value.is_directory
+            ? nodePath
+            : nodePath.split('/').slice(0, -1).join('/');
+          if (targetPath) {
+            await invoke('open_in_file_explorer', { path: targetPath });
+          }
+        }
+        break;
+      case 'openInBrowser':
+        if (selectedNode.value && !selectedNode.value.is_directory) {
+          const nodePath = normalizePath(selectedNode.value.id)
+          if (!isMarkdownFilePath(nodePath)) {
+            message.warning('仅支持 Markdown 文件')
+            break
+          }
+          const url = `http://localhost:8888/browser/preview?path=${encodeURIComponent(nodePath)}`
+          await openUrl(url)
         }
         break;
     }
@@ -444,107 +852,117 @@ const editName = ref('')
 // 修改后的 addNode 函数
 const addNode = async (parentId, isDirectory = false) => {
   parentId = normalizePath(parentId);
-  // console.log('添加节点，父节点 ID:', parentId, '是否目录:', isDirectory);
 
-  let parentNode;
-  let isRoot = false;
-  if (!parentId || parentId === normalizePath(fileTreeStore.activeRepoPath)) {
-    // 如果没有parentId，使用当前激活的仓库路径作为根目录
-    parentNode = {
-      id: normalizePath(fileTreeStore.activeRepoPath),
-      is_directory: true,
-      children: fileTree.value
-    };
-    isRoot = true;
-  } else {
+  const activeRepo = normalizePath(fileTreeStore.activeRepoPath)
+  const isRoot = !parentId || parentId === activeRepo
+
+  let parentNode = null
+  if (!isRoot) {
     parentNode = findNodeById(fileTree.value, parentId);
     if (!parentNode) {
-      // 如果找不到父节点，可能是根目录
-      parentNode = {
-        id: normalizePath(fileTreeStore.activeRepoPath),
-        is_directory: true,
-        children: fileTree.value
-      };
-      isRoot = true;
-      // console.warn('未找到父节点，使用根目录作为父节点');
+      parentId = activeRepo
+      parentNode = null
     }
   }
 
-  // 2. 创建临时名称和路径
-  const tempName = isDirectory ? '新建文件夹' : '新建文件';
-  const tempId = `${normalizePath(parentNode.id)}/${tempName}`;
+  if (!isRoot && parentNode?.is_directory) {
+    ensureExpandedForDir(parentNode.id)
+    if (!Array.isArray(parentNode.children) || parentNode.children.length === 0) {
+      await fileTreeStore.fetchFileTree(parentNode.id)
+      const filteredChildren = filterHiddenTree(fileTreeStore.fileTree)
+      parentNode.children = sortFileTree(normalizeTreeIds(filteredChildren))
+    }
+  }
 
-  // 3. 创建临时节点
+  const tempName = isDirectory ? '新建文件夹' : '新建文件';
+  const baseDir = isRoot ? activeRepo : normalizePath(parentNode?.id)
+  const tempId = `${baseDir}/${tempName}`;
+
   const newNode = {
     id: tempId,
     name: tempName,
     is_directory: isDirectory,
     children: isDirectory ? [] : undefined,
-    isNew: true // 标记为新节点
+    isNew: true
   };
 
   if (isRoot) {
-    // 直接操作 fileTree.value
-    fileTree.value = [...fileTree.value, newNode];
+    fileTree.value = [newNode, ...fileTree.value];
   } else {
-    parentNode.children = [...(parentNode.children || []), newNode];
-    parentNode.children.sort((a, b) =>
-      a.is_directory === b.is_directory ? 0 : a.is_directory ? -1 : 1
-    );
+    parentNode.children = [newNode, ...(parentNode.children || [])];
   }
 
-  // ★ 自动展开父节点，确保新节点可见
-  if (!expandedKeys.value.includes(parentNode.id)) {
-    expandedKeys.value.push(parentNode.id);
+  if (!isRoot && parentNode?.id) {
+    ensureExpandedForDir(parentNode.id)
   }
 
-  // 5. 进入编辑模式
   startEditing(newNode);
+
+  await nextTick()
+  await scrollToKey(newNode.id)
+  await focusEditingInput(newNode.id)
 
   selectedKeys.value = [];
 
-  // 6. 返回Promise，在编辑完成后处理
   return new Promise((resolve) => {
     const unwatch = watch(editingNode, (newVal) => {
       if (!newVal) {
         unwatch();
-        handleEditComplete(newNode, parentNode, isDirectory, resolve);
+        handleEditComplete(newNode, parentNode, isDirectory, isRoot, resolve);
       }
     });
   });
 };
 
 // 处理编辑完成的函数
-const handleEditComplete = async (node, parentNode, isDirectory, resolve) => {
-  // 如果名称未改变或为空，删除临时节点
+const handleEditComplete = async (node, parentNode, isDirectory, isRoot, resolve) => {
+  const removeTempNode = () => {
+    if (isRoot) {
+      fileTree.value = fileTree.value.filter(n => n.id !== node.id)
+      return
+    }
+
+    if (parentNode?.children) {
+      parentNode.children = parentNode.children.filter(n => n.id !== node.id)
+    }
+  }
+
   if (node.name === '新建文件夹' || node.name === '新建文件' || !node.name.trim()) {
-    parentNode.children = parentNode.children.filter(n => n.id !== node.id);
+    removeTempNode()
     resolve(null);
     return;
   }
 
   try {
-    // 创建实际文件/目录
+    const targetPath = normalizePath(node.id)
+    node.id = targetPath
+
     if (isDirectory) {
-      await invoke('create_directory', { path: node.id });
+      await invoke('create_directory', { path: targetPath })
     } else {
       await invoke('create_file_with_content', {
-        path: node.id,
-        content: '' // 初始为空内容
-      });
+        path: targetPath,
+        content: ''
+      })
     }
 
-    // 移除临时标记
-    delete node.isNew;
+    delete node.isNew
+
+    const parentDir = isRoot
+      ? fileTreeStore.activeRepoPath
+      : parentNode?.id
+
+    if (parentDir) {
+      await refreshDirectory(parentDir)
+    }
+
     resolve(node);
   } catch (error) {
     console.error('创建失败:', error);
-    // 回滚：删除临时节点
-    parentNode.children = parentNode.children.filter(n => n.id !== node.id);
+    removeTempNode()
     message.error(`创建失败: ${error.message}`);
     resolve(null);
   } finally {
-    // 重置选中路径
     selectedKeys.value = [];
   }
 };
@@ -556,7 +974,7 @@ const handleBlur = async () => {
   const node = editingNode.value;
   const oldId = node.id;
   const parentNode = findParentNode(fileTree.value, oldId);
-  const parentPath = parentNode ? parentNode.id : fileTreeStore.activeRepoPath;
+  let parentPath = parentNode ? parentNode.id : fileTreeStore.activeRepoPath;
 
   if (!editName.value.trim() ||
     editName.value === '新建文件' ||
@@ -588,12 +1006,13 @@ const handleBlur = async () => {
     return;
   }
 
-  // 构建新路径
-  const newId = `${parentPath}/${editName.value}`;
+  // 构建新路径（统一规范化，避免 Windows 路径分隔符导致创建/读取不一致）
+  const basePath = normalizePath(parentPath)
+  const newId = normalizePath(`${basePath}/${editName.value}`)
 
   // 更新节点信息
-  node.name = editName.value;
-  node.id = newId;
+  node.name = editName.value
+  node.id = newId
 
   // 如果是新节点，结束编辑（实际文件会在handleEditComplete中创建）
   if (node.isNew) {
@@ -604,23 +1023,10 @@ const handleBlur = async () => {
 
   // 以下是原有重命名逻辑
   try {
-    let oldContent = '';
-    if (!node.is_directory) {
-      try {
-        oldContent = await fileTreeStore.fetchFileContent(oldId);
-      } catch (error) {
-        console.error('获取旧文件内容失败:', error);
-      }
-    }
-
     if (node.is_directory) {
       await invoke('rename_directory', { oldPath: oldId, newPath: newId });
     } else {
-      await invoke('create_file_with_content', {
-        path: newId,
-        content: oldContent
-      });
-      await invoke('delete_path', { path: oldId });
+      await invoke('rename_path', { oldPath: oldId, newPath: newId });
     }
 
     // 更新标签页
@@ -631,14 +1037,7 @@ const handleBlur = async () => {
       // 同步内容（如果内容有变化）
       fileTreeStore.openTabs[tabIndex].content = node.content || fileTreeStore.openTabs[tabIndex].content;
       if (fileTreeStore.activeTab === oldId) {
-        fileTreeStore.activeTab = newId;
-      }
-      // 如果编辑器当前打开的就是这个文件，也同步 selectedFile
-      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === oldId) {
-        fileTreeStore.selectedFile = {
-          path: newId,
-          content: fileTreeStore.openTabs[tabIndex].content
-        };
+        fileTreeStore.setActiveTab(newId);
       }
     }
   } catch (error) {
@@ -651,7 +1050,7 @@ const handleBlur = async () => {
     editName.value = '';
     // 根目录下刷新整个树，否则刷新父目录
     if (normalizePath(parentPath) === normalizePath(fileTreeStore.activeRepoPath)) {
-      await loadFileTree();
+      await loadFileTree({ force: true });
     } else {
       await refreshDirectory(parentPath);
     }
@@ -660,29 +1059,26 @@ const handleBlur = async () => {
 
 // 删除文件或目录
 const deleteNode = async (nodeId) => {
-  const node = findNodeById(fileTree.value, nodeId)
-  if (node) {
-    if (confirm(`确定要删除 ${node.name} 吗？`)) {
-      const parentNode = findParentNode(fileTree.value, nodeId)
-      if (parentNode) {
-        parentNode.children = parentNode.children.filter((child) => child.id !== nodeId)
-        // 调用 Tauri 后端 API 删除文件或目录
-        await invoke('delete_path', { path: nodeId })
-        await refreshDirectory(nodeId);
-      } else {
-        await invoke('delete_path', { path: nodeId })
-        await refreshDirectory(fileTreeStore.activeRepoPath);
-      }
-      // 删除后关闭标签页
-      fileTreeStore.closeTab(nodeId);
-      // 如果当前编辑器打开的就是被删文件，也清空 selectedFile
-      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === nodeId) {
-        fileTreeStore.selectedFile = null;
-      }
-      // 清理选中状态，防止死锁
-      selectedKeys.value = [];
-      lastSelectedKey.value = null;
-    }
+  const normalizedId = normalizePath(nodeId)
+  const node = findNodeById(fileTree.value, normalizedId)
+  if (!node) return
+
+  const ok = await confirmDialog(`确定要删除 ${node.name} 吗？`, {
+    title: '删除',
+    kind: 'warning'
+  })
+  if (!ok) return
+
+  try {
+    await invoke('delete_path', { path: normalizedId })
+    await handleFileRemoved(normalizedId)
+  } catch (error) {
+    message.error(`删除失败: ${error.message}`)
+    const parentPath = normalizedId.split('/').slice(0, -1).join('/') || normalizePath(fileTreeStore.activeRepoPath)
+    await refreshDirectory(parentPath)
+  } finally {
+    selectedKeys.value = []
+    lastSelectedKey.value = null
   }
 }
 
@@ -734,6 +1130,7 @@ const renderLabel = ({ option }) => {
     console.log('EEE ======> renderLabel editingNode.value:', editingNode.value);
     return h('input', {
       class: 'editable-input',
+      'data-node-id': normalizePath(option.id),
       value: editName.value,
       onInput: (e) => (editName.value = e.target.value),
       onBlur: handleBlur,
@@ -746,18 +1143,9 @@ const renderLabel = ({ option }) => {
   }
 }
 
-watch(editingNode, (val) => {
-  if (val) {
-    nextTick(() => {
-      setTimeout(() => {
-        const input = document.querySelector('.editable-input')
-        if (input) {
-          input.focus()
-          input.select()
-        }
-      }, 50) // 延迟，确保 input 已渲染
-    })
-  }
+watch(editingNode, async (val) => {
+  if (!val) return
+  await focusEditingInput(val.id)
 })
 
 // 处理输入框的 keydown 事件
@@ -798,43 +1186,61 @@ const handleKeydown = async (e) => {
 
 const moveNode = async (node) => {
   const targetDirectoryPath = await selectTargetPath();
+  if (!targetDirectoryPath) return;
 
-  if (targetDirectoryPath) {
-    try {
-      const fileName = node.name; // 获取文件名
-      const destinationPath = `${normalizePath(targetDirectoryPath)}/${fileName}`; // 构建目标路径
+  const sourcePath = normalizePath(node.id);
+  const targetDir = normalizePath(targetDirectoryPath);
+  const destinationPath = normalizePath(`${targetDir}/${node.name}`);
+  const sourceParentPath = sourcePath.split('/').slice(0, -1).join('/') || normalizePath(fileTreeStore.activeRepoPath);
 
-      console.log('源路径:', node.id);
-      console.log('目标路径:', destinationPath);
+  try {
+    console.log('源路径:', sourcePath);
+    console.log('目标路径:', destinationPath);
 
-      await invoke('move_path', { sourcePath: normalizePath(node.id), destinationPath });
+    await invoke('move_path', { sourcePath, destinationPath });
 
-      // 更新文件树
-      const parentNode = findParentNode(fileTree.value, node.id);
-      if (parentNode) {
-        parentNode.children = parentNode.children.filter((child) => child.id !== node.id);
-      }
-
-      const targetNode = findNodeById(fileTree.value, normalizePath(targetDirectoryPath));
-      if (targetNode && targetNode.is_directory) {
-        targetNode.children.push(node);
-        node.id = destinationPath; // 更新节点路径
-      }
-
-      // 刷新源目录和目标目录
-      const sourceDirectoryId = findParentNode(fileTree.value, node.id)?.id;
-      console.log('源节点 ID:', node.id, '源目录 ID:', fileTree.value);
-      if (sourceDirectoryId) {
-        await refreshDirectory(sourceDirectoryId);
-      }
-
-      if (targetDirectoryPath) {
-        await refreshDirectory(targetDirectoryPath);
-      }
-      console.log('移动成功');
-    } catch (error) {
-      console.error('移动失败:', error);
+    const parentNode = findParentNode(fileTree.value, sourcePath);
+    if (parentNode?.children?.length) {
+      parentNode.children = parentNode.children.filter(
+        (child) => normalizePath(child.id) !== sourcePath
+      );
+    } else {
+      fileTree.value = fileTree.value.filter((n) => normalizePath(n.id) !== sourcePath);
     }
+
+    const targetNode = findNodeById(fileTree.value, targetDir);
+    if (targetNode && targetNode.is_directory) {
+      if (!Array.isArray(targetNode.children)) targetNode.children = [];
+      node.id = destinationPath;
+      targetNode.children.push(node);
+    } else {
+      node.id = destinationPath;
+      await loadFileTree({ force: true });
+    }
+
+    const tabIndex = fileTreeStore.openTabs.findIndex((tab) => normalizePath(tab.path) === sourcePath);
+    if (tabIndex !== -1) {
+      const tab = fileTreeStore.openTabs[tabIndex];
+      tab.path = destinationPath;
+      tab.fileName = destinationPath.split('/').pop();
+      if (fileTreeStore.activeTab && normalizePath(fileTreeStore.activeTab) === sourcePath) {
+        fileTreeStore.setActiveTab(destinationPath);
+      }
+    }
+
+    if (selectedKeys.value?.length && normalizePath(selectedKeys.value[0]) === sourcePath) {
+      selectedKeys.value = [destinationPath];
+      lastSelectedKey.value = destinationPath;
+    }
+
+    await refreshDirectory(sourceParentPath);
+    await refreshDirectory(targetDir);
+
+    console.log('移动成功');
+  } catch (error) {
+    console.error('移动失败:', error);
+    await refreshDirectory(sourceParentPath);
+    await refreshDirectory(targetDir);
   }
 };
 
@@ -853,47 +1259,60 @@ const selectTargetPath = async () => {
 };
 
 const refreshDirectory = async (directoryId) => {
-  console.log('刷新目录:', directoryId);
+  const activeRepo = normalizePath(fileTreeStore.activeRepoPath)
+  const normalizedId = normalizePath(directoryId)
+  console.log('刷新目录:', normalizedId)
 
-  // 检查是否是隐藏目录
-  if (isHiddenPath(directoryId)) {
-    console.log('跳过隐藏目录刷新:', directoryId);
-    return;
+  if (isHiddenPath(normalizedId)) {
+    console.log('跳过隐藏目录刷新:', normalizedId)
+    return
   }
 
-  // 如果是根目录，刷新整个文件树
-  if (!directoryId || directoryId === fileTreeStore.activeRepoPath) {
-    await loadFileTree();
-    return;
+  if (!normalizedId || !activeRepo || normalizedId === activeRepo) {
+    await loadFileTree({ force: true })
+    return
   }
 
-  // 查找要刷新的目录节点
-  const directoryNode = findNodeById(fileTree.value, directoryId);
-  if (directoryNode && directoryNode.is_directory) {
-    try {
-      // 保存当前展开状态
-      const wasExpanded = expandedKeys.value.includes(directoryId);
+  let targetDir = normalizedId
 
-      // 重新加载目录内容
-      await fileTreeStore.fetchFileTree(directoryId);
+  const maybeNode = findNodeById(fileTree.value, targetDir)
+  if (maybeNode && !maybeNode.is_directory) {
+    targetDir = targetDir.split('/').slice(0, -1).join('/') || activeRepo
+  }
 
-      // 保留原有节点的展开状态和内容
-      const newChildren = fileTreeStore.fileTree.map(newNode => {
-        const existingNode = findNodeById([directoryNode], newNode.id);
-        return existingNode || newNode;
-      });
+  if (!targetDir || targetDir === activeRepo) {
+    await loadFileTree({ force: true })
+    return
+  }
 
-      directoryNode.children = [...newChildren];
+  const directoryNode = findNodeById(fileTree.value, targetDir)
+  if (!directoryNode || !directoryNode.is_directory) {
+    await loadFileTree({ force: true })
+    return
+  }
 
-      // 恢复展开状态
-      if (wasExpanded && !expandedKeys.value.includes(directoryId)) {
-        expandedKeys.value.push(directoryId);
-      }
+  try {
+    const wasExpanded = expandedKeys.value.includes(targetDir)
 
-      console.log('目录局部刷新成功:', directoryNode);
-    } catch (error) {
-      console.error('目录刷新失败:', error);
+    await fileTreeStore.fetchFileTree(targetDir, { force: true })
+
+    const filteredTree = filterHiddenTree(fileTreeStore.fileTree)
+    const sortedChildren = sortFileTree(normalizeTreeIds(filteredTree))
+
+    const newChildren = sortedChildren.map(newNode => {
+      const existingNode = findNodeById([directoryNode], newNode.id)
+      return existingNode || newNode
+    })
+
+    directoryNode.children = [...newChildren]
+
+    if (wasExpanded && !expandedKeys.value.includes(targetDir)) {
+      expandedKeys.value.push(targetDir)
     }
+
+    console.log('目录局部刷新成功:', directoryNode)
+  } catch (error) {
+    console.error('目录刷新失败:', error)
   }
 };
 
@@ -961,13 +1380,7 @@ const handleFileRenamed = async (oldPath, newPath) => {
       fileTreeStore.openTabs[tabIndex].fileName = newPath.split(/[\\/]/).pop();
 
       if (fileTreeStore.activeTab === normalizedOldPath) {
-        fileTreeStore.activeTab = normalizedNewPath;
-      }
-      if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedOldPath) {
-        fileTreeStore.selectedFile = {
-          path: normalizedNewPath,
-          content: fileTreeStore.openTabs[tabIndex].content
-        };
+        fileTreeStore.setActiveTab(normalizedNewPath);
       }
     }
 
@@ -1037,54 +1450,94 @@ const extractOldPathFromEvent = (event) => {
 
 // 优化处理文件删除事件的函数
 const handleFileRemoved = async (filePath) => {
-  const normalizedPath = normalizePath(filePath);
-  const parentPath = normalizedPath.split('/').slice(0, -1).join('/');
+  const removedPath = normalizePath(filePath)
+  const parentPath = removedPath.split('/').slice(0, -1).join('/')
 
-  // 检查是否是隐藏路径
-  if (isHiddenPath(normalizedPath) || isHiddenPath(parentPath)) {
-    console.log('跳过隐藏目录的文件删除事件:', normalizedPath);
-    return;
+  if (isHiddenPath(removedPath) || isHiddenPath(parentPath)) {
+    console.log('跳过隐藏目录的文件删除事件:', removedPath)
+    return
   }
 
-  // 查找并删除节点
-  const nodeToRemove = findNodeById(fileTree.value, normalizedPath);
-  if (nodeToRemove) {
-    const parentNode = findParentNode(fileTree.value, normalizedPath);
-    if (parentNode) {
-      parentNode.children = parentNode.children.filter(child => child.id !== normalizedPath);
-    } else {
-      fileTree.value = fileTree.value.filter(child => child.id !== normalizedPath);
-    }
+  const removedNode = findNodeById(fileTree.value, removedPath)
+  const isDir =
+    !!removedNode?.is_directory ||
+    fileTreeStore.openTabs.some((tab) => normalizePath(tab.path).startsWith(`${removedPath}/`))
+
+  const removeFromTree = (nodes) => {
+    if (!Array.isArray(nodes)) return []
+    return nodes
+      .filter((node) => normalizePath(node.id) !== removedPath)
+      .map((node) => {
+        if (node.children) node.children = removeFromTree(node.children)
+        return node
+      })
   }
 
-  // 删除后关闭标签页
-  fileTreeStore.closeTab(normalizedPath);
-  if (fileTreeStore.selectedFile && fileTreeStore.selectedFile.path === normalizedPath) {
-    fileTreeStore.selectedFile = null;
-  }
-  if (fileTreeStore.activeTab === normalizedPath) {
-    fileTreeStore.activeTab = null;
+  fileTree.value = removeFromTree(fileTree.value)
+
+  if (selectedKeys.value?.length && normalizePath(selectedKeys.value[0]) === removedPath) {
+    selectedKeys.value = []
+    lastSelectedKey.value = null
   }
 
-  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath);
+  if (expandedKeys.value?.length) {
+    expandedKeys.value = expandedKeys.value.filter((key) => {
+      const k = normalizePath(key)
+      if (k === removedPath) return false
+      if (isDir && k.startsWith(`${removedPath}/`)) return false
+      return true
+    })
+  }
+
+  const tabPathsToClose = fileTreeStore.openTabs
+    .map((tab) => tab.path)
+    .filter((p) => {
+      const np = normalizePath(p)
+      if (np === removedPath) return true
+      return isDir && np.startsWith(`${removedPath}/`)
+    })
+
+  for (const p of tabPathsToClose) {
+    fileTreeStore.closeTab(p)
+  }
+
+  await refreshDirectory(parentPath || fileTreeStore.activeRepoPath)
 };
 
 // 清理函数
 const cleanupFileWatcher = async () => {
   try {
-    // 先停止后端监控
     await invoke('stop_file_watching')
 
-    // 然后清理前端监听器
     if (unlistenRef.value && typeof unlistenRef.value === 'function') {
       await unlistenRef.value()
       unlistenRef.value = null
     }
     console.log('文件监控已停止')
   } catch (error) {
+    if (error && error.message && error.message.includes('unregisterListener')) {
+      console.warn('文件监控已经停止，无需重复停止')
+      return
+    }
     console.error('停止文件监控失败:', error)
-    throw error // 重新抛出错误以便外部捕获
   }
+}
+
+const syncRepoPathsFromKnowledgeBases = (knowledgeBases) => {
+  const list = Array.isArray(knowledgeBases) ? knowledgeBases : []
+  const paths = list.map(kb => kb.location)
+  fileTreeStore.setRepopathlist(paths)
+
+  const currentActive = fileTreeStore.activeRepoPath
+  const defaultActive = paths.length > 0 ? paths[0] : null
+
+  if (!currentActive && defaultActive) {
+    fileTreeStore.setActiveRepoPath(defaultActive)
+  } else if (currentActive && !paths.includes(currentActive)) {
+    fileTreeStore.setActiveRepoPath(defaultActive)
+  }
+
+  return paths
 }
 
 // 新增初始化函数
@@ -1092,25 +1545,16 @@ const initializeRepositories = async () => {
   console.log('[Init] 开始初始化知识库')
 
   try {
-    // 1. 从知识库商店加载知识库列表
-    const knowledgeBases = await knowledgeBaseStore.fetchKnowledgeBases()
+    let knowledgeBases = knowledgeBaseStore.knowledgeBases
+    if (!knowledgeBases || knowledgeBases.length === 0) {
+      knowledgeBases = await knowledgeBaseStore.fetchKnowledgeBases()
+    }
     console.log('[Load] 获取知识库列表:', knowledgeBases)
 
-    // 2. 同步路径到filetreestore
-    const paths = knowledgeBases.map(kb => kb.location)
-    fileTreeStore.setRepopathlist(paths)
+    const paths = syncRepoPathsFromKnowledgeBases(knowledgeBases)
 
-    // 3. 设置默认激活路径（优先保持当前选中，否则选第一个）
-    const currentActive = fileTreeStore.activeRepoPath
-    const defaultActive = paths.length > 0 ? paths[0] : null
-
-    if (!currentActive && defaultActive) {
-      fileTreeStore.setActiveRepoPath(defaultActive)
-      console.log('[Set] 设置默认激活路径:', defaultActive)
-    } else if (currentActive && !paths.includes(currentActive)) {
-      // 当前选中路径不在新列表中时，重置为第一个
-      fileTreeStore.setActiveRepoPath(defaultActive)
-      console.warn('[Warn] 重置无效激活路径:', currentActive, '→', defaultActive)
+    if (!fileTreeStore.activeRepoPath && paths.length > 0) {
+      console.log('[Set] 设置默认激活路径:', paths[0])
     }
 
     return paths
@@ -1118,12 +1562,19 @@ const initializeRepositories = async () => {
     console.error('[Error] 初始化知识库失败:', error)
     throw error
   } finally {
-    // 确保文件监控被正确设置
     if (fileTreeStore.activeRepoPath) {
       await setupFileWatcher()
     }
   }
 }
+
+watch(
+  () => knowledgeBaseStore.knowledgeBases,
+  (list) => {
+    syncRepoPathsFromKnowledgeBases(list)
+  },
+  { deep: true }
+)
 
 // 初始化时获取文件树数据
 onMounted(async () => {
@@ -1135,12 +1586,31 @@ onMounted(async () => {
     await loadRepoTree(fileTreeStore.activeRepoPath)
   }
 
+  await nextTick()
+  updateActiveRepoMaxHeight()
+
+  window.addEventListener('resize', updateActiveRepoMaxHeight)
+
+  if (typeof ResizeObserver !== 'undefined' && fileTreeContainerRef.value) {
+    const ro = new ResizeObserver(() => updateActiveRepoMaxHeight())
+    ro.observe(fileTreeContainerRef.value)
+
+    const headerEl = fileTreeContainerRef.value.querySelector('.list-header')
+    if (headerEl) ro.observe(headerEl)
+
+    activeRepoResizeObserver.value = ro
+  }
+
   // 添加文件监控
   // setupFileWatcher()
 })
 
 
 onUnmounted(() => {
+  window.removeEventListener('resize', updateActiveRepoMaxHeight)
+  activeRepoResizeObserver.value?.disconnect?.()
+  activeRepoResizeObserver.value = null
+
   // 清理所有状态
   editingNode.value = null
   editName.value = ''
@@ -1181,11 +1651,18 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  margin-bottom: 8px;
-  background-color: #ffffff;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  padding: 12px 14px;
+  margin-bottom: 0;
+  background-color: var(--n-card-color, #fffe);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .title-container {
@@ -1193,40 +1670,40 @@ onUnmounted(() => {
   align-items: center;
   height: auto;
   /* 确保高度自适应 */
+  gap: 6px;
+}
+
+.kb-manager-icon {
+  color: var(--n-text-color-secondary);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 4px;
+}
+
+.kb-manager-icon:hover {
+  color: var(--n-color-primary);
 }
 
 .repo-title-header {
-  font-size: 18px !important;
-  /* 使用!important确保覆盖其他样式 */
+  font-size: 15px !important;
   font-weight: 600;
-  color: #191b1b;
-  letter-spacing: 0.5px;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+  color: var(--n-text-color, rgba(0, 0, 0, 0.9));
   display: flex;
   align-items: center;
   margin: 0;
-  /* 移除可能影响大小的外边距 */
   padding: 0;
-  /* 移除可能影响大小的内边距 */
   line-height: 1.2;
-  /* 设置合适的行高 */
 }
 
 .repo-title {
-  font-size: 15px !important;
-  /* 使用!important确保覆盖其他样式 */
-  font-weight: 600;
-  color: #191b1b;
-  letter-spacing: 0.5px;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+  font-size: 13px !important;
+  font-weight: 500;
+  color: var(--n-text-color, rgba(0, 0, 0, 0.9));
   display: flex;
   align-items: center;
   margin: 0;
-  /* 移除可能影响大小的外边距 */
   padding: 0;
-  /* 移除可能影响大小的内边距 */
   line-height: 1.2;
-  /* 设置合适的行高 */
 }
 
 /* 刷新按钮样式调整 */
@@ -1247,10 +1724,38 @@ onUnmounted(() => {
   height: calc(100% - var(--scrollbar-height, 42px));
   display: flex;
   flex-direction: column;
-  background-color: var(--n-color-embedded);
+  background-color: var(--n-card-color, #fff);
+  border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+}
+
+.import-template-modal-content {
+  width: 420px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+:deep(.import-template-modal-content .n-form),
+:deep(.import-template-modal-content .n-form-item) {
+  max-width: 100%;
+}
+
+:deep(.import-template-modal-content .n-form-item-blank) {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+:deep(.import-template-modal-content .n-input),
+:deep(.import-template-modal-content .n-input-wrapper) {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+:deep(.import-template-modal-content .n-input__input-el) {
+  min-width: 0;
 }
 
 .toolbar {
@@ -1269,10 +1774,62 @@ onUnmounted(() => {
   color: var(--n-text-color);
 }
 
+.repo-body {
+  flex: 1;
+  height: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.active-repo-wrapper {
+  background-color: rgba(0, 0, 0, 0.04);
+  border-left: 3px solid #1890ff;
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--n-border-color);
+}
+
+.active-repo-wrapper .repo-actions {
+  opacity: 1;
+}
+
+.active-repo-wrapper .repo-title,
+.active-repo-wrapper .repo-icon,
+.active-repo-wrapper .expand-icon {
+  color: #1890ff;
+  font-weight: 500;
+}
+
+.active-repo-wrapper .repo-item {
+  padding: 12px 12px;
+}
+
+.active-tree-container {
+  height: var(--active-repo-max-height, 360px);
+  padding: 8px 0 8px 24px;
+  border-left: 1px dashed var(--n-border-color);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.active-tree-container .tree-component {
+  height: 100%;
+}
+
 .repo-scroll-container {
   flex: 1;
   height: 0;
-  background-color: #ffffff;
+  min-height: 0;
+  background-color: transparent;
+}
+
+:deep(.repo-scroll-container .n-scrollbar-rail) {
+  width: 6px;
+}
+
+:deep(.repo-scroll-container .n-scrollbar-rail__scrollbar) {
+  border-radius: 3px;
 }
 
 .repo-list {
@@ -1296,8 +1853,8 @@ onUnmounted(() => {
 
 /* 鼠标悬停效果 - 添加发光边框和背景 */
 .repo-list-item:hover {
-  background-color: rgba(24, 144, 255, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(24, 144, 255, 0.2);
+  background-color: rgba(0, 0, 0, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 /* 鼠标悬停时的文字和图标效果 */
@@ -1315,17 +1872,49 @@ onUnmounted(() => {
 
 /* 选中状态效果*/
 .repo-list-item.active {
-  background-color: rgba(24, 144, 255, 0.16);
-  /* 比原来更深一点 */
+  background-color: rgba(0, 0, 0, 0.04);
   border-left: 3px solid #1890ff;
-  box-shadow: inset 0 0 8px rgba(24, 144, 255, 0.13);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.repo-list-item.active.expanded {
+  height: var(--active-repo-max-height, 360px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.repo-list-item.active.expanded > .n-list-item__main) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.repo-list-item.active.expanded .tree-container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.repo-list-item.active.expanded .tree-component {
+  height: 100%;
+}
+
+:deep(.repo-list-item.active.expanded .tree-component .n-tree__empty) {
+  height: 100%;
 }
 
 /* 暗色模式下选中状态更明显 */
 .dark-mode .repo-list-item.active {
-  background-color: rgba(24, 144, 255, 0.22);
+  background-color: rgba(255, 255, 255, 0.06);
   border-left: 3px solid #8ab4f8;
-  box-shadow: inset 0 0 8px rgba(138, 180, 248, 0.18);
+  box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.08);
 }
 
 /* 选中状态下的文字和图标 */
@@ -1380,9 +1969,45 @@ onUnmounted(() => {
   width: 100%;
 }
 
-/* 节点悬停效果 */
-.n-tree-node:hover {
-  background: rgba(0, 0, 0, 0.05);
+:deep(.tree-component .n-tree-node) {
+  padding: 0;
+}
+
+:deep(.tree-component .n-tree-node-content) {
+  margin: 2px 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+:deep(.tree-component .n-tree-node-content__text) {
+  font-size: 13px;
+  line-height: 1.35;
+  font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+}
+
+:deep(.tree-component .n-tree-node-content:hover) {
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.03), #ffffff);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.18), 0 2px 12px 0 rgba(7, 118, 161, 0.1);
+  transform: scale(1.01);
+}
+
+:deep(.tree-component .n-tree-node--selected .n-tree-node-content) {
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.045), #ffffff);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.26), 0 2px 12px 0 rgba(7, 118, 161, 0.14);
+  animation: file-tree-select-pop 160ms ease-out;
+}
+
+@keyframes file-tree-select-pop {
+  from {
+    transform: scale(1);
+  }
+  60% {
+    transform: scale(1.02);
+  }
+  to {
+    transform: scale(1.01);
+  }
 }
 
 /* 编辑输入框样式 */
@@ -1411,21 +2036,18 @@ onUnmounted(() => {
 
 /* 暗色模式适配 */
 .dark-mode .file-tree-container {
-  background-color: var(--n-color-embedded);
-}
-
-.dark-mode .toolbar {
-  background-color: rgba(30, 30, 30, 0.7) !important;
-  border-bottom: 1px solid #333 !important;
+  background-color: var(--n-card-color, #1a1a1a);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .dark-mode .repo-scroll-container {
-  background-color: #1a1a1a;
+  background-color: transparent;
 }
 
 /* 选中状态下的 action/refresh 图标 */
 .repo-list-item.active .action-icon,
-.repo-list-item.active .refresh-icon {
+.repo-list-item.active .refresh-icon,
+.repo-list-item.active .browser-icon {
   color: var(--n-color-primary, #1890ff);
   background-color: var(--n-color-primary-suppl, #e6f7ff);
 }
@@ -1439,7 +2061,8 @@ onUnmounted(() => {
 
 /* 暗色模式下 action/refresh 图标 */
 .dark-mode .action-icon,
-.dark-mode .refresh-icon {
+.dark-mode .refresh-icon,
+.dark-mode .browser-icon {
   color: #444a57;
   background-color: transparent;
 }
@@ -1448,8 +2071,11 @@ onUnmounted(() => {
 .dark-mode .action-icon.active,
 .dark-mode .refresh-icon:hover,
 .dark-mode .refresh-icon.active,
+.dark-mode .browser-icon:hover,
+.dark-mode .browser-icon.active,
 .dark-mode .repo-list-item.active .action-icon,
-.dark-mode .repo-list-item.active .refresh-icon {
+.dark-mode .repo-list-item.active .refresh-icon,
+.dark-mode .repo-list-item.active .browser-icon {
   color: #8ab4f8;
   background-color: rgba(65, 105, 225, 0.13);
 }
@@ -1469,19 +2095,23 @@ onUnmounted(() => {
 
 /* Action/refresh 图标基础样式（合并） */
 .action-icon,
-.refresh-icon {
+.refresh-icon,
+.browser-icon {
   color: var(--n-text-color-disabled, #bfbfbf);
   /* 平时较淡，与背景接近 */
   background-color: transparent;
   transition: color 0.2s, background-color 0.2s;
   border-radius: 4px;
   padding: 2px;
+  cursor: pointer;
 }
 
 .action-icon:hover,
 .action-icon.active,
 .refresh-icon:hover,
-.refresh-icon.active {
+.refresh-icon.active,
+.browser-icon:hover,
+.browser-icon.active {
   color: var(--n-color-primary, #1890ff);
   /* 选中时主色 */
   background-color: var(--n-color-primary-suppl, #e6f7ff);

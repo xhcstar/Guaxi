@@ -20,27 +20,35 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled" @click="showNotes"></n-icon>
-      <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
+      <n-icon class="header-icon" size="20" :component="Open20Regular" @click="openWebModel"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from "vue";
+
+import { useMessage } from 'naive-ui'
+import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useChatStore } from '../../stores/chatStore'
 import ChatModelSelector from "./ChatModelSelector.vue"
 import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
   Search20Filled,
   TextBulletListLtr20Filled,
-  Screenshot24Regular
+  Screenshot24Regular,
+
+  Open20Regular,
 } from '@vicons/fluent'
 
 const viewKey = 'chat'
 const siderStore = useSiderStore();
+const chatStore = useChatStore();
+const message = useMessage();
+
+
 const toggleLeftSider = () => {
   siderStore.toggleLeftSider(viewKey)
 };
@@ -49,7 +57,6 @@ const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 };
 
-// 占位函数
 const showSearchPlaceholder = () => {
   console.log('搜索框获得焦点 - 占位功能');
 };
@@ -61,6 +68,22 @@ const showNotes = () => {
 const CaptureScreenshot = () => {
   console.log('截图功能点击');
 };
+
+
+const openWebModel = async () => {
+  try {
+    const modelId = chatStore.selectedModel
+    if (modelId !== 7 && modelId !== 8) {
+      message.warning('当前模型不是网页模式')
+      return
+    }
+    const provider = modelId === 7 ? 'yuanbao' : 'chatgpt'
+    await invoke('open_web_model_window', { provider })
+  } catch (e) {
+    console.error('打开网页模型失败:', e)
+    message.error('打开网页模型失败')
+  }
+}
 </script>
 
 <style scoped>

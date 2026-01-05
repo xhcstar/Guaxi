@@ -2,26 +2,75 @@
   <div class="chat-container">
     <div class="chat-header">
       <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
-      <span class="chat-title">{{ activeChat?.name || "未选择会话" }}</span>
+      <div class="chat-header-title">
+        <n-input v-if="isEditingTitle" size="small" v-model:value="editingTitle" class="chat-title-input"
+          @keydown.enter.prevent="commitTitle" @blur="commitTitle" />
+        <span v-else class="chat-title" @dblclick="beginEditTitle">{{ displayTitle }}</span>
+      </div>
     </div>
 
-    <div class="message-list" ref="messageContainer">
+    <div class="message-list" ref="messageContainer" @scroll="updateIsAtBottom">
       <div v-for="(message, index) in activeChatMessages.topic" :key="message.msgid" class="message-item"
         :class="message.sender === 'me' ? 'message-right' : 'message-left'">
         <n-avatar v-if="message.sender === 'me'" :src="activeChat.MeAvatar" size="medium" round />
         <n-avatar v-else :src="activeChat.ModelAvatar" size="medium" round />
         <div class="message-bubble">
-          <div class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
+          <div v-if="message.isPlaceholder" class="message-content" :ref="el => setMessageRef(el, index)">
+            <span class="typing-dots"><i></i><i></i><i></i></span>
+          </div>
+          <div v-else class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
+
+          <div v-if="!message.isPlaceholder && message.sender !== 'me'" class="message-actions">
+            <button class="message-action-btn" type="button" title="复制" @click="copyMessage(message)">
+              <n-icon>
+                <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm4 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h12v14z"
+                    fill="currentColor" />
+                </svg>
+              </n-icon>
+            </button>
+
+            <button class="message-action-btn" type="button" title="分享" @click="shareMessage(message)">
+              <n-icon>
+                <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7a2.5 2.5 0 0 0 0-1.39l7.02-4.11A2.99 2.99 0 1 0 14 5a2.9 2.9 0 0 0 .05.52L7.03 9.63a3 3 0 1 0 0 4.74l7.02 4.11c-.03.17-.05.34-.05.52a3 3 0 1 0 3-2.92z"
+                    fill="currentColor" />
+                </svg>
+              </n-icon>
+            </button>
+
+            <button class="message-action-btn" type="button" title="重新生成" :disabled="isGenerating"
+              @click="regenerateFrom(index)">
+              <n-icon>
+                <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 13.65-6.65z"
+                    fill="currentColor" />
+                </svg>
+              </n-icon>
+            </button>
+          </div>
         </div>
+      </div>
+
+      <div v-show="showJumpToBottom" class="jump-to-bottom" @click="jumpToBottom">
+        <n-spin v-if="isGenerating" size="small" />
+        <n-icon v-else>
+          <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 16.5l-6-6 1.4-1.4L12 13.7l4.6-4.6L18 10.5l-6 6z" fill="currentColor" />
+          </svg>
+        </n-icon>
       </div>
 
     </div>
 
     <div class="input-area">
       <div class="chat-input-height-handle" @mousedown="startResize"></div>
-      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" @keydown="handleKeydown" style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
+      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" :disabled="isGenerating"
+        @keydown="handleKeydown" style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;" />
-      <n-button @click="sendMessage" color="#dbe7e4"
+      <n-button @click="sendMessage" color="#dbe7e4" :disabled="isGenerating"
         style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
           <n-icon>
@@ -47,8 +96,11 @@ import { addCopyButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
 
 
 const chatStore = useChatStore();
-const messageInput = ref(""); // 用户输入的消息
-let unsubscribe = null;
+const messageInput = ref("");
+const inputHistory = ref([]);
+const historyIndex = ref(-1);
+let unsubscribeStream = null;
+let unsubscribeWebModel = null;
 const messageRefs = ref([]);
 
 
@@ -58,26 +110,360 @@ const activeChat = computed(() =>
 );
 
 // 当前会话的消息记录
-const activeChatMessages = computed(() => activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || []);
+const activeChatMessages = computed(() =>
+  activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || { topicid: chatStore.selectedTopic, topic: [] }
+);
 
+const displayTitle = computed(() => {
+  const t = (activeChatMessages.value?.title ?? '').toString().trim();
+  if (t) return t;
+  return activeChat.value?.name || '未选择会话';
+});
 
-// 滚动到最新消息
-const messageContainer = ref(null);
-const scrollToBottom = () => {
+const isEditingTitle = ref(false);
+const editingTitle = ref('');
+
+const beginEditTitle = () => {
+  if (!activeChat.value) return;
+  const current = (activeChatMessages.value?.title ?? '').toString().trim();
+  editingTitle.value = current || '';
+  isEditingTitle.value = true;
   nextTick(() => {
-    if (messageContainer.value) {
-      messageContainer.value.scrollTop = messageContainer.value.scrollHeight;
+    const el = document.querySelector('.chat-title-input input');
+    if (el && typeof el.focus === 'function') {
+      el.focus();
+      if (typeof el.select === 'function') el.select();
     }
   });
 };
 
-const askDeepSeek = async (question) => {
+const commitTitle = () => {
+  if (!isEditingTitle.value) return;
+  isEditingTitle.value = false;
+
+  const nextTitle = (editingTitle.value ?? '').toString().trim();
+  if (!activeChatMessages.value) return;
+
+  if (nextTitle) {
+    activeChatMessages.value.title = nextTitle;
+    activeChatMessages.value.__titleLocked = true;
+  } else {
+    activeChatMessages.value.title = '';
+    activeChatMessages.value.__titleLocked = false;
+  }
+
+  scheduleAutosave();
+};
+
+const pickAutoTitle = (raw) => {
+  let s = (raw ?? '').toString();
+  if (!s.trim()) return '';
+
+  s = s.replace(/```[\s\S]*?```/g, ' ');
+  s = s.replace(/`[^`]*`/g, ' ');
+  s = s.replace(/\[\s*\S*?\]/g, ' ');
+
+  const lines = s.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  let first = lines[0] || '';
+
+  first = first.replace(/^#{1,6}\s+/, '');
+  first = first.replace(/^>\s+/, '');
+  first = first.replace(/^[-*+]\s+/, '');
+
+  const sentence = first.split(/([。！？.!?])\s/)[0] || first;
+  const title = sentence.replace(/\s+/g, ' ').trim();
+
+  const MAX = 24;
+  if (title.length <= MAX) return title;
+  return title.slice(0, MAX).trimEnd() + '…';
+};
+
+const streamTitleBuffer = new Map();
+
+const maybeAutoSetTitle = (sessionId) => {
+  const topic = activeChatMessages.value;
+  if (!topic) return;
+  if (topic.__titleLocked) return;
+
+  const current = (topic.title ?? '').toString().trim();
+  if (current) return;
+
+  const buf = streamTitleBuffer.get(sessionId) || '';
+  const nextTitle = pickAutoTitle(buf);
+  if (!nextTitle) return;
+
+  topic.title = nextTitle;
+  topic.__titleLocked = false;
+};
+
+const autosaveTimer = ref(null);
+
+const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
+
+const isGenerating = ref(false);
+const waitingFirstToken = ref(false);
+const generatingTimer = ref(null);
+const GENERATING_IDLE_MS = 2500;
+
+const stopGenerating = () => {
+  isGenerating.value = false;
+  waitingFirstToken.value = false;
+  if (generatingTimer.value) {
+    clearTimeout(generatingTimer.value);
+    generatingTimer.value = null;
+  }
+};
+
+const startGenerating = () => {
+  isGenerating.value = true;
+  waitingFirstToken.value = true;
+  if (generatingTimer.value) {
+    clearTimeout(generatingTimer.value);
+    generatingTimer.value = null;
+  }
+};
+
+const bumpGenerating = () => {
+  isGenerating.value = true;
+  waitingFirstToken.value = false;
+  if (generatingTimer.value) {
+    clearTimeout(generatingTimer.value);
+  }
+  generatingTimer.value = setTimeout(() => {
+    generatingTimer.value = null;
+    isGenerating.value = false;
+    waitingFirstToken.value = false;
+  }, GENERATING_IDLE_MS);
+};
+
+watch(
+  () => chatStore.selectedModel,
+  async (modelId) => {
+    if (modelId !== 7 && modelId !== 8) return;
+    const provider = modelId === 7 ? 'yuanbao' : 'chatgpt';
+    try {
+      await invoke('prepare_web_model_window', { provider });
+    } catch (e) {
+      console.error('预加载网页模型窗口失败:', e);
+    }
+  }
+);
+
+const getTopicSessionId = (topic) => {
+  const items = Array.isArray(topic) ? topic : [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const sid = items[i]?.chatSessionId;
+    if (typeof sid === 'string' && sid.trim()) return sid;
+  }
+  return '';
+};
+
+watch(
+  [() => chatStore.selectedModel, () => chatStore.selectedTopic],
+  () => {
+    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    chatStore.sendChatSessionId = getTopicSessionId(topic) || '';
+  },
+  { immediate: true }
+);
+
+const ensureTopicSessionId = (topic) => {
+  const existing = getTopicSessionId(topic);
+  const sid = existing || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  chatStore.sendChatSessionId = sid;
+  return sid;
+};
+
+const saveSessionSnapshot = async () => {
+  try {
+    const content = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    const sid = getTopicSessionId(content) || chatStore.sendChatSessionId || null;
+    const topicTitle = (activeChatMessages.value?.title ?? '').toString().trim() || null;
+    await invoke('save_chat_session', {
+      request: {
+        model_id: chatStore.selectedModel,
+        model_name: activeChat.value?.name || '',
+        topic_id: chatStore.selectedTopic,
+        session_id: sid,
+        topic_title: topicTitle,
+        content,
+      },
+    });
+  } catch (e) {
+    console.error('自动保存会话失败:', e);
+  }
+};
+
+const scheduleAutosave = () => {
+  if (autosaveTimer.value) {
+    clearTimeout(autosaveTimer.value);
+  }
+  autosaveTimer.value = setTimeout(() => {
+    autosaveTimer.value = null;
+    saveSessionSnapshot();
+  }, 800);
+};
+
+const normalizeMathDelimiters = (text) => {
+  return (text ?? '').toString()
+    .replace(/\\\[/g, '$$')
+    .replace(/\\\]/g, '$$')
+    .replace(/\\\(/g, '$')
+    .replace(/\\\)/g, '$');
+};
+
+const isAtBottom = ref(true);
+const showJumpToBottom = computed(() => !isAtBottom.value);
+
+const messageContainer = ref(null);
+
+const updateIsAtBottom = () => {
+  const el = messageContainer.value;
+  if (!el) return;
+  const threshold = 40;
+  isAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+};
+
+const scrollToBottom = () => {
+  nextTick(() => {
+    const el = messageContainer.value;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    updateIsAtBottom();
+  });
+};
+
+const jumpToBottom = () => {
+  scrollToBottom();
+};
+
+const stripHtml = (html) => {
+  const s = (html ?? '').toString();
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.innerHTML = s.replace(/<br\s*\/?\s*>/gi, '\n');
+  return (div.textContent || div.innerText || '').toString();
+};
+
+const messageToText = (message) => {
+  if (!message) return '';
+  const raw = (message.raw ?? '').toString();
+  if (raw.trim()) return raw;
+  return stripHtml(message.content);
+};
+
+const writeClipboard = async (text) => {
+  const value = (text ?? '').toString();
+  if (!value) return;
+
+  if (navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (e) { }
+  }
+
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager');
+    await mod.writeText(value);
+  } catch (e) {
+    console.error('写入剪贴板失败:', e);
+  }
+};
+
+const copyMessage = async (message) => {
+  await writeClipboard(messageToText(message));
+};
+
+const shareMessage = async (message) => {
+  const text = messageToText(message);
+  if (!text) return;
+
+  const api = navigator?.share;
+  if (typeof api === 'function') {
+    try {
+      await api({ text });
+      return;
+    } catch (e) { }
+  }
+
+  await writeClipboard(text);
+};
+
+const regenerateFrom = async (assistantIndex) => {
+  if (isGenerating.value || !activeChat.value) return;
+  const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+
+  let question = '';
+  for (let i = assistantIndex - 1; i >= 0; i--) {
+    const m = topic[i];
+    if (m && m.sender === 'me') {
+      question = messageToText(m);
+      break;
+    }
+  }
+  if (!question.trim()) return;
+
+  const isWeb = isWebModel.value;
+  const sessionId = ensureTopicSessionId(topic);
+
+  startGenerating();
+
+  topic.push({
+    msgid: topic.length + 1,
+    sender: activeChat.value.name,
+    chatSessionId: sessionId,
+    raw: '',
+    content: '',
+    isPlaceholder: true,
+  });
+
+  scrollToBottom();
+
+  if (isWeb) {
+    let provider = '';
+    if (chatStore.selectedModel === 7) provider = 'yuanbao';
+    if (chatStore.selectedModel === 8) provider = 'chatgpt';
+
+    try {
+      await invoke('web_model_send_message', {
+        request: {
+          provider,
+          model_id: chatStore.selectedModel,
+          topic_id: chatStore.selectedTopic,
+          session_id: sessionId,
+          content: question,
+        },
+      });
+    } catch (e) {
+      console.error('重新生成（网页模式）失败:', e);
+      stopGenerating();
+    }
+
+    scheduleAutosave();
+    return;
+  }
+
+  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
+  chatStore.accumulatedMessage = '';
+
+  try {
+    await askDeepSeek(question, sessionId);
+  } catch (e) {
+    console.error('重新生成失败:', e);
+    stopGenerating();
+  }
+
+  scheduleAutosave();
+};
+
+const askDeepSeek = async (question, sessionId) => {
   try {
     const request = {
       "modelid": chatStore.selectedModel,
       "question": question,
       "topicid": chatStore.selectedTopic,
-      "sessionid": chatStore.sendChatSessionId,
+      "sessionid": sessionId,
     };
     console.log('Request:', request);
     // const response = await invoke('get_chat_answer', { request });
@@ -93,35 +479,137 @@ const askDeepSeek = async (question) => {
 const sendMessage = async () => {
   if (!messageInput.value.trim() || !activeChat.value) return;
 
-  let question = messageInput.value.trim();
-  activeChatMessages.value.topic.push({
-    msgid: activeChatMessages.value.topic.length + 1,
-    sender: "me",
-    content: question,
-  });
+  const isWeb = isWebModel.value;
 
-  messageInput.value = ""; // 清空输入框
-  scrollToBottom(); // 滚动到底部
+  const question = messageInput.value.trim();
+
+  startGenerating();
+
+  inputHistory.value.push(question);
+  historyIndex.value = inputHistory.value.length;
+
+  const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+
+  const sessionId = ensureTopicSessionId(topic);
+
+  let provider = '';
+  if (isWeb) {
+    provider = chatStore.selectedModel === 7 ? 'yuanbao' : 'chatgpt';
+  }
+
+  if (
+    topic.length === 1 &&
+    topic[0]?.sender !== 'me' &&
+    typeof topic[0]?.content === 'string' &&
+    topic[0].content.includes('网页模式')
+  ) {
+    topic.splice(0, 1);
+  }
+
+  const myMsg = {
+    msgid: topic.length + 1,
+    sender: "me",
+    chatSessionId: sessionId,
+    raw: question,
+    content: question
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/\r?\n/g, '<br/>'),
+  };
+
+  topic.push(myMsg);
+
+  if (!isWeb) {
+    topic.push({
+      msgid: topic.length + 1,
+      sender: activeChat.value.name,
+      chatSessionId: sessionId,
+      raw: '',
+      content: '',
+      isPlaceholder: true,
+    });
+  }
+
+  console.log('topic', topic);
+
+  messageInput.value = "";
+  scrollToBottom();
+
+  if (isWeb) {
+    try {
+      await invoke('web_model_send_message', {
+        request: {
+          provider,
+          model_id: chatStore.selectedModel,
+          topic_id: chatStore.selectedTopic,
+          session_id: sessionId,
+          content: question,
+        },
+      });
+    } catch (e) {
+      console.error('发送到网页模型失败:', e);
+      stopGenerating();
+      return;
+    }
+
+    scrollToBottom();
+    scheduleAutosave();
+    return;
+  }
+
+  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
   chatStore.accumulatedMessage = '';
 
-  // 更新当前会话的消息记录
   try {
-    let answer = await askDeepSeek(question); // 等待 Promise 解析
-    console.log('answer:', answer);
-    // chatStore.updateChatSession(answer);
+    await askDeepSeek(question, sessionId);
   } catch (error) {
     console.error('Error during askDeepSeek:', error);
+    stopGenerating();
   }
-  scrollToBottom(); // 滚动到底部
+
+  scrollToBottom();
+  scheduleAutosave();
 };
 
 const handleKeydown = (event) => {
-  if (event.key === 'Enter') {
-    if (event.shiftKey) {
-      // Shift + Enter 换行，什么都不做
-      return;
+  const el = event?.target;
+
+  if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey) {
+    const hasSelectionApi = el && typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number';
+    if (hasSelectionApi) {
+      const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
+      const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+
+      if (event.key === 'ArrowUp' && atStart && inputHistory.value.length > 0) {
+        event.preventDefault();
+        if (historyIndex.value === -1) {
+          historyIndex.value = inputHistory.value.length;
+        }
+        historyIndex.value = Math.max(0, historyIndex.value - 1);
+        messageInput.value = inputHistory.value[historyIndex.value] ?? '';
+        requestAnimationFrame(() => {
+          el.selectionStart = el.selectionEnd = el.value.length;
+        });
+        return;
+      }
+
+      if (event.key === 'ArrowDown' && atEnd && inputHistory.value.length > 0 && historyIndex.value !== -1) {
+        event.preventDefault();
+        historyIndex.value = Math.min(inputHistory.value.length, historyIndex.value + 1);
+        messageInput.value = historyIndex.value >= inputHistory.value.length ? '' : (inputHistory.value[historyIndex.value] ?? '');
+        requestAnimationFrame(() => {
+          el.selectionStart = el.selectionEnd = el.value.length;
+        });
+        return;
+      }
     }
-    // 阻止默认行为并发送消息
+  }
+
+  if (event.key === 'Enter') {
+    if (event.shiftKey) return;
     event.preventDefault();
     sendMessage();
   }
@@ -169,20 +657,114 @@ const stopResize = () => {
 };
 
 onMounted(() => {
-  unsubscribe = listen("modle-streaming-respond-output", (event) => {
-    chatStore.collectChatSessionStream(event.payload);
-  }).then((unsubFn) => {
-    unsubscribe = unsubFn;
-  }).catch((err) => {
-    console.error('监听事件失败:', err);
-    unsubscribe = null;
+  nextTick(() => {
+    updateIsAtBottom();
   });
+
+  listen("modle-streaming-respond-output", (event) => {
+    const shouldFollow = isAtBottom.value;
+    bumpGenerating();
+    const rawPayload = typeof event.payload === 'string' ? event.payload : '';
+    const payload = typeof event.payload === 'string' ? normalizeMathDelimiters(event.payload) : event.payload;
+    if (rawPayload && (rawPayload.includes('$') || rawPayload.includes('`') || rawPayload.includes('```') || rawPayload.includes('\\[') || rawPayload.includes('\\]') || rawPayload.includes('\\(') || rawPayload.includes('\\)'))) {
+      console.info('[modle-streaming-respond-output raw]', rawPayload.slice(0, 400));
+    }
+
+    if (typeof payload === 'string' && payload && (payload.includes('$') || payload.includes('`') || payload.includes('```'))) {
+      console.info('[modle-streaming-respond-output normalized]', payload.slice(0, 400));
+    }
+
+    chatStore.collectChatSessionStream(payload);
+
+    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    const latest = topic[topic.length - 1];
+    if (latest && latest.sender !== 'me') {
+      if (!latest.chatSessionId) {
+        latest.chatSessionId = chatStore.sendChatSessionId || '';
+      }
+      if (latest.isPlaceholder && typeof payload === 'string' && payload.length > 0) {
+        latest.isPlaceholder = false;
+      }
+
+      const sid = (latest.chatSessionId || '').toString().trim();
+      if (sid && typeof payload === 'string' && payload) {
+        const prev = streamTitleBuffer.get(sid) || '';
+        const next = (prev + payload).slice(0, 800);
+        streamTitleBuffer.set(sid, next);
+        maybeAutoSetTitle(sid);
+      }
+    }
+
+    if (shouldFollow) {
+      scrollToBottom();
+    } else {
+      nextTick(updateIsAtBottom);
+    }
+    scheduleAutosave();
+  })
+    .then((unsubFn) => {
+      unsubscribeStream = unsubFn;
+    })
+    .catch((err) => {
+      console.error('监听事件失败:', err);
+      unsubscribeStream = null;
+    });
+
+  listen("web-model-chat-push", (event) => {
+    const shouldFollow = isAtBottom.value;
+    const payload = event.payload || {};
+    const modelId = payload.model_id;
+    const topicId = payload.topic_id;
+    const sessionId = payload.session_id;
+    const title = payload.title;
+    const messages = payload.messages;
+
+    const normalizedMessages = Array.isArray(messages)
+      ? messages.map((m) => ({
+        ...m,
+        content: normalizeMathDelimiters(m?.content),
+      }))
+      : messages;
+
+    chatStore.appendMessagesToTopic({
+      modelId,
+      topicId,
+      sessionId,
+      title,
+      messages: normalizedMessages,
+    });
+
+    if (modelId === chatStore.selectedModel && topicId === chatStore.selectedTopic) {
+      bumpGenerating();
+      if (shouldFollow) {
+        scrollToBottom();
+      } else {
+        nextTick(updateIsAtBottom);
+      }
+      scheduleAutosave();
+    }
+  })
+    .then((unsubFn) => {
+      unsubscribeWebModel = unsubFn;
+    })
+    .catch((err) => {
+      console.error('监听 web-model-chat-push 失败:', err);
+      unsubscribeWebModel = null;
+    });
 });
 
 onUnmounted(() => {
-  if (unsubscribe && typeof unsubscribe === 'function') {
-    unsubscribe(); // 清理监听器
+  if (unsubscribeStream && typeof unsubscribeStream === 'function') {
+    unsubscribeStream();
   }
+  if (unsubscribeWebModel && typeof unsubscribeWebModel === 'function') {
+    unsubscribeWebModel();
+  }
+  if (autosaveTimer.value) {
+    clearTimeout(autosaveTimer.value);
+    autosaveTimer.value = null;
+  }
+  stopGenerating();
 });
 
 const setMessageRef = (el, index) => {
@@ -210,36 +792,56 @@ const setMessageRef = (el, index) => {
 .chat-container {
   width: 100%;
   height: 100%;
-  border: 1px solid #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.06);
   display: flex;
   flex-direction: column;
   padding: 0;
   box-sizing: border-box;
+  min-height: 0;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
 }
 
 .chat-header {
   display: flex;
   align-items: center;
-  padding: 7px 15px;
-  border-bottom: 1px solid #ffffff;
-  background-color: #ffffff;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(12px);
+}
+
+.chat-header-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .chat-title {
-  margin-left: 10px;
   font-size: 14px;
-  font-weight: bold;
-  color: #333;
+  font-weight: 650;
+  color: rgba(15, 23, 42, 0.92);
+  cursor: text;
+  user-select: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-title-input {
+  max-width: 420px;
 }
 
 .message-list {
-  flex-grow: 1;
-  max-height: calc(100% - 80px - 80px);
-  /* 限制消息区域的最大高度 */
+  flex: 1 1 auto;
   overflow-y: auto;
-  /* 超出时显示滚动条 */
-  padding: 15px;
-  background-color: #ffffff;
+  padding: 16px;
+  background: radial-gradient(1200px 600px at 20% 0%, rgba(45, 212, 191, 0.10) 0%, rgba(45, 212, 191, 0) 60%),
+    radial-gradient(1000px 500px at 90% 10%, rgba(99, 102, 241, 0.08) 0%, rgba(99, 102, 241, 0) 55%),
+    #ffffff;
+  min-height: 0;
+  position: relative;
 }
 
 .message-item {
@@ -258,42 +860,134 @@ const setMessageRef = (el, index) => {
 
 .message-bubble {
   max-width: 70%;
-  padding: 8px;
-  border-radius: 20px;
-  margin: 0 5px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 16px;
+  margin: 0 6px;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-sizing: border-box;
+}
+
+.message-content {
+  min-width: 0;
 }
 
 .message-left .message-bubble {
-  background-color: #fdfffe;
+  background: rgba(255, 255, 255, 0.92);
   font-size: 16px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  /* 使用等宽字体 */
-  border-top-left-radius: 0;
+  border-top-left-radius: 6px;
 }
 
 .message-right .message-bubble {
-  background-color: #45d6a6;
+  background: linear-gradient(135deg, #2dd4bf 0%, #22c55e 100%);
   font-size: 16px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  /* 使用等宽字体 */
-  color: white;
-  border-top-right-radius: 0;
+  color: rgba(255, 255, 255, 0.98);
+  border-top-right-radius: 6px;
 }
 
 .input-area {
-  margin-top: 1px;
-  padding-top: 1px;
+  flex: 0 0 auto;
   border-top: 1px solid #ddd;
   position: relative;
+  background-color: #ffffff;
   padding-bottom: 2px;
   height: 80px;
-  /* 固定输入区域的高度 */
   min-height: 80px;
-  /* 设置最小高度 */
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
-  /* 使用等宽字体 */
+}
+
+.jump-to-bottom {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: rgba(0, 0, 0, 0.7);
+  z-index: 3;
+}
+
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 14px;
+}
+
+.typing-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  animation: typingDot 1.2s infinite ease-in-out;
+}
+
+.typing-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typingDot {
+
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+.message-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.message-left .message-actions {
+  justify-content: flex-start;
+}
+
+.message-item:hover .message-actions {
+  opacity: 1;
+}
+
+.message-action-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.95);
+  color: rgba(0, 0, 0, 0.7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.message-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .chat-input-height-handle {
@@ -346,10 +1040,26 @@ const setMessageRef = (el, index) => {
   background: #f6f8fa !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
 }
 
 .hljs code {
   font-family: inherit !important;
+  display: block;
+  white-space: pre;
+}
+
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
+}
+
+pre code {
+  display: block;
+  white-space: pre;
 }
 
 /* 代码块复制按钮 */

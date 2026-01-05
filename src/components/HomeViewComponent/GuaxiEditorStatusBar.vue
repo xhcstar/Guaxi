@@ -63,7 +63,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
+import * as monaco from 'monaco-editor'
 import { useEditorStore } from '../../stores/editorStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { NPopover } from 'naive-ui'
@@ -229,20 +230,7 @@ const toggleIndentation = () => {
   }
 }
 
-// 点击外部关闭菜单
-const handleClickOutside = () => {
-  showLanguageMenu.value = false
-  showEncodingMenu.value = false
-}
 
-// 添加全局点击监听
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
-})
 </script>
 
 <style scoped>

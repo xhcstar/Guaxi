@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 import markdownItMathjax from "markdown-it-mathjax3";
 import mermaid from "mermaid";
 import hljs from "highlight.js";
-import "highlight.js/styles/github.css";
+import "highlight.js/styles/atom-one-light.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
 import { nextTick } from "vue";
 
@@ -146,7 +146,7 @@ function escapeRegExp(string) {
 // }
 
 export const renderMarkdown = async (content, options) => {
-  // console.log("原始内容:", content);
+  console.log("原始内容:", content);
   const {
     preserveOriginal = false, // 新增参数，控制是否保留原始内容
     mermaid: enableMermaid = true,
@@ -233,42 +233,54 @@ export const renderMarkdown = async (content, options) => {
       md.renderer.rules.paragraph_close || ((tokens, idx) => "</p>");
 
     md.renderer.rules.paragraph_open = (tokens, idx) => {
-      let paragraph = defaultParagraphOpen(tokens, idx).replace(
-        "<p",
-        '<p class="md-paragraph"'
-      );
+      const token = tokens[idx];
+      const attrs = ['class="md-paragraph"'];
 
-      if (preserveOriginal) {
-        // 只为普通段落添加原始内容，不处理代码块、数学公式块、mermaid图表块
-        // 判断当前段落是否属于这些特殊块的范围
-        // token.map: [起始行, 结束行]，可用于定位原文行号
-        const token = tokens[idx];
-        // 只处理有 map 属性的段落（即普通段落），跳过没有 map 的（如代码块、公式块等）
-        if (token && Array.isArray(token.map)) {
-          // 取段落起始行
-          const lineIndex = token.map[0];
-          // 用正则分割，兼容 \r\n、\n、\r
+      if (token && Array.isArray(token.map)) {
+        const startLine = token.map[0] + 1;
+        const endLine = token.map[1] + 1;
+        attrs.push(`data-md-start-line="${startLine}"`);
+        attrs.push(`data-md-end-line="${endLine}"`);
+
+        if (preserveOriginal) {
           const originalLines = content.split(/\r?\n|\r/);
-          const original = originalLines[lineIndex] || "";
-          // 仅为普通段落添加 data-md-original
-          paragraph = paragraph.replace(
-            "<p",
-            `<p data-md-original="${safeEncode(original)}"`
-          );
-          // 可选：调试输出
-          // console.log(`段落[${idx}] - 设置原始内容:`, {
-          //   lineIndex,
-          //   originalContent: original,
-          //   encodedContent: safeEncode(original),
-          // });
+          const original = originalLines[token.map[0]] || "";
+          attrs.push(`data-md-original="${safeEncode(original)}"`);
         }
       }
 
-      return paragraph;
+      return `<p ${attrs.join(" ")}>`;
     };
 
     md.renderer.rules.paragraph_close = (tokens, idx) => {
       return defaultParagraphClose(tokens, idx);
+    };
+
+    // 标题渲染规则：为标题添加源码行号，便于编辑/预览联动
+    const defaultHeadingOpen =
+      md.renderer.rules.heading_open ||
+      ((tokens, idx) => `<${tokens[idx].tag}>`);
+    const defaultHeadingClose =
+      md.renderer.rules.heading_close ||
+      ((tokens, idx) => `</${tokens[idx].tag}>`);
+
+    md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
+      const token = tokens[idx];
+      const tag = token.tag || "h1";
+      const attrs = [`class="md-heading md-heading-${tag}"`];
+
+      if (token && Array.isArray(token.map)) {
+        const startLine = token.map[0] + 1;
+        const endLine = token.map[1] + 1;
+        attrs.push(`data-md-start-line="${startLine}"`);
+        attrs.push(`data-md-end-line="${endLine}"`);
+      }
+
+      return `<${tag} ${attrs.join(" ")}>`;
+    };
+
+    md.renderer.rules.heading_close = (tokens, idx, options, env, self) => {
+      return defaultHeadingClose(tokens, idx, options, env, self);
     };
 
     // 添加Mermaid支持（同时保留原始内容功能）

@@ -35,8 +35,17 @@
 
         <n-collapse-transition>
           <div v-if="kb.id === selectedId && expanded" class="tree-container">
-            <n-tree :key="`tree-${selectedId}`" :data="treeData" :block-line="true" :expand-on-click="true"
-              :expanded-keys="expandedKeys" class="kb-tree" @update:expanded-keys="handleTreeExpand" />
+            <n-tree
+              :key="`tree-${selectedId}`"
+              :data="treeData"
+              :block-line="true"
+              :expand-on-click="true"
+              :expanded-keys="expandedKeys"
+              :selected-keys="selectedKeys"
+              class="kb-tree"
+              @update:expanded-keys="handleTreeExpand"
+              @update:selected-keys="handleTreeSelect"
+            />
           </div>
         </n-collapse-transition>
       </n-list-item>
@@ -76,6 +85,7 @@ const selectedId = computed(() => selectedKnowledgeBase.value?.id || null);
 const treeData = shallowRef([]);
 const expanded = ref(false);
 const expandedKeys = ref([]);
+const selectedKeys = ref([]);
 let abortController = new AbortController();
 
 // 确保在切换知识库时正确处理树形数据
@@ -106,9 +116,10 @@ const toggleKnowledgeBase = async (kb) => {
 
       const newTreeData = [convertToTreeNode(root)];
 
-      // 使用 shallowRef 的 .value 赋值确保响应式更新
       treeData.value = newTreeData;
       expandedKeys.value = [newTreeData[0].key];
+      selectedKeys.value = [newTreeData[0].key];
+      store.setSelectedTreeNodeKey(newTreeData[0].key);
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -121,6 +132,14 @@ const toggleKnowledgeBase = async (kb) => {
 // 处理树节点展开状态变化
 const handleTreeExpand = (keys) => {
   expandedKeys.value = keys;
+};
+
+const handleTreeSelect = (keys) => {
+  selectedKeys.value = keys;
+  const key = Array.isArray(keys) ? keys[0] : null;
+  if (key) {
+    store.setSelectedTreeNodeKey(key);
+  }
 };
 
 // 刷新列表
@@ -142,9 +161,10 @@ const refreshList = async () => {
 
 // 转换树形数据结构
 function convertToTreeNode(node) {
+  const key = String(node.path || '').replace(/\\/g, '/');
   return {
     label: node.name,
-    key: node.path,
+    key,
     isLeaf: !node.is_dir,
     prefix: () => h(
       NIcon,
@@ -165,14 +185,16 @@ onMounted(async () => {
     });
     treeData.value = [convertToTreeNode(root)];
     expandedKeys.value = [treeData.value[0].key];
+    selectedKeys.value = [treeData.value[0].key];
+    store.setSelectedTreeNodeKey(treeData.value[0].key);
   }
 });
 
 onUnmounted(() => {
-  // 组件卸载时取消所有请求
   abortController.abort();
-  selectedId.value = null;
   treeData.value = [];
+  expandedKeys.value = [];
+  selectedKeys.value = [];
 });
 </script>
 

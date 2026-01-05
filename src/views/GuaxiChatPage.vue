@@ -1,17 +1,20 @@
 <template>
-  <div class="app-layout">
-    <div class="main-header">
-      <GuaxiHeaderChatView />
+  <n-message-provider placement="bottom">
+    <div class="app-layout">
+      <div class="main-header">
+        <GuaxiHeaderChatView />
+      </div>
+      <div class="main-content">
+        <GuaxiContentChatView />
+      </div>
     </div>
-    <div class="main-content">
-      <GuaxiContentChatView />
-    </div>
-  </div>
+  </n-message-provider>
 </template>
 
 <script setup>
 import GuaxiHeaderChatView from "../components/ChatViewComponent/GuaxiHeaderChatView.vue";
 import GuaxiContentChatView from "../components/ChatViewComponent/GuaxiContentChatView.vue";
+import { NMessageProvider } from 'naive-ui'
 </script>
 
 <style scoped>
@@ -39,7 +42,7 @@ import GuaxiContentChatView from "../components/ChatViewComponent/GuaxiContentCh
   display: flex;
   flex-direction: column;
   background-color: #ffffff; /* 示例背景色 */
-  overflow-y: auto; /* 如果内容超出，允许垂直滚动 */
+  overflow: hidden;
   margin: 0;
   padding: 0;
 }

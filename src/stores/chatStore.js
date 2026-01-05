@@ -1,9 +1,9 @@
 import { defineStore } from "pinia";
 import { renderMarkdown } from "../components/GuaxiMarkdownRender/GuaxiMarker";
-import { debounce } from "lodash-es";
 import chatgptImg from '@/assets/chatgpt.png';
 import deepseekImg from '@/assets/deepseek.png';
 import qwenImg from '@/assets/qwen.png';
+import yuanbao from '@/assets/yuanbao.png';
 import kimiImg from '@/assets/kimi.png';
 import doubaoImg from '@/assets/doubao.png';
 import localQwenImg from '@/assets/local_qwen.png';
@@ -152,6 +152,46 @@ export const useChatStore = defineStore("chatStore", {
           },
         ],
       },
+
+      {
+        id: 7,
+        name: "腾讯元宝(网页)",
+        ModelAvatar: yuanbao,
+        MeAvatar: meImg,
+        MessagesList: [
+          {
+            topicid: 0,
+            topic: [
+              {
+                msgid: 0,
+                sender: "腾讯元宝(网页)",
+                chatSessionId: "",
+                content: "您好，我是腾讯元宝，有什么可以帮忙的吗？",
+              },
+            ],
+          },
+        ],
+      },
+
+      {
+        id: 8,
+        name: "ChatGPT(网页)",
+        ModelAvatar: chatgptImg,
+        MeAvatar: meImg,
+        MessagesList: [
+          {
+            topicid: 0,
+            topic: [
+              {
+                msgid: 0,
+                sender: "ChatGPT(网页)",
+                chatSessionId: "",
+                content: "您好，我是 ChatGPT，有什么可以帮忙的吗？",
+              },
+            ],
+          },
+        ],
+      },
     ],
 
     activeChatId: 0,
@@ -166,6 +206,8 @@ export const useChatStore = defineStore("chatStore", {
         { name: "Qwen", selectedModel: "2" },
         { name: "Kimi", selectedModel: "3" },
         { name: "豆包", selectedModel: "4" },
+        { name: "腾讯元宝(网页)", selectedModel: "7" },
+        { name: "ChatGPT(网页)", selectedModel: "8" },
       ],
 
       localModel: [
@@ -177,6 +219,9 @@ export const useChatStore = defineStore("chatStore", {
     lastMessage: null,
     lastMessageTime: 0,
     accumulatedMessage: "",
+
+    streamTargetModelId: null,
+    streamTargetTopicId: null,
   }),
   actions: {
     // 更新激活的会话 ID
@@ -190,6 +235,78 @@ export const useChatStore = defineStore("chatStore", {
 
     setModelTopic(topicId) {
       this.selectedTopic = topicId;
+    },
+
+    setStreamTarget(modelId, topicId) {
+      this.streamTargetModelId = modelId;
+      this.streamTargetTopicId = topicId;
+      this.lastMessage = null;
+      this.lastMessageTime = 0;
+    },
+
+    appendMessagesToTopic({ modelId, topicId, sessionId, title, messages }) {
+      const targetModelId = typeof modelId === 'number' ? modelId : this.selectedModel;
+      const targetTopicId = typeof topicId === 'number' ? topicId : this.selectedTopic;
+      const safeMessages = Array.isArray(messages) ? messages : [];
+      const safeTitle = (title ?? '').toString().trim();
+
+      this.SelectModelchatSessions.find((session) => {
+        if (session.id !== targetModelId) return;
+
+        let topicitem = session.MessagesList.find((t) => t.topicid === targetTopicId);
+        if (!topicitem) {
+          topicitem = {
+            topicid: targetTopicId,
+            title: '',
+            topic: [],
+          };
+          session.MessagesList.push(topicitem);
+        }
+
+        if (safeTitle) {
+          topicitem.title = safeTitle;
+        }
+
+        safeMessages.forEach((m) => {
+          const role = (m?.role || '').toString().toLowerCase();
+          const sender = role === 'user' ? 'me' : session.name;
+          const raw = (m?.content ?? '').toString();
+          const messageId = (m?.message_id ?? m?.messageId ?? '').toString();
+
+          const applyContent = (target) => {
+            target.raw = raw;
+            if (sender === 'me') {
+              target.content = plainToHtml(raw);
+              return;
+            }
+          };
+
+          if (messageId) {
+            const existing = topicitem.topic.find((x) => x?.messageId === messageId && x?.sender === sender);
+            if (existing) {
+              existing.chatSessionId = sessionId || existing.chatSessionId || '';
+              applyContent(existing);
+              return;
+            }
+          }
+
+          const next = {
+            msgid: topicitem.topic.length + 1,
+            sender,
+            chatSessionId: sessionId || '',
+            raw,
+            content: raw,
+            messageId: messageId || '',
+          };
+
+          applyContent(next);
+          topicitem.topic.push(next);
+        });
+
+        if (sessionId && targetModelId === this.selectedModel && targetTopicId === this.selectedTopic) {
+          this.sendChatSessionId = sessionId;
+        }
+      });
     },
 
     updateChatSession(answer) {
@@ -236,10 +353,13 @@ export const useChatStore = defineStore("chatStore", {
     },
 
     updateMessageContent() {
+      const modelId = this.streamTargetModelId ?? this.selectedModel;
+      const topicId = this.streamTargetTopicId ?? this.selectedTopic;
+
       this.SelectModelchatSessions.find((session) => {
-        if (session.id === this.selectedModel) {
+        if (session.id === modelId) {
           session.MessagesList.find((topicitem) => {
-            if (topicitem.topicid === this.selectedTopic) {
+            if (topicitem.topicid === topicId) {
               const latestTopic = topicitem.topic[topicitem.topic.length - 1];
               if (latestTopic && latestTopic.sender !== "me") {
                 this.renderDebounced(this.accumulatedMessage).then(
@@ -248,13 +368,11 @@ export const useChatStore = defineStore("chatStore", {
                   }
                 );
               } else {
-                console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>> accumulatedMessage", this.accumulatedMessage);
                 topicitem.topic.push({
                   msgid: topicitem.topic.length,
                   sender: session.name,
                   content: this.accumulatedMessage,
                 });
-                this.accumulatedMessage = "";
               }
             }
           });
@@ -262,21 +380,54 @@ export const useChatStore = defineStore("chatStore", {
       });
     },
 
-    // 保留防抖渲染方法
-    renderDebounced: debounce(async function (content) {
-      try {
-        return await renderMarkdown(content, {
-          basePath: "",
-          mermaid: true,
-          math: true,
-          codeHighlight: true,
-          theme: "default",
-        });
-      } catch (error) {
-        console.error("渲染错误:", error);
-        return `<div class="render-error">${content}</div>`;
+    renderDebounced(content) {
+      const text = (content ?? '').toString();
+
+      if (!this.__renderDebounceState) {
+        this.__renderDebounceState = {
+          timer: null,
+          pending: [],
+          last: '',
+        };
       }
-    }, 50),
+
+      const state = this.__renderDebounceState;
+      state.last = text;
+
+      return new Promise((resolve) => {
+        state.pending.push(resolve);
+
+        if (state.timer) {
+          clearTimeout(state.timer);
+        }
+
+        state.timer = setTimeout(async () => {
+          state.timer = null;
+
+          const pending = state.pending.splice(0, state.pending.length);
+          const toRender = state.last;
+
+          let rendered = '';
+          try {
+            console.log('toRender', toRender);
+            rendered = await renderMarkdown(toRender, {
+              basePath: "",
+              mermaid: true,
+              math: true,
+              codeHighlight: true,
+              theme: "default",
+            });
+          } catch (error) {
+            console.error("渲染错误:", error);
+            rendered = `<div class="render-error">${toRender}</div>`;
+          }
+
+          for (const r of pending) {
+            try { r(rendered); } catch (e) { }
+          }
+        }, 50);
+      });
+    },
 
     addChatSession() {
       this.SelectModelchatSessions.find((session) => {

@@ -54,6 +54,7 @@ onMounted(async () => {
   height: 100%;
   display: flex;
   flex-direction: column;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', monospace;
 }
 
 .repo-header {
