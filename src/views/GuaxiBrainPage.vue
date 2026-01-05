@@ -1,16 +1,14 @@
 <template>
   <div class="app-layout">
-    <n-config-provider>
-      <n-message-provider>
-        <div class="main-header">
-          <GuaxiHeaderBrainView />
-        </div>
-        <div class="main-content">
-          <GuaxiContentBrainView />
-          <CreateKnowledgeBaseForm />
-        </div>
-      </n-message-provider>
-    </n-config-provider>
+    <n-message-provider>
+      <div class="main-header">
+        <GuaxiHeaderBrainView />
+      </div>
+      <div class="main-content">
+        <GuaxiContentBrainView />
+        <CreateKnowledgeBaseForm />
+      </div>
+    </n-message-provider>
   </div>
 </template>
 
@@ -41,8 +39,8 @@ import CreateKnowledgeBaseForm from "../components/BrainViewComponent/CreateKnow
 .main-header {
   flex: 0 0 auto;
   height: 35px;
-  background-color: #f5f5f5;
-  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  background-color: var(--guaxi-header-bg);
+  box-shadow: var(--guaxi-header-shadow);
 }
 
 /* 内容区域样式 */
@@ -51,7 +49,7 @@ import CreateKnowledgeBaseForm from "../components/BrainViewComponent/CreateKnow
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   overflow: hidden;
   margin: 0;
   padding: 0;

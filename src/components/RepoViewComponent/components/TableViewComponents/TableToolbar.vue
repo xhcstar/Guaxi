@@ -104,9 +104,9 @@ const FilterOffIcon = {
 }
 
 .action-button {
-  color: #5a5a5a;
-  background-color: #f5f5f5;
-  border: 1px solid #e0e0e0;
+  color: var(--guaxi-text-secondary);
+  background-color: var(--guaxi-header-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
   transition: all 0.2s ease;
   padding: 4px 10px;
@@ -114,9 +114,9 @@ const FilterOffIcon = {
 }
 
 .action-button:hover {
-  background-color: #e8f0fe;
-  border-color: #c6d8ff;
-  color: #409EFF;
+  background-color: var(--guaxi-panel-bg);
+  border-color: var(--guaxi-border);
+  color: var(--n-color-primary, #409EFF);
 }
 
 .add-file-button {

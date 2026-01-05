@@ -67,11 +67,11 @@ const handleMenuSelect = (key) => {
 }
 
 .custom-menu .n-menu-item:hover {
-  background-color: rgba(0, 0, 0, 0.05); /* 鼠标悬停时的背景色 */
+  background-color: var(--guaxi-header-bg);
 }
 
 .custom-menu .n-menu-item.n-menu-item--selected {
-  background-color: rgba(0, 120, 212, 0.1); /* 选中菜单项的背景色 */
-  color: #0078d4; /* 选中菜单项的文本颜色 */
+  background-color: rgba(45, 212, 191, 0.12);
+  color: var(--n-color-primary);
 }
 </style>

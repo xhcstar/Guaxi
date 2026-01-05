@@ -281,11 +281,11 @@ async function handleSearchImported() {
   align-items: center;
   justify-content: space-between;
   height: 35px;
-  background-color: #f5f5f5;
-  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  background-color: var(--guaxi-header-bg);
+  box-shadow: var(--guaxi-header-shadow);
   padding: 0 8px;
   box-sizing: border-box;
-  border-bottom: 2px solid #aab4ae;
+  border-bottom: 1px solid var(--guaxi-border);
 }
 
 /* 重置所有内部div的盒模型 */
@@ -335,6 +335,24 @@ async function handleSearchImported() {
   padding: 0 8px !important;
 }
 
+.search-container :deep(.n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+.search-container :deep(.n-input .n-input__border),
+.search-container :deep(.n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+.search-container :deep(.n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+.search-container :deep(.n-input__prefix),
+.search-container :deep(.n-input__suffix) {
+  color: var(--guaxi-text-secondary) !important;
+}
+
 /* 右侧样式 */
 .header-right {
   display: flex;
@@ -358,7 +376,7 @@ async function handleSearchImported() {
 .header-icon:hover {
   opacity: 0.8;
   transform: scale(1.05);
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: var(--guaxi-panel-bg);
 }
 
 /* 下拉菜单样式 */
@@ -376,6 +394,6 @@ async function handleSearchImported() {
 }
 
 :deep(.n-dropdown-option:hover) {
-  background-color: #f5f5f5;
+  background-color: var(--guaxi-header-bg);
 }
 </style>

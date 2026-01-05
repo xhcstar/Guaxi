@@ -100,9 +100,9 @@
             <n-switch v-model:value="glowEnabled" size="small" />
           </div>
           <div v-if="glowEnabled">
-            <div style="font-size: 11px; color: #666; margin-bottom: 4px;">强度</div>
+            <div style="font-size: 11px; color: var(--guaxi-text-secondary); margin-bottom: 4px;">强度</div>
             <n-slider v-model:value="glowStrength" :min="0" :max="2.5" :step="0.05" />
-            <div style="font-size: 11px; color: #666; margin: 12px 0 4px;">光晕大小</div>
+            <div style="font-size: 11px; color: var(--guaxi-text-secondary); margin: 12px 0 4px;">光晕大小</div>
             <n-slider v-model:value="glowSize" :min="6" :max="44" :step="1" />
           </div>
         </div>
@@ -2844,9 +2844,9 @@ onBeforeUnmount(() => {
 .toolbar {
   padding: 8px 12px;
   z-index: 10;
-  background-color: var(--toolbar-bg, rgba(255, 255, 255, 0.85));
+  background-color: var(--guaxi-panel-bg);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--toolbar-border, rgba(0, 0, 0, 0.05));
+  border-bottom: 1px solid var(--guaxi-border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
   display: flex;
   align-items: center;
@@ -2854,8 +2854,8 @@ onBeforeUnmount(() => {
 }
 
 .dark-mode .toolbar {
-  background-color: var(--toolbar-bg, rgba(30, 30, 30, 0.8));
-  border-bottom: 1px solid var(--toolbar-border, rgba(255, 255, 255, 0.1));
+  background-color: var(--guaxi-panel-bg);
+  border-bottom: 1px solid var(--guaxi-border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
@@ -2908,7 +2908,8 @@ onBeforeUnmount(() => {
   left: 10px;
   width: 140px;
   z-index: 5;
-  background-color: rgba(255, 255, 255, 0.9);
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   transform: scale(0.95);
@@ -2947,7 +2948,8 @@ onBeforeUnmount(() => {
 
 /* 暗色模式下的调整 */
 .dark-mode .legend-panel {
-  background-color: rgba(30, 30, 30, 0.9);
+  background-color: var(--guaxi-panel-bg);
+  border-color: var(--guaxi-border);
 }
 
 /* Color indicators in legend */

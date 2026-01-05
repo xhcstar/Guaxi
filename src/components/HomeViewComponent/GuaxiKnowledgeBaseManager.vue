@@ -421,14 +421,15 @@ onMounted(async () => {
 }
 
 .page {
-  height: 100vh;
-  padding: 12px 14px;
-  box-sizing: border-box;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  box-sizing: border-box;
   gap: 10px;
   overflow: hidden;
-  background: var(--n-body-color, #f5f7fa);
+  background: var(--guaxi-content-bg);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
 }
 
@@ -439,8 +440,8 @@ onMounted(async () => {
   gap: 12px;
   padding: 10px 12px;
   border-radius: 10px;
-  background: var(--n-card-color, #ffffff);
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
 }
 
@@ -458,9 +459,8 @@ onMounted(async () => {
   text-overflow: ellipsis;
   padding: 6px 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  backdrop-filter: blur(6px);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
 }
 
 .main {
@@ -478,10 +478,10 @@ onMounted(async () => {
   flex-direction: column;
   gap: 8px;
   overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   padding: 10px;
-  background: var(--n-card-color, #ffffff);
+  background: var(--guaxi-panel-bg);
   box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
 }
 
@@ -495,14 +495,14 @@ onMounted(async () => {
 .right {
   min-height: 0;
   overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   padding: 12px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: var(--n-card-color, #ffffff);
+  background: var(--guaxi-panel-bg);
   box-shadow: 0 10px 28px rgba(16, 24, 40, 0.08);
 }
 
@@ -518,7 +518,7 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 10px;
   padding-bottom: 8px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--guaxi-border);
 }
 
 .editor-title {
@@ -533,8 +533,8 @@ onMounted(async () => {
   opacity: 0.75;
   padding: 10px 10px;
   border-radius: 10px;
-  border: 1px dashed rgba(0, 0, 0, 0.12);
-  background: rgba(0, 0, 0, 0.02);
+  border: 1px dashed var(--guaxi-border);
+  background: var(--guaxi-header-bg);
 }
 
 .row {
@@ -584,13 +584,13 @@ onMounted(async () => {
 }
 
 :deep(.kb-tree .n-tree-node-content:hover) {
-  background: linear-gradient(to right, rgba(0, 0, 0, 0.03), #ffffff);
+  background: var(--guaxi-header-bg);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.16), 0 2px 12px rgba(7, 118, 161, 0.08);
   transform: scale(1.01);
 }
 
 :deep(.kb-tree .n-tree-node--selected .n-tree-node-content) {
-  background: linear-gradient(to right, rgba(0, 0, 0, 0.045), #ffffff);
+  background: var(--guaxi-header-bg);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.24), 0 2px 12px rgba(7, 118, 161, 0.12);
   animation: kb-tree-select-pop 160ms ease-out;
 }

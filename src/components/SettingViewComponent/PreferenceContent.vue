@@ -4,7 +4,18 @@
       <n-space vertical size="large" style="width: 100%">
         <div>
           <h3>外观</h3>
-          <p class="description">这里是外观的设置内容，后续可在此扩展主题、字号等个性化配置。</p>
+          <p class="description">在此切换应用主题。亮色为 Onedark-light 风格，暗色为 Onedark 风格。</p>
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+            <n-form-item label="主题">
+              <n-select
+                v-model:value="themeValue"
+                :options="themeOptions"
+                :disabled="loading"
+                style="width: 240px"
+                @update:value="handleThemeChange"
+              />
+            </n-form-item>
+          </n-form>
         </div>
 
         <n-divider />
@@ -59,9 +70,18 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NAlert, NSwitch } from 'naive-ui'
+import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { useSettingsStore } from '../../stores/settingsStore'
 
+const settingsStore = useSettingsStore()
+
+const themeOptions = [
+  { label: 'Onedark-light（亮色）', value: 'light' },
+  { label: 'Onedark（暗色）', value: 'dark' },
+]
+
+const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
 const loading = ref(false)
@@ -69,26 +89,39 @@ const loading = ref(false)
 onMounted(async () => {
   try {
     loading.value = true
-    const [seconds, enabled] = await Promise.all([
-      invoke('get_gc_cycle_seconds'),
-      invoke('get_lsp_syntax_highlight_enabled')
+    await Promise.all([
+      settingsStore.loadAppearanceConfig(),
+      (async () => {
+        const [seconds, enabled] = await Promise.all([
+          invoke('get_gc_cycle_seconds'),
+          invoke('get_lsp_syntax_highlight_enabled')
+        ])
+
+        if (typeof seconds === 'number' && seconds > 0) {
+          gcCycleHours.value = Math.max(1, Math.round(seconds / 3600))
+        } else {
+          gcCycleHours.value = 1
+        }
+
+        lspHighlightEnabled.value = !!enabled
+      })(),
     ])
 
-    if (typeof seconds === 'number' && seconds > 0) {
-      gcCycleHours.value = Math.max(1, Math.round(seconds / 3600))
-    } else {
-      gcCycleHours.value = 1
-    }
-
-    lspHighlightEnabled.value = !!enabled
+    themeValue.value = settingsStore.appearanceTheme
   } catch (error) {
     console.error('加载偏好设置失败:', error)
     gcCycleHours.value = 1
     lspHighlightEnabled.value = false
+    themeValue.value = 'light'
   } finally {
     loading.value = false
   }
 })
+
+const handleThemeChange = async (value) => {
+  themeValue.value = value === 'dark' ? 'dark' : 'light'
+  await settingsStore.setAppearanceTheme(themeValue.value)
+}
 
 const handleGcCycleChange = async (value) => {
   if (!value || value < 1) {
@@ -127,7 +160,7 @@ const handleLspHighlightChange = async (value) => {
 
 .description {
   margin-top: 4px;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   font-size: 13px;
 }
 

@@ -1187,8 +1187,8 @@ onMounted(async () => {
   justify-content: space-between;
   height: 35px;
   /* 固定高度 */
-  background-color: #f5f5f5;
-  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  background-color: var(--guaxi-header-bg);
+  box-shadow: var(--guaxi-header-shadow);
   padding: 0 8px;
   box-sizing: border-box;
   /* 确保padding不增加总高度 */
@@ -1243,14 +1243,25 @@ onMounted(async () => {
   margin: 0 !important;
 }
 
+.search-container :deep(.n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+.search-container :deep(.n-input .n-input__border),
+.search-container :deep(.n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
 .search-container :deep(.n-input__input-el) {
   height: 28px !important;
   line-height: 28px !important;
+  color: var(--guaxi-text-primary) !important;
 }
 
 .search-container :deep(.n-input__prefix),
 .search-container :deep(.n-input__suffix) {
   height: 28px !important;
+  color: var(--guaxi-text-secondary) !important;
 }
 
 /* 右侧样式 */
@@ -1287,7 +1298,7 @@ onMounted(async () => {
 }
 
 .search-dd-root {
-  background: #fff;
+  background: var(--guaxi-panel-bg);
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-top: none;
   border-top-left-radius: 0;
@@ -1329,13 +1340,13 @@ onMounted(async () => {
 
 .search-dd-section-title {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--guaxi-text-secondary);
   padding: 6px 10px;
 }
 
 .search-dd-divider {
   height: 1px;
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--guaxi-border);
   margin: 4px 0;
 }
 
@@ -1349,13 +1360,13 @@ onMounted(async () => {
 }
 
 .search-dd-row:hover {
-  background: linear-gradient(to right, #f0f7ff, #ffffff);
+  background: rgba(255, 255, 255, 0.03);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.18), 0 2px 12px 0 rgba(7, 118, 161, 0.1);
   transform: scale(1.01);
 }
 
 .search-dd-row.is-selected {
-  background: linear-gradient(to right, #e6f7ff, #ffffff);
+  background: rgba(255, 255, 255, 0.06);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.26), 0 2px 12px 0 rgba(7, 118, 161, 0.14);
   animation: search-dd-select-pop 160ms ease-out;
 }
@@ -1384,13 +1395,13 @@ onMounted(async () => {
 
 .search-dd-row-text {
   font-size: 13px;
-  color: rgba(0, 0, 0, 0.9);
+  color: var(--guaxi-text-primary);
 }
 
 .search-dd-empty {
   padding: 8px 10px;
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--guaxi-text-secondary);
 }
 
 .search-dd-item {
@@ -1440,7 +1451,7 @@ onMounted(async () => {
 
 .search-dd-path {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--guaxi-text-secondary);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

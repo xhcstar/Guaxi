@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--guaxi-app-bg);
 }
 
 .flipboard-main {
@@ -152,8 +152,7 @@ onBeforeUnmount(() => {
 
 .sidebar-container {
   position: relative;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
+  background: var(--guaxi-panel-bg);
   transition: width 0.3s ease;
   overflow: hidden;
 }
@@ -165,13 +164,12 @@ onBeforeUnmount(() => {
 .content-area {
   flex: 1;
   min-width: 0;
-  background: #f8f9fa;
+  background: var(--guaxi-content-bg);
 }
 
 .reader-panel {
   position: relative;
-  background: rgba(255, 255, 255, 0.98);
-  backdrop-filter: blur(10px);
+  background: var(--guaxi-panel-bg);
   transition: width 0.3s ease;
   overflow: hidden;
   box-shadow: -2px 0 20px rgba(0, 0, 0, 0.1);

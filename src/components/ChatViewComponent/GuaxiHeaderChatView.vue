@@ -92,9 +92,9 @@ const openWebModel = async () => {
   align-items: center;
   justify-content: space-between;
   height: 35px;
-  background-color: #f5f5f5;
-  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
-  border-bottom: 2px solid #aab4ae;
+  background-color: var(--guaxi-header-bg);
+  box-shadow: var(--guaxi-header-shadow);
+  border-bottom: 2px solid var(--guaxi-border);
   padding: 0 8px;
   box-sizing: border-box;
 }

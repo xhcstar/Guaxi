@@ -381,7 +381,7 @@ const handleResourceRootPick = async () => {
 
 .description {
   margin-top: 4px;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   font-size: 13px;
 }
 

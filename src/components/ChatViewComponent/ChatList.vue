@@ -210,8 +210,8 @@ onUnmounted(() => {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  border-right: 1px solid rgba(15, 23, 42, 0.08);
-  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  border-right: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
   overflow-y: auto;
 }
 
@@ -220,9 +220,8 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 14px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
   gap: 8px;
 }
 
@@ -248,7 +247,7 @@ onUnmounted(() => {
 }
 
 .chat-item:hover {
-  background: rgba(15, 23, 42, 0.04);
+  background: var(--guaxi-header-bg);
 }
 
 .chat-avatar {
@@ -266,7 +265,7 @@ onUnmounted(() => {
 .chat-title {
   font-size: 14px;
   font-weight: bold;
-  color: #333;
+  color: var(--guaxi-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -274,13 +273,13 @@ onUnmounted(() => {
 
 .chat-timestamp {
   font-size: 12px;
-  color: #999;
+  color: var(--guaxi-text-secondary);
   margin-left: 10px;
 }
 
 .chat-last-message {
   font-size: 12px;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -290,8 +289,8 @@ onUnmounted(() => {
 /* 右键菜单 */
 .context-menu {
   position: absolute;
-  background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
   border-radius: 10px;
   padding: 6px;
@@ -304,9 +303,10 @@ onUnmounted(() => {
   cursor: pointer;
   font-size: 13px;
   border-radius: 8px;
+  color: var(--guaxi-text-primary);
 }
 
 .menu-item:hover {
-  background: rgba(15, 23, 42, 0.06);
+  background: var(--guaxi-header-bg);
 }
 </style>

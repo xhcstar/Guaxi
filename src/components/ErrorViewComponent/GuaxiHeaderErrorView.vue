@@ -76,9 +76,9 @@ const toggleRightSider = () => {
 .guaxi-header {
   flex: 0 0 auto; /* 固定高度的 header */
   height: 35px; /* 设置你需要的高度 */
-  background-color: #f5f5f5; /* 示例背景色 */
-  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1); /* 示例阴影 */
-  border-bottom: 2px solid #aab4ae;
+  background-color: var(--guaxi-header-bg); /* 示例背景色 */
+  box-shadow: var(--guaxi-header-shadow); /* 示例阴影 */
+  border-bottom: 2px solid var(--guaxi-border);
   display: flex; 
   align-items: center; 
   justify-content: space-between;

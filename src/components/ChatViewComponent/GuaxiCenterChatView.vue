@@ -70,7 +70,7 @@
       <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" :disabled="isGenerating"
         @keydown="handleKeydown" style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;" />
-      <n-button @click="sendMessage" color="#dbe7e4" :disabled="isGenerating"
+      <n-button @click="sendMessage" type="primary" :disabled="isGenerating"
         style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
         <template #icon>
           <n-icon>
@@ -78,7 +78,7 @@
               p-id="5954" width="48" height="48">
               <path
                 d="M1145.732473 24.529036A96.502796 96.502796 0 0 0 1047.167948 6.302655L62.5449 378.38417a96.762677 96.762677 0 0 0-8.229592 177.44733l153.746105 75.175158a32.918368 32.918368 0 0 1 8.229592 5.804029c15.974071 41.130635 79.05606 202.292036 107.123301 260.540222a120.758435 120.758435 0 0 0 64.520002 59.530271c-1.611268-0.155929-3.465091-0.485113-5.318915-0.814297a88.359831 88.359831 0 0 0 14.518733 4.192761 96.190937 96.190937 0 0 0 87.59751-26.455973l57.260636-57.260636a32.485232 32.485232 0 0 1 38.722396-5.318915l246.662532 140.024344a97.143838 97.143838 0 0 0 47.748959 12.751536 97.022559 97.022559 0 0 0 94.042581-73.56389l205.999684-830.478457a95.671174 95.671174 0 0 0-29.453277-95.290014z m-868.005397 592.3747L805.56445 314.903695l-297.997861 305.222576a48.112794 48.112794 0 0 0-10.811085 17.325457c-0.155929 0.329184-0.155929 0.485113-0.329184 0.814297-0.641042 1.940451-59.53027 175.680134-94.371764 254.233756a58.404116 58.404116 0 0 1-20.651945-22.748325c-25.814931-54.211355-85.986243-207.628277-103.727511-252.795743z"
-                fill="#6EC2B0" p-id="5955"></path>
+                fill="currentColor" p-id="5955"></path>
             </svg>
           </n-icon>
         </template>
@@ -792,13 +792,13 @@ const setMessageRef = (el, index) => {
 .chat-container {
   width: 100%;
   height: 100%;
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--guaxi-border);
   display: flex;
   flex-direction: column;
   padding: 0;
   box-sizing: border-box;
   min-height: 0;
-  background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
+  background: var(--guaxi-content-bg);
 }
 
 .chat-header {
@@ -806,9 +806,8 @@ const setMessageRef = (el, index) => {
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
 }
 
 .chat-header-title {
@@ -821,7 +820,7 @@ const setMessageRef = (el, index) => {
 .chat-title {
   font-size: 14px;
   font-weight: 650;
-  color: rgba(15, 23, 42, 0.92);
+  color: var(--guaxi-text-primary);
   cursor: text;
   user-select: text;
   white-space: nowrap;
@@ -839,7 +838,7 @@ const setMessageRef = (el, index) => {
   padding: 16px;
   background: radial-gradient(1200px 600px at 20% 0%, rgba(45, 212, 191, 0.10) 0%, rgba(45, 212, 191, 0) 60%),
     radial-gradient(1000px 500px at 90% 10%, rgba(99, 102, 241, 0.08) 0%, rgba(99, 102, 241, 0) 55%),
-    #ffffff;
+    var(--guaxi-content-bg);
   min-height: 0;
   position: relative;
 }
@@ -865,7 +864,7 @@ const setMessageRef = (el, index) => {
   border-radius: 16px;
   margin: 0 6px;
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--guaxi-border);
   box-sizing: border-box;
 }
 
@@ -874,7 +873,7 @@ const setMessageRef = (el, index) => {
 }
 
 .message-left .message-bubble {
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--guaxi-panel-bg);
   font-size: 16px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   border-top-left-radius: 6px;
@@ -890,14 +889,30 @@ const setMessageRef = (el, index) => {
 
 .input-area {
   flex: 0 0 auto;
-  border-top: 1px solid #ddd;
+  border-top: 1px solid var(--guaxi-border);
   position: relative;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
   padding-bottom: 2px;
   height: 80px;
   min-height: 80px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
+}
+
+.input-area :deep(.n-input) {
+  flex: 1 1 auto;
+  height: calc(100% - 2px);
+}
+
+.input-area :deep(.n-input__textarea-el) {
+  height: 100% !important;
+  background-color: var(--guaxi-content-bg) !important;
+  color: var(--guaxi-text-primary) !important;
+}
+
+.input-area :deep(.n-input__textarea-el::placeholder) {
+  color: var(--guaxi-text-secondary);
+  opacity: 0.85;
 }
 
 .jump-to-bottom {
@@ -907,14 +922,14 @@ const setMessageRef = (el, index) => {
   width: 34px;
   height: 34px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: rgba(0, 0, 0, 0.7);
+  color: var(--guaxi-text-secondary);
   z-index: 3;
 }
 
@@ -976,9 +991,9 @@ const setMessageRef = (el, index) => {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  background: rgba(255, 255, 255, 0.95);
-  color: rgba(0, 0, 0, 0.7);
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -995,7 +1010,7 @@ const setMessageRef = (el, index) => {
   width: 100%;
   height: 2px;
   cursor: ns-resize;
-  background-color: #ffffff;
+  background-color: var(--guaxi-border);
 }
 </style>
 
@@ -1017,17 +1032,17 @@ const setMessageRef = (el, index) => {
 
 /* Mermaid图表样式 */
 .mermaid {
-  background-color: white;
+  background-color: var(--guaxi-panel-bg);
   border-radius: 8px;
   padding: 16px;
   margin: 1em 0;
   text-align: center;
+  border: 1px solid var(--guaxi-border);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
-.dark .mermaid {
-  background-color: #2d2d2d;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+:root[data-guaxi-theme='dark'] .mermaid {
+  background-color: var(--guaxi-panel-bg);
 }
 
 /* 代码块样式 */
@@ -1037,8 +1052,8 @@ const setMessageRef = (el, index) => {
   padding: 1.5em 1em !important;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
-  background: #f6f8fa !important;
-  border: 1px solid #e1e4e8;
+  background: var(--guaxi-header-bg) !important;
+  border: 1px solid var(--guaxi-border);
   margin: 1em 0;
   max-width: 100%;
   overflow-x: auto;
@@ -1069,11 +1084,13 @@ pre code {
   top: 10px;
   padding: 2px 8px;
   font-size: 12px;
-  background: #e1e4e8;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.2s;
+  color: var(--guaxi-text-secondary);
 }
 
 .hljs:hover::before {
@@ -1081,9 +1098,9 @@ pre code {
 }
 
 /* 暗色模式代码块 */
-.dark .hljs {
-  background: #2d2d2d !important;
-  border-color: #444;
+:root[data-guaxi-theme='dark'] .hljs {
+  background: var(--guaxi-header-bg) !important;
+  border-color: var(--guaxi-border);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
 }
 
@@ -1091,15 +1108,16 @@ pre code {
   font-family: inherit !important;
 }
 
-.dark .hljs::before {
-  background: #444;
-  color: #fff;
+:root[data-guaxi-theme='dark'] .hljs::before {
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-secondary);
 }
 
 .copy-button {
   opacity: 1 !important;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-secondary);
 }
 
 /* 暗色模式适配 */
@@ -1111,23 +1129,24 @@ pre code {
 table {
   width: 100%;
   border-collapse: collapse;
-  border: 1px solid #ddd;
+  border: 1px solid var(--guaxi-border);
 }
 
 th,
 td {
-  border: 1px solid #ddd;
+  border: 1px solid var(--guaxi-border);
   padding: 8px;
   text-align: center;
 }
 
 th {
-  background-color: #f4f4f4;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
   font-weight: bold;
 }
 
 tr:nth-child(even) {
-  background-color: #f9f9f9;
+  background-color: var(--guaxi-panel-bg);
 }
 
 img {

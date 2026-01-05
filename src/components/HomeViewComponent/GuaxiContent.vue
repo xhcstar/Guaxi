@@ -141,7 +141,7 @@ const onMouseDownRightSidebar = (event) => {
   flex-direction: column;
   min-height: 0;
   width: 100%;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   overflow: hidden;
 }
 

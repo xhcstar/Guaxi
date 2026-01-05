@@ -122,23 +122,28 @@ defineExpose({
 }
 
 :deep(.n-data-table) {
-  --n-border-color: #eaeaea;
-  --n-th-color: #f8f9fa;
-  --n-td-color: #ffffff;
-  --n-td-color-hover: #f5f7fa;
-  --n-td-color-striped: #f9f9f9;
+  --n-border-color: var(--guaxi-border);
+  --n-th-color: var(--guaxi-header-bg);
+  --n-td-color: var(--guaxi-panel-bg);
+  --n-td-color-hover: var(--guaxi-header-bg);
+  --n-td-color-striped: var(--guaxi-content-bg);
   height: 100% !important;
   display: flex;
   flex-direction: column;
 }
 
+:deep(.n-data-table .n-data-table__pagination) {
+  background-color: var(--guaxi-panel-bg);
+  border-top: 1px solid var(--guaxi-border);
+}
+
 :deep(.n-data-table-th) {
   font-weight: 600;
-  color: #333;
+  color: var(--guaxi-text-primary);
   padding: 10px;
 }
 
 :deep(.n-data-table-tr--hover) {
-  background-color: #f0f7ff;
+  background-color: var(--guaxi-header-bg);
 }
 </style>

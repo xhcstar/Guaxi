@@ -83,7 +83,7 @@ const handleClickOutside = () => {
 :deep(.n-dropdown-menu) {
   z-index: 10001 !important;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--guaxi-border);
   border-radius: 4px;
   pointer-events: auto;
 }
@@ -94,6 +94,6 @@ const handleClickOutside = () => {
 }
 
 :deep(.n-dropdown-option:hover) {
-  background-color: #f0f7ff;
+  background-color: var(--guaxi-header-bg);
 }
 </style>
