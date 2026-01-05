@@ -112,7 +112,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   overflow: hidden;
   margin: 0;
   padding: 0;
@@ -134,7 +134,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: rgba(239, 243, 239, 0.3);
+  background: var(--guaxi-content-bg);
 }
 
 .brain-sider {
@@ -142,7 +142,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow: hidden;
   position: relative;
-  background: rgba(239, 243, 239, 0.3);
+  background: var(--guaxi-panel-bg);
 }
 
 .sider-resize-handle {

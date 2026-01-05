@@ -42,7 +42,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
   const titleStyle = {
     fontSize: "17px",
     fontWeight: "bold",
-    color: "#000000",
+    color: "var(--guaxi-text-primary)",
   };
 
   // 校验表格单元格

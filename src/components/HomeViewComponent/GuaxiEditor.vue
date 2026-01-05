@@ -1762,7 +1762,9 @@ const initEditor = () => {
   };
   const language = languageMap[fileExt] || 'markdown';
 
-  monaco.editor.defineTheme('one-light', {
+  const isDark = document.documentElement.dataset.guaxiTheme === 'dark';
+
+  monaco.editor.defineTheme('guaxi-light', {
     base: 'vs',
     inherit: true,
     rules: [
@@ -1811,10 +1813,12 @@ const initEditor = () => {
     }
   });
 
+  const themeName = isDark ? 'vs-dark' : 'guaxi-light';
+
   editor = monaco.editor.create(editorContainer.value, {
     value: rawContent.value,
     language: language,
-    theme: 'one-light',
+    theme: themeName,
     readOnly: !!activeTab.value?.unsupported,
     autoClosingQuotes: 'always',
     automaticLayout: true,  // 自动布局
@@ -4463,8 +4467,8 @@ onUnmounted(() => {
   padding: 4px 8px;
   height: 30px;
   min-height: 30px;
-  background-color: var(--toolbar-bg, #f8f8f8);
-  border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  background-color: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
   position: relative;
   width: 100%;
   box-sizing: border-box;
@@ -4497,8 +4501,8 @@ onUnmounted(() => {
   gap: 2px;
   padding: 4px;
   border-radius: 8px;
-  background-color: var(--toolbar-bg, #f8f8f8);
-  border: 1px solid var(--divider-color, #e0e0e0);
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
 }
 
@@ -4516,8 +4520,8 @@ onUnmounted(() => {
   gap: 2px;
   padding: 4px;
   border-radius: 8px;
-  background-color: var(--toolbar-bg, #f8f8f8);
-  border: 1px solid var(--divider-color, #e0e0e0);
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
 }
 
@@ -4530,7 +4534,7 @@ onUnmounted(() => {
 .floating-table-toolbar-divider {
   width: 1px;
   height: 16px;
-  background-color: var(--divider-color, #e0e0e0);
+  background-color: var(--guaxi-border);
   margin: 0 2px;
 }
 
@@ -4545,7 +4549,7 @@ onUnmounted(() => {
 }
 
 .toolbar-editing-actions :deep(.n-button:hover) {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: var(--guaxi-panel-bg);
 }
 
 .toolbar-spacer {
@@ -4622,7 +4626,7 @@ onUnmounted(() => {
 }
 
 .mode-toggle:hover {
-  background-color: var(--hover-color, #f0f0f0);
+  background-color: var(--guaxi-panel-bg);
 }
 
 .editor-content {
@@ -4840,8 +4844,8 @@ onUnmounted(() => {
   flex: 0 0 30px;
   flex-shrink: 0;
   align-items: center;
-  background: #f5f5f5;
-  border-bottom: 1px solid #ddd;
+  background: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
   overflow: hidden;
 }
 
@@ -4854,7 +4858,7 @@ onUnmounted(() => {
 }
 
 .tab-region-right {
-  border-left: 1px solid #ddd;
+  border-left: 1px solid var(--guaxi-border);
 }
 
 .tab-region::-webkit-scrollbar {
@@ -4882,7 +4886,7 @@ onUnmounted(() => {
   user-select: none;
   white-space: nowrap;
   flex-shrink: 0;
-  color: rgba(0, 0, 0, 0.85);
+  color: var(--guaxi-text-primary);
 }
 
 .tab-title {
@@ -4939,9 +4943,9 @@ onUnmounted(() => {
 }
 
 .tab-item.active {
-  background: #fff;
+  background: var(--guaxi-panel-bg);
   border-bottom: 2px solid var(--primary-color, #18a058);
-  color: rgba(0, 0, 0, 0.95);
+  color: var(--guaxi-text-primary);
 }
 
 .tab-item:hover {

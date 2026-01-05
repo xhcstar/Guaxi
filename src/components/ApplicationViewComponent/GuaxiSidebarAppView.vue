@@ -134,9 +134,8 @@ const navigateTo = (path) => {
   width: var(--sider-width, 36px);
   min-width: var(--sider-width, 36px);
   padding: 20px 0;
-  border-right: 2px solid #aab4ae;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
+  border-right: 2px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
   margin-top: 10px;
   height: 100%;
   box-sizing: border-box;
@@ -149,7 +148,7 @@ const navigateTo = (path) => {
   flex-direction: column;
   gap: 8px;
   font-size: 13px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--guaxi-panel-bg);
 }
 
 .app-category-item {
@@ -159,12 +158,12 @@ const navigateTo = (path) => {
   padding: 6px 10px;
   border-radius: 10px;
   cursor: pointer;
-  color: #444;
+  color: var(--guaxi-text-secondary);
   transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease, box-shadow 0.15s ease;
 }
 
 .app-category-item:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--guaxi-header-bg);
   transform: translateX(2px);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
 }

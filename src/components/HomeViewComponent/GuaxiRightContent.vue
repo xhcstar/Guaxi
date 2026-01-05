@@ -24,7 +24,7 @@ const rightSiderStore = useRightSiderStore()
   min-width: 0;
   max-width: 100vw;
   box-sizing: border-box;
-  background: #fafbfc;
+  background: var(--guaxi-panel-bg);
   overflow: auto;
   display: flex;
   flex-direction: column;

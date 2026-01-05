@@ -51,11 +51,25 @@ const currentComponent = computed(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-primary);
+}
+
+.setting-card :deep(.n-card) {
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-primary);
+}
+
+.setting-card :deep(.n-card__header) {
+  color: var(--guaxi-text-primary);
 }
 
 .setting-card :deep(.n-card__content) {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  color: var(--guaxi-text-primary);
 }
 </style>

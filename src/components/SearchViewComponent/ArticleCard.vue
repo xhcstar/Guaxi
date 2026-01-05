@@ -159,17 +159,17 @@ const formatTime = (timeString) => {
 }
 
 .category-badge {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--guaxi-panel-bg);
   padding: 4px 12px;
   border-radius: 12px;
   font-size: 12px;
   font-weight: 600;
-  color: #333;
+  color: var(--guaxi-text-primary);
 }
 
 .bookmark-btn {
-  background: rgba(255, 255, 255, 0.95);
-  border: none;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 50%;
   width: 32px;
   height: 32px;
@@ -178,11 +178,11 @@ const formatTime = (timeString) => {
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s ease;
-  color: #666;
+  color: var(--guaxi-text-secondary);
 }
 
 .bookmark-btn:hover {
-  background: white;
+  background: var(--guaxi-content-bg);
   color: #ff6b6b;
 }
 
@@ -210,8 +210,8 @@ const formatTime = (timeString) => {
 }
 
 .category-tag {
-  background: #f0f2f5;
-  color: #666;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-secondary);
   padding: 4px 8px;
   border-radius: 6px;
   font-size: 12px;
@@ -222,14 +222,14 @@ const formatTime = (timeString) => {
   display: flex;
   gap: 12px;
   font-size: 12px;
-  color: #999;
+  color: var(--guaxi-text-secondary);
 }
 
 .card-title {
   font-size: 18px;
   font-weight: 700;
   line-height: 1.4;
-  color: #1a1a1a;
+  color: var(--guaxi-text-primary);
   margin-bottom: 8px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -243,7 +243,7 @@ const formatTime = (timeString) => {
 }
 
 .card-summary {
-  color: #666;
+  color: var(--guaxi-text-secondary);
   line-height: 1.6;
   font-size: 14px;
   display: -webkit-box;
@@ -282,8 +282,8 @@ const formatTime = (timeString) => {
 }
 
 .action-btn:hover {
-  background: #f5f5f5;
-  color: #333;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
 }
 
 .action-btn .bookmarked {

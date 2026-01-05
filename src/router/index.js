@@ -39,7 +39,7 @@ const GuaxiAppWindow = {
             height: '100vh',
             padding: '16px',
             boxSizing: 'border-box',
-            background: '#f5f5f5',
+            background: 'var(--guaxi-app-bg)',
           },
         },
         [h(Comp.value)],

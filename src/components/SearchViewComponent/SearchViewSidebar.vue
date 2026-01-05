@@ -172,8 +172,8 @@ const navigateTo = (path) => {
     padding: 20px 0;
     width: var(--sider-width, 36px);
     min-width: var(--sider-width, 36px);
-    border-right: 2px solid #aab4ae;
-    background: rgba(255, 255, 255, 0.95);
+    border-right: 2px solid var(--guaxi-border);
+    background: var(--guaxi-panel-bg);
     backdrop-filter: blur(10px);
     margin-top: 10px;
     height: 100%;
@@ -186,9 +186,9 @@ const navigateTo = (path) => {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--guaxi-panel-bg);
     backdrop-filter: blur(10px);
-    border-right: 1px solid rgba(0, 0, 0, 0.08);
+    border-right: 1px solid var(--guaxi-border);
 }
 
 .sidebar-header {
@@ -202,7 +202,7 @@ const navigateTo = (path) => {
 .sidebar-title {
     font-size: 18px;
     font-weight: 600;
-    color: #1a1a1a;
+    color: var(--guaxi-text-primary);
     margin: 0;
 }
 
@@ -226,13 +226,13 @@ const navigateTo = (path) => {
     border-radius: 12px;
     cursor: pointer;
     transition: all 0.2s ease;
-    color: #666;
+    color: var(--guaxi-text-secondary);
     position: relative;
 }
 
 .category-item:hover {
     background: rgba(0, 0, 0, 0.04);
-    color: #333;
+    color: var(--guaxi-text-primary);
 }
 
 .category-item.active {

@@ -1653,10 +1653,10 @@ onUnmounted(() => {
   align-items: center;
   padding: 12px 14px;
   margin-bottom: 0;
-  background-color: var(--n-card-color, #fffe);
+  background-color: var(--guaxi-header-bg);
   border-top-left-radius: 8px;
   border-top-right-radius: 8px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--guaxi-border);
 }
 
 .header-actions {
@@ -1687,7 +1687,7 @@ onUnmounted(() => {
 .repo-title-header {
   font-size: 15px !important;
   font-weight: 600;
-  color: var(--n-text-color, rgba(0, 0, 0, 0.9));
+  color: var(--guaxi-text-primary);
   display: flex;
   align-items: center;
   margin: 0;
@@ -1698,7 +1698,7 @@ onUnmounted(() => {
 .repo-title {
   font-size: 13px !important;
   font-weight: 500;
-  color: var(--n-text-color, rgba(0, 0, 0, 0.9));
+  color: var(--guaxi-text-primary);
   display: flex;
   align-items: center;
   margin: 0;
@@ -1708,15 +1708,15 @@ onUnmounted(() => {
 
 /* 刷新按钮样式调整 */
 .refresh-btn {
-  background-color: #f0f0f0;
-  color: #5f6368;
+  background-color: transparent;
+  color: var(--guaxi-text-secondary);
   border: none;
   transition: all 0.3s ease;
 }
 
 .refresh-btn:hover {
-  background-color: #e0e0e0;
-  color: #191b1b;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
   transform: rotate(90deg);
 }
 
@@ -1724,8 +1724,8 @@ onUnmounted(() => {
   height: calc(100% - var(--scrollbar-height, 42px));
   display: flex;
   flex-direction: column;
-  background-color: var(--n-card-color, #fff);
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
@@ -1760,9 +1760,8 @@ onUnmounted(() => {
 
 .toolbar {
   padding: 12px 16px;
-  background-color: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(5px);
-  border-bottom: 1px solid var(--n-border-color);
+  background-color: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1853,7 +1852,7 @@ onUnmounted(() => {
 
 /* 鼠标悬停效果 - 添加发光边框和背景 */
 .repo-list-item:hover {
-  background-color: rgba(0, 0, 0, 0.03);
+  background-color: var(--guaxi-header-bg);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
@@ -1872,8 +1871,8 @@ onUnmounted(() => {
 
 /* 选中状态效果*/
 .repo-list-item.active {
-  background-color: rgba(0, 0, 0, 0.04);
-  border-left: 3px solid #1890ff;
+  background-color: var(--guaxi-header-bg);
+  border-left: 3px solid var(--n-color-primary, #1890ff);
   box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.08);
   position: sticky;
   top: 0;
@@ -1987,13 +1986,13 @@ onUnmounted(() => {
 }
 
 :deep(.tree-component .n-tree-node-content:hover) {
-  background: linear-gradient(to right, rgba(0, 0, 0, 0.03), #ffffff);
+  background: var(--guaxi-header-bg);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.18), 0 2px 12px 0 rgba(7, 118, 161, 0.1);
   transform: scale(1.01);
 }
 
 :deep(.tree-component .n-tree-node--selected .n-tree-node-content) {
-  background: linear-gradient(to right, rgba(0, 0, 0, 0.045), #ffffff);
+  background: var(--guaxi-header-bg);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.26), 0 2px 12px 0 rgba(7, 118, 161, 0.14);
   animation: file-tree-select-pop 160ms ease-out;
 }

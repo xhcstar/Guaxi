@@ -383,8 +383,8 @@ onUnmounted(() => {
 .toolbar-container {
   padding: 8px 16px;
   flex-shrink: 0;
-  background-color: #ffffff;
-  border-bottom: 1px solid #f0f0f0;
+  background-color: var(--guaxi-panel-bg);
+  border-bottom: 1px solid var(--guaxi-border);
 }
 
 .table-container {

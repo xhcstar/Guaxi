@@ -674,14 +674,14 @@ onBeforeUnmount(() => {
 }
 
 .n-tabs .n-tabs-tab--active {
-  color: #1890ff;
-  background: #e6f7ff;
+  color: var(--n-color-primary, #1890ff);
+  background: var(--n-color-primary-suppl, var(--guaxi-header-bg));
   box-shadow: 0 2px 8px 0 rgba(24, 144, 255, 0.08);
 }
 
 .n-tabs .n-tabs-tab:hover {
-  background: #f0f7ff;
-  color: #1890ff;
+  background: var(--guaxi-header-bg);
+  color: var(--n-color-primary, #1890ff);
 }
 
 .tab-label {
@@ -718,12 +718,12 @@ onBeforeUnmount(() => {
 }
 
 .tab-content::-webkit-scrollbar-thumb {
-  background-color: rgba(0, 0, 0, 0.2);
+  background-color: rgba(127, 127, 127, 0.35);
   border-radius: 3px;
 }
 
 .tab-content::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(0, 0, 0, 0.4);
+  background-color: rgba(127, 127, 127, 0.55);
 }
 
 .tab-content::-webkit-scrollbar-track {
@@ -787,7 +787,7 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 450px;
   box-sizing: border-box;
-  background: var(--n-card-color, #fff);
+  background: var(--guaxi-panel-bg);
   border-radius: 6px;
   box-shadow: none;
   padding: 8px;
@@ -799,7 +799,7 @@ onBeforeUnmount(() => {
 }
 
 .n-list-item:hover .search-result-item {
-  background: linear-gradient(to right, #f0f7ff, #ffffff);
+  background: var(--guaxi-header-bg);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
     0 2px 12px 0 rgba(7, 118, 161, 0.15);
   transform: scale(1.01);
@@ -811,7 +811,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-color);
+  color: var(--guaxi-text-primary);
   width: 100%;
   cursor: pointer;
   min-width: 0;
@@ -823,7 +823,7 @@ onBeforeUnmount(() => {
 }
 
 .n-list-item:hover .file-name {
-  color: #1890ff;
+  color: var(--n-color-primary, #1890ff);
 }
 
 .filename-text {
@@ -835,8 +835,8 @@ onBeforeUnmount(() => {
 }
 
 .line-badge {
-  background-color: #e6f7ff;
-  color: #1890ff;
+  background-color: var(--n-color-primary-suppl, rgba(24, 144, 255, 0.12));
+  color: var(--n-color-primary, #1890ff);
   padding: 1px 6px;
   border-radius: 4px;
   font-size: 11px;
@@ -859,9 +859,10 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   margin-left: 0px;
   font-size: 13px;
-  color: #444;
+  color: var(--guaxi-text-secondary);
   line-height: 1.5;
-  background: #f8fafc;
+  background: var(--guaxi-header-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 4px;
   padding: 8px;
   max-height: calc(3 * 1.5em + 16px);
@@ -905,11 +906,11 @@ onBeforeUnmount(() => {
 }
 
 .error-banner {
-  background: #fff2f0;
+  background: rgba(245, 34, 45, 0.12);
   padding: 8px 12px;
   margin: 8px 0;
   color: #f5222d;
-  border: 1px solid #ffccc7;
+  border: 1px solid rgba(245, 34, 45, 0.35);
   border-radius: 4px;
   font-size: 13px;
 }
@@ -917,8 +918,8 @@ onBeforeUnmount(() => {
 .invalid-items-detail {
   margin-top: 8px;
   padding: 8px;
-  background: #fff9f9;
-  border: 1px dashed #ffccc7;
+  background: rgba(245, 34, 45, 0.08);
+  border: 1px dashed rgba(245, 34, 45, 0.35);
   border-radius: 4px;
 }
 

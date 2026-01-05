@@ -31,8 +31,8 @@ import GuaxiContentAppView from "../components/ApplicationViewComponent/GuaxiCon
 .main-header {
   flex: 0 0 auto; /* 固定高度的 header */
   height: 30px; /* 设置你需要的高度 */
-  background-color: #f5f5f5; /* 示例背景色 */
-  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1); /* 示例阴影 */
+  background-color: var(--guaxi-header-bg);
+  box-shadow: var(--guaxi-header-shadow);
 }
 
 /* 内容区域样式 */
@@ -40,7 +40,7 @@ import GuaxiContentAppView from "../components/ApplicationViewComponent/GuaxiCon
   flex: 1 1 auto; /* 填充剩余空间 */
   display: flex;
   flex-direction: column;
-  background-color: #ffffff; /* 示例背景色 */
+  background-color: var(--guaxi-content-bg);
   overflow-y: auto; /* 如果内容超出，允许垂直滚动 */
   margin: 0;
   padding: 0;

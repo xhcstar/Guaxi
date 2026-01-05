@@ -100,9 +100,8 @@ const addFeed = () => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--guaxi-panel-bg);
+  border-right: 1px solid var(--guaxi-border);
 }
 
 .sidebar-header {
@@ -116,17 +115,17 @@ const addFeed = () => {
 .sidebar-title {
   font-size: 18px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--guaxi-text-primary);
   margin: 0;
 }
 
 .collapse-btn {
-  color: #666;
+  color: var(--guaxi-text-secondary);
   transition: color 0.2s ease;
 }
 
 .collapse-btn:hover {
-  color: #333;
+  color: var(--guaxi-text-primary);
 }
 
 .sidebar-scroll {
@@ -149,13 +148,13 @@ const addFeed = () => {
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   position: relative;
 }
 
 .category-item:hover {
-  background: rgba(0, 0, 0, 0.04);
-  color: #333;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
 }
 
 .category-item.active {
@@ -187,8 +186,8 @@ const addFeed = () => {
 }
 
 .category-item:not(.active) .category-count {
-  background: rgba(0, 0, 0, 0.06);
-  color: #666;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-secondary);
 }
 
 .sidebar-footer {

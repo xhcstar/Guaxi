@@ -114,9 +114,8 @@ const toggleLeftSidebar = () => {
 
 <style scoped>
 .flipboard-header {
-  background: rgba(255, 255, 255, 0.98);
-  backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
   height: 64px;
   position: sticky;
   top: 0;
@@ -152,7 +151,7 @@ const toggleLeftSidebar = () => {
 .header-icon:hover {
   opacity: 0.8;
   transform: scale(1.05);
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: var(--guaxi-panel-bg);
 }
 
 .logo {
@@ -191,13 +190,13 @@ const toggleLeftSidebar = () => {
 }
 
 .header-right .n-button {
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
   transition: all 0.2s ease;
 }
 
 .header-right .n-button:hover {
-  background: rgba(255, 255, 255, 1);
-  border-color: rgba(0, 0, 0, 0.2);
+  background: var(--guaxi-content-bg);
+  border-color: var(--guaxi-border);
 }
 </style>

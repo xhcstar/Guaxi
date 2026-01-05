@@ -240,7 +240,7 @@ onUnmounted(() => {
   align-items: center;
   padding: 12px 16px;
   margin-bottom: 8px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
@@ -253,7 +253,7 @@ onUnmounted(() => {
 .repo-title {
   font-size: 18px;
   font-weight: 600;
-  color: #191b1b;
+  color: var(--guaxi-text-primary);
   letter-spacing: 0.5px;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
   display: flex;
@@ -265,7 +265,7 @@ onUnmounted(() => {
   display: inline-block;
   width: 4px;
   height: 16px;
-  background-color: #191b1b;
+  background-color: var(--guaxi-text-primary);
   margin-right: 8px;
   border-radius: 2px;
 }

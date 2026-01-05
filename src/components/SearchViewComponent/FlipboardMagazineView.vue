@@ -197,7 +197,7 @@ const refreshArticles = () => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #f8f9fa;
+  background: var(--guaxi-content-bg);
 }
 
 .view-controls-bar {
@@ -205,9 +205,8 @@ const refreshArticles = () => {
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--guaxi-panel-bg);
+  border-bottom: 1px solid var(--guaxi-border);
 }
 
 .controls-left {
@@ -217,7 +216,7 @@ const refreshArticles = () => {
 }
 
 .results-count {
-  color: #666;
+  color: var(--guaxi-text-secondary);
   font-size: 14px;
 }
 

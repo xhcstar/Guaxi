@@ -127,8 +127,8 @@ const backupOptions = [
 <style scoped>
 .top-toolbar {
   padding: 8px 16px;
-  background-color: #fafafa;
-  border-bottom: 1px solid #e8e8e8;
+  background-color: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
   height: auto;
   min-height: 40px;
 }
@@ -139,7 +139,7 @@ const backupOptions = [
 }
 
 .toolbar-button {
-  color: #5a5a5a;
+  color: var(--guaxi-text-secondary);
   transition: all 0.2s ease;
   border-radius: 6px;
   padding: 4px 6px;
@@ -152,8 +152,8 @@ const backupOptions = [
 }
 
 .toolbar-button:hover {
-  background-color: #f0f4ff;
-  color: #409EFF;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--n-color-primary, #409EFF);
 }
 
 .toolbar-button[type="primary"] {

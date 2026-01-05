@@ -160,14 +160,13 @@ const formatTime = (timeString) => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: rgba(255, 255, 255, 0.98);
+  background: var(--guaxi-content-bg);
 }
 
 .reader-header {
   padding: 16px 24px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
 }
 
 .reader-actions {
@@ -177,7 +176,7 @@ const formatTime = (timeString) => {
 }
 
 .close-btn {
-  color: #666;
+  color: var(--guaxi-text-secondary);
 }
 
 .reader-content {
@@ -214,7 +213,7 @@ const formatTime = (timeString) => {
 .meta-info {
   display: flex;
   gap: 16px;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   font-size: 14px;
 }
 
@@ -222,7 +221,7 @@ const formatTime = (timeString) => {
   font-size: 2.5rem;
   font-weight: 700;
   line-height: 1.2;
-  color: #1a1a1a;
+  color: var(--guaxi-text-primary);
   margin-bottom: 24px;
 }
 

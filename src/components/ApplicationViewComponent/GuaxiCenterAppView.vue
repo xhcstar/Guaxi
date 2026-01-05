@@ -72,8 +72,8 @@ const handleClick = (app) => {
 .app-card {
   cursor: pointer;
   border-radius: 14px;
-  border: 1px solid rgba(0, 0, 0, 0.04);
-  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
@@ -109,7 +109,7 @@ const handleClick = (app) => {
 
 .app-description {
   font-size: 13px;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   margin-top: 4px;
   min-height: 36px;
 }

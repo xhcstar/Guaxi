@@ -107,18 +107,18 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .n-layout-sider {
-  background: rgba(239, 243, 239, 0.3);
+  background: var(--guaxi-panel-bg);
 }
 
 .n-layout-content {
-  background: rgba(239, 243, 239, 0.3);
+  background: var(--guaxi-content-bg);
 }
 
 .guaxi-content {
   flex: 1 1 auto; /* 填充剩余空间 */
   display: flex;
   flex-direction: column;
-  background-color: #ffffff; /* 示例背景色 */
+  background-color: var(--guaxi-content-bg);
   overflow: hidden;
   margin: 0;
   padding: 0;
@@ -139,7 +139,7 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 100%;
   cursor: ew-resize;
-  background-color: #f8fdfa;
+  background-color: var(--guaxi-border);
 }
 
 .sider-resize-handle-right {
@@ -149,7 +149,7 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 100%;
   cursor: ew-resize;
-  background-color: #f8fdfa;
+  background-color: var(--guaxi-border);
 }
 </style>
 

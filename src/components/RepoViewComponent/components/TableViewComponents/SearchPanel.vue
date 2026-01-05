@@ -280,14 +280,14 @@ const onLeave = (el) => {
 
 .toggle-btn {
   border-radius: 6px;
-  color: #5a5a5a;
+  color: var(--guaxi-text-secondary);
   transition: all 0.2s ease;
   padding: 4px 8px;
 }
 
 .toggle-btn:hover {
-  background-color: #f0f4ff;
-  color: #409EFF;
+  background-color: var(--guaxi-header-bg);
+  color: var(--n-color-primary, #409EFF);
 }
 
 .keyword-search {
@@ -300,7 +300,7 @@ const onLeave = (el) => {
   overflow: hidden;
   transition: max-height 0.3s ease, opacity 0.3s ease;
   padding-top: 8px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--guaxi-border);
 }
 
 /* 平滑展开动画 */
