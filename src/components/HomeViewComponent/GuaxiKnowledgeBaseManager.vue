@@ -421,7 +421,7 @@ onMounted(async () => {
 }
 
 .page {
-  height: 100%;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   min-height: 0;
