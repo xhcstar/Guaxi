@@ -118,19 +118,32 @@ onBeforeUnmount(() => {
 }
 
 .guaxi-content {
-  flex: 1 1 auto; /* 填充剩余空间 */
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   background-color: var(--guaxi-content-bg);
   min-height: 0;
+  height: 100%;
   overflow: hidden;
   margin: 0;
   padding: 0;
 }
 
+.guaxi-content :deep(.n-layout) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.guaxi-content :deep(.n-layout-content) {
+  min-height: 0;
+}
+
 .setting-layout {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
 }
 
 .setting-main {

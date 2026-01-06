@@ -47,12 +47,11 @@ import { NMessageProvider } from 'naive-ui';
 /* 内容区域样式 */
 .main-content {
   flex: 1 1 auto;
-  /* 填充剩余空间 */
   display: flex;
   flex-direction: column;
   background-color: var(--guaxi-content-bg);
-  overflow-y: auto;
-  /* 如果内容超出，允许垂直滚动 */
+  overflow: hidden;
+  min-height: 0;
   margin: 0;
   padding: 0;
 }

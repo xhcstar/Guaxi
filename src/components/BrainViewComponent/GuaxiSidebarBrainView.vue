@@ -1,7 +1,8 @@
 <template>
   <div class="sider-container">
     <div class="sider-icon-container">
-      <n-icon size="24" style="cursor: pointer;" @click="navigateTo('/')">
+      <div class="sider-icon-top">
+      <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/' }" @click="navigateTo('/')">
         <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">
           <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M5 12H3l9-9l9 9h-2"></path>
@@ -11,7 +12,7 @@
         </svg>
       </n-icon>
 
-      <n-icon size="24" style="cursor: pointer;" @click="navigateTo('/chat')">
+      <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/chat' }" @click="navigateTo('/chat')">
         <svg t="1735469078531" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
           p-id="11424" width="54" height="54">
           <path
@@ -20,7 +21,7 @@
         </svg>
       </n-icon>
 
-      <n-icon size="24" style="cursor: pointer;" @click="navigateTo('/repository')">
+      <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/repository' }" @click="navigateTo('/repository')">
         <svg t="1741272321151" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
           p-id="44336" width="32" height="32">
           <path
@@ -29,7 +30,7 @@
         </svg>
       </n-icon>
 
-      <n-icon size="24" style="cursor: pointer;" @click="navigateTo('/brain')">
+      <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/brain' }" @click="navigateTo('/brain')">
         <svg t="1750401154259" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
           p-id="20006" width="48" height="48">
           <path
@@ -38,7 +39,7 @@
         </svg>
       </n-icon>
 
-      <n-icon size="24" style="cursor: pointer;" @click="navigateTo('/application')">
+      <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/application' }" @click="navigateTo('/application')">
         <svg t="1735460858811" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
           p-id="9472" width="54" height="54">
           <path
@@ -47,7 +48,7 @@
         </svg>
       </n-icon>
 
-      <n-icon size="24" style="cursor: pointer;" @click="navigateTo('/search')">
+      <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/search' }" @click="navigateTo('/search')">
         <svg t="1735455405203" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
           p-id="10538" width="54" height="54">
           <path
@@ -62,7 +63,10 @@
         </svg>
       </n-icon>
 
-      <n-icon size="24" style="cursor: pointer;" @click="navigateTo('/setting')">
+      </div>
+
+      <div class="sider-icon-bottom">
+        <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/setting' }" @click="navigateTo('/setting')">
         <svg t="1735455601102" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
           p-id="5062" width="54" height="54">
           <path
@@ -73,34 +77,106 @@
             fill="#040000" p-id="5064"></path>
         </svg>
       </n-icon>
+      </div>
     </div>
     <GuaxiSidbarBrainContent />
   </div>
 </template>
 
 <script setup>
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import GuaxiSidbarBrainContent from "./GuaxiSidbarBrainContent.vue"
-const navigateTo = (path) => {
-  window.location.hash = path; // 修改 hash，实现导航
-};
 
+const activePath = ref((window.location.hash || '#/').slice(1) || '/')
+
+const syncActivePath = () => {
+  activePath.value = (window.location.hash || '#/').slice(1) || '/'
+}
+
+onMounted(() => {
+  window.addEventListener('hashchange', syncActivePath)
+  syncActivePath()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', syncActivePath)
+})
+
+const navigateTo = (path) => {
+  window.location.hash = path
+}
 </script>
 
 <style scope>
 .sider-container {
   display: flex;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
 .sider-icon-container {
   display: flex;
   flex-direction: column;
-  gap: 50px;
   align-items: center;
-  /* 使图标在容器中居中 */
-  width: var(--sider-width, 36px);
-  border-right: 2px solid var(--guaxi-border);
-  margin-top: 10px;
-  height: 100%
+  width: var(--sider-width, 44px);
+  min-width: var(--sider-width, 44px);
+  margin-top: 0;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  border-right: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+}
+
+.sider-icon-top {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  padding: 14px 0;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sider-icon-bottom {
+  width: 100%;
+  padding: 0 0 14px;
+  display: flex;
+  justify-content: center;
+}
+
+.nav-icon {
+  cursor: pointer;
+  color: var(--guaxi-text-secondary);
+  padding: 8px;
+  border-radius: 12px;
+  transition: background-color 0.2s ease, color 0.2s ease, transform 0.12s ease, box-shadow 0.2s ease;
+}
+
+.nav-icon svg,
+.nav-icon svg * {
+  fill: currentColor !important;
+  stroke: currentColor !important;
+}
+
+.nav-icon:hover,
+.nav-icon.active {
+  color: var(--n-color-primary);
+  background: rgba(45, 212, 191, 0.12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+:global(:root[data-guaxi-theme='dark']) .nav-icon {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+:global(:root[data-guaxi-theme='dark']) .nav-icon:hover,
+:global(:root[data-guaxi-theme='dark']) .nav-icon.active {
+  background: rgba(97, 175, 239, 0.16);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
 }
 </style>

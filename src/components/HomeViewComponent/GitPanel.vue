@@ -2079,6 +2079,8 @@ onUnmounted(() => {
   width: 100vw;
   overflow: hidden;
   position: relative;
+  background-color: var(--bg-color);
+  color: var(--text-color);
 }
 
 .git-sidebar {

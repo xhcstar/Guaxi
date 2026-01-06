@@ -74,4 +74,18 @@ const handleMenuSelect = (key) => {
   background-color: rgba(45, 212, 191, 0.12);
   color: var(--n-color-primary);
 }
+
+.custom-menu :deep(.n-menu-item-content__icon) {
+  color: var(--guaxi-text-secondary);
+  transition: color 0.2s ease;
+}
+
+.custom-menu :deep(.n-menu-item:hover .n-menu-item-content__icon),
+.custom-menu :deep(.n-menu-item--selected .n-menu-item-content__icon) {
+  color: var(--n-color-primary);
+}
+
+:global(:root[data-guaxi-theme='dark']) .custom-menu :deep(.n-menu-item-content__icon) {
+  color: var(--guaxi-text-primary);
+}
 </style>
