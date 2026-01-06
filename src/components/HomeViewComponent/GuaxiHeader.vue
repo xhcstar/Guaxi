@@ -282,6 +282,16 @@ const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 }
 function openOutlinePanel() {
+  const isCollapsed = siderStore.isRightSiderCollapsed?.[viewKey]
+  const isVisible = isCollapsed === false
+  const isOutline = rightSiderStore.panel === 'outline'
+
+  if (isVisible && rightSiderStore.isOpen && isOutline) {
+    rightSiderStore.close()
+    siderStore.setRightSiderCollapsed(viewKey, true)
+    return
+  }
+
   rightSiderStore.setPanel('outline')
   rightSiderStore.open()
   siderStore.setRightSiderCollapsed(viewKey, false)
