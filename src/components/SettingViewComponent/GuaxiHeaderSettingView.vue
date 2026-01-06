@@ -8,8 +8,6 @@
 
     <!-- 右侧：功能图标 -->
     <div class="header-right">
-      <n-icon class="header-icon" size="20" :component="TextBulletListLtr20Filled"></n-icon>
-      <n-icon class="header-icon" size="20" :component="Screenshot24Regular"></n-icon>
       <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
     </div>
   </div>
@@ -21,8 +19,6 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
-  TextBulletListLtr20Filled,
-  Screenshot24Regular
 } from '@vicons/fluent'
 
 const viewKey = 'setting'
