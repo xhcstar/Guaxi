@@ -295,7 +295,8 @@ async function openTemplateManager() {
   try {
     await invoke('create_template_manager_window', {
       label: 'template_manager',
-      title: '模板管理器'
+      title: '模板管理器',
+      theme: settingsStore.appearanceTheme,
     })
   } catch (err) {
     const msg = String(err?.message || err || '')

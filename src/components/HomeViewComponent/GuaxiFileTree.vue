@@ -159,6 +159,7 @@ import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NS
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
+import { useSettingsStore } from '../../stores/settingsStore'
 import { h, ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
@@ -194,7 +195,8 @@ const openKnowledgeBaseManager = async () => {
   try {
     await invoke('create_knowledge_base_manager_window', {
       label: 'knowledge_base_manager',
-      title: '知识库管理器'
+      title: '知识库管理器',
+      theme: settingsStore.appearanceTheme,
     })
   } catch (err) {
     const msg = String(err?.message || err || '')
@@ -215,6 +217,7 @@ const isMarkdownFilePath = (p) => {
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
+const settingsStore = useSettingsStore()
 const lastSelectedKey = ref(null);
 
 const fileTreeContainerRef = ref(null)

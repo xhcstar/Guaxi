@@ -69,7 +69,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -85,6 +85,14 @@ const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
 const loading = ref(false)
+
+watch(
+  () => settingsStore.appearanceTheme,
+  (v) => {
+    themeValue.value = v === 'dark' ? 'dark' : 'light'
+  },
+  { immediate: true }
+)
 
 onMounted(async () => {
   try {

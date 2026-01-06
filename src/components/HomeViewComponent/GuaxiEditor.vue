@@ -378,6 +378,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
 import { Icon } from '@iconify/vue'
@@ -427,6 +428,7 @@ const gitPanel = ref(null)
 // 引入 Pinia store
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
+const settingsStore = useSettingsStore()
 const mode = ref('edit');
 const previewMode = ref('toggle');
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
@@ -2267,6 +2269,7 @@ const toggleGitPanel = async () => {
       label: windowLabel,
       title: windowTitle,
       workspacePath: fileTreeStore.activeRepoPath,
+      theme: settingsStore.appearanceTheme,
     })
   } catch (error) {
     console.error('创建窗口失败:', error)

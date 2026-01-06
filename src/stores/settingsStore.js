@@ -21,6 +21,7 @@ export const useSettingsStore = defineStore("settings", {
 
     applyAppearanceTheme(theme) {
       const t = theme === 'dark' ? 'dark' : 'light'
+      if (!document?.documentElement) return
       document.documentElement.dataset.guaxiTheme = t
       document.documentElement.classList.toggle('dark-mode', t === 'dark')
     },
@@ -31,17 +32,31 @@ export const useSettingsStore = defineStore("settings", {
         return
       }
 
+      const themeParam = (() => {
+        try {
+          const t = new URLSearchParams(window.location.search).get('theme')
+          return t === 'dark' || t === 'light' ? t : null
+        } catch {
+          return null
+        }
+      })()
+
+      if (themeParam) {
+        this.appearanceTheme = themeParam
+        this.applyAppearanceTheme(this.appearanceTheme)
+      }
+
       try {
         const appearance = await invoke('get_appearance_config')
         const theme = appearance?.theme === 'dark' ? 'dark' : 'light'
         const fontSize = Number(appearance?.font_size)
 
-        this.appearanceTheme = theme
+        this.appearanceTheme = themeParam || theme
         this.appearanceFontSize = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 14
         this.appearanceLoaded = true
         this.applyAppearanceTheme(this.appearanceTheme)
       } catch (error) {
-        this.appearanceTheme = 'light'
+        this.appearanceTheme = themeParam || 'light'
         this.appearanceFontSize = 14
         this.appearanceLoaded = true
         this.applyAppearanceTheme(this.appearanceTheme)

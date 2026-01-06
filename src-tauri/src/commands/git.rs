@@ -871,6 +871,7 @@ pub async fn create_git_window(
     label: String,
     title: String,
     workspace_path: String,
+    theme: Option<String>,
 ) -> Result<(), String> {
     // 检查窗口是否已存在
     if app.get_webview_window(&label).is_some() {
@@ -879,8 +880,15 @@ pub async fn create_git_window(
 
     info!("workspace_path: {}", workspace_path);
 
-    // 构建URL查询参数
-    let url = WebviewUrl::App(format!("/git?workspacePath={}", encode(&workspace_path),).into());
+    let mut url_qs = format!("workspacePath={}", encode(&workspace_path));
+
+    let theme = theme.unwrap_or_default().trim().to_lowercase();
+    if theme == "dark" || theme == "light" {
+        url_qs.push_str("&theme=");
+        url_qs.push_str(encode(&theme).as_ref());
+    }
+
+    let url = WebviewUrl::App(format!("/git?{}", url_qs).into());
 
     info!("url: {}", url);
     info!("正在打开路径: {}", workspace_path);

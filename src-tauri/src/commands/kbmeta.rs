@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use urlencoding::encode;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct KbStats {
@@ -992,12 +993,18 @@ pub async fn create_knowledge_base_manager_window(
     app: tauri::AppHandle,
     label: String,
     title: String,
+    theme: Option<String>,
 ) -> Result<(), String> {
     if app.get_webview_window(&label).is_some() {
         return Err(format!("窗口 {} 已存在", label));
     }
 
-    let url = WebviewUrl::App("/kb-manager".into());
+    let theme = theme.unwrap_or_default().trim().to_lowercase();
+    let url = if theme == "dark" || theme == "light" {
+        WebviewUrl::App(format!("/kb-manager?theme={}", encode(&theme)).into())
+    } else {
+        WebviewUrl::App("/kb-manager".into())
+    };
 
     let window = WebviewWindowBuilder::new(&app, &label, url)
         .title(&title)

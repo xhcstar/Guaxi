@@ -454,6 +454,17 @@ const { notification } = createDiscreteApi(['notification'])
 const settingsStore = useSettingsStore()
 const getMonacoTheme = () => (settingsStore.appearanceTheme === 'dark' ? 'vs-dark' : 'vs')
 
+watch(
+  () => settingsStore.appearanceTheme,
+  () => {
+    try {
+      monaco.editor.setTheme(getMonacoTheme())
+    } catch (e) {
+    }
+  },
+  { immediate: true }
+)
+
 // 日志级别枚举
 const LogLevel = {
   DEBUG: 0,
