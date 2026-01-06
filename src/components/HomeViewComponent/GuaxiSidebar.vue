@@ -89,6 +89,8 @@ const navigateTo = (path) => {
 <style scope>
 .sider-container {
   display: flex;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -97,10 +99,12 @@ const navigateTo = (path) => {
   flex-direction: column;
   gap: 50px;
   align-items: center;
-  /* 使图标在容器中居中 */
+  justify-content: flex-start;
   width: var(--sider-width, 36px);
-  border-right: 2px solid #aab4ae;
-  margin-top: 10px;
+  min-width: var(--sider-width, 36px);
+  /* border-right: 2px solid #aab4ae; */
+  margin-top: 0;
   height: 100%;
+  box-sizing: border-box;
 }
 </style>

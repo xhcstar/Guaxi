@@ -92,7 +92,7 @@ onBeforeUnmount(() => {
 }
 
 .n-layout-sider {
-  background: rgba(239, 243, 239, 0.3);
+  background: var(--guaxi-content-bg);
   height: 100%; /* 确保侧边栏高度填满 */
 }
 
@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 100%;
   cursor: ew-resize;
-  background-color: #f8fdfa;
+  background-color: var(--guaxi-content-bg);
   z-index: 1;
 }
 

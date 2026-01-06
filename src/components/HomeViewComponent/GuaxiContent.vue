@@ -161,7 +161,7 @@ const onMouseDownRightSidebar = (event) => {
 
 .n-layout-sider {
   position: relative;
-  background: rgba(239, 243, 239, 0.3);
+  background: var(--guaxi-content-bg);
   will-change: width;
 }
 

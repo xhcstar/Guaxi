@@ -168,7 +168,7 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 100%;
   cursor: ew-resize;
-  background-color: #f8fdfa;
+  background-color: var(--guaxi-panel-bg);
 }
 
 .sider-resize-handle-right {
@@ -178,7 +178,7 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 100%;
   cursor: ew-resize;
-  background-color: #f8fdfa;
+  background-color: var(--guaxi-panel-bg);
   z-index: 2;
 }
 </style>
