@@ -80,12 +80,14 @@ defineExpose({
   height: 100%;
   border-radius: 8px;
   overflow: hidden;
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 /* 移除或修改单元格padding设置 */
 :deep(.n-data-table-td) {
-  padding: 2px, 4px;
+  padding: 2px 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -135,6 +137,27 @@ defineExpose({
 :deep(.n-data-table .n-data-table__pagination) {
   background-color: var(--guaxi-panel-bg);
   border-top: 1px solid var(--guaxi-border);
+}
+
+:deep(.n-data-table .n-pagination-quick-jumper) {
+  color: var(--guaxi-text-secondary);
+}
+
+:deep(.n-data-table .n-pagination-quick-jumper .n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+:deep(.n-data-table .n-pagination-quick-jumper .n-input .n-input__border),
+:deep(.n-data-table .n-pagination-quick-jumper .n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+:deep(.n-data-table .n-pagination-quick-jumper .n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+:deep(.n-data-table .n-pagination-quick-jumper .n-input__input-el::placeholder) {
+  color: var(--guaxi-text-secondary) !important;
 }
 
 :deep(.n-data-table-th) {

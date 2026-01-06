@@ -196,6 +196,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { useEditorStore } from '../../stores/editorStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { storeToRefs } from 'pinia';
 
 // UI components from Naive UI
@@ -219,6 +220,7 @@ import {
 const store = useKnowledgeBaseStore();
 const fileTreeStore = useFileTreeStore();
 const editorStore = useEditorStore();
+const settingsStore = useSettingsStore();
 
 // Destructure store properties with reactivity
 const { knowledgeBases, selectedKnowledgeBase, visibleTypes, selectedTags, searchQuery, focusTarget, selectedGraphNode } = storeToRefs(store);
@@ -238,7 +240,7 @@ const error = (...args) => DEBUG && console.error('[KnowledgeGraph]', ...args);
 // Reactive state variables
 const container = ref(null); // Reference to DOM container
 const autoRotate = ref(true); // Auto-rotation toggle state
-const darkMode = ref(false); // Dark mode toggle state
+const darkMode = ref(document.documentElement?.dataset?.guaxiTheme === 'dark'); // Dark mode toggle state
 const selectedNode = ref(null); // Currently selected node
 const isLoading = ref(false); // Loading state
 const loadingProgress = ref(0); // Loading progress percentage
@@ -1089,16 +1091,13 @@ const toggleAutoRotate = () => {
 /**
  * Toggle between dark and light mode
  */
-const toggleDarkMode = () => {
-  darkMode.value = !darkMode.value;
-
-  // Update scene background and fog
+const applyDarkModeTheme = () => {
   if (scene) {
     scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xbbbbbb);
-    scene.fog.color.copy(scene.background);
+    if (scene.fog?.color) scene.fog.color.copy(scene.background);
   }
 
-  nodes.forEach(node => {
+  nodes.forEach((node) => {
     if (node.mesh?.material) {
       const c = getNodeColor(node.userData.type);
       node.userData.originalColor = c;
@@ -1115,18 +1114,41 @@ const toggleDarkMode = () => {
     applyStarGlow(node);
   });
 
-  // 更新边材质
-  edges.forEach(edge => {
+  edges.forEach((edge) => {
     if (edge.material) {
-      edge.material.color.setHex(darkMode.value ? 0x445566 : 0xB0BEC5); // 更暗淡的蓝灰色
+      edge.material.color.setHex(darkMode.value ? 0x445566 : 0xB0BEC5);
       edge.material.opacity = darkMode.value ? 0.25 : 0.3;
       edge.material.needsUpdate = true;
     }
   });
 
-  // 更新光照
-  setupLighting();
+  if (scene) setupLighting();
+};
 
+const syncDarkModeFromAppTheme = () => {
+  const next = (settingsStore.appearanceTheme === 'dark') || (document.documentElement?.dataset?.guaxiTheme === 'dark');
+  if (darkMode.value !== next) {
+    darkMode.value = next;
+  }
+  if (scene) applyDarkModeTheme();
+};
+
+watch(
+  () => settingsStore.appearanceTheme,
+  () => {
+    syncDarkModeFromAppTheme();
+  }
+);
+
+const toggleDarkMode = async () => {
+  const next = darkMode.value ? 'light' : 'dark';
+  try {
+    await settingsStore.setAppearanceTheme(next);
+  } catch (e) {
+  }
+
+  syncDarkModeFromAppTheme();
+  if (scene) applyDarkModeTheme();
   log(`已切换至${darkMode.value ? '暗黑' : '亮色'}模式`);
 };
 
@@ -2663,6 +2685,8 @@ const handleCanvasClick = (event) => {
 // Component lifecycle hooks
 onMounted(async () => {
   log('组件挂载开始');
+
+  syncDarkModeFromAppTheme();
 
   // 1. 先初始化Three.js场景
   await nextTick();

@@ -157,9 +157,31 @@ const openWebModel = async () => {
 }
 
 /* 输入框样式 */
-:deep(.n-input) {
+.search-container :deep(.n-input) {
   height: 25px !important;
   min-height: 25px !important;
-  line-height: 25px !important;
+  margin: 0 !important;
+}
+
+.search-container :deep(.n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+.search-container :deep(.n-input .n-input__border),
+.search-container :deep(.n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+.search-container :deep(.n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+.search-container :deep(.n-input__input-el::placeholder) {
+  color: var(--guaxi-text-secondary) !important;
+}
+
+.search-container :deep(.n-input__prefix),
+.search-container :deep(.n-input__suffix) {
+  color: var(--guaxi-text-secondary) !important;
 }
 </style>

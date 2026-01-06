@@ -2,7 +2,7 @@
   <div class="chat-list-container">
     <div class="chat-list-header">
       <div style="flex-grow: 2; align-items: center; vertical-align: middle;">
-        <n-input round size="small" placeholder="搜索" />
+        <n-input round size="small" placeholder="搜索" class="chat-search-input" />
       </div>
       <div>
         <n-icon size="20" style="flex-grow: 1; align-items: center; vertical-align: middle;" @click="handleAddChat">
@@ -223,6 +223,28 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--guaxi-border);
   background: var(--guaxi-panel-bg);
   gap: 8px;
+}
+
+.chat-list-header :deep(.n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+.chat-list-header :deep(.n-input .n-input__border),
+.chat-list-header :deep(.n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+.chat-list-header :deep(.n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+.chat-list-header :deep(.n-input__input-el::placeholder) {
+  color: var(--guaxi-text-secondary) !important;
+}
+
+.chat-list-header :deep(.n-input__prefix),
+.chat-list-header :deep(.n-input__suffix) {
+  color: var(--guaxi-text-secondary) !important;
 }
 
 .chat-list {

@@ -85,6 +85,7 @@ import { ChevronDown, ChevronRight } from '@vicons/fa';
 import { useEditorStore } from '../../stores/editorStore';
 import { useRightSiderStore } from '../../stores/rightSiderStore';
 import { useSiderStore } from '../../stores/useSiderStore';
+import { useSettingsStore } from '../../stores/settingsStore'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { join } from '@tauri-apps/api/path'
 import { path } from '@tauri-apps/api';
@@ -120,6 +121,7 @@ const IconifyIcon = defineComponent({
 const editorStore = useEditorStore();
 const rightSiderStore = useRightSiderStore();
 const siderStore = useSiderStore();
+const settingsStore = useSettingsStore()
 const renderedContents = ref({});
 
 const props = defineProps({
@@ -299,7 +301,7 @@ const renderedCardContent = async (cardItem, excerptFilePath) => {
       mermaid: true,
       math: true,
       codeHighlight: true,
-      theme: 'default'
+      theme: settingsStore.appearanceTheme
     });
   } catch (error) {
     console.error('渲染卡片内容失败:', error);
@@ -557,17 +559,17 @@ watch(() => props.excerptResults, (newVal) => {
 }
 
 .n-list::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--guaxi-header-bg);
   border-radius: 3px;
 }
 
 .n-list::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: var(--guaxi-border);
   border-radius: 3px;
 }
 
 .n-list::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  background: var(--guaxi-text-secondary);
 }
 
 .excerpt-result-item {
@@ -579,7 +581,8 @@ watch(() => props.excerptResults, (newVal) => {
   width: 100%;
   max-width: 450px;
   box-sizing: border-box;
-  background: var(--n-card-color, #fff);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
   box-shadow: none;
   padding: 8px;
@@ -591,9 +594,9 @@ watch(() => props.excerptResults, (newVal) => {
 
 /* 增强的悬停效果 */
 .n-list-item:hover .excerpt-result-item {
-  background: linear-gradient(to right, #f0f7ff, #ffffff);
-  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
-    0 2px 12px 0 rgba(7, 118, 161, 0.15);
+  background: var(--guaxi-header-bg);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.22),
+    0 2px 12px 0 rgba(0, 0, 0, 0.18);
   transform: scale(1.01);
 }
 
@@ -603,7 +606,7 @@ watch(() => props.excerptResults, (newVal) => {
   gap: 8px;
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-color);
+  color: var(--guaxi-text-primary);
   width: 100%;
   cursor: pointer;
   min-width: 0;
@@ -616,7 +619,7 @@ watch(() => props.excerptResults, (newVal) => {
 
 /* 文件名悬停效果 */
 .n-list-item:hover .file-name {
-  color: #1890ff;
+  color: var(--n-color-primary, #1890ff);
 }
 
 .filename-text {
@@ -655,7 +658,8 @@ watch(() => props.excerptResults, (newVal) => {
 
 .file-content {
   width: 100%;
-  background-color: #f8fafc;
+  background-color: var(--guaxi-header-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
   margin-top: 8px;
   box-sizing: border-box;
@@ -710,7 +714,7 @@ watch(() => props.excerptResults, (newVal) => {
 
 .card-timestamp {
   font-size: 12px;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   flex-shrink: 0;
 }
 
@@ -723,7 +727,7 @@ watch(() => props.excerptResults, (newVal) => {
 .card-item {
   padding: 12px;
   margin-bottom: 8px;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--guaxi-border);
   width: 100%;
   box-sizing: border-box;
   transition: all 0.2s;
@@ -731,7 +735,7 @@ watch(() => props.excerptResults, (newVal) => {
 
 /* 卡片项悬停效果 */
 .card-item:hover {
-  background-color: #f9f9f9;
+  background-color: var(--guaxi-header-bg);
   border-radius: 4px;
 }
 
@@ -746,7 +750,7 @@ watch(() => props.excerptResults, (newVal) => {
 
 .card-item-type {
   font-size: 12px;
-  color: #888;
+  color: var(--guaxi-text-secondary);
   flex-shrink: 0;
 }
 
@@ -763,7 +767,7 @@ watch(() => props.excerptResults, (newVal) => {
 
 .card-item-timestamp {
   font-size: 11px;
-  color: #999;
+  color: var(--guaxi-text-secondary);
   text-align: right;
 }
 
@@ -772,11 +776,11 @@ watch(() => props.excerptResults, (newVal) => {
   max-width: 100%;
   margin: 8px 0;
   padding: 8px;
-  background: #f8f9fa;
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   border-radius: 4px;
-  border: 1px solid #eee;
+  border: 1px solid var(--guaxi-border);
   box-sizing: border-box;
-  /* 只在内容溢出时显示滚动条 */
   overflow: auto;
   word-wrap: break-word;
   overflow-wrap: break-word;
@@ -785,8 +789,8 @@ watch(() => props.excerptResults, (newVal) => {
 
 /* 渲染内容悬停效果 */
 .card-item:hover .card-item-rendered {
-  background-color: #fff;
-  border-color: #d9d9d9;
+  background-color: var(--guaxi-content-bg);
+  border-color: var(--guaxi-border);
 }
 
 .card-item-rendered :deep(pre) {
@@ -796,7 +800,7 @@ watch(() => props.excerptResults, (newVal) => {
   word-break: break-word;
   margin: 0;
   padding: 0.5em;
-  background: #f5f5f5;
+  background: var(--guaxi-header-bg);
   border-radius: 3px;
 }
 
@@ -824,14 +828,14 @@ watch(() => props.excerptResults, (newVal) => {
 .card-item-rendered :deep(table td),
 .card-item-rendered :deep(table th) {
   padding: 6px 13px;
-  border: 1px solid #dfe2e5;
+  border: 1px solid var(--guaxi-border);
 }
 
 .card-item-rendered :deep(blockquote) {
   margin: 0;
   padding: 0 1em;
-  color: #6a737d;
-  border-left: 0.25em solid #dfe2e5;
+  color: var(--guaxi-text-secondary);
+  border-left: 0.25em solid var(--guaxi-border);
 }
 
 /* 加载状态动画增强 */

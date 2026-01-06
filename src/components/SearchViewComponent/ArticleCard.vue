@@ -98,7 +98,8 @@ const formatTime = (timeString) => {
 
 <style scoped>
 .article-card {
-  background: white;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
@@ -273,7 +274,7 @@ const formatTime = (timeString) => {
   gap: 4px;
   background: none;
   border: none;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   font-size: 12px;
   cursor: pointer;
   padding: 4px 8px;

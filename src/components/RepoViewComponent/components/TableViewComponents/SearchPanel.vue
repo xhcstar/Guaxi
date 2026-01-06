@@ -232,6 +232,8 @@ const onLeave = (el) => {
 
 .search-card {
   border-radius: 12px;
+  background-color: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   transition: all 0.3s ease;
 }
@@ -255,7 +257,7 @@ const onLeave = (el) => {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--guaxi-text-primary);
   line-height: 1;
 }
 
@@ -265,8 +267,8 @@ const onLeave = (el) => {
 }
 
 .search-btn {
-  background-color: #409EFF;
-  border-color: #409EFF;
+  background-color: var(--n-color-primary, #409EFF);
+  border-color: var(--n-color-primary, #409EFF);
   color: white;
   border-radius: 6px;
   transition: all 0.2s ease;
@@ -322,6 +324,55 @@ const onLeave = (el) => {
 
 :deep(.n-input.n-input--small) {
   height: 32px;
+}
+
+.keyword-search :deep(.n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+.keyword-search :deep(.n-input .n-input__border),
+.keyword-search :deep(.n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+.keyword-search :deep(.n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+.keyword-search :deep(.n-input__prefix),
+.keyword-search :deep(.n-input__suffix) {
+  color: var(--guaxi-text-secondary) !important;
+}
+
+:deep(.n-select .n-base-selection) {
+  background-color: var(--guaxi-panel-bg) !important;
+  border-color: var(--guaxi-border) !important;
+}
+
+:deep(.n-select .n-base-selection .n-base-selection-label) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+:deep(.n-select .n-base-selection .n-base-selection-placeholder) {
+  color: var(--guaxi-text-secondary) !important;
+}
+
+:deep(.n-date-picker .n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+:deep(.n-date-picker .n-input .n-input__border),
+:deep(.n-date-picker .n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+:deep(.n-date-picker .n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+:deep(.n-date-picker .n-input__prefix),
+:deep(.n-date-picker .n-input__suffix) {
+  color: var(--guaxi-text-secondary) !important;
 }
 
 :deep(.n-select) {
