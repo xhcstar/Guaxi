@@ -2,6 +2,7 @@ import { ref, nextTick, h } from "vue";
 import { NIcon } from "naive-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
+import { useSettingsStore } from "../../../stores/settingsStore";
 
 export function useContextMenu({ store, message }) {
   const showDropdown = ref(false);
@@ -171,6 +172,12 @@ export function useContextMenu({ store, message }) {
         return;
       }
 
+      const settingsStore = useSettingsStore();
+      const theme =
+        settingsStore.appearanceTheme ||
+        document?.documentElement?.dataset?.guaxiTheme ||
+        "";
+
       await invoke("create_reader_window", {
         label: windowLabel,
         title: windowTitle,
@@ -181,6 +188,7 @@ export function useContextMenu({ store, message }) {
           library: row.library,
           import_file_id: importFileId,
         },
+        theme,
       });
 
       console.log("窗口创建成功:", {

@@ -75,27 +75,29 @@ pub async fn create_reader_window(
     label: String,
     title: String,
     file_data: FileData, // 使用强类型结构体替代 serde_json::Value
+    theme: Option<String>,
 ) -> Result<(), String> {
     // 检查窗口是否已存在
     if app.get_webview_window(&label).is_some() {
         return Err(format!("窗口 {} 已存在", label));
     }
 
-    // 使用 Base64 编码文件路径
-    // let encoded_path = general_purpose::URL_SAFE.encode(&file_data.file_path);
-
-    // 构建URL查询参数
-    let url = WebviewUrl::App(
-        format!(
-            "/reader?filePath={}&fileType={}&fileName={}&library={}&importFileId={}",
-            encode(&file_data.file_path),
-            encode(&file_data.file_type),
-            encode(&file_data.file_name),
-            encode(&file_data.library),
-            encode(&file_data.import_file_id.unwrap_or(0).to_string()),
-        )
-        .into(),
+    let mut url_qs = format!(
+        "filePath={}&fileType={}&fileName={}&library={}&importFileId={}",
+        encode(&file_data.file_path),
+        encode(&file_data.file_type),
+        encode(&file_data.file_name),
+        encode(&file_data.library),
+        encode(&file_data.import_file_id.unwrap_or(0).to_string()),
     );
+
+    let theme = theme.unwrap_or_default().trim().to_lowercase();
+    if theme == "dark" || theme == "light" {
+        url_qs.push_str("&theme=");
+        url_qs.push_str(encode(&theme).as_ref());
+    }
+
+    let url = WebviewUrl::App(format!("/reader?{}", url_qs).into());
 
     info!("file_data: {:?}", file_data);
     info!("url: {}", url);

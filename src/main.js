@@ -16,8 +16,24 @@ app.use(router);
 app.use(pinia);
 
 const settingsStore = useSettingsStore(pinia)
-const theme = new URLSearchParams(window.location.search).get('theme')
-if (theme === 'dark' || theme === 'light') {
+
+const getThemeFromUrl = () => {
+  try {
+    let qs = window.location.search || ''
+    if (!qs) {
+      const hash = window.location.hash || ''
+      const qIdx = hash.indexOf('?')
+      if (qIdx >= 0) qs = hash.slice(qIdx)
+    }
+    const theme = new URLSearchParams(qs).get('theme')
+    return theme === 'dark' || theme === 'light' ? theme : null
+  } catch {
+    return null
+  }
+}
+
+const theme = getThemeFromUrl()
+if (theme) {
   settingsStore.appearanceTheme = theme
   settingsStore.applyAppearanceTheme(theme)
 }
