@@ -99,7 +99,7 @@ const navigateTo = (path) => {
   align-items: center;
   /* 使图标在容器中居中 */
   width: var(--sider-width, 36px);
-  border-right: 2px solid #eef1f0;
+  border-right: 2px solid var(--guaxi-border);
   margin-top: 10px;
   height: 100vh;
 }
