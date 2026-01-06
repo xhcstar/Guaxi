@@ -2208,19 +2208,20 @@ button:disabled {
 
 .zoom-in:hover,
 .zoom-out:hover {
-  background-color: #f1f3f5;
+  background-color: var(--guaxi-header-bg);
 }
 
 .zoom-in:disabled,
 .zoom-out:disabled {
-  background-color: #95a5a6;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-secondary);
   cursor: not-allowed;
 }
 
 .fit-width {
-  background-color: #f8f9fa;
-  color: #495057;
-  border: 1px solid #e9ecef;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
   padding: 5px 8px;
 }
 
@@ -2253,7 +2254,7 @@ button:disabled {
   min-width: 0;
   overflow: auto;
   position: relative;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   overscroll-behavior: none;
   scroll-behavior: auto;
 }
@@ -2267,7 +2268,7 @@ button:disabled {
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: #f8f9fa;
+  background-color: var(--guaxi-content-bg);
   transform-origin: center center !important;
   transition: transform 0.3s ease-out;
   will-change: transform;
@@ -2285,14 +2286,14 @@ button:disabled {
   justify-content: center;
   align-items: center;
   height: 100%;
-  color: #868e96;
+  color: var(--guaxi-text-secondary);
   font-size: 14px;
 }
 
 .resize-handle {
   width: 3px;
   height: 100%;
-  background-color: #e9ecef;
+  background-color: var(--guaxi-border);
   cursor: col-resize;
   position: relative;
   z-index: 10;
@@ -2312,13 +2313,13 @@ button:disabled {
   min-width: 0;
   overflow-y: auto;
   padding: 5px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   display: flex;
 }
 
 .outline-panel-wrapper {
   width: 260px;
-  border-left: 1px solid #e0e0e0;
+  border-left: 1px solid var(--guaxi-border);
   box-sizing: border-box;
 }
 
@@ -2326,8 +2327,8 @@ button:disabled {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 18px;
   line-height: 1.6;
-  color: #000000;
-  background-color: #ffffff;
+  color: var(--guaxi-text-primary);
+  background-color: var(--guaxi-content-bg);
   user-select: text;
   padding: 10px;
   cursor: text;

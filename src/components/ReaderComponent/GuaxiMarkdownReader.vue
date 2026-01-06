@@ -1932,11 +1932,11 @@ button:disabled {
 .page-info {
   font-size: 12px;
   font-weight: 500;
-  color: #495057;
+  color: var(--guaxi-text-primary);
   padding: 5px 8px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
   border-radius: 6px;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
@@ -1950,9 +1950,10 @@ button:disabled {
   width: 50px;
   padding: 6px;
   text-align: center;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
@@ -2036,7 +2037,7 @@ button:disabled {
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: #f8f9fa;
+  background-color: var(--guaxi-content-bg);
   transform-origin: center center !important;
   transition: transform 0.3s ease-out;
   will-change: transform;
@@ -2054,14 +2055,14 @@ button:disabled {
   justify-content: center;
   align-items: center;
   height: 100%;
-  color: #868e96;
+  color: var(--guaxi-text-secondary);
   font-size: 14px;
 }
 
 .resize-handle {
   width: 3px;
   height: 100%;
-  background-color: #e9ecef;
+  background-color: var(--guaxi-border);
   cursor: col-resize;
   position: relative;
   z-index: 10;

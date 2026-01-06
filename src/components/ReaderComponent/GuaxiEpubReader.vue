@@ -2051,11 +2051,11 @@ button:disabled {
 .page-info {
   font-size: 14px;
   font-weight: 500;
-  color: #495057;
+  color: var(--guaxi-text-primary);
   padding: 6px 12px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
   border-radius: 6px;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
@@ -2070,9 +2070,10 @@ button:disabled {
   width: 60px;
   padding: 6px;
   text-align: center;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
