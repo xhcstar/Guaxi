@@ -2,6 +2,12 @@
   <div class="guaxi-header">
     <!-- 左侧：Logo 和 Icon -->
     <div class="header-left">
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon size="20" class="header-icon" :component="PanelLeftContract24Regular" @click="toggleLeftSider"></n-icon>
+        </template>
+        切换左侧边栏
+      </n-tooltip>
       <div class="logo-text">Guaxi</div>
     </div>
 
@@ -71,6 +77,12 @@
         横向分屏
       </n-tooltip>
 
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
+          <n-icon class="header-icon" size="20" :component="PanelRightContract24Regular" @click="toggleRightSider"></n-icon>
+        </template>
+        切换右侧边栏
+      </n-tooltip>
 
     </div>
   </div>
@@ -227,7 +239,9 @@ import {
   DocumentSearch24Regular,
   NotebookSection24Regular,
   BookAdd20Regular,
-  Box20Regular
+  Box20Regular,
+  PanelLeftContract24Regular,
+  PanelRightContract24Regular
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -261,6 +275,12 @@ const splitHorizontal = () => {
   fileTreeStore.splitCurrentTab('horizontal');
 };
 
+const toggleLeftSider = () => {
+  siderStore.toggleLeftSider(viewKey)
+}
+const toggleRightSider = () => {
+  siderStore.toggleRightSider(viewKey)
+}
 function openOutlinePanel() {
   rightSiderStore.setPanel('outline')
   rightSiderStore.open()
