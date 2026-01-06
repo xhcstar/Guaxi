@@ -265,53 +265,86 @@ onMounted(refresh)
 
 <style scoped>
 .page {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 10px;
+  min-height: 0;
+  padding: 12px;
   box-sizing: border-box;
-  gap: 8px;
+  gap: 10px;
+  overflow: hidden;
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
 }
 
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
 }
 
 .title {
-  font-weight: 600;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
 }
 
 .path {
   font-size: 12px;
-  color: var(--guaxi-text-secondary);
+  opacity: 0.8;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
 }
 
 .main {
-  flex: 1 1 auto;
+  flex: 1;
   min-height: 0;
-  display: flex;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 12px;
+  overflow: hidden;
 }
 
 .left {
-  width: 340px;
-  min-width: 280px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: hidden;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--guaxi-panel-bg);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+}
+
+.left :deep(.n-collapse) {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 
 .right {
-  flex: 1 1 auto;
-  min-width: 0;
+  min-height: 0;
   overflow: auto;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--guaxi-panel-bg);
+  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.08);
 }
 
 .row {
@@ -328,6 +361,10 @@ onMounted(refresh)
 }
 
 .active {
-  background: var(--guaxi-header-bg);
+  background: rgba(45, 212, 191, 0.12);
+}
+
+:global(:root[data-guaxi-theme='dark']) .active {
+  background: rgba(97, 175, 239, 0.16);
 }
 </style>

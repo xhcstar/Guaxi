@@ -71,6 +71,38 @@ const currentComponent = computed(() => {
   min-height: 0;
   overflow: auto;
   color: var(--guaxi-text-primary);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.26) transparent;
+}
+
+.setting-card :deep(.n-card__content::-webkit-scrollbar) {
+  width: 8px;
+  height: 8px;
+}
+
+.setting-card :deep(.n-card__content::-webkit-scrollbar-thumb) {
+  background-color: rgba(0, 0, 0, 0.22);
+  border-radius: 999px;
+}
+
+.setting-card :deep(.n-card__content::-webkit-scrollbar-thumb:hover) {
+  background-color: rgba(0, 0, 0, 0.34);
+}
+
+.setting-card :deep(.n-card__content::-webkit-scrollbar-track) {
+  background-color: transparent;
+}
+
+:global(:root[data-guaxi-theme='dark']) .setting-card :deep(.n-card__content) {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+:global(:root[data-guaxi-theme='dark']) .setting-card :deep(.n-card__content::-webkit-scrollbar-thumb) {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+:global(:root[data-guaxi-theme='dark']) .setting-card :deep(.n-card__content::-webkit-scrollbar-thumb:hover) {
+  background-color: rgba(255, 255, 255, 0.26);
 }
 
 .setting-card :deep(.n-input .n-input-wrapper),

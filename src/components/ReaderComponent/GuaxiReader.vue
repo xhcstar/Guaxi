@@ -96,7 +96,8 @@ const emit = defineEmits(['close'])
   left: 0;
   right: 0;
   bottom: 0;
-  background: white;
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
   z-index: 1000;
   overflow: auto;
   display: flex;
@@ -105,14 +106,14 @@ const emit = defineEmits(['close'])
 
 .unknown-type {
   padding: 20px;
-  color: red;
+  color: var(--n-color-error, #e06c75);
   font-size: 18px;
   text-align: center;
   margin: auto;
 }
 
 .unknown-type p {
-  color: #666;
+  color: var(--guaxi-text-secondary);
   font-size: 14px;
   margin-top: 10px;
 }

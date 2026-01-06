@@ -4,19 +4,6 @@
     <div class="list-header">
       <div class="title-container">
         <n-text class="repo-title-header">知识库编辑</n-text>
-        <n-tooltip trigger="hover">
-          <template #trigger>
-            <n-icon-wrapper
-              :size="18"
-              :border-radius="6"
-              class="kb-manager-icon"
-              @click="openKnowledgeBaseManager"
-            >
-              <n-icon :component="SettingsOutline" size="16" />
-            </n-icon-wrapper>
-          </template>
-          知识库管理器
-        </n-tooltip>
       </div>
       <div class="header-actions">
         <n-tooltip trigger="hover">
@@ -41,6 +28,20 @@
             </n-icon-wrapper>
           </template>
           刷新所有目录
+        </n-tooltip>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-icon-wrapper
+              :size="18"
+              :border-radius="6"
+              class="kb-manager-icon"
+              @click="openKnowledgeBaseManager"
+            >
+              <n-icon :component="SettingsOutline" size="16" />
+            </n-icon-wrapper>
+          </template>
+          知识库管理器
         </n-tooltip>
       </div>
     </div>
@@ -1683,14 +1684,6 @@ onUnmounted(() => {
 }
 
 .kb-manager-icon {
-  color: var(--n-text-color-secondary);
-  cursor: pointer;
-  transition: all 0.3s ease;
-  padding: 4px;
-}
-
-.kb-manager-icon:hover {
-  color: var(--n-color-primary);
 }
 
 .repo-title-header {
@@ -2070,7 +2063,8 @@ onUnmounted(() => {
 /* 暗色模式下 action/refresh 图标 */
 .dark-mode .action-icon,
 .dark-mode .refresh-icon,
-.dark-mode .browser-icon {
+.dark-mode .browser-icon,
+.dark-mode .kb-manager-icon {
   color: #444a57;
   background-color: transparent;
 }
@@ -2081,6 +2075,8 @@ onUnmounted(() => {
 .dark-mode .refresh-icon.active,
 .dark-mode .browser-icon:hover,
 .dark-mode .browser-icon.active,
+.dark-mode .kb-manager-icon:hover,
+.dark-mode .kb-manager-icon.active,
 .dark-mode .repo-list-item.active .action-icon,
 .dark-mode .repo-list-item.active .refresh-icon,
 .dark-mode .repo-list-item.active .browser-icon {
@@ -2104,9 +2100,9 @@ onUnmounted(() => {
 /* Action/refresh 图标基础样式（合并） */
 .action-icon,
 .refresh-icon,
-.browser-icon {
+.browser-icon,
+.kb-manager-icon {
   color: var(--n-text-color-disabled, #bfbfbf);
-  /* 平时较淡，与背景接近 */
   background-color: transparent;
   transition: color 0.2s, background-color 0.2s;
   border-radius: 4px;
@@ -2119,10 +2115,10 @@ onUnmounted(() => {
 .refresh-icon:hover,
 .refresh-icon.active,
 .browser-icon:hover,
-.browser-icon.active {
+.browser-icon.active,
+.kb-manager-icon:hover,
+.kb-manager-icon.active {
   color: var(--n-color-primary, #1890ff);
-  /* 选中时主色 */
   background-color: var(--n-color-primary-suppl, #e6f7ff);
-  /* 选中时淡主色背景 */
 }
 </style>
