@@ -2300,7 +2300,7 @@ watchEffect(async () => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: #f5f5f5;
+  background-color: var(--guaxi-content-bg);
   overflow: hidden;
 }
 
@@ -2311,17 +2311,17 @@ watchEffect(async () => {
   align-items: center;
   height: 28px;
   padding: 6px 8px;
-  background-color: #f8f9fa;
-  border-bottom: 1px solid #e0e0e0;
+  background-color: var(--guaxi-panel-bg);
+  border-bottom: 1px solid var(--guaxi-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 /* 36. 按钮基础样式 */
 button {
   padding: 5px 8px;
-  background-color: #ffffff;
-  color: #495057;
-  border: 1px solid #e9ecef;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
@@ -2333,15 +2333,15 @@ button {
 }
 
 button:hover {
-  background-color: #f8f9fa;
-  border-color: #e9ecef;
+  background-color: var(--guaxi-header-bg);
+  border-color: var(--guaxi-border);
   transform: translateY(-1px);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 button:disabled {
-  background-color: #f8f9fa;
-  color: #adb5bd;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-secondary);
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
@@ -2351,11 +2351,11 @@ button:disabled {
 .page-info {
   font-size: 12px;
   font-weight: 500;
-  color: #495057;
+  color: var(--guaxi-text-primary);
   padding: 5px 8px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
   border-radius: 6px;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--guaxi-border);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
@@ -2370,9 +2370,10 @@ button:disabled {
   width: 50px;
   padding: 6px;
   text-align: center;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
@@ -2395,9 +2396,9 @@ button:disabled {
 
 .zoom-in,
 .zoom-out {
-  background-color: #f8f9fa;
-  color: #495057;
-  border: 1px solid #e9ecef;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
 }
 
 .zoom-in:hover,
@@ -2415,9 +2416,9 @@ button:disabled {
 .rotate-left,
 .rotate-right,
 .fit-width {
-  background-color: #f8f9fa;
-  color: #495057;
-  border: 1px solid #e9ecef;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
   padding: 5px 8px;
 }
 
@@ -2467,7 +2468,7 @@ button:disabled {
   min-width: 0;
   overflow: auto;
   position: relative;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   overscroll-behavior: none;
   scroll-behavior: auto;
 }
@@ -2535,13 +2536,13 @@ button:disabled {
   min-width: 0;
   overflow-y: auto;
   padding: 5px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   display: flex;
 }
 
 .outline-panel-wrapper {
   width: 260px;
-  border-left: 1px solid #e0e0e0;
+  border-left: 1px solid var(--guaxi-border);
   box-sizing: border-box;
 }
 
@@ -2550,8 +2551,8 @@ button:disabled {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 18px;
   line-height: 1.6;
-  color: #000000;
-  background-color: #ffffff;
+  color: var(--guaxi-text-primary);
+  background-color: var(--guaxi-content-bg);
   user-select: text;
   padding: 10px;
   cursor: text;
@@ -2631,13 +2632,13 @@ button:disabled {
   right: -600px;
   width: 600px;
   height: 100%;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
   transition: right 0.3s ease;
   z-index: 100;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #e9ecef;
+  border-left: 1px solid var(--guaxi-border);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 14px;
 }

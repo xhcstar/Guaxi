@@ -34,7 +34,13 @@ export const useSettingsStore = defineStore("settings", {
 
       const themeParam = (() => {
         try {
-          const t = new URLSearchParams(window.location.search).get('theme')
+          let qs = window.location.search || ''
+          if (!qs) {
+            const hash = window.location.hash || ''
+            const qIdx = hash.indexOf('?')
+            if (qIdx >= 0) qs = hash.slice(qIdx)
+          }
+          const t = new URLSearchParams(qs).get('theme')
           return t === 'dark' || t === 'light' ? t : null
         } catch {
           return null
