@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, WebviewUrl, WebviewWindowBuilder};
 use tauri::Manager;
+use urlencoding::encode;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct TemplateEntry {
@@ -95,12 +96,18 @@ pub async fn create_template_manager_window(
     app: tauri::AppHandle,
     label: String,
     title: String,
+    theme: Option<String>,
 ) -> Result<(), String> {
     if app.get_webview_window(&label).is_some() {
         return Err(format!("窗口 {} 已存在", label));
     }
 
-    let url = WebviewUrl::App("/templates".into());
+    let theme = theme.unwrap_or_default().trim().to_lowercase();
+    let url = if theme == "dark" || theme == "light" {
+        WebviewUrl::App(format!("/templates?theme={}", encode(&theme)).into())
+    } else {
+        WebviewUrl::App("/templates".into())
+    };
 
     let window = WebviewWindowBuilder::new(&app, &label, url)
         .title(&title)
