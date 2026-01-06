@@ -5,7 +5,7 @@
     <n-form :model="form" :rules="rules" label-placement="left" label-width="auto" label-align="right" size="medium"
       ref="formRef" class="custom-form">
       <n-form-item v-for="column in formColumns" :key="column.key" :label="column.title" :path="column.key"
-        :label-style="{ fontWeight: 'bold', color: '#333', fontSize: '15px' }" class="form-item">
+        :label-style="{ fontWeight: 'bold', color: 'var(--guaxi-text-primary)', fontSize: '15px' }" class="form-item">
 
         <!-- 文件路径 - 带选择文件按钮 -->
         <template v-if="column.key === 'filePath'">
@@ -247,7 +247,7 @@ const formColumns = computed(() => {
 
 .input-tips {
   font-size: 12px;
-  color: #999;
+  color: var(--guaxi-text-secondary);
   margin-top: 4px;
 }
 
@@ -266,17 +266,17 @@ const formColumns = computed(() => {
 }
 
 .cancel-button {
-  background-color: #f5f5f5;
-  border-color: #e0e0e0;
-  color: #5a5a5a;
+  background-color: var(--guaxi-header-bg);
+  border-color: var(--guaxi-border);
+  color: var(--guaxi-text-primary);
   border-radius: 6px;
   transition: all 0.2s ease;
   min-width: 80px;
 }
 
 .cancel-button:hover {
-  background-color: #f0f0f0;
-  border-color: #d9d9d9;
+  background-color: var(--guaxi-panel-bg);
+  border-color: var(--guaxi-border);
 }
 </style>
 
@@ -284,7 +284,7 @@ const formColumns = computed(() => {
 /* 修复样式冲突 - 使用更具体的选择器 */
 .add-file-modal :deep(.n-form-item-label) {
   font-weight: 600;
-  color: #333;
+  color: var(--guaxi-text-primary);
   min-width: 80px;
 }
 
@@ -344,12 +344,12 @@ const formColumns = computed(() => {
 .add-file-modal :deep(.n-input-group) {
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--guaxi-border);
   transition: border-color 0.2s ease;
 }
 
 .add-file-modal :deep(.n-input-group:focus-within) {
-  border-color: #409EFF;
+  border-color: var(--n-color-primary, #409EFF);
   box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
 }
 
@@ -366,22 +366,22 @@ const formColumns = computed(() => {
 
 .add-file-modal :deep(.n-input-group .n-button) {
   border-radius: 0;
-  border-left: 1px solid #e0e0e0;
+  border-left: 1px solid var(--guaxi-border);
   height: 34px;
 }
 
 .add-file-modal :deep(.n-input-group .n-button:hover) {
-  border-left-color: #c0c4cc;
+  border-left-color: var(--n-color-primary, #409EFF);
 }
 
 .add-file-modal :deep(.n-input-group:focus-within .n-button) {
-  border-left-color: #409EFF;
+  border-left-color: var(--n-color-primary, #409EFF);
 }
 
 /* 修复只读输入框样式 */
 .add-file-modal :deep(.n-input[readonly] .n-input__input-el) {
-  background-color: #f5f5f5;
-  color: #999;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-secondary);
   cursor: not-allowed;
 }
 
@@ -397,6 +397,6 @@ const formColumns = computed(() => {
 }
 
 .add-file-modal :deep(.n-base-select-option:hover) {
-  background-color: #f0f7ff;
+  background-color: var(--guaxi-header-bg);
 }
 </style>

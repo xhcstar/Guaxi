@@ -332,7 +332,8 @@ async function handleSearchImported() {
   min-height: 25px !important;
   line-height: 25px !important;
   margin: 0 !important;
-  padding: 0 8px !important;
+  background-color: var(--guaxi-panel-bg) !important;
+  overflow: hidden;
 }
 
 .search-container :deep(.n-input .n-input-wrapper) {

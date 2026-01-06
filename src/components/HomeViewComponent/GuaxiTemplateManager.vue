@@ -286,7 +286,7 @@ onMounted(refresh)
 
 .path {
   font-size: 12px;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -328,6 +328,6 @@ onMounted(refresh)
 }
 
 .active {
-  background: rgba(24, 160, 88, 0.08);
+  background: var(--guaxi-header-bg);
 }
 </style>

@@ -55,7 +55,7 @@ const handleClick = (app) => {
 }
 </script>
 
-<style scope>
+<style scoped>
 .app-center {
   flex-grow: 1;
   padding: 16px 20px;
@@ -124,7 +124,8 @@ const handleClick = (app) => {
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 11px;
-  background: rgba(102, 126, 234, 0.1);
-  color: #4c51bf;
+  background: var(--guaxi-header-bg);
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-secondary);
 }
 </style>

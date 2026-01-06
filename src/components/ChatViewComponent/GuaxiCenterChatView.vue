@@ -832,6 +832,19 @@ const setMessageRef = (el, index) => {
   max-width: 420px;
 }
 
+.chat-title-input :deep(.n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+.chat-title-input :deep(.n-input__border),
+.chat-title-input :deep(.n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+.chat-title-input :deep(.n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
 .message-list {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -902,6 +915,15 @@ const setMessageRef = (el, index) => {
 .input-area :deep(.n-input) {
   flex: 1 1 auto;
   height: calc(100% - 2px);
+}
+
+.input-area :deep(.n-input .n-input-wrapper) {
+  background-color: var(--guaxi-content-bg) !important;
+}
+
+.input-area :deep(.n-input .n-input__border),
+.input-area :deep(.n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
 }
 
 .input-area :deep(.n-input__textarea-el) {

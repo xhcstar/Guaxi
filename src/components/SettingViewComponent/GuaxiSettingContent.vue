@@ -72,4 +72,33 @@ const currentComponent = computed(() => {
   overflow: auto;
   color: var(--guaxi-text-primary);
 }
+
+.setting-card :deep(.n-input .n-input-wrapper),
+.setting-card :deep(.n-input-number .n-input .n-input-wrapper) {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+.setting-card :deep(.n-input .n-input__border),
+.setting-card :deep(.n-input .n-input__state-border),
+.setting-card :deep(.n-input-number .n-input .n-input__border),
+.setting-card :deep(.n-input-number .n-input .n-input__state-border) {
+  border-color: var(--guaxi-border) !important;
+}
+
+.setting-card :deep(.n-input__input-el),
+.setting-card :deep(.n-input__textarea-el),
+.setting-card :deep(.n-input-number .n-input__input-el) {
+  color: var(--guaxi-text-primary) !important;
+}
+
+.setting-card :deep(.n-input__input-el::placeholder),
+.setting-card :deep(.n-input__textarea-el::placeholder),
+.setting-card :deep(.n-input-number .n-input__input-el::placeholder) {
+  color: var(--guaxi-text-secondary) !important;
+}
+
+.setting-card :deep(.n-input__prefix),
+.setting-card :deep(.n-input__suffix) {
+  color: var(--guaxi-text-secondary) !important;
+}
 </style>

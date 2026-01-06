@@ -446,9 +446,13 @@ import {
 import { ChevronLeft20Filled, ChevronRight20Filled } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
 import * as monaco from 'monaco-editor'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言注册
 
 const { notification } = createDiscreteApi(['notification'])
+
+const settingsStore = useSettingsStore()
+const getMonacoTheme = () => (settingsStore.appearanceTheme === 'dark' ? 'vs-dark' : 'vs')
 
 // 日志级别枚举
 const LogLevel = {
@@ -1373,6 +1377,10 @@ const getFileStatusIcon = (status) => {
   }
 }
 
+watch(() => settingsStore.appearanceTheme, () => {
+  monaco.editor.setTheme(getMonacoTheme())
+})
+
 const initMonacoEditor = async () => {
   if (isEditorInitialized.value || !diffEditorContainer.value) return;
 
@@ -1397,7 +1405,7 @@ const initMonacoEditor = async () => {
       originalEditable: false,
       readOnly: true,
       automaticLayout: true,
-      theme: 'vs',
+      theme: getMonacoTheme(),
       fontSize: 16,
       fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
       fontLigatures: true,
@@ -1420,6 +1428,7 @@ const initMonacoEditor = async () => {
     }));
 
     isEditorInitialized.value = true;
+    monaco.editor.setTheme(getMonacoTheme());
 
     // 初始空模型
     const emptyModel = monaco.editor.createModel('', 'plaintext');
@@ -1938,20 +1947,28 @@ onUnmounted(() => {
 <style>
 /* 全局样式 - 浅色主题 */
 :root {
-  --bg-color: #f8f9fa;
-  --text-color: #212529;
-  --text-color-secondary: #6c757d;
-  --divider-color: #dee2e6;
+  --bg-color: var(--guaxi-content-bg);
+  --text-color: var(--guaxi-text-primary);
+  --text-color-secondary: var(--guaxi-text-secondary);
+  --divider-color: var(--guaxi-border);
   --hover-color: rgba(0, 0, 0, 0.05);
-  --graph-bg: #e9ecef;
-  --added-bg: rgba(40, 167, 69, 0.1);
-  --modified-bg: rgba(255, 193, 7, 0.1);
-  --deleted-bg: rgba(220, 53, 69, 0.1);
-  --current-branch-bg: rgba(40, 167, 69, 0.15);
-  --card-bg: #ffffff;
-  --input-bg: #ffffff;
-  --sidebar-bg: #f3f3f3;
+  --graph-bg: var(--guaxi-header-bg);
+  --added-bg: rgba(40, 167, 69, 0.12);
+  --modified-bg: rgba(255, 193, 7, 0.12);
+  --deleted-bg: rgba(220, 53, 69, 0.12);
+  --current-branch-bg: rgba(40, 167, 69, 0.16);
+  --card-bg: var(--guaxi-panel-bg);
+  --input-bg: var(--guaxi-panel-bg);
+  --sidebar-bg: var(--guaxi-header-bg);
   --sidebar-width: 280px;
+}
+
+:root[data-guaxi-theme='dark'] {
+  --hover-color: rgba(255, 255, 255, 0.06);
+  --added-bg: rgba(40, 167, 69, 0.18);
+  --modified-bg: rgba(255, 193, 7, 0.16);
+  --deleted-bg: rgba(220, 53, 69, 0.16);
+  --current-branch-bg: rgba(40, 167, 69, 0.22);
 }
 
 .n-card {
@@ -2174,22 +2191,7 @@ onUnmounted(() => {
   height: 100%;
 }
 
-/* 暗色主题适配 */
-@media (prefers-color-scheme: dark) {
-  .git-content {
-    background-color: var(--card-bg);
-  }
 
-  .content-navbar {
-    background-color: var(--card-bg);
-    border-bottom-color: var(--divider-color);
-  }
-
-  .commit-message {
-    background-color: var(--bg-color);
-    border-bottom-color: var(--divider-color);
-  }
-}
 
 .source-control-header {
   padding: 8px 12px;
@@ -2330,20 +2332,7 @@ onUnmounted(() => {
   border-left: 2px solid #007bff;
 }
 
-/* 暗色主题适配 */
-@media (prefers-color-scheme: dark) {
-  .commit-item:hover {
-    background-color: rgba(255, 255, 255, 0.05);
-  }
 
-  .expanded-commit {
-    background-color: rgba(0, 123, 255, 0.1);
-  }
-
-  .selected-commit {
-    background-color: rgba(0, 123, 255, 0.15);
-  }
-}
 
 /* 确保分隔线可见 */
 .section-divider,
@@ -2573,7 +2562,7 @@ onUnmounted(() => {
 
 /* 调整 Monaco Editor 主题 */
 .monaco-editor .line-numbers {
-  color: #6c757d !important;
+  color: var(--text-color-secondary) !important;
 }
 
 .monaco-editor .margin {
@@ -2616,11 +2605,8 @@ onUnmounted(() => {
   z-index: 10;
 }
 
-/* 暗色主题适配 */
-@media (prefers-color-scheme: dark) {
-  .loading-overlay {
-    background-color: rgba(0, 0, 0, 0.5);
-  }
+:root[data-guaxi-theme='dark'] .loading-overlay {
+  background-color: rgba(0, 0, 0, 0.5);
 }
 
 /* 新增折叠按钮样式 */
