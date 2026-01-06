@@ -113,6 +113,17 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
       this.openTabs.splice(index, 1);
 
+      if (this.openTabs.length === 0) {
+        this.activeTab = null;
+        this.activeTabLeft = null;
+        this.activeTabRight = null;
+        this.selectedFile = null;
+        this.layoutMode = 'single';
+        this.splitIndex = null;
+        this.activeRegion = 'left';
+        return;
+      }
+
       const leftCountAfter =
         this.layoutMode !== 'single' && beforeSplitIndex != null
           ? Math.max(0, Math.min(beforeSplitIndex, this.openTabs.length))

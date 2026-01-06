@@ -276,6 +276,15 @@ const unlistenRef = ref(null)
 
 const selectedKeys = ref([]); // 新增：存储当前选中的节点keys
 
+watch(
+  () => fileTreeStore.openTabs.length,
+  (len) => {
+    if (len !== 0) return;
+    lastSelectedKey.value = null;
+    selectedKeys.value = [];
+  }
+)
+
 const ensureExpandedForDir = (dirPath) => {
   const active = normalizePath(fileTreeStore.activeRepoPath)
   const target = normalizePath(dirPath)

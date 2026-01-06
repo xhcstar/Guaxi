@@ -223,8 +223,9 @@
       </div>
     </div>
 
-    <div v-if="selectedFile" class="editor-content" :class="previewMode">
-      <div v-show="previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
+    <div class="editor-content" :class="previewMode">
+      <div v-if="!selectedFile" class="editor-empty">请选择一个文件以开始编辑</div>
+      <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
       <div v-show="previewMode !== 'realtime' && showPreview" v-html="renderedHtml" class="preview"
         ref="previewContainer" @click="handlePreviewClick"></div>
       <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
@@ -4634,6 +4635,17 @@ onUnmounted(() => {
   min-height: 0;
   display: flex;
   overflow: hidden;
+}
+
+.editor-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--guaxi-text-secondary, #8a8f98);
+  font-size: 14px;
+  user-select: none;
 }
 
 .editor-content.toggle {
