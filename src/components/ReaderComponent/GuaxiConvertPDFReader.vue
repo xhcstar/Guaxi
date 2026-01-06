@@ -2403,12 +2403,13 @@ button:disabled {
 
 .zoom-in:hover,
 .zoom-out:hover {
-  background-color: #f1f3f5;
+  background-color: var(--guaxi-header-bg);
 }
 
 .zoom-in:disabled,
 .zoom-out:disabled {
-  background-color: #95a5a6;
+  background-color: var(--guaxi-header-bg);
+  color: var(--guaxi-text-secondary);
   cursor: not-allowed;
 }
 
@@ -2425,7 +2426,7 @@ button:disabled {
 .rotate-left:hover,
 .rotate-right:hover,
 .fit-width:hover {
-  background-color: #f1f3f5;
+  background-color: var(--guaxi-header-bg);
 }
 
 /* 42. 笔记按钮样式 */
@@ -2483,7 +2484,7 @@ button:disabled {
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: #f8f9fa;
+  background-color: var(--guaxi-content-bg);
   transform-origin: center center !important;
   transition: transform 0.3s ease-out;
   will-change: transform;
@@ -2507,7 +2508,7 @@ button:disabled {
   justify-content: center;
   align-items: center;
   height: 100%;
-  color: #868e96;
+  color: var(--guaxi-text-secondary);
   font-size: 14px;
 }
 
@@ -2515,7 +2516,7 @@ button:disabled {
 .resize-handle {
   width: 3px;
   height: 100%;
-  background-color: #e9ecef;
+  background-color: var(--guaxi-border);
   cursor: col-resize;
   position: relative;
   z-index: 10;
