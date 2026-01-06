@@ -4,7 +4,7 @@
       <n-space vertical size="large" style="width: 100%">
         <div>
           <h3>外观</h3>
-          <p class="description">在此切换应用主题。亮色为 Onedark-light 风格，暗色为 Onedark 风格。</p>
+          <p class="description">在此切换应用主题, 暗色或者亮色。</p>
           <n-form label-placement="left" label-width="auto" :show-require-mark="false">
             <n-form-item label="主题">
               <n-select
@@ -77,8 +77,8 @@ import { useSettingsStore } from '../../stores/settingsStore'
 const settingsStore = useSettingsStore()
 
 const themeOptions = [
-  { label: 'Onedark-light（亮色）', value: 'light' },
-  { label: 'Onedark（暗色）', value: 'dark' },
+  { label: '亮色', value: 'light' },
+  { label: '暗色', value: 'dark' },
 ]
 
 const themeValue = ref('light')
