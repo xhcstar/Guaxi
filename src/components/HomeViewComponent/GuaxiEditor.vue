@@ -168,18 +168,6 @@
         </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-actions">
-          <!-- 添加 Git 操作按钮 -->
-          <n-tooltip placement="top" trigger="hover">
-            <template #trigger>
-              <n-button text @click="toggleGitPanel">
-                <n-icon width="16" height="16">
-                  <GitBranchOutline />
-                </n-icon>
-              </n-button>
-            </template>
-            Git 操作
-          </n-tooltip>
-
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text @click="toggleVimMode">

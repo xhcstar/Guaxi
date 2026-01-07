@@ -1741,6 +1741,11 @@ const handleStageAll = async () => {
     await refreshGitStatus()
   } catch (error) {
     logger.error('Failed to stage all files', error)
+    notification.error({
+      title: '暂存全部失败',
+      content: String(error?.message || error),
+      duration: 3000
+    })
   }
 }
 
