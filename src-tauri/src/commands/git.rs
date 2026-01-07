@@ -18,7 +18,10 @@ fn is_ignored_git_path(path: &str) -> bool {
 }
 
 fn normalize_remote_url(raw: &str) -> String {
-    let mut s = raw.trim().to_string();
+    let mut s = raw
+        .trim()
+        .trim_matches(|c: char| matches!(c, '`' | '"' | '\''))
+        .to_string();
     if s.is_empty() {
         return s;
     }
@@ -332,6 +335,11 @@ pub fn git_push(path: String) -> Result<(), String> {
     if let Some(url) = remote.url() {
         let normalized = normalize_remote_url(url);
         if normalized != url {
+            info!(
+                origin_url_before = url,
+                origin_url_after = normalized.as_str(),
+                "normalize origin url for pull"
+            );
             if let Err(e) = repo.remote_set_url("origin", normalized.as_str()) {
                 warn!("Failed to normalize origin url: {}", e);
             } else {
@@ -354,13 +362,32 @@ pub fn git_push(path: String) -> Result<(), String> {
     } else {
         (String::new(), String::new())
     };
+    let kb_token_present = !kb_token.trim().is_empty();
+
+    info!(
+        origin_url = origin_url.as_str(),
+        current_branch = current_branch.as_str(),
+        is_kb_repo,
+        kb_username_present = !kb_username.trim().is_empty(),
+        kb_token_present,
+        "git_push context"
+    );
 
     let cfg = repo.config().ok();
 
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(move |url, username_from_url, allowed| {
+        info!(
+            url,
+            username_from_url = ?username_from_url,
+            allowed = ?allowed,
+            is_kb_repo,
+            kb_token_present,
+            "git_push credentials callback"
+        );
+
         if is_kb_repo
-            && !kb_token.is_empty()
+            && kb_token_present
             && allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
         {
             let username = if !kb_username.is_empty() {
@@ -446,19 +473,57 @@ pub fn git_pull(path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
+    if let Some(url) = remote.url() {
+        let normalized = normalize_remote_url(url);
+        if normalized != url {
+            if let Err(e) = repo.remote_set_url("origin", normalized.as_str()) {
+                warn!("Failed to normalize origin url: {}", e);
+            } else {
+                remote = repo.find_remote("origin").map_err(|e| {
+                    error!("Failed to find remote 'origin': {}", e);
+                    e.to_string()
+                })?;
+            }
+        }
+    }
+
+    let origin_url = remote
+        .url()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "".to_string());
+
     let is_kb_repo = settingview::is_knowledge_bases_root_path(&path);
     let (kb_username, kb_token) = if is_kb_repo {
         settingview::get_knowledge_bases_remote_username_token()
     } else {
         (String::new(), String::new())
     };
+    let kb_token_present = !kb_token.trim().is_empty();
+
+    info!(
+        origin_url = origin_url.as_str(),
+        current_branch = current_branch.as_str(),
+        is_kb_repo,
+        kb_username_present = !kb_username.trim().is_empty(),
+        kb_token_present,
+        "git_pull context"
+    );
 
     let cfg = repo.config().ok();
 
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(move |url, username_from_url, allowed| {
+        info!(
+            url,
+            username_from_url = ?username_from_url,
+            allowed = ?allowed,
+            is_kb_repo,
+            kb_token_present,
+            "git_pull credentials callback"
+        );
+
         if is_kb_repo
-            && !kb_token.is_empty()
+            && kb_token_present
             && allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
         {
             let username = if !kb_username.is_empty() {

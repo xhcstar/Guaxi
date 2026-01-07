@@ -240,6 +240,14 @@ onMounted(async () => {
     const gitUsername = remoteConfig?.gitUsername ?? remoteConfig?.git_username;
     const gitEmail = remoteConfig?.gitEmail ?? remoteConfig?.git_email;
 
+    console.log('[NoteRepoContent][KB Remote] loaded', {
+      remoteUrl: remoteUrl ? String(remoteUrl) : '',
+      username: remoteConfig?.username ? String(remoteConfig.username) : '',
+      hasToken: !!hasToken,
+      gitUsername: gitUsername ? String(gitUsername) : '',
+      gitEmail: gitEmail ? String(gitEmail) : '',
+    });
+
     knowledgeBasesRemoteUrl.value = remoteUrl ? String(remoteUrl) : '';
     knowledgeBasesRemoteUsername.value = remoteConfig?.username ? String(remoteConfig.username) : '';
     knowledgeBasesRemoteHasToken.value = !!hasToken;
@@ -344,6 +352,14 @@ const handleKnowledgeBasesRemoteSave = async () => {
       return;
     }
 
+    console.log('[NoteRepoContent][KB Remote] saving', {
+      remoteUrl: remoteUrl,
+      username,
+      tokenProvided: !!tokenInput,
+      gitUsername: String(knowledgeBasesGitUsername.value || '').trim(),
+      gitEmail: String(knowledgeBasesGitEmail.value || '').trim(),
+    });
+
     await invoke('set_knowledge_bases_remote_config', {
       remoteUrl: knowledgeBasesRemoteUrl.value,
       username: knowledgeBasesRemoteUsername.value,
@@ -351,6 +367,17 @@ const handleKnowledgeBasesRemoteSave = async () => {
       gitUsername: knowledgeBasesGitUsername.value,
       gitEmail: knowledgeBasesGitEmail.value,
     });
+
+    try {
+      const remoteConfig = await invoke('get_knowledge_bases_remote_config');
+      console.log('[NoteRepoContent][KB Remote] saved, backend says', {
+        remoteUrl: remoteConfig?.remote_url ?? remoteConfig?.remoteUrl,
+        username: remoteConfig?.username,
+        hasToken: remoteConfig?.has_token ?? remoteConfig?.hasToken,
+      });
+    } catch (e) {
+      console.warn('[NoteRepoContent][KB Remote] verify after save failed', e);
+    }
 
     knowledgeBasesRemoteHasToken.value = knowledgeBasesRemoteHasToken.value || !!knowledgeBasesRemoteToken.value.trim();
     knowledgeBasesRemoteToken.value = '';

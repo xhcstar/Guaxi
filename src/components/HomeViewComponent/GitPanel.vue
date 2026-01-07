@@ -1913,27 +1913,33 @@ const handleCommitKeydown = (e) => {
 }
 
 const handlePull = async () => {
-  logger.debug('Pulling changes')
+  logger.debug('Pulling changes', { path: props.workspacePath })
   gitLoading.value.pull = true
   try {
     await invoke('git_pull', { path: props.workspacePath })
     logger.info('Pull successful')
     refreshGitStatus()
   } catch (error) {
-    logger.error('Pull failed', { error })
+    logger.error('Pull failed', {
+      path: props.workspacePath,
+      error: String(error)
+    })
   } finally {
     gitLoading.value.pull = false
   }
 }
 
 const handlePush = async () => {
-  logger.debug('Pushing changes')
+  logger.debug('Pushing changes', { path: props.workspacePath })
   gitLoading.value.push = true
   try {
     await invoke('git_push', { path: props.workspacePath })
     logger.info('Push successful')
   } catch (error) {
-    logger.error('Push failed', { error })
+    logger.error('Push failed', {
+      path: props.workspacePath,
+      error: String(error)
+    })
   } finally {
     gitLoading.value.push = false
   }
