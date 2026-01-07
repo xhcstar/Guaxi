@@ -17,24 +17,45 @@
       <!-- 仓库管理和提交区域容器 -->
       <div class="sidebar-content" :style="{ display: isSidebarCollapsed ? 'none' : 'block' }">
         <div class="source-control-header">
-          <n-space align="center" justify="space-between">
-            <n-text strong>仓库管理</n-text>
-            <n-button text @click="refreshGitStatus">
-              <template #icon>
+          <n-space vertical size="small">
+            <n-space align="center" justify="space-between">
+              <n-text strong>源代码管理</n-text>
+              <n-button text @click="refreshGitStatus">
+                <template #icon>
+                  <n-icon>
+                    <RefreshOutline />
+                  </n-icon>
+                </template>
+              </n-button>
+            </n-space>
+            <n-space align="center" justify="space-between" class="scm-header-sub">
+              <n-space align="center">
                 <n-icon>
-                  <RefreshOutline />
+                  <GitBranchOutline />
                 </n-icon>
-              </template>
-            </n-button>
+                <n-text>{{ currentBranch || '未检出分支' }}</n-text>
+              </n-space>
+              <n-text v-if="workspacePathName" depth="3">{{ workspacePathName }}</n-text>
+            </n-space>
           </n-space>
         </div>
 
         <!-- 提交区域 -->
         <div class="commit-section">
-          <n-input v-model:value="commitForm.message" type="textarea" placeholder="提交信息 (必填)"
-            :autosize="{ minRows: 1, maxRows: 3 }" style="min-width: 250px; margin-bottom: 8px;" />
-          <n-button type="primary" @click="handleCommit"
-            :disabled="!commitForm.message.trim() || stagedFiles.length === 0" style="width: 100%;">
+          <n-input
+            v-model:value="commitForm.message"
+            type="textarea"
+            placeholder="提交信息（Ctrl+Enter 提交）"
+            :autosize="{ minRows: 1, maxRows: 3 }"
+            style="min-width: 250px; margin-bottom: 8px;"
+            @keydown="handleCommitKeydown"
+          />
+          <n-button
+            type="primary"
+            @click="handleCommit"
+            :disabled="!commitForm.message.trim() || stagedFiles.length === 0"
+            style="width: 100%;"
+          >
             提交
           </n-button>
         </div>
@@ -46,44 +67,40 @@
             <!-- Changes区域 -->
             <div class="changes-section" ref="changesSection" :style="{ flex: `0 0 ${changesHeight}px` }">
               <n-collapse :default-expanded-names="['changes']">
-                <n-collapse-item name="changes" title="Changes">
+                <n-collapse-item name="changes" title="更改">
                   <template #header-extra>
-                    <n-badge :value="unstagedFiles.length" :max="99" />
+                    <n-space align="center" size="small">
+                      <n-badge :value="unstagedFiles.length" :max="99" />
+                      <n-button
+                        text
+                        quaternary
+                        size="tiny"
+                        @click.stop="handleStageAll"
+                        :disabled="unstagedFiles.length === 0"
+                      >
+                        <template #icon>
+                          <n-icon>
+                            <AddCircleOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                      <n-button
+                        text
+                        quaternary
+                        size="tiny"
+                        @click.stop="handleDiscardAll"
+                        :disabled="unstagedFiles.length === 0"
+                      >
+                        <template #icon>
+                          <n-icon>
+                            <CloseCircleOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </n-space>
                   </template>
 
                   <n-list>
-                    <!-- 操作按钮行 -->
-                    <n-list-item>
-                      <n-space justify="space-between">
-                        <n-space>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handleStageAll" :disabled="unstagedFiles.length === 0">
-                                <template #icon>
-                                  <n-icon>
-                                    <AddCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            暂存全部
-                          </n-tooltip>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handleDiscardAll" :disabled="unstagedFiles.length === 0">
-                                <template #icon>
-                                  <n-icon>
-                                    <CloseCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            丢弃全部
-                          </n-tooltip>
-                        </n-space>
-                      </n-space>
-                    </n-list-item>
-
                     <!-- 文件列表项 -->
                     <n-list-item v-for="file in unstagedFiles" :key="file.path">
                       <n-space align="center" justify="space-between">
@@ -132,32 +149,27 @@
             <!-- Staged Changes区域 -->
             <div class="staged-section" ref="stagedSection" :style="{ flex: `0 0 ${stagedHeight}px` }">
               <n-collapse :default-expanded-names="['staged']">
-                <n-collapse-item name="staged" title="Staged Changes">
+                <n-collapse-item name="staged" title="已暂存的更改">
                   <template #header-extra>
-                    <n-badge :value="stagedFiles.length" :max="99" />
+                    <n-space align="center" size="small">
+                      <n-badge :value="stagedFiles.length" :max="99" />
+                      <n-button
+                        text
+                        quaternary
+                        size="tiny"
+                        @click.stop="handleUnstageAll"
+                        :disabled="stagedFiles.length === 0"
+                      >
+                        <template #icon>
+                          <n-icon>
+                            <RemoveCircleOutline />
+                          </n-icon>
+                        </template>
+                      </n-button>
+                    </n-space>
                   </template>
 
                   <n-list>
-                    <!-- 操作按钮行 -->
-                    <n-list-item>
-                      <n-space justify="space-between">
-                        <n-space>
-                          <n-tooltip trigger="hover">
-                            <template #trigger>
-                              <n-button text @click="handleUnstageAll" :disabled="stagedFiles.length === 0">
-                                <template #icon>
-                                  <n-icon>
-                                    <RemoveCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
-                            </template>
-                            取消暂存全部
-                          </n-tooltip>
-                        </n-space>
-                      </n-space>
-                    </n-list-item>
-
                     <!-- 暂存文件列表项 -->
                     <n-list-item v-for="file in stagedFiles" :key="file.path">
                       <n-space align="center" justify="space-between">
@@ -421,7 +433,7 @@
 </template>
 
 <script setup>
-import { ref, h, onMounted, onUnmounted, nextTick, watch, markRaw } from 'vue'
+import { ref, h, onMounted, onUnmounted, nextTick, watch, markRaw, computed } from 'vue'
 import {
   NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip, NForm,
   NFormItem,
@@ -505,6 +517,13 @@ const props = defineProps({
     type: String,
     required: true
   }
+})
+
+const workspacePathName = computed(() => {
+  const s = String(props.workspacePath || '')
+  if (!s) return ''
+  const parts = s.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || s
 })
 
 // 拖动相关状态
@@ -1802,6 +1821,15 @@ const handleCommit = async () => {
     commitForm.value.message = ''
     await refreshGitStatus()
   } catch (error) {
+  }
+}
+
+const handleCommitKeydown = (e) => {
+  if (!e) return
+  if (e.ctrlKey && e.key === 'Enter') {
+    e.preventDefault()
+    if (!commitForm.value.message.trim() || stagedFiles.value.length === 0) return
+    handleCommit()
   }
 }
 
