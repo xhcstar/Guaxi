@@ -15,7 +15,7 @@
       </div>
 
       <!-- 仓库管理和提交区域容器 -->
-      <div class="sidebar-content" :style="{ display: isSidebarCollapsed ? 'none' : 'block' }">
+      <div class="sidebar-content" :style="{ display: isSidebarCollapsed ? 'none' : 'flex' }">
         <div class="source-control-header">
           <n-space vertical size="small">
             <n-space align="center" justify="space-between">
@@ -66,48 +66,63 @@
           <div class="panels-container" ref="panelsContainer">
             <!-- Changes区域 -->
             <div class="changes-section" ref="changesSection" :style="{ flex: `0 0 ${changesHeight}px` }">
-              <n-collapse :default-expanded-names="['changes']">
-                <n-collapse-item name="changes" title="更改">
-                  <template #header-extra>
-                    <n-space align="center" size="small">
-                      <n-badge :value="unstagedFiles.length" :max="99" />
-                      <n-button
-                        text
-                        quaternary
-                        size="tiny"
+              <div class="section-header">
+                <div class="section-header-left">
+                  <span class="section-title">更改</span>
+                  <span class="section-count">{{ unstagedFiles.length }}</span>
+                </div>
+                <div class="section-header-right">
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <button
+                        class="section-icon-button"
+                        type="button"
                         @click.stop="handleStageAll"
                         :disabled="unstagedFiles.length === 0"
                       >
-                        <template #icon>
-                          <n-icon>
-                            <AddCircleOutline />
-                          </n-icon>
-                        </template>
-                      </n-button>
-                      <n-button
-                        text
-                        quaternary
-                        size="tiny"
+                        <n-icon>
+                          <AddOutline />
+                        </n-icon>
+                      </button>
+                    </template>
+                    暂存全部
+                  </n-tooltip>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <button
+                        class="section-icon-button"
+                        type="button"
                         @click.stop="handleDiscardAll"
                         :disabled="unstagedFiles.length === 0"
                       >
-                        <template #icon>
-                          <n-icon>
-                            <CloseCircleOutline />
-                          </n-icon>
-                        </template>
-                      </n-button>
-                    </n-space>
-                  </template>
-
-                  <n-list>
-                    <!-- 文件列表项 -->
-                    <n-list-item v-for="file in unstagedFiles" :key="file.path">
-                      <n-space align="center" justify="space-between">
-                        <n-space align="center" @click="handleFileClick(file)">
-                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                          <n-text>{{ file.path }}</n-text>
-                        </n-space>
+                        <n-icon>
+                          <CloseCircleOutline />
+                        </n-icon>
+                      </button>
+                    </template>
+                    丢弃全部
+                  </n-tooltip>
+                </div>
+              </div>
+              <div class="section-scroll">
+                <n-list>
+                  <n-list-item v-for="file in unstagedFiles" :key="file.path">
+                    <div class="git-file-row">
+                      <div class="git-file-left" @click="handleFileClick(file)">
+                        <n-icon
+                          :component="getFileStatusIcon(file.status)"
+                          size="16"
+                          class="git-status-icon"
+                          :class="getStatusClass(file.status)"
+                        />
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-text class="git-file-path">{{ file.path }}</n-text>
+                          </template>
+                          {{ file.path }}
+                        </n-tooltip>
+                      </div>
+                      <div class="git-file-actions">
                         <n-space>
                           <n-tooltip trigger="hover">
                             <template #trigger>
@@ -134,11 +149,11 @@
                             丢弃
                           </n-tooltip>
                         </n-space>
-                      </n-space>
-                    </n-list-item>
-                  </n-list>
-                </n-collapse-item>
-              </n-collapse>
+                      </div>
+                    </div>
+                  </n-list-item>
+                </n-list>
+              </div>
             </div>
 
             <!-- Changes和Staged Changes之间的分隔线 -->
@@ -148,35 +163,48 @@
 
             <!-- Staged Changes区域 -->
             <div class="staged-section" ref="stagedSection" :style="{ flex: `0 0 ${stagedHeight}px` }">
-              <n-collapse :default-expanded-names="['staged']">
-                <n-collapse-item name="staged" title="已暂存的更改">
-                  <template #header-extra>
-                    <n-space align="center" size="small">
-                      <n-badge :value="stagedFiles.length" :max="99" />
-                      <n-button
-                        text
-                        quaternary
-                        size="tiny"
+              <div class="section-header">
+                <div class="section-header-left">
+                  <span class="section-title">已暂存的更改</span>
+                  <span class="section-count">{{ stagedFiles.length }}</span>
+                </div>
+                <div class="section-header-right">
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <button
+                        class="section-icon-button"
+                        type="button"
                         @click.stop="handleUnstageAll"
                         :disabled="stagedFiles.length === 0"
                       >
-                        <template #icon>
-                          <n-icon>
-                            <RemoveCircleOutline />
-                          </n-icon>
-                        </template>
-                      </n-button>
-                    </n-space>
-                  </template>
-
-                  <n-list>
-                    <!-- 暂存文件列表项 -->
-                    <n-list-item v-for="file in stagedFiles" :key="file.path">
-                      <n-space align="center" justify="space-between">
-                        <n-space align="center" @click="handleFileClick(file)">
-                          <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                          <n-text>{{ file.path }}</n-text>
-                        </n-space>
+                        <n-icon>
+                          <CheckmarkCircleOutline />
+                        </n-icon>
+                      </button>
+                    </template>
+                    取消暂存全部
+                  </n-tooltip>
+                </div>
+              </div>
+              <div class="section-scroll">
+                <n-list>
+                  <n-list-item v-for="file in stagedFiles" :key="file.path">
+                    <div class="git-file-row">
+                      <div class="git-file-left" @click="handleFileClick(file)">
+                        <n-icon
+                          :component="getFileStatusIcon(file.status)"
+                          size="16"
+                          class="git-status-icon"
+                          :class="getStatusClass(file.status)"
+                        />
+                        <n-tooltip trigger="hover">
+                          <template #trigger>
+                            <n-text class="git-file-path">{{ file.path }}</n-text>
+                          </template>
+                          {{ file.path }}
+                        </n-tooltip>
+                      </div>
+                      <div class="git-file-actions">
                         <n-space>
                           <n-tooltip trigger="hover">
                             <template #trigger>
@@ -191,11 +219,11 @@
                             取消暂存
                           </n-tooltip>
                         </n-space>
-                      </n-space>
-                    </n-list-item>
-                  </n-list>
-                </n-collapse-item>
-              </n-collapse>
+                      </div>
+                    </div>
+                  </n-list-item>
+                </n-list>
+              </div>
             </div>
 
             <!-- Staged Changes和提交历史之间的分隔线 -->
@@ -205,96 +233,124 @@
 
             <!-- 提交历史区域 -->
             <div class="commits-section" ref="commitsSection">
-              <n-collapse :default-expanded-names="['commits']">
-                <n-collapse-item name="commits" title="提交历史">
-                  <!-- 操作工具栏 -->
-                  <div class="commits-toolbar">
-                    <n-space justify="space-between" align="center">
-                      <n-space>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handlePull" :loading="gitLoading.pull">
-                              <template #icon>
-                                <n-icon>
-                                  <CloudDownloadOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
+              <div class="section-header">
+                <div class="section-header-left">
+                  <span class="section-title">提交历史</span>
+                  <span class="section-count">{{ commits.length }}</span>
+                </div>
+                <div class="section-header-right">
+                  <n-space>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-button text @click="handlePull" :loading="gitLoading.pull">
+                          <template #icon>
+                            <n-icon>
+                              <CloudDownloadOutline />
+                            </n-icon>
                           </template>
-                          拉取
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="handlePush" :loading="gitLoading.push">
-                              <template #icon>
-                                <n-icon>
-                                  <CloudUploadOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
+                        </n-button>
+                      </template>
+                      拉取
+                    </n-tooltip>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-button text @click="handlePush" :loading="gitLoading.push">
+                          <template #icon>
+                            <n-icon>
+                              <CloudUploadOutline />
+                            </n-icon>
                           </template>
-                          推送
-                        </n-tooltip>
-                        <n-tooltip trigger="hover">
-                          <template #trigger>
-                            <n-button text @click="showBranchPanel = true">
-                              <template #icon>
-                                <n-icon>
-                                  <GitBranchOutline />
-                                </n-icon>
-                              </template>
-                            </n-button>
+                        </n-button>
+                      </template>
+                      推送
+                    </n-tooltip>
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-button text @click="showBranchPanel = true">
+                          <template #icon>
+                            <n-icon>
+                              <GitBranchOutline />
+                            </n-icon>
                           </template>
-                          创建分支
-                        </n-tooltip>
-                      </n-space>
-                      <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
-                        <n-icon>
-                          <GitBranchOutline />
-                        </n-icon>
-                        {{ currentBranch }}
-                      </n-tag>
-                    </n-space>
-                  </div>
+                        </n-button>
+                      </template>
+                      创建分支
+                    </n-tooltip>
+                    <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
+                      <n-icon>
+                        <GitBranchOutline />
+                      </n-icon>
+                      {{ currentBranch }}
+                    </n-tag>
+                  </n-space>
+                </div>
+              </div>
 
-                  <!-- 提交历史列表 -->
-                  <div class="commits-list">
-                    <div v-for="commit in commits" :key="commit.id" class="commit-item" :class="{
-                      'selected-commit': selectedCommit?.id === commit.id,
-                      'expanded-commit': expandedCommit?.id === commit.id
-                    }" @click="selectCommit(commit)">
-                      <!-- 提交信息摘要 -->
-                      <div class="commit-summary">
-                        <n-text strong>{{ commit.summary }}</n-text>
-                        <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
-                      </div>
-
-                      <!-- 提交元信息 -->
-                      <div class="commit-meta">
-                        <n-text depth="3">{{ commit.author }}</n-text>
-                        <n-text depth="3">{{ formatDateRelative(commit.date) }}</n-text>
-                      </div>
-
-                      <!-- 展开的文件变更列表 -->
-                      <div v-if="expandedCommit?.id === commit.id" class="commit-files">
-                        <n-list>
-                          <n-list-item v-for="file in commitFiles" :key="file.path"
-                            @click.stop="handleCommitFileClick(file)"
-                            :class="{ 'selected-file': selectedFile?.path === file.path }">
-                            <n-space align="center">
-                              <n-icon :component="getFileStatusIcon(file.status)" size="16" />
-                              <n-text>{{ file.path }}</n-text>
-                              <n-tag v-if="file.status !== ' '" size="small" :type="getStatusTagType(file.status)">
-                                {{ file.status }}
-                              </n-tag>
-                            </n-space>
-                          </n-list-item>
-                        </n-list>
-                      </div>
+              <div class="commits-list">
+                <div
+                  v-for="commit in commits"
+                  :key="commit.id"
+                  class="commit-item"
+                  :class="{
+                    'selected-commit': selectedCommit?.id === commit.id,
+                    'expanded-commit': expandedCommit?.id === commit.id
+                  }"
+                  @click="selectCommit(commit)"
+                >
+                  <div class="git-file-row commit-row">
+                    <div class="git-file-left">
+                      <n-icon :component="GitCommitOutline" size="16" class="commit-icon" />
+                      <n-tooltip trigger="hover">
+                        <template #trigger>
+                          <div class="git-file-path">
+                            <n-text>{{ commit.summary }}</n-text>
+                          </div>
+                        </template>
+                        <div class="commit-tooltip">
+                          <div>{{ commit.summary }}</div>
+                          <div class="commit-tooltip-meta">{{ commit.author }} · {{ commit.id.slice(0, 7) }} · {{ formatDateRelative(commit.date) }}</div>
+                        </div>
+                      </n-tooltip>
+                    </div>
+                    <div class="commit-right">
+                      <n-text depth="3" class="commit-time">{{ formatDateRelative(commit.date) }}</n-text>
+                      <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
                     </div>
                   </div>
-                </n-collapse-item>
-              </n-collapse>
+                  <div v-if="expandedCommit?.id === commit.id" class="commit-files">
+                    <n-list>
+                      <n-list-item
+                        v-for="file in commitFiles"
+                        :key="file.path"
+                        @click.stop="handleCommitFileClick(file)"
+                        :class="{ 'selected-file': selectedFile?.path === file.path }"
+                      >
+                        <div class="git-file-row">
+                          <div class="git-file-left">
+                            <n-icon
+                              :component="getFileStatusIcon(file.status)"
+                              size="16"
+                              class="git-status-icon"
+                              :class="getStatusClass(file.status)"
+                            />
+                            <n-tooltip trigger="hover">
+                              <template #trigger>
+                                <n-text class="git-file-path">{{ file.path }}</n-text>
+                              </template>
+                              {{ file.path }}
+                            </n-tooltip>
+                          </div>
+                          <div class="git-file-actions">
+                            <n-tag v-if="file.status !== ' '" size="small" :type="getStatusTagType(file.status)">
+                              {{ file.status }}
+                            </n-tag>
+                          </div>
+                        </div>
+                      </n-list-item>
+                    </n-list>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -337,20 +393,30 @@
 
           <!-- 导航按钮 -->
           <n-space>
-            <n-button text @click="navigateDiff('prev')" :disabled="!selectedFile || diffLoading.file">
-              <template #icon>
-                <n-icon>
-                  <ChevronUpOutline />
-                </n-icon>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button text @click="navigateDiff('prev')" :disabled="!selectedFile || diffLoading.file">
+                  <template #icon>
+                    <n-icon>
+                      <ChevronUpOutline />
+                    </n-icon>
+                  </template>
+                </n-button>
               </template>
-            </n-button>
-            <n-button text @click="navigateDiff('next')" :disabled="!selectedFile || diffLoading.file">
-              <template #icon>
-                <n-icon>
-                  <ChevronDownOutline />
-                </n-icon>
+              上一个差异
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-button text @click="navigateDiff('next')" :disabled="!selectedFile || diffLoading.file">
+                  <template #icon>
+                    <n-icon>
+                      <ChevronDownOutline />
+                    </n-icon>
+                  </template>
+                </n-button>
               </template>
-            </n-button>
+              下一个差异
+            </n-tooltip>
           </n-space>
         </n-space>
       </div>
@@ -435,7 +501,7 @@
 <script setup>
 import { ref, h, onMounted, onUnmounted, nextTick, watch, markRaw, computed } from 'vue'
 import {
-  NIcon, NTag, NButton, NCollapse, NCollapseItem, NDivider, NTooltip, NForm,
+  NIcon, NTag, NButton, NDivider, NTooltip, NForm,
   NFormItem,
   NInput,
   createDiscreteApi,
@@ -446,12 +512,13 @@ import {
   CloudUploadOutline,
   RefreshOutline,
   AddCircleOutline,
+  AddOutline,
   CreateOutline,
   RemoveCircleOutline,
   CloseCircleOutline,
+  CheckmarkCircleOutline,
   DocumentOutline,
   GitCommitOutline,
-  CheckmarkCircleOutline,
   ChevronUpOutline,
   ChevronDownOutline
 } from '@vicons/ionicons5'
@@ -1404,13 +1471,25 @@ const formatDateFull = (timestamp) => {
 
 const getFileStatusIcon = (status) => {
   switch (status) {
-    case 'A': return AddCircleOutline // 已暂存的新文件
-    case 'M': return CreateOutline    // 修改的文件
-    case 'D': return RemoveCircleOutline // 删除的文件
-    case '?': return DocumentOutline  // 未跟踪文件
-    case 'R': return GitCommitOutline // 重命名文件
-    case 'T': return GitCommitOutline // 类型变更
-    default: return DocumentOutline   // 其他状态
+    case 'A': return AddCircleOutline
+    case 'M': return CreateOutline
+    case 'D': return RemoveCircleOutline
+    case '?': return DocumentOutline
+    case 'R': return GitCommitOutline
+    case 'T': return GitCommitOutline
+    default: return DocumentOutline
+  }
+}
+
+const getStatusClass = (status) => {
+  switch (status) {
+    case 'A': return 'git-status-a'
+    case 'M': return 'git-status-m'
+    case 'D': return 'git-status-d'
+    case 'R': return 'git-status-r'
+    case 'T': return 'git-status-t'
+    case '?': return 'git-status-u'
+    default: return 'git-status-o'
   }
 }
 
@@ -2068,6 +2147,165 @@ onUnmounted(() => {
   background-color: var(--hover-color);
 }
 
+.git-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.git-status-icon {
+  width: 16px;
+  flex: 0 0 16px;
+}
+
+.git-status-a {
+  color: #2da44e;
+}
+
+.git-status-m {
+  color: #bf8700;
+}
+
+.git-status-d {
+  color: #d1242f;
+}
+
+.git-status-r,
+.git-status-t {
+  color: #1f6feb;
+}
+
+.git-status-u {
+  color: var(--text-color-secondary);
+}
+
+.git-status-o {
+  color: var(--text-color-secondary);
+}
+
+:root[data-guaxi-theme='dark'] .git-status-a {
+  color: #3fb950;
+}
+
+:root[data-guaxi-theme='dark'] .git-status-m {
+  color: #d29922;
+}
+
+:root[data-guaxi-theme='dark'] .git-status-d {
+  color: #f85149;
+}
+
+:root[data-guaxi-theme='dark'] .git-status-r,
+:root[data-guaxi-theme='dark'] .git-status-t {
+  color: #58a6ff;
+}
+
+.commit-row {
+  align-items: center;
+}
+
+.commit-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.commit-time {
+  font-size: 12px;
+}
+
+.commit-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+}
+
+.commit-tooltip-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-color-secondary);
+}
+
+.git-file-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.git-file-path {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-file-actions {
+  flex: 0 0 auto;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+  flex-shrink: 0;
+}
+
+.section-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.section-title {
+  font-size: 12px;
+}
+
+.section-count {
+  font-size: 12px;
+  color: var(--text-color-secondary);
+}
+
+.section-icon-button {
+  border: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.section-icon-button:hover:not(:disabled) {
+  background-color: var(--hover-color);
+}
+
+.section-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.section-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .selected-commit {
   background-color: var(--current-branch-bg);
 }
@@ -2132,6 +2370,7 @@ onUnmounted(() => {
   position: relative;
   background-color: var(--bg-color);
   color: var(--text-color);
+  font-family: 'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .git-sidebar {
@@ -2250,7 +2489,7 @@ onUnmounted(() => {
   padding: 8px 12px;
   border-bottom: 1px solid var(--divider-color);
   background-color: var(--card-bg);
-  /* flex-shrink: 0; */
+  flex-shrink: 0;
 }
 
 .commit-section {
@@ -2272,9 +2511,9 @@ onUnmounted(() => {
 
 /* 修改 changes-container 样式 */
 .changes-container {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  height: 100%;
   min-height: 0;
   position: relative;
 }
@@ -2282,41 +2521,57 @@ onUnmounted(() => {
 .changes-section,
 .staged-section,
 .commits-section {
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 40px;
-  /* 标题栏高度 */
   transition: flex 0.1s ease-out;
   background-color: var(--card-bg);
   border-top: 1px solid var(--divider-color);
 }
 
-/* 自定义滚动条样式 */
-.changes-section::-webkit-scrollbar,
-.staged-section::-webkit-scrollbar,
-.commits-section::-webkit-scrollbar {
-  width: 3px;
+.changes-section .n-collapse,
+.staged-section .n-collapse,
+.commits-section .n-collapse {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.changes-section::-webkit-scrollbar-track,
-.staged-section::-webkit-scrollbar-track,
-.commits-section::-webkit-scrollbar-track {
+.changes-section .n-collapse-item,
+.staged-section .n-collapse-item,
+.commits-section .n-collapse-item {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.section-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.section-scroll::-webkit-scrollbar {
+  width: 2px;
+  height: 2px;
+}
+
+.section-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.changes-section::-webkit-scrollbar-thumb,
-.staged-section::-webkit-scrollbar-thumb,
-.commits-section::-webkit-scrollbar-thumb {
+.section-scroll::-webkit-scrollbar-thumb {
   background-color: var(--text-color-secondary);
-  border-radius: 3px;
-  opacity: 0.3;
+  border-radius: 2px;
+  opacity: 0.45;
 }
 
-.changes-section::-webkit-scrollbar-thumb:hover,
-.staged-section::-webkit-scrollbar-thumb:hover,
-.commits-section::-webkit-scrollbar-thumb:hover {
-  opacity: 0.6;
+.section-scroll::-webkit-scrollbar-thumb:hover {
+  opacity: 0.8;
 }
 
 .commits-toolbar {
@@ -2326,10 +2581,32 @@ onUnmounted(() => {
 }
 
 .commits-list {
-  height: calc(100% - 40px);
-  overflow: hidden;
-  margin-bottom: 40px;
-  padding-bottom: 120px;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  margin-bottom: 0;
+  padding-bottom: 16px;
+  scrollbar-gutter: stable;
+}
+
+.commits-list::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+.commits-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.commits-list::-webkit-scrollbar-thumb {
+  background-color: var(--text-color-secondary);
+  border-radius: 3px;
+  opacity: 0.5;
+}
+
+.commits-list::-webkit-scrollbar-thumb:hover {
+  opacity: 0.85;
 }
 
 .commit-item {
@@ -2430,7 +2707,20 @@ onUnmounted(() => {
 }
 
 /* 动态内容区域显示控制 */
+.n-collapse-item__content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .n-collapse-item__content-inner {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   transition: opacity 0.15s ease;
 }
 
@@ -2456,7 +2746,7 @@ onUnmounted(() => {
 .n-list {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .sidebar-resize-handle {
@@ -2568,8 +2858,7 @@ onUnmounted(() => {
 }
 
 .n-collapse-item .n-collapse-item__header {
-  padding: 4px 12px;
-  position: relative;
+  padding: 0 12px;
 }
 
 .n-collapse-item .n-collapse-item__content-inner {
@@ -2700,7 +2989,10 @@ onUnmounted(() => {
 }
 
 .sidebar-content {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 </style>
