@@ -4842,9 +4842,9 @@ onUnmounted(() => {
 
 .tab-bar {
   display: flex;
-  height: 30px;
-  min-height: 30px;
-  flex: 0 0 30px;
+  height: 35px;
+  min-height: 35px;
+  flex: 0 0 35px;
   flex-shrink: 0;
   align-items: center;
   background: var(--guaxi-header-bg);
@@ -4858,6 +4858,7 @@ onUnmounted(() => {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .tab-region-right {
@@ -4865,7 +4866,7 @@ onUnmounted(() => {
 }
 
 .tab-region::-webkit-scrollbar {
-  width: 3px;
+  width: 4px;
   height: 4px;
 }
 
