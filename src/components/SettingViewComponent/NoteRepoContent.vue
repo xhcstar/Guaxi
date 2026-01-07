@@ -233,12 +233,17 @@ onMounted(async () => {
 
   try {
     const remoteConfig = await invoke('get_knowledge_bases_remote_config');
-    knowledgeBasesRemoteUrl.value = remoteConfig?.remote_url ? String(remoteConfig.remote_url) : '';
+    const remoteUrl = remoteConfig?.remoteUrl ?? remoteConfig?.remote_url;
+    const hasToken = remoteConfig?.hasToken ?? remoteConfig?.has_token;
+    const gitUsername = remoteConfig?.gitUsername ?? remoteConfig?.git_username;
+    const gitEmail = remoteConfig?.gitEmail ?? remoteConfig?.git_email;
+
+    knowledgeBasesRemoteUrl.value = remoteUrl ? String(remoteUrl) : '';
     knowledgeBasesRemoteUsername.value = remoteConfig?.username ? String(remoteConfig.username) : '';
-    knowledgeBasesRemoteHasToken.value = !!remoteConfig?.has_token;
+    knowledgeBasesRemoteHasToken.value = !!hasToken;
     knowledgeBasesRemoteToken.value = '';
-    knowledgeBasesGitUsername.value = remoteConfig?.git_username ? String(remoteConfig.git_username) : '';
-    knowledgeBasesGitEmail.value = remoteConfig?.git_email ? String(remoteConfig.git_email) : '';
+    knowledgeBasesGitUsername.value = gitUsername ? String(gitUsername) : '';
+    knowledgeBasesGitEmail.value = gitEmail ? String(gitEmail) : '';
   } catch (error) {
     console.error('加载知识库远程仓库配置失败:', error);
     knowledgeBasesRemoteUrl.value = '';
@@ -326,11 +331,11 @@ const handleKnowledgeBasesRemoteSave = async () => {
   try {
     loading.value = true;
     await invoke('set_knowledge_bases_remote_config', {
-      remote_url: knowledgeBasesRemoteUrl.value,
+      remoteUrl: knowledgeBasesRemoteUrl.value,
       username: knowledgeBasesRemoteUsername.value,
       token: knowledgeBasesRemoteToken.value,
-      git_username: knowledgeBasesGitUsername.value,
-      git_email: knowledgeBasesGitEmail.value,
+      gitUsername: knowledgeBasesGitUsername.value,
+      gitEmail: knowledgeBasesGitEmail.value,
     });
 
     knowledgeBasesRemoteHasToken.value = knowledgeBasesRemoteHasToken.value || !!knowledgeBasesRemoteToken.value.trim();
