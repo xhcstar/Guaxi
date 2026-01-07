@@ -318,6 +318,12 @@ pub fn git_push(path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
+    let current_branch = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        .unwrap_or_else(|| "master".to_string());
+
     let mut remote = repo.find_remote("origin").map_err(|e| {
         error!("Failed to find remote 'origin': {}", e);
         e.to_string()
@@ -349,6 +355,8 @@ pub fn git_push(path: String) -> Result<(), String> {
         (String::new(), String::new())
     };
 
+    let cfg = repo.config().ok();
+
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(move |url, username_from_url, allowed| {
         if is_kb_repo
@@ -357,10 +365,26 @@ pub fn git_push(path: String) -> Result<(), String> {
         {
             let username = if !kb_username.is_empty() {
                 kb_username.clone()
+            } else if url.to_ascii_lowercase().contains("gitee.com") {
+                return Err(git2::Error::from_str(
+                    "Gitee HTTPS 推送/拉取使用访问令牌时需要填写远程仓库用户名（你的 Gitee 账号或邮箱）",
+                ));
             } else {
                 default_http_username(url, username_from_url)
             };
             return Cred::userpass_plaintext(&username, &kb_token);
+        }
+
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            if let Some(cfg) = cfg.as_ref() {
+                if let Ok(c) = Cred::credential_helper(cfg, url, username_from_url) {
+                    return Ok(c);
+                }
+                let u = default_http_username(url, username_from_url);
+                if let Ok(c) = Cred::credential_helper(cfg, url, Some(u.as_str())) {
+                    return Ok(c);
+                }
+            }
         }
 
         if allowed.contains(CredentialType::SSH_KEY) {
@@ -380,16 +404,23 @@ pub fn git_push(path: String) -> Result<(), String> {
     let mut push_options = PushOptions::new();
     push_options.remote_callbacks(callbacks);
 
-    remote
-        .push(&["refs/heads/*:refs/heads/*"], Some(&mut push_options))
-        .map_err(|e| {
-            error!("Failed to push: {}", e);
-            if origin_url.is_empty() {
-                e.to_string()
-            } else {
-                format!("{} (origin: {})", e, origin_url)
-            }
-        })?;
+    let refspec = format!("refs/heads/{0}:refs/heads/{0}", current_branch);
+
+    remote.push(&[refspec.as_str()], Some(&mut push_options)).map_err(|e| {
+        error!("Failed to push: {}", e);
+        if origin_url.is_empty() {
+            e.to_string()
+        } else {
+            format!("{} (origin: {})", e, origin_url)
+        }
+    })?;
+
+    if let Ok(mut branch) = repo.find_branch(&current_branch, BranchType::Local) {
+        let upstream = format!("origin/{}", current_branch);
+        if let Err(e) = branch.set_upstream(Some(upstream.as_str())) {
+            warn!("Failed to set upstream for {}: {}", current_branch, e);
+        }
+    }
 
     info!("Push successful");
     Ok(())
@@ -422,20 +453,36 @@ pub fn git_pull(path: String) -> Result<(), String> {
         (String::new(), String::new())
     };
 
+    let cfg = repo.config().ok();
+
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |_url, username_from_url, allowed| {
+    callbacks.credentials(move |url, username_from_url, allowed| {
         if is_kb_repo
             && !kb_token.is_empty()
             && allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
         {
             let username = if !kb_username.is_empty() {
                 kb_username.clone()
+            } else if url.to_ascii_lowercase().contains("gitee.com") {
+                return Err(git2::Error::from_str(
+                    "Gitee HTTPS 推送/拉取使用访问令牌时需要填写远程仓库用户名（你的 Gitee 账号或邮箱）",
+                ));
             } else {
-                username_from_url
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "git".to_string())
+                default_http_username(url, username_from_url)
             };
             return Cred::userpass_plaintext(&username, &kb_token);
+        }
+
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            if let Some(cfg) = cfg.as_ref() {
+                if let Ok(c) = Cred::credential_helper(cfg, url, username_from_url) {
+                    return Ok(c);
+                }
+                let u = default_http_username(url, username_from_url);
+                if let Ok(c) = Cred::credential_helper(cfg, url, Some(u.as_str())) {
+                    return Ok(c);
+                }
+            }
         }
 
         if allowed.contains(CredentialType::SSH_KEY) {
