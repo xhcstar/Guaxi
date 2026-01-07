@@ -1314,6 +1314,11 @@ const toggleSectionVisibility = (section, headerHeight) => {
   }
 };
 
+const isIgnoredGitPath = (p) => {
+  const s = String(p || '').replace(/\\/g, '/')
+  return s === '.meta' || s.startsWith('.meta/') || s.includes('/.meta/')
+}
+
 const refreshGitStatus = async () => {
   logger.debug('Refreshing Git status')
   console.log('repo path:', props.workspacePath)
@@ -1333,6 +1338,8 @@ const refreshGitStatus = async () => {
 
     // 根据后端返回的 staged 字段正确分类文件
     statuses.forEach(file => {
+      if (isIgnoredGitPath(file?.path)) return
+
       const fileData = {
         path: file.path,
         status: file.status,
