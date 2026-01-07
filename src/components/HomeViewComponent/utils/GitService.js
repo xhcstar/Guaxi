@@ -10,33 +10,12 @@ export default class GitService {
     return await invoke("get_current_branch", { path: this.workspacePath });
   }
 
-  async getFileStatus(filePath) {
+  async getFileStatus(repoPath = this.workspacePath) {
     try {
-      // 修改为调用 get_git_status
-      return await invoke("get_git_status", { path: filePath });
+      return await invoke("get_git_status", { path: repoPath });
     } catch (error) {
       console.error("获取文件状态失败:", error);
       return [];
-    }
-  }
-
-  async getLineChanges(filePath) {
-    try {
-      // 这个命令在后端可能不存在，我们可以复用 get_git_status
-      const status = await this.getFileStatus(filePath);
-      return {
-        added: status
-          .filter((s) => s.status === "A")
-          .map((s) => s.lines_added)
-          .flat(),
-        modified: status
-          .filter((s) => s.status === "M")
-          .map((s) => s.lines_modified)
-          .flat(),
-      };
-    } catch (error) {
-      console.error("获取行变更失败:", error);
-      return { added: [], modified: [] };
     }
   }
 
@@ -57,15 +36,22 @@ export default class GitService {
 
   async getLineChanges(filePath) {
     try {
-      const status = await this.getFileStatus(filePath);
+      const status = await this.getFileStatus();
+      const target = String(filePath || '').replace(/\\/g, '/');
+
+      const fileStatus = status.filter((s) => {
+        const p = String(s?.path || '').replace(/\\/g, '/');
+        return p === target || (target && p.endsWith('/' + target));
+      });
+
       return {
-        added: status
+        added: fileStatus
           .filter((s) => s.status === "A")
           .flatMap((s) => s.lines_added),
-        modified: status
+        modified: fileStatus
           .filter((s) => s.status === "M")
           .flatMap((s) => s.lines_modified),
-        deleted: status
+        deleted: fileStatus
           .filter((s) => s.status === "D")
           .flatMap((s) => s.lines_deleted),
       };

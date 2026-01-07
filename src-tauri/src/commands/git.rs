@@ -12,6 +12,11 @@ use urlencoding::encode;
 
 use super::settingview;
 
+fn is_ignored_git_path(path: &str) -> bool {
+    let p = path.replace('\\', "/");
+    p == ".meta" || p.starts_with(".meta/") || p.contains("/.meta/")
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitCommit {
     id: String,
@@ -96,6 +101,10 @@ pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
             Some(p) => p.to_string(),
             None => continue,
         };
+
+        if is_ignored_git_path(&path) {
+            continue;
+        }
 
         // 更精确的状态判断
         let (status, staged) = if entry.status().is_index_new() {
@@ -683,8 +692,17 @@ pub fn stage_all(path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
+    let mut cb = |p: &Path, _matched: &[u8]| -> i32 {
+        let s = p.to_string_lossy();
+        if is_ignored_git_path(&s) {
+            1
+        } else {
+            0
+        }
+    };
+
     index
-        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, Some(&mut cb))
         .map_err(|e| {
             error!("Failed to add all to index: {}", e);
             e.to_string()
@@ -996,10 +1014,16 @@ pub fn get_file_content(
             format!("Failed to peel to tree: {}", e)
         })?;
 
-        let entry = tree.get_path(file_path).map_err(|e| {
-            error!("File not found in revision {}: {}", file_path.display(), e);
-            format!("File not found in revision: {}", file_path.display())
-        })?;
+        let entry = match tree.get_path(file_path) {
+            Ok(entry) => entry,
+            Err(e) => {
+                if e.code() == git2::ErrorCode::NotFound {
+                    return Ok(String::new());
+                }
+                error!("Failed to get file in revision {}: {}", file_path.display(), e);
+                return Err(format!("Failed to get file in revision: {}", file_path.display()));
+            }
+        };
 
         let blob = repo.find_blob(entry.id()).map_err(|e| {
             error!("Failed to find blob: {}", e);
@@ -1014,10 +1038,16 @@ pub fn get_file_content(
         debug!("Getting content from working directory");
         // 获取工作目录的文件内容
         let full_path = Path::new(&path).join(file_path);
-        std::fs::read_to_string(&full_path).map_err(|e| {
-            error!("Failed to read file {}: {}", full_path.display(), e);
-            format!("Failed to read file: {}", e)
-        })?
+        match std::fs::read_to_string(&full_path) {
+            Ok(v) => v,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    return Ok(String::new());
+                }
+                error!("Failed to read file {}: {}", full_path.display(), e);
+                return Err(format!("Failed to read file: {}", e));
+            }
+        }
     };
 
     debug!("Successfully retrieved content for {}", file_path.display());
