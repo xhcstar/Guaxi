@@ -6,6 +6,7 @@ export const useSettingsStore = defineStore("settings", {
   state: () => ({
     selectedMenu: "noterepo",
     librariesRoot: "",
+    knowledgeBasesRoot: "",
     appearanceTheme: "light",
     appearanceFontSize: 14,
     appearanceLoaded: false,
@@ -86,9 +87,14 @@ export const useSettingsStore = defineStore("settings", {
     async get_librariesRoot() {
       try {
         this.librariesRoot = await invoke("get_libraries_root");
-        // console.log("初始化: 获取当librariesRoot路径成功", this.librariesRoot);
       } catch (error) {
-        // console.error("获取当librariesRoot仓库路径失败", error);
+      }
+    },
+
+    async get_knowledgeBasesRoot() {
+      try {
+        this.knowledgeBasesRoot = await invoke("get_knowledge_bases_root");
+      } catch (error) {
       }
     },
   },

@@ -692,21 +692,45 @@ pub fn stage_all(path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
-    let mut cb = |p: &Path, _matched: &[u8]| -> i32 {
-        let s = p.to_string_lossy();
-        if is_ignored_git_path(&s) {
-            1
-        } else {
-            0
-        }
-    };
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true);
+    opts.recurse_untracked_dirs(true);
+    opts.show(StatusShow::IndexAndWorkdir);
 
-    index
-        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, Some(&mut cb))
-        .map_err(|e| {
-            error!("Failed to add all to index: {}", e);
-            e.to_string()
-        })?;
+    let statuses = repo.statuses(Some(&mut opts)).map_err(|e| {
+        error!("Failed to get statuses: {}", e);
+        e.to_string()
+    })?;
+
+    for entry in statuses.iter() {
+        let Some(p) = entry.path() else {
+            continue;
+        };
+        if is_ignored_git_path(p) {
+            continue;
+        }
+
+        let rel = Path::new(p);
+        let abs = repo
+            .workdir()
+            .ok_or_else(|| "Bare repository has no working directory".to_string())?
+            .join(rel);
+
+        if abs.is_dir() {
+            continue;
+        }
+
+        if entry.status().is_wt_deleted() {
+            if let Err(e) = index.remove_path(rel) {
+                warn!("Failed to remove path from index {}: {}", rel.display(), e);
+            }
+            continue;
+        }
+
+        if let Err(e) = index.add_path(rel) {
+            warn!("Skipping invalid path {}: {}", rel.display(), e);
+        }
+    }
 
     index.write().map_err(|e| {
         error!("Failed to write index: {}", e);

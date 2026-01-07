@@ -23,6 +23,15 @@
 
         <n-tooltip trigger="hover">
           <template #trigger>
+            <n-icon-wrapper :size="18" :border-radius="6" class="git-icon" @click="toggleGitPanel">
+              <n-icon :component="GitBranchOutline" size="16" />
+            </n-icon-wrapper>
+          </template>
+          Git 操作
+        </n-tooltip>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
             <n-icon-wrapper :size="18" :border-radius="6" class="refresh-icon" @click="refreshAll">
               <n-icon :component="RefreshIcon" size="16" />
             </n-icon-wrapper>
@@ -156,7 +165,7 @@
 
 <script setup>
 import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -188,6 +197,38 @@ const toggleBrowserPreview = async () => {
   } catch (e) {
     browserPreviewEnabled.value = false
     message.error('打开浏览器失败，请确认已启用 opener 插件')
+  }
+}
+
+const toggleGitPanel = async () => {
+  if (!settingsStore.knowledgeBasesRoot) {
+    await settingsStore.get_knowledgeBasesRoot()
+  }
+
+  const workspacePath = settingsStore.knowledgeBasesRoot
+  if (!workspacePath) {
+    message.error('未配置知识库根目录')
+    return
+  }
+
+  const windowLabel = `git-${Date.now()}`
+  const windowTitle = workspacePath
+
+  try {
+    await invoke('create_git_window', {
+      label: windowLabel,
+      title: windowTitle,
+      workspacePath,
+      theme: settingsStore.appearanceTheme,
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('Git 窗口已打开')
+      return
+    }
+    console.error('创建 Git 窗口失败:', err)
+    message.error('打开 Git 窗口失败')
   }
 }
 
@@ -2067,6 +2108,7 @@ onUnmounted(() => {
 .dark-mode .action-icon,
 .dark-mode .refresh-icon,
 .dark-mode .browser-icon,
+.dark-mode .git-icon,
 .dark-mode .kb-manager-icon {
   color: #444a57;
   background-color: transparent;
@@ -2078,6 +2120,8 @@ onUnmounted(() => {
 .dark-mode .refresh-icon.active,
 .dark-mode .browser-icon:hover,
 .dark-mode .browser-icon.active,
+.dark-mode .git-icon:hover,
+.dark-mode .git-icon.active,
 .dark-mode .kb-manager-icon:hover,
 .dark-mode .kb-manager-icon.active,
 .dark-mode .repo-list-item.active .action-icon,
@@ -2104,6 +2148,7 @@ onUnmounted(() => {
 .action-icon,
 .refresh-icon,
 .browser-icon,
+.git-icon,
 .kb-manager-icon {
   color: var(--n-text-color-disabled, #bfbfbf);
   background-color: transparent;
@@ -2119,6 +2164,8 @@ onUnmounted(() => {
 .refresh-icon.active,
 .browser-icon:hover,
 .browser-icon.active,
+.git-icon:hover,
+.git-icon.active,
 .kb-manager-icon:hover,
 .kb-manager-icon.active {
   color: var(--n-color-primary, #1890ff);
