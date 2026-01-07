@@ -124,7 +124,7 @@
               <n-input v-model:value="knowledgeBasesRemoteUrl" :disabled="loading" placeholder="https://..." />
             </n-form-item>
             <n-form-item label="远程仓库用户名">
-              <n-input v-model:value="knowledgeBasesRemoteUsername" :disabled="loading" placeholder="可选" />
+              <n-input v-model:value="knowledgeBasesRemoteUsername" :disabled="loading" placeholder="Gitee 必填(账号/邮箱)，其他可选" />
             </n-form-item>
             <n-form-item label="Git 用户名">
               <n-input v-model:value="knowledgeBasesGitUsername" :disabled="loading"
@@ -167,6 +167,7 @@ import {
   NDivider,
   NForm,
   NFormItem,
+  useMessage,
 } from 'naive-ui';
 import {
   FolderAdd20Regular,
@@ -178,6 +179,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 
 const store = repoStore();
+const message = useMessage();
 
 // 文件库根目录
 const librariesRoot = ref('');
@@ -330,6 +332,18 @@ const handleTemplateRepoSave = async () => {
 const handleKnowledgeBasesRemoteSave = async () => {
   try {
     loading.value = true;
+
+    const remoteUrl = String(knowledgeBasesRemoteUrl.value || '').trim();
+    const username = String(knowledgeBasesRemoteUsername.value || '').trim();
+    const tokenInput = String(knowledgeBasesRemoteToken.value || '').trim();
+    const hasToken = knowledgeBasesRemoteHasToken.value || !!tokenInput;
+    const isGitee = remoteUrl.toLowerCase().includes('gitee.com');
+
+    if (remoteUrl && isGitee && hasToken && !username) {
+      message.warning('Gitee 使用访问令牌时需要填写用户名（账号或邮箱）');
+      return;
+    }
+
     await invoke('set_knowledge_bases_remote_config', {
       remoteUrl: knowledgeBasesRemoteUrl.value,
       username: knowledgeBasesRemoteUsername.value,
