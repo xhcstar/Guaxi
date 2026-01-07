@@ -1473,7 +1473,7 @@ onMounted(async () => {
 
 .search-dd-preview {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.65);
+  color: var(--guaxi-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
