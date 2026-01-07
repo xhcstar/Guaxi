@@ -17,6 +17,48 @@ fn is_ignored_git_path(path: &str) -> bool {
     p == ".meta" || p.starts_with(".meta/") || p.contains("/.meta/")
 }
 
+fn normalize_remote_url(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if s.is_empty() {
+        return s;
+    }
+
+    if let Some((left, _)) = s.split_once('#') {
+        s = left.to_string();
+    }
+    if let Some((left, _)) = s.split_once('?') {
+        s = left.to_string();
+    }
+
+    while s.ends_with('/') {
+        s.pop();
+    }
+
+    if (s.starts_with("http://") || s.starts_with("https://")) && !s.ends_with(".git") {
+        s.push_str(".git");
+    }
+
+    s
+}
+
+fn default_http_username(url: &str, username_from_url: Option<&str>) -> String {
+    if let Some(u) = username_from_url {
+        if !u.trim().is_empty() {
+            return u.to_string();
+        }
+    }
+
+    let u = url.to_ascii_lowercase();
+    if u.contains("github.com") {
+        return "x-access-token".to_string();
+    }
+    if u.contains("gitlab") {
+        return "oauth2".to_string();
+    }
+
+    "git".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitCommit {
     id: String,
@@ -281,6 +323,25 @@ pub fn git_push(path: String) -> Result<(), String> {
         e.to_string()
     })?;
 
+    if let Some(url) = remote.url() {
+        let normalized = normalize_remote_url(url);
+        if normalized != url {
+            if let Err(e) = repo.remote_set_url("origin", normalized.as_str()) {
+                warn!("Failed to normalize origin url: {}", e);
+            } else {
+                remote = repo.find_remote("origin").map_err(|e| {
+                    error!("Failed to find remote 'origin': {}", e);
+                    e.to_string()
+                })?;
+            }
+        }
+    }
+
+    let origin_url = remote
+        .url()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "".to_string());
+
     let is_kb_repo = settingview::is_knowledge_bases_root_path(&path);
     let (kb_username, kb_token) = if is_kb_repo {
         settingview::get_knowledge_bases_remote_username_token()
@@ -289,7 +350,7 @@ pub fn git_push(path: String) -> Result<(), String> {
     };
 
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |_url, username_from_url, allowed| {
+    callbacks.credentials(move |url, username_from_url, allowed| {
         if is_kb_repo
             && !kb_token.is_empty()
             && allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
@@ -297,9 +358,7 @@ pub fn git_push(path: String) -> Result<(), String> {
             let username = if !kb_username.is_empty() {
                 kb_username.clone()
             } else {
-                username_from_url
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "git".to_string())
+                default_http_username(url, username_from_url)
             };
             return Cred::userpass_plaintext(&username, &kb_token);
         }
@@ -325,7 +384,11 @@ pub fn git_push(path: String) -> Result<(), String> {
         .push(&["refs/heads/*:refs/heads/*"], Some(&mut push_options))
         .map_err(|e| {
             error!("Failed to push: {}", e);
-            e.to_string()
+            if origin_url.is_empty() {
+                e.to_string()
+            } else {
+                format!("{} (origin: {})", e, origin_url)
+            }
         })?;
 
     info!("Push successful");

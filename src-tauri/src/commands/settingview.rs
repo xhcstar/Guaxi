@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use git2::{Cred, CredentialType, PushOptions, RemoteCallbacks, Repository, Signature};
+use git2::{Repository, Signature};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Library {
@@ -136,6 +136,30 @@ fn normalize_knowledge_bases_root(raw: &str) -> PathBuf {
     }
 }
 
+fn normalize_remote_url(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if s.is_empty() {
+        return s;
+    }
+
+    if let Some((left, _)) = s.split_once('#') {
+        s = left.to_string();
+    }
+    if let Some((left, _)) = s.split_once('?') {
+        s = left.to_string();
+    }
+
+    while s.ends_with('/') {
+        s.pop();
+    }
+
+    if (s.starts_with("http://") || s.starts_with("https://")) && !s.ends_with(".git") {
+        s.push_str(".git");
+    }
+
+    s
+}
+
 fn schedule_knowledge_bases_git_init(root: PathBuf) {
     if root.as_os_str().is_empty() {
         return;
@@ -231,9 +255,9 @@ fn ensure_knowledge_bases_git_repo(root: &Path) -> Result<(), String> {
         repo.set_head("refs/heads/master").map_err(|e| e.to_string())?;
     }
     let remote_url = if config.knowledge_bases_remote_url.trim().is_empty() {
-        KNOWLEDGE_BASES_REMOTE_URL.to_string()
+        normalize_remote_url(KNOWLEDGE_BASES_REMOTE_URL)
     } else {
-        config.knowledge_bases_remote_url.trim().to_string()
+        normalize_remote_url(config.knowledge_bases_remote_url.as_str())
     };
 
     if repo.find_remote("origin").is_err() {
@@ -246,39 +270,6 @@ fn ensure_knowledge_bases_git_repo(root: &Path) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
         }
     }
-
-    let token = config.knowledge_bases_remote_token.trim().to_string();
-    if token.is_empty() {
-        return Ok(());
-    }
-
-    let mut remote = repo.find_remote("origin").map_err(|e| e.to_string())?;
-    let username_cfg = config.knowledge_bases_remote_username.trim().to_string();
-
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |_url, username_from_url, allowed| {
-        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
-            let username = if !username_cfg.is_empty() {
-                username_cfg.clone()
-            } else {
-                username_from_url
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "git".to_string())
-            };
-            return Cred::userpass_plaintext(&username, &token);
-        }
-        Cred::default()
-    });
-
-    let mut push_options = PushOptions::new();
-    push_options.remote_callbacks(callbacks);
-
-    remote
-        .push(
-            &["refs/heads/master:refs/heads/master"],
-            Some(&mut push_options),
-        )
-        .map_err(|e| format!("git push failed: {}", e))?;
 
     Ok(())
 }
@@ -661,13 +652,13 @@ pub fn set_knowledge_bases_remote_config(
     git_email: String,
 ) -> Result<(), String> {
     let mut config = load_config();
-    config.knowledge_bases_remote_url = remote_url;
-    config.knowledge_bases_remote_username = username;
-    if !token.is_empty() {
-        config.knowledge_bases_remote_token = token;
+    config.knowledge_bases_remote_url = normalize_remote_url(remote_url.as_str());
+    config.knowledge_bases_remote_username = username.trim().to_string();
+    if !token.trim().is_empty() {
+        config.knowledge_bases_remote_token = token.trim().to_string();
     }
-    config.knowledge_bases_git_username = git_username;
-    config.knowledge_bases_git_email = git_email;
+    config.knowledge_bases_git_username = git_username.trim().to_string();
+    config.knowledge_bases_git_email = git_email.trim().to_string();
     save_config(&config);
 
     let root = get_knowledge_bases_root();
