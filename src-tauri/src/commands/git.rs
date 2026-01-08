@@ -1,10 +1,9 @@
 use git2::{
-    build::CheckoutBuilder, BranchType, Cred, CredentialType, Delta, DiffFormat, DiffOptions,
-    FetchOptions, IndexEntry, Oid, PushOptions, RemoteCallbacks, Repository, RepositoryOpenFlags,
-    StatusOptions, StatusShow, Tree,
+    build::CheckoutBuilder, BranchType, Delta, DiffFormat, DiffOptions, IndexEntry, Oid, Repository,
+    RepositoryOpenFlags, StatusOptions, StatusShow, Tree,
 };
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info, warn};
@@ -16,6 +15,7 @@ fn is_ignored_git_path(path: &str) -> bool {
     p == ".meta" || p.starts_with(".meta/") || p.contains("/.meta/")
 }
 
+#[cfg(any())]
 fn normalize_remote_url(raw: &str) -> String {
     let mut s = raw
         .trim()
@@ -43,6 +43,7 @@ fn normalize_remote_url(raw: &str) -> String {
     s
 }
 
+#[cfg(any())]
 fn default_http_username(url: &str, username_from_url: Option<&str>) -> String {
     if let Some(u) = username_from_url {
         if !u.trim().is_empty() {
@@ -68,6 +69,9 @@ pub struct GitCommit {
     author: String,
     date: String,
     summary: String,
+    files_changed: usize,
+    insertions: usize,
+    deletions: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -132,64 +136,69 @@ pub fn get_git_root(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
-    let repo =
-        Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
+pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let repo =
+            Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
-    let mut options = StatusOptions::new();
-    options.include_untracked(true);
-    options.recurse_untracked_dirs(true);
-    options.show(StatusShow::IndexAndWorkdir);
+        let mut options = StatusOptions::new();
+        options.include_untracked(true);
+        options.recurse_untracked_dirs(true);
+        options.show(StatusShow::IndexAndWorkdir);
 
-    let statuses = repo
-        .statuses(Some(&mut options))
-        .map_err(|e| format!("Failed to get statuses: {}", e))?;
+        let statuses = repo
+            .statuses(Some(&mut options))
+            .map_err(|e| format!("Failed to get statuses: {}", e))?;
 
-    let mut changes = Vec::new();
+        let mut changes = Vec::new();
 
-    for entry in statuses.iter() {
-        let path = match entry.path() {
-            Some(p) => p.to_string(),
-            None => continue,
-        };
+        for entry in statuses.iter() {
+            let path = match entry.path() {
+                Some(p) => p.to_string(),
+                None => continue,
+            };
 
-        if is_ignored_git_path(&path) {
-            continue;
+            if is_ignored_git_path(&path) {
+                continue;
+            }
+
+            let (status, staged) = if entry.status().is_index_new() {
+                ("A", true)
+            } else if entry.status().is_index_modified() {
+                ("M", true)
+            } else if entry.status().is_index_deleted() {
+                ("D", true)
+            } else if entry.status().is_wt_new() {
+                ("?", false)
+            } else if entry.status().is_wt_modified() {
+                ("M", false)
+            } else if entry.status().is_wt_deleted() {
+                ("D", false)
+            } else if entry.status().is_wt_renamed() {
+                ("R", false)
+            } else if entry.status().is_wt_typechange() {
+                ("T", false)
+            } else {
+                (" ", false)
+            };
+
+            changes.push(GitChange {
+                path,
+                status: status.to_string(),
+                lines_added: Vec::new(),
+                lines_modified: Vec::new(),
+                lines_deleted: Vec::new(),
+                diff: String::new(),
+                staged,
+            });
         }
 
-        // 更精确的状态判断
-        let (status, staged) = if entry.status().is_index_new() {
-            ("A", true) // 已暂存的新文件
-        } else if entry.status().is_index_modified() {
-            ("M", true) // 已暂存的修改
-        } else if entry.status().is_index_deleted() {
-            ("D", true) // 已暂存的删除
-        } else if entry.status().is_wt_new() {
-            ("?", false) // 未跟踪文件
-        } else if entry.status().is_wt_modified() {
-            ("M", false) // 工作区修改但未暂存
-        } else if entry.status().is_wt_deleted() {
-            ("D", false) // 工作区删除但未暂存
-        } else if entry.status().is_wt_renamed() {
-            ("R", false) // 重命名
-        } else if entry.status().is_wt_typechange() {
-            ("T", false) // 类型变更
-        } else {
-            (" ", false) // 其他状态
-        };
+        Ok(changes)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-        changes.push(GitChange {
-            path,
-            status: status.to_string(),
-            lines_added: Vec::new(),
-            lines_modified: Vec::new(),
-            lines_deleted: Vec::new(),
-            diff: String::new(),
-            staged, // 添加 staged 字段
-        });
-    }
-
-    Ok(changes)
+    result
 }
 
 #[tauri::command]
@@ -400,8 +409,8 @@ pub fn git_push(path: String) -> Result<(), String> {
 
     return Ok(());
 
-    // legacy libgit2 实现保留在下方（不再执行）
-
+    #[cfg(any())]
+    {
     let mut remote = repo.find_remote("origin").map_err(|e| {
         error!("Failed to find remote 'origin': {}", e);
         e.to_string()
@@ -522,6 +531,7 @@ pub fn git_push(path: String) -> Result<(), String> {
 
     info!("Push successful");
     Ok(())
+    }
 }
 
 #[tauri::command]
@@ -566,6 +576,8 @@ pub fn git_pull(path: String) -> Result<(), String> {
 
     return Ok(());
 
+    #[cfg(any())]
+    {
     let mut remote = repo.find_remote("origin").map_err(|e| {
         error!("Failed to find remote 'origin': {}", e);
         e.to_string()
@@ -728,6 +740,7 @@ pub fn git_pull(path: String) -> Result<(), String> {
 
     info!("Pull successful");
     Ok(())
+    }
 }
 
 #[tauri::command]
@@ -894,36 +907,73 @@ pub fn unstage_file(path: String, file_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_git_log(path: String, branch_name: String) -> Result<Vec<GitCommit>, String> {
-    let repo = Repository::discover(&path).map_err(|e| e.to_string())?;
+pub async fn get_git_log(
+    path: String,
+    branch_name: String,
+    limit: Option<usize>,
+) -> Result<Vec<GitCommit>, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let max = match limit.unwrap_or(200) {
+            0 => 200,
+            n if n > 2000 => 2000,
+            n => n,
+        };
 
-    let branch = repo
-        .find_branch(&branch_name, BranchType::Local)
-        .map_err(|e| format!("Failed to find branch {}: {}", branch_name, e))?;
+        let repo = Repository::discover(&path).map_err(|e| e.to_string())?;
 
-    let mut revwalk = repo.revwalk().map_err(|e| e.to_string())?;
-    revwalk
-        .push_ref(branch.get().name().ok_or("Invalid branch name")?)
-        .map_err(|e| e.to_string())?;
+        let branch = repo
+            .find_branch(&branch_name, BranchType::Local)
+            .map_err(|e| format!("Failed to find branch {}: {}", branch_name, e))?;
 
-    let mut commits = Vec::new();
-    for oid in revwalk {
-        let oid = oid.map_err(|e| e.to_string())?;
-        let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+        let mut revwalk = repo.revwalk().map_err(|e| e.to_string())?;
+        revwalk
+            .push_ref(branch.get().name().ok_or("Invalid branch name")?)
+            .map_err(|e| e.to_string())?;
 
-        let message = commit.message().unwrap_or_default().to_string();
-        let summary = message.lines().next().unwrap_or_default().to_string();
+        let mut commits = Vec::new();
+        for oid in revwalk.take(max) {
+            let oid = oid.map_err(|e| e.to_string())?;
+            let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
 
-        commits.push(GitCommit {
-            id: oid.to_string(),
-            message,
-            summary,
-            author: commit.author().name().unwrap_or_default().to_string(),
-            date: commit.time().seconds().to_string(),
-        });
-    }
+            let message = commit.message().unwrap_or_default().to_string();
+            let summary = message.lines().next().unwrap_or_default().to_string();
 
-    Ok(commits)
+            let parent_tree = if commit.parent_count() > 0 {
+                Some(
+                    commit
+                        .parent(0)
+                        .map_err(|e| e.to_string())?
+                        .tree()
+                        .map_err(|e| e.to_string())?,
+                )
+            } else {
+                None
+            };
+            let commit_tree = commit.tree().map_err(|e| e.to_string())?;
+            let diff = repo
+                .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
+                .map_err(|e| e.to_string())?;
+
+            let stats = diff.stats().map_err(|e| e.to_string())?;
+
+            commits.push(GitCommit {
+                id: oid.to_string(),
+                message,
+                summary,
+                author: commit.author().name().unwrap_or_default().to_string(),
+                date: commit.time().seconds().to_string(),
+                files_changed: stats.files_changed(),
+                insertions: stats.insertions(),
+                deletions: stats.deletions(),
+            });
+        }
+
+        Ok(commits)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    result
 }
 
 #[tauri::command]
