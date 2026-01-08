@@ -287,33 +287,35 @@
               </div>
 
               <div class="commits-list">
-                <div
+                <n-tooltip
                   v-for="commit in commits"
                   :key="commit.id"
-                  class="commit-item"
-                  :class="{
-                    'selected-commit': selectedCommit?.id === commit.id,
-                    'expanded-commit': expandedCommit?.id === commit.id
-                  }"
-                  @click="selectCommit(commit)"
+                  trigger="hover"
+                  placement="right-start"
+                  :delay="120"
+                  :duration="80"
+                  :raw="true"
+                  :show-arrow="false"
+                  :content-style="commitTooltipContentStyle"
                 >
-                  <div class="git-file-row commit-row">
-                    <div class="git-file-left">
-                      <n-icon :component="GitCommitOutline" size="16" class="commit-icon" />
-                      <n-tooltip trigger="hover">
-                        <template #trigger>
+                  <template #trigger>
+                    <div
+                      class="commit-item"
+                      :class="{
+                        'selected-commit': selectedCommit?.id === commit.id,
+                        'expanded-commit': expandedCommit?.id === commit.id
+                      }"
+                      @click="selectCommit(commit)"
+                    >
+                      <div class="git-file-row commit-row">
+                        <div class="git-file-left">
+                          <n-icon :component="GitCommitOutline" size="16" class="commit-icon" />
                           <div class="git-file-path">
                             <n-text>{{ commit.summary }}</n-text>
                           </div>
-                        </template>
-                        <div class="commit-tooltip">
-                          <div>{{ commit.summary }}</div>
-                          <div class="commit-tooltip-meta">{{ commit.author }} · {{ commit.id.slice(0, 7) }} · {{ formatDateRelative(commit.date) }}</div>
                         </div>
-                      </n-tooltip>
-                    </div>
-                    <div class="commit-right">
-                      <div class="commit-markers">
+                        <div class="commit-right">
+                          <div class="commit-markers">
                         <n-tooltip v-if="headMarkers.local_head && commit.id === headMarkers.local_head" trigger="hover">
                           <template #trigger>
                             <span class="commit-marker-pill commit-marker-local">
@@ -333,11 +335,11 @@
                           {{ headMarkers.remote_ref || 'origin' }}
                         </n-tooltip>
                       </div>
-                      <n-text depth="3" class="commit-time">{{ formatDateRelative(commit.date) }}</n-text>
-                      <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
-                    </div>
-                  </div>
-                  <div v-if="expandedCommit?.id === commit.id" class="commit-files">
+                          <n-text depth="3" class="commit-time">{{ formatDateRelative(commit.date) }}</n-text>
+                          <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
+                        </div>
+                      </div>
+                      <div v-if="expandedCommit?.id === commit.id" class="commit-files">
                     <n-list>
                       <n-list-item
                         v-for="file in commitFiles"
@@ -368,8 +370,24 @@
                         </div>
                       </n-list-item>
                     </n-list>
+                      </div>
+                    </div>
+                  </template>
+
+                  <div class="commit-tooltip vscode-commit-tooltip">
+                    <div class="commit-tooltip-header">
+                      {{ commit.author }} , {{ formatDateRelative(commit.date) }} ({{ formatDateFull(commit.date) }})
+                    </div>
+                    <div class="commit-tooltip-message">
+                      <div class="commit-tooltip-subject">{{ commit.message.split('\n')[0] }}</div>
+                      <pre class="commit-tooltip-body">{{ commit.message.split('\n').slice(1).join('\n') }}</pre>
+                    </div>
+                    <div class="commit-tooltip-stats">
+                      已更改 {{ commit.files_changed }} 个文件, {{ commit.insertions }} 个插入(+), {{ commit.deletions }} 个删除(-)
+                    </div>
+                    <div class="commit-tooltip-hash">{{ commit.id.slice(0, 7) }}</div>
                   </div>
-                </div>
+                </n-tooltip>
               </div>
             </div>
           </div>
@@ -550,6 +568,31 @@ const { notification } = createDiscreteApi(['notification'])
 const settingsStore = useSettingsStore()
 const getMonacoTheme = () => (settingsStore.appearanceTheme === 'dark' ? 'vs-dark' : 'vs')
 
+const commitTooltipContentStyle = computed(() => {
+  const isDark = settingsStore.appearanceTheme === 'dark'
+  return isDark
+    ? {
+        backgroundColor: '#1e1e1e',
+        color: '#d4d4d4',
+        border: '1px solid rgba(255, 255, 255, 0.12)',
+        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+        padding: '10px 12px',
+        borderRadius: '8px',
+        '--git-tooltip-text': '#d4d4d4',
+        '--git-tooltip-text-secondary': '#9da7b3'
+      }
+    : {
+        backgroundColor: '#ffffff',
+        color: '#1f2328',
+        border: 'none',
+        boxShadow: '0 8px 24px rgba(140, 149, 159, 0.25)',
+        padding: '10px 12px',
+        borderRadius: '8px',
+        '--git-tooltip-text': '#1f2328',
+        '--git-tooltip-text-secondary': '#57606a'
+      }
+})
+
 watch(
   () => settingsStore.appearanceTheme,
   () => {
@@ -648,7 +691,7 @@ const gitLoading = ref({
 
 const gitAutoRefresh = ref({
   enabled: true,
-  intervalMs: 1500
+  intervalMs: 5000
 })
 
 const isRefreshingStatus = ref(false)
@@ -669,7 +712,7 @@ const scheduleAutoRefresh = () => {
   if (!gitAutoRefresh.value.enabled) return
   if (refreshDebounceTimerId) clearTimeout(refreshDebounceTimerId)
   refreshDebounceTimerId = setTimeout(() => {
-    refreshGitStatus({ resetSelection: false })
+    refreshGitStatus({ resetSelection: false, includeCommits: false })
   }, 250)
 }
 
@@ -1071,14 +1114,10 @@ const confirmBranchSwitch = () => {
 // 获取分支列表
 const fetchBranches = async () => {
   try {
-    const result = await invoke('list_branches', {
-      path: props.workspacePath
-    });
-
-    // 获取当前分支
-    const current = await invoke('get_current_branch', {
-      path: props.workspacePath
-    });
+    const [result, current] = await Promise.all([
+      invoke('list_branches', { path: props.workspacePath }),
+      invoke('get_current_branch', { path: props.workspacePath })
+    ])
 
     // 更新分支列表和当前分支
     branches.value = result.map(b => ({
@@ -1125,7 +1164,7 @@ const handleBranchItemClick = async (branch) => {
       // 刷新所有相关状态
       await Promise.all([
         fetchBranches(),       // 刷新分支列表
-        refreshGitStatus(),    // 刷新文件状态
+        await refreshGitStatus({ includeCommits: true }),    // 刷新文件状态
         loadCommitHistory()    // 刷新提交历史
       ]);
 
@@ -1455,7 +1494,7 @@ const isIgnoredGitPath = (p) => {
   return s === '.meta' || s.startsWith('.meta/') || s.includes('/.meta/')
 }
 
-const refreshGitStatus = async ({ resetSelection = true } = {}) => {
+const refreshGitStatus = async ({ resetSelection = true, includeCommits = true } = {}) => {
   if (isRefreshingStatus.value) return
   isRefreshingStatus.value = true
 
@@ -1500,7 +1539,9 @@ const refreshGitStatus = async ({ resetSelection = true } = {}) => {
     stagedFiles.value = newStagedFiles
     unstagedFiles.value = newUnstagedFiles
 
-    await loadCommitHistory()
+    if (includeCommits) {
+      await loadCommitHistory()
+    }
 
     if (!resetSelection) {
       if (prevSelectedCommitId) {
@@ -1537,14 +1578,24 @@ const refreshGitStatus = async ({ resetSelection = true } = {}) => {
 
 const loadCommitHistory = async () => {
   try {
-    const currentBranch = await invoke('get_current_branch', { path: props.workspacePath })
+    const [markers, branch] = await Promise.all([
+      invoke('get_git_head_markers', { path: props.workspacePath }),
+      currentBranch.value
+        ? Promise.resolve(currentBranch.value)
+        : invoke('get_current_branch', { path: props.workspacePath })
+    ])
+
+    if (!currentBranch.value && branch) {
+      currentBranch.value = branch
+    }
+
     commits.value = await invoke('get_git_log', {
       path: props.workspacePath,
-      branchName: currentBranch
+      branchName: branch || currentBranch.value,
+      limit: 200
     })
-    headMarkers.value = await invoke('get_git_head_markers', {
-      path: props.workspacePath
-    })
+
+    headMarkers.value = markers
     logger.debug('Commit history loaded', { count: commits.value.length })
   } catch (error) {
     logger.error('Failed to load commit history', error)
@@ -2008,11 +2059,22 @@ const handlePull = async () => {
   try {
     await invoke('git_pull', { path: props.workspacePath })
     logger.info('Pull successful')
+    notification.success({
+      title: '拉取成功',
+      content: currentBranch.value ? `已更新 ${currentBranch.value}` : '已更新本地分支',
+      duration: 2000
+    })
     refreshGitStatus()
   } catch (error) {
+    const msg = String(error?.message || error)
     logger.error('Pull failed', {
       path: props.workspacePath,
-      error: String(error)
+      error: msg
+    })
+    notification.error({
+      title: '拉取失败',
+      content: msg,
+      duration: 4000
     })
   } finally {
     gitLoading.value.pull = false
@@ -2025,10 +2087,21 @@ const handlePush = async () => {
   try {
     await invoke('git_push', { path: props.workspacePath })
     logger.info('Push successful')
+    notification.success({
+      title: '推送成功',
+      content: currentBranch.value ? `已推送 ${currentBranch.value}` : '已推送到远端',
+      duration: 2000
+    })
   } catch (error) {
+    const msg = String(error?.message || error)
     logger.error('Push failed', {
       path: props.workspacePath,
-      error: String(error)
+      error: msg
+    })
+    notification.error({
+      title: '推送失败',
+      content: msg,
+      duration: 4000
     })
   } finally {
     gitLoading.value.push = false
@@ -2114,7 +2187,7 @@ onMounted(() => {
     autoRefreshIntervalId = setInterval(() => {
       if (!gitAutoRefresh.value.enabled) return
       if (document.visibilityState !== 'visible') return
-      refreshGitStatus({ resetSelection: false })
+      refreshGitStatus({ resetSelection: false, includeCommits: false })
     }, gitAutoRefresh.value.intervalMs)
 
     const onFocus = () => scheduleAutoRefresh()
@@ -2422,6 +2495,49 @@ onUnmounted(() => {
   margin-top: 6px;
   font-size: 12px;
   color: var(--text-color-secondary);
+}
+
+.vscode-commit-tooltip {
+  max-width: 520px;
+  white-space: normal;
+}
+
+.commit-tooltip-header {
+  font-size: 12px;
+  color: var(--git-tooltip-text-secondary, var(--text-color-secondary));
+  margin-bottom: 8px;
+}
+
+.commit-tooltip-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.commit-tooltip-subject {
+  font-size: 13px;
+  color: var(--git-tooltip-text, var(--text-color));
+}
+
+.commit-tooltip-body {
+  margin: 0;
+  font-size: 12px;
+  color: var(--git-tooltip-text, var(--text-color));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.commit-tooltip-stats {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--git-tooltip-text-secondary, var(--text-color-secondary));
+}
+
+.commit-tooltip-hash {
+  margin-top: 6px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: var(--git-tooltip-text-secondary, var(--text-color-secondary));
 }
 
 .git-file-left {

@@ -706,9 +706,6 @@ pub fn is_knowledge_bases_root_path(path: &str) -> bool {
     }
 }
 
-pub fn get_knowledge_bases_remote_username_token() -> (String, String) {
-    ("".to_string(), "".to_string())
-}
 
 #[tauri::command]
 pub fn get_knowledge_bases_root() -> String {
