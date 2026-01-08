@@ -406,7 +406,7 @@ import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { save } from '@tauri-apps/plugin-dialog'
+import { save, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 
 const outlineStore = useOutlineStore()
 // 添加 GitPanel 组件引用
@@ -3266,6 +3266,46 @@ const updateEditorContent = (content) => {
   });
 };
 
+const AUTO_SAVE_FALLBACK_INTERVAL_MS = 5 * 60 * 1000
+let autoSaveTimerId = null
+const autoSaving = ref(false)
+
+const autoSaveDirtyTabs = async () => {
+  if (autoSaving.value) return
+  if (editorStore.autoSaveEnabled === false) return
+  if (!fileTreeStore.openTabs.length) return
+
+  autoSaving.value = true
+  try {
+    const activePath = fileTreeStore.activeTab
+    if (activePath) {
+      const targetEditor = getActiveEditor()
+      const activeContent =
+        previewMode.value === 'realtime' && realtimeVditor
+          ? realtimeVditor.getValue()
+          : targetEditor
+            ? targetEditor.getValue()
+            : rawContent.value
+      fileTreeStore.updateTabContent(activePath, activeContent)
+    }
+
+    const dirtyTabs = fileTreeStore.openTabs.filter((tab) => tab?.dirty)
+    if (!dirtyTabs.length) return
+
+    for (const tab of dirtyTabs) {
+      if (!tab?.path) continue
+      if (tab.unsupported) continue
+      await fileTreeStore.updateFileContent(tab.path, tab.content)
+    }
+
+    editorStore.setLastAutoSaveAt(Date.now())
+  } catch (e) {
+    console.error('自动保存失败:', e)
+  } finally {
+    autoSaving.value = false
+  }
+}
+
 // 保存内容
 const saveContent = async () => {
   if (!selectedFile.value) return;
@@ -4226,7 +4266,7 @@ const switchTab = (path, region) => {
   updateEditorContent(tab.content);
 };
 
-const closeTab = (path, region) => {
+const closeTab = async (path, region) => {
   const targetRegion = region || 'left';
   const regionActivePath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
   const regionEditor = targetRegion === 'right' ? secondaryEditor : editor;
@@ -4247,6 +4287,15 @@ const closeTab = (path, region) => {
   if (regionEditor && regionActivePath === path) {
     const content = regionEditor.getValue();
     fileTreeStore.updateTabContent(path, content);
+  }
+
+  const closingTab = fileTreeStore.openTabs.find((t) => t.path === path)
+  if (closingTab?.dirty) {
+    const ok = await confirmDialog(`文件「${closingTab.fileName || path}」尚未保存，确定要关闭并丢弃更改吗？`, {
+      title: '未保存的更改',
+      kind: 'warning'
+    })
+    if (!ok) return
   }
 
   fileTreeStore.closeTab(path, targetRegion);
@@ -4415,11 +4464,21 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   outlineStore.setJumpToLine(jumpToLine)
   initGitService()
+
+  const intervalMs = Number(editorStore.autoSaveIntervalMs) || AUTO_SAVE_FALLBACK_INTERVAL_MS
+  if (editorStore.autoSaveEnabled !== false && intervalMs > 0) {
+    autoSaveTimerId = window.setInterval(autoSaveDirtyTabs, intervalMs)
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
   destroyRealtimeVditor();
+
+  if (autoSaveTimerId) {
+    window.clearInterval(autoSaveTimerId)
+    autoSaveTimerId = null
+  }
 
   if (editorEffectsRight) {
     editorEffectsRight.destroy();

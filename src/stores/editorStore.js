@@ -10,6 +10,10 @@ export const useEditorStore = defineStore("editor", {
     editorInstance: null, // Monaco编辑器实例引用
     isInserting: false, // 新增：插入操作状态标志
 
+    autoSaveEnabled: true,
+    autoSaveIntervalMs: 5 * 60 * 1000,
+    lastAutoSaveAt: null,
+
     // 状态栏相关状态
     cursorPosition: { lineNumber: 1, column: 1 },
     language: "plaintext",
@@ -209,6 +213,20 @@ export const useEditorStore = defineStore("editor", {
     // 更新光标位置
     setCursorPosition(position) {
       this.cursorPosition = position;
+    },
+
+    setAutoSaveEnabled(enabled) {
+      this.autoSaveEnabled = !!enabled;
+    },
+
+    setAutoSaveIntervalMs(ms) {
+      const next = Number(ms);
+      this.autoSaveIntervalMs = Number.isFinite(next) && next > 0 ? next : 5 * 60 * 1000;
+    },
+
+    setLastAutoSaveAt(ts) {
+      const next = Number(ts);
+      this.lastAutoSaveAt = Number.isFinite(next) && next > 0 ? next : Date.now();
     },
 
     // 更新问题计数
