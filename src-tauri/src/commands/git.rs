@@ -3,7 +3,8 @@ use git2::{
     RepositoryOpenFlags, StatusOptions, StatusShow, Tree,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info, warn};
@@ -13,6 +14,74 @@ use urlencoding::encode;
 fn is_ignored_git_path(path: &str) -> bool {
     let p = path.replace('\\', "/");
     p == ".meta" || p.starts_with(".meta/") || p.contains("/.meta/")
+}
+
+fn flush_pending_deletes(pending_deletes: &mut u32, deleted: &mut BTreeSet<u32>, anchor: u32) {
+    if *pending_deletes > 0 {
+        deleted.insert(anchor.max(1));
+        *pending_deletes = 0;
+    }
+}
+
+fn collect_line_changes_from_diff(diff: &git2::Diff) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+    let mut added = BTreeSet::<u32>::new();
+    let mut modified = BTreeSet::<u32>::new();
+    let mut deleted = BTreeSet::<u32>::new();
+
+    let mut pending_deletes: u32 = 0;
+    let mut current_new_line: u32 = 1;
+    let mut current_hunk_new_start: u32 = 1;
+
+    let _ = diff.foreach(
+        &mut |_delta, _| true,
+        None,
+        None,
+        Some(&mut |_delta, hunk, line| {
+            if let Some(hunk) = hunk {
+                let hunk_new_start = hunk.new_start() as u32;
+                if hunk_new_start != current_hunk_new_start {
+                    flush_pending_deletes(
+                        &mut pending_deletes,
+                        &mut deleted,
+                        current_new_line.max(1),
+                    );
+                    current_hunk_new_start = hunk_new_start;
+                    current_new_line = current_hunk_new_start.max(1);
+                }
+            }
+
+            match line.origin() {
+                '+' => {
+                    let ln = line.new_lineno().unwrap_or(current_new_line);
+                    if pending_deletes > 0 {
+                        modified.insert(ln);
+                        pending_deletes = pending_deletes.saturating_sub(1);
+                    } else {
+                        added.insert(ln);
+                    }
+                    current_new_line = ln.saturating_add(1);
+                }
+                '-' => {
+                    pending_deletes = pending_deletes.saturating_add(1);
+                }
+                ' ' => {
+                    flush_pending_deletes(&mut pending_deletes, &mut deleted, current_new_line.max(1));
+                    let ln = line.new_lineno().unwrap_or(current_new_line);
+                    current_new_line = ln.saturating_add(1);
+                }
+                _ => {}
+            }
+            true
+        }),
+    );
+
+    flush_pending_deletes(&mut pending_deletes, &mut deleted, current_new_line.max(1));
+
+    (
+        added.into_iter().collect(),
+        modified.into_iter().collect(),
+        deleted.into_iter().collect(),
+    )
 }
 
 #[cfg(any())]
@@ -141,6 +210,35 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
         let repo =
             Repository::discover(&path).map_err(|e| format!("Failed to open repository: {}", e))?;
 
+        let repo_root: PathBuf = repo
+            .workdir()
+            .unwrap_or_else(|| Path::new(&path))
+            .to_path_buf();
+
+        let head_tree = match repo.head().ok().and_then(|h| h.peel_to_tree().ok()) {
+            Some(t) => t,
+            None => {
+                let builder = repo
+                    .treebuilder(None)
+                    .map_err(|e| format!("Failed to create tree builder: {}", e))?;
+                let oid = builder
+                    .write()
+                    .map_err(|e| format!("Failed to write empty tree: {}", e))?;
+                repo.find_tree(oid)
+                    .map_err(|e| format!("Failed to find empty tree: {}", e))?
+            }
+        };
+
+        let mut index = repo
+            .index()
+            .map_err(|e| format!("Failed to get repository index: {}", e))?;
+        let index_tree_oid = index
+            .write_tree()
+            .map_err(|e| format!("Failed to write index tree: {}", e))?;
+        let index_tree = repo
+            .find_tree(index_tree_oid)
+            .map_err(|e| format!("Failed to find index tree: {}", e))?;
+
         let mut options = StatusOptions::new();
         options.include_untracked(true);
         options.recurse_untracked_dirs(true);
@@ -153,12 +251,12 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
         let mut changes = Vec::new();
 
         for entry in statuses.iter() {
-            let path = match entry.path() {
+            let rel_path = match entry.path() {
                 Some(p) => p.to_string(),
                 None => continue,
             };
 
-            if is_ignored_git_path(&path) {
+            if is_ignored_git_path(&rel_path) {
                 continue;
             }
 
@@ -182,12 +280,75 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                 (" ", false)
             };
 
+            let mut lines_added: Vec<u32> = Vec::new();
+            let mut lines_modified: Vec<u32> = Vec::new();
+            let mut lines_deleted: Vec<u32> = Vec::new();
+
+            if status == "?" {
+                let abs = repo_root.join(Path::new(&rel_path));
+                if let Ok(content) = std::fs::read_to_string(&abs) {
+                    let line_count = content.lines().count() as u32;
+                    if line_count > 0 {
+                        lines_added = (1..=line_count).collect();
+                    }
+                }
+            } else if status == "A" || status == "M" || status == "D" {
+                let mut diff_options = DiffOptions::new();
+                diff_options.context_lines(0);
+                diff_options.pathspec(rel_path.clone());
+
+                let diff = if staged {
+                    repo.diff_tree_to_tree(
+                        Some(&head_tree),
+                        Some(&index_tree),
+                        Some(&mut diff_options),
+                    )
+                    .map_err(|e| format!("Failed to create staged diff: {}", e))?
+                } else {
+                    repo.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
+                        .map_err(|e| format!("Failed to create workdir diff: {}", e))?
+                };
+
+                let (a, m, d) = collect_line_changes_from_diff(&diff);
+
+                if status == "M" {
+                    let mut all = BTreeSet::<u32>::new();
+                    all.extend(a);
+                    all.extend(m);
+                    all.extend(d);
+                    lines_modified = all.into_iter().collect();
+
+                    if lines_modified.is_empty() {
+                        lines_modified.push(1);
+                    }
+                } else if status == "A" {
+                    lines_added = a;
+                    if lines_added.is_empty() {
+                        let abs = repo_root.join(Path::new(&rel_path));
+                        if let Ok(content) = std::fs::read_to_string(&abs) {
+                            let line_count = content.lines().count() as u32;
+                            if line_count > 0 {
+                                lines_added = (1..=line_count).collect();
+                            }
+                        }
+                    }
+                    if lines_added.is_empty() {
+                        lines_added.push(1);
+                    }
+                } else if status == "D" {
+                    lines_deleted = d;
+                    if lines_deleted.is_empty() {
+                        lines_deleted.push(1);
+                    }
+                }
+            }
+
             changes.push(GitChange {
-                path,
+                path: rel_path,
                 status: status.to_string(),
-                lines_added: Vec::new(),
-                lines_modified: Vec::new(),
-                lines_deleted: Vec::new(),
+                lines_added,
+                lines_modified,
+                lines_deleted,
                 diff: String::new(),
                 staged,
             });

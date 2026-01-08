@@ -36,27 +36,42 @@ export default class GitService {
 
   async getLineChanges(filePath) {
     try {
-      const status = await this.getFileStatus();
-      const target = String(filePath || '').replace(/\\/g, '/');
+      const targetAbs = String(filePath || '').replace(/\\/g, '/');
+      const repoAbs = String(this.workspacePath || '').replace(/\\/g, '/');
+      const targetRel = repoAbs && targetAbs.startsWith(repoAbs + '/')
+        ? targetAbs.slice(repoAbs.length + 1)
+        : targetAbs;
 
-      const fileStatus = status.filter((s) => {
+      const status = await this.getFileStatus(filePath);
+      const list = Array.isArray(status) ? status : [];
+
+      const matched = list.filter((s) => {
         const p = String(s?.path || '').replace(/\\/g, '/');
-        return p === target || (target && p.endsWith('/' + target));
+        return p === targetAbs || p === targetRel || (targetRel && p.endsWith('/' + targetRel));
+      });
+
+      console.debug('[GitService] getLineChanges', {
+        repoAbs,
+        targetAbs,
+        targetRel,
+        statusCount: list.length,
+        matchedCount: matched.length,
+        sample: matched.slice(0, 2)
       });
 
       return {
-        added: fileStatus
-          .filter((s) => s.status === "A")
-          .flatMap((s) => s.lines_added),
-        modified: fileStatus
-          .filter((s) => s.status === "M")
-          .flatMap((s) => s.lines_modified),
-        deleted: fileStatus
-          .filter((s) => s.status === "D")
-          .flatMap((s) => s.lines_deleted),
+        added: matched
+          .filter((s) => s.status === 'A')
+          .flatMap((s) => Array.isArray(s.lines_added) ? s.lines_added : []),
+        modified: matched
+          .filter((s) => s.status === 'M')
+          .flatMap((s) => Array.isArray(s.lines_modified) ? s.lines_modified : []),
+        deleted: matched
+          .filter((s) => s.status === 'D')
+          .flatMap((s) => Array.isArray(s.lines_deleted) ? s.lines_deleted : []),
       };
     } catch (error) {
-      console.error("获取行变更失败:", error);
+      console.error('获取行变更失败:', error);
       return { added: [], modified: [], deleted: [] };
     }
   }

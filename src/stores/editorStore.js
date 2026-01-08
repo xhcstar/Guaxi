@@ -85,36 +85,73 @@ export const useEditorStore = defineStore("editor", {
 
     setGitDecorations(decorations) {
       this.gitDecorations = decorations;
+      console.debug('[GitDecorations] setGitDecorations', {
+        count: Array.isArray(decorations) ? decorations.length : null
+      });
       this.applyGitDecorations();
     },
 
     applyGitDecorations() {
-      if (!this.editorInstance || this.gitDecorations.length === 0) return;
-
-      if (this.gitDecorationIds.length > 0) {
-        this.editorInstance.deltaDecorations(this.gitDecorationIds, []);
+      if (!this.editorInstance) {
+        console.debug('[GitDecorations] applyGitDecorations skipped (no editorInstance)');
+        return;
       }
 
-      this.gitDecorationIds = this.editorInstance.deltaDecorations(
-        [],
-        this.gitDecorations
-      );
+      const hasDecorations = Array.isArray(this.gitDecorations) && this.gitDecorations.length > 0;
+      if (!hasDecorations) {
+        if (Array.isArray(this.gitDecorationIds) && this.gitDecorationIds.length > 0) {
+          this.editorInstance.deltaDecorations(this.gitDecorationIds, []);
+        }
+        this.gitDecorationIds = [];
+        console.debug('[GitDecorations] applyGitDecorations cleared (no decorations)', {
+          decorationsType: typeof this.gitDecorations,
+          count: Array.isArray(this.gitDecorations) ? this.gitDecorations.length : null
+        });
+        return;
+      }
+
+      try {
+        if (Array.isArray(this.gitDecorationIds) && this.gitDecorationIds.length > 0) {
+          this.editorInstance.deltaDecorations(this.gitDecorationIds, []);
+        }
+
+        this.gitDecorationIds = this.editorInstance.deltaDecorations([], this.gitDecorations);
+
+        console.debug('[GitDecorations] applied', {
+          decorationsCount: this.gitDecorations.length,
+          decorationIdsCount: Array.isArray(this.gitDecorationIds) ? this.gitDecorationIds.length : null
+        });
+      } catch (e) {
+        console.error('[GitDecorations] apply failed:', e);
+      }
     },
 
     clearGitDecorations() {
-      if (this.editorInstance && this.gitDecorationIds.length > 0) {
+      const before = Array.isArray(this.gitDecorationIds) ? this.gitDecorationIds.length : null;
+      if (this.editorInstance && Array.isArray(this.gitDecorationIds) && this.gitDecorationIds.length > 0) {
         this.editorInstance.deltaDecorations(this.gitDecorationIds, []);
       }
       this.gitDecorations = [];
       this.gitDecorationIds = [];
+      console.debug('[GitDecorations] cleared', { before });
     },
 
     updateGitLineDecorations({ added = [], modified = [], deleted = [] }) {
+      console.debug('[GitDecorations] updateGitLineDecorations input', {
+        added: Array.isArray(added) ? added.length : null,
+        modified: Array.isArray(modified) ? modified.length : null,
+        deleted: Array.isArray(deleted) ? deleted.length : null
+      });
+
       const decorations = [
-        ...added.map((line) => this.createGitDecoration(line, "added")),
-        ...modified.map((line) => this.createGitDecoration(line, "modified")),
-        ...deleted.map((line) => this.createGitDecoration(line, "deleted")),
+        ...(Array.isArray(added) ? added : []).map((line) => this.createGitDecoration(line, "added")),
+        ...(Array.isArray(modified) ? modified : []).map((line) => this.createGitDecoration(line, "modified")),
+        ...(Array.isArray(deleted) ? deleted : []).map((line) => this.createGitDecoration(line, "deleted")),
       ];
+
+      console.debug('[GitDecorations] updateGitLineDecorations generated', {
+        count: decorations.length
+      });
 
       this.setGitDecorations(decorations);
     },
@@ -131,8 +168,8 @@ export const useEditorStore = defineStore("editor", {
         range: new monaco.Range(line, 1, line, 1),
         options: {
           isWholeLine: true,
-          glyphMarginClassName: className,
-          glyphMarginHoverMessage: { value: hoverMessage },
+          linesDecorationsClassName: className,
+          hoverMessage: { value: hoverMessage },
           stickiness:
             monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         },
