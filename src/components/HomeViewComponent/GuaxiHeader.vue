@@ -385,6 +385,13 @@ const dropdownFloatingStyle = computed(() => {
 
 const trimmedQuery = computed(() => searchQuery.value.trim())
 
+watch(trimmedQuery, (q) => {
+  if (q) return
+  if (editorStore.highlightInfo) {
+    editorStore.highlightInfo = null
+  }
+})
+
 const typeMenuItems = computed(() => ([
   { key: 'file', label: SEARCH_TYPE_LABELS.file, icon: DocumentSearch20Filled },
   { key: 'note', label: SEARCH_TYPE_LABELS.note, icon: DocumentSearch24Regular },
