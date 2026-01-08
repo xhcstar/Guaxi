@@ -2081,8 +2081,8 @@ onUnmounted(() => {
 
 /* 暗色模式适配 */
 .dark-mode .file-tree-container {
-  background-color: var(--n-card-color, #1a1a1a);
-  border-color: rgba(255, 255, 255, 0.12);
+  background-color: var(--guaxi-panel-bg);
+  border-color: var(--guaxi-border);
 }
 
 .dark-mode .repo-scroll-container {

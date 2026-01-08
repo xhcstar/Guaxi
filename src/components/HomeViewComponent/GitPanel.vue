@@ -566,7 +566,118 @@ import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言�
 const { notification } = createDiscreteApi(['notification'])
 
 const settingsStore = useSettingsStore()
-const getMonacoTheme = () => (settingsStore.appearanceTheme === 'dark' ? 'vs-dark' : 'vs')
+
+let guaxiMonacoThemesReady = false
+const ensureGuaxiMonacoThemes = () => {
+  if (guaxiMonacoThemesReady) return
+
+  monaco.editor.defineTheme('guaxi-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: 'a0a1a7' },
+      { token: 'keyword', foreground: 'a626a4' },
+      { token: 'string', foreground: '50a14f' },
+      { token: 'number', foreground: '986801' },
+      { token: 'regexp', foreground: '0184bc' },
+      { token: 'type', foreground: 'c18401' },
+      { token: 'delimiter', foreground: '383a42' },
+      { token: 'variable', foreground: 'e45649' },
+      { token: 'parameter', foreground: '4078f2' },
+      { token: 'function', foreground: '4078f2' },
+      { token: 'constant', foreground: '986801' },
+      { token: 'class', foreground: 'c18401' },
+      { token: 'identifier', foreground: '383a42' },
+      { token: 'tag', foreground: 'e45649' },
+      { token: 'attribute.name', foreground: 'c18401' },
+      { token: 'meta.embedded', foreground: 'a0a1a7' }
+    ],
+    colors: {
+      'editor.background': '#fafafa',
+      'editor.foreground': '#383a42',
+      'editorLineNumber.foreground': '#a0a1a7',
+      'editorLineNumber.activeForeground': '#383a42',
+      'editorCursor.foreground': '#4078f2',
+      'editor.selectionBackground': '#d7dae0',
+      'editor.inactiveSelectionBackground': '#e3f2fd',
+      'editor.lineHighlightBackground': '#f0f0f0',
+      'editorBracketMatch.background': '#e1f5fe',
+      'editorBracketMatch.border': '#90caf9',
+      'editor.selectionHighlightBackground': '#ffe0b2',
+      'editor.foldBackground': '#f7f9fc',
+      'editorWhitespace.foreground': '#d0d0d0',
+      'editorIndentGuide.background': '#d0d0d0',
+      'editorIndentGuide.activeBackground': '#b0bec5',
+      'editorHoverWidget.background': '#ffffff',
+      'editorHoverWidget.border': '#e0e0e0',
+      'editorSuggestWidget.background': '#ffffff',
+      'editorSuggestWidget.border': '#e0e0e0',
+      'editorSuggestWidget.foreground': '#383a42',
+      'editorSuggestWidget.selectedBackground': '#e3f2fd',
+      'editorWidget.background': '#ffffff',
+      'editorWidget.border': '#e0e0e0',
+      'editorGutter.background': '#fafafa',
+      'scrollbar.shadow': '#00000033'
+    }
+  })
+
+  monaco.editor.defineTheme('guaxi-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: '5c6370' },
+      { token: 'keyword', foreground: 'c678dd' },
+      { token: 'string', foreground: '98c379' },
+      { token: 'number', foreground: 'd19a66' },
+      { token: 'regexp', foreground: '56b6c2' },
+      { token: 'type', foreground: 'e5c07b' },
+      { token: 'delimiter', foreground: 'abb2bf' },
+      { token: 'variable', foreground: 'e06c75' },
+      { token: 'parameter', foreground: '61afef' },
+      { token: 'function', foreground: '61afef' },
+      { token: 'constant', foreground: 'd19a66' },
+      { token: 'class', foreground: 'e5c07b' },
+      { token: 'identifier', foreground: 'abb2bf' },
+      { token: 'tag', foreground: 'e06c75' },
+      { token: 'attribute.name', foreground: 'e5c07b' },
+      { token: 'meta.embedded', foreground: '5c6370' }
+    ],
+    colors: {
+      'editor.background': '#282c34',
+      'editor.foreground': '#abb2bf',
+      'editorLineNumber.foreground': '#5c6370',
+      'editorLineNumber.activeForeground': '#abb2bf',
+      'editorCursor.foreground': '#61afef',
+      'editor.selectionBackground': '#3e4451',
+      'editor.inactiveSelectionBackground': '#323842',
+      'editor.lineHighlightBackground': '#2c313a',
+      'editorBracketMatch.background': '#3b4048',
+      'editorBracketMatch.border': '#528bff',
+      'editor.selectionHighlightBackground': '#3e445155',
+      'editor.foldBackground': '#2c313a',
+      'editorWhitespace.foreground': '#3b4048',
+      'editorIndentGuide.background': '#3b4048',
+      'editorIndentGuide.activeBackground': '#4b5263',
+      'editorHoverWidget.background': '#282c34',
+      'editorHoverWidget.border': '#3b4048',
+      'editorSuggestWidget.background': '#282c34',
+      'editorSuggestWidget.border': '#3b4048',
+      'editorSuggestWidget.foreground': '#abb2bf',
+      'editorSuggestWidget.selectedBackground': '#2c313a',
+      'editorWidget.background': '#282c34',
+      'editorWidget.border': '#3b4048',
+      'editorGutter.background': '#282c34',
+      'scrollbar.shadow': '#00000066'
+    }
+  })
+
+  guaxiMonacoThemesReady = true
+}
+
+const getMonacoTheme = () => {
+  ensureGuaxiMonacoThemes()
+  return settingsStore.appearanceTheme === 'dark' ? 'guaxi-dark' : 'guaxi-light'
+}
 
 const commitTooltipContentStyle = computed(() => {
   const isDark = settingsStore.appearanceTheme === 'dark'
@@ -597,6 +708,7 @@ watch(
   () => settingsStore.appearanceTheme,
   () => {
     try {
+      ensureGuaxiMonacoThemes()
       monaco.editor.setTheme(getMonacoTheme())
     } catch (e) {
     }
@@ -1631,6 +1743,7 @@ const getStatusClass = (status) => {
 }
 
 watch(() => settingsStore.appearanceTheme, () => {
+  ensureGuaxiMonacoThemes()
   monaco.editor.setTheme(getMonacoTheme())
 })
 
@@ -1652,6 +1765,9 @@ const initMonacoEditor = async () => {
 
     // 注册自定义语言
     await registerDiffLanguages();
+
+    ensureGuaxiMonacoThemes()
+    monaco.editor.setTheme(getMonacoTheme())
 
     // 初始化差异编辑器
     diffEditor = markRaw(monaco.editor.createDiffEditor(editorContainer, {
@@ -1687,6 +1803,7 @@ const initMonacoEditor = async () => {
     }));
 
     isEditorInitialized.value = true;
+    ensureGuaxiMonacoThemes()
     monaco.editor.setTheme(getMonacoTheme());
 
     // 初始空模型
@@ -2310,6 +2427,7 @@ onUnmounted(() => {
   --input-bg: var(--guaxi-panel-bg);
   --sidebar-bg: var(--guaxi-header-bg);
   --sidebar-width: 280px;
+  --git-monaco-bg: #fafafa;
 }
 
 :root[data-guaxi-theme='dark'] {
@@ -2318,6 +2436,7 @@ onUnmounted(() => {
   --modified-bg: rgba(255, 193, 7, 0.16);
   --deleted-bg: rgba(220, 53, 69, 0.16);
   --current-branch-bg: rgba(40, 167, 69, 0.22);
+  --git-monaco-bg: #282c34;
 }
 
 .n-card {
@@ -3234,11 +3353,11 @@ onUnmounted(() => {
 }
 
 .monaco-editor .margin {
-  background-color: var(--sidebar-bg) !important;
+  background-color: var(--git-monaco-bg) !important;
 }
 
 .monaco-editor .monaco-editor-background {
-  background-color: var(--card-bg) !important;
+  background-color: var(--git-monaco-bg) !important;
 }
 
 /* 差异高亮样式 */
