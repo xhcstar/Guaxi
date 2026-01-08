@@ -3818,7 +3818,7 @@ const renderDebounced = debounce(async (content) => {
       mermaid: true,
       math: true,
       codeHighlight: true,
-      theme: 'default'
+      theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
     });
 
     // 确保DOM更新后添加按钮
@@ -5331,17 +5331,44 @@ onUnmounted(() => {
 
 /* Mermaid图表样式 */
 .mermaid {
-  background-color: white;
+  background-color: var(--guaxi-panel-bg, #ffffff);
+  border: 1px solid var(--guaxi-border, #e1e4e8);
   border-radius: 8px;
   padding: 16px;
   margin: 1em 0;
   text-align: center;
+  overflow: auto;
+  color: var(--guaxi-text-primary, #1f2328);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
 .dark .mermaid {
-  background-color: #2d2d2d;
+  background-color: #1f242d;
+  border-color: #30363d;
+  color: #c9d1d9;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.dark .mermaid svg text,
+.dark .mermaid svg .label text {
+  fill: #c9d1d9 !important;
+}
+
+.dark .mermaid svg .edgePath path {
+  stroke: #8b949e !important;
+}
+
+.dark .mermaid svg .arrowheadPath {
+  fill: #8b949e !important;
+  stroke: #8b949e !important;
+}
+
+.dark .mermaid svg .node rect,
+.dark .mermaid svg .node polygon,
+.dark .mermaid svg .node circle,
+.dark .mermaid svg .cluster rect {
+  fill: #2c313a !important;
+  stroke: #6e7681 !important;
 }
 
 /* 代码块样式 */
@@ -5354,26 +5381,107 @@ onUnmounted(() => {
   background: #f6f8fa !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
+  color: #24292f;
 }
 
 .hljs code {
   font-family: inherit !important;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
 }
 
-code:not(.hljs code) {
+.preview pre:not(.hljs) > code {
+  display: block;
+  border-radius: 6px;
+  border: 1px solid #e1e4e8;
+  background: #f6f8fa;
+  color: #24292f;
+  padding: 1.5em 1em;
+  overflow-x: auto;
+}
+
+.dark-mode .preview pre:not(.hljs) > code {
+  border-color: #30363d;
+  background: #1f242d;
+  color: #c9d1d9;
+}
+
+.preview :not(pre) > code:not(.hljs) {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
   font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: rgba(175, 184, 193, 0.2);
 }
 
 /* 暗色模式代码块 */
-.dark .hljs {
-  background: #2d2d2d !important;
-  border-color: #444;
+.dark-mode .hljs {
+  background: #1f242d !important;
+  border-color: #30363d;
+  color: #c9d1d9;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
 }
 
-.dark .hljs code {
+.dark-mode .hljs code {
   font-family: inherit !important;
+}
+
+.dark-mode .preview :not(pre) > code:not(.hljs) {
+  background: rgba(110, 118, 129, 0.25);
+  color: #c9d1d9;
+}
+
+.dark-mode .hljs-comment,
+.dark-mode .hljs-quote {
+  color: #8b949e;
+}
+
+.dark-mode .hljs-keyword,
+.dark-mode .hljs-selector-tag,
+.dark-mode .hljs-literal,
+.dark-mode .hljs-built_in,
+.dark-mode .hljs-type {
+  color: #ff7b72;
+}
+
+.dark-mode .hljs-string,
+.dark-mode .hljs-doctag,
+.dark-mode .hljs-regexp {
+  color: #a5d6ff;
+}
+
+.dark-mode .hljs-number,
+.dark-mode .hljs-symbol,
+.dark-mode .hljs-bullet {
+  color: #79c0ff;
+}
+
+.dark-mode .hljs-title,
+.dark-mode .hljs-section,
+.dark-mode .hljs-function .hljs-title {
+  color: #d2a8ff;
+}
+
+.dark-mode .hljs-attr,
+.dark-mode .hljs-attribute,
+.dark-mode .hljs-variable,
+.dark-mode .hljs-template-variable,
+.dark-mode .hljs-property,
+.dark-mode .hljs-params {
+  color: #ffa657 !important;
+}
+
+.dark-mode .hljs-subst,
+.dark-mode .hljs-operator,
+.dark-mode .hljs-punctuation {
+  color: #c9d1d9 !important;
+}
+
+.dark-mode .hljs-meta,
+.dark-mode .hljs-tag,
+.dark-mode .hljs-name {
+  color: #7ee787;
 }
 
 /* 修改为以下样式： */
