@@ -1823,6 +1823,7 @@ const initEditor = () => {
       size: 'fit'
     },
     glyphMargin: true, // 启用行号左侧边栏
+    lineDecorationsWidth: 6,
     scrollbar: {
       vertical: 'auto',
       horizontal: 'auto',
@@ -2165,6 +2166,7 @@ const ensureSecondaryEditor = () => {
         const content = model.getValue();
         rawContent.value = content;
         fileTreeStore.updateTabContent(path, content);
+        updateGitDecorations();
       }, 120)
     );
   }
@@ -2199,49 +2201,228 @@ watch(
 // Git 服务
 const gitService = ref(null)
 
+let gitDiffEditor = null
+let gitDiffContainerEl = null
+let gitDiffOriginalModel = null
+let gitDiffModifiedModel = null
+let gitDecorationsSeq = 0
+
+const ensureGitDiffEditor = (languageId) => {
+  const lang = languageId || 'plaintext'
+
+  if (gitDiffEditor && gitDiffOriginalModel && gitDiffModifiedModel) {
+    monaco.editor.setModelLanguage(gitDiffOriginalModel, lang)
+    monaco.editor.setModelLanguage(gitDiffModifiedModel, lang)
+    return
+  }
+
+  gitDiffContainerEl = document.createElement('div')
+  gitDiffContainerEl.style.position = 'absolute'
+  gitDiffContainerEl.style.left = '-99999px'
+  gitDiffContainerEl.style.top = '-99999px'
+  gitDiffContainerEl.style.width = '1px'
+  gitDiffContainerEl.style.height = '1px'
+  gitDiffContainerEl.style.overflow = 'hidden'
+  document.body.appendChild(gitDiffContainerEl)
+
+  gitDiffEditor = monaco.editor.createDiffEditor(gitDiffContainerEl, {
+    renderSideBySide: false,
+    readOnly: true,
+    renderIndicators: false,
+    automaticLayout: false,
+    scrollBeyondLastLine: false,
+    diffAlgorithm: 'advanced'
+  })
+
+  gitDiffOriginalModel = monaco.editor.createModel('', lang)
+  gitDiffModifiedModel = monaco.editor.createModel('', lang)
+
+  gitDiffEditor.setModel({
+    original: gitDiffOriginalModel,
+    modified: gitDiffModifiedModel
+  })
+}
+
+const computeUnsavedLineChanges = () => {
+  const filePath = selectedFile.value?.path
+  if (!filePath) return null
+
+  const tab = fileTreeStore.openTabs.find((t) => t?.path === filePath)
+  if (!tab) return null
+
+  const original = tab.savedContent ?? ''
+  const modified = tab.content ?? ''
+  if (original === modified) return { added: [], modified: [], deleted: [] }
+
+  const languageId = editor?.getModel?.()?.getLanguageId?.() || 'plaintext'
+  ensureGitDiffEditor(languageId)
+
+  gitDiffOriginalModel.setValue(original)
+  gitDiffModifiedModel.setValue(modified)
+
+  const lineChanges = gitDiffEditor.getLineChanges() || []
+  const modifiedLineCount = gitDiffModifiedModel.getLineCount()
+
+  const added = new Set()
+  const changed = new Set()
+  const deleted = new Set()
+
+  const toLen = (start, end) => (end === 0 ? 0 : Math.max(0, end - start + 1))
+  const clampLine = (n) => {
+    const nn = Number(n) || 1
+    if (modifiedLineCount <= 0) return 1
+    return Math.min(Math.max(1, nn), modifiedLineCount)
+  }
+
+  for (const ch of lineChanges) {
+    const oLen = toLen(ch.originalStartLineNumber, ch.originalEndLineNumber)
+    const mLen = toLen(ch.modifiedStartLineNumber, ch.modifiedEndLineNumber)
+
+    if (oLen === 0 && mLen > 0) {
+      for (let ln = ch.modifiedStartLineNumber; ln <= ch.modifiedEndLineNumber; ln += 1) {
+        added.add(clampLine(ln))
+      }
+      continue
+    }
+
+    if (mLen === 0 && oLen > 0) {
+      deleted.add(clampLine(ch.modifiedStartLineNumber))
+      continue
+    }
+
+    if (mLen > 0) {
+      for (let ln = ch.modifiedStartLineNumber; ln <= ch.modifiedEndLineNumber; ln += 1) {
+        changed.add(clampLine(ln))
+      }
+    }
+  }
+
+  return {
+    added: Array.from(added).sort((a, b) => a - b),
+    modified: Array.from(changed).sort((a, b) => a - b),
+    deleted: Array.from(deleted).sort((a, b) => a - b)
+  }
+}
+
 // 初始化 Git 服务
 const initGitService = async () => {
-  if (selectedFile.value?.path) {
-    const dir = await dirname(selectedFile.value.path)
+  const filePath = selectedFile.value?.path
+  if (filePath) {
+    const dir = await dirname(filePath)
+    console.debug('[Git] initGitService', { filePath, dir })
     gitService.value = new GitService(dir)
     await updateGitStatus()
+    return
   }
+
+  console.debug('[Git] initGitService skipped (no selected file)')
 }
 
 // 更新 Git 状态
 const updateGitStatus = async () => {
-  if (!gitService.value || !selectedFile.value?.path) return
+  const filePath = selectedFile.value?.path
+  const workspacePath = gitService.value?.workspacePath
+
+  if (!gitService.value || !filePath) {
+    console.debug('[Git] updateGitStatus skipped', {
+      hasGitService: !!gitService.value,
+      filePath
+    })
+    return
+  }
 
   try {
+    console.debug('[Git] updateGitStatus start', { filePath, workspacePath })
+
     const branch = await gitService.value.getCurrentBranch()
     editorStore.setGitBranch(branch)
 
-    const status = await gitService.value.getFileStatus(selectedFile.value.path)
-    editorStore.setGitChanges({
+    const status = await gitService.value.getFileStatus(filePath)
+    const counts = {
       added: status.filter(s => s.status === 'A').length,
       modified: status.filter(s => s.status === 'M').length,
       deleted: status.filter(s => s.status === 'D').length
+    }
+
+    console.debug('[Git] fileStatus', {
+      filePath,
+      statusCount: Array.isArray(status) ? status.length : null,
+      counts,
+      sample: Array.isArray(status) ? status.slice(0, 3) : status
     })
 
+    editorStore.setGitChanges(counts)
+
     await updateGitDecorations()
+    console.debug('[Git] updateGitStatus done', {
+      gitDecorationsCount: editorStore.gitDecorations?.length || 0,
+      gitDecorationIdsCount: editorStore.gitDecorationIds?.length || 0
+    })
   } catch (error) {
-    console.error('更新 Git 状态失败:', error)
+    console.error('[Git] updateGitStatus failed:', error)
   }
 }
 
 // 更新 Git 装饰器
 const updateGitDecorations = async () => {
-  if (!editor || !selectedFile.value?.path || !gitService.value) return
+  const filePath = selectedFile.value?.path
+  const seq = ++gitDecorationsSeq
+
+  const apply = (changes) => {
+    if (seq !== gitDecorationsSeq) return
+
+    if (!changes) {
+      editorStore.clearGitDecorations()
+      return
+    }
+
+    editorStore.updateGitLineDecorations({
+      added: changes.added || [],
+      modified: changes.modified || [],
+      deleted: changes.deleted || []
+    })
+  }
+
+  if (!editor || !filePath || !gitService.value) {
+    console.debug('[Git] updateGitDecorations skipped', {
+      hasEditor: !!editor,
+      filePath,
+      hasGitService: !!gitService.value
+    })
+    apply(null)
+    return
+  }
+
+  const tab = fileTreeStore.openTabs.find((t) => t?.path === filePath)
+  const preferUnsaved = !!tab?.dirty
 
   try {
-    const changes = await gitService.value.getLineChanges(selectedFile.value.path)
-    editorStore.updateGitLineDecorations({
-      added: changes.added,
-      modified: changes.modified,
-      deleted: changes.deleted
+    console.debug('[Git] updateGitDecorations start', {
+      filePath,
+      hasEditorStoreInstance: !!editorStore.editorInstance,
+      preferUnsaved
+    })
+
+    if (preferUnsaved) {
+      const changes = computeUnsavedLineChanges()
+      apply(changes)
+      console.debug('[Git] updateGitDecorations done (unsaved)', {
+        gitDecorationsCount: editorStore.gitDecorations?.length || 0,
+        gitDecorationIdsCount: editorStore.gitDecorationIds?.length || 0
+      })
+      return
+    }
+
+    const changes = await gitService.value.getLineChanges(filePath)
+    apply(changes)
+
+    console.debug('[Git] updateGitDecorations done', {
+      gitDecorationsCount: editorStore.gitDecorations?.length || 0,
+      gitDecorationIdsCount: editorStore.gitDecorationIds?.length || 0
     })
   } catch (error) {
-    console.error('更新 Git 装饰器失败:', error)
+    console.error('[Git] updateGitDecorations failed:', error)
+    apply(null)
   }
 }
 
@@ -2308,6 +2489,7 @@ const setupEditorListeners = () => {
         if (path) fileTreeStore.updateTabContent(path, content);
         recordEditLocationFromEditor();
         updateTableToolbar();
+        updateGitDecorations();
       }, 300)
     );
   }
@@ -2428,9 +2610,11 @@ const setupEditorListeners = () => {
       return;
     }
 
-    const pos = e.selection.getStartPosition();
-    const visiblePos = editor.getScrolledVisiblePosition(pos);
-    if (!visiblePos) {
+    const startPos = e.selection.getStartPosition();
+    const endPos = e.selection.getEndPosition();
+    const startVisible = editor.getScrolledVisiblePosition(startPos);
+    const endVisible = editor.getScrolledVisiblePosition(endPos);
+    if (!startVisible || !endVisible) {
       floatingToolbarVisible.value = false;
       return;
     }
@@ -2438,16 +2622,32 @@ const setupEditorListeners = () => {
     const wrapperRect = wrapperEl.getBoundingClientRect();
     const editorRect = editorEl.getBoundingClientRect();
 
-    const left = editorRect.left - wrapperRect.left + visiblePos.left;
-    const top = editorRect.top - wrapperRect.top + visiblePos.top - 36;
+    const leftBase = editorRect.left - wrapperRect.left;
+    const topBase = editorRect.top - wrapperRect.top;
+
+    const selTop = Math.min(startVisible.top, endVisible.top);
+    const selBottom = Math.max(startVisible.top + startVisible.height, endVisible.top + endVisible.height);
+    const selLeft = Math.min(startVisible.left, endVisible.left);
 
     const headerEl = editorHeaderRef.value;
     const headerHeight = headerEl ? headerEl.getBoundingClientRect().height : 0;
     const minTop = headerHeight + 8;
 
+    const toolbarH = 36;
+    const gap = 8;
+
+    const preferTop = topBase + selTop - toolbarH - gap;
+    const fallbackTop = topBase + selBottom + gap;
+
+    const top = preferTop >= minTop ? preferTop : fallbackTop;
+    const clampedTop = Math.min(Math.max(minTop, top), Math.max(minTop, wrapperRect.height - toolbarH - 8));
+
+    const left = leftBase + selLeft;
+    const clampedLeft = Math.min(Math.max(8, left), Math.max(8, wrapperRect.width - 260));
+
     floatingToolbarStyle.value = {
-      left: `${Math.max(8, left)}px`,
-      top: `${Math.max(minTop, top)}px`
+      left: `${clampedLeft}px`,
+      top: `${clampedTop}px`
     };
     floatingToolbarVisible.value = true;
   });
@@ -3298,6 +3498,7 @@ const autoSaveDirtyTabs = async () => {
       await fileTreeStore.updateFileContent(tab.path, tab.content)
     }
 
+    await updateGitStatus();
     editorStore.setLastAutoSaveAt(Date.now())
   } catch (e) {
     console.error('自动保存失败:', e)
@@ -3324,6 +3525,7 @@ const saveContent = async () => {
         : rawContent.value;
 
   await fileTreeStore.updateFileContent(selectedFile.value.path, content);
+  await updateGitStatus();
   message.info('修改已保存');
   if (vimMode.value) {
     message.info('修改已保存');
@@ -3658,7 +3860,7 @@ watch(selectedFile, async (newFile) => {
       renderDebounced(newFile.content)
     }
 
-    await updateGitDecorations()
+    await initGitService()
   } else {
     if (editor) {
       editor.setValue('');
@@ -4496,6 +4698,24 @@ onUnmounted(() => {
   editor?.dispose();
   editor = null;
   editorStore.setEditorInstance(null); // 清除store中的引用
+
+  if (gitDiffEditor) {
+    gitDiffEditor.dispose()
+    gitDiffEditor = null
+  }
+  if (gitDiffOriginalModel) {
+    gitDiffOriginalModel.dispose()
+    gitDiffOriginalModel = null
+  }
+  if (gitDiffModifiedModel) {
+    gitDiffModifiedModel.dispose()
+    gitDiffModifiedModel = null
+  }
+  if (gitDiffContainerEl) {
+    gitDiffContainerEl.remove()
+    gitDiffContainerEl = null
+  }
+
   if (vimModeInstance) {
     vimModeInstance.dispose();
   }
@@ -5016,27 +5236,30 @@ onUnmounted(() => {
 }
 
 /* Git 行变更装饰器样式 */
-.git-line-added {
-  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%2361af61"/></svg>') no-repeat;
-  background-position: 0 center;
-  margin-left: 3px;
+:deep(.monaco-editor .margin-view-overlays .git-line-added),
+:deep(.monaco-editor .margin-view-overlays .git-line-modified),
+:deep(.monaco-editor .margin-view-overlays .git-line-deleted) {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  opacity: 1 !important;
 }
 
-.git-line-modified {
-  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%23e5c07b"/></svg>') no-repeat;
-  background-position: 0 center;
-  margin-left: 3px;
+:deep(.monaco-editor .margin-view-overlays .git-line-added) {
+  box-shadow: inset 4px 0 0 rgba(46, 160, 67, 0.95) !important;
 }
 
-.git-line-deleted {
-  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" fill="%23e06c75"/></svg>') no-repeat;
-  background-position: 0 center;
-  margin-left: 3px;
+:deep(.monaco-editor .margin-view-overlays .git-line-modified) {
+  box-shadow: inset 4px 0 0 rgba(46, 160, 67, 0.75) !important;
+}
+
+:deep(.monaco-editor .margin-view-overlays .git-line-deleted) {
+  box-shadow: inset 4px 0 0 rgba(46, 160, 67, 0.55) !important;
 }
 
 /* 确保装饰器区域可见 */
-.monaco-editor .glyph-margin {
-  background-color: var(--vscode-editorGutter-background);
+:deep(.monaco-editor .glyph-margin) {
+  background-color: var(--guaxi-header-bg) !important;
 }
 </style>
 
