@@ -4572,19 +4572,21 @@ const closeTab = async (path, region) => {
 };
 
 const applyHighlights = () => {
-  if (!editor || !editorStore.highlightInfo) return;
+  if (!editor) return;
 
-  const model = editor.getModel(); // 只声明一次
+  if (editorStore.decorations?.length) {
+    editor.deltaDecorations(editorStore.decorations, []);
+    editorStore.decorations = [];
+  }
+
+  if (!editorStore.highlightInfo) return;
+
+  const model = editor.getModel();
   if (!model) return;
 
   const { lineNumber, matches = [], text } = editorStore.highlightInfo;
 
   console.log("WWW>>> applyHighlights", { lineNumber, matches, text });
-  // 清除旧的高亮
-  if (editorStore.decorations) {
-    editor.deltaDecorations(editorStore.decorations, []);
-    editorStore.decorations = [];
-  }
 
   let newDecorations = [];
 
