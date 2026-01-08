@@ -232,7 +232,7 @@
             </div>
 
             <!-- 提交历史区域 -->
-            <div class="commits-section" ref="commitsSection">
+            <div class="commits-section" ref="commitsSection" :style="{ flex: `0 0 ${commitsHeight}px` }">
               <div class="section-header">
                 <div class="section-header-left">
                   <span class="section-title">提交历史</span>
@@ -287,17 +287,23 @@
               </div>
 
               <div class="commits-list">
-                <n-tooltip
-                  v-for="commit in commits"
-                  :key="commit.id"
-                  trigger="hover"
-                  placement="right-start"
-                  :delay="120"
-                  :duration="80"
-                  :raw="true"
-                  :show-arrow="false"
-                  :content-style="commitTooltipContentStyle"
+                <n-spin
+                  :show="commitHistoryLoading"
+                  size="small"
+                  description="正在加载提交历史..."
+                  class="commit-history-spin"
                 >
+                  <n-tooltip
+                    v-for="commit in commits"
+                    :key="commit.id"
+                    trigger="hover"
+                    placement="right-start"
+                    :delay="120"
+                    :duration="80"
+                    :raw="true"
+                    :show-arrow="false"
+                    :content-style="commitTooltipContentStyle"
+                  >
                   <template #trigger>
                     <div
                       class="commit-item"
@@ -387,7 +393,8 @@
                     </div>
                     <div class="commit-tooltip-hash">{{ commit.id.slice(0, 7) }}</div>
                   </div>
-                </n-tooltip>
+                  </n-tooltip>
+                </n-spin>
               </div>
             </div>
           </div>
@@ -535,6 +542,7 @@ import {
   NIcon, NTag, NButton, NDivider, NTooltip, NForm,
   NFormItem,
   NInput,
+  NSpin,
   createDiscreteApi,
 } from 'naive-ui'
 import {
@@ -786,6 +794,7 @@ const isDraggingCommits = ref(false)
 const currentBranch = ref('')
 const branches = ref([])
 const commits = ref([])
+const commitHistoryLoading = ref(false)
 const headMarkers = ref({
   local_head: null,
   remote_head: null,
@@ -1689,6 +1698,9 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
 }
 
 const loadCommitHistory = async () => {
+  if (commitHistoryLoading.value) return
+  commitHistoryLoading.value = true
+
   try {
     const [markers, branch] = await Promise.all([
       invoke('get_git_head_markers', { path: props.workspacePath }),
@@ -1711,6 +1723,8 @@ const loadCommitHistory = async () => {
     logger.debug('Commit history loaded', { count: commits.value.length })
   } catch (error) {
     logger.error('Failed to load commit history', error)
+  } finally {
+    commitHistoryLoading.value = false
   }
 }
 
@@ -2932,6 +2946,37 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+.commit-history-spin {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.commit-history-spin :deep(.n-spin-container) {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.commit-history-spin :deep(.n-spin-body) {
+  flex: 1;
+  min-height: 64px;
+  box-sizing: border-box;
+  padding: 12px 0 24px;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.commit-history-spin :deep(.n-spin-description) {
+  padding-top: 6px;
+  line-height: 1.25;
+}
+
 /* 新增 panels-container 样式 */
 .panels-container {
   flex: 1;
@@ -2961,6 +3006,10 @@ onUnmounted(() => {
   transition: flex 0.1s ease-out;
   background-color: var(--card-bg);
   border-top: 1px solid var(--divider-color);
+}
+
+.commits-section {
+  min-height: 140px;
 }
 
 .changes-section .n-collapse,
