@@ -213,7 +213,9 @@
 
     <div class="editor-content" :class="previewMode">
       <div v-if="!selectedFile" class="editor-empty">请选择一个文件以开始编辑</div>
-      <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor" class="realtime-vditor"></div>
+      <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor"
+        class="realtime-vditor">
+      </div>
       <div v-show="previewMode !== 'realtime' && showPreview" v-html="renderedHtml" class="preview"
         ref="previewContainer" @click="handlePreviewClick"></div>
       <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
@@ -1465,22 +1467,22 @@ const registerMarkdownLanguageFeatures = () => {
     createSnippet('image', '![${1:描述}](${2:路径})', '插入图片'),
     createSnippet('quote', '> ${1:引用内容}\n', '插入引用'),
     createSnippet('hr', '\n---\n', '插入分隔线'),
-    createSnippet('table2', '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n', '插入表格'), 
-    createSnippet('table3', '| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} |\n', '插入三列表格'), 
-    createSnippet('table4', '| 列1 | 列2 | 列3 | 列4 |\n| --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} |\n', '插入四列表格'), 
-    createSnippet('table5', '| 列1 | 列2 | 列3 | 列4 | 列5 |\n| --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} |\n', '插入五列表格'), 
-    createSnippet('table6', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 |\n| --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} |\n', '插入六列表格'), 
-    createSnippet('table7', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 |\n| --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} |\n', '插入七列表格'), 
-    createSnippet('table8', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} |\n', '插入八列表格'), 
-    createSnippet('table9', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 | 列9 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} | ${9:值9} |\n', '插入九列表格'), 
+    createSnippet('table2', '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n', '插入表格'),
+    createSnippet('table3', '| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} |\n', '插入三列表格'),
+    createSnippet('table4', '| 列1 | 列2 | 列3 | 列4 |\n| --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} |\n', '插入四列表格'),
+    createSnippet('table5', '| 列1 | 列2 | 列3 | 列4 | 列5 |\n| --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} |\n', '插入五列表格'),
+    createSnippet('table6', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 |\n| --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} |\n', '插入六列表格'),
+    createSnippet('table7', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 |\n| --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} |\n', '插入七列表格'),
+    createSnippet('table8', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} |\n', '插入八列表格'),
+    createSnippet('table9', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 | 列9 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} | ${9:值9} |\n', '插入九列表格'),
     createSnippet('red', '<font color="red">${1:红色文字}</font>', '设置红色文本'),
-    createSnippet('blue','<font color="blue">${1:蓝色文字}</font>','设置蓝色文本'),
-    createSnippet('green','<font color="green">${1:绿色文字}</font>','设置绿色文本'),
-    createSnippet('yellow','<font color="yellow">${1:黄色文字}</font>','设置黄色文本'),
-    createSnippet('orange','<font color="orange">${1:橙色文字}</font>','设置橙色文本'),
-    createSnippet('purple','<font color="purple">${1:紫色文字}</font>','设置紫色文本'),
-    createSnippet('cyan','<font color="cyan">${1:青色文字}</font>','设置青色文本'),
-    createSnippet('purple','<font color="purple">${1:紫色文字}</font>','设置紫色文本'),
+    createSnippet('blue', '<font color="blue">${1:蓝色文字}</font>', '设置蓝色文本'),
+    createSnippet('green', '<font color="green">${1:绿色文字}</font>', '设置绿色文本'),
+    createSnippet('yellow', '<font color="yellow">${1:黄色文字}</font>', '设置黄色文本'),
+    createSnippet('orange', '<font color="orange">${1:橙色文字}</font>', '设置橙色文本'),
+    createSnippet('purple', '<font color="purple">${1:紫色文字}</font>', '设置紫色文本'),
+    createSnippet('cyan', '<font color="cyan">${1:青色文字}</font>', '设置青色文本'),
+    createSnippet('purple', '<font color="purple">${1:紫色文字}</font>', '设置紫色文本'),
   ];
 
   const createLatexSnippet = (key, insertText, detail, label) => ({
@@ -1759,44 +1761,44 @@ const initEditor = () => {
     base: 'vs',
     inherit: true,
     rules: [
-      { token: 'comment', foreground: '9e9e9e' },
-      { token: 'keyword', foreground: '9c27b0' },
-      { token: 'string', foreground: '2e7d32' },
-      { token: 'number', foreground: 'ef6c00' },
-      { token: 'regexp', foreground: '00897b' },
-      { token: 'type', foreground: '6a1b9a' },
-      { token: 'delimiter', foreground: '2f3337' },
-      { token: 'variable', foreground: 'e53935' },
-      { token: 'parameter', foreground: '3949ab' },
-      { token: 'function', foreground: '1565c0' },
-      { token: 'constant', foreground: '00838f' },
-      { token: 'class', foreground: '283593' },
-      { token: 'identifier', foreground: '2f3337' },
-      { token: 'tag', foreground: 'd32f2f' },
-      { token: 'attribute.name', foreground: '6d4c41' },
-      { token: 'meta.embedded', foreground: '455a64' }
+      { token: 'comment', foreground: 'a0a1a7' },           // Comment
+      { token: 'keyword', foreground: 'a626a4' },           // Keyword
+      { token: 'string', foreground: '50a14f' },           // String
+      { token: 'number', foreground: '986801' },           // Number
+      { token: 'regexp', foreground: '0184bc' },           // RegExp → 用 Operator 相近色
+      { token: 'type', foreground: 'c18401' },           // Type
+      { token: 'delimiter', foreground: '383a42' },           // Delimiter → Main text color
+      { token: 'variable', foreground: 'e45649' },           // Variable
+      { token: 'parameter', foreground: '4078f2' },           // Parameter → Function color
+      { token: 'function', foreground: '4078f2' },           // Function
+      { token: 'constant', foreground: '986801' },           // Constant → Number color
+      { token: 'class', foreground: 'c18401' },           // Class → Type color
+      { token: 'identifier', foreground: '383a42' },           // Identifier → Main text color
+      { token: 'tag', foreground: 'e45649' },           // Tag → Variable color
+      { token: 'attribute.name', foreground: 'c18401' },           // Attribute name → Type color
+      { token: 'meta.embedded', foreground: 'a0a1a7' }            // Meta embedded → Comment color
     ],
     colors: {
-      'editor.background': '#ffffff',
-      'editor.foreground': '#2f3337',
-      'editorLineNumber.foreground': '#b0b3ba',
-      'editorLineNumber.activeForeground': '#2f3337',
-      'editorCursor.foreground': '#1565c0',
-      'editor.selectionBackground': '#cfe8ff',
+      'editor.background': '#fafafa',
+      'editor.foreground': '#383a42',
+      'editorLineNumber.foreground': '#a0a1a7',
+      'editorLineNumber.activeForeground': '#383a42',
+      'editorCursor.foreground': '#4078f2',
+      'editor.selectionBackground': '#d7dae0',
       'editor.inactiveSelectionBackground': '#e3f2fd',
-      'editor.lineHighlightBackground': '#f2f5fb',
+      'editor.lineHighlightBackground': '#f0f0f0',
       'editorBracketMatch.background': '#e1f5fe',
       'editorBracketMatch.border': '#90caf9',
       'editor.selectionHighlightBackground': '#ffe0b2',
       'editor.foldBackground': '#f7f9fc',
-      'editorWhitespace.foreground': '#d0d0d5',
-      'editorIndentGuide.background': '#e0e0e0',
+      'editorWhitespace.foreground': '#d0d0d0',
+      'editorIndentGuide.background': '#d0d0d0',
       'editorIndentGuide.activeBackground': '#b0bec5',
       'editorHoverWidget.background': '#ffffff',
       'editorHoverWidget.border': '#e0e0e0',
       'editorSuggestWidget.background': '#ffffff',
       'editorSuggestWidget.border': '#e0e0e0',
-      'editorSuggestWidget.foreground': '#2f3337',
+      'editorSuggestWidget.foreground': '#383a42',
       'editorSuggestWidget.selectedBackground': '#e3f2fd',
       'editorWidget.background': '#ffffff',
       'editorWidget.border': '#e0e0e0',
@@ -1804,7 +1806,56 @@ const initEditor = () => {
     }
   });
 
-  const themeName = isDark ? 'vs-dark' : 'guaxi-light';
+  monaco.editor.defineTheme('guaxi-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: '5c6370' },           // Comment
+      { token: 'keyword', foreground: 'c678dd' },           // Keyword
+      { token: 'string', foreground: '98c379' },           // String
+      { token: 'number', foreground: 'd19a66' },           // Number
+      { token: 'regexp', foreground: '56b6c2' },           // RegExp → Operator color
+      { token: 'type', foreground: 'e5c07b' },           // Type
+      { token: 'delimiter', foreground: 'abb2bf' },           // Delimiter → Main text color
+      { token: 'variable', foreground: 'e06c75' },           // Variable
+      { token: 'parameter', foreground: '61afef' },           // Parameter → Function color
+      { token: 'function', foreground: '61afef' },           // Function
+      { token: 'constant', foreground: 'd19a66' },           // Constant → Number color
+      { token: 'class', foreground: 'e5c07b' },           // Class → Type color
+      { token: 'identifier', foreground: 'abb2bf' },           // Identifier → Main text color
+      { token: 'tag', foreground: 'e06c75' },           // Tag → Variable color
+      { token: 'attribute.name', foreground: 'e5c07b' },           // Attribute name → Type color
+      { token: 'meta.embedded', foreground: '5c6370' }            // Meta embedded → Comment color
+    ],
+    colors: {
+      'editor.background': '#282c34',
+      'editor.foreground': '#abb2bf',
+      'editorLineNumber.foreground': '#5c6370',
+      'editorLineNumber.activeForeground': '#abb2bf',
+      'editorCursor.foreground': '#61afef',
+      'editor.selectionBackground': '#3e4451',
+      'editor.inactiveSelectionBackground': '#323842',
+      'editor.lineHighlightBackground': '#2c313a',
+      'editorBracketMatch.background': '#3b4048',
+      'editorBracketMatch.border': '#528bff',
+      'editor.selectionHighlightBackground': '#3e445155',
+      'editor.foldBackground': '#2c313a',
+      'editorWhitespace.foreground': '#3b4048',
+      'editorIndentGuide.background': '#3b4048',
+      'editorIndentGuide.activeBackground': '#4b5263',
+      'editorHoverWidget.background': '#282c34',
+      'editorHoverWidget.border': '#3b4048',
+      'editorSuggestWidget.background': '#282c34',
+      'editorSuggestWidget.border': '#3b4048',
+      'editorSuggestWidget.foreground': '#abb2bf',
+      'editorSuggestWidget.selectedBackground': '#2c313a',
+      'editorWidget.background': '#282c34',
+      'editorWidget.border': '#3b4048',
+      'scrollbar.shadow': '#00000066'
+    }
+  });
+
+  const themeName = isDark ? 'guaxi-dark' : 'guaxi-light';
 
   editor = monaco.editor.create(editorContainer.value, {
     value: rawContent.value,
