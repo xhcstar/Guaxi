@@ -3,7 +3,8 @@
     <!-- 顶部控制栏 -->
     <div class="markdown-controls">
       <div class="page-info">
-        <span>第 {{ currentPage }} 页 / 共 {{ totalPages }} 页</span>
+        <span>第 {{ currentPage }} 页 / 共 {{ totalPages }} 页（{{ progressPercent }}%）</span>
+        <span v-if="completedReadingMs">已完成：{{ formatDuration(completedReadingMs) }}</span>
       </div>
 
       <div class="page-navigation">
@@ -38,6 +39,14 @@
           <n-button class="layout-switch" text title="切换布局">
             <template #icon>
               <n-icon :component="OptionsOutline" />
+            </template>
+          </n-button>
+        </n-dropdown>
+
+        <n-dropdown trigger="click" :options="bookmarkOptions" @select="handleBookmarkSelect">
+          <n-button class="layout-switch" text title="书签">
+            <template #icon>
+              <n-icon :component="BookmarksOutline" />
             </template>
           </n-button>
         </n-dropdown>
@@ -79,7 +88,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick"
+      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
@@ -187,7 +196,7 @@
 </template>
 
 <script setup>
-import { ref, watchEffect, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -213,7 +222,8 @@ import {
   LanguageOutline,
   SaveOutline,
   ExitOutline,
-  OptionsOutline
+  OptionsOutline,
+  BookmarksOutline
 } from '@vicons/ionicons5'
 
 // 组件属性定义
@@ -259,8 +269,164 @@ const startX = ref(0);
 const startLeftWidth = ref(0);
 const leftPanelWidth = ref('50%');
 const currentPage = ref(1)
-const totalPages = ref(0)
+const totalPages = ref(1)
 const jumpPage = ref(1)
+
+const readerStorageKey = computed(() => {
+  const baseId = props.importFileId != null && props.importFileId !== 0
+    ? `id:${props.importFileId}`
+    : `path:${props.filePath || props.fileName || ''}`;
+  const safeId = String(baseId).replace(/\\/g, '/');
+  return `guaxi_reader_state_v1:${props.library}:${props.fileType}:${safeId}`;
+});
+
+const pendingRestorePage = ref(null);
+const isHydrated = ref(false);
+
+const bookmarks = ref([]);
+const totalReadingMs = ref(0);
+const completedAt = ref(null);
+const completedReadingMs = ref(null);
+const sessionStartedAt = ref(0);
+
+const progressPercent = computed(() => {
+  if (!totalPages.value) return 0;
+  return Math.min(100, Math.max(0, Math.round((currentPage.value / totalPages.value) * 1000) / 10));
+});
+
+const formatDuration = (ms) => {
+  const v = Number(ms);
+  if (!Number.isFinite(v) || v <= 0) return '0s';
+  const totalSeconds = Math.floor(v / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+};
+
+const loadReaderState = () => {
+  try {
+    const raw = localStorage.getItem(readerStorageKey.value);
+    if (!raw) {
+      return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      lastPage: Math.max(1, Number(parsed.lastPage) || 1),
+      bookmarks: Array.isArray(parsed.bookmarks)
+        ? parsed.bookmarks
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n) && n > 0)
+        : [],
+      totalReadingMs: Math.max(0, Number(parsed.totalReadingMs) || 0),
+      completedAt: parsed.completedAt || null,
+      completedReadingMs: parsed.completedReadingMs == null ? null : Math.max(0, Number(parsed.completedReadingMs) || 0),
+    };
+  } catch {
+    return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null };
+  }
+};
+
+const persistReaderState = () => {
+  try {
+    localStorage.setItem(
+      readerStorageKey.value,
+      JSON.stringify({
+        v: 1,
+        lastPage: currentPage.value,
+        bookmarks: [...new Set(bookmarks.value)].sort((a, b) => a - b),
+        totalReadingMs: totalReadingMs.value,
+        completedAt: completedAt.value,
+        completedReadingMs: completedReadingMs.value,
+      })
+    );
+  } catch {
+  }
+};
+
+const startReadingSession = () => {
+  sessionStartedAt.value = Date.now();
+};
+
+const endReadingSession = () => {
+  if (!sessionStartedAt.value) return;
+  const elapsed = Math.max(0, Date.now() - sessionStartedAt.value);
+  totalReadingMs.value += elapsed;
+  sessionStartedAt.value = 0;
+};
+
+const markCompletedIfNeeded = () => {
+  if (completedAt.value) return;
+  if (!totalPages.value) return;
+  if (currentPage.value < totalPages.value) return;
+  completedAt.value = new Date().toISOString();
+  const elapsed = sessionStartedAt.value ? Math.max(0, Date.now() - sessionStartedAt.value) : 0;
+  completedReadingMs.value = totalReadingMs.value + elapsed;
+};
+
+const isBookmarkedCurrent = computed(() => bookmarks.value.includes(currentPage.value));
+
+const toggleBookmarkCurrentPage = () => {
+  const p = currentPage.value;
+  if (!p) return;
+  const i = bookmarks.value.indexOf(p);
+  if (i >= 0) {
+    bookmarks.value.splice(i, 1);
+  } else {
+    bookmarks.value.push(p);
+  }
+  persistReaderState();
+};
+
+const bookmarkOptions = computed(() => {
+  const opts = [
+    {
+      label: isBookmarkedCurrent.value
+        ? `取消书签（第 ${currentPage.value} 页）`
+        : `添加书签（第 ${currentPage.value} 页）`,
+      key: 'toggle-current'
+    }
+  ];
+
+  const sorted = [...new Set(bookmarks.value)].sort((a, b) => a - b);
+  if (sorted.length) {
+    opts.push({ label: '书签列表', key: 'bookmarks-title', disabled: true });
+    sorted.forEach((p) => {
+      opts.push({ label: `跳转到第 ${p} 页`, key: `page:${p}` });
+    });
+    opts.push({ label: '清空书签', key: 'clear' });
+  }
+
+  return opts;
+});
+
+const handleBookmarkSelect = (key) => {
+  if (key === 'toggle-current') return toggleBookmarkCurrentPage();
+  if (key === 'clear') {
+    bookmarks.value = [];
+    persistReaderState();
+    return;
+  }
+  if (typeof key === 'string' && key.startsWith('page:')) {
+    const p = Number(key.slice('page:'.length));
+    if (Number.isFinite(p)) goToPage(p);
+  }
+};
+
+const calculateTotalPages = async () => {
+  await nextTick();
+  const panel = markdownPanel.value;
+  if (!panel) {
+    totalPages.value = 1;
+    return;
+  }
+  const viewportHeight = panel.clientHeight || 1;
+  const contentHeight = panel.scrollHeight || viewportHeight;
+  totalPages.value = Math.max(1, Math.ceil(contentHeight / viewportHeight));
+};
+
 const elements = ref([])
 const viewMode = ref('split')
 const previousLeftWidth = ref(leftPanelWidth.value)
@@ -992,6 +1158,8 @@ const loadMarkdownPage = async () => {
     );
     generateOutlineFromMarkdown(markdownContent.value);
 
+    await calculateTotalPages();
+
   } catch (error) {
     console.error('加载Markdown失败:', error);
     markdownLines.value = [{
@@ -999,6 +1167,7 @@ const loadMarkdownPage = async () => {
       html: `<div class="error">加载错误: ${error.message}</div>`
     }];
     outlineStore.setOutline([]);
+    totalPages.value = 1;
   }
 };
 
@@ -1348,19 +1517,13 @@ const handleWheelZoom = (e) => {
 
 const prevPage = () => {
   if (currentPage.value > 1) {
-    const newPage = currentPage.value - 1;
-    currentPage.value = newPage;
-    jumpPage.value = newPage;
-    loadMarkdownPage();
+    goToPage(currentPage.value - 1);
   }
 };
 
 const nextPage = () => {
   if (currentPage.value < totalPages.value) {
-    const newPage = currentPage.value + 1;
-    currentPage.value = newPage;
-    jumpPage.value = newPage;
-    loadMarkdownPage();
+    goToPage(currentPage.value + 1);
   }
 };
 
@@ -1369,7 +1532,11 @@ const goToPage = (page) => {
   const targetPage = Math.max(1, Math.min(pageNum, totalPages.value));
   currentPage.value = targetPage;
   jumpPage.value = targetPage;
-  loadMarkdownPage();
+
+  const panel = markdownPanel.value;
+  if (!panel) return;
+  const viewportHeight = panel.clientHeight || 1;
+  panel.scrollTo({ top: (targetPage - 1) * viewportHeight, behavior: 'smooth' });
 };
 
 const toggleNotesPanel = () => {
@@ -1732,6 +1899,27 @@ onMounted(async () => {
   await updateMarkdownPath()
   outlineStore.setJumpToLine(jumpToHeading)
 
+  const state = loadReaderState();
+  bookmarks.value = [...new Set(state.bookmarks)].sort((a, b) => a - b);
+  totalReadingMs.value = state.totalReadingMs;
+  completedAt.value = state.completedAt;
+  completedReadingMs.value = state.completedReadingMs;
+  pendingRestorePage.value = state.lastPage;
+  isHydrated.value = true;
+  startReadingSession();
+
+  const handlePanelScroll = debounce(() => {
+    const panel = markdownPanel.value;
+    if (!panel) return;
+    const viewportHeight = panel.clientHeight || 1;
+    const tp = totalPages.value || 1;
+    const page = Math.max(1, Math.min(tp, Math.floor(panel.scrollTop / viewportHeight) + 1));
+    if (page !== currentPage.value) {
+      currentPage.value = page;
+      jumpPage.value = page;
+    }
+  }, 100);
+
   await Promise.all([
     (async () => {
       await ensureNotesPath()
@@ -1739,6 +1927,27 @@ onMounted(async () => {
     })(),
     loadMarkdownPage()
   ])
+
+  if (markdownPanel.value) {
+    markdownPanel.value.addEventListener('scroll', handlePanelScroll, { passive: true });
+  }
+
+  if (pendingRestorePage.value != null && totalPages.value) {
+    const p = Math.max(1, Math.min(Number(pendingRestorePage.value) || 1, totalPages.value));
+    pendingRestorePage.value = null;
+    nextTick(() => goToPage(p));
+  }
+
+  watch(currentPage, () => {
+    if (!isHydrated.value) return;
+    markCompletedIfNeeded();
+    persistReaderState();
+  });
+
+  watch(bookmarks, () => {
+    if (!isHydrated.value) return;
+    persistReaderState();
+  }, { deep: true });
 
   window.addEventListener('keyup', handleKeyUp);
 
@@ -1767,6 +1976,10 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  endReadingSession();
+  markCompletedIfNeeded();
+  if (isHydrated.value) persistReaderState();
+
   window.removeEventListener('resize', handleResize);
   document.removeEventListener('mousemove', handleMouseMove);
   document.removeEventListener('mouseup', stopResize);
