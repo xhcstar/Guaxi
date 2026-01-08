@@ -313,6 +313,20 @@
                       </n-tooltip>
                     </div>
                     <div class="commit-right">
+                      <div class="commit-markers">
+                        <n-tooltip v-if="headMarkers.local_head && commit.id === headMarkers.local_head" trigger="hover">
+                          <template #trigger>
+                            <n-icon :component="CheckmarkCircleOutline" size="14" class="commit-marker-icon" />
+                          </template>
+                          HEAD
+                        </n-tooltip>
+                        <n-tooltip v-if="headMarkers.remote_head && commit.id === headMarkers.remote_head" trigger="hover">
+                          <template #trigger>
+                            <n-icon :component="CloudDownloadOutline" size="14" class="commit-marker-icon" />
+                          </template>
+                          {{ headMarkers.remote_ref || 'origin' }}
+                        </n-tooltip>
+                      </div>
                       <n-text depth="3" class="commit-time">{{ formatDateRelative(commit.date) }}</n-text>
                       <n-text depth="3" class="commit-hash">{{ commit.id.slice(0, 7) }}</n-text>
                     </div>
@@ -614,6 +628,11 @@ const isDraggingCommits = ref(false)
 const currentBranch = ref('')
 const branches = ref([])
 const commits = ref([])
+const headMarkers = ref({
+  local_head: null,
+  remote_head: null,
+  remote_ref: null
+})
 const unstagedFiles = ref([])
 const stagedFiles = ref([])
 const selectedFile = ref(null)
@@ -1459,6 +1478,9 @@ const loadCommitHistory = async () => {
       path: props.workspacePath,
       branchName: currentBranch
     })
+    headMarkers.value = await invoke('get_git_head_markers', {
+      path: props.workspacePath
+    })
     logger.debug('Commit history loaded', { count: commits.value.length })
   } catch (error) {
     logger.error('Failed to load commit history', error)
@@ -2217,6 +2239,16 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+.commit-markers {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.commit-marker-icon {
+  color: var(--text-color-secondary);
 }
 
 .commit-time {

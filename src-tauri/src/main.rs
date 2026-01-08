@@ -226,6 +226,7 @@ async fn main() {
             commands::git::get_git_root,
             commands::git::get_git_status,
             commands::git::get_current_branch,
+            commands::git::get_git_head_markers,
             commands::git::list_branches,
             commands::git::git_commit,
             commands::git::git_push,

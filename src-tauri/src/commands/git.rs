@@ -10,7 +10,6 @@ use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info, warn};
 use urlencoding::encode;
 
-use super::settingview;
 
 fn is_ignored_git_path(path: &str) -> bool {
     let p = path.replace('\\', "/");
@@ -86,6 +85,13 @@ pub struct GitChange {
 pub struct GitBranch {
     name: String,
     is_current: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GitHeadMarkers {
+    local_head: Option<String>,
+    remote_head: Option<String>,
+    remote_ref: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -212,6 +218,46 @@ pub fn get_current_branch(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn get_git_head_markers(path: String) -> Result<GitHeadMarkers, String> {
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let head = repo.head().map_err(|e| {
+        error!("Failed to get HEAD: {}", e);
+        e.to_string()
+    })?;
+
+    let local_head = head.target().map(|oid| oid.to_string());
+
+    let mut remote_head: Option<String> = None;
+    let mut remote_ref: Option<String> = None;
+
+    if let Some(branch_name) = head.shorthand() {
+        let origin_refname = format!("refs/remotes/origin/{}", branch_name);
+        if let Ok(origin_ref) = repo.find_reference(origin_refname.as_str()) {
+            remote_ref = Some(format!("origin/{}", branch_name));
+            remote_head = origin_ref.target().map(|oid| oid.to_string());
+        } else if let Ok(local_branch) = repo.find_branch(branch_name, BranchType::Local) {
+            if let Ok(upstream_branch) = local_branch.upstream() {
+                if let Some(name) = upstream_branch.get().name() {
+                    remote_ref = Some(name.trim_start_matches("refs/remotes/").to_string());
+                }
+                let upstream_ref = upstream_branch.into_reference();
+                remote_head = upstream_ref.target().map(|oid| oid.to_string());
+            }
+        }
+    }
+
+    Ok(GitHeadMarkers {
+        local_head,
+        remote_head,
+        remote_ref,
+    })
+}
+
+#[tauri::command]
 pub fn list_branches(path: String) -> Result<Vec<GitBranch>, String> {
     info!("Listing branches for path: {}", path);
     let repo = Repository::discover(&path).map_err(|e| {
@@ -325,7 +371,36 @@ pub fn git_push(path: String) -> Result<(), String> {
         .head()
         .ok()
         .and_then(|h| h.shorthand().map(|s| s.to_string()))
-        .unwrap_or_else(|| "master".to_string());
+        .unwrap_or_else(|| "main".to_string());
+
+    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
+    let output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .arg("push")
+        .arg("-u")
+        .arg("origin")
+        .arg(&current_branch)
+        .output()
+        .map_err(|e| format!("无法执行 git（请确认已安装 Git 且已加入 PATH）：{}", e))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
+        };
+        return Err(format!("git push 失败（{}）：{}", current_branch, msg));
+    }
+
+    return Ok(());
+
+    // legacy libgit2 实现保留在下方（不再执行）
 
     let mut remote = repo.find_remote("origin").map_err(|e| {
         error!("Failed to find remote 'origin': {}", e);
@@ -356,12 +431,8 @@ pub fn git_push(path: String) -> Result<(), String> {
         .map(|s| s.to_string())
         .unwrap_or_else(|| "".to_string());
 
-    let is_kb_repo = settingview::is_knowledge_bases_root_path(&path);
-    let (kb_username, kb_token) = if is_kb_repo {
-        settingview::get_knowledge_bases_remote_username_token()
-    } else {
-        (String::new(), String::new())
-    };
+    let is_kb_repo = false;
+    let (kb_username, kb_token) = (String::new(), String::new());
     let kb_token_present = !kb_token.trim().is_empty();
 
     info!(
@@ -468,6 +539,33 @@ pub fn git_pull(path: String) -> Result<(), String> {
         .and_then(|h| h.shorthand().map(|s| s.to_string()))
         .unwrap_or_else(|| "main".to_string());
 
+    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
+    let output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .arg("pull")
+        .arg("--ff-only")
+        .arg("origin")
+        .arg(&current_branch)
+        .output()
+        .map_err(|e| format!("无法执行 git（请确认已安装 Git 且已加入 PATH）：{}", e))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
+        };
+        return Err(format!("git pull 失败（{}）：{}", current_branch, msg));
+    }
+
+    return Ok(());
+
     let mut remote = repo.find_remote("origin").map_err(|e| {
         error!("Failed to find remote 'origin': {}", e);
         e.to_string()
@@ -492,12 +590,8 @@ pub fn git_pull(path: String) -> Result<(), String> {
         .map(|s| s.to_string())
         .unwrap_or_else(|| "".to_string());
 
-    let is_kb_repo = settingview::is_knowledge_bases_root_path(&path);
-    let (kb_username, kb_token) = if is_kb_repo {
-        settingview::get_knowledge_bases_remote_username_token()
-    } else {
-        (String::new(), String::new())
-    };
+    let is_kb_repo = false;
+    let (kb_username, kb_token) = (String::new(), String::new());
     let kb_token_present = !kb_token.trim().is_empty();
 
     info!(
