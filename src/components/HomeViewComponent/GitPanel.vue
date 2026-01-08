@@ -437,18 +437,11 @@
 
       <!-- 文件差异或提交详情 -->
       <div class="content-viewer">
-        <div v-if="selectedFile" class="diff-viewer">
-          <!-- Monaco Editor 容器 -->
+        <div v-if="selectedFile || selectedCommit" class="diff-viewer">
           <div ref="diffEditorContainer" class="diff-editor-container"></div>
         </div>
 
-        <!-- 在 commit-details 部分添加加载状态 -->
-        <div v-else-if="selectedCommit" class="commit-details">
-          <!-- 提交差异 -->
-          <div ref="diffEditorContainer" class="diff-editor-container"></div>
-        </div>
-
-        <div v-else="!selectedFile && !selectedCommit" class="empty-state">
+        <div v-else class="empty-state">
           <n-empty description="选择文件或提交查看详情" />
         </div>
       </div>
@@ -929,37 +922,38 @@ const navigateDiff = async (direction) => {
 const updateCommitDiff = async (commit) => {
   if (!isEditorInitialized.value || !diffEditorContainer.value) {
     await initMonacoEditor();
-  } else {
-    isEditorInitialized.value = false;
   }
 
-  if (!commit || !diffEditor.value) return;
+  if (!commit || !diffEditor) return;
 
   diffLoading.value.commit = true;
 
   try {
-    // 获取提交差异
     const diff = await invoke('get_commit_diff', {
       path: props.workspacePath,
       commitId: commit.id
     });
 
-    // 解析差异内容
     const { original, modified } = parseUnifiedDiff(diff);
 
-    // 创建 Monaco 模型
     const originalModel = monaco.editor.createModel(original, 'plaintext');
     const modifiedModel = monaco.editor.createModel(modified, 'plaintext');
 
-    // 设置差异编辑器模型
-    diffEditor.value.setModel({
+    const oldModel = diffEditor.getModel();
+    diffEditor.setModel({
       original: originalModel,
       modified: modifiedModel
     });
 
-    // 导航到第一个差异
+    if (oldModel) {
+      setTimeout(() => {
+        oldModel.original?.dispose();
+        oldModel.modified?.dispose();
+      }, 100);
+    }
+
     setTimeout(() => {
-      const modifiedEditor = diffEditor.value.getModifiedEditor();
+      const modifiedEditor = diffEditor.getModifiedEditor();
       const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
       if (diffNavAction) {
         diffNavAction.run().then(() => {
@@ -1500,14 +1494,29 @@ const refreshGitStatus = async ({ resetSelection = true } = {}) => {
     await loadCommitHistory()
 
     if (!resetSelection) {
-      if (prevSelectedFilePath) {
-        const all = [...stagedFiles.value, ...unstagedFiles.value]
-        const matched = all.find((f) => f?.path === prevSelectedFilePath)
-        selectedFile.value = matched || null
-      }
       if (prevSelectedCommitId) {
         const matchedCommit = commits.value.find((c) => c?.id === prevSelectedCommitId)
-        selectedCommit.value = matchedCommit || null
+        if (matchedCommit) {
+          if (selectedCommit.value && selectedCommit.value.id === matchedCommit.id) {
+            Object.assign(selectedCommit.value, matchedCommit)
+          } else {
+            selectedCommit.value = matchedCommit
+          }
+        }
+      }
+
+      if (prevSelectedFilePath && !prevSelectedCommitId) {
+        const all = [...stagedFiles.value, ...unstagedFiles.value]
+        const matched = all.find((f) => f?.path === prevSelectedFilePath)
+        if (matched) {
+          if (selectedFile.value && selectedFile.value.path === matched.path) {
+            Object.assign(selectedFile.value, matched)
+          } else {
+            selectedFile.value = matched
+          }
+        } else {
+          selectedFile.value = null
+        }
       }
     }
   } catch (error) {
@@ -1645,8 +1654,6 @@ const updateFileDiff = async (file) => {
   console.log('updateFileDiff: isEditorInitialized.value ', isEditorInitialized.value, 'diffEditorContainer.value', diffEditorContainer.value);
   if (!isEditorInitialized.value || !diffEditorContainer.value) {
     await initMonacoEditor();
-  } else {
-    isEditorInitialized.value = false;
   }
 
   console.log('updateFileDiff: diffEditor ', diffEditor, 'diffEditorContainer.value', diffEditorContainer.value);
@@ -2049,11 +2056,11 @@ const formatDateRelative = (timestamp) => {
 
 // 监听 selectedFile 变化
 watch(selectedFile, (newVal) => {
-  if (newVal) {
+  if (newVal && !selectedCommit.value) {
     nextTick(() => {
       updateFileDiff(newVal)
     })
-  } else if (diffEditor) {
+  } else if (!newVal && diffEditor) {
     diffEditor.setModel(null)
   }
 })
@@ -2064,8 +2071,8 @@ watch(selectedCommit, (newVal) => {
     nextTick(() => {
       updateCommitDiff(newVal)
     })
-  } else if (diffEditor.value) {
-    diffEditor.value.setModel(null)
+  } else if (diffEditor) {
+    diffEditor.setModel(null)
   }
 })
 
