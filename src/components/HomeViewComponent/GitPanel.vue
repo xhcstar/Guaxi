@@ -22,7 +22,7 @@
               <n-text strong>源代码管理</n-text>
               <n-button text @click="refreshGitStatus">
                 <template #icon>
-                  <n-icon>
+                  <n-icon size="20" class="panel-header-icon">
                     <RefreshOutline />
                   </n-icon>
                 </template>
@@ -30,7 +30,7 @@
             </n-space>
             <n-space align="center" justify="space-between" class="scm-header-sub">
               <n-space align="center">
-                <n-icon>
+                <n-icon size="18" class="panel-header-icon">
                   <GitBranchOutline />
                 </n-icon>
                 <n-text>{{ currentBranch || '未检出分支' }}</n-text>
@@ -80,8 +80,8 @@
                         @click.stop="handleStageAll"
                         :disabled="unstagedFiles.length === 0"
                       >
-                        <n-icon>
-                          <AddOutline />
+                        <n-icon size="18" class="panel-header-icon">
+                          <AddCircleOutline />
                         </n-icon>
                       </button>
                     </template>
@@ -95,8 +95,8 @@
                         @click.stop="handleDiscardAll"
                         :disabled="unstagedFiles.length === 0"
                       >
-                        <n-icon>
-                          <CloseCircleOutline />
+                        <n-icon size="18" class="panel-header-icon">
+                          <TrashOutline />
                         </n-icon>
                       </button>
                     </template>
@@ -128,8 +128,8 @@
                             <template #trigger>
                               <n-button text @click.stop="handleStageFile(file)">
                                 <template #icon>
-                                  <n-icon>
-                                    <AddCircleOutline />
+                                  <n-icon size="18" class="panel-header-icon">
+                                    <AddOutline />
                                   </n-icon>
                                 </template>
                               </n-button>
@@ -140,7 +140,7 @@
                             <template #trigger>
                               <n-button text @click.stop="handleDiscardFile(file)">
                                 <template #icon>
-                                  <n-icon>
+                                  <n-icon size="18" class="panel-header-icon">
                                     <CloseCircleOutline />
                                   </n-icon>
                                 </template>
@@ -177,8 +177,8 @@
                         @click.stop="handleUnstageAll"
                         :disabled="stagedFiles.length === 0"
                       >
-                        <n-icon>
-                          <CheckmarkCircleOutline />
+                        <n-icon size="18" class="panel-header-icon">
+                          <RemoveOutline />
                         </n-icon>
                       </button>
                     </template>
@@ -210,7 +210,7 @@
                             <template #trigger>
                               <n-button text @click.stop="handleUnstageFile(file)">
                                 <template #icon>
-                                  <n-icon>
+                                  <n-icon size="18" class="panel-header-icon">
                                     <RemoveCircleOutline />
                                   </n-icon>
                                 </template>
@@ -244,8 +244,8 @@
                       <template #trigger>
                         <n-button text @click="handlePull" :loading="gitLoading.pull">
                           <template #icon>
-                            <n-icon>
-                              <CloudDownloadOutline />
+                            <n-icon size="20" class="panel-header-icon">
+                              <DownloadOutline />
                             </n-icon>
                           </template>
                         </n-button>
@@ -256,7 +256,7 @@
                       <template #trigger>
                         <n-button text @click="handlePush" :loading="gitLoading.push">
                           <template #icon>
-                            <n-icon>
+                            <n-icon size="20" class="panel-header-icon">
                               <CloudUploadOutline />
                             </n-icon>
                           </template>
@@ -268,8 +268,8 @@
                       <template #trigger>
                         <n-button text @click="showBranchPanel = true">
                           <template #icon>
-                            <n-icon>
-                              <GitBranchOutline />
+                            <n-icon size="20" class="panel-header-icon">
+                              <AddCircleOutline />
                             </n-icon>
                           </template>
                         </n-button>
@@ -277,7 +277,7 @@
                       创建分支
                     </n-tooltip>
                     <n-tag type="info" size="small" @click="showBranchPanel = true" style="cursor: pointer">
-                      <n-icon>
+                      <n-icon size="16" class="panel-header-icon">
                         <GitBranchOutline />
                       </n-icon>
                       {{ currentBranch }}
@@ -316,13 +316,19 @@
                       <div class="commit-markers">
                         <n-tooltip v-if="headMarkers.local_head && commit.id === headMarkers.local_head" trigger="hover">
                           <template #trigger>
-                            <n-icon :component="CheckmarkCircleOutline" size="14" class="commit-marker-icon" />
+                            <span class="commit-marker-pill commit-marker-local">
+                              <n-icon :component="GitBranchOutline" size="14" class="commit-marker-pill-icon" />
+                              <span class="commit-marker-pill-text">{{ currentBranch || 'HEAD' }}</span>
+                            </span>
                           </template>
-                          HEAD
+                          {{ currentBranch || 'HEAD' }}
                         </n-tooltip>
                         <n-tooltip v-if="headMarkers.remote_head && commit.id === headMarkers.remote_head" trigger="hover">
                           <template #trigger>
-                            <n-icon :component="CloudDownloadOutline" size="14" class="commit-marker-icon" />
+                            <span class="commit-marker-pill commit-marker-remote">
+                              <n-icon :component="CloudOutline" size="14" class="commit-marker-pill-icon" />
+                              <span class="commit-marker-pill-text">{{ headMarkers.remote_ref || 'origin' }}</span>
+                            </span>
                           </template>
                           {{ headMarkers.remote_ref || 'origin' }}
                         </n-tooltip>
@@ -515,19 +521,22 @@ import {
 } from 'naive-ui'
 import {
   GitBranchOutline,
-  CloudDownloadOutline,
-  CloudUploadOutline,
   RefreshOutline,
   AddCircleOutline,
   AddOutline,
   CreateOutline,
   RemoveCircleOutline,
+  RemoveOutline,
   CloseCircleOutline,
+  TrashOutline,
   CheckmarkCircleOutline,
   DocumentOutline,
   GitCommitOutline,
   ChevronUpOutline,
-  ChevronDownOutline
+  ChevronDownOutline,
+  DownloadOutline,
+  CloudUploadOutline,
+  CloudOutline
 } from '@vicons/ionicons5'
 import { ChevronLeft20Filled, ChevronRight20Filled } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
@@ -2350,7 +2359,47 @@ onUnmounted(() => {
   gap: 6px;
 }
 
+.panel-header-icon {
+  color: var(--text-color);
+}
+
 .commit-marker-icon {
+  color: var(--text-color-secondary);
+}
+
+.commit-marker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+  line-height: 1;
+  max-width: 160px;
+}
+
+.commit-marker-pill-icon {
+  flex: 0 0 auto;
+}
+
+.commit-marker-pill-text {
+  font-size: 11px;
+  color: var(--text-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-marker-local {
+  background-color: rgba(0, 123, 255, 0.12);
+}
+
+.commit-marker-local .commit-marker-pill-icon {
+  color: var(--primary-color);
+}
+
+.commit-marker-remote .commit-marker-pill-icon {
   color: var(--text-color-secondary);
 }
 
@@ -2423,21 +2472,23 @@ onUnmounted(() => {
 
 .section-icon-button {
   border: none;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
   background: transparent;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: var(--text-color);
 }
 
 .section-icon-button:hover:not(:disabled) {
   background-color: var(--hover-color);
+  color: var(--text-color);
 }
 
 .section-icon-button:disabled {
-  opacity: 0.4;
+  color: var(--text-color-secondary);
   cursor: default;
 }
 
