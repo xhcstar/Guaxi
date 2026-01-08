@@ -2,7 +2,7 @@
   <div class="knowledge-base-list">
     <div class="list-header">
       <div class="title-container">
-        <n-text class="repo-title">第二大脑</n-text>
+        <n-text class="repo-title">知识图谱</n-text>
       </div>
       <n-tooltip trigger="hover">
         <template #trigger>
