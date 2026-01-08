@@ -644,19 +644,16 @@ pub fn get_knowledge_bases_remote_config() -> KnowledgeBasesRemoteConfig {
         save_config(&config);
     }
 
-    let has_token = !config.knowledge_bases_remote_token.trim().is_empty();
     info!(
         remote_url = config.knowledge_bases_remote_url.as_str(),
-        username = config.knowledge_bases_remote_username.as_str(),
-        has_token,
         git_username = config.knowledge_bases_git_username.as_str(),
         git_email = config.knowledge_bases_git_email.as_str(),
         "get_knowledge_bases_remote_config"
     );
     KnowledgeBasesRemoteConfig {
         remote_url: config.knowledge_bases_remote_url,
-        username: config.knowledge_bases_remote_username,
-        has_token,
+        username: "".to_string(),
+        has_token: false,
         git_username: config.knowledge_bases_git_username,
         git_email: config.knowledge_bases_git_email,
     }
@@ -672,26 +669,23 @@ pub fn set_knowledge_bases_remote_config(
 ) -> Result<(), String> {
     let mut config = load_config();
 
+    let _ = username;
+    let _ = token;
+
     let normalized_remote_url = normalize_remote_url(remote_url.as_str());
-    let normalized_username = username.trim().to_string();
-    let token_provided = !token.trim().is_empty();
     let normalized_git_username = git_username.trim().to_string();
     let normalized_git_email = git_email.trim().to_string();
 
     info!(
         remote_url = normalized_remote_url.as_str(),
-        username = normalized_username.as_str(),
-        token_provided,
         git_username = normalized_git_username.as_str(),
         git_email = normalized_git_email.as_str(),
         "set_knowledge_bases_remote_config"
     );
 
     config.knowledge_bases_remote_url = normalized_remote_url;
-    config.knowledge_bases_remote_username = normalized_username;
-    if token_provided {
-        config.knowledge_bases_remote_token = token.trim().to_string();
-    }
+    config.knowledge_bases_remote_username = "".to_string();
+    config.knowledge_bases_remote_token = "".to_string();
     config.knowledge_bases_git_username = normalized_git_username;
     config.knowledge_bases_git_email = normalized_git_email;
     save_config(&config);
@@ -713,11 +707,7 @@ pub fn is_knowledge_bases_root_path(path: &str) -> bool {
 }
 
 pub fn get_knowledge_bases_remote_username_token() -> (String, String) {
-    let config = load_config();
-    (
-        config.knowledge_bases_remote_username.trim().to_string(),
-        config.knowledge_bases_remote_token.trim().to_string(),
-    )
+    ("".to_string(), "".to_string())
 }
 
 #[tauri::command]

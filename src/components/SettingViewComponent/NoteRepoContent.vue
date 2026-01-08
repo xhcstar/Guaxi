@@ -109,7 +109,7 @@
         <div>
           <h3>知识库远程仓库</h3>
           <p class="description">
-            配置后将应用到 KnowledgeBases 根目录下的 Git 仓库，可用于后续 git push / git pull。
+            配置后将应用到 KnowledgeBases 根目录下的 Git 仓库。push / pull 将直接调用系统 git 命令（类似 VSCode），使用你的本机 Git 配置与凭据环境。
           </p>
 
           <n-alert type="info" v-if="knowledgeBasesRemoteUrl" style="max-width: 95%;">
@@ -123,9 +123,6 @@
             <n-form-item label="远程仓库地址">
               <n-input v-model:value="knowledgeBasesRemoteUrl" :disabled="loading" placeholder="https://..." />
             </n-form-item>
-            <n-form-item label="远程仓库用户名">
-              <n-input v-model:value="knowledgeBasesRemoteUsername" :disabled="loading" placeholder="Gitee 必填(账号/邮箱)，其他可选" />
-            </n-form-item>
             <n-form-item label="Git 用户名">
               <n-input v-model:value="knowledgeBasesGitUsername" :disabled="loading"
                 placeholder="用于提交, 例如: Your Name" />
@@ -133,10 +130,6 @@
             <n-form-item label="Git Email">
               <n-input v-model:value="knowledgeBasesGitEmail" :disabled="loading"
                 placeholder="用于提交, 例如: you@example.com" />
-            </n-form-item>
-            <n-form-item label="访问秘钥">
-              <n-input v-model:value="knowledgeBasesRemoteToken" :disabled="loading" type="password"
-                :placeholder="knowledgeBasesRemoteHasToken ? '已配置（留空可保持不变）' : '请输入访问秘钥'" show-password-on="click" />
             </n-form-item>
             <n-form-item label="操作">
               <n-space>
@@ -167,7 +160,6 @@ import {
   NDivider,
   NForm,
   NFormItem,
-  useMessage,
 } from 'naive-ui';
 import {
   FolderAdd20Regular,
@@ -179,7 +171,6 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 
 const store = repoStore();
-const message = useMessage();
 
 // 文件库根目录
 const librariesRoot = ref('');
@@ -195,9 +186,6 @@ const templateRepoPath = ref('');
 
 // 知识库远程仓库配置
 const knowledgeBasesRemoteUrl = ref('');
-const knowledgeBasesRemoteUsername = ref('');
-const knowledgeBasesRemoteToken = ref('');
-const knowledgeBasesRemoteHasToken = ref(false);
 const knowledgeBasesGitUsername = ref('');
 const knowledgeBasesGitEmail = ref('');
 
@@ -236,30 +224,21 @@ onMounted(async () => {
   try {
     const remoteConfig = await invoke('get_knowledge_bases_remote_config');
     const remoteUrl = remoteConfig?.remoteUrl ?? remoteConfig?.remote_url;
-    const hasToken = remoteConfig?.hasToken ?? remoteConfig?.has_token;
     const gitUsername = remoteConfig?.gitUsername ?? remoteConfig?.git_username;
     const gitEmail = remoteConfig?.gitEmail ?? remoteConfig?.git_email;
 
     console.log('[NoteRepoContent][KB Remote] loaded', {
       remoteUrl: remoteUrl ? String(remoteUrl) : '',
-      username: remoteConfig?.username ? String(remoteConfig.username) : '',
-      hasToken: !!hasToken,
       gitUsername: gitUsername ? String(gitUsername) : '',
       gitEmail: gitEmail ? String(gitEmail) : '',
     });
 
     knowledgeBasesRemoteUrl.value = remoteUrl ? String(remoteUrl) : '';
-    knowledgeBasesRemoteUsername.value = remoteConfig?.username ? String(remoteConfig.username) : '';
-    knowledgeBasesRemoteHasToken.value = !!hasToken;
-    knowledgeBasesRemoteToken.value = '';
     knowledgeBasesGitUsername.value = gitUsername ? String(gitUsername) : '';
     knowledgeBasesGitEmail.value = gitEmail ? String(gitEmail) : '';
   } catch (error) {
     console.error('加载知识库远程仓库配置失败:', error);
     knowledgeBasesRemoteUrl.value = '';
-    knowledgeBasesRemoteUsername.value = '';
-    knowledgeBasesRemoteHasToken.value = false;
-    knowledgeBasesRemoteToken.value = '';
     knowledgeBasesGitUsername.value = '';
     knowledgeBasesGitEmail.value = '';
   }
@@ -342,28 +321,17 @@ const handleKnowledgeBasesRemoteSave = async () => {
     loading.value = true;
 
     const remoteUrl = String(knowledgeBasesRemoteUrl.value || '').trim();
-    const username = String(knowledgeBasesRemoteUsername.value || '').trim();
-    const tokenInput = String(knowledgeBasesRemoteToken.value || '').trim();
-    const hasToken = knowledgeBasesRemoteHasToken.value || !!tokenInput;
-    const isGitee = remoteUrl.toLowerCase().includes('gitee.com');
-
-    if (remoteUrl && isGitee && hasToken && !username) {
-      message.warning('Gitee 使用访问令牌时需要填写用户名（账号或邮箱）');
-      return;
-    }
 
     console.log('[NoteRepoContent][KB Remote] saving', {
       remoteUrl: remoteUrl,
-      username,
-      tokenProvided: !!tokenInput,
       gitUsername: String(knowledgeBasesGitUsername.value || '').trim(),
       gitEmail: String(knowledgeBasesGitEmail.value || '').trim(),
     });
 
     await invoke('set_knowledge_bases_remote_config', {
       remoteUrl: knowledgeBasesRemoteUrl.value,
-      username: knowledgeBasesRemoteUsername.value,
-      token: knowledgeBasesRemoteToken.value,
+      username: '',
+      token: '',
       gitUsername: knowledgeBasesGitUsername.value,
       gitEmail: knowledgeBasesGitEmail.value,
     });
@@ -372,15 +340,10 @@ const handleKnowledgeBasesRemoteSave = async () => {
       const remoteConfig = await invoke('get_knowledge_bases_remote_config');
       console.log('[NoteRepoContent][KB Remote] saved, backend says', {
         remoteUrl: remoteConfig?.remote_url ?? remoteConfig?.remoteUrl,
-        username: remoteConfig?.username,
-        hasToken: remoteConfig?.has_token ?? remoteConfig?.hasToken,
       });
     } catch (e) {
       console.warn('[NoteRepoContent][KB Remote] verify after save failed', e);
     }
-
-    knowledgeBasesRemoteHasToken.value = knowledgeBasesRemoteHasToken.value || !!knowledgeBasesRemoteToken.value.trim();
-    knowledgeBasesRemoteToken.value = '';
   } catch (error) {
     console.error('保存知识库远程仓库配置失败:', error);
   } finally {
