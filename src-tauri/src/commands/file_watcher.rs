@@ -93,6 +93,14 @@ impl FileWatcher {
                                     old_path,
                                 }
                             }
+                            notify::EventKind::Modify(_) => {
+                                debug!("File modified: {:?}", event.paths);
+                                FileEvent {
+                                    kind: "Modify".to_string(),
+                                    path: event.paths[0].to_string_lossy().to_string(),
+                                    old_path: None,
+                                }
+                            }
                             _ => {
                                 debug!("Ignoring non-relevant file event: {:?}", event.kind);
                                 continue;

@@ -538,6 +538,7 @@ import {
 } from '@vicons/ionicons5'
 import { ChevronLeft20Filled, ChevronRight20Filled } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import * as monaco from 'monaco-editor'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言注册
@@ -642,6 +643,33 @@ const gitLoading = ref({
   commit: false,
   checkout: false  // 添加分支切换加载状态
 });
+
+const gitAutoRefresh = ref({
+  enabled: true,
+  intervalMs: 1500
+})
+
+const isRefreshingStatus = ref(false)
+const fileChangeUnlisten = ref(null)
+let autoRefreshIntervalId = null
+let refreshDebounceTimerId = null
+
+const normalizeFsPath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/g, '')
+const isPathUnderRepo = (p) => {
+  const root = normalizeFsPath(props.workspacePath)
+  const s = normalizeFsPath(p)
+  if (!root || !s) return false
+  if (s === root) return true
+  return s.startsWith(root + '/')
+}
+
+const scheduleAutoRefresh = () => {
+  if (!gitAutoRefresh.value.enabled) return
+  if (refreshDebounceTimerId) clearTimeout(refreshDebounceTimerId)
+  refreshDebounceTimerId = setTimeout(() => {
+    refreshGitStatus({ resetSelection: false })
+  }, 250)
+}
 
 const selectedCommit = ref(null)
 const expandedCommit = ref(null)
@@ -1424,20 +1452,27 @@ const isIgnoredGitPath = (p) => {
   return s === '.meta' || s.startsWith('.meta/') || s.includes('/.meta/')
 }
 
-const refreshGitStatus = async () => {
+const refreshGitStatus = async ({ resetSelection = true } = {}) => {
+  if (isRefreshingStatus.value) return
+  isRefreshingStatus.value = true
+
   logger.debug('Refreshing Git status')
   console.log('repo path:', props.workspacePath)
+
+  const prevSelectedFilePath = selectedFile.value?.path
+  const prevSelectedCommitId = selectedCommit.value?.id
+
   try {
     const statuses = await invoke('get_git_status', {
       path: props.workspacePath
     });
 
-    // 重置选择状态
-    selectedFile.value = null;
-    selectedCommit.value = null;
-    isEditorInitialized.value = false;
+    if (resetSelection) {
+      selectedFile.value = null;
+      selectedCommit.value = null;
+      isEditorInitialized.value = false;
+    }
 
-    // 创建临时容器
     const newStagedFiles = []
     const newUnstagedFiles = []
 
@@ -1459,15 +1494,26 @@ const refreshGitStatus = async () => {
       }
     })
 
-    // 批量更新响应式数据
     stagedFiles.value = newStagedFiles
     unstagedFiles.value = newUnstagedFiles
 
-
-    // 添加获取提交历史的调用
     await loadCommitHistory()
+
+    if (!resetSelection) {
+      if (prevSelectedFilePath) {
+        const all = [...stagedFiles.value, ...unstagedFiles.value]
+        const matched = all.find((f) => f?.path === prevSelectedFilePath)
+        selectedFile.value = matched || null
+      }
+      if (prevSelectedCommitId) {
+        const matchedCommit = commits.value.find((c) => c?.id === prevSelectedCommitId)
+        selectedCommit.value = matchedCommit || null
+      }
+    }
   } catch (error) {
     logger.error('Failed to refresh Git status', error)
+  } finally {
+    isRefreshingStatus.value = false
   }
 }
 
@@ -2026,9 +2072,47 @@ watch(selectedCommit, (newVal) => {
 onMounted(() => {
   logger.debug('Component mounted')
 
+  const setupAutoRefresh = async () => {
+    try {
+      if (fileChangeUnlisten.value) {
+        await fileChangeUnlisten.value()
+        fileChangeUnlisten.value = null
+      }
+
+      fileChangeUnlisten.value = await listen('file_change', (event) => {
+        const payload = event?.payload || {}
+        if (!isPathUnderRepo(payload.path)) return
+        scheduleAutoRefresh()
+      })
+    } catch (e) {
+      logger.warn('Failed to listen file_change', e)
+    }
+
+    if (autoRefreshIntervalId) clearInterval(autoRefreshIntervalId)
+    autoRefreshIntervalId = setInterval(() => {
+      if (!gitAutoRefresh.value.enabled) return
+      if (document.visibilityState !== 'visible') return
+      refreshGitStatus({ resetSelection: false })
+    }, gitAutoRefresh.value.intervalMs)
+
+    const onFocus = () => scheduleAutoRefresh()
+    window.addEventListener('focus', onFocus)
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') scheduleAutoRefresh()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    onUnmounted(() => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    })
+  }
+
   // 初始化操作
   const initialize = async () => {
     try {
+      await setupAutoRefresh()
       await Promise.all([
         refreshGitStatus(),
         fetchBranches()
@@ -2065,7 +2149,19 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  // 移除所有事件监听器
+  if (refreshDebounceTimerId) {
+    clearTimeout(refreshDebounceTimerId)
+    refreshDebounceTimerId = null
+  }
+  if (autoRefreshIntervalId) {
+    clearInterval(autoRefreshIntervalId)
+    autoRefreshIntervalId = null
+  }
+  if (fileChangeUnlisten.value) {
+    fileChangeUnlisten.value().catch(() => {})
+    fileChangeUnlisten.value = null
+  }
+
   document.removeEventListener('mousemove', handleSidebarDrag)
   document.removeEventListener('mouseup', stopSidebarDrag)
   document.removeEventListener('mousemove', handleChangesDrag)
