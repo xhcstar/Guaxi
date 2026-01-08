@@ -1607,6 +1607,12 @@ const initMonacoEditor = async () => {
       originalEditable: false,
       readOnly: true,
       automaticLayout: true,
+      scrollbar: {
+        verticalScrollbarSize: 10,
+        horizontalScrollbarSize: 10,
+        arrowSize: 0,
+        useShadows: false
+      },
       theme: getMonacoTheme(),
       fontSize: 16,
       fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
@@ -2747,9 +2753,14 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+.section-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-color-secondary) transparent;
+}
+
 .section-scroll::-webkit-scrollbar {
-  width: 2px;
-  height: 2px;
+  width: 8px;
+  height: 8px;
 }
 
 .section-scroll::-webkit-scrollbar-track {
@@ -2758,12 +2769,13 @@ onUnmounted(() => {
 
 .section-scroll::-webkit-scrollbar-thumb {
   background-color: var(--text-color-secondary);
-  border-radius: 2px;
-  opacity: 0.45;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 
 .section-scroll::-webkit-scrollbar-thumb:hover {
-  opacity: 0.8;
+  background-color: var(--text-color);
 }
 
 .commits-toolbar {
@@ -2782,9 +2794,14 @@ onUnmounted(() => {
   scrollbar-gutter: stable;
 }
 
+.commits-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-color-secondary) transparent;
+}
+
 .commits-list::-webkit-scrollbar {
-  width: 3px;
-  height: 3px;
+  width: 8px;
+  height: 8px;
 }
 
 .commits-list::-webkit-scrollbar-track {
@@ -2793,12 +2810,13 @@ onUnmounted(() => {
 
 .commits-list::-webkit-scrollbar-thumb {
   background-color: var(--text-color-secondary);
-  border-radius: 3px;
-  opacity: 0.5;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 
 .commits-list::-webkit-scrollbar-thumb:hover {
-  opacity: 0.85;
+  background-color: var(--text-color);
 }
 
 .commit-item {
