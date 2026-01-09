@@ -134,10 +134,10 @@
           }" header-style="padding: 12px 16px;" content-style="padding: 0;">
           <template #header-extra>
             <div class="card-actions" v-if="activeCardIndex === index">
-              <n-button v-if="card.type !== 'composite'" size="tiny" type="primary" @click.stop="saveCardEdit(index)">
+              <n-button size="tiny" type="primary" @click.stop="saveCardEdit(index)">
                 <n-icon :component="SaveOutline" size="12" />
               </n-button>
-              <n-button v-if="card.type !== 'composite'" size="tiny" text @click.stop="exitEditMode(index)">
+              <n-button size="tiny" text @click.stop="exitEditMode(index)">
                 <n-icon :component="ExitOutline" size="12" />
               </n-button>
               <n-button size="tiny" text @click.stop="deleteCard(index)">
@@ -155,11 +155,17 @@
             @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></div>
 
           <!-- 添加复合笔记的专用渲染 -->
-          <div v-else class="composite-note-content" @click="enterEditMode(index)">
+          <div v-else-if="card.type === 'composite' && activeCardIndex !== index" class="composite-note-content"
+            @click="enterEditMode(index)">
             <div v-for="(segment, segIndex) in compositeSegments[index]" :key="segIndex" class="note-segment"
               :class="getSegmentClass(segment)">
               <div v-html="segment.content"></div>
             </div>
+          </div>
+
+          <div v-else class="note-content">
+            <textarea class="composite-note-editor" @keydown.meta.s.prevent="saveCardEdit(index)"
+              @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></textarea>
           </div>
 
           <template #footer>
@@ -2050,6 +2056,36 @@ const setContentEditableRef = (index, el) => {
   }
 };
 
+const getCompositeEditorText = (card) => {
+  const items = Array.isArray(card?.items) ? card.items : [];
+  return items
+    .map(item => (item?.original_markdown || item?.originalMarkdown || item?.content || '').trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+};
+
+const parseCompositeEditorTextToItems = (text, cardId) => {
+  const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [];
+
+  const parts = normalized
+    .split(/\n\s*---\s*\n/g)
+    .map(p => p.trim())
+    .filter(Boolean);
+
+  const now = Date.now();
+  const ts = new Date().toISOString();
+
+  return parts.map((part, idx) => ({
+    id: `${cardId || now}-${idx}-${now}`,
+    type: 'text',
+    content: part,
+    originalMarkdown: part,
+    original_markdown: part,
+    timestamp: ts
+  }));
+};
+
 const saveCardEdit = async (index) => {
   try {
     if (index < 0 || index >= noteCards.value.length) {
@@ -2064,7 +2100,14 @@ const saveCardEdit = async (index) => {
     const currentCard = JSON.parse(JSON.stringify(noteCards.value[index]));
 
     if (currentCard.type === 'composite') {
-      currentCard.content = editableDiv.innerHTML;
+      const raw = editableDiv?.tagName === 'TEXTAREA' ? editableDiv.value : editableDiv.innerText;
+      const items = parseCompositeEditorTextToItems(raw, currentCard.id);
+      currentCard.items = items;
+      currentCard.type = items.length > 1 ? 'composite' : 'single';
+      if (currentCard.type === 'composite') {
+        currentCard.title = `复合笔记 (${items.length}项)`;
+      }
+      currentCard.content = raw;
     } else {
       if (!Array.isArray(currentCard.items)) {
         currentCard.items = [];
@@ -2086,6 +2129,9 @@ const saveCardEdit = async (index) => {
     currentCard.timestamp = new Date().toISOString();
     await updateBackendNotes('update', currentCard);
 
+    noteCards.value.splice(index, 1, currentCard);
+    activeCardIndex.value = -1;
+
   } catch (error) {
     console.error('保存编辑失败:', {
       error,
@@ -2097,7 +2143,18 @@ const saveCardEdit = async (index) => {
 };
 
 const exitEditMode = (index) => {
+  const card = noteCards.value[index];
   const editableDiv = contentEditables.value[index];
+
+  if (card?.type === 'composite' && editableDiv?.tagName === 'TEXTAREA') {
+    const before = getCompositeEditorText(card);
+    if (editableDiv.value !== before) {
+      if (!confirm('有未保存的修改，确定要取消吗？')) return;
+    }
+    activeCardIndex.value = -1;
+    return;
+  }
+
   if (editableDiv && editableDiv.innerHTML !== noteCards.value[index].content) {
     if (!confirm('有未保存的修改，确定要取消吗？')) return;
   }
@@ -2108,6 +2165,17 @@ const enterEditMode = async (index) => {
   activeCardIndex.value = index;
   await nextTick();
   const editableDiv = contentEditables.value[index];
+  const card = noteCards.value[index];
+
+  if (card?.type === 'composite' && editableDiv?.tagName === 'TEXTAREA') {
+    if (!editableDiv.value || editableDiv.value.trim() === '') {
+      editableDiv.value = getCompositeEditorText(card);
+    }
+    editableDiv.focus();
+    editableDiv.setSelectionRange(editableDiv.value.length, editableDiv.value.length);
+    return;
+  }
+
   if (editableDiv) {
     if (!editableDiv.innerHTML || editableDiv.innerHTML.trim() === '') {
       editableDiv.innerHTML = noteHtmls.value[index] || '';
@@ -2322,12 +2390,25 @@ watchEffect((onInvalidate) => {
   background: white;
 }
 
-.word-preview-container :deep(.docx) {
+.word-preview-container :deep(.docx > *) {
   width: 100% !important;
   height: auto !important;
   padding: 0;
   margin: 0;
   box-shadow: none;
+}
+
+.composite-note-editor {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px 16px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  line-height: 1.5;
 }
 
 .word-preview-container :deep(.docx > *) {
@@ -2630,6 +2711,7 @@ button:disabled {
   box-shadow: 0 0 0 2px rgba(65, 210, 230, 0.5);
   transform: scale(1.005);
   outline: none;
+  cursor: pointer;
 }
 
 .markdown-content :deep(.selected) {
