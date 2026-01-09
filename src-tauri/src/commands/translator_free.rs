@@ -93,10 +93,11 @@ async fn process_batch(
     let clean_texts: Vec<String> = texts.iter().map(|t| preprocess_text(t)).collect();
     
     // 定义所有翻译服务（按优先级排序）
+    // Tencent 的 free 接口近期容易返回 405/非 JSON（反爬/接口变更），放到最后兜底。
     let services: [TranslateFn; 3] = [
-        tencent_translate_service,
-        google_translate_service,
         bing_translate_service,
+        google_translate_service,
+        tencent_translate_service,
     ];
 
     let mut last_error = None;
