@@ -87,7 +87,8 @@
 
       <!-- 右侧Markdown内容 -->
       <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
-        @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent">
+        @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
+        @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
             <div class="markdown-line">
@@ -113,6 +114,39 @@
             </div>
           </template>
         </div>
+
+        <div v-if="inPageSearchVisible" class="inpage-search-bar" @mousedown.stop>
+          <input ref="inPageSearchInput" class="inpage-search-input" v-model="inPageSearchQuery" placeholder="页内搜索"
+            @input="applyInPageSearch" @keydown.enter.prevent="gotoNextSearchMatch"
+            @keydown.shift.enter.prevent="gotoPrevSearchMatch" @keydown.esc.prevent="closeInPageSearch" />
+          <span class="inpage-search-count">{{ inPageSearchCountText }}</span>
+          <button class="inpage-search-btn" type="button" title="上一个" @click="gotoPrevSearchMatch">
+            <n-icon :component="ArrowBackOutline" />
+          </button>
+          <button class="inpage-search-btn" type="button" title="下一个" @click="gotoNextSearchMatch">
+            <n-icon :component="ArrowForwardOutline" />
+          </button>
+          <button class="inpage-search-btn" type="button" title="关闭" @click="closeInPageSearch">
+            <n-icon :component="CloseOutline" />
+          </button>
+        </div>
+
+        <div v-if="selectionToolbarVisible" class="selection-toolbar"
+          :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }" @mousedown.stop>
+          <button class="selection-tool-btn" type="button" title="翻译" :disabled="selectionBusy || !selectionText"
+            @click="translateSelection">
+            <n-icon :component="LanguageOutline" />
+          </button>
+          <button class="selection-tool-btn" type="button" title="查询" :disabled="selectionBusy || !selectionText"
+            @click="querySelection">
+            <n-icon :component="SearchOutline" />
+          </button>
+          <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
+            @click="insertSelectionResult">
+            <n-icon :component="AddOutline" />
+          </button>
+        </div>
+
         <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
           <GuaxiOutline />
         </div>
@@ -227,7 +261,8 @@ import {
   SaveOutline,
   ExitOutline,
   OptionsOutline,
-  BookmarksOutline
+  BookmarksOutline,
+  SearchOutline
 } from '@vicons/ionicons5'
 
 // 组件属性定义
@@ -352,6 +387,12 @@ const handleReaderShortcuts = (e) => {
     return
   }
 
+  if (ctrl && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault()
+    openInPageSearch()
+    return
+  }
+
   if (ctrl && (e.key === 't' || e.key === 'T')) {
     e.preventDefault()
     toggleTranslate()
@@ -385,6 +426,7 @@ const handleReaderShortcuts = (e) => {
 onMounted(() => {
   window.addEventListener('scroll', handleAnyScroll, true)
   window.addEventListener('keydown', handleReaderShortcuts, true)
+  window.addEventListener('mousedown', handleGlobalMouseDown, true)
 
   nextTick(() => {
     if (lastScrollTarget.value) return
@@ -401,12 +443,32 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleAnyScroll, true)
   window.removeEventListener('keydown', handleReaderShortcuts, true)
+  window.removeEventListener('mousedown', handleGlobalMouseDown, true)
 })
 
 const markdownContainer = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
 let notesRenderToken = 0;
+
+const selectionToolbarVisible = ref(false)
+const selectionToolbarTop = ref(0)
+const selectionToolbarLeft = ref(0)
+const selectionText = ref('')
+const selectionBusy = ref(false)
+const selectionInsertText = ref('')
+
+const inPageSearchVisible = ref(false)
+const inPageSearchQuery = ref('')
+const inPageSearchMatches = ref([])
+const inPageSearchActiveIndex = ref(-1)
+const inPageSearchInput = ref(null)
+
+const inPageSearchCountText = computed(() => {
+  const total = inPageSearchMatches.value.length
+  if (!total) return '0/0'
+  return `${Math.max(0, inPageSearchActiveIndex.value) + 1}/${total}`
+})
 
 // 视图状态
 const zoomLevel = ref(1);
@@ -1417,6 +1479,283 @@ const showSelectionMessage = (message) => {
     messageEl.classList.add('fade-out');
     setTimeout(() => messageEl.remove(), 500);
   }, 1500);
+}
+
+const closeSelectionToolbar = () => {
+  selectionToolbarVisible.value = false
+  selectionText.value = ''
+  selectionInsertText.value = ''
+}
+
+const insertIntoActiveNoteEditor = (text) => {
+  const idx = activeCardIndex.value
+  if (idx < 0) return false
+
+  const el = contentEditables.value[idx]
+  if (!el) return false
+
+  const payload = `\n\n${text}\n\n`
+
+  if (el instanceof HTMLTextAreaElement) {
+    el.focus()
+    const start = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length
+    const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : el.value.length
+    el.value = el.value.slice(0, start) + payload + el.value.slice(end)
+    const cursor = start + payload.length
+    el.setSelectionRange(cursor, cursor)
+    return true
+  }
+
+  if (el instanceof HTMLElement && el.isContentEditable) {
+    el.focus()
+    const selection = window.getSelection()
+    if (!selection) return false
+
+    let range = selection.rangeCount ? selection.getRangeAt(0) : null
+    if (!range || !el.contains(range.commonAncestorContainer)) {
+      range = document.createRange()
+      range.selectNodeContents(el)
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+
+    range.deleteContents()
+    const node = document.createTextNode(payload)
+    range.insertNode(node)
+    range.setStartAfter(node)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    return true
+  }
+
+  return false
+}
+
+const translateSelection = async () => {
+  const text = selectionText.value.trim()
+  if (!text) return
+
+  selectionBusy.value = true
+  try {
+    const response = await invoke('translate_text_free', { texts: [text] })
+    const translated = response?.translated_texts?.[0] || ''
+    if (!translated.trim()) {
+      message.error('翻译结果为空')
+      selectionInsertText.value = ''
+      return
+    }
+
+    selectionInsertText.value = `**${text}**\n\n${translated}`
+  } catch (error) {
+    const msg = typeof error === 'object' ? error.message || error.toString() : String(error)
+    message.error(`翻译失败: ${msg}`)
+  } finally {
+    selectionBusy.value = false
+  }
+}
+
+const querySelection = () => {
+  const text = selectionText.value.trim()
+  if (!text) return
+
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(text)}`
+  selectionInsertText.value = `[查询：${text}](${url})`
+}
+
+const insertSelectionResult = async () => {
+  const text = selectionInsertText.value.trim()
+  if (!text) return
+
+  const ok = insertIntoActiveNoteEditor(text)
+  if (!ok) {
+    await addToNotes({ type: 'text', content: text, originalMarkdown: text })
+  }
+
+  message.success('已插入笔记', { duration: 1200 })
+  closeSelectionToolbar()
+}
+
+const handleSelectionMouseUp = () => {
+  const selection = window.getSelection()
+  const text = selection ? selection.toString().trim() : ''
+  if (!text) {
+    closeSelectionToolbar()
+    return
+  }
+
+  const container = markdownContainer.value
+  if (!container || !selection || selection.rangeCount === 0) {
+    closeSelectionToolbar()
+    return
+  }
+
+  const range = selection.getRangeAt(0)
+  const common = range.commonAncestorContainer
+  const commonEl = common instanceof Element ? common : common.parentElement
+  if (!commonEl || !container.contains(commonEl)) {
+    closeSelectionToolbar()
+    return
+  }
+
+  const rect = range.getBoundingClientRect()
+  if (!rect || (rect.width === 0 && rect.height === 0)) {
+    closeSelectionToolbar()
+    return
+  }
+
+  selectionText.value = text
+
+  const pad = 8
+  const toolWidth = 140
+  const toolHeight = 40
+
+  let top = rect.top - toolHeight - 8
+  if (top < pad) top = rect.bottom + 8
+
+  let left = rect.left
+  left = Math.max(pad, Math.min(left, window.innerWidth - toolWidth - pad))
+
+  selectionToolbarTop.value = Math.round(top)
+  selectionToolbarLeft.value = Math.round(left)
+  selectionToolbarVisible.value = true
+}
+
+const handleGlobalMouseDown = (e) => {
+  const t = e?.target
+  if (!(t instanceof Element)) {
+    closeSelectionToolbar()
+    return
+  }
+
+  if (t.closest('.selection-toolbar')) return
+  closeSelectionToolbar()
+}
+
+const updateActiveSearchMatch = (nextIndex) => {
+  const total = inPageSearchMatches.value.length
+  if (!total) return
+
+  const normalized = ((nextIndex % total) + total) % total
+
+  const prev = inPageSearchMatches.value[inPageSearchActiveIndex.value]
+  if (prev) prev.classList.remove('inpage-match-active')
+
+  inPageSearchActiveIndex.value = normalized
+
+  const el = inPageSearchMatches.value[normalized]
+  if (el) {
+    el.classList.add('inpage-match-active')
+    el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+  }
+}
+
+const gotoNextSearchMatch = () => {
+  if (!inPageSearchMatches.value.length) return
+  updateActiveSearchMatch(inPageSearchActiveIndex.value + 1)
+}
+
+const gotoPrevSearchMatch = () => {
+  if (!inPageSearchMatches.value.length) return
+  updateActiveSearchMatch(inPageSearchActiveIndex.value - 1)
+}
+
+const clearInPageSearchHighlights = () => {
+  const container = markdownContainer.value
+  if (!container) return
+
+  const marks = container.querySelectorAll('span.inpage-match, span.inpage-match-active')
+  marks.forEach((mark) => {
+    const parent = mark.parentNode
+    if (!parent) return
+    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+    parent.normalize()
+  })
+}
+
+const applyInPageSearch = () => {
+  clearInPageSearchHighlights()
+
+  inPageSearchMatches.value = []
+  inPageSearchActiveIndex.value = -1
+
+  const query = inPageSearchQuery.value.trim()
+  if (!query) return
+
+  const container = markdownContainer.value
+  if (!container) return
+
+  const qLower = query.toLowerCase()
+
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        if (!node?.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT
+        const parent = node.parentElement
+        if (!parent) return NodeFilter.FILTER_REJECT
+        if (parent.closest('script, style')) return NodeFilter.FILTER_REJECT
+        return NodeFilter.FILTER_ACCEPT
+      }
+    }
+  )
+
+  const textNodes = []
+  while (walker.nextNode()) textNodes.push(walker.currentNode)
+
+  textNodes.forEach((textNode) => {
+    const text = textNode.textContent || ''
+    const lower = text.toLowerCase()
+
+    let idx = lower.indexOf(qLower)
+    if (idx === -1) return
+
+    const frag = document.createDocumentFragment()
+    let last = 0
+
+    while (idx !== -1) {
+      if (idx > last) frag.appendChild(document.createTextNode(text.slice(last, idx)))
+
+      const span = document.createElement('span')
+      span.className = 'inpage-match'
+      span.textContent = text.slice(idx, idx + query.length)
+      frag.appendChild(span)
+      inPageSearchMatches.value.push(span)
+
+      last = idx + query.length
+      idx = lower.indexOf(qLower, last)
+    }
+
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)))
+
+    const parent = textNode.parentNode
+    if (parent) parent.replaceChild(frag, textNode)
+  })
+
+  if (inPageSearchMatches.value.length) {
+    nextTick(() => updateActiveSearchMatch(0))
+  }
+}
+
+const openInPageSearch = async () => {
+  inPageSearchVisible.value = true
+  await nextTick()
+  const input = inPageSearchInput.value
+  if (input && input instanceof HTMLInputElement) {
+    input.focus()
+    input.select()
+  }
+  applyInPageSearch()
+}
+
+const closeInPageSearch = () => {
+  inPageSearchVisible.value = false
+  inPageSearchQuery.value = ''
+  clearInPageSearchHighlights()
+  inPageSearchMatches.value = []
+  inPageSearchActiveIndex.value = -1
 }
 
 const handleMarkdownHover = (e) => {
@@ -2905,6 +3244,95 @@ button:disabled {
 
 .selection-message.fade-out {
   opacity: 0;
+}
+
+.selection-toolbar {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(20, 20, 20, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+}
+
+.selection-tool-btn {
+  width: 32px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.selection-tool-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.inpage-search-bar {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(20, 20, 20, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.inpage-search-input {
+  width: 220px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  outline: none;
+}
+
+.inpage-search-count {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  min-width: 48px;
+  text-align: center;
+}
+
+.inpage-search-btn {
+  width: 32px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.markdown-content :deep(.inpage-match) {
+  background: rgba(255, 230, 120, 0.55);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+.markdown-content :deep(.inpage-match-active) {
+  background: rgba(255, 180, 80, 0.75);
+  box-shadow: 0 0 0 2px rgba(255, 180, 80, 0.35);
 }
 
 .notes-panel {

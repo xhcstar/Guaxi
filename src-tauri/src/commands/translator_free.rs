@@ -1,5 +1,5 @@
 use chrono::Utc;
-use reqwest::Client;
+use reqwest::{header, Client};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;
@@ -122,6 +122,28 @@ fn preprocess_text(text: &str) -> String {
     text.replace("<", "&lt;").replace(">", "&gt;")
 }
 
+fn summarize_body(body: &str) -> String {
+    let trimmed = body.trim();
+    let mut s: String = trimmed.chars().take(240).collect();
+    s = s.replace('\n', " ").replace('\r', " ");
+    if trimmed.chars().count() > 240 {
+        s.push('…');
+    }
+    s
+}
+
+fn response_is_probably_html(content_type: Option<&str>, body: &str) -> bool {
+    if let Some(ct) = content_type {
+        let ct_lower = ct.to_ascii_lowercase();
+        if ct_lower.contains("text/html") {
+            return true;
+        }
+    }
+
+    let b = body.trim_start().to_ascii_lowercase();
+    b.starts_with("<!doctype html") || b.starts_with("<html")
+}
+
 // 6. 腾讯翻译实现
 fn tencent_translate_service<'a>(
     texts: &'a [String],
@@ -129,6 +151,8 @@ fn tencent_translate_service<'a>(
     Box::pin(async move {
         let client = Client::builder()
             .user_agent("Mozilla/5.0")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
             .build()
             .map_err(TranslationError::from)?;
 
@@ -138,6 +162,8 @@ fn tencent_translate_service<'a>(
             let response = client
                 .post("https://fanyi.qq.com/api/translate")
                 .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Origin", "https://fanyi.qq.com")
+                .header("Referer", "https://fanyi.qq.com/")
                 .form(&[
                     ("sourceText", text.as_str()),
                     ("source", "auto"),
@@ -149,8 +175,39 @@ fn tencent_translate_service<'a>(
                 .await
                 .map_err(TranslationError::from)?;
 
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
             let response_text = response.text().await.map_err(TranslationError::from)?;
-            let result: serde_json::Value = serde_json::from_str(&response_text)?;
+
+            if !status.is_success() {
+                return Err(TranslationError(format!(
+                    "Tencent HTTP {}: {}",
+                    status.as_u16(),
+                    summarize_body(&response_text)
+                )));
+            }
+            if response_text.trim().is_empty() {
+                return Err(TranslationError("Tencent empty response".into()));
+            }
+            if response_is_probably_html(content_type.as_deref(), &response_text) {
+                return Err(TranslationError(format!(
+                    "Tencent non-JSON response: {}",
+                    summarize_body(&response_text)
+                )));
+            }
+
+            let result: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+                TranslationError(format!(
+                    "Tencent JSON error: {} ({})",
+                    e,
+                    summarize_body(&response_text)
+                ))
+            })?;
 
             if let Some(records) = result["translate"]["records"].as_array() {
                 if !records.is_empty() {
@@ -172,6 +229,8 @@ fn google_translate_service<'a>(
     Box::pin(async move {
         let client = Client::builder()
             .user_agent("Mozilla/5.0")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
             .build()
             .map_err(TranslationError::from)?;
 
@@ -191,8 +250,39 @@ fn google_translate_service<'a>(
                 .await
                 .map_err(TranslationError::from)?;
 
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
             let response_text = response.text().await.map_err(TranslationError::from)?;
-            let result: serde_json::Value = serde_json::from_str(&response_text)?;
+
+            if !status.is_success() {
+                return Err(TranslationError(format!(
+                    "Google HTTP {}: {}",
+                    status.as_u16(),
+                    summarize_body(&response_text)
+                )));
+            }
+            if response_text.trim().is_empty() {
+                return Err(TranslationError("Google empty response".into()));
+            }
+            if response_is_probably_html(content_type.as_deref(), &response_text) {
+                return Err(TranslationError(format!(
+                    "Google non-JSON response: {}",
+                    summarize_body(&response_text)
+                )));
+            }
+
+            let result: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+                TranslationError(format!(
+                    "Google JSON error: {} ({})",
+                    e,
+                    summarize_body(&response_text)
+                ))
+            })?;
 
             if let Some(translation) = result[0].as_array() {
                 let mut translated = String::new();
@@ -218,18 +308,44 @@ fn bing_translate_service<'a>(
     Box::pin(async move {
         let client = Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.42")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
             .build()
             .map_err(TranslationError::from)?;
 
-        // 获取token
-        let token = client
+        let token_response = client
             .get("https://edge.microsoft.com/translate/auth")
             .send()
             .await
-            .map_err(TranslationError::from)?
-            .text()
-            .await
             .map_err(TranslationError::from)?;
+
+        let token_status = token_response.status();
+        let token_content_type = token_response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let token_body = token_response.text().await.map_err(TranslationError::from)?;
+
+        if !token_status.is_success() {
+            return Err(TranslationError(format!(
+                "Bing token HTTP {}: {}",
+                token_status.as_u16(),
+                summarize_body(&token_body)
+            )));
+        }
+        if token_body.trim().is_empty() {
+            return Err(TranslationError("Bing token empty response".into()));
+        }
+        if response_is_probably_html(token_content_type.as_deref(), &token_body) {
+            return Err(TranslationError(format!(
+                "Bing token non-plain response: {}",
+                summarize_body(&token_body)
+            )));
+        }
+
+        let token = token_body.trim().to_string();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
         
@@ -238,18 +354,45 @@ fn bing_translate_service<'a>(
                 .post("https://api-edge.cognitive.microsofttranslator.com/translate")
                 .header("Authorization", format!("Bearer {}", token))
                 .header("Content-Type", "application/json")
-                .query(&[
-                    ("api-version", "3.0"),
-                    ("from", "auto"),
-                    ("to", "zh-Hans"),
-                ])
+                .query(&[("api-version", "3.0"), ("to", "zh-Hans")])
                 .json(&[serde_json::json!({"Text": text})])
                 .send()
                 .await
                 .map_err(TranslationError::from)?;
 
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
             let response_text = response.text().await.map_err(TranslationError::from)?;
-            let result: serde_json::Value = serde_json::from_str(&response_text)?;
+
+            if !status.is_success() {
+                return Err(TranslationError(format!(
+                    "Bing HTTP {}: {}",
+                    status.as_u16(),
+                    summarize_body(&response_text)
+                )));
+            }
+            if response_text.trim().is_empty() {
+                return Err(TranslationError("Bing empty response".into()));
+            }
+            if response_is_probably_html(content_type.as_deref(), &response_text) {
+                return Err(TranslationError(format!(
+                    "Bing non-JSON response: {}",
+                    summarize_body(&response_text)
+                )));
+            }
+
+            let result: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+                TranslationError(format!(
+                    "Bing JSON error: {} ({})",
+                    e,
+                    summarize_body(&response_text)
+                ))
+            })?;
 
             if let Some(translations) = result[0]["translations"].as_array() {
                 if !translations.is_empty() {
