@@ -88,7 +88,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick"
+      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
@@ -257,6 +257,130 @@ const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
 const outlineStore = useOutlineStore()
 const md = new MarkdownIt()
+
+const isEditableElement = (el) => {
+  if (!el) return false
+  const t = el.tagName ? el.tagName.toLowerCase() : ''
+  if (t === 'input' || t === 'textarea' || t === 'select') return true
+  return Boolean(el.isContentEditable)
+}
+
+const lastScrollTarget = ref(null)
+
+const isScrollableElement = (el) => {
+  if (!el) return false
+  const hasV = el.scrollHeight > el.clientHeight
+  const hasH = el.scrollWidth > el.clientWidth
+  return hasV || hasH
+}
+
+const handleAnyScroll = (e) => {
+  const t = e.target
+  if (t === document) {
+    const se = document.scrollingElement
+    if (se) lastScrollTarget.value = se
+    return
+  }
+  if (t && t instanceof HTMLElement && isScrollableElement(t)) {
+    lastScrollTarget.value = t
+  }
+}
+
+const handleReaderShortcuts = (e) => {
+  if (isEditableElement(e.target)) return
+
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    const target = lastScrollTarget.value
+    if (target && isScrollableElement(target)) {
+      const step = e.shiftKey ? 160 : 40
+      const top = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
+      const left = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
+      if (top !== 0 || left !== 0) {
+        e.preventDefault()
+        target.scrollBy({ top, left, behavior: 'auto' })
+        return
+      }
+    }
+  }
+
+  const ctrl = e.ctrlKey || e.metaKey
+
+  if (e.key === 'PageUp') {
+    e.preventDefault()
+    prevPage()
+    return
+  }
+
+  if (e.key === 'PageDown') {
+    e.preventDefault()
+    nextPage()
+    return
+  }
+
+  if (ctrl && e.key === '0') {
+    e.preventDefault()
+    fitToWidth()
+    return
+  }
+
+  if (ctrl && (e.key === '=' || e.key === '+')) {
+    e.preventDefault()
+    zoomIn()
+    return
+  }
+
+  if (ctrl && e.key === '-') {
+    e.preventDefault()
+    zoomOut()
+    return
+  }
+
+  if (ctrl && (e.key === 'n' || e.key === 'N')) {
+    e.preventDefault()
+    toggleNotesPanel()
+    return
+  }
+
+  if (ctrl && (e.key === 't' || e.key === 'T')) {
+    e.preventDefault()
+    toggleTranslate()
+    return
+  }
+
+  if (ctrl && e.key === '1') {
+    e.preventDefault()
+    handleViewModeSelect('split')
+    return
+  }
+
+  if (ctrl && e.key === '2') {
+    e.preventDefault()
+    handleViewModeSelect('full-left')
+    return
+  }
+
+  if (ctrl && e.key === '3') {
+    e.preventDefault()
+    handleViewModeSelect('full-right')
+    return
+  }
+
+  if (ctrl && e.key === '4') {
+    e.preventDefault()
+    handleViewModeSelect('outline')
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('scroll', handleAnyScroll, true)
+  window.addEventListener('keydown', handleReaderShortcuts, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', handleAnyScroll, true)
+  window.removeEventListener('keydown', handleReaderShortcuts, true)
+})
+
 const markdownContainer = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
