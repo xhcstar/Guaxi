@@ -104,7 +104,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
+      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
         @mouseleave="handleMarkdownLeave">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
@@ -174,7 +174,7 @@
             @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></div>
 
           <!-- 添加复合笔记的专用渲染 -->
-          <div v-else class="composite-note-content">
+          <div v-else class="composite-note-content" @click="enterEditMode(index)">
             <div v-for="(segment, segIndex) in compositeSegments[index]" :key="segIndex" class="note-segment"
               :class="getSegmentClass(segment)">
               <div v-html="segment.content"></div>
@@ -401,6 +401,7 @@ onBeforeUnmount(() => {
 const markdownContainer = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
+let notesRenderToken = 0;
 
 // 3. PDF渲染相关
 const {
@@ -899,7 +900,8 @@ function determineNoteType(target) {
   }
 
   // 4. 检查图片
-  if (target.tagName === 'IMG') {
+  const el = target instanceof Element ? target : target?.parentElement
+  if (el && (el.tagName === 'IMG' || el.closest('img') || el.querySelector('img'))) {
     return 'image';
   }
 
@@ -965,9 +967,13 @@ const handleMarkdownClick = async (e) => {
 
   // 2. 获取关键状态
   const isAltPressed = e.altKey;
-  const target = e.target;
+  const rawTarget = e.target;
+  const hoveredElement = document.querySelector('.markdown-content .hovered');
+  const target = hoveredElement && rawTarget instanceof Node && hoveredElement.contains(rawTarget)
+    ? hoveredElement
+    : rawTarget;
   const selection = window.getSelection();
-  const selectedText = selection.toString().trim();
+  const selectedText = selection ? selection.toString().trim() : '';
 
   // 3. Alt键特殊处理（不再提前return）
   if (isAltPressed && !altKeyCollector.value.isActive) {
@@ -998,20 +1004,25 @@ const handleMarkdownClick = async (e) => {
       
       // 如果需要纯文本内容，可以使用:
       noteContent = contentDiv.textContent;
+      originalMarkdown = noteContent;
     }
   }
   // 图片处理（现在支持Alt+Click）
-  else if (target.tagName === 'IMG') {
-    selectedElement = target;
+  else if (target instanceof Element && (target.tagName === 'IMG' || target.closest('img') || target.querySelector('img'))) {
+    const imgElement = target.tagName === 'IMG'
+      ? target
+      : (target.closest('img') || target.querySelector('img'));
+
+    selectedElement = imgElement;
     try {
-      const processedSrc = await processNoteImage(target);
+      const processedSrc = await processNoteImage(imgElement);
       message = '已选中图片';
       noteContent = `![图片](${processedSrc})`;
       originalMarkdown = noteContent; // 图片的原始Markdown就是noteContent
     } catch (error) {
       console.error('图片处理失败:', error);
       message = '图片处理失败，使用原始链接';
-      noteContent = `![图片](${target.src})`;
+      noteContent = `![图片](${imgElement.src})`;
       originalMarkdown = noteContent;
     }
   }
@@ -1152,6 +1163,12 @@ const handleMarkdownClick = async (e) => {
 
   // 6. 应用选中效果和笔记
   if (selectedElement) {
+    const hasContent = (originalMarkdown || noteContent || '').trim();
+    if (!hasContent) {
+      showSelectionMessage('未选中有效内容');
+      return;
+    }
+
     selectedElement.classList.add('selected');
     showSelectionMessage(message);
     selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1269,7 +1286,7 @@ async function parseCompositeContent(items) {
     const segments = await Promise.all(
       items.map(async (item, index) => {
         // 使用item中的内容，优先使用original_markdown
-        const content = item.original_markdown || item.content || '';
+        const content = item.original_markdown || item.originalMarkdown || item.content || '';
 
         // 渲染Markdown为HTML
         const html = await renderNoteContent(content);
@@ -1321,8 +1338,9 @@ const appendToCurrentNote = (element) => {
   const newItem = {
     id: Date.now().toString(),
     type: element.type,
-    content: element.content,
-    originalMarkdown: element.originalMarkdown,
+    content: element.content || element.originalMarkdown,
+    originalMarkdown: element.originalMarkdown || element.content,
+    original_markdown: element.originalMarkdown || element.content,
     timestamp: new Date().toISOString()
   };
 
@@ -1585,16 +1603,24 @@ const formatTime = (timestamp) => {
 
 // 添加新卡片
 const addNewCard = () => {
+  const now = Date.now();
+  const placeholder = '点击编辑内容...';
   const newCard = {
-    id: Date.now().toString(),
-    type: 'text',
+    id: now.toString(),
+    type: 'single',
     title: '新笔记',
-    content: '<p>点击编辑内容...</p>',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    items: [{
+      id: `${now}-0`,
+      type: 'text',
+      content: placeholder,
+      originalMarkdown: placeholder,
+      original_markdown: placeholder,
+      timestamp: new Date().toISOString()
+    }]
   }
 
   noteCards.value.push(newCard)
-  activeCardIndex.value = noteCards.value.length - 1
   updateBackendNotes('add', newCard)
 }
 
@@ -1622,24 +1648,36 @@ const addToNotes = async (element) => {
     return;
   }
 
+  const safeContent = (element?.originalMarkdown || element?.content || '').trim();
+  if (!safeContent) {
+    showSelectionMessage('未选中有效内容');
+    return;
+  }
+
+  const normalizedElement = {
+    ...element,
+    content: element?.content || safeContent,
+    originalMarkdown: element?.originalMarkdown || safeContent
+  };
+
   // 创建新卡片（单条笔记）
   const newCard = {
     id: Date.now().toString(),
     type: 'single',  // 单条笔记类型
-    title: getCardTitle(element.type),
+    title: getCardTitle(normalizedElement.type),
     timestamp: new Date().toISOString(),
     // 单条笔记的items数组只包含一个元素
     items: [{
       id: `${Date.now()}-0`,
-      type: element.type,
-      content: element.content,
-      originalMarkdown: element.originalMarkdown,
+      type: normalizedElement.type,
+      content: normalizedElement.content,
+      originalMarkdown: normalizedElement.originalMarkdown,
+      original_markdown: normalizedElement.originalMarkdown,
       timestamp: new Date().toISOString()
     }]
   };
 
   noteCards.value.push(newCard);
-  activeCardIndex.value = noteCards.value.length - 1;
   await updateBackendNotes('add', newCard);
 
   nextTick(() => {
@@ -1746,7 +1784,7 @@ const updateBackendNotes = async (action, cardData) => {
           id: item.id || `${cardData.id}-${Date.now()}`,
           type: item.type || 'text',
           content: item.content || '',
-          original_markdown: item.original_markdown || item.content || '',
+          original_markdown: item.original_markdown || item.originalMarkdown || item.content || '',
           timestamp: item.timestamp || new Date().toISOString()
         })),
         timestamp: cardData.timestamp || new Date().toISOString()
@@ -2355,6 +2393,7 @@ const toggleTranslate = async () => {
 
 // 1. 定义必要的 ref
 const contentEditables = ref([]);
+let autoSaveInterval = null;
 
 const setContentEditableRef = (index, el) => {
   if (el) {
@@ -2370,12 +2409,12 @@ const setContentEditableRef = (index, el) => {
 const saveCardEdit = async (index) => {
   try {
     if (index < 0 || index >= noteCards.value.length) {
-      throw new Error('无效的卡片索引');
+      return;
     }
 
     const editableDiv = contentEditables.value[index];
     if (!editableDiv) {
-      throw new Error('找不到可编辑元素');
+      return;
     }
 
     // 创建卡片的深拷贝
@@ -2517,16 +2556,20 @@ onMounted(async () => {
     checkImageLoaded()
   })
 
-  const autoSaveInterval = setInterval(() => {
-    if (activeCardIndex.value !== -1) {
-      saveCardEdit(activeCardIndex.value);
-    }
+  autoSaveInterval = setInterval(() => {
+    const idx = activeCardIndex.value;
+    if (idx < 0 || idx >= noteCards.value.length) return;
+    if (!contentEditables.value?.[idx]) return;
+    saveCardEdit(idx);
   }, 30000); // 每30秒自动保存
-
-  onBeforeUnmount(() => clearInterval(autoSaveInterval));
 })
 
 onBeforeUnmount(() => {
+  if (autoSaveInterval) {
+    clearInterval(autoSaveInterval);
+    autoSaveInterval = null;
+  }
+
   endReadingSession();
   markCompletedIfNeeded();
   if (isHydrated.value) persistReaderState();
@@ -2564,39 +2607,51 @@ const handleImageLoad = () => {
 };
 
 // 监听 noteCards，自动渲染所有笔记
-watchEffect(async () => {
-  noteHtmls.value = await Promise.all(
-    noteCards.value.map(async card => {
-      if (card.type === 'single') {
-        // 单条笔记从items[0]获取内容
-        const item = card.items?.[0] || {};
-        return await renderNoteContent(item.originalMarkdown || item.content || '');
-      }
-      return ""; // 非单个笔记返回空字符串
-    })
-  );
-
-  compositeSegments.value = await Promise.all(
-    noteCards.value.map(card =>
-      card.type === 'composite'
-        ? parseCompositeContent(card.items)
-        : [] // 非复合笔记返回空数组
-    )
-  );
-
-  // 等待 DOM 更新后，手动渲染 mermaid
-  nextTick(() => {
-    document.querySelectorAll('.composite-note-content .mermaid').forEach(el => {
-      try {
-        // 只渲染未被渲染过的
-        if (!el.querySelector('svg')) {
-          mermaid.run({ nodes: [el] });
-        }
-      } catch (e) {
-        // 忽略已渲染的
-      }
-    });
+watchEffect((onInvalidate) => {
+  const token = ++notesRenderToken;
+  const cards = noteCards.value.slice();
+  let cancelled = false;
+  onInvalidate(() => {
+    cancelled = true;
   });
+
+  (async () => {
+    const htmls = await Promise.all(
+      cards.map(async card => {
+        if (card.type === 'single') {
+          const item = card.items?.[0] || {};
+          return await renderNoteContent(item.original_markdown || item.originalMarkdown || item.content || '');
+        }
+        return "";
+      })
+    );
+
+    if (cancelled || token !== notesRenderToken) return;
+    noteHtmls.value = htmls;
+
+    const segments = await Promise.all(
+      cards.map(card =>
+        card.type === 'composite'
+          ? parseCompositeContent(card.items)
+          : []
+      )
+    );
+
+    if (cancelled || token !== notesRenderToken) return;
+    compositeSegments.value = segments;
+
+    nextTick(() => {
+      if (cancelled || token !== notesRenderToken) return;
+      document.querySelectorAll('.composite-note-content .mermaid').forEach(el => {
+        try {
+          if (!el.querySelector('svg')) {
+            mermaid.run({ nodes: [el] });
+          }
+        } catch (e) {
+        }
+      });
+    });
+  })();
 });
 </script>
 

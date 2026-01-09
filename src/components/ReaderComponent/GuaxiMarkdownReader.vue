@@ -88,7 +88,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @dblclick="handleMarkdownClick"
+      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
@@ -158,7 +158,7 @@
             @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></div>
 
           <!-- 添加复合笔记的专用渲染 -->
-          <div v-else class="composite-note-content">
+          <div v-else class="composite-note-content" @click="enterEditMode(index)">
             <div v-for="(segment, segIndex) in compositeSegments[index]" :key="segIndex" class="note-segment"
               :class="getSegmentClass(segment)">
               <div v-html="segment.content"></div>
@@ -384,6 +384,7 @@ onBeforeUnmount(() => {
 const markdownContainer = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
+let notesRenderToken = 0;
 
 // 视图状态
 const zoomLevel = ref(1);
@@ -836,12 +837,12 @@ function shouldSkipTranslation(node) {
 
 function determineNoteType(target) {
   // 1. 优先检查数学公式
-  if (target.closest('mjx-container, mjx-math, .math-inline, .math-block')) {
+  if (target?.closest?.('mjx-container, mjx-math, .math-inline, .math-block')) {
     return 'math';
   }
 
   // 2. 检查Mermaid图表
-  const mermaidContainer = target.closest('.mermaid, [data-processed="true"]');
+  const mermaidContainer = target?.closest?.('.mermaid, [data-processed="true"]');
   if (mermaidContainer) {
     if (mermaidContainer.querySelector('svg') || mermaidContainer.classList.contains('mermaid')) {
       return 'diagram';
@@ -849,7 +850,7 @@ function determineNoteType(target) {
   }
 
   // 3. 检查代码块
-  const pre = target.closest('pre');
+  const pre = target?.closest?.('pre');
   if (pre) {
     if (!pre.classList.contains('mermaid')) {
       if (pre.querySelector('code') ||
@@ -860,7 +861,8 @@ function determineNoteType(target) {
   }
 
   // 4. 检查图片
-  if (target.tagName === 'IMG') {
+  const el = target instanceof Element ? target : target?.parentElement
+  if (el && (el.tagName === 'IMG' || el.closest('img') || el.querySelector('img'))) {
     return 'image';
   }
 
@@ -909,9 +911,13 @@ const handleMarkdownClick = async (e) => {
   e.preventDefault();
 
   const isAltPressed = e.altKey;
-  const target = e.target;
+  const rawTarget = e.target;
+  const hoveredElement = document.querySelector('.markdown-content .hovered');
+  const target = hoveredElement && rawTarget instanceof Node && hoveredElement.contains(rawTarget)
+    ? hoveredElement
+    : rawTarget;
   const selection = window.getSelection();
-  const selectedText = selection.toString().trim();
+  const selectedText = selection ? selection.toString().trim() : '';
 
   if (isAltPressed && !altKeyCollector.value.isActive) {
     startAltKeyCollection();
@@ -934,19 +940,24 @@ const handleMarkdownClick = async (e) => {
       noteContent = contentDiv.innerHTML;
       message = '已选中译文';
       noteContent = contentDiv.textContent;
+      originalMarkdown = noteContent;
     }
   }
-  else if (target.tagName === 'IMG') {
-    selectedElement = target;
+  else if (target instanceof Element && (target.tagName === 'IMG' || target.closest('img') || target.querySelector('img'))) {
+    const imgElement = target.tagName === 'IMG'
+      ? target
+      : (target.closest('img') || target.querySelector('img'));
+
+    selectedElement = imgElement;
     try {
-      const processedSrc = await processNoteImage(target);
+      const processedSrc = await processNoteImage(imgElement);
       message = '已选中图片';
       noteContent = `![图片](${processedSrc})`;
       originalMarkdown = noteContent;
     } catch (error) {
       console.error('图片处理失败:', error);
       message = '图片处理失败，使用原始链接';
-      noteContent = `![图片](${target.src})`;
+      noteContent = `![图片](${imgElement.src})`;
       originalMarkdown = noteContent;
     }
   }
@@ -1028,11 +1039,17 @@ const handleMarkdownClick = async (e) => {
   }
 
   if (selectedElement) {
+    const hasContent = (originalMarkdown || noteContent || '').trim();
+    if (!hasContent) {
+      showSelectionMessage('未选中有效内容');
+      return;
+    }
+
     selectedElement.classList.add('selected');
     showSelectionMessage(message);
     selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    const noteType = determineNoteType(target);
+    const noteType = determineNoteType(selectedElement);
     const noteData = {
       type: noteType,
       content: noteContent,
@@ -1092,14 +1109,27 @@ const endAltKeyCollection = () => {
     altKeyCollector.value.timer = null;
   }
 
-  if (altKeyCollector.value.currentCard &&
-    (altKeyCollector.value.currentCard.content || altKeyCollector.value.currentCard.originalMarkdown)) {
-    const existingIndex = noteCards.value.findIndex(card => card.id === altKeyCollector.value.currentCard.id);
+  const currentCard = altKeyCollector.value.currentCard;
+  const isEmpty = !currentCard?.items?.length && !(currentCard?.content || currentCard?.originalMarkdown);
+  if (isEmpty && currentCard?.id) {
+    const idx = noteCards.value.findIndex(card => card.id === currentCard.id);
+    if (idx !== -1) {
+      noteCards.value.splice(idx, 1);
+      if (activeCardIndex.value === idx) {
+        activeCardIndex.value = -1;
+      } else if (activeCardIndex.value > idx) {
+        activeCardIndex.value--;
+      }
+    }
+  }
+
+  if (currentCard && (currentCard.content || currentCard.originalMarkdown)) {
+    const existingIndex = noteCards.value.findIndex(card => card.id === currentCard.id);
     if (existingIndex === -1) {
-      noteCards.value.push(altKeyCollector.value.currentCard);
+      noteCards.value.push(currentCard);
     }
     activeCardIndex.value = noteCards.value.length - 1;
-    updateBackendNotes('add', altKeyCollector.value.currentCard);
+    updateBackendNotes('add', currentCard);
 
     nextTick(() => {
       const cards = document.querySelectorAll('.n-card');
@@ -1123,7 +1153,7 @@ async function parseCompositeContent(items) {
   try {
     const segments = await Promise.all(
       items.map(async (item, index) => {
-        const content = item.original_markdown || item.content || '';
+        const content = item.original_markdown || item.originalMarkdown || item.content || '';
         const html = await renderNoteContent(content);
 
         return {
@@ -1169,8 +1199,9 @@ const appendToCurrentNote = (element) => {
   const newItem = {
     id: Date.now().toString(),
     type: element.type,
-    content: element.content,
-    originalMarkdown: element.originalMarkdown,
+    content: element.content || element.originalMarkdown,
+    originalMarkdown: element.originalMarkdown || element.content,
+    original_markdown: element.originalMarkdown || element.content,
     timestamp: new Date().toISOString()
   };
 
@@ -1308,16 +1339,24 @@ const formatTime = (timestamp) => {
 }
 
 const addNewCard = () => {
+  const now = Date.now();
+  const placeholder = '点击编辑内容...';
   const newCard = {
-    id: Date.now().toString(),
-    type: 'text',
+    id: now.toString(),
+    type: 'single',
     title: '新笔记',
-    content: '<p>点击编辑内容...</p>',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    items: [{
+      id: `${now}-0`,
+      type: 'text',
+      content: placeholder,
+      originalMarkdown: placeholder,
+      original_markdown: placeholder,
+      timestamp: new Date().toISOString()
+    }]
   }
 
   noteCards.value.push(newCard)
-  activeCardIndex.value = noteCards.value.length - 1
   updateBackendNotes('add', newCard)
 }
 
@@ -1342,22 +1381,34 @@ const addToNotes = async (element) => {
     return;
   }
 
+  const safeContent = (element?.originalMarkdown || element?.content || '').trim();
+  if (!safeContent) {
+    showSelectionMessage('未选中有效内容');
+    return;
+  }
+
+  const normalizedElement = {
+    ...element,
+    content: element?.content || safeContent,
+    originalMarkdown: element?.originalMarkdown || safeContent
+  };
+
   const newCard = {
     id: Date.now().toString(),
     type: 'single',
-    title: getCardTitle(element.type),
+    title: getCardTitle(normalizedElement.type),
     timestamp: new Date().toISOString(),
     items: [{
       id: `${Date.now()}-0`,
-      type: element.type,
-      content: element.content,
-      originalMarkdown: element.originalMarkdown,
+      type: normalizedElement.type,
+      content: normalizedElement.content,
+      originalMarkdown: normalizedElement.originalMarkdown,
+      original_markdown: normalizedElement.originalMarkdown,
       timestamp: new Date().toISOString()
     }]
   };
 
   noteCards.value.push(newCard);
-  activeCardIndex.value = noteCards.value.length - 1;
   await updateBackendNotes('add', newCard);
 
   nextTick(() => {
@@ -1926,6 +1977,7 @@ const toggleTranslate = async () => {
   }
 };
 const contentEditables = ref([]);
+let autoSaveInterval = null;
 
 const setContentEditableRef = (index, el) => {
   if (el) {
@@ -1939,12 +1991,12 @@ const setContentEditableRef = (index, el) => {
 const saveCardEdit = async (index) => {
   try {
     if (index < 0 || index >= noteCards.value.length) {
-      throw new Error('无效的卡片索引');
+      return;
     }
 
     const editableDiv = contentEditables.value[index];
     if (!editableDiv) {
-      throw new Error('找不到可编辑元素');
+      return;
     }
 
     const currentCard = JSON.parse(JSON.stringify(noteCards.value[index]));
@@ -2090,16 +2142,20 @@ onMounted(async () => {
     checkContentLoaded()
   })
 
-  const autoSaveInterval = setInterval(() => {
-    if (activeCardIndex.value !== -1) {
-      saveCardEdit(activeCardIndex.value);
-    }
+  autoSaveInterval = setInterval(() => {
+    const idx = activeCardIndex.value;
+    if (idx < 0 || idx >= noteCards.value.length) return;
+    if (!contentEditables.value?.[idx]) return;
+    saveCardEdit(idx);
   }, 30000);
-
-  onBeforeUnmount(() => clearInterval(autoSaveInterval));
 })
 
 onBeforeUnmount(() => {
+  if (autoSaveInterval) {
+    clearInterval(autoSaveInterval);
+    autoSaveInterval = null;
+  }
+
   endReadingSession();
   markCompletedIfNeeded();
   if (isHydrated.value) persistReaderState();
@@ -2126,35 +2182,51 @@ watch(() => props.filePath, async (newPath) => {
   }
 });
 
-watchEffect(async () => {
-  noteHtmls.value = await Promise.all(
-    noteCards.value.map(async card => {
-      if (card.type === 'single') {
-        const item = card.items?.[0] || {};
-        return await renderNoteContent(item.originalMarkdown || item.content || '');
-      }
-      return "";
-    })
-  );
-
-  compositeSegments.value = await Promise.all(
-    noteCards.value.map(card =>
-      card.type === 'composite'
-        ? parseCompositeContent(card.items)
-        : []
-    )
-  );
-
-  nextTick(() => {
-    document.querySelectorAll('.composite-note-content .mermaid').forEach(el => {
-      try {
-        if (!el.querySelector('svg')) {
-          mermaid.run({ nodes: [el] });
-        }
-      } catch (e) {
-      }
-    });
+watchEffect((onInvalidate) => {
+  const token = ++notesRenderToken;
+  const cards = noteCards.value.slice();
+  let cancelled = false;
+  onInvalidate(() => {
+    cancelled = true;
   });
+
+  (async () => {
+    const htmls = await Promise.all(
+      cards.map(async card => {
+        if (card.type === 'single') {
+          const item = card.items?.[0] || {};
+          return await renderNoteContent(item.original_markdown || item.originalMarkdown || item.content || '');
+        }
+        return "";
+      })
+    );
+
+    if (cancelled || token !== notesRenderToken) return;
+    noteHtmls.value = htmls;
+
+    const segments = await Promise.all(
+      cards.map(card =>
+        card.type === 'composite'
+          ? parseCompositeContent(card.items)
+          : []
+      )
+    );
+
+    if (cancelled || token !== notesRenderToken) return;
+    compositeSegments.value = segments;
+
+    nextTick(() => {
+      if (cancelled || token !== notesRenderToken) return;
+      document.querySelectorAll('.composite-note-content .mermaid').forEach(el => {
+        try {
+          if (!el.querySelector('svg')) {
+            mermaid.run({ nodes: [el] });
+          }
+        } catch (e) {
+        }
+      });
+    });
+  })();
 });
 </script>
 
