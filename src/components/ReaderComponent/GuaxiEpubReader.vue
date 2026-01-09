@@ -2157,6 +2157,9 @@ const saveCardEdit = async (index) => {
     currentCard.timestamp = new Date().toISOString();
     await updateBackendNotes('update', currentCard);
 
+    noteCards.value.splice(index, 1, currentCard);
+    activeCardIndex.value = -1;
+
   } catch (error) {
     console.error('保存编辑失败:', {
       error,
@@ -2414,6 +2417,19 @@ button:disabled {
   box-shadow: none;
 }
 
+.composite-note-editor {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px 16px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  line-height: 1.5;
+}
+
 /* 页面信息样式 */
 .page-info {
   font-size: 14px;
@@ -2669,6 +2685,7 @@ button:disabled {
   box-shadow: 0 0 0 2px rgba(65, 210, 230, 0.5);
   transform: scale(1.005);
   outline: none;
+  cursor: pointer;
 }
 
 .markdown-content :deep(.selected) {
