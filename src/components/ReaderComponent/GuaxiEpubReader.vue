@@ -2425,13 +2425,13 @@ button:disabled {
   min-width: 0;
   overflow-y: auto;
   padding: 5px;
-  background-color: #ffffff;
+  background-color: var(--guaxi-content-bg);
   display: flex;
 }
 
 .outline-panel-wrapper {
   width: 260px;
-  border-left: 1px solid #e0e0e0;
+  border-left: 1px solid var(--guaxi-border);
   box-sizing: border-box;
 }
 
@@ -2440,8 +2440,8 @@ button:disabled {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 16px;
   line-height: 1.6;
-  color: #000000;
-  background-color: #ffffff;
+  color: var(--guaxi-text-primary);
+  background-color: var(--guaxi-content-bg);
   user-select: text;
   padding: 10px;
   cursor: text;
