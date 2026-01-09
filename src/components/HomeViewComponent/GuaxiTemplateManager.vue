@@ -17,55 +17,58 @@
       <div class="main">
         <div class="left">
           <n-input v-model:value="filter" size="small" placeholder="搜索模板..." clearable />
-          <n-collapse accordion>
-            <n-collapse-item
-              v-for="group in groupedTemplates"
-              :key="group.type"
-              :title="`${group.type} (${group.items.length})`"
-              :name="group.type"
-            >
-              <n-list hoverable clickable>
-                <n-list-item
-                  v-for="t in group.items"
-                  :key="t.name"
-                  :class="{ active: t.name === selectedName }"
-                  @click="selectTemplate(t.name)"
-                >
-                  <div class="row">
-                    <div class="row-name">
-                      <span class="row-name-text">{{ t.name }}</span>
-                      <span v-if="t.builtin" class="builtin-tag">内置</span>
+          <div class="left-body">
+            <n-collapse accordion>
+              <n-collapse-item
+                v-for="group in groupedTemplates"
+                :key="group.type"
+                :title="`${group.type} (${group.items.length})`"
+                :name="group.type"
+              >
+                <n-list hoverable clickable>
+                  <n-list-item
+                    v-for="t in group.items"
+                    :key="t.name"
+                    :class="{ active: t.name === selectedName }"
+                    @click="selectTemplate(t.name)"
+                  >
+                    <div class="row">
+                      <div class="row-name">
+                        <span class="row-name-text">{{ t.name }}</span>
+                        <span v-if="t.builtin" class="builtin-tag">内置</span>
+                      </div>
+                      <n-button
+                        size="tiny"
+                        tertiary
+                        @click.stop="insertToEditor(t.name)"
+                        :disabled="loading"
+                      >
+                        插入
+                      </n-button>
                     </div>
-                    <n-button
-                      size="tiny"
-                      tertiary
-                      @click.stop="insertToEditor(t.name)"
-                      :disabled="loading"
-                    >
-                      插入
-                    </n-button>
-                  </div>
-                </n-list-item>
-              </n-list>
-            </n-collapse-item>
-          </n-collapse>
+                  </n-list-item>
+                </n-list>
+              </n-collapse-item>
+            </n-collapse>
+          </div>
         </div>
 
         <div class="right">
-          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form class="right-form" label-placement="left" label-width="auto" :show-require-mark="false">
             <n-form-item label="名称">
               <n-input v-model:value="editName" :disabled="loading" placeholder="例如：会议纪要" />
             </n-form-item>
             <n-form-item label="类型">
               <n-input v-model:value="editType" :disabled="loading" placeholder="例如：会议 / 日记 / TODO" />
             </n-form-item>
-            <n-form-item label="内容">
+            <n-form-item class="content-item" label="内容">
               <n-input
                 v-model:value="editContent"
+                class="content-textarea"
                 type="textarea"
                 :disabled="loading"
                 placeholder="输入模板内容（Markdown）"
-                :autosize="{ minRows: 16, maxRows: 28 }"
+                :autosize="false"
               />
             </n-form-item>
           </n-form>
@@ -399,7 +402,7 @@ onMounted(refresh)
 
 <style scoped>
 .page {
-  height: 100%;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -447,6 +450,7 @@ onMounted(refresh)
   min-height: 0;
   display: grid;
   grid-template-columns: 360px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   overflow: hidden;
 }
@@ -464,21 +468,76 @@ onMounted(refresh)
   box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
 }
 
-.left :deep(.n-collapse) {
+.left-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
 }
 
 .right {
+  height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   padding: 12px;
   box-sizing: border-box;
   background: var(--guaxi-panel-bg);
   box-shadow: 0 10px 28px rgba(16, 24, 40, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.right-form {
+  flex: 1 1 0%;
+  min-height: 0;
+  height: 100%;
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-item {
+  flex: 1 1 0% !important;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.content-item :deep(.n-form-item-label) {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+.content-item :deep(.n-form-item-blank) {
+  flex: 1 1 0%;
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-item :deep(.n-input) {
+  height: 100%;
+  min-height: 0;
+}
+
+.content-item :deep(.n-input-wrapper) {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+}
+
+.content-item :deep(.n-input__textarea-el) {
+  flex: 1;
+  min-height: 0;
+  height: 100% !important;
+  box-sizing: border-box;
+  resize: none;
+  overflow: auto;
 }
 
 .row {
