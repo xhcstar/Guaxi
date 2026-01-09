@@ -3,7 +3,7 @@
     <!-- 工具栏 -->
     <div class="list-header">
       <div class="title-container">
-        <n-text class="repo-title-header">知识库编辑</n-text>
+        <n-text class="repo-title-header">知识编辑</n-text>
       </div>
       <div class="header-actions">
         <n-tooltip trigger="hover">
@@ -1731,14 +1731,26 @@ onUnmounted(() => {
 }
 
 .repo-title-header {
-  font-size: 15px !important;
+  font-size: 18px !important;
   font-weight: 600;
   color: var(--guaxi-text-primary);
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
   display: flex;
   align-items: center;
   margin: 0;
   padding: 0;
   line-height: 1.2;
+}
+
+.repo-title-header::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 16px;
+  background-color: var(--guaxi-text-primary);
+  margin-right: 8px;
+  border-radius: 2px;
 }
 
 .repo-title {

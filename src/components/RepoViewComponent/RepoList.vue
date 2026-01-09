@@ -82,7 +82,7 @@ onMounted(async () => {
   width: 4px;
   height: 16px;
   background-color: var(--guaxi-text-primary);
-  margin-right: 10px;
+  margin-right: 8px;
   border-radius: 2px;
 }
 
