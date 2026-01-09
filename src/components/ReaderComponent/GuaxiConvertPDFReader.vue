@@ -104,8 +104,8 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClick" @mousemove="handleMarkdownHover"
-        @mouseleave="handleMarkdownLeave">
+      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
+        @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent">
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
             <div class="markdown-line">
@@ -145,7 +145,7 @@
           <n-icon :component="CloseOutline" size="18" />
         </button>
       </div>
-      <div class="notes-content">
+      <div class="notes-content" @mouseenter="setScrollTargetFromEvent">
         <n-card v-for="(card, index) in noteCards" :key="card.id" class="note-card" size="small" :title="card.title"
           :bordered="true" :segmented="{
             content: true,
@@ -290,6 +290,13 @@ const isEditableElement = (el) => {
 
 const lastScrollTarget = ref(null)
 
+const setScrollTargetFromEvent = (e) => {
+  const t = e?.currentTarget
+  if (t && t instanceof HTMLElement) {
+    lastScrollTarget.value = t
+  }
+}
+
 const isScrollableElement = (el) => {
   if (!el) return false
   const hasV = el.scrollHeight > el.clientHeight
@@ -397,6 +404,17 @@ const handleReaderShortcuts = (e) => {
 onMounted(() => {
   window.addEventListener('scroll', handleAnyScroll, true)
   window.addEventListener('keydown', handleReaderShortcuts, true)
+
+  nextTick(() => {
+    if (lastScrollTarget.value) return
+    const defaultTarget =
+      document.querySelector('.markdown-panel') ||
+      document.querySelector('.notes-content') ||
+      document.scrollingElement
+    if (defaultTarget && defaultTarget instanceof HTMLElement) {
+      lastScrollTarget.value = defaultTarget
+    }
+  })
 })
 
 onBeforeUnmount(() => {
@@ -967,6 +985,11 @@ async function processNoteImage(imgElement) {
 }
 
 // 在handleMarkdownClick函数中添加获取原始Markdown的逻辑
+const handleMarkdownClickAlt = async (e) => {
+  if (!e?.altKey) return
+  return handleMarkdownClick(e)
+}
+
 const handleMarkdownClick = async (e) => {
   // 1. 阻止默认行为（防止Alt+Click触发浏览器默认动作）
   e.preventDefault();
@@ -1224,7 +1247,7 @@ const startAltKeyCollection = () => {
   };
 
   noteCards.value.push(newCard);
-  activeCardIndex.value = noteCards.value.length - 1;
+  activeCardIndex.value = -1;
   altKeyCollector.value.currentCard = newCard;
 
   // 设置30秒后自动结束收集
@@ -1258,7 +1281,7 @@ const endAltKeyCollection = () => {
     if (existingIndex === -1) {
       noteCards.value.push(altKeyCollector.value.currentCard);
     }
-    activeCardIndex.value = noteCards.value.length - 1;
+    activeCardIndex.value = -1;
     updateBackendNotes('add', altKeyCollector.value.currentCard);
 
     nextTick(() => {
