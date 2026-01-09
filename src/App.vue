@@ -100,4 +100,75 @@ body {
   background: var(--guaxi-app-bg);
   color: var(--guaxi-text-primary);
 }
+
+:root[data-guaxi-theme='dark'] .fit-width,
+:root[data-guaxi-theme='dark'] .zoom-in,
+:root[data-guaxi-theme='dark'] .zoom-out {
+  background-color: var(--guaxi-header-bg) !important;
+  color: var(--guaxi-text-primary) !important;
+  border: 1px solid var(--guaxi-border) !important;
+}
+
+:root[data-guaxi-theme='dark'] .fit-width:hover,
+:root[data-guaxi-theme='dark'] .zoom-in:hover,
+:root[data-guaxi-theme='dark'] .zoom-out:hover {
+  background-color: var(--guaxi-header-bg) !important;
+}
+
+:root[data-guaxi-theme='dark'] .zoom-in:disabled,
+:root[data-guaxi-theme='dark'] .zoom-out:disabled {
+  background-color: var(--guaxi-header-bg) !important;
+  color: var(--guaxi-text-secondary) !important;
+}
+
+:root[data-guaxi-theme='dark'] .markdown-panel,
+:root[data-guaxi-theme='dark'] .markdown-content {
+  background-color: var(--guaxi-content-bg) !important;
+  color: var(--guaxi-text-primary) !important;
+}
+
+:root[data-guaxi-theme='dark'] .original-content {
+  background-color: var(--guaxi-panel-bg) !important;
+}
+
+:root[data-guaxi-theme='dark'] .translated-content {
+  background-color: var(--guaxi-header-bg) !important;
+  color: var(--guaxi-text-secondary) !important;
+}
+
+:root[data-guaxi-theme='dark'] .code-segment {
+  background: var(--guaxi-header-bg) !important;
+}
+
+:root[data-guaxi-theme='dark'] .diagram-segment {
+  background: var(--guaxi-panel-bg) !important;
+}
+
+:root[data-guaxi-theme='dark'] .note-segment {
+  border-bottom: 1px dashed var(--guaxi-border) !important;
+}
+
+:root[data-guaxi-theme='dark'] .original-fallback {
+  border-top: 1px dashed var(--guaxi-border) !important;
+}
+
+:root[data-guaxi-theme='dark'] .skipped-translation {
+  border-left: 3px solid var(--guaxi-border) !important;
+  color: var(--guaxi-text-secondary) !important;
+}
+
+:root[data-guaxi-theme='dark'] .translation-skipped-marker {
+  background-color: var(--guaxi-header-bg) !important;
+  color: var(--guaxi-text-secondary) !important;
+}
+
+:root[data-guaxi-theme='dark'] .hljs {
+  background: var(--guaxi-panel-bg) !important;
+  border-color: var(--guaxi-border) !important;
+  color: var(--guaxi-text-primary) !important;
+}
+
+:root[data-guaxi-theme='dark'] .mermaid {
+  background-color: var(--guaxi-panel-bg) !important;
+}
 </style>
