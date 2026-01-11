@@ -118,7 +118,7 @@
 
           <div class="pdf-image-container">
             <div class="pdf-page-container" ref="pdfPageContainer" v-show="!!currentPageData"
-              :class="{ 'pdf-editor-active': annotationMode !== 'none' }">
+              :class="{ 'pdf-editor-active': annotationMode !== 'none' }" @click="handlePdfPageClick">
               <canvas ref="pdfCanvas" class="rendered-pdf-canvas"></canvas>
               <div ref="pdfHighlightLayer" class="pdf-highlight-layer"></div>
               <div ref="pdfAnnotationLayer" class="pdf-annotation-layer annotationLayer"></div>
@@ -133,8 +133,11 @@
 
           <div class="pdf-annotation-toolbar-wrap" @mousedown.stop @click.stop @dblclick.stop>
             <div class="pdf-annotation-toolbar">
-              <button class="pdf-annotation-tool-btn" type="button" title="高亮（选中文本后点击）" @click="addPdfHighlightFromSelection">
+              <button class="pdf-annotation-tool-btn" type="button" title="高亮（选中文本后点击；再次点击可取消已有高亮）" @click="addPdfHighlightFromSelection">
                 <n-icon :component="ColorWandOutline" />
+              </button>
+              <button class="pdf-annotation-tool-btn" type="button" :disabled="!pdfActiveAnnotationId" title="取消高亮（删除当前高亮）" @click="deleteActivePdfHighlight">
+                <n-icon :component="TrashOutline" />
               </button>
               <button class="pdf-annotation-tool-btn" type="button" title="添加标注（高亮+写标注）" @click="addPdfAnnotationFromSelection">
                 <n-icon :component="ChatboxEllipsesOutline" />
@@ -2320,6 +2323,56 @@ const getHighlightRectsFromPdfJsEditor = (editorId) => {
 
 const pdfEditorRectHydrated = new Set()
 
+const handlePdfPageClick = (e) => {
+  const pageEl = pdfPageContainer.value
+  if (!(pageEl instanceof HTMLElement)) return
+
+  const clientX = Number(e?.clientX)
+  const clientY = Number(e?.clientY)
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return
+
+  const pageRect = pageEl.getBoundingClientRect()
+  if (!pageRect.width || !pageRect.height) return
+
+  const x = (clientX - pageRect.left) / pageRect.width
+  const y = (clientY - pageRect.top) / pageRect.height
+
+  const tolX = 3 / pageRect.width
+  const tolY = 3 / pageRect.height
+
+  const pageNum = Number(currentPage.value) || 1
+  const list = Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : []
+
+  const hit = list.find((it) => {
+    if (Number(it?.page) !== pageNum) return false
+    const rects = Array.isArray(it?.rects) ? it.rects : []
+    for (let i = 0; i < rects.length; i += 1) {
+      const r = rects[i]
+      const rx = Number(r?.x)
+      const ry = Number(r?.y)
+      const rw = Number(r?.w)
+      const rh = Number(r?.h)
+      if (!Number.isFinite(rx) || !Number.isFinite(ry) || !Number.isFinite(rw) || !Number.isFinite(rh)) continue
+      if (x >= rx - tolX && x <= rx + rw + tolX && y >= ry - tolY && y <= ry + rh + tolY) return true
+    }
+    return false
+  })
+
+  if (!hit?.id) return
+
+  pdfActiveAnnotationId.value = hit.id
+  pdfAnnotationPanelVisible.value = true
+  nextTick(() => {
+    renderPdfActiveHighlightForCurrentPage()
+  })
+
+  try {
+    e.preventDefault()
+    e.stopPropagation()
+  } catch {
+  }
+}
+
 const renderPdfActiveHighlightForCurrentPage = () => {
   clearPdfHighlightLayer()
   const layerEl = pdfHighlightLayer.value
@@ -2577,14 +2630,71 @@ const applyPdfJsHighlightForCurrentSelection = async (providedInfo) => {
   return { info, editorId }
 }
 
+const deleteActivePdfHighlight = async () => {
+  const id = typeof pdfActiveAnnotationId.value === 'string' ? pdfActiveAnnotationId.value : ''
+  if (!id) return
+  await deletePdfAnnotation(id)
+}
+
+const rectOverlapRatio = (a, b) => {
+  const ax = Number(a?.x)
+  const ay = Number(a?.y)
+  const aw = Number(a?.w)
+  const ah = Number(a?.h)
+  const bx = Number(b?.x)
+  const by = Number(b?.y)
+  const bw = Number(b?.w)
+  const bh = Number(b?.h)
+  if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(aw) || !Number.isFinite(ah)) return 0
+  if (!Number.isFinite(bx) || !Number.isFinite(by) || !Number.isFinite(bw) || !Number.isFinite(bh)) return 0
+  if (aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0) return 0
+
+  const x1 = Math.max(ax, bx)
+  const y1 = Math.max(ay, by)
+  const x2 = Math.min(ax + aw, bx + bw)
+  const y2 = Math.min(ay + ah, by + bh)
+  const iw = Math.max(0, x2 - x1)
+  const ih = Math.max(0, y2 - y1)
+  const inter = iw * ih
+  if (inter <= 0) return 0
+
+  const aArea = aw * ah
+  const bArea = bw * bh
+  const denom = Math.max(1e-9, Math.min(aArea, bArea))
+  return inter / denom
+}
+
+const selectionOverlapsAnnotation = (selRects, annRects) => {
+  const s = Array.isArray(selRects) ? selRects : []
+  const a = Array.isArray(annRects) ? annRects : []
+  if (!s.length || !a.length) return false
+
+  for (let i = 0; i < s.length; i += 1) {
+    for (let j = 0; j < a.length; j += 1) {
+      if (rectOverlapRatio(s[i], a[j]) >= 0.28) return true
+    }
+  }
+  return false
+}
+
 const addPdfHighlightFromSelection = async () => {
   const info = getPdfSelectionInfo()
   if (!info) return
 
+  const page = Number(currentPage.value) || 1
+  const selRects = Array.isArray(info.rects) ? info.rects : []
+  const list = Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : []
+
+  const hit = list.find((x) => Number(x?.page) === page && selectionOverlapsAnnotation(selRects, x?.rects))
+  if (hit?.id) {
+    await deletePdfAnnotation(hit.id)
+    return
+  }
+
   const id = `pdfhl_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`
   const item = {
     id,
-    page: Number(currentPage.value) || 1,
+    page,
     selectionText: String(info.text || '').slice(0, 800),
     note: '',
     anchor: info.anchor || null,
@@ -2595,7 +2705,7 @@ const addPdfHighlightFromSelection = async () => {
     editing: false,
   }
 
-  pdfAnnotations.value = [item, ...(Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : [])]
+  pdfAnnotations.value = [item, ...list]
   pdfActiveAnnotationId.value = id
   persistReaderState()
 
@@ -4376,7 +4486,7 @@ button:disabled {
   flex: 0 0 260px;
   min-width: 260px;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
   background-color: var(--guaxi-panel-bg);
@@ -4507,7 +4617,7 @@ button:disabled {
   flex: 0 0 260px;
   min-width: 260px;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
 }
