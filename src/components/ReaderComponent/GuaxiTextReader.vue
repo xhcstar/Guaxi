@@ -44,10 +44,18 @@
           </n-button>
         </n-dropdown>
 
+        <n-button class="layout-switch" text
+          :title="isBookmarkedCurrent ? `取消书签（第 ${currentPage} 页）` : `添加书签（第 ${currentPage} 页）`"
+          @click="toggleBookmarkCurrentPage">
+          <template #icon>
+            <n-icon :component="BookmarksOutline" />
+          </template>
+        </n-button>
+
         <n-dropdown trigger="click" :options="bookmarkOptions" @select="handleBookmarkSelect">
-          <n-button class="layout-switch" text title="书签">
+          <n-button class="layout-switch" text title="书签列表">
             <template #icon>
-              <n-icon :component="BookmarksOutline" />
+              <n-icon :component="LibraryOutline" />
             </template>
           </n-button>
         </n-dropdown>
@@ -242,7 +250,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -270,6 +278,8 @@ import {
   ExitOutline,
   OptionsOutline,
   BookmarksOutline,
+  BookmarkOutline,
+  LibraryOutline,
   SearchOutline
 } from '@vicons/ionicons5'
 
@@ -616,23 +626,36 @@ const toggleBookmarkCurrentPage = () => {
   persistReaderState();
 };
 
+const renderBookmarkOptionIcon = (iconComp) => () =>
+  h(NIcon, null, { default: () => h(iconComp) });
+
 const bookmarkOptions = computed(() => {
   const opts = [
     {
       label: isBookmarkedCurrent.value
         ? `取消书签（第 ${currentPage.value} 页）`
         : `添加书签（第 ${currentPage.value} 页）`,
-      key: 'toggle-current'
+      key: 'toggle-current',
+      icon: renderBookmarkOptionIcon(BookmarksOutline)
     }
   ];
 
   const sorted = [...new Set(bookmarks.value)].sort((a, b) => a - b);
   if (sorted.length) {
-    opts.push({ label: '书签列表', key: 'bookmarks-title', disabled: true });
-    sorted.forEach((p) => {
-      opts.push({ label: `跳转到第 ${p} 页`, key: `page:${p}` });
+    opts.push({
+      label: '书签列表',
+      key: 'bookmarks-title',
+      disabled: true,
+      icon: renderBookmarkOptionIcon(BookmarksOutline)
     });
-    opts.push({ label: '清空书签', key: 'clear' });
+    sorted.forEach((p) => {
+      opts.push({
+        label: `跳转到第 ${p} 页`,
+        key: `page:${p}`,
+        icon: renderBookmarkOptionIcon(BookmarkOutline)
+      });
+    });
+    opts.push({ label: '清空书签', key: 'clear', icon: renderBookmarkOptionIcon(TrashOutline) });
   }
 
   return opts;
