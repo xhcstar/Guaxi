@@ -100,6 +100,7 @@ async fn main() {
             commands::docprocess::check_file_converted,
             commands::docprocess::get_converted_pdf_page,
             commands::docprocess::load_markdown_content,
+            commands::docprocess::search_paginated_markdown,
             commands::docprocess::export_markdown_pdf_pandoc,
             commands::docprocess::export_markdown_pandoc,
             commands::markdown_reader_doc_process::markdown_reader_load_markdown_file,
