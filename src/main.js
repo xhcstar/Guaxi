@@ -1,5 +1,6 @@
 import { createApp } from "vue";
 import naive from "naive-ui";
+import "pdfjs-dist/web/pdf_viewer.css";
 import App from "./App.vue";
 import router from "./router";
 import { createPinia } from 'pinia';

@@ -3,6 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+use base64::engine::general_purpose;
+use base64::Engine as _;
+
 use crate::commands::kbmeta;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,6 +104,23 @@ pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
 pub fn read_file_content(path: String) -> Result<String, String> {
     let path = normalize_path(&path);
     fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn read_file_bytes_base64(path: String) -> Result<String, String> {
+    let path = normalize_path(&path);
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(general_purpose::STANDARD.encode(bytes))
+}
+
+#[tauri::command]
+pub fn write_file_bytes_base64(path: String, base64: String) -> Result<(), String> {
+    let path = normalize_path(&path);
+    let bytes = general_purpose::STANDARD
+        .decode(base64.as_bytes())
+        .map_err(|e| e.to_string())?;
+    fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

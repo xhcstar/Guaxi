@@ -78,24 +78,103 @@
 
     <!-- 主内容区 -->
     <div class="pdf-main-content">
-      <!-- 修改PDF渲染区域 -->
-      <div class="pdf-render-panel" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
-        @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag"
-        :style="{ cursor: isDragging ? 'grabbing' : 'grab' }">
+      <div v-if="pdfSearchVisible || mdSearchVisible" class="inpage-search-bar"
+        :class="pdfSearchVisible ? 'inpage-search-bar-pdf' : 'inpage-search-bar-md'" @mousedown.stop @click.stop
+        @dblclick.stop>
+        <input v-if="pdfSearchVisible" ref="pdfSearchInput" class="inpage-search-input" v-model="pdfSearchQuery"
+          placeholder="PDF搜索" @input="handlePdfSearchInput" @keydown.enter.prevent="gotoNextPdfSearch"
+          @keydown.shift.enter.prevent="gotoPrevPdfSearch" @keydown.esc.prevent="closePdfSearch" />
+        <input v-else ref="mdSearchInput" class="inpage-search-input" v-model="mdSearchQuery" placeholder="Markdown搜索"
+          @input="applyMarkdownSearch" @keydown.enter.prevent="gotoNextMarkdownSearch"
+          @keydown.shift.enter.prevent="gotoPrevMarkdownSearch" @keydown.esc.prevent="closeMarkdownSearch" />
+        <span class="inpage-search-count">{{ pdfSearchVisible ? pdfSearchCountText : mdSearchCountText }}</span>
+        <button v-if="pdfSearchVisible" class="inpage-search-btn" type="button" title="跳转"
+          @click="jumpToActivePdfSearchResult">
+          <n-icon :component="SearchOutline" />
+        </button>
+        <button class="inpage-search-btn" type="button" title="上一个"
+          @click="pdfSearchVisible ? gotoPrevPdfSearch() : gotoPrevMarkdownSearch()">
+          <n-icon :component="ArrowBackOutline" />
+        </button>
+        <button class="inpage-search-btn" type="button" title="下一个"
+          @click="pdfSearchVisible ? gotoNextPdfSearch() : gotoNextMarkdownSearch()">
+          <n-icon :component="ArrowForwardOutline" />
+        </button>
+        <button class="inpage-search-btn" type="button" title="关闭"
+          @click="pdfSearchVisible ? closePdfSearch() : closeMarkdownSearch()">
+          <n-icon :component="CloseOutline" />
+        </button>
+      </div>
 
-        <div class="pdf-image-container" :style="{
-          transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
-          transformOrigin: 'center center',
-          width: '100%',
-          height: '100%'
-        }">
-          <!-- 图片/混合模式 -->
-          <img v-if="renderContent?.content" :src="renderContent.content" @load="handleImageLoad"
-            class="rendered-pdf-image" ref="pdfImage" />
+      <div class="pdf-left-wrapper" v-show="viewMode !== 'full-right' || showOutline || pdfSearchVisible" :style="{ width: leftPanelWidth }">
+        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop>
+          <GuaxiOutline />
+        </div>
 
-          <!-- 加载状态 -->
-          <div v-else class="pdf-loading-message">
-            正在加载PDF页面...
+        <!-- 修改PDF渲染区域 -->
+        <div class="pdf-render-panel" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
+          @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag" @mouseenter="setScrollTargetFromEvent"
+          :style="{ cursor: isDragging ? 'grabbing' : 'text' }">
+
+          <div class="pdf-image-container">
+            <div class="pdf-page-container" ref="pdfPageContainer" v-show="!!currentPageData"
+              :class="{ 'pdf-editor-active': annotationMode !== 'none' }">
+              <canvas ref="pdfCanvas" class="rendered-pdf-canvas"></canvas>
+              <div ref="pdfHighlightLayer" class="pdf-highlight-layer"></div>
+              <div ref="pdfAnnotationLayer" class="pdf-annotation-layer annotationLayer"></div>
+              <div ref="pdfEditorLayer" class="pdf-editor-layer annotationEditorLayer"></div>
+              <div ref="pdfTextLayer" class="pdf-text-layer textLayer"></div>
+            </div>
+
+            <div v-if="!currentPageData" class="pdf-loading-message">
+              正在加载PDF页面...
+            </div>
+          </div>
+
+          <div class="pdf-annotation-toolbar-wrap" @mousedown.stop @click.stop @dblclick.stop>
+            <div class="pdf-annotation-toolbar">
+              <button class="pdf-annotation-tool-btn" type="button" title="高亮（选中文本后点击）" @click="addPdfHighlightFromSelection">
+                <n-icon :component="ColorWandOutline" />
+              </button>
+              <button class="pdf-annotation-tool-btn" type="button" title="添加标注（高亮+写标注）" @click="addPdfAnnotationFromSelection">
+                <n-icon :component="ChatboxEllipsesOutline" />
+              </button>
+              <button class="pdf-annotation-tool-btn" type="button" title="保存到原PDF" @click="savePdfAnnotationsToOriginal">
+                <n-icon :component="SaveOutline" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="pdfAnnotationPanelVisible" class="pdf-annotations-panel" @mousedown.stop @click.stop @dblclick.stop>
+          <div class="pdf-annotations-header">
+            <div class="pdf-annotations-title">PDF 标注</div>
+            <button class="pdf-annotations-close" type="button" title="关闭" @click="exitPdfAnnotationMode">
+              <n-icon :component="CloseOutline" />
+            </button>
+          </div>
+
+          <div class="pdf-annotations-list">
+            <div v-if="!pdfAnnotations.length" class="pdf-annotations-empty">暂无标注</div>
+            <div v-for="it in pdfAnnotations" :key="it.id" class="pdf-annotation-item"
+              :class="{ 'pdf-annotation-item-active': it.id === pdfActiveAnnotationId }" @click="activatePdfAnnotation(it.id)">
+              <div class="pdf-annotation-item-main">
+                <div class="pdf-annotation-item-meta">第 {{ it.page }} 页</div>
+                <div class="pdf-annotation-item-text">{{ it.selectionText }}</div>
+
+                <div v-if="it.note && !it.editing" class="pdf-annotation-item-note">{{ it.note }}</div>
+
+                <div v-if="it.editing" class="pdf-annotation-item-editor" @click.stop>
+                  <textarea v-model="it.note" class="pdf-annotation-note-input" placeholder="输入标注内容..."></textarea>
+                  <button class="pdf-annotation-note-save" type="button" title="保存标注" @click.stop="savePdfAnnotationNote(it.id)">
+                    <n-icon :component="SaveOutline" />
+                  </button>
+                </div>
+              </div>
+              <button class="pdf-annotation-item-delete" type="button" title="删除" @click.stop="deletePdfAnnotation(it.id)">
+                <n-icon :component="TrashOutline" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -104,9 +183,10 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
+      <div class="markdown-panel" v-show="viewMode !== 'full-left' || mdSearchVisible" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick" @mousemove="handleMarkdownHover"
         @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
+
         <div class="markdown-content" ref="markdownContainer">
           <template v-for="(line, index) in markdownLines" :key="index">
             <div class="markdown-line">
@@ -133,25 +213,6 @@
           </template>
         </div>
 
-        <div v-if="inPageSearchVisible" class="inpage-search-bar" @mousedown.stop @click.stop @dblclick.stop>
-          <input ref="inPageSearchInput" class="inpage-search-input" v-model="inPageSearchQuery" placeholder="全文搜索"
-            @input="handleSearchInput" @keydown.enter.prevent="gotoNextSearch"
-            @keydown.shift.enter.prevent="gotoPrevSearch" @keydown.esc.prevent="closeInPageSearch" />
-          <span class="inpage-search-count">{{ inPageSearchCountText }}</span>
-          <button class="inpage-search-btn" type="button" title="跳转" @click="jumpToActiveSearchResult">
-            <n-icon :component="SearchOutline" />
-          </button>
-          <button class="inpage-search-btn" type="button" title="上一个" @click="gotoPrevSearch">
-            <n-icon :component="ArrowBackOutline" />
-          </button>
-          <button class="inpage-search-btn" type="button" title="下一个" @click="gotoNextSearch">
-            <n-icon :component="ArrowForwardOutline" />
-          </button>
-          <button class="inpage-search-btn" type="button" title="关闭" @click="closeInPageSearch">
-            <n-icon :component="CloseOutline" />
-          </button>
-        </div>
-
         <div v-if="selectionToolbarVisible" class="selection-toolbar"
           :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }" @mousedown.stop @click.stop @dblclick.stop>
           <div class="selection-toolbar-actions">
@@ -171,10 +232,6 @@
 
           <div v-if="selectionBusy" class="selection-toolbar-body selection-toolbar-loading">正在翻译...</div>
           <div v-else-if="selectionInsertText" class="selection-toolbar-body" v-html="selectionPreviewHtml"></div>
-        </div>
-
-        <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
-          <GuaxiOutline />
         </div>
       </div>
     </div>
@@ -289,7 +346,9 @@ import {
   ExitOutline,
   OptionsOutline,
   BookmarksOutline,
-  SearchOutline
+  SearchOutline,
+  ColorWandOutline,
+  ChatboxEllipsesOutline
 } from '@vicons/ionicons5'
 
 // 1. 组件属性定义
@@ -416,7 +475,14 @@ const handleReaderShortcuts = (e) => {
 
   if (ctrl && (e.key === 'f' || e.key === 'F')) {
     e.preventDefault()
-    openInPageSearch()
+    const t = lastScrollTarget.value
+    const el = t && t instanceof HTMLElement ? t : null
+    const inPdf = el && (el.closest('.pdf-left-wrapper') || el.closest('.pdf-render-panel'))
+    if (inPdf) {
+      openPdfSearch()
+    } else {
+      openMarkdownSearch()
+    }
     return
   }
 
@@ -490,29 +556,41 @@ const selectionPreviewHtml = computed(() => {
   return v ? md.render(v) : ''
 })
 
-const inPageSearchVisible = ref(false)
-const inPageSearchQuery = ref('')
-const inPageSearchMatches = ref([])
-const inPageSearchActiveIndex = ref(-1)
-const inPageSearchInput = ref(null)
+const pdfSearchVisible = ref(false)
+const pdfSearchQuery = ref('')
+const pdfSearchMatches = ref([])
+const pdfSearchActiveIndex = ref(-1)
+const pdfSearchInput = ref(null)
 
-const fullSearchBusy = ref(false)
-const fullSearchResults = ref([])
-const fullSearchActiveIndex = ref(-1)
-let fullSearchTimer = 0
+const pdfFullSearchBusy = ref(false)
+const pdfFullSearchResults = ref([])
+const pdfFullSearchActiveIndex = ref(-1)
+let pdfFullSearchTimer = 0
 
-const inPageSearchCountText = computed(() => {
-  if (fullSearchBusy.value) return '搜索中…'
+const mdSearchVisible = ref(false)
+const mdSearchQuery = ref('')
+const mdSearchMatches = ref([])
+const mdSearchActiveIndex = ref(-1)
+const mdSearchInput = ref(null)
 
-  const totalResults = fullSearchResults.value.length
+const pdfSearchCountText = computed(() => {
+  if (pdfFullSearchBusy.value) return '搜索中…'
+
+  const totalResults = pdfFullSearchResults.value.length
   if (totalResults) {
-    const i = Math.max(0, fullSearchActiveIndex.value)
+    const i = Math.max(0, pdfFullSearchActiveIndex.value)
     return `${Math.min(totalResults, i + 1)}/${totalResults}`
   }
 
-  const total = inPageSearchMatches.value.length
+  const total = pdfSearchMatches.value.length
   if (!total) return '0/0'
-  return `${Math.max(0, inPageSearchActiveIndex.value) + 1}/${total}`
+  return `${Math.max(0, pdfSearchActiveIndex.value) + 1}/${total}`
+})
+
+const mdSearchCountText = computed(() => {
+  const total = mdSearchMatches.value.length
+  if (!total) return '0/0'
+  return `${Math.max(0, mdSearchActiveIndex.value) + 1}/${total}`
 })
 
 // 3. PDF渲染相关
@@ -523,14 +601,24 @@ const {
   textLayer,
   isLoading,
   error,
-  currentPageData
+  currentPageData,
+  getOutlineFlat,
+  searchText,
+  ensureAnnotationEditorUi,
+  setAnnotationEditorMode,
+  saveDocumentBase64,
+  getAnnotationEditorIdsForPage,
+  removeAnnotationEditorById,
+  highlightSelectionAsAnnotation
 } = usePdfRenderer(props);
 
 // 4. 视图状态
 const zoomLevel = ref(1);
 const rotation = ref(0);
 const pdfPanel = ref(null);
-const pdfImage = ref(null);
+const pdfCanvas = ref(null);
+const pdfAnnotationLayer = ref(null);
+const pdfTextLayer = ref(null);
 const isResizing = ref(false);
 const startX = ref(0);
 const startLeftWidth = ref(0);
@@ -538,6 +626,7 @@ const leftPanelWidth = ref('50%');
 const currentPage = ref(1)
 const totalPages = ref(0)
 const jumpPage = ref(1)
+const pdfOutlineLoadedFor = ref('')
 
 const readerStorageKey = computed(() => {
   const baseId = props.importFileId != null && props.importFileId !== 0
@@ -574,10 +663,69 @@ const formatDuration = (ms) => {
 };
 
 const loadReaderState = () => {
+  const normalizePdfAnnotations = (v) => {
+    if (!Array.isArray(v)) return [];
+    return v
+      .map((it) => {
+        const id = typeof it?.id === 'string' ? it.id : '';
+        const page = Math.max(1, Number(it?.page) || 1);
+        const selectionText = typeof it?.selectionText === 'string' ? it.selectionText : '';
+        const note = typeof it?.note === 'string' ? it.note : '';
+
+        const ax = Number(it?.anchor?.x);
+        const ay = Number(it?.anchor?.y);
+        const anchor = Number.isFinite(ax) && Number.isFinite(ay)
+          ? { x: Math.max(0, Math.min(1, ax)), y: Math.max(0, Math.min(1, ay)) }
+          : null;
+
+        const color = typeof it?.color === 'string' && it.color.trim()
+          ? it.color.trim()
+          : 'rgba(64, 196, 255, 0.32)';
+
+        const rects = Array.isArray(it?.rects)
+          ? it.rects
+            .map((r) => {
+              const x = Number(r?.x);
+              const y = Number(r?.y);
+              const w = Number(r?.w);
+              const h = Number(r?.h);
+              if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null;
+              return {
+                x: Math.max(0, Math.min(1, x)),
+                y: Math.max(0, Math.min(1, y)),
+                w: Math.max(0, Math.min(1, w)),
+                h: Math.max(0, Math.min(1, h)),
+              };
+            })
+            .filter(Boolean)
+            .filter((r) => r.w > 0.002 && r.h > 0.002)
+            .slice(0, 200)
+          : [];
+
+        const editorId = typeof it?.editorId === 'string' ? it.editorId : '';
+        const noteEditorId = typeof it?.noteEditorId === 'string' ? it.noteEditorId : '';
+
+        if (!id || !selectionText) return null;
+        return {
+          id,
+          page,
+          selectionText: selectionText.slice(0, 800),
+          note: note.slice(0, 2000),
+          anchor,
+          rects,
+          color,
+          editorId,
+          noteEditorId,
+          editing: false,
+        };
+      })
+      .filter(Boolean);
+  };
+
   try {
     const raw = localStorage.getItem(readerStorageKey.value);
     if (!raw) {
-      return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null };
+      return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null, pdfAnnotations: [] };
     }
     const parsed = JSON.parse(raw);
     return {
@@ -590,9 +738,10 @@ const loadReaderState = () => {
       totalReadingMs: Math.max(0, Number(parsed.totalReadingMs) || 0),
       completedAt: parsed.completedAt || null,
       completedReadingMs: parsed.completedReadingMs == null ? null : Math.max(0, Number(parsed.completedReadingMs) || 0),
+      pdfAnnotations: normalizePdfAnnotations(parsed.pdfAnnotations),
     };
   } catch {
-    return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null };
+    return { lastPage: 1, bookmarks: [], totalReadingMs: 0, completedAt: null, completedReadingMs: null, pdfAnnotations: [] };
   }
 };
 
@@ -607,6 +756,7 @@ const persistReaderState = () => {
         totalReadingMs: totalReadingMs.value,
         completedAt: completedAt.value,
         completedReadingMs: completedReadingMs.value,
+        pdfAnnotations: Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : [],
       })
     );
   } catch {
@@ -757,6 +907,7 @@ const velocity = ref({ x: 0, y: 0 })
 const lastDragTime = ref(0)
 const animationFrameId = ref(null)
 const isDecelerating = ref(false)
+let dragGlobalListenersActive = false
 
 // 8. 翻译相关
 const showTranslation = ref(false)
@@ -1650,73 +1801,141 @@ const handleGlobalMouseDown = (e) => {
   closeSelectionToolbar()
 }
 
-const updateActiveSearchMatch = (nextIndex) => {
-  const total = inPageSearchMatches.value.length
+const updateActivePdfSearchMatch = (nextIndex) => {
+  const total = pdfSearchMatches.value.length
   if (!total) return
 
   const normalized = ((nextIndex % total) + total) % total
 
-  const prev = inPageSearchMatches.value[inPageSearchActiveIndex.value]
+  const prev = pdfSearchMatches.value[pdfSearchActiveIndex.value]
   if (prev) prev.classList.remove('inpage-match-active')
 
-  inPageSearchActiveIndex.value = normalized
+  pdfSearchActiveIndex.value = normalized
 
-  const el = inPageSearchMatches.value[normalized]
+  const el = pdfSearchMatches.value[normalized]
   if (el) {
     el.classList.add('inpage-match-active')
     el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
   }
 }
 
-const gotoNextSearchMatch = () => {
-  if (!inPageSearchMatches.value.length) return
-  updateActiveSearchMatch(inPageSearchActiveIndex.value + 1)
+const gotoNextPdfSearchMatch = () => {
+  if (!pdfSearchMatches.value.length) return
+  updateActivePdfSearchMatch(pdfSearchActiveIndex.value + 1)
 }
 
-const gotoPrevSearchMatch = () => {
-  if (!inPageSearchMatches.value.length) return
-  updateActiveSearchMatch(inPageSearchActiveIndex.value - 1)
+const gotoPrevPdfSearchMatch = () => {
+  if (!pdfSearchMatches.value.length) return
+  updateActivePdfSearchMatch(pdfSearchActiveIndex.value - 1)
 }
 
-const updateActiveFullSearchResult = (nextIndex) => {
-  const total = fullSearchResults.value.length
+const updateActivePdfFullSearchResult = (nextIndex) => {
+  const total = pdfFullSearchResults.value.length
   if (!total) {
-    fullSearchActiveIndex.value = -1
+    pdfFullSearchActiveIndex.value = -1
     return
   }
   const normalized = ((nextIndex % total) + total) % total
-  fullSearchActiveIndex.value = normalized
+  pdfFullSearchActiveIndex.value = normalized
 }
 
-const jumpToActiveSearchResult = () => {
-  if (!fullSearchResults.value.length) return
+const jumpToActivePdfSearchResult = () => {
+  if (!pdfFullSearchResults.value.length) return
 
-  const i = fullSearchActiveIndex.value >= 0 ? fullSearchActiveIndex.value : 0
-  const hit = fullSearchResults.value[i]
+  const i = pdfFullSearchActiveIndex.value >= 0 ? pdfFullSearchActiveIndex.value : 0
+  const hit = pdfFullSearchResults.value[i]
   if (!hit?.page) return
 
   goToPage(hit.page)
 }
 
-const gotoNextSearch = () => {
-  if (fullSearchResults.value.length) {
-    updateActiveFullSearchResult(fullSearchActiveIndex.value + 1)
-    jumpToActiveSearchResult()
+const gotoNextPdfSearch = () => {
+  if (pdfFullSearchResults.value.length) {
+    updateActivePdfFullSearchResult(pdfFullSearchActiveIndex.value + 1)
+    jumpToActivePdfSearchResult()
     return
   }
-  gotoNextSearchMatch()
+  gotoNextPdfSearchMatch()
 }
 
-const gotoPrevSearch = () => {
-  if (fullSearchResults.value.length) {
-    updateActiveFullSearchResult(fullSearchActiveIndex.value - 1)
-    jumpToActiveSearchResult()
+const gotoPrevPdfSearch = () => {
+  if (pdfFullSearchResults.value.length) {
+    updateActivePdfFullSearchResult(pdfFullSearchActiveIndex.value - 1)
+    jumpToActivePdfSearchResult()
     return
   }
-  gotoPrevSearchMatch()
+  gotoPrevPdfSearchMatch()
 }
 
-const clearInPageSearchHighlights = () => {
+const updateActiveMarkdownSearchMatch = (nextIndex) => {
+  const total = mdSearchMatches.value.length
+  if (!total) return
+
+  const normalized = ((nextIndex % total) + total) % total
+
+  const prev = mdSearchMatches.value[mdSearchActiveIndex.value]
+  if (prev) prev.classList.remove('inpage-match-active')
+
+  mdSearchActiveIndex.value = normalized
+
+  const el = mdSearchMatches.value[normalized]
+  if (el) {
+    el.classList.add('inpage-match-active')
+    el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+  }
+}
+
+const gotoNextMarkdownSearch = () => {
+  if (!mdSearchMatches.value.length) return
+  updateActiveMarkdownSearchMatch(mdSearchActiveIndex.value + 1)
+}
+
+const gotoPrevMarkdownSearch = () => {
+  if (!mdSearchMatches.value.length) return
+  updateActiveMarkdownSearchMatch(mdSearchActiveIndex.value - 1)
+}
+
+const clearPdfSearchHighlights = () => {
+  const layer = pdfTextLayer.value
+  if (!layer) return
+
+  const marks = layer.querySelectorAll('span.inpage-match, span.inpage-match-active')
+  marks.forEach((el) => {
+    el.classList.remove('inpage-match')
+    el.classList.remove('inpage-match-active')
+  })
+}
+
+const applyPdfSearch = () => {
+  clearPdfSearchHighlights()
+
+  pdfSearchMatches.value = []
+  pdfSearchActiveIndex.value = -1
+
+  const query = pdfSearchQuery.value.trim()
+  if (!query) return
+
+  const layer = pdfTextLayer.value
+  if (!layer) return
+
+  const qLower = query.toLowerCase()
+  const spans = Array.from(layer.querySelectorAll('span'))
+
+  spans.forEach((span) => {
+    const t = String(span.textContent || '').trim()
+    if (!t) return
+    if (t.toLowerCase().includes(qLower)) {
+      span.classList.add('inpage-match')
+      pdfSearchMatches.value.push(span)
+    }
+  })
+
+  if (pdfSearchMatches.value.length) {
+    nextTick(() => updateActivePdfSearchMatch(0))
+  }
+}
+
+const clearMarkdownSearchHighlights = () => {
   const container = markdownContainer.value
   if (!container) return
 
@@ -1729,13 +1948,13 @@ const clearInPageSearchHighlights = () => {
   })
 }
 
-const applyInPageSearch = () => {
-  clearInPageSearchHighlights()
+const applyMarkdownSearch = () => {
+  clearMarkdownSearchHighlights()
 
-  inPageSearchMatches.value = []
-  inPageSearchActiveIndex.value = -1
+  mdSearchMatches.value = []
+  mdSearchActiveIndex.value = -1
 
-  const query = inPageSearchQuery.value.trim()
+  const query = mdSearchQuery.value.trim()
   if (!query) return
 
   const container = markdownContainer.value
@@ -1777,7 +1996,7 @@ const applyInPageSearch = () => {
       span.className = 'inpage-match'
       span.textContent = text.slice(idx, idx + query.length)
       frag.appendChild(span)
-      inPageSearchMatches.value.push(span)
+      mdSearchMatches.value.push(span)
 
       last = idx + query.length
       idx = lower.indexOf(qLower, last)
@@ -1789,8 +2008,8 @@ const applyInPageSearch = () => {
     if (parent) parent.replaceChild(frag, textNode)
   })
 
-  if (inPageSearchMatches.value.length) {
-    nextTick(() => updateActiveSearchMatch(0))
+  if (mdSearchMatches.value.length) {
+    nextTick(() => updateActiveMarkdownSearchMatch(0))
   }
 }
 
@@ -1806,88 +2025,95 @@ const invokeWithTimeout = (p, ms) => {
   })
 }
 
-const searchFullMarkdownFile = () => {
-  if (fullSearchTimer) {
-    clearTimeout(fullSearchTimer)
-    fullSearchTimer = 0
+const searchFullPdfDocument = () => {
+  if (pdfFullSearchTimer) {
+    clearTimeout(pdfFullSearchTimer)
+    pdfFullSearchTimer = 0
   }
 
-  const query = inPageSearchQuery.value.trim()
+  const query = pdfSearchQuery.value.trim()
   if (!query) {
-    fullSearchBusy.value = false
-    fullSearchResults.value = []
-    fullSearchActiveIndex.value = -1
+    pdfFullSearchBusy.value = false
+    pdfFullSearchResults.value = []
+    pdfFullSearchActiveIndex.value = -1
     return
   }
 
-  fullSearchTimer = window.setTimeout(async () => {
+  pdfFullSearchTimer = window.setTimeout(async () => {
     try {
-      fullSearchBusy.value = true
-      fullSearchResults.value = []
-      fullSearchActiveIndex.value = -1
+      pdfFullSearchBusy.value = true
+      pdfFullSearchResults.value = []
+      pdfFullSearchActiveIndex.value = -1
 
-      if (!markdownFilePath.value) {
-        await updateMarkdownPath()
-      }
+      const hits = typeof searchText === 'function' ? await searchText(query) : []
+      pdfFullSearchResults.value = Array.isArray(hits) ? hits : []
 
-      const resp = await invokeWithTimeout(
-        invoke('search_paginated_markdown', {
-          filepath: markdownFilePath.value,
-          query
-        }),
-        8000
-      )
-
-      if (!resp?.success) {
-        throw new Error(resp?.error || 'Failed to search markdown')
-      }
-
-      const hits = Array.isArray(resp.matches) ? resp.matches : []
-      fullSearchResults.value = hits
-
-      const currentIdx = hits.findIndex((m) => m?.page === currentPage.value)
-      fullSearchActiveIndex.value = currentIdx >= 0 ? currentIdx : (hits.length ? 0 : -1)
+      const currentIdx = pdfFullSearchResults.value.findIndex((m) => m?.page === currentPage.value)
+      pdfFullSearchActiveIndex.value = currentIdx >= 0
+        ? currentIdx
+        : (pdfFullSearchResults.value.length ? 0 : -1)
     } catch {
-      fullSearchResults.value = []
-      fullSearchActiveIndex.value = -1
+      pdfFullSearchResults.value = []
+      pdfFullSearchActiveIndex.value = -1
     } finally {
-      fullSearchBusy.value = false
+      pdfFullSearchBusy.value = false
     }
   }, 250)
 }
 
-const handleSearchInput = () => {
-  applyInPageSearch()
-  searchFullMarkdownFile()
+const handlePdfSearchInput = () => {
+  applyPdfSearch()
+  searchFullPdfDocument()
 }
 
-const openInPageSearch = async () => {
-  inPageSearchVisible.value = true
+const openPdfSearch = async () => {
+  closeMarkdownSearch()
+  pdfSearchVisible.value = true
   await nextTick()
-  const input = inPageSearchInput.value
+  const input = pdfSearchInput.value
   if (input && input instanceof HTMLInputElement) {
     input.focus()
     input.select()
   }
-  handleSearchInput()
+  handlePdfSearchInput()
 }
 
-const closeInPageSearch = () => {
-  inPageSearchVisible.value = false
-  inPageSearchQuery.value = ''
+const closePdfSearch = () => {
+  pdfSearchVisible.value = false
+  pdfSearchQuery.value = ''
 
-  if (fullSearchTimer) {
-    clearTimeout(fullSearchTimer)
-    fullSearchTimer = 0
+  if (pdfFullSearchTimer) {
+    clearTimeout(pdfFullSearchTimer)
+    pdfFullSearchTimer = 0
   }
 
-  fullSearchBusy.value = false
-  fullSearchResults.value = []
-  fullSearchActiveIndex.value = -1
+  pdfFullSearchBusy.value = false
+  pdfFullSearchResults.value = []
+  pdfFullSearchActiveIndex.value = -1
 
-  clearInPageSearchHighlights()
-  inPageSearchMatches.value = []
-  inPageSearchActiveIndex.value = -1
+  clearPdfSearchHighlights()
+  pdfSearchMatches.value = []
+  pdfSearchActiveIndex.value = -1
+}
+
+const openMarkdownSearch = async () => {
+  closePdfSearch()
+  mdSearchVisible.value = true
+  await nextTick()
+  const input = mdSearchInput.value
+  if (input && input instanceof HTMLInputElement) {
+    input.focus()
+    input.select()
+  }
+  applyMarkdownSearch()
+}
+
+const closeMarkdownSearch = () => {
+  mdSearchVisible.value = false
+  mdSearchQuery.value = ''
+  clearMarkdownSearchHighlights()
+  mdSearchMatches.value = []
+  mdSearchActiveIndex.value = -1
 }
 
 const handleMarkdownHover = (e) => {
@@ -1952,18 +2178,715 @@ const getImagesDirectory = async () => {
 };
 
 // 17. 数据加载
+const isPdfDebug = () => {
+  try {
+    const v = String(window?.localStorage?.getItem('guaxi_debug_pdfjs') || '').trim().toLowerCase()
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on'
+  } catch {
+    return false
+  }
+}
+
+const pdfDlog = (...args) => {
+  if (!isPdfDebug()) return
+  console.log('[PDFJS][Reader]', ...args)
+}
+
+const isPdfHighlightDebug = () => {
+  try {
+    const v = String(window?.localStorage?.getItem('guaxi_debug_pdfhl') || '').trim().toLowerCase()
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on'
+  } catch {
+    return false
+  }
+}
+
+const pdfHlog = (...args) => {
+  if (!isPdfHighlightDebug()) return
+  console.log('[PDFHL][Reader]', ...args)
+}
+
+const pdfPageContainer = ref(null)
+const pdfEditorLayer = ref(null)
+const pdfHighlightLayer = ref(null)
+
+const pdfAnnotations = ref([])
+const pdfActiveAnnotationId = ref(null)
+const pdfAnnotationPanelVisible = ref(false)
+
+const clearPdfHighlightLayer = () => {
+  const el = pdfHighlightLayer.value
+  if (el && el instanceof HTMLElement) el.innerHTML = ''
+}
+
+const normalizeClientRectsToPage = (domRects, pageRect) => {
+  const pr = pageRect && pageRect.width > 0 && pageRect.height > 0
+    ? pageRect
+    : null
+  if (!pr) return []
+
+  const w = pr.width || 1
+  const h = pr.height || 1
+
+  return (Array.isArray(domRects) ? domRects : [])
+    .map((r) => {
+      if (!r) return null
+      const x = (Number(r.left) - pr.left) / w
+      const y = (Number(r.top) - pr.top) / h
+      const rw = Number(r.width) / w
+      const rh = Number(r.height) / h
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(rw) || !Number.isFinite(rh)) return null
+      return {
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+        w: Math.max(0, Math.min(1, rw)),
+        h: Math.max(0, Math.min(1, rh)),
+      }
+    })
+    .filter(Boolean)
+    .filter((r) => r.w > 0.002 && r.h > 0.002)
+    .slice(0, 200)
+}
+
+const findPdfJsEditorElement = (editorId) => {
+  const root = pdfEditorLayer.value
+  if (!(root instanceof HTMLElement)) return null
+  const id = String(editorId || '').trim()
+  if (!id) return null
+
+  const sel = []
+  sel.push(`#${typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id}`)
+  sel.push(`[data-editor-id="${id}"]`)
+  sel.push(`[data-id="${id}"]`)
+  sel.push(`[data-annotation-id="${id}"]`)
+  sel.push(`[data-element-id="${id}"]`)
+
+  for (const s of sel) {
+    try {
+      const el = root.querySelector(s)
+      if (el && el instanceof HTMLElement) return el
+    } catch {
+    }
+  }
+
+  try {
+    const all = Array.from(root.querySelectorAll('*'))
+    for (let i = 0; i < all.length; i += 1) {
+      const el = all[i]
+      if (!(el instanceof HTMLElement)) continue
+      if (el.id === id) return el
+      const v = el.getAttribute('data-editor-id') || el.getAttribute('data-id') || el.getAttribute('data-annotation-id') || el.getAttribute('data-element-id')
+      if (v === id) return el
+    }
+  } catch {
+  }
+
+  return null
+}
+
+const getHighlightRectsFromPdfJsEditor = (editorId) => {
+  const pageEl = pdfPageContainer.value
+  if (!(pageEl instanceof HTMLElement)) return []
+
+  const editorEl = findPdfJsEditorElement(editorId)
+  if (!(editorEl instanceof HTMLElement)) {
+    if (isPdfHighlightDebug()) {
+      pdfHlog('pdfjsEditorNotFound', { editorId: String(editorId || '') })
+    }
+    return []
+  }
+
+  const pageRect = pageEl.getBoundingClientRect()
+  const rects = normalizeClientRectsToPage(Array.from(editorEl.getClientRects()), pageRect)
+
+  if (isPdfHighlightDebug()) {
+    const er = editorEl.getBoundingClientRect()
+    pdfHlog('pdfjsEditorRects', {
+      editorId: String(editorId || ''),
+      editorTag: editorEl.tagName,
+      editorClass: typeof editorEl.className === 'string' ? editorEl.className : '',
+      editorRect: { left: Math.round(er.left), top: Math.round(er.top), width: Math.round(er.width), height: Math.round(er.height) },
+      rectsPreview: rects.slice(0, 10).map((r) => ({
+        x: Number((Number(r.x) || 0).toFixed(6)),
+        y: Number((Number(r.y) || 0).toFixed(6)),
+        w: Number((Number(r.w) || 0).toFixed(6)),
+        h: Number((Number(r.h) || 0).toFixed(6)),
+      })),
+    })
+  }
+
+  return rects
+}
+
+const pdfEditorRectHydrated = new Set()
+
+const renderPdfActiveHighlightForCurrentPage = () => {
+  clearPdfHighlightLayer()
+  const layerEl = pdfHighlightLayer.value
+  const pageEl = pdfPageContainer.value
+  if (!(layerEl instanceof HTMLElement) || !(pageEl instanceof HTMLElement)) return
+
+  const pageNum = Number(currentPage.value) || 1
+  const list = Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : []
+  const onPage = list.filter((x) => Number(x?.page) === pageNum)
+  if (!onPage.length) return
+
+  const pr = pageEl.getBoundingClientRect()
+  const w = pr.width
+  const h = pr.height
+  if (!w || !h) return
+
+  const activeId = pdfActiveAnnotationId.value
+  let mutated = false
+
+  if (isPdfHighlightDebug()) {
+    pdfHlog('renderHighlights', {
+      page: pageNum,
+      count: onPage.length,
+      activeId: typeof activeId === 'string' ? activeId : String(activeId || ''),
+      pageClient: { w: pageEl.clientWidth, h: pageEl.clientHeight },
+      pageRect: { w: Number(pr.width.toFixed(3)), h: Number(pr.height.toFixed(3)), left: Number(pr.left.toFixed(3)), top: Number(pr.top.toFixed(3)) },
+    })
+  }
+
+  onPage.forEach((it) => {
+    if (!it) return
+
+    let rects = Array.isArray(it.rects) ? it.rects : []
+
+    const eid = typeof it.editorId === 'string' ? it.editorId : ''
+    if (eid && !pdfEditorRectHydrated.has(eid)) {
+      const fromPdfJs = getHighlightRectsFromPdfJsEditor(eid)
+      if (fromPdfJs.length) {
+        it.rects = fromPdfJs
+        rects = fromPdfJs
+        pdfEditorRectHydrated.add(eid)
+        mutated = true
+      }
+    }
+
+    const color = typeof it.color === 'string' ? it.color : 'rgba(64, 196, 255, 0.32)'
+    const isActive = activeId && it.id === activeId
+
+    rects.forEach((r) => {
+      const x = (Number(r?.x) || 0) * w
+      const y = (Number(r?.y) || 0) * h
+      const rw = (Number(r?.w) || 0) * w
+      const rh = (Number(r?.h) || 0) * h
+      if (rw <= 0 || rh <= 0) return
+
+      const div = document.createElement('div')
+      div.className = 'pdf-highlight-rect'
+      div.style.position = 'absolute'
+      div.style.borderRadius = '3px'
+      div.style.left = `${Number(x.toFixed(2))}px`
+      div.style.top = `${Number(y.toFixed(2))}px`
+      div.style.width = `${Number(rw.toFixed(2))}px`
+      div.style.height = `${Number(rh.toFixed(2))}px`
+      div.style.background = color
+      if (isActive) {
+        div.style.boxShadow = '0 0 0 1px rgba(64, 196, 255, 0.55)'
+      }
+      layerEl.appendChild(div)
+    })
+  })
+
+  if (mutated) {
+    pdfAnnotations.value = [...list]
+    persistReaderState()
+  }
+}
+
+const exitPdfAnnotationMode = () => {
+  pdfAnnotationPanelVisible.value = false
+  pdfActiveAnnotationId.value = null
+  clearPdfHighlightLayer()
+}
+
+const getPdfSelectionInfo = () => {
+  const layer = pdfTextLayer.value
+  const pageEl = pdfPageContainer.value
+  if (!(layer instanceof HTMLElement) || !(pageEl instanceof HTMLElement)) return null
+
+  const sel = window.getSelection()
+  const text = sel?.toString()?.trim() || ''
+  if (!text) return null
+
+  const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null
+  if (!range) return null
+
+  const inLayer = layer.contains(range.startContainer) && layer.contains(range.endContainer)
+  if (!inLayer) return null
+
+  const pageRect = pageEl.getBoundingClientRect()
+  const layerRect = layer.getBoundingClientRect()
+  const basisRect = layerRect && layerRect.width > 0 && layerRect.height > 0
+    ? layerRect
+    : pageRect
+
+  const bw = basisRect.width || 1
+  const bh = basisRect.height || 1
+
+  const br = range.getBoundingClientRect()
+  const rect = br && br.width > 0 && br.height > 0
+    ? br
+    : (range.getClientRects()?.[0] || null)
+  if (!rect) return null
+
+  const ax = (rect.left + rect.width / 2 - pageRect.left) / (pageRect.width || 1)
+  const ay = (rect.top + rect.height / 2 - pageRect.top) / (pageRect.height || 1)
+
+  const rawClientRects = Array.from(range.getClientRects())
+
+  const rects = rawClientRects
+    .map((r) => ({
+      x: (r.left - basisRect.left) / bw,
+      y: (r.top - basisRect.top) / bh,
+      w: r.width / bw,
+      h: r.height / bh,
+    }))
+    .filter((r) => Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.w) && Number.isFinite(r.h))
+    .map((r) => ({
+      x: Math.max(0, Math.min(1, r.x)),
+      y: Math.max(0, Math.min(1, r.y)),
+      w: Math.max(0, Math.min(1, r.w)),
+      h: Math.max(0, Math.min(1, r.h)),
+    }))
+    .filter((r) => r.w > 0.002 && r.h > 0.002)
+    .slice(0, 200)
+
+  if (isPdfHighlightDebug()) {
+    const sn = (n) => {
+      if (!n) return null
+      if (n instanceof Element) {
+        return {
+          node: n.tagName,
+          cls: typeof n.className === 'string' ? n.className : '',
+          text: String(n.textContent || '').trim().slice(0, 32),
+        }
+      }
+      return { node: n.nodeType, text: String(n.textContent || '').trim().slice(0, 32) }
+    }
+
+    const toRect = (r) => ({
+      left: Math.round(r.left),
+      top: Math.round(r.top),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    })
+
+    const raw = rawClientRects.slice(0, 24).map((r) => ({
+      ...toRect(r),
+      relLeft: Number((((r.left - pageRect.left) / (pageRect.width || 1)) || 0).toFixed(6)),
+      relTop: Number((((r.top - pageRect.top) / (pageRect.height || 1)) || 0).toFixed(6)),
+    }))
+
+    const norm = rects.slice(0, 24).map((r) => ({
+      x: Number((Number(r.x) || 0).toFixed(6)),
+      y: Number((Number(r.y) || 0).toFixed(6)),
+      w: Number((Number(r.w) || 0).toFixed(6)),
+      h: Number((Number(r.h) || 0).toFixed(6)),
+    }))
+
+    const stats = (() => {
+      const xs = rects.map((r) => Number(r.x)).filter((v) => Number.isFinite(v))
+      const ys = rects.map((r) => Number(r.y)).filter((v) => Number.isFinite(v))
+      if (!xs.length || !ys.length) return null
+      return {
+        minX: Number(Math.min(...xs).toFixed(6)),
+        maxX: Number(Math.max(...xs).toFixed(6)),
+        minY: Number(Math.min(...ys).toFixed(6)),
+        maxY: Number(Math.max(...ys).toFixed(6)),
+        count: rects.length,
+      }
+    })()
+
+    let spanRects = []
+    try {
+      const spans = Array.from(layer.querySelectorAll('span'))
+      for (let i = 0; i < spans.length && spanRects.length < 14; i += 1) {
+        const s = spans[i]
+        let hit = false
+        try {
+          hit = range.intersectsNode(s)
+        } catch {
+          hit = false
+        }
+        if (!hit) continue
+        const rr = s.getBoundingClientRect()
+        spanRects.push({
+          text: String(s.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24),
+          ...toRect(rr),
+          relLeft: Number((((rr.left - pageRect.left) / (pageRect.width || 1)) || 0).toFixed(6)),
+        })
+      }
+    } catch {
+      spanRects = []
+    }
+
+    pdfHlog('selectionInfo', {
+      textLen: text.length,
+      textPreview: text.slice(0, 80),
+      pageRect: toRect(pageRect),
+      layerRect: toRect(layerRect),
+      basisRect: toRect(basisRect),
+      boundRect: toRect(rect),
+      start: sn(range.startContainer instanceof Element ? range.startContainer : range.startContainer?.parentElement),
+      end: sn(range.endContainer instanceof Element ? range.endContainer : range.endContainer?.parentElement),
+      rawClientRects: raw,
+      normalizedRects: norm,
+      stats,
+      selectedSpanRects: spanRects,
+    })
+  }
+
+  return {
+    text,
+    range: range.cloneRange(),
+    rect,
+    rects,
+    anchor: {
+      x: Math.max(0, Math.min(1, ax)),
+      y: Math.max(0, Math.min(1, ay)),
+    },
+  }
+}
+
+const applyPdfJsHighlightForCurrentSelection = async (providedInfo) => {
+  const info = providedInfo || getPdfSelectionInfo()
+  if (!info) return null
+
+  let editorId = null
+
+  try {
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(info.range)
+
+    editorId = await highlightSelectionAsAnnotation({ color: '#40C4FF' })
+
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 0))
+  } finally {
+    try {
+      window.getSelection()?.removeAllRanges()
+    } catch {
+    }
+  }
+
+  return { info, editorId }
+}
+
+const addPdfHighlightFromSelection = async () => {
+  const info = getPdfSelectionInfo()
+  if (!info) return
+
+  const id = `pdfhl_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`
+  const item = {
+    id,
+    page: Number(currentPage.value) || 1,
+    selectionText: String(info.text || '').slice(0, 800),
+    note: '',
+    anchor: info.anchor || null,
+    rects: Array.isArray(info.rects) ? info.rects : [],
+    color: 'rgba(64, 196, 255, 0.32)',
+    editorId: '',
+    noteEditorId: '',
+    editing: false,
+  }
+
+  pdfAnnotations.value = [item, ...(Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : [])]
+  pdfActiveAnnotationId.value = id
+  persistReaderState()
+
+  await nextTick()
+  renderPdfActiveHighlightForCurrentPage()
+
+  const r = await applyPdfJsHighlightForCurrentSelection(info)
+  if (r?.editorId) {
+    item.editorId = r.editorId
+
+    const fromPdfJs = getHighlightRectsFromPdfJsEditor(r.editorId)
+    if (fromPdfJs.length) {
+      item.rects = fromPdfJs
+      await nextTick()
+      renderPdfActiveHighlightForCurrentPage()
+    }
+
+    pdfAnnotations.value = [...(Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : [])]
+    persistReaderState()
+  }
+}
+
+const addPdfAnnotationFromSelection = async () => {
+  const info = getPdfSelectionInfo()
+  pdfAnnotationPanelVisible.value = true
+  if (!info) return
+
+  const id = `pdfnote_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`
+  const next = {
+    id,
+    page: Number(currentPage.value) || 1,
+    selectionText: String(info.text || '').slice(0, 800),
+    note: '',
+    anchor: info.anchor || null,
+    rects: Array.isArray(info.rects) ? info.rects : [],
+    color: 'rgba(64, 196, 255, 0.32)',
+    editorId: '',
+    noteEditorId: '',
+    editing: true,
+  }
+
+  pdfAnnotations.value = [
+    next,
+    ...((Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : []).map((x) => ({ ...x, editing: false }))),
+  ]
+
+  pdfActiveAnnotationId.value = id
+  persistReaderState()
+
+  await nextTick()
+  renderPdfActiveHighlightForCurrentPage()
+
+  const r = await applyPdfJsHighlightForCurrentSelection(info)
+  if (r?.editorId) {
+    next.editorId = r.editorId
+
+    const fromPdfJs = getHighlightRectsFromPdfJsEditor(r.editorId)
+    if (fromPdfJs.length) {
+      next.rects = fromPdfJs
+      await nextTick()
+      renderPdfActiveHighlightForCurrentPage()
+    }
+
+    pdfAnnotations.value = [...(Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : [])]
+    persistReaderState()
+  }
+}
+
+const activatePdfAnnotation = async (id) => {
+  const it = (Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : []).find((x) => x?.id === id)
+  if (!it) return
+  pdfActiveAnnotationId.value = id
+  pdfAnnotationPanelVisible.value = true
+
+  const targetPage = Number(it.page) || 1
+  if (targetPage !== Number(currentPage.value)) {
+    await loadPdfPage(targetPage)
+  }
+
+  await nextTick()
+  renderPdfActiveHighlightForCurrentPage()
+}
+
+const dispatchFreeTextCreateAtClientPoint = async ({ clientX, clientY, text }) => {
+  const editor = pdfEditorLayer.value
+  if (!(editor instanceof HTMLElement)) return false
+
+  await setPdfAnnotationMode('freetext')
+  await nextTick()
+
+  const common = { bubbles: true, cancelable: true, clientX, clientY, button: 0 }
+  try {
+    editor.dispatchEvent(new MouseEvent('mousedown', common))
+    editor.dispatchEvent(new MouseEvent('mouseup', common))
+    editor.dispatchEvent(new MouseEvent('click', common))
+    editor.dispatchEvent(new MouseEvent('dblclick', common))
+  } catch {
+  }
+
+  await nextTick()
+  await new Promise((r) => setTimeout(r, 0))
+
+  const textareas = Array.from(editor.querySelectorAll('textarea'))
+  const editables = Array.from(editor.querySelectorAll('[contenteditable="true"]'))
+  const ta = textareas.length ? textareas[textareas.length - 1] : null
+  const ed = !ta && editables.length ? editables[editables.length - 1] : null
+
+  try {
+    if (ta && ta instanceof HTMLTextAreaElement) {
+      ta.focus()
+      ta.value = String(text || '')
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+      ta.blur()
+    } else if (ed && ed instanceof HTMLElement) {
+      ed.focus()
+      ed.textContent = String(text || '')
+      ed.dispatchEvent(new Event('input', { bubbles: true }))
+      ed.blur()
+    }
+  } catch {
+  }
+
+  await setPdfAnnotationMode('none')
+  return true
+}
+
+const savePdfAnnotationNote = async (id) => {
+  const list = Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : []
+  const idx = list.findIndex((x) => x?.id === id)
+  if (idx < 0) return
+
+  const it = list[idx]
+  const noteText = String(it?.note || '').trim()
+  it.editing = false
+  pdfAnnotations.value = [...list]
+  persistReaderState()
+
+  if (!noteText) {
+    if (it?.noteEditorId) {
+      await removeAnnotationEditorById(it.noteEditorId)
+      it.noteEditorId = ''
+      pdfAnnotations.value = [...(Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : [])]
+      persistReaderState()
+    }
+    await savePdfAnnotationsToOriginal()
+    return
+  }
+
+  const targetPage = Number(it.page) || 1
+  if (targetPage !== Number(currentPage.value)) {
+    await loadPdfPage(targetPage)
+  }
+
+  await nextTick()
+
+  if (it?.noteEditorId) {
+    await removeAnnotationEditorById(it.noteEditorId)
+    it.noteEditorId = ''
+  }
+
+  const pageEl = pdfPageContainer.value
+  if (!(pageEl instanceof HTMLElement)) {
+    await savePdfAnnotationsToOriginal()
+    return
+  }
+
+  const pageIndex = Math.max(0, (Number(targetPage) || 1) - 1)
+  const beforeIds = getAnnotationEditorIdsForPage(pageIndex)
+
+  const r = pageEl.getBoundingClientRect()
+  const ax = Number(it?.anchor?.x)
+  const ay = Number(it?.anchor?.y)
+  const cx = r.left + (Number.isFinite(ax) ? Math.max(0, Math.min(1, ax)) : 0.5) * r.width
+  const cy = r.top + (Number.isFinite(ay) ? Math.max(0, Math.min(1, ay)) : 0.5) * r.height
+
+  await dispatchFreeTextCreateAtClientPoint({ clientX: cx, clientY: cy, text: noteText })
+
+  await nextTick()
+  await new Promise((r) => setTimeout(r, 0))
+
+  const afterIds = getAnnotationEditorIdsForPage(pageIndex)
+  const created = afterIds.filter((x) => !beforeIds.includes(x))
+  const newId = created.length ? created[created.length - 1] : ''
+  if (newId) {
+    it.noteEditorId = newId
+    pdfAnnotations.value = [...(Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : [])]
+    persistReaderState()
+  }
+
+  await savePdfAnnotationsToOriginal()
+}
+
+const deletePdfAnnotation = async (id) => {
+  const list = Array.isArray(pdfAnnotations.value) ? pdfAnnotations.value : []
+  const it = list.find((x) => x?.id === id)
+
+  if (it?.editorId) {
+    await removeAnnotationEditorById(it.editorId)
+  }
+  if (it?.noteEditorId) {
+    await removeAnnotationEditorById(it.noteEditorId)
+  }
+
+  pdfAnnotations.value = list.filter((x) => x?.id !== id)
+  if (pdfActiveAnnotationId.value === id) {
+    pdfActiveAnnotationId.value = null
+  }
+  persistReaderState()
+
+  await nextTick()
+  renderPdfActiveHighlightForCurrentPage()
+}
+
+const annotationMode = ref('none')
+
+const setPdfAnnotationMode = async (mode) => {
+  annotationMode.value = String(mode || 'none')
+  await setAnnotationEditorMode(annotationMode.value)
+}
+
+const togglePdfHighlight = async () => {
+  const next = annotationMode.value === 'highlight' ? 'none' : 'highlight'
+  await setPdfAnnotationMode(next)
+}
+
+const togglePdfFreeText = async () => {
+  const next = annotationMode.value === 'freetext' ? 'none' : 'freetext'
+  await setPdfAnnotationMode(next)
+}
+
+const savePdfAnnotationsToOriginal = async () => {
+  try {
+    const b64 = await saveDocumentBase64()
+    await invoke('write_file_bytes_base64', { path: String(props.filePath || ''), base64: b64 })
+    message.success('PDF标注已保存到原文件', { duration: 1200 })
+  } catch (e) {
+    const msg = typeof e === 'object' ? e.message || e.toString() : String(e)
+    message.error(`保存PDF标注失败: ${msg}`)
+  }
+}
+
 const loadPdfPage = async (pageNum) => {
   try {
-    const data = await loadPage(pageNum);
+    await ensureAnnotationEditorUi({ containerEl: pdfPanel.value, viewerEl: pdfPageContainer.value })
+    await setPdfAnnotationMode(annotationMode.value)
+
+    const data = await loadPage(pageNum, {
+      scale: zoomLevel.value,
+      rotation: rotation.value,
+      canvasEl: pdfCanvas.value,
+      textLayerEl: pdfTextLayer.value,
+      annotationLayerEl: pdfAnnotationLayer.value,
+      editorLayerEl: pdfEditorLayer.value,
+      onGoToPage: (p) => goToPage(p)
+    });
+
     currentPage.value = data.page_number;
     totalPages.value = data.total_pages;
 
-    console.log('加载成功:', {
-      page: currentPage.value,
-      total: totalPages.value,
-      type: renderContent.value?.type
-    });
+    await nextTick()
+    renderPdfActiveHighlightForCurrentPage()
 
+    if (pdfSearchVisible.value && pdfSearchQuery.value.trim()) {
+      nextTick(() => applyPdfSearch())
+    }
+
+    const fp = String(props.filePath || '')
+    if (fp && pdfOutlineLoadedFor.value !== fp && typeof getOutlineFlat === 'function') {
+      pdfOutlineLoadedFor.value = fp
+      try {
+        const outline = await getOutlineFlat()
+        outlineStore.setOutline(Array.isArray(outline) ? outline : [])
+        outlineStore.setJumpToLine((p) => {
+          const n = Number(p)
+          if (Number.isFinite(n)) goToPage(n)
+        })
+      } catch {
+        outlineStore.setOutline([])
+      }
+    }
+
+    if (isPdfDebug()) {
+      const spanCount = pdfTextLayer.value ? pdfTextLayer.value.querySelectorAll('span').length : -1
+      pdfDlog('pageLoaded', {
+        page: currentPage.value,
+        total: totalPages.value,
+        pageW: Number(data?.page_width) || 0,
+        pageH: Number(data?.page_height) || 0,
+        spanCount
+      })
+    }
   } catch (err) {
     console.error('页面加载失败:', err);
     message.error(`加载失败: ${err.message}`);
@@ -1994,11 +2917,10 @@ const loadMarkdownPage = async (pageNum) => {
       { libraryBasePath: mdDir }
     );
     console.log("markdownLines.value:", markdownLines.value);
-    generateOutlineFromMarkdown(markdownContent.value);
 
     await nextTick()
-    if (inPageSearchVisible.value && inPageSearchQuery.value.trim()) {
-      applyInPageSearch()
+    if (mdSearchVisible.value && mdSearchQuery.value.trim()) {
+      applyMarkdownSearch()
     }
 
   } catch (error) {
@@ -2007,7 +2929,6 @@ const loadMarkdownPage = async (pageNum) => {
       raw: '',
       html: `<div class="error">加载错误: ${error.message}</div>`
     }];
-    outlineStore.setOutline([]);
   }
 };
 
@@ -2379,7 +3300,17 @@ const exportNotes = () => {
 // 20. 拖拽和缩放功能
 const startDrag = (e) => {
   try {
+    if (isPdfDebug()) {
+      pdfDlog('mousedown', {
+        altKey: Boolean(e.altKey),
+        button: e.button,
+        target: e?.target?.tagName,
+        inTextLayer: Boolean(e?.target instanceof Element && e.target.closest('.pdf-text-layer')),
+      })
+    }
+
     if (e.button !== 0 || !pdfPanel.value) return;
+    if (!e.altKey) return;
 
     // 取消任何进行中的动画
     if (animationFrameId.value) {
@@ -2402,6 +3333,12 @@ const startDrag = (e) => {
 
     document.body.style.userSelect = 'none';
     pdfPanel.value.style.cursor = 'grabbing';
+
+    if (!dragGlobalListenersActive) {
+      dragGlobalListenersActive = true
+      window.addEventListener('mouseup', endDrag, true)
+      window.addEventListener('blur', endDrag, true)
+    }
 
     e.preventDefault();
   } catch (error) {
@@ -2464,8 +3401,15 @@ const resetDragState = () => {
   isDragging.value = false;
   isDecelerating.value = false;
   document.body.style.userSelect = '';
+
+  if (dragGlobalListenersActive) {
+    dragGlobalListenersActive = false
+    window.removeEventListener('mouseup', endDrag, true)
+    window.removeEventListener('blur', endDrag, true)
+  }
+
   if (pdfPanel.value) {
-    pdfPanel.value.style.cursor = 'grab';
+    pdfPanel.value.style.cursor = 'text';
   }
 };
 
@@ -2494,32 +3438,25 @@ const decelerate = () => {
 };
 
 // 22. 缩放控制
-const handleWheelZoom = (e) => {
-  if (e.ctrlKey) {
-    e.preventDefault()
-    const delta = e.deltaY < 0 ? 0.1 : -0.1
-    zoomLevel.value = Math.max(0.5, Math.min(2, zoomLevel.value + delta))
+const handleWheelZoom = async (e) => {
+  if (!e.ctrlKey) return
 
-    // 缩放后确保内容可见
-    nextTick(() => {
-      if (pdfPanel.value && pdfImage.value) {
-        const panel = pdfPanel.value
-        const img = pdfImage.value
+  e.preventDefault()
+  const delta = e.deltaY < 0 ? 0.1 : -0.1
+  zoomLevel.value = Math.max(0.5, Math.min(2, zoomLevel.value + delta))
 
-        // 考虑旋转状态
-        const isVertical = Math.abs(rotation.value % 180) === 90
-        const effectiveWidth = isVertical ? img.naturalHeight : img.naturalWidth
-        const effectiveHeight = isVertical ? img.naturalWidth : img.naturalHeight
+  await loadPdfPage(currentPage.value)
 
-        const scaledWidth = effectiveWidth * zoomLevel.value
-        const scaledHeight = effectiveHeight * zoomLevel.value
+  await nextTick()
+  if (!pdfPanel.value) return
 
-        // 确保内容居中
-        panel.scrollLeft = Math.max(0, (scaledWidth - panel.clientWidth) / 2)
-        panel.scrollTop = Math.max(0, (scaledHeight - panel.clientHeight) / 2)
-      }
-    })
-  }
+  const panel = pdfPanel.value
+  const w = Number(currentPageData.value?.page_width) || 0
+  const h = Number(currentPageData.value?.page_height) || 0
+  if (!w || !h) return
+
+  panel.scrollLeft = Math.max(0, (w - panel.clientWidth) / 2)
+  panel.scrollTop = Math.max(0, (h - panel.clientHeight) / 2)
 }
 
 // 23. 分页控制
@@ -2561,19 +3498,26 @@ const toggleNotesPanel = () => {
 };
 
 // 25. 缩放功能
-const zoomIn = () => {
-  zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2);
+const zoomIn = async () => {
+  zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2)
+  await loadPdfPage(currentPage.value)
 };
 
-const zoomOut = () => {
-  zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5);
+const zoomOut = async () => {
+  zoomLevel.value = Math.max(zoomLevel.value - 0.1, 0.5)
+  await loadPdfPage(currentPage.value)
 };
 
 // 26. 面板大小调整
 const startResize = (e) => {
   isResizing.value = true;
   startX.value = e.clientX;
-  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.pdf-render-panel')).width, 10);
+
+  const leftEl = document.querySelector('.pdf-left-wrapper')
+  startLeftWidth.value = leftEl
+    ? parseInt(document.defaultView.getComputedStyle(leftEl).width, 10)
+    : 0
+
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('mouseup', stopResize);
   document.body.style.cursor = 'col-resize';
@@ -2584,7 +3528,14 @@ const startResize = (e) => {
 const handleMouseMove = (e) => {
   if (!isResizing.value) return;
 
-  const containerWidth = document.querySelector('.pdf-main-content').offsetWidth;
+  const containerEl = document.querySelector('.pdf-main-content');
+  if (!containerEl) return;
+
+  // Split resize should be based on the available width for panels (exclude the resize handle itself)
+  const handleEl = document.querySelector('.resize-handle');
+  const handleWidth = handleEl ? handleEl.getBoundingClientRect().width : 0;
+
+  const containerWidth = Math.max(1, containerEl.getBoundingClientRect().width - handleWidth);
   const dx = e.clientX - startX.value;
   let newLeftWidth = ((startLeftWidth.value + dx) * 100) / containerWidth;
 
@@ -2604,89 +3555,46 @@ const stopResize = () => {
 };
 
 // 27. 旋转功能
-const rotate = (degrees) => {
+const rotate = async (degrees) => {
   rotation.value = (rotation.value + degrees) % 360
-  nextTick(() => {
-    if (pdfImage.value?.naturalWidth) {
-      fitToWidth()
-    } else {
-      setTimeout(fitToWidth, 300)
-    }
-  })
+  await loadPdfPage(currentPage.value)
+  await fitToWidth()
 }
 
 // 28. 自适应宽度
-const fitToWidth = () => {
-  let isFitting = false;
-  if (!pdfPanel.value || !pdfImage.value || isFitting.value) return;
-  isFitting = true;
+const fitToWidth = async () => {
+  const panel = pdfPanel.value
+  if (!panel) return
 
-  try {
-    const panel = pdfPanel.value;
-    const img = pdfImage.value;
+  // Use actual available width to fit page (do not involve height constraints)
+  const panelWidth = panel.getBoundingClientRect().width || panel.clientWidth
+  if (!panelWidth) return
 
-    // 确保图像已加载
-    if (!img.naturalWidth) {
-      console.warn('图像尺寸未加载完成');
-      return;
-    }
+  const horizontalMargin = Math.min(20, panelWidth * 0.05)
+  const safeWidth = Math.max(0, panelWidth - horizontalMargin)
 
-    const panelWidth = panel.clientWidth;
-    const panelHeight = panel.clientHeight;
-    const imgNaturalWidth = img.naturalWidth;
-    const imgNaturalHeight = img.naturalHeight;
+  const base = await loadPage(currentPage.value, {
+    scale: 1,
+    rotation: rotation.value
+  })
 
-    // 考虑旋转状态
-    const isVertical = Math.abs(rotation.value % 180) === 90;
-    const effectiveWidth = isVertical ? imgNaturalHeight : imgNaturalWidth;
-    const effectiveHeight = isVertical ? imgNaturalWidth : imgNaturalHeight;
+  const baseW = Number(base?.page_width) || 0
+  if (!baseW) return
 
-    // 计算安全边距（动态适应）
-    const horizontalMargin = Math.min(20, panelWidth * 0.05);
-    const verticalMargin = Math.min(20, panelHeight * 0.05);
+  const minScale = 0.5
+  const scale = safeWidth / baseW
+  zoomLevel.value = Math.max(minScale, Math.min(scale, 2))
 
-    // 计算比例时考虑最小缩放限制
-    const minScale = 0.5;
-    const widthRatio = (panelWidth - horizontalMargin * 2) / effectiveWidth;
-    const heightRatio = (panelHeight - verticalMargin * 2) / effectiveHeight;
+  await loadPdfPage(currentPage.value)
 
-    // 动态选择策略：优先宽度适应，但确保内容可见
-    let newZoom = Math.max(minScale, Math.min(widthRatio, heightRatio));
+  await nextTick()
+  const w = Number(currentPageData.value?.page_width) || 0
+  if (!w) return
 
-    // 防止过度缩小（当容器很大时）
-    if (effectiveWidth * newZoom < panelWidth * 0.8 &&
-      effectiveHeight * newZoom < panelHeight * 0.8) {
-      newZoom = Math.max(widthRatio, heightRatio);
-    }
-
-    zoomLevel.value = newZoom;
-
-    // 智能居中（使用requestAnimationFrame确保DOM更新）
-    requestAnimationFrame(() => {
-      const scaledWidth = effectiveWidth * zoomLevel.value;
-      const scaledHeight = effectiveHeight * zoomLevel.value;
-
-      // 重置速度和拖拽状态
-      velocity.value = { x: 0, y: 0 };
-      isDecelerating.value = false;
-
-      // 计算居中位置，考虑边界情况
-      panel.scrollLeft = Math.max(0, Math.min(
-        (scaledWidth - panelWidth) / 2,
-        scaledWidth - panelWidth
-      ));
-      panel.scrollTop = Math.max(0, Math.min(
-        (scaledHeight - panelHeight) / 2,
-        scaledHeight - panelHeight
-      ));
-    });
-
-  } catch (error) {
-    console.error('fitToWidth错误:', error);
-  } finally {
-    isFitting = false;
-  }
-}
+  // Re-center using current clientWidth after render (accounts for scrollbar changes)
+  panel.scrollLeft = Math.max(0, (w - panel.clientWidth) / 2)
+  panel.scrollTop = 0
+};
 
 const setViewMode = (mode) => {
   if (mode === viewMode.value) return;
@@ -3071,12 +3979,33 @@ const handleKeyUp = (e) => {
 
 // 31. 生命周期和事件监听
 onMounted(async () => {
+  console.log('[PDFJS][Reader] mounted')
+
+  document.addEventListener('selectionchange', () => {
+    if (!isPdfDebug()) return
+    try {
+      const sel = window.getSelection()
+      const text = sel?.toString() || ''
+      if (text.trim()) {
+        pdfDlog('selectionchange', {
+          len: text.trim().length,
+          sample: text.trim().slice(0, 80)
+        })
+      }
+    } catch {
+    }
+  })
+
   await store.get_librariesRoot()
   await updateMarkdownPath()
-  outlineStore.setJumpToLine(jumpToHeading)
+  outlineStore.setJumpToLine((p) => {
+    const n = Number(p)
+    if (Number.isFinite(n)) goToPage(n)
+  })
 
   const state = loadReaderState();
   bookmarks.value = [...new Set(state.bookmarks)].sort((a, b) => a - b);
+  pdfAnnotations.value = Array.isArray(state.pdfAnnotations) ? state.pdfAnnotations : [];
   totalReadingMs.value = state.totalReadingMs;
   completedAt.value = state.completedAt;
   completedReadingMs.value = state.completedReadingMs;
@@ -3111,25 +4040,20 @@ onMounted(async () => {
     persistReaderState();
   }, { deep: true });
 
+  watch(pdfAnnotations, () => {
+    if (!isHydrated.value) return;
+    persistReaderState();
+  }, { deep: true });
+
   // 添加全局键盘事件监听
   window.addEventListener('keyup', handleKeyUp);
 
-  // 单独处理尺寸适应
   nextTick(() => {
-    // 只保留一个触发源
     window.addEventListener('resize', debounce(() => {
       if (isNotesReady.value) fitToWidth()
     }, 300))
 
-    // 确保图像加载完成
-    const checkImageLoaded = () => {
-      if (pdfImage.value?.complete && pdfImage.value.naturalWidth > 0) {
-        fitToWidth()
-      } else {
-        setTimeout(checkImageLoaded, 100)
-      }
-    }
-    checkImageLoaded()
+    fitToWidth()
   })
 
   autoSaveInterval = setInterval(() => {
@@ -3159,7 +4083,7 @@ onBeforeUnmount(() => {
 });
 
 const handleResize = () => {
-  if (pdfPanel.value && pdfImage.value) {
+  if (pdfPanel.value && currentPageData.value) {
     fitToWidth();
   }
 };
@@ -3413,12 +4337,22 @@ button:disabled {
   display: flex;
   overflow: hidden;
   gap: 0;
+  min-height: 0;
+}
+
+.pdf-left-wrapper {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 /* 45. PDF渲染面板样式 */
 .pdf-render-panel {
-  flex: 0 0 v-bind(leftPanelWidth);
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   overflow: auto;
   position: relative;
   background-color: var(--guaxi-content-bg);
@@ -3426,32 +4360,108 @@ button:disabled {
   scroll-behavior: auto;
 }
 
-/* 46. 图片容器样式 */
+/* 46. PDF页面容器样式 */
 .pdf-image-container {
-  position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
-  height: 100%;
+  min-height: 0;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
+  padding: 16px 0;
   background-color: var(--guaxi-content-bg);
-  transform-origin: center center !important;
-  transition: transform 0.3s ease-out;
-  will-change: transform;
+  box-sizing: border-box;
 }
 
-/* 47. 渲染图片样式 */
-.rendered-pdf-image {
-  max-width: none !important;
-  max-height: none !important;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  transition: transform 0.2s ease;
+.outline-panel-wrapper {
+  flex: 0 0 260px;
+  min-width: 260px;
+  height: 100%;
+  overflow: auto;
+  border-right: 1px solid var(--guaxi-border);
+  box-sizing: border-box;
+  background-color: var(--guaxi-panel-bg);
+}
+
+.pdf-page-container {
+  position: relative;
+  display: inline-block;
+  background: #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.rendered-pdf-canvas {
+  display: block;
   pointer-events: none;
+}
+
+.pdf-annotation-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.pdf-text-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  line-height: 1;
+  user-select: text;
+  z-index: 3;
+}
+
+.pdf-editor-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.pdf-page-container.pdf-editor-active .pdf-editor-layer {
+  pointer-events: auto;
+}
+
+.pdf-highlight-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  z-index: 2.3;
+  pointer-events: none;
+}
+
+.pdf-highlight-rect {
+  position: absolute;
+  border-radius: 3px;
+}
+
+:deep(.pdf-annotation-layer a),
+:deep(.pdf-annotation-layer input),
+:deep(.pdf-annotation-layer textarea),
+:deep(.pdf-annotation-layer select),
+:deep(.pdf-annotation-layer button) {
+  pointer-events: auto;
+}
+
+:deep(.pdf-text-layer span) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0% 0%;
+  pointer-events: auto;
 }
 
 /* 48. 加载消息样式 */
@@ -3494,8 +4504,11 @@ button:disabled {
 }
 
 .outline-panel-wrapper {
-  width: 260px;
-  border-left: 1px solid var(--guaxi-border);
+  flex: 0 0 260px;
+  min-width: 260px;
+  height: 100%;
+  overflow: auto;
+  border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
 }
 
@@ -3646,6 +4659,212 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.pdf-annotation-toolbar-wrap {
+  position: sticky;
+  bottom: 14px;
+  z-index: 900;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pdf-annotation-toolbar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(20, 20, 20, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.pdf-annotations-panel {
+  flex: 0 0 320px;
+  width: 320px;
+  min-width: 280px;
+  height: 100%;
+  border-left: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pdf-annotations-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--guaxi-border);
+}
+
+.pdf-annotations-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.pdf-annotations-close {
+  width: 30px;
+  height: 28px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pdf-annotations-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pdf-annotations-empty {
+  padding: 10px 8px;
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+}
+
+.pdf-annotation-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-header-bg);
+  cursor: pointer;
+}
+
+.pdf-annotation-item-active {
+  box-shadow: 0 0 0 2px rgba(255, 180, 80, 0.35);
+  border-color: rgba(255, 180, 80, 0.65);
+}
+
+.pdf-annotation-item-meta {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  margin-bottom: 6px;
+}
+
+.pdf-annotation-item-text {
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.pdf-annotation-item-delete {
+  width: 30px;
+  height: 28px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pdf-annotation-item-delete:hover {
+  color: var(--guaxi-text-primary);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.pdf-annotation-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pdf-annotation-item-note {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  background: rgba(64, 196, 255, 0.08);
+  color: var(--guaxi-text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pdf-annotation-item-editor {
+  margin-top: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pdf-annotation-note-input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 86px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.pdf-annotation-note-save {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pdf-annotation-tool-btn {
+  width: 36px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pdf-annotation-tool-btn-active {
+  background: rgba(77, 171, 247, 0.35);
+  border-color: rgba(77, 171, 247, 0.65);
+}
+
+.pdf-annotation-tool-btn:hover {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.pdf-annotation-tool-btn:active {
+  transform: translateY(1px);
+}
+
 .inpage-search-bar {
   position: fixed;
   top: 64px;
@@ -3660,6 +4879,16 @@ button:disabled {
   border-radius: 10px;
   backdrop-filter: blur(8px);
   box-shadow: var(--guaxi-header-shadow);
+}
+
+.inpage-search-bar-pdf {
+  left: 16px;
+  right: auto;
+}
+
+.inpage-search-bar-md {
+  right: 16px;
+  left: auto;
 }
 
 .inpage-search-input {
@@ -3693,13 +4922,15 @@ button:disabled {
   cursor: pointer;
 }
 
-.markdown-content :deep(.inpage-match) {
+.markdown-content :deep(.inpage-match),
+.pdf-text-layer :deep(.inpage-match) {
   background: rgba(255, 230, 120, 0.55);
   border-radius: 4px;
   padding: 0 2px;
 }
 
-.markdown-content :deep(.inpage-match-active) {
+.markdown-content :deep(.inpage-match-active),
+.pdf-text-layer :deep(.inpage-match-active) {
   background: rgba(255, 180, 80, 0.75);
   box-shadow: 0 0 0 2px rgba(255, 180, 80, 0.35);
 }

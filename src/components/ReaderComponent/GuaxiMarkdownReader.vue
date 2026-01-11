@@ -464,6 +464,21 @@ const selectionPreviewHtml = computed(() => {
   return v ? md.render(v) : ''
 })
 
+
+const isSelectionDebug = () => {
+  try {
+    const v = String(window?.localStorage?.getItem('guaxi_debug_selection') || '').trim().toLowerCase()
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on'
+  } catch {
+    return false
+  }
+}
+
+const selDlog = (...args) => {
+  if (!isSelectionDebug()) return
+  console.log('[Selection][MarkdownReader]', ...args)
+}
+
 const inPageSearchVisible = ref(false)
 const inPageSearchQuery = ref('')
 const inPageSearchMatches = ref([])
@@ -1452,6 +1467,30 @@ const handleSelectionMouseUp = () => {
     closeSelectionToolbar()
     return
   }
+
+  selDlog('mouseUp', {
+    textLen: text.length,
+    textPreview: text.slice(0, 80),
+    rect: {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    },
+    commonTag: commonEl?.tagName || null,
+  })
+
+  selDlog('mouseUp', {
+    textLen: text.length,
+    textPreview: text.slice(0, 80),
+    rect: {
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    },
+    commonTag: commonEl?.tagName || null,
+  })
 
   selectionText.value = text
 
