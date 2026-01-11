@@ -99,7 +99,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
+      <div ref="markdownPanel" class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
@@ -697,6 +697,7 @@ const markdownLines = ref([]);
 const markdownFilePath = ref('')
 
 const epubInstance = ref(null);
+const boundEpubDocs = new WeakSet();
 
 // 笔记相关
 const showNotes = ref(false)
@@ -734,6 +735,71 @@ const log = {
   info: (...args) => console.info('[INFO]', ...args),
   warn: (...args) => console.warn('[WARN]', ...args),
   error: (...args) => console.error('[ERROR]', ...args)
+}
+
+const handleEpubContentsSelectionMouseUp = (contents) => {
+  const win = contents?.window
+  const selection = win && typeof win.getSelection === 'function' ? win.getSelection() : null
+  const text = selection ? selection.toString().trim() : ''
+
+  if (!text) {
+    closeSelectionToolbar()
+    return
+  }
+
+  if (!selection || selection.rangeCount === 0) {
+    closeSelectionToolbar()
+    return
+  }
+
+  const iframe = contents?.iframe
+  if (!(iframe instanceof HTMLElement)) {
+    closeSelectionToolbar()
+    return
+  }
+
+  const range = selection.getRangeAt(0)
+  const rect = range.getBoundingClientRect()
+  if (!rect || (rect.width === 0 && rect.height === 0)) {
+    closeSelectionToolbar()
+    return
+  }
+
+  const iframeRect = iframe.getBoundingClientRect()
+
+  selectionText.value = text
+
+  const pad = 8
+  const toolWidth = 140
+  const toolHeight = 40
+
+  const absTop = iframeRect.top + rect.top
+  const absBottom = iframeRect.top + rect.bottom
+  const absLeft = iframeRect.left + rect.left
+
+  let top = absTop - toolHeight - 8
+  if (top < pad) top = absBottom + 8
+
+  let left = absLeft
+  left = Math.max(pad, Math.min(left, window.innerWidth - toolWidth - pad))
+
+  selectionToolbarTop.value = Math.round(top)
+  selectionToolbarLeft.value = Math.round(left)
+  selectionToolbarVisible.value = true
+}
+
+const bindEpubSelectionListeners = (rendition) => {
+  const list = rendition && typeof rendition.getContents === 'function' ? rendition.getContents() : []
+
+  for (const contents of Array.isArray(list) ? list : []) {
+    const doc = contents?.document
+    if (!doc || !(doc instanceof Document)) continue
+    if (boundEpubDocs.has(doc)) continue
+    boundEpubDocs.add(doc)
+
+    doc.addEventListener('mousedown', () => closeSelectionToolbar(), true)
+    doc.addEventListener('mouseup', () => handleEpubContentsSelectionMouseUp(contents), true)
+  }
 }
 
 // 修改后的 loadWithEpubPreview 函数
@@ -779,6 +845,7 @@ const loadWithEpubPreview = async () => {
     rendition.on('rendered', () => {
       nextTick(() => {
         adjustContainerHeight(rendition);
+        bindEpubSelectionListeners(rendition);
       });
     });
 
@@ -2238,6 +2305,24 @@ const handleWheelZoom = (e) => {
   }
 }
 
+const syncMarkdownToChapter = (chapter) => {
+  const panel = markdownPanel.value
+  if (!panel) return
+
+  nextTick(() => {
+    const h1 = panel.querySelectorAll('.markdown-content h1')
+    if (h1 && h1.length) {
+      const idx = Math.max(0, Math.min(chapter - 1, h1.length - 1))
+      h1[idx].scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    const maxTop = Math.max(0, panel.scrollHeight - panel.clientHeight)
+    const ratio = totalPages.value > 1 ? (chapter - 1) / (totalPages.value - 1) : 0
+    panel.scrollTo({ top: maxTop * ratio, behavior: 'smooth' })
+  })
+}
+
 const nextPage = async () => {
   if (currentPage.value >= totalPages.value || !epubInstance.value) return;
 
@@ -2246,10 +2331,11 @@ const nextPage = async () => {
     currentPage.value++;
     jumpPage.value = currentPage.value;
 
-    // 翻页后调整高度
     if (epubInstance.value.rendition) {
       adjustContainerHeight(epubInstance.value.rendition);
     }
+
+    syncMarkdownToChapter(currentPage.value)
   } catch (error) {
     console.error('翻页失败:', error);
     message.error('翻页失败');
@@ -2264,10 +2350,11 @@ const prevPage = async () => {
     currentPage.value--;
     jumpPage.value = currentPage.value;
 
-    // 翻页后调整高度
     if (epubInstance.value.rendition) {
       adjustContainerHeight(epubInstance.value.rendition);
     }
+
+    syncMarkdownToChapter(currentPage.value)
   } catch (error) {
     console.error('翻页失败:', error);
     message.error('翻页失败');
@@ -2284,6 +2371,8 @@ const goToPage = async (page) => {
     await epubInstance.value.rendition.display(targetPage);
     currentPage.value = targetPage;
     jumpPage.value = targetPage;
+
+    syncMarkdownToChapter(targetPage)
   } catch (error) {
     console.error('跳转页面失败:', error);
     message.error('跳转页面失败');
@@ -3281,13 +3370,14 @@ button:disabled {
   right: -600px;
   width: 600px;
   height: 100%;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
   transition: right 0.3s ease;
   z-index: 100;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #e9ecef;
+  border-left: 1px solid var(--guaxi-border);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 14px;
 }

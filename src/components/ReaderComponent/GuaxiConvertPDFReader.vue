@@ -121,7 +121,7 @@
 
         <!-- 修改PDF渲染区域 -->
         <div class="pdf-render-panel" v-show="viewMode !== 'full-right'" ref="pdfPanel" @wheel="handleWheelZoom" @mousedown="startDrag"
-          @mousemove="handleDrag" @mouseup="endDrag" @mouseleave="endDrag" @mouseenter="setScrollTargetFromEvent"
+          @mousemove="handleDrag" @mouseup="handlePdfPanelMouseUp" @mouseleave="endDrag" @mouseenter="setScrollTargetFromEvent"
           :style="{ cursor: isDragging ? 'grabbing' : 'text' }">
 
           <div class="pdf-image-container">
@@ -1779,8 +1779,8 @@ const handleSelectionMouseUp = () => {
     return
   }
 
-  const container = markdownContainer.value
-  if (!container || !selection || selection.rangeCount === 0) {
+  const containers = [markdownContainer.value, pdfTextLayer.value, pdfPageContainer.value].filter((x) => x && x instanceof HTMLElement)
+  if (!selection || selection.rangeCount === 0 || !containers.length) {
     closeSelectionToolbar()
     return
   }
@@ -1788,7 +1788,8 @@ const handleSelectionMouseUp = () => {
   const range = selection.getRangeAt(0)
   const common = range.commonAncestorContainer
   const commonEl = common instanceof Element ? common : common.parentElement
-  if (!commonEl || !container.contains(commonEl)) {
+  const container = commonEl ? containers.find((x) => x.contains(commonEl)) : null
+  if (!container) {
     closeSelectionToolbar()
     return
   }
@@ -3529,6 +3530,11 @@ const endDrag = () => {
     resetDragState();
   }
 };
+
+const handlePdfPanelMouseUp = () => {
+  endDrag()
+  handleSelectionMouseUp()
+}
 
 const resetDragState = () => {
   isDragging.value = false;

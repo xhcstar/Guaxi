@@ -84,7 +84,7 @@
         </div>
 
         <!-- Markdown渲染区域 -->
-        <div class="markdown-source-panel" ref="sourcePanel" v-show="viewMode !== 'full-right'">
+        <div class="markdown-source-panel" ref="sourcePanel" v-show="viewMode !== 'full-right'" @mouseup="handleSelectionMouseUp">
           <div class="markdown-source-container">
             <!-- Markdown原文内容 -->
             <div v-if="markdownContent" class="markdown-source-content" ref="sourceContent">
@@ -462,6 +462,7 @@ onBeforeUnmount(() => {
 
 const markdownContainer = ref(null);
 const sourceContent = ref(null);
+const sourcePanel = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
 let notesRenderToken = 0;
@@ -1502,8 +1503,8 @@ const handleSelectionMouseUp = () => {
     return
   }
 
-  const container = markdownContainer.value
-  if (!container || !selection || selection.rangeCount === 0) {
+  const containers = [markdownContainer.value, sourceContent.value].filter((x) => x && x instanceof HTMLElement)
+  if (!selection || selection.rangeCount === 0 || !containers.length) {
     closeSelectionToolbar()
     return
   }
@@ -1511,7 +1512,8 @@ const handleSelectionMouseUp = () => {
   const range = selection.getRangeAt(0)
   const common = range.commonAncestorContainer
   const commonEl = common instanceof Element ? common : common.parentElement
-  if (!commonEl || !container.contains(commonEl)) {
+  const container = commonEl ? containers.find((x) => x.contains(commonEl)) : null
+  if (!container) {
     closeSelectionToolbar()
     return
   }
@@ -2173,10 +2175,13 @@ const goToPage = (page) => {
   currentPage.value = targetPage;
   jumpPage.value = targetPage;
 
-  const panel = markdownPanel.value;
-  if (!panel) return;
-  const viewportHeight = panel.clientHeight || 1;
-  panel.scrollTo({ top: (targetPage - 1) * viewportHeight, behavior: 'smooth' });
+  const targets = [markdownPanel.value, sourcePanel.value].filter((x) => x && x instanceof HTMLElement)
+  if (!targets.length) return
+
+  for (const el of targets) {
+    const viewportHeight = el.clientHeight || 1
+    el.scrollTo({ top: (targetPage - 1) * viewportHeight, behavior: 'smooth' })
+  }
 };
 
 const toggleNotesPanel = () => {
@@ -3169,13 +3174,14 @@ button:disabled {
   right: -600px;
   width: 600px;
   height: 100%;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
   transition: right 0.3s ease;
   z-index: 100;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #e9ecef;
+  border-left: 1px solid var(--guaxi-border);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 14px;
 }
