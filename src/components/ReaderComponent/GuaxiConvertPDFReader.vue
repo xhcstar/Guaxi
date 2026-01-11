@@ -133,15 +133,18 @@
           </template>
         </div>
 
-        <div v-if="inPageSearchVisible" class="inpage-search-bar" @mousedown.stop>
-          <input ref="inPageSearchInput" class="inpage-search-input" v-model="inPageSearchQuery" placeholder="页内搜索"
-            @input="applyInPageSearch" @keydown.enter.prevent="gotoNextSearchMatch"
-            @keydown.shift.enter.prevent="gotoPrevSearchMatch" @keydown.esc.prevent="closeInPageSearch" />
+        <div v-if="inPageSearchVisible" class="inpage-search-bar" @mousedown.stop @click.stop @dblclick.stop>
+          <input ref="inPageSearchInput" class="inpage-search-input" v-model="inPageSearchQuery" placeholder="全文搜索"
+            @input="handleSearchInput" @keydown.enter.prevent="gotoNextSearch"
+            @keydown.shift.enter.prevent="gotoPrevSearch" @keydown.esc.prevent="closeInPageSearch" />
           <span class="inpage-search-count">{{ inPageSearchCountText }}</span>
-          <button class="inpage-search-btn" type="button" title="上一个" @click="gotoPrevSearchMatch">
+          <button class="inpage-search-btn" type="button" title="跳转" @click="jumpToActiveSearchResult">
+            <n-icon :component="SearchOutline" />
+          </button>
+          <button class="inpage-search-btn" type="button" title="上一个" @click="gotoPrevSearch">
             <n-icon :component="ArrowBackOutline" />
           </button>
-          <button class="inpage-search-btn" type="button" title="下一个" @click="gotoNextSearchMatch">
+          <button class="inpage-search-btn" type="button" title="下一个" @click="gotoNextSearch">
             <n-icon :component="ArrowForwardOutline" />
           </button>
           <button class="inpage-search-btn" type="button" title="关闭" @click="closeInPageSearch">
@@ -150,19 +153,24 @@
         </div>
 
         <div v-if="selectionToolbarVisible" class="selection-toolbar"
-          :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }" @mousedown.stop>
-          <button class="selection-tool-btn" type="button" title="翻译" :disabled="selectionBusy || !selectionText"
-            @click="translateSelection">
-            <n-icon :component="LanguageOutline" />
-          </button>
-          <button class="selection-tool-btn" type="button" title="查询" :disabled="selectionBusy || !selectionText"
-            @click="querySelection">
-            <n-icon :component="SearchOutline" />
-          </button>
-          <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
-            @click="insertSelectionResult">
-            <n-icon :component="AddOutline" />
-          </button>
+          :style="{ top: `${selectionToolbarTop}px`, left: `${selectionToolbarLeft}px` }" @mousedown.stop @click.stop @dblclick.stop>
+          <div class="selection-toolbar-actions">
+            <button class="selection-tool-btn" type="button" title="翻译" :disabled="selectionBusy || !selectionText"
+              @click="translateSelection">
+              <n-icon :component="LanguageOutline" />
+            </button>
+            <button class="selection-tool-btn" type="button" title="查询" :disabled="selectionBusy || !selectionText"
+              @click="querySelection">
+              <n-icon :component="SearchOutline" />
+            </button>
+            <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
+              @click="insertSelectionResult">
+              <n-icon :component="AddOutline" />
+            </button>
+          </div>
+
+          <div v-if="selectionBusy" class="selection-toolbar-body selection-toolbar-loading">正在翻译...</div>
+          <div v-else-if="selectionInsertText" class="selection-toolbar-body" v-html="selectionPreviewHtml"></div>
         </div>
 
         <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
@@ -477,13 +485,31 @@ const selectionText = ref('')
 const selectionBusy = ref(false)
 const selectionInsertText = ref('')
 
+const selectionPreviewHtml = computed(() => {
+  const v = selectionInsertText.value.trim()
+  return v ? md.render(v) : ''
+})
+
 const inPageSearchVisible = ref(false)
 const inPageSearchQuery = ref('')
 const inPageSearchMatches = ref([])
 const inPageSearchActiveIndex = ref(-1)
 const inPageSearchInput = ref(null)
 
+const fullSearchBusy = ref(false)
+const fullSearchResults = ref([])
+const fullSearchActiveIndex = ref(-1)
+let fullSearchTimer = 0
+
 const inPageSearchCountText = computed(() => {
+  if (fullSearchBusy.value) return '搜索中…'
+
+  const totalResults = fullSearchResults.value.length
+  if (totalResults) {
+    const i = Math.max(0, fullSearchActiveIndex.value)
+    return `${Math.min(totalResults, i + 1)}/${totalResults}`
+  }
+
   const total = inPageSearchMatches.value.length
   if (!total) return '0/0'
   return `${Math.max(0, inPageSearchActiveIndex.value) + 1}/${total}`
@@ -1652,6 +1678,44 @@ const gotoPrevSearchMatch = () => {
   updateActiveSearchMatch(inPageSearchActiveIndex.value - 1)
 }
 
+const updateActiveFullSearchResult = (nextIndex) => {
+  const total = fullSearchResults.value.length
+  if (!total) {
+    fullSearchActiveIndex.value = -1
+    return
+  }
+  const normalized = ((nextIndex % total) + total) % total
+  fullSearchActiveIndex.value = normalized
+}
+
+const jumpToActiveSearchResult = () => {
+  if (!fullSearchResults.value.length) return
+
+  const i = fullSearchActiveIndex.value >= 0 ? fullSearchActiveIndex.value : 0
+  const hit = fullSearchResults.value[i]
+  if (!hit?.page) return
+
+  goToPage(hit.page)
+}
+
+const gotoNextSearch = () => {
+  if (fullSearchResults.value.length) {
+    updateActiveFullSearchResult(fullSearchActiveIndex.value + 1)
+    jumpToActiveSearchResult()
+    return
+  }
+  gotoNextSearchMatch()
+}
+
+const gotoPrevSearch = () => {
+  if (fullSearchResults.value.length) {
+    updateActiveFullSearchResult(fullSearchActiveIndex.value - 1)
+    jumpToActiveSearchResult()
+    return
+  }
+  gotoPrevSearchMatch()
+}
+
 const clearInPageSearchHighlights = () => {
   const container = markdownContainer.value
   if (!container) return
@@ -1730,6 +1794,73 @@ const applyInPageSearch = () => {
   }
 }
 
+const invokeWithTimeout = (p, ms) => {
+  let t = 0
+  const timeout = new Promise((_, reject) => {
+    t = window.setTimeout(() => reject(new Error('timeout')), ms)
+  })
+  return Promise.race([p, timeout]).finally(() => {
+    if (t) {
+      clearTimeout(t)
+    }
+  })
+}
+
+const searchFullMarkdownFile = () => {
+  if (fullSearchTimer) {
+    clearTimeout(fullSearchTimer)
+    fullSearchTimer = 0
+  }
+
+  const query = inPageSearchQuery.value.trim()
+  if (!query) {
+    fullSearchBusy.value = false
+    fullSearchResults.value = []
+    fullSearchActiveIndex.value = -1
+    return
+  }
+
+  fullSearchTimer = window.setTimeout(async () => {
+    try {
+      fullSearchBusy.value = true
+      fullSearchResults.value = []
+      fullSearchActiveIndex.value = -1
+
+      if (!markdownFilePath.value) {
+        await updateMarkdownPath()
+      }
+
+      const resp = await invokeWithTimeout(
+        invoke('search_paginated_markdown', {
+          filepath: markdownFilePath.value,
+          query
+        }),
+        8000
+      )
+
+      if (!resp?.success) {
+        throw new Error(resp?.error || 'Failed to search markdown')
+      }
+
+      const hits = Array.isArray(resp.matches) ? resp.matches : []
+      fullSearchResults.value = hits
+
+      const currentIdx = hits.findIndex((m) => m?.page === currentPage.value)
+      fullSearchActiveIndex.value = currentIdx >= 0 ? currentIdx : (hits.length ? 0 : -1)
+    } catch {
+      fullSearchResults.value = []
+      fullSearchActiveIndex.value = -1
+    } finally {
+      fullSearchBusy.value = false
+    }
+  }, 250)
+}
+
+const handleSearchInput = () => {
+  applyInPageSearch()
+  searchFullMarkdownFile()
+}
+
 const openInPageSearch = async () => {
   inPageSearchVisible.value = true
   await nextTick()
@@ -1738,12 +1869,22 @@ const openInPageSearch = async () => {
     input.focus()
     input.select()
   }
-  applyInPageSearch()
+  handleSearchInput()
 }
 
 const closeInPageSearch = () => {
   inPageSearchVisible.value = false
   inPageSearchQuery.value = ''
+
+  if (fullSearchTimer) {
+    clearTimeout(fullSearchTimer)
+    fullSearchTimer = 0
+  }
+
+  fullSearchBusy.value = false
+  fullSearchResults.value = []
+  fullSearchActiveIndex.value = -1
+
   clearInPageSearchHighlights()
   inPageSearchMatches.value = []
   inPageSearchActiveIndex.value = -1
@@ -1854,6 +1995,11 @@ const loadMarkdownPage = async (pageNum) => {
     );
     console.log("markdownLines.value:", markdownLines.value);
     generateOutlineFromMarkdown(markdownContent.value);
+
+    await nextTick()
+    if (inPageSearchVisible.value && inPageSearchQuery.value.trim()) {
+      applyInPageSearch()
+    }
 
   } catch (error) {
     console.error('加载Markdown失败:', error);
@@ -3437,22 +3583,58 @@ button:disabled {
   position: fixed;
   z-index: 1100;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   padding: 6px;
-  background: rgba(20, 20, 20, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   backdrop-filter: blur(8px);
+  box-shadow: var(--guaxi-header-shadow);
+  color: var(--guaxi-text-primary);
+}
+
+.selection-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.selection-toolbar-body {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--guaxi-header-bg);
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.selection-toolbar-body :deep(p) {
+  margin: 0 0 6px;
+}
+
+.selection-toolbar-body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.selection-toolbar-loading {
+  opacity: 0.85;
 }
 
 .selection-tool-btn {
   width: 32px;
   height: 28px;
-  border: 0;
+  border: 1px solid var(--guaxi-border);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3473,11 +3655,11 @@ button:disabled {
   align-items: center;
   gap: 6px;
   padding: 6px;
-  background: rgba(20, 20, 20, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--guaxi-panel-bg);
+  border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   backdrop-filter: blur(8px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--guaxi-header-shadow);
 }
 
 .inpage-search-input {
@@ -3485,15 +3667,15 @@ button:disabled {
   height: 28px;
   padding: 0 10px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
   outline: none;
 }
 
 .inpage-search-count {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--guaxi-text-secondary);
   min-width: 48px;
   text-align: center;
 }
@@ -3501,10 +3683,10 @@ button:disabled {
 .inpage-search-btn {
   width: 32px;
   height: 28px;
-  border: 0;
+  border: 1px solid var(--guaxi-border);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  background: var(--guaxi-header-bg);
+  color: var(--guaxi-text-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;

@@ -178,6 +178,173 @@ pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownRes
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct PaginatedSearchMatch {
+    page: usize,
+    count: usize,
+    snippet: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PaginatedSearchResponse {
+    success: bool,
+    matches: Vec<PaginatedSearchMatch>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn search_paginated_markdown(filepath: String, query: String) -> PaginatedSearchResponse {
+    let q = query.trim();
+    if q.is_empty() {
+        return PaginatedSearchResponse {
+            success: true,
+            matches: vec![],
+            error: None,
+        };
+    }
+
+    info!("search_paginated_markdown: {}", filepath);
+
+    fn lower_ascii(b: u8) -> u8 {
+        if (b'A'..=b'Z').contains(&b) {
+            b + 32
+        } else {
+            b
+        }
+    }
+
+    fn count_and_first_non_overlapping(hay: &str, needle: &str) -> (usize, Option<usize>) {
+        if needle.is_empty() {
+            return (0, None);
+        }
+
+        let mut count = 0usize;
+        let mut first: Option<usize> = None;
+        let mut cursor = 0usize;
+
+        while cursor <= hay.len() {
+            let Some(pos) = hay[cursor..].find(needle) else {
+                break;
+            };
+            let abs = cursor + pos;
+            if first.is_none() {
+                first = Some(abs);
+            }
+            count += 1;
+            cursor = abs + needle.len();
+            if cursor > hay.len() {
+                break;
+            }
+        }
+
+        (count, first)
+    }
+
+    fn count_and_first_ascii_ci_non_overlapping(hay: &str, needle_lower: &[u8]) -> (usize, Option<usize>) {
+        if needle_lower.is_empty() {
+            return (0, None);
+        }
+
+        let h = hay.as_bytes();
+        let n = needle_lower;
+        if n.len() > h.len() {
+            return (0, None);
+        }
+
+        let mut count = 0usize;
+        let mut first: Option<usize> = None;
+        let mut i = 0usize;
+
+        while i + n.len() <= h.len() {
+            let mut ok = true;
+            for j in 0..n.len() {
+                if lower_ascii(h[i + j]) != n[j] {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if ok {
+                if first.is_none() {
+                    first = Some(i);
+                }
+                count += 1;
+                i += n.len();
+            } else {
+                i += 1;
+            }
+        }
+
+        (count, first)
+    }
+
+    match std::fs::read_to_string(&filepath) {
+        Ok(content) => {
+            let pages: Vec<&str> = content.split("\n{").collect();
+
+            let need_ascii_ci = q.bytes().any(|b| (b'A'..=b'Z').contains(&b) || (b'a'..=b'z').contains(&b));
+            let needle_lower: Vec<u8> = q.as_bytes().iter().map(|b| lower_ascii(*b)).collect();
+
+            let mut matches = Vec::new();
+
+            for (i, raw_page) in pages.iter().enumerate() {
+                let page_content = raw_page
+                    .trim_start_matches(|c: char| c.is_numeric())
+                    .trim_start_matches('}')
+                    .trim_start_matches('-')
+                    .trim();
+
+                if page_content.is_empty() {
+                    continue;
+                }
+
+                let (count, first_pos) = if need_ascii_ci {
+                    count_and_first_ascii_ci_non_overlapping(page_content, &needle_lower)
+                } else {
+                    count_and_first_non_overlapping(page_content, q)
+                };
+
+                if count == 0 {
+                    continue;
+                }
+
+                let mut snippet = String::new();
+                if let Some(p) = first_pos {
+                    let mut start = p.saturating_sub(30);
+                    while start > 0 && !page_content.is_char_boundary(start) {
+                        start -= 1;
+                    }
+
+                    let mut end = std::cmp::min(page_content.len(), p + q.len() + 30);
+                    while end < page_content.len() && !page_content.is_char_boundary(end) {
+                        end += 1;
+                    }
+
+                    snippet = page_content[start..end].replace(['\n', '\r', '\t'], " ");
+                    snippet = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+                }
+
+                matches.push(PaginatedSearchMatch {
+                    page: i + 1,
+                    count,
+                    snippet,
+                });
+            }
+
+            PaginatedSearchResponse {
+                success: true,
+                matches,
+                error: None,
+            }
+        }
+        Err(e) => PaginatedSearchResponse {
+            success: false,
+            matches: vec![],
+            error: Some(format!("Failed to read markdown file: {}", e)),
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn get_converted_pdf_page(request: Value) -> Result<String, String> {
     info!("get_converted_pdf_page: {:?}", request);
