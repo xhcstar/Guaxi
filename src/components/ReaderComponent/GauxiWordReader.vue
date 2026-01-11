@@ -86,7 +86,7 @@
         <!-- 左侧Word文档预览区域 -->
         <div class="word-source-panel" v-show="viewMode !== 'full-right'">
           <div class="word-source-container">
-            <div ref="wordPreviewContainer" class="word-preview-container"></div>
+            <div ref="wordPreviewContainer" class="word-preview-container" @mouseup="handleSelectionMouseUp"></div>
             <!-- 加载状态 -->
             <div v-if="isLoading" class="word-loading-message">
               正在加载Word文件...
@@ -99,7 +99,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
+      <div ref="markdownPanel" class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
@@ -1525,8 +1525,8 @@ const handleSelectionMouseUp = () => {
     return
   }
 
-  const container = markdownContainer.value
-  if (!container || !selection || selection.rangeCount === 0) {
+  const containers = [markdownContainer.value, wordPreviewContainer.value].filter((x) => x && x instanceof HTMLElement)
+  if (!selection || selection.rangeCount === 0 || !containers.length) {
     closeSelectionToolbar()
     return
   }
@@ -1534,7 +1534,8 @@ const handleSelectionMouseUp = () => {
   const range = selection.getRangeAt(0)
   const common = range.commonAncestorContainer
   const commonEl = common instanceof Element ? common : common.parentElement
-  if (!commonEl || !container.contains(commonEl)) {
+  const container = commonEl ? containers.find((x) => x.contains(commonEl)) : null
+  if (!container) {
     closeSelectionToolbar()
     return
   }
@@ -2167,19 +2168,13 @@ const handleWheelZoom = (e) => {
 
 const prevPage = () => {
   if (currentPage.value > 1) {
-    const newPage = currentPage.value - 1;
-    currentPage.value = newPage;
-    jumpPage.value = newPage;
-    loadMarkdownPage();
+    goToPage(currentPage.value - 1)
   }
 };
 
 const nextPage = () => {
   if (currentPage.value < totalPages.value) {
-    const newPage = currentPage.value + 1;
-    currentPage.value = newPage;
-    jumpPage.value = newPage;
-    loadMarkdownPage();
+    goToPage(currentPage.value + 1)
   }
 };
 
@@ -2189,10 +2184,13 @@ const goToPage = (page) => {
   currentPage.value = targetPage;
   jumpPage.value = targetPage;
 
-  const container = wordPreviewContainer.value;
-  if (!container) return;
-  const viewportHeight = container.clientHeight || 1;
-  container.scrollTo({ top: (targetPage - 1) * viewportHeight, behavior: 'smooth' });
+  const targets = [wordPreviewContainer.value, markdownPanel.value].filter((x) => x && x instanceof HTMLElement)
+  if (!targets.length) return
+
+  for (const el of targets) {
+    const viewportHeight = el.clientHeight || 1
+    el.scrollTo({ top: (targetPage - 1) * viewportHeight, behavior: 'smooth' })
+  }
 };
 
 const toggleNotesPanel = () => {

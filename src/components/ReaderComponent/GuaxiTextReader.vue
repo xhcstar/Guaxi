@@ -87,7 +87,7 @@
         <!-- 左侧text文档预览区域 -->
         <div class="text-source-panel" v-show="viewMode !== 'full-right'">
           <div class="text-source-container">
-            <div ref="textPreviewContainer" class="text-preview-container"></div>
+            <div ref="textPreviewContainer" class="text-preview-container" @mouseup="handleSelectionMouseUp"></div>
             <!-- 加载状态 -->
             <div v-if="isLoading" class="text-loading-message">
               正在加载文本文件...
@@ -100,7 +100,7 @@
       <div class="resize-handle" v-show="viewMode === 'split'" @mousedown="startResize"></div>
 
       <!-- 右侧Markdown内容 -->
-      <div class="markdown-panel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
+      <div class="markdown-panel" ref="markdownPanel" v-show="viewMode !== 'full-left'" @click="handleMarkdownClickAlt" @dblclick="handleMarkdownClick"
         @mousemove="handleMarkdownHover" @mouseleave="handleMarkdownLeave" @mouseenter="setScrollTargetFromEvent"
         @mouseup="handleSelectionMouseUp">
         <div class="markdown-content" ref="markdownContainer">
@@ -1659,8 +1659,8 @@ const handleSelectionMouseUp = () => {
     return
   }
 
-  const container = markdownContainer.value
-  if (!container || !selection || selection.rangeCount === 0) {
+  const containers = [markdownContainer.value, textPreviewContainer.value].filter((x) => x && x instanceof HTMLElement)
+  if (!selection || selection.rangeCount === 0 || !containers.length) {
     closeSelectionToolbar()
     return
   }
@@ -1668,7 +1668,8 @@ const handleSelectionMouseUp = () => {
   const range = selection.getRangeAt(0)
   const common = range.commonAncestorContainer
   const commonEl = common instanceof Element ? common : common.parentElement
-  if (!commonEl || !container.contains(commonEl)) {
+  const container = commonEl ? containers.find((x) => x.contains(commonEl)) : null
+  if (!container) {
     closeSelectionToolbar()
     return
   }
@@ -2318,16 +2319,13 @@ const goToPage = (page) => {
   currentPage.value = pageNum;
   jumpPage.value = pageNum;
 
-  if (!textPreviewContainer.value) return;
+  const targets = [textPreviewContainer.value, markdownPanel.value].filter((x) => x && x instanceof HTMLElement)
+  if (!targets.length) return
 
-  const container = textPreviewContainer.value;
-  const viewportHeight = container.clientHeight;
-  const scrollTop = (pageNum - 1) * viewportHeight;
-
-  container.scrollTo({
-    top: scrollTop,
-    behavior: 'smooth'
-  });
+  for (const el of targets) {
+    const viewportHeight = el.clientHeight || 1
+    el.scrollTo({ top: (pageNum - 1) * viewportHeight, behavior: 'smooth' })
+  }
 };
 
 const toggleNotesPanel = () => {
@@ -3476,13 +3474,14 @@ button:disabled {
   right: -600px;
   width: 600px;
   height: 100%;
-  background-color: #ffffff;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
   transition: right 0.3s ease;
   z-index: 100;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #e9ecef;
+  border-left: 1px solid var(--guaxi-border);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 14px;
 }
