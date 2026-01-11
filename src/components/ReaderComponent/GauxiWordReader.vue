@@ -70,17 +70,20 @@
 
     <!-- 主内容区 -->
     <div class="word-main-content">
-      <!-- 左侧Word文档预览区域 -->
-      <div class="word-source-panel" v-show="viewMode !== 'full-right'" :style="{ width: leftPanelWidth }">
-        <div class="word-source-container">
-          <div ref="wordPreviewContainer" class="word-preview-container"></div>
-          <!-- 加载状态 -->
-          <div v-if="isLoading" class="word-loading-message">
-            正在加载Word文件...
-          </div>
-        </div>
-        <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
+      <div class="word-left-wrapper" v-show="viewMode !== 'full-right' || showOutline" :style="{ width: leftPanelWidth }">
+        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop>
           <GuaxiOutline />
+        </div>
+
+        <!-- 左侧Word文档预览区域 -->
+        <div class="word-source-panel" v-show="viewMode !== 'full-right'">
+          <div class="word-source-container">
+            <div ref="wordPreviewContainer" class="word-preview-container"></div>
+            <!-- 加载状态 -->
+            <div v-if="isLoading" class="word-loading-message">
+              正在加载Word文件...
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2193,7 +2196,7 @@ const startResize = (e) => {
     startX.value = e.clientX;
 
     // 修改选择器为正确的面板类名
-    const leftPanel = document.querySelector('.word-source-panel');
+    const leftPanel = document.querySelector('.word-left-wrapper');
     if (!leftPanel) {
       throw new Error('左侧面板元素未找到');
     }
@@ -2770,13 +2773,22 @@ watchEffect((onInvalidate) => {
   position: relative;
 }
 
+.word-left-wrapper {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 /* 左侧Word文档区域 */
 .word-source-panel {
+  flex: 1 1 auto;
+  min-width: 0;
   height: 100%;
   overflow: auto;
   position: relative;
   background-color: white;
-  min-width: 30%;
 }
 
 .word-preview-container {
@@ -3056,9 +3068,13 @@ button:disabled {
 }
 
 .outline-panel-wrapper {
-  width: 260px;
-  border-left: 1px solid var(--guaxi-border);
+  flex: 0 0 260px;
+  min-width: 260px;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
+  background-color: var(--guaxi-panel-bg);
 }
 
 .markdown-content {

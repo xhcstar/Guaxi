@@ -70,13 +70,19 @@
 
     <!-- 主内容区 -->
     <div class="epub-main-content">
-      <!-- 左侧epub文档预览区域 -->
-      <div class="epub-source-panel" v-show="viewMode !== 'full-right'" :style="{ width: leftPanelWidth }">
-        <div class="epub-source-container">
-          <div ref="epubPreviewContainer" class="epub-preview-container"></div>
-          <!-- 加载状态 -->
-          <div v-if="isLoading" class="epub-loading-message">
-            正在加载epub文件...
+      <div class="epub-left-wrapper" v-show="viewMode !== 'full-right' || showOutline" :style="{ width: leftPanelWidth }">
+        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop>
+          <GuaxiOutline />
+        </div>
+
+        <!-- 左侧epub文档预览区域 -->
+        <div class="epub-source-panel" v-show="viewMode !== 'full-right'">
+          <div class="epub-source-container">
+            <div ref="epubPreviewContainer" class="epub-preview-container"></div>
+            <!-- 加载状态 -->
+            <div v-if="isLoading" class="epub-loading-message">
+              正在加载epub文件...
+            </div>
           </div>
         </div>
       </div>
@@ -151,9 +157,6 @@
           <div v-else-if="selectionInsertText" class="selection-toolbar-body" v-html="selectionPreviewHtml"></div>
         </div>
 
-        <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
-          <GuaxiOutline />
-        </div>
       </div>
     </div>
 
@@ -2287,7 +2290,7 @@ const startResize = (e) => {
 
   isResizing.value = true;
   startX.value = e.clientX;
-  startLeftWidth.value = parseInt(document.querySelector('.epub-source-panel').offsetWidth, 10);
+  startLeftWidth.value = parseInt(document.querySelector('.epub-left-wrapper').offsetWidth, 10);
 
   // 临时禁用EPUB区域的鼠标事件
   const epubContainer = document.querySelector('.epub-preview-container');
@@ -2951,11 +2954,18 @@ button:disabled {
 }
 
 /* EPUB渲染面板样式 */
+.epub-left-wrapper {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 .epub-source-panel {
   position: relative;
-  width: v-bind(leftPanelWidth);
-  min-width: 20%;
-  max-width: 80%;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
   /* 隐藏溢出内容 */
@@ -3027,9 +3037,13 @@ button:disabled {
 }
 
 .outline-panel-wrapper {
-  width: 260px;
-  border-left: 1px solid var(--guaxi-border);
+  flex: 0 0 260px;
+  min-width: 260px;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
+  background-color: var(--guaxi-panel-bg);
 }
 
 /* Markdown内容样式 */

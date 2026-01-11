@@ -71,13 +71,19 @@
 
     <!-- 主内容区 -->
     <div class="text-main-content">
-      <!-- 左侧text文档预览区域 -->
-      <div class="text-source-panel" v-show="viewMode !== 'full-right'" :style="{ width: leftPanelWidth }">
-        <div class="text-source-container">
-          <div ref="textPreviewContainer" class="text-preview-container"></div>
-          <!-- 加载状态 -->
-          <div v-if="isLoading" class="text-loading-message">
-            正在加载文本文件...
+      <div class="text-left-wrapper" v-show="viewMode !== 'full-right' || showOutline" :style="{ width: leftPanelWidth }">
+        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop>
+          <GuaxiOutline />
+        </div>
+
+        <!-- 左侧text文档预览区域 -->
+        <div class="text-source-panel" v-show="viewMode !== 'full-right'">
+          <div class="text-source-container">
+            <div ref="textPreviewContainer" class="text-preview-container"></div>
+            <!-- 加载状态 -->
+            <div v-if="isLoading" class="text-loading-message">
+              正在加载文本文件...
+            </div>
           </div>
         </div>
       </div>
@@ -152,9 +158,6 @@
           <div v-else-if="selectionInsertText" class="selection-toolbar-body" v-html="selectionPreviewHtml"></div>
         </div>
 
-        <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
-          <GuaxiOutline />
-        </div>
       </div>
     </div>
 
@@ -2304,7 +2307,7 @@ const startResize = (e) => {
     startX.value = e.clientX;
 
     // 修改选择器为正确的面板类名
-    const leftPanel = document.querySelector('.text-source-panel');
+    const leftPanel = document.querySelector('.text-left-wrapper');
     if (!leftPanel) {
       throw new Error('左侧面板元素未找到');
     }
@@ -2892,13 +2895,22 @@ watchEffect((onInvalidate) => {
   position: relative;
 }
 
+.text-left-wrapper {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 /* 左侧text文档区域 */
 .text-source-panel {
+  flex: 1 1 auto;
+  min-width: 0;
   height: 100%;
   overflow: auto;
   position: relative;
   background-color: white;
-  min-width: 30%;
 }
 
 .text-preview-container {
@@ -3202,9 +3214,13 @@ button:disabled {
 }
 
 .outline-panel-wrapper {
-  width: 260px;
-  border-left: 1px solid var(--guaxi-border);
+  flex: 0 0 260px;
+  min-width: 260px;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
+  background-color: var(--guaxi-panel-bg);
 }
 
 .markdown-content {
