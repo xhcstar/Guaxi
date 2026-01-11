@@ -70,16 +70,22 @@
 
     <!-- 主内容区 -->
     <div class="markdown-main-content">
-      <!-- Markdown渲染区域 -->
-      <div class="markdown-source-panel" ref="sourcePanel" v-show="viewMode !== 'full-right'">
-        <div class="markdown-source-container">
-          <!-- Markdown原文内容 -->
-          <div v-if="markdownContent" class="markdown-source-content" ref="sourceContent">
-            <pre>{{ markdownContent }}</pre>
-          </div>
-          <!-- 加载状态 -->
-          <div v-else class="markdown-loading-message">
-            正在加载Markdown文件...
+      <div class="markdown-left-wrapper" v-show="viewMode !== 'full-right' || showOutline" :style="{ width: leftPanelWidth }">
+        <div v-if="showOutline" class="outline-panel-wrapper outline-panel-wrapper-left" @click.stop>
+          <GuaxiOutline />
+        </div>
+
+        <!-- Markdown渲染区域 -->
+        <div class="markdown-source-panel" ref="sourcePanel" v-show="viewMode !== 'full-right'">
+          <div class="markdown-source-container">
+            <!-- Markdown原文内容 -->
+            <div v-if="markdownContent" class="markdown-source-content" ref="sourceContent">
+              <pre>{{ markdownContent }}</pre>
+            </div>
+            <!-- 加载状态 -->
+            <div v-else class="markdown-loading-message">
+              正在加载Markdown文件...
+            </div>
           </div>
         </div>
       </div>
@@ -154,9 +160,6 @@
           <div v-else-if="selectionInsertText" class="selection-toolbar-body" v-html="selectionPreviewHtml"></div>
         </div>
 
-        <div v-if="showOutline" class="outline-panel-wrapper" @click.stop>
-          <GuaxiOutline />
-        </div>
       </div>
     </div>
 
@@ -2143,7 +2146,7 @@ const zoomOut = () => {
 const startResize = (e) => {
   isResizing.value = true;
   startX.value = e.clientX;
-  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.markdown-source-panel')).width, 10);
+  startLeftWidth.value = parseInt(document.defaultView.getComputedStyle(document.querySelector('.markdown-left-wrapper')).width, 10);
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('mouseup', stopResize);
   document.body.style.cursor = 'col-resize';
@@ -2645,8 +2648,16 @@ watchEffect((onInvalidate) => {
 </script>
 
 <style scoped>
+.markdown-left-wrapper {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 .markdown-source-panel {
-  flex: 0 0 v-bind(leftPanelWidth);
+  flex: 1 1 auto;
   min-width: 0;
   overflow: auto;
   position: relative;
@@ -2910,9 +2921,13 @@ button:disabled {
 }
 
 .outline-panel-wrapper {
-  width: 260px;
-  border-left: 1px solid var(--guaxi-border);
+  flex: 0 0 260px;
+  min-width: 260px;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--guaxi-border);
   box-sizing: border-box;
+  background-color: var(--guaxi-panel-bg);
 }
 
 .markdown-content {
