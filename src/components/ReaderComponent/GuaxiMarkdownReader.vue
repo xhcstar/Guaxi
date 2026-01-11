@@ -80,8 +80,8 @@
           <div class="markdown-source-container">
             <!-- Markdown原文内容 -->
             <div v-if="markdownContent" class="markdown-source-content" ref="sourceContent">
-              <pre>{{ markdownContent }}</pre>
-            </div>
+            <div v-for="(srcLine, idx) in markdownSourceLines" :key="idx" class="markdown-source-line" :data-line="idx">{{ srcLine }}</div>
+          </div>
             <!-- 加载状态 -->
             <div v-else class="markdown-loading-message">
               正在加载Markdown文件...
@@ -451,6 +451,7 @@ onBeforeUnmount(() => {
 })
 
 const markdownContainer = ref(null);
+const sourceContent = ref(null);
 const noteHtmls = ref([]);
 const compositeSegments = ref([]);
 let notesRenderToken = 0;
@@ -699,6 +700,11 @@ const setViewMode = (mode) => {
 
 // Markdown相关
 const markdownContent = ref('')
+const markdownSourceLines = computed(() => {
+  const s = markdownContent.value
+  return s ? String(s).split('\n') : []
+})
+const outlineHeadingSourceLines = ref([])
 const markdownHtml = ref('')
 const markdownLines = ref([]);
 const markdownFilePath = ref('')
@@ -863,16 +869,20 @@ async function convertMarkdownToLines(content, options = {}) {
 
 function generateOutlineFromMarkdown(content) {
   if (!content) {
+    outlineHeadingSourceLines.value = [];
     outlineStore.setOutline([]);
     return;
   }
   const tokens = md.parse(content, {});
   const result = [];
+  const headingLines = [];
   tokens.forEach((token, idx) => {
     if (token.type === 'heading_open') {
       const level = Number(token.tag.slice(1));
       const nextToken = tokens[idx + 1];
       if (nextToken && nextToken.type === 'inline') {
+        const srcLine = Array.isArray(token.map) ? Number(token.map[0]) : 0;
+        headingLines.push(Number.isFinite(srcLine) ? srcLine : 0);
         result.push({
           level,
           text: nextToken.content,
@@ -881,15 +891,33 @@ function generateOutlineFromMarkdown(content) {
       }
     }
   });
+  outlineHeadingSourceLines.value = headingLines;
   outlineStore.setOutline(result);
 }
 
 function jumpToHeading(index) {
-  if (!markdownContainer.value) return;
-  const headings = markdownContainer.value.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  const target = headings[index];
-  if (target) {
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const idx = Number(index);
+  if (!Number.isFinite(idx)) return;
+
+  if (markdownContainer.value) {
+    const headings = markdownContainer.value.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    const target = headings[idx];
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  const srcLine = Array.isArray(outlineHeadingSourceLines.value)
+    ? outlineHeadingSourceLines.value[idx]
+    : null;
+  const lineNum = Number(srcLine);
+  if (!Number.isFinite(lineNum) || lineNum < 0) return;
+
+  const root = sourceContent?.value;
+  if (!(root instanceof HTMLElement)) return;
+  const el = root.querySelector(`[data-line="${lineNum}"]`);
+  if (el && el instanceof HTMLElement) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
 
@@ -2677,30 +2705,12 @@ watchEffect((onInvalidate) => {
   font-size: 18px;
   line-height: 1.6;
   color: var(--guaxi-text-primary);
-  white-space: pre-wrap;
-  /* 关键修改：允许自动换行 */
-  word-wrap: break-word;
-  /* 允许长单词换行 */
-  overflow-wrap: break-word;
-  /* 更现代的换行方式 */
   tab-size: 2;
   padding: 4px;
 }
 
-/* 确保pre元素继承所有样式 */
-.markdown-source-content pre {
-  margin: 0;
-  padding: 0;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
-  color: inherit;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  background: transparent;
-  border: none;
-  border-radius: 0;
+.markdown-source-line {
+  white-space: pre;
 }
 
 .markdown-content {

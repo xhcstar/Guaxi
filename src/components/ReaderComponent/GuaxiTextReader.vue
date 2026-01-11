@@ -677,6 +677,7 @@ const isLoading = ref(false)
 
 // Markdown相关
 const markdownContent = ref('')
+const outlineHeadingSourceLines = ref([])
 // const markdownHtml = ref('')
 const markdownLines = ref([]);
 const markdownFilePath = ref('')
@@ -935,16 +936,20 @@ const renderNoteContent = async (markdown) => {
 
 function generateOutlineFromMarkdown(content) {
   if (!content) {
+    outlineHeadingSourceLines.value = [];
     outlineStore.setOutline([]);
     return;
   }
   const tokens = md.parse(content, {});
   const result = [];
+  const headingLines = [];
   tokens.forEach((token, idx) => {
     if (token.type === 'heading_open') {
       const level = Number(token.tag.slice(1));
       const nextToken = tokens[idx + 1];
       if (nextToken && nextToken.type === 'inline') {
+        const srcLine = Array.isArray(token.map) ? Number(token.map[0]) : 0;
+        headingLines.push(Number.isFinite(srcLine) ? srcLine : 0);
         result.push({
           level,
           text: nextToken.content,
@@ -953,16 +958,35 @@ function generateOutlineFromMarkdown(content) {
       }
     }
   });
+  outlineHeadingSourceLines.value = headingLines;
   outlineStore.setOutline(result);
 }
 
 function jumpToHeading(index) {
-  if (!markdownContainer.value) return;
-  const headings = markdownContainer.value.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  const target = headings[index];
-  if (target) {
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const idx = Number(index);
+  if (!Number.isFinite(idx)) return;
+
+  if (markdownContainer.value) {
+    const headings = markdownContainer.value.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    const target = headings[idx];
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
+
+  const srcLine = Array.isArray(outlineHeadingSourceLines.value)
+    ? outlineHeadingSourceLines.value[idx]
+    : null;
+  const lineNum = Number(srcLine);
+  if (!Number.isFinite(lineNum) || lineNum < 0) return;
+
+  const container = textPreviewContainer?.value;
+  if (!(container instanceof HTMLElement)) return;
+  const pre = container.querySelector('pre');
+  const lh = pre ? Number.parseFloat(window.getComputedStyle(pre).lineHeight) : NaN;
+  const lineHeight = Number.isFinite(lh) && lh > 0 ? lh : 24;
+  const top = Math.max(0, lineNum * lineHeight);
+  container.scrollTo({ top, behavior: 'smooth' });
 }
 
 async function convertMarkdownToLines(content, options = {}) {
