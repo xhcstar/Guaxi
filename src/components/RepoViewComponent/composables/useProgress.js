@@ -155,6 +155,10 @@ export function useProgress({ store, message }) {
     const progressIndex = progresses.value.length - 1;
 
     const unlisten = await listen("conversion_progress", (event) => {
+      if (event.payload?.fileName && event.payload.fileName !== fileName) {
+        return;
+      }
+
       progresses.value[progressIndex] = {
         ...progresses.value[progressIndex],
         current: event.payload.current,

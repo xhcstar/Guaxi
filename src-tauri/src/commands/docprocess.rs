@@ -6,7 +6,10 @@ use serde_json::Value;
 use std::io::Cursor;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::collections::HashMap;
+use std::net::TcpListener;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Window};
 use tracing::{error, info};
 use image::ImageFormat; // 确保已导入 ImageFormat
@@ -17,6 +20,7 @@ use svg::Document;
 use std::path::PathBuf;
 use regex::Regex;
 use reqwest::Client;
+use tokio::time::{sleep, Duration};
 
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
@@ -49,6 +53,180 @@ struct ConversionProgress {
     current: u32,
     total: u32,
     message: String,
+    #[serde(rename = "fileName", skip_serializing_if = "Option::is_none")]
+    file_name: Option<String>,
+}
+
+#[derive(Default)]
+struct MarkerServerState {
+    child: Option<Child>,
+    port: Option<u16>,
+    python_path: String,
+    model_dir: Option<String>,
+}
+
+static MARKER_SERVER: OnceLock<Mutex<MarkerServerState>> = OnceLock::new();
+
+fn marker_server_state() -> &'static Mutex<MarkerServerState> {
+    MARKER_SERVER.get_or_init(|| Mutex::new(MarkerServerState::default()))
+}
+
+fn pick_free_port() -> Result<u16, String> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
+    Ok(port)
+}
+
+fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
+    if let Ok(v) = std::env::var("GUAXI_MARKER_SOURCE_DIR") {
+        let p = PathBuf::from(v);
+        if p.exists() {
+            return Ok(p);
+        }
+        return Err("GUAXI_MARKER_SOURCE_DIR 指向的目录不存在".to_string());
+    }
+
+    if cfg!(debug_assertions) {
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("marker-1.10.1");
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    let candidates = [
+        exe_dir.join("marker-1.10.1"),
+        exe_dir
+            .parent()
+            .map(|p| p.join("marker-1.10.1"))
+            .unwrap_or_else(|| exe_dir.join("marker-1.10.1")),
+    ];
+
+    for p in candidates {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    Err("找不到 marker-1.10.1 源码目录，请设置环境变量 GUAXI_MARKER_SOURCE_DIR".to_string())
+}
+
+async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
+    {
+        let mut st = marker_server_state().lock().map_err(|_| "MarkerServerState 锁失败".to_string())?;
+        if let Some(child) = st.child.as_mut() {
+            match child.try_wait() {
+                Ok(None) => {
+                    if let Some(port) = st.port {
+                        return Ok(port);
+                    }
+                }
+                Ok(Some(_)) | Err(_) => {
+                    st.child = None;
+                    st.port = None;
+                }
+            }
+        }
+    }
+
+    let python_path = std::env::var("GUAXI_MARKER_PYTHON").unwrap_or_else(|_| "python".to_string());
+    let model_dir = std::env::var("GUAXI_MARKER_MODELS_DIR").ok();
+
+    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = current_exe
+        .parent()
+        .ok_or_else(|| "Failed to get parent directory of exe".to_string())?;
+
+    let marker_src_dir = resolve_marker_source_dir(exe_dir)?;
+    let port = pick_free_port()?;
+
+    window
+        .emit(
+            "conversion_progress",
+            ConversionProgress {
+                current: 1,
+                total: 100,
+                message: "正在启动 Marker 服务...".to_string(),
+                file_name: None,
+            },
+        )
+        .ok();
+
+    let mut cmd = Command::new(&python_path);
+    cmd.arg("-m")
+        .arg("marker.scripts.server")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .current_dir(&marker_src_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let existing_pythonpath = std::env::var("PYTHONPATH").unwrap_or_default();
+    let marker_pythonpath = marker_src_dir.to_string_lossy().to_string();
+    let path_list_sep = if cfg!(windows) { ";" } else { ":" };
+    let combined_pythonpath = if existing_pythonpath.trim().is_empty() {
+        marker_pythonpath
+    } else {
+        format!("{}{}{}", marker_pythonpath, path_list_sep, existing_pythonpath)
+    };
+
+    cmd.env("PYTHONPATH", combined_pythonpath);
+
+    if let Some(dir) = &model_dir {
+        cmd.env("HF_HOME", dir);
+        cmd.env("HUGGINGFACE_HUB_CACHE", dir);
+        cmd.env("TRANSFORMERS_CACHE", dir);
+        cmd.env("TORCH_HOME", dir);
+        cmd.env("XDG_CACHE_HOME", dir);
+    }
+
+    let child = cmd.spawn().map_err(|e| format!("启动 Marker 服务失败: {}", e))?;
+
+    {
+        let mut st = marker_server_state().lock().map_err(|_| "MarkerServerState 锁失败".to_string())?;
+        st.child = Some(child);
+        st.port = Some(port);
+        st.python_path = python_path;
+        st.model_dir = model_dir;
+    }
+
+    let client = Client::new();
+    let health_url = format!("http://127.0.0.1:{}/", port);
+
+    for _ in 0..600 {
+        if let Ok(resp) = client.get(&health_url).send().await {
+            if resp.status().is_success() {
+                return Ok(port);
+            }
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+
+    {
+        let mut st = marker_server_state().lock().map_err(|_| "MarkerServerState 锁失败".to_string())?;
+        if let Some(mut child) = st.child.take() {
+            let _ = child.kill();
+        }
+        st.port = None;
+    }
+
+    Err("Marker 服务启动超时（可能在下载/加载模型），请稍后重试".to_string())
+}
+
+#[derive(Debug, Deserialize)]
+struct MarkerConvertResponse {
+    success: bool,
+    format: Option<String>,
+    output: Option<String>,
+    images: Option<HashMap<String, String>>,
+    metadata: Option<Value>,
+    error: Option<String>,
 }
 
 // 请求数据结构
@@ -586,7 +764,18 @@ pub async fn convert_to_markdown(
 ) -> Result<(), String> {
     info!("Converting file to markdown: {:?}", request);
 
-    // 发送转换开始事件
+    let file_name = Path::new(&request.input_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("未知文件")
+        .to_string();
+
+    let file_stem = Path::new(&request.input_path)
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document")
+        .to_string();
+
     window
         .emit(
             "conversion_progress",
@@ -594,161 +783,108 @@ pub async fn convert_to_markdown(
                 current: 0,
                 total: 100,
                 message: "开始转换...".to_string(),
+                file_name: Some(file_name.clone()),
             },
         )
         .map_err(|e| format!("Failed to emit start progress: {}", e))?;
 
-    // 获取当前可执行文件路径
-    let current_exe =
-        std::env::current_exe().map_err(|e| format!("Failed to get current exe path: {}", e))?;
+    let port = ensure_marker_server(&window).await?;
+    let base_url = format!("http://127.0.0.1:{}", port);
 
-    // 获取可执行文件所在目录
-    let exe_dir = current_exe
-        .parent()
-        .ok_or("Failed to get parent directory of exe")?;
+    window
+        .emit(
+            "conversion_progress",
+            ConversionProgress {
+                current: 10,
+                total: 100,
+                message: "Marker 服务已就绪，开始转换...".to_string(),
+                file_name: Some(file_name.clone()),
+            },
+        )
+        .ok();
 
-    // 构建转换器路径
-    let converter_path = exe_dir.join("utils").join("Guaxi_doc_convertor.exe");
-    let converter_path_str = converter_path
-        .to_str()
-        .ok_or("Failed to convert converter path to string")?;
+    let client = Client::new();
+    let resp = client
+        .post(format!("{}/marker", base_url))
+        .json(&serde_json::json!({
+            "filepath": request.input_path,
+            "output_format": "markdown",
+            "paginate_output": true
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("调用 Marker 服务失败: {}", e))?;
 
-    // 创建子进程并捕获输出
-    let mut child = Command::new(converter_path_str)
-        .arg(&request.input_path)
-        .arg("--output_format")
-        .arg("markdown")
-        .arg("--disable_multiprocessing")
-        .arg("--paginate_output")
-        .arg("--output_dir")
-        .arg(&request.output_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to execute converter: {}", e))?;
-
-    // 先获取标准输出和标准错误的句柄
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    // Create async tasks for output streams
-    let window_clone_stdout = window.clone();
-    let stdout_task = tokio::spawn(async move {
-        if let Some(stdout) = stdout {
-            let mut reader = BufReader::new(stdout);
-            let mut buffer = Vec::new();
-
-            loop {
-                buffer.clear();
-                match reader.read_until(b'\n', &mut buffer) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        let filtered: Vec<u8> = buffer
-                            .iter()
-                            .filter(|&&b| b.is_ascii() && !b.is_ascii_control())
-                            .cloned()
-                            .collect();
-
-                        let line = String::from_utf8_lossy(&filtered).trim().to_string();
-
-                        if !line.is_empty() {
-                            info!("Converter output: {}", line);
-
-                            if let Some(percent) = parse_progress(&line) {
-                                window_clone_stdout
-                                    .emit(
-                                        "conversion_progress",
-                                        ConversionProgress {
-                                            current: percent,
-                                            total: 100,
-                                            message: format!("转换中... {}%", percent),
-                                        },
-                                    )
-                                    .map_err(|e| error!("Failed to emit progress: {}", e))
-                                    .ok();
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to read output: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    // Handle stderr output
-    let window_clone_stderr = window.clone();
-    let stderr_task = tokio::spawn(async move {
-        if let Some(stderr) = stderr {
-            let mut reader = BufReader::new(stderr);
-            let mut buffer = Vec::new();
-
-            loop {
-                buffer.clear();
-                match reader.read_until(b'\n', &mut buffer) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        let filtered: Vec<u8> = buffer
-                            .iter()
-                            .filter(|&&b| b.is_ascii() && !b.is_ascii_control())
-                            .cloned()
-                            .collect();
-
-                        let line = String::from_utf8_lossy(&filtered).trim().to_string();
-
-                        if !line.is_empty() {
-                            error!("Converter stderr: {}", line);
-
-                            if let Some(percent) = parse_progress(&line) {
-                                window_clone_stderr
-                                    .emit(
-                                        "conversion_progress",
-                                        ConversionProgress {
-                                            current: percent,
-                                            total: 100,
-                                            message: format!("转换中... {}%", percent),
-                                        },
-                                    )
-                                    .map_err(|e| error!("Failed to emit progress: {}", e))
-                                    .ok();
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to read stderr: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    // 等待子进程结束
-    let status = child
-        .wait()
-        .map_err(|e| format!("Failed to wait for converter: {}", e))?;
-
-    // 等待输出处理任务完成
-    let _ = stdout_task.await;
-    let _ = stderr_task.await;
-
-    if status.success() {
-        window
-            .emit(
-                "conversion_progress",
-                ConversionProgress {
-                    current: 100,
-                    total: 100,
-                    message: "转换完成".to_string(),
-                },
-            )
-            .map_err(|e| format!("Failed to emit completion: {}", e))?;
-        Ok(())
-    } else {
-        Err("Conversion failed".to_string())
+    if !resp.status().is_success() {
+        return Err(format!("Marker 服务返回错误状态: {}", resp.status()));
     }
+
+    let data: MarkerConvertResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 Marker 返回失败: {}", e))?;
+
+    if !data.success {
+        return Err(data
+            .error
+            .unwrap_or_else(|| "Marker 转换失败".to_string()));
+    }
+
+    let markdown = data
+        .output
+        .ok_or_else(|| "Marker 返回的 markdown 为空".to_string())?;
+
+    window
+        .emit(
+            "conversion_progress",
+            ConversionProgress {
+                current: 90,
+                total: 100,
+                message: "正在写入转换结果...".to_string(),
+                file_name: Some(file_name.clone()),
+            },
+        )
+        .ok();
+
+    let output_root = PathBuf::from(&request.output_dir);
+    let output_dir = output_root.join(&file_stem);
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| format!("创建输出目录失败: {}", e))?;
+
+    let md_path = output_dir.join(format!("{}.md", file_stem));
+    std::fs::write(&md_path, markdown)
+        .map_err(|e| format!("写入 markdown 失败: {}", e))?;
+
+    if let Some(images) = data.images {
+        for (name, b64) in images {
+            let safe_name = Path::new(&name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image.bin");
+
+            let bytes = general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| format!("解码图片失败: {}", e))?;
+
+            let img_path = output_dir.join(safe_name);
+            std::fs::write(&img_path, bytes)
+                .map_err(|e| format!("写入图片失败: {}", e))?;
+        }
+    }
+
+    window
+        .emit(
+            "conversion_progress",
+            ConversionProgress {
+                current: 100,
+                total: 100,
+                message: "转换完成".to_string(),
+                file_name: Some(file_name.clone()),
+            },
+        )
+        .map_err(|e| format!("Failed to emit completion: {}", e))?;
+
+    Ok(())
 }
 
 fn parse_progress(line: &str) -> Option<u32> {
