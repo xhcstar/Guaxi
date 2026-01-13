@@ -3,10 +3,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyList; // 导入 PyList 类型
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::Cursor;
-use std::path::Path;
 use std::collections::HashMap;
+use std::fs;
+use std::io::Cursor;
 use std::net::TcpListener;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Window};
@@ -16,7 +18,6 @@ use base64::Engine as _; // 使用新的 base64 编码方式
 use base64::engine::general_purpose;
 use svg::node::element::{Rectangle, Text as SvgText};
 use svg::Document;
-use std::path::PathBuf;
 use regex::Regex;
 use reqwest::Client;
 use tokio::time::{sleep, Duration};
@@ -108,6 +109,38 @@ fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
     Err("找不到 marker-1.10.1 源码目录，请检查是否存在：<软件目录>\\utils\\MarkdownConvertor\\marker-1.10.1".to_string())
 }
 
+fn resolve_marker_python_path(marker_src_dir: &Path) -> Result<PathBuf, String> {
+    let venv_dir = marker_src_dir.join(".venv");
+
+    if cfg!(windows) {
+        let candidates = [
+            venv_dir.join("Scripts").join("python.exe"),
+            venv_dir.join("python.exe"),
+        ];
+
+        for p in candidates {
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+
+        return Err(format!(
+            "找不到 Marker 虚拟环境中的 python，请先构建运行环境：{}",
+            venv_dir.to_string_lossy()
+        ));
+    }
+
+    let p = venv_dir.join("bin").join("python");
+    if p.exists() {
+        return Ok(p);
+    }
+
+    Err(format!(
+        "找不到 Marker 虚拟环境中的 python，请先构建运行环境：{}",
+        venv_dir.to_string_lossy()
+    ))
+}
+
 async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
     {
         let mut st = marker_server_state()
@@ -135,16 +168,28 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         }
     }
 
-    let python_path = std::env::var("GUAXI_MARKER_PYTHON").unwrap_or_else(|_| "python".to_string());
-    let model_dir = std::env::var("GUAXI_MARKER_MODELS_DIR").ok();
-    info!(python = python_path.as_str(), models_dir = model_dir.as_deref().unwrap_or(""), "marker server config");
-
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_dir = current_exe
         .parent()
         .ok_or_else(|| "Failed to get parent directory of exe".to_string())?;
 
     let marker_src_dir = resolve_marker_source_dir(exe_dir)?;
+    let python_path = resolve_marker_python_path(&marker_src_dir)?
+        .to_string_lossy()
+        .to_string();
+
+    let model_dir = exe_dir
+        .join("utils")
+        .join("Models")
+        .join("surya_models");
+    let _ = fs::create_dir_all(&model_dir);
+
+    info!(
+        python = python_path.as_str(),
+        models_dir = model_dir.to_string_lossy().as_ref(),
+        "marker server config"
+    );
+
     let port = pick_free_port()?;
 
     window
@@ -181,13 +226,12 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
 
     cmd.env("PYTHONPATH", combined_pythonpath);
 
-    if let Some(dir) = &model_dir {
-        cmd.env("HF_HOME", dir);
-        cmd.env("HUGGINGFACE_HUB_CACHE", dir);
-        cmd.env("TRANSFORMERS_CACHE", dir);
-        cmd.env("TORCH_HOME", dir);
-        cmd.env("XDG_CACHE_HOME", dir);
-    }
+    let model_dir = model_dir.to_string_lossy().to_string();
+    cmd.env("HF_HOME", &model_dir);
+    cmd.env("HUGGINGFACE_HUB_CACHE", &model_dir);
+    cmd.env("TRANSFORMERS_CACHE", &model_dir);
+    cmd.env("TORCH_HOME", &model_dir);
+    cmd.env("XDG_CACHE_HOME", &model_dir);
 
     info!(
         python = python_path.as_str(),
@@ -202,7 +246,7 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         st.child = Some(child);
         st.port = Some(port);
         st.python_path = python_path;
-        st.model_dir = model_dir;
+        st.model_dir = Some(model_dir);
     }
 
     let client = Client::new();

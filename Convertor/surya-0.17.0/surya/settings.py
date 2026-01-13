@@ -1,12 +1,40 @@
 import os
+import sys
+from pathlib import Path
 from typing import Callable, Dict, Optional
 
 import torch
 from dotenv import find_dotenv
+from platformdirs import user_cache_dir
 from pydantic import computed_field
 from pydantic_settings import BaseSettings
-from pathlib import Path
-from platformdirs import user_cache_dir
+
+
+def _resolve_guaxi_model_cache_dir() -> Optional[Path]:
+    exe = None
+    try:
+        exe = Path(sys.executable).resolve()
+    except Exception:
+        pass
+
+    if exe is not None:
+        parts = [p.lower() for p in exe.parts]
+        if "utils" in parts:
+            idx = len(parts) - 1 - parts[::-1].index("utils")
+            base = Path(*exe.parts[:idx])
+            return base / "utils" / "Models" / "surya_models"
+
+    try:
+        cwd = Path.cwd().resolve()
+        paths = [cwd]
+        paths.extend(cwd.parents)
+        for p in paths:
+            if (p / "utils").exists():
+                return p / "utils" / "Models" / "surya_models"
+    except Exception:
+        pass
+
+    return None
 
 
 class Settings(BaseSettings):
@@ -21,7 +49,9 @@ class Settings(BaseSettings):
     PARALLEL_DOWNLOAD_WORKERS: int = (
         10  # Number of workers for parallel model downloads
     )
-    MODEL_CACHE_DIR: str = str(Path(user_cache_dir("datalab")) / "models")
+    MODEL_CACHE_DIR: str = str(
+        _resolve_guaxi_model_cache_dir() or (Path(user_cache_dir("datalab")) / "models")
+    )
     LOGLEVEL: str = "INFO"  # Logging level
 
     # Paths
