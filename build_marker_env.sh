@@ -23,7 +23,20 @@ if [ ! -d "$MARKER_DST" ]; then
   cp -a "$MARKER_SRC" "$MARKER_PARENT/"
 fi
 
+if [ ! -f "$MARKER_DST/pyproject.toml" ]; then
+  rm -rf "$MARKER_DST"
+  cp -a "$MARKER_SRC" "$MARKER_PARENT/"
+fi
+
 CONDA_BIN="${CONDA_BIN:-}"
+
+to_windows_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+    return 0
+  fi
+  printf "%s" "$1"
+}
 
 if [ -z "$CONDA_BIN" ] && [ -n "${CONDA_EXE:-}" ] && [ -f "$CONDA_EXE" ]; then
   CONDA_BIN="$CONDA_EXE"
@@ -56,10 +69,15 @@ if [ -z "$CONDA_BIN" ]; then
 fi
 
 if [ ! -d "$VENV_DIR" ]; then
+  VENV_DIR_FOR_CONDA="$VENV_DIR"
+  case "$CONDA_BIN" in
+    *.exe) VENV_DIR_FOR_CONDA="$(to_windows_path "$VENV_DIR")" ;;
+  esac
+
   if [ "$CONDA_OVERRIDE_CHANNELS" = "1" ]; then
-    "$CONDA_BIN" create -y -p "$VENV_DIR" --override-channels -c "$CONDA_CHANNEL" "python=$PYTHON_VERSION" pip
+    "$CONDA_BIN" create -y -p "$VENV_DIR_FOR_CONDA" --override-channels -c "$CONDA_CHANNEL" "python=$PYTHON_VERSION" pip
   else
-    "$CONDA_BIN" create -y -p "$VENV_DIR" "python=$PYTHON_VERSION" pip
+    "$CONDA_BIN" create -y -p "$VENV_DIR_FOR_CONDA" "python=$PYTHON_VERSION" pip
   fi
 fi
 
@@ -71,11 +89,22 @@ else
   VENV_PY="$VENV_DIR/bin/python"
 fi
 
+MARKER_DST_FOR_PIP="$MARKER_DST"
+SURYA_SRC_FOR_PIP="$SURYA_SRC"
+case "$VENV_PY" in
+  *.exe)
+    MARKER_DST_FOR_PIP="$(to_windows_path "$MARKER_DST")"
+    SURYA_SRC_FOR_PIP="$(to_windows_path "$SURYA_SRC")"
+    ;;
+esac
+
 "$VENV_PY" -m pip install -U pip setuptools wheel
 
-"$VENV_PY" -m pip install "$MARKER_DST"
+"$VENV_PY" -m pip install "$MARKER_DST_FOR_PIP"
 
-"$VENV_PY" -m pip install --force-reinstall --no-deps "$SURYA_SRC"
+"$VENV_PY" -m pip install fastapi uvicorn python-multipart
+
+"$VENV_PY" -m pip install --force-reinstall --no-deps "$SURYA_SRC_FOR_PIP"
 
 echo
 echo "Marker env ready:"
