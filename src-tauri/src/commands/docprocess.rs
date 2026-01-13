@@ -395,8 +395,10 @@ pub async fn load_markdown_content(filepath: String, page: usize) -> MarkdownRes
     info!("load_markdown_content: {}, page: {}", filepath, page);
     match std::fs::read_to_string(&filepath) {
         Ok(content) => {
-            // 使用更精确的分页符匹配
-            let pages: Vec<&str> = content.split("\n{").collect();
+            let pages: Vec<&str> = content
+                .split("\n{")
+                .filter(|p| !p.trim().is_empty())
+                .collect();
             let page_content = if page < pages.len() {
                 pages[page]
                     .trim_start_matches(|c: char| c.is_numeric())
@@ -523,7 +525,10 @@ pub async fn search_paginated_markdown(filepath: String, query: String) -> Pagin
 
     match std::fs::read_to_string(&filepath) {
         Ok(content) => {
-            let pages: Vec<&str> = content.split("\n{").collect();
+            let pages: Vec<&str> = content
+                .split("\n{")
+                .filter(|p| !p.trim().is_empty())
+                .collect();
 
             let need_ascii_ci = q.bytes().any(|b| (b'A'..=b'Z').contains(&b) || (b'a'..=b'z').contains(&b));
             let needle_lower: Vec<u8> = q.as_bytes().iter().map(|b| lower_ascii(*b)).collect();
