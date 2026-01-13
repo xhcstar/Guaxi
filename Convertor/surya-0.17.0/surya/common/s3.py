@@ -67,6 +67,17 @@ def download_file(remote_path: str, local_path: str, chunk_size: int = 1024 * 10
         raise
 
 
+def is_safetensors_ok(local_path: Path) -> bool:
+    try:
+        from safetensors import safe_open
+
+        with safe_open(str(local_path), framework="pt") as f:
+            _ = list(f.keys())
+        return True
+    except Exception:
+        return False
+
+
 def check_manifest(local_dir: str):
     local_dir = Path(local_dir)
     manifest_path = local_dir / "manifest.json"
@@ -77,7 +88,10 @@ def check_manifest(local_dir: str):
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
         for file in manifest["files"]:
-            if not os.path.exists(local_dir / file):
+            file_path = local_dir / file
+            if not os.path.exists(file_path):
+                return False
+            if file_path.suffix == ".safetensors" and not is_safetensors_ok(file_path):
                 return False
     except Exception:
         return False
@@ -106,21 +120,48 @@ def download_directory(remote_path: str, local_dir: str):
         os.makedirs(local_dir, exist_ok=True)
         shutil.copy2(manifest_path, os.path.join(local_dir, "manifest.json"))
 
-        missing_files = []
+        files_to_download = []
         for file in manifest["files"]:
-            if not os.path.exists(os.path.join(local_dir, file)):
-                missing_files.append(file)
+            dest_path = os.path.join(local_dir, file)
+            if not os.path.exists(dest_path):
+                files_to_download.append(file)
+                continue
+
+            if os.path.isdir(dest_path):
+                continue
+
+            if file.endswith(".safetensors") and not is_safetensors_ok(Path(dest_path)):
+                files_to_download.append(file)
+                continue
+
+            remote_file = join_urls(s3_url, file)
+            remote_size = 0
+            try:
+                head = requests.head(remote_file, allow_redirects=True, timeout=30)
+                head.raise_for_status()
+                remote_size = int(head.headers.get("content-length") or 0)
+            except Exception:
+                remote_size = 0
+
+            if remote_size > 0:
+                try:
+                    local_size = os.path.getsize(dest_path)
+                except OSError:
+                    local_size = -1
+
+                if local_size != remote_size:
+                    files_to_download.append(file)
 
         pbar = tqdm(
             desc=f"Downloading {model_name} model to {local_dir}",
-            total=len(missing_files),
+            total=len(files_to_download),
         )
 
         with ThreadPoolExecutor(
             max_workers=settings.PARALLEL_DOWNLOAD_WORKERS
         ) as executor:
             futures = []
-            for file in missing_files:
+            for file in files_to_download:
                 remote_file = join_urls(s3_url, file)
                 local_file = os.path.join(temp_dir, file)
                 futures.append(executor.submit(download_file, remote_file, local_file))
@@ -131,13 +172,13 @@ def download_directory(remote_path: str, local_dir: str):
 
         pbar.close()
 
-        for file in missing_files:
+        for file in files_to_download:
             src = os.path.join(temp_dir, file)
             dest = os.path.join(local_dir, file)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            if os.path.exists(dest):
-                continue
             if os.path.exists(src):
+                if os.path.exists(dest) and os.path.isfile(dest):
+                    os.remove(dest)
                 shutil.move(src, dest)
 
 
