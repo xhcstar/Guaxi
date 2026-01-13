@@ -7,6 +7,54 @@ export function useProgress({ store, message }) {
   const progresses = ref([]);
   const showTaskList = ref(false);
 
+  const findLatestConversionProgressIndex = (fileName) => {
+    for (let i = progresses.value.length - 1; i >= 0; i -= 1) {
+      const p = progresses.value[i];
+      if (p?.type === "conversion" && p?.fileName === fileName) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const markConversionFailed = (fileName, error) => {
+    const idx = findLatestConversionProgressIndex(fileName);
+    const errorMessage =
+      (typeof error === "string" && error) ||
+      error?.message ||
+      error?.toString?.() ||
+      "未知错误";
+
+    const payload = {
+      current: 100,
+      total: 100,
+      message: `转换失败: ${errorMessage}`,
+      fileName,
+      type: "conversion",
+      failed: true,
+      finishedAt: new Date().toISOString(),
+    };
+
+    if (idx !== -1) {
+      progresses.value[idx] = {
+        ...progresses.value[idx],
+        ...payload,
+      };
+      return;
+    }
+
+    progresses.value.push({ show: true, ...payload });
+  };
+
+  const clearFailedTasks = () => {
+    const before = progresses.value.length;
+    progresses.value = progresses.value.filter(
+      (p) => !(p?.type === "conversion" && (p?.failed || p?.message?.includes("失败")))
+    );
+    const removed = before - progresses.value.length;
+    message.info(`已清除失败任务: ${removed} 个`);
+  };
+
   listen("backup_progress", (event) => {
     const db = event.payload.databaseType || "资料库";
     let idx = progresses.value.findIndex(
@@ -173,19 +221,31 @@ export function useProgress({ store, message }) {
         fileName,
         current: event.payload.current,
         message: event.payload.message,
+        failed: event.payload?.failed,
       });
 
       progresses.value[progressIndex] = {
         ...progresses.value[progressIndex],
         current: event.payload.current,
         message: event.payload.message,
+        failed:
+          event.payload?.failed ||
+          progresses.value[progressIndex]?.failed ||
+          event.payload?.message?.includes("失败"),
       };
 
-      // 转换完成后3秒自动移除
-      if (event.payload.current >= 100) {
+      const shouldAutoRemove =
+        event.payload.current >= 100 &&
+        !progresses.value[progressIndex]?.failed &&
+        !event.payload?.message?.includes("失败");
+
+      if (shouldAutoRemove) {
         console.info("[conversion] completed", { fileName });
         setTimeout(() => {
-          if (progresses.value[progressIndex]?.current >= 100) {
+          if (
+            progresses.value[progressIndex]?.current >= 100 &&
+            !progresses.value[progressIndex]?.failed
+          ) {
             progresses.value.splice(progressIndex, 1);
           }
         }, 3000);
@@ -233,6 +293,8 @@ export function useProgress({ store, message }) {
         durationMs: Date.now() - startedAt,
         error,
       });
+
+      markConversionFailed(fileName, error);
       throw error;
     }
   };
@@ -467,6 +529,7 @@ export function useProgress({ store, message }) {
     cancelConversion,
     getConversionStats,
     clearCompletedTasks,
+    clearFailedTasks,
     exportConversionReport,
     retryFailedTasks,
 

@@ -80,13 +80,16 @@ fn pick_free_port() -> Result<u16, String> {
 }
 
 fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
-    if let Ok(v) = std::env::var("GUAXI_MARKER_SOURCE_DIR") {
-        let p = PathBuf::from(&v);
-        if p.exists() {
-            info!(marker_source_dir = p.to_string_lossy().as_ref(), "marker source dir resolved from env");
-            return Ok(p);
-        }
-        return Err("GUAXI_MARKER_SOURCE_DIR 指向的目录不存在".to_string());
+    let p = exe_dir
+        .join("utils")
+        .join("MarkdownConvertor")
+        .join("marker-1.10.1");
+    if p.exists() {
+        info!(
+            marker_source_dir = p.to_string_lossy().as_ref(),
+            "marker source dir resolved from app install dir"
+        );
+        return Ok(p);
     }
 
     if cfg!(debug_assertions) {
@@ -94,26 +97,15 @@ fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
             .join("..")
             .join("marker-1.10.1");
         if p.exists() {
-            info!(marker_source_dir = p.to_string_lossy().as_ref(), "marker source dir resolved from workspace");
+            info!(
+                marker_source_dir = p.to_string_lossy().as_ref(),
+                "marker source dir resolved from workspace"
+            );
             return Ok(p);
         }
     }
 
-    let candidates = [
-        exe_dir.join("marker-1.10.1"),
-        exe_dir
-            .parent()
-            .map(|p| p.join("marker-1.10.1"))
-            .unwrap_or_else(|| exe_dir.join("marker-1.10.1")),
-    ];
-
-    for p in candidates {
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-
-    Err("找不到 marker-1.10.1 源码目录，请设置环境变量 GUAXI_MARKER_SOURCE_DIR".to_string())
+    Err("找不到 marker-1.10.1 源码目录，请检查是否存在：<软件目录>\\utils\\MarkdownConvertor\\marker-1.10.1".to_string())
 }
 
 async fn ensure_marker_server(window: &Window) -> Result<u16, String> {

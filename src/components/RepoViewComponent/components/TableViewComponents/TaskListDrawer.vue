@@ -1,20 +1,26 @@
 <template>
   <n-drawer :show="show" @update:show="$emit('update:show', $event)" width="400" placement="right">
     <n-drawer-content title="任务列表" closable @close="$emit('update:show', false)">
+      <div class="task-actions" v-if="hasFailedTasks">
+        <n-space justify="end">
+          <n-button size="small" type="error" secondary @click="handleClearFailed">清除失败 ({{ failedTaskCount }})</n-button>
+        </n-space>
+      </div>
       <n-text v-if="categorizedProgresses.conversion.length" strong>转换任务</n-text>
       <n-list v-if="categorizedProgresses.conversion.length" hoverable>
         <n-list-item v-for="(progress, index) in categorizedProgresses.conversion" :key="'conv-' + index" class="task-item"
-          :class="{ 'task-item-completed': progress.current >= 100 }">
+          :class="{ 'task-item-completed': progress.current >= 100, 'task-item-failed': isFailed(progress) }">
           <div class="task-content">
             <div class="task-header">
               <n-text strong class="task-filename">{{ progress.fileName }}</n-text>
-              <n-tag v-if="progress.current < 100" size="small" type="info" class="task-tag">
+              <n-tag v-if="isFailed(progress)" size="small" type="error" class="task-tag">失败</n-tag>
+              <n-tag v-else-if="progress.current < 100" size="small" type="info" class="task-tag">
                 {{ progress.type === 'backup' ? '备份中' : (progress.type === 'recovery' ? '恢复中' : (progress.type === 'import' ? '导入中' : (progress.type === 'export' ? '导出中' : '转换中'))) }}
               </n-tag>
               <n-tag v-else size="small" type="success" class="task-tag">已完成</n-tag>
             </div>
             <n-progress type="line" :percentage="progress.current" :indicator-placement="'inside'"
-              :status="progress.current >= 100 ? 'success' : 'info'" :height="15" class="task-progress" />
+              :status="isFailed(progress) ? 'error' : (progress.current >= 100 ? 'success' : 'info')" :height="15" class="task-progress" />
             <n-text depth="3" class="task-message">
               <n-icon size="14" class="task-message-icon"><InfoCircleFilled /></n-icon>
               {{ progress.message }}
@@ -107,10 +113,11 @@
 </template>
 
 <script setup>
-import { NDrawer, NDrawerContent, NList, NListItem, NText, NTag, NProgress, NIcon } from 'naive-ui'
+import { computed } from 'vue'
+import { NDrawer, NDrawerContent, NList, NListItem, NText, NTag, NProgress, NIcon, NButton, NSpace } from 'naive-ui'
 import { InfoCircleFilled } from '@vicons/antd'
 
-defineProps({
+const props = defineProps({
   show: {
     type: Boolean,
     default: false
@@ -129,13 +136,37 @@ defineProps({
       import: [],
       export: []
     })
+  },
+  clearFailedTasks: {
+    type: Function,
+    default: null
   }
 })
 
 defineEmits(['update:show'])
+
+const isFailed = (progress) => {
+  return Boolean(progress?.failed || progress?.message?.includes('失败'))
+}
+
+const failedTaskCount = computed(() => {
+  return (props.progresses || []).filter((p) => p?.type === 'conversion' && isFailed(p)).length
+})
+
+const hasFailedTasks = computed(() => failedTaskCount.value > 0)
+
+const handleClearFailed = () => {
+  if (typeof props.clearFailedTasks === 'function') {
+    props.clearFailedTasks()
+  }
+}
 </script>
 
 <style scoped>
+.task-actions {
+  padding-bottom: 12px;
+}
+
 .task-item {
   padding: 12px;
   margin-bottom: 8px;
@@ -151,6 +182,10 @@ defineEmits(['update:show'])
 
 .task-item-completed {
   opacity: 0.8;
+  background-color: var(--n-color-hover);
+}
+
+.task-item-failed {
   background-color: var(--n-color-hover);
 }
 

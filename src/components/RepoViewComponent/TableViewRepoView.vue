@@ -7,7 +7,7 @@
       @import-items="importItems" @export-items="exportItems" />
 
     <!-- 任务列表抽屉 -->
-    <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" />
+    <TaskListDrawer :show="showTaskList" @update:show="showTaskList = $event" :progresses="progresses" :categorized-progresses="categorizedProgresses" :clear-failed-tasks="clearFailedTasks" />
 
     <!-- 搜索栏 -->
 
@@ -95,8 +95,8 @@ const {
   showTaskList,
   toggleTaskList,
   startProgressListener,
-  stopProgressListener,
-  convertFile
+  convertFile,
+  clearFailedTasks
 } = useProgress({ store, message })
 
 const {

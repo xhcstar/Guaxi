@@ -349,6 +349,8 @@ export function useFormHandling({
       await store.fetchRepos();
       await store.fetchFiles(store.currentDatabase);
 
+      let unlisten = null;
+
       try {
         // 构建输出目录路径
         const { outputDir, fileToCheck } = await buildConvertOutputFilePath(
@@ -399,7 +401,7 @@ export function useFormHandling({
           filePath: currentForm.value.filePath,
         });
 
-        const unlisten = await startProgressListener(
+        unlisten = await startProgressListener(
           currentForm.value.filePath
         );
 
@@ -424,28 +426,18 @@ export function useFormHandling({
 
         // 转换完成后取消监听
         console.info("[import] unlisten conversion_progress", { flowId });
-        unlisten();
+        if (unlisten) {
+          unlisten();
+          unlisten = null;
+        }
       } catch (error) {
         console.error("[import] conversion flow failed", { flowId, error });
 
-        // 更新进度条状态为失败
-        const fileName =
-          currentForm.value.filePath.split(/[\\/]/).pop() || "未知文件";
-        const progressIndex = progresses.value.findIndex(
-          (p) => p.fileName === fileName
-        );
-        if (progressIndex !== -1) {
-          progresses.value[progressIndex] = {
-            ...progresses.value[progressIndex],
-            message: `转换失败: ${error.message || error}`,
-            current: 100,
-          };
-          setTimeout(() => {
-            progresses.value = progresses.value.filter(
-              (_, i) => i !== progressIndex
-            );
-          }, 3000);
+        if (unlisten) {
+          unlisten();
+          unlisten = null;
         }
+
         message.error(`添加文件失败: ${error}`);
       }
 
