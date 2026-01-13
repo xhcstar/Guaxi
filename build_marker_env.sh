@@ -6,11 +6,11 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SURYA_SRC="$ROOT_DIR/Convertor/surya-0.17.0"
 MARKER_SRC="$ROOT_DIR/Convertor/marker-1.10.1"
 
-MARKER_PARENT="$ROOT_DIR/utils/MarkdownConvertor"
+MARKER_PARENT="$ROOT_DIR/src-tauri/utils/MarkdownConvertor"
 MARKER_DST="$MARKER_PARENT/marker-1.10.1"
 
 VENV_DIR="$MARKER_DST/.venv"
-MODELS_DIR="$ROOT_DIR/utils/Models/surya_models"
+MODELS_DIR="$ROOT_DIR/src-tauri/utils/Models/surya_models"
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.10}"
 CONDA_OVERRIDE_CHANNELS="${CONDA_OVERRIDE_CHANNELS:-1}"
@@ -55,7 +55,8 @@ if [ -z "$CONDA_BIN" ] && [ -n "${USERPROFILE:-}" ]; then
     "$USERPROFILE/Miniconda3/Scripts/conda.exe" \
     "$USERPROFILE/miniconda3/Scripts/conda.exe" \
     "$USERPROFILE/Anaconda3/Scripts/conda.exe" \
-    "$USERPROFILE/anaconda3/Scripts/conda.exe"; do
+    "$USERPROFILE/anaconda3/Scripts/conda.exe" \
+    "D:/Softwares/miniconda/Scripts/conda.exe"; do
     if [ -f "$p" ]; then
       CONDA_BIN="$p"
       break
