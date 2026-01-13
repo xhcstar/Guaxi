@@ -38,5 +38,5 @@ src-tauri/utils/MarkdownConvertor/
 src-tauri/utils/Models/surya_models/
 
 # Generated runtime assets (do not commit)
-src-tauri/utils/MarkdownConvertor/
-src-tauri/utils/Models/surya_models/
+src-tauri/utils/MarkdownConvertor/*
+src-tauri/utils/Models/surya_models/*

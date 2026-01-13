@@ -13,6 +13,8 @@ VENV_DIR="$MARKER_DST/.venv"
 MODELS_DIR="$ROOT_DIR/utils/Models/surya_models"
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.10}"
+CONDA_OVERRIDE_CHANNELS="${CONDA_OVERRIDE_CHANNELS:-1}"
+CONDA_CHANNEL="${CONDA_CHANNEL:-conda-forge}"
 
 mkdir -p "$MARKER_PARENT"
 mkdir -p "$MODELS_DIR"
@@ -54,7 +56,11 @@ if [ -z "$CONDA_BIN" ]; then
 fi
 
 if [ ! -d "$VENV_DIR" ]; then
-  "$CONDA_BIN" create -y -p "$VENV_DIR" "python=$PYTHON_VERSION" pip
+  if [ "$CONDA_OVERRIDE_CHANNELS" = "1" ]; then
+    "$CONDA_BIN" create -y -p "$VENV_DIR" --override-channels -c "$CONDA_CHANNEL" "python=$PYTHON_VERSION" pip
+  else
+    "$CONDA_BIN" create -y -p "$VENV_DIR" "python=$PYTHON_VERSION" pip
+  fi
 fi
 
 if [ -f "$VENV_DIR/Scripts/python.exe" ]; then
