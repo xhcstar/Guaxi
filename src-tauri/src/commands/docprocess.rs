@@ -4,7 +4,6 @@ use pyo3::types::PyList; // 导入 PyList 类型
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Cursor;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -246,10 +245,8 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
 #[derive(Debug, Deserialize)]
 struct MarkerConvertResponse {
     success: bool,
-    format: Option<String>,
     output: Option<String>,
     images: Option<HashMap<String, String>>,
-    metadata: Option<Value>,
     error: Option<String>,
 }
 
@@ -941,28 +938,6 @@ pub async fn convert_to_markdown(
     Ok(())
 }
 
-fn parse_progress(line: &str) -> Option<u32> {
-    info!("Parsing progress: {}", line);
-
-    // 使用更精确的字符串匹配
-    if line.contains("Loaded ") {
-        return Some(10);
-    } else if line.contains("Recognizing layout") {
-        return Some(25);
-    } else if line.contains("Running OCR Error Detection") {
-        return Some(35);
-    } else if line.contains("Texify inference started") {
-        return Some(50);
-    } else if line.contains("Recognizing Text") {
-        return Some(70);
-    } else if line.contains("Recognizing tables") {
-        return Some(85);
-    } else if line.contains("Saving markdown to") {
-        return Some(95);
-    }
-
-    None
-}
 
 #[tauri::command]
 pub async fn export_markdown_pdf_pandoc(
