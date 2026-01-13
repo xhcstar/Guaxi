@@ -2883,7 +2883,7 @@ watchEffect((onInvalidate) => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: #f5f5f5;
+  background-color: var(--guaxi-content-bg);
   overflow: hidden;
 }
 
@@ -2894,17 +2894,17 @@ watchEffect((onInvalidate) => {
   align-items: center;
   height: 40px;
   padding: 6px 12px;
-  background-color: #f8f9fa;
-  border-bottom: 1px solid #e0e0e0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  background-color: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
+  box-shadow: var(--guaxi-header-shadow);
 }
 
 /* 按钮基础样式 */
 button {
   padding: 6px 12px;
-  background-color: #ffffff;
-  color: #495057;
-  border: 1px solid #e9ecef;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
@@ -2916,15 +2916,15 @@ button {
 }
 
 button:hover {
-  background-color: #f8f9fa;
-  border-color: #e9ecef;
+  background-color: var(--guaxi-content-bg);
+  border-color: var(--guaxi-border);
   transform: translateY(-1px);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 button:disabled {
-  background-color: #f8f9fa;
-  color: #adb5bd;
+  background-color: var(--guaxi-content-bg);
+  color: var(--guaxi-text-secondary);
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
@@ -2993,28 +2993,29 @@ button:disabled {
 
 .zoom-in,
 .zoom-out {
-  background-color: #f8f9fa;
-  color: #495057;
-  border: 1px solid #e9ecef;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
   padding: 6px;
 }
 
 .zoom-in:hover,
 .zoom-out:hover {
-  background-color: #f1f3f5;
+  background-color: var(--guaxi-content-bg);
 }
 
 .zoom-in:disabled,
 .zoom-out:disabled {
-  background-color: #95a5a6;
+  background-color: var(--guaxi-content-bg);
+  color: var(--guaxi-text-secondary);
   cursor: not-allowed;
 }
 
 /* 适合宽度按钮样式 */
 .fit-width {
-  background-color: #f8f9fa;
-  color: #495057;
-  border: 1px solid #e9ecef;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border: 1px solid var(--guaxi-border);
   padding: 6px 12px;
 }
 
