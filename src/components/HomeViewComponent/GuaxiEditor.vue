@@ -1054,7 +1054,9 @@ let templateInsertListenerUnmounted = false
 const safeUnlistenTemplateInsert = () => {
   if (typeof unlistenTemplateInsert !== 'function') return
   try {
-    unlistenTemplateInsert()
+    Promise.resolve(unlistenTemplateInsert()).catch((e) => {
+      console.debug('反注册模板插入事件失败:', e)
+    })
   } catch (e) {
     console.debug('反注册模板插入事件失败:', e)
   }
@@ -1077,7 +1079,9 @@ onMounted(async () => {
 
     if (templateInsertListenerUnmounted) {
       try {
-        unlisten()
+        Promise.resolve(unlisten()).catch((e) => {
+          console.debug('反注册模板插入事件失败:', e)
+        })
       } catch (e) {
         console.debug('反注册模板插入事件失败:', e)
       }

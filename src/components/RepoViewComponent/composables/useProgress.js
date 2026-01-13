@@ -3,9 +3,13 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 
+const sharedProgresses = ref([]);
+const sharedShowTaskList = ref(false);
+let baseListenersInitialized = false;
+
 export function useProgress({ store, message }) {
-  const progresses = ref([]);
-  const showTaskList = ref(false);
+  const progresses = sharedProgresses;
+  const showTaskList = sharedShowTaskList;
 
   const findLatestConversionProgressIndex = (fileName) => {
     for (let i = progresses.value.length - 1; i >= 0; i -= 1) {
@@ -88,38 +92,75 @@ export function useProgress({ store, message }) {
     }
   });
 
-  listen("recovery_progress", (event) => {
-    const db = event.payload.databaseType || "资料库";
-    let idx = progresses.value.findIndex(
-      (p) => p.type === "recovery" && p.fileName === db
-    );
-    if (idx === -1) {
-      progresses.value.push({
-        show: true,
-        current: 0,
-        total: 100,
-        message: "开始恢复...",
-        fileName: db,
-        type: "recovery",
-      });
-      idx = progresses.value.length - 1;
-    }
-    progresses.value[idx] = {
-      ...progresses.value[idx],
-      current: event.payload.current,
-      message: event.payload.message,
-    };
-    if (event.payload.current >= 100) {
-      setTimeout(() => {
-        const i = progresses.value.findIndex(
-          (p) => p.type === "recovery" && p.fileName === db
-        );
-        if (i !== -1 && progresses.value[i]?.current >= 100) {
-          progresses.value.splice(i, 1);
-        }
-      }, 3000);
-    }
-  });
+  if (!baseListenersInitialized) {
+    baseListenersInitialized = true;
+
+    listen("backup_progress", (event) => {
+      const db = event.payload.databaseType || "资料库";
+      let idx = progresses.value.findIndex(
+        (p) => p.type === "backup" && p.fileName === db
+      );
+      if (idx === -1) {
+        progresses.value.push({
+          show: true,
+          current: 0,
+          total: 100,
+          message: "开始备份...",
+          fileName: db,
+          type: "backup",
+        });
+        idx = progresses.value.length - 1;
+      }
+      progresses.value[idx] = {
+        ...progresses.value[idx],
+        current: event.payload.current,
+        message: event.payload.message,
+      };
+      if (event.payload.current >= 100) {
+        setTimeout(() => {
+          const i = progresses.value.findIndex(
+            (p) => p.type === "backup" && p.fileName === db
+          );
+          if (i !== -1 && progresses.value[i]?.current >= 100) {
+            progresses.value.splice(i, 1);
+          }
+        }, 3000);
+      }
+    });
+
+    listen("recovery_progress", (event) => {
+      const db = event.payload.databaseType || "资料库";
+      let idx = progresses.value.findIndex(
+        (p) => p.type === "recovery" && p.fileName === db
+      );
+      if (idx === -1) {
+        progresses.value.push({
+          show: true,
+          current: 0,
+          total: 100,
+          message: "开始恢复...",
+          fileName: db,
+          type: "recovery",
+        });
+        idx = progresses.value.length - 1;
+      }
+      progresses.value[idx] = {
+        ...progresses.value[idx],
+        current: event.payload.current,
+        message: event.payload.message,
+      };
+      if (event.payload.current >= 100) {
+        setTimeout(() => {
+          const i = progresses.value.findIndex(
+            (p) => p.type === "recovery" && p.fileName === db
+          );
+          if (i !== -1 && progresses.value[i]?.current >= 100) {
+            progresses.value.splice(i, 1);
+          }
+        }, 3000);
+      }
+    });
+  }
 
   // 新增：计算属性 - 按任务类型分类
   const categorizedProgresses = computed(() => {
@@ -205,8 +246,9 @@ export function useProgress({ store, message }) {
       type: "conversion", // 新增：标记任务类型
     };
 
-    progresses.value.push(newProgress);
-    const progressIndex = progresses.value.length - 1;
+    const taskId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    progresses.value.push({ ...newProgress, id: taskId });
 
     const unlisten = await listen("conversion_progress", (event) => {
       if (event.payload?.fileName && event.payload.fileName !== fileName) {
@@ -217,6 +259,13 @@ export function useProgress({ store, message }) {
         return;
       }
 
+      const idx = progresses.value.findIndex(
+        (p) => p?.type === "conversion" && p?.fileName === fileName && p?.id === taskId
+      );
+      if (idx === -1) {
+        return;
+      }
+
       console.debug("[conversion] progress", {
         fileName,
         current: event.payload.current,
@@ -224,29 +273,31 @@ export function useProgress({ store, message }) {
         failed: event.payload?.failed,
       });
 
-      progresses.value[progressIndex] = {
-        ...progresses.value[progressIndex],
+      const failed =
+        event.payload?.failed ||
+        progresses.value[idx]?.failed ||
+        event.payload?.message?.includes("失败");
+
+      progresses.value[idx] = {
+        ...progresses.value[idx],
         current: event.payload.current,
         message: event.payload.message,
-        failed:
-          event.payload?.failed ||
-          progresses.value[progressIndex]?.failed ||
-          event.payload?.message?.includes("失败"),
+        failed,
       };
 
       const shouldAutoRemove =
         event.payload.current >= 100 &&
-        !progresses.value[progressIndex]?.failed &&
+        !failed &&
         !event.payload?.message?.includes("失败");
 
       if (shouldAutoRemove) {
         console.info("[conversion] completed", { fileName });
         setTimeout(() => {
-          if (
-            progresses.value[progressIndex]?.current >= 100 &&
-            !progresses.value[progressIndex]?.failed
-          ) {
-            progresses.value.splice(progressIndex, 1);
+          const i = progresses.value.findIndex(
+            (p) => p?.type === "conversion" && p?.fileName === fileName && p?.id === taskId
+          );
+          if (i !== -1 && progresses.value[i]?.current >= 100 && !progresses.value[i]?.failed) {
+            progresses.value.splice(i, 1);
           }
         }, 3000);
       }

@@ -755,10 +755,16 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (unsubscribeStream && typeof unsubscribeStream === 'function') {
-    unsubscribeStream();
+    try {
+      Promise.resolve(unsubscribeStream()).catch(() => {})
+    } catch {
+    }
   }
   if (unsubscribeWebModel && typeof unsubscribeWebModel === 'function') {
-    unsubscribeWebModel();
+    try {
+      Promise.resolve(unsubscribeWebModel()).catch(() => {})
+    } catch {
+    }
   }
   if (autosaveTimer.value) {
     clearTimeout(autosaveTimer.value);
