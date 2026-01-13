@@ -229,14 +229,7 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    let existing_pythonpath = std::env::var("PYTHONPATH").unwrap_or_default();
-    let marker_pythonpath = marker_src_dir.to_string_lossy().to_string();
-    let path_list_sep = if cfg!(windows) { ";" } else { ":" };
-    let combined_pythonpath = if existing_pythonpath.trim().is_empty() {
-        marker_pythonpath
-    } else {
-        format!("{}{}{}", marker_pythonpath, path_list_sep, existing_pythonpath)
-    };
+    let combined_pythonpath = marker_src_dir.to_string_lossy().to_string();
 
     cmd.env("PYTHONPATH", combined_pythonpath);
 
@@ -897,7 +890,7 @@ pub async fn convert_to_markdown(
         .and_then(|s| s.to_str())
         .unwrap_or("document")
         .to_string();
-    let expected_output_dir = PathBuf::from(&request.output_dir);
+    let expected_output_dir = PathBuf::from(&request.output_dir).join(&input_stem);
     let expected_md_path = expected_output_dir.join(format!("{}.md", input_stem));
 
     info!(
@@ -923,6 +916,8 @@ pub async fn convert_to_markdown(
 
     let model_dir_str = model_dir.to_string_lossy().to_string();
 
+    let _ = fs::create_dir_all(&expected_output_dir);
+
     let args: Vec<String> = vec![
         "-u".to_string(),
         script_path.to_string_lossy().to_string(),
@@ -930,8 +925,9 @@ pub async fn convert_to_markdown(
         "--output_format".to_string(),
         "markdown".to_string(),
         "--paginate_output".to_string(),
+        "--disable_multiprocessing".to_string(),
         "--output_dir".to_string(),
-        request.output_dir.clone(),
+        expected_output_dir.to_string_lossy().to_string(),
         "--progress_json".to_string(),
     ];
 
