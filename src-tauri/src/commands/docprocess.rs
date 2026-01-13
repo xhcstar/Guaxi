@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyList; // 导入 PyList 类型
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Cursor;
 use std::net::TcpListener;
@@ -944,6 +944,8 @@ pub async fn convert_to_markdown(
     cmd.args(&args)
         .current_dir(&marker_src_dir)
         .env("PYTHONPATH", combined_pythonpath)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
         .env("HF_HOME", model_dir_str.as_str())
         .env("HUGGINGFACE_HUB_CACHE", model_dir_str.as_str())
         .env("TRANSFORMERS_CACHE", model_dir_str.as_str())
@@ -966,14 +968,30 @@ pub async fn convert_to_markdown(
         .ok_or_else(|| "Failed to capture converter stderr".to_string())?;
 
     let output_file_holder: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
     let window_stdout = window.clone();
     let file_name_stdout = file_name.clone();
     let output_file_holder_stdout = output_file_holder.clone();
     let stdout_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let trimmed = line.trim();
+        let mut reader = BufReader::new(stdout);
+        let mut buf: Vec<u8> = Vec::new();
+
+        loop {
+            buf.clear();
+            let n = match reader.read_until(b'\n', &mut buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(file_name = file_name_stdout.as_str(), err = %e, "failed reading converter stdout");
+                    break;
+                }
+            };
+            if n == 0 {
+                break;
+            }
+
+            let line = String::from_utf8_lossy(&buf);
+            let trimmed = line.trim_matches(&['\r', '\n'][..]).trim();
             if trimmed.is_empty() {
                 continue;
             }
@@ -1031,13 +1049,37 @@ pub async fn convert_to_markdown(
     });
 
     let file_name_stderr = file_name.clone();
+    let stderr_tail_task = stderr_tail.clone();
     let stderr_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let trimmed = line.trim();
+        let mut reader = BufReader::new(stderr);
+        let mut buf: Vec<u8> = Vec::new();
+
+        loop {
+            buf.clear();
+            let n = match reader.read_until(b'\n', &mut buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(file_name = file_name_stderr.as_str(), err = %e, "failed reading converter stderr");
+                    break;
+                }
+            };
+            if n == 0 {
+                break;
+            }
+
+            let line = String::from_utf8_lossy(&buf);
+            let trimmed = line.trim_matches(&['\r', '\n'][..]).trim();
             if trimmed.is_empty() {
                 continue;
             }
+
+            if let Ok(mut g) = stderr_tail_task.lock() {
+                if g.len() >= 200 {
+                    g.pop_front();
+                }
+                g.push_back(trimmed.to_string());
+            }
+
             warn!(file_name = file_name_stderr.as_str(), line = trimmed, "converter stderr");
         }
     });
@@ -1058,7 +1100,22 @@ pub async fn convert_to_markdown(
     let _ = stderr_task.await;
 
     if !status.success() {
-        return Err(format!("Marker 转换失败: {}", status));
+        let tail = stderr_tail
+            .lock()
+            .ok()
+            .map(|g| {
+                let keep = 80usize;
+                let mut v: Vec<String> = g.iter().rev().take(keep).cloned().collect();
+                v.reverse();
+                v.join("\n")
+            })
+            .unwrap_or_default();
+
+        if tail.trim().is_empty() {
+            return Err(format!("Marker 转换失败: {}", status));
+        }
+
+        return Err(format!("Marker 转换失败: {}\n{}", status, tail));
     }
 
     let reported_output_file = output_file_holder
