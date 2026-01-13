@@ -272,12 +272,25 @@ export function useFormHandling({
 
   // 添加文件
   const addFile = async () => {
+    const flowId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    console.info("[import] addFile start", {
+      flowId,
+      filePath: currentForm.value.filePath,
+      importFileName: currentForm.value.importFileName,
+      library: currentForm.value.library,
+      knowledgeRepo: currentForm.value.knowledgeRepo,
+    });
+
     try {
       const validationError = await validateForm();
       if (validationError) {
+        console.warn("[import] validateForm failed", { flowId, validationError });
         message.error(validationError);
         return;
       }
+
+      console.info("[import] validateForm ok", { flowId });
 
       if (!currentForm.value.library || !currentForm.value.importFileName) {
         message.error(
@@ -288,10 +301,17 @@ export function useFormHandling({
       }
 
       // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
+      console.info("[import] invoke add_repo_import_file", {
+        flowId,
+        library: currentForm.value.library,
+        filePath: currentForm.value.filePath,
+      });
+
       const addResultInfo = await invoke("add_repo_import_file", {
         library: currentForm.value.library,
         filePath: currentForm.value.filePath,
       }).catch((error) => {
+        console.error("[import] add_repo_import_file failed", { flowId, error });
         let errorMessage = "Failed to import file";
         if (error.includes("Unsupported file type")) {
           errorMessage = "Unsupported file type";
@@ -299,6 +319,8 @@ export function useFormHandling({
         message.error(errorMessage);
         throw new Error(errorMessage);
       });
+
+      console.info("[import] add_repo_import_file ok", { flowId, addResultInfo });
 
       // 创建 importfileList
       const importfileList = createImportFileList(
@@ -334,9 +356,25 @@ export function useFormHandling({
           currentForm.value.library
         );
 
+        console.info("[import] buildConvertOutputFilePath", {
+          flowId,
+          outputDir,
+          fileToCheck,
+        });
+
         // 检查文件是否已转换
+        console.info("[import] invoke check_file_converted", {
+          flowId,
+          outputDir: fileToCheck,
+        });
+
         const isConverted = await invoke("check_file_converted", {
           outputDir: fileToCheck,
+        });
+
+        console.info("[import] check_file_converted result", {
+          flowId,
+          isConverted,
         });
 
         console.log("isConverted", isConverted);
@@ -356,6 +394,11 @@ export function useFormHandling({
         }
 
         // 开始监听进度事件
+        console.info("[import] startProgressListener", {
+          flowId,
+          filePath: currentForm.value.filePath,
+        });
+
         const unlisten = await startProgressListener(
           currentForm.value.filePath
         );
@@ -364,7 +407,15 @@ export function useFormHandling({
         isAddFileModalVisible.value = false;
 
         // 开始转换流程
+        console.info("[import] convertFile start", {
+          flowId,
+          filePath: currentForm.value.filePath,
+          outputDir,
+        });
+
         await convertFile(currentForm.value.filePath, outputDir);
+
+        console.info("[import] convertFile ok", { flowId });
 
         // 转换完成后刷新数据
         console.log("add_file currentDatabase", store.currentDatabase);
@@ -372,8 +423,11 @@ export function useFormHandling({
         resetForm();
 
         // 转换完成后取消监听
+        console.info("[import] unlisten conversion_progress", { flowId });
         unlisten();
       } catch (error) {
+        console.error("[import] conversion flow failed", { flowId, error });
+
         // 更新进度条状态为失败
         const fileName =
           currentForm.value.filePath.split(/[\\/]/).pop() || "未知文件";

@@ -142,6 +142,12 @@ export function useProgress({ store, message }) {
   const startProgressListener = async (filePath) => {
     const fileName = filePath.split(/[\\/]/).pop() || "未知文件";
 
+    console.info("[conversion] startProgressListener", {
+      fileName,
+      filePath,
+      ts: new Date().toISOString(),
+    });
+
     const newProgress = {
       show: true,
       current: 0,
@@ -156,8 +162,18 @@ export function useProgress({ store, message }) {
 
     const unlisten = await listen("conversion_progress", (event) => {
       if (event.payload?.fileName && event.payload.fileName !== fileName) {
+        console.debug("[conversion] progress ignored", {
+          listeningFor: fileName,
+          got: event.payload.fileName,
+        });
         return;
       }
+
+      console.debug("[conversion] progress", {
+        fileName,
+        current: event.payload.current,
+        message: event.payload.message,
+      });
 
       progresses.value[progressIndex] = {
         ...progresses.value[progressIndex],
@@ -167,6 +183,7 @@ export function useProgress({ store, message }) {
 
       // 转换完成后3秒自动移除
       if (event.payload.current >= 100) {
+        console.info("[conversion] completed", { fileName });
         setTimeout(() => {
           if (progresses.value[progressIndex]?.current >= 100) {
             progresses.value.splice(progressIndex, 1);
@@ -175,11 +192,23 @@ export function useProgress({ store, message }) {
       }
     });
 
-    return unlisten;
+    return () => {
+      console.info("[conversion] stopProgressListener", { fileName });
+      return unlisten();
+    };
   };
 
   // 转换文件
   const convertFile = async (inputPath, outputDir) => {
+    const fileName = inputPath.split(/[\\/]/).pop() || "未知文件";
+    const startedAt = Date.now();
+
+    console.info("[conversion] invoke convert_to_markdown", {
+      fileName,
+      inputPath,
+      outputDir,
+    });
+
     try {
       await invoke(
         "convert_to_markdown",
@@ -193,8 +222,17 @@ export function useProgress({ store, message }) {
           target: "main",
         }
       );
+
+      console.info("[conversion] convert_to_markdown ok", {
+        fileName,
+        durationMs: Date.now() - startedAt,
+      });
     } catch (error) {
-      console.error("Conversion failed:", error);
+      console.error("[conversion] convert_to_markdown failed", {
+        fileName,
+        durationMs: Date.now() - startedAt,
+        error,
+      });
       throw error;
     }
   };
@@ -291,6 +329,8 @@ export function useProgress({ store, message }) {
 
   // 取消转换任务
   const cancelConversion = async (fileName) => {
+    console.info("[conversion] cancelConversion", { fileName });
+
     try {
       await invoke("cancel_conversion", {
         fileName: fileName,
@@ -304,7 +344,7 @@ export function useProgress({ store, message }) {
 
       message.info(`已取消转换任务: ${fileName}`);
     } catch (error) {
-      console.error("取消转换失败:", error);
+      console.error("[conversion] cancelConversion failed", { fileName, error });
       message.error(`取消转换失败: ${error.message || error}`);
     }
   };

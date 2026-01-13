@@ -11,7 +11,7 @@ use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Window};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use image::ImageFormat; // 确保已导入 ImageFormat
 use base64::Engine as _; // 使用新的 base64 编码方式
 use base64::engine::general_purpose;
@@ -82,8 +82,9 @@ fn pick_free_port() -> Result<u16, String> {
 
 fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
     if let Ok(v) = std::env::var("GUAXI_MARKER_SOURCE_DIR") {
-        let p = PathBuf::from(v);
+        let p = PathBuf::from(&v);
         if p.exists() {
+            info!(marker_source_dir = p.to_string_lossy().as_ref(), "marker source dir resolved from env");
             return Ok(p);
         }
         return Err("GUAXI_MARKER_SOURCE_DIR 指向的目录不存在".to_string());
@@ -94,6 +95,7 @@ fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
             .join("..")
             .join("marker-1.10.1");
         if p.exists() {
+            info!(marker_source_dir = p.to_string_lossy().as_ref(), "marker source dir resolved from workspace");
             return Ok(p);
         }
     }
@@ -117,15 +119,24 @@ fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
 
 async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
     {
-        let mut st = marker_server_state().lock().map_err(|_| "MarkerServerState 锁失败".to_string())?;
+        let mut st = marker_server_state()
+            .lock()
+            .map_err(|_| "MarkerServerState 锁失败".to_string())?;
         if let Some(child) = st.child.as_mut() {
             match child.try_wait() {
                 Ok(None) => {
                     if let Some(port) = st.port {
+                        info!(port, "marker server already running, reuse");
                         return Ok(port);
                     }
                 }
-                Ok(Some(_)) | Err(_) => {
+                Ok(Some(status)) => {
+                    warn!(?status, "marker server exited, will restart");
+                    st.child = None;
+                    st.port = None;
+                }
+                Err(e) => {
+                    warn!(err = e.to_string(), "marker server state check failed, will restart");
                     st.child = None;
                     st.port = None;
                 }
@@ -135,6 +146,7 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
 
     let python_path = std::env::var("GUAXI_MARKER_PYTHON").unwrap_or_else(|_| "python".to_string());
     let model_dir = std::env::var("GUAXI_MARKER_MODELS_DIR").ok();
+    info!(python = python_path.as_str(), models_dir = model_dir.as_deref().unwrap_or(""), "marker server config");
 
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_dir = current_exe
@@ -186,6 +198,12 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         cmd.env("XDG_CACHE_HOME", dir);
     }
 
+    info!(
+        python = python_path.as_str(),
+        port,
+        cwd = marker_src_dir.to_string_lossy().as_ref(),
+        "spawning marker server"
+    );
     let child = cmd.spawn().map_err(|e| format!("启动 Marker 服务失败: {}", e))?;
 
     {
@@ -199,14 +217,20 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
     let client = Client::new();
     let health_url = format!("http://127.0.0.1:{}/", port);
 
-    for _ in 0..600 {
+    for i in 0..600 {
         if let Ok(resp) = client.get(&health_url).send().await {
             if resp.status().is_success() {
+                info!(port, tries = i + 1, "marker server is ready");
                 return Ok(port);
             }
         }
+        if i == 0 || (i + 1) % 40 == 0 {
+            info!(port, tries = i + 1, "waiting for marker server...");
+        }
         sleep(Duration::from_millis(500)).await;
     }
+
+    warn!(port, "marker server startup timed out");
 
     {
         let mut st = marker_server_state().lock().map_err(|_| "MarkerServerState 锁失败".to_string())?;
@@ -762,13 +786,18 @@ pub async fn convert_to_markdown(
     request: ConvertFileRequest,
     window: Window,
 ) -> Result<(), String> {
-    info!("Converting file to markdown: {:?}", request);
-
     let file_name = Path::new(&request.input_path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("未知文件")
         .to_string();
+
+    info!(
+        file_name = file_name.as_str(),
+        input_path = request.input_path.as_str(),
+        output_dir = request.output_dir.as_str(),
+        "convert_to_markdown start"
+    );
 
     let file_stem = Path::new(&request.input_path)
         .file_stem()
@@ -790,6 +819,7 @@ pub async fn convert_to_markdown(
 
     let port = ensure_marker_server(&window).await?;
     let base_url = format!("http://127.0.0.1:{}", port);
+    info!(file_name = file_name.as_str(), base_url = base_url.as_str(), "marker server ready for conversion");
 
     window
         .emit(
@@ -804,8 +834,11 @@ pub async fn convert_to_markdown(
         .ok();
 
     let client = Client::new();
+    let url = format!("{}/marker", base_url);
+    info!(file_name = file_name.as_str(), url = url.as_str(), "calling marker api");
+
     let resp = client
-        .post(format!("{}/marker", base_url))
+        .post(&url)
         .json(&serde_json::json!({
             "filepath": request.input_path,
             "output_format": "markdown",
@@ -815,8 +848,10 @@ pub async fn convert_to_markdown(
         .await
         .map_err(|e| format!("调用 Marker 服务失败: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Marker 服务返回错误状态: {}", resp.status()));
+    let status = resp.status();
+    if !status.is_success() {
+        warn!(file_name = file_name.as_str(), http_status = status.as_u16(), "marker api returned non-success");
+        return Err(format!("Marker 服务返回错误状态: {}", status));
     }
 
     let data: MarkerConvertResponse = resp
@@ -825,6 +860,7 @@ pub async fn convert_to_markdown(
         .map_err(|e| format!("解析 Marker 返回失败: {}", e))?;
 
     if !data.success {
+        warn!(file_name = file_name.as_str(), err = data.error.as_deref().unwrap_or(""), "marker conversion failed");
         return Err(data
             .error
             .unwrap_or_else(|| "Marker 转换失败".to_string()));
@@ -833,6 +869,13 @@ pub async fn convert_to_markdown(
     let markdown = data
         .output
         .ok_or_else(|| "Marker 返回的 markdown 为空".to_string())?;
+
+    info!(
+        file_name = file_name.as_str(),
+        markdown_len = markdown.len(),
+        image_count = data.images.as_ref().map(|m| m.len()).unwrap_or(0),
+        "marker conversion succeeded"
+    );
 
     window
         .emit(
@@ -855,7 +898,15 @@ pub async fn convert_to_markdown(
     std::fs::write(&md_path, markdown)
         .map_err(|e| format!("写入 markdown 失败: {}", e))?;
 
+    info!(
+        file_name = file_name.as_str(),
+        output_dir = output_dir.to_string_lossy().as_ref(),
+        md_path = md_path.to_string_lossy().as_ref(),
+        "wrote markdown output"
+    );
+
     if let Some(images) = data.images {
+        let mut wrote = 0usize;
         for (name, b64) in images {
             let safe_name = Path::new(&name)
                 .file_name()
@@ -869,7 +920,10 @@ pub async fn convert_to_markdown(
             let img_path = output_dir.join(safe_name);
             std::fs::write(&img_path, bytes)
                 .map_err(|e| format!("写入图片失败: {}", e))?;
+            wrote += 1;
         }
+
+        info!(file_name = file_name.as_str(), wrote, "wrote images");
     }
 
     window
