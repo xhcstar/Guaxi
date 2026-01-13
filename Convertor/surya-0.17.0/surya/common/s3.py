@@ -31,6 +31,8 @@ def get_model_name(pretrained_model_name_or_path: str):
 def download_file(remote_path: str, local_path: str, chunk_size: int = 1024 * 1024):
     local_path = Path(local_path)
     try:
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
         response = requests.get(remote_path, stream=True, allow_redirects=True)
         response.raise_for_status()  # Raise an exception for bad status codes
 
@@ -98,20 +100,27 @@ def download_directory(remote_path: str, local_dir: str):
         manifest_path = os.path.join(temp_dir, "manifest.json")
         download_file(manifest_file, manifest_path)
 
-        # List and download all files
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
 
+        os.makedirs(local_dir, exist_ok=True)
+        shutil.copy2(manifest_path, os.path.join(local_dir, "manifest.json"))
+
+        missing_files = []
+        for file in manifest["files"]:
+            if not os.path.exists(os.path.join(local_dir, file)):
+                missing_files.append(file)
+
         pbar = tqdm(
             desc=f"Downloading {model_name} model to {local_dir}",
-            total=len(manifest["files"]),
+            total=len(missing_files),
         )
 
         with ThreadPoolExecutor(
             max_workers=settings.PARALLEL_DOWNLOAD_WORKERS
         ) as executor:
             futures = []
-            for file in manifest["files"]:
+            for file in missing_files:
                 remote_file = join_urls(s3_url, file)
                 local_file = os.path.join(temp_dir, file)
                 futures.append(executor.submit(download_file, remote_file, local_file))
@@ -122,9 +131,14 @@ def download_directory(remote_path: str, local_dir: str):
 
         pbar.close()
 
-        # Move all files to new directory
-        for file in os.listdir(temp_dir):
-            shutil.move(os.path.join(temp_dir, file), local_dir)
+        for file in missing_files:
+            src = os.path.join(temp_dir, file)
+            dest = os.path.join(local_dir, file)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if os.path.exists(dest):
+                continue
+            if os.path.exists(src):
+                shutil.move(src, dest)
 
 
 class S3DownloaderMixin:
