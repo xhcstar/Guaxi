@@ -930,7 +930,6 @@ pub async fn convert_to_markdown(
         "--output_format".to_string(),
         "markdown".to_string(),
         "--paginate_output".to_string(),
-        "--disable_multiprocessing".to_string(),
         "--output_dir".to_string(),
         expected_output_dir.to_string_lossy().to_string(),
         "--progress_json".to_string(),

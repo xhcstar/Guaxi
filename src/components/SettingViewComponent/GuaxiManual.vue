@@ -14,6 +14,7 @@
             <li><a href="#features">主要功能</a></li>
             <li><a href="#quickstart">快速开始</a></li>
             <li><a href="#pages">页面与功能详解</a></li>
+            <li><a href="#editor">编辑器与右侧面板（重点）</a></li>
             <li><a href="#setting">设置：大模型与 Markdown 转换</a></li>
             <li><a href="#faq">常见问题</a></li>
           </ul>
@@ -30,10 +31,9 @@
 
           <div class="figure">
             <div class="figure-box">
-              <div class="figure-title">占位图：软件主界面</div>
-              <div class="figure-sub">建议文件：src/assets/manual/overview.png</div>
+              <img class="figure-img" src="../../assets/manual/overview.png" alt="软件主界面" />
             </div>
-            <div class="figure-caption">图 1：Guaxi 总览（占位）</div>
+            <div class="figure-caption">图 1：Guaxi 总览</div>
           </div>
         </section>
 
@@ -93,10 +93,9 @@
 
           <div class="figure">
             <div class="figure-box">
-              <div class="figure-title">占位图：设置-笔记库与资源库</div>
-              <div class="figure-sub">建议文件：src/assets/manual/setting-noterepo.png</div>
+              <img class="figure-img" src="../../assets/manual/setting-noterepo.png" alt="设置-笔记库与资源库" />
             </div>
-            <div class="figure-caption">图 2：建议的首次配置（占位）</div>
+            <div class="figure-caption">图 2：建议的首次配置</div>
           </div>
 
           <h3 class="h3">2）基本使用流程（建议）</h3>
@@ -113,33 +112,164 @@
         <section id="pages">
           <h2 class="h2">页面与功能详解</h2>
 
+          <div id="editor" class="page-section">
+            <div class="page-title">编辑器/阅读器（重点）</div>
+            <div class="page-desc">
+              首页（Home）为主要编辑入口，内置 Monaco 编辑器（支持 Markdown 常用操作、右键菜单与表格辅助）。资料库（Repository）右键“打开”后会启动阅读器窗口（Markdown/Text/Word/Epub 等），提供顶部工具栏、页内搜索、书签与右侧“我的笔记”面板。
+            </div>
+
+            <div class="manual-subtitle">Home：编辑器快捷键速查（Monaco）</div>
+            <ul class="manual-ul">
+              <li>保存：保存当前文件内容（操作：编辑后按快捷键；快捷键：Ctrl+S）。</li>
+              <li>模式：编辑 / 预览 / 分栏 / 实时预览（操作：点击编辑器模式切换按钮；快捷键：Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4）。</li>
+              <li>加粗：为选中内容添加/取消 **（操作：选中文本后点击工具条“加粗”；快捷键：Ctrl+B）。</li>
+              <li>斜体：为选中内容添加/取消 *（操作：选中文本后点击工具条“斜体”；快捷键：Ctrl+I）。</li>
+              <li>删除线：为选中内容添加/取消 ~~（操作：选中文本后点击工具条“删除线”；快捷键：Ctrl+Shift+X）。</li>
+              <li>插入链接：插入 [文字](URL)（操作：选中文本或放置光标后触发；快捷键：Ctrl+K）。</li>
+              <li>插入表格：插入 Markdown 表格骨架（操作：在光标处插入；快捷键：Ctrl+Alt+T）。</li>
+              <li>表格：下方插入行（Ctrl+Alt+↓）；删除当前行（Ctrl+Alt+Shift+↓）。</li>
+              <li>表格：右侧插入列（Ctrl+Alt+→）；删除当前列（Ctrl+Alt+Shift+→）。</li>
+              <li>编辑位置跳转：返回上次编辑位置（Alt+←）；前进到下一编辑位置（Alt+→）。</li>
+              <li>剪切/复制/粘贴：Ctrl+X / Ctrl+C / Ctrl+V（也可用右键菜单）。</li>
+            </ul>
+
+            <div class="manual-subtitle">Home：编辑器右键菜单</div>
+            <ul class="manual-ul">
+              <li>剪切 / 复制 / 粘贴：在编辑器内右键 → 选择对应操作（快捷键：Ctrl+X / Ctrl+C / Ctrl+V）。</li>
+              <li>Markdown 格式化（全文）：右键 → Markdown 格式化（全文），仅 Markdown 文件可用（快捷键：无）。</li>
+              <li>Markdown 格式化（选中）：先选中文本 → 右键 → Markdown 格式化（选中）（快捷键：无）。</li>
+              <li>跳转到上次编辑位置：右键 → 跳转到上次编辑位置（快捷键：Alt+←）。</li>
+              <li>跳转到下一编辑位置：右键 → 跳转到下一编辑位置（快捷键：Alt+→）。</li>
+              <li>插入Markdown模板：右键 → 插入Markdown模板，会在光标/选区插入示例模板（快捷键：无）。</li>
+              <li>命令面板：右键 → 命令面板（快捷键：Monaco 默认 F1）。</li>
+            </ul>
+
+            <div class="manual-subtitle">Home：选中浮动工具条</div>
+            <ul class="manual-ul">
+              <li>触发：在编辑器内框选文字后松开鼠标，会弹出浮动工具条。</li>
+              <li>常用项：加粗（Ctrl+B）、斜体（Ctrl+I）、删除线（Ctrl+Shift+X）、插入链接（Ctrl+K）、内联代码、插入表格（Ctrl+Alt+T）。</li>
+            </ul>
+
+            <div class="manual-subtitle">Home：表格浮动工具条</div>
+            <ul class="manual-ul">
+              <li>触发：光标位于 Markdown 表格内时显示，用于快速增删行/列。</li>
+              <li>下方插入行 / 删除当前行：Ctrl+Alt+↓ / Ctrl+Alt+Shift+↓。</li>
+              <li>右侧插入列 / 删除当前列：Ctrl+Alt+→ / Ctrl+Alt+Shift+→。</li>
+            </ul>
+
+            <div class="manual-subtitle">阅读器：工具栏图标与作用（Repository 右键“打开”后）</div>
+            <ul class="manual-ul">
+              <li>← / →：上一页 / 下一页（操作：点击顶部按钮；快捷键：PageUp / PageDown）。</li>
+              <li>适合宽度：将页面缩放到合适宽度（操作：点击“适合宽度”；快捷键：Ctrl+0）。</li>
+              <li>－ / ＋：缩小 / 放大（操作：点击缩放按钮；快捷键：Ctrl+- / Ctrl+=）。</li>
+              <li>布局（切换布局）：左右分栏 / 仅左侧 / 仅右侧 / 大纲（操作：点击“切换布局”下拉；快捷键：Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4）。</li>
+              <li>书签：添加/取消当前页书签；书签列表：打开书签库并跳转到指定页（快捷键：无）。</li>
+              <li>笔记：显示/隐藏右侧“我的笔记”面板（操作：点击“笔记”；快捷键：Ctrl+N）。</li>
+              <li>译文：显示/隐藏译文（操作：点击“译文”；快捷键：Ctrl+T）。</li>
+            </ul>
+
+            <div class="manual-subtitle">阅读器：模式切换与分栏（重点）</div>
+            <ul class="manual-ul">
+              <li>左右分栏：左侧显示原文/预览，右侧显示渲染后的内容（最适合对照阅读与做笔记）。</li>
+              <li>仅左侧 / 仅右侧：专注单栏阅读；中间拖拽线仅在“左右分栏”模式出现。</li>
+              <li>大纲：切换显示大纲面板，便于按标题快速定位。</li>
+            </ul>
+
+            <div class="manual-subtitle">阅读器：页内搜索（重点）</div>
+            <ul class="manual-ul">
+              <li>打开：Ctrl+F；关闭：Esc 或搜索栏“关闭”按钮。</li>
+              <li>跳转：Enter 下一个、Shift+Enter 上一个；也可点击搜索栏中的 ← / →。</li>
+              <li>计数：显示为 当前/总数，例如 3/12。</li>
+            </ul>
+
+            <div class="manual-subtitle">阅读器：右侧“我的笔记”面板（重点）</div>
+            <ul class="manual-ul">
+              <li>打开/关闭：工具栏“笔记”按钮或 Ctrl+N；面板右上角“×”关闭。</li>
+              <li>新增卡片：点击“添加新卡片”。</li>
+              <li>编辑：点击卡片正文进入编辑；保存（保存图标，支持 Ctrl+S）；退出编辑（退出图标）。</li>
+              <li>删除：垃圾桶图标删除当前卡片。</li>
+            </ul>
+          </div>
+
+          <div class="page-section">
+            <div class="page-title">各页面顶部栏图标速查</div>
+            <div class="page-desc">
+              各页面顶部栏的图标会随页面而变化，下列为常见入口及其作用。
+            </div>
+            <ul class="manual-ul">
+              <li>左侧栏开关（面板收起图标）：切换左侧边栏（文件树/导航/分类）。</li>
+              <li>右侧栏开关（面板收起图标）：切换右侧边栏（详情/大纲/筛选/信息面板）。</li>
+              <li>放大镜（首页/资料库）：用于搜索文件或内容；资料库支持更细的搜索类型下拉选项。</li>
+              <li>截图：首页为“截图并插入”；资料库为“截图保存到当前目录 images 文件夹”。</li>
+              <li>首页额外入口：新建知识库 / 打开大纲 / 模板管理 / 纵向分屏 / 横向分屏。</li>
+              <li>聊天额外入口：打开网页模型（仅当当前模型为网页模式时可用）。</li>
+            </ul>
+          </div>
+
           <div class="page-section">
             <div class="page-title">首页（Home）</div>
             <div class="page-desc">
-              首页包含顶部工具条与主内容区。顶部提供侧栏展开/收起、搜索、截图、打开其他页面入口等能力（以实际按钮为准）。
-              左侧通常为文件树/目录，右侧为辅助面板（如大纲/信息面板），均支持拖拽调整宽度。
+              首页包含顶部工具条与主内容区。顶部提供侧栏展开/收起、搜索、截图并插入、模板管理、分屏等能力；左侧通常为文件树/目录，右侧为辅助面板（如大纲/搜索导航），左右栏均支持拖拽调整宽度。
             </div>
+
+            <div class="manual-subtitle">顶部栏图标与使用</div>
+            <ul class="manual-ul">
+              <li>左侧栏开关（面板收起图标）：展开/收起左侧边栏（操作：点击左上角图标；快捷键：无）。</li>
+              <li>搜索（放大镜）：搜索文件/内容/摘录（操作：点击输入框 → 选择类型 → 输入关键词 → 回车；快捷键：Enter 执行）。</li>
+              <li>新建知识库（Book+）：创建新的知识库（操作：点击图标 → 在弹窗中填写信息并提交；快捷键：无）。</li>
+              <li>大纲（列表图标）：打开/切换右侧大纲面板（操作：点击图标；快捷键：无）。</li>
+              <li>模板管理（Box 图标）：打开模板管理器窗口（操作：点击图标 → 在模板列表中点“插入”把模板发送到编辑器；快捷键：无）。</li>
+              <li>截图并插入（Screenshot 图标）：截图并将识别结果以 Markdown 插入到当前编辑器（操作：点击图标 → 按系统提示完成截图；快捷键：无）。</li>
+              <li>纵向分屏：将编辑区分为左右两个编辑器（操作：点击“纵向分屏”；快捷键：无）。</li>
+              <li>横向分屏：将编辑区分为上下两个编辑器（操作：点击“横向分屏”；快捷键：无）。</li>
+              <li>右侧栏开关（面板收起图标）：展开/收起右侧边栏（操作：点击右上角图标；快捷键：无）。</li>
+            </ul>
+
             <div class="figure">
               <div class="figure-box">
-                <div class="figure-title">占位图：首页布局</div>
-                <div class="figure-sub">建议文件：src/assets/manual/page-home.png</div>
+                <img class="figure-img" src="../../assets/manual/page-home.png" alt="首页布局" />
               </div>
-              <div class="figure-caption">图 3：首页（占位）</div>
+              <div class="figure-caption">图 3：首页</div>
             </div>
           </div>
 
           <div class="page-section">
             <div class="page-title">资料库（Repository）</div>
             <div class="page-desc">
-              该页面用于管理导入的文件资料。顶部提供“搜索导入文件”的输入框，支持关键词搜索与下拉选项；
-              右上角有截图等快捷入口；左右侧栏支持折叠与拖拽调整宽度。
+              该页面用于管理导入的本地资料文件。你可以导入文件并补充元数据（文件库/知识库/标签/描述），通过顶部搜索快速定位；在表格中右键条目可打开阅读器窗口进行阅读与做笔记。
             </div>
+
+            <div class="manual-subtitle">导入文件（重点）</div>
+            <ul class="manual-ul">
+              <li>入口：点击表格工具栏“导入文件”（Folder+ 图标）。</li>
+              <li>选择文件：在“文件路径”行点击“选择文件”，选择本地文件后会自动填充文件名/类型/大小/入库时间等只读字段。</li>
+              <li>补充信息：填写“文件描述”，选择或输入“文件库 / 知识库”，填写“文件标签”（多个用英文逗号分隔）。</li>
+              <li>提交：点击“提交”完成导入（快捷键：无）。</li>
+            </ul>
+
+            <div class="manual-subtitle">顶部栏图标与搜索</div>
+            <ul class="manual-ul">
+              <li>左侧栏开关：展开/收起左侧边栏（快捷键：无）。</li>
+              <li>搜索（放大镜）：点击输入框后选择“按文件名/描述/标签/文件库/知识库/类型”搜索，输入关键词后回车执行。</li>
+              <li>高级输入（可选）：在关键词中可使用 <b>lib:</b>、<b>tag:</b>、<b>type:</b>、<b>repo:</b> 组合过滤（例如：<b>lib:Books tag:AI type:pdf</b>）。</li>
+              <li>截图（Screenshot 图标）：将截图保存到当前文件同目录下的 <b>images</b> 文件夹（文件名同源文件名，后缀 .png）（快捷键：无）。</li>
+              <li>右侧栏开关：展开/收起右侧边栏（快捷键：无）。</li>
+            </ul>
+
+            <div class="manual-subtitle">资料条目右键菜单</div>
+            <ul class="manual-ul">
+              <li>打开：右键某行 → 打开，会创建独立阅读器窗口（支持：pdf、markdown/md、html/htm、epub、word/doc/docx、txt；快捷键：无）。</li>
+              <li>打开导入文件所在目录 / 打开笔记文件所在目录：用于在系统文件管理器中定位文件（快捷键：无）。</li>
+              <li>编辑：修改条目元数据（描述/标签等）并保存（快捷键：无）。</li>
+              <li>删除 / 删除该条目及相关文件：删除当前条目（后者会清理相关文件）（快捷键：无）。</li>
+              <li>移动 / 导出 / 分享：对条目执行对应操作（以当前界面为准；快捷键：无）。</li>
+            </ul>
+
             <div class="figure">
               <div class="figure-box">
-                <div class="figure-title">占位图：资料库搜索</div>
-                <div class="figure-sub">建议文件：src/assets/manual/page-repo-search.png</div>
+                <img class="figure-img" src="../../assets/manual/page-repo-search.png" alt="资料库搜索" />
               </div>
-              <div class="figure-caption">图 4：资料库搜索（占位）</div>
+              <div class="figure-caption">图 4：资料库搜索</div>
             </div>
           </div>
 
@@ -166,10 +296,9 @@
             </div>
             <div class="figure">
               <div class="figure-box">
-                <div class="figure-title">占位图：聊天页面与模型选择</div>
-                <div class="figure-sub">建议文件：src/assets/manual/page-chat.png</div>
+                <img class="figure-img" src="../../assets/manual/page-chat.png" alt="聊天页面与模型选择" />
               </div>
-              <div class="figure-caption">图 6：聊天（占位）</div>
+              <div class="figure-caption">图 6：聊天</div>
             </div>
           </div>
 
@@ -181,10 +310,9 @@
             </div>
             <div class="figure">
               <div class="figure-box">
-                <div class="figure-title">占位图：知识库管理与创建</div>
-                <div class="figure-sub">建议文件：src/assets/manual/page-brain.png</div>
+                <img class="figure-img" src="../../assets/manual/page-brain.png" alt="知识库管理与创建" />
               </div>
-              <div class="figure-caption">图 7：知识库（占位）</div>
+              <div class="figure-caption">图 7：知识库</div>
             </div>
           </div>
 
@@ -196,10 +324,9 @@
             </div>
             <div class="figure">
               <div class="figure-box">
-                <div class="figure-title">占位图：应用中心</div>
-                <div class="figure-sub">建议文件：src/assets/manual/page-application.png</div>
+                <img class="figure-img" src="../../assets/manual/page-application.png" alt="应用中心" />
               </div>
-              <div class="figure-caption">图 8：应用中心（占位）</div>
+              <div class="figure-caption">图 8：应用中心</div>
             </div>
           </div>
 
@@ -211,10 +338,9 @@
             </div>
             <div class="figure">
               <div class="figure-box">
-                <div class="figure-title">占位图：设置页面与菜单</div>
-                <div class="figure-sub">建议文件：src/assets/manual/page-setting.png</div>
+                <img class="figure-img" src="../../assets/manual/page-setting.png" alt="设置页面与菜单" />
               </div>
-              <div class="figure-caption">图 9：设置页面（占位）</div>
+              <div class="figure-caption">图 9：设置页面</div>
             </div>
           </div>
         </section>
@@ -351,11 +477,12 @@ import { NCard, NSpace, NAlert, NDivider, NTag } from 'naive-ui'
 .figure-box {
   border: 1px dashed var(--guaxi-border);
   border-radius: 12px;
-  height: 180px;
+  min-height: 360px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  align-items: center;
+  align-items: stretch;
   background: rgba(127, 127, 127, 0.08);
   user-select: none;
 }
@@ -374,6 +501,14 @@ import { NCard, NSpace, NAlert, NDivider, NTag } from 'naive-ui'
   margin-top: 6px;
   color: var(--guaxi-text-secondary);
   font-size: 12px;
+}
+
+.figure-img {
+  width: 100%;
+  height: auto;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 .feature-grid {
@@ -418,6 +553,21 @@ import { NCard, NSpace, NAlert, NDivider, NTag } from 'naive-ui'
   margin: 8px 0 0;
   padding-left: 18px;
   line-height: 1.9;
+}
+
+.manual-subtitle {
+  margin-top: 10px;
+  font-weight: 700;
+}
+
+.manual-ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  line-height: 1.9;
+}
+
+.manual-ul li {
+  margin: 2px 0;
 }
 
 .qa {
