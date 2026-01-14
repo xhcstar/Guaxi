@@ -58,12 +58,12 @@
 
         <n-form label-placement="left" label-width="auto" :show-require-mark="false">
           <n-form-item label="Markdown 转换模型">
-            <n-input v-model:value="markdownModelsArchivePath" :disabled="loading" placeholder="选择模型压缩包（.zip）" />
+            <n-input v-model:value="markdownModelsArchivePath" :disabled="installingModels" placeholder="选择模型压缩包（.zip）" />
           </n-form-item>
           <n-form-item label="操作">
             <n-space>
-              <n-button :disabled="loading" @click="pickMarkdownModelsArchive">选择压缩包...</n-button>
-              <n-button :disabled="loading" type="primary" @click="installMarkdownModels">安装</n-button>
+              <n-button :disabled="installingModels" @click="pickMarkdownModelsArchive">选择压缩包...</n-button>
+              <n-button :disabled="installingModels" :loading="installingModels" type="primary" @click="installMarkdownModels">安装</n-button>
             </n-space>
           </n-form-item>
         </n-form>
@@ -72,12 +72,12 @@
 
         <n-form label-placement="left" label-width="auto" :show-require-mark="false">
           <n-form-item label="模型运行环境">
-            <n-input v-model:value="markdownConvertorEnvArchivePath" :disabled="loading" placeholder="选择运行环境压缩包（将拷贝到 utils/MarkdownConvertor）" />
+            <n-input v-model:value="markdownConvertorEnvArchivePath" :disabled="copyingEnv" placeholder="选择运行环境压缩包（将拷贝到 utils/MarkdownConvertor）" />
           </n-form-item>
           <n-form-item label="操作">
             <n-space>
-              <n-button :disabled="loading" @click="pickMarkdownConvertorEnvArchive">选择压缩包...</n-button>
-              <n-button :disabled="loading" type="primary" @click="installMarkdownConvertorEnv">拷贝</n-button>
+              <n-button :disabled="copyingEnv" @click="pickMarkdownConvertorEnvArchive">选择压缩包...</n-button>
+              <n-button :disabled="copyingEnv" :loading="copyingEnv" type="primary" @click="installMarkdownConvertorEnv">拷贝</n-button>
             </n-space>
           </n-form-item>
         </n-form>
@@ -127,6 +127,8 @@ const chatRecordRoot = ref('')
 
 const markdownModelsArchivePath = ref('')
 const markdownConvertorEnvArchivePath = ref('')
+const installingModels = ref(false)
+const copyingEnv = ref(false)
 
 const form = reactive({
   chatgpt_api_key: '',
@@ -219,15 +221,16 @@ const installMarkdownModels = async () => {
     return
   }
 
-  loading.value = true
+  installingModels.value = true
   try {
-    const installedTo = await invoke('install_markdown_models_archive', { archive_path: p })
+    message.info('开始安装模型（预计约10分钟）')
+    const installedTo = await invoke('install_markdown_models_archive', { archivePath: p })
     message.success(`模型已安装到: ${installedTo}`)
   } catch (e) {
     console.error('安装 Markdown 转换模型失败:', e)
     message.error('安装 Markdown 转换模型失败')
   } finally {
-    loading.value = false
+    installingModels.value = false
   }
 }
 
@@ -250,15 +253,16 @@ const installMarkdownConvertorEnv = async () => {
     return
   }
 
-  loading.value = true
+  copyingEnv.value = true
   try {
-    const installedTo = await invoke('install_markdown_convertor_env_archive', { archive_path: p })
+    message.info('开始拷贝运行环境（预计约10分钟）')
+    const installedTo = await invoke('install_markdown_convertor_env_archive', { archivePath: p })
     message.success(`运行环境压缩包已拷贝到: ${installedTo}`)
   } catch (e) {
     console.error('拷贝模型运行环境压缩包失败:', e)
     message.error('拷贝模型运行环境压缩包失败')
   } finally {
-    loading.value = false
+    copyingEnv.value = false
   }
 }
 

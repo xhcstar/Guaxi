@@ -543,88 +543,167 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn install_markdown_models_archive(archive_path: String) -> Result<String, String> {
-    let p = archive_path.trim();
-    if p.is_empty() {
-        return Err("archive_path is empty".to_string());
+fn find_dir_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 || !root.is_dir() {
+        return None;
     }
 
-    let zip_path = PathBuf::from(p);
-    if !zip_path.is_file() {
-        return Err(format!("找不到模型压缩包: {}", zip_path.to_string_lossy()));
-    }
-
-    if !zip_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.eq_ignore_ascii_case("zip"))
+    if root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s == name)
         .unwrap_or(false)
     {
-        return Err("模型压缩包仅支持 .zip".to_string());
+        return Some(root.to_path_buf());
     }
 
-    let exe = exe_dir()?;
-    let models_dir = exe.join("utils").join("Models");
-    let surya_models_dir = models_dir.join("surya_models");
-    fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
 
-    let temp_dir = exe
-        .join("tmp")
-        .join(format!("surya_models_{}", Uuid::new_v4()));
-    remove_path_if_exists(&temp_dir)?;
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+        if p.file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s == name)
+            .unwrap_or(false)
+        {
+            return Some(p);
+        }
 
-    info!(
-        archive_path = zip_path.to_string_lossy().as_ref(),
-        temp_dir = temp_dir.to_string_lossy().as_ref(),
-        "extracting markdown models archive"
-    );
-
-    extract_zip_to_dir(&zip_path, &temp_dir)?;
-
-    let packaged_surya_models = temp_dir.join("surya_models");
-    remove_path_if_exists(&surya_models_dir)?;
-
-    if packaged_surya_models.is_dir() {
-        copy_dir_recursive(&packaged_surya_models, &surya_models_dir)?;
-    } else {
-        copy_dir_recursive(&temp_dir, &surya_models_dir)?;
+        if let Some(found) = find_dir_by_name(&p, name, max_depth - 1) {
+            return Some(found);
+        }
     }
 
-    let _ = remove_path_if_exists(&temp_dir);
-
-    Ok(surya_models_dir.to_string_lossy().to_string())
+    None
 }
 
 #[tauri::command]
-pub fn install_markdown_convertor_env_archive(archive_path: String) -> Result<String, String> {
-    let p = archive_path.trim();
-    if p.is_empty() {
-        return Err("archive_path is empty".to_string());
-    }
+pub async fn install_markdown_models_archive(archive_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = archive_path.trim();
+        if p.is_empty() {
+            return Err("archive_path is empty".to_string());
+        }
 
-    let src = PathBuf::from(p);
-    if !src.is_file() {
-        return Err(format!("找不到运行环境压缩包: {}", src.to_string_lossy()));
-    }
+        let zip_path = PathBuf::from(p);
+        if !zip_path.is_file() {
+            return Err(format!("找不到模型压缩包: {}", zip_path.to_string_lossy()));
+        }
 
-    let exe = exe_dir()?;
-    let dst_dir = exe.join("utils").join("MarkdownConvertor");
-    fs::create_dir_all(&dst_dir).map_err(|e| e.to_string())?;
+        if !zip_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
+            return Err("模型压缩包仅支持 .zip".to_string());
+        }
 
-    let name = src
-        .file_name()
-        .ok_or_else(|| "无法获取压缩包文件名".to_string())?;
-    let dst = dst_dir.join(name);
+        let exe = exe_dir()?;
+        let utils_dir = exe.join("utils");
+        let models_dir = utils_dir.join("Models");
+        fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
 
-    if dst.exists() {
-        let _ = fs::remove_file(&dst);
-    }
+        let temp_dir = exe
+            .join("tmp")
+            .join(format!("surya_models_{}", Uuid::new_v4()));
+        remove_path_if_exists(&temp_dir)?;
+        fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
-    fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+        info!(
+            archive_path = zip_path.to_string_lossy().as_ref(),
+            temp_dir = temp_dir.to_string_lossy().as_ref(),
+            "extracting markdown models archive"
+        );
 
-    Ok(dst.to_string_lossy().to_string())
+        extract_zip_to_dir(&zip_path, &temp_dir)?;
+
+        let packaged_surya_models = find_dir_by_name(&temp_dir, "surya_models", 5)
+            .ok_or_else(|| "压缩包内未找到 surya_models 目录".to_string())?;
+
+        let dst_surya_models = models_dir.join("surya_models");
+        remove_path_if_exists(&dst_surya_models)?;
+        copy_dir_recursive(&packaged_surya_models, &dst_surya_models)?;
+
+        let _ = remove_path_if_exists(&temp_dir);
+
+        if !dst_surya_models.is_dir() {
+            return Err(format!(
+                "模型目录校验失败: {}",
+                dst_surya_models.to_string_lossy()
+            ));
+        }
+
+        Ok(dst_surya_models.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn install_markdown_convertor_env_archive(archive_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = archive_path.trim();
+        if p.is_empty() {
+            return Err("archive_path is empty".to_string());
+        }
+
+        let zip_path = PathBuf::from(p);
+        if !zip_path.is_file() {
+            return Err(format!("找不到运行环境压缩包: {}", zip_path.to_string_lossy()));
+        }
+
+        if !zip_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
+            return Err("运行环境压缩包仅支持 .zip".to_string());
+        }
+
+        let exe = exe_dir()?;
+        let utils_dir = exe.join("utils");
+        fs::create_dir_all(&utils_dir).map_err(|e| e.to_string())?;
+
+        let temp_dir = exe
+            .join("tmp")
+            .join(format!("markdown_convertor_env_{}", Uuid::new_v4()));
+        remove_path_if_exists(&temp_dir)?;
+        fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+        info!(
+            archive_path = zip_path.to_string_lossy().as_ref(),
+            temp_dir = temp_dir.to_string_lossy().as_ref(),
+            "extracting markdown convertor env archive"
+        );
+
+        extract_zip_to_dir(&zip_path, &temp_dir)?;
+
+        let packaged_convertor_dir = find_dir_by_name(&temp_dir, "MarkdownConvertor", 5)
+            .ok_or_else(|| "压缩包内未找到 MarkdownConvertor 目录".to_string())?;
+
+        let dst_convertor_dir = utils_dir.join("MarkdownConvertor");
+        remove_path_if_exists(&dst_convertor_dir)?;
+        copy_dir_recursive(&packaged_convertor_dir, &dst_convertor_dir)?;
+
+        let _ = remove_path_if_exists(&temp_dir);
+
+        let expected = dst_convertor_dir.join("marker-1.10.1");
+        if !expected.is_dir() {
+            return Err(format!(
+                "运行环境目录校验失败: {}",
+                expected.to_string_lossy()
+            ));
+        }
+
+        Ok(expected.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
