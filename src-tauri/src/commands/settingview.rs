@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use uuid::Uuid;
+use zip::ZipArchive;
 
 use git2::{Repository, Signature};
 
@@ -467,6 +468,163 @@ pub fn set_chat_record_root(path: String) -> Result<(), String> {
     config.chat_record_root = root_path.to_string_lossy().to_string();
     save_config(&config);
     Ok(())
+}
+
+fn exe_dir() -> Result<PathBuf, String> {
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
+    exe_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())
+}
+
+fn remove_path_if_exists(p: &Path) -> Result<(), String> {
+    if !p.exists() {
+        return Ok(());
+    }
+    if p.is_dir() {
+        fs::remove_dir_all(p).map_err(|e| e.to_string())?;
+    } else {
+        fs::remove_file(p).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn extract_zip_to_dir(zip_path: &Path, target_dir: &Path) -> Result<(), String> {
+    let f = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(f).map_err(|e| e.to_string())?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let out_path = target_dir.join(file.mangled_name());
+
+        if file.name().ends_with('/') {
+            fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+
+        if let Some(p) = out_path.parent() {
+            if !p.exists() {
+                fs::create_dir_all(p).map_err(|e| e.to_string())?;
+            }
+        }
+
+        let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut file, &mut out).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let ty = entry.file_type().map_err(|e| e.to_string())?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if ty.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if ty.is_file() {
+            if let Some(p) = dst_path.parent() {
+                if !p.exists() {
+                    fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                }
+            }
+            if dst_path.exists() {
+                let _ = fs::remove_file(&dst_path);
+            }
+            fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn install_markdown_models_archive(archive_path: String) -> Result<String, String> {
+    let p = archive_path.trim();
+    if p.is_empty() {
+        return Err("archive_path is empty".to_string());
+    }
+
+    let zip_path = PathBuf::from(p);
+    if !zip_path.is_file() {
+        return Err(format!("找不到模型压缩包: {}", zip_path.to_string_lossy()));
+    }
+
+    if !zip_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+    {
+        return Err("模型压缩包仅支持 .zip".to_string());
+    }
+
+    let exe = exe_dir()?;
+    let models_dir = exe.join("utils").join("Models");
+    let surya_models_dir = models_dir.join("surya_models");
+    fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
+
+    let temp_dir = exe
+        .join("tmp")
+        .join(format!("surya_models_{}", Uuid::new_v4()));
+    remove_path_if_exists(&temp_dir)?;
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    info!(
+        archive_path = zip_path.to_string_lossy().as_ref(),
+        temp_dir = temp_dir.to_string_lossy().as_ref(),
+        "extracting markdown models archive"
+    );
+
+    extract_zip_to_dir(&zip_path, &temp_dir)?;
+
+    let packaged_surya_models = temp_dir.join("surya_models");
+    remove_path_if_exists(&surya_models_dir)?;
+
+    if packaged_surya_models.is_dir() {
+        copy_dir_recursive(&packaged_surya_models, &surya_models_dir)?;
+    } else {
+        copy_dir_recursive(&temp_dir, &surya_models_dir)?;
+    }
+
+    let _ = remove_path_if_exists(&temp_dir);
+
+    Ok(surya_models_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn install_markdown_convertor_env_archive(archive_path: String) -> Result<String, String> {
+    let p = archive_path.trim();
+    if p.is_empty() {
+        return Err("archive_path is empty".to_string());
+    }
+
+    let src = PathBuf::from(p);
+    if !src.is_file() {
+        return Err(format!("找不到运行环境压缩包: {}", src.to_string_lossy()));
+    }
+
+    let exe = exe_dir()?;
+    let dst_dir = exe.join("utils").join("MarkdownConvertor");
+    fs::create_dir_all(&dst_dir).map_err(|e| e.to_string())?;
+
+    let name = src
+        .file_name()
+        .ok_or_else(|| "无法获取压缩包文件名".to_string())?;
+    let dst = dst_dir.join(name);
+
+    if dst.exists() {
+        let _ = fs::remove_file(&dst);
+    }
+
+    fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+
+    Ok(dst.to_string_lossy().to_string())
 }
 
 #[tauri::command]

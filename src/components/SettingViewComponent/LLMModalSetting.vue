@@ -56,6 +56,34 @@
 
         <n-divider />
 
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="Markdown 转换模型">
+            <n-input v-model:value="markdownModelsArchivePath" :disabled="loading" placeholder="选择模型压缩包（.zip）" />
+          </n-form-item>
+          <n-form-item label="操作">
+            <n-space>
+              <n-button :disabled="loading" @click="pickMarkdownModelsArchive">选择压缩包...</n-button>
+              <n-button :disabled="loading" type="primary" @click="installMarkdownModels">安装</n-button>
+            </n-space>
+          </n-form-item>
+        </n-form>
+
+        <n-divider />
+
+        <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+          <n-form-item label="模型运行环境">
+            <n-input v-model:value="markdownConvertorEnvArchivePath" :disabled="loading" placeholder="选择运行环境压缩包（将拷贝到 utils/MarkdownConvertor）" />
+          </n-form-item>
+          <n-form-item label="操作">
+            <n-space>
+              <n-button :disabled="loading" @click="pickMarkdownConvertorEnvArchive">选择压缩包...</n-button>
+              <n-button :disabled="loading" type="primary" @click="installMarkdownConvertorEnv">拷贝</n-button>
+            </n-space>
+          </n-form-item>
+        </n-form>
+
+        <n-divider />
+
         <div class="status">
           <div class="status-title">当前状态</div>
           <n-list hoverable style="max-width: 100%">
@@ -96,6 +124,9 @@ const loading = ref(false)
 const message = useMessage()
 
 const chatRecordRoot = ref('')
+
+const markdownModelsArchivePath = ref('')
+const markdownConvertorEnvArchivePath = ref('')
 
 const form = reactive({
   chatgpt_api_key: '',
@@ -164,6 +195,68 @@ const saveChatRecordRoot = async () => {
   } catch (e) {
     console.error('保存 ChatRecord 路径失败:', e)
     message.error('保存 ChatRecord 路径失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const pickMarkdownModelsArchive = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Archive', extensions: ['zip'] }],
+    })
+    if (selected) markdownModelsArchivePath.value = String(selected)
+  } catch (e) {
+    console.error('选择 Markdown 转换模型压缩包失败:', e)
+  }
+}
+
+const installMarkdownModels = async () => {
+  const p = markdownModelsArchivePath.value.trim()
+  if (!p) {
+    message.warning('请先选择模型压缩包')
+    return
+  }
+
+  loading.value = true
+  try {
+    const installedTo = await invoke('install_markdown_models_archive', { archive_path: p })
+    message.success(`模型已安装到: ${installedTo}`)
+  } catch (e) {
+    console.error('安装 Markdown 转换模型失败:', e)
+    message.error('安装 Markdown 转换模型失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const pickMarkdownConvertorEnvArchive = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Archive', extensions: ['zip', '7z', 'rar'] }],
+    })
+    if (selected) markdownConvertorEnvArchivePath.value = String(selected)
+  } catch (e) {
+    console.error('选择模型运行环境压缩包失败:', e)
+  }
+}
+
+const installMarkdownConvertorEnv = async () => {
+  const p = markdownConvertorEnvArchivePath.value.trim()
+  if (!p) {
+    message.warning('请先选择运行环境压缩包')
+    return
+  }
+
+  loading.value = true
+  try {
+    const installedTo = await invoke('install_markdown_convertor_env_archive', { archive_path: p })
+    message.success(`运行环境压缩包已拷贝到: ${installedTo}`)
+  } catch (e) {
+    console.error('拷贝模型运行环境压缩包失败:', e)
+    message.error('拷贝模型运行环境压缩包失败')
   } finally {
     loading.value = false
   }
