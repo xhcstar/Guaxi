@@ -10,13 +10,13 @@
         <div class="toc">
           <div class="toc-title">目录</div>
           <ul class="toc-list">
-            <li><a href="#intro">软件简介</a></li>
-            <li><a href="#features">主要功能</a></li>
-            <li><a href="#quickstart">快速开始</a></li>
-            <li><a href="#pages">页面与功能详解</a></li>
-            <li><a href="#editor">编辑器与右侧面板（重点）</a></li>
-            <li><a href="#setting">设置：大模型与 Markdown 转换</a></li>
-            <li><a href="#faq">常见问题</a></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('intro')">软件简介</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('features')">主要功能</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('quickstart')">快速开始</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('pages')">页面与功能详解</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('editor')">编辑器与右侧面板（重点）</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('setting')">设置：大模型与 Markdown 转换</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('faq')">常见问题</button></li>
           </ul>
         </div>
 
@@ -118,6 +118,65 @@
               首页（Home）为主要编辑入口，内置 Monaco 编辑器（支持 Markdown 常用操作、右键菜单与表格辅助）。资料库（Repository）右键“打开”后会启动阅读器窗口（Markdown/Text/Word/Epub 等），提供顶部工具栏、页内搜索、书签与右侧“我的笔记”面板。
             </div>
 
+            <div class="manual-subtitle">Home：编辑器工具条图标（顶部）</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Edit16Filled" /></div>
+                <div class="icon-name">Vim 模式</div>
+                <div class="icon-desc">启用 Vim 模式（再次点击切换为 <span class="icon-inline" style="margin:0 4px 0 0"><n-icon :component="LogoVimeo" /></span> 图标状态）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SaveOutline" /></div>
+                <div class="icon-name">保存</div>
+                <div class="icon-desc">保存当前文件（Ctrl+S）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:file-pen-line" width="18" height="18" /></div>
+                <div class="icon-name">模式：编辑</div>
+                <div class="icon-desc">切换编辑/预览/分屏/实时预览（Ctrl+1/2/3/4）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:eye" width="18" height="18" /></div>
+                <div class="icon-name">模式：预览</div>
+                <div class="icon-desc">同上（预览态图标）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:columns-2" width="18" height="18" /></div>
+                <div class="icon-name">模式：分屏预览</div>
+                <div class="icon-desc">同上（分屏预览态图标）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:sparkles" width="18" height="18" /></div>
+                <div class="icon-name">模式：实时预览</div>
+                <div class="icon-desc">同上（实时预览态图标）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="DownloadOutline" /></div>
+                <div class="icon-name">导出</div>
+                <div class="icon-desc">导出 Markdown（PDF / docx / html / tex / epub / odt / txt）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:minus" width="18" height="18" /></div>
+                <div class="icon-name">分隔线</div>
+                <div class="icon-desc">插入 Markdown 分隔线。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:undo" width="18" height="18" /></div>
+                <div class="icon-name">撤销</div>
+                <div class="icon-desc">撤销编辑操作。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:redo" width="18" height="18" /></div>
+                <div class="icon-name">重做</div>
+                <div class="icon-desc">重做编辑操作。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon><CloseOutline /></n-icon></div>
+                <div class="icon-name">关闭标签页</div>
+                <div class="icon-desc">关闭当前文件标签页。</div>
+              </div>
+            </div>
+
             <div class="manual-subtitle">Home：编辑器快捷键速查（Monaco）</div>
             <ul class="manual-ul">
               <li>保存：保存当前文件内容（操作：编辑后按快捷键；快捷键：Ctrl+S）。</li>
@@ -147,26 +206,165 @@
             <div class="manual-subtitle">Home：选中浮动工具条</div>
             <ul class="manual-ul">
               <li>触发：在编辑器内框选文字后松开鼠标，会弹出浮动工具条。</li>
-              <li>常用项：加粗（Ctrl+B）、斜体（Ctrl+I）、删除线（Ctrl+Shift+X）、插入链接（Ctrl+K）、内联代码、插入表格（Ctrl+Alt+T）。</li>
             </ul>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:bold" width="18" height="18" /></div>
+                <div class="icon-name">加粗</div>
+                <div class="icon-desc">为选中内容添加/取消 **（Ctrl+B）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:italic" width="18" height="18" /></div>
+                <div class="icon-name">斜体</div>
+                <div class="icon-desc">为选中内容添加/取消 *（Ctrl+I）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:strikethrough" width="18" height="18" /></div>
+                <div class="icon-name">删除线</div>
+                <div class="icon-desc">为选中内容添加/取消 ~~（Ctrl+Shift+X）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:link" width="18" height="18" /></div>
+                <div class="icon-name">链接</div>
+                <div class="icon-desc">插入 [文字](URL)（Ctrl+K）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:code" width="18" height="18" /></div>
+                <div class="icon-name">行内代码</div>
+                <div class="icon-desc">为选中内容包裹反引号。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:quote" width="18" height="18" /></div>
+                <div class="icon-name">引用</div>
+                <div class="icon-desc">插入/取消引用块。</div>
+              </div>
+            </div>
 
             <div class="manual-subtitle">Home：表格浮动工具条</div>
             <ul class="manual-ul">
               <li>触发：光标位于 Markdown 表格内时显示，用于快速增删行/列。</li>
-              <li>下方插入行 / 删除当前行：Ctrl+Alt+↓ / Ctrl+Alt+Shift+↓。</li>
-              <li>右侧插入列 / 删除当前列：Ctrl+Alt+→ / Ctrl+Alt+Shift+→。</li>
             </ul>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="mdi:table-row-plus-after" width="18" height="18" /></div>
+                <div class="icon-name">新增行</div>
+                <div class="icon-desc">在下方插入行（Ctrl+Alt+↓）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="mdi:table-row-remove" width="18" height="18" /></div>
+                <div class="icon-name">删除行</div>
+                <div class="icon-desc">删除当前行（Ctrl+Alt+Shift+↓）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="mdi:table-column-plus-after" width="18" height="18" /></div>
+                <div class="icon-name">新增列</div>
+                <div class="icon-desc">在右侧插入列（Ctrl+Alt+→）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="mdi:table-column-remove" width="18" height="18" /></div>
+                <div class="icon-name">删除列</div>
+                <div class="icon-desc">删除当前列（Ctrl+Alt+Shift+→）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:align-left" width="18" height="18" /></div>
+                <div class="icon-name">左对齐</div>
+                <div class="icon-desc">设置当前列左对齐。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:align-center" width="18" height="18" /></div>
+                <div class="icon-name">居中</div>
+                <div class="icon-desc">设置当前列居中。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:align-right" width="18" height="18" /></div>
+                <div class="icon-name">右对齐</div>
+                <div class="icon-desc">设置当前列右对齐。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><Icon icon="lucide:sparkles" width="18" height="18" /></div>
+                <div class="icon-name">格式化</div>
+                <div class="icon-desc">格式化表格。</div>
+              </div>
+            </div>
 
             <div class="manual-subtitle">阅读器：工具栏图标与作用（Repository 右键“打开”后）</div>
-            <ul class="manual-ul">
-              <li>← / →：上一页 / 下一页（操作：点击顶部按钮；快捷键：PageUp / PageDown）。</li>
-              <li>适合宽度：将页面缩放到合适宽度（操作：点击“适合宽度”；快捷键：Ctrl+0）。</li>
-              <li>－ / ＋：缩小 / 放大（操作：点击缩放按钮；快捷键：Ctrl+- / Ctrl+=）。</li>
-              <li>布局（切换布局）：左右分栏 / 仅左侧 / 仅右侧 / 大纲（操作：点击“切换布局”下拉；快捷键：Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4）。</li>
-              <li>书签：添加/取消当前页书签；书签列表：打开书签库并跳转到指定页（快捷键：无）。</li>
-              <li>笔记：显示/隐藏右侧“我的笔记”面板（操作：点击“笔记”；快捷键：Ctrl+N）。</li>
-              <li>译文：显示/隐藏译文（操作：点击“译文”；快捷键：Ctrl+T）。</li>
-            </ul>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="ArrowBackOutline" /></div>
+                <div class="icon-name">上一页</div>
+                <div class="icon-desc">上一页（PageUp）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="ArrowForwardOutline" /></div>
+                <div class="icon-name">下一页</div>
+                <div class="icon-desc">下一页（PageDown）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="ExpandOutline" /></div>
+                <div class="icon-name">适合宽度</div>
+                <div class="icon-desc">将页面缩放到合适宽度（Ctrl+0）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="RemoveOutline" /></div>
+                <div class="icon-name">缩小</div>
+                <div class="icon-desc">缩小页面（Ctrl+-）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="AddOutline" /></div>
+                <div class="icon-name">放大</div>
+                <div class="icon-desc">放大页面（Ctrl+=）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="OptionsOutline" /></div>
+                <div class="icon-name">切换布局</div>
+                <div class="icon-desc">左右分栏 / 仅左侧 / 仅右侧 / 大纲（Ctrl+1/2/3/4）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="BookmarksOutline" /></div>
+                <div class="icon-name">书签</div>
+                <div class="icon-desc">添加/取消当前页书签。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="LibraryOutline" /></div>
+                <div class="icon-name">书签列表</div>
+                <div class="icon-desc">打开书签库并跳转到指定页。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="DocumentTextOutline" /></div>
+                <div class="icon-name">笔记</div>
+                <div class="icon-desc">显示/隐藏右侧“我的笔记”面板（Ctrl+N）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="LanguageOutline" /></div>
+                <div class="icon-name">译文</div>
+                <div class="icon-desc">显示/隐藏译文（Ctrl+T）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SearchOutline" /></div>
+                <div class="icon-name">页内搜索</div>
+                <div class="icon-desc">打开页内搜索（Ctrl+F）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="CloseOutline" /></div>
+                <div class="icon-name">关闭</div>
+                <div class="icon-desc">关闭页内搜索或关闭面板。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SaveOutline" /></div>
+                <div class="icon-name">保存笔记</div>
+                <div class="icon-desc">保存当前卡片编辑内容（Ctrl+S）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="ExitOutline" /></div>
+                <div class="icon-name">退出编辑</div>
+                <div class="icon-desc">退出卡片编辑模式。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="TrashOutline" /></div>
+                <div class="icon-name">删除</div>
+                <div class="icon-desc">删除当前笔记卡片或清空书签。</div>
+              </div>
+            </div>
 
             <div class="manual-subtitle">阅读器：模式切换与分栏（重点）</div>
             <ul class="manual-ul">
@@ -196,14 +394,58 @@
             <div class="page-desc">
               各页面顶部栏的图标会随页面而变化，下列为常见入口及其作用。
             </div>
-            <ul class="manual-ul">
-              <li>左侧栏开关（面板收起图标）：切换左侧边栏（文件树/导航/分类）。</li>
-              <li>右侧栏开关（面板收起图标）：切换右侧边栏（详情/大纲/筛选/信息面板）。</li>
-              <li>放大镜（首页/资料库）：用于搜索文件或内容；资料库支持更细的搜索类型下拉选项。</li>
-              <li>截图：首页为“截图并插入”；资料库为“截图保存到当前目录 images 文件夹”。</li>
-              <li>首页额外入口：新建知识库 / 打开大纲 / 模板管理 / 纵向分屏 / 横向分屏。</li>
-              <li>聊天额外入口：打开网页模型（仅当当前模型为网页模式时可用）。</li>
-            </ul>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelLeftContract24Regular" /></div>
+                <div class="icon-name">左侧栏开关</div>
+                <div class="icon-desc">切换左侧边栏（文件树/导航/分类）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelRightContract24Regular" /></div>
+                <div class="icon-name">右侧栏开关</div>
+                <div class="icon-desc">切换右侧边栏（详情/大纲/筛选/信息面板）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Search32Filled" /></div>
+                <div class="icon-name">搜索</div>
+                <div class="icon-desc">用于搜索文件或内容；资料库支持更细的搜索类型下拉选项。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Screenshot24Regular" /></div>
+                <div class="icon-name">截图</div>
+                <div class="icon-desc">首页为“截图并插入”；资料库为“截图保存到当前目录 images 文件夹”。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="BookAdd20Regular" /></div>
+                <div class="icon-name">新建知识库</div>
+                <div class="icon-desc">打开“创建知识库”弹窗。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="TextBulletListLtr20Filled" /></div>
+                <div class="icon-name">大纲</div>
+                <div class="icon-desc">打开/切换右侧大纲面板。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Box20Regular" /></div>
+                <div class="icon-name">模板管理</div>
+                <div class="icon-desc">打开模板管理器窗口。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="DocumentSearch20Filled" /></div>
+                <div class="icon-name">搜索类型：文件</div>
+                <div class="icon-desc">首页搜索下拉中选择“文件”。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="DocumentSearch24Regular" /></div>
+                <div class="icon-name">搜索类型：笔记</div>
+                <div class="icon-desc">首页搜索下拉中选择“笔记”。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="NotebookSection24Regular" /></div>
+                <div class="icon-name">搜索类型：摘录</div>
+                <div class="icon-desc">首页搜索下拉中选择“摘录”。</div>
+              </div>
+            </div>
           </div>
 
           <div class="page-section">
@@ -213,17 +455,67 @@
             </div>
 
             <div class="manual-subtitle">顶部栏图标与使用</div>
-            <ul class="manual-ul">
-              <li>左侧栏开关（面板收起图标）：展开/收起左侧边栏（操作：点击左上角图标；快捷键：无）。</li>
-              <li>搜索（放大镜）：搜索文件/内容/摘录（操作：点击输入框 → 选择类型 → 输入关键词 → 回车；快捷键：Enter 执行）。</li>
-              <li>新建知识库（Book+）：创建新的知识库（操作：点击图标 → 在弹窗中填写信息并提交；快捷键：无）。</li>
-              <li>大纲（列表图标）：打开/切换右侧大纲面板（操作：点击图标；快捷键：无）。</li>
-              <li>模板管理（Box 图标）：打开模板管理器窗口（操作：点击图标 → 在模板列表中点“插入”把模板发送到编辑器；快捷键：无）。</li>
-              <li>截图并插入（Screenshot 图标）：截图并将识别结果以 Markdown 插入到当前编辑器（操作：点击图标 → 按系统提示完成截图；快捷键：无）。</li>
-              <li>纵向分屏：将编辑区分为左右两个编辑器（操作：点击“纵向分屏”；快捷键：无）。</li>
-              <li>横向分屏：将编辑区分为上下两个编辑器（操作：点击“横向分屏”；快捷键：无）。</li>
-              <li>右侧栏开关（面板收起图标）：展开/收起右侧边栏（操作：点击右上角图标；快捷键：无）。</li>
-            </ul>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelLeftContract24Regular" /></div>
+                <div class="icon-name">左侧栏开关</div>
+                <div class="icon-desc">展开/收起左侧边栏。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Search32Filled" /></div>
+                <div class="icon-name">搜索</div>
+                <div class="icon-desc">搜索文件/内容/摘录（回车执行；可在下拉中切换搜索类型）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="BookAdd20Regular" /></div>
+                <div class="icon-name">新建知识库</div>
+                <div class="icon-desc">打开“创建知识库”弹窗。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="TextBulletListLtr20Filled" /></div>
+                <div class="icon-name">大纲</div>
+                <div class="icon-desc">打开/切换右侧大纲面板。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Box20Regular" /></div>
+                <div class="icon-name">模板管理</div>
+                <div class="icon-desc">打开模板管理器窗口。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Screenshot24Regular" /></div>
+                <div class="icon-name">截图并插入</div>
+                <div class="icon-desc">截图并将识别结果以 Markdown 插入到当前编辑器。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 16 16" width="16" height="16">
+                      <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
+                      <line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">纵向分屏</div>
+                <div class="icon-desc">将编辑区分为左右两个编辑器。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 16 16" width="16" height="16">
+                      <rect x="1.5" y="2.5" width="13" height="11" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="1" />
+                      <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">横向分屏</div>
+                <div class="icon-desc">将编辑区分为上下两个编辑器。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelRightContract24Regular" /></div>
+                <div class="icon-name">右侧栏开关</div>
+                <div class="icon-desc">展开/收起右侧边栏。</div>
+              </div>
+            </div>
 
             <div class="figure">
               <div class="figure-box">
@@ -240,21 +532,86 @@
             </div>
 
             <div class="manual-subtitle">导入文件（重点）</div>
-            <ul class="manual-ul">
-              <li>入口：点击表格工具栏“导入文件”（Folder+ 图标）。</li>
-              <li>选择文件：在“文件路径”行点击“选择文件”，选择本地文件后会自动填充文件名/类型/大小/入库时间等只读字段。</li>
-              <li>补充信息：填写“文件描述”，选择或输入“文件库 / 知识库”，填写“文件标签”（多个用英文逗号分隔）。</li>
-              <li>提交：点击“提交”完成导入（快捷键：无）。</li>
-            </ul>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="FolderAdd20Regular" /></div>
+                <div class="icon-name">导入文件</div>
+                <div class="icon-desc">打开“导入文件”弹窗并提交入库。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SortAscendingIcon" /></div>
+                <div class="icon-name">排序</div>
+                <div class="icon-desc">按文件名 / 所属文件库 / 入库时间排序。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="FilterOffIcon" /></div>
+                <div class="icon-name">清除筛选</div>
+                <div class="icon-desc">清除表格所有筛选条件。</div>
+              </div>
+            </div>
 
             <div class="manual-subtitle">顶部栏图标与搜索</div>
-            <ul class="manual-ul">
-              <li>左侧栏开关：展开/收起左侧边栏（快捷键：无）。</li>
-              <li>搜索（放大镜）：点击输入框后选择“按文件名/描述/标签/文件库/知识库/类型”搜索，输入关键词后回车执行。</li>
-              <li>高级输入（可选）：在关键词中可使用 <b>lib:</b>、<b>tag:</b>、<b>type:</b>、<b>repo:</b> 组合过滤（例如：<b>lib:Books tag:AI type:pdf</b>）。</li>
-              <li>截图（Screenshot 图标）：将截图保存到当前文件同目录下的 <b>images</b> 文件夹（文件名同源文件名，后缀 .png）（快捷键：无）。</li>
-              <li>右侧栏开关：展开/收起右侧边栏（快捷键：无）。</li>
-            </ul>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelLeftContract24Regular" /></div>
+                <div class="icon-name">左侧栏开关</div>
+                <div class="icon-desc">展开/收起左侧边栏。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Search32Filled" /></div>
+                <div class="icon-name">搜索</div>
+                <div class="icon-desc">搜索导入文件（回车执行）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="DocumentSearch24Regular" /></div>
+                <div class="icon-name">搜索类型</div>
+                <div class="icon-desc">在下拉中切换：按文件名/描述/标签/文件库/知识库/类型搜索。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="TextBulletListLtr20Filled" /></div>
+                <div class="icon-name">列表入口</div>
+                <div class="icon-desc">当前实现为静态图标（无点击动作）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Screenshot24Regular" /></div>
+                <div class="icon-name">截图</div>
+                <div class="icon-desc">将截图保存到当前文件同目录下的 images 文件夹（.png）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelRightContract24Regular" /></div>
+                <div class="icon-name">右侧栏开关</div>
+                <div class="icon-desc">展开/收起右侧边栏。</div>
+              </div>
+            </div>
+
+            <div class="manual-subtitle">后台任务与批量操作（工具条）</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="TasksApp20Regular" /></div>
+                <div class="icon-name">任务列表</div>
+                <div class="icon-desc">打开转换/备份/导入/导出等任务列表。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SaveSync20Regular" /></div>
+                <div class="icon-name">备份资料库</div>
+                <div class="icon-desc">下拉选择“备份当前库 / 备份所有库”。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="BoxArrowLeft20Regular" /></div>
+                <div class="icon-name">从备份恢复</div>
+                <div class="icon-desc">执行资料库恢复任务。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="TextBulletListAdd20Filled" /></div>
+                <div class="icon-name">导入条目</div>
+                <div class="icon-desc">执行条目批量导入任务。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SignOut20Regular" /></div>
+                <div class="icon-name">导出条目</div>
+                <div class="icon-desc">执行条目批量导出任务。</div>
+              </div>
+            </div>
 
             <div class="manual-subtitle">资料条目右键菜单</div>
             <ul class="manual-ul">
@@ -279,6 +636,41 @@
               资讯获取页面采用三栏布局：左侧分类/列表，中间列表视图，右侧详情阅读面板。左右栏可折叠与拖拽调整宽度；
               选择条目后会在右侧加载咨询详情。
             </div>
+
+            <div class="manual-subtitle">顶部栏图标与使用</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelLeftContract24Regular" /></div>
+                <div class="icon-name">左侧栏开关</div>
+                <div class="icon-desc">切换左侧分类/列表侧栏。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SearchOutline" /></div>
+                <div class="icon-name">搜索</div>
+                <div class="icon-desc">搜索文章、主题（输入框前缀图标）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="NewspaperOutline" /></div>
+                <div class="icon-name">杂志视图</div>
+                <div class="icon-desc">切换为 magazine 模式。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="GridOutline" /></div>
+                <div class="icon-name">网格视图</div>
+                <div class="icon-desc">切换为 grid 模式。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="ListOutline" /></div>
+                <div class="icon-name">列表视图</div>
+                <div class="icon-desc">切换为 list 模式。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="RefreshOutline" /></div>
+                <div class="icon-name">刷新</div>
+                <div class="icon-desc">刷新文章列表。</div>
+              </div>
+            </div>
+
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" src="../../assets/manual/page-flipboard.png" alt="资讯获取页面三栏布局" />
@@ -307,6 +699,41 @@
               知识库页面用于创建与管理知识库内容，并提供“创建知识库”表单入口。建议先在设置中配置知识库根目录，
               再在此页面创建新的知识库结构。
             </div>
+
+            <div class="manual-subtitle">图谱工具条图标（Knowledge Graph）</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="CompassOutline" /></div>
+                <div class="icon-name">重置视角</div>
+                <div class="icon-desc">将图谱视角恢复到默认状态。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SyncOutline" /></div>
+                <div class="icon-name">自动旋转</div>
+                <div class="icon-desc">开启/停止图谱自动旋转。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="MoonOutline" /></div>
+                <div class="icon-name">暗色模式</div>
+                <div class="icon-desc">切换亮色/暗色模式。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="LayersOutline" /></div>
+                <div class="icon-name">布局设置</div>
+                <div class="icon-desc">打开布局模式选择（popover）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SpeedometerOutline" /></div>
+                <div class="icon-name">性能设置</div>
+                <div class="icon-desc">调整渲染质量/性能档位（slider）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SparklesOutline" /></div>
+                <div class="icon-name">视觉特效</div>
+                <div class="icon-desc">星光/光晕等视觉特效开关与参数。</div>
+              </div>
+            </div>
+
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" src="../../assets/manual/page-brain.png" alt="知识库管理与创建" />
@@ -335,6 +762,55 @@
               设置页面为三栏布局：左侧为设置菜单，中间为设置内容区，右侧为扩展面板。左侧菜单包含：
               笔记库、外观、服务器、大模型、关于，以及本页“用户手册”。
             </div>
+
+            <div class="manual-subtitle">顶部栏图标与使用</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelLeftContract24Regular" /></div>
+                <div class="icon-name">左侧栏开关</div>
+                <div class="icon-desc">切换左侧设置菜单栏。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="PanelRightContract24Regular" /></div>
+                <div class="icon-name">右侧栏开关</div>
+                <div class="icon-desc">切换右侧扩展面板。</div>
+              </div>
+            </div>
+
+            <div class="manual-subtitle">左侧菜单图标（Setting Sidebar）</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="FolderAdd20Regular" /></div>
+                <div class="icon-name">笔记库</div>
+                <div class="icon-desc">配置文件库根目录/资源库根目录/知识库根目录等。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Image28Regular" /></div>
+                <div class="icon-name">外观</div>
+                <div class="icon-desc">外观与偏好设置（以当前实现为准）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Server24Regular" /></div>
+                <div class="icon-name">服务器</div>
+                <div class="icon-desc">服务器相关配置（以当前实现为准）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Key24Regular" /></div>
+                <div class="icon-name">大模型</div>
+                <div class="icon-desc">配置各家模型 API Key 及 Markdown 转换模型/运行环境。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="InformationCircleOutline" /></div>
+                <div class="icon-name">关于</div>
+                <div class="icon-desc">关于信息与版本说明。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="BookOutline" /></div>
+                <div class="icon-name">用户手册</div>
+                <div class="icon-desc">打开本手册页面。</div>
+              </div>
+            </div>
+
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" src="../../assets/manual/page-setting.png" alt="设置页面与菜单" />
@@ -407,13 +883,190 @@
 </template>
 
 <script setup>
-import { NCard, NSpace, NAlert, NDivider, NTag } from 'naive-ui'
+import { h } from 'vue'
+import { Icon } from '@iconify/vue'
+import { NCard, NSpace, NAlert, NDivider, NTag, NIcon } from 'naive-ui'
+import {
+  BookAdd20Regular,
+  Box20Regular,
+  BoxArrowLeft20Regular,
+  DocumentEdit16Regular,
+  DocumentSearch20Filled,
+  DocumentSearch24Regular,
+  FolderAdd20Regular,
+  NotebookSection24Regular,
+  PanelLeftContract24Regular,
+  PanelRightContract24Regular,
+  SaveSync20Regular,
+  Screenshot24Regular,
+  Search32Filled,
+  SignOut20Regular,
+  TasksApp20Regular,
+  TextBulletListAdd20Filled,
+  TextBulletListLtr20Filled,
+  Edit16Filled
+} from '@vicons/fluent'
+import {
+  AddOutline,
+  ArrowBackOutline,
+  ArrowForwardOutline,
+  BookmarksOutline,
+  CloseOutline,
+  CompassOutline,
+  DocumentTextOutline,
+  DownloadOutline,
+  ExitOutline,
+  ExpandOutline,
+  GridOutline,
+  LanguageOutline,
+  LayersOutline,
+  LibraryOutline,
+  ListOutline,
+  LogoVimeo,
+  MoonOutline,
+  NewspaperOutline,
+  OptionsOutline,
+  RefreshOutline,
+  RemoveOutline,
+  SaveOutline,
+  SearchOutline,
+  SparklesOutline,
+  SpeedometerOutline,
+  SyncOutline,
+  TrashOutline
+} from '@vicons/ionicons5'
+
+const SortAscendingIcon = {
+  render() {
+    return h('svg', {
+      xmlns: 'http://www.w3.org/2000/svg',
+      viewBox: '0 0 24 24',
+      fill: 'currentColor'
+    }, [
+      h('path', {
+        d: 'M19 17h3l-4 4-4-4h3V3h2v14zM9 13H5v-2h4V9H5V7h4V5H5V3H3v12h2v-2h4v-2zm2-2h2v2h-2v-2zm0-4h2v2h-2V7zm0 8h2v2h-2v-2z'
+      })
+    ])
+  }
+}
+
+const FilterOffIcon = {
+  render() {
+    return h('svg', {
+      xmlns: 'http://www.w3.org/2000/svg',
+      viewBox: '0 0 24 24',
+      fill: 'currentColor'
+    }, [
+      h('path', {
+        d: 'M19.79 5.61C20.3 4.95 19.83 4 19 4H6.83l7.97 7.97 4.99-6.36zM2.81 2.81L1.39 4.22 10 13v6c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-2.17l5.78 5.78 1.41-1.41L2.81 2.81z'
+      })
+    ])
+  }
+}
+
+const scrollToSection = (id) => {
+  const el = document.getElementById(String(id))
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <style scoped>
 .manual {
   width: 100%;
   box-sizing: border-box;
+}
+
+.icon-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  vertical-align: -3px;
+  margin-right: 6px;
+  flex: 0 0 auto;
+}
+
+.icon-inline :deep(svg) {
+  display: block;
+}
+
+.icon-inline :deep(.n-icon) {
+  --n-size: 18px;
+}
+
+.icon-block {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 6px;
+}
+
+.icon-row {
+  display: grid;
+  grid-template-columns: 22px 140px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 6px 8px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+}
+
+.icon-name {
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.icon-desc {
+  color: var(--guaxi-text-secondary);
+  line-height: 1.6;
+}
+
+.icon-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  vertical-align: -3px;
+  margin-right: 6px;
+  flex: 0 0 auto;
+}
+
+.icon-inline :deep(svg) {
+  display: block;
+}
+
+.icon-inline :deep(.n-icon) {
+  --n-size: 18px;
+}
+
+.icon-block {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 6px;
+}
+
+.icon-row {
+  display: grid;
+  grid-template-columns: 22px 140px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 6px 8px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-panel-bg);
+}
+
+.icon-name {
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.icon-desc {
+  color: var(--guaxi-text-secondary);
+  line-height: 1.6;
 }
 
 .h2 {
@@ -434,6 +1087,10 @@ import { NCard, NSpace, NAlert, NDivider, NTag } from 'naive-ui'
   line-height: 1.8;
 }
 
+.manual section {
+  scroll-margin-top: 12px;
+}
+
 .toc {
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
@@ -451,13 +1108,30 @@ import { NCard, NSpace, NAlert, NDivider, NTag } from 'naive-ui'
   padding-left: 18px;
 }
 
-.toc-list a {
-  color: var(--n-color-primary);
-  text-decoration: none;
+.toc-list {
+  margin: 0;
+  padding-left: 18px;
 }
 
-.toc-list a:hover {
+.toc-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--n-color-primary);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.toc-link:hover {
   text-decoration: underline;
+}
+
+.toc-link:focus-visible {
+  outline: 2px solid rgba(64, 158, 255, 0.5);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .figure {
