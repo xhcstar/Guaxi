@@ -613,31 +613,34 @@ pub async fn install_markdown_models_archive(archive_path: String) -> Result<Str
         remove_path_if_exists(&temp_dir)?;
         fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
-        info!(
-            archive_path = zip_path.to_string_lossy().as_ref(),
-            temp_dir = temp_dir.to_string_lossy().as_ref(),
-            "extracting markdown models archive"
-        );
+        let result: Result<String, String> = (|| {
+            info!(
+                archive_path = zip_path.to_string_lossy().as_ref(),
+                temp_dir = temp_dir.to_string_lossy().as_ref(),
+                "extracting markdown models archive"
+            );
 
-        extract_zip_to_dir(&zip_path, &temp_dir)?;
+            extract_zip_to_dir(&zip_path, &temp_dir)?;
 
-        let packaged_surya_models = find_dir_by_name(&temp_dir, "surya_models", 5)
-            .ok_or_else(|| "压缩包内未找到 surya_models 目录".to_string())?;
+            let packaged_surya_models = find_dir_by_name(&temp_dir, "surya_models", 5)
+                .ok_or_else(|| "压缩包内未找到 surya_models 目录".to_string())?;
 
-        let dst_surya_models = models_dir.join("surya_models");
-        remove_path_if_exists(&dst_surya_models)?;
-        copy_dir_recursive(&packaged_surya_models, &dst_surya_models)?;
+            let dst_surya_models = models_dir.join("surya_models");
+            remove_path_if_exists(&dst_surya_models)?;
+            copy_dir_recursive(&packaged_surya_models, &dst_surya_models)?;
+
+            if !dst_surya_models.is_dir() {
+                return Err(format!(
+                    "模型目录校验失败: {}",
+                    dst_surya_models.to_string_lossy()
+                ));
+            }
+
+            Ok(dst_surya_models.to_string_lossy().to_string())
+        })();
 
         let _ = remove_path_if_exists(&temp_dir);
-
-        if !dst_surya_models.is_dir() {
-            return Err(format!(
-                "模型目录校验失败: {}",
-                dst_surya_models.to_string_lossy()
-            ));
-        }
-
-        Ok(dst_surya_models.to_string_lossy().to_string())
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -675,32 +678,35 @@ pub async fn install_markdown_convertor_env_archive(archive_path: String) -> Res
         remove_path_if_exists(&temp_dir)?;
         fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
-        info!(
-            archive_path = zip_path.to_string_lossy().as_ref(),
-            temp_dir = temp_dir.to_string_lossy().as_ref(),
-            "extracting markdown convertor env archive"
-        );
+        let result: Result<String, String> = (|| {
+            info!(
+                archive_path = zip_path.to_string_lossy().as_ref(),
+                temp_dir = temp_dir.to_string_lossy().as_ref(),
+                "extracting markdown convertor env archive"
+            );
 
-        extract_zip_to_dir(&zip_path, &temp_dir)?;
+            extract_zip_to_dir(&zip_path, &temp_dir)?;
 
-        let packaged_convertor_dir = find_dir_by_name(&temp_dir, "MarkdownConvertor", 5)
-            .ok_or_else(|| "压缩包内未找到 MarkdownConvertor 目录".to_string())?;
+            let packaged_convertor_dir = find_dir_by_name(&temp_dir, "MarkdownConvertor", 5)
+                .ok_or_else(|| "压缩包内未找到 MarkdownConvertor 目录".to_string())?;
 
-        let dst_convertor_dir = utils_dir.join("MarkdownConvertor");
-        remove_path_if_exists(&dst_convertor_dir)?;
-        copy_dir_recursive(&packaged_convertor_dir, &dst_convertor_dir)?;
+            let dst_convertor_dir = utils_dir.join("MarkdownConvertor");
+            remove_path_if_exists(&dst_convertor_dir)?;
+            copy_dir_recursive(&packaged_convertor_dir, &dst_convertor_dir)?;
+
+            let expected = dst_convertor_dir.join("marker-1.10.1");
+            if !expected.is_dir() {
+                return Err(format!(
+                    "运行环境目录校验失败: {}",
+                    expected.to_string_lossy()
+                ));
+            }
+
+            Ok(expected.to_string_lossy().to_string())
+        })();
 
         let _ = remove_path_if_exists(&temp_dir);
-
-        let expected = dst_convertor_dir.join("marker-1.10.1");
-        if !expected.is_dir() {
-            return Err(format!(
-                "运行环境目录校验失败: {}",
-                expected.to_string_lossy()
-            ));
-        }
-
-        Ok(expected.to_string_lossy().to_string())
+        result
     })
     .await
     .map_err(|e| e.to_string())?
