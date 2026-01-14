@@ -62,16 +62,11 @@
         <!-- 显示/隐藏笔记按钮 -->
         <button class="toggle-notes" @click="toggleNotesPanel" :title="showNotes ? '隐藏笔记' : '显示笔记'">
           <n-icon :component="DocumentTextOutline" />
-          <span class="btn-text">{{ showNotes ? '隐藏笔记' : '显示笔记' }}</span>
         </button>
 
         <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'"
           :class="{ 'translating': isTranslating }">
           <n-icon :component="LanguageOutline" />
-          <span class="btn-text">
-            {{ showTranslation ? '隐藏译文' : '显示译文' }}
-            <span v-if="isTranslating" class="translating-indicator">...</span>
-          </span>
         </button>
       </div>
     </div>
@@ -184,13 +179,13 @@
           }" header-style="padding: 12px 16px;" content-style="padding: 0;">
           <template #header-extra>
             <div class="card-actions" v-if="activeCardIndex === index">
-              <n-button v-if="card.type !== 'composite'" size="tiny" type="primary" @click.stop="saveCardEdit(index)">
+              <n-button v-if="card.type !== 'composite'" size="tiny" type="primary" @click.stop="saveCardEdit(index)" title="保存">
                 <n-icon :component="SaveOutline" size="12" />
               </n-button>
-              <n-button v-if="card.type !== 'composite'" size="tiny" text @click.stop="exitEditMode(index)">
+              <n-button v-if="card.type !== 'composite'" size="tiny" text @click.stop="exitEditMode(index)" title="退出编辑">
                 <n-icon :component="ExitOutline" size="12" />
               </n-button>
-              <n-button size="tiny" text @click.stop="deleteCard(index)">
+              <n-button size="tiny" text @click.stop="deleteCard(index)" title="删除">
                 <n-icon :component="TrashOutline" size="12" />
               </n-button>
             </div>
@@ -2902,6 +2897,8 @@ watchEffect((onInvalidate) => {
   background-color: var(--guaxi-header-bg);
   border-bottom: 1px solid var(--guaxi-border);
   box-shadow: var(--guaxi-header-shadow);
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
 /* 按钮基础样式 */
@@ -2965,6 +2962,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .page-navigation input {
@@ -2983,6 +2981,7 @@ button:disabled {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-shrink: 0;
 }
 
 /* 缩放控制样式 */

@@ -386,14 +386,6 @@
           <h2 class="h2">常见问题</h2>
 
           <div class="qa">
-            <div class="q">Q：为什么“用户手册”菜单点了没有内容？</div>
-            <div class="a">
-              A：请确认已应用“菜单新增”和“内容映射”的修改；并确保当前选中菜单 key 为
-              <n-tag size="small">manual</n-tag>。
-            </div>
-          </div>
-
-          <div class="qa">
             <div class="q">Q：Markdown 转换模型安装后仍不可用？</div>
             <div class="a">
               A：检查软件同级目录下是否存在 <b>utils/Models/surya_models</b>；

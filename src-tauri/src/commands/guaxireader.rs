@@ -110,7 +110,7 @@ pub async fn create_reader_window(
     let window = WebviewWindowBuilder::new(&app, &label, url)
         .title(&title)
         .inner_size(1200.0, 800.0)
-        .min_inner_size(800.0, 600.0)
+        .min_inner_size(1100.0, 650.0)
         .visible(false)
         .build()
         .map_err(|e| format!("创建窗口失败: {}", e))?;
