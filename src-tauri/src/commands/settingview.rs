@@ -291,6 +291,12 @@ pub struct AppearanceConfig {
     font_size: u8,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MarkdownInstallStatus {
+    pub installed: bool,
+    pub expected_path: String,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         // 获取当前程序所在路径
@@ -578,6 +584,42 @@ fn find_dir_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf
     }
 
     None
+}
+
+#[tauri::command]
+pub async fn get_markdown_models_status() -> Result<MarkdownInstallStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = exe_dir()?;
+        let expected = exe
+            .join("utils")
+            .join("Models")
+            .join("surya_models");
+
+        Ok(MarkdownInstallStatus {
+            installed: expected.is_dir(),
+            expected_path: expected.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_markdown_convertor_env_status() -> Result<MarkdownInstallStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = exe_dir()?;
+        let expected = exe
+            .join("utils")
+            .join("MarkdownConvertor")
+            .join("marker-1.10.1");
+
+        Ok(MarkdownInstallStatus {
+            installed: expected.is_dir(),
+            expected_path: expected.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

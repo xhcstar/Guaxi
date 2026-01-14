@@ -107,6 +107,14 @@
               <template #prefix><span class="status-prefix">豆包</span></template>
               <template #suffix>{{ form.doubao_api_key?.trim() ? '已配置' : '未配置' }}</template>
             </n-list-item>
+            <n-list-item>
+              <template #prefix><span class="status-prefix">Markdown模型</span></template>
+              <template #suffix>{{ markdownModelsStatus.installed ? '已加载' : '未加载' }}</template>
+            </n-list-item>
+            <n-list-item>
+              <template #prefix><span class="status-prefix">转换环境</span></template>
+              <template #suffix>{{ markdownEnvStatus.installed ? '已加载' : '未加载' }}</template>
+            </n-list-item>
           </n-list>
         </div>
       </n-space>
@@ -130,6 +138,9 @@ const markdownConvertorEnvArchivePath = ref('')
 const installingModels = ref(false)
 const copyingEnv = ref(false)
 
+const markdownModelsStatus = ref({ installed: false, expected_path: '' })
+const markdownEnvStatus = ref({ installed: false, expected_path: '' })
+
 const form = reactive({
   chatgpt_api_key: '',
   deepseek_api_key: '',
@@ -150,6 +161,18 @@ const loadConfig = async () => {
 
     const root = await invoke('get_chat_record_root')
     chatRecordRoot.value = typeof root === 'string' ? root : ''
+
+    const modelsStatus = await invoke('get_markdown_models_status')
+    markdownModelsStatus.value = {
+      installed: Boolean(modelsStatus?.installed),
+      expected_path: typeof modelsStatus?.expected_path === 'string' ? modelsStatus.expected_path : '',
+    }
+
+    const envStatus = await invoke('get_markdown_convertor_env_status')
+    markdownEnvStatus.value = {
+      installed: Boolean(envStatus?.installed),
+      expected_path: typeof envStatus?.expected_path === 'string' ? envStatus.expected_path : '',
+    }
   } catch (e) {
     console.error('加载大模型配置失败:', e)
   } finally {

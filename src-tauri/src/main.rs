@@ -175,6 +175,8 @@ async fn main() {
             commands::settingview::set_llm_config,
             commands::settingview::get_chat_record_root,
             commands::settingview::set_chat_record_root,
+            commands::settingview::get_markdown_models_status,
+            commands::settingview::get_markdown_convertor_env_status,
             commands::settingview::install_markdown_models_archive,
             commands::settingview::install_markdown_convertor_env_archive,
             commands::chatview::save_chat_session,
