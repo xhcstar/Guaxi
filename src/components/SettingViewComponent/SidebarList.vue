@@ -13,7 +13,7 @@
 <script setup>
 import { ref, h } from 'vue';
 import { NMenu, NIcon } from 'naive-ui';
-import { InformationCircleOutline } from '@vicons/ionicons5';
+import { InformationCircleOutline, BookOutline } from '@vicons/ionicons5';
 import { FolderAdd20Regular, Image28Regular, Server24Regular, Key24Regular } from '@vicons/fluent';
 import { useSettingsStore } from '../../stores/settingsStore';
 
@@ -46,6 +46,11 @@ const menuOptions = [
     label: '关于',
     key: 'about',
     icon: () => h(NIcon, { component: InformationCircleOutline, size: 24 }),
+  },
+  {
+    label: '用户手册',
+    key: 'manual',
+    icon: () => h(NIcon, { component: BookOutline, size: 24 }),
   },
 ];
 

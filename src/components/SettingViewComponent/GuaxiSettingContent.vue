@@ -14,6 +14,7 @@ import PreferenceContent from './PreferenceContent.vue';
 import ServerContent from './ServerContent.vue';
 import AboutContent from './AboutContent.vue';
 import LLMModalSetting from './LLMModalSetting.vue';
+import GuaxiManual from './GuaxiManual.vue';
 import { useSettingsStore } from '../../stores/settingsStore';
 
 const settingsStore = useSettingsStore();
@@ -31,6 +32,8 @@ const currentComponent = computed(() => {
       return AboutContent;
     case 'llm':
       return LLMModalSetting;
+    case 'manual':
+      return GuaxiManual;
     default:
       return null;
   }
