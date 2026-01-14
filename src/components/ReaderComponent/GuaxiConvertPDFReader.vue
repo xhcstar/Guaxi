@@ -1324,11 +1324,8 @@ const handleMarkdownClick = async (e) => {
     // 克隆代码块节点以避免修改原始DOM
     const clonedBlock = codeBlock.cloneNode(true);
 
-    // 移除克隆节点中的复制按钮
-    const copyButton = clonedBlock.querySelector('.copy-button');
-    if (copyButton) {
-      copyButton.remove();
-    }
+    const btn = clonedBlock.querySelector('.copy-button');
+    if (btn) btn.remove();
 
     // 获取处理后的代码内容
     const codeContent = clonedBlock.textContent || '';
@@ -1340,11 +1337,8 @@ const handleMarkdownClick = async (e) => {
       `\`\`\`\n${codeContent}\n\`\`\``;
     console.log('代码块原始Markdown:', originalMarkdown);
 
-    // 解码原始Markdown并移除可能的"复制"文本
     originalMarkdown = decodeURIComponent(originalMarkdown);
-    originalMarkdown = originalMarkdown.replace(/\s*复制\s*$/, ''); // 移除末尾的"复制"文本
 
-    // 使用处理后的HTML（不含复制按钮）
     noteContent = originalMarkdown;
   }
   // 数学公式
@@ -4397,16 +4391,30 @@ button:disabled {
 }
 
 .composite-note-editor {
+  box-sizing: border-box;
   width: 100%;
-  min-height: 160px;
-  padding: 12px 16px;
-  border: none;
+  max-width: 100%;
+  min-height: 180px;
+  padding: 14px 16px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
   outline: none;
   resize: vertical;
-  background: transparent;
-  color: inherit;
+  background-color: var(--guaxi-content-bg, var(--guaxi-panel-bg));
+  color: var(--guaxi-text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.65;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.composite-note-editor:focus {
+  border-color: rgba(77, 171, 247, 0.9);
+  box-shadow: 0 0 0 3px rgba(77, 171, 247, 0.18);
+}
+
+.dark .composite-note-editor {
+  background-color: rgba(255, 255, 255, 0.04);
 }
 
 /* 37. 页面信息样式 */

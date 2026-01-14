@@ -1126,16 +1126,13 @@ const handleMarkdownClick = async (e) => {
     const codeBlock = target.closest('pre, code, .code-block');
     selectedElement = codeBlock;
     const clonedBlock = codeBlock.cloneNode(true);
-    const copyButton = clonedBlock.querySelector('.copy-button');
-    if (copyButton) {
-      copyButton.remove();
-    }
+    const btn = clonedBlock.querySelector('.copy-button');
+    if (btn) btn.remove();
     const codeContent = clonedBlock.textContent || '';
     message = `已选中代码块: ${codeContent.substring(0, 30)}${codeContent.length > 30 ? '...' : ''}`;
     originalMarkdown = codeBlock.closest('[data-md-original]')?.getAttribute('data-md-original') ||
       `\`\`\`\n${codeContent}\n\`\`\``;
     originalMarkdown = decodeURIComponent(originalMarkdown);
-    originalMarkdown = originalMarkdown.replace(/\s*复制\s*$/, '');
     noteContent = originalMarkdown;
   }
   else if (target.closest('mjx-container, mjx-math, .math-inline, .math-block, svg.math-rendered')) {
@@ -3443,16 +3440,30 @@ button:disabled {
 }
 
 .composite-note-editor {
+  box-sizing: border-box;
   width: 100%;
-  min-height: 160px;
-  padding: 12px 16px;
-  border: none;
+  max-width: 100%;
+  min-height: 180px;
+  padding: 14px 16px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
   outline: none;
   resize: vertical;
-  background: transparent;
-  color: inherit;
+  background-color: var(--guaxi-content-bg, var(--guaxi-panel-bg));
+  color: var(--guaxi-text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.65;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.composite-note-editor:focus {
+  border-color: rgba(77, 171, 247, 0.9);
+  box-shadow: 0 0 0 3px rgba(77, 171, 247, 0.18);
+}
+
+.dark .composite-note-editor {
+  background-color: rgba(255, 255, 255, 0.04);
 }
 
 /* 69. Markdown行样式 */
