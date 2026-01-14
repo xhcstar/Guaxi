@@ -85,35 +85,192 @@
         <n-divider />
 
         <div class="status">
-          <div class="status-title">当前状态</div>
-          <n-list hoverable style="max-width: 100%">
+          <div class="status-header">
+            <div class="status-title">
+              <n-space align="center" size="small">
+                <n-icon :component="InformationCircleOutline" />
+                <span>当前状态</span>
+              </n-space>
+            </div>
+            <n-text depth="3" class="status-subtitle">鼠标悬停标签查看提示与期望路径</n-text>
+          </div>
+
+          <n-list hoverable class="status-list">
             <n-list-item>
-              <template #prefix><span class="status-prefix">ChatGPT</span></template>
-              <template #suffix>{{ form.chatgpt_api_key?.trim() ? '已配置' : '未配置' }}</template>
+              <template #prefix>
+                <n-space align="center" size="small">
+                  <n-icon :component="KeyOutline" />
+                  <span class="status-prefix">ChatGPT</span>
+                </n-space>
+              </template>
+              <template #suffix>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-tag size="small" :type="hasKey(form.chatgpt_api_key) ? 'success' : 'warning'" class="status-tag">
+                      <n-space align="center" size="small">
+                        <n-icon :component="hasKey(form.chatgpt_api_key) ? CheckmarkCircleOutline : CloseCircleOutline" />
+                        <span>{{ hasKey(form.chatgpt_api_key) ? '已配置' : '未配置' }}</span>
+                      </n-space>
+                    </n-tag>
+                  </template>
+                  <div class="status-tip">
+                    <div class="status-tip-title">ChatGPT API Key</div>
+                    <div class="status-tip-desc">在上方输入并点击“保存”后生效</div>
+                  </div>
+                </n-tooltip>
+              </template>
             </n-list-item>
+
             <n-list-item>
-              <template #prefix><span class="status-prefix">DeepSeek</span></template>
-              <template #suffix>{{ form.deepseek_api_key?.trim() ? '已配置' : '未配置' }}</template>
+              <template #prefix>
+                <n-space align="center" size="small">
+                  <n-icon :component="KeyOutline" />
+                  <span class="status-prefix">DeepSeek</span>
+                </n-space>
+              </template>
+              <template #suffix>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-tag size="small" :type="hasKey(form.deepseek_api_key) ? 'success' : 'warning'" class="status-tag">
+                      <n-space align="center" size="small">
+                        <n-icon :component="hasKey(form.deepseek_api_key) ? CheckmarkCircleOutline : CloseCircleOutline" />
+                        <span>{{ hasKey(form.deepseek_api_key) ? '已配置' : '未配置' }}</span>
+                      </n-space>
+                    </n-tag>
+                  </template>
+                  <div class="status-tip">
+                    <div class="status-tip-title">DeepSeek API Key</div>
+                    <div class="status-tip-desc">在上方输入并点击“保存”后生效</div>
+                  </div>
+                </n-tooltip>
+              </template>
             </n-list-item>
+
             <n-list-item>
-              <template #prefix><span class="status-prefix">Qwen</span></template>
-              <template #suffix>{{ form.qwen_api_key?.trim() ? '已配置' : '未配置' }}</template>
+              <template #prefix>
+                <n-space align="center" size="small">
+                  <n-icon :component="KeyOutline" />
+                  <span class="status-prefix">Qwen</span>
+                </n-space>
+              </template>
+              <template #suffix>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-tag size="small" :type="hasKey(form.qwen_api_key) ? 'success' : 'warning'" class="status-tag">
+                      <n-space align="center" size="small">
+                        <n-icon :component="hasKey(form.qwen_api_key) ? CheckmarkCircleOutline : CloseCircleOutline" />
+                        <span>{{ hasKey(form.qwen_api_key) ? '已配置' : '未配置' }}</span>
+                      </n-space>
+                    </n-tag>
+                  </template>
+                  <div class="status-tip">
+                    <div class="status-tip-title">Qwen API Key</div>
+                    <div class="status-tip-desc">在上方输入并点击“保存”后生效</div>
+                  </div>
+                </n-tooltip>
+              </template>
             </n-list-item>
+
             <n-list-item>
-              <template #prefix><span class="status-prefix">Kimi</span></template>
-              <template #suffix>{{ form.kimi_api_key?.trim() ? '已配置' : '未配置' }}</template>
+              <template #prefix>
+                <n-space align="center" size="small">
+                  <n-icon :component="KeyOutline" />
+                  <span class="status-prefix">Kimi</span>
+                </n-space>
+              </template>
+              <template #suffix>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-tag size="small" :type="hasKey(form.kimi_api_key) ? 'success' : 'warning'" class="status-tag">
+                      <n-space align="center" size="small">
+                        <n-icon :component="hasKey(form.kimi_api_key) ? CheckmarkCircleOutline : CloseCircleOutline" />
+                        <span>{{ hasKey(form.kimi_api_key) ? '已配置' : '未配置' }}</span>
+                      </n-space>
+                    </n-tag>
+                  </template>
+                  <div class="status-tip">
+                    <div class="status-tip-title">Kimi API Key</div>
+                    <div class="status-tip-desc">在上方输入并点击“保存”后生效</div>
+                  </div>
+                </n-tooltip>
+              </template>
             </n-list-item>
+
             <n-list-item>
-              <template #prefix><span class="status-prefix">豆包</span></template>
-              <template #suffix>{{ form.doubao_api_key?.trim() ? '已配置' : '未配置' }}</template>
+              <template #prefix>
+                <n-space align="center" size="small">
+                  <n-icon :component="KeyOutline" />
+                  <span class="status-prefix">豆包</span>
+                </n-space>
+              </template>
+              <template #suffix>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-tag size="small" :type="hasKey(form.doubao_api_key) ? 'success' : 'warning'" class="status-tag">
+                      <n-space align="center" size="small">
+                        <n-icon :component="hasKey(form.doubao_api_key) ? CheckmarkCircleOutline : CloseCircleOutline" />
+                        <span>{{ hasKey(form.doubao_api_key) ? '已配置' : '未配置' }}</span>
+                      </n-space>
+                    </n-tag>
+                  </template>
+                  <div class="status-tip">
+                    <div class="status-tip-title">豆包 API Key</div>
+                    <div class="status-tip-desc">在上方输入并点击“保存”后生效</div>
+                  </div>
+                </n-tooltip>
+              </template>
             </n-list-item>
+
             <n-list-item>
-              <template #prefix><span class="status-prefix">Markdown模型</span></template>
-              <template #suffix>{{ markdownModelsStatus.installed ? '已加载' : '未加载' }}</template>
+              <template #prefix>
+                <n-space align="center" size="small">
+                  <n-icon :component="CubeOutline" />
+                  <span class="status-prefix">Markdown模型</span>
+                </n-space>
+              </template>
+              <template #suffix>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-tag size="small" :type="loading ? 'info' : (markdownModelsStatus.installed ? 'success' : 'warning')" class="status-tag">
+                      <n-space align="center" size="small">
+                        <n-icon :component="loading ? TimeOutline : (markdownModelsStatus.installed ? CheckmarkCircleOutline : CloseCircleOutline)" />
+                        <span>{{ loading ? '检测中' : (markdownModelsStatus.installed ? '已加载' : '未加载') }}</span>
+                      </n-space>
+                    </n-tag>
+                  </template>
+                  <div class="status-tip">
+                    <div class="status-tip-title">Markdown 转换模型</div>
+                    <div class="status-tip-desc">期望路径：{{ markdownModelsStatus.expected_path || '-' }}</div>
+                    <div class="status-tip-desc">未加载时请选择 surya_models.zip 并点击“安装”</div>
+                  </div>
+                </n-tooltip>
+              </template>
             </n-list-item>
+
             <n-list-item>
-              <template #prefix><span class="status-prefix">转换环境</span></template>
-              <template #suffix>{{ markdownEnvStatus.installed ? '已加载' : '未加载' }}</template>
+              <template #prefix>
+                <n-space align="center" size="small">
+                  <n-icon :component="ConstructOutline" />
+                  <span class="status-prefix">转换环境</span>
+                </n-space>
+              </template>
+              <template #suffix>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-tag size="small" :type="loading ? 'info' : (markdownEnvStatus.installed ? 'success' : 'warning')" class="status-tag">
+                      <n-space align="center" size="small">
+                        <n-icon :component="loading ? TimeOutline : (markdownEnvStatus.installed ? CheckmarkCircleOutline : CloseCircleOutline)" />
+                        <span>{{ loading ? '检测中' : (markdownEnvStatus.installed ? '已加载' : '未加载') }}</span>
+                      </n-space>
+                    </n-tag>
+                  </template>
+                  <div class="status-tip">
+                    <div class="status-tip-title">模型运行环境</div>
+                    <div class="status-tip-desc">期望路径：{{ markdownEnvStatus.expected_path || '-' }}</div>
+                    <div class="status-tip-desc">未加载时请选择 MarkdownConvertor.zip 并点击“拷贝”</div>
+                  </div>
+                </n-tooltip>
+              </template>
             </n-list-item>
           </n-list>
         </div>
@@ -124,7 +281,8 @@
 
 <script setup>
 import { reactive, ref, onMounted } from 'vue'
-import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NList, NListItem, useMessage } from 'naive-ui'
+import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NList, NListItem, NIcon, NTag, NTooltip, NText, useMessage } from 'naive-ui'
+import { CheckmarkCircleOutline, CloseCircleOutline, ConstructOutline, CubeOutline, InformationCircleOutline, KeyOutline, TimeOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 
@@ -140,6 +298,8 @@ const copyingEnv = ref(false)
 
 const markdownModelsStatus = ref({ installed: false, expected_path: '' })
 const markdownEnvStatus = ref({ installed: false, expected_path: '' })
+
+const hasKey = (v) => typeof v === 'string' && v.trim().length > 0
 
 const form = reactive({
   chatgpt_api_key: '',
@@ -298,9 +458,62 @@ onMounted(loadConfig)
   box-sizing: border-box;
 }
 
+.status-header {
+  margin-bottom: 8px;
+}
+
 .status-title {
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 2px;
+}
+
+.status-subtitle {
+  display: block;
+  line-height: 1.2;
+}
+
+.status-list {
+  max-width: 100%;
+}
+
+.status-tag {
+  user-select: none;
+}
+
+.status :deep(.n-icon) {
+  --n-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.status :deep(.n-icon svg) {
+  display: block;
+}
+
+.status :deep(.n-space) {
+  align-items: center;
+}
+
+.status :deep(.n-tag) {
+  display: inline-flex;
+  align-items: center;
+}
+
+.status-tip {
+  max-width: 360px;
+}
+
+.status-tip-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.status-tip-desc {
+  font-size: 12px;
+  line-height: 1.3;
+  opacity: 0.9;
 }
 
 .status-prefix {
