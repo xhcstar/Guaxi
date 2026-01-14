@@ -3998,14 +3998,19 @@ const saveCardEdit = async (index) => {
       }
 
       // 更新或创建第一个item
+      const raw = editableDiv.innerText;
+
       if (currentCard.items[0]) {
-        currentCard.items[0].content = editableDiv.innerHTML;
+        currentCard.items[0].content = raw;
+        currentCard.items[0].original_markdown = raw;
+        currentCard.items[0].originalMarkdown = raw;
       } else {
         currentCard.items[0] = {
           id: `${currentCard.id}-0`,
           type: 'text',
-          content: editableDiv.innerHTML,
-          original_markdown: '',
+          content: raw,
+          original_markdown: raw,
+          originalMarkdown: raw,
           timestamp: new Date().toISOString()
         };
       }

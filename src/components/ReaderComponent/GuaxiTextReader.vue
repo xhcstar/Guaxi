@@ -2090,7 +2090,7 @@ const updateBackendNotes = async (action, cardData) => {
           id: item.id || `${cardData.id}-${Date.now()}`,
           type: item.type || 'text',
           content: item.content || '',
-          original_markdown: item.originalMarkdown || item.content || '',
+          original_markdown: item.original_markdown || item.originalMarkdown || item.content || '',
           timestamp: item.timestamp || new Date().toISOString()
         })),
         timestamp: cardData.timestamp || new Date().toISOString()
@@ -2672,14 +2672,19 @@ const saveCardEdit = async (index) => {
         currentCard.items = [];
       }
 
+      const raw = editableDiv.innerText;
+
       if (currentCard.items[0]) {
-        currentCard.items[0].content = editableDiv.innerHTML;
+        currentCard.items[0].content = raw;
+        currentCard.items[0].original_markdown = raw;
+        currentCard.items[0].originalMarkdown = raw;
       } else {
         currentCard.items[0] = {
           id: `${currentCard.id}-0`,
           type: 'text',
-          content: editableDiv.innerHTML,
-          original_markdown: '',
+          content: raw,
+          original_markdown: raw,
+          originalMarkdown: raw,
           timestamp: new Date().toISOString()
         };
       }

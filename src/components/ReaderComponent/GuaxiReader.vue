@@ -41,7 +41,7 @@ const props = defineProps({
     required: true,
   },
   importFileId: {
-    type: Number,
+    type: [Number, String],
     default: null,
   }
 })

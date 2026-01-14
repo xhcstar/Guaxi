@@ -274,17 +274,16 @@
           </div>
 
           <div class="page-section">
-            <div class="page-title">搜索（Search）</div>
+            <div class="page-title">资讯获取</div>
             <div class="page-desc">
-              搜索页面采用三栏布局：左侧分类/列表，中间列表视图，右侧详情阅读面板。左右栏可折叠与拖拽调整宽度；
-              选择条目后会在右侧加载详情。
+              资讯获取页面采用三栏布局：左侧分类/列表，中间列表视图，右侧详情阅读面板。左右栏可折叠与拖拽调整宽度；
+              选择条目后会在右侧加载咨询详情。
             </div>
             <div class="figure">
               <div class="figure-box">
-                <div class="figure-title">占位图：搜索页面三栏布局</div>
-                <div class="figure-sub">建议文件：src/assets/manual/page-search.png</div>
+                <img class="figure-img" src="../../assets/manual/page-flipboard.png" alt="资讯获取页面三栏布局" />
               </div>
-              <div class="figure-caption">图 5：搜索页面（占位）</div>
+              <div class="figure-caption">图 5：资讯获取页面（占位）</div>
             </div>
           </div>
 
@@ -375,8 +374,7 @@
 
           <div class="figure">
             <div class="figure-box">
-              <div class="figure-title">占位图：设置-大模型与转换模型</div>
-              <div class="figure-sub">建议文件：src/assets/manual/setting-llm.png</div>
+              <img class="figure-img" src="../../assets/manual/setting-llm.png" alt="大模型与转换配置" />
             </div>
             <div class="figure-caption">图 10：大模型与转换配置（占位）</div>
           </div>
