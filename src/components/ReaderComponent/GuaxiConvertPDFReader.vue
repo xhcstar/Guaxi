@@ -274,9 +274,10 @@
           <div v-if="card.type !== 'composite' && activeCardIndex !== index" class="note-content"
             :contenteditable="false" v-html="noteHtmls[index]" @click="enterEditMode(index)"></div>
 
-          <div v-else-if="card.type !== 'composite' && activeCardIndex === index" class="note-content"
-            contenteditable="true" @keydown.meta.s.prevent="saveCardEdit(index)"
-            @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></div>
+          <div v-else-if="card.type !== 'composite' && activeCardIndex === index" class="note-content">
+            <textarea class="composite-note-editor" @input="markEditorDirty(index)" @keydown.meta.s.prevent="saveCardEdit(index)"
+              @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></textarea>
+          </div>
 
           <!-- 添加复合笔记的专用渲染 -->
           <div v-else-if="card.type === 'composite' && activeCardIndex !== index" class="composite-note-content"
@@ -288,7 +289,7 @@
           </div>
 
           <div v-else class="note-content">
-            <textarea class="composite-note-editor" @keydown.meta.s.prevent="saveCardEdit(index)"
+            <textarea class="composite-note-editor" @input="markEditorDirty(index)" @keydown.meta.s.prevent="saveCardEdit(index)"
               @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></textarea>
           </div>
 
@@ -3952,16 +3953,33 @@ const contentEditables = ref([]);
 let autoSaveInterval = null;
 
 const setContentEditableRef = (index, el) => {
-  if (el) {
-    // 确保数组足够大
-    if (!contentEditables.value[index]) {
-      contentEditables.value = [...contentEditables.value];
-    }
-    contentEditables.value[index] = el;
-  }
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || idx < 0) return;
+
+  if (contentEditables.value[idx] === el) return;
+  contentEditables.value = [...contentEditables.value];
+  contentEditables.value[idx] = el || null;
 };
 
+const editorDirty = ref([]);
+
+const setEditorDirty = (index, dirty) => {
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || idx < 0) return;
+  if (editorDirty.value[idx] === Boolean(dirty)) return;
+  editorDirty.value = [...editorDirty.value];
+  editorDirty.value[idx] = Boolean(dirty);
+};
+
+const markEditorDirty = (index) => setEditorDirty(index, true);
+const resetEditorDirty = (index) => setEditorDirty(index, false);
+
 // 2. 修改保存函数
+const getSingleEditorText = (card) => {
+  const item = card?.items?.[0] || {};
+  return String(item.original_markdown || item.originalMarkdown || item.content || '');
+};
+
 const saveCardEdit = async (index) => {
   try {
     if (index < 0 || index >= noteCards.value.length) {
@@ -3978,7 +3996,11 @@ const saveCardEdit = async (index) => {
 
     // 统一处理内容更新
     if (currentCard.type === 'composite') {
-      const raw = editableDiv?.tagName === 'TEXTAREA' ? editableDiv.value : editableDiv.innerText;
+      let raw = editableDiv?.tagName === 'TEXTAREA' ? editableDiv.value : editableDiv.innerText;
+      if (editableDiv?.tagName === 'TEXTAREA' && !editorDirty.value[index] && !String(raw || '').trim()) {
+        raw = getCompositeEditorText(currentCard);
+      }
+
       const items = parseCompositeEditorTextToItems(raw, currentCard.id);
       currentCard.items = items;
       currentCard.type = items.length > 1 ? 'composite' : 'single';
@@ -3987,13 +4009,14 @@ const saveCardEdit = async (index) => {
       }
       currentCard.content = raw;
     } else {
-      // 确保items数组存在
       if (!Array.isArray(currentCard.items)) {
         currentCard.items = [];
       }
 
-      // 更新或创建第一个item
-      const raw = editableDiv.innerText;
+      let raw = editableDiv?.tagName === 'TEXTAREA' ? editableDiv.value : editableDiv.innerText;
+      if (editableDiv?.tagName === 'TEXTAREA' && !editorDirty.value[index] && !String(raw || '').trim()) {
+        raw = getSingleEditorText(currentCard);
+      }
 
       if (currentCard.items[0]) {
         currentCard.items[0].content = raw;
@@ -4015,6 +4038,7 @@ const saveCardEdit = async (index) => {
     await updateBackendNotes('update', currentCard);
 
     noteCards.value.splice(index, 1, currentCard);
+    resetEditorDirty(index);
     activeCardIndex.value = -1;
 
   } catch (error) {
@@ -4067,11 +4091,22 @@ const exitEditMode = (index) => {
     if (editableDiv.value !== before) {
       if (!confirm('有未保存的修改，确定要取消吗？')) return;
     }
+    resetEditorDirty(index);
     activeCardIndex.value = -1;
     return;
   }
 
-  if (editableDiv && editableDiv.innerHTML !== noteCards.value[index].content) {
+  if (card?.type !== 'composite' && editableDiv?.tagName === 'TEXTAREA') {
+    const before = getSingleEditorText(card);
+    if (editableDiv.value !== before) {
+      if (!confirm('有未保存的修改，确定要取消吗？')) return;
+    }
+    resetEditorDirty(index);
+    activeCardIndex.value = -1;
+    return;
+  }
+
+  if (editableDiv && editableDiv.tagName !== 'TEXTAREA' && editableDiv.innerHTML !== noteCards.value[index].content) {
     if (!confirm('有未保存的修改，确定要取消吗？')) return;
   }
   activeCardIndex.value = -1;
@@ -4084,8 +4119,19 @@ const enterEditMode = async (index) => {
   const card = noteCards.value[index];
 
   if (card?.type === 'composite' && editableDiv?.tagName === 'TEXTAREA') {
+    resetEditorDirty(index);
     if (!editableDiv.value || editableDiv.value.trim() === '') {
       editableDiv.value = getCompositeEditorText(card);
+    }
+    editableDiv.focus();
+    editableDiv.setSelectionRange(editableDiv.value.length, editableDiv.value.length);
+    return;
+  }
+
+  if (card?.type !== 'composite' && editableDiv?.tagName === 'TEXTAREA') {
+    resetEditorDirty(index);
+    if (!editableDiv.value || editableDiv.value.trim() === '') {
+      editableDiv.value = getSingleEditorText(card);
     }
     editableDiv.focus();
     editableDiv.setSelectionRange(editableDiv.value.length, editableDiv.value.length);
@@ -4281,7 +4327,7 @@ watchEffect((onInvalidate) => {
 
     nextTick(() => {
       if (cancelled || token !== notesRenderToken) return;
-      document.querySelectorAll('.composite-note-content .mermaid').forEach(el => {
+      document.querySelectorAll('.notes-panel .mermaid').forEach(el => {
         try {
           if (!el.querySelector('svg')) {
             mermaid.run({ nodes: [el] });

@@ -195,9 +195,10 @@
           <div v-if="card.type !== 'composite' && activeCardIndex !== index" class="note-content"
             :contenteditable="false" v-html="noteHtmls[index]" @click="enterEditMode(index)"></div>
 
-          <div v-else-if="card.type !== 'composite' && activeCardIndex === index" class="note-content"
-            contenteditable="true" @keydown.meta.s.prevent="saveCardEdit(index)"
-            @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></div>
+          <div v-else-if="card.type !== 'composite' && activeCardIndex === index" class="note-content">
+            <textarea class="composite-note-editor" @input="markEditorDirty(index)" @keydown.meta.s.prevent="saveCardEdit(index)"
+              @keydown.ctrl.s.prevent="saveCardEdit(index)" :ref="el => setContentEditableRef(index, el)"></textarea>
+          </div>
 
           <!-- 添加复合笔记的专用渲染 -->
           <div v-else class="composite-note-content" @click="enterEditMode(index)">
@@ -2621,12 +2622,27 @@ const contentEditables = ref([]);
 let autoSaveInterval = null;
 
 const setContentEditableRef = (index, el) => {
-  if (el) {
-    if (!contentEditables.value[index]) {
-      contentEditables.value = [...contentEditables.value];
-    }
-    contentEditables.value[index] = el;
-  }
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || idx < 0) return;
+  if (contentEditables.value[idx] === el) return;
+  contentEditables.value = [...contentEditables.value];
+  contentEditables.value[idx] = el || null;
+};
+
+const editorDirty = ref([]);
+const setEditorDirty = (index, dirty) => {
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || idx < 0) return;
+  if (editorDirty.value[idx] === Boolean(dirty)) return;
+  editorDirty.value = [...editorDirty.value];
+  editorDirty.value[idx] = Boolean(dirty);
+};
+const markEditorDirty = (index) => setEditorDirty(index, true);
+const resetEditorDirty = (index) => setEditorDirty(index, false);
+
+const getSingleEditorText = (card) => {
+  const item = card?.items?.[0] || {};
+  return String(item.original_markdown || item.originalMarkdown || item.content || '');
 };
 
 const saveCardEdit = async (index) => {
@@ -2649,19 +2665,22 @@ const saveCardEdit = async (index) => {
         currentCard.items = [];
       }
 
-      const html = editableDiv.innerHTML;
+      let raw = editableDiv?.tagName === 'TEXTAREA' ? editableDiv.value : editableDiv.innerText;
+      if (editableDiv?.tagName === 'TEXTAREA' && !editorDirty.value[index] && !String(raw || '').trim()) {
+        raw = getSingleEditorText(currentCard);
+      }
 
       if (currentCard.items[0]) {
-        currentCard.items[0].content = html;
-        currentCard.items[0].original_markdown = html;
-        currentCard.items[0].originalMarkdown = html;
+        currentCard.items[0].content = raw;
+        currentCard.items[0].original_markdown = raw;
+        currentCard.items[0].originalMarkdown = raw;
       } else {
         currentCard.items[0] = {
           id: `${currentCard.id}-0`,
           type: 'text',
-          content: html,
-          original_markdown: html,
-          originalMarkdown: html,
+          content: raw,
+          original_markdown: raw,
+          originalMarkdown: raw,
           timestamp: new Date().toISOString()
         };
       }
@@ -2671,6 +2690,7 @@ const saveCardEdit = async (index) => {
     await updateBackendNotes('update', currentCard);
 
     noteCards.value.splice(index, 1, currentCard);
+    resetEditorDirty(index);
     activeCardIndex.value = -1;
 
   } catch (error) {
@@ -2684,7 +2704,18 @@ const saveCardEdit = async (index) => {
 };
 
 const exitEditMode = (index) => {
+  const card = noteCards.value[index];
   const editableDiv = contentEditables.value[index];
+
+  if (card?.type !== 'composite' && editableDiv?.tagName === 'TEXTAREA') {
+    const before = getSingleEditorText(card);
+    if (editableDiv.value !== before) {
+      if (!confirm('有未保存的修改，确定要取消吗？')) return;
+    }
+    activeCardIndex.value = -1;
+    return;
+  }
+
   if (editableDiv && editableDiv.innerHTML !== noteCards.value[index].content) {
     if (!confirm('有未保存的修改，确定要取消吗？')) return;
   }
@@ -2695,6 +2726,18 @@ const enterEditMode = async (index) => {
   activeCardIndex.value = index;
   await nextTick();
   const editableDiv = contentEditables.value[index];
+  const card = noteCards.value[index];
+
+  if (card?.type !== 'composite' && editableDiv?.tagName === 'TEXTAREA') {
+    resetEditorDirty(index);
+    if (!editableDiv.value || editableDiv.value.trim() === '') {
+      editableDiv.value = getSingleEditorText(card);
+    }
+    editableDiv.focus();
+    editableDiv.setSelectionRange(editableDiv.value.length, editableDiv.value.length);
+    return;
+  }
+
   if (editableDiv) {
     if (!editableDiv.innerHTML || editableDiv.innerHTML.trim() === '') {
       editableDiv.innerHTML = noteHtmls.value[index] || '';
@@ -2862,7 +2905,7 @@ watchEffect((onInvalidate) => {
 
     nextTick(() => {
       if (cancelled || token !== notesRenderToken) return;
-      document.querySelectorAll('.composite-note-content .mermaid').forEach(el => {
+      document.querySelectorAll('.notes-panel .mermaid').forEach(el => {
         try {
           if (!el.querySelector('svg')) {
             mermaid.run({ nodes: [el] });
