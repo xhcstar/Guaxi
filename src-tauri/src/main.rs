@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tokio::time::{sleep, Duration};
 
@@ -18,28 +18,28 @@ async fn app_init() {
     commands::settingview::load_config();
     info!("Config loaded");
     match commands::repoview::setup_db() {
-        Ok(_) => println!("Database initialized successfully."),
-        Err(e) => eprintln!("Failed to initialize database: {}", e),
+        Ok(_) => info!("Database initialized successfully."),
+        Err(e) => error!("Failed to initialize database: {}", e),
     }
     match commands::settingview::init_library_config() {
-        Ok(_) => println!("Library config initialized successfully."),
-        Err(e) => eprintln!("Failed to initialize library config: {}", e),
+        Ok(_) => info!("Library config initialized successfully."),
+        Err(e) => error!("Failed to initialize library config: {}", e),
     }
     match commands::settingview::init_resource_root() {
-        Ok(_) => println!("Resource root initialized successfully."),
-        Err(e) => eprintln!("Failed to initialize resource root: {}", e),
+        Ok(_) => info!("Resource root initialized successfully."),
+        Err(e) => error!("Failed to initialize resource root: {}", e),
     }
     match commands::settingview::init_template_root() {
-        Ok(_) => println!("Template root initialized successfully."),
-        Err(e) => eprintln!("Failed to initialize template root: {}", e),
+        Ok(_) => info!("Template root initialized successfully."),
+        Err(e) => error!("Failed to initialize template root: {}", e),
     }
     match commands::settingview::init_chat_record_root() {
-        Ok(_) => println!("ChatRecord root initialized successfully."),
-        Err(e) => eprintln!("Failed to initialize ChatRecord root: {}", e),
+        Ok(_) => info!("ChatRecord root initialized successfully."),
+        Err(e) => error!("Failed to initialize ChatRecord root: {}", e),
     }
     match commands::settingview::init_knowledge_bases_root() {
-        Ok(_) => println!("KnowledgeBases root initialized successfully."),
-        Err(e) => eprintln!("Failed to initialize KnowledgeBases root: {}", e),
+        Ok(_) => info!("KnowledgeBases root initialized successfully."),
+        Err(e) => error!("Failed to initialize KnowledgeBases root: {}", e),
     }
 }
 
@@ -50,10 +50,10 @@ fn start_background_gc() {
             let interval = config.gc_cycle_seconds.max(60);
             sleep(Duration::from_secs(interval)).await;
             if let Err(e) = commands::repoview::gc_deleted_items() {
-                eprintln!("Background GC (database) failed: {}", e);
+                error!("Background GC (database) failed: {}", e);
             }
             if let Err(e) = commands::backup::gc_conflict_files() {
-                eprintln!("Background GC (conflicts) failed: {}", e);
+                error!("Background GC (conflicts) failed: {}", e);
             }
         }
     });
@@ -278,7 +278,7 @@ async fn main() {
             let state_for_server = shared_state.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = start_backend_services(state_for_server).await {
-                    eprintln!("Failed to start backend services: {}", e);
+                    error!("Failed to start backend services: {}", e);
                 }
             });
 
@@ -297,7 +297,7 @@ async fn main() {
                                     match commands::guaxiscreencap::trigger_screenshot_tool_once().await
                                     {
                                         Ok(_) => info!("截图成功"),
-                                        Err(e) => eprintln!("截图失败: {}", e),
+                                        Err(e) => error!("截图失败: {}", e),
                                     }
                                 });
                             }
