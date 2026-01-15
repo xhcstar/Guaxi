@@ -62,15 +62,15 @@ fn start_background_gc() {
 #[tokio::main]
 async fn main() {
     // 初始化日志订阅器，输出到终端和文件
-    // let file_appender = tracing_appender::rolling::daily("logs", "logfile.log");
-    // let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let file_appender = tracing_appender::rolling::daily("logs", "logfile.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO) // 设置最大日志级别
         .with_span_events(FmtSpan::CLOSE) // 关闭 span 结束事件
         // .json()  // 输出 JSON 格式（可选）
         .with_writer(std::io::stdout) // 输出到终端
-        // .with_writer(non_blocking)  // 输出到文件
+        .with_writer(non_blocking)  // 输出到文件
         .init(); // 初始化
 
     // 示例日志输出
