@@ -5,7 +5,7 @@ use once_cell::sync::OnceCell;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::prelude::*;
 
 static LOG_GUARD: OnceCell<tracing_appender::non_blocking::WorkerGuard> = OnceCell::new();
 
@@ -65,14 +65,32 @@ fn start_background_gc() {
 
 #[tokio::main]
 async fn main() {
+    // 创建文件 appender - 禁用 ANSI 颜色
     let file_appender = tracing_appender::rolling::daily("logs", "logfile.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     let _ = LOG_GUARD.set(guard);
 
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+    // 为文件输出创建单独的 layer - 禁用 ANSI 颜色
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false) // 关键：禁用文件中的 ANSI 颜色
+        .with_target(true)
+        .with_level(true)
         .with_span_events(FmtSpan::CLOSE)
-        .with_writer(std::io::stdout.and(non_blocking))
+        .compact(); // 使用紧凑格式适合文件
+
+    // 为终端输出创建 layer - 启用 ANSI 颜色
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_ansi(true) // 终端保持颜色
+        .with_target(true)
+        .with_level(true)
+        .with_span_events(FmtSpan::CLOSE);
+
+    // 使用 registry 组合多个 layer
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .with(stdout_layer)
         .init();
 
     // 示例日志输出
@@ -296,7 +314,8 @@ async fn main() {
                                 info!("Shortcut pressed: {:?}", shortcut);
                                 // 创建异步任务处理截图
                                 tauri::async_runtime::spawn(async move {
-                                    match commands::guaxiscreencap::trigger_screenshot_tool_once().await
+                                    match commands::guaxiscreencap::trigger_screenshot_tool_once()
+                                        .await
                                     {
                                         Ok(_) => info!("截图成功"),
                                         Err(e) => error!("截图失败: {}", e),
