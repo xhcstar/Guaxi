@@ -77,7 +77,7 @@ async fn main() {
         .with_target(true)
         .with_level(true)
         .with_span_events(FmtSpan::CLOSE)
-        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339()) // 使用时间格式化器
+        .with_timer(tracing_subscriber::fmt::time::LocalTime::rfc_3339()) // 使用时间格式化器
         .compact(); // 使用紧凑格式适合文件
 
     // 为终端输出创建 layer - 启用 ANSI 颜色
@@ -87,7 +87,7 @@ async fn main() {
         .with_target(true)
         .with_level(true)
         .with_span_events(FmtSpan::CLOSE)
-        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339()); // 使用时间格式化器
+        .with_timer(tracing_subscriber::fmt::time::LocalTime::rfc_3339()); // 使用时间格式化器
 
     // 使用 registry 组合多个 layer
     tracing_subscriber::registry()
