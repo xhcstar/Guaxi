@@ -308,25 +308,34 @@ async fn main() {
             {
                 use tauri_plugin_global_shortcut::ShortcutState;
 
-                app.handle().plugin(
-                    tauri_plugin_global_shortcut::Builder::new()
-                        .with_shortcuts(["ctrl+alt+z"])?
-                        .with_handler(|_app, shortcut, event| {
-                            if event.state == ShortcutState::Pressed {
-                                info!("Shortcut pressed: {:?}", shortcut);
-                                // 创建异步任务处理截图
-                                tauri::async_runtime::spawn(async move {
-                                    match commands::guaxiscreencap::trigger_screenshot_tool_once()
-                                        .await
-                                    {
-                                        Ok(_) => info!("截图成功"),
-                                        Err(e) => error!("截图失败: {}", e),
-                                    }
-                                });
-                            }
-                        })
-                        .build(),
-                )?;
+                let plugin = tauri_plugin_global_shortcut::Builder::new()
+                    .with_shortcuts(["ctrl+alt+z"])
+                    .map(|builder| {
+                        builder
+                            .with_handler(|_app, shortcut, event| {
+                                if event.state == ShortcutState::Pressed {
+                                    info!("Shortcut pressed: {:?}", shortcut);
+                                    tauri::async_runtime::spawn(async move {
+                                        match commands::guaxiscreencap::trigger_screenshot_tool_once().await {
+                                            Ok(_) => info!("截图成功"),
+                                            Err(e) => error!("截图失败: {}", e),
+                                        }
+                                    });
+                                }
+                            })
+                            .build()
+                    });
+
+                match plugin {
+                    Ok(plugin) => {
+                        if let Err(e) = app.handle().plugin(plugin) {
+                            error!("Failed to register global shortcut plugin: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to configure global shortcut plugin: {}", e);
+                    }
+                }
             }
 
             Ok(())
