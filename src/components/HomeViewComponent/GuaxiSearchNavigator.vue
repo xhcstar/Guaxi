@@ -7,7 +7,7 @@
           <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
             <div class="scroller">
-              <n-virtual-list :items="keyedFileResults" :item-size="64" :key-field="'_uniqueKey'" class="virtual-list"
+              <n-virtual-list :items="keyedFileResults" :item-size="48" :key-field="'_uniqueKey'" class="virtual-list"
                 @scroll="debouncedScroll">
                 <template #default="{ item }">
                 <n-list-item @click="openSearchResult(item)">
@@ -728,7 +728,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow: hidden;
   overflow-x: hidden;
-  padding: 0 8px 5px;
+  padding: 0 8px 5px 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -740,7 +740,7 @@ onBeforeUnmount(() => {
   width: 100%;
   min-width: 0;
   overflow: hidden;
-  padding: 0 8px 5px;
+  padding: 0 8px 5px 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -762,6 +762,15 @@ onBeforeUnmount(() => {
 :deep(.n-virtual-list) {
   overflow-x: hidden !important;
   overscroll-behavior: contain;
+}
+
+:deep(.n-virtual-list__content) {
+  width: 100% !important;
+  overflow-x: hidden;
+}
+
+:deep(.n-virtual-list__content > *) {
+  width: 100% !important;
 }
 
 :deep(.n-virtual-list-item) {

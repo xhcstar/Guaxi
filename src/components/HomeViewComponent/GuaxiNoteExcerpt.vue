@@ -8,10 +8,9 @@
     <n-scrollbar v-else class="excerpt-scrollbar">
       <n-list hoverable clickable>
         <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path">
-        <div class="excerpt-result-item">
+        <div class="excerpt-result-item" @click="toggleFileExpand(item)">
           <div class="file-name" :title="item.file_path">
-            <!-- 将展开箭头移到最前面 -->
-            <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="12" @click="toggleFileExpand(item)"
+            <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="12" @click.stop="toggleFileExpand(item)"
               class="expand-icon" />
             <IconifyIcon v-bind="getFileIconPropsWithLog(item.file_path)" />
             <span class="filename-text">{{ item.file_name }}</span>
@@ -24,8 +23,7 @@
           </div>
         </div>
 
-        <!-- 展开的文件内容区域 -->
-        <div v-if="item.expanded" class="file-content">
+        <div v-if="item.expanded" class="file-content" @click.stop>
           <n-spin :show="item.loading">
             <div v-if="item.content" class="card-container">
               <n-card v-for="card in item.content.cards" :key="card.id" class="excerpt-card">
@@ -590,7 +588,7 @@ watch(() => props.excerptResults, (newVal) => {
   box-shadow: none;
   padding: 8px;
   margin-bottom: 2px;
-  margin-left: 8px;
+  margin-left: 0;
   transition: all 0.2s ease;
   position: relative;
 }
@@ -600,7 +598,6 @@ watch(() => props.excerptResults, (newVal) => {
   background: var(--guaxi-header-bg);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.22),
     0 2px 12px 0 rgba(0, 0, 0, 0.18);
-  transform: scale(1.01);
 }
 
 .file-name {
