@@ -5,8 +5,9 @@
         <n-text depth="3">尝试不同的搜索词</n-text>
       </template>
     </n-empty>
-    <n-list v-else hoverable clickable>
-      <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path">
+    <n-scrollbar v-else class="excerpt-scrollbar">
+      <n-list hoverable clickable>
+        <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path">
         <div class="excerpt-result-item">
           <div class="file-name" :title="item.file_path">
             <!-- 将展开箭头移到最前面 -->
@@ -60,8 +61,9 @@
             <n-empty v-else-if="item.loading" description="无法加载文件内容" />
           </n-spin>
         </div>
-      </n-list-item>
-    </n-list>
+        </n-list-item>
+      </n-list>
+    </n-scrollbar>
   </div>
 </template>
 
@@ -78,7 +80,8 @@ import {
   NIcon,
   NCard,
   NTag,
-  NSpin
+  NSpin,
+  NScrollbar
 } from 'naive-ui';
 import { TextGrammarArrowLeft20Regular } from '@vicons/fluent';
 import { ChevronDown, ChevronRight } from '@vicons/fa';
@@ -512,34 +515,36 @@ watch(() => props.excerptResults, (newVal) => {
   height: 100%;
   width: 100%;
   min-height: 0;
-  max-height: calc(100vh - 50px);
-  padding-bottom: 15px;
-  margin-bottom: 15px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* 只在这里设置滚动 */
 }
 
-/* 当有展开项时，改为内部滚动 */
-.excerpt-navigator.has-expanded-items {
-  overflow-y: visible;
-  max-height: calc(100vh - 50px);
+.excerpt-scrollbar {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.n-list {
-  flex: 1;
+:deep(.n-scrollbar-container) {
+  min-height: 0;
+}
+
+:deep(.n-list) {
   min-height: 0;
   max-width: 475px;
   width: 100%;
   padding: 0;
   margin: 0;
-  overflow-y: auto;
-  /* 只在列表容器设置滚动 */
+  overflow: hidden;
 }
 
-.n-list-item {
+:deep(.n-list__content) {
+  min-height: 0;
+}
+
+:deep(.n-list-item) {
   width: 100%;
   max-width: 465px;
   margin: 2px !important;
@@ -547,28 +552,26 @@ watch(() => props.excerptResults, (newVal) => {
   transition: all 0.2s ease;
 }
 
-/* 鼠标悬停效果增强 */
-.n-list-item:hover {
+:deep(.n-list-item:hover) {
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-/* 统一滚动条样式 */
-.n-list::-webkit-scrollbar {
+:deep(.n-list::-webkit-scrollbar) {
   width: 6px;
 }
 
-.n-list::-webkit-scrollbar-track {
+:deep(.n-list::-webkit-scrollbar-track) {
   background: var(--guaxi-header-bg);
   border-radius: 3px;
 }
 
-.n-list::-webkit-scrollbar-thumb {
+:deep(.n-list::-webkit-scrollbar-thumb) {
   background: var(--guaxi-border);
   border-radius: 3px;
 }
 
-.n-list::-webkit-scrollbar-thumb:hover {
+:deep(.n-list::-webkit-scrollbar-thumb:hover) {
   background: var(--guaxi-text-secondary);
 }
 
@@ -663,14 +666,7 @@ watch(() => props.excerptResults, (newVal) => {
   border-radius: 6px;
   margin-top: 8px;
   box-sizing: border-box;
-  transition: max-height 0.3s ease;
-}
-
-/* 展开状态下的样式 */
-.file-content.expanded {
-  max-height: 470px;
-  /* 根据需要调整 */
-  overflow: auto;
+  overflow: visible;
 }
 
 .card-container {

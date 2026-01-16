@@ -6,9 +6,10 @@
         <div class="tab-content">
           <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
-            <n-virtual-list :items="keyedFileResults" :item-size="64" :key-field="'_uniqueKey'" class="scroller"
-              @scroll="debouncedScroll">
-              <template #default="{ item }">
+            <div class="scroller">
+              <n-virtual-list :items="keyedFileResults" :item-size="64" :key-field="'_uniqueKey'" class="virtual-list"
+                @scroll="debouncedScroll">
+                <template #default="{ item }">
                 <n-list-item @click="openSearchResult(item)">
                   <div class="search-result-item">
                     <div class="file-name" :title="getFullPath(item)">
@@ -21,13 +22,14 @@
                     </div>
                   </div>
                 </n-list-item>
-              </template>
-              <template #footer>
-                <div v-if="searchState.loading" class="loading-more">
-                  <n-spin size="small" />
-                </div>
-              </template>
-            </n-virtual-list>
+                </template>
+                <template #footer>
+                  <div v-if="searchState.loading" class="loading-more">
+                    <n-spin size="small" />
+                  </div>
+                </template>
+              </n-virtual-list>
+            </div>
           </n-list>
         </div>
       </n-tab-pane>
@@ -48,9 +50,10 @@
           </div>
           <n-empty v-if="noteResults.length === 0" description="暂无内容搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
-            <n-virtual-list :items="keyedNoteResults" :item-size="64" :key-field="'_uniqueKey'" class="scroller"
-              @scroll="debouncedScroll">
-              <template #default="{ item }">
+            <div class="scroller">
+              <n-virtual-list :items="keyedNoteResults" :item-size="64" :key-field="'_uniqueKey'" class="virtual-list"
+                @scroll="debouncedScroll">
+                <template #default="{ item }">
                 <n-list-item @click="openSearchResult(item)">
                   <div class="search-result-item">
                     <div class="file-name" :title="getFullPath(item)">
@@ -61,13 +64,14 @@
                     <div class="preview-content" v-html="formatPreview(item)"></div>
                   </div>
                 </n-list-item>
-              </template>
-              <template #footer>
-                <div v-if="searchState.loading" class="loading-more">
-                  <n-spin size="small" />
-                </div>
-              </template>
-            </n-virtual-list>
+                </template>
+                <template #footer>
+                  <div v-if="searchState.loading" class="loading-more">
+                    <n-spin size="small" />
+                  </div>
+                </template>
+              </n-virtual-list>
+            </div>
           </n-list>
         </div>
       </n-tab-pane>
@@ -647,6 +651,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .search-navigator {
   height: 100%;
+  width: 100%;
+  min-width: 0;
   max-width: 490px;
   display: flex;
   flex-direction: column;
@@ -697,50 +703,80 @@ onBeforeUnmount(() => {
 }
 
 :deep(.n-tabs-content) {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+:deep(.n-tab-pane) {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
 .tab-content {
-  height: 100%;
-  max-height: calc(100vh - 108px);
-  max-width: 480px;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
-  padding: 8px 4px 5px 0;
+  overflow-x: hidden;
+  padding: 0 8px 5px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
 }
 
-.tab-content::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.tab-content::-webkit-scrollbar-thumb {
-  background-color: rgba(127, 127, 127, 0.35);
-  border-radius: 3px;
-}
-
-.tab-content::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(127, 127, 127, 0.55);
-}
-
-.tab-content::-webkit-scrollbar-track {
-  background-color: transparent;
-}
-
 .tab-content-excerpts {
-  height: 100%;
-  max-height: calc(100vh - 108px);
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
-  padding: 8px 4px 5px 0;
+  padding: 0 8px 5px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .scroller {
-  height: calc(100vh - 108px);
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
   overflow: hidden;
+}
+
+.virtual-list {
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden;
+}
+
+:deep(.n-virtual-list) {
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+}
+
+:deep(.n-virtual-list-item) {
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+}
+
+:deep(.n-virtual-list) {
+  width: 100%;
+  height: 100%;
+}
+
+:deep(.n-virtual-list-item) {
+  width: 100%;
 }
 
 /* 确保虚拟列表项正确显示 */
@@ -758,17 +794,32 @@ onBeforeUnmount(() => {
   padding: 8px;
 }
 
-.n-list {
+.tab-content :deep(.n-list) {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 0;
   margin: 0;
-  max-width: 475px;
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  overflow-x: hidden;
+}
+
+.tab-content :deep(.n-list__content) {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
-.n-list-item {
+.tab-content :deep(.n-list-item) {
   width: 100%;
-  max-width: 465px;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
   margin: 0 !important;
   padding: 2px 0 !important;
   transition: all 0.2s ease;
@@ -785,14 +836,13 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   gap: 4px;
   width: 100%;
-  max-width: 450px;
+  min-width: 0;
   box-sizing: border-box;
   background: var(--guaxi-panel-bg);
   border-radius: 6px;
   box-shadow: none;
   padding: 8px;
   margin-bottom: 2px;
-  margin-left: 8px;
   margin-top: 5px;
   transition: all 0.2s ease;
   position: relative;
@@ -802,7 +852,6 @@ onBeforeUnmount(() => {
   background: var(--guaxi-header-bg);
   box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
     0 2px 12px 0 rgba(7, 118, 161, 0.15);
-  transform: scale(1.01);
 }
 
 .file-name {
@@ -815,9 +864,7 @@ onBeforeUnmount(() => {
   width: 100%;
   cursor: pointer;
   min-width: 0;
-  max-width: 420px;
   overflow: hidden;
-  padding-right: 8px;
   box-sizing: border-box;
   transition: color 0.2s;
 }
@@ -880,18 +927,21 @@ onBeforeUnmount(() => {
   transition: background 0.2s;
 }
 
-.n-tab-pane {
-  height: 100%;
+:deep(.n-tab-pane) {
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.n-tabs-pane-wrapper {
-  flex: 1;
+:deep(.n-tabs-pane-wrapper) {
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0 !important;
+  margin: 0 !important;
   transition: opacity 0.3s;
 }
 
