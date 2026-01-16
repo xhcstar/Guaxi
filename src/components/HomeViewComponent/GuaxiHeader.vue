@@ -1051,14 +1051,37 @@ const handleWindowReflow = () => {
   updateDropdownPosition()
 }
 
+const handleGlobalSearchHotkey = (e) => {
+  if (e?.defaultPrevented) return
+
+  const key = e?.key
+  const isP = key === 'p' || key === 'P'
+  const withModifier = !!(e?.ctrlKey || e?.metaKey)
+
+  if (!isP || !withModifier || e?.altKey) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  Promise.resolve(showSearchOptions())
+    .catch(() => {})
+    .finally(() => {
+      nextTick(() => {
+        searchInputRef.value?.focus?.()
+      })
+    })
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleWindowReflow)
   window.addEventListener('scroll', handleWindowReflow, true)
+  window.addEventListener('keydown', handleGlobalSearchHotkey, true)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleWindowReflow)
   window.removeEventListener('scroll', handleWindowReflow, true)
+  window.removeEventListener('keydown', handleGlobalSearchHotkey, true)
   debouncedRunPreviewSearch.cancel()
 })
 

@@ -29,6 +29,8 @@ const classifyReadFileError = (error) => {
   return "READ_FAILED";
 };
 
+const normalizeTabPath = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+
 export const useFileTreeStore = defineStore("fileTreeStore", {
   state: () => ({
     fileTree: [],
@@ -70,25 +72,37 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 新增：专门处理搜索结果的打开
     async fileTreeOpenSearchResult(result) {
       console.log("打开搜索结果:", result);
+
+      const requestedPath = result?.path;
+      const requestedKey = normalizeTabPath(requestedPath);
+      const existingTab = this.openTabs.find((tab) => normalizeTabPath(tab.path) === requestedKey);
+
       // 获取文件内容（如果未加载）
-      if (!this.openTabs.some((tab) => tab.path === result.path)) {
-        const res = await this.fetchFileContent(result.path);
+      if (!existingTab) {
+        const res = await this.fetchFileContent(requestedPath);
         if (res?.ok) {
-          await this.openFileInTab(result.path, res.content, {
+          await this.openFileInTab(requestedPath, res.content, {
             unsupported: !!res.unsupported,
           });
         } else {
           throw new Error(res?.code || "READ_FAILED");
         }
+      } else if (existingTab.path !== requestedPath) {
+        console.debug('[fileTreeOpenSearchResult] Reusing tab via normalized path match', {
+          requested: requestedPath,
+          actual: existingTab.path
+        })
       }
 
+      const activePath = existingTab?.path || requestedPath;
+
       // 激活标签页并同步 selectedFile
-      this.setActiveTab(result.path);
-      const active = this.openTabs.find((tab) => tab.path === result.path);
+      this.setActiveTab(activePath);
+      const active = this.openTabs.find((tab) => normalizeTabPath(tab.path) === normalizeTabPath(activePath));
 
       // 返回需要高亮的信息
       return {
-        path: result.path,
+        path: active?.path || activePath,
         lineNumber: result.line_number,
         matches: result.matches,
         content: active ? active.content : this.selectedFile?.content || "",
@@ -209,10 +223,11 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     async openFileInTab(path, content, options = {}) {
       const fileName = path.split(/[\\/]/).pop();
 
-      // 检查是否已存在相同路径的标签页
-      const existingIndex = this.openTabs.findIndex((tab) => tab.path === path);
-      if (existingIndex !== -1) {
-        this.setActiveTab(path, this.layoutMode === 'single' ? 'left' : this.activeRegion);
+      // 检查是否已存在相同路径的标签页（兼容 Windows 下 \ 与 / 以及大小写差异）
+      const desiredKey = normalizeTabPath(path);
+      const existingTab = this.openTabs.find((tab) => normalizeTabPath(tab.path) === desiredKey);
+      if (existingTab) {
+        this.setActiveTab(existingTab.path, this.layoutMode === 'single' ? 'left' : this.activeRegion);
         return;
       }
 
@@ -328,6 +343,14 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
     // 新增：统一设置激活标签并同步 selectedFile
     setActiveTab(path, region) {
+      const desiredKey = normalizeTabPath(path);
+      const resolved = path
+        ? this.openTabs.find((t) => normalizeTabPath(t.path) === desiredKey)
+        : null;
+      if (resolved) {
+        path = resolved.path;
+      }
+
       this.activeTab = path;
 
       if (!path) {
@@ -339,7 +362,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         return;
       }
 
-      const index = this.openTabs.findIndex((t) => t.path === path);
+      const index = this.openTabs.findIndex((t) => normalizeTabPath(t.path) === normalizeTabPath(path));
       const tab = index !== -1 ? this.openTabs[index] : null;
 
       if (tab) {

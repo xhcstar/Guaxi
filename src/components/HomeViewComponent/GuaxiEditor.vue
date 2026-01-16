@@ -1899,7 +1899,7 @@ const initEditor = () => {
     automaticLayout: true,  // 自动布局
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
-    wordWrap: 'off',
+    wordWrap: 'on',
     renderValidationDecorations: 'on',
     minimap: {
       enabled: false,  // 启用迷你地图
