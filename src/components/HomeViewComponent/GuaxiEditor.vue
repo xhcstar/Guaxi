@@ -1800,22 +1800,22 @@ const initEditor = () => {
       { token: 'number', foreground: '986801' },           // Number
       { token: 'regexp', foreground: '0184bc' },           // RegExp → 用 Operator 相近色
       { token: 'type', foreground: 'c18401' },           // Type
-      { token: 'delimiter', foreground: '383a42' },           // Delimiter → Main text color
+      { token: 'delimiter', foreground: '1f2328' },           // Delimiter → Main text color
       { token: 'variable', foreground: 'e45649' },           // Variable
       { token: 'parameter', foreground: '4078f2' },           // Parameter → Function color
       { token: 'function', foreground: '4078f2' },           // Function
       { token: 'constant', foreground: '986801' },           // Constant → Number color
       { token: 'class', foreground: 'c18401' },           // Class → Type color
-      { token: 'identifier', foreground: '383a42' },           // Identifier → Main text color
+      { token: 'identifier', foreground: '1f2328' },           // Identifier → Main text color
       { token: 'tag', foreground: 'e45649' },           // Tag → Variable color
       { token: 'attribute.name', foreground: 'c18401' },           // Attribute name → Type color
       { token: 'meta.embedded', foreground: 'a0a1a7' }            // Meta embedded → Comment color
     ],
     colors: {
-      'editor.background': '#fafafa',
-      'editor.foreground': '#383a42',
+      'editor.background': '#ffffff',
+      'editor.foreground': '#1f2328',
       'editorLineNumber.foreground': '#a0a1a7',
-      'editorLineNumber.activeForeground': '#383a42',
+      'editorLineNumber.activeForeground': '#1f2328',
       'editorCursor.foreground': '#4078f2',
       'editor.selectionBackground': '#d7dae0',
       'editor.inactiveSelectionBackground': '#e3f2fd',
@@ -5049,6 +5049,20 @@ onUnmounted(() => {
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
+  background-color: var(--guaxi-header-bg) !important;
+  color: var(--guaxi-text-primary) !important;
+  border-bottom: 1px solid var(--guaxi-border) !important;
+}
+
+.realtime-vditor :deep(.vditor-toolbar svg),
+.realtime-vditor :deep(.vditor-toolbar svg *) {
+  fill: currentColor !important;
+  stroke: currentColor !important;
+}
+
+.realtime-vditor :deep(.vditor-reset) {
+  background-color: var(--guaxi-content-bg) !important;
+  color: var(--guaxi-text-primary) !important;
 }
 
 .realtime-vditor :deep(.vditor-toolbar > *) {
@@ -5413,7 +5427,7 @@ onUnmounted(() => {
   padding: 1.5em 1em !important;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
-  background: #f6f8fa !important;
+  background: #ffffff !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
   color: #24292f;
@@ -5430,7 +5444,7 @@ onUnmounted(() => {
   display: block;
   border-radius: 6px;
   border: 1px solid #e1e4e8;
-  background: #f6f8fa;
+  background: #ffffff;
   color: #24292f;
   padding: 1.5em 1em;
   overflow-x: auto;

@@ -31,12 +31,12 @@ const ONE_DARK = {
 }
 
 const ONE_DARK_LIGHT = {
-  bg: '#fafafa',
+  bg: '#ffffff',
   panel: '#ffffff',
-  header: '#f5f5f5',
-  border: '#e5e5e6',
-  text1: '#383a42',
-  text2: '#666666',
+  header: '#ffffff',
+  border: '#d0d7de',
+  text1: '#1f2328',
+  text2: '#57606a',
   primary: '#4078f2',
   info: '#0184bc',
   success: '#50a14f',
@@ -74,14 +74,14 @@ const themeOverrides = computed(() => {
 
 <style>
 :root {
-  --guaxi-app-bg: #fafafa;
-  --guaxi-header-bg: #f5f5f5;
+  --guaxi-app-bg: #ffffff;
+  --guaxi-header-bg: #ffffff;
   --guaxi-content-bg: #ffffff;
   --guaxi-panel-bg: #ffffff;
-  --guaxi-border: #e5e5e6;
-  --guaxi-text-primary: #383a42;
-  --guaxi-text-secondary: #666666;
-  --guaxi-header-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  --guaxi-border: #d0d7de;
+  --guaxi-text-primary: #1f2328;
+  --guaxi-text-secondary: #57606a;
+  --guaxi-header-shadow: 0px 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 :root[data-guaxi-theme='dark'] {
@@ -99,6 +99,57 @@ html,
 body {
   background: var(--guaxi-app-bg);
   color: var(--guaxi-text-primary);
+}
+
+pre,
+.hljs,
+.code-segment {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
+}
+
+pre::-webkit-scrollbar,
+.hljs::-webkit-scrollbar,
+.code-segment::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+pre::-webkit-scrollbar-thumb,
+.hljs::-webkit-scrollbar-thumb,
+.code-segment::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.22);
+  border-radius: 999px;
+}
+
+pre::-webkit-scrollbar-thumb:hover,
+.hljs::-webkit-scrollbar-thumb:hover,
+.code-segment::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.34);
+}
+
+pre::-webkit-scrollbar-track,
+.hljs::-webkit-scrollbar-track,
+.code-segment::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+:root[data-guaxi-theme='dark'] pre,
+:root[data-guaxi-theme='dark'] .hljs,
+:root[data-guaxi-theme='dark'] .code-segment {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+:root[data-guaxi-theme='dark'] pre::-webkit-scrollbar-thumb,
+:root[data-guaxi-theme='dark'] .hljs::-webkit-scrollbar-thumb,
+:root[data-guaxi-theme='dark'] .code-segment::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+:root[data-guaxi-theme='dark'] pre::-webkit-scrollbar-thumb:hover,
+:root[data-guaxi-theme='dark'] .hljs::-webkit-scrollbar-thumb:hover,
+:root[data-guaxi-theme='dark'] .code-segment::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.26);
 }
 
 :root[data-guaxi-theme='dark'] .fit-width,

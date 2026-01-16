@@ -1080,7 +1080,7 @@ const setMessageRef = (el, index) => {
   padding: 1.5em 1em !important;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
-  background: var(--guaxi-header-bg) !important;
+  background: var(--guaxi-content-bg) !important;
   border: 1px solid var(--guaxi-border);
   margin: 1em 0;
   max-width: 100%;

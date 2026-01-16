@@ -20,5 +20,6 @@ import GuaxiFileTree from './GuaxiFileTree.vue';
   min-height: 0;
   display: flex;
   flex-direction: column;
+  background-color: var(--guaxi-content-bg);
 }
 </style>

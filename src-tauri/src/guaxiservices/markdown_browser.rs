@@ -461,7 +461,12 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
             .dl:hover {{ color: #0969da; border-color: rgba(9,105,218,0.35); background: rgba(9,105,218,0.06); }}
             .sub {{ margin-top: 4px; font-size: 12px; color: rgba(31,35,40,0.6); word-break: break-all; }}
             .content {{ max-width: 980px; margin: 0 auto; padding: 18px 16px 60px; }}
-            pre {{ background: rgba(0,0,0,0.04); padding: 12px; border-radius: 10px; overflow: auto; }}
+            pre {{ background: #ffffff; border: 1px solid rgba(0,0,0,0.08); padding: 12px; border-radius: 10px; overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.22) transparent; }}
+            pre::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+            pre::-webkit-scrollbar-thumb {{ background-color: rgba(0,0,0,0.22); border-radius: 999px; }}
+            pre::-webkit-scrollbar-thumb:hover {{ background-color: rgba(0,0,0,0.34); }}
+            pre::-webkit-scrollbar-track {{ background-color: transparent; }}
+            pre code.hljs, code.hljs, .hljs {{ background: transparent !important; }}
             code {{ font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; }}
             img {{ max-width: 100%; }}
             a {{ color: #0969da; }}

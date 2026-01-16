@@ -1818,7 +1818,7 @@ onUnmounted(() => {
 
 .toolbar {
   padding: 12px 16px;
-  background-color: var(--guaxi-header-bg);
+  background-color: var(--guaxi-panel-bg);
   border-bottom: 1px solid var(--guaxi-border);
   display: flex;
   justify-content: space-between;
@@ -1840,7 +1840,7 @@ onUnmounted(() => {
 }
 
 .active-repo-wrapper {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: var(--guaxi-panel-bg);
   border-left: 3px solid #1890ff;
   box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.08);
   border-bottom: 1px solid var(--n-border-color);
@@ -2162,7 +2162,7 @@ onUnmounted(() => {
 .browser-icon,
 .git-icon,
 .kb-manager-icon {
-  color: var(--n-text-color-disabled, #bfbfbf);
+  color: var(--guaxi-text-secondary);
   background-color: transparent;
   transition: color 0.2s, background-color 0.2s;
   border-radius: 4px;

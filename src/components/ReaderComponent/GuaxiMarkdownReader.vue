@@ -3372,7 +3372,7 @@ button:disabled {
 }
 
 .code-segment {
-  background: #f6f8fa;
+  background: #ffffff;
   padding: 12px;
   border-radius: 6px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;

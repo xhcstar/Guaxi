@@ -3770,7 +3770,7 @@ button:disabled {
   padding: 1.5em 1em !important;
   font-size: 15px;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
-  background: #f6f8fa !important;
+  background: #ffffff !important;
   border: 1px solid #e1e4e8;
   margin: 1em 0;
 }
