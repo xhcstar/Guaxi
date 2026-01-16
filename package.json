@@ -25,6 +25,7 @@
     "@iconify/json": "^2.2.350",
     "@iconify-icons/lucide": "^1.2.135",
     "@iconify-icons/mdi": "^1.2.48",
+    "@iconify-icons/vscode-icons": "^1.2.0",
     "isomorphic-git": "^1.32.1",
     "leaflet": "^1.9.4",
     "monaco-editor-textmate": "^4.0.0",
