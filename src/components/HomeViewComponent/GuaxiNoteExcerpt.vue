@@ -7,8 +7,8 @@
     </n-empty>
     <n-scrollbar v-else class="excerpt-scrollbar">
       <n-list hoverable clickable>
-        <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path">
-        <div class="excerpt-result-item" @click="toggleFileExpand(item)">
+        <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path" @click="toggleFileExpand(item)">
+        <div class="excerpt-result-item">
           <div class="file-name" :title="item.file_path">
             <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="12" @click.stop="toggleFileExpand(item)"
               class="expand-icon" />
@@ -580,7 +580,7 @@ watch(() => props.excerptResults, (newVal) => {
   top: 4px;
   gap: 4px;
   width: 100%;
-  max-width: 450px;
+  min-width: 0;
   box-sizing: border-box;
   background: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
