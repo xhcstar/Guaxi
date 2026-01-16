@@ -131,22 +131,22 @@
                 <div class="icon-desc">保存当前文件（Ctrl+S）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:file-pen-line" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="filePenLineIcon" /></div>
                 <div class="icon-name">模式：编辑</div>
                 <div class="icon-desc">切换编辑/预览/分屏/实时预览（Ctrl+1/2/3/4）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:eye" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="eyeIcon" /></div>
                 <div class="icon-name">模式：预览</div>
                 <div class="icon-desc">同上（预览态图标）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:columns-2" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="columns2Icon" /></div>
                 <div class="icon-name">模式：分屏预览</div>
                 <div class="icon-desc">同上（分屏预览态图标）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:sparkles" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="sparklesIcon" /></div>
                 <div class="icon-name">模式：实时预览</div>
                 <div class="icon-desc">同上（实时预览态图标）。</div>
               </div>
@@ -156,17 +156,17 @@
                 <div class="icon-desc">导出 Markdown（PDF / docx / html / tex / epub / odt / txt）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:minus" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="minusIcon" /></div>
                 <div class="icon-name">分隔线</div>
                 <div class="icon-desc">插入 Markdown 分隔线。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:undo" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="undoIcon" /></div>
                 <div class="icon-name">撤销</div>
                 <div class="icon-desc">撤销编辑操作。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:redo" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="redoIcon" /></div>
                 <div class="icon-name">重做</div>
                 <div class="icon-desc">重做编辑操作。</div>
               </div>
@@ -209,32 +209,32 @@
             </ul>
             <div class="icon-block">
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:bold" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="boldIcon" /></div>
                 <div class="icon-name">加粗</div>
                 <div class="icon-desc">为选中内容添加/取消 **（Ctrl+B）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:italic" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="italicIcon" /></div>
                 <div class="icon-name">斜体</div>
                 <div class="icon-desc">为选中内容添加/取消 *（Ctrl+I）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:strikethrough" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="strikethroughIcon" /></div>
                 <div class="icon-name">删除线</div>
                 <div class="icon-desc">为选中内容添加/取消 ~~（Ctrl+Shift+X）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:link" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="linkIcon" /></div>
                 <div class="icon-name">链接</div>
                 <div class="icon-desc">插入 [文字](URL)（Ctrl+K）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:code" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="codeIcon" /></div>
                 <div class="icon-name">行内代码</div>
                 <div class="icon-desc">为选中内容包裹反引号。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:quote" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="quoteIcon" /></div>
                 <div class="icon-name">引用</div>
                 <div class="icon-desc">插入/取消引用块。</div>
               </div>
@@ -246,42 +246,42 @@
             </ul>
             <div class="icon-block">
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="mdi:table-row-plus-after" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="tableRowPlusAfter" /></div>
                 <div class="icon-name">新增行</div>
                 <div class="icon-desc">在下方插入行（Ctrl+Alt+↓）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="mdi:table-row-remove" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="tableRowRemove" /></div>
                 <div class="icon-name">删除行</div>
                 <div class="icon-desc">删除当前行（Ctrl+Alt+Shift+↓）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="mdi:table-column-plus-after" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="tableColumnPlusAfter" /></div>
                 <div class="icon-name">新增列</div>
                 <div class="icon-desc">在右侧插入列（Ctrl+Alt+→）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="mdi:table-column-remove" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="tableColumnRemove" /></div>
                 <div class="icon-name">删除列</div>
                 <div class="icon-desc">删除当前列（Ctrl+Alt+Shift+→）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:align-left" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="alignLeftIcon" /></div>
                 <div class="icon-name">左对齐</div>
                 <div class="icon-desc">设置当前列左对齐。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:align-center" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="alignCenterIcon" /></div>
                 <div class="icon-name">居中</div>
                 <div class="icon-desc">设置当前列居中。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:align-right" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="alignRightIcon" /></div>
                 <div class="icon-name">右对齐</div>
                 <div class="icon-desc">设置当前列右对齐。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><Icon icon="lucide:sparkles" width="18" height="18" /></div>
+                <div class="icon-inline"><Icon :icon="sparklesIcon" /></div>
                 <div class="icon-name">格式化</div>
                 <div class="icon-desc">格式化表格。</div>
               </div>
@@ -935,6 +935,28 @@ import {
   SyncOutline,
   TrashOutline
 } from '@vicons/ionicons5'
+
+// Iconify local icons to preserve original lucide/mdi visuals offline
+import filePenLineIcon from '@iconify-icons/lucide/file-edit'
+import eyeIcon from '@iconify-icons/lucide/eye'
+import columns2Icon from '@iconify-icons/lucide/columns'
+import sparklesIcon from '@iconify-icons/lucide/sparkles'
+import minusIcon from '@iconify-icons/lucide/minus'
+import undoIcon from '@iconify-icons/lucide/undo'
+import redoIcon from '@iconify-icons/lucide/redo'
+import boldIcon from '@iconify-icons/lucide/bold'
+import italicIcon from '@iconify-icons/lucide/italic'
+import strikethroughIcon from '@iconify-icons/lucide/strikethrough'
+import linkIcon from '@iconify-icons/lucide/link'
+import codeIcon from '@iconify-icons/lucide/code'
+import quoteIcon from '@iconify-icons/lucide/quote'
+import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
+import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
+import tableColumnPlusAfter from '@iconify-icons/mdi/table-column-plus-after'
+import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
+import alignLeftIcon from '@iconify-icons/lucide/align-left'
+import alignCenterIcon from '@iconify-icons/lucide/align-center'
+import alignRightIcon from '@iconify-icons/lucide/align-right'
 
 const SortAscendingIcon = {
   render() {

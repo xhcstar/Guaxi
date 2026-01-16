@@ -35,7 +35,7 @@
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
                 <n-button text size="tiny">
-                  <Icon icon="lucide:heading" width="16" height="16" />
+                  <Icon :icon="headingIcon" width="16" height="16" />
                 </n-button>
               </template>
               标题
@@ -45,7 +45,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleBold">
-                <Icon icon="lucide:bold" width="16" height="16" />
+                <Icon :icon="boldIcon" width="16" height="16" />
               </n-button>
             </template>
             加粗 (Ctrl+B)
@@ -53,7 +53,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleItalic">
-                <Icon icon="lucide:italic" width="16" height="16" />
+                <Icon :icon="italicIcon" width="16" height="16" />
               </n-button>
             </template>
             斜体 (Ctrl+I)
@@ -61,7 +61,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleStrikethrough">
-                <Icon icon="lucide:strikethrough" width="16" height="16" />
+                <Icon :icon="strikethroughIcon" width="16" height="16" />
               </n-button>
             </template>
             删除线 (Ctrl+Shift+X)
@@ -69,7 +69,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertLink">
-                <Icon icon="lucide:link" width="16" height="16" />
+                <Icon :icon="linkIcon" width="16" height="16" />
               </n-button>
             </template>
             链接 (Ctrl+K)
@@ -77,7 +77,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleBlockquote">
-                <Icon icon="lucide:quote" width="16" height="16" />
+                <Icon :icon="quoteIcon" width="16" height="16" />
               </n-button>
             </template>
             引用
@@ -85,7 +85,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleInlineCode">
-                <Icon icon="lucide:code" width="16" height="16" />
+                <Icon :icon="codeIcon" width="16" height="16" />
               </n-button>
             </template>
             行内代码
@@ -93,7 +93,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertCodeBlockFromToolbar">
-                <Icon icon="lucide:square-terminal" width="16" height="16" />
+                <Icon :icon="squareTerminalIcon" width="16" height="16" />
               </n-button>
             </template>
             代码块
@@ -102,7 +102,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleUnorderedList">
-                <Icon icon="lucide:list" width="16" height="16" />
+                <Icon :icon="listIcon" width="16" height="16" />
               </n-button>
             </template>
             无序列表
@@ -110,7 +110,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleOrderedList">
-                <Icon icon="lucide:list-ordered" width="16" height="16" />
+                <Icon :icon="listOrderedIcon" width="16" height="16" />
               </n-button>
             </template>
             有序列表
@@ -118,7 +118,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleTaskList">
-                <Icon icon="lucide:list-checks" width="16" height="16" />
+                <Icon :icon="listChecksIcon" width="16" height="16" />
               </n-button>
             </template>
             任务列表
@@ -127,7 +127,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertTable">
-                <Icon icon="lucide:table" width="16" height="16" />
+                <Icon :icon="tableIcon" width="16" height="16" />
               </n-button>
             </template>
             表格 (Ctrl+Alt+T)
@@ -135,7 +135,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertImage">
-                <Icon icon="lucide:image" width="16" height="16" />
+                <Icon :icon="imageIcon" width="16" height="16" />
               </n-button>
             </template>
             图片
@@ -143,7 +143,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertHorizontalRule">
-                <Icon icon="lucide:minus" width="16" height="16" />
+                <Icon :icon="minusIcon" width="16" height="16" />
               </n-button>
             </template>
             分隔线
@@ -152,7 +152,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="undo">
-                <Icon icon="lucide:undo" width="16" height="16" />
+                <Icon :icon="undoIcon" width="16" height="16" />
               </n-button>
             </template>
             撤销
@@ -160,7 +160,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="redo">
-                <Icon icon="lucide:redo" width="16" height="16" />
+                <Icon :icon="redoIcon" width="16" height="16" />
               </n-button>
             </template>
             重做
@@ -222,8 +222,8 @@
         <div v-show="tableToolbarVisible" class="floating-table-toolbar" :style="tableToolbarStyle" @mousedown.prevent>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="addTableRowBelow">
-                <Icon icon="mdi:table-row-plus-after" width="16" height="16" />
+                <n-button text size="tiny" @click="addTableRowBelow">
+                <Icon :icon="tableRowPlusAfter" width="16" height="16" />
               </n-button>
             </template>
             新增行 (Ctrl+Alt+↓)
@@ -231,7 +231,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="deleteTableRow">
-                <Icon icon="mdi:table-row-remove" width="16" height="16" />
+                <Icon :icon="tableRowRemove" width="16" height="16" />
               </n-button>
             </template>
             删除行 (Ctrl+Alt+Shift+↓)
@@ -240,7 +240,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="addTableColumnRight">
-                <Icon icon="mdi:table-column-plus-after" width="16" height="16" />
+                <Icon :icon="tableColumnPlusAfter" width="16" height="16" />
               </n-button>
             </template>
             新增列 (Ctrl+Alt+→)
@@ -248,7 +248,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="deleteTableColumn">
-                <Icon icon="mdi:table-column-remove" width="16" height="16" />
+                <Icon :icon="tableColumnRemove" width="16" height="16" />
               </n-button>
             </template>
             删除列 (Ctrl+Alt+Shift+→)
@@ -256,24 +256,24 @@
           <div class="floating-table-toolbar-divider"></div>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="setTableColumnAlign('left')">
-                <Icon icon="lucide:align-left" width="16" height="16" />
+                <n-button text size="tiny" @click="setTableColumnAlign('left')">
+                <Icon :icon="alignLeftIcon" width="16" height="16" />
               </n-button>
             </template>
             左对齐
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="setTableColumnAlign('center')">
-                <Icon icon="lucide:align-center" width="16" height="16" />
+                <n-button text size="tiny" @click="setTableColumnAlign('center')">
+                <Icon :icon="alignCenterIcon" width="16" height="16" />
               </n-button>
             </template>
             居中
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="setTableColumnAlign('right')">
-                <Icon icon="lucide:align-right" width="16" height="16" />
+                <n-button text size="tiny" @click="setTableColumnAlign('right')">
+                <Icon :icon="alignRightIcon" width="16" height="16" />
               </n-button>
             </template>
             右对齐
@@ -281,8 +281,8 @@
           <div class="floating-table-toolbar-divider"></div>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="formatTable">
-                <Icon icon="lucide:sparkles" width="16" height="16" />
+                <n-button text size="tiny" @click="formatTable">
+                <Icon :icon="sparklesIcon" width="16" height="16" />
               </n-button>
             </template>
             格式化
@@ -293,7 +293,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleBold">
-                <Icon icon="lucide:bold" width="16" height="16" />
+                  <Icon :icon="boldIcon" width="16" height="16" />
               </n-button>
             </template>
             加粗 (Ctrl+B)
@@ -301,7 +301,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleItalic">
-                <Icon icon="lucide:italic" width="16" height="16" />
+                  <Icon :icon="italicIcon" width="16" height="16" />
               </n-button>
             </template>
             斜体 (Ctrl+I)
@@ -309,7 +309,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleStrikethrough">
-                <Icon icon="lucide:strikethrough" width="16" height="16" />
+                  <Icon :icon="strikethroughIcon" width="16" height="16" />
               </n-button>
             </template>
             删除线 (Ctrl+Shift+X)
@@ -317,7 +317,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertLink">
-                <Icon icon="lucide:link" width="16" height="16" />
+                  <Icon :icon="linkIcon" width="16" height="16" />
               </n-button>
             </template>
             链接 (Ctrl+K)
@@ -325,7 +325,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleInlineCode">
-                <Icon icon="lucide:code" width="16" height="16" />
+                  <Icon :icon="codeIcon" width="16" height="16" />
               </n-button>
             </template>
             行内代码
@@ -333,7 +333,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleBlockquote">
-                <Icon icon="lucide:quote" width="16" height="16" />
+                 <Icon :icon="quoteIcon" width="16" height="16" />
               </n-button>
             </template>
             引用
@@ -372,8 +372,37 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
 import { Icon } from '@iconify/vue'
-import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline, SaveOutline } from '@vicons/ionicons5'
-import { DocumentEdit16Regular, Edit16Filled } from '@vicons/fluent'
+import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
+import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
+// Iconify local icon imports (lucide + mdi) to preserve original visuals without runtime network fetch
+import headingIcon from '@iconify-icons/lucide/heading'
+import boldIcon from '@iconify-icons/lucide/bold'
+import italicIcon from '@iconify-icons/lucide/italic'
+import strikethroughIcon from '@iconify-icons/lucide/strikethrough'
+import linkIcon from '@iconify-icons/lucide/link'
+import quoteIcon from '@iconify-icons/lucide/quote'
+import codeIcon from '@iconify-icons/lucide/code'
+import squareTerminalIcon from '@iconify-icons/lucide/terminal-square'
+import listIcon from '@iconify-icons/lucide/list'
+import listOrderedIcon from '@iconify-icons/lucide/list-ordered'
+import listChecksIcon from '@iconify-icons/lucide/list-checks'
+import tableIcon from '@iconify-icons/lucide/table'
+import imageIcon from '@iconify-icons/lucide/image'
+import minusIcon from '@iconify-icons/lucide/minus'
+import undoIcon from '@iconify-icons/lucide/undo'
+import redoIcon from '@iconify-icons/lucide/redo'
+import alignLeftIcon from '@iconify-icons/lucide/align-left'
+import alignCenterIcon from '@iconify-icons/lucide/align-center'
+import alignRightIcon from '@iconify-icons/lucide/align-right'
+import sparklesIcon from '@iconify-icons/lucide/sparkles'
+import filePenLineIcon from '@iconify-icons/lucide/file-edit'
+import eyeIcon from '@iconify-icons/lucide/eye'
+import columns2Icon from '@iconify-icons/lucide/columns'
+
+import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
+import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
+import tableColumnPlusAfter from '@iconify-icons/mdi/table-column-plus-after'
+import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import Vditor from 'vditor'
@@ -3946,9 +3975,9 @@ const previewModeLabel = computed(() => {
 
 const previewModeIcon = computed(() => {
   if (previewMode.value === 'toggle') {
-    return mode.value === 'edit' ? 'lucide:file-pen-line' : 'lucide:eye';
+    return mode.value === 'edit' ? filePenLineIcon : eyeIcon;
   }
-  return previewMode.value === 'split' ? 'lucide:columns-2' : 'lucide:sparkles';
+  return previewMode.value === 'split' ? columns2Icon : sparklesIcon;
 });
 
 const showEditor = computed(() => {

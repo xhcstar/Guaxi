@@ -18,6 +18,7 @@
     "@tauri-apps/plugin-os": "2.3.2",
     "@vicons/ionicons5": "latest",
     "isomorphic-git": "^1.32.1",
+    "leaflet": "^1.9.4",
     "monaco-editor-textmate": "^4.0.0",
     "monaco-languageclient": "^10.4.0",
     "monaco-textmate": "^3.0.1",
@@ -28,10 +29,11 @@
     "vscode-oniguruma": "^2.0.1",
     "vscode-ws-jsonrpc": "^3.5.0",
     "vue": "^3.5.13",
-    "vue-router": "^4.5.0",
-    "leaflet": "^1.9.4"
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@iconify-icons/lucide": "^1.2.135",
+    "@iconify-icons/mdi": "^1.2.48",
     "@iconify/json": "^2.2.350",
     "@iconify/vue": "^5.0.0",
     "@tauri-apps/cli": "^2.9.6",
