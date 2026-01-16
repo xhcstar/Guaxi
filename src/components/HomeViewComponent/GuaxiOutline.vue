@@ -1,8 +1,10 @@
 <template>
     <div class="outline-panel">
-        <n-tree :data="outlineTree" key-field="id" label-field="text" :render-label="renderLabel"
-            :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true" :virtual-scroll="true"
-            :virtual-scroll-item-height="28" @update:selected-keys="handleSelect" class="outline-tree" />
+        <div class="outline-scroll">
+            <n-tree :data="outlineTree" key-field="id" label-field="text" :render-label="renderLabel"
+                :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true" :virtual-scroll="true"
+                :virtual-scroll-item-height="28" @update:selected-keys="handleSelect" class="outline-tree" />
+        </div>
     </div>
 </template>
 
@@ -69,15 +71,27 @@ const handleSelect = (keys, options) => {
 
 <style scoped>
 .outline-panel {
+    flex: 1 1 0;
+    min-height: 0;
+    height: 100%;
     padding: 8px;
     font-size: 14px;
-    overflow-y: auto;
-    max-height: 100%;
-    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.outline-scroll {
+    flex: 1 1 0;
+    height: 0;
+    min-height: 0;
+    overflow: auto;
 }
 
 .outline-tree {
     width: 100%;
     height: 100%;
+    min-height: 0;
 }
 </style>

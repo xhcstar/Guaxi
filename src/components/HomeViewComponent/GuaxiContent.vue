@@ -14,7 +14,7 @@
       <!-- 右侧边栏 -->
       <!-- <n-layout has-sider sider-placement="right"> -->
       <n-layout-sider v-model:collapsed="isRightSiderCollapsed" :width="rightSiderbarWidth" collapse-mode="width"
-        :collapsed-width="0" bordered content-style="padding: 0;" :native-scrollbar="false"
+        :collapsed-width="0" bordered content-style="padding: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden;" :native-scrollbar="false"
         style="height: 100%; position: relative;">
         <GuaxiRightContent />
         <div class="sidebar-dragger right" @mousedown="onMouseDownRightSidebar" />

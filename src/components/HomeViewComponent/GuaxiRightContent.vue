@@ -21,13 +21,14 @@ const rightSiderStore = useRightSiderStore()
 <style scoped>
 .right-sider-content {
   flex: 1 1 0;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
   max-width: 100vw;
   box-sizing: border-box;
   background: var(--guaxi-panel-bg);
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  height: 100%;
 }
 </style>
