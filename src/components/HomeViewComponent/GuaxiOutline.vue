@@ -87,6 +87,19 @@ const handleSelect = (keys, options) => {
     height: 0;
     min-height: 0;
     overflow: auto;
+    padding: 0 16px;
+    box-sizing: border-box;
+}
+
+:deep(.n-tree-node-content) {
+    border-radius: 6px;
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+:deep(.n-tree-node-content:hover) {
+    background: var(--guaxi-header-bg);
+    box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
+        0 2px 12px 0 rgba(7, 118, 161, 0.15);
 }
 
 .outline-tree {

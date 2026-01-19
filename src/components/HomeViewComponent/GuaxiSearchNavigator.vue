@@ -830,7 +830,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   overflow: hidden;
   margin: 0 !important;
-  padding: 2px 0 !important;
+  padding: 2px 4px !important;
   transition: all 0.2s ease;
 }
 
