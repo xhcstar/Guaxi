@@ -2672,6 +2672,7 @@ const setupEditorListeners = () => {
         if (path) fileTreeStore.updateTabContent(path, content);
         recordEditLocationFromEditor();
         updateTableToolbar();
+        scheduleAutoFormatActiveTable();
         updateGitDecorations();
       }, 300)
     );
@@ -2746,6 +2747,11 @@ const setupEditorListeners = () => {
   };
 
   editor.onKeyDown((e) => {
+    if (e.keyCode === monaco.KeyCode.Enter) {
+      const handled = handleMarkdownListEnter(e);
+      if (handled) return;
+    }
+
     if (e.keyCode !== monaco.KeyCode.Tab) return;
     if (!isSuggestWidgetVisible()) return;
 
@@ -3214,6 +3220,8 @@ const toggleLinePrefix = (prefix, pattern, buildLine) => {
     if (!pattern.test(text)) allMatch = false;
   }
 
+  const shouldMoveCursor = selection.isEmpty() && startLine === endLine && (!lines[0].trim() || selection.startColumn === 1);
+
   const edits = lines.map((text, index) => {
     const lineNumber = startLine + index;
     const next = allMatch
@@ -3228,6 +3236,14 @@ const toggleLinePrefix = (prefix, pattern, buildLine) => {
   });
 
   editor.executeEdits('markdown-toolbar', edits);
+
+  if (shouldMoveCursor && !allMatch) {
+    const nextLine = model.getLineContent(startLine);
+    const m = nextLine.match(pattern);
+    const nextColumn = m ? Math.max(1, m[0].length + 1) : 1;
+    editor.setPosition(new monaco.Position(startLine, nextColumn));
+  }
+
   editor.focus();
 };
 
@@ -3249,6 +3265,118 @@ const toggleOrderedList = () => {
 
 const toggleTaskList = () => {
   toggleLinePrefix('- [ ] ', /^-\s\[( |x|X)\]\s+/, null);
+};
+
+const isMarkdownListDebug = () => {
+  try {
+    const v = String(window?.localStorage?.getItem('guaxi_debug_md_list') || '').trim().toLowerCase();
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  } catch {
+    return false;
+  }
+};
+
+const parseMarkdownListPrefix = (line) => {
+  const text = String(line || '');
+
+  const task = /^([\t ]*)([-+*])\s+\[( |x|X)\]\s+/.exec(text);
+  if (task) {
+    return {
+      kind: 'task',
+      indent: task[1] || '',
+      marker: task[2] || '-',
+      checked: (task[3] || '').toLowerCase() === 'x',
+      prefix: task[0]
+    };
+  }
+
+  const ordered = /^([\t ]*)(\d+)\.\s+/.exec(text);
+  if (ordered) {
+    return {
+      kind: 'ordered',
+      indent: ordered[1] || '',
+      number: Number(ordered[2] || 1) || 1,
+      prefix: ordered[0]
+    };
+  }
+
+  const unordered = /^([\t ]*)([-+*])\s+/.exec(text);
+  if (unordered) {
+    return {
+      kind: 'unordered',
+      indent: unordered[1] || '',
+      marker: unordered[2] || '-',
+      prefix: unordered[0]
+    };
+  }
+
+  return null;
+};
+
+const handleMarkdownListEnter = (e) => {
+  if (!editor) return false;
+
+  const model = editor.getModel();
+  const pos = editor.getPosition();
+  const selection = editor.getSelection();
+  if (!model || !pos || !selection || !selection.isEmpty()) return false;
+
+  if (model.getLanguageId() !== 'markdown') return false;
+
+  const lineText = model.getLineContent(pos.lineNumber);
+  const parsed = parseMarkdownListPrefix(lineText);
+  if (!parsed) return false;
+
+  if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return false;
+
+  const afterPrefix = lineText.slice(parsed.prefix.length);
+  const isEmptyItem = afterPrefix.trim().length === 0 && pos.column >= parsed.prefix.length + 1;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (isMarkdownListDebug()) {
+    console.debug('[MarkdownList] enter', {
+      lineNumber: pos.lineNumber,
+      kind: parsed.kind,
+      isEmptyItem
+    });
+  }
+
+  if (isEmptyItem) {
+    const fullRange = new monaco.Range(pos.lineNumber, 1, pos.lineNumber, model.getLineMaxColumn(pos.lineNumber));
+    editor.executeEdits('md-list-enter-exit', [
+      {
+        range: fullRange,
+        text: `${parsed.indent}\n${parsed.indent}`,
+        forceMoveMarkers: true
+      }
+    ]);
+    editor.setPosition(new monaco.Position(pos.lineNumber + 1, parsed.indent.length + 1));
+    editor.focus();
+    return true;
+  }
+
+  let nextPrefix = '';
+  if (parsed.kind === 'ordered') {
+    nextPrefix = `${parsed.indent}${parsed.number + 1}. `;
+  } else if (parsed.kind === 'task') {
+    nextPrefix = `${parsed.indent}${parsed.marker} [ ] `;
+  } else {
+    nextPrefix = `${parsed.indent}${parsed.marker} `;
+  }
+
+  editor.executeEdits('md-list-enter-continue', [
+    {
+      range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+      text: `\n${nextPrefix}`,
+      forceMoveMarkers: true
+    }
+  ]);
+
+  editor.setPosition(new monaco.Position(pos.lineNumber + 1, nextPrefix.length + 1));
+  editor.focus();
+  return true;
 };
 
 const isPotentialTableLine = (line) => {
@@ -3277,15 +3405,86 @@ const buildTableRow = (cells) => {
   return `| ${cells.map((c) => (c ?? '').trim()).join(' | ')} |`;
 };
 
+const detectSeparatorAlign = (cell) => {
+  const v = String(cell || '').trim();
+  const left = v.startsWith(':');
+  const right = v.endsWith(':');
+  if (left && right) return 'center';
+  if (right) return 'right';
+  if (left) return 'left';
+  return null;
+};
+
 const normalizeSeparatorCell = (cell, align) => {
   const base = (cell || '').trim();
   const hasMin = base.replace(/:/g, '').replace(/-/g, '').length === 0;
-  if (!hasMin) return '---';
+  const detected = align || detectSeparatorAlign(base);
 
-  if (align === 'left') return ':---';
-  if (align === 'center') return ':---:';
-  if (align === 'right') return '---:';
+  if (!hasMin) {
+    if (detected === 'left') return ':---';
+    if (detected === 'center') return ':---:';
+    if (detected === 'right') return '---:';
+    return '---';
+  }
+
+  if (detected === 'left') return ':---';
+  if (detected === 'center') return ':---:';
+  if (detected === 'right') return '---:';
   return '---';
+};
+
+const padTableCell = (text, width, align) => {
+  const raw = String(text ?? '').trim();
+  const len = raw.length;
+  const w = Math.max(0, Number(width) || 0);
+  if (len >= w) return raw;
+
+  const delta = w - len;
+  if (align === 'right') return `${' '.repeat(delta)}${raw}`;
+  if (align === 'center') {
+    const left = Math.floor(delta / 2);
+    const right = delta - left;
+    return `${' '.repeat(left)}${raw}${' '.repeat(right)}`;
+  }
+  return `${raw}${' '.repeat(delta)}`;
+};
+
+const buildAlignedTableLines = (rows) => {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (!safeRows.length) return [];
+
+  const colCount = safeRows.reduce((m, r) => Math.max(m, Array.isArray(r) ? r.length : 0), 0) || 1;
+  const sepRow = safeRows[1] || [];
+  const aligns = Array.from({ length: colCount }, (_, i) => detectSeparatorAlign(sepRow[i]));
+
+  const widths = Array.from({ length: colCount }, () => 3);
+  safeRows.forEach((row, rowIndex) => {
+    if (!Array.isArray(row) || rowIndex === 1) return;
+    for (let i = 0; i < colCount; i += 1) {
+      const v = String(row[i] ?? '').trim();
+      widths[i] = Math.max(widths[i], v.length);
+    }
+  });
+
+  return safeRows.map((row, rowIndex) => {
+    const cells = Array.from({ length: colCount }, (_, i) => (Array.isArray(row) ? row[i] : ''));
+
+    if (rowIndex === 1) {
+      const sepCells = cells.map((c, i) => {
+        const a = aligns[i];
+        const w = Math.max(3, widths[i]);
+        const dashes = '-'.repeat(w);
+        if (a === 'left') return `:${dashes}`;
+        if (a === 'center') return `:${dashes}:`;
+        if (a === 'right') return `${dashes}:`;
+        return dashes;
+      });
+      return `| ${sepCells.join(' | ')} |`;
+    }
+
+    const padded = cells.map((c, i) => padTableCell(c, widths[i], aligns[i]));
+    return `| ${padded.join(' | ')} |`;
+  });
 };
 
 const getColumnIndexFromCursor = (line, column, colCount) => {
@@ -3373,6 +3572,83 @@ const detectTableContext = () => {
   };
 };
 
+let tableAutoFormatBusy = false;
+
+const isTableAutoFormatDebug = () => {
+  try {
+    const v = String(window?.localStorage?.getItem('guaxi_debug_md_table') || '').trim().toLowerCase();
+    return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  } catch {
+    return false;
+  }
+};
+
+const scheduleAutoFormatActiveTable = debounce(() => {
+  if (!editor) return;
+  if (tableAutoFormatBusy) return;
+
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  const pos = editor.getPosition();
+  if (!model || !pos || !selection || !selection.isEmpty()) return;
+  if (model.getLanguageId() !== 'markdown') return;
+
+  const ctx = detectTableContext();
+  if (!ctx) return;
+
+  const rawLines = [];
+  for (let i = ctx.startLine; i <= ctx.endLine; i += 1) {
+    rawLines.push(model.getLineContent(i));
+  }
+
+  const nextRows = ctx.rows.map((row, idx) => {
+    if (idx !== 1) return row;
+    return row.map((c) => normalizeSeparatorCell(c, null));
+  });
+
+  const nextLines = buildAlignedTableLines(nextRows);
+  const currentText = rawLines.join('\n');
+  const nextText = nextLines.join('\n');
+  if (currentText === nextText) return;
+
+  const activeRowIndex = Math.max(0, Math.min(rawLines.length - 1, pos.lineNumber - ctx.startLine));
+  const activeColIndex = getColumnIndexFromCursor(rawLines[activeRowIndex] || '', pos.column, ctx.colCount);
+
+  const currentCellColumn = getCursorColumnForTableCell(rawLines[activeRowIndex] || '', activeColIndex, 0);
+  const offset = Math.max(0, (pos.column || 1) - currentCellColumn);
+
+  if (isTableAutoFormatDebug()) {
+    console.debug('[MarkdownTable] auto-format', {
+      startLine: ctx.startLine,
+      endLine: ctx.endLine,
+      activeRowIndex,
+      activeColIndex,
+      offset
+    });
+  }
+
+  tableAutoFormatBusy = true;
+  try {
+    const range = new monaco.Range(ctx.startLine, 1, ctx.endLine, model.getLineMaxColumn(ctx.endLine));
+    editor.executeEdits('md-table-auto-format', [
+      {
+        range,
+        text: nextText,
+        forceMoveMarkers: true
+      }
+    ]);
+
+    const targetText = nextLines[activeRowIndex] || '';
+    const targetCol = getCursorColumnForTableCell(targetText, activeColIndex, offset);
+    editor.setPosition(new monaco.Position(ctx.startLine + activeRowIndex, targetCol));
+  } finally {
+    nextTick(() => {
+      tableAutoFormatBusy = false;
+      updateTableToolbar();
+    });
+  }
+}, 220);
+
 const updateTableToolbar = () => {
   if (!editor) {
     tableToolbarVisible.value = false;
@@ -3426,19 +3702,42 @@ const updateTableToolbar = () => {
   tableToolbarVisible.value = true;
 };
 
+const getPipePositions = (line) => {
+  const text = String(line || '');
+  const positions = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '|') positions.push(i);
+  }
+  return positions;
+};
+
+const getCursorColumnForTableCell = (line, colIndex, offset = 0) => {
+  const text = String(line || '');
+  const pipes = getPipePositions(text);
+  if (pipes.length < 2) return 1;
+
+  const col = Math.max(0, Math.min(pipes.length - 2, Number(colIndex) || 0));
+  const left = pipes[col];
+  const right = pipes[col + 1];
+  const cellStart = Math.min(text.length, left + 2);
+  const cellEnd = Math.max(cellStart, right - 1);
+  const off = Math.max(0, Math.min(cellEnd - cellStart, Number(offset) || 0));
+
+  return Math.max(1, Math.min(text.length + 1, cellStart + off + 1));
+};
+
 const applyTableEdits = (nextRows, nextActiveRowIndex, nextActiveColIndex) => {
   if (!editor) return;
   const model = editor.getModel();
   const ctx = activeTableContext.value;
   if (!model || !ctx) return;
 
-  const textLines = nextRows.map((cells, idx) => {
-    if (idx === 1) {
-      const normalized = cells.map((c) => normalizeSeparatorCell(c, null));
-      return buildTableRow(normalized);
-    }
-    return buildTableRow(cells);
+  const normalizedRows = nextRows.map((row, idx) => {
+    if (idx !== 1) return row;
+    return row.map((c) => normalizeSeparatorCell(c, null));
   });
+
+  const textLines = buildAlignedTableLines(normalizedRows);
 
   const range = new monaco.Range(ctx.startLine, 1, ctx.endLine, model.getLineMaxColumn(ctx.endLine));
   editor.executeEdits('md-table-toolbar', [
@@ -3450,9 +3749,12 @@ const applyTableEdits = (nextRows, nextActiveRowIndex, nextActiveColIndex) => {
   ]);
 
   const row = Math.max(2, Math.min(textLines.length - 1, nextActiveRowIndex));
-  const col = Math.max(0, Math.min((nextRows[0]?.length || 1) - 1, nextActiveColIndex));
+  const col = Math.max(0, Math.min((normalizedRows[0]?.length || 1) - 1, nextActiveColIndex));
   const targetLine = ctx.startLine + row;
-  editor.setPosition(new monaco.Position(targetLine, 3));
+  const targetText = textLines[row] || '';
+  const targetCol = getCursorColumnForTableCell(targetText, col, 0);
+
+  editor.setPosition(new monaco.Position(targetLine, targetCol));
   editor.focus();
 
   nextTick(() => {
