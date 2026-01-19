@@ -1737,6 +1737,50 @@ const registerMarkdownLanguageFeatures = () => {
 const tabBarRef = ref(null)
 const tabRegionLeftRef = ref(null)
 const tabRegionRightRef = ref(null)
+
+const languagePairingConfigured = new Set()
+
+const ensureLanguagePairingConfig = (languageId) => {
+  const id = languageId || 'plaintext'
+  if (languagePairingConfigured.has(id)) return
+  if (id !== 'markdown' && id !== 'plaintext') return
+
+  try {
+    monaco.languages.setLanguageConfiguration(id, {
+      brackets: [
+        ['{', '}'],
+        ['[', ']'],
+        ['(', ')']
+      ],
+      autoClosingPairs: [
+        { open: '{', close: '}' },
+        { open: '[', close: ']' },
+        { open: '(', close: ')' },
+        { open: '"', close: '"' },
+        { open: "'", close: "'" },
+        { open: '`', close: '`' },
+        { open: '“', close: '”' },
+        { open: '‘', close: '’' }
+      ],
+      surroundingPairs: [
+        { open: '{', close: '}' },
+        { open: '[', close: ']' },
+        { open: '(', close: ')' },
+        { open: '"', close: '"' },
+        { open: "'", close: "'" },
+        { open: '`', close: '`' },
+        { open: '“', close: '”' },
+        { open: '‘', close: '’' }
+      ]
+    })
+
+    languagePairingConfigured.add(id)
+    console.debug('[Editor] language pairing configured', { languageId: id })
+  } catch (e) {
+    console.warn('[Editor] failed to configure language pairing', { languageId: id, error: e })
+  }
+}
+
 // 初始化编辑器
 const initEditor = () => {
   console.debug('[Editor] initEditor called', {
@@ -1788,6 +1832,8 @@ const initEditor = () => {
   };
   const language = languageMap[fileExt] || 'markdown';
 
+  ensureLanguagePairingConfig(language)
+
   const isDark = document.documentElement.dataset.guaxiTheme === 'dark';
 
   monaco.editor.defineTheme('guaxi-light', {
@@ -1822,6 +1868,25 @@ const initEditor = () => {
       'editor.lineHighlightBackground': '#f0f0f0',
       'editorBracketMatch.background': '#e1f5fe',
       'editorBracketMatch.border': '#90caf9',
+      'editorBracketHighlight.foreground1': '#d73a49',
+      'editorBracketHighlight.foreground2': '#f66a0a',
+      'editorBracketHighlight.foreground3': '#b08800',
+      'editorBracketHighlight.foreground4': '#22863a',
+      'editorBracketHighlight.foreground5': '#0366d6',
+      'editorBracketHighlight.foreground6': '#6f42c1',
+      'editorBracketHighlight.unexpectedBracket.foreground': '#d73a49',
+      'editorBracketPairGuide.background1': '#d73a4933',
+      'editorBracketPairGuide.background2': '#f66a0a33',
+      'editorBracketPairGuide.background3': '#b0880033',
+      'editorBracketPairGuide.background4': '#22863a33',
+      'editorBracketPairGuide.background5': '#0366d633',
+      'editorBracketPairGuide.background6': '#6f42c133',
+      'editorBracketPairGuide.activeBackground1': '#d73a4966',
+      'editorBracketPairGuide.activeBackground2': '#f66a0a66',
+      'editorBracketPairGuide.activeBackground3': '#b0880066',
+      'editorBracketPairGuide.activeBackground4': '#22863a66',
+      'editorBracketPairGuide.activeBackground5': '#0366d666',
+      'editorBracketPairGuide.activeBackground6': '#6f42c166',
       'editor.selectionHighlightBackground': '#ffe0b2',
       'editor.foldBackground': '#f7f9fc',
       'editorWhitespace.foreground': '#d0d0d0',
@@ -1871,6 +1936,25 @@ const initEditor = () => {
       'editor.lineHighlightBackground': '#2c313a',
       'editorBracketMatch.background': '#3b4048',
       'editorBracketMatch.border': '#528bff',
+      'editorBracketHighlight.foreground1': '#e06c75',
+      'editorBracketHighlight.foreground2': '#d19a66',
+      'editorBracketHighlight.foreground3': '#e5c07b',
+      'editorBracketHighlight.foreground4': '#98c379',
+      'editorBracketHighlight.foreground5': '#56b6c2',
+      'editorBracketHighlight.foreground6': '#c678dd',
+      'editorBracketHighlight.unexpectedBracket.foreground': '#e06c75',
+      'editorBracketPairGuide.background1': '#e06c7533',
+      'editorBracketPairGuide.background2': '#d19a6633',
+      'editorBracketPairGuide.background3': '#e5c07b33',
+      'editorBracketPairGuide.background4': '#98c37933',
+      'editorBracketPairGuide.background5': '#56b6c233',
+      'editorBracketPairGuide.background6': '#c678dd33',
+      'editorBracketPairGuide.activeBackground1': '#e06c7566',
+      'editorBracketPairGuide.activeBackground2': '#d19a6666',
+      'editorBracketPairGuide.activeBackground3': '#e5c07b66',
+      'editorBracketPairGuide.activeBackground4': '#98c37966',
+      'editorBracketPairGuide.activeBackground5': '#56b6c266',
+      'editorBracketPairGuide.activeBackground6': '#c678dd66',
       'editor.selectionHighlightBackground': '#3e445155',
       'editor.foldBackground': '#2c313a',
       'editorWhitespace.foreground': '#3b4048',
@@ -1895,7 +1979,11 @@ const initEditor = () => {
     language: language,
     theme: themeName,
     readOnly: !!activeTab.value?.unsupported,
+    autoClosingBrackets: 'always',
     autoClosingQuotes: 'always',
+    autoClosingDelete: 'auto',
+    autoClosingOvertype: 'auto',
+    autoSurround: 'languageDefined',
     automaticLayout: true,  // 自动布局
     scrollBeyondLastColumn: 40, // 允许水平滚动超出最后一列
     fixedOverflowWidgets: true, // 确保浮动部件可以超出编辑器边界
@@ -2211,6 +2299,16 @@ const ensureSecondaryEditor = () => {
     value: rightTab?.content || '',
     language,
     readOnly: !!rightTab?.unsupported,
+    autoClosingBrackets: 'always',
+    autoClosingQuotes: 'always',
+    autoClosingDelete: 'auto',
+    autoClosingOvertype: 'auto',
+    autoSurround: 'languageDefined',
+    bracketPairColorization: { enabled: true },
+    guides: {
+      bracketPairs: true,
+      bracketPairsHorizontal: 'active'
+    },
     automaticLayout: true,
   });
 
