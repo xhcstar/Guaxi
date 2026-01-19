@@ -10,7 +10,7 @@
               <n-select
                 v-model:value="themeValue"
                 :options="themeOptions"
-                :disabled="loading"
+                :disabled="loading || themeSaving"
                 style="width: 240px"
                 @update:value="handleThemeChange"
               />
@@ -85,6 +85,7 @@ const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
 const loading = ref(false)
+const themeSaving = ref(false)
 
 watch(
   () => settingsStore.appearanceTheme,
@@ -127,8 +128,34 @@ onMounted(async () => {
 })
 
 const handleThemeChange = async (value) => {
-  themeValue.value = value === 'dark' ? 'dark' : 'light'
-  await settingsStore.setAppearanceTheme(themeValue.value)
+  if (loading.value || themeSaving.value) return
+
+  const next = value === 'dark' ? 'dark' : 'light'
+  themeValue.value = next
+
+  try {
+    themeSaving.value = true
+
+    console.log('[Preference] 切换主题:', {
+      next,
+      current: settingsStore.appearanceTheme,
+    })
+
+    await settingsStore.setAppearanceTheme(next)
+
+    try {
+      const appearance = await invoke('get_appearance_config')
+      console.log('[Preference] 后端返回的 appearance（用于确认是否写入配置文件）:', appearance)
+    } catch (e) {
+      console.error('[Preference] 获取后端 appearance 失败（无法确认是否写入配置文件）:', e)
+    }
+
+    console.log('[Preference] 主题切换完成（已应用并已尝试写入配置文件）:', next)
+  } catch (error) {
+    console.error('[Preference] 主题切换失败（可能未写入配置文件）:', error)
+  } finally {
+    themeSaving.value = false
+  }
 }
 
 const handleGcCycleChange = async (value) => {

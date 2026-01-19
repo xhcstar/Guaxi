@@ -25,6 +25,7 @@ pub struct LibraryConfig {
 pub struct AppConfig {
     server: ServerConfig,
     database: DatabaseConfig,
+    #[serde(default)]
     appearance: AppearanceConfig,
     libraries_repo_config: LibraryConfig,
     active_repo_path: Option<String>,
@@ -285,10 +286,29 @@ pub struct DatabaseConfig {
     password: String,
 }
 
+fn default_appearance_theme() -> String {
+    "light".to_string()
+}
+
+fn default_appearance_font_size() -> u8 {
+    14
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AppearanceConfig {
+    #[serde(default = "default_appearance_theme")]
     theme: String,
+    #[serde(default = "default_appearance_font_size")]
     font_size: u8,
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        AppearanceConfig {
+            theme: default_appearance_theme(),
+            font_size: default_appearance_font_size(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -381,6 +401,10 @@ pub fn get_config_path() -> PathBuf {
 
 pub fn load_config() -> AppConfig {
     let config_path = get_config_path();
+    info!(
+        config_path = config_path.to_string_lossy().as_ref(),
+        "loading guaxi_config.json"
+    );
 
     if !config_path.exists() {
         // 如果配置文件不存在，创建默认配置
@@ -390,9 +414,13 @@ pub fn load_config() -> AppConfig {
         }
         fs::write(
             &config_path,
-            serde_json::to_string(&default_config).unwrap(),
+            serde_json::to_string_pretty(&default_config).unwrap(),
         )
         .expect("无法写入默认配置文件");
+        info!(
+            config_path = config_path.to_string_lossy().as_ref(),
+            "guaxi_config.json created with default config"
+        );
         return default_config;
     }
 
@@ -408,7 +436,12 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(config: &AppConfig) {
     let config_path = get_config_path();
-    fs::write(&config_path, serde_json::to_string(config).unwrap()).expect("无法写入配置文件");
+    let json = serde_json::to_string_pretty(config).unwrap();
+    fs::write(&config_path, json).expect("无法写入配置文件");
+    info!(
+        config_path = config_path.to_string_lossy().as_ref(),
+        "guaxi_config.json saved"
+    );
 }
 
 #[tauri::command]
@@ -805,6 +838,20 @@ pub fn get_appearance_config() -> AppearanceConfig {
 
 #[tauri::command]
 pub fn set_appearance_config(theme: String, font_size: u8) {
+    let raw_theme = theme.trim().to_lowercase();
+    let theme = if raw_theme == "dark" { "dark" } else { "light" }.to_string();
+    let font_size = if font_size == 0 {
+        default_appearance_font_size()
+    } else {
+        font_size
+    };
+
+    info!(
+        theme = theme.as_str(),
+        font_size = font_size,
+        "set_appearance_config"
+    );
+
     let mut config = load_config();
     config.appearance = AppearanceConfig { theme, font_size };
     save_config(&config);

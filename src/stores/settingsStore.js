@@ -56,7 +56,7 @@ export const useSettingsStore = defineStore("settings", {
       try {
         const appearance = await invoke('get_appearance_config')
         const theme = appearance?.theme === 'dark' ? 'dark' : 'light'
-        const fontSize = Number(appearance?.font_size)
+        const fontSize = Number(appearance?.font_size ?? appearance?.fontSize)
 
         this.appearanceTheme = themeParam || theme
         this.appearanceFontSize = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 14
@@ -72,15 +72,26 @@ export const useSettingsStore = defineStore("settings", {
 
     async setAppearanceTheme(theme) {
       const next = theme === 'dark' ? 'dark' : 'light'
+      const prev = this.appearanceTheme
+
       this.appearanceTheme = next
+      this.appearanceLoaded = true
       this.applyAppearanceTheme(this.appearanceTheme)
+
+      console.log('[SettingsStore] apply theme:', { prev, next })
 
       try {
         await invoke('set_appearance_config', {
           theme: this.appearanceTheme,
+          fontSize: this.appearanceFontSize,
+        })
+        console.log('[SettingsStore] theme persisted:', {
+          theme: this.appearanceTheme,
           font_size: this.appearanceFontSize,
         })
       } catch (error) {
+        console.error('[SettingsStore] theme persist failed:', error)
+        throw error
       }
     },
 
