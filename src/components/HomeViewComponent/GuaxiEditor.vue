@@ -452,6 +452,7 @@ const mode = ref('edit');
 const previewMode = ref('toggle');
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
+const lastPreviewRenderedSource = ref('');
 const previewContainer = ref(null);
 const editorContainer = ref(null);
 const secondaryEditorContainer = ref(null);
@@ -3632,20 +3633,19 @@ const updateEditorContent = (content) => {
   const targetEditor = getActiveEditor();
   if (!targetEditor) return;
 
-  // 当内容为空时，确保完全重置编辑器
-  if (!nextContent) {
-    targetEditor.setValue('');
-    const model = targetEditor.getModel();
-    if (model) {
-      model.setValue('');
-    }
-  } else {
-    targetEditor.setValue(nextContent);
-  }
-
   targetEditor.updateOptions({
     readOnly: !!activeTab.value?.unsupported,
   });
+
+  const model = targetEditor.getModel();
+  const currentValue = model ? model.getValue() : targetEditor.getValue();
+  if (currentValue === nextContent) return;
+
+  if (model) {
+    model.setValue(nextContent);
+  } else {
+    targetEditor.setValue(nextContent);
+  }
 };
 
 const AUTO_SAVE_FALLBACK_INTERVAL_MS = 5 * 60 * 1000
@@ -3709,18 +3709,15 @@ const saveContent = async () => {
   await fileTreeStore.updateFileContent(selectedFile.value.path, content);
   await updateGitStatus();
   message.info('修改已保存');
-  if (vimMode.value) {
-    message.info('修改已保存');
-  }
 
-  rawContent.value = content;
-
-  if (previewMode.value !== 'realtime' && targetEditor) {
-    updateEditorContent(content);
+  if (rawContent.value !== content) {
+    rawContent.value = content;
   }
 
   if (previewMode.value === 'split' && canPreview.value) {
-    renderDebounced(content);
+    if (lastPreviewRenderedSource.value !== content) {
+      renderDebounced(content);
+    }
   }
 };
 
@@ -3939,6 +3936,7 @@ const setMainMode = async (nextMode) => {
 const renderDebounced = debounce(async (content) => {
   if (!selectedFile.value || !mode.value || !content || !canPreview.value) {
     renderedHtml.value = '';
+    lastPreviewRenderedSource.value = '';
     return;
   }
 
@@ -3951,6 +3949,8 @@ const renderDebounced = debounce(async (content) => {
       codeHighlight: true,
       theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
     });
+
+    lastPreviewRenderedSource.value = content;
 
     // 确保DOM更新后添加按钮
     nextTick(() => {
@@ -3976,9 +3976,35 @@ const canPreview = computed(() => {
   return editorStore.language === 'markdown';
 });
 
+const lastSelectedFilePath = ref(null)
+
 // 监听文件选择
 watch(selectedFile, async (newFile) => {
   if (newFile) {
+    const nextPath = newFile.path || '';
+    const prevPath = lastSelectedFilePath.value || '';
+
+    const isSameFile = !!nextPath && !!prevPath && nextPath === prevPath;
+    if (isSameFile) {
+      const nextContent = newFile.content || '';
+      const targetEditor = getActiveEditor();
+      const currentContent =
+        previewMode.value === 'realtime' && realtimeVditor
+          ? realtimeVditor.getValue()
+          : targetEditor
+            ? targetEditor.getValue()
+            : rawContent.value;
+
+      if (currentContent === nextContent) {
+        if (rawContent.value !== nextContent) {
+          rawContent.value = nextContent;
+        }
+        return;
+      }
+    }
+
+    lastSelectedFilePath.value = nextPath;
+
     const fileExt = newFile.path?.split('.').pop() || 'markdown';
     const languageMap = {
       'js': 'javascript',
