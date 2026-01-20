@@ -151,7 +151,7 @@
                 <div class="icon-desc">同上（实时预览态图标）。</div>
               </div>
               <div class="icon-row">
-                <div class="icon-inline"><n-icon :component="DownloadOutline" /></div>
+                <div class="icon-inline"><n-icon :component="ExitOutline" /></div>
                 <div class="icon-name">导出</div>
                 <div class="icon-desc">导出 Markdown（PDF / docx / html / tex / epub / odt / txt）。</div>
               </div>
@@ -914,7 +914,6 @@ import {
   CloseOutline,
   CompassOutline,
   DocumentTextOutline,
-  DownloadOutline,
   ExitOutline,
   ExpandOutline,
   GridOutline,

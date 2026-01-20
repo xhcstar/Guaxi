@@ -156,34 +156,41 @@ export const renderMarkdown = async (content, options) => {
   } = options;
 
   try {
-    // 调用后端处理图片路径
-    const response = await fetch(
-      "http://localhost:8888/api/markdown/image_process",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content,
-          base_path: options.basePath,
-        }),
-      }
-    );
+    let finalContent = content;
+    let mappings = [];
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    let finalContent = result.processed_content;
-    const mappings = result.mappings || [];
-
-    // 根据mappings替换图片路径
-    mappings.forEach((mapping) => {
-      finalContent = finalContent.replace(
-        new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, "g"),
-        `](${mapping.served_path})`
+    // 调用后端处理图片路径（接口不可用时，不影响后续 Markdown 本地渲染）
+    try {
+      const response = await fetch(
+        "http://localhost:8888/api/markdown/image_process",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content,
+            base_path: options.basePath,
+          }),
+        }
       );
-    });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      finalContent = result.processed_content;
+      mappings = result.mappings || [];
+
+      // 根据mappings替换图片路径
+      mappings.forEach((mapping) => {
+        finalContent = finalContent.replace(
+          new RegExp(`\\]\\(${escapeRegExp(mapping.original_path)}\\)`, "g"),
+          `](${mapping.served_path})`
+        );
+      });
+    } catch (err) {
+      console.warn("[MarkdownRender] 图片路径处理失败，继续本地渲染:", err);
+    }
 
     // console.log("result:", result);
     // console.log("处理后的内容:", finalContent);

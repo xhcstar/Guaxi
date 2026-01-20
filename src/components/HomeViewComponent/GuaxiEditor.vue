@@ -231,12 +231,21 @@
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
                 <n-button text>
-                  <n-icon :component="DownloadOutline" width="16" height="16" />
+                  <n-icon :component="ExitOutline" width="16" height="16" />
                 </n-button>
               </template>
               导出
             </n-tooltip>
           </n-dropdown>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="openMarkdownManual">
+                <Icon :icon="bookOpenIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            Markdown语法查询手册
+          </n-tooltip>
         </div>
       </div>
     </div>
@@ -402,7 +411,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber } from 'naive-ui'
 import { Icon } from '@iconify/vue'
-import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
+import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
 // Iconify local icon imports (lucide + mdi) to preserve original visuals without runtime network fetch
 import headingIcon from '@iconify-icons/lucide/heading'
@@ -428,6 +437,7 @@ import sparklesIcon from '@iconify-icons/lucide/sparkles'
 import filePenLineIcon from '@iconify-icons/lucide/file-edit'
 import eyeIcon from '@iconify-icons/lucide/eye'
 import columns2Icon from '@iconify-icons/lucide/columns'
+import bookOpenIcon from '@iconify-icons/lucide/book-open'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
 import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
@@ -484,6 +494,28 @@ const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
 const previewContainer = ref(null);
+
+const openMarkdownManual = async () => {
+  const windowLabel = 'markdown-manual'
+  const windowTitle = 'Markdown语法查询手册'
+
+  try {
+    await invoke('create_markdown_manual_window', {
+      label: windowLabel,
+      title: windowTitle,
+      theme: settingsStore.appearanceTheme,
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('Markdown 语法手册窗口已打开')
+      return
+    }
+    console.error('[MarkdownManual] open window failed:', err)
+    message.error('打开 Markdown 语法手册失败')
+  }
+}
+
 const editorContainer = ref(null);
 const secondaryEditorContainer = ref(null);
 const editorWrapperRef = ref(null);

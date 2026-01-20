@@ -272,6 +272,7 @@ async fn main() {
             commands::git::discard_all,
             commands::git::get_commit_diff,
             commands::git::create_git_window,
+            commands::markdown_manual::create_markdown_manual_window,
             commands::git::get_file_content,
             commands::git::get_file_diff,
             commands::git::get_commit_file_diff,

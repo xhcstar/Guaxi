@@ -12,6 +12,7 @@ import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
 import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
 import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
+import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownManual.vue'
 
 import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumApp.vue'
 import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
@@ -113,6 +114,14 @@ export const routes = [
     path: '/templates',
     name: 'templates',
     component: GuaxiTemplateManager,
+  },
+  {
+    path: '/markdown-manual',
+    name: 'markdown-manual',
+    component: GuaxiMarkdownManual,
+    props: (route) => ({
+      theme: route.query.theme,
+    })
   },
   {
     path: '/kb-manager',

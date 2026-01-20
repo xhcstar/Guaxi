@@ -24,3 +24,4 @@ pub mod text_reader_doc_process;
 pub mod backup;
 pub mod markdowncheck;
 pub mod flipboard;
+pub mod markdown_manual;
