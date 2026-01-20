@@ -1672,6 +1672,40 @@ const registerMarkdownLanguageFeatures = () => {
     detail
   });
 
+  const clampInt = (value, min, max) => {
+    const num = Number.parseInt(String(value || ''), 10);
+    if (!Number.isFinite(num)) return null;
+    if (num < min) return min;
+    if (num > max) return max;
+    return num;
+  };
+
+  const buildMarkdownTableSnippet = (rows, cols) => {
+    const safeRows = clampInt(rows, 1, 30);
+    const safeCols = clampInt(cols, 1, 30);
+    if (!safeRows || !safeCols) return '';
+
+    const headerCells = Array.from(
+      { length: safeCols },
+      (_, i) => ` 列${i + 1} `
+    ).join('|');
+    const sepCells = Array.from({ length: safeCols }, () => ' --- ').join('|');
+
+    let tabStop = 1;
+    const bodyLines = [];
+    for (let r = 0; r < safeRows; r += 1) {
+      const rowCells = [];
+      for (let c = 0; c < safeCols; c += 1) {
+        const label = `值${r + 1}-${c + 1}`;
+        rowCells.push(' ${' + String(tabStop) + ':' + label + '} ');
+        tabStop += 1;
+      }
+      bodyLines.push(`|${rowCells.join('|')}|`);
+    }
+
+    return `|${headerCells}|\n|${sepCells}|\n${bodyLines.join('\n')}\n`;
+  };
+
   const markdownSnippets = [
     createSnippet('h1', '# ${1:标题}\n\n', '插入一级标题'),
     createSnippet('h2', '## ${1:标题}\n\n', '插入二级标题'),
@@ -1693,14 +1727,6 @@ const registerMarkdownLanguageFeatures = () => {
     createSnippet('image', '![${1:描述}](${2:路径})', '插入图片'),
     createSnippet('quote', '> ${1:引用内容}\n', '插入引用'),
     createSnippet('hr', '\n---\n', '插入分隔线'),
-    createSnippet('table2', '| 列1 | 列2 |\n| --- | --- |\n| ${1:值1} | ${2:值2} |\n', '插入表格'),
-    createSnippet('table3', '| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} |\n', '插入三列表格'),
-    createSnippet('table4', '| 列1 | 列2 | 列3 | 列4 |\n| --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} |\n', '插入四列表格'),
-    createSnippet('table5', '| 列1 | 列2 | 列3 | 列4 | 列5 |\n| --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} |\n', '插入五列表格'),
-    createSnippet('table6', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 |\n| --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} |\n', '插入六列表格'),
-    createSnippet('table7', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 |\n| --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} |\n', '插入七列表格'),
-    createSnippet('table8', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} |\n', '插入八列表格'),
-    createSnippet('table9', '| 列1 | 列2 | 列3 | 列4 | 列5 | 列6 | 列7 | 列8 | 列9 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| ${1:值1} | ${2:值2} | ${3:值3} | ${4:值4} | ${5:值5} | ${6:值6} | ${7:值7} | ${8:值8} | ${9:值9} |\n', '插入九列表格'),
     createSnippet('red', '<font color="red">${1:红色文字}</font>', '设置红色文本'),
     createSnippet('blue', '<font color="blue">${1:蓝色文字}</font>', '设置蓝色文本'),
     createSnippet('green', '<font color="green">${1:绿色文字}</font>', '设置绿色文本'),
@@ -1879,10 +1905,47 @@ const registerMarkdownLanguageFeatures = () => {
             /^[a-zA-Z]:/.test(token)));
       if (inPathLike) return { suggestions: [] };
 
-      const word = model.getWordUntilPosition(position)?.word || '';
+      const wordInfo = model.getWordUntilPosition(position);
+      const word = wordInfo?.word || '';
       if (!word) return { suggestions: [] };
 
       const lower = word.toLowerCase();
+      const tableMatch = /^table(\d{1,2})(?:x|_)(\d{1,2})$/.exec(lower);
+      if (tableMatch && wordInfo?.startColumn && wordInfo?.endColumn) {
+        const rows = clampInt(tableMatch[1], 1, 30);
+        const cols = clampInt(tableMatch[2], 1, 30);
+        const insertText = buildMarkdownTableSnippet(rows, cols);
+
+        if (insertText) {
+          console.debug('[MarkdownSnippet] table param', { word, rows, cols });
+
+          const range = new monaco.Range(
+            position.lineNumber,
+            wordInfo.startColumn,
+            position.lineNumber,
+            wordInfo.endColumn
+          );
+
+          return {
+            suggestions: [
+              {
+                label: `table${rows}x${cols}`,
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText,
+                insertTextRules:
+                  monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                detail: `插入 ${rows}×${cols} 表格`,
+                range,
+                sortText: '0_table_param'
+              }
+            ]
+          };
+        }
+
+        console.warn('[MarkdownSnippet] invalid table param', { word, rows, cols });
+        return { suggestions: [] };
+      }
+
       const suggestions = markdownSnippets
         .filter((s) => String(s.label || '').toLowerCase().startsWith(lower))
         .slice(0, 50);
