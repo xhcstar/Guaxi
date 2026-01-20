@@ -3584,4 +3584,80 @@ button:disabled {
   border-radius: 4px;
   margin-left: 8px;
 }
+
+.markdown-content :deep(.mermaid) {
+  background-color: var(--guaxi-panel-bg, #ffffff);
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 1em 0;
+  overflow: auto;
+}
+
+.dark .markdown-content :deep(.mermaid),
+.dark-mode .markdown-content :deep(.mermaid) {
+  background-color: #1f242d;
+  border-color: #4b5563;
+}
+
+.dark .markdown-content :deep(.mermaid svg),
+.dark-mode .markdown-content :deep(.mermaid svg) {
+  background: transparent !important;
+}
+
+.dark .markdown-content :deep(.mermaid svg),
+.dark-mode .markdown-content :deep(.mermaid svg) {
+  color: #e6edf3 !important;
+}
+
+.dark .markdown-content :deep(.mermaid svg text),
+.dark .markdown-content :deep(.mermaid svg tspan),
+.dark-mode .markdown-content :deep(.mermaid svg text),
+.dark-mode .markdown-content :deep(.mermaid svg tspan) {
+  fill: #e6edf3 !important;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 1.6px;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65)) drop-shadow(0 0 1px rgba(255, 255, 255, 0.35));
+}
+
+.dark .markdown-content :deep(.mermaid svg foreignObject),
+.dark .markdown-content :deep(.mermaid svg foreignObject *),
+.dark-mode .markdown-content :deep(.mermaid svg foreignObject),
+.dark-mode .markdown-content :deep(.mermaid svg foreignObject *) {
+  color: #e6edf3 !important;
+}
+
+.dark .markdown-content :deep(.mermaid svg path),
+.dark .markdown-content :deep(.mermaid svg line),
+.dark .markdown-content :deep(.mermaid svg polyline),
+.dark .markdown-content :deep(.mermaid svg polygon),
+.dark .markdown-content :deep(.mermaid svg rect),
+.dark .markdown-content :deep(.mermaid svg circle),
+.dark .markdown-content :deep(.mermaid svg ellipse),
+.dark-mode .markdown-content :deep(.mermaid svg path),
+.dark-mode .markdown-content :deep(.mermaid svg line),
+.dark-mode .markdown-content :deep(.mermaid svg polyline),
+.dark-mode .markdown-content :deep(.mermaid svg polygon),
+.dark-mode .markdown-content :deep(.mermaid svg rect),
+.dark-mode .markdown-content :deep(.mermaid svg circle),
+.dark-mode .markdown-content :deep(.mermaid svg ellipse) {
+  stroke: #c9d1d9 !important;
+}
+
+.dark .markdown-content :deep(.mermaid svg marker path),
+.dark-mode .markdown-content :deep(.mermaid svg marker path) {
+  fill: #c9d1d9 !important;
+  stroke: #c9d1d9 !important;
+}
+
+.dark .markdown-content :deep(.mermaid svg.sankey),
+.dark-mode .markdown-content :deep(.mermaid svg.sankey),
+.dark .markdown-content :deep(.mermaid svg[id*="sankey"]),
+.dark-mode .markdown-content :deep(.mermaid svg[id*="sankey"]),
+.dark .markdown-content :deep(.mermaid svg [class*="sankey"]),
+.dark-mode .markdown-content :deep(.mermaid svg [class*="sankey"]) {
+  filter: brightness(1.22) saturate(1.12);
+}
 </style>

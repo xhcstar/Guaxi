@@ -6373,11 +6373,73 @@ onUnmounted(() => {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
-.dark .mermaid {
+.dark .mermaid,
+.dark-mode .mermaid {
   background-color: #1f242d;
-  border-color: #30363d;
-  color: #c9d1d9;
+  border-color: #4b5563;
+  color: #e6edf3;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.dark .mermaid svg,
+.dark-mode .mermaid svg {
+  background: transparent !important;
+}
+
+.dark .mermaid svg,
+.dark-mode .mermaid svg {
+  color: #e6edf3 !important;
+}
+
+.dark .mermaid svg text,
+.dark .mermaid svg tspan,
+.dark-mode .mermaid svg text,
+.dark-mode .mermaid svg tspan {
+  fill: #e6edf3 !important;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 1.6px;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65)) drop-shadow(0 0 1px rgba(255, 255, 255, 0.35));
+}
+
+.dark .mermaid svg foreignObject,
+.dark .mermaid svg foreignObject *,
+.dark-mode .mermaid svg foreignObject,
+.dark-mode .mermaid svg foreignObject * {
+  color: #e6edf3 !important;
+}
+
+.dark .mermaid svg path,
+.dark .mermaid svg line,
+.dark .mermaid svg polyline,
+.dark .mermaid svg polygon,
+.dark .mermaid svg rect,
+.dark .mermaid svg circle,
+.dark .mermaid svg ellipse,
+.dark-mode .mermaid svg path,
+.dark-mode .mermaid svg line,
+.dark-mode .mermaid svg polyline,
+.dark-mode .mermaid svg polygon,
+.dark-mode .mermaid svg rect,
+.dark-mode .mermaid svg circle,
+.dark-mode .mermaid svg ellipse {
+  stroke: #c9d1d9 !important;
+}
+
+.dark .mermaid svg marker path,
+.dark-mode .mermaid svg marker path {
+  fill: #c9d1d9 !important;
+  stroke: #c9d1d9 !important;
+}
+
+.dark .mermaid svg.sankey,
+.dark-mode .mermaid svg.sankey,
+.dark .mermaid svg[id*="sankey"],
+.dark-mode .mermaid svg[id*="sankey"],
+.dark .mermaid svg [class*="sankey"],
+.dark-mode .mermaid svg [class*="sankey"] {
+  filter: brightness(1.22) saturate(1.12);
 }
 
 
