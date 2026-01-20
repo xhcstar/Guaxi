@@ -38,12 +38,52 @@ export const addCopyButtons = (container) => {
     const copyButton = document.createElement("button");
     copyButton.className = "copy-button";
 
-    // 创建图标元素
-    const textSpan = document.createElement("span");
-    textSpan.className = "copy-button-text";
-    textSpan.textContent = "复制";
+    const iconSvgMap = {
+      copy: `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+        </svg>
+      `,
+      check: `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+        </svg>
+      `,
+      close: `
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L12 13.41l-6.29 6.3-1.42-1.41L10.59 12 4.29 5.71 5.7 4.29 12 10.59l6.29-6.3z"/>
+        </svg>
+      `,
+    };
 
-    copyButton.appendChild(textSpan);
+    const setCopyButtonState = (state) => {
+      const nextState = state || "copy";
+      const iconHtml = iconSvgMap[nextState] || iconSvgMap.copy;
+      iconSpan.innerHTML = iconHtml;
+
+      const titleMap = {
+        copy: "复制",
+        check: "已复制",
+        close: "复制失败",
+      };
+      const title = titleMap[nextState] || "复制";
+      copyButton.title = title;
+      copyButton.setAttribute("aria-label", title);
+    };
+
+    // 创建图标元素（替代文案）
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "copy-button-icon";
+    iconSpan.style.cssText = `
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 0;
+    `;
+
+    copyButton.appendChild(iconSpan);
+    setCopyButtonState("copy");
+
     copyButton.style.cssText = `
       position: absolute;
       right: 12px;
@@ -83,13 +123,11 @@ export const addCopyButtons = (container) => {
           ({ writeText }) => writeText(code)
         );
 
-        // 保存原始文本
-        const originalText = textSpan.textContent;
-        copyButton.dataset.originalText = originalText;
+        // 保存原始状态
         copyButton.dataset.isCopying = "true";
 
-        // 只修改文本内容
-        textSpan.textContent = "已复制";
+        // 只修改图标状态
+        setCopyButtonState("check");
 
         // 清除之前的定时器（如果有）
         if (copyButton.dataset.timeoutId) {
@@ -98,8 +136,8 @@ export const addCopyButtons = (container) => {
 
         // 设置新的定时器
         const timeoutId = setTimeout(() => {
-          // 恢复原始文本
-          textSpan.textContent = originalText;
+          // 恢复原始状态
+          setCopyButtonState("copy");
           delete copyButton.dataset.isCopying;
           delete copyButton.dataset.timeoutId;
         }, 2000);
@@ -108,13 +146,11 @@ export const addCopyButtons = (container) => {
       } catch (err) {
         console.error("复制失败:", err);
 
-        // 保存原始文本
-        const originalText = textSpan.textContent;
-        copyButton.dataset.originalText = originalText;
+        // 保存原始状态
         copyButton.dataset.isCopying = "true";
 
-        // 只修改文本内容
-        textSpan.textContent = "复制失败";
+        // 只修改图标状态
+        setCopyButtonState("close");
 
         // 清除之前的定时器（如果有）
         if (copyButton.dataset.timeoutId) {
@@ -123,8 +159,8 @@ export const addCopyButtons = (container) => {
 
         // 设置新的定时器
         const timeoutId = setTimeout(() => {
-          // 恢复原始文本
-          textSpan.textContent = originalText;
+          // 恢复原始状态
+          setCopyButtonState("copy");
           delete copyButton.dataset.isCopying;
           delete copyButton.dataset.timeoutId;
         }, 2000);
