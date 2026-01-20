@@ -42,7 +42,7 @@
               @click.stop="copyCard(card)"
             >
               <Icon
-                :icon="copiedCardId === card.id ? 'mdi:check' : 'mdi:content-copy'"
+                :icon="copiedCardId === card.id ? mdiCheck : mdiContentCopy"
                 width="16"
                 height="16"
               />
@@ -58,6 +58,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
+import mdiCheck from '@iconify-icons/mdi/check'
+import mdiContentCopy from '@iconify-icons/mdi/content-copy'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
 import markdownManualRaw from '../../assets/MarkdownTest.md?raw'
 import { useSettingsStore } from '../../stores/settingsStore'
