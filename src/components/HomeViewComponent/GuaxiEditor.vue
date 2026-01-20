@@ -5671,6 +5671,24 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
+.preview :deep(a),
+.preview :deep(a:visited) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dark-mode .preview :deep(a),
+.dark-mode .preview :deep(a:visited),
+.dark .preview :deep(a),
+.dark .preview :deep(a:visited) {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.preview :deep(a:hover) {
+  opacity: 0.92;
+}
+
 .preview code {
   font-family: inherit !important;
 }
