@@ -14,9 +14,17 @@ const RenderOptions = {
   basePath: "",
 };
 
-export const addCopyButtons = (container) => {
+export const addCopyButtons = (container, options = {}) => {
   // 移除已有按钮
   container.querySelectorAll(".copy-button").forEach((btn) => btn.remove());
+
+  const theme = String(options?.theme || '').trim().toLowerCase();
+  const fromDom =
+    !!container?.closest?.('.dark') ||
+    !!container?.closest?.('.dark-mode') ||
+    !!document?.documentElement?.classList?.contains?.('dark') ||
+    !!document?.documentElement?.classList?.contains?.('dark-mode');
+  const isDark = theme === 'dark' || fromDom;
 
   // 查找所有可能的代码块容器（包括 hljs 和 pre code）
   const codeContainers = Array.from(
@@ -94,9 +102,9 @@ export const addCopyButtons = (container) => {
       display: flex;
       align-items: center;
       justify-content: center;
-      color: rgba(0, 0, 0, 0.6);
-      background: rgba(255, 255, 255, 0.8);
-      border: none;
+      color: ${isDark ? 'rgba(255, 255, 255, 0.85)' : 'rgba(0, 0, 0, 0.6)'};
+      background: ${isDark ? 'rgba(60, 60, 60, 0.85)' : 'rgba(255, 255, 255, 0.85)'};
+      border: 1px solid ${isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.12)'};
       cursor: pointer;
       z-index: 10;
       gap: 4px;
@@ -463,7 +471,7 @@ export const renderMarkdown = async (content, options) => {
         });
     }
 
-    addCopyButtons(container);
+    addCopyButtons(container, { theme });
     // console.log("渲染后的HTML:", container.innerHTML);
     return container.innerHTML;
   } catch (err) {

@@ -4701,7 +4701,9 @@ const renderDebounced = debounce(async (content) => {
     // 确保DOM更新后添加按钮
     nextTick(() => {
       if (previewContainer.value) {
-        addCopyButtons(previewContainer.value);
+        addCopyButtons(previewContainer.value, {
+          theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+        });
       }
     });
   } catch (error) {
@@ -5081,7 +5083,9 @@ watch([rawContent, shouldAutoRenderPreview], () => {
 watch(renderedHtml, () => {
   nextTick(() => {
     if (previewContainer.value) {
-      addCopyButtons(previewContainer.value);
+      addCopyButtons(previewContainer.value, {
+        theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+      });
       if (pendingPreviewScrollRestore.value) {
         const el = previewContainer.value;
         const height = el.scrollHeight;
@@ -6376,27 +6380,6 @@ onUnmounted(() => {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
-.dark .mermaid svg text,
-.dark .mermaid svg .label text {
-  fill: #c9d1d9 !important;
-}
-
-.dark .mermaid svg .edgePath path {
-  stroke: #8b949e !important;
-}
-
-.dark .mermaid svg .arrowheadPath {
-  fill: #8b949e !important;
-  stroke: #8b949e !important;
-}
-
-.dark .mermaid svg .node rect,
-.dark .mermaid svg .node polygon,
-.dark .mermaid svg .node circle,
-.dark .mermaid svg .cluster rect {
-  fill: #2c313a !important;
-  stroke: #6e7681 !important;
-}
 
 /* 代码块样式 */
 .hljs {
