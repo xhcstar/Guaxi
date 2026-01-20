@@ -392,6 +392,18 @@ const { librariesRoot } = storeToRefs(store)
 const outlineStore = useOutlineStore()
 const md = new MarkdownIt()
 
+const resolveMarkdownTheme = () => {
+  try {
+    const root = document?.documentElement
+    const isDark =
+      !!root?.classList?.contains?.('dark') ||
+      !!root?.classList?.contains?.('dark-mode')
+    return isDark ? 'dark' : 'default'
+  } catch {
+    return 'default'
+  }
+}
+
 const isEditableElement = (el) => {
   if (!el) return false
   const t = el.tagName ? el.tagName.toLowerCase() : ''
@@ -974,7 +986,7 @@ const renderNoteContent = async (markdown) => {
       mermaid: true,
       math: true,
       codeHighlight: true,
-      theme: 'default'
+      theme: resolveMarkdownTheme()
     });
   } catch (e) {
     return `<div class="render-error">${e.message}</div>`;
@@ -984,19 +996,19 @@ const renderNoteContent = async (markdown) => {
 async function convertPdfRenderMarkdown(content, options = {}) {
   const processedContent = await processImages(content, options.libraryBasePath);
   try {
+    const theme = resolveMarkdownTheme()
     let html = await renderMarkdown(processedContent, {
       preserveOriginal: true,
       basePath: "",
       mermaid: true,
       math: true,
       codeHighlight: true,
-      theme: 'default'
+      theme
     });
 
-    // 确保DOM更新后添加按钮
     nextTick(() => {
       if (markdownContainer.value) {
-        addCopyButtons(markdownContainer.value);
+        addCopyButtons(markdownContainer.value, { theme });
       }
     });
 
