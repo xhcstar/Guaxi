@@ -663,6 +663,9 @@ const buildEditorContextMenuOptions = () => {
     { label: '粘贴', key: 'editor.action.clipboardPasteAction' },
     { type: 'divider' },
 
+    { label: '文件内搜索 (Ctrl+F)', key: 'actions.find' },
+    { type: 'divider' },
+
     { label: 'Markdown 格式化（全文）', key: 'guaxi.markdown.formatDocument', disabled: !isMarkdown },
     { label: 'Markdown 格式化（选中）', key: 'guaxi.markdown.formatSelection', disabled: !isMarkdown || !hasSelection },
     { type: 'divider' },
@@ -706,6 +709,8 @@ const handleEditorContextMenuSelect = async (key) => {
 const tableToolbarVisible = ref(false);
 const tableToolbarStyle = ref({ left: '0px', top: '0px' });
 const activeTableContext = ref(null);
+let tableInsertAutoFormatBusy = false;
+let lastTableToolbarInsertAt = 0;
 const scrollRatio = ref(0);
 const pendingPreviewScrollRestore = ref(false);
 const pendingPreviewScrollLine = ref(null);
@@ -1283,6 +1288,8 @@ const insertTableWithSize = (rows, cols) => {
   const pos = editor.getPosition()
   if (!model || !pos) return
 
+  lastTableToolbarInsertAt = Date.now();
+
   const snippet = buildMarkdownTable(rows, cols)
   insertBlockSnippet(snippet)
 
@@ -1291,6 +1298,7 @@ const insertTableWithSize = (rows, cols) => {
     editor.setPosition(new monaco.Position(line, 3))
     editor.focus()
     updateTableToolbar()
+    formatTable()
   })
 }
 
@@ -2319,6 +2327,9 @@ const initEditor = () => {
       bracketPairs: true,  // 显示括号配对引导线
       bracketPairsHorizontal: 'active'  // 水平引导线
     },
+    find: {
+      addExtraSpaceOnTop: false
+    },
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
 
@@ -2496,6 +2507,41 @@ const initEditor = () => {
       label: '表格：删除当前列',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.RightArrow],
       run: () => deleteTableColumn()
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.moveCellLeft',
+      label: '表格：移动到左侧单元格',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyH],
+      run: () => moveTableCell(-1, 0)
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.moveCellDown',
+      label: '表格：移动到下方单元格',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyJ],
+      run: () => moveTableCell(0, 1)
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.moveCellUp',
+      label: '表格：移动到上方单元格',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyK],
+      run: () => moveTableCell(0, -1)
+    });
+
+    editor.addAction({
+      id: 'guaxi.table.moveCellRight',
+      label: '表格：移动到右侧单元格',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyL],
+      run: () => moveTableCell(1, 0)
+    });
+
+    editor.addAction({
+      id: 'guaxi.file.find',
+      label: '文件内搜索',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF],
+      run: () => runEditorAction('actions.find')
     });
 
     editor.onContextMenu((e) => {
@@ -2916,6 +2962,52 @@ const setupEditorListeners = () => {
 
   const model = editor.getModel();
   if (model) {
+    model.onDidChangeContent((ev) => {
+      if (!editor) return;
+      if (tableInsertAutoFormatBusy) return;
+      if (tableAutoFormatBusy) return;
+      if (Date.now() - lastTableToolbarInsertAt < 450) return;
+      if (model.getLanguageId() !== 'markdown') return;
+      const selection = editor.getSelection();
+      if (!selection) return;
+      if (!ev?.changes?.length) return;
+
+      const tableChange = ev.changes.find((c) => {
+        if (!c?.text) return false;
+        if (c.range?.startColumn !== 1) return false;
+        const t = String(c.text).replace(/\r/g, '');
+        if (!t.includes('\n')) return false;
+        if (!/^\s*\|/.test(t)) return false;
+        return /\n\|\s*-{3,}/.test(t);
+      });
+
+      if (!tableChange) return;
+
+      tableInsertAutoFormatBusy = true;
+
+      window.setTimeout(() => {
+        if (!editor) {
+          tableInsertAutoFormatBusy = false;
+          return;
+        }
+
+        const ctx = detectTableContext();
+        if (!ctx) {
+          tableInsertAutoFormatBusy = false;
+          return;
+        }
+
+        const targetLine = Math.min(model.getLineCount(), ctx.startLine + 2);
+        editor.setPosition(new monaco.Position(targetLine, 3));
+        updateTableToolbar();
+        formatTable();
+
+        nextTick(() => {
+          tableInsertAutoFormatBusy = false;
+        });
+      }, 0);
+    });
+
     model.onDidChangeContent(
       debounce(() => {
         const content = model.getValue();
@@ -3043,6 +3135,11 @@ const setupEditorListeners = () => {
 
     const isEmpty = e.selection.isEmpty();
     if (isEmpty || !selectedText.trim()) {
+      floatingToolbarVisible.value = false;
+      return;
+    }
+
+    if (e.source !== 'mouse') {
       floatingToolbarVisible.value = false;
       return;
     }
@@ -4172,6 +4269,39 @@ const formatTable = () => {
   });
 
   applyTableEdits(nextRows, ctx.activeRowIndex, ctx.activeColIndex);
+};
+
+const moveTableCell = (dx, dy) => {
+  if (!editor) return;
+
+  const model = editor.getModel();
+  const pos = editor.getPosition();
+  const selection = editor.getSelection();
+  if (!model || !pos || !selection) return;
+  if (model.getLanguageId() !== 'markdown') return;
+  if (!selection.isEmpty()) return;
+
+  const ctx = detectTableContext();
+  if (!ctx) return;
+
+  const maxRow = Math.max(0, ctx.rows.length - 1);
+  const nextCol = Math.max(0, Math.min(ctx.colCount - 1, ctx.activeColIndex + (Number(dx) || 0)));
+
+  let nextRow = Math.max(0, Math.min(maxRow, ctx.activeRowIndex + (Number(dy) || 0)));
+  if (nextRow === 1 && dy < 0) nextRow = 0;
+  if (nextRow === 1 && dy > 0) nextRow = Math.min(maxRow, 2);
+
+  const currentLine = model.getLineContent(ctx.startLine + ctx.activeRowIndex);
+  const currentCellCol = getCursorColumnForTableCell(currentLine, ctx.activeColIndex, 0);
+  const offset = Math.max(0, (pos.column || 1) - currentCellCol);
+
+  const targetLineNumber = ctx.startLine + nextRow;
+  const targetLine = model.getLineContent(targetLineNumber);
+  const targetCol = getCursorColumnForTableCell(targetLine, nextCol, offset);
+
+  editor.setPosition(new monaco.Position(targetLineNumber, targetCol));
+  editor.focus();
+  updateTableToolbar();
 };
 
 const insertTable = () => {

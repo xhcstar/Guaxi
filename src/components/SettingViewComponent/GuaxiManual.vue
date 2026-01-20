@@ -180,14 +180,16 @@
             <div class="manual-subtitle">Home：编辑器快捷键速查（Monaco）</div>
             <ul class="manual-ul">
               <li>保存：保存当前文件内容（操作：编辑后按快捷键；快捷键：Ctrl+S）。</li>
+              <li>文件内搜索：打开搜索框（操作：编辑器内按快捷键；快捷键：Ctrl+F）。</li>
               <li>模式：编辑 / 预览 / 分栏 / 实时预览（操作：点击编辑器模式切换按钮；快捷键：Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4）。</li>
               <li>加粗：为选中内容添加/取消 **（操作：选中文本后点击工具条“加粗”；快捷键：Ctrl+B）。</li>
               <li>斜体：为选中内容添加/取消 *（操作：选中文本后点击工具条“斜体”；快捷键：Ctrl+I）。</li>
               <li>删除线：为选中内容添加/取消 ~~（操作：选中文本后点击工具条“删除线”；快捷键：Ctrl+Shift+X）。</li>
               <li>插入链接：插入 [文字](URL)（操作：选中文本或放置光标后触发；快捷键：Ctrl+K）。</li>
-              <li>插入表格：插入 Markdown 表格骨架（操作：在光标处插入；快捷键：Ctrl+Alt+T）。</li>
+              <li>插入表格：插入 Markdown 表格骨架（操作：在光标处插入；快捷键：Ctrl+Alt+T；插入后自动格式化）。</li>
               <li>表格：下方插入行（Ctrl+Alt+↓）；删除当前行（Ctrl+Alt+Shift+↓）。</li>
               <li>表格：右侧插入列（Ctrl+Alt+→）；删除当前列（Ctrl+Alt+Shift+→）。</li>
+              <li>表格：单元格移动（Ctrl+Alt+H/J/K/L，分别为左/下/上/右）。</li>
               <li>编辑位置跳转：返回上次编辑位置（Alt+←）；前进到下一编辑位置（Alt+→）。</li>
               <li>剪切/复制/粘贴：Ctrl+X / Ctrl+C / Ctrl+V（也可用右键菜单）。</li>
             </ul>
@@ -195,6 +197,7 @@
             <div class="manual-subtitle">Home：编辑器右键菜单</div>
             <ul class="manual-ul">
               <li>剪切 / 复制 / 粘贴：在编辑器内右键 → 选择对应操作（快捷键：Ctrl+X / Ctrl+C / Ctrl+V）。</li>
+              <li>文件内搜索：右键 → 文件内搜索（快捷键：Ctrl+F）。</li>
               <li>Markdown 格式化（全文）：右键 → Markdown 格式化（全文），仅 Markdown 文件可用（快捷键：无）。</li>
               <li>Markdown 格式化（选中）：先选中文本 → 右键 → Markdown 格式化（选中）（快捷键：无）。</li>
               <li>跳转到上次编辑位置：右键 → 跳转到上次编辑位置（快捷键：Alt+←）。</li>
