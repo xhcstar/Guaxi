@@ -247,6 +247,7 @@ async fn main() {
             commands::searcher::rg_search,
             commands::searcher::cancel_search,
             commands::knowledgebase::create_knowledge_base,
+            commands::knowledgebase::delete_knowledge_base,
             commands::knowledgebase::get_knowledge_base_list,
             commands::knowledgebase::get_knowledge_base_tree,
             commands::knowledgebase::get_knowledge_graph_data,

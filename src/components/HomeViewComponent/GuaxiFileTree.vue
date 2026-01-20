@@ -82,6 +82,14 @@
               </template>
               新建文件夹
             </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(activeRepoPathItem)">
+                  <n-icon :component="TrashOutline" size="14" />
+                </n-icon-wrapper>
+              </template>
+              删除知识库
+            </n-tooltip>
             <n-icon size="15" class="expand-icon">
               <chevron-down-icon v-if="fileTreeStore.isRepoExpanded(activeRepoPathItem)" />
               <chevron-forward-icon v-else />
@@ -125,6 +133,14 @@
                     </n-icon-wrapper>
                   </template>
                   新建文件夹
+                </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(path)">
+                      <n-icon :component="TrashOutline" size="14" />
+                    </n-icon-wrapper>
+                  </template>
+                  删除知识库
                 </n-tooltip>
                 <n-icon size="15" class="expand-icon">
                   <chevron-forward-icon />
@@ -545,6 +561,78 @@ const handleAddFolder = async (repoPath) => {
     message.error(`添加文件夹失败: ${error.message}`);
   }
 };
+
+const closeTabsUnderRepo = (repoPath) => {
+  const prefix = normalizePath(repoPath)
+  if (!prefix) return
+  const tabs = Array.isArray(fileTreeStore.openTabs) ? [...fileTreeStore.openTabs] : []
+  for (const tab of tabs) {
+    const tabPath = normalizePath(tab?.path)
+    if (!tabPath) continue
+    if (tabPath === prefix || tabPath.startsWith(`${prefix}/`)) {
+      fileTreeStore.closeTab(tab.path)
+    }
+  }
+}
+
+const handleDeleteKnowledgeBase = async (repoPath) => {
+  const kbName = getRepoName(repoPath)
+  if (!kbName) return
+
+  const ok = await confirmDialog(
+    `确定删除知识库 “${kbName}” 吗？\n\n将删除该知识库目录及其所有子目录和文件，并从数据库中移除该知识库条目。此操作不可恢复。`,
+    {
+      title: '删除知识库',
+      kind: 'warning',
+      okLabel: '删除',
+      cancelLabel: '取消'
+    }
+  )
+
+  if (!ok) return
+
+  try {
+    const deletedNorm = normalizePath(repoPath)
+    const activeNorm = normalizePath(fileTreeStore.activeRepoPath)
+
+    closeTabsUnderRepo(repoPath)
+    await invoke('delete_knowledge_base', {
+      input: { knowledge_base_name: kbName }
+    })
+
+    let refreshed = []
+    try {
+      refreshed = await knowledgeBaseStore.fetchKnowledgeBases()
+    } catch {
+      refreshed = knowledgeBaseStore.knowledgeBases
+    }
+
+    const paths = Array.isArray(refreshed) ? refreshed.map(kb => kb.location) : []
+    fileTreeStore.setRepopathlist(paths)
+
+    const activeStillExists = paths.some(p => normalizePath(p) === activeNorm)
+    const needResetActive = activeNorm === deletedNorm || !activeStillExists
+
+    if (needResetActive) {
+      const nextRepo = paths[0] || null
+      fileTreeStore.setActiveRepoPath(nextRepo)
+
+      if (nextRepo) {
+        fileTreeStore.expandedRepos.set(nextRepo, true)
+        await loadRepoTree(nextRepo)
+      } else {
+        fileTree.value = []
+        expandedKeys.value = []
+        selectedKeys.value = []
+      }
+    }
+
+    message.success('知识库已删除')
+  } catch (error) {
+    console.error('删除知识库失败:', error)
+    message.error('删除知识库失败')
+  }
+}
 
 // 获取仓库显示名称
 const getRepoName = (path) => {

@@ -17,6 +17,12 @@ pub struct KnowledgeBaseInput {
     pub knowledge_base_description: String,
 }
 
+/// 删除知识库时的输入结构体
+#[derive(Deserialize)]
+pub struct DeleteKnowledgeBaseInput {
+    pub knowledge_base_name: String,
+}
+
 /// 知识库列表项结构体
 #[derive(Serialize)]
 pub struct KnowledgeBaseListItem {
@@ -148,6 +154,63 @@ pub fn create_knowledge_base(input: KnowledgeBaseInput) -> Result<(), String> {
             0
         ],
     ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 删除知识库命令
+#[tauri::command]
+pub fn delete_knowledge_base(input: DeleteKnowledgeBaseInput) -> Result<(), String> {
+    setup_db()?;
+
+    let kb_name = input.knowledge_base_name.trim().to_string();
+    if kb_name.is_empty() {
+        return Err("知识库名称不能为空".to_string());
+    }
+    if kb_name == ".meta" {
+        return Err("非法知识库名称".to_string());
+    }
+    if kb_name.contains('/') || kb_name.contains('\\') {
+        return Err("非法知识库名称".to_string());
+    }
+
+    let root = crate::commands::settingview::get_knowledge_bases_root();
+    let root_dir = PathBuf::from(&root);
+    if !root_dir.exists() {
+        fs::create_dir_all(&root_dir).map_err(|e| e.to_string())?;
+    }
+
+    let kb_dir = root_dir.join(&kb_name);
+
+    let root_canon = fs::canonicalize(&root_dir).unwrap_or(root_dir.clone());
+    if kb_dir.exists() {
+        if !kb_dir.is_dir() {
+            return Err("知识库路径不是目录".to_string());
+        }
+
+        let kb_canon = fs::canonicalize(&kb_dir).map_err(|e| e.to_string())?;
+        let parent = kb_canon.parent().ok_or("无法获取知识库父目录".to_string())?;
+        let parent_canon = fs::canonicalize(parent).unwrap_or(parent.to_path_buf());
+        if parent_canon != root_canon {
+            return Err("非法删除路径".to_string());
+        }
+
+        fs::remove_dir_all(&kb_dir).map_err(|e| e.to_string())?;
+    }
+
+    let kb_meta_dir = root_dir
+        .join(".meta")
+        .join(format!("{}_meta", sanitize_meta_stem(&kb_name)));
+    if kb_meta_dir.exists() {
+        let _ = fs::remove_dir_all(&kb_meta_dir);
+    }
+
+    let conn = init_db().map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM knowledge_bases WHERE knowledge_base_name = ?",
+        params![kb_name],
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
