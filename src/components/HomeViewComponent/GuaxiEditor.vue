@@ -90,14 +90,16 @@
             </template>
             行内代码
           </n-tooltip>
-          <n-tooltip placement="top" trigger="hover">
-            <template #trigger>
-              <n-button text size="tiny" @click="insertCodeBlockFromToolbar">
-                <Icon :icon="squareTerminalIcon" width="16" height="16" />
-              </n-button>
-            </template>
-            代码块
-          </n-tooltip>
+          <n-dropdown trigger="click" :options="codeBlockOptions" @select="handleCodeBlockSelect">
+            <n-tooltip placement="top" trigger="hover">
+              <template #trigger>
+                <n-button text size="tiny">
+                  <Icon :icon="squareTerminalIcon" width="16" height="16" />
+                </n-button>
+              </template>
+              代码块
+            </n-tooltip>
+          </n-dropdown>
 
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -1137,6 +1139,28 @@ const headingOptions = [
   { label: 'H4', key: 4 },
   { label: 'H5', key: 5 },
   { label: 'H6', key: 6 }
+]
+
+const codeBlockOptions = [
+  { label: '纯代码块', key: 'plain' },
+  { label: 'C', key: 'c' },
+  { label: 'C++', key: 'cpp' },
+  { label: 'Python', key: 'python' },
+  { label: 'Shell', key: 'bash' },
+  { label: 'Mermaid', key: 'mermaid' },
+  { label: 'Rust', key: 'rust' },
+  { label: 'JavaScript', key: 'javascript' },
+  { label: 'TypeScript', key: 'typescript' },
+  { label: 'Lua', key: 'lua' },
+  { label: 'HTML', key: 'html' },
+  { label: 'Perl', key: 'perl' },
+  { label: 'JSON', key: 'json' },
+  { label: 'XML', key: 'xml' },
+  { label: 'TeX', key: 'tex' },
+  { label: 'C#', key: 'csharp' },
+  { label: 'Lisp', key: 'lisp' },
+  { label: 'TOML', key: 'toml' },
+  { label: 'PowerShell', key: 'powershell' }
 ]
 
 const vimMode = ref(false);
@@ -3938,8 +3962,20 @@ const insertImage = () => {
   insertBlockSnippet('![图片描述](路径或URL)\n');
 };
 
+const insertCodeBlock = (lang) => {
+  const v = String(lang || '').trim();
+  const prefix = v ? `\`\`\`${v}\n` : '```\n';
+  wrapSelection(prefix, '\n```\n', '代码');
+};
+
+const handleCodeBlockSelect = (key) => {
+  const k = String(key || '').trim();
+  const lang = k === 'plain' ? '' : k;
+  insertCodeBlock(lang);
+};
+
 const insertCodeBlockFromToolbar = () => {
-  wrapSelection('```\n', '\n```\n', '代码');
+  insertCodeBlock('');
 };
 
 const insertHorizontalRule = () => {
@@ -5878,6 +5914,34 @@ onUnmounted(() => {
   text-align: center;
   margin: 1rem 0;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.n-dropdown-menu {
+  max-height: 320px;
+  max-height: min(320px, calc(100vh - 140px));
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(140, 140, 140, 0.45) transparent;
+}
+
+.n-dropdown-menu::-webkit-scrollbar {
+  width: 8px;
+}
+
+.n-dropdown-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.n-dropdown-menu::-webkit-scrollbar-thumb {
+  background: rgba(140, 140, 140, 0.35);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.n-dropdown-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 140, 140, 0.55);
+  background-clip: content-box;
 }
 
 /* Mermaid图表样式 */
