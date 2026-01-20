@@ -3433,13 +3433,69 @@ const normalizeSeparatorCell = (cell, align) => {
   return '---';
 };
 
+// 判断 Unicode 组合附加符号（Combining Marks）。
+// 这类字符通常叠加在前一个字符上显示，因此在“可视宽度”计算中按 0 宽度处理。
+const isCombiningCodePoint = (cp) => {
+  return (
+    (cp >= 0x0300 && cp <= 0x036f) ||
+    (cp >= 0x1ab0 && cp <= 0x1aff) ||
+    (cp >= 0x1dc0 && cp <= 0x1dff) ||
+    (cp >= 0x20d0 && cp <= 0x20ff) ||
+    (cp >= 0xfe20 && cp <= 0xfe2f)
+  );
+};
+
+// 判断 Unicode 码点是否为“全宽”字符。
+// 用于近似估算等宽字体下的显示宽度：CJK/全角标点/emoji 等通常按 2 列宽处理。
+const isFullWidthCodePoint = (cp) => {
+  if (cp >= 0x1100 && (
+    cp <= 0x115f ||
+    cp === 0x2329 ||
+    cp === 0x232a ||
+    (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe10 && cp <= 0xfe19) ||
+    (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1f64f) ||
+    (cp >= 0x1f900 && cp <= 0x1f9ff) ||
+    (cp >= 0x20000 && cp <= 0x3fffd)
+  )) return true;
+
+  return false;
+};
+
+// 计算字符串的“可视宽度”（用于 Markdown 表格源码对齐）。
+// 规则：控制字符忽略；组合字符按 0；全宽字符按 2；其它按 1。
+// 说明：这是为了提升中英文混排时 | 的对齐观感，而不是严格的排版引擎实现。
+const getDisplayWidth = (input) => {
+  const s = String(input ?? '');
+  let width = 0;
+
+  for (const ch of s) {
+    const cp = ch.codePointAt(0) || 0;
+
+    if (cp === 0) continue;
+    if (cp < 32 || cp === 0x7f) continue;
+    if (isCombiningCodePoint(cp)) continue;
+
+    width += isFullWidthCodePoint(cp) ? 2 : 1;
+  }
+
+  return width;
+};
+
+// 按列宽对齐单元格：用“可视宽度”补齐空格，而不是用 string.length。
+// 这样在 Monaco 编辑器的等宽字体下，中英文混排时各行的竖线更容易对齐。
 const padTableCell = (text, width, align) => {
   const raw = String(text ?? '').trim();
-  const len = raw.length;
+  const current = getDisplayWidth(raw);
   const w = Math.max(0, Number(width) || 0);
-  if (len >= w) return raw;
+  if (current >= w) return raw;
 
-  const delta = w - len;
+  const delta = w - current;
   if (align === 'right') return `${' '.repeat(delta)}${raw}`;
   if (align === 'center') {
     const left = Math.floor(delta / 2);
@@ -3449,6 +3505,8 @@ const padTableCell = (text, width, align) => {
   return `${raw}${' '.repeat(delta)}`;
 };
 
+// 将表格的二维 cells 渲染为 Markdown 行，并根据列宽补空格。
+// 目标：在源码编辑态也能保持每列 | 对齐，提升可读性。
 const buildAlignedTableLines = (rows) => {
   const safeRows = Array.isArray(rows) ? rows : [];
   if (!safeRows.length) return [];
@@ -3462,7 +3520,7 @@ const buildAlignedTableLines = (rows) => {
     if (!Array.isArray(row) || rowIndex === 1) return;
     for (let i = 0; i < colCount; i += 1) {
       const v = String(row[i] ?? '').trim();
-      widths[i] = Math.max(widths[i], v.length);
+      widths[i] = Math.max(widths[i], getDisplayWidth(v));
     }
   });
 
