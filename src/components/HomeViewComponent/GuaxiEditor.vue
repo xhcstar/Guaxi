@@ -126,14 +126,42 @@
             任务列表
           </n-tooltip>
 
-          <n-tooltip placement="top" trigger="hover">
+          <n-popover trigger="click" placement="bottom-start" :show="tableInsertPopoverVisible"
+            @update:show="handleTableInsertPopoverUpdateShow">
             <template #trigger>
-              <n-button text size="tiny" @click="insertTable">
-                <Icon :icon="tableIcon" width="16" height="16" />
-              </n-button>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny">
+                    <Icon :icon="tableIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                表格 (Ctrl+Alt+T)
+              </n-tooltip>
             </template>
-            表格 (Ctrl+Alt+T)
-          </n-tooltip>
+
+            <div class="table-insert-popover" @mousedown.stop>
+              <div class="table-insert-hint">{{ tableInsertHint }}</div>
+              <div class="table-insert-grid" @mouseup="handleTableGridMouseUp" @mouseleave="handleTableGridMouseLeave">
+                <template v-for="r in tableGridMaxRows" :key="`r-${r}`">
+                  <template v-for="c in tableGridMaxCols" :key="`c-${r}-${c}`">
+                    <div class="table-insert-cell" :class="{ active: r <= tableGridRows && c <= tableGridCols }"
+                      @mousedown.prevent="handleTableGridMouseDown(r, c)" @mouseover="handleTableGridMouseOver(r, c)" />
+                  </template>
+                </template>
+              </div>
+
+              <div class="table-insert-controls">
+                <div class="table-insert-inputs">
+                  <n-input-number v-model:value="tableInputRows" size="tiny" :min="2" :max="tableInsertMaxRows"
+                    :show-button="false" placeholder="行" />
+                  <span class="table-insert-mul">×</span>
+                  <n-input-number v-model:value="tableInputCols" size="tiny" :min="1" :max="tableInsertMaxCols"
+                    :show-button="false" placeholder="列" />
+                  <n-button size="tiny" type="primary" @click="insertTableFromInputs">插入</n-button>
+                </div>
+              </div>
+            </div>
+          </n-popover>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertImage">
@@ -224,7 +252,7 @@
         <div v-show="tableToolbarVisible" class="floating-table-toolbar" :style="tableToolbarStyle" @mousedown.prevent>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-                <n-button text size="tiny" @click="addTableRowBelow">
+              <n-button text size="tiny" @click="addTableRowBelow">
                 <Icon :icon="tableRowPlusAfter" width="16" height="16" />
               </n-button>
             </template>
@@ -258,7 +286,7 @@
           <div class="floating-table-toolbar-divider"></div>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-                <n-button text size="tiny" @click="setTableColumnAlign('left')">
+              <n-button text size="tiny" @click="setTableColumnAlign('left')">
                 <Icon :icon="alignLeftIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -266,7 +294,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-                <n-button text size="tiny" @click="setTableColumnAlign('center')">
+              <n-button text size="tiny" @click="setTableColumnAlign('center')">
                 <Icon :icon="alignCenterIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -274,7 +302,7 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-                <n-button text size="tiny" @click="setTableColumnAlign('right')">
+              <n-button text size="tiny" @click="setTableColumnAlign('right')">
                 <Icon :icon="alignRightIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -283,7 +311,7 @@
           <div class="floating-table-toolbar-divider"></div>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-                <n-button text size="tiny" @click="formatTable">
+              <n-button text size="tiny" @click="formatTable">
                 <Icon :icon="sparklesIcon" width="16" height="16" />
               </n-button>
             </template>
@@ -295,7 +323,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleBold">
-                  <Icon :icon="boldIcon" width="16" height="16" />
+                <Icon :icon="boldIcon" width="16" height="16" />
               </n-button>
             </template>
             加粗 (Ctrl+B)
@@ -303,7 +331,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleItalic">
-                  <Icon :icon="italicIcon" width="16" height="16" />
+                <Icon :icon="italicIcon" width="16" height="16" />
               </n-button>
             </template>
             斜体 (Ctrl+I)
@@ -311,7 +339,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleStrikethrough">
-                  <Icon :icon="strikethroughIcon" width="16" height="16" />
+                <Icon :icon="strikethroughIcon" width="16" height="16" />
               </n-button>
             </template>
             删除线 (Ctrl+Shift+X)
@@ -319,7 +347,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="insertLink">
-                  <Icon :icon="linkIcon" width="16" height="16" />
+                <Icon :icon="linkIcon" width="16" height="16" />
               </n-button>
             </template>
             链接 (Ctrl+K)
@@ -327,7 +355,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleInlineCode">
-                  <Icon :icon="codeIcon" width="16" height="16" />
+                <Icon :icon="codeIcon" width="16" height="16" />
               </n-button>
             </template>
             行内代码
@@ -335,7 +363,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text size="tiny" @click="toggleBlockquote">
-                 <Icon :icon="quoteIcon" width="16" height="16" />
+                <Icon :icon="quoteIcon" width="16" height="16" />
               </n-button>
             </template>
             引用
@@ -372,7 +400,7 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
-import { NTooltip, NIcon, useMessage, NDropdown } from 'naive-ui'
+import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, DownloadOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
@@ -1162,6 +1190,114 @@ const codeBlockOptions = [
   { label: 'TOML', key: 'toml' },
   { label: 'PowerShell', key: 'powershell' }
 ]
+
+const tableInsertPopoverVisible = ref(false)
+const tableGridMaxRows = 10
+const tableGridMaxCols = 10
+const tableGridRows = ref(2)
+const tableGridCols = ref(2)
+const tableGridDragging = ref(false)
+
+const tableInsertMaxRows = 120
+const tableInsertMaxCols = 40
+const tableInputRows = ref(2)
+const tableInputCols = ref(2)
+
+const tableInsertHint = computed(() => `${tableGridRows.value} 行 × ${tableGridCols.value} 列`)
+
+const handleTableInsertPopoverUpdateShow = (val) => {
+  tableInsertPopoverVisible.value = val
+  if (val) {
+    tableGridRows.value = 2
+    tableGridCols.value = 2
+    tableGridDragging.value = false
+    tableInputRows.value = 2
+    tableInputCols.value = 2
+  } else {
+    tableGridDragging.value = false
+  }
+}
+
+const clampInt = (value, min, max) => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return min
+  return Math.max(min, Math.min(max, Math.floor(n)))
+}
+
+const buildMarkdownTable = (rows, cols) => {
+  const r = clampInt(rows, 2, tableInsertMaxRows)
+  const c = clampInt(cols, 1, tableInsertMaxCols)
+
+  const header = Array.from({ length: c }, (_, i) => `列${i + 1}`)
+  const sep = Array.from({ length: c }, () => '---')
+
+  const lines = []
+  lines.push(`| ${header.join(' | ')} |`)
+  lines.push(`| ${sep.join(' | ')} |`)
+
+  const bodyRows = Math.max(1, r - 1)
+  for (let i = 0; i < bodyRows; i += 1) {
+    const cells = Array.from({ length: c }, (_, idx) => (i === 0 ? `内容${idx + 1}` : ''))
+    lines.push(`| ${cells.join(' | ')} |`)
+  }
+
+  return `${lines.join('\n')}\n`
+}
+
+const insertTableWithSize = (rows, cols) => {
+  if (!ensureMarkdownEditor()) return
+
+  const model = editor.getModel()
+  const pos = editor.getPosition()
+  if (!model || !pos) return
+
+  const snippet = buildMarkdownTable(rows, cols)
+  insertBlockSnippet(snippet)
+
+  nextTick(() => {
+    const line = pos.lineNumber + 2
+    editor.setPosition(new monaco.Position(line, 3))
+    editor.focus()
+    updateTableToolbar()
+  })
+}
+
+const handleTableGridMouseDown = (r, c) => {
+  tableGridDragging.value = true
+  tableGridRows.value = clampInt(r, 1, tableGridMaxRows)
+  tableGridCols.value = clampInt(c, 1, tableGridMaxCols)
+}
+
+const handleTableGridMouseOver = (r, c) => {
+  if (!tableGridDragging.value) {
+    tableGridRows.value = clampInt(r, 1, tableGridMaxRows)
+    tableGridCols.value = clampInt(c, 1, tableGridMaxCols)
+    return
+  }
+  tableGridRows.value = clampInt(r, 1, tableGridMaxRows)
+  tableGridCols.value = clampInt(c, 1, tableGridMaxCols)
+}
+
+const handleTableGridMouseUp = () => {
+  if (!tableInsertPopoverVisible.value) return
+  if (!tableGridDragging.value) return
+  tableGridDragging.value = false
+
+  insertTableWithSize(tableGridRows.value, tableGridCols.value)
+  tableInsertPopoverVisible.value = false
+}
+
+const handleTableGridMouseLeave = () => {
+  if (!tableGridDragging.value) return
+  tableGridDragging.value = false
+}
+
+const insertTableFromInputs = () => {
+  const r = clampInt(tableInputRows.value, 2, tableInsertMaxRows)
+  const c = clampInt(tableInputCols.value, 1, tableInsertMaxCols)
+  insertTableWithSize(r, c)
+  tableInsertPopoverVisible.value = false
+}
 
 const vimMode = ref(false);
 const vimStatusBar = ref(null);
@@ -3944,18 +4080,7 @@ const formatTable = () => {
 };
 
 const insertTable = () => {
-  if (!ensureMarkdownEditor()) return;
-
-  const pos = editor.getPosition();
-  insertBlockSnippet('| 列1 | 列2 |\n| --- | --- |\n| 内容1 | 内容2 |\n');
-
-  if (pos) {
-    nextTick(() => {
-      editor.setPosition(new monaco.Position(pos.lineNumber + 2, 3));
-      editor.focus();
-      updateTableToolbar();
-    });
-  }
+  insertTableWithSize(2, 2)
 };
 
 const insertImage = () => {
@@ -5415,6 +5540,68 @@ onUnmounted(() => {
   margin: 0 2px;
 }
 
+.table-insert-popover {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: fit-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 6px;
+}
+
+.table-insert-hint {
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+  opacity: 0.9;
+}
+
+.table-insert-grid {
+  display: inline-grid;
+  width: fit-content;
+  grid-template-columns: repeat(10, 16px);
+  gap: 4px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--guaxi-header-bg);
+  border: 1px solid var(--guaxi-border);
+  user-select: none;
+}
+
+.table-insert-cell {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 75%, transparent);
+}
+
+.table-insert-cell.active {
+  background: rgba(74, 202, 219, 0.65);
+  border-color: rgba(74, 202, 219, 0.9);
+}
+
+.table-insert-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.table-insert-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-insert-inputs :deep(.n-input-number) {
+  width: 74px;
+}
+
+.table-insert-mul {
+  opacity: 0.7;
+}
+
 .toolbar-editing-actions :deep(.n-button) {
   padding: 0 4px;
   height: 22px;
@@ -6006,7 +6193,7 @@ onUnmounted(() => {
   padding: 0 !important;
 }
 
-.preview pre:not(.hljs) > code {
+.preview pre:not(.hljs)>code {
   display: block;
   border-radius: 6px;
   border: 1px solid #e1e4e8;
@@ -6016,13 +6203,13 @@ onUnmounted(() => {
   overflow-x: auto;
 }
 
-.dark-mode .preview pre:not(.hljs) > code {
+.dark-mode .preview pre:not(.hljs)>code {
   border-color: #30363d;
   background: #1f242d;
   color: #c9d1d9;
 }
 
-.preview :not(pre) > code:not(.hljs) {
+.preview :not(pre)>code:not(.hljs) {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
   font-size: 0.9em;
   padding: 0.1em 0.35em;
@@ -6042,7 +6229,7 @@ onUnmounted(() => {
   font-family: inherit !important;
 }
 
-.dark-mode .preview :not(pre) > code:not(.hljs) {
+.dark-mode .preview :not(pre)>code:not(.hljs) {
   background: rgba(110, 118, 129, 0.25);
   color: #c9d1d9;
 }
