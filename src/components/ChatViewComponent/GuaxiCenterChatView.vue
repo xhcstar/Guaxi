@@ -92,7 +92,7 @@ import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { addCopyButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
+import { addCopyButtons, addMediaViewerButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
 
 
 const chatStore = useChatStore();
@@ -778,6 +778,7 @@ const setMessageRef = (el, index) => {
     messageRefs.value[index] = el;
     nextTick(() => {
       addCopyButtons(el);
+      addMediaViewerButtons(el);
     });
   }
 };

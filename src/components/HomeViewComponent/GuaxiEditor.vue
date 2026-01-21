@@ -444,7 +444,7 @@ import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
 import tableColumnPlusAfter from '@iconify-icons/mdi/table-column-plus-after'
 import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
-import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
 import 'vditor/dist/method'
@@ -4704,6 +4704,9 @@ const renderDebounced = debounce(async (content) => {
         addCopyButtons(previewContainer.value, {
           theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
         });
+        addMediaViewerButtons(previewContainer.value, {
+          theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+        });
       }
     });
   } catch (error) {
@@ -5084,6 +5087,9 @@ watch(renderedHtml, () => {
   nextTick(() => {
     if (previewContainer.value) {
       addCopyButtons(previewContainer.value, {
+        theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+      });
+      addMediaViewerButtons(previewContainer.value, {
         theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
       });
       if (pendingPreviewScrollRestore.value) {

@@ -252,7 +252,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { platform } from '@tauri-apps/plugin-os';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
-import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { NCard, NButton, NIcon, NText, useMessage, NDropdown } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -860,6 +860,7 @@ const renderNoteContent = async (markdown) => {
       mermaid: true,
       math: true,
       codeHighlight: true,
+      buttons: false,
       theme: resolveMarkdownTheme()
     });
   } catch (e) {
@@ -915,6 +916,7 @@ async function convertMarkdownToLines(content, options = {}) {
     nextTick(() => {
       if (markdownContainer.value) {
         addCopyButtons(markdownContainer.value, { theme });
+        addMediaViewerButtons(markdownContainer.value, { theme });
       }
     });
 
@@ -1791,9 +1793,22 @@ const loadMarkdownPage = async () => {
 
     const mdDir = await dirname(markdownFilePath.value);
     markdownContent.value = response.content;
-    markdownLines.value = await convertMarkdownToLines(markdownContent.value,
-      { libraryBasePath: mdDir }
-    );
+    markdownLines.value = await convertMarkdownToLines(markdownContent.value, { libraryBasePath: mdDir });
+
+    await nextTick();
+    requestAnimationFrame(() => {
+      const container = markdownContainer.value;
+      if (container) {
+        const theme = resolveMarkdownTheme();
+        addCopyButtons(container, { theme });
+        addMediaViewerButtons(container, { theme });
+        console.info('[WordReader] media buttons refreshed:', {
+          images: container.querySelectorAll('img').length,
+          mermaid: container.querySelectorAll('.mermaid, svg').length,
+        });
+      }
+    });
+
     generateOutlineFromMarkdown(markdownContent.value);
 
   } catch (error) {

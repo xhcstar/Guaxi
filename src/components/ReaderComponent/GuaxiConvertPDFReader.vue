@@ -331,7 +331,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { platform } from '@tauri-apps/plugin-os';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
-import { renderMarkdown, addCopyButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { NCard, NButton, NIcon, NText, useMessage, NDropdown } from 'naive-ui'
 import usePdfRenderer from './usePdfRenderer'
 import MarkdownIt from 'markdown-it'
@@ -986,6 +986,7 @@ const renderNoteContent = async (markdown) => {
       mermaid: true,
       math: true,
       codeHighlight: true,
+      buttons: false,
       theme: resolveMarkdownTheme()
     });
   } catch (e) {
@@ -1009,6 +1010,7 @@ async function convertPdfRenderMarkdown(content, options = {}) {
     nextTick(() => {
       if (markdownContainer.value) {
         addCopyButtons(markdownContainer.value, { theme });
+        addMediaViewerButtons(markdownContainer.value, { theme });
       }
     });
 
@@ -3049,14 +3051,25 @@ const loadMarkdownPage = async (pageNum) => {
     const mdDir = await dirname(markdownFilePath.value);
     markdownContent.value = response.content;
     // console.log("markdownContent.value:", markdownContent.value);
-    markdownLines.value = await convertPdfRenderMarkdown(markdownContent.value,
-      { libraryBasePath: mdDir }
-    );
+    markdownLines.value = await convertPdfRenderMarkdown(markdownContent.value, { libraryBasePath: mdDir });
     console.log("markdownLines.value:", markdownLines.value);
 
-    await nextTick()
+    await nextTick();
+    requestAnimationFrame(() => {
+      const container = markdownContainer.value;
+      if (container) {
+        const theme = resolveMarkdownTheme();
+        addCopyButtons(container, { theme });
+        addMediaViewerButtons(container, { theme });
+        console.info('[ConvertPDFReader] media buttons refreshed:', {
+          images: container.querySelectorAll('img').length,
+          mermaid: container.querySelectorAll('.mermaid, svg').length,
+        });
+      }
+    });
+
     if (mdSearchVisible.value && mdSearchQuery.value.trim()) {
-      applyMarkdownSearch()
+      applyMarkdownSearch();
     }
 
   } catch (error) {
