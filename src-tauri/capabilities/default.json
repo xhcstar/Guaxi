@@ -9,7 +9,8 @@
     "knowledge_base_manager",
     "app-*",
     "git-*",
-    "markdown-manual"
+    "markdown-manual",
+    "life-habits"
   ],
   "permissions": [
     "core:default",

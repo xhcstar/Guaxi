@@ -25,3 +25,4 @@ pub mod backup;
 pub mod markdowncheck;
 pub mod flipboard;
 pub mod markdown_manual;
+pub mod todo;

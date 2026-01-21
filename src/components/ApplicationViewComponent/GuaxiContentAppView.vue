@@ -38,6 +38,7 @@ import LifeAlbumApp from "./apps/LifeAlbumApp.vue"
 import MusicPlayerApp from "./apps/MusicPlayerApp.vue"
 import LanguageTranslatorApp from "./apps/LanguageTranslatorApp.vue"
 import PlaceholderApp from "./apps/PlaceholderApp.vue"
+import TODOApp from "./apps/TODO.vue"
 
 
 const categories = [
@@ -61,12 +62,13 @@ const apps = [
   },
   {
     id: 'life-habits',
-    name: '习惯打卡',
+    name: 'TO DO',
     category: 'life',
     categoryLabel: '生活类',
-    description: '培养每日好习惯，记录打卡进度',
-    icon: '📅',
-    color: 'linear-gradient(135deg, #f6d365, #fda085)'
+    description: '像 Microsoft To Do 一样管理清单与任务',
+    icon: '✅',
+    color: 'linear-gradient(135deg, #4facfe, #00f2fe)',
+    component: TODOApp
   },
   {
     id: 'music-player',

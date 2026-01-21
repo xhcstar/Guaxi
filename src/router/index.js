@@ -18,9 +18,11 @@ import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumA
 import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
 import LanguageTranslatorApp from '../components/ApplicationViewComponent/apps/LanguageTranslatorApp.vue'
 import PlaceholderApp from '../components/ApplicationViewComponent/apps/PlaceholderApp.vue'
+import TODOApp from '../components/ApplicationViewComponent/apps/TODO.vue'
 
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
+  'life-habits': TODOApp,
   'music-player': MusicPlayerApp,
   'language-translator': LanguageTranslatorApp,
 }

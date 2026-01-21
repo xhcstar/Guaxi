@@ -295,6 +295,23 @@ async fn main() {
             commands::flipboard::get_featured_articles,
             commands::flipboard::get_recommendations,
             commands::flipboard::get_popular_articles,
+            commands::todo::todo_init,
+            commands::todo::todo_get_snapshot,
+            commands::todo::todo_upsert_list,
+            commands::todo::todo_delete_list,
+            commands::todo::todo_reorder_lists,
+            commands::todo::todo_upsert_task,
+            commands::todo::todo_delete_task,
+            commands::todo::todo_set_task_completed,
+            commands::todo::todo_toggle_task_important,
+            commands::todo::todo_set_task_myday,
+            commands::todo::todo_set_task_due_date,
+            commands::todo::todo_set_task_repeat_rule,
+            commands::todo::todo_set_task_notes,
+            commands::todo::todo_upsert_step,
+            commands::todo::todo_delete_step,
+            commands::todo::todo_reorder_steps,
+            commands::todo::todo_search_tasks,
         ])
         .setup(move |app| {
             shared_state.set_app_handle(app.handle().clone());
