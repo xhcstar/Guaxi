@@ -2303,7 +2303,7 @@ const initEditor = () => {
     fontLigatures: true,
     // wrappingIndent: 'indent',  // 换行缩进
     renderWhitespace: 'selection',  // 选中时显示空白字符
-    renderLineHighlight: 'all',  // 高亮当前行
+    renderLineHighlight: 'line',  // 高亮当前行
     lineHeight: 24,  // 行高
     padding: {
       top: 8,  // 顶部内边距
@@ -4091,7 +4091,14 @@ const updateTableToolbar = () => {
   const wrapperRect = wrapperEl.getBoundingClientRect();
   const editorRect = editorEl.getBoundingClientRect();
 
-  const anchorPos = new monaco.Position(ctx.startLine, 1);
+  const leftBase = editorRect.left - wrapperRect.left;
+  const topBase = editorRect.top - wrapperRect.top;
+
+  const cursorPos = editor.getPosition();
+  const anchorPos = cursorPos
+    ? new monaco.Position(cursorPos.lineNumber, cursorPos.column)
+    : new monaco.Position(ctx.startLine, 1);
+
   const visiblePos = editor.getScrolledVisiblePosition(anchorPos);
   if (!visiblePos) {
     tableToolbarVisible.value = false;
@@ -4103,10 +4110,41 @@ const updateTableToolbar = () => {
   const headerHeight = headerEl ? headerEl.getBoundingClientRect().height : 0;
   const minTop = headerHeight + 8;
 
+  const toolbarH = 36;
+  const toolbarW = 320;
+  const gap = 8;
+
+  const preferTop = topBase + visiblePos.top - toolbarH - gap;
+  const fallbackTop = topBase + visiblePos.top + visiblePos.height + gap;
+  const top = preferTop >= minTop ? preferTop : fallbackTop;
+  const clampedTop = Math.min(
+    Math.max(minTop, top),
+    Math.max(minTop, wrapperRect.height - toolbarH - 8)
+  );
+
+  const layout = editor.getLayoutInfo ? editor.getLayoutInfo() : null;
+  const contentLeft = layout && Number.isFinite(layout.contentLeft) ? layout.contentLeft : 0;
+  const minLeft = Math.max(8, leftBase + contentLeft);
+
+  const left = leftBase + visiblePos.left;
+  const clampedLeft = Math.min(
+    Math.max(minLeft, left),
+    Math.max(minLeft, wrapperRect.width - toolbarW - 8)
+  );
+
   tableToolbarStyle.value = {
-    left: `${Math.max(8, editorRect.left - wrapperRect.left + 8)}px`,
-    top: `${Math.max(minTop, editorRect.top - wrapperRect.top + visiblePos.top - 36)}px`
+    left: `${clampedLeft}px`,
+    top: `${clampedTop}px`
   };
+
+  if (isTableAutoFormatDebug()) {
+    console.debug('[MarkdownTable] toolbar', {
+      left: clampedLeft,
+      top: clampedTop,
+      contentLeft,
+      anchor: { lineNumber: anchorPos.lineNumber, column: anchorPos.column },
+    });
+  }
 
   activeTableContext.value = ctx;
   tableToolbarVisible.value = true;
