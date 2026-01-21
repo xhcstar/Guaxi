@@ -404,7 +404,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick, provide, h } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onActivated, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -5023,7 +5023,46 @@ const destroyRealtimeVditor = () => {
   }
 };
 
+const normalizeHomePreviewModeKey = (key) => {
+  const k = String(key || '').trim().toLowerCase();
+  return ['edit', 'preview', 'split', 'realtime'].includes(k) ? k : 'edit';
+};
+
+const getHomePreviewModeKeyFromState = () => {
+  if (previewMode.value === 'toggle') {
+    return mode.value === 'preview' ? 'preview' : 'edit';
+  }
+  return normalizeHomePreviewModeKey(previewMode.value);
+};
+
+const setHomePreviewModeKeySafe = (key) => {
+  const next = normalizeHomePreviewModeKey(key);
+
+  const setter = editorStore?.setHomePreviewModeKey;
+  if (typeof setter === 'function') {
+    try {
+      setter.call(editorStore, next);
+      return;
+    } catch (e) {
+      console.warn('[Editor] setHomePreviewModeKey failed, fallback to direct write', e);
+    }
+  } else {
+    console.warn('[Editor] editorStore.setHomePreviewModeKey is not a function, fallback to direct write', {
+      type: typeof setter,
+      key: next,
+    });
+  }
+
+  try {
+    editorStore.homePreviewModeKey = next;
+  } catch (e) {
+    console.error('[Editor] fallback write homePreviewModeKey failed', e);
+  }
+};
+
 const handlePreviewModeSelect = async (key) => {
+  const desiredKey = normalizeHomePreviewModeKey(key);
+
   if (previewMode.value === 'realtime') {
     captureScrollPosition();
     if (realtimeVditor) {
@@ -5035,33 +5074,38 @@ const handlePreviewModeSelect = async (key) => {
     }
   }
 
-  if (key === 'edit') {
+  if (desiredKey === 'edit') {
+    setHomePreviewModeKeySafe('edit');
     previewMode.value = 'toggle';
     await setMainMode('edit');
     return;
   }
 
-  if (key === 'preview') {
+  if (desiredKey === 'preview') {
     if (!canPreview.value) {
       message.warning('仅 Markdown 文件支持预览');
+      setHomePreviewModeKeySafe('edit');
       previewMode.value = 'toggle';
       await setMainMode('edit');
       return;
     }
+    setHomePreviewModeKeySafe('preview');
     previewMode.value = 'toggle';
     await setMainMode('preview');
     return;
   }
 
-  if (key === 'split') {
+  if (desiredKey === 'split') {
     if (!canPreview.value) {
       message.warning('仅 Markdown 文件支持预览');
+      setHomePreviewModeKeySafe('edit');
       previewMode.value = 'toggle';
       await setMainMode('edit');
       renderedHtml.value = '';
       return;
     }
 
+    setHomePreviewModeKeySafe('split');
     previewMode.value = 'split';
     await setMainMode('edit');
     await nextTick();
@@ -5069,20 +5113,31 @@ const handlePreviewModeSelect = async (key) => {
     return;
   }
 
-  if (key === 'realtime') {
+  if (desiredKey === 'realtime') {
     if (!canPreview.value) {
       message.warning('仅 Markdown 文件支持预览');
+      setHomePreviewModeKeySafe('edit');
       previewMode.value = 'toggle';
       await setMainMode('edit');
       renderedHtml.value = '';
       return;
     }
 
+    setHomePreviewModeKeySafe('realtime');
     captureScrollPosition();
     pendingRealtimeScrollRestore.value = true;
     previewMode.value = 'realtime';
     await setMainMode('edit');
   }
+};
+
+const restoreHomePreviewMode = async (from = 'mounted') => {
+  const desiredKey = normalizeHomePreviewModeKey(editorStore.homePreviewModeKey);
+  const currentKey = getHomePreviewModeKeyFromState();
+  if (currentKey === desiredKey) return;
+
+  console.debug('[Editor] restoreHomePreviewMode', { from, desiredKey, currentKey });
+  await handlePreviewModeSelect(desiredKey);
 };
 
 watch(previewMode, async (nextMode, prevMode) => {
@@ -5671,11 +5726,17 @@ onMounted(() => {
   outlineStore.setJumpToLine(jumpToLine)
   initGitService()
 
+  restoreHomePreviewMode('mounted')
+
   const intervalMs = Number(editorStore.autoSaveIntervalMs) || AUTO_SAVE_FALLBACK_INTERVAL_MS
   if (editorStore.autoSaveEnabled !== false && intervalMs > 0) {
     autoSaveTimerId = window.setInterval(autoSaveDirtyTabs, intervalMs)
   }
 });
+
+onActivated(() => {
+  restoreHomePreviewMode('activated')
+})
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);

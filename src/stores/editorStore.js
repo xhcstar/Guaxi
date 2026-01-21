@@ -33,6 +33,9 @@ export const useEditorStore = defineStore("editor", {
       deleted: 0,
     },
     gitBranch: "", // 当前 Git 分支
+
+    // Home 编辑器预览模式：用于页面切换/组件重建后恢复（edit/preview/split/realtime）
+    homePreviewModeKey: "edit",
   }),
   actions: {
     // 检查文件是否处于激活状态
@@ -68,6 +71,15 @@ export const useEditorStore = defineStore("editor", {
         this.editorInstance.layout();
       }
       console.debug("[EditorStore] Triggering editor update");
+    },
+
+    setHomePreviewModeKey(key) {
+      const k = String(key || "").trim().toLowerCase();
+      const next = ["edit", "preview", "split", "realtime"].includes(k) ? k : "edit";
+      if (this.homePreviewModeKey === next) return;
+
+      this.homePreviewModeKey = next;
+      console.info("[EditorStore] homePreviewModeKey updated", { key: next });
     },
 
     // Git 相关操作
