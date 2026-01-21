@@ -116,11 +116,14 @@ export async function initTextmate(
   editor: monaco.editor.IStandaloneCodeEditor,
   languageId: string
 ) {
-  if (languageId === 'markdown') {
+  const lang = String(languageId || '').trim().toLowerCase()
+
+  if (lang === 'markdown' || lang === 'shell') {
+    console.info('[TextMate] skipped', { languageId: lang })
     return
   }
 
-  const scopeName = languageScopeMap.get(languageId)
+  const scopeName = languageScopeMap.get(lang)
   if (!scopeName) {
     return
   }
@@ -129,9 +132,14 @@ export async function initTextmate(
 
   // 所有开启 TextMate 的语言
   const grammars = new Map<string, string>()
-  for (const [lang, scope] of languageScopeMap.entries()) {
-    grammars.set(lang, scope)
+  for (const [k, scope] of languageScopeMap.entries()) {
+    grammars.set(k, scope)
   }
 
-  await wireTmGrammars(monaco, registry, grammars, editor)
+  try {
+    await wireTmGrammars(monaco, registry, grammars, editor)
+    console.debug('[TextMate] wired', { languageId: lang, scopeName })
+  } catch (e) {
+    console.warn('[TextMate] wire failed, fallback to Monaco default', { languageId: lang, scopeName }, e)
+  }
 }

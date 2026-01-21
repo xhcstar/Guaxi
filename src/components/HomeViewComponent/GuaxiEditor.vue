@@ -2337,7 +2337,9 @@ const initEditor = () => {
     .then((result) => {
       const enableLspSyntaxHighlight = !!result
       if (enableLspSyntaxHighlight) {
-        initTextmate(editor, language);
+        initTextmate(editor, language).catch((e) => {
+          console.warn('[Editor] initTextmate failed, ignored', { language }, e)
+        })
         initLspClient(editor, language, selectedFile.value?.path || '');
       }
     })
