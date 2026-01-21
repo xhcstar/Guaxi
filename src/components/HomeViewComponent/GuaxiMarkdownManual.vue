@@ -226,6 +226,10 @@ const renderMermaidIn = async (rootEl) => {
 
   try {
     const { default: mermaid } = await import('mermaid')
+    try {
+      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' })
+    } catch {
+    }
     await mermaid.run({ nodes })
     console.info('[MarkdownManual] mermaid rendered:', { nodes: nodes.length })
   } catch (e) {
@@ -421,6 +425,26 @@ watch(normalizedTheme, async () => {
   font-size: var(--markdown-manual-preview-font-size, 17px);
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
   line-height: 1.5;
+}
+
+.markdown-manual-card-preview .markdown-manual-card-body :deep(a),
+.markdown-manual-card-preview .markdown-manual-card-body :deep(a:visited) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dark-mode .markdown-manual-card-preview .markdown-manual-card-body :deep(a),
+.dark-mode .markdown-manual-card-preview .markdown-manual-card-body :deep(a:visited),
+.dark .markdown-manual-card-preview .markdown-manual-card-body :deep(a),
+.dark .markdown-manual-card-preview .markdown-manual-card-body :deep(a:visited),
+:root[data-guaxi-theme='dark'] .markdown-manual-card-preview .markdown-manual-card-body :deep(a),
+:root[data-guaxi-theme='dark'] .markdown-manual-card-preview .markdown-manual-card-body :deep(a:visited) {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.markdown-manual-card-preview .markdown-manual-card-body :deep(a:hover) {
+  opacity: 0.92;
 }
 
 .markdown-manual-card-preview .markdown-manual-card-body :deep(code) {

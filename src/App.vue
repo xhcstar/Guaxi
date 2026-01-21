@@ -220,6 +220,12 @@ pre::-webkit-scrollbar-track,
 }
 
 :root[data-guaxi-theme='dark'] .mermaid {
-  background-color: var(--guaxi-panel-bg) !important;
+  background-color: #ffffff !important;
+  color: #1f2328 !important;
+  border: 1px solid var(--guaxi-border) !important;
+}
+
+:root[data-guaxi-theme='dark'] .mermaid svg {
+  background-color: #ffffff !important;
 }
 </style>

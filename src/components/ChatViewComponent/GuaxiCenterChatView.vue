@@ -1058,9 +1058,31 @@ const setMessageRef = (el, index) => {
   ;
 }
 
+/* Markdown链接样式（与 GuaxiEditor 保持一致） */
+.message-content a,
+.message-content a:visited {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dark-mode .message-content a,
+.dark-mode .message-content a:visited,
+.dark .message-content a,
+.dark .message-content a:visited,
+:root[data-guaxi-theme='dark'] .message-content a,
+:root[data-guaxi-theme='dark'] .message-content a:visited {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.message-content a:hover {
+  opacity: 0.92;
+}
+
 /* Mermaid图表样式 */
 .mermaid {
-  background-color: var(--guaxi-panel-bg);
+  background-color: #ffffff;
+  color: #1f2328;
   border-radius: 8px;
   padding: 16px;
   margin: 1em 0;
@@ -1069,8 +1091,8 @@ const setMessageRef = (el, index) => {
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
 }
 
-:root[data-guaxi-theme='dark'] .mermaid {
-  background-color: var(--guaxi-panel-bg);
+:root[data-guaxi-theme='dark'] .mermaid svg {
+  background-color: #ffffff;
 }
 
 /* 代码块样式 */

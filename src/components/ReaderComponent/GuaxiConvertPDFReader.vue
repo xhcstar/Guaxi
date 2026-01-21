@@ -4732,6 +4732,26 @@ button:disabled {
   cursor: text;
 }
 
+.markdown-content :deep(a),
+.markdown-content :deep(a:visited) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dark-mode .markdown-content :deep(a),
+.dark-mode .markdown-content :deep(a:visited),
+.dark .markdown-content :deep(a),
+.dark .markdown-content :deep(a:visited),
+:root[data-guaxi-theme='dark'] .markdown-content :deep(a),
+:root[data-guaxi-theme='dark'] .markdown-content :deep(a:visited) {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.markdown-content :deep(a:hover) {
+  opacity: 0.92;
+}
+
 /* 52. Markdown元素样式 */
 .markdown-content :deep(p),
 .markdown-content :deep(h1),
@@ -5508,82 +5528,14 @@ button:disabled {
 
 /* 72. Mermaid图表全局样式 */
 .mermaid {
-  background-color: white;
+  background-color: #ffffff;
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 8px;
   padding: 16px;
   margin: 1em 0;
   text-align: center;
+  color: #1f2328;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-}
-
-.dark .mermaid,
-.dark-mode .mermaid {
-  background-color: #1f242d;
-  border-color: #4b5563;
-  color: #e6edf3;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-}
-
-.dark .mermaid svg,
-.dark-mode .mermaid svg {
-  background: transparent !important;
-}
-
-.dark .mermaid svg,
-.dark-mode .mermaid svg {
-  color: #e6edf3 !important;
-}
-
-.dark .mermaid svg text,
-.dark .mermaid svg tspan,
-.dark-mode .mermaid svg text,
-.dark-mode .mermaid svg tspan {
-  fill: #e6edf3 !important;
-  paint-order: stroke;
-  stroke: rgba(0, 0, 0, 0.65);
-  stroke-width: 1.6px;
-  stroke-linejoin: round;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65)) drop-shadow(0 0 1px rgba(255, 255, 255, 0.35));
-}
-
-.dark .mermaid svg foreignObject,
-.dark .mermaid svg foreignObject *,
-.dark-mode .mermaid svg foreignObject,
-.dark-mode .mermaid svg foreignObject * {
-  color: #e6edf3 !important;
-}
-
-.dark .mermaid svg path,
-.dark .mermaid svg line,
-.dark .mermaid svg polyline,
-.dark .mermaid svg polygon,
-.dark .mermaid svg rect,
-.dark .mermaid svg circle,
-.dark .mermaid svg ellipse,
-.dark-mode .mermaid svg path,
-.dark-mode .mermaid svg line,
-.dark-mode .mermaid svg polyline,
-.dark-mode .mermaid svg polygon,
-.dark-mode .mermaid svg rect,
-.dark-mode .mermaid svg circle,
-.dark-mode .mermaid svg ellipse {
-  stroke: #c9d1d9 !important;
-}
-
-.dark .mermaid svg marker path,
-.dark-mode .mermaid svg marker path {
-  fill: #c9d1d9 !important;
-  stroke: #c9d1d9 !important;
-}
-
-.dark .mermaid svg.sankey,
-.dark-mode .mermaid svg.sankey,
-.dark .mermaid svg[id*="sankey"],
-.dark-mode .mermaid svg[id*="sankey"],
-.dark .mermaid svg [class*="sankey"],
-.dark-mode .mermaid svg [class*="sankey"] {
-  filter: brightness(1.22) saturate(1.12);
 }
 
 /* 73. 代码块全局样式 */

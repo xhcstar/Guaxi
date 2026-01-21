@@ -245,42 +245,16 @@ export const renderMarkdown = async (content, options) => {
         !!document?.documentElement?.classList?.contains?.("dark") ||
         !!document?.documentElement?.classList?.contains?.("dark-mode");
       const isDark = String(theme || "").trim().toLowerCase() === "dark" || fromDom;
+      const keepMermaidLight = true;
 
       mermaid.initialize({
         startOnLoad: false,
-        theme: isDark ? "dark" : "default",
+        theme: keepMermaidLight ? "default" : isDark ? "dark" : "default",
         securityLevel: "loose",
-        ...(isDark
+        ...(keepMermaidLight
           ? {
               themeVariables: {
-                darkMode: true,
-                background: "transparent",
-                fontFamily:
-                  "Maple Mono NF CN, JetBrainsMono Nerd Font Mono, Consolas, monospace, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif",
-
-                textColor: "#e6edf3",
-                primaryTextColor: "#e6edf3",
-                secondaryTextColor: "#e6edf3",
-                titleColor: "#e6edf3",
-
-                mainBkg: "#2b3442",
-                secondBkg: "#313c4d",
-                tertiaryColor: "#364152",
-
-                primaryBorderColor: "#9aa4b2",
-                secondaryBorderColor: "#9aa4b2",
-                tertiaryBorderColor: "#9aa4b2",
-
-                lineColor: "#c9d1d9",
-                clusterBkg: "#1b2230",
-                clusterBorder: "#9aa4b2",
-                edgeLabelBackground: "#111827",
-
-                noteBkgColor: "#2b3442",
-                noteTextColor: "#e6edf3",
-                actorBkg: "#2b3442",
-                actorBorder: "#9aa4b2",
-                actorTextColor: "#e6edf3",
+                background: "#ffffff",
               },
             }
           : {}),
