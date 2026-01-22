@@ -69,7 +69,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, watch, onUnmounted, computed } from 'vue'
+import { ref, onUnmounted, computed } from 'vue'
 import { NButton, NSpin, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import pinIcon from '@iconify-icons/lucide/pin'
@@ -188,16 +188,6 @@ const onHeaderMouseDown = (e) => {
   window.addEventListener('mousemove', onMouseMove, true)
   window.addEventListener('mouseup', onMouseUp, true)
 }
-
-watch(
-  () => props.pos,
-  () => {
-    nextTick(() => {
-      updatePos(Number(props.pos?.left ?? 8), Number(props.pos?.top ?? 8))
-    })
-  },
-  { deep: true }
-)
 
 onUnmounted(() => {
   onMouseUp()

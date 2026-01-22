@@ -575,6 +575,9 @@ const selectionTranslateResult = ref('');
 const selectionTranslateError = ref('');
 const selectionTranslateItems = ref([]);
 
+const selectionTranslateMultiAvailable = ref(true)
+let selectionTranslateMultiNotFoundWarned = false
+
 watch(floatingToolbarVisible, (show) => {
   if (!show && !selectionTranslatePinned.value) selectionTranslatePanelVisible.value = false;
 });
@@ -3674,6 +3677,10 @@ const handleSelectionTranslatePanelUpdatePos = (pos) => {
   const left = Number(pos.left);
   const top = Number(pos.top);
   if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+
+  const cur = selectionTranslatePanelPos.value
+  if (cur && Number(cur.left) === left && Number(cur.top) === top) return
+
   selectionTranslatePanelPos.value = { left, top };
 };
 
@@ -3733,12 +3740,13 @@ const translateSelectionText = async () => {
   console.info('[SelectionTranslate] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value });
 
   try {
-    try {
-      const response = await invoke('selection_translate_free_multi', {
-        text,
-        from: selectionTranslateFrom.value,
-        to: selectionTranslateTo.value
-      });
+    if (selectionTranslateMultiAvailable.value) {
+      try {
+        const response = await invoke('selection_translate_free_multi', {
+          text,
+          from: selectionTranslateFrom.value,
+          to: selectionTranslateTo.value
+        });
 
       const items = Array.isArray(response?.items) ? response.items : []
       selectionTranslateItems.value = items.map((it) => ({
@@ -3756,10 +3764,20 @@ const translateSelectionText = async () => {
         return
       }
 
-      const err = String(response?.error || '翻译结果为空')
-      throw new Error(err)
-    } catch (err) {
-      console.warn('[SelectionTranslate] multi failed, fallback to single:', err)
+        const err = String(response?.error || '翻译结果为空')
+        throw new Error(err)
+      } catch (err) {
+        const msg = String(err?.message || err || '')
+        if (msg.includes('selection_translate_free_multi') && msg.toLowerCase().includes('not found')) {
+          selectionTranslateMultiAvailable.value = false
+          if (!selectionTranslateMultiNotFoundWarned) {
+            selectionTranslateMultiNotFoundWarned = true
+            console.warn('[SelectionTranslate] multi command not found, disabled multi path. Please restart tauri backend.')
+          }
+        } else {
+          console.warn('[SelectionTranslate] multi failed, fallback to single:', err)
+        }
+      }
     }
 
     const response = await invoke('translate_text_free', { texts: [text] });
