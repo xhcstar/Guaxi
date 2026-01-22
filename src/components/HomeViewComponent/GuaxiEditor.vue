@@ -377,7 +377,23 @@
             </template>
             引用
           </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" :disabled="selectionTranslateBusy" @click="openSelectionTranslatePanel">
+                <Icon :icon="languagesIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            翻译
+          </n-tooltip>
         </div>
+
+        <GuaxiSelectionTranslatePanel v-if="selectionTranslatePanelVisible" :pos="selectionTranslatePanelPos"
+          :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
+          :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" @translate="translateSelectionText"
+          @copy="copySelectionTranslateResult" @toggle-pin="toggleSelectionTranslatePinned"
+          @update:pos="handleSelectionTranslatePanelUpdatePos" @close="closeSelectionTranslatePanel" />
+
         <div class="editor-split-wrapper" :class="[layoutMode, { 'vim-enabled': vimMode }]">
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
@@ -409,6 +425,7 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
+import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
@@ -438,6 +455,7 @@ import filePenLineIcon from '@iconify-icons/lucide/file-edit'
 import eyeIcon from '@iconify-icons/lucide/eye'
 import columns2Icon from '@iconify-icons/lucide/columns'
 import bookOpenIcon from '@iconify-icons/lucide/book-open'
+import languagesIcon from '@iconify-icons/lucide/languages'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
 import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
@@ -522,6 +540,19 @@ const editorWrapperRef = ref(null);
 const editorHeaderRef = ref(null);
 const floatingToolbarVisible = ref(false);
 const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
+
+const selectionTranslatePanelVisible = ref(false);
+const selectionTranslatePinned = ref(false);
+const selectionTranslatePanelPos = ref({ left: 8, top: 8 });
+
+const selectionTranslateBusy = ref(false);
+const selectionTranslateRaw = ref('');
+const selectionTranslateResult = ref('');
+const selectionTranslateError = ref('');
+
+watch(floatingToolbarVisible, (show) => {
+  if (!show && !selectionTranslatePinned.value) selectionTranslatePanelVisible.value = false;
+});
 
 const editorContextMenuVisible = ref(false);
 const editorContextMenuPosition = ref({ x: 0, y: 0 });
@@ -3186,7 +3217,7 @@ const setupEditorListeners = () => {
     const clampedTop = Math.min(Math.max(minTop, top), Math.max(minTop, wrapperRect.height - toolbarH - 8));
 
     const left = leftBase + selLeft;
-    const clampedLeft = Math.min(Math.max(8, left), Math.max(8, wrapperRect.width - 260));
+    const clampedLeft = Math.min(Math.max(8, left), Math.max(8, wrapperRect.width - 310));
 
     floatingToolbarStyle.value = {
       left: `${clampedLeft}px`,
@@ -3603,6 +3634,98 @@ const toggleLinePrefix = (prefix, pattern, buildLine) => {
 
 const toggleBlockquote = () => {
   toggleLinePrefix('> ', /^>\s+/, null);
+};
+
+const getSelectedTextForTranslate = () => {
+  if (!editor) return '';
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection || selection.isEmpty()) return '';
+  return model.getValueInRange(selection) || '';
+};
+
+const handleSelectionTranslatePanelUpdatePos = (pos) => {
+  if (!pos) return;
+  const left = Number(pos.left);
+  const top = Number(pos.top);
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+  selectionTranslatePanelPos.value = { left, top };
+};
+
+const toggleSelectionTranslatePinned = () => {
+  selectionTranslatePinned.value = !selectionTranslatePinned.value;
+  console.info('[SelectionTranslate] pin:', { pinned: selectionTranslatePinned.value });
+};
+
+const closeSelectionTranslatePanel = () => {
+  selectionTranslatePanelVisible.value = false;
+  selectionTranslatePinned.value = false;
+};
+
+const openSelectionTranslatePanel = async () => {
+  const text = getSelectedTextForTranslate().trim();
+  if (!text) {
+    message.warning('请先框选要翻译的文本');
+    return;
+  }
+
+  const left = Number.parseFloat(String(floatingToolbarStyle.value?.left || ''));
+  const top = Number.parseFloat(String(floatingToolbarStyle.value?.top || ''));
+  const nextLeft = Number.isFinite(left) ? left : 8;
+  const nextTop = Number.isFinite(top) ? top + 44 : 52;
+  selectionTranslatePanelPos.value = { left: nextLeft, top: nextTop };
+  selectionTranslatePanelVisible.value = true;
+
+  await translateSelectionText();
+};
+
+const translateSelectionText = async () => {
+  const text = getSelectedTextForTranslate().trim();
+  if (!text) {
+    message.warning('请先框选要翻译的文本');
+    return;
+  }
+
+  if (selectionTranslateBusy.value) return;
+
+  selectionTranslateRaw.value = text;
+  selectionTranslateResult.value = '';
+  selectionTranslateError.value = '';
+  selectionTranslateBusy.value = true;
+
+  console.info('[SelectionTranslate] start', { len: text.length });
+
+  try {
+    const response = await invoke('translate_text_free', { texts: [text] });
+    const translated = (response?.translated_texts?.[0] || '').toString();
+
+    if (!translated.trim() || translated.includes('[Translation Failed]')) {
+      const err = String(response?.error || '翻译结果为空');
+      throw new Error(err);
+    }
+
+    selectionTranslateResult.value = translated;
+    console.info('[SelectionTranslate] success', { len: translated.length });
+  } catch (err) {
+    const msg = String(err?.message || err || '翻译失败');
+    selectionTranslateError.value = msg;
+    console.error('[SelectionTranslate] failed:', err);
+    message.error(`翻译失败: ${msg}`);
+  } finally {
+    selectionTranslateBusy.value = false;
+  }
+};
+
+const copySelectionTranslateResult = async () => {
+  const text = String(selectionTranslateResult.value || '');
+  if (!text) return;
+
+  const ok = await writeClipboardText(text);
+  if (ok) {
+    message.success('已复制译文', { duration: 1200 });
+  } else {
+    message.warning('复制失败：无剪贴板权限');
+  }
 };
 
 const toggleUnorderedList = () => {
@@ -5849,6 +5972,7 @@ onUnmounted(() => {
   height: 22px;
   border-radius: 6px;
 }
+
 
 .floating-table-toolbar {
   position: absolute;
