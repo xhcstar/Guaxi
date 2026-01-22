@@ -158,9 +158,19 @@
               <n-icon :component="AddOutline" />
             </button>
           </div>
+        </div>
 
-          <div v-if="selectionBusy" class="selection-toolbar-body selection-toolbar-loading">正在翻译...</div>
-          <div v-else-if="selectionInsertText" class="selection-toolbar-body" v-html="selectionPreviewHtml"></div>
+        <div v-if="selectionTranslatePanelVisible" class="selection-translate-layer">
+          <div class="selection-translate-layer-inner">
+            <GuaxiSelectionTranslatePanel :pos="selectionTranslatePanelPos" :raw="selectionTranslateRaw"
+              :result="selectionTranslateResult" :error="selectionTranslateError" :busy="selectionTranslateBusy"
+              :pinned="selectionTranslatePinned" :items="selectionTranslateItems" :from-lang="selectionTranslateFrom"
+              :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions"
+              @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
+              @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
+              @translate="translateSelectionText" @copy="copySelectionTranslateResult" @toggle-pin="toggleSelectionTranslatePinned"
+              @update:pos="handleSelectionTranslatePanelUpdatePos" @close="closeSelectionTranslatePanel" />
+          </div>
         </div>
 
       </div>
@@ -254,6 +264,7 @@ import { NCard, NButton, NIcon, NText, useMessage, NDropdown } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
 import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
+import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import {
   ArrowBackOutline,
   ArrowForwardOutline,
@@ -482,11 +493,63 @@ const selectionText = ref('')
 const selectionBusy = ref(false)
 const selectionInsertText = ref('')
 
+const selectionTranslatePanelVisible = ref(false)
+const selectionTranslatePinned = ref(false)
+const selectionTranslatePanelPos = ref({ left: 8, top: 8 })
+
+const selectionTranslateFrom = ref('auto')
+const selectionTranslateTo = ref('zh')
+
+const selectionTranslateLangOptions = [
+  { label: '自动检测', value: 'auto' },
+  { label: '中文', value: 'zh' },
+  { label: '英文', value: 'en' },
+  { label: '日文', value: 'ja' },
+  { label: '韩文', value: 'ko' },
+  { label: '法文', value: 'fr' },
+  { label: '德文', value: 'de' },
+  { label: '西班牙语', value: 'es' },
+  { label: '俄语', value: 'ru' },
+  { label: '葡萄牙语', value: 'pt' },
+  { label: '意大利语', value: 'it' },
+  { label: '荷兰语', value: 'nl' },
+  { label: '越南语', value: 'vi' },
+  { label: '泰语', value: 'th' }
+]
+
+const selectionTranslateBusy = ref(false)
+const selectionTranslateRaw = ref('')
+const selectionTranslateResult = ref('')
+const selectionTranslateError = ref('')
+const selectionTranslateItems = ref([])
+
+const selectionTranslateMultiAvailable = ref(true)
+let selectionTranslateMultiNotFoundWarned = false
+
+let selectionTranslateScheduleTimer = null
+const scheduleSelectionTranslate = () => {
+  if (!selectionTranslatePanelVisible.value) return
+  if (selectionTranslateBusy.value) return
+
+  const raw = String(selectionTranslateRaw.value || '').trim()
+  if (!raw) return
+
+  clearTimeout(selectionTranslateScheduleTimer)
+  selectionTranslateScheduleTimer = setTimeout(() => {
+    translateSelectionText(raw)
+  }, 250)
+}
+
+watch([selectionTranslateFrom, selectionTranslateTo], ([from, to], [prevFrom, prevTo]) => {
+  if (!selectionTranslatePanelVisible.value) return
+  if (from === prevFrom && to === prevTo) return
+  scheduleSelectionTranslate()
+})
+
 const selectionPreviewHtml = computed(() => {
   const v = selectionInsertText.value.trim()
   return v ? md.render(v) : ''
 })
-
 
 const isSelectionDebug = () => {
   try {
@@ -500,6 +563,52 @@ const isSelectionDebug = () => {
 const selDlog = (...args) => {
   if (!isSelectionDebug()) return
   console.log('[Selection][MarkdownReader]', ...args)
+}
+
+const handleSelectionTranslatePanelUpdatePos = (pos) => {
+  if (!pos) return
+  const left = Number(pos.left)
+  const top = Number(pos.top)
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return
+
+  const cur = selectionTranslatePanelPos.value
+  if (cur && Number(cur.left) === left && Number(cur.top) === top) return
+
+  selectionTranslatePanelPos.value = { left, top }
+}
+
+const toggleSelectionTranslatePinned = () => {
+  selectionTranslatePinned.value = !selectionTranslatePinned.value
+  console.info('[SelectionTranslate][MarkdownReader] pin:', { pinned: selectionTranslatePinned.value })
+}
+
+const swapSelectionTranslateLangs = () => {
+  const tmp = selectionTranslateFrom.value
+  selectionTranslateFrom.value = selectionTranslateTo.value
+  selectionTranslateTo.value = tmp
+  console.info('[SelectionTranslate][MarkdownReader] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+
+  if (selectionTranslatePanelVisible.value && !selectionTranslateBusy.value) {
+    translateSelectionText(selectionTranslateRaw.value)
+  }
+}
+
+const closeSelectionTranslatePanel = () => {
+  selectionTranslatePanelVisible.value = false
+  selectionTranslatePinned.value = false
+}
+
+const copySelectionTranslateResult = async (payload) => {
+  const t = typeof payload === 'string' ? payload : payload?.text
+  const text = String(t || selectionTranslateResult.value || '')
+  if (!text) return
+
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success('已复制译文', { duration: 1200 })
+  } catch {
+    message.warning('复制失败：无剪贴板权限')
+  }
 }
 
 const inPageSearchVisible = ref(false)
@@ -1458,27 +1567,128 @@ const insertIntoActiveNoteEditor = (text) => {
   return false
 }
 
-const translateSelection = async () => {
+const openSelectionTranslatePanel = async () => {
   const text = selectionText.value.trim()
   if (!text) return
 
+  const pw = window.innerWidth
+  const ph = window.innerHeight
+
+  const pad = 8
+  const panelW = 360
+  const panelH = 260
+  const maxLeft = Math.max(pad, pw - panelW - pad)
+  const maxTop = Math.max(pad, ph - panelH - pad)
+
+  const baseLeft = Number(selectionToolbarLeft.value)
+  const baseTop = Number(selectionToolbarTop.value)
+
+  const nextLeft = Number.isFinite(baseLeft) ? baseLeft : pad
+  const nextTop = Number.isFinite(baseTop) ? baseTop + 44 : 52
+
+  selectionTranslatePanelPos.value = {
+    left: Math.min(Math.max(pad, nextLeft), maxLeft),
+    top: Math.min(Math.max(pad, nextTop), maxTop)
+  }
+
+  selectionTranslatePanelVisible.value = true
+
+  await translateSelectionText(text)
+}
+
+const translateSelectionText = async (overrideText) => {
+  const text = String((overrideText ?? selectionText.value) || '').trim()
+  if (!text) return
+
+  if (selectionTranslateBusy.value) return
+
   selectionBusy.value = true
+  selectionTranslateBusy.value = true
+  selectionTranslateRaw.value = text
+  selectionTranslateResult.value = ''
+  selectionTranslateError.value = ''
+  selectionTranslateItems.value = []
+
+  console.info('[SelectionTranslate][MarkdownReader] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+
   try {
-    const response = await invoke('translate_text_free', { texts: [text] })
-    const translated = response?.translated_texts?.[0] || ''
-    if (!translated.trim()) {
-      message.error('翻译结果为空')
-      selectionInsertText.value = ''
-      return
+    if (selectionTranslateMultiAvailable.value) {
+      try {
+        const response = await invoke('selection_translate_free_multi', {
+          text,
+          from: selectionTranslateFrom.value,
+          to: selectionTranslateTo.value
+        })
+
+        const items = Array.isArray(response?.items) ? response.items : []
+        selectionTranslateItems.value = items.map((it) => ({
+          engine: String(it?.engine || ''),
+          success: Boolean(it?.success),
+          text: String(it?.text || ''),
+          error: it?.error ? String(it.error) : ''
+        }))
+
+        const primary = selectionTranslateItems.value.find((it) => it.success && String(it.text || '').trim())
+        if (primary) {
+          const translated = String(primary.text || '')
+          selectionTranslateResult.value = translated
+          selectionTranslateError.value = ''
+          selectionInsertText.value = `**${text}**\n\n${translated}`
+          console.info('[SelectionTranslate][MarkdownReader] multi success', { engines: selectionTranslateItems.value.length })
+          return
+        }
+
+        const err = String(response?.error || '翻译结果为空')
+        throw new Error(err)
+      } catch (err) {
+        const msg = String(err?.message || err || '')
+        if (msg.includes('selection_translate_free_multi') && msg.toLowerCase().includes('not found')) {
+          selectionTranslateMultiAvailable.value = false
+          if (!selectionTranslateMultiNotFoundWarned) {
+            selectionTranslateMultiNotFoundWarned = true
+            console.warn('[SelectionTranslate][MarkdownReader] multi command not found, disabled multi path. Please restart tauri backend.')
+          }
+        } else {
+          console.warn('[SelectionTranslate][MarkdownReader] multi failed, fallback to single:', err)
+        }
+      }
     }
 
+    const response = await invoke('translate_text_free', {
+      texts: [text],
+      from: selectionTranslateFrom.value,
+      to: selectionTranslateTo.value
+    })
+
+    const translated = (response?.translated_texts?.[0] || '').toString()
+
+    if (!translated.trim() || translated.includes('[Translation Failed]')) {
+      const err = String(response?.error || '翻译结果为空')
+      throw new Error(err)
+    }
+
+    selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
+    selectionTranslateResult.value = translated
+    selectionTranslateError.value = ''
     selectionInsertText.value = `**${text}**\n\n${translated}`
-  } catch (error) {
-    const msg = typeof error === 'object' ? error.message || error.toString() : String(error)
+    console.info('[SelectionTranslate][MarkdownReader] single success', { len: translated.length })
+  } catch (err) {
+    const msg = String(err?.message || err || '翻译失败')
+    selectionTranslateError.value = msg
+    selectionTranslateItems.value = [{ engine: 'Free', success: false, text: '', error: msg }]
+    selectionTranslateResult.value = ''
+    selectionInsertText.value = ''
+    console.error('[SelectionTranslate][MarkdownReader] failed:', err)
     message.error(`翻译失败: ${msg}`)
   } finally {
+    selectionTranslateBusy.value = false
     selectionBusy.value = false
   }
+}
+
+const translateSelection = async () => {
+  selectionToolbarVisible.value = false
+  await openSelectionTranslatePanel()
 }
 
 const querySelection = () => {
@@ -1580,6 +1790,7 @@ const handleGlobalMouseDown = (e) => {
   }
 
   if (t.closest('.selection-toolbar')) return
+  if (t.closest('.pot-selection-translate-panel')) return
   closeSelectionToolbar()
 }
 
@@ -3154,6 +3365,27 @@ button:disabled {
   backdrop-filter: blur(8px);
   box-shadow: var(--guaxi-header-shadow);
   color: var(--guaxi-text-primary);
+}
+
+.selection-translate-layer {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1150;
+  pointer-events: none;
+}
+
+.selection-translate-layer-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.selection-translate-layer-inner :deep(.pot-selection-translate-panel) {
+  pointer-events: auto;
 }
 
 .selection-toolbar-actions {

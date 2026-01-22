@@ -580,6 +580,7 @@ fn transmart_translate_service<'a>(
     })
 }
 
+#[allow(dead_code)]
 fn bing_dict_translate_service<'a>(
     texts: &'a [String],
     from: &'a str,
@@ -782,6 +783,7 @@ fn bing_dict_translate_service<'a>(
     })
 }
 
+#[allow(dead_code)]
 fn ecdict_translate_service<'a>(
     texts: &'a [String],
     _from: &'a str,
