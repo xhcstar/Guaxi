@@ -1,13 +1,15 @@
 <template>
   <n-config-provider :theme="naiveTheme" :theme-overrides="themeOverrides">
-    <RouterView />
+    <n-message-provider placement="bottom">
+      <RouterView />
+    </n-message-provider>
   </n-config-provider>
 </template>
 
 <script setup>
 import { computed, onMounted } from 'vue'
 import { RouterView } from 'vue-router'
-import { NConfigProvider, darkTheme } from 'naive-ui'
+import { NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import { useSettingsStore } from './stores/settingsStore'
 
 const settingsStore = useSettingsStore()

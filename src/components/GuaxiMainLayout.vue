@@ -15,6 +15,7 @@ import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
+import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
 import NotFound from '../views/NotFound.vue'
 
 const routes = {
@@ -24,6 +25,7 @@ const routes = {
   '/brain': GuaxiBrainPage,
   '/application': GuaxiApplicationPage,
   '/search': GuaxiSearchPage,
+  '/statistics': GuaxiStatisticsPage,
   '/setting': GuaxiSettingPage,
 }
 

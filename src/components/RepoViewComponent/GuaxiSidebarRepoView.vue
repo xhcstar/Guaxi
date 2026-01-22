@@ -48,6 +48,17 @@
         </svg>
       </n-icon>
 
+      <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/statistics' }" @click="navigateTo('/statistics')">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+          <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3v18h18" />
+            <path d="M7 14v4" />
+            <path d="M12 10v8" />
+            <path d="M17 6v12" />
+          </g>
+        </svg>
+      </n-icon>
+
       <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/search' }" @click="navigateTo('/search')">
         <svg t="1735455405203" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
           p-id="10538" width="54" height="54">
