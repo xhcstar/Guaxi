@@ -580,6 +580,279 @@ fn transmart_translate_service<'a>(
     })
 }
 
+fn bing_dict_translate_service<'a>(
+    texts: &'a [String],
+    from: &'a str,
+    _to: &'a str,
+) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
+    Box::pin(async move {
+        let client = Client::builder()
+            .user_agent("Mozilla/5.0")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
+            .build()
+            .map_err(TranslationError::from)?;
+
+        let mut translated_texts = Vec::with_capacity(texts.len());
+
+        for text in texts {
+            let from_norm = normalize_lang_lower(from);
+            let mut detected = from_norm.clone();
+            if detected == "auto" {
+                let t = text.trim_start();
+                if t.chars()
+                    .next()
+                    .map(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+                    .unwrap_or(false)
+                {
+                    detected = "zh-cn".into();
+                } else {
+                    detected = "en-us".into();
+                }
+            }
+            if detected == "auto" {
+                detected = "en-us".into();
+            }
+
+            let url = "https://www.bing.com/api/v6/dictionarywords/search";
+            let response = client
+                .get(url)
+                .query(&[
+                    ("q", text.as_str()),
+                    (
+                        "appid",
+                        "371E7B2AF0F9B84EC491D731DF90A55719C7D209",
+                    ),
+                    ("mkt", "zh-cn"),
+                    ("pname", "bingdict"),
+                ])
+                .send()
+                .await
+                .map_err(TranslationError::from)?;
+
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let response_text = response.text().await.map_err(TranslationError::from)?;
+
+            if !status.is_success() {
+                return Err(TranslationError(format!(
+                    "BingDict HTTP {}: {}",
+                    status.as_u16(),
+                    summarize_body(&response_text)
+                )));
+            }
+            if response_text.trim().is_empty() {
+                return Err(TranslationError("BingDict empty response".into()));
+            }
+            if response_is_probably_html(content_type.as_deref(), &response_text) {
+                return Err(TranslationError(format!(
+                    "BingDict non-JSON response: {}",
+                    summarize_body(&response_text)
+                )));
+            }
+
+            let result: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+                TranslationError(format!(
+                    "BingDict JSON error: {} ({})",
+                    e,
+                    summarize_body(&response_text)
+                ))
+            })?;
+
+            let Some(first) = result
+                .get("value")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+            else {
+                return Err(TranslationError("BingDict missing value[0]".into()));
+            };
+
+            let meaning_groups = first
+                .get("meaningGroups")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            if meaning_groups.is_empty() {
+                return Err(TranslationError("BingDict empty meaningGroups".into()));
+            }
+
+            let mut pronunciations: Vec<String> = Vec::new();
+            let mut explanations: Vec<String> = Vec::new();
+            let mut associations: Vec<String> = Vec::new();
+
+            for g in meaning_groups {
+                let pos = g
+                    .get("partsOfSpeech")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.get(0))
+                    .and_then(|v| v.get("name").and_then(|x| x.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+
+                let fragments = g
+                    .get("meanings")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.get(0))
+                    .and_then(|v| v.get("richDefinitions"))
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.get(0))
+                    .and_then(|v| v.get("fragments"))
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+
+                if fragments.is_empty() {
+                    continue;
+                }
+
+                let mut texts = Vec::new();
+                for f in fragments {
+                    if let Some(t) = f.get("text").and_then(|v| v.as_str()) {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            texts.push(t.to_string());
+                        }
+                    }
+                }
+
+                if texts.is_empty() {
+                    continue;
+                }
+
+                if pos == "en-us" || pos == "zh-cn" {
+                    pronunciations.extend(texts);
+                } else {
+                    explanations.push(format!("{} {}", pos, texts.join(" / ")).trim().to_string());
+                    if texts.len() > 1 {
+                        associations.extend(texts.clone());
+                    }
+                }
+            }
+
+            let mut out = String::new();
+            if !pronunciations.is_empty() {
+                out.push_str("发音\n");
+                for p in pronunciations.iter().take(6) {
+                    out.push_str("- ");
+                    out.push_str(p);
+                    out.push('\n');
+                }
+            }
+            if !explanations.is_empty() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str("释义\n");
+                for e in explanations.iter().take(12) {
+                    out.push_str("- ");
+                    out.push_str(e);
+                    out.push('\n');
+                }
+            }
+            if !associations.is_empty() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str("变形\n");
+                let mut uniq: Vec<String> = Vec::new();
+                for a in associations {
+                    if !uniq.contains(&a) {
+                        uniq.push(a);
+                    }
+                }
+                out.push_str(uniq.join(", ").as_str());
+                out.push('\n');
+            }
+
+            let out = out.trim().to_string();
+            if out.is_empty() {
+                return Err(TranslationError("BingDict empty result".into()));
+            }
+
+            translated_texts.push(out);
+        }
+
+        Ok((translated_texts, "BingDict".into()))
+    })
+}
+
+fn ecdict_translate_service<'a>(
+    texts: &'a [String],
+    _from: &'a str,
+    _to: &'a str,
+) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
+    Box::pin(async move {
+        let client = Client::builder()
+            .user_agent("Mozilla/5.0")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
+            .build()
+            .map_err(TranslationError::from)?;
+
+        let mut translated_texts = Vec::with_capacity(texts.len());
+
+        for text in texts {
+            let response = client
+                .post("https://pot-app.com/api/dict")
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({"text": text}))
+                .send()
+                .await
+                .map_err(TranslationError::from)?;
+
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let response_text = response.text().await.map_err(TranslationError::from)?;
+
+            if !status.is_success() {
+                return Err(TranslationError(format!(
+                    "ECDICT HTTP {}: {}",
+                    status.as_u16(),
+                    summarize_body(&response_text)
+                )));
+            }
+            if response_text.trim().is_empty() {
+                return Err(TranslationError("ECDICT empty response".into()));
+            }
+            if response_is_probably_html(content_type.as_deref(), &response_text) {
+                return Err(TranslationError(format!(
+                    "ECDICT non-JSON response: {}",
+                    summarize_body(&response_text)
+                )));
+            }
+
+            let val: serde_json::Value = serde_json::from_str(&response_text)
+                .unwrap_or_else(|_| serde_json::Value::String(response_text.clone()));
+
+            let out = if let Some(s) = val.as_str() {
+                s.trim().to_string()
+            } else {
+                serde_json::to_string_pretty(&val).unwrap_or_else(|_| response_text.clone())
+            };
+
+            let out = out.trim().to_string();
+            if out.is_empty() {
+                return Err(TranslationError("ECDICT empty result".into()));
+            }
+
+            translated_texts.push(out);
+        }
+
+        Ok((translated_texts, "ECDICT".into()))
+    })
+}
+
 // 8. 谷歌翻译实现
 fn google_translate_service<'a>(
     texts: &'a [String],
