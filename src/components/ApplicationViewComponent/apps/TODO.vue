@@ -1,74 +1,133 @@
 <template>
   <div class="todo-root">
-    <div class="todo-shell">
+    <div class="todo-shell" :class="{ 'with-detail': showDetail }">
       <div class="todo-nav">
         <div class="todo-nav-top">
           <div class="todo-brand">
             <div class="todo-brand-title">TO DO</div>
-            <div class="todo-brand-sub">本地生产版（SQLite）</div>
-            <div class="todo-brand-sub2">DB: {{ dbInfo?.db_path || '-' }}</div>
           </div>
 
           <n-input v-model:value="searchQuery" size="small" clearable placeholder="搜索任务 / 备注 / 步骤"
             @update:value="onSearchChange" />
         </div>
 
-        <div class="todo-nav-section">
-          <div class="nav-title">智能列表</div>
-
-          <div class="nav-item" :class="{ active: activeView === 'myday' }" @click="setActiveView('myday')">
-            <div class="nav-item-left">
-              <span class="nav-emoji">☀️</span>
-              <span class="nav-label">我的一天</span>
+        <div class="todo-nav-sections">
+          <div class="todo-nav-section todo-nav-section-smart">
+            <div class="nav-section-head">
+              <div class="nav-title">智能列表</div>
             </div>
-            <div class="nav-count" v-if="counts.myday">{{ counts.myday }}</div>
+            <div class="nav-section-body">
+              <div class="nav-item" :class="{ active: activeView === 'myday' }" @click="setActiveView('myday')">
+                <div class="nav-item-left">
+                  <n-icon class="nav-icon" :component="SunnyOutline" :size="18" />
+                  <span class="nav-label">我的一天</span>
+                </div>
+                <div class="nav-count" v-if="counts.myday">{{ counts.myday }}</div>
+              </div>
+
+              <div class="nav-item" :class="{ active: activeView === 'important' }" @click="setActiveView('important')">
+                <div class="nav-item-left">
+                  <n-icon class="nav-icon" :component="StarOutline" :size="18" />
+                  <span class="nav-label">重要</span>
+                </div>
+                <div class="nav-count" v-if="counts.important">{{ counts.important }}</div>
+              </div>
+
+              <div class="nav-item" :class="{ active: activeView === 'planned' }" @click="setActiveView('planned')">
+                <div class="nav-item-left">
+                  <n-icon class="nav-icon" :component="CalendarOutline" :size="18" />
+                  <span class="nav-label">已计划</span>
+                </div>
+                <div class="nav-count" v-if="counts.planned">{{ counts.planned }}</div>
+              </div>
+            </div>
           </div>
 
-          <div class="nav-item" :class="{ active: activeView === 'important' }" @click="setActiveView('important')">
-            <div class="nav-item-left">
-              <span class="nav-emoji">⭐</span>
-              <span class="nav-label">重要</span>
+          <div class="nav-sep nav-sep-static"></div>
+
+          <div class="todo-nav-section todo-nav-section-lists">
+            <div class="nav-section-head">
+              <div class="nav-title">列表</div>
             </div>
-            <div class="nav-count" v-if="counts.important">{{ counts.important }}</div>
-          </div>
-
-          <div class="nav-item" :class="{ active: activeView === 'planned' }" @click="setActiveView('planned')">
-            <div class="nav-item-left">
-              <span class="nav-emoji">📅</span>
-              <span class="nav-label">已计划</span>
-            </div>
-            <div class="nav-count" v-if="counts.planned">{{ counts.planned }}</div>
-          </div>
-
-          <div class="nav-sep"></div>
-
-          <div class="nav-title">列表</div>
+            <div class="nav-section-body">
 
           <div class="nav-item" :class="{ active: activeView === 'inbox' }" @click="setActiveView('inbox')">
             <div class="nav-item-left">
-              <span class="nav-emoji">🧾</span>
+              <n-icon class="nav-icon" :component="ListOutline" :size="18" />
               <span class="nav-label">{{ inboxTitle }}</span>
             </div>
             <div class="nav-count" v-if="counts.inbox">{{ counts.inbox }}</div>
           </div>
 
-          <div v-for="l in customLists" :key="l.id" class="nav-item" :class="{ active: activeView === l.id }">
+          <div v-for="g in groups" :key="g.id" class="nav-group">
+            <div class="nav-item nav-group-header" :class="{ open: !!groupOpen[g.id] }">
+              <div class="nav-item-left" @click="toggleGroupOpen(g.id)">
+                <n-icon class="nav-icon" :component="groupOpen[g.id] ? ChevronDownOutline : ChevronForwardOutline" :size="16" />
+                <n-icon class="nav-icon" :component="FolderOutline" :size="16" />
+                <span class="nav-label">{{ g.title }}</span>
+              </div>
+              <div class="nav-item-right">
+                <n-dropdown :options="groupInlineOptions" trigger="click" @select="(k) => onGroupInlineSelect(k, g.id)">
+                  <button class="more-btn" @click.stop>···</button>
+                </n-dropdown>
+              </div>
+            </div>
+
+            <div v-if="groupOpen[g.id]" class="nav-group-lists">
+              <div v-for="l in listsInGroup(g.id)" :key="l.id" class="nav-item nav-item-nested"
+                :class="{ active: activeView === l.id }">
+                <div class="nav-item-left" @click="setActiveView(l.id)">
+                  <n-icon class="nav-icon" :component="ListOutline" :size="18" />
+                  <span class="nav-label">{{ l.title }}</span>
+                </div>
+                <div class="nav-item-right">
+                  <div class="nav-count" v-if="counts.byList[l.id]">{{ counts.byList[l.id] }}</div>
+                  <n-dropdown :options="listInlineOptionsFor(l.id)" trigger="click" @select="(k) => onListInlineSelect(k, l.id)">
+                    <button class="more-btn" @click.stop>···</button>
+                  </n-dropdown>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-for="l in ungroupedLists" :key="l.id" class="nav-item" :class="{ active: activeView === l.id }">
             <div class="nav-item-left" @click="setActiveView(l.id)">
-              <span class="nav-emoji">📌</span>
+              <n-icon class="nav-icon" :component="ListOutline" :size="18" />
               <span class="nav-label">{{ l.title }}</span>
             </div>
             <div class="nav-item-right">
               <div class="nav-count" v-if="counts.byList[l.id]">{{ counts.byList[l.id] }}</div>
-              <n-dropdown :options="listInlineOptions" trigger="click" @select="(k) => onListInlineSelect(k, l.id)">
+              <n-dropdown :options="listInlineOptionsFor(l.id)" trigger="click" @select="(k) => onListInlineSelect(k, l.id)">
                 <button class="more-btn" @click.stop>···</button>
               </n-dropdown>
+            </div>
+          </div>
             </div>
           </div>
         </div>
 
         <div class="todo-nav-footer">
-          <n-button size="small" secondary @click="openCreateList">新建列表</n-button>
-          <n-button size="small" quaternary @click="reloadAll">刷新</n-button>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="medium" class="nav-footer-icon" @click="openCreateList">
+                <template #icon>
+                  <n-icon :component="TextBulletListAdd20Filled" :size="22" />
+                </template>
+              </n-button>
+            </template>
+            新建列表
+          </n-tooltip>
+
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="medium" class="nav-footer-icon" @click="openCreateGroup">
+                <template #icon>
+                  <n-icon :component="FolderAdd20Regular" :size="22" />
+                </template>
+              </n-button>
+            </template>
+            新建分组
+          </n-tooltip>
         </div>
       </div>
 
@@ -91,7 +150,8 @@
         </div>
 
         <div class="task-pane">
-          <div v-if="searchHitsMode" class="search-hits">
+          <div v-if="searchHitsMode" class="task-pane-scroll">
+            <div class="search-hits">
             <div class="task-group-title">搜索结果 <span class="task-group-count">{{ searchHits.length }}</span></div>
 
             <div v-if="searchHits.length === 0" class="task-empty">
@@ -120,66 +180,67 @@
                 <button class="task-del" @click.stop="removeTask(hit.task.id)">×</button>
               </div>
             </div>
+            </div>
           </div>
 
           <template v-else>
-            <div class="task-group">
-              <div class="task-group-title">
-                未完成 <span class="task-group-count">{{ incompleteTasks.length }}</span>
-              </div>
-
-              <div v-if="incompleteTasks.length === 0" class="task-empty">
-                <div class="task-empty-title">这里还没有任务</div>
-                <div class="task-empty-sub">在下方输入框添加一个新任务</div>
-              </div>
-
-              <div v-for="t in incompleteTasks" :key="t.id" class="task-row"
-                :class="{ selected: t.id === selectedTaskId }" @click="selectTask(t.id)">
-                <div class="task-row-left">
-                  <n-checkbox size="small" :checked="!!t.completed" @update:checked="(v) => toggleCompleted(t.id, v)"
-                    @click.stop />
-                  <div class="task-main">
-                    <div class="task-title">{{ t.title }}</div>
-                    <div class="task-meta" v-if="taskMetaLine(t)">{{ taskMetaLine(t) }}</div>
+            <n-tabs v-model:value="taskTab" type="segment" size="small" class="task-tabs">
+              <n-tab-pane name="incomplete" :tab="`未完成 ${incompleteTasks.length}`">
+                <div class="task-pane-scroll">
+                  <div v-if="incompleteTasks.length === 0" class="task-empty">
+                    <div class="task-empty-title">这里还没有任务</div>
+                    <div class="task-empty-sub">在下方输入框添加一个新任务</div>
                   </div>
-                </div>
 
-                <div class="task-row-right">
-                  <button class="task-star" :class="{ on: !!t.important }" @click.stop="toggleImportant(t.id)">
-                    {{ t.important ? '★' : '☆' }}
-                  </button>
-                  <button class="task-del" @click.stop="removeTask(t.id)">×</button>
-                </div>
-              </div>
-            </div>
+                  <div v-for="t in incompleteTasks" :key="t.id" class="task-row"
+                    :class="{ selected: t.id === selectedTaskId }" @click="selectTask(t.id)">
+                    <div class="task-row-left">
+                      <n-checkbox size="small" :checked="!!t.completed" @update:checked="(v) => toggleCompleted(t.id, v)"
+                        @click.stop />
+                      <div class="task-main">
+                        <div class="task-title">{{ t.title }}</div>
+                        <div class="task-meta" v-if="taskMetaLine(t)">{{ taskMetaLine(t) }}</div>
+                      </div>
+                    </div>
 
-            <div class="task-group task-group-completed">
-              <div class="task-group-title clickable" @click="toggleShowCompleted">
-                已完成 <span class="task-group-count">{{ completedTasks.length }}</span>
-                <span class="task-group-tip">{{ showCompleted ? '收起' : '展开' }}</span>
-              </div>
-
-              <div v-if="showCompleted">
-                <div v-for="t in completedTasks" :key="t.id" class="task-row completed"
-                  :class="{ selected: t.id === selectedTaskId }" @click="selectTask(t.id)">
-                  <div class="task-row-left">
-                    <n-checkbox size="small" :checked="!!t.completed" @update:checked="(v) => toggleCompleted(t.id, v)"
-                      @click.stop />
-                    <div class="task-main">
-                      <div class="task-title">{{ t.title }}</div>
-                      <div class="task-meta" v-if="taskMetaLine(t)">{{ taskMetaLine(t) }}</div>
+                    <div class="task-row-right">
+                      <button class="task-star" :class="{ on: !!t.important }" @click.stop="toggleImportant(t.id)">
+                        {{ t.important ? '★' : '☆' }}
+                      </button>
+                      <button class="task-del" @click.stop="removeTask(t.id)">×</button>
                     </div>
                   </div>
+                </div>
+              </n-tab-pane>
 
-                  <div class="task-row-right">
-                    <button class="task-star" :class="{ on: !!t.important }" @click.stop="toggleImportant(t.id)">
-                      {{ t.important ? '★' : '☆' }}
-                    </button>
-                    <button class="task-del" @click.stop="removeTask(t.id)">×</button>
+              <n-tab-pane v-if="showCompleted" name="completed" :tab="`已完成 ${completedTasks.length}`">
+                <div class="task-pane-scroll">
+                  <div v-if="completedTasks.length === 0" class="task-empty">
+                    <div class="task-empty-title">还没有已完成任务</div>
+                    <div class="task-empty-sub">完成一个任务后会显示在这里</div>
+                  </div>
+
+                  <div v-for="t in completedTasks" :key="t.id" class="task-row completed"
+                    :class="{ selected: t.id === selectedTaskId }" @click="selectTask(t.id)">
+                    <div class="task-row-left">
+                      <n-checkbox size="small" :checked="!!t.completed" @update:checked="(v) => toggleCompleted(t.id, v)"
+                        @click.stop />
+                      <div class="task-main">
+                        <div class="task-title">{{ t.title }}</div>
+                        <div class="task-meta" v-if="taskMetaLine(t)">{{ taskMetaLine(t) }}</div>
+                      </div>
+                    </div>
+
+                    <div class="task-row-right">
+                      <button class="task-star" :class="{ on: !!t.important }" @click.stop="toggleImportant(t.id)">
+                        {{ t.important ? '★' : '☆' }}
+                      </button>
+                      <button class="task-del" @click.stop="removeTask(t.id)">×</button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
+              </n-tab-pane>
+            </n-tabs>
           </template>
         </div>
 
@@ -194,13 +255,8 @@
         </div>
       </div>
 
-      <div class="todo-detail" :class="{ empty: !selectedTask }">
-        <div v-if="!selectedTask" class="detail-empty">
-          <div class="detail-empty-title">选择一个任务</div>
-          <div class="detail-empty-sub">在这里查看并编辑任务详情</div>
-        </div>
-
-        <div v-else class="detail-body">
+      <div v-if="showDetail" class="todo-detail">
+        <div class="detail-body">
           <div class="detail-top">
             <n-checkbox size="small" :checked="!!selectedTask.completed"
               @update:checked="(v) => toggleCompleted(selectedTask.id, v)" />
@@ -210,6 +266,7 @@
               @click="toggleImportant(selectedTask.id)">
               {{ selectedTask.important ? '★' : '☆' }}
             </button>
+            <button v-if="isNarrow" class="detail-close" @click.stop="selectedTaskId = ''">×</button>
           </div>
 
           <div class="detail-actions">
@@ -280,7 +337,10 @@
 
     <n-modal v-model:show="createListModal">
       <n-card title="新建列表" style="width: 420px">
-        <n-input v-model:value="newListTitle" placeholder="列表名称" @keyup.enter="createList" />
+        <div style="display:flex; flex-direction:column; gap: 10px;">
+          <n-input v-model:value="newListTitle" placeholder="列表名称" @keyup.enter="createList" />
+          <n-select v-model:value="newListGroupId" size="small" :options="groupSelectOptions" placeholder="所属分组" />
+        </div>
         <div style="display:flex; justify-content:flex-end; gap: 8px; margin-top: 12px;">
           <n-button @click="createListModal = false">取消</n-button>
           <n-button type="primary" :loading="busy" @click="createList">创建</n-button>
@@ -288,12 +348,42 @@
       </n-card>
     </n-modal>
 
+    <n-modal v-model:show="createGroupModal">
+      <n-card title="新建分组" style="width: 420px">
+        <n-input v-model:value="newGroupTitle" placeholder="分组名称" @keyup.enter="createGroup" />
+        <div style="display:flex; justify-content:flex-end; gap: 8px; margin-top: 12px;">
+          <n-button @click="createGroupModal = false">取消</n-button>
+          <n-button type="primary" :loading="busy" @click="createGroup">创建</n-button>
+        </div>
+      </n-card>
+    </n-modal>
+
     <n-modal v-model:show="renameListModal">
-      <n-card title="重命名列表" style="width: 420px">
-        <n-input v-model:value="renameListTitle" placeholder="列表名称" @keyup.enter="confirmRenameList" />
+      <n-card :title="renameKind === 'group' ? '重命名分组' : '重命名列表'" style="width: 420px">
+        <n-input v-model:value="renameListTitle" :placeholder="renameKind === 'group' ? '分组名称' : '列表名称'" @keyup.enter="confirmRenameList" />
         <div style="display:flex; justify-content:flex-end; gap: 8px; margin-top: 12px;">
           <n-button @click="renameListModal = false">取消</n-button>
           <n-button type="primary" :loading="busy" @click="confirmRenameList">确定</n-button>
+        </div>
+      </n-card>
+    </n-modal>
+
+    <n-modal v-model:show="moveListModal">
+      <n-card title="移动到分组" style="width: 420px">
+        <n-select v-model:value="moveTargetGroupId" size="small" :options="groupSelectOptions" placeholder="选择分组" />
+        <div style="display:flex; justify-content:flex-end; gap: 8px; margin-top: 12px;">
+          <n-button @click="moveListModal = false">取消</n-button>
+          <n-button type="primary" :loading="busy" @click="confirmMoveList">确定</n-button>
+        </div>
+      </n-card>
+    </n-modal>
+
+    <n-modal v-model:show="attachListModal">
+      <n-card title="添加列表到分组" style="width: 420px">
+        <n-select v-model:value="attachListId" size="small" filterable :options="attachableListOptions" placeholder="选择要添加的列表" />
+        <div style="display:flex; justify-content:flex-end; gap: 8px; margin-top: 12px;">
+          <n-button @click="attachListModal = false">取消</n-button>
+          <n-button type="primary" :loading="busy" @click="confirmAttachList">确定</n-button>
         </div>
       </n-card>
     </n-modal>
@@ -301,9 +391,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { FolderAdd20Regular, TextBulletListAdd20Filled } from '@vicons/fluent'
+import {
+  CalendarOutline,
+  ChevronDownOutline,
+  ChevronForwardOutline,
+  FolderOutline,
+  ListOutline,
+  StarOutline,
+  SunnyOutline,
+} from '@vicons/ionicons5'
 
 const { message } = createDiscreteApi(['message'])
 
@@ -317,6 +417,11 @@ const steps = ref([])
 const activeView = ref('myday')
 const selectedTaskId = ref('')
 const showCompleted = ref(true)
+const taskTab = ref('incomplete')
+
+watch(showCompleted, (v) => {
+  if (!v && taskTab.value === 'completed') taskTab.value = 'incomplete'
+})
 
 const searchQuery = ref('')
 const searchHits = ref([])
@@ -327,10 +432,25 @@ const newTaskTitle = ref('')
 
 const createListModal = ref(false)
 const newListTitle = ref('')
+const newListGroupId = ref('')
+
+const createGroupModal = ref(false)
+const newGroupTitle = ref('')
 
 const renameListModal = ref(false)
 const renameListTitle = ref('')
 const renameListId = ref('')
+const renameKind = ref('list')
+const renameGroupId = ref('')
+
+// 分组/列表归属操作
+const moveListModal = ref(false)
+const moveListId = ref('')
+const moveTargetGroupId = ref('')
+
+const attachListModal = ref(false)
+const attachTargetGroupId = ref('')
+const attachListId = ref('')
 
 const selectedTaskTitleDraft = ref('')
 const notesDraft = ref('')
@@ -351,6 +471,12 @@ const repeatOptions = [
 const listInlineOptions = [
   { label: '重命名', key: 'rename' },
   { label: '删除', key: 'delete' },
+]
+
+const groupInlineOptions = [
+  { label: '添加列表', key: 'attach' },
+  { label: '重命名', key: 'rename' },
+  { label: '删除分组', key: 'delete' },
 ]
 
 const sortOptions = [
@@ -391,6 +517,13 @@ const reloadAll = async () => {
 
 const inboxTitle = computed(() => (lists.value.find((l) => l.id === 'inbox')?.title || '任务'))
 
+const groups = computed(() =>
+  lists.value
+    .filter((l) => l.kind === 'group')
+    .slice()
+    .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0)),
+)
+
 const customLists = computed(() =>
   lists.value
     .filter((l) => l.kind === 'custom')
@@ -398,7 +531,69 @@ const customLists = computed(() =>
     .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0)),
 )
 
+const ungroupedLists = computed(() => customLists.value.filter((l) => !String(l.group_id || '').trim()))
+
+const listsInGroup = (groupId) => {
+  const gid = String(groupId || '').trim()
+  if (!gid) return []
+  return customLists.value.filter((l) => String(l.group_id || '').trim() === gid)
+}
+
+const groupSelectOptions = computed(() => {
+  const opts = [{ label: '无分组', value: '' }]
+  for (const g of groups.value) opts.push({ label: g.title, value: g.id })
+  return opts
+})
+
+const groupTitleById = computed(() => {
+  const m = {}
+  for (const g of groups.value) m[g.id] = g.title
+  return m
+})
+
+const attachableListOptions = computed(() => {
+  const gid = String(attachTargetGroupId.value || '').trim()
+  const opts = []
+
+  for (const l of customLists.value) {
+    const curGid = String(l.group_id || '').trim()
+    if (gid && curGid === gid) continue
+
+    const groupLabel = curGid ? `（当前：${groupTitleById.value[curGid] || '分组'}）` : ''
+    opts.push({ label: `${l.title}${groupLabel}`, value: l.id })
+  }
+
+  return opts
+})
+
+const groupOpen = ref({})
+
+watch(
+  groups,
+  (gs) => {
+    const next = { ...groupOpen.value }
+    for (const g of gs) {
+      if (typeof next[g.id] !== 'boolean') next[g.id] = true
+    }
+    groupOpen.value = next
+  },
+  { immediate: true },
+)
+
+const toggleGroupOpen = (groupId) => {
+  const gid = String(groupId || '').trim()
+  if (!gid) return
+  groupOpen.value = { ...groupOpen.value, [gid]: !groupOpen.value[gid] }
+}
+
 const selectedTask = computed(() => tasks.value.find((t) => t.id === selectedTaskId.value) || null)
+const showDetail = computed(() => !!selectedTask.value)
+
+const viewportW = ref(typeof window !== 'undefined' ? window.innerWidth : 1200)
+const updateViewportW = () => {
+  viewportW.value = typeof window !== 'undefined' ? window.innerWidth : 1200
+}
+const isNarrow = computed(() => viewportW.value <= 1100)
 
 const selectedSteps = computed(() => {
   if (!selectedTask.value) return []
@@ -535,7 +730,7 @@ const taskMetaLine = (t) => {
 }
 
 const selectTask = (id) => {
-  selectedTaskId.value = id
+  selectedTaskId.value = selectedTaskId.value === id ? '' : id
 }
 
 const setSortMode = (k) => {
@@ -817,6 +1012,7 @@ const duplicateTask = async (id) => {
 
 const toggleShowCompleted = () => {
   showCompleted.value = !showCompleted.value
+  if (!showCompleted.value) taskTab.value = 'incomplete'
 }
 
 const addStep = async (taskId) => {
@@ -885,6 +1081,8 @@ const removeStep = async (stepId) => {
 
 const openCreateList = () => {
   newListTitle.value = ''
+  const cur = lists.value.find((x) => x.id === activeView.value)
+  newListGroupId.value = cur?.kind === 'custom' ? String(cur.group_id || '') : ''
   createListModal.value = true
 }
 
@@ -894,9 +1092,11 @@ const createList = async () => {
 
   busy.value = true
   try {
-    const l = await invoke('todo_upsert_list', { input: { id: null, title, kind: 'custom' } })
+    const group_id = String(newListGroupId.value || '')
+    const l = await invoke('todo_upsert_list', { input: { id: null, title, kind: 'custom', group_id } })
     lists.value.push(l)
     createListModal.value = false
+    if (group_id) groupOpen.value = { ...groupOpen.value, [group_id]: true }
     setActiveView(l.id)
   } catch (e) {
     console.error('[TODO] createList failed', e)
@@ -906,17 +1106,162 @@ const createList = async () => {
   }
 }
 
+const openCreateGroup = () => {
+  newGroupTitle.value = ''
+  createGroupModal.value = true
+}
+
+const createGroup = async () => {
+  const title = String(newGroupTitle.value || '').trim()
+  if (!title) return
+
+  busy.value = true
+  try {
+    const g = await invoke('todo_upsert_list', { input: { id: null, title, kind: 'group', group_id: '' } })
+    lists.value.push(g)
+    groupOpen.value = { ...groupOpen.value, [g.id]: true }
+    createGroupModal.value = false
+  } catch (e) {
+    console.error('[TODO] createGroup failed', e)
+    message.error(`新建分组失败：${String(e?.message || e || '')}`)
+  } finally {
+    busy.value = false
+  }
+}
+
+const listInlineOptionsFor = (listId) => {
+  const l = lists.value.find((x) => x.id === listId)
+  if (!l || l.kind !== 'custom') return listInlineOptions
+
+  const inGroup = !!String(l.group_id || '').trim()
+  const opts = [{ label: '移动到分组', key: 'move' }]
+  if (inGroup) opts.push({ label: '从分组移除', key: 'detach' })
+  opts.push(...listInlineOptions)
+  return opts
+}
+
+const openMoveList = (listId) => {
+  const l = lists.value.find((x) => x.id === listId && x.kind === 'custom')
+  if (!l) return
+  moveListId.value = l.id
+  moveTargetGroupId.value = String(l.group_id || '')
+  moveListModal.value = true
+  console.info('[TODO] openMoveList', { listId: l.id, curGroupId: moveTargetGroupId.value })
+}
+
+const confirmMoveList = async () => {
+  const id = String(moveListId.value || '').trim()
+  const gid = String(moveTargetGroupId.value || '').trim()
+  const l0 = lists.value.find((x) => x.id === id && x.kind === 'custom')
+  if (!id || !l0) return
+
+  busy.value = true
+  try {
+    const l = await invoke('todo_upsert_list', { input: { id, title: l0.title, kind: 'custom', group_id: gid } })
+    const idx = lists.value.findIndex((x) => x.id === id)
+    if (idx >= 0) lists.value[idx] = l
+    moveListModal.value = false
+    if (gid) groupOpen.value = { ...groupOpen.value, [gid]: true }
+    console.info('[TODO] move list ok', { id, group_id: gid })
+  } catch (e) {
+    console.error('[TODO] move list failed', e)
+    message.error(`移动列表失败：${String(e?.message || e || '')}`)
+  } finally {
+    busy.value = false
+  }
+}
+
+const detachListFromGroup = async (listId) => {
+  const id = String(listId || '').trim()
+  const l0 = lists.value.find((x) => x.id === id && x.kind === 'custom')
+  if (!id || !l0) return
+
+  busy.value = true
+  try {
+    const l = await invoke('todo_upsert_list', { input: { id, title: l0.title, kind: 'custom', group_id: '' } })
+    const idx = lists.value.findIndex((x) => x.id === id)
+    if (idx >= 0) lists.value[idx] = l
+    console.info('[TODO] detach list ok', { id })
+  } catch (e) {
+    console.error('[TODO] detach list failed', e)
+    message.error(`从分组移除失败：${String(e?.message || e || '')}`)
+  } finally {
+    busy.value = false
+  }
+}
+
+const openAttachList = (groupId) => {
+  const gid = String(groupId || '').trim()
+  if (!gid) return
+  attachTargetGroupId.value = gid
+  attachListId.value = ''
+  attachListModal.value = true
+  console.info('[TODO] openAttachList', { groupId: gid })
+}
+
+const confirmAttachList = async () => {
+  const gid = String(attachTargetGroupId.value || '').trim()
+  const id = String(attachListId.value || '').trim()
+  const l0 = lists.value.find((x) => x.id === id && x.kind === 'custom')
+  if (!gid || !id || !l0) return
+
+  busy.value = true
+  try {
+    const l = await invoke('todo_upsert_list', { input: { id, title: l0.title, kind: 'custom', group_id: gid } })
+    const idx = lists.value.findIndex((x) => x.id === id)
+    if (idx >= 0) lists.value[idx] = l
+    attachListModal.value = false
+    groupOpen.value = { ...groupOpen.value, [gid]: true }
+    console.info('[TODO] attach list ok', { id, group_id: gid })
+  } catch (e) {
+    console.error('[TODO] attach list failed', e)
+    message.error(`添加列表到分组失败：${String(e?.message || e || '')}`)
+  } finally {
+    busy.value = false
+  }
+}
+
 const onListInlineSelect = (k, listId) => {
+  if (k === 'move') {
+    openMoveList(listId)
+    return
+  }
+  if (k === 'detach') {
+    detachListFromGroup(listId)
+    return
+  }
   if (k === 'rename') {
     const l = lists.value.find((x) => x.id === listId)
     if (!l) return
+    renameKind.value = 'list'
     renameListId.value = l.id
     renameListTitle.value = l.title
+    renameGroupId.value = String(l.group_id || '')
     renameListModal.value = true
     return
   }
   if (k === 'delete') {
     deleteList(listId)
+  }
+}
+
+const onGroupInlineSelect = (k, groupId) => {
+  const g = lists.value.find((x) => x.id === groupId && x.kind === 'group')
+  if (!g) return
+  if (k === 'attach') {
+    openAttachList(groupId)
+    return
+  }
+  if (k === 'rename') {
+    renameKind.value = 'group'
+    renameListId.value = g.id
+    renameListTitle.value = g.title
+    renameGroupId.value = ''
+    renameListModal.value = true
+    return
+  }
+  if (k === 'delete') {
+    deleteGroup(groupId)
   }
 }
 
@@ -927,12 +1272,14 @@ const confirmRenameList = async () => {
 
   busy.value = true
   try {
-    const l = await invoke('todo_upsert_list', { input: { id, title, kind: 'custom' } })
+    const kind = renameKind.value === 'group' ? 'group' : 'custom'
+    const group_id = kind === 'custom' ? String(renameGroupId.value || '') : ''
+    const l = await invoke('todo_upsert_list', { input: { id, title, kind, group_id } })
     const idx = lists.value.findIndex((x) => x.id === id)
     if (idx >= 0) lists.value[idx] = l
     renameListModal.value = false
   } catch (e) {
-    console.error('[TODO] rename list failed', e)
+    console.error('[TODO] rename failed', e)
     message.error(`重命名失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -955,21 +1302,39 @@ const deleteList = async (listId) => {
   }
 }
 
+const deleteGroup = async (groupId) => {
+  busy.value = true
+  try {
+    await invoke('todo_delete_list', { listId: groupId })
+    await reloadAll()
+  } catch (e) {
+    console.error('[TODO] delete group failed', e)
+    message.error(`删除分组失败：${String(e?.message || e || '')}`)
+  } finally {
+    busy.value = false
+  }
+}
+
 const listMenuOptions = computed(() => {
-  const base = [
-    { label: showCompleted.value ? '隐藏已完成' : '显示已完成', key: 'toggle-completed' },
-    { label: '刷新', key: 'reload' },
-  ]
-  return base
+  return [{ label: showCompleted.value ? '隐藏已完成' : '显示已完成', key: 'toggle-completed' }]
 })
 
 const onListMenuSelect = (k) => {
   if (k === 'toggle-completed') toggleShowCompleted()
-  if (k === 'reload') reloadAll()
 }
 
 onMounted(async () => {
+  updateViewportW()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', updateViewportW)
+  }
   await reloadAll()
+})
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', updateViewportW)
+  }
 })
 </script>
 
@@ -984,9 +1349,13 @@ onMounted(async () => {
   height: 100%;
   width: 100%;
   display: grid;
-  grid-template-columns: 260px minmax(360px, 1fr) minmax(360px, 520px);
+  grid-template-columns: 260px 1fr;
   gap: 12px;
   box-sizing: border-box;
+}
+
+.todo-shell.with-detail {
+  grid-template-columns: 260px minmax(360px, 1fr) minmax(360px, 520px);
 }
 
 .todo-nav,
@@ -1033,9 +1402,40 @@ onMounted(async () => {
   word-break: break-all;
 }
 
+.todo-nav-sections {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .todo-nav-section {
   padding: 10px;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.todo-nav-section-smart {
+  flex: 0 0 auto;
+  max-height: 220px;
+}
+
+.todo-nav-section-lists {
+  flex: 1 1 auto;
+}
+
+.nav-section-head {
+  flex: 0 0 auto;
+}
+
+.nav-section-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .nav-title {
@@ -1048,6 +1448,10 @@ onMounted(async () => {
   height: 1px;
   margin: 8px 10px;
   background: var(--guaxi-border);
+}
+
+.nav-sep.nav-sep-static {
+  margin: 0 10px;
 }
 
 .nav-item {
@@ -1082,6 +1486,11 @@ onMounted(async () => {
 .nav-emoji {
   width: 20px;
   text-align: center;
+}
+
+.nav-icon {
+  color: var(--guaxi-text-secondary);
+  flex: 0 0 auto;
 }
 
 .nav-label {
@@ -1120,10 +1529,25 @@ onMounted(async () => {
 }
 
 .todo-nav-footer {
-  padding: 10px;
+  padding: 10px 12px;
   display: flex;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 0;
   border-top: 1px solid var(--guaxi-border);
+  align-items: center;
+}
+
+.nav-footer-icon {
+  border-radius: 12px;
+  padding: 6px 10px;
+}
+
+.nav-group-lists {
+  padding-left: 16px;
+}
+
+.nav-item.nav-item-nested {
+  padding-left: 22px;
 }
 
 .list-header {
@@ -1154,8 +1578,33 @@ onMounted(async () => {
 .task-pane {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.task-pane-scroll {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 10px 10px 0;
+}
+
+.task-tabs {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 10px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.task-tabs :deep(.n-tabs-content) {
+  flex: 1;
+  min-height: 0;
+}
+
+.task-tabs :deep(.n-tab-pane) {
+  height: 100%;
 }
 
 .task-group {
@@ -1363,6 +1812,21 @@ onMounted(async () => {
   gap: 10px;
 }
 
+.detail-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: var(--guaxi-text-secondary);
+}
+
+.detail-close:hover {
+  background: var(--guaxi-header-bg);
+}
+
 .detail-title-input {
   flex: 1;
 }
@@ -1447,8 +1911,17 @@ onMounted(async () => {
     grid-template-columns: 240px 1fr;
   }
 
-  .todo-detail {
+  .todo-shell.with-detail {
+    grid-template-columns: 240px 1fr;
+  }
+
+  .todo-shell.with-detail .todo-list {
     display: none;
+  }
+
+  .todo-shell.with-detail .todo-detail {
+    display: flex;
+    grid-column: 2 / 3;
   }
 }
 </style>

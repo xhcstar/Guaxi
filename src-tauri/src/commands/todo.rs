@@ -2,13 +2,14 @@ use chrono::Datelike;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 use tauri::Manager;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 const TODO_DIR_NAME: &str = "guaxi_todo";
 const TODO_DB_NAME: &str = "todo.sqlite3";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TodoDbInfo {
@@ -20,7 +21,8 @@ pub struct TodoDbInfo {
 pub struct TodoList {
     pub id: String,
     pub title: String,
-    pub kind: String, // "system" | "custom"
+    pub kind: String, // "system" | "custom" | "group"
+    pub group_id: String, // group list id or ""
     pub order_index: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -67,6 +69,7 @@ pub struct UpsertListInput {
     pub id: Option<String>,
     pub title: String,
     pub kind: Option<String>,
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -113,16 +116,35 @@ fn valid_date_key(s: &str) -> bool {
 }
 
 fn resolve_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let base = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取 AppData 目录失败: {}", e))?;
+    let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?
+        .to_path_buf();
 
-    let dir = base.join(TODO_DIR_NAME);
-    if !dir.exists() {
-        std::fs::create_dir_all(&dir).map_err(|e| format!("创建 TODO 数据目录失败: {}", e))?;
+    let repos_dir = exe_dir.join("repos");
+    if !repos_dir.exists() {
+        fs::create_dir_all(&repos_dir).map_err(|e| format!("创建 repos 目录失败: {}", e))?;
     }
-    Ok(dir.join(TODO_DB_NAME))
+
+    let dir = repos_dir.join(TODO_DIR_NAME);
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("创建 TODO 数据目录失败: {}", e))?;
+    }
+
+    let new_path = dir.join(TODO_DB_NAME);
+
+    if !new_path.exists() {
+        if let Ok(base) = app.path().app_data_dir() {
+            let old_dir = base.join(TODO_DIR_NAME);
+            let old_path = old_dir.join(TODO_DB_NAME);
+            if old_path.exists() {
+                let _ = fs::copy(&old_path, &new_path);
+            }
+        }
+    }
+
+    Ok(new_path)
 }
 
 fn open_conn(db_path: &Path) -> Result<Connection, String> {
@@ -132,6 +154,21 @@ fn open_conn(db_path: &Path) -> Result<Connection, String> {
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("设置 WAL 失败: {}", e))?;
     Ok(conn)
+}
+
+fn has_column(conn: &Connection, table: &str, col: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| e.to_string())?;
+    for r in rows {
+        if r.map_err(|e| e.to_string())? == col {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn setup_schema(conn: &Connection) -> Result<(), String> {
@@ -153,6 +190,11 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         .optional()
         .map_err(|e| e.to_string())?;
 
+    let stored_ver: i64 = ver
+        .as_deref()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
+
     if ver.is_none() {
         conn.execute(
             "INSERT INTO todo_meta(k, v) VALUES('schema_version', ?1)",
@@ -166,6 +208,7 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             kind TEXT NOT NULL,
+            group_id TEXT NOT NULL DEFAULT '',
             order_index INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -173,6 +216,22 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    if !has_column(conn, "todo_lists", "group_id")? {
+        conn.execute(
+            "ALTER TABLE todo_lists ADD COLUMN group_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    if stored_ver < SCHEMA_VERSION {
+        conn.execute(
+            "UPDATE todo_meta SET v=?2 WHERE k='schema_version' AND v=?1",
+            params![stored_ver.to_string(), SCHEMA_VERSION.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS todo_tasks (
@@ -266,9 +325,10 @@ fn row_to_list(row: &rusqlite::Row) -> Result<TodoList, rusqlite::Error> {
         id: row.get(0)?,
         title: row.get(1)?,
         kind: row.get(2)?,
-        order_index: row.get(3)?,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
+        group_id: row.get(3)?,
+        order_index: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
     })
 }
 
@@ -333,7 +393,7 @@ pub fn todo_get_snapshot(app: tauri::AppHandle) -> Result<TodoSnapshot, String> 
         let db_info = get_db_info(&app)?;
 
         let mut lists_stmt = conn
-            .prepare("SELECT id, title, kind, order_index, created_at, updated_at FROM todo_lists ORDER BY order_index ASC")
+            .prepare("SELECT id, title, kind, group_id, order_index, created_at, updated_at FROM todo_lists ORDER BY order_index ASC")
             .map_err(|e| e.to_string())?;
         let lists = lists_stmt
             .query_map([], row_to_list)
@@ -388,7 +448,32 @@ pub fn todo_upsert_list(app: tauri::AppHandle, input: UpsertListInput) -> Result
         }
 
         let kind = input.kind.unwrap_or_else(|| "custom".to_string());
-        let kind = if kind == "system" { "system" } else { "custom" }.to_string();
+        let kind = if kind == "system" {
+            "system"
+        } else if kind == "group" {
+            "group"
+        } else {
+            "custom"
+        }
+        .to_string();
+
+        let mut group_id = input.group_id.unwrap_or_default().trim().to_string();
+        if kind != "custom" {
+            group_id = "".to_string();
+        }
+        if !group_id.is_empty() {
+            let gid_exists: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM todo_lists WHERE id=?1 AND kind='group'",
+                    params![group_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if gid_exists.is_none() {
+                group_id = "".to_string();
+            }
+        }
 
         let id = input
             .id
@@ -418,11 +503,19 @@ pub fn todo_upsert_list(app: tauri::AppHandle, input: UpsertListInput) -> Result
             let order_index = max_order + 1;
 
             conn.execute(
-                "INSERT INTO todo_lists(id, title, kind, order_index, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
-                params![id, title, kind, order_index, now],
+                "INSERT INTO todo_lists(id, title, kind, group_id, order_index, created_at, updated_at)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                params![id, title, kind, group_id, order_index, now],
             )
             .map_err(|e| e.to_string())?;
+
+            info!(
+                "[TODO] 新建列表: id={}, kind={}, group_id={}, order_index={}",
+                id,
+                kind,
+                group_id,
+                order_index
+            );
         } else {
             if id == "inbox" {
                 conn.execute(
@@ -430,17 +523,45 @@ pub fn todo_upsert_list(app: tauri::AppHandle, input: UpsertListInput) -> Result
                     params![id, title, now],
                 )
                 .map_err(|e| e.to_string())?;
+
+                info!("[TODO] 更新系统列表 inbox 标题: {}", title);
             } else {
+                let prev: Option<(String, String)> = conn
+                    .query_row(
+                        "SELECT kind, group_id FROM todo_lists WHERE id=?1",
+                        params![id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+
                 conn.execute(
-                    "UPDATE todo_lists SET title=?2, kind=?3, updated_at=?4 WHERE id=?1",
-                    params![id, title, kind, now],
+                    "UPDATE todo_lists SET title=?2, kind=?3, group_id=?4, updated_at=?5 WHERE id=?1",
+                    params![id, title, kind, group_id, now],
                 )
                 .map_err(|e| e.to_string())?;
+
+                if let Some((pk, pg)) = prev {
+                    if pk != kind || pg != group_id {
+                        info!(
+                            "[TODO] 更新列表归属: id={}, kind {} -> {}, group_id {} -> {}",
+                            id,
+                            pk,
+                            kind,
+                            pg,
+                            group_id
+                        );
+                    } else {
+                        info!("[TODO] 更新列表: id={}, kind={}, group_id={}", id, kind, group_id);
+                    }
+                } else {
+                    info!("[TODO] 更新列表: id={}, kind={}, group_id={}", id, kind, group_id);
+                }
             }
         }
 
         conn.query_row(
-            "SELECT id, title, kind, order_index, created_at, updated_at FROM todo_lists WHERE id=?1",
+            "SELECT id, title, kind, group_id, order_index, created_at, updated_at FROM todo_lists WHERE id=?1",
             params![id],
             row_to_list,
         )
@@ -457,6 +578,23 @@ pub fn todo_delete_list(app: tauri::AppHandle, list_id: String) -> Result<(), St
         }
         if id == "inbox" {
             return Err("系统列表 inbox 不允许删除".to_string());
+        }
+
+        let kind: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM todo_lists WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if kind.as_deref() == Some("group") {
+            conn.execute(
+                "UPDATE todo_lists SET group_id='', updated_at=?2 WHERE group_id=?1",
+                params![id, now_iso()],
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         let affected = conn
@@ -551,12 +689,20 @@ pub fn todo_upsert_task(app: tauri::AppHandle, input: UpsertTaskInput) -> Result
             return Err("list_id 不能为空".to_string());
         }
 
-        let list_exists: Option<String> = conn
-            .query_row("SELECT id FROM todo_lists WHERE id=?1", params![list_id], |r| r.get(0))
+        let list_kind: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM todo_lists WHERE id=?1",
+                params![list_id],
+                |r| r.get(0),
+            )
             .optional()
             .map_err(|e| e.to_string())?;
 
-        let list_id = if list_exists.is_some() { list_id } else { "inbox".to_string() };
+        let list_id = if matches!(list_kind.as_deref(), Some("system") | Some("custom")) {
+            list_id
+        } else {
+            "inbox".to_string()
+        };
 
         let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string()).trim().to_string();
         if id.is_empty() {
