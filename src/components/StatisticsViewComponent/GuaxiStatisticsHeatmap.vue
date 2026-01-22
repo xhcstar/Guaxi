@@ -130,7 +130,11 @@ const weeks = computed(() => {
   gap: 6px;
   margin-top: 8px;
   font-size: 12px;
-  opacity: 0.75;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+:global(:root[data-guaxi-theme="dark"]) .legend {
+  color: rgba(255, 255, 255, 0.82);
 }
 
 .legend-cell {
@@ -171,6 +175,22 @@ const weeks = computed(() => {
 }
 
 :global(:root[data-guaxi-theme="dark"]) .lv-0 {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:global(:root[data-guaxi-theme="dark"]) .lv-1 {
+  background: rgba(34, 197, 94, 0.26);
+}
+
+:global(:root[data-guaxi-theme="dark"]) .lv-2 {
+  background: rgba(34, 197, 94, 0.4);
+}
+
+:global(:root[data-guaxi-theme="dark"]) .lv-3 {
+  background: rgba(34, 197, 94, 0.62);
+}
+
+:global(:root[data-guaxi-theme="dark"]) .lv-4 {
+  background: rgba(34, 197, 94, 0.92);
 }
 </style>

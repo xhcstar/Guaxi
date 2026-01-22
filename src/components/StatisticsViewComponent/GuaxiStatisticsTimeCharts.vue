@@ -1,10 +1,10 @@
 <template>
-  <div class="time-charts">
+  <div ref="rootEl" class="time-charts">
     <n-grid :x-gap="12" :y-gap="12" :cols="12">
-      <n-grid-item :span="4">
+      <n-grid-item :span="12">
         <n-card size="small" class="panel-card" title="新增文档（时间分布）">
           <div class="sub">{{ rangeLabel }}</div>
-          <svg class="chart" :viewBox="`0 0 ${w} ${h}`" preserveAspectRatio="none">
+          <svg class="chart" :viewBox="`0 0 ${w} ${h}`" preserveAspectRatio="xMidYMid meet">
             <defs>
               <linearGradient id="createdArea" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stop-color="rgba(45, 212, 191, 0.35)" />
@@ -14,7 +14,7 @@
             <path :d="created.areaPath" fill="url(#createdArea)" />
             <path :d="created.linePath" fill="none" stroke="rgba(45, 212, 191, 0.95)" stroke-width="2" />
             <g v-for="(l, i) in labels" :key="`c-${l}`">
-              <text :x="x(i)" :y="h - 6" text-anchor="middle" fill="rgba(0,0,0,0.55)" font-size="11">
+              <text :x="x(i)" :y="h - 6" text-anchor="middle" class="axis-text" :style="`fill: ${axisLabelFill} !important`" font-size="11">
                 {{ l }}
               </text>
             </g>
@@ -22,10 +22,10 @@
         </n-card>
       </n-grid-item>
 
-      <n-grid-item :span="4">
+      <n-grid-item :span="12">
         <n-card size="small" class="panel-card" title="修改文档（时间分布）">
           <div class="sub">{{ rangeLabel }}</div>
-          <svg class="chart" :viewBox="`0 0 ${w} ${h}`" preserveAspectRatio="none">
+          <svg class="chart" :viewBox="`0 0 ${w} ${h}`" preserveAspectRatio="xMidYMid meet">
             <defs>
               <linearGradient id="modifiedArea" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stop-color="rgba(59, 130, 246, 0.35)" />
@@ -35,7 +35,7 @@
             <path :d="modified.areaPath" fill="url(#modifiedArea)" />
             <path :d="modified.linePath" fill="none" stroke="rgba(59, 130, 246, 0.95)" stroke-width="2" />
             <g v-for="(l, i) in labels" :key="`m-${l}`">
-              <text :x="x(i)" :y="h - 6" text-anchor="middle" fill="rgba(0,0,0,0.55)" font-size="11">
+              <text :x="x(i)" :y="h - 6" text-anchor="middle" class="axis-text" :style="`fill: ${axisLabelFill} !important`" font-size="11">
                 {{ l }}
               </text>
             </g>
@@ -43,10 +43,10 @@
         </n-card>
       </n-grid-item>
 
-      <n-grid-item :span="4">
+      <n-grid-item :span="12">
         <n-card size="small" class="panel-card" title="资料导入（时间分布）">
           <div class="sub">{{ rangeLabel }}</div>
-          <svg class="chart" :viewBox="`0 0 ${w} ${h}`" preserveAspectRatio="none">
+          <svg class="chart" :viewBox="`0 0 ${w} ${h}`" preserveAspectRatio="xMidYMid meet">
             <defs>
               <linearGradient id="importArea" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stop-color="rgba(249, 115, 22, 0.35)" />
@@ -56,7 +56,7 @@
             <path :d="imported.areaPath" fill="url(#importArea)" />
             <path :d="imported.linePath" fill="none" stroke="rgba(249, 115, 22, 0.95)" stroke-width="2" />
             <g v-for="(l, i) in labels" :key="`i-${l}`">
-              <text :x="x(i)" :y="h - 6" text-anchor="middle" fill="rgba(0,0,0,0.55)" font-size="11">
+              <text :x="x(i)" :y="h - 6" text-anchor="middle" class="axis-text" :style="`fill: ${axisLabelFill} !important`" font-size="11">
                 {{ l }}
               </text>
             </g>
@@ -68,7 +68,7 @@
 </template>
 
 <script setup>
-import { computed, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 /**
  * 顶部时间分布图组件：
@@ -81,8 +81,55 @@ const props = defineProps({
   repoImportedFiles: { type: Array, default: () => [] },
 });
 
-const w = 760;
+const rootEl = ref(null);
+const w = ref(760);
 const h = 200;
+
+const isDark = ref(false);
+const axisLabelFill = computed(() => (isDark.value ? "rgba(255, 255, 255, 0.92)" : "rgba(0, 0, 0, 0.65)"));
+
+function syncTheme() {
+  const el = document?.documentElement;
+  const byDataset = String(el?.dataset?.guaxiTheme || "") === "dark";
+  const byClass = !!el?.classList?.contains?.("dark-mode") || !!el?.classList?.contains?.("dark");
+  isDark.value = byDataset || byClass;
+}
+
+let ro;
+let mo;
+function updateWidth() {
+  const el = rootEl.value;
+  const cw = el?.clientWidth || 0;
+  if (!cw) return;
+  w.value = Math.max(360, Math.floor(cw));
+}
+
+onMounted(() => {
+  updateWidth();
+  syncTheme();
+
+  if (typeof ResizeObserver !== "undefined") {
+    ro = new ResizeObserver(() => updateWidth());
+    if (rootEl.value) ro.observe(rootEl.value);
+  } else {
+    window.addEventListener("resize", updateWidth, { passive: true });
+  }
+
+  if (typeof MutationObserver !== "undefined") {
+    mo = new MutationObserver(() => {
+      const prev = isDark.value;
+      syncTheme();
+      if (prev !== isDark.value) console.info("[statistics:timecharts] theme changed", { dark: isDark.value });
+    });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-guaxi-theme", "class"] });
+  }
+});
+
+onBeforeUnmount(() => {
+  if (ro) ro.disconnect();
+  else window.removeEventListener("resize", updateWidth);
+  if (mo) mo.disconnect();
+});
 
 function parseDateSafe(v) {
   if (!v) return null;
@@ -107,10 +154,20 @@ function daysAgo(n) {
   return d;
 }
 
+function yearsAgo(n) {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - n);
+  return d;
+}
+
 const range = computed(() => {
   if (props.timeRange === "week") return { start: daysAgo(7), end: new Date() };
   if (props.timeRange === "month") return { start: daysAgo(30), end: new Date() };
-  return { start: daysAgo(365), end: new Date() };
+  if (props.timeRange === "year") return { start: yearsAgo(1), end: new Date() };
+  if (props.timeRange === "5y") return { start: yearsAgo(5), end: new Date() };
+  if (props.timeRange === "10y") return { start: yearsAgo(10), end: new Date() };
+  if (props.timeRange === "20y") return { start: yearsAgo(20), end: new Date() };
+  return { start: yearsAgo(1), end: new Date() };
 });
 
 const rangeLabel = computed(() => {
@@ -151,7 +208,19 @@ function makeBuckets() {
     return { labels, starts };
   }
 
-  // year：按月 12 桶
+  const m = /^([0-9]+)y$/.exec(props.timeRange);
+  if (m) {
+    const n = Math.max(1, Number(m[1]) || 1);
+    const now = new Date();
+    const curY = now.getFullYear();
+    for (let i = n - 1; i >= 0; i -= 1) {
+      const y = curY - i;
+      labels.push(String(y));
+      starts.push(new Date(y, 0, 1, 0, 0, 0, 0));
+    }
+    return { labels, starts };
+  }
+
   const s = new Date(end);
   s.setDate(1);
   s.setHours(0, 0, 0, 0);
@@ -179,11 +248,12 @@ const labels = computed(() => bucket.value.labels);
 
 const padX = 20;
 const padY = 16;
-const innerW = w - padX * 2;
-const innerH = h - padY * 2 - 18;
+const innerW = computed(() => w.value - padX * 2);
+const innerH = computed(() => h - padY * 2 - 18);
 
-const x = (i) => padX + (labels.value.length === 1 ? innerW / 2 : (i / (labels.value.length - 1)) * innerW);
-const y = (v, maxY) => padY + (1 - v / maxY) * innerH;
+const x = (i) =>
+  padX + (labels.value.length === 1 ? innerW.value / 2 : (i / (labels.value.length - 1)) * innerW.value);
+const y = (v, maxY) => padY + (1 - v / maxY) * innerH.value;
 
 function buildPaths(arr) {
   const maxY = Math.max(...arr, 1);
@@ -195,7 +265,7 @@ function buildPaths(arr) {
   const linePath = d.trim();
 
   const lastX = x(arr.length - 1);
-  const baseY = padY + innerH;
+  const baseY = padY + innerH.value;
   const areaPath = `${linePath} L ${lastX.toFixed(2)} ${baseY.toFixed(2)} L ${x(0).toFixed(2)} ${baseY.toFixed(2)} Z`;
 
   return { linePath, areaPath };
@@ -206,7 +276,7 @@ const created = computed(() => {
   const arr = new Array(b.labels.length).fill(0);
 
   for (const it of props.kbFileMetas || []) {
-    const d = it?.createdAt;
+    const d = parseDateSafe(it?.createdAt);
     if (!inRange(d)) continue;
     const idx = bucketIndex(d, b);
     if (idx >= 0) arr[idx] += 1;
@@ -220,7 +290,7 @@ const modified = computed(() => {
   const arr = new Array(b.labels.length).fill(0);
 
   for (const it of props.kbFileMetas || []) {
-    const d = it?.modifiedAt;
+    const d = parseDateSafe(it?.modifiedAt);
     if (!inRange(d)) continue;
     const idx = bucketIndex(d, b);
     if (idx >= 0) arr[idx] += 1;
@@ -263,7 +333,7 @@ watch(
 
 .chart {
   width: 100%;
-  height: 190px;
+  height: 200px;
 }
 
 .sub {
@@ -271,5 +341,10 @@ watch(
   margin-bottom: 6px;
   font-size: 12px;
   opacity: 0.75;
+  color: var(--guaxi-text-secondary);
+}
+
+.axis-text {
+  opacity: 0.92;
 }
 </style>

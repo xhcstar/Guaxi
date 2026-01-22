@@ -128,6 +128,9 @@ const timeRangeOptions = [
   { label: "最近 7 天", value: "week" },
   { label: "最近 30 天", value: "month" },
   { label: "最近 1 年", value: "year" },
+  { label: "最近 5 年", value: "5y" },
+  { label: "最近 10 年", value: "10y" },
+  { label: "最近 20 年", value: "20y" },
 ];
 
 const timeRange = ref("week");
@@ -180,10 +183,20 @@ function daysAgo(n) {
   return d;
 }
 
+function yearsAgo(n) {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - n);
+  return d;
+}
+
 const range = computed(() => {
   if (timeRange.value === "week") return { start: daysAgo(7), end: new Date() };
   if (timeRange.value === "month") return { start: daysAgo(30), end: new Date() };
-  return { start: daysAgo(365), end: new Date() };
+  if (timeRange.value === "year") return { start: yearsAgo(1), end: new Date() };
+  if (timeRange.value === "5y") return { start: yearsAgo(5), end: new Date() };
+  if (timeRange.value === "10y") return { start: yearsAgo(10), end: new Date() };
+  if (timeRange.value === "20y") return { start: yearsAgo(20), end: new Date() };
+  return { start: yearsAgo(1), end: new Date() };
 });
 
 const barChartWidth = 520;
