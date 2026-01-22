@@ -746,6 +746,42 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
+.tab-content-excerpts :deep(.n-list),
+.tab-content-excerpts :deep(.n-list-item),
+.tab-content-excerpts :deep(.excerpt-result-item),
+.tab-content-excerpts :deep(.file-content),
+.tab-content-excerpts :deep(.card-container),
+.tab-content-excerpts :deep(.excerpt-card),
+.tab-content-excerpts :deep(.n-card) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.tab-content-excerpts :deep(.n-list-item),
+.tab-content-excerpts :deep(.excerpt-result-item),
+.tab-content-excerpts :deep(.file-content) {
+  overflow: hidden;
+}
+
+.tab-content-excerpts :deep(.card-item-rendered),
+.tab-content-excerpts :deep(.card-item-rendered *),
+.tab-content-excerpts :deep(.n-card__content),
+.tab-content-excerpts :deep(.n-card__content *) {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.tab-content-excerpts :deep(.card-item-rendered pre) {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.tab-content-excerpts :deep(.card-item-rendered img) {
+  max-width: 100%;
+  height: auto;
+}
 .scroller {
   flex: 1 1 0;
   min-height: 0;
