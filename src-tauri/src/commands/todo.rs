@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 const TODO_DIR_NAME: &str = "guaxi_todo";
 const TODO_DB_NAME: &str = "todo.sqlite3";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TodoDbInfo {
@@ -242,6 +242,7 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
             important INTEGER NOT NULL DEFAULT 0,
             my_day_key TEXT NOT NULL DEFAULT '',
             due_date TEXT NOT NULL DEFAULT '',
+            reminded_due_date TEXT NOT NULL DEFAULT '',
             repeat_rule TEXT NOT NULL DEFAULT '',
             notes TEXT NOT NULL DEFAULT '',
             order_index INTEGER NOT NULL DEFAULT 0,
@@ -253,6 +254,14 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+
+    if !has_column(conn, "todo_tasks", "reminded_due_date")? {
+        conn.execute(
+            "ALTER TABLE todo_tasks ADD COLUMN reminded_due_date TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_todo_tasks_list_completed ON todo_tasks(list_id, completed, order_index)",
@@ -764,6 +773,7 @@ pub fn todo_upsert_task(app: tauri::AppHandle, input: UpsertTaskInput) -> Result
                     completed=COALESCE(?4, completed),
                     important=COALESCE(?5, important),
                     my_day_key=COALESCE(?6, my_day_key),
+                    reminded_due_date=CASE WHEN COALESCE(?7, due_date) != due_date THEN '' ELSE reminded_due_date END,
                     due_date=COALESCE(?7, due_date),
                     repeat_rule=COALESCE(?8, repeat_rule),
                     notes=COALESCE(?9, notes),
@@ -837,7 +847,7 @@ pub fn todo_set_task_completed(app: tauri::AppHandle, task_id: String, completed
             if let Some(next_due) = next_due_date(&task.due_date, &task.repeat_rule) {
                 info!("[TODO] 重复任务完成：推进截止日期 {} -> {}", task.due_date, next_due);
                 conn.execute(
-                    "UPDATE todo_tasks SET completed=0, completed_at=?2, due_date=?3, updated_at=?2 WHERE id=?1",
+                    "UPDATE todo_tasks SET completed=0, completed_at=?2, due_date=?3, reminded_due_date='', updated_at=?2 WHERE id=?1",
                     params![id, now, next_due],
                 )
                 .map_err(|e| e.to_string())?;
@@ -932,7 +942,7 @@ pub fn todo_set_task_due_date(app: tauri::AppHandle, task_id: String, due_date: 
         }
 
         conn.execute(
-            "UPDATE todo_tasks SET due_date=?2, updated_at=?3 WHERE id=?1",
+            "UPDATE todo_tasks SET due_date=?2, reminded_due_date=CASE WHEN due_date!=?2 THEN '' ELSE reminded_due_date END, updated_at=?3 WHERE id=?1",
             params![id, due_date, now_iso()],
         )
         .map_err(|e| e.to_string())?;
@@ -1188,5 +1198,56 @@ pub fn todo_search_tasks(app: tauri::AppHandle, query: String, limit: Option<i64
         }
 
         Ok(hits)
+    })
+}
+
+#[tauri::command]
+pub fn todo_poll_due_reminders(app: tauri::AppHandle, limit: Option<i64>) -> Result<Vec<TodoTask>, String> {
+    info!("[TODO] todo_poll_due_reminders called");
+    with_db(&app, |conn| {
+        let lim = limit.unwrap_or(50).clamp(1, 200);
+        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+
+        let tasks: Vec<TodoTask> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, list_id, title, completed, important, my_day_key, due_date, repeat_rule, notes, order_index, created_at, updated_at, completed_at
+                     FROM todo_tasks
+                     WHERE completed=0
+                       AND due_date!=''
+                       AND due_date <= ?1
+                       AND reminded_due_date != due_date
+                     ORDER BY due_date ASC, updated_at DESC
+                     LIMIT ?2",
+                )
+                .map_err(|e| e.to_string())?;
+
+            let rows = stmt
+                .query_map(params![today, lim], row_to_task)
+                .map_err(|e| e.to_string())?;
+
+            let mut tasks: Vec<TodoTask> = Vec::new();
+            for r in rows {
+                tasks.push(r.map_err(|e| e.to_string())?);
+            }
+            tasks
+        };
+
+        if tasks.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        for t in &tasks {
+            tx.execute(
+                "UPDATE todo_tasks SET reminded_due_date=?2 WHERE id=?1",
+                params![t.id, t.due_date],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+
+        info!("[TODO] due reminders polled: {}", tasks.len());
+        Ok(tasks)
     })
 }

@@ -410,6 +410,8 @@ const { message } = createDiscreteApi(['message'])
 const busy = ref(false)
 const dbInfo = ref(null)
 
+const reminderTimer = ref(null)
+
 const lists = ref([])
 const tasks = ref([])
 const steps = ref([])
@@ -512,6 +514,35 @@ const reloadAll = async () => {
     message.error(`加载 TODO 数据失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
+  }
+}
+
+const pollDueReminders = async () => {
+  try {
+    if (typeof document !== 'undefined' && document.hidden) return
+
+    const res = await invoke('todo_poll_due_reminders', { limit: 50 })
+    const arr = Array.isArray(res) ? res : []
+    if (!arr.length) return
+
+    const today = String(todayKey.value || '')
+    const overdue = arr.filter((t) => String(t?.due_date || '') && String(t.due_date) < today).length
+    const dueToday = arr.length - overdue
+
+    const bits = []
+    if (overdue) bits.push(`${overdue} 个已逾期`)
+    if (dueToday) bits.push(`${dueToday} 个今天到期`)
+
+    const names = arr
+      .slice(0, 3)
+      .map((t) => String(t?.title || '').trim())
+      .filter(Boolean)
+    const preview = names.length ? `（${names.join('、')}${arr.length > names.length ? '…' : ''}）` : ''
+
+    message.warning(`任务到期提醒：${bits.join('，') || `${arr.length} 个到期`}${preview}`)
+    console.info('[TODO] due reminders', { total: arr.length, overdue, dueToday, tasks: arr.map((t) => ({ id: t.id, due_date: t.due_date, title: t.title })) })
+  } catch (e) {
+    console.warn('[TODO] pollDueReminders failed', e)
   }
 }
 
@@ -1328,12 +1359,25 @@ onMounted(async () => {
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', updateViewportW)
   }
+
   await reloadAll()
+  await pollDueReminders()
+
+  reminderTimer.value = setInterval(() => {
+    pollDueReminders()
+  }, 60 * 1000)
+
+  console.info('[TODO] due reminder timer started')
 })
 
 onUnmounted(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', updateViewportW)
+  }
+  if (reminderTimer.value) {
+    clearInterval(reminderTimer.value)
+    reminderTimer.value = null
+    console.info('[TODO] due reminder timer stopped')
   }
 })
 </script>

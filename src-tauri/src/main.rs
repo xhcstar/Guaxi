@@ -312,6 +312,7 @@ async fn main() {
             commands::todo::todo_delete_step,
             commands::todo::todo_reorder_steps,
             commands::todo::todo_search_tasks,
+            commands::todo::todo_poll_due_reminders,
         ])
         .setup(move |app| {
             shared_state.set_app_handle(app.handle().clone());
