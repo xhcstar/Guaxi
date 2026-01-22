@@ -392,8 +392,8 @@
           :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
           :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" :items="selectionTranslateItems"
           :from-lang="selectionTranslateFrom" :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions"
-          @update:from-lang="(v) => selectionTranslateFrom.value = String(v || 'auto')"
-          @update:to-lang="(v) => selectionTranslateTo.value = String(v || 'zh')" @swap-langs="swapSelectionTranslateLangs"
+          @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
+          @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
           @translate="translateSelectionText" @copy="copySelectionTranslateResult"
           @toggle-pin="toggleSelectionTranslatePinned" @update:pos="handleSelectionTranslatePanelUpdatePos"
           @close="closeSelectionTranslatePanel" />
@@ -578,9 +578,21 @@ const selectionTranslateItems = ref([]);
 const selectionTranslateMultiAvailable = ref(true)
 let selectionTranslateMultiNotFoundWarned = false
 
-watch(floatingToolbarVisible, (show) => {
-  if (!show && !selectionTranslatePinned.value) selectionTranslatePanelVisible.value = false;
-});
+const scheduleSelectionTranslate = debounce(() => {
+  if (!selectionTranslatePanelVisible.value) return
+  if (selectionTranslateBusy.value) return
+
+  const raw = String(selectionTranslateRaw.value || '').trim()
+  if (!raw) return
+
+  translateSelectionText(raw)
+}, 250)
+
+watch([selectionTranslateFrom, selectionTranslateTo], ([from, to], [prevFrom, prevTo]) => {
+  if (!selectionTranslatePanelVisible.value) return
+  if (from === prevFrom && to === prevTo) return
+  scheduleSelectionTranslate()
+})
 
 const editorContextMenuVisible = ref(false);
 const editorContextMenuPosition = ref({ x: 0, y: 0 });
@@ -3696,7 +3708,7 @@ const swapSelectionTranslateLangs = () => {
   console.info('[SelectionTranslate] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
   if (selectionTranslatePanelVisible.value && !selectionTranslateBusy.value) {
-    translateSelectionText()
+    translateSelectionText(selectionTranslateRaw.value)
   }
 }
 
@@ -3714,16 +3726,31 @@ const openSelectionTranslatePanel = async () => {
 
   const left = Number.parseFloat(String(floatingToolbarStyle.value?.left || ''));
   const top = Number.parseFloat(String(floatingToolbarStyle.value?.top || ''));
-  const nextLeft = Number.isFinite(left) ? left : 8;
-  const nextTop = Number.isFinite(top) ? top + 44 : 52;
-  selectionTranslatePanelPos.value = { left: nextLeft, top: nextTop };
+
+  const wrapperEl = editorWrapperRef.value
+  const pw = wrapperEl?.clientWidth ?? window.innerWidth
+  const ph = wrapperEl?.clientHeight ?? window.innerHeight
+
+  const pad = 8
+  const panelW = 360
+  const panelH = 260
+  const maxLeft = Math.max(pad, pw - panelW - pad)
+  const maxTop = Math.max(pad, ph - panelH - pad)
+
+  const nextLeft = Number.isFinite(left) ? left : pad
+  const nextTop = Number.isFinite(top) ? top + 44 : 52
+
+  selectionTranslatePanelPos.value = {
+    left: Math.min(Math.max(pad, nextLeft), maxLeft),
+    top: Math.min(Math.max(pad, nextTop), maxTop)
+  };
   selectionTranslatePanelVisible.value = true;
 
-  await translateSelectionText();
+  await translateSelectionText(text);
 };
 
-const translateSelectionText = async () => {
-  const text = getSelectedTextForTranslate().trim();
+const translateSelectionText = async (overrideText) => {
+  const text = String((overrideText ?? getSelectedTextForTranslate()) || '').trim();
   if (!text) {
     message.warning('请先框选要翻译的文本');
     return;
@@ -3780,7 +3807,11 @@ const translateSelectionText = async () => {
       }
     }
 
-    const response = await invoke('translate_text_free', { texts: [text] });
+    const response = await invoke('translate_text_free', {
+      texts: [text],
+      from: selectionTranslateFrom.value,
+      to: selectionTranslateTo.value
+    });
     const translated = (response?.translated_texts?.[0] || '').toString();
 
     if (!translated.trim() || translated.includes('[Translation Failed]')) {

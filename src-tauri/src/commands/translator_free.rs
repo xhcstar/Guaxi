@@ -1,4 +1,3 @@
-use chrono::Utc;
 use reqwest::{header, Client};
 use serde::Serialize;
 use std::error::Error;
@@ -52,28 +51,46 @@ impl From<serde_json::Error> for TranslationError {
 #[tauri::command]
 pub async fn translate_text_free(
     texts: Vec<String>,
+    from: Option<String>,
+    to: Option<String>,
 ) -> Result<TranslationResult, String> {
-    info!("Translating {} texts", texts.len());
-    
+    let from = from.unwrap_or_else(|| "auto".into());
+    let to = to.unwrap_or_else(|| "zh".into());
+
+    let from_norm = normalize_lang_lower(&from);
+    let to_norm = normalize_lang_lower(&to);
+
+    info!(
+        "Translating {} texts (from={}, to={})",
+        texts.len(),
+        from_norm,
+        to_norm
+    );
+
     let mut translated_texts = Vec::with_capacity(texts.len());
     let mut last_error = None;
-    
+
     // 分批处理，每批5条
     for chunk in texts.chunks(5) {
-        match process_batch(chunk, "auto", "zh").await {
+        match process_batch(chunk, &from_norm, &to_norm).await {
             Ok((results, _engine)) => translated_texts.extend(results),
             Err(e) => {
                 let error_str = e.to_string();
                 last_error = Some(error_str.clone());
-                warn!("Translation service failed: {}", error_str);
+                warn!(
+                    "Translation service failed (from={}, to={}): {}",
+                    from_norm,
+                    to_norm,
+                    error_str
+                );
                 translated_texts.extend(vec!["[Translation Failed]".to_string(); chunk.len()]);
             }
         }
-        
+
         // 控制请求频率
         sleep(Duration::from_millis(200)).await;
     }
-    
+
     Ok(TranslationResult {
         success: last_error.is_none(),
         translated_texts,
@@ -117,10 +134,12 @@ pub async fn selection_translate_free_multi(
         to
     );
 
-    let services: [(&str, TranslateFn); 3] = [
+    let services: [(&str, TranslateFn); 5] = [
         ("Bing", bing_translate_service),
         ("Google", google_translate_service),
-        ("Tencent", tencent_translate_service),
+        ("Lingva", lingva_translate_service),
+        ("Yandex", yandex_translate_service),
+        ("Transmart", transmart_translate_service),
     ];
 
     let mut items = Vec::with_capacity(services.len());
@@ -187,11 +206,12 @@ async fn process_batch(
     let clean_texts: Vec<String> = texts.iter().map(|t| preprocess_text(t)).collect();
 
     // 定义所有翻译服务（按优先级排序）
-    // Tencent 的 free 接口近期容易返回 405/非 JSON（反爬/接口变更），放到最后兜底。
-    let services: [TranslateFn; 3] = [
+    let services: [TranslateFn; 5] = [
         bing_translate_service,
         google_translate_service,
-        tencent_translate_service,
+        lingva_translate_service,
+        yandex_translate_service,
+        transmart_translate_service,
     ];
 
     let mut last_error = None;
@@ -245,12 +265,30 @@ fn map_bing_lang(lang: &str) -> String {
     }
 }
 
-fn map_tencent_lang(lang: &str) -> String {
+
+fn map_lingva_lang(lang: &str) -> String {
+    let l = normalize_lang_lower(lang);
+    match l.as_str() {
+        "zh" | "zh-cn" | "zh-hans" | "zh-hant" | "zh-tw" => "zh".into(),
+        _ => l,
+    }
+}
+
+fn map_yandex_lang(lang: &str) -> String {
+    let l = normalize_lang_lower(lang);
+    match l.as_str() {
+        "auto" | "" => "".into(),
+        "zh" | "zh-cn" | "zh-hans" | "zh-hant" | "zh-tw" => "zh".into(),
+        _ => l,
+    }
+}
+
+fn map_transmart_lang(lang: &str) -> String {
     let l = normalize_lang_lower(lang);
     match l.as_str() {
         "auto" => "auto".into(),
-        "zh" | "zh-cn" | "zh-hans" | "zh-hant" | "zh-tw" => "zh".into(),
-        "ja" => "jp".into(),
+        "zh" | "zh-cn" | "zh-hans" => "zh".into(),
+        "zh-tw" | "zh-hant" => "zh-TW".into(),
         _ => l,
     }
 }
@@ -277,8 +315,8 @@ fn response_is_probably_html(content_type: Option<&str>, body: &str) -> bool {
     b.starts_with("<!doctype html") || b.starts_with("<html")
 }
 
-// 6. 腾讯翻译实现
-fn tencent_translate_service<'a>(
+// 6. Lingva 翻译实现
+fn lingva_translate_service<'a>(
     texts: &'a [String],
     from: &'a str,
     to: &'a str,
@@ -293,21 +331,104 @@ fn tencent_translate_service<'a>(
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 
-        let source = map_tencent_lang(from);
-        let target = map_tencent_lang(to);
+        let source = map_lingva_lang(from);
+        let target = map_lingva_lang(to);
 
         for text in texts {
+            let plain_text = text.replace('/', "@@");
+            let encoded_text = urlencoding::encode(&plain_text);
+            let url = format!(
+                "https://lingva.pot-app.com/api/v1/{}/{}/{}",
+                source, target, encoded_text
+            );
+
             let response = client
-                .post("https://fanyi.qq.com/api/translate")
+                .get(url)
+                .send()
+                .await
+                .map_err(TranslationError::from)?;
+
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let response_text = response.text().await.map_err(TranslationError::from)?;
+
+            if !status.is_success() {
+                return Err(TranslationError(format!(
+                    "Lingva HTTP {}: {}",
+                    status.as_u16(),
+                    summarize_body(&response_text)
+                )));
+            }
+            if response_text.trim().is_empty() {
+                return Err(TranslationError("Lingva empty response".into()));
+            }
+            if response_is_probably_html(content_type.as_deref(), &response_text) {
+                return Err(TranslationError(format!(
+                    "Lingva non-JSON response: {}",
+                    summarize_body(&response_text)
+                )));
+            }
+
+            let result: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+                TranslationError(format!(
+                    "Lingva JSON error: {} ({})",
+                    e,
+                    summarize_body(&response_text)
+                ))
+            })?;
+
+            let translation = result
+                .get("translation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .replace("@@", "/");
+
+            if translation.trim().is_empty() {
+                return Err(TranslationError("Lingva empty result".into()));
+            }
+
+            translated_texts.push(translation);
+        }
+
+        Ok((translated_texts, "Lingva".into()))
+    })
+}
+
+// 7. Yandex 翻译实现
+fn yandex_translate_service<'a>(
+    texts: &'a [String],
+    from: &'a str,
+    to: &'a str,
+) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
+    Box::pin(async move {
+        let client = Client::builder()
+            .user_agent("Mozilla/5.0")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
+            .build()
+            .map_err(TranslationError::from)?;
+
+        let mut translated_texts = Vec::with_capacity(texts.len());
+
+        let source = map_yandex_lang(from);
+        let target = map_yandex_lang(to);
+
+        for text in texts {
+            let id = format!("{}-0-0", Uuid::new_v4().to_string().replace('-', ""));
+
+            let response = client
+                .post("https://translate.yandex.net/api/v1/tr.json/translate")
+                .query(&[("id", id), ("srv", "android".to_string())])
                 .header("Content-Type", "application/x-www-form-urlencoded")
-                .header("Origin", "https://fanyi.qq.com")
-                .header("Referer", "https://fanyi.qq.com/")
                 .form(&[
-                    ("sourceText", text.as_str()),
-                    ("source", source.as_str()),
-                    ("target", target.as_str()),
-                    ("qtk", &generate_qtk()),
-                    ("qtv", &generate_qtv()),
+                    ("source_lang", source.as_str()),
+                    ("target_lang", target.as_str()),
+                    ("text", text.as_str()),
                 ])
                 .send()
                 .await
@@ -324,39 +445,138 @@ fn tencent_translate_service<'a>(
 
             if !status.is_success() {
                 return Err(TranslationError(format!(
-                    "Tencent HTTP {}: {}",
+                    "Yandex HTTP {}: {}",
                     status.as_u16(),
                     summarize_body(&response_text)
                 )));
             }
             if response_text.trim().is_empty() {
-                return Err(TranslationError("Tencent empty response".into()));
+                return Err(TranslationError("Yandex empty response".into()));
             }
             if response_is_probably_html(content_type.as_deref(), &response_text) {
                 return Err(TranslationError(format!(
-                    "Tencent non-JSON response: {}",
+                    "Yandex non-JSON response: {}",
                     summarize_body(&response_text)
                 )));
             }
 
             let result: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
                 TranslationError(format!(
-                    "Tencent JSON error: {} ({})",
+                    "Yandex JSON error: {} ({})",
                     e,
                     summarize_body(&response_text)
                 ))
             })?;
 
-            if let Some(records) = result["translate"]["records"].as_array() {
-                if !records.is_empty() {
-                    translated_texts.push(records[0]["targetText"].as_str().unwrap_or("").to_string());
-                    continue;
+            let t = result
+                .get("text")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if t.trim().is_empty() {
+                return Err(TranslationError("Yandex empty result".into()));
+            }
+
+            translated_texts.push(t);
+        }
+
+        Ok((translated_texts, "Yandex".into()))
+    })
+}
+
+fn transmart_translate_service<'a>(
+    texts: &'a [String],
+    from: &'a str,
+    to: &'a str,
+) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
+    Box::pin(async move {
+        let client = Client::builder()
+            .user_agent("Mozilla/5.0")
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
+            .build()
+            .map_err(TranslationError::from)?;
+
+        let mut translated_texts = Vec::with_capacity(texts.len());
+
+        let source = map_transmart_lang(from);
+        let target = map_transmart_lang(to);
+
+        for text in texts {
+            let response = client
+                .post("https://transmart.qq.com/api/imt")
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({
+                    "header": { "fn": "auto_translation" },
+                    "type": "plain",
+                    "source": { "lang": source.as_str(), "text_list": [text] },
+                    "target": { "lang": target.as_str() }
+                }))
+                .send()
+                .await
+                .map_err(TranslationError::from)?;
+
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let response_text = response.text().await.map_err(TranslationError::from)?;
+
+            if !status.is_success() {
+                return Err(TranslationError(format!(
+                    "Transmart HTTP {}: {}",
+                    status.as_u16(),
+                    summarize_body(&response_text)
+                )));
+            }
+            if response_text.trim().is_empty() {
+                return Err(TranslationError("Transmart empty response".into()));
+            }
+            if response_is_probably_html(content_type.as_deref(), &response_text) {
+                return Err(TranslationError(format!(
+                    "Transmart non-JSON response: {}",
+                    summarize_body(&response_text)
+                )));
+            }
+
+            let result: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+                TranslationError(format!(
+                    "Transmart JSON error: {} ({})",
+                    e,
+                    summarize_body(&response_text)
+                ))
+            })?;
+
+            let Some(lines) = result.get("auto_translation").and_then(|v| v.as_array()) else {
+                return Err(TranslationError(format!(
+                    "Transmart missing auto_translation: {}",
+                    summarize_body(&response_text)
+                )));
+            };
+
+            let mut out = String::new();
+            for line in lines {
+                if let Some(s) = line.as_str() {
+                    out.push_str(s);
+                    out.push('\n');
                 }
             }
-            return Err(TranslationError("Tencent translation failed".into()));
+
+            let out = out.trim().to_string();
+            if out.is_empty() {
+                return Err(TranslationError("Transmart empty result".into()));
+            }
+
+            translated_texts.push(out);
         }
-        
-        Ok((translated_texts, "Tencent".into()))
+
+        Ok((translated_texts, "Transmart".into()))
     })
 }
 
@@ -558,13 +778,3 @@ fn bing_translate_service<'a>(
     })
 }
 
-// 辅助函数
-fn generate_qtk() -> String {
-    let timestamp = Utc::now().timestamp_millis();
-    let random_num = rand::random::<u32>();
-    format!("{}{}", timestamp, random_num)
-}
-
-fn generate_qtv() -> String {
-    Uuid::new_v4().to_string().replace("-", "")
-}

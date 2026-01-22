@@ -1,6 +1,6 @@
 <template>
   <div ref="panelRef" class="pot-selection-translate-panel" :style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
-    @mousedown.stop @click.stop>
+    @mousedown.stop @click.stop @wheel.stop>
     <div class="panel-header" @mousedown.prevent="onHeaderMouseDown">
       <div class="panel-header-left">
         <n-button text size="tiny" :title="pinned ? '取消固定' : '固定'" @click.stop="emit('toggle-pin')">
@@ -69,7 +69,7 @@
 </template>
 
 <script setup>
-import { ref, onUnmounted, computed } from 'vue'
+import { ref, onUnmounted, computed, onMounted, nextTick } from 'vue'
 import { NButton, NSpin, NSelect } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import pinIcon from '@iconify-icons/lucide/pin'
@@ -189,6 +189,19 @@ const onHeaderMouseDown = (e) => {
   window.addEventListener('mouseup', onMouseUp, true)
 }
 
+const ensureClampedPos = () => {
+  const left = Number(props.pos?.left ?? 0) || 0
+  const top = Number(props.pos?.top ?? 0) || 0
+  const p = clampToParent(left, top)
+  if (Number(props.pos?.left) === p.left && Number(props.pos?.top) === p.top) return
+  emit('update:pos', p)
+}
+
+onMounted(async () => {
+  await nextTick()
+  ensureClampedPos()
+})
+
 onUnmounted(() => {
   onMouseUp()
 })
@@ -200,6 +213,9 @@ onUnmounted(() => {
   z-index: 20;
   width: 360px;
   max-width: min(420px, calc(100vw - 24px));
+  max-height: min(72vh, calc(100vh - 24px));
+  display: flex;
+  flex-direction: column;
   border-radius: 12px;
   background: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
@@ -241,6 +257,10 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .panel-langs {
