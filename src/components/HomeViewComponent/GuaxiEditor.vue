@@ -390,9 +390,13 @@
 
         <GuaxiSelectionTranslatePanel v-if="selectionTranslatePanelVisible" :pos="selectionTranslatePanelPos"
           :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
-          :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" @translate="translateSelectionText"
-          @copy="copySelectionTranslateResult" @toggle-pin="toggleSelectionTranslatePinned"
-          @update:pos="handleSelectionTranslatePanelUpdatePos" @close="closeSelectionTranslatePanel" />
+          :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" :items="selectionTranslateItems"
+          :from-lang="selectionTranslateFrom" :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions"
+          @update:from-lang="(v) => selectionTranslateFrom.value = String(v || 'auto')"
+          @update:to-lang="(v) => selectionTranslateTo.value = String(v || 'zh')" @swap-langs="swapSelectionTranslateLangs"
+          @translate="translateSelectionText" @copy="copySelectionTranslateResult"
+          @toggle-pin="toggleSelectionTranslatePinned" @update:pos="handleSelectionTranslatePanelUpdatePos"
+          @close="closeSelectionTranslatePanel" />
 
         <div class="editor-split-wrapper" :class="[layoutMode, { 'vim-enabled': vimMode }]">
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
@@ -545,10 +549,31 @@ const selectionTranslatePanelVisible = ref(false);
 const selectionTranslatePinned = ref(false);
 const selectionTranslatePanelPos = ref({ left: 8, top: 8 });
 
+const selectionTranslateFrom = ref('auto')
+const selectionTranslateTo = ref('zh')
+
+const selectionTranslateLangOptions = [
+  { label: '自动检测', value: 'auto' },
+  { label: '中文', value: 'zh' },
+  { label: '英文', value: 'en' },
+  { label: '日文', value: 'ja' },
+  { label: '韩文', value: 'ko' },
+  { label: '法文', value: 'fr' },
+  { label: '德文', value: 'de' },
+  { label: '西班牙语', value: 'es' },
+  { label: '俄语', value: 'ru' },
+  { label: '葡萄牙语', value: 'pt' },
+  { label: '意大利语', value: 'it' },
+  { label: '荷兰语', value: 'nl' },
+  { label: '越南语', value: 'vi' },
+  { label: '泰语', value: 'th' }
+]
+
 const selectionTranslateBusy = ref(false);
 const selectionTranslateRaw = ref('');
 const selectionTranslateResult = ref('');
 const selectionTranslateError = ref('');
+const selectionTranslateItems = ref([]);
 
 watch(floatingToolbarVisible, (show) => {
   if (!show && !selectionTranslatePinned.value) selectionTranslatePanelVisible.value = false;
@@ -3657,6 +3682,17 @@ const toggleSelectionTranslatePinned = () => {
   console.info('[SelectionTranslate] pin:', { pinned: selectionTranslatePinned.value });
 };
 
+const swapSelectionTranslateLangs = () => {
+  const tmp = selectionTranslateFrom.value
+  selectionTranslateFrom.value = selectionTranslateTo.value
+  selectionTranslateTo.value = tmp
+  console.info('[SelectionTranslate] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+
+  if (selectionTranslatePanelVisible.value && !selectionTranslateBusy.value) {
+    translateSelectionText()
+  }
+}
+
 const closeSelectionTranslatePanel = () => {
   selectionTranslatePanelVisible.value = false;
   selectionTranslatePinned.value = false;
@@ -3691,11 +3727,41 @@ const translateSelectionText = async () => {
   selectionTranslateRaw.value = text;
   selectionTranslateResult.value = '';
   selectionTranslateError.value = '';
+  selectionTranslateItems.value = [];
   selectionTranslateBusy.value = true;
 
-  console.info('[SelectionTranslate] start', { len: text.length });
+  console.info('[SelectionTranslate] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value });
 
   try {
+    try {
+      const response = await invoke('selection_translate_free_multi', {
+        text,
+        from: selectionTranslateFrom.value,
+        to: selectionTranslateTo.value
+      });
+
+      const items = Array.isArray(response?.items) ? response.items : []
+      selectionTranslateItems.value = items.map((it) => ({
+        engine: String(it?.engine || ''),
+        success: Boolean(it?.success),
+        text: String(it?.text || ''),
+        error: it?.error ? String(it.error) : ''
+      }))
+
+      const primary = selectionTranslateItems.value.find((it) => it.success && String(it.text || '').trim())
+      if (primary) {
+        selectionTranslateResult.value = String(primary.text || '')
+        selectionTranslateError.value = ''
+        console.info('[SelectionTranslate] multi success', { engines: selectionTranslateItems.value.length })
+        return
+      }
+
+      const err = String(response?.error || '翻译结果为空')
+      throw new Error(err)
+    } catch (err) {
+      console.warn('[SelectionTranslate] multi failed, fallback to single:', err)
+    }
+
     const response = await invoke('translate_text_free', { texts: [text] });
     const translated = (response?.translated_texts?.[0] || '').toString();
 
@@ -3704,11 +3770,13 @@ const translateSelectionText = async () => {
       throw new Error(err);
     }
 
+    selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
     selectionTranslateResult.value = translated;
-    console.info('[SelectionTranslate] success', { len: translated.length });
+    console.info('[SelectionTranslate] single success', { len: translated.length });
   } catch (err) {
     const msg = String(err?.message || err || '翻译失败');
     selectionTranslateError.value = msg;
+    selectionTranslateItems.value = [{ engine: 'Free', success: false, text: '', error: msg }]
     console.error('[SelectionTranslate] failed:', err);
     message.error(`翻译失败: ${msg}`);
   } finally {
@@ -3716,8 +3784,9 @@ const translateSelectionText = async () => {
   }
 };
 
-const copySelectionTranslateResult = async () => {
-  const text = String(selectionTranslateResult.value || '');
+const copySelectionTranslateResult = async (payload) => {
+  const t = typeof payload === 'string' ? payload : payload?.text
+  const text = String(t || selectionTranslateResult.value || '')
   if (!text) return;
 
   const ok = await writeClipboardText(text);

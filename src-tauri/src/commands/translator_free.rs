@@ -60,7 +60,7 @@ pub async fn translate_text_free(
     
     // 分批处理，每批5条
     for chunk in texts.chunks(5) {
-        match process_batch(chunk).await {
+        match process_batch(chunk, "auto", "zh").await {
             Ok((results, _engine)) => translated_texts.extend(results),
             Err(e) => {
                 let error_str = e.to_string();
@@ -81,17 +81,111 @@ pub async fn translate_text_free(
     })
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct SelectionTranslateEngineItem {
+    pub engine: String,
+    pub success: bool,
+    pub text: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SelectionTranslateMultiResult {
+    pub success: bool,
+    pub items: Vec<SelectionTranslateEngineItem>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn selection_translate_free_multi(
+    text: String,
+    from: String,
+    to: String,
+) -> Result<SelectionTranslateMultiResult, String> {
+    let raw = text.trim().to_string();
+    if raw.is_empty() {
+        return Err("Empty text".into());
+    }
+
+    let clean = preprocess_text(&raw);
+    let texts = vec![clean];
+
+    info!(
+        "SelectionTranslate multi: len={}, from={}, to={}",
+        texts[0].len(),
+        from,
+        to
+    );
+
+    let services: [(&str, TranslateFn); 3] = [
+        ("Bing", bing_translate_service),
+        ("Google", google_translate_service),
+        ("Tencent", tencent_translate_service),
+    ];
+
+    let mut items = Vec::with_capacity(services.len());
+
+    for (name, service) in services.iter() {
+        match service(&texts, &from, &to).await {
+            Ok((results, _engine)) => {
+                let t = results.get(0).cloned().unwrap_or_default();
+                if t.trim().is_empty() {
+                    items.push(SelectionTranslateEngineItem {
+                        engine: name.to_string(),
+                        success: false,
+                        text: String::new(),
+                        error: Some("Empty result".into()),
+                    });
+                } else {
+                    items.push(SelectionTranslateEngineItem {
+                        engine: name.to_string(),
+                        success: true,
+                        text: t,
+                        error: None,
+                    });
+                }
+            }
+            Err(e) => {
+                warn!("SelectionTranslate engine {} failed: {}", name, e);
+                items.push(SelectionTranslateEngineItem {
+                    engine: name.to_string(),
+                    success: false,
+                    text: String::new(),
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    let success = items.iter().any(|it| it.success);
+    let error = if success {
+        None
+    } else {
+        Some("All translation services failed".into())
+    };
+
+    Ok(SelectionTranslateMultiResult {
+        success,
+        items,
+        error,
+    })
+}
+
 // 3. 定义翻译函数类型
 type TranslateFn = for<'a> fn(
     &'a [String],
+    &'a str,
+    &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>>;
 
 // 4. 处理每批翻译
 async fn process_batch(
     texts: &[String],
+    from: &str,
+    to: &str,
 ) -> Result<(Vec<String>, String), TranslationError> {
     let clean_texts: Vec<String> = texts.iter().map(|t| preprocess_text(t)).collect();
-    
+
     // 定义所有翻译服务（按优先级排序）
     // Tencent 的 free 接口近期容易返回 405/非 JSON（反爬/接口变更），放到最后兜底。
     let services: [TranslateFn; 3] = [
@@ -101,9 +195,9 @@ async fn process_batch(
     ];
 
     let mut last_error = None;
-    
+
     for service in services.iter() {
-        match service(&clean_texts).await {
+        match service(&clean_texts, from, to).await {
             Ok((results, engine)) => return Ok((results, engine)),
             Err(e) => {
                 last_error = Some(e.clone());
@@ -121,6 +215,44 @@ fn preprocess_text(text: &str) -> String {
         return "[Image]".to_string();
     }
     text.replace("<", "&lt;").replace(">", "&gt;")
+}
+
+fn normalize_lang(lang: &str) -> String {
+    lang.trim().to_string()
+}
+
+fn normalize_lang_lower(lang: &str) -> String {
+    lang.trim().to_ascii_lowercase()
+}
+
+fn map_google_lang(lang: &str) -> String {
+    let l = normalize_lang_lower(lang);
+    match l.as_str() {
+        "auto" => "auto".into(),
+        "zh" | "zh-cn" | "zh-hans" => "zh-CN".into(),
+        "zh-tw" | "zh-hant" => "zh-TW".into(),
+        _ => l,
+    }
+}
+
+fn map_bing_lang(lang: &str) -> String {
+    let l = normalize_lang_lower(lang);
+    match l.as_str() {
+        "auto" => "auto".into(),
+        "zh" | "zh-cn" | "zh-hans" => "zh-Hans".into(),
+        "zh-tw" | "zh-hant" => "zh-Hant".into(),
+        _ => normalize_lang(lang),
+    }
+}
+
+fn map_tencent_lang(lang: &str) -> String {
+    let l = normalize_lang_lower(lang);
+    match l.as_str() {
+        "auto" => "auto".into(),
+        "zh" | "zh-cn" | "zh-hans" | "zh-hant" | "zh-tw" => "zh".into(),
+        "ja" => "jp".into(),
+        _ => l,
+    }
 }
 
 fn summarize_body(body: &str) -> String {
@@ -148,6 +280,8 @@ fn response_is_probably_html(content_type: Option<&str>, body: &str) -> bool {
 // 6. 腾讯翻译实现
 fn tencent_translate_service<'a>(
     texts: &'a [String],
+    from: &'a str,
+    to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
         let client = Client::builder()
@@ -158,7 +292,10 @@ fn tencent_translate_service<'a>(
             .map_err(TranslationError::from)?;
 
         let mut translated_texts = Vec::with_capacity(texts.len());
-        
+
+        let source = map_tencent_lang(from);
+        let target = map_tencent_lang(to);
+
         for text in texts {
             let response = client
                 .post("https://fanyi.qq.com/api/translate")
@@ -167,8 +304,8 @@ fn tencent_translate_service<'a>(
                 .header("Referer", "https://fanyi.qq.com/")
                 .form(&[
                     ("sourceText", text.as_str()),
-                    ("source", "auto"),
-                    ("target", "zh"),
+                    ("source", source.as_str()),
+                    ("target", target.as_str()),
                     ("qtk", &generate_qtk()),
                     ("qtv", &generate_qtv()),
                 ])
@@ -226,6 +363,8 @@ fn tencent_translate_service<'a>(
 // 8. 谷歌翻译实现
 fn google_translate_service<'a>(
     texts: &'a [String],
+    from: &'a str,
+    to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
         let client = Client::builder()
@@ -236,14 +375,17 @@ fn google_translate_service<'a>(
             .map_err(TranslationError::from)?;
 
         let mut translated_texts = Vec::with_capacity(texts.len());
-        
+
+        let sl = map_google_lang(from);
+        let tl = map_google_lang(to);
+
         for text in texts {
             let response = client
                 .get("https://translate.googleapis.com/translate_a/single")
                 .query(&[
                     ("client", "gtx"),
-                    ("sl", "auto"),
-                    ("tl", "zh-CN"),
+                    ("sl", sl.as_str()),
+                    ("tl", tl.as_str()),
                     ("dt", "t"),
                     ("q", text.as_str()),
                 ])
@@ -305,6 +447,8 @@ fn google_translate_service<'a>(
 // 9. 必应翻译实现
 fn bing_translate_service<'a>(
     texts: &'a [String],
+    from: &'a str,
+    to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
         let client = Client::builder()
@@ -349,13 +493,19 @@ fn bing_translate_service<'a>(
         let token = token_body.trim().to_string();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
-        
+
+        let from_norm = normalize_lang_lower(from);
+        let mut query: Vec<(&str, String)> = vec![("api-version", "3.0".into()), ("to", map_bing_lang(to))];
+        if from_norm != "auto" {
+            query.push(("from", map_bing_lang(from)));
+        }
+
         for text in texts {
             let response = client
                 .post("https://api-edge.cognitive.microsofttranslator.com/translate")
                 .header("Authorization", format!("Bearer {}", token))
                 .header("Content-Type", "application/json")
-                .query(&[("api-version", "3.0"), ("to", "zh-Hans")])
+                .query(&query)
                 .json(&[serde_json::json!({"Text": text})])
                 .send()
                 .await

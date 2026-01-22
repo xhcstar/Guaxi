@@ -131,6 +131,7 @@ async fn main() {
             commands::text_reader_doc_process::read_text_file,
             commands::translator::translate_text,
             commands::translator_free::translate_text_free,
+            commands::translator_free::selection_translate_free_multi,
             commands::docprocess::copy_image_file,
             commands::fileprocess::get_file_tree,
             commands::fileprocess::read_file_content,
