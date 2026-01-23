@@ -60,7 +60,7 @@
         :style="fileTreeStore.isRepoExpanded(activeRepoPathItem) ? { '--active-repo-max-height': activeRepoMaxHeight + 'px' } : undefined">
         <div class="repo-item" @click="toggleRepo(activeRepoPathItem)">
           <div class="repo-title">
-            <n-icon size="15" class="repo-icon">
+            <n-icon size="16" class="repo-icon">
               <FolderIcon />
             </n-icon>
             {{ getRepoName(activeRepoPathItem) }}
@@ -68,24 +68,24 @@
           <div class="repo-actions">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(activeRepoPathItem)">
-                  <n-icon :component="FileAddIcon" size="14" />
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleAddFile(activeRepoPathItem)">
+                  <n-icon :component="FileAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
               新建文件
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(activeRepoPathItem)">
-                  <n-icon :component="FolderAddIcon" size="14" />
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(activeRepoPathItem)">
+                  <n-icon :component="FolderAddIcon" size="16" />
                 </n-icon-wrapper>
               </template>
               新建文件夹
             </n-tooltip>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(activeRepoPathItem)">
-                  <n-icon :component="TrashOutline" size="14" />
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(activeRepoPathItem)">
+                  <n-icon :component="TrashOutline" size="16" />
                 </n-icon-wrapper>
               </template>
               删除知识库
@@ -112,7 +112,7 @@
           <n-list-item v-for="path in inactiveRepoPaths" :key="path" class="repo-list-item">
             <div class="repo-item" @click="toggleRepo(path)">
               <div class="repo-title">
-                <n-icon size="15" class="repo-icon">
+                <n-icon size="16" class="repo-icon">
                   <FolderIcon />
                 </n-icon>
                 {{ getRepoName(path) }}
@@ -120,24 +120,24 @@
               <div class="repo-actions">
                 <n-tooltip trigger="hover">
                   <template #trigger>
-                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
-                      <n-icon :component="FileAddIcon" size="14" />
+                    <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
+                      <n-icon :component="FileAddIcon" size="16" />
                     </n-icon-wrapper>
                   </template>
                   新建文件
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
-                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(path)">
-                      <n-icon :component="FolderAddIcon" size="14" />
+                    <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleAddFolder(path)">
+                      <n-icon :component="FolderAddIcon" size="16" />
                     </n-icon-wrapper>
                   </template>
                   新建文件夹
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
-                    <n-icon-wrapper :size="20" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(path)">
-                      <n-icon :component="TrashOutline" size="14" />
+                    <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleDeleteKnowledgeBase(path)">
+                      <n-icon :component="TrashOutline" size="16" />
                     </n-icon-wrapper>
                   </template>
                   删除知识库
@@ -1842,7 +1842,7 @@ onUnmounted(() => {
 }
 
 .repo-title {
-  font-size: 13px !important;
+  font-size: 15px !important;
   font-weight: 500;
   color: var(--guaxi-text-primary);
   display: flex;
@@ -2210,7 +2210,7 @@ onUnmounted(() => {
 .dark-mode .browser-icon,
 .dark-mode .git-icon,
 .dark-mode .kb-manager-icon {
-  color: #444a57;
+  color: #b8c7ff;
   background-color: transparent;
 }
 
