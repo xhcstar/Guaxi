@@ -18,7 +18,7 @@ export const useFlipboardStore = () => {
   const searchQuery = ref('')
   const currentView = ref('grid') // 'grid' | 'list' | 'magazine'
 
-  // 获取文章列表
+  // 获取文章列表（基于订阅源的真实抓取）
   const fetchArticles = async (category = null, forceRefresh = false) => {
     if (forceRefresh) {
       isRefreshing.value = true
@@ -29,11 +29,12 @@ export const useFlipboardStore = () => {
     selectedCategory.value = category
 
     try {
-      const data = await invoke('get_articles', {
+      console.log('FlipboardStore: fetchArticles from feeds', { category })
+      const data = await invoke('refresh_articles_from_feeds', {
         category,
         limit: 50
       })
-      articles.value = data
+      articles.value = Array.isArray(data) ? data : []
 
       // 保存到本地存储
       localStorage.setItem('flipboard_last_fetch', new Date().toISOString())
@@ -113,6 +114,45 @@ export const useFlipboardStore = () => {
       return true
     } catch (error) {
       console.error('Failed to add feed:', error)
+      throw error
+    }
+  }
+
+  // 启用/禁用订阅源
+  const setFeedEnabled = async (id, enabled) => {
+    try {
+      console.log('FlipboardStore: setFeedEnabled', { id, enabled })
+      await invoke('set_feed_enabled', { id, enabled })
+      await fetchFeeds()
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: setFeedEnabled failed:', error)
+      throw error
+    }
+  }
+
+  // 更新订阅源
+  const updateFeed = async ({ id, url, name, category, enabled }) => {
+    try {
+      console.log('FlipboardStore: updateFeed', { id, url, name, category, enabled })
+      await invoke('update_feed', { id, url, name, category, enabled: Boolean(enabled) })
+      await fetchFeeds()
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: updateFeed failed:', error)
+      throw error
+    }
+  }
+
+  // 删除订阅源
+  const deleteFeed = async (id) => {
+    try {
+      console.log('FlipboardStore: deleteFeed', { id })
+      await invoke('delete_feed', { id })
+      await fetchFeeds()
+      return true
+    } catch (error) {
+      console.error('FlipboardStore: deleteFeed failed:', error)
       throw error
     }
   }
@@ -223,8 +263,9 @@ export const useFlipboardStore = () => {
     localStorage.setItem('flipboard_view_mode', currentView.value)
   }
 
-  // 刷新文章
+  // 刷新文章（强制从订阅源重新抓取）
   const refreshArticles = async () => {
+    console.log('FlipboardStore: manual refresh articles')
     await fetchArticles(selectedCategory.value, true)
   }
 
@@ -318,6 +359,9 @@ export const useFlipboardStore = () => {
     fetchCategories,
     fetchFeeds,
     addFeed,
+    setFeedEnabled,
+    updateFeed,
+    deleteFeed,
     addBookmark,
     removeBookmark,
     isBookmarked,

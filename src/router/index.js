@@ -13,6 +13,7 @@ import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
 import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
 import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
 import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownManual.vue'
+import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
 
 import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumApp.vue'
 import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
@@ -129,6 +130,14 @@ export const routes = [
     path: '/kb-manager',
     name: 'kb-manager',
     component: GuaxiKnowledgeBaseManager,
+  },
+  {
+    path: '/flipboard-feeds',
+    name: 'flipboard-feeds',
+    component: FlipboardFeedManager,
+    props: (route) => ({
+      category: route.query.category,
+    })
   },
   {
     path: '/app/:appId',

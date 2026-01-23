@@ -115,7 +115,7 @@
       </n-scrollbar>
 
       <div class="sidebar-footer">
-        <n-button block type="primary" @click="addFeed" class="add-feed-btn">
+        <n-button block type="primary" @click="openFeedManagerWindow" class="add-feed-btn">
           <template #icon>
             <n-icon>
               <Add />
@@ -130,7 +130,9 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import { invoke } from '@tauri-apps/api/core'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
+import { useMessage } from 'naive-ui'
 import {
   GlobeOutline as Globe,
   BusinessOutline as Business,
@@ -142,6 +144,7 @@ import {
 } from '@vicons/ionicons5'
 
 const store = useFlipboardStore()
+const message = useMessage()
 
 const activePath = ref((window.location.hash || '#/').slice(1) || '/')
 
@@ -179,8 +182,17 @@ const selectCategory = (categoryId) => {
   store.fetchArticles(categoryId)
 }
 
-const addFeed = () => {
-  console.log('添加订阅源')
+const openFeedManagerWindow = async () => {
+  try {
+    console.log('SearchViewSidebar: open feed manager window')
+    await invoke('create_flipboard_feed_window', {
+      label: 'flipboard_feeds',
+      title: '订阅源管理'
+    })
+  } catch (error) {
+    console.error('SearchViewSidebar: open feed manager window failed:', error)
+    message.error('打开订阅源管理窗口失败')
+  }
 }
 
 const navigateTo = (path) => {

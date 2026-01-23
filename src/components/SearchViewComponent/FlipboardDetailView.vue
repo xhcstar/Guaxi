@@ -26,6 +26,22 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
+            <n-button
+              circle
+              size="small"
+              :disabled="!currentArticle"
+              @click="selectionNotesRef?.toggleNotesPanel?.()"
+            >
+              <n-icon>
+                <DocumentTextIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          笔记
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
             <n-button circle size="small">
               <n-icon>
                 <ShareIcon />
@@ -58,7 +74,18 @@
 
         <!-- 文章内容 -->
         <div class="article-body">
-          <div class="article-content" v-html="formattedContent"></div>
+          <SelectionNotesPanel
+            ref="selectionNotesRef"
+            :article-id="currentArticle.id"
+            :article-title="currentArticle.title"
+          >
+            <div
+              class="article-content"
+              v-html="formattedContent"
+              @mouseup="selectionNotesRef?.handleSelectionMouseUp?.()"
+              @dblclick="selectionNotesRef?.toggleNotesPanel?.()"
+            ></div>
+          </SelectionNotesPanel>
         </div>
 
         <!-- 相关文章 -->
@@ -92,8 +119,9 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
+import SelectionNotesPanel from './SelectionNotesPanel.vue'
 import {
   BookmarkOutline,
   ShareSocialOutline,
@@ -120,6 +148,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'article-select'])
 
 const store = useFlipboardStore()
+const selectionNotesRef = ref(null)
 
 const isCurrentBookmarked = computed(() => {
   return props.currentArticle ? store.isBookmarked(props.currentArticle.id) : false

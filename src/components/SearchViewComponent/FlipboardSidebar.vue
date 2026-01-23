@@ -36,12 +36,21 @@
         </template>
         添加订阅源
       </n-button>
+
+      <n-button block secondary @click="openFeedManagerWindow" class="manage-feed-btn">
+        <template #icon>
+          <n-icon><Settings /></n-icon>
+        </template>
+        订阅源管理
+      </n-button>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
+import { useMessage } from 'naive-ui'
+import { invoke } from '@tauri-apps/api/core'
 import { 
   GlobeOutline as Globe,
   BusinessOutline as Business,
@@ -51,7 +60,8 @@ import {
   TrendingUpOutline as Technology,
   ChevronBackOutline as ChevronLeft,
   ChevronForwardOutline as ChevronRight,
-  AddOutline as Add
+  AddOutline as Add,
+  SettingsOutline as Settings
 } from '@vicons/ionicons5'
 
 const props = defineProps({
@@ -65,8 +75,9 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['category-change'])
+const emit = defineEmits(['category-change', 'open-feed-config-dialog'])
 
+const message = useMessage()
 const collapsed = ref(false)
 
 const getCategoryIcon = (categoryId) => {
@@ -90,8 +101,22 @@ const toggleCollapse = () => {
   // 这里可以通知父组件调整布局
 }
 
-const addFeed = () => {
-  console.log('添加订阅源')
+const addFeed = async () => {
+  console.log('FlipboardSidebar: add feed -> open feed manager window')
+  await openFeedManagerWindow()
+}
+
+const openFeedManagerWindow = async () => {
+  try {
+    console.log('FlipboardSidebar: open feed manager window')
+    await invoke('create_flipboard_feed_window', {
+      label: 'flipboard_feeds',
+      title: '订阅源管理'
+    })
+  } catch (error) {
+    console.error('FlipboardSidebar: open feed manager window failed:', error)
+    message.error('打开订阅源管理窗口失败')
+  }
 }
 </script>
 
@@ -207,5 +232,12 @@ const addFeed = () => {
 .add-feed-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.manage-feed-btn {
+  margin-top: 10px;
+  border-radius: 12px;
+  height: 40px;
+  font-weight: 500;
 }
 </style>
