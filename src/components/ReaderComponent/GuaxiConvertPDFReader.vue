@@ -3840,6 +3840,9 @@ const handleWheelZoom = async (e) => {
 
   panel.scrollLeft = Math.max(0, targetScrollLeft)
   panel.scrollTop = Math.max(0, targetScrollTop)
+
+  // 缩放和滚动位置稳定后，强制重绘当前页高亮，避免缩放过程中高亮短暂消失
+  renderPdfActiveHighlightForCurrentPage()
 }
 
 // 23. 分页控制
@@ -3977,6 +3980,9 @@ const fitToWidth = async () => {
   // Re-center using current clientWidth after render (accounts for scrollbar changes)
   panel.scrollLeft = Math.max(0, (w - panel.clientWidth) / 2)
   panel.scrollTop = 0
+
+  // 自适应宽度完成后，再次按照当前缩放和尺寸重绘高亮
+  renderPdfActiveHighlightForCurrentPage()
 };
 
 const setViewMode = (mode) => {
