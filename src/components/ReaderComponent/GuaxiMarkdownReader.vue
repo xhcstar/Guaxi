@@ -3547,6 +3547,26 @@ button:disabled {
   outline: none;
 }
 
+.note-content :deep(a),
+.note-content :deep(a:visited) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dark-mode .note-content :deep(a),
+.dark-mode .note-content :deep(a:visited),
+.dark .note-content :deep(a),
+.dark .note-content :deep(a:visited),
+:root[data-guaxi-theme='dark'] .note-content :deep(a),
+:root[data-guaxi-theme='dark'] .note-content :deep(a:visited) {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.note-content :deep(a:hover) {
+  opacity: 0.92;
+}
+
 .note-content.saved-feedback {
   animation: savedPulse 1s;
 }
