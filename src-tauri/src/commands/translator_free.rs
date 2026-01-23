@@ -281,6 +281,7 @@ fn map_yandex_lang(lang: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn map_transmart_lang(lang: &str) -> String {
     let l = normalize_lang_lower(lang);
     match l.as_str() {
@@ -485,6 +486,7 @@ fn yandex_translate_service<'a>(
     })
 }
 
+#[allow(dead_code)]
 fn transmart_translate_service<'a>(
     texts: &'a [String],
     from: &'a str,
