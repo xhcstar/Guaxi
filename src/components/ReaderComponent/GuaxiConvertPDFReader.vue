@@ -3725,10 +3725,12 @@ const handleDrag = (e) => {
     pdfPanel.value.scrollTop = startScrollPos.value.top - dy;
 
     // 计算速度（像素/毫秒）
+    // 注意：scrollLeft/scrollTop 的更新方向与鼠标位移 dx/dy 相反（scroll = start - delta），
+    // 若不取反，松手后惯性滚动会把页面往回拉。
     if (deltaTime > 0) {
       velocity.value = {
-        x: dx / deltaTime,
-        y: dy / deltaTime
+        x: -dx / deltaTime,
+        y: -dy / deltaTime
       };
     }
 
@@ -3805,24 +3807,39 @@ const decelerate = () => {
 
 // 22. 缩放控制
 const handleWheelZoom = async (e) => {
-  if (!e.ctrlKey) return
+  if (!e.ctrlKey || !pdfPanel.value) return
 
   e.preventDefault()
+
+  const panel = pdfPanel.value
+  const prevZoom = zoomLevel.value
+
+  const rect = panel.getBoundingClientRect()
+  const localX = e.clientX - rect.left
+  const localY = e.clientY - rect.top
+
+  const prevScrollLeft = panel.scrollLeft
+  const prevScrollTop = panel.scrollTop
+
   const delta = e.deltaY < 0 ? 0.1 : -0.1
-  zoomLevel.value = Math.max(0.5, Math.min(2, zoomLevel.value + delta))
+  const nextZoom = Math.max(0.5, Math.min(2, prevZoom + delta))
+
+  if (nextZoom === prevZoom) return
+
+  zoomLevel.value = nextZoom
 
   await loadPdfPage(currentPage.value)
 
   await nextTick()
   if (!pdfPanel.value) return
 
-  const panel = pdfPanel.value
-  const w = Number(currentPageData.value?.page_width) || 0
-  const h = Number(currentPageData.value?.page_height) || 0
-  if (!w || !h) return
+  const scale = nextZoom / prevZoom
 
-  panel.scrollLeft = Math.max(0, (w - panel.clientWidth) / 2)
-  panel.scrollTop = Math.max(0, (h - panel.clientHeight) / 2)
+  const targetScrollLeft = (prevScrollLeft + localX) * scale - localX
+  const targetScrollTop = (prevScrollTop + localY) * scale - localY
+
+  panel.scrollLeft = Math.max(0, targetScrollLeft)
+  panel.scrollTop = Math.max(0, targetScrollTop)
 }
 
 // 23. 分页控制
