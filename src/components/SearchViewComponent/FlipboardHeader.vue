@@ -32,31 +32,53 @@
       <!-- 右侧操作按钮 -->
       <div class="header-right">
         <n-button-group>
-          <n-button circle size="small" @click="setViewMode('magazine')"
-            :type="currentView === 'magazine' ? 'primary' : 'default'">
-            <n-icon>
-              <MagazineIcon />
-            </n-icon>
-          </n-button>
-          <n-button circle size="small" @click="setViewMode('grid')"
-            :type="currentView === 'grid' ? 'primary' : 'default'">
-            <n-icon>
-              <GridIcon />
-            </n-icon>
-          </n-button>
-          <n-button circle size="small" @click="setViewMode('list')"
-            :type="currentView === 'list' ? 'primary' : 'default'">
-            <n-icon>
-              <ListIcon />
-            </n-icon>
-          </n-button>
+          <n-tooltip placement="bottom" trigger="hover">
+            <template #trigger>
+              <n-button circle size="small" @click="setViewMode('magazine')"
+                :type="currentView === 'magazine' ? 'primary' : 'default'">
+                <n-icon>
+                  <MagazineIcon />
+                </n-icon>
+              </n-button>
+            </template>
+            杂志视图
+          </n-tooltip>
+
+          <n-tooltip placement="bottom" trigger="hover">
+            <template #trigger>
+              <n-button circle size="small" @click="setViewMode('grid')"
+                :type="currentView === 'grid' ? 'primary' : 'default'">
+                <n-icon>
+                  <GridIcon />
+                </n-icon>
+              </n-button>
+            </template>
+            网格视图
+          </n-tooltip>
+
+          <n-tooltip placement="bottom" trigger="hover">
+            <template #trigger>
+              <n-button circle size="small" @click="setViewMode('list')"
+                :type="currentView === 'list' ? 'primary' : 'default'">
+                <n-icon>
+                  <ListIcon />
+                </n-icon>
+              </n-button>
+            </template>
+            列表视图
+          </n-tooltip>
         </n-button-group>
 
-        <n-button circle size="small" @click="refreshArticles" :loading="isLoading">
-          <n-icon>
-            <RefreshIcon />
-          </n-icon>
-        </n-button>
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button circle size="small" @click="refreshArticles" :loading="isLoading">
+              <n-icon>
+                <RefreshIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          刷新文章
+        </n-tooltip>
       </div>
     </div>
   </div>
@@ -192,6 +214,7 @@ const toggleLeftSidebar = () => {
 .header-right .n-button {
   border: 1px solid var(--guaxi-border);
   background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
   transition: all 0.2s ease;
 }
 

@@ -13,30 +13,19 @@
         <div class="sider-resize-handle" @mousedown="onMouseDownLeftSidebar"></div>
       </div>
 
-      <!-- 中间内容区域 -->
-      <div class="content-area">
-        <FlipboardMagazineView :articles="filteredArticles" :current-view="currentView" :is-loading="isLoading"
-          @article-select="handleArticleSelect" />
-      </div>
-
-      <!-- 右侧阅读面板 -->
-      <div class="reader-panel" :class="{ collapsed: isRightSiderCollapsed }"
-        :style="{ width: isRightSiderCollapsed ? '0' : rightSiderbarWidth + 'px' }">
-        <FlipboardDetailView :current-article="currentArticle" :is-loading="isLoading" />
-        <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSidebar"></div>
-      </div>
+      <!-- 中间内容区域 + 右侧阅读区域交给 ReadingCoordinator 统一协调 -->
+      <ReadingCoordinator view-key="search" />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from "vue"
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue"
 import { useFlipboardStore } from '../stores/flipboardStore.js'
 import { useSiderStore } from '../stores/useSiderStore'
 import SearchViewSidebar from '../components/SearchViewComponent/SearchViewSidebar.vue'
 import FlipboardHeader from "../components/SearchViewComponent/FlipboardHeader.vue"
-import FlipboardMagazineView from "../components/SearchViewComponent/FlipboardMagazineView.vue"
-import FlipboardDetailView from "../components/SearchViewComponent/FlipboardDetailView.vue"
+import ReadingCoordinator from "../components/SearchViewComponent/ReadingCoordinator.vue"
 
 // 使用 store
 const store = useFlipboardStore()
@@ -53,6 +42,16 @@ const isLeftSiderCollapsed = computed({
 const isRightSiderCollapsed = computed({
   get: () => siderStore.isRightSiderCollapsed[viewKey] ?? true,
   set: (val) => siderStore.setRightSiderCollapsed(viewKey, val)
+})
+const isReadingMode = ref(false)
+const readerPanelStyle = computed(() => {
+  if (isRightSiderCollapsed.value) {
+    return { width: '0' }
+  }
+  if (isReadingMode.value) {
+    return { flex: '1 1 auto', width: 'auto' }
+  }
+  return { width: rightSiderbarWidth.value + 'px' }
 })
 
 // 拖拽状态
@@ -73,14 +72,32 @@ const isLoading = computed(() => store.isLoading.value)
 const handleArticleSelect = async (article) => {
   try {
     await store.fetchArticleDetail(article.id)
-    // 自动展开右侧面板
     if (isRightSiderCollapsed.value) {
       isRightSiderCollapsed.value = false
     }
+    isReadingMode.value = true
   } catch (error) {
     console.error('Failed to load article detail:', error)
   }
 }
+
+const handleReaderClose = () => {
+  isRightSiderCollapsed.value = true
+  isReadingMode.value = false
+  store.currentArticle.value = null
+}
+
+const handleRelatedArticleSelect = async (article) => {
+  try {
+    await store.fetchArticleDetail(article.id)
+  } catch (error) {
+    console.error('Failed to load related article detail:', error)
+  }
+}
+
+watch(() => store.currentView.value, () => {
+  isReadingMode.value = false
+})
 
 // 拖拽调整宽度逻辑
 const onMouseDownLeftSidebar = (event) => {

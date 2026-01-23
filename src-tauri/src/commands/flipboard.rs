@@ -60,12 +60,6 @@ fn get_default_categories() -> Vec<Category> {
             color: "#3B82F6".to_string(),
         },
         Category {
-            id: "news".to_string(),
-            name: "新闻".to_string(),
-            icon: "Newspaper".to_string(),
-            color: "#EF4444".to_string(),
-        },
-        Category {
             id: "technology".to_string(),
             name: "科技".to_string(),
             icon: "Chip".to_string(),
@@ -78,14 +72,8 @@ fn get_default_categories() -> Vec<Category> {
             color: "#10B981".to_string(),
         },
         Category {
-            id: "sports".to_string(),
-            name: "体育".to_string(),
-            icon: "Trophy".to_string(),
-            color: "#F59E0B".to_string(),
-        },
-        Category {
             id: "entertainment".to_string(),
-            name: "娱乐".to_string(),
+            name: "游戏".to_string(),
             icon: "Film".to_string(),
             color: "#EC4899".to_string(),
         },
@@ -96,10 +84,22 @@ fn get_default_categories() -> Vec<Category> {
             color: "#F97316".to_string(),
         },
         Category {
-            id: "science".to_string(),
-            name: "科学".to_string(),
-            icon: "Beaker".to_string(),
-            color: "#06B6D4".to_string(),
+            id: "computer".to_string(),
+            name: "计算机".to_string(),
+            icon: "Chip".to_string(),
+            color: "#0EA5E9".to_string(),
+        },
+        Category {
+            id: "math".to_string(),
+            name: "数学".to_string(),
+            icon: "Calculator".to_string(),
+            color: "#22C55E".to_string(),
+        },
+        Category {
+            id: "physics".to_string(),
+            name: "物理".to_string(),
+            icon: "Flash".to_string(),
+            color: "#F97316".to_string(),
         },
     ]
 }

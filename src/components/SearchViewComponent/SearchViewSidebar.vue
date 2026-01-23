@@ -163,12 +163,14 @@ const selectedCategory = computed(() => store.selectedCategory.value)
 
 const getCategoryIcon = (categoryId) => {
   const iconMap = {
-    'news': Globe,
     'business': Business,
-    'sports': Sports,
+    'technology': Technology,
+    'computer': Technology,
+    'math': Business,
+    'physics': Globe,
     'lifestyle': Heart,
     'entertainment': Camera,
-    'technology': Technology
+    'news': Globe
   }
   return iconMap[categoryId] || Globe
 }

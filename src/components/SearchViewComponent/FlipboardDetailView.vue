@@ -2,21 +2,38 @@
   <div class="reader-panel">
     <div class="reader-header">
       <div class="reader-actions">
-        <n-button circle size="small" @click="closeReader" class="close-btn">
-          <n-icon>
-            <CloseIcon />
-          </n-icon>
-        </n-button>
-        <n-button circle size="small" @click="toggleBookmark" :type="isCurrentBookmarked ? 'primary' : 'default'">
-          <n-icon>
-            <BookmarkIcon />
-          </n-icon>
-        </n-button>
-        <n-button circle size="small">
-          <n-icon>
-            <ShareIcon />
-          </n-icon>
-        </n-button>
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button circle size="small" @click="closeReader" class="close-btn">
+              <n-icon>
+                <CloseIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          关闭阅读
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button circle size="small" @click="toggleBookmark" :type="isCurrentBookmarked ? 'primary' : 'default'">
+              <n-icon>
+                <BookmarkIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          收藏/取消收藏
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
+            <n-button circle size="small">
+              <n-icon>
+                <ShareIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          分享
+        </n-tooltip>
       </div>
     </div>
 
@@ -175,6 +192,18 @@ const formatTime = (timeString) => {
   align-items: center;
 }
 
+.reader-actions .n-button {
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-secondary);
+  border: 1px solid var(--guaxi-border);
+  transition: all 0.2s ease;
+}
+
+.reader-actions .n-button:hover {
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+}
+
 .close-btn {
   color: var(--guaxi-text-secondary);
 }
@@ -240,7 +269,7 @@ const formatTime = (timeString) => {
 .article-body {
   line-height: 1.8;
   font-size: 1.125rem;
-  color: #2d3748;
+  color: var(--guaxi-text-primary);
 }
 
 .article-content {
@@ -250,33 +279,34 @@ const formatTime = (timeString) => {
 .article-content :deep(p) {
   margin-bottom: 1.5em;
   text-align: justify;
+  color: var(--guaxi-text-primary);
 }
 
 .article-content :deep(h2) {
   font-size: 1.5rem;
   font-weight: 600;
   margin: 2em 0 1em;
-  color: #1a1a1a;
+  color: var(--guaxi-text-primary);
 }
 
 .article-content :deep(h3) {
   font-size: 1.25rem;
   font-weight: 600;
   margin: 1.5em 0 0.5em;
-  color: #1a1a1a;
+  color: var(--guaxi-text-primary);
 }
 
 .related-articles {
   margin-top: 60px;
   padding-top: 40px;
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  border-top: 1px solid var(--guaxi-border);
 }
 
 .related-title {
   font-size: 1.25rem;
   font-weight: 600;
   margin-bottom: 24px;
-  color: #1a1a1a;
+  color: var(--guaxi-text-primary);
 }
 
 .related-list {
@@ -288,13 +318,14 @@ const formatTime = (timeString) => {
 .related-card {
   padding: 16px;
   border-radius: 8px;
-  background: #f8f9fa;
+  background: var(--guaxi-panel-bg);
   cursor: pointer;
   transition: all 0.2s ease;
+  border: 1px solid var(--guaxi-border);
 }
 
 .related-card:hover {
-  background: #e9ecef;
+  background: var(--guaxi-header-bg);
   transform: translateX(4px);
 }
 
@@ -302,12 +333,12 @@ const formatTime = (timeString) => {
   font-size: 1rem;
   font-weight: 600;
   margin-bottom: 8px;
-  color: #1a1a1a;
+  color: var(--guaxi-text-primary);
 }
 
 .related-card p {
   font-size: 0.875rem;
-  color: #666;
+  color: var(--guaxi-text-secondary);
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -324,7 +355,7 @@ const formatTime = (timeString) => {
 }
 
 .empty-tip {
-  color: #666;
+  color: var(--guaxi-text-secondary);
   font-size: 14px;
   margin-top: 8px;
 }

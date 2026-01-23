@@ -40,19 +40,6 @@
           共 {{ articles.length }} 篇文章
         </div>
       </div>
-      
-      <div class="controls-right">
-        <n-button 
-          size="small" 
-          circle
-          @click="refreshArticles"
-          :loading="isLoading"
-        >
-          <template #icon>
-            <n-icon><RefreshIcon /></n-icon>
-          </template>
-        </n-button>
-      </div>
     </div>
 
     <!-- 内容区域 -->
@@ -220,11 +207,6 @@ const refreshArticles = () => {
   font-size: 14px;
 }
 
-.controls-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
 .magazine-content {
   flex: 1;
