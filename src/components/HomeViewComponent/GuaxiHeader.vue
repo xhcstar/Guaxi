@@ -244,6 +244,7 @@ import {
   PanelRightContract24Regular
 } from '@vicons/fluent'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 
 const rightSiderStore = useRightSiderStore()
@@ -258,6 +259,30 @@ const searchType = ref('file')
 
 const viewKey = 'home'
 const message = useMessage();
+const appWindow = getCurrentWindow();
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForWindowMinimized = async (timeoutMs = 1200, settleMs = 260) => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const minimized = await appWindow.isMinimized();
+      if (minimized) {
+        console.debug('[Screenshot] Window minimized, waiting extra settle time before capture');
+        await sleep(settleMs);
+        console.debug('[Screenshot] Window minimized and settled, ready to capture');
+        return true;
+      }
+    } catch (e) {
+      console.warn('[Screenshot] Failed to check isMinimized:', e);
+      break;
+    }
+    await sleep(50);
+  }
+  console.warn('[Screenshot] Wait for minimized timed out, continue to capture');
+  return false;
+};
 
 const splitVertical = () => {
   if (!fileTreeStore.activeTab) {
@@ -321,6 +346,14 @@ async function openTemplateManager() {
 
 async function CaptureScreenshot() {
   try {
+    try {
+      console.debug('[Screenshot] Minimizing window before capture')
+      await appWindow.minimize()
+      await waitForWindowMinimized()
+    } catch (minErr) {
+      console.warn('[Screenshot] Failed to minimize window:', minErr)
+    }
+
     const originalPath = fileTreeStore.selectedFile?.path
     console.debug('[Screenshot] Triggered', {
       activeTab: fileTreeStore.activeTab,
@@ -365,6 +398,15 @@ async function CaptureScreenshot() {
   } catch (err) {
     console.error('[Screenshot] Failed:', err)
     message.error('截图失败')
+  } finally {
+    try {
+      console.debug('[Screenshot] Restoring window after capture')
+      await appWindow.unminimize()
+      await appWindow.show()
+      await appWindow.setFocus()
+    } catch (restoreErr) {
+      console.warn('[Screenshot] Failed to restore window:', restoreErr)
+    }
   }
 }
 
