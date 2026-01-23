@@ -134,12 +134,11 @@ pub async fn selection_translate_free_multi(
         to
     );
 
-    let services: [(&str, TranslateFn); 5] = [
+    let services: [(&str, TranslateFn); 4] = [
         ("Bing", bing_translate_service),
         ("Google", google_translate_service),
         ("Lingva", lingva_translate_service),
         ("Yandex", yandex_translate_service),
-        ("Transmart", transmart_translate_service),
     ];
 
     let mut items = Vec::with_capacity(services.len());
@@ -206,12 +205,11 @@ async fn process_batch(
     let clean_texts: Vec<String> = texts.iter().map(|t| preprocess_text(t)).collect();
 
     // 定义所有翻译服务（按优先级排序）
-    let services: [TranslateFn; 5] = [
+    let services: [TranslateFn; 4] = [
         bing_translate_service,
         google_translate_service,
         lingva_translate_service,
         yandex_translate_service,
-        transmart_translate_service,
     ];
 
     let mut last_error = None;
