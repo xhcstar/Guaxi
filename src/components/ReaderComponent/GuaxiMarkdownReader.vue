@@ -3263,6 +3263,9 @@ button:disabled {
   user-select: text;
   padding: 10px;
   cursor: text;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .markdown-content :deep(a),

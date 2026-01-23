@@ -3316,6 +3316,9 @@ watchEffect((onInvalidate) => {
   color: var(--guaxi-text-primary);
   background-color: var(--guaxi-content-bg);
   user-select: text;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .text-viewer-container {
@@ -3580,6 +3583,9 @@ button:disabled {
   user-select: text;
   padding: 10px;
   cursor: text;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .markdown-content :deep(a),
