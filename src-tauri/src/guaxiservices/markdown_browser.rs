@@ -530,6 +530,12 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
 
               const md = await rawResp.text();
 
+              // 基于内容的简易变更检测：如果内容未变化，则不重复渲染
+              if (window.__guaxiLastPreviewMd !== undefined && window.__guaxiLastPreviewMd === md) {{
+                return;
+              }}
+              window.__guaxiLastPreviewMd = md;
+
               let processed = md;
               try {{
                 const procResp = await fetch('/api/markdown/image_process', {{
@@ -608,6 +614,26 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               if (!contentEl) return;
               contentEl.textContent = (e && e.message) ? e.message : '渲染失败';
             }});
+
+            // 启动轮询检测，文件保存后自动刷新预览
+            const POLL_INTERVAL_MS = 1200;
+
+            function startAutoReload() {{
+              if (window.__guaxiPreviewAutoReloadStarted) {{
+                return;
+              }}
+              window.__guaxiPreviewAutoReloadStarted = true;
+
+              console.log('[Guaxi Preview] Auto-reload watcher started, interval =', POLL_INTERVAL_MS, 'ms');
+
+              setInterval(() => {{
+                loadAndRender().catch((e) => {{
+                  console.warn('[Guaxi Preview] Auto-reload failed:', e);
+                }});
+              }}, POLL_INTERVAL_MS);
+            }}
+
+            startAutoReload();
           </script>
         </body>
         </html>"#,
