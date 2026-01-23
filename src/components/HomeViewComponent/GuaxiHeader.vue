@@ -1072,16 +1072,25 @@ const handleGlobalSearchHotkey = (e) => {
     })
 }
 
+const handleBeforeUnload = () => {
+  searchHistory.value = []
+  try {
+    localStorage.removeItem(HISTORY_STORAGE_KEY)
+  } catch {}
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleWindowReflow)
   window.addEventListener('scroll', handleWindowReflow, true)
   window.addEventListener('keydown', handleGlobalSearchHotkey, true)
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleWindowReflow)
   window.removeEventListener('scroll', handleWindowReflow, true)
   window.removeEventListener('keydown', handleGlobalSearchHotkey, true)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   debouncedRunPreviewSearch.cancel()
 })
 
