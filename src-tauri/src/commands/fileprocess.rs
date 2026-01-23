@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -133,6 +134,23 @@ pub fn write_file_content(path: String, content: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_executable_dir() -> Result<String, String> {
+    let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?
+        .to_path_buf();
+
+    info!(
+        exe_path = %exe_path.display(),
+        exe_dir = %exe_dir.display(),
+        "get_executable_dir"
+    );
+
+    Ok(exe_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]

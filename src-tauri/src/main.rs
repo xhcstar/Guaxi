@@ -138,6 +138,7 @@ async fn main() {
             commands::fileprocess::read_file_bytes_base64,
             commands::fileprocess::write_file_bytes_base64,
             commands::fileprocess::write_file_content,
+            commands::fileprocess::get_executable_dir,
             commands::fileprocess::create_directory,
             commands::fileprocess::create_file,
             commands::fileprocess::delete_path,

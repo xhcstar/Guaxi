@@ -35,14 +35,20 @@
           content-style="padding: 0;">
           <template #header-extra>
             <div class="card-actions" v-if="activeCardIndex === index">
-              <n-button size="tiny" type="primary" @click.stop="saveCardEdit(index)" title="保存">
-                保存
+              <n-button size="tiny" type="primary" @click.stop="saveCardEdit(index)" title="保存" :disabled="selectionBusy">
+                <template #icon>
+                  <n-icon :component="Save" />
+                </template>
               </n-button>
-              <n-button size="tiny" text @click.stop="exitEditMode(index)" title="退出编辑">
-                退出
+              <n-button size="tiny" tertiary @click.stop="exitEditMode(index)" title="退出编辑">
+                <template #icon>
+                  <n-icon :component="Close" />
+                </template>
               </n-button>
-              <n-button size="tiny" text @click.stop="deleteCard(index)" title="删除">
-                删除
+              <n-button size="tiny" type="error" tertiary @click.stop="deleteCard(index)" title="删除">
+                <template #icon>
+                  <n-icon :component="Trash" />
+                </template>
               </n-button>
             </div>
           </template>
@@ -71,6 +77,9 @@
 
         <div class="add-card-container">
           <n-button type="primary" dashed block @click="addNewCard">
+            <template #icon>
+              <n-icon :component="Add" />
+            </template>
             添加新卡片
           </n-button>
         </div>
@@ -102,7 +111,10 @@
  */
 
 import { ref, onMounted, watch, defineExpose } from 'vue'
-import { NCard, NButton, NText, useMessage } from 'naive-ui'
+import { invoke } from '@tauri-apps/api/core'
+import { join } from '@tauri-apps/api/path'
+import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
+import { AddOutline as Add, SaveOutline as Save, CloseOutline as Close, TrashOutline as Trash } from '@vicons/ionicons5'
 
 /**
  * props.articleId     用于区分每篇文章的笔记存储 key
@@ -139,64 +151,204 @@ const selectionInsertText = ref('')
 const selectionBusy = ref(false)
 
 /**
- * 本地存储 key：保证每篇文章单独一份笔记数据
+ * 笔记文件路径：每篇文章单独一个 JSON 文件
+ * - 目标位置：可执行文件同级目录 /Fliprepo/flipboard-notes/
+ * - 文件名：<articleId>.json
  */
-const storageKey = ref('')
+const notesFilePath = ref('')
 
 /**
- * 初始化存储 key
+ * 将 articleId 转成可用作文件名的安全字符串（Windows 兼容）
+ * - 禁止字符：<>:"/\\|?* 以及控制字符
+ * - 同时避免把 URL 的 / 或 \ 变成目录层级
  */
-const initStorageKey = () => {
-  storageKey.value = `flipboard_notes_${String(props.articleId)}`
-  console.debug('[SelectionNotesPanel] initStorageKey:', storageKey.value)
+const toSafeFileName = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+
+  return raw
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/[\s]+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 180)
 }
 
 /**
- * 从 localStorage 读取已保存的笔记数据
+ * 初始化并确保笔记文件所在目录存在
  */
-const loadNotesFromStorage = () => {
+const ensureNotesFilePath = async () => {
+  if (notesFilePath.value) return notesFilePath.value
+
+  const rawArticleId = String(props.articleId)
+  const safeArticleId = toSafeFileName(rawArticleId)
+  const fileBaseName = safeArticleId || `article_${Date.now()}`
+
   try {
-    if (!storageKey.value) {
-      console.warn('[SelectionNotesPanel] storageKey is empty, skip load')
-      return
-    }
-    const raw = localStorage.getItem(storageKey.value)
-    if (!raw) {
-      console.debug('[SelectionNotesPanel] no existing notes, skip')
-      return
-    }
-    const data = JSON.parse(raw)
-    if (Array.isArray(data)) {
-      noteCards.value = data
-    } else if (Array.isArray(data?.cards)) {
-      noteCards.value = data.cards
-    }
-    console.debug('[SelectionNotesPanel] notes loaded from storage', {
-      key: storageKey.value,
-      count: noteCards.value.length
+    const exeDir = await invoke('get_executable_dir')
+    const dir = await join(exeDir, 'Fliprepo', 'flipboard-notes')
+
+    console.debug('[SelectionNotesPanel] resolve notes dir', {
+      exeDir,
+      dir,
+      rawArticleId,
+      safeArticleId,
+      fileBaseName
     })
+
+    await invoke('create_directory', { path: dir })
+
+    notesFilePath.value = await join(dir, `${fileBaseName}.json`)
+    console.debug('[SelectionNotesPanel] notesFilePath ready:', notesFilePath.value)
+
+    return notesFilePath.value
   } catch (error) {
-    console.error('[SelectionNotesPanel] loadNotesFromStorage failed:', error)
+    const msg = error?.message || String(error)
+    console.error('[SelectionNotesPanel] ensureNotesFilePath failed:', msg)
+    message.error('初始化笔记目录失败', { duration: 2500 })
+    throw error
   }
 }
 
 /**
- * 将当前 noteCards 写回 localStorage
+ * 从 JSON 文件加载笔记
  */
-const saveNotesToStorage = () => {
+const loadNotesFromFile = async () => {
+  const articleId = String(props.articleId)
+  const fp = await ensureNotesFilePath()
+
+  const isNotFoundError = (msg) => {
+    const s = String(msg || '').toLowerCase()
+    return (
+      s.includes('notfound') ||
+      s.includes('no such file') ||
+      s.includes('系统找不到指定的文件') ||
+      s.includes('the system cannot find the file specified') ||
+      s.includes('os error 2')
+    )
+  }
+
+  const tryMigrateFromLegacyLocalStorage = async () => {
+    try {
+      const legacyKey = `flipboard_notes_${articleId}`
+      const legacyRaw = localStorage.getItem(legacyKey)
+      if (!legacyRaw) return false
+
+      const legacyData = JSON.parse(legacyRaw)
+      if (Array.isArray(legacyData)) {
+        noteCards.value = legacyData
+      } else if (Array.isArray(legacyData?.cards)) {
+        noteCards.value = legacyData.cards
+      } else {
+        return false
+      }
+
+      console.info('[SelectionNotesPanel] migrated notes from legacy localStorage', {
+        legacyKey,
+        filePath: fp,
+        count: noteCards.value.length
+      })
+
+      await saveNotesToFile()
+      return true
+    } catch (e) {
+      console.warn('[SelectionNotesPanel] migrate legacy localStorage failed', e)
+      return false
+    }
+  }
+
   try {
-    if (!storageKey.value) {
-      console.warn('[SelectionNotesPanel] storageKey is empty, skip save')
+    let raw = ''
+    try {
+      raw = await invoke('read_file_content', { path: fp })
+    } catch (e) {
+      const msg = e?.message || String(e)
+      if (!isNotFoundError(msg)) throw e
+
+      console.debug('[SelectionNotesPanel] notes file not found, treat as empty', {
+        filePath: fp,
+        msg
+      })
+
+      noteCards.value = []
+      const migrated = await tryMigrateFromLegacyLocalStorage()
+      if (!migrated) {
+        await invoke('create_file_with_content', { path: fp, content: '' })
+      }
       return
     }
-    const payload = JSON.stringify(noteCards.value)
-    localStorage.setItem(storageKey.value, payload)
-    console.debug('[SelectionNotesPanel] notes saved to storage', {
-      key: storageKey.value,
+
+    if (!String(raw || '').trim()) {
+      console.debug('[SelectionNotesPanel] notes file empty, treat as empty', { filePath: fp })
+      noteCards.value = []
+
+      const migrated = await tryMigrateFromLegacyLocalStorage()
+      if (!migrated) {
+        await saveNotesToFile()
+      }
+      return
+    }
+
+    let data
+    try {
+      data = JSON.parse(raw)
+    } catch (e) {
+      console.warn('[SelectionNotesPanel] notes file is not valid json, reset to empty', {
+        filePath: fp,
+        error: e?.message || String(e)
+      })
+      noteCards.value = []
+      await saveNotesToFile()
+      return
+    }
+
+    if (Array.isArray(data)) {
+      noteCards.value = data
+    } else if (Array.isArray(data?.cards)) {
+      noteCards.value = data.cards
+    } else {
+      noteCards.value = []
+    }
+
+    console.debug('[SelectionNotesPanel] notes loaded from file', {
+      filePath: fp,
       count: noteCards.value.length
     })
   } catch (error) {
-    console.error('[SelectionNotesPanel] saveNotesToStorage failed:', error)
+    const msg = error?.message || String(error)
+    console.error('[SelectionNotesPanel] loadNotesFromFile failed:', msg)
+    message.error(`读取笔记失败: ${msg}`, { duration: 2500 })
+  }
+}
+
+/**
+ * 将当前 noteCards 写回 JSON 文件
+ */
+const saveNotesToFile = async () => {
+  try {
+    const fp = await ensureNotesFilePath()
+
+    const payload = JSON.stringify(
+      {
+        version: 1,
+        articleId: String(props.articleId),
+        articleTitle: props.articleTitle || '',
+        updatedAt: new Date().toISOString(),
+        cards: noteCards.value
+      },
+      null,
+      2
+    )
+
+    await invoke('write_file_content', { path: fp, content: payload })
+
+    console.debug('[SelectionNotesPanel] notes saved to file', {
+      filePath: fp,
+      count: noteCards.value.length
+    })
+  } catch (error) {
+    const msg = error?.message || String(error)
+    console.error('[SelectionNotesPanel] saveNotesToFile failed:', msg)
+    message.error('保存笔记失败', { duration: 2500 })
   }
 }
 
@@ -388,7 +540,7 @@ const showNoteAddedBubble = () => {
  * 将当前 noteCards 持久化到 localStorage
  */
 const persistNotes = async () => {
-  saveNotesToStorage()
+  await saveNotesToFile()
 }
 
 /**
@@ -493,17 +645,16 @@ const formatTime = (timestamp) => {
 // 监听 articleId 变化，切换文章时重新加载对应的笔记数据
 watch(
   () => props.articleId,
-  () => {
-    initStorageKey()
+  async () => {
+    notesFilePath.value = ''
     noteCards.value = []
-    loadNotesFromStorage()
+    await loadNotesFromFile()
   },
   { immediate: true }
 )
 
-onMounted(() => {
-  initStorageKey()
-  loadNotesFromStorage()
+onMounted(async () => {
+  await loadNotesFromFile()
 })
 
 // 将 handleSelectionMouseUp / toggleNotesPanel 暴露给父组件
@@ -593,6 +744,7 @@ defineExpose({
   background: transparent;
   cursor: pointer;
   font-size: 12px;
+  color: var(--guaxi-text-secondary, #64748b);
 }
 
 .notes-content {
@@ -605,20 +757,40 @@ defineExpose({
   margin-bottom: 12px;
 }
 
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
 .note-content {
   padding: 12px 16px;
   font-size: 13px;
   line-height: 1.6;
+  color: var(--guaxi-text-primary, #0f172a);
 }
 
 .note-editor {
   width: 100%;
-  min-height: 120px;
-  padding: 8px;
-  border-radius: 4px;
+  min-height: 140px;
+  padding: 10px;
+  border-radius: 6px;
   border: 1px solid var(--guaxi-border, #e5e7eb);
   font-size: 13px;
   resize: vertical;
+  background: var(--guaxi-panel-bg, #fff);
+  color: var(--guaxi-text-primary, #0f172a);
+}
+
+.note-editor::placeholder {
+  color: var(--guaxi-text-secondary, #64748b);
+}
+
+.note-editor:focus {
+  outline: none;
+  border-color: var(--guaxi-primary, #2563eb);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
 }
 
 .composite-note-content {
