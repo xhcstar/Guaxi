@@ -786,6 +786,26 @@ watch(() => props.excerptResults, (newVal) => {
   border-color: var(--guaxi-border);
 }
 
+.card-item-rendered :deep(a),
+.card-item-rendered :deep(a:visited) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dark-mode .card-item-rendered :deep(a),
+.dark-mode .card-item-rendered :deep(a:visited),
+.dark .card-item-rendered :deep(a),
+.dark .card-item-rendered :deep(a:visited),
+:root[data-guaxi-theme='dark'] .card-item-rendered :deep(a),
+:root[data-guaxi-theme='dark'] .card-item-rendered :deep(a:visited) {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.card-item-rendered :deep(a:hover) {
+  opacity: 0.92;
+}
+
 .card-item-rendered :deep(pre) {
   max-width: 100%;
   overflow: auto;
