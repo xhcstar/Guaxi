@@ -71,6 +71,28 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
+            <n-button circle size="small" secondary @click="refreshHealth" :disabled="isLoading" :type="healthType">
+              <n-icon>
+                <HealthIcon />
+              </n-icon>
+            </n-button>
+          </template>
+          <div class="health-tooltip">
+            <div class="health-title">抓取健康</div>
+            <div class="health-line">总源：{{ healthSummary.total }} / 成功：{{ healthSummary.ok }} / 失败：{{ healthSummary.failed }}</div>
+            <div class="health-line">RSS：{{ healthSummary.rss }} / HTML：{{ healthSummary.html }} / Fallback：{{ healthSummary.fallback }}</div>
+            <div v-if="healthSummary.failedItems.length" class="health-failed">
+              <div class="health-line">最近失败：</div>
+              <div v-for="x in healthSummary.failedItems" :key="x.feed_id" class="health-failed-item">
+                {{ x.feed_name }}：{{ x.last_error }}
+              </div>
+            </div>
+            <div v-else class="health-line">最近无失败记录</div>
+          </div>
+        </n-tooltip>
+
+        <n-tooltip placement="bottom" trigger="hover">
+          <template #trigger>
             <n-button circle size="small" @click="refreshArticles" :loading="isLoading">
               <n-icon>
                 <RefreshIcon />
@@ -94,7 +116,8 @@ import {
   GridOutline,
   ListOutline,
   NewspaperOutline,
-  RefreshOutline
+  RefreshOutline,
+  PulseOutline
 } from '@vicons/ionicons5'
 
 const SearchIcon = SearchOutline
@@ -102,6 +125,7 @@ const GridIcon = GridOutline
 const ListIcon = ListOutline
 const MagazineIcon = NewspaperOutline
 const RefreshIcon = RefreshOutline
+const HealthIcon = PulseOutline
 
 const store = useFlipboardStore()
 const siderStore = useSiderStore()
@@ -110,6 +134,58 @@ const viewKey = 'search'
 const searchQuery = computed(() => store.searchQuery.value)
 const currentView = computed(() => store.currentView.value)
 const isLoading = computed(() => store.isLoading.value)
+
+const feedHealth = computed(() => {
+  const list = store.feedHealth?.value
+  return Array.isArray(list) ? list : []
+})
+
+const healthSummary = computed(() => {
+  const list = feedHealth.value
+  const total = list.length
+
+  let ok = 0
+  let failed = 0
+  let rss = 0
+  let html = 0
+  let fallback = 0
+
+  const failedItems = []
+
+  for (const h of list) {
+    const err = h?.last_error
+    if (err) {
+      failed += 1
+      failedItems.push(h)
+    } else {
+      ok += 1
+    }
+
+    const method = String(h?.last_method || '').trim()
+    if (method === 'rss') rss += 1
+    else if (method === 'html') html += 1
+    else if (method) fallback += 1
+  }
+
+  failedItems.sort((a, b) => String(b?.last_attempt_at || '').localeCompare(String(a?.last_attempt_at || '')))
+
+  return {
+    total,
+    ok,
+    failed,
+    rss,
+    html,
+    fallback,
+    failedItems: failedItems.slice(0, 3)
+  }
+})
+
+const healthType = computed(() => {
+  if (!healthSummary.value.total) return 'default'
+  if (healthSummary.value.failed) return 'error'
+  if (healthSummary.value.fallback) return 'warning'
+  return 'success'
+})
 
 const handleSearch = (query) => {
   store.searchQuery.value = query
@@ -127,6 +203,15 @@ const setViewMode = (mode) => {
 
 const refreshArticles = () => {
   store.refreshArticles()
+}
+
+const refreshHealth = async () => {
+  try {
+    console.log('FlipboardHeader: refreshHealth')
+    await store.fetchFeedHealth()
+  } catch (e) {
+    console.error('FlipboardHeader: refreshHealth failed', e)
+  }
 }
 
 const toggleLeftSidebar = () => {
@@ -209,6 +294,34 @@ const toggleLeftSidebar = () => {
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+}
+
+.health-tooltip {
+  max-width: 420px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.health-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.health-line {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.health-failed {
+  margin-top: 8px;
+}
+
+.health-failed-item {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-right .n-button {

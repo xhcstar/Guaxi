@@ -17,6 +17,7 @@ export const useFlipboardStore = () => {
   const isRefreshing = ref(false)
   const searchQuery = ref('')
   const currentView = ref('grid') // 'grid' | 'list' | 'magazine'
+  const feedHealth = ref([])
 
   // 获取文章列表（基于订阅源的真实抓取）
   const fetchArticles = async (category = null, forceRefresh = false) => {
@@ -35,6 +36,12 @@ export const useFlipboardStore = () => {
         limit: 50
       })
       articles.value = Array.isArray(data) ? data : []
+
+      try {
+        await fetchFeedHealth()
+      } catch (e) {
+        console.warn('FlipboardStore: fetchFeedHealth failed after fetchArticles', e)
+      }
 
       // 保存到本地存储
       localStorage.setItem('flipboard_last_fetch', new Date().toISOString())
@@ -103,6 +110,18 @@ export const useFlipboardStore = () => {
       feeds.value = data
     } catch (error) {
       console.error('Failed to fetch feeds:', error)
+    }
+  }
+
+  const fetchFeedHealth = async () => {
+    try {
+      console.log('FlipboardStore: fetchFeedHealth')
+      const data = await invoke('get_feed_health')
+      feedHealth.value = Array.isArray(data) ? data : []
+      return feedHealth.value
+    } catch (error) {
+      console.error('FlipboardStore: fetchFeedHealth failed:', error)
+      throw error
     }
   }
 
@@ -358,6 +377,7 @@ export const useFlipboardStore = () => {
     isRefreshing,
     searchQuery,
     currentView,
+    feedHealth,
 
     // 计算属性
     filteredArticles,
@@ -372,6 +392,7 @@ export const useFlipboardStore = () => {
     searchArticles,
     fetchCategories,
     fetchFeeds,
+    fetchFeedHealth,
     addFeed,
     generateFeedsByPlatform,
     setFeedEnabled,

@@ -3,7 +3,7 @@ use once_cell::sync::Lazy;
 use rss::Channel;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -17,6 +17,8 @@ static ARTICLES: Lazy<Mutex<Vec<Article>>> = Lazy::new(|| Mutex::new(Vec::new())
 static CATEGORIES: Lazy<Mutex<Vec<Category>>> = Lazy::new(|| Mutex::new(get_default_categories()));
 static FEEDS: Lazy<Mutex<Vec<FeedSource>>> = Lazy::new(|| Mutex::new(Vec::new()));
 static FEEDS_INITIALIZED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+static FEED_HEALTH: Lazy<Mutex<HashMap<String, FeedHealth>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     let mut default_headers = HeaderMap::new();
     default_headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"));
@@ -148,6 +150,74 @@ pub struct FeedSource {
     pub exclude_keywords: Option<String>,
     #[serde(default)]
     pub remark: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FeedHealth {
+    pub feed_id: String,
+    pub feed_name: String,
+    pub url: String,
+    pub category: String,
+    pub source_type: String,
+    pub last_attempt_at: String,
+    pub last_success_at: Option<String>,
+    pub last_method: Option<String>,
+    pub last_item_count: u32,
+    pub last_error: Option<String>,
+}
+
+fn record_feed_health_success(feed: &FeedSource, method: &str, item_count: usize) {
+    let now = Utc::now().to_rfc3339();
+    let mut lock = FEED_HEALTH.lock().unwrap();
+
+    lock.insert(
+        feed.id.clone(),
+        FeedHealth {
+            feed_id: feed.id.clone(),
+            feed_name: feed.name.clone(),
+            url: feed.url.clone(),
+            category: feed.category.clone(),
+            source_type: feed.source_type.clone(),
+            last_attempt_at: now.clone(),
+            last_success_at: Some(now),
+            last_method: Some(method.to_string()),
+            last_item_count: item_count as u32,
+            last_error: None,
+        },
+    );
+
+    info!(
+        "flipboard: feed health success, id = {}, method = {}, items = {}",
+        feed.id, method, item_count
+    );
+}
+
+fn record_feed_health_failure(feed: &FeedSource, method: &str, err: String) {
+    let now = Utc::now().to_rfc3339();
+    let mut lock = FEED_HEALTH.lock().unwrap();
+
+    let prev_success = lock.get(&feed.id).and_then(|h| h.last_success_at.clone());
+
+    lock.insert(
+        feed.id.clone(),
+        FeedHealth {
+            feed_id: feed.id.clone(),
+            feed_name: feed.name.clone(),
+            url: feed.url.clone(),
+            category: feed.category.clone(),
+            source_type: feed.source_type.clone(),
+            last_attempt_at: now,
+            last_success_at: prev_success,
+            last_method: Some(method.to_string()),
+            last_item_count: 0,
+            last_error: Some(err.clone()),
+        },
+    );
+
+    warn!(
+        "flipboard: feed health failure, id = {}, method = {}, err = {}",
+        feed.id, method, err
+    );
 }
 
 #[allow(dead_code)]
@@ -457,6 +527,32 @@ pub async fn get_feeds() -> Result<Vec<FeedSource>, String> {
     let feeds_lock = FEEDS.lock().unwrap();
     info!("flipboard: get_feeds, count = {}", feeds_lock.len());
     Ok(feeds_lock.clone())
+}
+
+#[command]
+pub async fn get_feed_health() -> Result<Vec<FeedHealth>, String> {
+    ensure_feeds_initialized();
+
+    let enabled_ids: HashSet<String> = {
+        let feeds_lock = FEEDS.lock().unwrap();
+        feeds_lock
+            .iter()
+            .filter(|f| f.enabled)
+            .map(|f| f.id.clone())
+            .collect()
+    };
+
+    let mut list: Vec<FeedHealth> = {
+        let lock = FEED_HEALTH.lock().unwrap();
+        lock.values().cloned().collect()
+    };
+
+    list.retain(|h| enabled_ids.contains(&h.feed_id));
+    list.sort_by(|a, b| a.feed_name.cmp(&b.feed_name));
+
+    info!("flipboard: get_feed_health, count = {}", list.len());
+
+    Ok(list)
 }
 
 #[command]
@@ -899,7 +995,12 @@ async fn fetch_html_and_extract_articles(feed: &FeedSource) -> Result<Vec<Articl
         format!("invalid html url: {}", e)
     })?;
 
-    info!("flipboard: fetching html page: {}", parsed);
+    let base_host = parsed.host_str().unwrap_or("").to_string();
+
+    info!(
+        "flipboard: fetching html page: {} (host = {})",
+        parsed, base_host
+    );
 
     let resp = HTTP_CLIENT.get(parsed.clone()).send().await.map_err(|e| {
         error!("flipboard: request html {} failed: {}", parsed, e);
@@ -922,55 +1023,124 @@ async fn fetch_html_and_extract_articles(feed: &FeedSource) -> Result<Vec<Articl
     })?;
 
     let document = Html::parse_document(&body);
-    let selector = Selector::parse("a").map_err(|e| e.to_string())?;
+
+    let selectors = vec![
+        "article a",
+        "h1 a, h2 a, h3 a",
+        ".entry-title a, .post-title a, .title a",
+        ".post a",
+        "a",
+    ];
 
     let mut seen = HashSet::new();
     let mut articles = Vec::new();
     let now = Utc::now().to_rfc3339();
 
-    for (idx, element) in document.select(&selector).enumerate() {
-        let text = element.text().collect::<String>().trim().to_string();
-        if text.len() < 8 {
-            continue;
+    let is_same_site = |base: &Url, candidate: &Url| {
+        let base_host = base.host_str().unwrap_or("");
+        let cand_host = candidate.host_str().unwrap_or("");
+        if base_host.is_empty() || cand_host.is_empty() {
+            return false;
         }
+        cand_host == base_host || cand_host.ends_with(&format!(".{}", base_host))
+    };
 
-        let href = element.value().attr("href").unwrap_or("").trim();
-        if href.is_empty() || href.starts_with('#') {
-            continue;
-        }
+    let is_noise_path = |u: &Url| {
+        let p = u.path().to_lowercase();
+        p == "/" || p.is_empty() || p.starts_with("/tag/") || p.starts_with("/tags/")
+            || p.starts_with("/category/")
+            || p.starts_with("/categories/")
+            || p.starts_with("/about")
+            || p.starts_with("/privacy")
+            || p.starts_with("/terms")
+            || p.starts_with("/login")
+            || p.starts_with("/signup")
+            || p.starts_with("/register")
+    };
 
-        if !seen.insert(href.to_string()) {
-            continue;
-        }
-
-        let link = if href.starts_with("http://") || href.starts_with("https://") {
-            href.to_string()
-        } else {
-            Url::options()
-                .base_url(Some(&parsed))
-                .parse(href)
-                .map(|u| u.to_string())
-                .unwrap_or_else(|_| href.to_string())
+    for sel in selectors {
+        let selector = match Selector::parse(sel) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("flipboard: invalid css selector {}: {}", sel, e);
+                continue;
+            }
         };
 
-        let id = format!("{}-html-{}", feed.id, idx);
+        for element in document.select(&selector) {
+            if articles.len() >= 50 {
+                break;
+            }
 
-        articles.push(Article {
-            id,
-            title: text,
-            description: String::new(),
-            content: String::new(),
-            source: feed.name.clone(),
-            url: link,
-            image_url: None,
-            published_at: now.clone(),
-            category: feed.category.clone(),
-            author: None,
-            read_count: 0,
-            likes: 0,
-        });
+            let href_raw = element.value().attr("href").unwrap_or("").trim();
+            if href_raw.is_empty() || href_raw.starts_with('#') {
+                continue;
+            }
+            if href_raw.starts_with("javascript:")
+                || href_raw.starts_with("mailto:")
+                || href_raw.starts_with("tel:")
+            {
+                continue;
+            }
 
-        if articles.len() >= 50 {
+            let resolved = Url::options().base_url(Some(&parsed)).parse(href_raw);
+            let link_url = match resolved {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+
+            if !link_url.scheme().starts_with("http") {
+                continue;
+            }
+
+            if !is_same_site(&parsed, &link_url) {
+                continue;
+            }
+
+            if is_noise_path(&link_url) {
+                continue;
+            }
+
+            let link = link_url.to_string();
+            if !seen.insert(link.clone()) {
+                continue;
+            }
+
+            let title_attr = element.value().attr("title").unwrap_or("").trim();
+            let text = if !title_attr.is_empty() {
+                title_attr.to_string()
+            } else {
+                element.text().collect::<String>().trim().to_string()
+            };
+
+            let title = text
+                .split_whitespace()
+                .collect::<Vec<&str>>()
+                .join(" ");
+
+            if title.len() < 8 || title.len() > 120 {
+                continue;
+            }
+
+            let id = format!("{}-html-{}", feed.id, articles.len());
+
+            articles.push(Article {
+                id,
+                title,
+                description: String::new(),
+                content: String::new(),
+                source: feed.name.clone(),
+                url: link,
+                image_url: None,
+                published_at: now.clone(),
+                category: feed.category.clone(),
+                author: None,
+                read_count: 0,
+                likes: 0,
+            });
+        }
+
+        if articles.len() >= 20 {
             break;
         }
     }
@@ -1227,62 +1397,119 @@ async fn collect_articles_for_feed(feed: &FeedSource) -> Result<Vec<Article>, St
     match source_type.as_str() {
         "zhihu" => {
             let rss_result = fetch_rss_feed_internal(feed).await;
-            let base_articles = match rss_result {
-                Ok(list) if !list.is_empty() => list,
-                _ => match fetch_zhihu_fallback(feed).await {
-                    Ok(list) => list,
-                    Err(e) => {
-                        warn!(
-                            "flipboard: zhihu rss and fallback both failed for {}: {}",
-                            feed.url, e
-                        );
-                        Vec::new()
-                    }
-                },
+            match rss_result {
+                Ok(list) if !list.is_empty() => {
+                    let out = filter_articles_by_keywords(list, feed);
+                    record_feed_health_success(feed, "rss", out.len());
+                    return Ok(out);
+                }
+                Ok(_) => {
+                    warn!(
+                        "flipboard: zhihu rss returned empty, try fallback api, feed = {}",
+                        feed.url
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "flipboard: zhihu rss failed, try fallback api, feed = {}, err = {}",
+                        feed.url, e
+                    );
+                }
+            }
+
+            return match fetch_zhihu_fallback(feed).await {
+                Ok(list) => {
+                    let out = filter_articles_by_keywords(list, feed);
+                    record_feed_health_success(feed, "zhihu_api", out.len());
+                    Ok(out)
+                }
+                Err(e) => {
+                    record_feed_health_failure(feed, "zhihu_api", e.clone());
+                    Ok(Vec::new())
+                }
             };
-            return Ok(filter_articles_by_keywords(base_articles, feed));
         }
         "bilibili" => {
             let rss_result = fetch_rss_feed_internal(feed).await;
-            let base_articles = match rss_result {
-                Ok(list) if !list.is_empty() => list,
-                _ => match fetch_bilibili_fallback(feed).await {
-                    Ok(list) => list,
-                    Err(e) => {
-                        warn!(
-                            "flipboard: bilibili rss and fallback both failed for {}: {}",
-                            feed.url, e
-                        );
-                        Vec::new()
-                    }
-                },
+            match rss_result {
+                Ok(list) if !list.is_empty() => {
+                    let out = filter_articles_by_keywords(list, feed);
+                    record_feed_health_success(feed, "rss", out.len());
+                    return Ok(out);
+                }
+                Ok(_) => {
+                    warn!(
+                        "flipboard: bilibili rss returned empty, try fallback api, feed = {}",
+                        feed.url
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "flipboard: bilibili rss failed, try fallback api, feed = {}, err = {}",
+                        feed.url, e
+                    );
+                }
+            }
+
+            return match fetch_bilibili_fallback(feed).await {
+                Ok(list) => {
+                    let out = filter_articles_by_keywords(list, feed);
+                    record_feed_health_success(feed, "bilibili_api", out.len());
+                    Ok(out)
+                }
+                Err(e) => {
+                    record_feed_health_failure(feed, "bilibili_api", e.clone());
+                    Ok(Vec::new())
+                }
             };
-            return Ok(filter_articles_by_keywords(base_articles, feed));
         }
         _ => {}
     }
 
     if source_type.is_empty() || source_type == "rss" {
-        let articles = fetch_rss_feed_internal(feed).await?;
-        return Ok(filter_articles_by_keywords(articles, feed));
-    }
-
-    let rss_result = fetch_rss_feed_internal(feed).await;
-    let base_articles = match rss_result {
-        Ok(list) if !list.is_empty() => list,
-        _ => match fetch_html_and_extract_articles(feed).await {
-            Ok(list) => list,
-            Err(e) => {
-                warn!(
-                    "flipboard: rss and html fetch both failed for {}: {}",
-                    feed.url, e
-                );
-                Vec::new()
+        match fetch_rss_feed_internal(feed).await {
+            Ok(list) => {
+                let out = filter_articles_by_keywords(list, feed);
+                record_feed_health_success(feed, "rss", out.len());
+                Ok(out)
             }
-        },
-    };
-
-    Ok(filter_articles_by_keywords(base_articles, feed))
+            Err(e) => {
+                record_feed_health_failure(feed, "rss", e.clone());
+                Err(e)
+            }
+        }
+    } else {
+        let rss_result = fetch_rss_feed_internal(feed).await;
+        match rss_result {
+            Ok(list) if !list.is_empty() => {
+                let out = filter_articles_by_keywords(list, feed);
+                record_feed_health_success(feed, "rss", out.len());
+                Ok(out)
+            }
+            Ok(_) => match fetch_html_and_extract_articles(feed).await {
+                Ok(list) => {
+                    let out = filter_articles_by_keywords(list, feed);
+                    record_feed_health_success(feed, "html", out.len());
+                    Ok(out)
+                }
+                Err(e) => {
+                    record_feed_health_failure(feed, "html", e.clone());
+                    Ok(Vec::new())
+                }
+            },
+            Err(e) => match fetch_html_and_extract_articles(feed).await {
+                Ok(list) => {
+                    let out = filter_articles_by_keywords(list, feed);
+                    record_feed_health_success(feed, "html", out.len());
+                    Ok(out)
+                }
+                Err(e2) => {
+                    record_feed_health_failure(feed, "html", format!("rss_err = {}; html_err = {}", e, e2));
+                    Ok(Vec::new())
+                }
+            },
+        }
+    }
 }
 
 #[command]
