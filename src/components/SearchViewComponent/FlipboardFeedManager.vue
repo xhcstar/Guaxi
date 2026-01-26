@@ -14,8 +14,12 @@
           刷新
         </n-button>
 
-        <n-button type="primary" size="small" @click="openAddDialog" :disabled="loading">
-          添加订阅源
+        <n-button type="primary" size="small" @click="openSimpleDialog" :disabled="loading">
+          快速添加信息源
+        </n-button>
+
+        <n-button size="small" @click="openAddDialog" :disabled="loading">
+          高级配置
         </n-button>
       </n-space>
     </div>
@@ -26,6 +30,29 @@
     <FeedSourceConfigDialog :show="showDialog" :categories="categories" :default-category="filterCategory || 'all'"
       :initial-feed="editingFeed" @update:show="val => (showDialog = val)" @submit="handleDialogSubmit"
       @cancel="handleDialogCancel" />
+
+    <n-modal v-model:show="showSimpleDialog" preset="dialog" title="快速添加信息源" :mask-closable="false"
+      :close-on-esc="false" :style="{ width: '520px' }">
+      <n-form :model="simpleForm">
+        <n-form-item label="归属分类">
+          <n-select v-model:value="simpleForm.categoryId" :options="categoryOptions" placeholder="选择归属分类" />
+        </n-form-item>
+        <n-form-item label="平台">
+          <n-select v-model:value="simpleForm.platforms" :options="platformOptions" multiple
+            placeholder="请选择至少一个平台" />
+        </n-form-item>
+      </n-form>
+      <template #action>
+        <n-space justify="end">
+          <n-button @click="handleSimpleCancel" :disabled="simpleLoading">
+            取消
+          </n-button>
+          <n-button type="primary" @click="handleSimpleSubmit" :loading="simpleLoading">
+            生成信息源
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -40,7 +67,7 @@
  * - FeedSourceConfigDialog 收集了更多字段（sourceType/fetchInterval/keywords/remark），当前仅使用 name/url/categoryId 参与后端调用
  */
 import { computed, h, onMounted, ref } from 'vue'
-import { NButton, NSwitch, NTag, createDiscreteApi } from 'naive-ui'
+import { NButton, NSwitch, NTag, NModal, NForm, NFormItem, NSelect, createDiscreteApi } from 'naive-ui'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import FeedSourceConfigDialog from './FeedSourceConfigDialog.vue'
 
@@ -60,6 +87,18 @@ const keyword = ref('')
 const filterCategory = ref('')
 const showDialog = ref(false)
 const editingFeed = ref(null)
+
+const showSimpleDialog = ref(false)
+const simpleLoading = ref(false)
+const simpleForm = ref({
+  categoryId: 'all',
+  platforms: []
+})
+
+const platformOptions = [
+  { label: '知乎', value: 'zhihu' },
+  { label: 'B 站', value: 'bilibili' }
+]
 
 // 行级别的“忙碌”集合：避免用户连续点击导致重复请求
 const busyIds = ref(new Set())
@@ -261,10 +300,46 @@ const refresh = async () => {
   }
 }
 
+const handleSimpleSubmit = async () => {
+  const categoryId = String(simpleForm.value.categoryId || 'all').trim() || 'all'
+  const platforms = Array.isArray(simpleForm.value.platforms) ? simpleForm.value.platforms.slice() : []
+
+  if (!platforms.length) {
+    message.error('请至少选择一个平台')
+    return
+  }
+
+  try {
+    simpleLoading.value = true
+    console.log('FlipboardFeedManager: simple submit', { categoryId, platforms })
+    const created = await store.generateFeedsByPlatform(platforms, categoryId)
+    if (created && created.length) {
+      message.success(`已为所选平台生成 ${created.length} 个信息源`)
+    } else {
+      message.warning('未生成新的信息源，请尝试使用高级配置')
+    }
+    showSimpleDialog.value = false
+  } catch (e) {
+    console.error('FlipboardFeedManager: simple submit failed', e)
+    message.error(String(e || '生成信息源失败'))
+  } finally {
+    simpleLoading.value = false
+  }
+}
+
 const openAddDialog = () => {
   console.log('FlipboardFeedManager: open add dialog')
   editingFeed.value = null
   showDialog.value = true
+}
+
+const openSimpleDialog = () => {
+  console.log('FlipboardFeedManager: open simple dialog')
+  simpleForm.value = {
+    categoryId: filterCategory.value || 'all',
+    platforms: []
+  }
+  showSimpleDialog.value = true
 }
 
 const openEditDialog = (row) => {
@@ -277,34 +352,56 @@ const handleDialogCancel = () => {
   console.log('FlipboardFeedManager: dialog cancel')
 }
 
+const handleSimpleCancel = () => {
+  console.log('FlipboardFeedManager: simple dialog cancel')
+  showSimpleDialog.value = false
+}
+
 const handleDialogSubmit = async (payload) => {
-  // payload 来自 FeedSourceConfigDialog：{ id, name, url, categoryId, ... }
   console.log('FlipboardFeedManager: dialog submit', payload)
 
   const id = String(payload?.id || '').trim()
   const name = String(payload?.name || '').trim()
   const url = String(payload?.url || '').trim()
   const category = String(payload?.categoryId || 'all').trim() || 'all'
+  const sourceType = String(payload?.sourceType || 'rss').trim() || 'rss'
+  const fetchInterval = Number(payload?.fetchInterval || 60)
+  const includeKeywords = String(payload?.includeKeywords || '').trim()
+  const excludeKeywords = String(payload?.excludeKeywords || '').trim()
+  const remark = String(payload?.remark || '').trim()
 
   if (!name || !url) {
     message.error('名称和 URL 不能为空')
     return
   }
 
+  const source = {
+    id,
+    name,
+    url,
+    category,
+    source_type: sourceType,
+    fetch_interval: fetchInterval,
+    include_keywords: includeKeywords,
+    exclude_keywords: excludeKeywords,
+    remark
+  }
+
   try {
     loading.value = true
 
     if (id) {
-      // 编辑：enabled 沿用原值（如果找不到则默认 true）
       const original = feeds.value.find(f => String(f?.id || '') === id)
       const enabled = original ? !!original.enabled : true
+      const merged = { ...source, enabled }
 
-      console.log('FlipboardFeedManager: update feed', { id, name, url, category, enabled })
-      await store.updateFeed({ id, name, url, category, enabled })
+      console.log('FlipboardFeedManager: update feed', merged)
+      await store.updateFeed(merged)
       message.success('订阅源已更新')
     } else {
-      console.log('FlipboardFeedManager: add feed', { name, url, category })
-      await store.addFeed(url, name, category)
+      const merged = { ...source, enabled: true }
+      console.log('FlipboardFeedManager: add feed', merged)
+      await store.addFeed(merged)
       message.success('订阅源已添加')
     }
 

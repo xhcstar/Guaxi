@@ -106,14 +106,28 @@ export const useFlipboardStore = () => {
     }
   }
 
-  // 添加RSS源
-  const addFeed = async (url, name, category) => {
+  // 添加信息源
+  const addFeed = async (source) => {
     try {
-      await invoke('add_feed', { url, name, category })
-      await fetchFeeds() // 刷新列表
+      console.log('FlipboardStore: addFeed', source)
+      await invoke('add_feed', { input: source })
+      await fetchFeeds()
       return true
     } catch (error) {
       console.error('Failed to add feed:', error)
+      throw error
+    }
+  }
+
+  // 按平台和分类自动生成信息源（简单模式）
+  const generateFeedsByPlatform = async (platforms, category) => {
+    try {
+      console.log('FlipboardStore: generateFeedsByPlatform', { platforms, category })
+      const created = await invoke('generate_feeds_for_platforms', { platforms, category })
+      await fetchFeeds()
+      return created
+    } catch (error) {
+      console.error('FlipboardStore: generateFeedsByPlatform failed:', error)
       throw error
     }
   }
@@ -131,11 +145,11 @@ export const useFlipboardStore = () => {
     }
   }
 
-  // 更新订阅源
-  const updateFeed = async ({ id, url, name, category, enabled }) => {
+  // 更新信息源
+  const updateFeed = async (source) => {
     try {
-      console.log('FlipboardStore: updateFeed', { id, url, name, category, enabled })
-      await invoke('update_feed', { id, url, name, category, enabled: Boolean(enabled) })
+      console.log('FlipboardStore: updateFeed', source)
+      await invoke('update_feed', { input: source })
       await fetchFeeds()
       return true
     } catch (error) {
@@ -359,6 +373,7 @@ export const useFlipboardStore = () => {
     fetchCategories,
     fetchFeeds,
     addFeed,
+    generateFeedsByPlatform,
     setFeedEnabled,
     updateFeed,
     deleteFeed,

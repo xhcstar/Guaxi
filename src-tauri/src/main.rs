@@ -292,6 +292,7 @@ async fn main() {
             commands::flipboard::search_articles,
             commands::flipboard::get_categories,
             commands::flipboard::get_feeds,
+            commands::flipboard::generate_feeds_for_platforms,
             commands::flipboard::add_feed,
             commands::flipboard::set_feed_enabled,
             commands::flipboard::update_feed,

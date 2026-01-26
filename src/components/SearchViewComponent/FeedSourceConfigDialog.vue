@@ -109,9 +109,12 @@ const form = ref({
 
 const sourceTypeOptions = [
   { label: 'RSS / Atom', value: 'rss' },
+  { label: '知乎', value: 'zhihu' },
+  { label: 'B 站', value: 'bilibili' },
+  { label: '微信公众号', value: 'wechat' },
   { label: '博客 / 专栏', value: 'blog' },
   { label: '论坛 / 社区', value: 'forum' },
-  { label: '自定义', value: 'custom' }
+  { label: '其他 / 自定义', value: 'custom' }
 ]
 
 const fetchIntervalOptions = [
@@ -192,17 +195,23 @@ const rules = {
 }
 
 const resetForm = () => {
-  const initial = props.initialFeed
+  const initial = props.initialFeed || {}
+  const sourceType = initial.source_type || initial.sourceType || 'rss'
+  const fetchInterval = initial.fetch_interval ?? 60
+  const includeKeywords = initial.include_keywords || ''
+  const excludeKeywords = initial.exclude_keywords || ''
+  const remark = initial.remark || ''
+
   form.value = {
-    id: initial?.id || '',
-    name: initial?.name || '',
-    sourceType: 'rss',
-    url: initial?.url || '',
-    categoryId: initial?.category || props.defaultCategory || 'all',
-    fetchInterval: 60,
-    includeKeywords: '',
-    excludeKeywords: '',
-    remark: ''
+    id: initial.id || '',
+    name: initial.name || '',
+    sourceType,
+    url: initial.url || '',
+    categoryId: initial.category || props.defaultCategory || 'all',
+    fetchInterval,
+    includeKeywords,
+    excludeKeywords,
+    remark
   }
 }
 

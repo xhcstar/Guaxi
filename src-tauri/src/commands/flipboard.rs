@@ -1,13 +1,16 @@
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use rss::Channel;
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{command, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::{error, info, warn};
 use url::Url;
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, CONNECTION, PRAGMA, UPGRADE_INSECURE_REQUESTS};
 
 // 全局状态
 static ARTICLES: Lazy<Mutex<Vec<Article>>> = Lazy::new(|| Mutex::new(Vec::new()));
@@ -15,8 +18,18 @@ static CATEGORIES: Lazy<Mutex<Vec<Category>>> = Lazy::new(|| Mutex::new(get_defa
 static FEEDS: Lazy<Mutex<Vec<FeedSource>>> = Lazy::new(|| Mutex::new(Vec::new()));
 static FEEDS_INITIALIZED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    let mut default_headers = HeaderMap::new();
+    default_headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"));
+    default_headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"));
+    default_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    default_headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    default_headers.insert(CONNECTION, HeaderValue::from_static("keep-alive"));
+    default_headers.insert(UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
+
     reqwest::Client::builder()
-        .user_agent("guaxi-flipboard/0.1")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36")
+        .default_headers(default_headers)
+        .redirect(reqwest::redirect::Policy::limited(10))
         .build()
         .expect("build reqwest client failed")
 });
@@ -125,6 +138,16 @@ pub struct FeedSource {
     pub url: String,
     pub category: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub source_type: String,
+    #[serde(default)]
+    pub fetch_interval: Option<u32>,
+    #[serde(default)]
+    pub include_keywords: Option<String>,
+    #[serde(default)]
+    pub exclude_keywords: Option<String>,
+    #[serde(default)]
+    pub remark: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -191,29 +214,59 @@ fn get_default_categories() -> Vec<Category> {
 
 // 获取默认RSS源
 fn get_default_feeds() -> Vec<FeedSource> {
-    vec![
-        FeedSource {
-            id: "1".to_string(),
-            name: "BBC新闻".to_string(),
-            url: "http://feeds.bbci.co.uk/news/rss.xml".to_string(),
-            category: "news".to_string(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "2".to_string(),
-            name: "TechCrunch".to_string(),
-            url: "https://techcrunch.com/feed/".to_string(),
-            category: "technology".to_string(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "3".to_string(),
-            name: "哈佛商业评论".to_string(),
-            url: "https://hbr.org/feed".to_string(),
-            category: "business".to_string(),
-            enabled: true,
-        },
-    ]
+    vec![]
+}
+
+#[derive(Debug, Clone)]
+struct PlatformFeedTemplate {
+    name: String,
+    url: String,
+    source_type: String,
+    include_keywords: Option<String>,
+    exclude_keywords: Option<String>,
+    remark: Option<String>,
+}
+
+fn build_default_feeds_for_platform(platform: &str) -> Vec<PlatformFeedTemplate> {
+    match platform {
+        "zhihu" => vec![
+            PlatformFeedTemplate {
+                name: "知乎 - 热榜".to_string(),
+                url: "https://rsshub.app/zhihu/hotlist".to_string(),
+                source_type: "zhihu".to_string(),
+                include_keywords: None,
+                exclude_keywords: None,
+                remark: Some("自动生成的知乎综合热榜信息源".to_string()),
+            },
+            PlatformFeedTemplate {
+                name: "知乎 - 日报精选".to_string(),
+                url: "https://rsshub.app/zhihu/daily".to_string(),
+                source_type: "zhihu".to_string(),
+                include_keywords: None,
+                exclude_keywords: None,
+                remark: Some("自动生成的知乎日报精选信息源".to_string()),
+            },
+        ],
+        "bilibili" => vec![
+            PlatformFeedTemplate {
+                name: "B站 - 综合热门".to_string(),
+                url: "https://rsshub.app/bilibili/popular/all".to_string(),
+                source_type: "bilibili".to_string(),
+                include_keywords: None,
+                exclude_keywords: None,
+                remark: Some("自动生成的 B 站综合热门信息源".to_string()),
+            },
+            PlatformFeedTemplate {
+                name: "B站 - 日排行".to_string(),
+                url: "https://rsshub.app/bilibili/ranking/0/0/1".to_string(),
+                source_type: "bilibili".to_string(),
+                include_keywords: None,
+                exclude_keywords: None,
+                remark: Some("自动生成的 B 站日排行信息源".to_string()),
+            },
+        ],
+        _ => Vec::new(),
+    }
 }
 
 // 生成模拟文章数据
@@ -400,7 +453,6 @@ pub async fn get_categories() -> Result<Vec<Category>, String> {
 
 #[command]
 pub async fn get_feeds() -> Result<Vec<FeedSource>, String> {
-    // 确保从配置文件加载订阅源
     ensure_feeds_initialized();
     let feeds_lock = FEEDS.lock().unwrap();
     info!("flipboard: get_feeds, count = {}", feeds_lock.len());
@@ -408,22 +460,135 @@ pub async fn get_feeds() -> Result<Vec<FeedSource>, String> {
 }
 
 #[command]
-pub async fn add_feed(url: String, name: String, category: String) -> Result<(), String> {
-    // 确保订阅源已从配置文件初始化
+pub async fn generate_feeds_for_platforms(
+    platforms: Vec<String>,
+    category: String,
+) -> Result<Vec<FeedSource>, String> {
+    ensure_feeds_initialized();
+
+    let normalized_category = category.trim().to_string();
+    if normalized_category.is_empty() {
+        return Err("category 不能为空".to_string());
+    }
+
+    {
+        let categories_lock = CATEGORIES.lock().unwrap();
+        if !categories_lock
+            .iter()
+            .any(|cat| cat.id == normalized_category)
+            && normalized_category != "all"
+        {
+            return Err("Invalid category".to_string());
+        }
+    }
+
+    let normalized_platforms: Vec<String> = platforms
+        .into_iter()
+        .map(|p| p.trim().to_lowercase())
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    if normalized_platforms.is_empty() {
+        return Err("platforms 不能为空".to_string());
+    }
+
+    let mut feeds_lock = FEEDS.lock().unwrap();
+
+    let mut existing_urls: HashSet<String> = feeds_lock
+        .iter()
+        .map(|f| f.url.trim().to_lowercase())
+        .collect();
+
+    let mut created = Vec::new();
+
+    for platform in &normalized_platforms {
+        let templates = build_default_feeds_for_platform(platform);
+        if templates.is_empty() {
+            warn!(
+                "flipboard: no default feeds for platform {}, skip simple generate",
+                platform
+            );
+            continue;
+        }
+
+        for t in templates {
+            let url_norm = t.url.trim().to_lowercase();
+            if url_norm.is_empty() || existing_urls.contains(&url_norm) {
+                continue;
+            }
+
+            let feed = FeedSource {
+                id: format!("f{}", Utc::now().timestamp_millis()),
+                name: t.name,
+                url: t.url,
+                category: normalized_category.clone(),
+                enabled: true,
+                source_type: t.source_type,
+                fetch_interval: Some(60),
+                include_keywords: t.include_keywords,
+                exclude_keywords: t.exclude_keywords,
+                remark: t.remark,
+            };
+
+            existing_urls.insert(url_norm);
+            feeds_lock.push(feed.clone());
+            created.push(feed);
+        }
+    }
+
+    if created.is_empty() {
+        return Err("未生成任何新的信息源，请尝试使用高级配置".to_string());
+    }
+
+    if let Err(e) = save_feeds_to_config(&feeds_lock) {
+        warn!(
+            "flipboard: save_feeds_to_config failed after generate_feeds_for_platforms: {}",
+            e
+        );
+    }
+
+    info!(
+        "flipboard: generate_feeds_for_platforms success, created = {}, category = {}, platforms = {:?}",
+        created.len(),
+        normalized_category,
+        normalized_platforms
+    );
+
+    Ok(created)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FeedSourceInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub source_type: String,
+    pub url: String,
+    pub category: String,
+    pub fetch_interval: Option<u32>,
+    pub include_keywords: Option<String>,
+    pub exclude_keywords: Option<String>,
+    pub remark: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+#[command]
+pub async fn add_feed(input: FeedSourceInput) -> Result<(), String> {
     ensure_feeds_initialized();
     let mut feeds_lock = FEEDS.lock().unwrap();
 
-    // 检查URL是否有效
-    if !url.starts_with("http") {
+    let url = input.url.trim().to_string();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("Invalid URL format".to_string());
     }
 
-    // 检查是否已存在
-    if feeds_lock.iter().any(|feed| feed.url == url) {
+    if feeds_lock
+        .iter()
+        .any(|feed| feed.url.trim().eq_ignore_ascii_case(&url))
+    {
         return Err("Feed already exists".to_string());
     }
 
-    // 检查分类是否存在
+    let category = input.category.trim().to_string();
     let categories_lock = CATEGORIES.lock().unwrap();
     if !categories_lock.iter().any(|cat| cat.id == category) && category != "all" {
         return Err("Invalid category".to_string());
@@ -431,15 +596,19 @@ pub async fn add_feed(url: String, name: String, category: String) -> Result<(),
 
     let new_feed = FeedSource {
         id: format!("f{}", Utc::now().timestamp_millis()),
-        name,
+        name: input.name.trim().to_string(),
         url,
         category,
-        enabled: true,
+        enabled: input.enabled.unwrap_or(true),
+        source_type: input.source_type.trim().to_string(),
+        fetch_interval: input.fetch_interval,
+        include_keywords: input.include_keywords,
+        exclude_keywords: input.exclude_keywords,
+        remark: input.remark,
     };
 
     feeds_lock.push(new_feed);
 
-    // 写入配置文件，保证订阅源持久化
     if let Err(e) = save_feeds_to_config(&feeds_lock) {
         warn!(
             "flipboard: save_feeds_to_config failed after add_feed: {}",
@@ -485,18 +654,19 @@ pub async fn set_feed_enabled(id: String, enabled: bool) -> Result<(), String> {
 }
 
 #[command]
-pub async fn update_feed(
-    id: String,
-    url: String,
-    name: String,
-    category: String,
-    enabled: bool,
-) -> Result<(), String> {
+pub async fn update_feed(input: FeedSourceInput) -> Result<(), String> {
     ensure_feeds_initialized();
 
-    let url = url.trim().to_string();
-    let name = name.trim().to_string();
-    let category = category.trim().to_string();
+    let id = input
+        .id
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "id 不能为空".to_string())?;
+
+    let url = input.url.trim().to_string();
+    let name = input.name.trim().to_string();
+    let category = input.category.trim().to_string();
 
     if name.is_empty() {
         return Err("name 不能为空".to_string());
@@ -531,7 +701,16 @@ pub async fn update_feed(
         target.url = url;
         target.name = name;
         target.category = category;
-        target.enabled = enabled;
+        if let Some(enabled) = input.enabled {
+            target.enabled = enabled;
+        }
+        if !input.source_type.trim().is_empty() {
+            target.source_type = input.source_type.trim().to_string();
+        }
+        target.fetch_interval = input.fetch_interval;
+        target.include_keywords = input.include_keywords;
+        target.exclude_keywords = input.exclude_keywords;
+        target.remark = input.remark;
 
         target.id.clone()
     };
@@ -573,6 +752,52 @@ pub async fn delete_feed(id: String) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+fn split_keywords(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+fn filter_articles_by_keywords(articles: Vec<Article>, feed: &FeedSource) -> Vec<Article> {
+    let include = feed
+        .include_keywords
+        .as_deref()
+        .map(split_keywords)
+        .unwrap_or_default();
+    let exclude = feed
+        .exclude_keywords
+        .as_deref()
+        .map(split_keywords)
+        .unwrap_or_default();
+
+    if include.is_empty() && exclude.is_empty() {
+        return articles;
+    }
+
+    articles
+        .into_iter()
+        .filter(|a| {
+            let text = format!(
+                "{} {} {}",
+                a.title.to_lowercase(),
+                a.description.to_lowercase(),
+                a.content.to_lowercase()
+            );
+
+            if !include.is_empty() && !include.iter().any(|k| text.contains(k)) {
+                return false;
+            }
+
+            if exclude.iter().any(|k| text.contains(k)) {
+                return false;
+            }
+
+            true
+        })
+        .collect()
 }
 
 async fn fetch_rss_feed_internal(feed: &FeedSource) -> Result<Vec<Article>, String> {
@@ -663,6 +888,403 @@ async fn fetch_rss_feed_internal(feed: &FeedSource) -> Result<Vec<Article>, Stri
     Ok(articles)
 }
 
+async fn fetch_html_and_extract_articles(feed: &FeedSource) -> Result<Vec<Article>, String> {
+    let url = feed.url.trim();
+    if url.is_empty() {
+        return Err("feed url is empty".to_string());
+    }
+
+    let parsed = Url::parse(url).map_err(|e| {
+        error!("flipboard: invalid html url {}: {}", url, e);
+        format!("invalid html url: {}", e)
+    })?;
+
+    info!("flipboard: fetching html page: {}", parsed);
+
+    let resp = HTTP_CLIENT.get(parsed.clone()).send().await.map_err(|e| {
+        error!("flipboard: request html {} failed: {}", parsed, e);
+        e.to_string()
+    })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        warn!(
+            "flipboard: html {} returned non-success: {} {}",
+            parsed, status, body
+        );
+        return Err(format!("html {} returned status {}", parsed, status));
+    }
+
+    let body = resp.text().await.map_err(|e| {
+        error!("flipboard: read html {} body failed: {}", parsed, e);
+        e.to_string()
+    })?;
+
+    let document = Html::parse_document(&body);
+    let selector = Selector::parse("a").map_err(|e| e.to_string())?;
+
+    let mut seen = HashSet::new();
+    let mut articles = Vec::new();
+    let now = Utc::now().to_rfc3339();
+
+    for (idx, element) in document.select(&selector).enumerate() {
+        let text = element.text().collect::<String>().trim().to_string();
+        if text.len() < 8 {
+            continue;
+        }
+
+        let href = element.value().attr("href").unwrap_or("").trim();
+        if href.is_empty() || href.starts_with('#') {
+            continue;
+        }
+
+        if !seen.insert(href.to_string()) {
+            continue;
+        }
+
+        let link = if href.starts_with("http://") || href.starts_with("https://") {
+            href.to_string()
+        } else {
+            Url::options()
+                .base_url(Some(&parsed))
+                .parse(href)
+                .map(|u| u.to_string())
+                .unwrap_or_else(|_| href.to_string())
+        };
+
+        let id = format!("{}-html-{}", feed.id, idx);
+
+        articles.push(Article {
+            id,
+            title: text,
+            description: String::new(),
+            content: String::new(),
+            source: feed.name.clone(),
+            url: link,
+            image_url: None,
+            published_at: now.clone(),
+            category: feed.category.clone(),
+            author: None,
+            read_count: 0,
+            likes: 0,
+        });
+
+        if articles.len() >= 50 {
+            break;
+        }
+    }
+
+    info!(
+        "flipboard: fetched {} items from html {} ({})",
+        articles.len(),
+        feed.name,
+        feed.url
+    );
+
+    Ok(articles)
+}
+
+async fn fetch_zhihu_fallback(feed: &FeedSource) -> Result<Vec<Article>, String> {
+    let api_url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=50";
+
+    info!(
+        "flipboard: zhihu fallback using api {}, feed = {} ({})",
+        api_url,
+        feed.name,
+        feed.url
+    );
+
+    let resp = HTTP_CLIENT.get(api_url).send().await.map_err(|e| {
+        error!("flipboard: zhihu api request failed: {}", e);
+        e.to_string()
+    })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        warn!(
+            "flipboard: zhihu api {} returned non-success: {} {}",
+            api_url, status, body
+        );
+        return Err(format!("zhihu api returned status {}", status));
+    }
+
+    let text = resp.text().await.map_err(|e| {
+        error!("flipboard: read zhihu api body failed: {}", e);
+        e.to_string()
+    })?;
+
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        error!("flipboard: parse zhihu api json failed: {}", e);
+        e.to_string()
+    })?;
+
+    let data = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "zhihu api json missing data array".to_string())?;
+
+    let now = Utc::now().to_rfc3339();
+    let mut articles = Vec::new();
+
+    for (idx, item) in data.iter().enumerate() {
+        let target = item.get("target").unwrap_or(&serde_json::Value::Null);
+        let title = target
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("无标题")
+            .to_string();
+        let desc = target
+            .get("excerpt")
+            .or_else(|| target.get("desc"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("")
+            .to_string();
+        let raw_url = target
+            .get("url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("");
+        let link = if raw_url.starts_with("http://") || raw_url.starts_with("https://") {
+            raw_url.to_string()
+        } else if raw_url.is_empty() {
+            "https://www.zhihu.com/hot".to_string()
+        } else {
+            format!("https://www.zhihu.com{}", raw_url)
+        };
+
+        let id = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{}-zhihu-{}", feed.id, idx));
+
+        articles.push(Article {
+            id,
+            title,
+            description: desc.clone(),
+            content: desc,
+            source: feed.name.clone(),
+            url: link,
+            image_url: None,
+            published_at: now.clone(),
+            category: feed.category.clone(),
+            author: None,
+            read_count: 0,
+            likes: 0,
+        });
+
+        if articles.len() >= 50 {
+            break;
+        }
+    }
+
+    info!(
+        "flipboard: zhihu fallback fetched {} items for feed {}",
+        articles.len(),
+        feed.name
+    );
+
+    Ok(articles)
+}
+
+async fn fetch_bilibili_fallback(feed: &FeedSource) -> Result<Vec<Article>, String> {
+    let api_url = "https://api.bilibili.com/x/web-interface/popular";
+
+    info!(
+        "flipboard: bilibili fallback using api {}, feed = {} ({})",
+        api_url,
+        feed.name,
+        feed.url
+    );
+
+    let resp = HTTP_CLIENT
+        .get(api_url)
+        .query(&[("ps", "50"), ("pn", "1")])
+        .send()
+        .await
+        .map_err(|e| {
+            error!("flipboard: bilibili api request failed: {}", e);
+            e.to_string()
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        warn!(
+            "flipboard: bilibili api {} returned non-success: {} {}",
+            api_url, status, body
+        );
+        return Err(format!("bilibili api returned status {}", status));
+    }
+
+    let text = resp.text().await.map_err(|e| {
+        error!("flipboard: read bilibili api body failed: {}", e);
+        e.to_string()
+    })?;
+
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        error!("flipboard: parse bilibili api json failed: {}", e);
+        e.to_string()
+    })?;
+
+    let data = v
+        .get("data")
+        .and_then(|d| d.get("list"))
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "bilibili api json missing data.list array".to_string())?;
+
+    let now = Utc::now().to_rfc3339();
+    let mut articles = Vec::new();
+
+    for (idx, item) in data.iter().enumerate() {
+        let title = item
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("无标题")
+            .to_string();
+        let desc = item
+            .get("desc")
+            .and_then(|d| d.as_str())
+            .unwrap_or("")
+            .to_string();
+        let bvid = item
+            .get("bvid")
+            .and_then(|b| b.as_str())
+            .unwrap_or("");
+        let short = item
+            .get("short_link_v2")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let link = if !short.is_empty() {
+            short.to_string()
+        } else if !bvid.is_empty() {
+            format!("https://www.bilibili.com/video/{}", bvid)
+        } else {
+            "https://www.bilibili.com".to_string()
+        };
+
+        let id = item
+            .get("aid")
+            .and_then(|v| v.as_i64())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| format!("{}-bilibili-{}", feed.id, idx));
+
+        let author = item
+            .get("owner")
+            .and_then(|o| o.get("name"))
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string());
+
+        let likes = item
+            .get("stat")
+            .and_then(|s| s.get("like"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let views = item
+            .get("stat")
+            .and_then(|s| s.get("view"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let image_url = item
+            .get("pic")
+            .and_then(|p| p.as_str())
+            .map(|s| s.to_string());
+
+        articles.push(Article {
+            id,
+            title,
+            description: desc.clone(),
+            content: desc,
+            source: feed.name.clone(),
+            url: link,
+            image_url,
+            published_at: now.clone(),
+            category: feed.category.clone(),
+            author,
+            read_count: views as u32,
+            likes: likes as u32,
+        });
+
+        if articles.len() >= 50 {
+            break;
+        }
+    }
+
+    info!(
+        "flipboard: bilibili fallback fetched {} items for feed {}",
+        articles.len(),
+        feed.name
+    );
+
+    Ok(articles)
+}
+
+async fn collect_articles_for_feed(feed: &FeedSource) -> Result<Vec<Article>, String> {
+    let source_type = feed.source_type.trim().to_lowercase();
+
+    match source_type.as_str() {
+        "zhihu" => {
+            let rss_result = fetch_rss_feed_internal(feed).await;
+            let base_articles = match rss_result {
+                Ok(list) if !list.is_empty() => list,
+                _ => match fetch_zhihu_fallback(feed).await {
+                    Ok(list) => list,
+                    Err(e) => {
+                        warn!(
+                            "flipboard: zhihu rss and fallback both failed for {}: {}",
+                            feed.url, e
+                        );
+                        Vec::new()
+                    }
+                },
+            };
+            return Ok(filter_articles_by_keywords(base_articles, feed));
+        }
+        "bilibili" => {
+            let rss_result = fetch_rss_feed_internal(feed).await;
+            let base_articles = match rss_result {
+                Ok(list) if !list.is_empty() => list,
+                _ => match fetch_bilibili_fallback(feed).await {
+                    Ok(list) => list,
+                    Err(e) => {
+                        warn!(
+                            "flipboard: bilibili rss and fallback both failed for {}: {}",
+                            feed.url, e
+                        );
+                        Vec::new()
+                    }
+                },
+            };
+            return Ok(filter_articles_by_keywords(base_articles, feed));
+        }
+        _ => {}
+    }
+
+    if source_type.is_empty() || source_type == "rss" {
+        let articles = fetch_rss_feed_internal(feed).await?;
+        return Ok(filter_articles_by_keywords(articles, feed));
+    }
+
+    let rss_result = fetch_rss_feed_internal(feed).await;
+    let base_articles = match rss_result {
+        Ok(list) if !list.is_empty() => list,
+        _ => match fetch_html_and_extract_articles(feed).await {
+            Ok(list) => list,
+            Err(e) => {
+                warn!(
+                    "flipboard: rss and html fetch both failed for {}: {}",
+                    feed.url, e
+                );
+                Vec::new()
+            }
+        },
+    };
+
+    Ok(filter_articles_by_keywords(base_articles, feed))
+}
+
 #[command]
 pub async fn fetch_rss_feed(url: String) -> Result<Vec<Article>, String> {
     let feed = FeedSource {
@@ -671,6 +1293,11 @@ pub async fn fetch_rss_feed(url: String) -> Result<Vec<Article>, String> {
         url,
         category: "all".to_string(),
         enabled: true,
+        source_type: "rss".to_string(),
+        fetch_interval: Some(60),
+        include_keywords: None,
+        exclude_keywords: None,
+        remark: None,
     };
     fetch_rss_feed_internal(&feed).await
 }
@@ -712,12 +1339,12 @@ pub async fn refresh_articles_from_feeds(
     let mut all_articles = Vec::new();
 
     for feed in &feeds {
-        match fetch_rss_feed_internal(feed).await {
+        match collect_articles_for_feed(feed).await {
             Ok(mut list) => {
                 all_articles.append(&mut list);
             }
             Err(e) => {
-                warn!("flipboard: fetch feed {} failed: {}", feed.url, e);
+                warn!("flipboard: collect feed {} failed: {}", feed.url, e);
             }
         }
     }
