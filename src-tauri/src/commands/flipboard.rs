@@ -1391,6 +1391,283 @@ async fn fetch_bilibili_fallback(feed: &FeedSource) -> Result<Vec<Article>, Stri
     Ok(articles)
 }
 
+struct CrawlResult {
+    method: &'static str,
+    articles: Vec<Article>,
+}
+
+fn is_probably_json_api(url: &Url) -> bool {
+    let host = url.host_str().unwrap_or("");
+    let path = url.path();
+    host.starts_with("api.")
+        || (host.contains("zhihu.com") && path.contains("/api/"))
+        || (host.contains("bilibili.com") && path.contains("/x/"))
+        || (host.contains("bilibili.com") && path.contains("/web-interface/"))
+}
+
+async fn fetch_json_value(url: &Url) -> Result<serde_json::Value, String> {
+    info!("flipboard: fetch json {}", url);
+
+    let resp = HTTP_CLIENT.get(url.clone()).send().await.map_err(|e| {
+        error!("flipboard: request json {} failed: {}", url, e);
+        e.to_string()
+    })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        warn!("flipboard: json {} returned non-success: {} {}", url, status, body);
+        return Err(format!("json {} returned status {}", url, status));
+    }
+
+    let text = resp.text().await.map_err(|e| {
+        error!("flipboard: read json {} body failed: {}", url, e);
+        e.to_string()
+    })?;
+
+    serde_json::from_str::<serde_json::Value>(&text).map_err(|e| {
+        error!("flipboard: parse json {} failed: {}", url, e);
+        e.to_string()
+    })
+}
+
+fn extract_zhihu_articles_from_json(feed: &FeedSource, v: &serde_json::Value) -> Result<Vec<Article>, String> {
+    let data = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "zhihu json missing data array".to_string())?;
+
+    let now = Utc::now().to_rfc3339();
+    let mut articles = Vec::new();
+
+    for (idx, item) in data.iter().enumerate() {
+        let target = item.get("target").unwrap_or(item);
+        let title = target
+            .get("title")
+            .or_else(|| target.get("name"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("无标题")
+            .trim()
+            .to_string();
+
+        if title.len() < 4 {
+            continue;
+        }
+
+        let desc = target
+            .get("excerpt")
+            .or_else(|| target.get("desc"))
+            .or_else(|| target.get("description"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        let raw_url = target
+            .get("url")
+            .or_else(|| target.get("link"))
+            .and_then(|u| u.as_str())
+            .unwrap_or("");
+
+        let link = if raw_url.starts_with("http://") || raw_url.starts_with("https://") {
+            raw_url.to_string()
+        } else if raw_url.is_empty() {
+            feed.url.clone()
+        } else {
+            format!("https://www.zhihu.com{}", raw_url)
+        };
+
+        let id = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{}-zhihu-json-{}", feed.id, idx));
+
+        articles.push(Article {
+            id,
+            title,
+            description: desc.clone(),
+            content: desc,
+            source: feed.name.clone(),
+            url: link,
+            image_url: None,
+            published_at: now.clone(),
+            category: feed.category.clone(),
+            author: None,
+            read_count: 0,
+            likes: 0,
+        });
+
+        if articles.len() >= 50 {
+            break;
+        }
+    }
+
+    Ok(articles)
+}
+
+fn extract_bilibili_articles_from_json(feed: &FeedSource, v: &serde_json::Value) -> Result<Vec<Article>, String> {
+    let data = v.get("data").ok_or_else(|| "bilibili json missing data".to_string())?;
+    let list = data
+        .get("list")
+        .and_then(|d| d.as_array())
+        .or_else(|| data.get("archives").and_then(|d| d.as_array()))
+        .ok_or_else(|| "bilibili json missing data.list/data.archives".to_string())?;
+
+    let now = Utc::now().to_rfc3339();
+    let mut articles = Vec::new();
+
+    for (idx, item) in list.iter().enumerate() {
+        let title = item
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("无标题")
+            .trim()
+            .to_string();
+
+        if title.len() < 4 {
+            continue;
+        }
+
+        let desc = item
+            .get("desc")
+            .or_else(|| item.get("dynamic"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        let bvid = item.get("bvid").and_then(|b| b.as_str()).unwrap_or("");
+        let short = item
+            .get("short_link_v2")
+            .or_else(|| item.get("short_link"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+
+        let link = if !short.is_empty() {
+            short.to_string()
+        } else if !bvid.is_empty() {
+            format!("https://www.bilibili.com/video/{}", bvid)
+        } else {
+            "https://www.bilibili.com".to_string()
+        };
+
+        let id = item
+            .get("aid")
+            .and_then(|v| v.as_i64())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| format!("{}-bili-json-{}", feed.id, idx));
+
+        let author = item
+            .get("owner")
+            .and_then(|o| o.get("name"))
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string());
+
+        let likes = item
+            .get("stat")
+            .and_then(|s| s.get("like"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let views = item
+            .get("stat")
+            .and_then(|s| s.get("view"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let image_url = item.get("pic").and_then(|p| p.as_str()).map(|s| s.to_string());
+
+        articles.push(Article {
+            id,
+            title,
+            description: desc.clone(),
+            content: desc,
+            source: feed.name.clone(),
+            url: link,
+            image_url,
+            published_at: now.clone(),
+            category: feed.category.clone(),
+            author,
+            read_count: views as u32,
+            likes: likes as u32,
+        });
+
+        if articles.len() >= 50 {
+            break;
+        }
+    }
+
+    Ok(articles)
+}
+
+async fn crawl_zhihu_when_rss_unavailable(feed: &FeedSource) -> Result<CrawlResult, String> {
+    let parsed = Url::parse(feed.url.trim()).map_err(|e| format!("invalid url: {}", e))?;
+
+    if is_probably_json_api(&parsed) {
+        match fetch_json_value(&parsed).await {
+            Ok(v) => match extract_zhihu_articles_from_json(feed, &v) {
+                Ok(list) if !list.is_empty() => {
+                    return Ok(CrawlResult {
+                        method: "zhihu_api_url",
+                        articles: list,
+                    });
+                }
+                Ok(_) => warn!("flipboard: zhihu api url extracted empty, url = {}", feed.url),
+                Err(e) => warn!("flipboard: zhihu api url extract failed, url = {}, err = {}", feed.url, e),
+            },
+            Err(e) => warn!("flipboard: zhihu api url request failed, url = {}, err = {}", feed.url, e),
+        }
+    }
+
+    match fetch_html_and_extract_articles(feed).await {
+        Ok(list) if !list.is_empty() => Ok(CrawlResult {
+            method: "html",
+            articles: list,
+        }),
+        _ => {
+            let list = fetch_zhihu_fallback(feed).await?;
+            Ok(CrawlResult {
+                method: "zhihu_api_hot",
+                articles: list,
+            })
+        }
+    }
+}
+
+async fn crawl_bilibili_when_rss_unavailable(feed: &FeedSource) -> Result<CrawlResult, String> {
+    let parsed = Url::parse(feed.url.trim()).map_err(|e| format!("invalid url: {}", e))?;
+
+    if is_probably_json_api(&parsed) {
+        match fetch_json_value(&parsed).await {
+            Ok(v) => match extract_bilibili_articles_from_json(feed, &v) {
+                Ok(list) if !list.is_empty() => {
+                    return Ok(CrawlResult {
+                        method: "bilibili_api_url",
+                        articles: list,
+                    });
+                }
+                Ok(_) => warn!("flipboard: bilibili api url extracted empty, url = {}", feed.url),
+                Err(e) => warn!("flipboard: bilibili api url extract failed, url = {}, err = {}", feed.url, e),
+            },
+            Err(e) => warn!("flipboard: bilibili api url request failed, url = {}, err = {}", feed.url, e),
+        }
+    }
+
+    match fetch_html_and_extract_articles(feed).await {
+        Ok(list) if !list.is_empty() => Ok(CrawlResult {
+            method: "html",
+            articles: list,
+        }),
+        _ => {
+            let list = fetch_bilibili_fallback(feed).await?;
+            Ok(CrawlResult {
+                method: "bilibili_api_popular",
+                articles: list,
+            })
+        }
+    }
+}
+
 async fn collect_articles_for_feed(feed: &FeedSource) -> Result<Vec<Article>, String> {
     let source_type = feed.source_type.trim().to_lowercase();
 
@@ -1405,26 +1682,26 @@ async fn collect_articles_for_feed(feed: &FeedSource) -> Result<Vec<Article>, St
                 }
                 Ok(_) => {
                     warn!(
-                        "flipboard: zhihu rss returned empty, try fallback api, feed = {}",
+                        "flipboard: zhihu rss returned empty, use crawler for url, feed = {}",
                         feed.url
                     );
                 }
                 Err(e) => {
                     warn!(
-                        "flipboard: zhihu rss failed, try fallback api, feed = {}, err = {}",
+                        "flipboard: zhihu rss failed, use crawler for url, feed = {}, err = {}",
                         feed.url, e
                     );
                 }
             }
 
-            return match fetch_zhihu_fallback(feed).await {
-                Ok(list) => {
-                    let out = filter_articles_by_keywords(list, feed);
-                    record_feed_health_success(feed, "zhihu_api", out.len());
+            return match crawl_zhihu_when_rss_unavailable(feed).await {
+                Ok(res) => {
+                    let out = filter_articles_by_keywords(res.articles, feed);
+                    record_feed_health_success(feed, res.method, out.len());
                     Ok(out)
                 }
                 Err(e) => {
-                    record_feed_health_failure(feed, "zhihu_api", e.clone());
+                    record_feed_health_failure(feed, "zhihu_crawler", e.clone());
                     Ok(Vec::new())
                 }
             };
@@ -1439,26 +1716,26 @@ async fn collect_articles_for_feed(feed: &FeedSource) -> Result<Vec<Article>, St
                 }
                 Ok(_) => {
                     warn!(
-                        "flipboard: bilibili rss returned empty, try fallback api, feed = {}",
+                        "flipboard: bilibili rss returned empty, use crawler for url, feed = {}",
                         feed.url
                     );
                 }
                 Err(e) => {
                     warn!(
-                        "flipboard: bilibili rss failed, try fallback api, feed = {}, err = {}",
+                        "flipboard: bilibili rss failed, use crawler for url, feed = {}, err = {}",
                         feed.url, e
                     );
                 }
             }
 
-            return match fetch_bilibili_fallback(feed).await {
-                Ok(list) => {
-                    let out = filter_articles_by_keywords(list, feed);
-                    record_feed_health_success(feed, "bilibili_api", out.len());
+            return match crawl_bilibili_when_rss_unavailable(feed).await {
+                Ok(res) => {
+                    let out = filter_articles_by_keywords(res.articles, feed);
+                    record_feed_health_success(feed, res.method, out.len());
                     Ok(out)
                 }
                 Err(e) => {
-                    record_feed_health_failure(feed, "bilibili_api", e.clone());
+                    record_feed_health_failure(feed, "bilibili_crawler", e.clone());
                     Ok(Vec::new())
                 }
             };
