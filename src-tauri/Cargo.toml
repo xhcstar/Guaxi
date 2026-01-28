@@ -78,3 +78,13 @@ rss = "2.0.12"
 url = "2.5.7"
 exif = { git = "https://github.com/kamadak/exif-rs", package = "exif" }
 scraper = "0.25.0"
+aes-gcm = "0.10.3"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }

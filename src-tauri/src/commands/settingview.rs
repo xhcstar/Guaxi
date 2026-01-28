@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::{engine::general_purpose, Engine as _};
+use keyring::Entry;
+use rand::rngs::OsRng;
+use rand::TryRngCore;
 use tracing::{info, warn};
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -448,23 +455,27 @@ pub fn get_config_path() -> PathBuf {
 }
 
 pub fn load_config() -> AppConfig {
+    const ENC_PREFIX: &str = "enc:v1:";
+    const KEYRING_SERVICE: &str = "com.guaxi.guaxi";
+    const KEYRING_USER_PREFIX: &str = "guaxi_config_master_key:";
+
     let config_path = get_config_path();
     info!(
         config_path = config_path.to_string_lossy().as_ref(),
         "loading guaxi_config.json"
     );
 
+    let mut needs_save = false;
+    let mut needs_migrate = false;
+
     if !config_path.exists() {
-        // 如果配置文件不存在，创建默认配置
         let mut default_config = AppConfig::default();
-        if default_config.device_id.is_empty() {
+        if default_config.device_id.trim().is_empty() {
             default_config.device_id = Uuid::new_v4().to_string();
         }
-        fs::write(
-            &config_path,
-            serde_json::to_string_pretty(&default_config).unwrap(),
-        )
-        .expect("无法写入默认配置文件");
+
+        save_config(&default_config);
+
         info!(
             config_path = config_path.to_string_lossy().as_ref(),
             "guaxi_config.json created with default config"
@@ -472,22 +483,301 @@ pub fn load_config() -> AppConfig {
         return default_config;
     }
 
-    // 读取配置文件
     let config_data = fs::read_to_string(&config_path).expect("无法读取配置文件");
-    let mut config: AppConfig = serde_json::from_str(&config_data).expect("无法解析配置文件");
-    if config.device_id.is_empty() {
+    let mut v: serde_json::Value = serde_json::from_str(&config_data).expect("无法解析配置文件");
+
+    let device_id = v
+        .pointer("/device_id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let device_id = if device_id.is_empty() {
+        let new_id = Uuid::new_v4().to_string();
+        v["device_id"] = serde_json::Value::String(new_id.clone());
+        needs_save = true;
+        warn!("device_id is empty in config, regenerated a new one");
+        new_id
+    } else {
+        device_id
+    };
+
+    let mut cached_key: Option<[u8; 32]> = None;
+    let mut get_master_key = || -> Result<[u8; 32], String> {
+        if let Some(k) = cached_key {
+            return Ok(k);
+        }
+
+        let user = format!("{}{}", KEYRING_USER_PREFIX, device_id);
+        let entry = Entry::new(KEYRING_SERVICE, &user).map_err(|e| e.to_string())?;
+
+        let key_b64 = match entry.get_password() {
+            Ok(s) => s,
+            Err(_) => {
+                let mut k = [0u8; 32];
+                let mut rng = OsRng;
+                if let Err(e) = rng.try_fill_bytes(&mut k) {
+                    warn!(error = %e, "generate master key failed");
+                    return Err(format!("generate master key failed: {}", e));
+                }
+
+                let b64 = general_purpose::STANDARD.encode(k);
+                entry
+                    .set_password(&b64)
+                    .map_err(|e| format!("store master key failed: {}", e))?;
+                info!("master key generated and stored in system keyring");
+                b64
+            }
+        };
+
+        let raw = general_purpose::STANDARD
+            .decode(key_b64.trim())
+            .map_err(|e| format!("invalid master key in keyring: {}", e))?;
+        if raw.len() != 32 {
+            return Err(format!("invalid master key length: {}", raw.len()));
+        }
+
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&raw);
+        cached_key = Some(out);
+        Ok(out)
+    };
+
+    // 标记明文字段（用于首次升级自动迁移）
+    for ptr in [
+        "/database/password",
+        "/resource_repo_sync/webdav/password",
+        "/resource_repo_sync/syncthing/api_key",
+        "/llm_config/chatgpt_api_key",
+        "/llm_config/deepseek_api_key",
+        "/llm_config/qwen_api_key",
+        "/llm_config/kimi_api_key",
+        "/llm_config/doubao_api_key",
+        "/knowledge_bases_remote_token",
+    ] {
+        if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
+            let t = s.trim();
+            if !t.is_empty() && !t.starts_with(ENC_PREFIX) {
+                needs_migrate = true;
+            }
+        }
+    }
+
+    let mut try_decrypt = |ptr: &str| {
+        let Some(slot) = v.pointer_mut(ptr) else {
+            return;
+        };
+        let Some(raw) = slot.as_str().map(|s| s.to_string()) else {
+            return;
+        };
+
+        let t = raw.trim();
+        if t.is_empty() || !t.starts_with(ENC_PREFIX) {
+            return;
+        }
+
+        let enc = t.trim_start_matches(ENC_PREFIX);
+        let blob = match general_purpose::STANDARD.decode(enc) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(ptr = ptr, error = %e, "decode encrypted field failed");
+                return;
+            }
+        };
+        if blob.len() <= 12 {
+            warn!(ptr = ptr, blob_len = blob.len(), "encrypted blob too short");
+            return;
+        }
+
+        let key = match get_master_key() {
+            Ok(k) => k,
+            Err(e) => {
+                warn!(ptr = ptr, error = e.as_str(), "load master key failed");
+                return;
+            }
+        };
+
+        // enc:v1:BASE64( nonce(12B) || ciphertext+tag )
+        let cipher = match Aes256Gcm::new_from_slice(&key) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(ptr = ptr, error = %e, "init aes-256-gcm cipher failed");
+                return;
+            }
+        };
+        let nonce = Nonce::from_slice(&blob[..12]);
+        let ciphertext = &blob[12..];
+
+        let plain = match cipher.decrypt(nonce, ciphertext) {
+            Ok(p) => p,
+            Err(_) => {
+                warn!(ptr = ptr, "decrypt encrypted field failed");
+                return;
+            }
+        };
+        let plain = match String::from_utf8(plain) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(ptr = ptr, error = %e, "decrypt output is not utf-8");
+                return;
+            }
+        };
+
+        *slot = serde_json::Value::String(plain);
+    };
+
+    // 解密密文字段（内存中使用明文；落盘仍由 save_config 统一加密）
+    try_decrypt("/database/password");
+    try_decrypt("/resource_repo_sync/webdav/password");
+    try_decrypt("/resource_repo_sync/syncthing/api_key");
+    try_decrypt("/llm_config/chatgpt_api_key");
+    try_decrypt("/llm_config/deepseek_api_key");
+    try_decrypt("/llm_config/qwen_api_key");
+    try_decrypt("/llm_config/kimi_api_key");
+    try_decrypt("/llm_config/doubao_api_key");
+    try_decrypt("/knowledge_bases_remote_token");
+
+    let mut config: AppConfig = serde_json::from_value(v).expect("无法解析配置文件");
+
+    if config.device_id.trim().is_empty() {
         config.device_id = Uuid::new_v4().to_string();
+        needs_save = true;
+    }
+
+    if needs_save || needs_migrate {
+        info!(needs_save, needs_migrate, "migrating config sensitive fields to encrypted form");
         save_config(&config);
     }
+
     config
 }
 
 pub fn save_config(config: &AppConfig) {
+    const ENC_PREFIX: &str = "enc:v1:";
+    const KEYRING_SERVICE: &str = "com.guaxi.guaxi";
+    const KEYRING_USER_PREFIX: &str = "guaxi_config_master_key:";
+
     let config_path = get_config_path();
-    let json = serde_json::to_string_pretty(config).unwrap();
+
+    let device_id = config.device_id.trim();
+    let device_id = if device_id.is_empty() { "default" } else { device_id };
+
+    let mut cached_key: Option<[u8; 32]> = None;
+    let mut get_master_key = || -> Result<[u8; 32], String> {
+        if let Some(k) = cached_key {
+            return Ok(k);
+        }
+
+        let user = format!("{}{}", KEYRING_USER_PREFIX, device_id);
+        let entry = Entry::new(KEYRING_SERVICE, &user).map_err(|e| e.to_string())?;
+
+        let key_b64 = match entry.get_password() {
+            Ok(s) => s,
+            Err(_) => {
+                let mut k = [0u8; 32];
+                let mut rng = OsRng;
+                if let Err(e) = rng.try_fill_bytes(&mut k) {
+                    warn!(error = %e, "generate master key failed");
+                    return Err(format!("generate master key failed: {}", e));
+                }
+
+                let b64 = general_purpose::STANDARD.encode(k);
+                entry
+                    .set_password(&b64)
+                    .map_err(|e| format!("store master key failed: {}", e))?;
+                info!("master key generated and stored in system keyring");
+                b64
+            }
+        };
+
+        let raw = general_purpose::STANDARD
+            .decode(key_b64.trim())
+            .map_err(|e| format!("invalid master key in keyring: {}", e))?;
+        if raw.len() != 32 {
+            return Err(format!("invalid master key length: {}", raw.len()));
+        }
+
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&raw);
+        cached_key = Some(out);
+        Ok(out)
+    };
+
+    let mut encrypt_string = |plain: &str| -> Result<String, String> {
+        let t = plain.trim();
+        if t.is_empty() {
+            return Ok("".to_string());
+        }
+        if t.starts_with(ENC_PREFIX) {
+            return Ok(t.to_string());
+        }
+
+        let key = get_master_key()?;
+        let cipher = Aes256Gcm::new_from_slice(&key)
+            .map_err(|e| format!("init aes-256-gcm cipher failed: {}", e))?;
+
+        let mut nonce_bytes = [0u8; 12];
+        let mut rng = OsRng;
+        rng.try_fill_bytes(&mut nonce_bytes)
+            .map_err(|e| format!("generate nonce failed: {}", e))?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        // enc:v1:BASE64( nonce(12B) || ciphertext+tag )
+        let ciphertext = cipher
+            .encrypt(nonce, t.as_bytes())
+            .map_err(|_| "encrypt failed".to_string())?;
+
+        let mut blob: Vec<u8> = Vec::with_capacity(12 + ciphertext.len());
+        blob.extend_from_slice(&nonce_bytes);
+        blob.extend_from_slice(&ciphertext);
+
+        Ok(format!(
+            "{}{}",
+            ENC_PREFIX,
+            general_purpose::STANDARD.encode(blob)
+        ))
+    };
+
+    let mut encrypted_fields = 0u32;
+    let mut encrypt_field = |val: &mut serde_json::Value, ptr: &str| {
+        let Some(slot) = val.pointer_mut(ptr) else {
+            return;
+        };
+        let Some(cur) = slot.as_str().map(|s| s.to_string()) else {
+            return;
+        };
+
+        match encrypt_string(&cur) {
+            Ok(out) => {
+                if !out.is_empty() && out != cur {
+                    encrypted_fields += 1;
+                }
+                *slot = serde_json::Value::String(out);
+            }
+            Err(e) => {
+                warn!(ptr = ptr, error = e.as_str(), "encrypt config field failed; keep plaintext");
+            }
+        }
+    };
+
+    let mut val = serde_json::to_value(config).unwrap();
+    encrypt_field(&mut val, "/database/password");
+    encrypt_field(&mut val, "/resource_repo_sync/webdav/password");
+    encrypt_field(&mut val, "/resource_repo_sync/syncthing/api_key");
+    encrypt_field(&mut val, "/llm_config/chatgpt_api_key");
+    encrypt_field(&mut val, "/llm_config/deepseek_api_key");
+    encrypt_field(&mut val, "/llm_config/qwen_api_key");
+    encrypt_field(&mut val, "/llm_config/kimi_api_key");
+    encrypt_field(&mut val, "/llm_config/doubao_api_key");
+    encrypt_field(&mut val, "/knowledge_bases_remote_token");
+
+    let json = serde_json::to_string_pretty(&val).unwrap();
     fs::write(&config_path, json).expect("无法写入配置文件");
+
     info!(
         config_path = config_path.to_string_lossy().as_ref(),
+        encrypted_fields,
         "guaxi_config.json saved"
     );
 }

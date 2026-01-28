@@ -66,7 +66,7 @@ fn join_webdav_url(base: &str, remote_base_path: &str) -> Result<String, String>
     u.set_fragment(None);
 
     // 基础 URL 的 path 段（例如 https://host/dav -> ["dav"]）
-    let mut base_path_segments: Vec<String> = u
+    let base_path_segments: Vec<String> = u
         .path()
         .split('/')
         .map(|s| s.trim())

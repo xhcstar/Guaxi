@@ -270,6 +270,7 @@ const message = useMessage();
 const appWindow = getCurrentWindow();
 
 const RESOURCE_REPO_SYNC_STATUS_KEY = 'guaxi:resourceRepoSyncStatus:v1'
+const RESOURCE_REPO_SYNC_PENDING_KEY = 'guaxi:resourceRepoSyncPending:v1'
 
 const nowLabel = () => {
   try {
@@ -362,26 +363,43 @@ const runResourceRepoSync = async (reason) => {
 const initResourceRepoAutoSync = async () => {
   try {
     setTimeout(() => {
-      runResourceRepoSync('startup').catch(() => {})
+      let pending = false
+      try {
+        pending = localStorage.getItem(RESOURCE_REPO_SYNC_PENDING_KEY) === '1'
+      } catch {}
+
+      if (pending) {
+        try {
+          localStorage.removeItem(RESOURCE_REPO_SYNC_PENDING_KEY)
+        } catch {}
+      }
+
+      runResourceRepoSync(pending ? 'startup-pending' : 'startup').catch(() => {})
     }, 800)
   } catch {}
 
   try {
-    unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
+    unlistenCloseRequested = await appWindow.onCloseRequested(async () => {
       if (closeSyncBusy.value) return
-
       closeSyncBusy.value = true
-      try {
-        event?.preventDefault?.()
-        await runResourceRepoSync('shutdown')
-      } catch (e) {
-        console.warn('[GuaxiHeader] close sync failed', e)
-      }
 
       try {
-        await appWindow.close()
+        try {
+          localStorage.setItem(RESOURCE_REPO_SYNC_PENDING_KEY, '1')
+        } catch {}
+
+        setSyncState({
+          status: 'skipped',
+          action: '自动同步（关闭）',
+          at: nowLabel(),
+          detail: '关闭时不阻塞同步，下次启动将自动补偿执行',
+        })
+
+        console.info('[GuaxiHeader] close requested: mark resource repo sync pending and allow close')
       } catch (e) {
-        console.warn('[GuaxiHeader] close window after sync failed', e)
+        console.warn('[GuaxiHeader] close handler failed', e)
+      } finally {
+        closeSyncBusy.value = false
       }
     })
 
