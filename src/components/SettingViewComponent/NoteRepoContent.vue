@@ -92,6 +92,21 @@
             用于在不同设备间同步 ResourceRepo 目录内容。建议先配置连接器，再手动触发同步。
           </p>
 
+          <n-alert :type="syncUi.alertType" :show-icon="true" class="sync-status-alert" style="max-width: 95%;">
+            <n-space align="center" justify="space-between" style="width: 100%">
+              <div class="sync-status-main">
+                <div class="sync-status-title">{{ syncUi.title }}</div>
+                <div class="sync-status-sub">
+                  <span v-if="syncState.detail">{{ syncState.detail }}</span>
+                  <span v-else>
+                    最近操作：{{ syncState.action || '—' }} · {{ syncState.at || '—' }}
+                  </span>
+                </div>
+              </div>
+              <n-tag :type="syncUi.tagType" size="small">{{ syncUi.tagText }}</n-tag>
+            </n-space>
+          </n-alert>
+
           <n-form label-placement="left" label-width="auto" :show-require-mark="false" style="margin-top: 8px">
             <n-form-item label="同步后端">
               <n-select v-model:value="syncProvider" :options="syncProviderOptions" :disabled="loading" />
@@ -199,7 +214,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted } from 'vue';
 import {
   NCard,
   NList,
@@ -216,6 +231,7 @@ import {
   NFormItem,
   NSelect,
   NSwitch,
+  NTag,
 } from 'naive-ui';
 import {
   FolderAdd20Regular,
@@ -266,6 +282,127 @@ const knowledgeBasesGitEmail = ref('');
 
 const loading = ref(false);
 
+const RESOURCE_REPO_SYNC_STATUS_KEY = 'guaxi:resourceRepoSyncStatus:v1'
+
+const nowLabel = () => {
+  try {
+    return new Date().toLocaleString()
+  } catch {
+    return ''
+  }
+}
+
+const formatInvokeError = (e) => {
+  const msg = e?.message ?? (typeof e?.toString === 'function' ? e.toString() : String(e))
+  const s = typeof msg === 'string' ? msg.trim() : ''
+  return s || '操作失败'
+}
+
+const readSyncState = () => {
+  try {
+    const raw = localStorage.getItem(RESOURCE_REPO_SYNC_STATUS_KEY)
+    if (!raw) return { status: 'idle', action: '', at: '', detail: '' }
+    const v = JSON.parse(raw)
+    return {
+      status: String(v?.status || 'idle'),
+      action: String(v?.action || ''),
+      at: String(v?.at || ''),
+      detail: String(v?.detail || ''),
+    }
+  } catch (e) {
+    console.warn('[NoteRepoContent][ResourceRepoSync] read sync state failed', e)
+    return { status: 'idle', action: '', at: '', detail: '' }
+  }
+}
+
+const writeSyncState = (next) => {
+  try {
+    localStorage.setItem(RESOURCE_REPO_SYNC_STATUS_KEY, JSON.stringify(next))
+  } catch (e) {
+    console.warn('[NoteRepoContent][ResourceRepoSync] write sync state failed', e)
+  }
+}
+
+const syncState = ref(readSyncState())
+const syncStateRaw = ref('')
+let syncPollTimer = null
+
+const applySyncState = (next, source) => {
+  if (!next) return
+  syncState.value = {
+    status: String(next?.status || 'idle'),
+    action: String(next?.action || ''),
+    at: String(next?.at || ''),
+    detail: String(next?.detail || ''),
+  }
+  console.log('[NoteRepoContent][ResourceRepoSync] state update', { source, state: syncState.value })
+}
+
+const refreshSyncStateFromStorage = (source) => {
+  try {
+    const raw = localStorage.getItem(RESOURCE_REPO_SYNC_STATUS_KEY) || ''
+    if (raw && raw === syncStateRaw.value) return
+    syncStateRaw.value = raw
+    if (!raw) {
+      applySyncState({ status: 'idle', action: '', at: '', detail: '' }, source)
+      return
+    }
+    const v = JSON.parse(raw)
+    applySyncState(v, source)
+  } catch (e) {
+    console.warn('[NoteRepoContent][ResourceRepoSync] refresh sync state failed', e)
+  }
+}
+
+const handleSyncStateEvent = (e) => {
+  applySyncState(e?.detail, 'custom-event')
+}
+
+const handleStorageEvent = (e) => {
+  if (!e) return
+  if (e.key !== RESOURCE_REPO_SYNC_STATUS_KEY) return
+  refreshSyncStateFromStorage('storage-event')
+}
+
+const setSyncState = (patch) => {
+  const next = { ...syncState.value, ...patch }
+  syncState.value = next
+  writeSyncState(next)
+
+  try {
+    syncStateRaw.value = JSON.stringify(next)
+  } catch {}
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent('guaxi:resource-repo-sync-state', {
+        detail: next,
+      })
+    )
+  } catch (e) {
+    console.warn('[NoteRepoContent][ResourceRepoSync] dispatch sync state event failed', e)
+  }
+
+  console.log('[NoteRepoContent][ResourceRepoSync] state', next)
+}
+
+const syncUi = computed(() => {
+  const s = String(syncState.value?.status || 'idle')
+  if (s === 'running') {
+    return { alertType: 'info', tagType: 'info', tagText: '进行中', title: '资源库同步进行中…' }
+  }
+  if (s === 'success') {
+    return { alertType: 'success', tagType: 'success', tagText: '成功', title: '资源库同步状态正常' }
+  }
+  if (s === 'error') {
+    return { alertType: 'error', tagType: 'error', tagText: '失败', title: '资源库同步失败' }
+  }
+  if (s === 'skipped') {
+    return { alertType: 'warning', tagType: 'warning', tagText: '跳过', title: '资源库同步已跳过' }
+  }
+  return { alertType: 'default', tagType: 'default', tagText: '未运行', title: '资源库同步未运行' }
+})
+
 // 打开文件浏览器选择文件库根目录
 const handleOpenFileBrowserForLibraryRoot = async () => {
   try {
@@ -287,6 +424,19 @@ const handleOpenFileBrowserForLibraryRoot = async () => {
 
 // 加载配置
 onMounted(async () => {
+  window.addEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
+  window.addEventListener('storage', handleStorageEvent)
+
+  refreshSyncStateFromStorage('mounted')
+
+  try {
+    syncPollTimer = setInterval(() => {
+      refreshSyncStateFromStorage('poll')
+    }, 800)
+  } catch (e) {
+    console.warn('[NoteRepoContent][ResourceRepoSync] start sync state poll failed', e)
+  }
+
   librariesRoot.value = await invoke('get_libraries_root');
 
   try {
@@ -369,6 +519,19 @@ onMounted(async () => {
   }
 });
 
+onUnmounted(() => {
+  window.removeEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
+  window.removeEventListener('storage', handleStorageEvent)
+
+  try {
+    if (syncPollTimer) {
+      clearInterval(syncPollTimer)
+      syncPollTimer = null
+    }
+  } catch (e) {
+    console.warn('[NoteRepoContent][ResourceRepoSync] stop sync state poll failed', e)
+  }
+})
 
 const handleKnowledgeBasesRootPick = async () => {
   try {
@@ -496,35 +659,56 @@ const buildResourceRepoSyncConfig = () => {
 }
 
 const handleResourceRepoSyncSave = async () => {
+  const action = '保存配置'
   try {
     loading.value = true;
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+
     await invoke('set_resource_repo_sync_config', {
       configInput: buildResourceRepoSyncConfig(),
     });
+
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: '配置已保存' })
   } catch (error) {
+    const msg = formatInvokeError(error)
     console.error('保存资源库同步配置失败:', error);
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
   } finally {
     loading.value = false;
   }
 }
 
 const handleResourceRepoSyncTest = async () => {
+  const action = '测试连接'
   try {
     loading.value = true;
-    await invoke('resource_repo_test_connection');
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+
+    const res = await invoke('resource_repo_test_connection');
+    const text = typeof res === 'string' ? res : '连接正常'
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
   } catch (error) {
+    const msg = formatInvokeError(error)
     console.error('测试资源库同步连接失败:', error);
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
   } finally {
     loading.value = false;
   }
 }
 
 const handleResourceRepoSyncNow = async () => {
+  const action = '立即同步'
   try {
     loading.value = true;
-    await invoke('resource_repo_sync_now');
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+
+    const res = await invoke('resource_repo_sync_now');
+    const text = typeof res === 'string' ? res : '同步完成'
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
   } catch (error) {
+    const msg = formatInvokeError(error)
     console.error('资源库同步失败:', error);
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
   } finally {
     loading.value = false;
   }
@@ -567,5 +751,26 @@ const handleResourceRepoSyncNow = async () => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.sync-status-alert {
+  margin-top: 8px;
+}
+
+.sync-status-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sync-status-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sync-status-sub {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  line-height: 1.25;
 }
 </style>

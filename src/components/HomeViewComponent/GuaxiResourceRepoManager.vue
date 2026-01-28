@@ -36,12 +36,27 @@
         </div>
 
         <div class="right">
-          <n-card size="small" title="详情">
-            <n-space vertical>
-              <n-text depth="3">选中路径：</n-text>
-              <n-text>{{ selectedPath || '（未选择）' }}</n-text>
-            </n-space>
-          </n-card>
+          <n-space vertical>
+            <n-card size="small" title="同步状态">
+              <n-space align="center" justify="space-between">
+                <div class="sync-status-main">
+                  <div class="sync-status-title">{{ syncUi.title }}</div>
+                  <div class="sync-status-sub">
+                    <span v-if="syncState.detail">{{ syncState.detail }}</span>
+                    <span v-else>最近操作：{{ syncState.action || '—' }} · {{ syncState.at || '—' }}</span>
+                  </div>
+                </div>
+                <n-tag :type="syncUi.tagType" size="small">{{ syncUi.tagText }}</n-tag>
+              </n-space>
+            </n-card>
+
+            <n-card size="small" title="详情">
+              <n-space vertical>
+                <n-text depth="3">选中路径：</n-text>
+                <n-text>{{ selectedPath || '（未选择）' }}</n-text>
+              </n-space>
+            </n-card>
+          </n-space>
         </div>
       </div>
     </div>
@@ -49,19 +64,134 @@
 </template>
 
 <script setup>
-import { h, onMounted, ref } from 'vue'
-import { NButton, NCard, NMessageProvider, NSpace, NSpin, NText, NTree, useMessage } from 'naive-ui'
+import { computed, h, onMounted, onUnmounted, ref } from 'vue'
+import { NButton, NCard, NMessageProvider, NSpace, NSpin, NTag, NText, NTree, useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { Folder20Regular, Document20Regular } from '@vicons/fluent'
 import { NIcon } from 'naive-ui'
 
 const message = useMessage()
 
+const RESOURCE_REPO_SYNC_STATUS_KEY = 'guaxi:resourceRepoSyncStatus:v1'
+
+const nowLabel = () => {
+  try {
+    return new Date().toLocaleString()
+  } catch {
+    return ''
+  }
+}
+
 const formatInvokeError = (e) => {
   const msg = e?.message ?? (typeof e?.toString === 'function' ? e.toString() : String(e))
   const s = typeof msg === 'string' ? msg.trim() : ''
   return s || '操作失败'
 }
+
+const readSyncState = () => {
+  try {
+    const raw = localStorage.getItem(RESOURCE_REPO_SYNC_STATUS_KEY)
+    if (!raw) return { status: 'idle', action: '', at: '', detail: '' }
+    const v = JSON.parse(raw)
+    return {
+      status: String(v?.status || 'idle'),
+      action: String(v?.action || ''),
+      at: String(v?.at || ''),
+      detail: String(v?.detail || ''),
+    }
+  } catch (e) {
+    console.warn('[ResourceRepoManager] read sync state failed', e)
+    return { status: 'idle', action: '', at: '', detail: '' }
+  }
+}
+
+const writeSyncState = (next) => {
+  try {
+    localStorage.setItem(RESOURCE_REPO_SYNC_STATUS_KEY, JSON.stringify(next))
+  } catch (e) {
+    console.warn('[ResourceRepoManager] write sync state failed', e)
+  }
+}
+
+const syncState = ref(readSyncState())
+const syncStateRaw = ref('')
+let syncPollTimer = null
+
+const applySyncState = (next, source) => {
+  if (!next) return
+  syncState.value = {
+    status: String(next?.status || 'idle'),
+    action: String(next?.action || ''),
+    at: String(next?.at || ''),
+    detail: String(next?.detail || ''),
+  }
+  console.log('[ResourceRepoManager] sync state update', { source, state: syncState.value })
+}
+
+const refreshSyncStateFromStorage = (source) => {
+  try {
+    const raw = localStorage.getItem(RESOURCE_REPO_SYNC_STATUS_KEY) || ''
+    if (raw && raw === syncStateRaw.value) return
+    syncStateRaw.value = raw
+    if (!raw) {
+      applySyncState({ status: 'idle', action: '', at: '', detail: '' }, source)
+      return
+    }
+    const v = JSON.parse(raw)
+    applySyncState(v, source)
+  } catch (e) {
+    console.warn('[ResourceRepoManager] refresh sync state failed', e)
+  }
+}
+
+const handleSyncStateEvent = (e) => {
+  applySyncState(e?.detail, 'custom-event')
+}
+
+const handleStorageEvent = (e) => {
+  if (!e) return
+  if (e.key !== RESOURCE_REPO_SYNC_STATUS_KEY) return
+  refreshSyncStateFromStorage('storage-event')
+}
+
+const setSyncState = (patch) => {
+  const next = { ...syncState.value, ...patch }
+  syncState.value = next
+  writeSyncState(next)
+
+  try {
+    syncStateRaw.value = JSON.stringify(next)
+  } catch {}
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent('guaxi:resource-repo-sync-state', {
+        detail: next,
+      })
+    )
+  } catch (e) {
+    console.warn('[ResourceRepoManager] dispatch sync state event failed', e)
+  }
+
+  console.log('[ResourceRepoManager] sync state', next)
+}
+
+const syncUi = computed(() => {
+  const s = String(syncState.value?.status || 'idle')
+  if (s === 'running') {
+    return { tagType: 'info', tagText: '进行中', title: '资源库同步进行中…' }
+  }
+  if (s === 'success') {
+    return { tagType: 'success', tagText: '成功', title: '资源库同步状态正常' }
+  }
+  if (s === 'error') {
+    return { tagType: 'error', tagText: '失败', title: '资源库同步失败' }
+  }
+  if (s === 'skipped') {
+    return { tagType: 'warning', tagText: '跳过', title: '资源库同步已跳过' }
+  }
+  return { tagType: 'default', tagText: '未运行', title: '资源库同步未运行' }
+})
 
 const loading = ref(false)
 const loadingTree = ref(false)
@@ -197,33 +327,74 @@ const deleteSelected = async () => {
 }
 
 const testConnection = async () => {
+  const action = '测试连接'
   try {
     loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+
     const res = await invoke('resource_repo_test_connection')
-    message.success(typeof res === 'string' ? res : '连接正常')
+    const text = typeof res === 'string' ? res : '连接正常'
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
+    message.success(text)
   } catch (e) {
+    const msg = formatInvokeError(e)
     console.error('[ResourceRepoManager] test connection failed', e)
-    message.error(formatInvokeError(e))
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+    message.error(msg)
   } finally {
     loading.value = false
   }
 }
 
 const syncNow = async () => {
+  const action = '立即同步'
   try {
     loading.value = true
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+
     const res = await invoke('resource_repo_sync_now')
-    message.success(typeof res === 'string' ? res : '同步完成')
+    const text = typeof res === 'string' ? res : '同步完成'
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
+    message.success(text)
   } catch (e) {
+    const msg = formatInvokeError(e)
     console.error('[ResourceRepoManager] sync failed', e)
-    message.error(formatInvokeError(e))
+    setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
+    message.error(msg)
   } finally {
     loading.value = false
   }
 }
 
 onMounted(async () => {
+  window.addEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
+  window.addEventListener('storage', handleStorageEvent)
+
+  refreshSyncStateFromStorage('mounted')
+
+  try {
+    syncPollTimer = setInterval(() => {
+      refreshSyncStateFromStorage('poll')
+    }, 800)
+  } catch (e) {
+    console.warn('[ResourceRepoManager] start sync state poll failed', e)
+  }
+
   await refresh()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('guaxi:resource-repo-sync-state', handleSyncStateEvent)
+  window.removeEventListener('storage', handleStorageEvent)
+
+  try {
+    if (syncPollTimer) {
+      clearInterval(syncPollTimer)
+      syncPollTimer = null
+    }
+  } catch (e) {
+    console.warn('[ResourceRepoManager] stop sync state poll failed', e)
+  }
 })
 </script>
 
@@ -289,5 +460,22 @@ onMounted(async () => {
 
 .right {
   min-height: 0;
+}
+
+.sync-status-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sync-status-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sync-status-sub {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  line-height: 1.25;
 }
 </style>

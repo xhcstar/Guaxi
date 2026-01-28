@@ -269,6 +269,128 @@ const viewKey = 'home'
 const message = useMessage();
 const appWindow = getCurrentWindow();
 
+const RESOURCE_REPO_SYNC_STATUS_KEY = 'guaxi:resourceRepoSyncStatus:v1'
+
+const nowLabel = () => {
+  try {
+    return new Date().toLocaleString()
+  } catch {
+    return ''
+  }
+}
+
+const formatInvokeError = (e) => {
+  const msg = e?.message ?? (typeof e?.toString === 'function' ? e.toString() : String(e))
+  const s = typeof msg === 'string' ? msg.trim() : ''
+  return s || '操作失败'
+}
+
+const readSyncState = () => {
+  try {
+    const raw = localStorage.getItem(RESOURCE_REPO_SYNC_STATUS_KEY)
+    if (!raw) return { status: 'idle', action: '', at: '', detail: '' }
+    const v = JSON.parse(raw)
+    return {
+      status: String(v?.status || 'idle'),
+      action: String(v?.action || ''),
+      at: String(v?.at || ''),
+      detail: String(v?.detail || ''),
+    }
+  } catch {
+    return { status: 'idle', action: '', at: '', detail: '' }
+  }
+}
+
+const setSyncState = (patch) => {
+  const base = readSyncState()
+  const next = { ...base, ...patch }
+  try {
+    localStorage.setItem(RESOURCE_REPO_SYNC_STATUS_KEY, JSON.stringify(next))
+  } catch (e) {
+    console.warn('[GuaxiHeader] write sync state failed', e)
+  }
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent('guaxi:resource-repo-sync-state', {
+        detail: next,
+      })
+    )
+  } catch (e) {
+    console.warn('[GuaxiHeader] dispatch sync state event failed', e)
+  }
+
+  console.log('[GuaxiHeader] resource repo sync state', next)
+}
+
+const autoSyncBusy = ref(false)
+const closeSyncBusy = ref(false)
+let unlistenCloseRequested = null
+
+const runResourceRepoSync = async (reason) => {
+  if (autoSyncBusy.value) return
+  autoSyncBusy.value = true
+
+  const action = reason === 'shutdown' ? '自动同步（关闭）' : '自动同步（启动）'
+
+  try {
+    setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
+    console.info('[GuaxiHeader] resource repo auto sync start', { reason })
+
+    const res = await invoke('resource_repo_sync_now')
+    const text = typeof res === 'string' ? res : '同步完成'
+
+    setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
+    console.info('[GuaxiHeader] resource repo auto sync success', { reason, text })
+  } catch (e) {
+    const msg = formatInvokeError(e)
+    const skipped = msg.includes('未启用资源库同步后端')
+
+    console.warn('[GuaxiHeader] resource repo auto sync failed', { reason, msg, raw: e })
+
+    setSyncState({
+      status: skipped ? 'skipped' : 'error',
+      action,
+      at: nowLabel(),
+      detail: msg,
+    })
+  } finally {
+    autoSyncBusy.value = false
+  }
+}
+
+const initResourceRepoAutoSync = async () => {
+  try {
+    setTimeout(() => {
+      runResourceRepoSync('startup').catch(() => {})
+    }, 800)
+  } catch {}
+
+  try {
+    unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
+      if (closeSyncBusy.value) return
+
+      closeSyncBusy.value = true
+      try {
+        event?.preventDefault?.()
+        await runResourceRepoSync('shutdown')
+      } catch (e) {
+        console.warn('[GuaxiHeader] close sync failed', e)
+      }
+
+      try {
+        await appWindow.close()
+      } catch (e) {
+        console.warn('[GuaxiHeader] close window after sync failed', e)
+      }
+    })
+
+    console.log('[GuaxiHeader] close requested listener registered')
+  } catch (e) {
+    console.warn('[GuaxiHeader] register onCloseRequested failed', e)
+  }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const waitForWindowMinimized = async (timeoutMs = 1200, settleMs = 260) => {
@@ -1152,6 +1274,10 @@ onMounted(() => {
   window.addEventListener('scroll', handleWindowReflow, true)
   window.addEventListener('keydown', handleGlobalSearchHotkey, true)
   window.addEventListener('beforeunload', handleBeforeUnload)
+
+  Promise.resolve(initResourceRepoAutoSync()).catch((e) => {
+    console.warn('[GuaxiHeader] init resource repo auto sync failed', e)
+  })
 })
 
 onUnmounted(() => {
@@ -1160,6 +1286,15 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalSearchHotkey, true)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   debouncedRunPreviewSearch.cancel()
+
+  try {
+    if (typeof unlistenCloseRequested === 'function') {
+      unlistenCloseRequested()
+      unlistenCloseRequested = null
+    }
+  } catch (e) {
+    console.warn('[GuaxiHeader] unlisten close requested failed', e)
+  }
 })
 
 async function handleSearchFiles() {
