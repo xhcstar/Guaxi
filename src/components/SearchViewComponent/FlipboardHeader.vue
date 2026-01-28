@@ -71,7 +71,7 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
-            <n-button circle size="small" secondary @click="refreshHealth" :disabled="isLoading" :type="healthType">
+            <n-button class="header-circle-btn" circle size="small" secondary @click="refreshHealth" :disabled="isLoading" :type="healthType">
               <n-icon>
                 <HealthIcon />
               </n-icon>
@@ -93,8 +93,8 @@
 
         <n-tooltip placement="bottom" trigger="hover">
           <template #trigger>
-            <n-button circle size="small" @click="refreshArticles" :loading="isLoading">
-              <n-icon>
+            <n-button class="header-circle-btn" circle size="small" @click="refreshArticles" :disabled="isLoading">
+              <n-icon :class="{ 'refresh-spin': isLoading }">
                 <RefreshIcon />
               </n-icon>
             </n-button>
@@ -294,6 +294,43 @@ const toggleLeftSidebar = () => {
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+}
+
+.header-circle-btn {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.header-circle-btn :deep(.n-button__content) {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-circle-btn :deep(.n-button__icon) {
+  margin-right: 0 !important;
+}
+
+.header-circle-btn :deep(.n-base-loading) {
+  margin-right: 0 !important;
+}
+
+.refresh-spin {
+  animation: guaxi-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes guaxi-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .health-tooltip {
