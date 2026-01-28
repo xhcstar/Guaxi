@@ -225,16 +225,18 @@ const cityByCoordKey = ref({})
 const visiblePhotos = computed(() => photos.value.slice(0, visibleLimit.value))
 
 const toSrc = (p) => {
-  const raw = String(p || '')
+  const raw = String(p || '').trim()
   if (!raw) return ''
 
-  const assetUrl = convertFileSrc(raw)
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw
 
-  if (typeof assetUrl === 'string' && (assetUrl.includes('asset.localhost') || assetUrl.startsWith('asset://'))) {
-    return `http://localhost:8888/markdown/api/images/${encodeURIComponent(raw)}`
+  try {
+    const assetUrl = convertFileSrc(raw)
+    return typeof assetUrl === 'string' && assetUrl ? assetUrl : raw
+  } catch (e) {
+    console.warn('[LifeAlbum] convertFileSrc failed:', e)
+    return raw
   }
-
-  return assetUrl
 }
 
 const mapEl = ref(null)
