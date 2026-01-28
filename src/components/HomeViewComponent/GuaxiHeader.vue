@@ -417,9 +417,10 @@ const initResourceRepoAutoSync = async () => {
 
         if (autoSyncBusy.value) {
           closeAfterSync = true
+          const currentState = readSyncState()
           setSyncState({
             status: 'running',
-            action: syncState.value?.action || '自动同步（启动）',
+            action: currentState?.action || '自动同步（启动）',
             at: nowLabel(),
             detail: '关闭已请求：正在后台同步，同步完成后将自动退出',
           })
