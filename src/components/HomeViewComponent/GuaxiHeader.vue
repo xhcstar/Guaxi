@@ -325,11 +325,6 @@ const setSyncState = (patch) => {
 }
 
 const autoSyncBusy = ref(false)
-const closeSyncBusy = ref(false)
-let unlistenCloseRequested = null
-let closeRequested = false
-let closeAfterSync = false
-let closeIssued = false
 
 const runResourceRepoSync = async (reason) => {
   if (autoSyncBusy.value) return
@@ -360,29 +355,6 @@ const runResourceRepoSync = async (reason) => {
     })
   } finally {
     autoSyncBusy.value = false
-
-    if (closeRequested && closeAfterSync && !closeIssued) {
-      closeIssued = true
-      console.info('[GuaxiHeader] sync finished, close was requested earlier; closing window now')
-
-      try {
-        if (typeof unlistenCloseRequested === 'function') {
-          const fn = unlistenCloseRequested
-          unlistenCloseRequested = null
-          await fn()
-        }
-      } catch (e) {
-        console.warn('[GuaxiHeader] unlisten close requested failed', e)
-      }
-
-      try {
-        appWindow.close().catch((e) => {
-          console.warn('[GuaxiHeader] close window failed', e)
-        })
-      } catch (e) {
-        console.warn('[GuaxiHeader] close window failed', e)
-      }
-    }
   }
 }
 
@@ -406,71 +378,6 @@ const initResourceRepoAutoSync = async () => {
     }, 800)
   } catch {}
 
-  try {
-    unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
-      if (closeSyncBusy.value) return
-      closeSyncBusy.value = true
-      closeRequested = true
-
-      try {
-        event?.preventDefault?.()
-
-        if (autoSyncBusy.value) {
-          closeAfterSync = true
-          const currentState = readSyncState()
-          setSyncState({
-            status: 'running',
-            action: currentState?.action || '自动同步（启动）',
-            at: nowLabel(),
-            detail: '关闭已请求：正在后台同步，同步完成后将自动退出',
-          })
-          console.info('[GuaxiHeader] close requested while syncing: will close after sync finished')
-          return
-        }
-
-        closeAfterSync = false
-
-        try {
-          localStorage.setItem(RESOURCE_REPO_SYNC_PENDING_KEY, '1')
-        } catch {}
-
-        setSyncState({
-          status: 'skipped',
-          action: '自动同步（关闭）',
-          at: nowLabel(),
-          detail: '关闭时不阻塞同步，下次启动将自动补偿执行',
-        })
-
-        console.info('[GuaxiHeader] close requested: mark resource repo sync pending and close now')
-      } catch (e) {
-        console.warn('[GuaxiHeader] close handler failed', e)
-      } finally {
-        closeSyncBusy.value = false
-      }
-
-      try {
-        if (typeof unlistenCloseRequested === 'function') {
-          const fn = unlistenCloseRequested
-          unlistenCloseRequested = null
-          await fn()
-        }
-      } catch (e) {
-        console.warn('[GuaxiHeader] unlisten close requested failed', e)
-      }
-
-      try {
-        appWindow.close().catch((e) => {
-          console.warn('[GuaxiHeader] close window failed', e)
-        })
-      } catch (e) {
-        console.warn('[GuaxiHeader] close window failed', e)
-      }
-    })
-
-    console.log('[GuaxiHeader] close requested listener registered')
-  } catch (e) {
-    console.warn('[GuaxiHeader] register onCloseRequested failed', e)
-  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1369,14 +1276,6 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
   debouncedRunPreviewSearch.cancel()
 
-  try {
-    if (typeof unlistenCloseRequested === 'function') {
-      unlistenCloseRequested()
-      unlistenCloseRequested = null
-    }
-  } catch (e) {
-    console.warn('[GuaxiHeader] unlisten close requested failed', e)
-  }
 })
 
 async function handleSearchFiles() {
