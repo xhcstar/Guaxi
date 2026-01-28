@@ -1,4 +1,4 @@
-use crate::commands::settingview::get_image_bed_root;
+use crate::commands::settingview::{get_image_bed_root, get_knowledge_bases_root, get_libraries_root};
 use crate::commands::repoview::{ResourceInput, add_resource};
 use actix_web::{get, post, web, HttpResponse};
 use mime_guess;
@@ -6,8 +6,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info;
-use urlencoding::decode;
+use tracing::{info, warn};
+use urlencoding::{decode, encode};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MarkdownRequest {
@@ -62,14 +62,16 @@ async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
             info!("Full path: {:?}", full_path);
 
             if let Some(full_path) = full_path {
-                // 转换为适合 URL 的路径格式
+                // 转换为适合 URL 的路径格式（对绝对路径做 URL 编码，避免空格/中文等导致 URL 无效）
+                let abs = full_path
+                    .to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .trim_start_matches('/')
+                    .replace('\\', "/")
+                    .to_string();
                 let served_path = format!(
                     "http://localhost:8888/markdown/api/images/{}",
-                    full_path
-                        .to_string_lossy()
-                        .trim_start_matches(r"\\?\") // 先移除UNC前缀
-                        .trim_start_matches('/') // 再移除残留斜杠
-                        .replace('\\', "/")
+                    encode(&abs)
                 );
                 info!("Served path: {}", served_path);
 
@@ -96,19 +98,58 @@ async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
 
 #[get("/markdown/api/images/{path:.*}")]
 async fn serve_image(path: web::Path<String>) -> HttpResponse {
-    match decode(&path) {
-        Ok(decoded_path) => {
-            let file_path = Path::new(&*decoded_path);
-            info!("Decoded path: {:?}", file_path);
+    let decoded = match decode(&path) {
+        Ok(v) => v.into_owned(),
+        Err(_) => return HttpResponse::BadRequest().body("Invalid path encoding"),
+    };
 
-            match fs::read(file_path) {
-                Ok(content) => HttpResponse::Ok()
-                    .content_type(mime_guess::from_path(file_path).first_or_octet_stream())
-                    .body(content),
-                Err(_) => HttpResponse::NotFound().finish(),
-            }
+    let decoded = decoded.trim_start_matches(r"\\?\").to_string();
+    let candidate = PathBuf::from(decoded);
+
+    let file_canon = match candidate.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+
+    if !file_canon.is_file() {
+        return HttpResponse::NotFound().finish();
+    }
+
+    let mut allowed_roots: Vec<PathBuf> = Vec::new();
+    for raw in [get_image_bed_root(), get_libraries_root(), get_knowledge_bases_root()] {
+        let p = PathBuf::from(raw);
+        if let Ok(canon) = p.canonicalize() {
+            allowed_roots.push(canon);
         }
-        Err(_) => HttpResponse::BadRequest().body("Invalid path encoding"),
+    }
+
+    if allowed_roots.is_empty() {
+        warn!(
+            file = file_canon.to_string_lossy().as_ref(),
+            "serve_image forbidden: no allowed roots"
+        );
+        return HttpResponse::Forbidden().finish();
+    }
+
+    let allowed = allowed_roots.iter().any(|r| file_canon.starts_with(r));
+    if !allowed {
+        warn!(
+            file = file_canon.to_string_lossy().as_ref(),
+            "serve_image forbidden: file is outside allowed roots"
+        );
+        return HttpResponse::Forbidden().finish();
+    }
+
+    info!(
+        file = file_canon.to_string_lossy().as_ref(),
+        "serve_image allowed"
+    );
+
+    match fs::read(&file_canon) {
+        Ok(content) => HttpResponse::Ok()
+            .content_type(mime_guess::from_path(&file_canon).first_or_octet_stream())
+            .body(content),
+        Err(_) => HttpResponse::NotFound().finish(),
     }
 }
 

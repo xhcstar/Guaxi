@@ -87,6 +87,60 @@
         <n-divider />
 
         <div>
+          <h3>资源库同步（云存储连接器）</h3>
+          <p class="description">
+            用于在不同设备间同步 ResourceRepo 目录内容。建议先配置连接器，再手动触发同步。
+          </p>
+
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false" style="margin-top: 8px">
+            <n-form-item label="同步后端">
+              <n-select v-model:value="syncProvider" :options="syncProviderOptions" :disabled="loading" />
+            </n-form-item>
+
+            <n-form-item label="优先拉取">
+              <n-switch v-model:value="preferPull" :disabled="loading" />
+            </n-form-item>
+
+            <template v-if="syncProvider === 'webdav'">
+              <n-form-item label="WebDAV URL">
+                <n-input v-model:value="webdavUrl" :disabled="loading" placeholder="例如：https://dav.jianguoyun.com/dav" />
+              </n-form-item>
+              <n-form-item label="用户名">
+                <n-input v-model:value="webdavUsername" :disabled="loading" placeholder="坚果云账号" />
+              </n-form-item>
+              <n-form-item label="密码/应用密码">
+                <n-input v-model:value="webdavPassword" :disabled="loading" type="password" show-password-on="click" placeholder="建议使用应用密码" />
+              </n-form-item>
+              <n-form-item label="远端目录">
+                <n-input v-model:value="webdavRemoteBasePath" :disabled="loading" placeholder="例如：Guaxi/ResourceRepo" />
+              </n-form-item>
+            </template>
+
+            <template v-else-if="syncProvider === 'syncthing'">
+              <n-form-item label="API URL">
+                <n-input v-model:value="syncthingApiUrl" :disabled="loading" placeholder="例如：http://127.0.0.1:8384" />
+              </n-form-item>
+              <n-form-item label="API Key">
+                <n-input v-model:value="syncthingApiKey" :disabled="loading" type="password" show-password-on="click" placeholder="Syncthing GUI API Key" />
+              </n-form-item>
+              <n-form-item label="Folder ID">
+                <n-input v-model:value="syncthingFolderId" :disabled="loading" placeholder="例如：default" />
+              </n-form-item>
+            </template>
+
+            <n-form-item label="操作">
+              <n-space>
+                <n-button :disabled="loading" @click="handleResourceRepoSyncSave">保存</n-button>
+                <n-button :disabled="loading" @click="handleResourceRepoSyncTest">测试连接</n-button>
+                <n-button :disabled="loading" type="primary" @click="handleResourceRepoSyncNow">立即同步</n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>模板库</h3>
           <p class="description">
             用于存放 Markdown 模板文件。未配置时启动会自动在程序同级目录创建 Template 文件夹并写入配置。
@@ -160,6 +214,8 @@ import {
   NDivider,
   NForm,
   NFormItem,
+  NSelect,
+  NSwitch,
 } from 'naive-ui';
 import {
   FolderAdd20Regular,
@@ -183,6 +239,25 @@ const knowledgeBasesRoot = ref('');
 
 // 模板库路径
 const templateRepoPath = ref('');
+
+// 资源库同步配置
+const syncProvider = ref('none');
+const preferPull = ref(false);
+
+const webdavUrl = ref('');
+const webdavUsername = ref('');
+const webdavPassword = ref('');
+const webdavRemoteBasePath = ref('');
+
+const syncthingApiUrl = ref('');
+const syncthingApiKey = ref('');
+const syncthingFolderId = ref('');
+
+const syncProviderOptions = [
+  { label: '不启用', value: 'none' },
+  { label: '坚果云 WebDAV', value: 'webdav' },
+  { label: 'Syncthing API', value: 'syncthing' },
+];
 
 // 知识库远程仓库配置
 const knowledgeBasesRemoteUrl = ref('');
@@ -264,6 +339,33 @@ onMounted(async () => {
     resourceRoot.value = '';
   } finally {
     loading.value = false;
+  }
+
+  try {
+    const cfg = await invoke('get_resource_repo_sync_config');
+
+    syncProvider.value = cfg?.provider ? String(cfg.provider) : 'none';
+    preferPull.value = Boolean(cfg?.prefer_pull);
+
+    webdavUrl.value = cfg?.webdav?.url ? String(cfg.webdav.url) : '';
+    webdavUsername.value = cfg?.webdav?.username ? String(cfg.webdav.username) : '';
+    webdavPassword.value = cfg?.webdav?.password ? String(cfg.webdav.password) : '';
+    webdavRemoteBasePath.value = cfg?.webdav?.remote_base_path ? String(cfg.webdav.remote_base_path) : '';
+
+    syncthingApiUrl.value = cfg?.syncthing?.api_url ? String(cfg.syncthing.api_url) : '';
+    syncthingApiKey.value = cfg?.syncthing?.api_key ? String(cfg.syncthing.api_key) : '';
+    syncthingFolderId.value = cfg?.syncthing?.folder_id ? String(cfg.syncthing.folder_id) : '';
+
+    console.log('[NoteRepoContent][ResourceRepoSync] loaded', {
+      provider: syncProvider.value,
+      preferPull: preferPull.value,
+      webdavUrl: webdavUrl.value,
+      webdavRemoteBasePath: webdavRemoteBasePath.value,
+      syncthingApiUrl: syncthingApiUrl.value,
+      syncthingFolderId: syncthingFolderId.value,
+    });
+  } catch (error) {
+    console.error('加载资源库同步配置失败:', error);
   }
 });
 
@@ -369,6 +471,65 @@ const handleResourceRootPick = async () => {
     loading.value = false;
   }
 };
+
+const sanitizeWebdavText = (v) => {
+  const s = String(v || '').trim()
+  return s.replace(/^`+|`+$/g, '').replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '').trim()
+}
+
+const buildResourceRepoSyncConfig = () => {
+  return {
+    provider: String(syncProvider.value || 'none'),
+    prefer_pull: Boolean(preferPull.value),
+    webdav: {
+      url: sanitizeWebdavText(webdavUrl.value),
+      username: String(webdavUsername.value || '').trim(),
+      password: String(webdavPassword.value || ''),
+      remote_base_path: sanitizeWebdavText(webdavRemoteBasePath.value),
+    },
+    syncthing: {
+      api_url: String(syncthingApiUrl.value || '').trim(),
+      api_key: String(syncthingApiKey.value || ''),
+      folder_id: String(syncthingFolderId.value || '').trim(),
+    },
+  }
+}
+
+const handleResourceRepoSyncSave = async () => {
+  try {
+    loading.value = true;
+    await invoke('set_resource_repo_sync_config', {
+      configInput: buildResourceRepoSyncConfig(),
+    });
+  } catch (error) {
+    console.error('保存资源库同步配置失败:', error);
+  } finally {
+    loading.value = false;
+  }
+}
+
+const handleResourceRepoSyncTest = async () => {
+  try {
+    loading.value = true;
+    await invoke('resource_repo_test_connection');
+  } catch (error) {
+    console.error('测试资源库同步连接失败:', error);
+  } finally {
+    loading.value = false;
+  }
+}
+
+const handleResourceRepoSyncNow = async () => {
+  try {
+    loading.value = true;
+    await invoke('resource_repo_sync_now');
+  } catch (error) {
+    console.error('资源库同步失败:', error);
+  } finally {
+    loading.value = false;
+  }
+}
+
 </script>
 
 <style scoped>

@@ -8,6 +8,8 @@ pub mod repoview;
 pub mod serverview;
 pub mod settingview;
 pub mod templateview;
+pub mod resource_repo_window;
+pub mod cloudsync;
 pub mod statisticview;
 pub mod guaxiscreencap;
 pub mod translator;

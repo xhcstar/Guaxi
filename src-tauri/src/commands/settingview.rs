@@ -34,6 +34,8 @@ pub struct AppConfig {
     #[serde(default = "default_image_bed_root")]
     image_bed_root: String,
     #[serde(default)]
+    resource_repo_sync: ResourceRepoSyncConfig,
+    #[serde(default)]
     life_album_album_dir: String,
     #[serde(default)]
     template_repo_path: String,
@@ -79,6 +81,51 @@ pub struct LlmConfig {
     pub kimi_api_key: String,
     #[serde(default)]
     pub doubao_api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct WebDavSyncConfig {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub remote_base_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct SyncthingSyncConfig {
+    #[serde(default)]
+    pub api_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub folder_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ResourceRepoSyncConfig {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub prefer_pull: bool,
+    #[serde(default)]
+    pub webdav: WebDavSyncConfig,
+    #[serde(default)]
+    pub syncthing: SyncthingSyncConfig,
+}
+
+impl Default for ResourceRepoSyncConfig {
+    fn default() -> Self {
+        Self {
+            provider: "none".to_string(),
+            prefer_pull: false,
+            webdav: WebDavSyncConfig::default(),
+            syncthing: SyncthingSyncConfig::default(),
+        }
+    }
 }
 
 fn default_gc_cycle_seconds() -> u64 {
@@ -351,6 +398,7 @@ impl Default for AppConfig {
             repopathlist: Vec::new(),
             libraries_root: "".to_string(),
             image_bed_root: default_image_bed_root(),
+            resource_repo_sync: ResourceRepoSyncConfig::default(),
             life_album_album_dir: "".to_string(),
             template_repo_path: "".to_string(),
             chat_record_root: default_chat_record_root(),
@@ -910,6 +958,19 @@ pub fn get_image_bed_root() -> String {
 pub fn set_image_bed_root(path: String) {
     let mut config = load_config();
     config.image_bed_root = path;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_resource_repo_sync_config() -> ResourceRepoSyncConfig {
+    let config = load_config();
+    config.resource_repo_sync
+}
+
+#[tauri::command]
+pub fn set_resource_repo_sync_config(config_input: ResourceRepoSyncConfig) {
+    let mut config = load_config();
+    config.resource_repo_sync = config_input;
     save_config(&config);
 }
 

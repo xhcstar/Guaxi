@@ -11,6 +11,7 @@ import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
 import GuaxiTemplateManager from '../components/HomeViewComponent/GuaxiTemplateManager.vue'
+import GuaxiResourceRepoManager from '../components/HomeViewComponent/GuaxiResourceRepoManager.vue'
 import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
 import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownManual.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
@@ -117,6 +118,11 @@ export const routes = [
     path: '/templates',
     name: 'templates',
     component: GuaxiTemplateManager,
+  },
+  {
+    path: '/resource-repo',
+    name: 'resource-repo',
+    component: GuaxiResourceRepoManager,
   },
   {
     path: '/markdown-manual',
