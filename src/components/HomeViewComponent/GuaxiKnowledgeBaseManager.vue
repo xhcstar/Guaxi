@@ -2,19 +2,8 @@
   <n-message-provider placement="bottom">
     <div class="page">
       <div class="header">
-        <div class="title">知识库管理器</div>
-        <n-space>
-          <n-button size="small" @click="refresh" :loading="loading">刷新</n-button>
-          <n-button size="small" @click="syncAll" :loading="loading">同步全部元数据</n-button>
-        </n-space>
-      </div>
-
-      <div class="path" :title="kbRootPath">
-        {{ kbRootPath || '未配置 KnowledgeBases 路径' }}
-      </div>
-
-      <div class="main">
-        <div class="left">
+        <div class="header-left">
+          <div class="title">知识库管理器</div>
           <n-select
             v-model:value="selectedKbName"
             size="small"
@@ -23,9 +12,78 @@
             placeholder="选择知识库"
             :options="kbOptions"
             :disabled="loading"
+            style="width: 240px"
             @update:value="handleKbChange"
           />
+        </div>
+        <n-space size="small" align="center">
+          <n-tooltip v-if="viewMode === 'graph'" trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper
+                :size="28"
+                :border-radius="8"
+                class="header-icon"
+                :class="{ active: !graphLeftVisible }"
+                @click="graphLeftVisible = !graphLeftVisible"
+              >
+                <n-icon :component="PanelLeftContract24Regular" size="18" />
+              </n-icon-wrapper>
+            </template>
+            {{ graphLeftVisible ? '隐藏左侧面板' : '显示左侧面板' }}
+          </n-tooltip>
 
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="refresh">
+                <n-icon :component="RefreshOutline" size="18" />
+              </n-icon-wrapper>
+            </template>
+            刷新
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper :size="28" :border-radius="8" class="header-icon" @click="syncAll">
+                <n-icon :component="SyncOutline" size="18" />
+              </n-icon-wrapper>
+            </template>
+            同步全部元数据
+          </n-tooltip>
+
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper
+                :size="28"
+                :border-radius="8"
+                class="header-icon"
+                :class="{ active: viewMode === 'graph' }"
+                @click="toggleViewMode"
+              >
+                <n-icon :component="viewMode === 'meta' ? LayersOutline : ListOutline" size="18" />
+              </n-icon-wrapper>
+            </template>
+            {{ viewMode === 'meta' ? '切换到图形编辑模式' : '切换到元数据模式' }}
+          </n-tooltip>
+
+          <n-tooltip v-if="viewMode === 'graph'" trigger="hover">
+            <template #trigger>
+              <n-icon-wrapper
+                :size="28"
+                :border-radius="8"
+                class="header-icon"
+                :class="{ active: !graphRightVisible }"
+                @click="graphRightVisible = !graphRightVisible"
+              >
+                <n-icon :component="PanelRightContract24Regular" size="18" />
+              </n-icon-wrapper>
+            </template>
+            {{ graphRightVisible ? '隐藏右侧面板' : '显示右侧面板' }}
+          </n-tooltip>
+        </n-space>
+      </div>
+
+      <div v-if="viewMode === 'meta'" class="main">
+        <div class="left">
           <div class="left-body">
             <n-tree
               v-if="treeData.length"
@@ -125,16 +183,62 @@
           </div>
         </div>
       </div>
+
+      <GuaxiKnowledgeBaseGraphEditor
+        v-else
+        v-model:selected-kb-name="selectedKbName"
+        v-model:expanded-keys="expandedKeys"
+        v-model:selected-keys="selectedKeys"
+        v-model:left-visible="graphLeftVisible"
+        v-model:right-visible="graphRightVisible"
+        :loading="loading"
+        :kb-options="kbOptions"
+        :tree-data="treeData"
+        :kb-location="currentKbLocation"
+        :root-key="ROOT_KEY"
+        @kb-change="handleKbChange"
+        @patch-tree="handleGraphPatchTree"
+        @reload="handleGraphReload"
+      />
     </div>
   </n-message-provider>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { NButton, NCollapse, NCollapseItem, NDynamicTags, NForm, NFormItem, NInput, NSelect, NSpace, NTree, createDiscreteApi } from 'naive-ui'
+import { NButton, NCollapse, NCollapseItem, NDynamicTags, NForm, NFormItem, NIcon, NIconWrapper, NInput, NSelect, NSpace, NTooltip, NTree, createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { LayersOutline, ListOutline, RefreshOutline, SyncOutline } from '@vicons/ionicons5'
+import { PanelLeftContract24Regular, PanelRightContract24Regular } from '@vicons/fluent'
+import GuaxiKnowledgeBaseGraphEditor from './GuaxiKnowledgeBaseGraphEditor.vue'
 
+// 顶部工具条使用 createDiscreteApi，避免依赖组件上下文
 const { message } = createDiscreteApi(['message'])
+
+// 主界面模式：meta（当前 JSON/表单编辑） / graph（图形化目录树编辑）
+const viewMode = ref('graph')
+
+// 图形模式下左右面板显隐
+const graphLeftVisible = ref(true)
+const graphRightVisible = ref(false)
+
+const toggleViewMode = () => {
+  const next = viewMode.value === 'meta' ? 'graph' : 'meta'
+  viewMode.value = next
+
+  if (next === 'graph') {
+    graphLeftVisible.value = true
+    graphRightVisible.value = false
+
+    // 图形模式默认不全展开，只保留根节点展开；选中节点会在图形面板内按需展开并聚焦
+    expandedKeys.value = [ROOT_KEY]
+    if (!Array.isArray(selectedKeys.value) || !selectedKeys.value.length) {
+      selectedKeys.value = [ROOT_KEY]
+    }
+  }
+}
+
+const ROOT_KEY = '__kb_root__'
 
 const loading = ref(false)
 const kbRootPath = ref('')
@@ -145,8 +249,8 @@ const kbMeta = ref(null)
 const kbDraft = ref(null)
 
 const treeData = ref([])
-const expandedKeys = ref([])
-const selectedKeys = ref([])
+const expandedKeys = ref(['__kb_root__'])
+const selectedKeys = ref(['__kb_root__'])
 
 const currentKind = ref('')
 const currentRelPath = ref('')
@@ -230,16 +334,15 @@ const loadKbMeta = async (kbName) => {
   fileDraft.value = null
 
   const rootNode = meta?.tree
-  const rootKey = '__kb_root__'
   treeData.value = rootNode ? [{
-    key: rootKey,
+    key: ROOT_KEY,
     label: rootNode.name || kbName,
     isDir: true,
     children: buildTreeNodes(rootNode)
   }] : []
 
-  expandedKeys.value = treeData.value.length ? [rootKey] : []
-  selectedKeys.value = treeData.value.length ? [rootKey] : []
+  expandedKeys.value = treeData.value.length ? [ROOT_KEY] : []
+  selectedKeys.value = treeData.value.length ? [ROOT_KEY] : []
 
   currentKind.value = 'kb'
   currentRelPath.value = ''
@@ -346,6 +449,135 @@ const reloadCurrent = async () => {
   }
 }
 
+const currentKbLocation = computed(() => {
+  const kbName = selectedKbName.value
+  if (!kbName) return ''
+
+  const hit = Array.isArray(kbList.value)
+    ? kbList.value.find(x => x?.knowledge_base_name === kbName)
+    : null
+
+  return String(hit?.knowledge_base_location || kbMeta.value?.knowledge_base_location || '')
+})
+
+const expandToRelPath = (relPath) => {
+  const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '')
+  if (!p) return
+  const parts = p.split('/').filter(Boolean)
+  const keys = [ROOT_KEY]
+  for (let i = 0; i < Math.max(parts.length - 1, 0); i++) {
+    keys.push(parts.slice(0, i + 1).join('/'))
+  }
+  expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ...keys]))
+}
+
+const basenameOfRel = (relPath) => {
+  const s = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  return s.split('/').filter(Boolean).pop() || ''
+}
+
+const remapKey = (key, oldKey, newKey) => {
+  const k = String(key || '')
+  const oldK = String(oldKey || '')
+  const newK = String(newKey || '')
+
+  if (!k || k === ROOT_KEY) return k
+  if (!oldK || !newK) return k
+
+  if (k === oldK) return newK
+  if (k.startsWith(`${oldK}/`)) return `${newK}${k.slice(oldK.length)}`
+  return k
+}
+
+const patchTreeAfterRename = (treeRoot, oldKey, newKey) => {
+  const oldK = String(oldKey || '')
+  const newK = String(newKey || '')
+  if (!treeRoot || !oldK || !newK) return false
+
+  const patchDescendants = (node) => {
+    const kids = Array.isArray(node?.children) ? node.children : []
+    for (const ch of kids) {
+      ch.key = remapKey(ch.key, oldK, newK)
+      const base = basenameOfRel(ch.key)
+      if (base) ch.label = base
+      patchDescendants(ch)
+    }
+  }
+
+  const dfs = (node) => {
+    if (!node) return false
+    if (String(node.key || '') === oldK) {
+      node.key = newK
+      const base = basenameOfRel(newK)
+      if (base) node.label = base
+      patchDescendants(node)
+      return true
+    }
+
+    const kids = Array.isArray(node.children) ? node.children : []
+    for (const ch of kids) {
+      if (dfs(ch)) return true
+    }
+    return false
+  }
+
+  return dfs(treeRoot)
+}
+
+const handleGraphPatchTree = (payload) => {
+  const oldKey = String(payload?.oldKey || '')
+  const newKey = String(payload?.newKey || '')
+
+  if (!oldKey || !newKey) {
+    console.warn('[KBManager] patch-tree invalid payload', payload)
+    return
+  }
+
+  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
+  if (!root) {
+    console.warn('[KBManager] patch-tree missed: empty tree', payload)
+    return
+  }
+
+  const ok = patchTreeAfterRename(root, oldKey, newKey)
+  if (!ok) {
+    console.warn('[KBManager] patch-tree missed: node not found', payload)
+    return
+  }
+
+  selectedKeys.value = (Array.isArray(selectedKeys.value) ? selectedKeys.value : []).map(k => remapKey(k, oldKey, newKey))
+
+  const remappedExpanded = (Array.isArray(expandedKeys.value) ? expandedKeys.value : []).map(k => remapKey(k, oldKey, newKey))
+  expandedKeys.value = Array.from(new Set([ROOT_KEY, ...remappedExpanded]))
+
+  if (currentRelPath.value) currentRelPath.value = remapKey(currentRelPath.value, oldKey, newKey)
+
+  if (!selectedKeys.value.length) selectedKeys.value = [newKey]
+  expandToRelPath(newKey)
+
+  console.info('[KBManager] patch-tree ok', { oldKey, newKey })
+}
+
+const handleGraphReload = async (payload) => {
+  if (!selectedKbName.value) return
+
+  try {
+    loading.value = true
+    await loadKbMeta(selectedKbName.value)
+
+    const nextKey = payload?.selectKey
+    if (nextKey) {
+      selectedKeys.value = [nextKey]
+      expandToRelPath(nextKey)
+    }
+  } catch (e) {
+    console.error('图形模式刷新树失败:', e)
+    message.error('图形模式刷新树失败')
+  } finally {
+    loading.value = false
+  }
+}
+
 const saveCurrent = async () => {
   if (!selectedKbName.value) return
 
@@ -443,12 +675,40 @@ onMounted(async () => {
   background: var(--guaxi-panel-bg);
   border: 1px solid var(--guaxi-border);
   box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+  color: var(--guaxi-text-primary);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
 .title {
   font-size: 16px;
   font-weight: 650;
   letter-spacing: 0.2px;
+}
+
+.header-icon {
+  cursor: pointer;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-header-bg);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  color: var(--guaxi-text-primary);
+}
+
+.header-icon:hover {
+  background: var(--guaxi-header-bg);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.16), 0 2px 12px rgba(7, 118, 161, 0.08);
+  transform: scale(1.02);
+}
+
+.header-icon.active {
+  background: rgba(24, 160, 88, 0.10);
+  box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.18), 0 2px 12px rgba(16, 24, 40, 0.08);
+  color: rgba(24, 160, 88, 0.95);
 }
 
 .path {
