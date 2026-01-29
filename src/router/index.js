@@ -19,6 +19,7 @@ import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFee
 import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumApp.vue'
 import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
 import LanguageTranslatorApp from '../components/ApplicationViewComponent/apps/LanguageTranslatorApp.vue'
+import FileTransferAssistantApp from '../components/ApplicationViewComponent/apps/FileTransferAssistantApp.vue'
 import PlaceholderApp from '../components/ApplicationViewComponent/apps/PlaceholderApp.vue'
 import TODOApp from '../components/ApplicationViewComponent/apps/TODO.vue'
 
@@ -27,6 +28,7 @@ const APP_COMPONENT_MAP = {
   'life-habits': TODOApp,
   'music-player': MusicPlayerApp,
   'language-translator': LanguageTranslatorApp,
+  'tools-file-transfer': FileTransferAssistantApp,
 }
 
 const GuaxiAppWindow = {

@@ -11,7 +11,8 @@
     "app-*",
     "git-*",
     "markdown-manual",
-    "life-habits"
+    "life-habits",
+    "tools-file-transfer"
   ],
   "permissions": [
     "core:default",

@@ -67,6 +67,8 @@ pub struct AppConfig {
     #[serde(default)]
     lsp_syntax_highlight_enabled: bool,
     #[serde(default)]
+    webrtc_signal_url: String,
+    #[serde(default)]
     llm_config: LlmConfig,
 }
 
@@ -418,6 +420,7 @@ impl Default for AppConfig {
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
+            webrtc_signal_url: "".to_string(),
             llm_config: LlmConfig::default(),
         }
     }
@@ -805,6 +808,22 @@ pub fn get_lsp_syntax_highlight_enabled() -> bool {
 pub fn set_lsp_syntax_highlight_enabled(enabled: bool) {
     let mut config = load_config();
     config.lsp_syntax_highlight_enabled = enabled;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_webrtc_signal_url() -> String {
+    let config = load_config();
+    config.webrtc_signal_url
+}
+
+#[tauri::command]
+pub fn set_webrtc_signal_url(url: String) {
+    let next = url.trim().to_string();
+    info!(url = next.as_str(), "set_webrtc_signal_url");
+
+    let mut config = load_config();
+    config.webrtc_signal_url = next;
     save_config(&config);
 }
 

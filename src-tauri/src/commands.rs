@@ -28,3 +28,4 @@ pub mod markdowncheck;
 pub mod flipboard;
 pub mod markdown_manual;
 pub mod todo;
+pub mod filetransfer;

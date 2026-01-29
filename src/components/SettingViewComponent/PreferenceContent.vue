@@ -62,6 +62,33 @@
           </n-form>
         </div>
 
+        <n-divider />
+
+        <div>
+          <h3>WebRTC 文件传输</h3>
+          <p class="description">
+            房间码模式需要一个“信令服务”（只中转 WebRTC 协商信息，不传文件内容）。此处配置后，文件传输助手将不再需要手动填写信令地址。
+          </p>
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+            <n-form-item label="信令服务地址">
+              <n-input
+                v-model:value="webrtcSignalUrl"
+                placeholder="例如：wss://your-signal.example.com/ft/signal"
+                :disabled="loading || webrtcSignalSaving"
+              />
+            </n-form-item>
+            <n-form-item>
+              <n-button
+                type="primary"
+                size="small"
+                :disabled="loading || webrtcSignalSaving"
+                @click="handleWebrtcSignalUrlSave"
+              >
+                保存
+              </n-button>
+            </n-form-item>
+          </n-form>
+        </div>
 
       </n-space>
     </n-card>
@@ -70,7 +97,7 @@
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
-import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NAlert, NSwitch, NSelect } from 'naive-ui'
+import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -84,8 +111,10 @@ const themeOptions = [
 const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
+const webrtcSignalUrl = ref('')
 const loading = ref(false)
 const themeSaving = ref(false)
+const webrtcSignalSaving = ref(false)
 
 watch(
   () => settingsStore.appearanceTheme,
@@ -101,9 +130,10 @@ onMounted(async () => {
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
       (async () => {
-        const [seconds, enabled] = await Promise.all([
+        const [seconds, enabled, signalUrl] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
-          invoke('get_lsp_syntax_highlight_enabled')
+          invoke('get_lsp_syntax_highlight_enabled'),
+          invoke('get_webrtc_signal_url')
         ])
 
         if (typeof seconds === 'number' && seconds > 0) {
@@ -113,6 +143,7 @@ onMounted(async () => {
         }
 
         lspHighlightEnabled.value = !!enabled
+        webrtcSignalUrl.value = typeof signalUrl === 'string' ? signalUrl : ''
       })(),
     ])
 
@@ -184,6 +215,28 @@ const handleLspHighlightChange = async (value) => {
   }
 }
 
+const handleWebrtcSignalUrlSave = async () => {
+  try {
+    webrtcSignalSaving.value = true
+    const url = String(webrtcSignalUrl.value || '').trim()
+
+    console.log('[Preference] 保存 WebRTC 信令服务地址:', url)
+
+    await invoke('set_webrtc_signal_url', { url })
+
+    try {
+      const saved = await invoke('get_webrtc_signal_url')
+      console.log('[Preference] WebRTC 信令服务地址已保存（后端读取确认）:', saved)
+      webrtcSignalUrl.value = typeof saved === 'string' ? saved : url
+    } catch (e) {
+      console.error('[Preference] 读取 WebRTC 信令服务地址失败（无法确认是否写入配置文件）:', e)
+    }
+  } catch (error) {
+    console.error('保存 WebRTC 信令服务地址失败:', error)
+  } finally {
+    webrtcSignalSaving.value = false
+  }
+}
 
 </script>
 

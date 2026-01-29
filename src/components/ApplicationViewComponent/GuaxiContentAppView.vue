@@ -37,6 +37,7 @@ import GuaxiRightContentAppView from "./GuaxiRightContentAppView.vue"
 import LifeAlbumApp from "./apps/LifeAlbumApp.vue"
 import MusicPlayerApp from "./apps/MusicPlayerApp.vue"
 import LanguageTranslatorApp from "./apps/LanguageTranslatorApp.vue"
+import FileTransferAssistantApp from "./apps/FileTransferAssistantApp.vue"
 import PlaceholderApp from "./apps/PlaceholderApp.vue"
 import TODOApp from "./apps/TODO.vue"
 
@@ -91,14 +92,14 @@ const apps = [
     component: LanguageTranslatorApp
   },
   {
-    id: 'tools-screenshot',
-    name: '截图工具',
+    id: 'tools-file-transfer',
+    name: '文件传输助手',
     category: 'tools',
     categoryLabel: '工具类',
-    description: '快速截屏并保存到项目目录',
-    icon: '📸',
+    description: '局域网/互联网互传文件，支持多任务与断点续传',
+    icon: '📤',
     color: 'linear-gradient(135deg, #ff9a9e, #fecfef)',
-    component: PlaceholderApp
+    component: FileTransferAssistantApp
   },
   {
     id: 'tools-table',
