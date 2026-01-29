@@ -69,17 +69,17 @@
 
               <g class="nodes">
                 <g v-for="n in graphLayout.nodes" :key="n.key" class="node"
-                  :class="{ selected: n.key === selectedKey, dir: n.kind === 'dir', file: n.kind === 'file', paragraph: n.kind === 'paragraph' }"
-                  :transform="`translate(${n.x},${n.y})`" @click.stop="selectGraphNode(n.key)">
+                  :class="{ selected: n.key === selectedKey, dir: n.kind === 'dir', file: n.kind === 'file', paragraph: n.kind === 'paragraph', expanded: isNodeExpanded(n) }"
+                  :transform="`translate(${n.x},${n.y})`" @click.stop="selectGraphNode(n.key)" @dblclick.stop="toggleNodeExpand(n.key)">
                   <rect
                     class="node-rect"
-                    :width="graphNodeSize.w"
-                    :height="graphNodeSize.h"
+                    :width="nodeRenderSize(n).w"
+                    :height="nodeRenderSize(n).h"
                     :rx="nodeCornerRadius(n)"
                     :ry="nodeCornerRadius(n)"
                   />
 
-                  <foreignObject v-if="editingKey === n.key" :x="8" :y="12" :width="graphNodeSize.w - 16" :height="graphNodeSize.h - 24">
+                  <foreignObject v-if="editingKey === n.key" :x="8" :y="12" :width="nodeRenderSize(n).w - 16" :height="nodeRenderSize(n).h - 24">
                     <div class="inline-edit-wrap">
                       <input
                         class="inline-edit-input"
@@ -92,11 +92,19 @@
                     </div>
                   </foreignObject>
 
-                  <text v-else class="node-text" :x="graphNodeSize.w / 2" :y="graphNodeSize.h / 2 + 5" text-anchor="middle">
+                  <foreignObject v-else-if="isNodeExpanded(n)" :x="8" :y="10" :width="nodeRenderSize(n).w - 16" :height="nodeRenderSize(n).h - 20">
+                    <div class="node-expanded-fo">
+                      <div class="node-expanded-title">{{ n.displayLabel }}</div>
+                      <div v-if="nodeContentLoading" class="node-expanded-loading">内容加载中...</div>
+                      <pre v-else class="node-expanded-pre">{{ expandedNodeText }}</pre>
+                    </div>
+                  </foreignObject>
+
+                  <text v-else class="node-text" :x="nodeRenderSize(n).w / 2" :y="nodeRenderSize(n).h / 2 + 5" text-anchor="middle">
                     {{ n.displayLabel }}
                   </text>
 
-                  <g v-if="n.key === selectedKey" class="node-actions" :transform="`translate(${graphNodeSize.w - 100}, -11)`">
+                  <g v-if="n.key === selectedKey && n.kind !== 'paragraph'" class="node-actions" :transform="`translate(${nodeRenderSize(n).w - 100}, -11)`">
                     <g v-if="n.isDir" class="node-plus" transform="translate(78,0)" @click.stop="openCreateTypeModal">
                       <title>新建（分类 / 知识点）</title>
                       <rect class="node-plus-rect" width="22" height="22" rx="11" ry="11" />
@@ -136,38 +144,51 @@
     </div>
 
     <div v-if="rightVisible" class="graph-right" :style="{ width: `${rightWidth}px` }">
-      <div class="inspector-header">
-        <div class="inspector-title">节点</div>
-        <n-space size="small" justify="end">
-          <n-button size="small" :disabled="!canAdd" @click="openCreateTypeModal">新建</n-button>
+      <div class="right-sider-content">
+        <n-space vertical :size="12" class="panel">
+          <n-card title="节点信息" size="small">
+            <n-space v-if="selectedNode" vertical>
+              <n-tag :type="getNodeTagType(selectedNodeKind)" size="small">
+                {{ kindLabel(selectedNodeKind) }}
+              </n-tag>
+
+              <div class="node-content-wrap">
+                <div v-if="nodeContentLoading" class="node-content-loading">内容加载中...</div>
+                <pre v-else class="node-content-pre">{{ nodeContentText }}</pre>
+              </div>
+
+              <n-button-group size="small">
+                <n-button @click="focusSelected">聚焦</n-button>
+                <n-button v-if="canOpenSelected" @click.stop="openSelectedInHome">打开</n-button>
+                <n-button v-if="selectedKey && selectedKey !== graphRootKey" @click="enterSubGraph(selectedKey)">子图</n-button>
+                <n-button @click="clearSelected">清除</n-button>
+              </n-button-group>
+            </n-space>
+            <n-text v-else depth="3">点击图谱中的节点查看属性</n-text>
+          </n-card>
+
+
+          <n-card title="搜索" size="small">
+            <n-input v-model:value="searchQueryModel" placeholder="搜索节点..." clearable />
+          </n-card>
+
+          <n-card title="类型筛选" size="small">
+            <n-checkbox-group v-model:value="visibleKindsModel">
+              <n-space vertical>
+                <n-checkbox v-for="opt in kindOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</n-checkbox>
+              </n-space>
+            </n-checkbox-group>
+          </n-card>
+
+          <n-card title="结果" size="small">
+            <n-list v-if="filteredResults.length > 0" class="search-results">
+              <n-list-item v-for="n in filteredResults" :key="n.key" @click="focusNodeFromResult(n)">
+                <n-thing :title="n.title" :description="n.description" />
+              </n-list-item>
+            </n-list>
+            <n-text v-else depth="3">无匹配结果</n-text>
+          </n-card>
         </n-space>
-      </div>
-
-      <div class="inspector-body">
-        <div v-if="!selectedNode" class="empty">请选择一个节点</div>
-
-        <n-form v-else :model="inspectorDraft" label-placement="left" label-width="80">
-          <n-form-item label="名称">
-            <n-input v-model:value="inspectorDraft.name" :disabled="selectedKey === rootKey" />
-          </n-form-item>
-
-          <n-form-item label="类型">
-            <n-input :value="selectedNode.isDir ? '目录' : '文件'" disabled />
-          </n-form-item>
-
-          <n-form-item label="相对路径">
-            <n-input :value="selectedNode.relPath" disabled />
-          </n-form-item>
-
-          <n-form-item label="绝对路径">
-            <n-input :value="selectedNode.absPath" disabled />
-          </n-form-item>
-
-          <n-space justify="end">
-            <n-button size="small" :disabled="!canRename" @click="startInlineEdit(selectedKey)">重命名</n-button>
-            <n-button size="small" type="error" :disabled="!canDelete" @click="deleteSelectedNode">删除</n-button>
-          </n-space>
-        </n-form>
       </div>
     </div>
 
@@ -197,10 +218,34 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { NButton, NForm, NFormItem, NIcon, NIconWrapper, NInput, NModal, NSpace, NTooltip, NTree, createDiscreteApi } from 'naive-ui'
+import {
+  NButton,
+  NButtonGroup,
+  NCard,
+  NCheckbox,
+  NCheckboxGroup,
+  NForm,
+  NFormItem,
+  NIcon,
+  NIconWrapper,
+  NInput,
+  NList,
+  NListItem,
+  NModal,
+  NSpace,
+  NTag,
+  NText,
+  NThing,
+  NTooltip,
+  NTree,
+  createDiscreteApi
+} from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
+import { emitTo } from '@tauri-apps/api/event'
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { ArrowBackOutline, DownloadOutline } from '@vicons/ionicons5'
+import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { useEditorStore } from '../../stores/editorStore'
 
 const props = defineProps({
   loading: { type: Boolean, default: false },
@@ -230,6 +275,9 @@ const emit = defineEmits([
 ])
 
 const { message } = createDiscreteApi(['message'])
+
+const fileTreeStore = useFileTreeStore()
+const editorStore = useEditorStore()
 
 // 左右面板显隐与拖拽调整宽度
 const leftVisible = ref(!!props.leftVisible)
@@ -346,13 +394,26 @@ const nodeMap = computed(() => {
     const isRoot = key === props.rootKey
     const relPath = isRoot ? '' : normalizeRel(key)
 
+    const rawKind = String(n?.kind || n?.nodeKind || n?.type || '').toLowerCase()
+    const kind = (rawKind === 'paragraph' || rawKind === 'para' || n?.isParagraph)
+      ? 'paragraph'
+      : (n?.isDir ? 'dir' : 'file')
+
+    const parentRelPath = parentKey ? (m.get(parentKey)?.relPath || '') : ''
+    const effectiveRelPath = kind === 'paragraph' ? parentRelPath : relPath
+
     m.set(key, {
       key,
+      kind,
       name: String(n.label || ''),
       isDir: !!n.isDir,
+      isParagraph: kind === 'paragraph',
       parentKey: parentKey || null,
-      relPath,
-      absPath: toAbsPath(relPath)
+      relPath: effectiveRelPath,
+      absPath: toAbsPath(effectiveRelPath),
+      stableId: typeof n?.stableId === 'string' ? n.stableId : (typeof n?.stable_id === 'string' ? n.stable_id : ''),
+      startLine: n?.startLine ?? n?.start_line,
+      endLine: n?.endLine ?? n?.end_line
     })
 
     const kids = Array.isArray(n.children) ? n.children : []
@@ -382,6 +443,301 @@ watch(selectedNode, (n) => {
   const draftName = n.isDir ? String(n.name || '') : stripMdExt(n.name)
   inspectorDraft.value = { name: draftName }
 }, { immediate: true })
+
+const fileContentCache = new Map()
+
+const nodeContentLoading = ref(false)
+const nodeContentText = ref('')
+const nodeContentFullText = ref('')
+
+const expandedNodeKey = ref('')
+
+const expandedNodeText = computed(() => {
+  const raw = String(nodeContentText.value || '')
+  if (!raw) return ''
+
+  const maxChars = 4000
+  if (raw.length <= maxChars) return raw
+
+  const tail = `\n\n…（已截断，长度 ${raw.length}）`
+  return raw.slice(0, maxChars) + tail
+})
+
+const isNodeExpanded = (layoutNode) => {
+  const k = String(layoutNode?.key || '')
+  return k && k === expandedNodeKey.value && k === String(selectedKey.value || '')
+}
+
+const estimateExpandedSize = (text) => {
+  const t = String(text || '')
+  const lines = t ? t.split('\n') : []
+  const lineCount = Math.max(1, lines.length)
+  const longest = lines.reduce((m, s) => Math.max(m, String(s || '').length), 0)
+
+  const w = clamp(260 + Math.min(520, Math.floor(longest * 7)), 300, 900)
+  const h = clamp(110 + Math.min(520, Math.floor(lineCount * 18)), 140, 720)
+
+  return { w, h }
+}
+
+const nodeRenderSize = (layoutNode) => {
+  if (!isNodeExpanded(layoutNode)) return graphNodeSize
+  return estimateExpandedSize(expandedNodeText.value)
+}
+
+const toggleNodeExpand = async (key) => {
+  const k = String(key || '')
+  if (!k) return
+
+  if (expandedNodeKey.value === k) {
+    expandedNodeKey.value = ''
+    console.info('[KBGraphEditor] collapse node', { key: k })
+    return
+  }
+
+  expandedNodeKey.value = k
+  console.info('[KBGraphEditor] expand node', { key: k })
+
+  const n = nodeMap.value.get(k)
+  if (n) {
+    await loadTextForNode(n)
+  }
+}
+
+const canOpenSelected = computed(() => {
+  const n = selectedNode.value
+  if (!n) return false
+  return ['file', 'paragraph'].includes(String(n.kind || '')) && !!String(n.absPath || '')
+})
+
+const normalizeNewline = (s) => String(s || '').replace(/\r\n/g, '\n')
+
+const extractParagraph = (content, startLine, endLine) => {
+  const text = normalizeNewline(content)
+  const lines = text.split('\n')
+
+  const start = Math.max(1, Number(startLine || 1))
+  const end = Math.max(start, Number(endLine || startLine || start))
+
+  const maxLines = 200
+  const sliceEnd = Math.min(end, start + maxLines - 1)
+
+  return lines.slice(start - 1, sliceEnd).join('\n')
+}
+
+const applyNodeContent = (text, meta = {}) => {
+  const v = String(text || '')
+  nodeContentText.value = v
+  nodeContentFullText.value = v
+  console.info('[KBGraphEditor] node content loaded', { key: selectedKey.value, len: v.length, ...meta })
+}
+
+const loadTextForNode = async (n) => {
+  if (!n) {
+    nodeContentText.value = ''
+    nodeContentFullText.value = ''
+    nodeContentCanExpand.value = false
+    nodeContentExpanded.value = false
+    return
+  }
+
+  nodeContentExpanded.value = false
+
+  const kind = String(n.kind || '')
+  if (kind === 'dir') {
+    applyNodeContent(String(n.name || ''), { kind })
+    return
+  }
+
+  const absPath = String(n.absPath || '')
+  if (!absPath) {
+    applyNodeContent(String(n.name || ''), { kind, absPath: '' })
+    return
+  }
+
+  nodeContentLoading.value = true
+  try {
+    let content = fileContentCache.get(absPath)
+    if (typeof content !== 'string') {
+      console.info('[KBGraphEditor] load node content', { absPath, kind })
+      const res = await fileTreeStore.fetchFileContent(absPath)
+      if (!res?.ok) {
+        throw new Error('读取文件内容失败')
+      }
+      content = String(res.content || '')
+      fileContentCache.set(absPath, content)
+    }
+
+    if (kind === 'paragraph') {
+      const para = extractParagraph(content, n.startLine, n.endLine)
+      applyNodeContent(para, { kind, absPath, startLine: n.startLine, endLine: n.endLine })
+      return
+    }
+
+    applyNodeContent(content, { kind, absPath })
+  } catch (e) {
+    console.error('[KBGraphEditor] load node content failed:', e)
+    applyNodeContent(String(n.name || ''), { kind, absPath, fallback: true })
+  } finally {
+    nodeContentLoading.value = false
+  }
+}
+
+watch(selectedNode, (n) => {
+  loadTextForNode(n)
+}, { immediate: true })
+
+const handleNodeContentClick = () => {
+  if (!selectedNode.value) return
+  if (!nodeContentCanExpand.value) return
+  nodeContentExpanded.value = true
+  console.info('[KBGraphEditor] expand node content', { key: selectedKey.value })
+}
+
+const OPEN_FILE_IN_HOME_EVENT = 'open_file_in_home'
+
+const openSelectedInHome = async () => {
+  const n = selectedNode.value
+  if (!n) return
+
+  const kind = String(n.kind || '')
+  if (!['file', 'paragraph'].includes(kind)) return
+
+  const path = String(n.absPath || '')
+  if (!path) return
+
+  const lineNumber = kind === 'paragraph' ? Math.max(1, Number(n.startLine || 1)) : 1
+
+  const payload = { path, kind, lineNumber }
+
+  try {
+    console.info('[KBGraphEditor] emit open_file_in_home', { target: 'main', payload })
+    await emitTo('main', OPEN_FILE_IN_HOME_EVENT, payload)
+    message.success('已通知主窗口打开')
+  } catch (e) {
+    console.warn('[KBGraphEditor] emit open_file_in_home failed, fallback to local open:', e)
+
+    try {
+      const res = await fileTreeStore.fetchFileContent(path)
+      if (!res?.ok) {
+        message.error('打开失败：读取文件内容失败')
+        return
+      }
+
+      await fileTreeStore.openFileInTab(path, res.content, { unsupported: !!res.unsupported })
+
+      editorStore.setFile({
+        path,
+        content: String(res.content || ''),
+        highlightInfo: {
+          lineNumber,
+          matches: [{ start: 0, end: 1000000 }],
+          text: ''
+        }
+      })
+    } catch (err) {
+      console.error('[KBGraphEditor] fallback local open failed:', err)
+      message.error(String(err?.message || '打开失败'))
+    }
+  }
+}
+
+const searchQuery = ref('')
+const visibleKinds = ref(['dir', 'file', 'paragraph'])
+
+const kindOptions = [
+  { label: '目录', value: 'dir' },
+  { label: '文件', value: 'file' },
+  { label: '段落', value: 'paragraph' }
+]
+
+const searchQueryModel = computed({
+  get: () => searchQuery.value,
+  set: (v) => { searchQuery.value = String(v || '') }
+})
+
+const visibleKindsModel = computed({
+  get: () => visibleKinds.value,
+  set: (v) => { visibleKinds.value = Array.isArray(v) ? v : [] }
+})
+
+const selectedNodeKind = computed(() => {
+  const n = selectedNode.value
+  if (!n) return ''
+  return String(n.kind || (n.isParagraph ? 'paragraph' : (n.isDir ? 'dir' : 'file')))
+})
+
+const kindLabel = (k) => {
+  const hit = kindOptions.find(x => x.value === k)
+  return hit ? hit.label : String(k || '')
+}
+
+const getNodeTagType = (k) => {
+  switch (k) {
+    case 'dir': return 'info'
+    case 'file': return 'success'
+    case 'paragraph': return 'default'
+    default: return 'default'
+  }
+}
+
+const normalize = (v) => String(v || '').toLowerCase()
+
+const filteredResults = computed(() => {
+  const all = Array.from(nodeMap.value.values())
+  const allowed = new Set(Array.isArray(visibleKinds.value) ? visibleKinds.value : [])
+  const q = normalize(searchQuery.value).trim()
+
+  const out = all.filter((n) => {
+    if (!n) return false
+    const k = String(n.kind || (n.isParagraph ? 'paragraph' : (n.isDir ? 'dir' : 'file')))
+    if (allowed.size && !allowed.has(k)) return false
+
+    if (!q) return true
+    const hay = `${n.name || ''} ${n.relPath || ''} ${n.absPath || ''} ${n.stableId || ''}`
+    return normalize(hay).includes(q)
+  }).map((n) => {
+    const k = String(n.kind || (n.isParagraph ? 'paragraph' : (n.isDir ? 'dir' : 'file')))
+    const title = String(n.name || '')
+    const descParts = [kindLabel(k)]
+    if (n.relPath) descParts.push(String(n.relPath))
+    if (n.stableId) descParts.push(String(n.stableId))
+    if (n.startLine != null || n.endLine != null) descParts.push(`L${n.startLine ?? ''}-${n.endLine ?? ''}`)
+    return { key: n.key, kind: k, parentKey: n.parentKey, title, description: descParts.join(' | ') }
+  })
+
+  out.sort((a, b) => {
+    if (a.kind !== b.kind) return String(a.kind).localeCompare(String(b.kind), 'zh')
+    return String(a.title).localeCompare(String(b.title), 'zh')
+  })
+
+  return out.slice(0, 200)
+})
+
+const focusSelected = () => {
+  const k = String(selectedKey.value || '')
+  if (!k) return
+  centerOnKey(k)
+  console.info('[KBGraphEditor] right panel focus selected', { key: k })
+}
+
+const clearSelected = () => {
+  cancelInlineEdit()
+  selectedKeysModel.value = []
+  console.info('[KBGraphEditor] right panel clear selected')
+}
+
+const focusNodeFromResult = (n) => {
+  const key = String(n?.key || '')
+  if (!key) return
+
+  if (String(n?.kind) === 'paragraph' && n?.parentKey) {
+    ensureExpandedToKey(String(n.parentKey))
+  }
+
+  selectGraphNode(key)
+  console.info('[KBGraphEditor] right panel focus node', { key })
+}
 
 const graphCanvasRef = ref(null)
 
@@ -606,7 +962,7 @@ svg{--guaxi-panel-bg:${panelBg};--guaxi-content-bg:${contentBg};--guaxi-border:$
 .node.dir .node-rect{stroke:rgba(24,160,88,.46);}
 .node.paragraph .node-rect{stroke:rgba(179,127,235,.58);stroke-dasharray:4 3;}
 .node.selected .node-rect{stroke:rgba(33,189,236,.90);stroke-width:2.5;}
-.node-text{font-size:13px;fill:${textPrimary};opacity:.9;font-family:'Maple Mono NF CN','JetBrainsMono Nerd Font Mono',Consolas,monospace,'Microsoft YaHei',system-ui;}
+.node-text{font-size:14px;fill:${textPrimary};opacity:.9;font-family:'Maple Mono NF CN','JetBrainsMono Nerd Font Mono',Consolas,monospace,'Microsoft YaHei',system-ui;}
 .node-plus-rect{fill:${panelBg};stroke:rgba(33,189,236,.68);stroke-width:1.5;}
 .node-plus-text{font-size:14px;text-anchor:middle;fill:${textPrimary};}
 .node-subgraph-rect{fill:${panelBg};stroke:rgba(179,127,235,.64);stroke-width:1.5;}
@@ -843,7 +1199,9 @@ const ensureExpandedToKey = (key) => {
   const next = new Set(expandedKeysModel.value)
   next.add(rootK)
 
-  if (n.isDir && k !== rootK) next.add(k)
+  const treeNode = treeIndex.value.get(k)
+  const hasChildren = !!(treeNode && Array.isArray(treeNode.children) && treeNode.children.length)
+  if ((n.isDir || hasChildren) && k !== rootK) next.add(k)
 
   let cur = n
   while (cur?.parentKey) {
@@ -940,7 +1298,9 @@ const enterSubGraph = (key) => {
   selectedKeysModel.value = [k]
 
   const n = nodeMap.value.get(k)
-  expandedKeysModel.value = n?.isDir ? [k] : []
+  const treeNode = treeIndex.value.get(k)
+  const expandable = !!(treeNode && Array.isArray(treeNode.children) && treeNode.children.length)
+  expandedKeysModel.value = (n?.isDir || expandable) ? [k] : []
 
   nextTick(() => {
     centerOnKey(k)
@@ -973,7 +1333,10 @@ const selectGraphNode = (key) => {
   selectedKeysModel.value = [k]
 
   const n = nodeMap.value.get(k)
-  if (n?.isDir) {
+  const treeNode = treeIndex.value.get(k)
+  const expandable = !!(treeNode && Array.isArray(treeNode.children) && treeNode.children.length)
+
+  if (n && n.kind !== 'paragraph' && (n.isDir || expandable)) {
     if (prevSelected === k) toggleDirExpanded(k)
     else ensureExpandedToKey(k)
   }
@@ -1011,9 +1374,9 @@ watch(() => selectedKey.value, (k) => {
 })
 
 const canOperate = computed(() => !!props.selectedKbName && !!normalizeBase(props.kbLocation))
-const canAdd = computed(() => canOperate.value && !!selectedNode.value)
-const canRename = computed(() => canOperate.value && !!selectedNode.value && selectedKey.value !== props.rootKey)
-const canDelete = computed(() => canOperate.value && !!selectedNode.value && selectedKey.value !== props.rootKey)
+const canAdd = computed(() => canOperate.value && !!selectedNode.value && selectedNode.value.kind === 'dir')
+const canRename = computed(() => canOperate.value && !!selectedNode.value && selectedKey.value !== props.rootKey && selectedNode.value.kind !== 'paragraph')
+const canDelete = computed(() => canOperate.value && !!selectedNode.value && selectedKey.value !== props.rootKey && selectedNode.value.kind !== 'paragraph')
 
 const createTypeVisible = ref(false)
 
@@ -1432,7 +1795,7 @@ const deleteSelectedNode = async () => {
 }
 
 .node-text {
-  font-size: 13px;
+  font-size: 14px;
   fill: var(--guaxi-text-primary);
   opacity: 0.9;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
@@ -1548,25 +1911,78 @@ const deleteSelectedNode = async () => {
   flex-direction: column;
 }
 
-.inspector-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--guaxi-border);
-}
-
-.inspector-title {
-  font-weight: 650;
-}
-
-.inspector-body {
-  flex: 1;
-  min-height: 0;
+.right-sider-content {
+  flex: 1 1 auto;
+  height: 100%;
+  width: 100%;
   overflow: auto;
-  padding: 12px;
+}
+
+.panel {
+  padding: 8px;
+}
+
+.search-results {
+  max-height: 380px;
+  overflow: auto;
+}
+
+.node-content-wrap {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--guaxi-content-bg);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.node-content-loading {
+  font-size: 14px;
+  opacity: 0.75;
+}
+
+.node-content-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--guaxi-text-primary);
+}
+
+.node-expanded-fo {
+  width: 100%;
+  height: 100%;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.node-expanded-title {
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-expanded-loading {
+  font-size: 14px;
+  opacity: 0.75;
+}
+
+.node-expanded-pre {
+  margin: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--guaxi-text-primary);
 }
 
 .empty {

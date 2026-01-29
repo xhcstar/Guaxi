@@ -44,7 +44,11 @@ import router from "./router";
 import { createPinia } from 'pinia';
 import { initTauriEvents, cleanupTauriEvents } from './stores/tauriEvents';
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useSettingsStore } from './stores/settingsStore'
+import { useFileTreeStore } from './stores/fileTreeStore'
+import { useEditorStore } from './stores/editorStore'
 
 const iconRegistry = {
   'mdi:folder-outline': mdiFolderOutline,
@@ -99,6 +103,70 @@ app.use(router);
 app.use(pinia);
 
 const settingsStore = useSettingsStore(pinia)
+const fileTreeStore = useFileTreeStore(pinia)
+const editorStore = useEditorStore(pinia)
+
+const OPEN_FILE_IN_HOME_EVENT = 'open_file_in_home'
+let unlistenOpenFileInHome = null
+
+const windowLabel = (() => {
+  try {
+    return String(getCurrentWebviewWindow()?.label || '')
+  } catch (e) {
+    console.warn('[Main] getCurrentWebviewWindow failed:', e)
+    return ''
+  }
+})()
+
+if (windowLabel === 'main') {
+  listen(OPEN_FILE_IN_HOME_EVENT, async (event) => {
+    const payload = event?.payload || {}
+    const path = String(payload?.path || '')
+    const kind = String(payload?.kind || '')
+    const lineNumberRaw = payload?.lineNumber ?? payload?.startLine ?? payload?.line ?? 1
+    const lineNumber = Math.max(1, Number(lineNumberRaw) || 1)
+
+    if (!path) {
+      console.warn('[Main] open_file_in_home ignored (empty path)', { payload })
+      return
+    }
+
+    console.info('[Main] open_file_in_home received', { path, kind, lineNumber })
+
+    try {
+      const res = await fileTreeStore.fetchFileContent(path)
+      if (!res?.ok) {
+        console.error('[Main] open_file_in_home failed (read file failed)', { path, res })
+        return
+      }
+
+      await fileTreeStore.openFileInTab(path, res.content, { unsupported: !!res.unsupported })
+
+      editorStore.setFile({
+        path,
+        content: String(res.content || ''),
+        highlightInfo: {
+          lineNumber,
+          matches: [{ start: 0, end: 1000000 }],
+          text: ''
+        }
+      })
+
+      if (router?.currentRoute?.value?.path !== '/') {
+        router.push('/').catch(() => {})
+      }
+    } catch (e) {
+      console.error('[Main] open_file_in_home failed:', e)
+    }
+  }).then((unlisten) => {
+    unlistenOpenFileInHome = unlisten
+    console.info('[Main] open_file_in_home listener registered')
+  }).catch((e) => {
+    console.error('[Main] open_file_in_home listener register failed:', e)
+  })
+} else {
+  console.info('[Main] skip open_file_in_home listener (not main window)', { windowLabel })
+}
 
 const getThemeFromUrl = () => {
   try {
@@ -134,5 +202,13 @@ app.mount("#app");
 
 // 应用卸载时清理
 window.addEventListener('beforeunload', async () => {
+  try {
+    if (typeof unlistenOpenFileInHome === 'function') {
+      await unlistenOpenFileInHome()
+    }
+  } catch (e) {
+    console.error('[Main] unlisten open_file_in_home failed:', e)
+  }
+
   await cleanupTauriEvents();
 });

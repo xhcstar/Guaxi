@@ -205,7 +205,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NCollapse, NCollapseItem, NDynamicTags, NForm, NFormItem, NIcon, NIconWrapper, NInput, NSelect, NSpace, NTooltip, NTree, createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { LayersOutline, ListOutline, RefreshOutline, SyncOutline } from '@vicons/ionicons5'
@@ -291,6 +291,132 @@ const buildTreeNodes = (node) => {
   }))
 }
 
+// 段落节点：使用“文件相对路径/__para__/stable_id”作为 key，便于随文件/目录重命名同步 remap
+const PARA_SEG = '__para__'
+const PARA_MARK = `/${PARA_SEG}/`
+
+const normalizeRelKey = (p) => String(p || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+
+const extractFileRelPathFromTreeKey = (key) => {
+  const k = String(key || '')
+  if (!k || k === ROOT_KEY) return ''
+  const idx = k.indexOf(PARA_MARK)
+  return idx >= 0 ? k.slice(0, idx) : k
+}
+
+const findTreeNodeByKey = (root, key) => {
+  const k = String(key || '')
+  if (!root || !k) return null
+
+  const dfs = (n) => {
+    if (!n) return null
+    if (String(n.key || '') === k) return n
+    const kids = Array.isArray(n.children) ? n.children : []
+    for (const ch of kids) {
+      const hit = dfs(ch)
+      if (hit) return hit
+    }
+    return null
+  }
+
+  return dfs(root)
+}
+
+const fileParagraphChildrenCache = new Map()
+
+const makeParagraphChildrenFromFileMeta = (fileRelPath, meta) => {
+  const rel = normalizeRelKey(fileRelPath)
+  const nodes = Array.isArray(meta?.structure_nodes) ? meta.structure_nodes : []
+  const out = []
+
+  nodes.forEach((n, idx) => {
+    const title = String(n?.title || '').trim()
+    const level = Number(n?.level || 0)
+    const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
+    const kind = String(attrs?.kind || (level > 0 ? 'section' : 'paragraph'))
+    if (kind !== 'paragraph') return
+
+    const stableId = typeof attrs?.stable_id === 'string' && attrs.stable_id
+      ? attrs.stable_id
+      : `idx_${idx}`
+
+    const start = attrs?.start_line
+    const end = attrs?.end_line
+
+    const display = title
+      ? `P L${start ?? ''}-${end ?? ''} ${title}`
+      : `P L${start ?? ''}-${end ?? ''}`
+
+    out.push({
+      key: `${rel}/${PARA_SEG}/${stableId}`,
+      label: display,
+      isDir: false,
+      kind: 'paragraph',
+      isParagraph: true,
+      stableId,
+      startLine: start,
+      endLine: end
+    })
+  })
+
+  return out
+}
+
+const applyParagraphChildrenToTree = (fileRelPath, children) => {
+  const rel = normalizeRelKey(fileRelPath)
+  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
+  if (!root || !rel) return false
+
+  const fileNode = findTreeNodeByKey(root, rel)
+  if (!fileNode || fileNode.isDir) return false
+
+  const nextChildren = Array.isArray(children) ? children : []
+  fileNode.children = nextChildren.length ? nextChildren : undefined
+
+  // 触发树组件刷新（深层对象变更在某些情况下不会立刻触发 n-tree 重绘）
+  treeData.value = [...(treeData.value || [])]
+  return true
+}
+
+const ensureParagraphChildrenForFile = async (fileRelPath) => {
+  const rel = normalizeRelKey(fileRelPath)
+  if (!rel || !selectedKbName.value) return false
+
+  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
+  if (!root) return false
+
+  const fileNode = findTreeNodeByKey(root, rel)
+  if (!fileNode || fileNode.isDir) return false
+
+  if (Array.isArray(fileNode.children) && fileNode.children.some(ch => String(ch?.kind || '') === 'paragraph')) {
+    return true
+  }
+
+  if (fileParagraphChildrenCache.has(rel)) {
+    const cached = fileParagraphChildrenCache.get(rel)
+    applyParagraphChildrenToTree(rel, cached)
+    return true
+  }
+
+  try {
+    console.info('[KBManager] load paragraph nodes', { relPath: rel })
+    const meta = await invoke('kbmeta_read_file_meta', { knowledgeBaseName: selectedKbName.value, relPath: rel })
+    const children = makeParagraphChildrenFromFileMeta(rel, meta)
+    fileParagraphChildrenCache.set(rel, children)
+    applyParagraphChildrenToTree(rel, children)
+
+    if (children.length) {
+      expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ROOT_KEY, rel]))
+    }
+
+    console.info('[KBManager] paragraph nodes ready', { relPath: rel, count: children.length })
+    return true
+  } catch (e) {
+    console.error('[KBManager] load paragraph nodes failed:', e)
+    return false
+  }
+}
+
 const deepClone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)))
 
 const makeFileDraft = (meta) => {
@@ -333,6 +459,9 @@ const loadKbMeta = async (kbName) => {
   kbDraft.value = deepClone(meta)
   fileDraft.value = null
 
+  // 切换知识库时清空段落缓存，避免跨 KB 串数据
+  fileParagraphChildrenCache.clear()
+
   const rootNode = meta?.tree
   treeData.value = rootNode ? [{
     key: ROOT_KEY,
@@ -346,6 +475,8 @@ const loadKbMeta = async (kbName) => {
 
   currentKind.value = 'kb'
   currentRelPath.value = ''
+
+  console.info('[KBManager] kb meta loaded', { kbName, hasTree: !!rootNode })
 }
 
 const refresh = async () => {
@@ -381,6 +512,8 @@ const handleKbChange = async (kbName) => {
     selectedKeys.value = []
     currentKind.value = ''
     currentRelPath.value = ''
+
+    fileParagraphChildrenCache.clear()
     return
   }
 
@@ -418,6 +551,15 @@ const handleSelectNode = async (keys, options) => {
     })
     kbDraft.value = null
     fileDraft.value = makeFileDraft(meta)
+
+    // 元数据模式下：选中文件时直接把段落节点挂到树上（避免再发一次请求）
+    const paras = makeParagraphChildrenFromFileMeta(currentRelPath.value, meta)
+    fileParagraphChildrenCache.set(normalizeRelKey(currentRelPath.value), paras)
+    applyParagraphChildrenToTree(currentRelPath.value, paras)
+
+    if (paras.length) {
+      expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ROOT_KEY, normalizeRelKey(currentRelPath.value)]))
+    }
   } catch (e) {
     console.error('读取文件配置失败:', e)
     message.error('读取文件配置失败')
@@ -498,8 +640,13 @@ const patchTreeAfterRename = (treeRoot, oldKey, newKey) => {
     const kids = Array.isArray(node?.children) ? node.children : []
     for (const ch of kids) {
       ch.key = remapKey(ch.key, oldK, newK)
-      const base = basenameOfRel(ch.key)
-      if (base) ch.label = base
+
+      // 段落节点 label 是展示文本（例如行号+标题），不应该被 basename 覆盖
+      if (String(ch?.kind || '') !== 'paragraph') {
+        const base = basenameOfRel(ch.key)
+        if (base) ch.label = base
+      }
+
       patchDescendants(ch)
     }
   }
@@ -557,6 +704,21 @@ const handleGraphPatchTree = (payload) => {
 
   console.info('[KBManager] patch-tree ok', { oldKey, newKey })
 }
+
+// 图形模式：选中节点时按需补齐段落节点（避免启动时扫描全库）
+watch(() => selectedKeys.value, async (keys) => {
+  if (!selectedKbName.value) return
+
+  const rawKey = Array.isArray(keys) ? String(keys[0] || '') : ''
+  const fileRel = extractFileRelPathFromTreeKey(rawKey)
+  if (!fileRel || fileRel === ROOT_KEY) return
+
+  const root = Array.isArray(treeData.value) ? treeData.value[0] : null
+  const node = root ? findTreeNodeByKey(root, fileRel) : null
+  if (!node || node.isDir) return
+
+  await ensureParagraphChildrenForFile(fileRel)
+}, { deep: false })
 
 const handleGraphReload = async (payload) => {
   if (!selectedKbName.value) return
