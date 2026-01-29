@@ -70,7 +70,7 @@
               <g class="nodes">
                 <g v-for="n in graphLayout.nodes" :key="n.key" class="node"
                   :class="{ selected: n.key === selectedKey, dir: n.kind === 'dir', file: n.kind === 'file', paragraph: n.kind === 'paragraph', expanded: isNodeExpanded(n) }"
-                  :transform="`translate(${n.x},${n.y})`" @click.stop="selectGraphNode(n.key)" @dblclick.stop="toggleNodeExpand(n.key)">
+                  :transform="`translate(${n.x},${n.y})`" @click.stop="selectGraphNode(n.key)">
                   <rect
                     class="node-rect"
                     :width="nodeRenderSize(n).w"
@@ -104,26 +104,32 @@
                     {{ n.displayLabel }}
                   </text>
 
-                  <g v-if="n.key === selectedKey && n.kind !== 'paragraph'" class="node-actions" :transform="`translate(${nodeRenderSize(n).w - 100}, -11)`">
+                  <g v-if="n.key === selectedKey" class="node-actions" :transform="`translate(${nodeRenderSize(n).w - 126}, -11)`">
+                    <g class="node-view" transform="translate(104,0)" @click.stop="toggleNodeExpand(n.key)">
+                      <title>查看内容</title>
+                      <rect class="node-view-rect" width="22" height="22" rx="11" ry="11" />
+                      <text class="node-view-text" x="11" y="15">☰</text>
+                    </g>
+
                     <g v-if="n.isDir" class="node-plus" transform="translate(78,0)" @click.stop="openCreateTypeModal">
                       <title>新建（分类 / 知识点）</title>
                       <rect class="node-plus-rect" width="22" height="22" rx="11" ry="11" />
                       <text class="node-plus-text" x="11" y="15">+</text>
                     </g>
 
-                    <g v-if="n.key !== graphRootKey" class="node-subgraph" transform="translate(52,0)" @click.stop="enterSubGraph(n.key)">
+                    <g v-if="n.key !== graphRootKey && n.kind !== 'paragraph'" class="node-subgraph" transform="translate(52,0)" @click.stop="enterSubGraph(n.key)">
                       <title>进入子图</title>
                       <rect class="node-subgraph-rect" width="22" height="22" rx="11" ry="11" />
                       <text class="node-subgraph-text" x="11" y="15">⤵</text>
                     </g>
 
-                    <g v-if="n.key !== rootKey" class="node-rename" transform="translate(26,0)" @click.stop="startInlineEdit(n.key)">
+                    <g v-if="n.key !== rootKey && n.kind !== 'paragraph'" class="node-rename" transform="translate(26,0)" @click.stop="startInlineEdit(n.key)">
                       <title>重命名</title>
                       <rect class="node-rename-rect" width="22" height="22" rx="11" ry="11" />
                       <text class="node-rename-text" x="11" y="15">✎</text>
                     </g>
 
-                    <g v-if="n.key !== rootKey" class="node-delete" @click.stop="deleteSelectedNode">
+                    <g v-if="n.key !== rootKey && n.kind !== 'paragraph'" class="node-delete" @click.stop="deleteSelectedNode">
                       <title>删除</title>
                       <rect class="node-delete-rect" width="22" height="22" rx="11" ry="11" />
                       <text class="node-delete-text" x="11" y="15">×</text>
@@ -954,6 +960,8 @@ svg{--guaxi-panel-bg:${panelBg};--guaxi-content-bg:${contentBg};--guaxi-border:$
 .node.paragraph .node-rect{stroke:rgba(179,127,235,.58);stroke-dasharray:4 3;}
 .node.selected .node-rect{stroke:rgba(33,189,236,.90);stroke-width:2.5;}
 .node-text{font-size:14px;fill:${textPrimary};opacity:.9;font-family:'Maple Mono NF CN','JetBrainsMono Nerd Font Mono',Consolas,monospace,'Microsoft YaHei',system-ui;}
+.node-view-rect{fill:${panelBg};stroke:rgba(33,189,236,.68);stroke-width:1.5;}
+.node-view-text{font-size:13px;text-anchor:middle;fill:${textPrimary};}
 .node-plus-rect{fill:${panelBg};stroke:rgba(33,189,236,.68);stroke-width:1.5;}
 .node-plus-text{font-size:14px;text-anchor:middle;fill:${textPrimary};}
 .node-subgraph-rect{fill:${panelBg};stroke:rgba(179,127,235,.64);stroke-width:1.5;}
@@ -1846,10 +1854,27 @@ const deleteSelectedNode = async () => {
   padding: 2px 0 10px;
 }
 
+.node-view,
 .node-plus,
 .node-rename,
 .node-delete {
   cursor: pointer;
+}
+
+.node-view-rect {
+  fill: var(--guaxi-panel-bg);
+  stroke: rgba(33, 189, 236, 0.68);
+  stroke-width: 1.5;
+}
+
+.node-view:hover .node-view-rect {
+  filter: drop-shadow(0 6px 14px rgba(7, 118, 161, 0.16));
+}
+
+.node-view-text {
+  font-size: 13px;
+  text-anchor: middle;
+  fill: var(--guaxi-text-primary);
 }
 
 .node-plus-rect {
