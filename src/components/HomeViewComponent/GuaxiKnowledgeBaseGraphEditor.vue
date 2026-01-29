@@ -96,7 +96,7 @@
                     <div class="node-expanded-fo">
                       <div class="node-expanded-title">{{ n.displayLabel }}</div>
                       <div v-if="nodeContentLoading" class="node-expanded-loading">内容加载中...</div>
-                      <pre v-else class="node-expanded-pre">{{ expandedNodeText }}</pre>
+                      <pre class="node-expanded-pre">{{ expandedNodeText }}</pre>
                     </div>
                   </foreignObject>
 
@@ -154,7 +154,7 @@
 
               <div class="node-content-wrap">
                 <div v-if="nodeContentLoading" class="node-content-loading">内容加载中...</div>
-                <pre v-else class="node-content-pre">{{ nodeContentText }}</pre>
+                <pre class="node-content-pre">{{ nodeContentFullText || nodeContentText }}</pre>
               </div>
 
               <n-button-group size="small">
@@ -453,14 +453,18 @@ const nodeContentFullText = ref('')
 const expandedNodeKey = ref('')
 
 const expandedNodeText = computed(() => {
-  const raw = String(nodeContentText.value || '')
-  if (!raw) return ''
+  return String(nodeContentFullText.value || nodeContentText.value || '')
+})
 
-  const maxChars = 4000
-  if (raw.length <= maxChars) return raw
+const expandedNodeHeight = computed(() => {
+  const t = String(expandedNodeText.value || '')
+  if (!t) return 220
+  const lines = t.split('\n')
+  const lineCount = Math.max(1, lines.length)
 
-  const tail = `\n\n…（已截断，长度 ${raw.length}）`
-  return raw.slice(0, maxChars) + tail
+  // 只膨胀“高度”，宽度保持与普通节点一致，避免横向遮挡；内容使用滚动查看
+  const h = 120 + Math.min(320, Math.floor(lineCount * 18))
+  return clamp(h, 160, 520)
 })
 
 const isNodeExpanded = (layoutNode) => {
@@ -468,21 +472,9 @@ const isNodeExpanded = (layoutNode) => {
   return k && k === expandedNodeKey.value && k === String(selectedKey.value || '')
 }
 
-const estimateExpandedSize = (text) => {
-  const t = String(text || '')
-  const lines = t ? t.split('\n') : []
-  const lineCount = Math.max(1, lines.length)
-  const longest = lines.reduce((m, s) => Math.max(m, String(s || '').length), 0)
-
-  const w = clamp(260 + Math.min(520, Math.floor(longest * 7)), 300, 900)
-  const h = clamp(110 + Math.min(520, Math.floor(lineCount * 18)), 140, 720)
-
-  return { w, h }
-}
-
 const nodeRenderSize = (layoutNode) => {
   if (!isNodeExpanded(layoutNode)) return graphNodeSize
-  return estimateExpandedSize(expandedNodeText.value)
+  return { w: graphNodeSize.w, h: expandedNodeHeight.value }
 }
 
 const toggleNodeExpand = async (key) => {
@@ -517,12 +509,11 @@ const extractParagraph = (content, startLine, endLine) => {
   const lines = text.split('\n')
 
   const start = Math.max(1, Number(startLine || 1))
-  const end = Math.max(start, Number(endLine || startLine || start))
+  const end = endLine != null
+    ? Math.max(start, Number(endLine || start))
+    : lines.length
 
-  const maxLines = 200
-  const sliceEnd = Math.min(end, start + maxLines - 1)
-
-  return lines.slice(start - 1, sliceEnd).join('\n')
+  return lines.slice(start - 1, Math.min(end, lines.length)).join('\n')
 }
 
 const applyNodeContent = (text, meta = {}) => {
@@ -536,12 +527,8 @@ const loadTextForNode = async (n) => {
   if (!n) {
     nodeContentText.value = ''
     nodeContentFullText.value = ''
-    nodeContentCanExpand.value = false
-    nodeContentExpanded.value = false
     return
   }
-
-  nodeContentExpanded.value = false
 
   const kind = String(n.kind || '')
   if (kind === 'dir') {
@@ -587,12 +574,16 @@ watch(selectedNode, (n) => {
   loadTextForNode(n)
 }, { immediate: true })
 
-const handleNodeContentClick = () => {
-  if (!selectedNode.value) return
-  if (!nodeContentCanExpand.value) return
-  nodeContentExpanded.value = true
-  console.info('[KBGraphEditor] expand node content', { key: selectedKey.value })
-}
+watch(selectedKey, (k) => {
+  const key = String(k || '')
+  if (expandedNodeKey.value && expandedNodeKey.value !== key) {
+    console.info('[KBGraphEditor] collapse expanded node (selection changed)', {
+      expanded: expandedNodeKey.value,
+      selected: key,
+    })
+    expandedNodeKey.value = ''
+  }
+})
 
 const OPEN_FILE_IN_HOME_EVENT = 'open_file_in_home'
 
@@ -1013,7 +1004,11 @@ const layoutTreeGraph = (root, activeRootKey) => {
   const edges = []
 
   const nodeW = graphNodeSize.w
-  const nodeH = graphNodeSize.h
+  const nodeHForKey = (k) => {
+    const key = String(k || '')
+    if (!key) return graphNodeSize.h
+    return key === expandedNodeKey.value ? Number(expandedNodeHeight.value || graphNodeSize.h) : graphNodeSize.h
+  }
   const colGap = 56
   const colStep = nodeW + colGap
   const rowGap = 14
@@ -1032,19 +1027,21 @@ const layoutTreeGraph = (root, activeRootKey) => {
 
   const measureHeight = (n) => {
     const key = String(n?.key || '')
-    if (!key) return nodeH
+    const selfH = nodeHForKey(key)
+    if (!key) return selfH
+
     const cached = heightMemo.get(key)
     if (typeof cached === 'number') return cached
 
     const kids = visibleChildrenOf(n)
     if (!kids.length) {
-      heightMemo.set(key, nodeH)
-      return nodeH
+      heightMemo.set(key, selfH)
+      return selfH
     }
 
     const sumKids = kids.reduce((acc, ch) => acc + measureHeight(ch), 0)
     const total = sumKids + rowGap * Math.max(kids.length - 1, 0)
-    const h = Math.max(nodeH, total)
+    const h = Math.max(selfH, total)
     heightMemo.set(key, h)
     return h
   }
@@ -1054,8 +1051,9 @@ const layoutTreeGraph = (root, activeRootKey) => {
     if (!key) return
 
     const subtreeH = measureHeight(n)
+    const selfH = nodeHForKey(key)
     const x = depth * colStep
-    const y = topY + (subtreeH - nodeH) / 2
+    const y = topY + (subtreeH - selfH) / 2
 
     const kind = kindForTreeNode(n)
 
@@ -1063,6 +1061,8 @@ const layoutTreeGraph = (root, activeRootKey) => {
       key,
       x,
       y,
+      w: nodeW,
+      h: selfH,
       kind,
       isDir: !!n?.isDir,
       displayLabel: (() => {
@@ -1097,14 +1097,14 @@ const layoutTreeGraph = (root, activeRootKey) => {
 
     const minX = Math.min(...nodes.map(n => n.x))
     const minY = Math.min(...nodes.map(n => n.y))
-    const maxX = Math.max(...nodes.map(n => n.x))
-    const maxY = Math.max(...nodes.map(n => n.y))
+    const maxR = Math.max(...nodes.map(n => n.x + Number(n.w || nodeW)))
+    const maxB = Math.max(...nodes.map(n => n.y + Number(n.h || graphNodeSize.h)))
 
     return {
       left: minX,
       top: minY,
-      right: maxX + nodeW,
-      bottom: maxY + nodeH
+      right: maxR,
+      bottom: maxB
     }
   }
 
@@ -1115,8 +1115,12 @@ const layoutTreeGraph = (root, activeRootKey) => {
     const b0 = measureBounds()
     const bboxCx = (b0.left + b0.right) / 2
     const bboxCy = (b0.top + b0.bottom) / 2
-    const rootCx = rootNode.x + nodeW / 2
-    const rootCy = rootNode.y + nodeH / 2
+
+    const rootW = Number(rootNode.w || nodeW)
+    const rootH = Number(rootNode.h || graphNodeSize.h)
+
+    const rootCx = rootNode.x + rootW / 2
+    const rootCy = rootNode.y + rootH / 2
 
     applyShift(bboxCx - rootCx, bboxCy - rootCy)
 
@@ -1137,10 +1141,14 @@ const layoutTreeGraph = (root, activeRootKey) => {
     const b = pos.get(e.to)
     if (!a || !b) return null
 
-    const x1 = a.x + nodeW
-    const y1 = a.y + nodeH / 2
+    const aw = Number(a.w || nodeW)
+    const ah = Number(a.h || graphNodeSize.h)
+    const bh = Number(b.h || graphNodeSize.h)
+
+    const x1 = a.x + aw
+    const y1 = a.y + ah / 2
     const x2 = b.x
-    const y2 = b.y + nodeH / 2
+    const y2 = b.y + bh / 2
 
     const dx = Math.max(54, Math.min(110, (x2 - x1) / 2))
     const c1x = x1 + dx
@@ -1222,8 +1230,12 @@ const centerOnKey = (key) => {
 
   const zoom = graphZoom.value
   const pad = 12
-  const cx = (node.x + graphNodeSize.w / 2) * zoom
-  const cy = (node.y + graphNodeSize.h / 2) * zoom
+
+  const nodeW = Number(node.w || graphNodeSize.w)
+  const nodeH = Number(node.h || graphNodeSize.h)
+
+  const cx = (node.x + nodeW / 2) * zoom
+  const cy = (node.y + nodeH / 2) * zoom
 
   const nextLeft = Math.max(0, pad + cx - el.clientWidth / 2)
   const nextTop = Math.max(0, pad + cy - el.clientHeight / 2)
@@ -1945,9 +1957,10 @@ const deleteSelectedNode = async () => {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.7;
   color: var(--guaxi-text-primary);
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
 }
 
 .node-expanded-fo {
@@ -1980,9 +1993,10 @@ const deleteSelectedNode = async () => {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.7;
   color: var(--guaxi-text-primary);
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
 }
 
 .empty {

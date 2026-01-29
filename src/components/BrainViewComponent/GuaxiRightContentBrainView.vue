@@ -242,6 +242,8 @@ const focusNode = (n) => {
   height: 100%;
   width: 100%;
   overflow: auto;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
+  font-size: 14px;
 }
 
 .panel {
