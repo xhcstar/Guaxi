@@ -110,7 +110,7 @@
  *  3. 在文章内容的 .article-content 上挂：@mouseup="selectionNotesRef.handleSelectionMouseUp()"
  */
 
-import { ref, onMounted, watch, defineExpose } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join } from '@tauri-apps/api/path'
 import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
