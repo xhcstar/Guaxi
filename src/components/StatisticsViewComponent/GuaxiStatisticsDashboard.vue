@@ -561,8 +561,23 @@ const repoTagChartHeight = computed(() => {
   return rows * (barRowHeight + barRowGap) - barRowGap;
 });
 
-const KB_VOLUME_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// 说明：默认 6 小时采样一次，避免频繁扫盘影响性能。
+// 测试时可在 DevTools 里设置 localStorage 覆盖间隔（毫秒）：
+// localStorage.setItem('guaxi_kb_volume_snapshot_interval_ms_v1', '5000')
+const KB_VOLUME_SNAPSHOT_INTERVAL_MS_DEFAULT = 6 * 60 * 60 * 1000;
+const KB_VOLUME_SNAPSHOT_INTERVAL_MS_KEY = "guaxi_kb_volume_snapshot_interval_ms_v1";
 const KB_VOLUME_SNAPSHOT_MAX = 500;
+
+function getVolumeSnapshotIntervalMs() {
+  try {
+    const raw = localStorage.getItem(KB_VOLUME_SNAPSHOT_INTERVAL_MS_KEY);
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 1000) return Math.floor(n);
+  } catch (e) {
+    console.warn("[statistics] read snapshot interval failed", e);
+  }
+  return KB_VOLUME_SNAPSHOT_INTERVAL_MS_DEFAULT;
+}
 
 function readVolumeSnapshotsFromLocal() {
   try {
@@ -588,7 +603,9 @@ function recordVolumeSnapshotIfNeeded() {
   const list = Array.isArray(kbVolumeSnapshots.value) ? kbVolumeSnapshots.value.slice() : [];
   const lastTs = Number(list[list.length - 1]?.ts) || 0;
   const now = Date.now();
-  if (lastTs && now - lastTs < KB_VOLUME_SNAPSHOT_INTERVAL_MS) return;
+  const intervalMs = getVolumeSnapshotIntervalMs();
+
+  if (lastTs && now - lastTs < intervalMs) return;
 
   const summaries = Array.isArray(kbSummaries.value) ? kbSummaries.value : [];
   if (summaries.length === 0) return;
@@ -611,12 +628,51 @@ function recordVolumeSnapshotIfNeeded() {
   console.info("[statistics] recordVolumeSnapshot", { ts: now, kbCount: Object.keys(items).length });
 }
 
-async function loadKbSummaries() {
+async function loadKbSummaries(opts) {
+  const reason = String(opts?.reason || "manual");
   const list = await invoke("kbmeta_sync_all");
   const arr = Array.isArray(list) ? list : [];
   kbSummaries.value = arr;
-  console.info("[statistics] kbmeta_sync_all", { kbCount: arr.length });
+  console.info("[statistics] kbmeta_sync_all", { kbCount: arr.length, reason });
   recordVolumeSnapshotIfNeeded();
+}
+
+let volumeSnapshotTimer;
+function clearVolumeSnapshotTimer() {
+  if (volumeSnapshotTimer) {
+    clearTimeout(volumeSnapshotTimer);
+    volumeSnapshotTimer = null;
+  }
+}
+
+function scheduleNextVolumeSnapshot() {
+  clearVolumeSnapshotTimer();
+
+  const intervalMs = getVolumeSnapshotIntervalMs();
+  const list = Array.isArray(kbVolumeSnapshots.value) ? kbVolumeSnapshots.value : [];
+  const lastTs = Number(list[list.length - 1]?.ts) || 0;
+  const now = Date.now();
+
+  const dueAt = lastTs ? lastTs + intervalMs : now;
+  const delay = Math.max(1000, dueAt - now);
+
+  console.info("[statistics] scheduleNextVolumeSnapshot", {
+    intervalMs,
+    lastTs,
+    dueAt,
+    delay,
+  });
+
+  volumeSnapshotTimer = setTimeout(async () => {
+    try {
+      console.info("[statistics] auto volume snapshot tick", { ts: new Date().toISOString() });
+      await loadKbSummaries({ reason: "auto" });
+    } catch (e) {
+      console.warn("[statistics] auto volume snapshot failed", e);
+    } finally {
+      scheduleNextVolumeSnapshot();
+    }
+  }, delay);
 }
 
 async function loadKnowledgeBasesGitLog() {
@@ -757,7 +813,11 @@ async function reloadAll() {
   });
 
   try {
-    await Promise.all([loadKbSummaries(), loadRepoImportedFiles(), loadKnowledgeBasesGitLog()]);
+    await Promise.all([
+      loadKbSummaries({ reason: "reload" }),
+      loadRepoImportedFiles(),
+      loadKnowledgeBasesGitLog(),
+    ]);
 
     // 扫描阅读器状态是同步的，不要放到并发里避免与刷新 UI 抢占节奏
     scanReaderState();
@@ -795,10 +855,14 @@ onMounted(async () => {
 
   scanReaderState();
   await reloadAll();
+
+  // 后台自动采样：按间隔到点后才触发 kbmeta_sync_all + 写快照
+  scheduleNextVolumeSnapshot();
 });
 
 onBeforeUnmount(() => {
   try {
+    clearVolumeSnapshotTimer();
     if (ro) ro.disconnect();
     if (mo) mo.disconnect();
   } catch (e) {
