@@ -326,6 +326,8 @@ const setSyncState = (patch) => {
 
 const autoSyncBusy = ref(false)
 
+const closeRequested = ref(false)
+
 const runResourceRepoSync = async (reason) => {
   if (autoSyncBusy.value) return
   autoSyncBusy.value = true
@@ -361,7 +363,7 @@ const runResourceRepoSync = async (reason) => {
 const initResourceRepoAutoSync = async () => {
   try {
     setTimeout(() => {
-      if (closeRequested) return
+      if (closeRequested.value) return
 
       let pending = false
       try {
@@ -1252,6 +1254,7 @@ const handleGlobalSearchHotkey = (e) => {
 }
 
 const handleBeforeUnload = () => {
+  closeRequested.value = true
   searchHistory.value = []
   try {
     localStorage.removeItem(HISTORY_STORAGE_KEY)
@@ -1270,6 +1273,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  closeRequested.value = true
   window.removeEventListener('resize', handleWindowReflow)
   window.removeEventListener('scroll', handleWindowReflow, true)
   window.removeEventListener('keydown', handleGlobalSearchHotkey, true)
