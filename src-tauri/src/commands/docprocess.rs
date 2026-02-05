@@ -24,6 +24,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Deserialize, Debug)]
 pub struct OpenFileRequest {
     filetype: String,
@@ -228,6 +234,9 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         .current_dir(&marker_src_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
 
     let combined_pythonpath = marker_src_dir.to_string_lossy().to_string();
 
@@ -958,6 +967,9 @@ pub async fn convert_to_markdown(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 Marker 转换失败: {}", e))?;
@@ -1248,6 +1260,10 @@ pub async fn export_markdown_pandoc(
     };
 
     let mut cmd = Command::new(pandoc_path_str);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
     cmd.current_dir(input_dir)
         .arg(&processed_md_path)
         .arg("-o")
