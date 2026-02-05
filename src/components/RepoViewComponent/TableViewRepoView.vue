@@ -41,6 +41,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, onMounted, onUnmounted, computed, watch, nextTick, h } from 'vue'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -68,6 +69,7 @@ import { useSearchComplete } from './SearchUtils/useSearchComplete.js'
 import { useTableConfig } from './composables/useTableConfig.js'
 import { useFileOperations } from './composables/useFileOperations.js'
 
+const logger = createLogger('TableViewRepoView')
 // 初始化存储和消息
 const store = repoStore()
 const eventStore = useEventStore()
@@ -233,7 +235,7 @@ const backupDatabase = async (scope = 'current') => {
   try {
     await backupDatabaseOp(scope)
   } catch (error) {
-    console.error('备份失败:', error)
+    logger.error('备份失败:', error)
   }
 }
 
@@ -241,7 +243,7 @@ const recoverDatabase = async () => {
   try {
     await recoverDatabaseOp()
   } catch (error) {
-    console.error('恢复失败:', error)
+    logger.error('恢复失败:', error)
   }
 }
 
@@ -249,7 +251,7 @@ const importItems = async () => {
   try {
     await importItemsOp()
   } catch (error) {
-    console.error('导入失败:', error)
+    logger.error('导入失败:', error)
   }
 }
 
@@ -257,16 +259,16 @@ const exportItems = async () => {
   try {
     await exportItemsOp(checkedRowKeys.value)
   } catch (error) {
-    console.error('导出失败:', error)
+    logger.error('导出失败:', error)
   }
 }
 
 const initAppHandle = async () => {
   try {
     await invoke('init_backend_services')
-    console.log('AppHandle initialized successfully')
+    logger.info('AppHandle initialized successfully')
   } catch (error) {
-    console.error('Failed to initialize AppHandle:', error)
+    logger.error('Failed to initialize AppHandle:', error)
     message.error('初始化应用句柄失败，部分功能可能受限')
   }
 }
@@ -332,7 +334,7 @@ onMounted(async () => {
       if (container) {
         const rect = container.getBoundingClientRect()
         containerHeight.value = rect.height
-        console.log('Table container height:', containerHeight.value)
+        logger.info('Table container height:', containerHeight.value)
       }
     })
   }
@@ -352,14 +354,14 @@ onMounted(async () => {
     const unsubscribe = eventStore.subscribe(
       'add_web_clipper_file_event',
       (payload) => {
-        console.log('处理事件:', payload)
+        logger.info('处理事件:', payload)
         handleFileInfoEvent(payload)
       }
     )
 
     onUnmounted(unsubscribe)
   } catch (error) {
-    console.error('事件系统初始化失败:', error)
+    logger.error('事件系统初始化失败:', error)
   }
 
   initializeSearch();

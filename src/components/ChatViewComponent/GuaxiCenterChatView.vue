@@ -88,13 +88,14 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { addCopyButtons, addMediaViewerButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
 
-
+const logger = createLogger('GuaxiCenterChatView')
 const chatStore = useChatStore();
 const messageInput = ref("");
 const inputHistory = ref([]);
@@ -244,7 +245,7 @@ watch(
     try {
       await invoke('prepare_web_model_window', { provider });
     } catch (e) {
-      console.error('预加载网页模型窗口失败:', e);
+      logger.error('预加载网页模型窗口失败:', e);
     }
   }
 );
@@ -290,7 +291,7 @@ const saveSessionSnapshot = async () => {
       },
     });
   } catch (e) {
-    console.error('自动保存会话失败:', e);
+    logger.error('自动保存会话失败:', e);
   }
 };
 
@@ -367,7 +368,7 @@ const writeClipboard = async (text) => {
     const mod = await import('@tauri-apps/plugin-clipboard-manager');
     await mod.writeText(value);
   } catch (e) {
-    console.error('写入剪贴板失败:', e);
+    logger.error('写入剪贴板失败:', e);
   }
 };
 
@@ -436,7 +437,7 @@ const regenerateFrom = async (assistantIndex) => {
         },
       });
     } catch (e) {
-      console.error('重新生成（网页模式）失败:', e);
+      logger.error('重新生成（网页模式）失败:', e);
       stopGenerating();
     }
 
@@ -450,7 +451,7 @@ const regenerateFrom = async (assistantIndex) => {
   try {
     await askDeepSeek(question, sessionId);
   } catch (e) {
-    console.error('重新生成失败:', e);
+    logger.error('重新生成失败:', e);
     stopGenerating();
   }
 
@@ -465,13 +466,13 @@ const askDeepSeek = async (question, sessionId) => {
       "topicid": chatStore.selectedTopic,
       "sessionid": sessionId,
     };
-    console.log('Request:', request);
+    logger.info('Request:', request);
     // const response = await invoke('get_chat_answer', { request });
     const response = await invoke('get_chat_answer_stream', { request });
-    console.log('Response:', response);
+    logger.info('Response:', response);
     return response;
   } catch (error) {
-    console.error('Error calling API:', error);
+    logger.error('Error calling API:', error);
   }
 };
 
@@ -533,7 +534,7 @@ const sendMessage = async () => {
     });
   }
 
-  console.log('topic', topic);
+  logger.info('topic', topic);
 
   messageInput.value = "";
   scrollToBottom();
@@ -550,7 +551,7 @@ const sendMessage = async () => {
         },
       });
     } catch (e) {
-      console.error('发送到网页模型失败:', e);
+      logger.error('发送到网页模型失败:', e);
       stopGenerating();
       return;
     }
@@ -566,7 +567,7 @@ const sendMessage = async () => {
   try {
     await askDeepSeek(question, sessionId);
   } catch (error) {
-    console.error('Error during askDeepSeek:', error);
+    logger.error('Error during askDeepSeek:', error);
     stopGenerating();
   }
 
@@ -639,7 +640,7 @@ const onMouseMove = (e) => {
     diff = 0;
   }
   const newHeight = startHeight + diff;
-  console.log('newHeight:', newHeight);
+  logger.info('newHeight:', newHeight);
   if (newHeight > 85) { // 限制最小高度
     const inputArea = document.querySelector('.input-area');
     inputArea.style.height = newHeight + 'px'; // 修改 height
@@ -667,11 +668,11 @@ onMounted(() => {
     const rawPayload = typeof event.payload === 'string' ? event.payload : '';
     const payload = typeof event.payload === 'string' ? normalizeMathDelimiters(event.payload) : event.payload;
     if (rawPayload && (rawPayload.includes('$') || rawPayload.includes('`') || rawPayload.includes('```') || rawPayload.includes('\\[') || rawPayload.includes('\\]') || rawPayload.includes('\\(') || rawPayload.includes('\\)'))) {
-      console.info('[modle-streaming-respond-output raw]', rawPayload.slice(0, 400));
+      logger.info('[modle-streaming-respond-output raw]', rawPayload.slice(0, 400));
     }
 
     if (typeof payload === 'string' && payload && (payload.includes('$') || payload.includes('`') || payload.includes('```'))) {
-      console.info('[modle-streaming-respond-output normalized]', payload.slice(0, 400));
+      logger.info('[modle-streaming-respond-output normalized]', payload.slice(0, 400));
     }
 
     chatStore.collectChatSessionStream(payload);
@@ -706,7 +707,7 @@ onMounted(() => {
       unsubscribeStream = unsubFn;
     })
     .catch((err) => {
-      console.error('监听事件失败:', err);
+      logger.error('监听事件失败:', err);
       unsubscribeStream = null;
     });
 
@@ -748,7 +749,7 @@ onMounted(() => {
       unsubscribeWebModel = unsubFn;
     })
     .catch((err) => {
-      console.error('监听 web-model-chat-push 失败:', err);
+      logger.error('监听 web-model-chat-push 失败:', err);
       unsubscribeWebModel = null;
     });
 });

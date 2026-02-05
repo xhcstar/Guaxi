@@ -91,11 +91,13 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, onMounted, ref } from 'vue'
 import { NButton, NCollapse, NCollapseItem, NForm, NFormItem, NInput, NList, NListItem, NSpace, createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 
+const logger = createLogger('GuaxiTemplateManager')
 const { message } = createDiscreteApi(['message'])
 
 const loading = ref(false)
@@ -178,7 +180,7 @@ const refresh = async () => {
     templateRepoPath.value = typeof path === 'string' ? path : ''
     templates.value = Array.isArray(list) ? list : []
   } catch (e) {
-    console.error('加载模板失败:', e)
+    logger.error('加载模板失败:', e)
     message.error('加载模板失败')
   } finally {
     loading.value = false
@@ -274,7 +276,7 @@ const selectTemplate = async (name) => {
     editType.value = data?.template_type || '未分类'
     editContent.value = data?.content || ''
   } catch (e) {
-    console.error('读取模板失败:', e)
+    logger.error('读取模板失败:', e)
     message.error('读取模板失败')
   } finally {
     loading.value = false
@@ -307,7 +309,7 @@ const save = async () => {
     message.success('已保存')
     await refresh()
   } catch (e) {
-    console.error('保存模板失败:', e)
+    logger.error('保存模板失败:', e)
     message.error('保存模板失败')
   } finally {
     loading.value = false
@@ -332,7 +334,7 @@ const remove = async () => {
     newTemplate()
     await refresh()
   } catch (e) {
-    console.error('删除模板失败:', e)
+    logger.error('删除模板失败:', e)
     message.error('删除模板失败')
   } finally {
     loading.value = false
@@ -361,7 +363,7 @@ const insertToEditor = async (name) => {
     await invoke('emit_template_insert', { content })
     message.success('已发送到编辑器窗口')
   } catch (e) {
-    console.error('插入失败:', e)
+    logger.error('插入失败:', e)
     message.error('插入失败')
   } finally {
     loading.value = false
@@ -390,7 +392,7 @@ const importFromFile = async () => {
     message.success('导入成功')
     await refresh()
   } catch (e) {
-    console.error('导入失败:', e)
+    logger.error('导入失败:', e)
     message.error('导入失败')
   } finally {
     loading.value = false

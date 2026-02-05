@@ -21,13 +21,14 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 // import type { DropdownOption } from 'naive-ui'
 import { ref, computed } from 'vue'
 import { useFileProcessStore } from '../../stores/fileProcessStore'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core';
 
-
+const logger = createLogger('OpenFile')
 const fileProcessStore = useFileProcessStore();
 const supportFileTypeList = fileProcessStore.supportFileType;
 
@@ -44,7 +45,7 @@ const dropdownOptions = computed(() => {
         }),
     };
 
-    console.log('openFilelist', openFilelist);
+    logger.info('openFilelist', openFilelist);
     return [openFilelist];
 });
 
@@ -94,18 +95,18 @@ const handleFileSelect = async () => {
                     curpage: fileProcessStore.curentPage,
                     lastpage: fileProcessStore.lastPage,
                 };
-                console.log('openfile_request:', openfile_request);
+                logger.info('openfile_request:', openfile_request);
                 const response = await invoke('openfile', { request: openfile_request });
                 fileProcessStore.getCurentOpenedFileContent(response, 0);
-                console.log('Response:', response);
+                logger.info('Response:', response);
             } catch (error) {
-                console.error('Error calling openfile API:', error);
+                logger.error('Error calling openfile API:', error);
             }
         } else {
-            console.log('未选择文件');
+            logger.info('未选择文件');
         }
     } catch (error) {
-        console.error('打开文件选择框时发生错误:', error);
+        logger.error('打开文件选择框时发生错误:', error);
     }
 };
 

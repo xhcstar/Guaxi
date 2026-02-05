@@ -49,6 +49,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useSettingsStore } from './stores/settingsStore'
 import { useFileTreeStore } from './stores/fileTreeStore'
 import { useEditorStore } from './stores/editorStore'
+import { initFrontendLogging, createLogger } from './utils/logger'
 
 const iconRegistry = {
   'mdi:folder-outline': mdiFolderOutline,
@@ -96,6 +97,13 @@ for (const [name, data] of Object.entries(iconRegistry)) {
 
 const app = createApp(App);
 
+initFrontendLogging({
+  scope: 'Main',
+  forwardConsole: true,
+  forwardErrors: true
+})
+const logger = createLogger('Main')
+
 const pinia = createPinia()
 
 app.use(naive);
@@ -113,7 +121,7 @@ const windowLabel = (() => {
   try {
     return String(getCurrentWebviewWindow()?.label || '')
   } catch (e) {
-    console.warn('[Main] getCurrentWebviewWindow failed:', e)
+    logger.warn('[Main] getCurrentWebviewWindow failed:', e)
     return ''
   }
 })()
@@ -127,16 +135,16 @@ if (windowLabel === 'main') {
     const lineNumber = Math.max(1, Number(lineNumberRaw) || 1)
 
     if (!path) {
-      console.warn('[Main] open_file_in_home ignored (empty path)', { payload })
+      logger.warn('[Main] open_file_in_home ignored (empty path)', { payload })
       return
     }
 
-    console.info('[Main] open_file_in_home received', { path, kind, lineNumber })
+    logger.info('[Main] open_file_in_home received', { path, kind, lineNumber })
 
     try {
       const res = await fileTreeStore.fetchFileContent(path)
       if (!res?.ok) {
-        console.error('[Main] open_file_in_home failed (read file failed)', { path, res })
+        logger.error('[Main] open_file_in_home failed (read file failed)', { path, res })
         return
       }
 
@@ -156,16 +164,16 @@ if (windowLabel === 'main') {
         router.push('/').catch(() => {})
       }
     } catch (e) {
-      console.error('[Main] open_file_in_home failed:', e)
+      logger.error('[Main] open_file_in_home failed:', e)
     }
   }).then((unlisten) => {
     unlistenOpenFileInHome = unlisten
-    console.info('[Main] open_file_in_home listener registered')
+    logger.info('[Main] open_file_in_home listener registered')
   }).catch((e) => {
-    console.error('[Main] open_file_in_home listener register failed:', e)
+    logger.error('[Main] open_file_in_home listener register failed:', e)
   })
 } else {
-  console.info('[Main] skip open_file_in_home listener (not main window)', { windowLabel })
+  logger.info('[Main] skip open_file_in_home listener (not main window)', { windowLabel })
 }
 
 const getThemeFromUrl = () => {
@@ -191,11 +199,11 @@ if (theme) {
 
 // 初始化Tauri事件系统
 initTauriEvents().catch(error => {
-  console.error('全局事件初始化失败:', error);
+  logger.error('全局事件初始化失败:', error);
 });
 
 invoke('init_backend_services').catch(error => {
-  console.error('后端服务初始化失败:', error);
+  logger.error('后端服务初始化失败:', error);
 });
 
 app.mount("#app");
@@ -207,7 +215,7 @@ window.addEventListener('beforeunload', async () => {
       await unlistenOpenFileInHome()
     }
   } catch (e) {
-    console.error('[Main] unlisten open_file_in_home failed:', e)
+    logger.error('[Main] unlisten open_file_in_home failed:', e)
   }
 
   await cleanupTauriEvents();

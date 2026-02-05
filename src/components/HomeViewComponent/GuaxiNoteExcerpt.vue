@@ -66,6 +66,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { h, defineComponent, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
@@ -92,6 +93,7 @@ import { join } from '@tauri-apps/api/path'
 import { path } from '@tauri-apps/api';
 import { convertFileSrc } from '@tauri-apps/api/core';
 
+const logger = createLogger('GuaxiNoteExcerpt')
 const IconifyIcon = defineComponent({
   name: 'IconifyIcon',
   props: {
@@ -212,7 +214,7 @@ const FILE_ICON_MAP = {
 const getFileIconPropsWithLog = (path) => {
   const props = getFileIconProps(path);
   if (!props.icon) {
-    console.warn('[n-icon] icon prop missing!', path, props);
+    logger.warn('[n-icon] icon prop missing!', path, props);
   }
   return props;
 };
@@ -264,7 +266,7 @@ async function processImages(content, basePath = '') {
         const safeSrc = await convertFileSrc(fullPath);
         replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
       } catch (error) {
-        console.warn(`路径转换失败: ${src}`, error);
+        logger.warn(`路径转换失败: ${src}`, error);
       }
     }
   }
@@ -273,7 +275,7 @@ async function processImages(content, basePath = '') {
 
 const getImagesDirectory = async (filePath) => {
   if (!filePath) {
-    console.warn('未提供有效文件路径');
+    logger.warn('未提供有效文件路径');
     return '';
   }
 
@@ -283,7 +285,7 @@ const getImagesDirectory = async (filePath) => {
     const imagesDir = await path.join(parentDir, 'images');
     return await path.normalize(imagesDir);
   } catch (error) {
-    console.error('获取images目录失败:', error);
+    logger.error('获取images目录失败:', error);
     return ''; // 返回空字符串而不是抛出错误
   }
 };
@@ -305,7 +307,7 @@ const renderedCardContent = async (cardItem, excerptFilePath) => {
       theme: settingsStore.appearanceTheme
     });
   } catch (error) {
-    console.error('渲染卡片内容失败:', error);
+    logger.error('渲染卡片内容失败:', error);
     return cardItem.content; // 失败时返回原始内容
   }
 };
@@ -335,7 +337,7 @@ const toggleFileExpand = async (item) => {
         }
       }
     } catch (err) {
-      console.error('加载文件内容失败:', err);
+      logger.error('加载文件内容失败:', err);
       window.$message?.error('加载文件内容失败: ' + err);
     } finally {
       item.loading = false;
@@ -417,7 +419,7 @@ const insertExcerpt = async (item) => {
             const fileBasePath = cardItem.file_path || '';
             const imageDir = await getImagesDirectory(fileBasePath);
             const processedImageContent = await processImages(cardItem.content, imageDir);
-            console.log(">>>>>>>> processedImageContent:", processedImageContent);
+            logger.info(">>>>>>>> processedImageContent:", processedImageContent);
             contentToInsert += `\n${processedImageContent}`;
             break;
           case 'diagram':
@@ -434,7 +436,7 @@ const insertExcerpt = async (item) => {
     window.$message?.success(`已插入 ${item.content.cards?.length || 0} 个卡片的内容`);
 
   } catch (error) {
-    console.error('插入摘录失败:', error);
+    logger.error('插入摘录失败:', error);
     window.$message?.error('插入摘录失败: ' + error.message);
   }
 };
@@ -442,7 +444,7 @@ const insertExcerpt = async (item) => {
 // 修改 insertCardItem 函数，添加 async
 const insertCardItem = async (cardItem, parentFilePath) => {
   let contentToInsert = '';
-  console.log('插入摘录:', cardItem);
+  logger.info('插入摘录:', cardItem);
 
   try {
     // 根据不同类型格式化内容
@@ -457,22 +459,22 @@ const insertCardItem = async (cardItem, parentFilePath) => {
         contentToInsert = `\n${cardItem.content}`;
         break;
       case 'image':
-        console.log('处理图片类型:', cardItem);
+        logger.info('处理图片类型:', cardItem);
         // 优先使用卡片项自身的file_path，没有则使用父文件路径
         const fileBasePath = cardItem.file_path || parentFilePath || '';
-        console.log('使用的基础路径:', fileBasePath);
+        logger.info('使用的基础路径:', fileBasePath);
 
         if (!fileBasePath) {
-          console.warn('没有可用的文件路径，使用原始内容');
+          logger.warn('没有可用的文件路径，使用原始内容');
           contentToInsert = `\n${cardItem.content}`;
           break;
         }
 
         const imageDir = await getImagesDirectory(fileBasePath);
-        console.log('图片目录:', imageDir);
+        logger.info('图片目录:', imageDir);
 
         const processedImageContent = await processImages(cardItem.content, imageDir);
-        console.log("处理后的图片内容:", processedImageContent);
+        logger.info("处理后的图片内容:", processedImageContent);
         contentToInsert = `\n${processedImageContent}`;
         break;
       case 'diagram':
@@ -486,7 +488,7 @@ const insertCardItem = async (cardItem, parentFilePath) => {
     await editorStore.insertContent(contentToInsert);
     window.$message?.success('内容已插入');
   } catch (error) {
-    console.error('插入内容失败:', error);
+    logger.error('插入内容失败:', error);
     window.$message?.error('插入内容失败');
   }
 };

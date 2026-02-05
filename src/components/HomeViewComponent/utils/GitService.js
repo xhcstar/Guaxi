@@ -1,6 +1,8 @@
 // src/utils/GitService.js
 import { invoke } from "@tauri-apps/api/core";
+import { createLogger } from '../../../utils/logger'
 
+const logger = createLogger('GitService')
 export default class GitService {
   constructor(workspacePath) {
     this.workspacePath = workspacePath;
@@ -14,7 +16,7 @@ export default class GitService {
     try {
       return await invoke("get_git_status", { path: repoPath });
     } catch (error) {
-      console.error("获取文件状态失败:", error);
+      logger.error("获取文件状态失败:", error);
       return [];
     }
   }
@@ -50,7 +52,7 @@ export default class GitService {
         return p === targetAbs || p === targetRel || (targetRel && p.endsWith('/' + targetRel));
       });
 
-      console.debug('[GitService] getLineChanges', {
+      logger.debug('[GitService] getLineChanges', {
         repoAbs,
         targetAbs,
         targetRel,
@@ -71,7 +73,7 @@ export default class GitService {
           .flatMap((s) => Array.isArray(s.lines_deleted) ? s.lines_deleted : []),
       };
     } catch (error) {
-      console.error('获取行变更失败:', error);
+      logger.error('获取行变更失败:', error);
       return { added: [], modified: [], deleted: [] };
     }
   }

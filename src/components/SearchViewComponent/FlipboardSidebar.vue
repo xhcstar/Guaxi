@@ -48,6 +48,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -63,6 +64,8 @@ import {
   AddOutline as Add,
   SettingsOutline as Settings
 } from '@vicons/ionicons5'
+
+const logger = createLogger('FlipboardSidebar')
 
 const props = defineProps({
   categories: {
@@ -102,19 +105,19 @@ const toggleCollapse = () => {
 }
 
 const addFeed = async () => {
-  console.log('FlipboardSidebar: add feed -> open feed manager window')
+  logger.info('FlipboardSidebar: add feed -> open feed manager window')
   await openFeedManagerWindow()
 }
 
 const openFeedManagerWindow = async () => {
   try {
-    console.log('FlipboardSidebar: open feed manager window')
+    logger.info('FlipboardSidebar: open feed manager window')
     await invoke('create_flipboard_feed_window', {
       label: 'flipboard_feeds',
       title: '订阅源管理'
     })
   } catch (error) {
-    console.error('FlipboardSidebar: open feed manager window failed:', error)
+    logger.error('FlipboardSidebar: open feed manager window failed:', error)
     message.error('打开订阅源管理窗口失败')
   }
 }

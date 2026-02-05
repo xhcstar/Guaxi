@@ -91,7 +91,10 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { onBeforeUnmount, onMounted, ref } from "vue";
+
+const logger = createLogger('GuaxiStatisticsSidebar')
 
 /**
  * 统计页专用 Sidebar：
@@ -105,7 +108,7 @@ const syncActivePath = () => {
 };
 
 onMounted(() => {
-  console.info("[statistics:sidebar] mounted");
+  logger.info("[statistics:sidebar] mounted");
   window.addEventListener("hashchange", syncActivePath);
   syncActivePath();
 });
@@ -115,7 +118,7 @@ onBeforeUnmount(() => {
 });
 
 const navigateTo = (path) => {
-  console.info("[statistics:sidebar] navigateTo", path);
+  logger.info("[statistics:sidebar] navigateTo", path);
   window.location.hash = path;
 };
 </script>

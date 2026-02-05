@@ -54,6 +54,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, onMounted, h, shallowRef, onUnmounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
@@ -75,7 +76,7 @@ import {
   Book24Regular as BookIcon,
 } from '@vicons/fluent';
 
-
+const logger = createLogger('GuaxiBrainKnowledgeBaseList')
 const store = useKnowledgeBaseStore();
 const message = useMessage();
 const { knowledgeBases, selectedKnowledgeBase } = storeToRefs(store);
@@ -123,7 +124,7 @@ const toggleKnowledgeBase = async (kb) => {
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
-      console.error("切换知识库失败:", error);
+      logger.error("切换知识库失败:", error);
       message.error("加载知识库内容失败");
     }
   }
@@ -154,7 +155,7 @@ const refreshList = async () => {
       }
     }
   } catch (error) {
-    console.error("刷新知识库列表失败:", error);
+    logger.error("刷新知识库列表失败:", error);
     message.error("刷新知识库列表失败");
   }
 };

@@ -24,12 +24,14 @@
 
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, onMounted, onBeforeUnmount } from "vue"
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiSidebarSettingView from "./GuaxiSidebarSettingView.vue"
 import GuaxiSettingContent from "./GuaxiSettingContent.vue"
 import GuaxiRightContentSettingView from "./GuaxiRightContentSettingView.vue"
 
+const logger = createLogger('GuaxiContentSettingView')
 
 const leftSiderbarWidth = ref(350); // 默认宽度
 const leftSidebarresizing = ref(false);
@@ -73,7 +75,7 @@ const onMouseUpLeftSidebar = () => {
 };
 
 const onMouseDownRightSidebar = (event) => {
-  console.log("onMouseDownRightSidebar");
+  logger.info("onMouseDownRightSidebar");
   rightSidebarresizing.value = true;
   rightSidebarStartX.value = event.clientX;
   rightSidebarStartWidth.value = rightSiderbarWidth.value;

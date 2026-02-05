@@ -223,6 +223,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   NButton,
@@ -253,6 +254,7 @@ import { ArrowBackOutline, DownloadOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 
+const logger = createLogger('GuaxiKnowledgeBaseGraphEditor')
 const props = defineProps({
   loading: { type: Boolean, default: false },
   kbOptions: { type: Array, default: () => [] },
@@ -321,7 +323,7 @@ const stopResize = () => {
   document.body.style.userSelect = ''
   window.removeEventListener('mousemove', onResizeMove)
   window.removeEventListener('mouseup', stopResize)
-  console.info('[KBGraphEditor] resize stop', { leftWidth: leftWidth.value, rightWidth: rightWidth.value })
+  logger.info('[KBGraphEditor] resize stop', { leftWidth: leftWidth.value, rightWidth: rightWidth.value })
 }
 
 const startResize = (side, e) => {
@@ -334,19 +336,19 @@ const startResize = (side, e) => {
 
   window.addEventListener('mousemove', onResizeMove)
   window.addEventListener('mouseup', stopResize)
-  console.info('[KBGraphEditor] resize start', { side, startWidth })
+  logger.info('[KBGraphEditor] resize start', { side, startWidth })
 }
 
 const setLeftVisible = (v) => {
   leftVisible.value = !!v
   emit('update:leftVisible', leftVisible.value)
-  console.info('[KBGraphEditor] toggle left panel', { visible: leftVisible.value })
+  logger.info('[KBGraphEditor] toggle left panel', { visible: leftVisible.value })
 }
 
 const setRightVisible = (v) => {
   rightVisible.value = !!v
   emit('update:rightVisible', rightVisible.value)
-  console.info('[KBGraphEditor] toggle right panel', { visible: rightVisible.value })
+  logger.info('[KBGraphEditor] toggle right panel', { visible: rightVisible.value })
 }
 
 const toggleLeftVisible = () => setLeftVisible(!leftVisible.value)
@@ -489,12 +491,12 @@ const toggleNodeExpand = async (key) => {
 
   if (expandedNodeKey.value === k) {
     expandedNodeKey.value = ''
-    console.info('[KBGraphEditor] collapse node', { key: k })
+    logger.info('[KBGraphEditor] collapse node', { key: k })
     return
   }
 
   expandedNodeKey.value = k
-  console.info('[KBGraphEditor] expand node', { key: k })
+  logger.info('[KBGraphEditor] expand node', { key: k })
 
   const n = nodeMap.value.get(k)
   if (n) {
@@ -526,7 +528,7 @@ const applyNodeContent = (text, meta = {}) => {
   const v = String(text || '')
   nodeContentText.value = v
   nodeContentFullText.value = v
-  console.info('[KBGraphEditor] node content loaded', { key: selectedKey.value, len: v.length, ...meta })
+  logger.info('[KBGraphEditor] node content loaded', { key: selectedKey.value, len: v.length, ...meta })
 }
 
 const loadTextForNode = async (n) => {
@@ -552,7 +554,7 @@ const loadTextForNode = async (n) => {
   try {
     let content = fileContentCache.get(absPath)
     if (typeof content !== 'string') {
-      console.info('[KBGraphEditor] load node content', { absPath, kind })
+      logger.info('[KBGraphEditor] load node content', { absPath, kind })
       const res = await fileTreeStore.fetchFileContent(absPath)
       if (!res?.ok) {
         throw new Error('读取文件内容失败')
@@ -569,7 +571,7 @@ const loadTextForNode = async (n) => {
 
     applyNodeContent(content, { kind, absPath })
   } catch (e) {
-    console.error('[KBGraphEditor] load node content failed:', e)
+    logger.error('[KBGraphEditor] load node content failed:', e)
     applyNodeContent(String(n.name || ''), { kind, absPath, fallback: true })
   } finally {
     nodeContentLoading.value = false
@@ -583,7 +585,7 @@ watch(selectedNode, (n) => {
 watch(selectedKey, (k) => {
   const key = String(k || '')
   if (expandedNodeKey.value && expandedNodeKey.value !== key) {
-    console.info('[KBGraphEditor] collapse expanded node (selection changed)', {
+    logger.info('[KBGraphEditor] collapse expanded node (selection changed)', {
       expanded: expandedNodeKey.value,
       selected: key,
     })
@@ -608,11 +610,11 @@ const openSelectedInHome = async () => {
   const payload = { path, kind, lineNumber }
 
   try {
-    console.info('[KBGraphEditor] emit open_file_in_home', { target: 'main', payload })
+    logger.info('[KBGraphEditor] emit open_file_in_home', { target: 'main', payload })
     await emitTo('main', OPEN_FILE_IN_HOME_EVENT, payload)
     message.success('已通知主窗口打开')
   } catch (e) {
-    console.warn('[KBGraphEditor] emit open_file_in_home failed, fallback to local open:', e)
+    logger.warn('[KBGraphEditor] emit open_file_in_home failed, fallback to local open:', e)
 
     try {
       const res = await fileTreeStore.fetchFileContent(path)
@@ -633,7 +635,7 @@ const openSelectedInHome = async () => {
         }
       })
     } catch (err) {
-      console.error('[KBGraphEditor] fallback local open failed:', err)
+      logger.error('[KBGraphEditor] fallback local open failed:', err)
       message.error(String(err?.message || '打开失败'))
     }
   }
@@ -715,13 +717,13 @@ const focusSelected = () => {
   const k = String(selectedKey.value || '')
   if (!k) return
   centerOnKey(k)
-  console.info('[KBGraphEditor] right panel focus selected', { key: k })
+  logger.info('[KBGraphEditor] right panel focus selected', { key: k })
 }
 
 const clearSelected = () => {
   cancelInlineEdit()
   selectedKeysModel.value = []
-  console.info('[KBGraphEditor] right panel clear selected')
+  logger.info('[KBGraphEditor] right panel clear selected')
 }
 
 const focusNodeFromResult = (n) => {
@@ -733,7 +735,7 @@ const focusNodeFromResult = (n) => {
   }
 
   selectGraphNode(key)
-  console.info('[KBGraphEditor] right panel focus node', { key })
+  logger.info('[KBGraphEditor] right panel focus node', { key })
 }
 
 const graphCanvasRef = ref(null)
@@ -773,7 +775,7 @@ const stopPan = () => {
   window.removeEventListener('mouseup', stopPan)
 
   if (panState.value.moved) lastPanMovedAt.value = Date.now()
-  console.info('[KBGraphEditor] pan stop', { moved: panState.value.moved })
+  logger.info('[KBGraphEditor] pan stop', { moved: panState.value.moved })
 }
 
 const startPan = (e) => {
@@ -799,7 +801,7 @@ const startPan = (e) => {
   window.addEventListener('mousemove', onPanMove)
   window.addEventListener('mouseup', stopPan)
 
-  console.info('[KBGraphEditor] pan start', { left: el.scrollLeft, top: el.scrollTop })
+  logger.info('[KBGraphEditor] pan start', { left: el.scrollLeft, top: el.scrollTop })
 }
 
 const kindForTreeNode = (n) => {
@@ -832,7 +834,7 @@ const handleWheel = (e) => {
   e.preventDefault()
   if (e.deltaY > 0) zoomOut()
   else zoomIn()
-  console.info('[KBGraphEditor] zoom wheel', { zoom: graphZoom.value })
+  logger.info('[KBGraphEditor] zoom wheel', { zoom: graphZoom.value })
 }
 
 // 导出：使用保存对话框写入文件（避免外部 CSS 丢失，所以会把关键样式写进 SVG）
@@ -846,7 +848,7 @@ const readCssVar = (name, fallback) => {
     const v = getComputedStyle(document.documentElement).getPropertyValue(name)
     return String(v || '').trim() || fallback
   } catch (e) {
-    console.warn('[KBGraphEditor] readCssVar failed', { name, e })
+    logger.warn('[KBGraphEditor] readCssVar failed', { name, e })
     return fallback
   }
 }
@@ -860,7 +862,7 @@ const readCssVarFrom = (el, name, fallback) => {
       const out = String(v || '').trim()
       if (out) return out
     } catch (e) {
-      console.warn('[KBGraphEditor] readCssVarFrom failed', { name, target: c === el ? 'host' : (c === document.body ? 'body' : 'root'), e })
+      logger.warn('[KBGraphEditor] readCssVarFrom failed', { name, target: c === el ? 'host' : (c === document.body ? 'body' : 'root'), e })
     }
   }
   return fallback
@@ -873,17 +875,17 @@ const saveBlobWithDialog = async (blob, defaultName, filters) => {
 
     const path = await save({ defaultPath: defaultName, filters })
     if (!path) {
-      console.info('[KBGraphEditor] export canceled')
+      logger.info('[KBGraphEditor] export canceled')
       return false
     }
 
     const buf = new Uint8Array(await blob.arrayBuffer())
     await writeFile(path, buf)
 
-    console.info('[KBGraphEditor] export saved', { path, bytes: buf.byteLength })
+    logger.info('[KBGraphEditor] export saved', { path, bytes: buf.byteLength })
     return true
   } catch (e) {
-    console.error('[KBGraphEditor] export save failed:', e)
+    logger.error('[KBGraphEditor] export save failed:', e)
     message.error(String(e?.message || '保存失败'))
     return false
   }
@@ -898,7 +900,7 @@ const exportGraphAsSvg = async () => {
   const host = graphCanvasRef.value
   const svg = host?.querySelector?.('svg.graph-svg')
   if (!svg) {
-    console.warn('[KBGraphEditor] export svg missed: svg not found')
+    logger.warn('[KBGraphEditor] export svg missed: svg not found')
     message.error('导出失败：未找到图形')
     return
   }
@@ -910,7 +912,7 @@ const exportGraphAsSvg = async () => {
   const border = readCssVarFrom(host, '--guaxi-border', theme === 'dark' ? '#3e4451' : '#d0d7de')
   const textPrimary = readCssVarFrom(host, '--guaxi-text-primary', theme === 'dark' ? '#abb2bf' : '#1f2328')
 
-  console.info('[KBGraphEditor] export theme vars', { theme, panelBg, contentBg, border, textPrimary })
+  logger.info('[KBGraphEditor] export theme vars', { theme, panelBg, contentBg, border, textPrimary })
 
   const nodeW = graphNodeSize.w
   const nodeH = graphNodeSize.h
@@ -928,9 +930,9 @@ const exportGraphAsSvg = async () => {
     viewY = bbox.y - pad
     viewW = bbox.width + pad * 2
     viewH = bbox.height + pad * 2
-    console.info('[KBGraphEditor] export bbox', { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height })
+    logger.info('[KBGraphEditor] export bbox', { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height })
   } catch (e) {
-    console.warn('[KBGraphEditor] export getBBox failed, fallback to layout bounds', e)
+    logger.warn('[KBGraphEditor] export getBBox failed, fallback to layout bounds', e)
 
     const xs = graphLayout.value.nodes.map(n => Number(n.x || 0))
     const ys = graphLayout.value.nodes.map(n => Number(n.y || 0))
@@ -989,7 +991,7 @@ svg{--guaxi-panel-bg:${panelBg};--guaxi-content-bg:${contentBg};--guaxi-border:$
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const defaultName = `${kb || 'kb'}_graph_${ts}.svg`
 
-  console.info('[KBGraphEditor] export svg', { viewW, viewH, defaultName })
+  logger.info('[KBGraphEditor] export svg', { viewW, viewH, defaultName })
 
   const ok = await saveBlobWithDialog(
     new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }),
@@ -1255,7 +1257,7 @@ const centerOnKey = (key) => {
     el.scrollTop = nextTop
   }
 
-  console.info('[KBGraphEditor] focus node', { key: k, left: nextLeft, top: nextTop, zoom })
+  logger.info('[KBGraphEditor] focus node', { key: k, left: nextLeft, top: nextTop, zoom })
 }
 
 const collapseDirKey = (dirKey) => {
@@ -1265,7 +1267,7 @@ const collapseDirKey = (dirKey) => {
   const rootK = graphRootKey.value
   if (k === rootK) {
     expandedKeysModel.value = []
-    console.info('[KBGraphEditor] collapse root', { key: k })
+    logger.info('[KBGraphEditor] collapse root', { key: k })
     return
   }
 
@@ -1284,7 +1286,7 @@ const collapseDirKey = (dirKey) => {
   }
 
   expandedKeysModel.value = Array.from(next)
-  console.info('[KBGraphEditor] collapse dir', { key: k })
+  logger.info('[KBGraphEditor] collapse dir', { key: k })
 }
 
 const toggleDirExpanded = (dirKey) => {
@@ -1293,7 +1295,7 @@ const toggleDirExpanded = (dirKey) => {
   if (expandedSet.has(k)) collapseDirKey(k)
   else {
     ensureExpandedToKey(k)
-    console.info('[KBGraphEditor] expand dir', { key: k })
+    logger.info('[KBGraphEditor] expand dir', { key: k })
   }
 }
 
@@ -1324,7 +1326,7 @@ const enterSubGraph = (key) => {
 
   nextTick(() => {
     centerOnKey(k)
-    console.info('[KBGraphEditor] enter subgraph', { key: k, stack: viewRootStack.value.length })
+    logger.info('[KBGraphEditor] enter subgraph', { key: k, stack: viewRootStack.value.length })
   })
 }
 
@@ -1343,7 +1345,7 @@ const exitSubGraph = () => {
       el.scrollLeft = Number(prev.scrollLeft || 0)
       el.scrollTop = Number(prev.scrollTop || 0)
     }
-    console.info('[KBGraphEditor] exit subgraph', { rootKey: graphRootKey.value, stack: viewRootStack.value.length })
+    logger.info('[KBGraphEditor] exit subgraph', { rootKey: graphRootKey.value, stack: viewRootStack.value.length })
   })
 }
 
@@ -1377,7 +1379,7 @@ const handleCanvasClick = () => {
 
   const now = Date.now()
   if (now - Number(lastPanMovedAt.value || 0) < 120) {
-    console.info('[KBGraphEditor] canvas click ignored (just panned)')
+    logger.info('[KBGraphEditor] canvas click ignored (just panned)')
     return
   }
 
@@ -1385,7 +1387,7 @@ const handleCanvasClick = () => {
 
   cancelInlineEdit()
   selectedKeysModel.value = []
-  console.info('[KBGraphEditor] canvas click clear selection')
+  logger.info('[KBGraphEditor] canvas click clear selection')
 }
 
 watch(() => selectedKey.value, (k) => {
@@ -1403,7 +1405,7 @@ const createTypeVisible = ref(false)
 const openCreateTypeModal = () => {
   if (!canAdd.value) return
   createTypeVisible.value = true
-  console.info('[KBGraphEditor] open create type modal', { selectedKey: selectedKey.value })
+  logger.info('[KBGraphEditor] open create type modal', { selectedKey: selectedKey.value })
 }
 
 const chooseCreateType = (kind) => {
@@ -1488,7 +1490,7 @@ const confirmGraphModal = async () => {
   }
 
   try {
-    console.info('[KBGraphEditor] create', { kind: graphModalKind.value, nextRel, nextAbs })
+    logger.info('[KBGraphEditor] create', { kind: graphModalKind.value, nextRel, nextAbs })
     if (graphModalKind.value === 'folder') {
       await invoke('create_directory', { path: nextAbs })
     } else {
@@ -1499,7 +1501,7 @@ const confirmGraphModal = async () => {
     graphModalVisible.value = false
     emit('reload', { selectKey: nextRel })
   } catch (e) {
-    console.error('[KBGraphEditor] create failed:', e)
+    logger.error('[KBGraphEditor] create failed:', e)
     message.error(String(e?.message || '创建失败'))
   }
 }
@@ -1532,13 +1534,13 @@ const applyRename = async () => {
   const nextAbs = toAbsPath(nextRel)
 
   try {
-    console.info('[KBGraphEditor] rename', { oldRel, nextRel, oldAbs, nextAbs })
+    logger.info('[KBGraphEditor] rename', { oldRel, nextRel, oldAbs, nextAbs })
     await invoke('rename_path', { oldPath: oldAbs, newPath: nextAbs })
     message.success('已重命名')
     emit('patch-tree', { oldKey: oldRel, newKey: nextRel, isDir: n.isDir })
     return true
   } catch (e) {
-    console.error('[KBGraphEditor] rename failed:', e)
+    logger.error('[KBGraphEditor] rename failed:', e)
     message.error(String(e?.message || '重命名失败'))
     return false
   }
@@ -1559,14 +1561,14 @@ const startInlineEdit = (key) => {
   editingKey.value = k
   editingValue.value = n.isDir ? String(n.name || '') : stripMdExt(n.name)
 
-  console.info('[KBGraphEditor] inline edit start', { key: k })
+  logger.info('[KBGraphEditor] inline edit start', { key: k })
   nextTick(() => {
     try {
       const el = document.querySelector(`[data-edit-key="${CSS.escape(k)}"]`)
       el?.focus?.()
       el?.select?.()
     } catch (e) {
-      console.warn('[KBGraphEditor] inline edit focus failed', e)
+      logger.warn('[KBGraphEditor] inline edit focus failed', e)
     }
   })
 }
@@ -1581,7 +1583,7 @@ const confirmInlineEdit = async () => {
 
   const ok = await applyRename()
   if (ok) {
-    console.info('[KBGraphEditor] inline edit ok', { key: k })
+    logger.info('[KBGraphEditor] inline edit ok', { key: k })
     editingKey.value = ''
     editingValue.value = ''
   }
@@ -1589,7 +1591,7 @@ const confirmInlineEdit = async () => {
 
 const cancelInlineEdit = () => {
   if (!editingKey.value) return
-  console.info('[KBGraphEditor] inline edit cancel', { key: editingKey.value })
+  logger.info('[KBGraphEditor] inline edit cancel', { key: editingKey.value })
   editingKey.value = ''
   editingValue.value = ''
 }
@@ -1608,7 +1610,7 @@ const deleteSelectedNode = async () => {
   if (!ok) return
 
   try {
-    console.info('[KBGraphEditor] delete', { rel: n.relPath, abs: n.absPath })
+    logger.info('[KBGraphEditor] delete', { rel: n.relPath, abs: n.absPath })
     await invoke('delete_path', { path: n.absPath })
     message.success('已删除')
 
@@ -1618,7 +1620,7 @@ const deleteSelectedNode = async () => {
 
     emit('reload', { selectKey: nextKey === props.rootKey ? props.rootKey : parent.relPath })
   } catch (e) {
-    console.error('[KBGraphEditor] delete failed:', e)
+    logger.error('[KBGraphEditor] delete failed:', e)
     message.error(String(e?.message || '删除失败'))
   }
 }

@@ -334,6 +334,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { join, dirname } from '@tauri-apps/api/path'
@@ -371,6 +372,7 @@ import {
   ChatboxEllipsesOutline
 } from '@vicons/ionicons5'
 
+const logger = createLogger('GuaxiConvertPDFReader')
 // 1. 组件属性定义
 const props = defineProps({
   filePath: {
@@ -655,14 +657,14 @@ const handleSelectionTranslatePanelUpdatePos = (pos) => {
 
 const toggleSelectionTranslatePinned = () => {
   selectionTranslatePinned.value = !selectionTranslatePinned.value
-  console.info('[SelectionTranslate][PDFReader] pin:', { pinned: selectionTranslatePinned.value })
+  logger.info('[SelectionTranslate][PDFReader] pin:', { pinned: selectionTranslatePinned.value })
 }
 
 const swapSelectionTranslateLangs = () => {
   const tmp = selectionTranslateFrom.value
   selectionTranslateFrom.value = selectionTranslateTo.value
   selectionTranslateTo.value = tmp
-  console.info('[SelectionTranslate][PDFReader] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+  logger.info('[SelectionTranslate][PDFReader] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
   if (selectionTranslatePanelVisible.value && !selectionTranslateBusy.value) {
     translateSelectionText(selectionTranslateRaw.value)
@@ -1077,7 +1079,7 @@ async function processImages(content, basePath = '') {
         const safeSrc = await convertFileSrc(fullPath);
         replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
       } catch (error) {
-        console.warn(`路径转换失败: ${src}`, error);
+        logger.warn(`路径转换失败: ${src}`, error);
       }
     }
   }
@@ -1192,7 +1194,7 @@ async function convertPdfRenderMarkdown(content, options = {}) {
 
     return lines;
   } catch (error) {
-    console.error('[ERROR] 渲染失败:', error);
+    logger.error('[ERROR] 渲染失败:', error);
     return [{
       raw: content,
       html: `<div class="render-error">${error.message}</div>`,
@@ -1249,7 +1251,7 @@ function shouldSkipTranslation(node) {
 
     return false;
   } catch (error) {
-    console.error('Error checking node:', error);
+    logger.error('Error checking node:', error);
     return false;
   }
 }
@@ -1279,7 +1281,7 @@ function safeEncode(content) {
 
 // 11. 笔记相关函数
 function determineNoteType(target) {
-  console.log('determineNoteType called with target:', target);
+  logger.info('determineNoteType called with target:', target);
 
   // 1. 优先检查数学公式
   if (target.closest('mjx-container, mjx-math, .math-inline, .math-block')) {
@@ -1322,17 +1324,17 @@ async function processNoteImage(imgElement) {
   try {
     // 解码URL并提取实际路径
     const rawSrc = imgElement.src;
-    // console.log('原始图片路径：', rawSrc);
+    // logger.info('原始图片路径：', rawSrc);
     let filePath = '';
 
     if (rawSrc.startsWith('http://asset.localhost/')) {
       filePath = decodeURIComponent(rawSrc.replace('http://asset.localhost/', ''));
-      // console.log('处理本地图片路径', rawSrc, filePath);
+      // logger.info('处理本地图片路径', rawSrc, filePath);
     } else if (rawSrc.startsWith('file://')) {
       filePath = decodeURIComponent(new URL(rawSrc).pathname);
-      // console.log('处理file协议图片路径', rawSrc, filePath);
+      // logger.info('处理file协议图片路径', rawSrc, filePath);
     } else {
-      // console.warn('非本地图片，无需处理:', rawSrc);
+      // logger.warn('非本地图片，无需处理:', rawSrc);
       return rawSrc; // 非本地图片直接返回原URL
     }
 
@@ -1349,7 +1351,7 @@ async function processNoteImage(imgElement) {
     const finalExt = validExts.includes(ext) ? ext : 'png';
     const fileName = `note-img-${Date.now()}.${finalExt}`;
 
-    // console.log('准备复制图片:', {
+    // logger.info('准备复制图片:', {
     //   srcPath: filePath,
     //   destDir: imageDir,
     //   fileName: fileName
@@ -1364,7 +1366,7 @@ async function processNoteImage(imgElement) {
 
     return `../images/${relativePath}`;
   } catch (error) {
-    console.error('图片处理失败:', error);
+    logger.error('图片处理失败:', error);
     return imgElement.src; // 失败时返回原URL
   }
 }
@@ -1434,7 +1436,7 @@ const handleMarkdownClick = async (e) => {
       noteContent = `![图片](${processedSrc})`;
       originalMarkdown = noteContent; // 图片的原始Markdown就是noteContent
     } catch (error) {
-      console.error('图片处理失败:', error);
+      logger.error('图片处理失败:', error);
       message = '图片处理失败，使用原始链接';
       noteContent = `![图片](${imgElement.src})`;
       originalMarkdown = noteContent;
@@ -1454,12 +1456,12 @@ const handleMarkdownClick = async (e) => {
     // 获取处理后的代码内容
     const codeContent = clonedBlock.textContent || '';
     message = `已选中代码块: ${codeContent.substring(0, 30)}${codeContent.length > 30 ? '...' : ''}`;
-    console.log('选中的代码块:', codeBlock);
+    logger.info('选中的代码块:', codeBlock);
 
     // 获取原始Markdown（从data-md-original属性）
     originalMarkdown = codeBlock.closest('[data-md-original]')?.getAttribute('data-md-original') ||
       `\`\`\`\n${codeContent}\n\`\`\``;
-    console.log('代码块原始Markdown:', originalMarkdown);
+    logger.info('代码块原始Markdown:', originalMarkdown);
 
     originalMarkdown = decodeURIComponent(originalMarkdown);
 
@@ -1472,7 +1474,7 @@ const handleMarkdownClick = async (e) => {
     selectedElement = mathElement;
 
     // 调试信息
-    // console.log('点击的数学元素:', mathElement);
+    // logger.info('点击的数学元素:', mathElement);
 
     // 查找原始LaTeX内容（按优先级）
     let original = mathElement.getAttribute('data-md-original');
@@ -1489,7 +1491,7 @@ const handleMarkdownClick = async (e) => {
       if (decodedOriginal) {
         decodedOriginal = decodeURIComponent(decodedOriginal);
       } else {
-        console.warn('未找到data-md-original属性，尝试从元素内容重建');
+        logger.warn('未找到data-md-original属性，尝试从元素内容重建');
         const isBlock = mathElement.classList.contains('math-block') ||
           mathElement.closest('.math-block') ||
           mathElement.tagName === 'MJX-BLOCK';
@@ -1497,7 +1499,7 @@ const handleMarkdownClick = async (e) => {
         decodedOriginal = isBlock ? `$$${content}$$` : `$${content}$`;
       }
     } catch (err) {
-      console.warn('解码公式失败:', err);
+      logger.warn('解码公式失败:', err);
       decodedOriginal = original || '无法获取公式内容';
     }
 
@@ -1512,7 +1514,7 @@ const handleMarkdownClick = async (e) => {
 
     message = `已选中${isBlockFormula ? '块级' : '行内'}公式: ${decodedOriginal.substring(0, 30)}${decodedOriginal.length > 30 ? '...' : ''}`;
 
-    // console.log('数学公式处理结果:', {
+    // logger.info('数学公式处理结果:', {
     // noteContent,
     // originalMarkdown,
     // isBlockFormula
@@ -1544,7 +1546,7 @@ const handleMarkdownClick = async (e) => {
 
     // 解码原始Markdown
     originalMarkdown = decodeURIComponent(originalMarkdown);
-    console.log('原始Markdown:', originalMarkdown);
+    logger.info('原始Markdown:', originalMarkdown);
 
     noteContent = originalMarkdown;
   }
@@ -1560,7 +1562,7 @@ const handleMarkdownClick = async (e) => {
       originalMarkdown = paragraph.getAttribute('data-md-original') ||
         textContent;
 
-      console.log('段落原始Markdown:', originalMarkdown);
+      logger.info('段落原始Markdown:', originalMarkdown);
 
       // 解码原始Markdown
       originalMarkdown = decodeURIComponent(originalMarkdown);
@@ -1588,8 +1590,8 @@ const handleMarkdownClick = async (e) => {
       originalMarkdown: originalMarkdown // 新增：存储原始Markdown
     };
 
-    console.log('确定的笔记类型:', noteType);
-    console.log('笔记数据:', noteData);
+    logger.info('确定的笔记类型:', noteType);
+    logger.info('笔记数据:', noteData);
 
     // 7. 区分复合笔记和新建笔记
     if (altKeyCollector.value.isActive) {
@@ -1685,7 +1687,7 @@ const endAltKeyCollection = () => {
  */
 async function parseCompositeContent(items) {
   if (!items || !Array.isArray(items)) {
-    console.warn('无效的items参数:', items);
+    logger.warn('无效的items参数:', items);
     return [];
   }
 
@@ -1711,7 +1713,7 @@ async function parseCompositeContent(items) {
 
     return segments;
   } catch (error) {
-    console.error('解析复合笔记失败:', error);
+    logger.error('解析复合笔记失败:', error);
     return [{
       type: 'error',
       content: `<div class="parse-error">解析失败: ${error.message}</div>`,
@@ -1883,7 +1885,7 @@ const translateSelectionText = async (overrideText) => {
   selectionTranslateError.value = ''
   selectionTranslateItems.value = []
 
-  console.info('[SelectionTranslate][PDFReader] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+  logger.info('[SelectionTranslate][PDFReader] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
   try {
     if (selectionTranslateMultiAvailable.value) {
@@ -1908,7 +1910,7 @@ const translateSelectionText = async (overrideText) => {
           selectionTranslateResult.value = translated
           selectionTranslateError.value = ''
           selectionInsertText.value = `**${text}**\n\n${translated}`
-          console.info('[SelectionTranslate][PDFReader] multi success', { engines: selectionTranslateItems.value.length })
+          logger.info('[SelectionTranslate][PDFReader] multi success', { engines: selectionTranslateItems.value.length })
           return
         }
 
@@ -1920,10 +1922,10 @@ const translateSelectionText = async (overrideText) => {
           selectionTranslateMultiAvailable.value = false
           if (!selectionTranslateMultiNotFoundWarned) {
             selectionTranslateMultiNotFoundWarned = true
-            console.warn('[SelectionTranslate][PDFReader] multi command not found, disabled multi path. Please restart tauri backend.')
+            logger.warn('[SelectionTranslate][PDFReader] multi command not found, disabled multi path. Please restart tauri backend.')
           }
         } else {
-          console.warn('[SelectionTranslate][PDFReader] multi failed, fallback to single:', err)
+          logger.warn('[SelectionTranslate][PDFReader] multi failed, fallback to single:', err)
         }
       }
     }
@@ -1945,14 +1947,14 @@ const translateSelectionText = async (overrideText) => {
     selectionTranslateResult.value = translated
     selectionTranslateError.value = ''
     selectionInsertText.value = `**${text}**\n\n${translated}`
-    console.info('[SelectionTranslate][PDFReader] single success', { len: translated.length })
+    logger.info('[SelectionTranslate][PDFReader] single success', { len: translated.length })
   } catch (err) {
     const msg = String(err?.message || err || '翻译失败')
     selectionTranslateError.value = msg
     selectionTranslateItems.value = [{ engine: 'Free', success: false, text: '', error: msg }]
     selectionTranslateResult.value = ''
     selectionInsertText.value = ''
-    console.error('[SelectionTranslate][PDFReader] failed:', err)
+    logger.error('[SelectionTranslate][PDFReader] failed:', err)
     message.error(`翻译失败: ${msg}`)
   } finally {
     selectionTranslateBusy.value = false
@@ -2432,7 +2434,7 @@ const isPdfDebug = () => {
 
 const pdfDlog = (...args) => {
   if (!isPdfDebug()) return
-  console.log('[PDFJS][Reader]', ...args)
+  logger.info('[PDFJS][Reader]', ...args)
 }
 
 const isPdfHighlightDebug = () => {
@@ -2446,7 +2448,7 @@ const isPdfHighlightDebug = () => {
 
 const pdfHlog = (...args) => {
   if (!isPdfHighlightDebug()) return
-  console.log('[PDFHL][Reader]', ...args)
+  logger.info('[PDFHL][Reader]', ...args)
 }
 
 const pdfPageContainer = ref(null)
@@ -3238,7 +3240,7 @@ const loadPdfPage = async (pageNum) => {
       })
     }
   } catch (err) {
-    console.error('页面加载失败:', err);
+    logger.error('页面加载失败:', err);
     message.error(`加载失败: ${err.message}`);
   }
 };
@@ -3262,9 +3264,9 @@ const loadMarkdownPage = async (pageNum) => {
     // 获取markdown文件所在目录
     const mdDir = await dirname(markdownFilePath.value);
     markdownContent.value = response.content;
-    // console.log("markdownContent.value:", markdownContent.value);
+    // logger.info("markdownContent.value:", markdownContent.value);
     markdownLines.value = await convertPdfRenderMarkdown(markdownContent.value, { libraryBasePath: mdDir });
-    console.log("markdownLines.value:", markdownLines.value);
+    logger.info("markdownLines.value:", markdownLines.value);
 
     await nextTick();
     requestAnimationFrame(() => {
@@ -3273,7 +3275,7 @@ const loadMarkdownPage = async (pageNum) => {
         const theme = resolveMarkdownTheme();
         addCopyButtons(container, { theme });
         addMediaViewerButtons(container, { theme });
-        console.info('[ConvertPDFReader] media buttons refreshed:', {
+        logger.info('[ConvertPDFReader] media buttons refreshed:', {
           images: container.querySelectorAll('img').length,
           mermaid: container.querySelectorAll('.mermaid, svg').length,
         });
@@ -3285,7 +3287,7 @@ const loadMarkdownPage = async (pageNum) => {
     }
 
   } catch (error) {
-    console.error('加载Markdown失败:', error);
+    logger.error('加载Markdown失败:', error);
     markdownLines.value = [{
       raw: '',
       html: `<div class="error">加载错误: ${error.message}</div>`
@@ -3337,11 +3339,11 @@ async function processRenderedSvg(content, type = 'mermaid') {
       imageDir: imageDir
     });
     const processedImagesPath = await processImages(`![${type}图表](../${relative_path})`, imageDir);
-    console.log(`${type}图表已保存到: ${processedImagesPath}`);
+    logger.info(`${type}图表已保存到: ${processedImagesPath}`);
     return processedImagesPath;
 
   } catch (error) {
-    console.error(`处理${type} SVG失败:`, error);
+    logger.error(`处理${type} SVG失败:`, error);
     // 失败时返回原始内容，但添加错误标记
     return `<!-- SVG处理失败 -->\n${content}`;
   }
@@ -3527,7 +3529,7 @@ const loadExistingNotes = async () => {
       });
     }
   } catch (error) {
-    console.error('加载笔记失败:', error);
+    logger.error('加载笔记失败:', error);
     noteCards.value = [];
   }
 };
@@ -3541,7 +3543,7 @@ const handleMissingNote = async (action, cardData) => {
     const exists = noteCards.value.some(card => card.id === cardData?.id);
 
     if (!exists) {
-      console.warn('笔记不存在，自动转为新增操作', cardData);
+      logger.warn('笔记不存在，自动转为新增操作', cardData);
 
       // 3. 确保数据完整
       const completeCard = {
@@ -3553,7 +3555,7 @@ const handleMissingNote = async (action, cardData) => {
       await updateBackendNotes('add', completeCard);
     }
   } catch (error) {
-    console.error('处理缺失笔记失败:', error);
+    logger.error('处理缺失笔记失败:', error);
     message.error('自动恢复失败，请手动添加笔记');
   }
 };
@@ -3591,7 +3593,7 @@ const updateBackendNotes = async (action, cardData) => {
     };
 
     // 4. 调试日志
-    console.debug('发送更新请求:', {
+    logger.debug('发送更新请求:', {
       action,
       cardId: cardData.id,
       payload: JSON.parse(JSON.stringify(payload)) // 深度拷贝
@@ -3606,7 +3608,7 @@ const updateBackendNotes = async (action, cardData) => {
       ? error.message || error.toString()
       : String(error);
 
-    console.error('更新笔记失败:', {
+    logger.error('更新笔记失败:', {
       error: errorMessage,
       cardData: JSON.parse(JSON.stringify(cardData || {}))
     });
@@ -3703,7 +3705,7 @@ const startDrag = (e) => {
 
     e.preventDefault();
   } catch (error) {
-    console.error('Error in startDrag:', error);
+    logger.error('Error in startDrag:', error);
     resetDragState();
   }
 };
@@ -3736,7 +3738,7 @@ const handleDrag = (e) => {
 
     e.preventDefault();
   } catch (error) {
-    console.error('Error in handleDrag:', error);
+    logger.error('Error in handleDrag:', error);
     endDrag();
   }
 };
@@ -3755,7 +3757,7 @@ const endDrag = () => {
       decelerate();
     }
   } catch (error) {
-    console.error('Error in endDrag:', error);
+    logger.error('Error in endDrag:', error);
     resetDragState();
   }
 };
@@ -4107,7 +4109,7 @@ const processTranslateQueue = async () => {
     });
 
     // 调试日志
-    console.log('翻译响应:', response);
+    logger.info('翻译响应:', response);
 
     // 修复点1: 检查响应结构是否匹配
     if (response && response.translated_texts?.length === texts.length) {
@@ -4128,13 +4130,13 @@ const processTranslateQueue = async () => {
       currentBatch.forEach(item => {
         item.line.translationError = `翻译失败: ${errorMsg}`;
       });
-      console.error('翻译错误:', response);
+      logger.error('翻译错误:', response);
     }
 
     lastTranslateTime.value = Date.now();
   } catch (error) {
     // 修复点4: 更好的错误处理
-    console.error('翻译异常:', error);
+    logger.error('翻译异常:', error);
     translateQueue.value.forEach(item => {
       item.line.translationError = `翻译异常: ${error.message || '未知错误'}`;
     });
@@ -4296,7 +4298,7 @@ const saveCardEdit = async (index) => {
     activeCardIndex.value = -1;
 
   } catch (error) {
-    console.error('保存编辑失败:', {
+    logger.error('保存编辑失败:', {
       error,
       index,
       card: noteCards.value[index]
@@ -4418,7 +4420,7 @@ const handleKeyUp = (e) => {
 
 // 31. 生命周期和事件监听
 onMounted(async () => {
-  console.log('[PDFJS][Reader] mounted')
+  logger.info('[PDFJS][Reader] mounted')
 
   document.addEventListener('selectionchange', () => {
     if (!isPdfDebug()) return

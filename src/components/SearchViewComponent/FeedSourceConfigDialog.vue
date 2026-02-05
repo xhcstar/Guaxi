@@ -52,9 +52,11 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 
+const logger = createLogger('FeedSourceConfigDialog')
 const props = defineProps({
   show: {
     type: Boolean,
@@ -216,7 +218,7 @@ const resetForm = () => {
 }
 
 const handleCancel = () => {
-  console.log('FeedSourceConfigDialog: cancel')
+  logger.info('FeedSourceConfigDialog: cancel')
   innerVisible.value = false
   emit('cancel')
 }
@@ -239,10 +241,10 @@ const handleSubmit = async () => {
       excludeKeywords: form.value.excludeKeywords.trim(),
       remark: form.value.remark.trim()
     }
-    console.log('FeedSourceConfigDialog: submit', payload)
+    logger.info('FeedSourceConfigDialog: submit', payload)
     emit('submit', payload)
   } catch (error) {
-    console.error('FeedSourceConfigDialog: validate or submit failed', error)
+    logger.error('FeedSourceConfigDialog: validate or submit failed', error)
     message.error('表单校验失败，请检查输入')
   } finally {
     saving.value = false

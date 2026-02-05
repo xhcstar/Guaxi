@@ -391,6 +391,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../../utils/logger'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -405,6 +406,7 @@ import {
   SunnyOutline,
 } from '@vicons/ionicons5'
 
+const logger = createLogger('TODO')
 const { message } = createDiscreteApi(['message'])
 
 const busy = ref(false)
@@ -508,9 +510,9 @@ const reloadAll = async () => {
     tasks.value = snap.tasks || []
     steps.value = snap.steps || []
     dbInfo.value = snap.db_info || info
-    console.info('[TODO] snapshot loaded', { lists: lists.value.length, tasks: tasks.value.length, steps: steps.value.length })
+    logger.info('[TODO] snapshot loaded', { lists: lists.value.length, tasks: tasks.value.length, steps: steps.value.length })
   } catch (e) {
-    console.error('[TODO] reload failed', e)
+    logger.error('[TODO] reload failed', e)
     message.error(`加载 TODO 数据失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -540,9 +542,9 @@ const pollDueReminders = async () => {
     const preview = names.length ? `（${names.join('、')}${arr.length > names.length ? '…' : ''}）` : ''
 
     message.warning(`任务到期提醒：${bits.join('，') || `${arr.length} 个到期`}${preview}`)
-    console.info('[TODO] due reminders', { total: arr.length, overdue, dueToday, tasks: arr.map((t) => ({ id: t.id, due_date: t.due_date, title: t.title })) })
+    logger.info('[TODO] due reminders', { total: arr.length, overdue, dueToday, tasks: arr.map((t) => ({ id: t.id, due_date: t.due_date, title: t.title })) })
   } catch (e) {
-    console.warn('[TODO] pollDueReminders failed', e)
+    logger.warn('[TODO] pollDueReminders failed', e)
   }
 }
 
@@ -778,7 +780,7 @@ const onSearchChange = async () => {
     const res = await invoke('todo_search_tasks', { query: q, limit: 300 })
     searchHits.value = Array.isArray(res) ? res : []
   } catch (e) {
-    console.warn('[TODO] search failed', e)
+    logger.warn('[TODO] search failed', e)
     searchHits.value = []
   }
 }
@@ -817,9 +819,9 @@ const addTask = async () => {
     tasks.value.unshift(task)
     newTaskTitle.value = ''
     selectedTaskId.value = task.id
-    console.info('[TODO] task created', task.id)
+    logger.info('[TODO] task created', task.id)
   } catch (e) {
-    console.error('[TODO] addTask failed', e)
+    logger.error('[TODO] addTask failed', e)
     message.error(`添加任务失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -847,7 +849,7 @@ const toggleCompleted = async (id, v) => {
     const t = await invoke('todo_set_task_completed', { taskId: id, completed: !!v })
     patchTaskLocal(t)
   } catch (e) {
-    console.error('[TODO] toggleCompleted failed', e)
+    logger.error('[TODO] toggleCompleted failed', e)
     message.error(`更新完成状态失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -860,7 +862,7 @@ const toggleImportant = async (id) => {
     const t = await invoke('todo_toggle_task_important', { taskId: id })
     patchTaskLocal(t)
   } catch (e) {
-    console.error('[TODO] toggleImportant failed', e)
+    logger.error('[TODO] toggleImportant failed', e)
     message.error(`更新重要状态失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -874,9 +876,9 @@ const removeTask = async (id) => {
     tasks.value = tasks.value.filter((x) => x.id !== id)
     steps.value = steps.value.filter((s) => s.task_id !== id)
     if (selectedTaskId.value === id) selectedTaskId.value = ''
-    console.info('[TODO] task deleted', id)
+    logger.info('[TODO] task deleted', id)
   } catch (e) {
-    console.error('[TODO] removeTask failed', e)
+    logger.error('[TODO] removeTask failed', e)
     message.error(`删除任务失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -903,7 +905,7 @@ const commitSelectedTitle = async () => {
     })
     patchTaskLocal(t)
   } catch (e) {
-    console.error('[TODO] commit title failed', e)
+    logger.error('[TODO] commit title failed', e)
     message.error(`保存标题失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -920,7 +922,7 @@ const commitNotes = async () => {
     const t = await invoke('todo_set_task_notes', { taskId: selectedTask.value.id, notes })
     patchTaskLocal(t)
   } catch (e) {
-    console.error('[TODO] commit notes failed', e)
+    logger.error('[TODO] commit notes failed', e)
     message.error(`保存备注失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -937,7 +939,7 @@ const toggleMyDay = async (id) => {
     const nt = await invoke('todo_set_task_myday', { taskId: id, myDayKey: next })
     patchTaskLocal(nt)
   } catch (e) {
-    console.error('[TODO] toggleMyDay failed', e)
+    logger.error('[TODO] toggleMyDay failed', e)
     message.error(`更新“我的一天”失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -953,7 +955,7 @@ const setDueDateFromPicker = async (ms) => {
     const nt = await invoke('todo_set_task_due_date', { taskId: selectedTask.value.id, dueDate: due })
     patchTaskLocal(nt)
   } catch (e) {
-    console.error('[TODO] setDueDate failed', e)
+    logger.error('[TODO] setDueDate failed', e)
     message.error(`设置截止日期失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -969,7 +971,7 @@ const commitRepeatPreset = async (v) => {
     const nt = await invoke('todo_set_task_repeat_rule', { taskId: selectedTask.value.id, repeatRule: String(v) })
     patchTaskLocal(nt)
   } catch (e) {
-    console.error('[TODO] commitRepeatPreset failed', e)
+    logger.error('[TODO] commitRepeatPreset failed', e)
     message.error(`设置重复失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -987,7 +989,7 @@ const commitRepeatDraft = async () => {
     const nt = await invoke('todo_set_task_repeat_rule', { taskId: selectedTask.value.id, repeatRule: rep })
     patchTaskLocal(nt)
   } catch (e) {
-    console.error('[TODO] commitRepeatDraft failed', e)
+    logger.error('[TODO] commitRepeatDraft failed', e)
     message.error(`设置重复失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1005,7 +1007,7 @@ const clearDueAndRepeat = async (id) => {
     repeatDraft.value = ''
     repeatPreset.value = null
   } catch (e) {
-    console.error('[TODO] clearDueAndRepeat failed', e)
+    logger.error('[TODO] clearDueAndRepeat failed', e)
     message.error(`清除失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1034,7 +1036,7 @@ const duplicateTask = async (id) => {
     tasks.value.unshift(nt)
     selectedTaskId.value = nt.id
   } catch (e) {
-    console.error('[TODO] duplicateTask failed', e)
+    logger.error('[TODO] duplicateTask failed', e)
     message.error(`复制失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1056,7 +1058,7 @@ const addStep = async (taskId) => {
     steps.value.push(s)
     newStepTitle.value = ''
   } catch (e) {
-    console.error('[TODO] addStep failed', e)
+    logger.error('[TODO] addStep failed', e)
     message.error(`添加步骤失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1073,7 +1075,7 @@ const toggleStep = async (taskId, stepId, v) => {
     const idx = steps.value.findIndex((x) => x.id === s.id)
     if (idx >= 0) steps.value[idx] = s
   } catch (e) {
-    console.error('[TODO] toggleStep failed', e)
+    logger.error('[TODO] toggleStep failed', e)
     message.error(`更新步骤失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1090,7 +1092,7 @@ const commitStepTitle = async (taskId, s) => {
     const idx = steps.value.findIndex((x) => x.id === ns.id)
     if (idx >= 0) steps.value[idx] = ns
   } catch (e) {
-    console.error('[TODO] commitStepTitle failed', e)
+    logger.error('[TODO] commitStepTitle failed', e)
     message.error(`保存步骤失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1103,7 +1105,7 @@ const removeStep = async (stepId) => {
     await invoke('todo_delete_step', { stepId })
     steps.value = steps.value.filter((x) => x.id !== stepId)
   } catch (e) {
-    console.error('[TODO] removeStep failed', e)
+    logger.error('[TODO] removeStep failed', e)
     message.error(`删除步骤失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1130,7 +1132,7 @@ const createList = async () => {
     if (group_id) groupOpen.value = { ...groupOpen.value, [group_id]: true }
     setActiveView(l.id)
   } catch (e) {
-    console.error('[TODO] createList failed', e)
+    logger.error('[TODO] createList failed', e)
     message.error(`新建列表失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1153,7 +1155,7 @@ const createGroup = async () => {
     groupOpen.value = { ...groupOpen.value, [g.id]: true }
     createGroupModal.value = false
   } catch (e) {
-    console.error('[TODO] createGroup failed', e)
+    logger.error('[TODO] createGroup failed', e)
     message.error(`新建分组失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1177,7 +1179,7 @@ const openMoveList = (listId) => {
   moveListId.value = l.id
   moveTargetGroupId.value = String(l.group_id || '')
   moveListModal.value = true
-  console.info('[TODO] openMoveList', { listId: l.id, curGroupId: moveTargetGroupId.value })
+  logger.info('[TODO] openMoveList', { listId: l.id, curGroupId: moveTargetGroupId.value })
 }
 
 const confirmMoveList = async () => {
@@ -1193,9 +1195,9 @@ const confirmMoveList = async () => {
     if (idx >= 0) lists.value[idx] = l
     moveListModal.value = false
     if (gid) groupOpen.value = { ...groupOpen.value, [gid]: true }
-    console.info('[TODO] move list ok', { id, group_id: gid })
+    logger.info('[TODO] move list ok', { id, group_id: gid })
   } catch (e) {
-    console.error('[TODO] move list failed', e)
+    logger.error('[TODO] move list failed', e)
     message.error(`移动列表失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1212,9 +1214,9 @@ const detachListFromGroup = async (listId) => {
     const l = await invoke('todo_upsert_list', { input: { id, title: l0.title, kind: 'custom', group_id: '' } })
     const idx = lists.value.findIndex((x) => x.id === id)
     if (idx >= 0) lists.value[idx] = l
-    console.info('[TODO] detach list ok', { id })
+    logger.info('[TODO] detach list ok', { id })
   } catch (e) {
-    console.error('[TODO] detach list failed', e)
+    logger.error('[TODO] detach list failed', e)
     message.error(`从分组移除失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1227,7 +1229,7 @@ const openAttachList = (groupId) => {
   attachTargetGroupId.value = gid
   attachListId.value = ''
   attachListModal.value = true
-  console.info('[TODO] openAttachList', { groupId: gid })
+  logger.info('[TODO] openAttachList', { groupId: gid })
 }
 
 const confirmAttachList = async () => {
@@ -1243,9 +1245,9 @@ const confirmAttachList = async () => {
     if (idx >= 0) lists.value[idx] = l
     attachListModal.value = false
     groupOpen.value = { ...groupOpen.value, [gid]: true }
-    console.info('[TODO] attach list ok', { id, group_id: gid })
+    logger.info('[TODO] attach list ok', { id, group_id: gid })
   } catch (e) {
-    console.error('[TODO] attach list failed', e)
+    logger.error('[TODO] attach list failed', e)
     message.error(`添加列表到分组失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1310,7 +1312,7 @@ const confirmRenameList = async () => {
     if (idx >= 0) lists.value[idx] = l
     renameListModal.value = false
   } catch (e) {
-    console.error('[TODO] rename failed', e)
+    logger.error('[TODO] rename failed', e)
     message.error(`重命名失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1326,7 +1328,7 @@ const deleteList = async (listId) => {
     steps.value = steps.value.filter((s) => tasks.value.some((t) => t.id === s.task_id))
     if (activeView.value === listId) setActiveView('inbox')
   } catch (e) {
-    console.error('[TODO] delete list failed', e)
+    logger.error('[TODO] delete list failed', e)
     message.error(`删除列表失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1339,7 +1341,7 @@ const deleteGroup = async (groupId) => {
     await invoke('todo_delete_list', { listId: groupId })
     await reloadAll()
   } catch (e) {
-    console.error('[TODO] delete group failed', e)
+    logger.error('[TODO] delete group failed', e)
     message.error(`删除分组失败：${String(e?.message || e || '')}`)
   } finally {
     busy.value = false
@@ -1367,7 +1369,7 @@ onMounted(async () => {
     pollDueReminders()
   }, 60 * 1000)
 
-  console.info('[TODO] due reminder timer started')
+  logger.info('[TODO] due reminder timer started')
 })
 
 onUnmounted(() => {
@@ -1377,7 +1379,7 @@ onUnmounted(() => {
   if (reminderTimer.value) {
     clearInterval(reminderTimer.value)
     reminderTimer.value = null
-    console.info('[TODO] due reminder timer stopped')
+    logger.info('[TODO] due reminder timer stopped')
   }
 })
 </script>

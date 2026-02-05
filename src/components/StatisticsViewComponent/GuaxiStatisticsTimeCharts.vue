@@ -68,7 +68,10 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+
+const logger = createLogger('GuaxiStatisticsTimeCharts')
 
 /**
  * 顶部时间分布图组件：
@@ -119,7 +122,7 @@ onMounted(() => {
     mo = new MutationObserver(() => {
       const prev = isDark.value;
       syncTheme();
-      if (prev !== isDark.value) console.info("[statistics:timecharts] theme changed", { dark: isDark.value });
+      if (prev !== isDark.value) logger.info("[statistics:timecharts] theme changed", { dark: isDark.value });
     });
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-guaxi-theme", "class"] });
   }
@@ -316,7 +319,7 @@ const imported = computed(() => {
 watch(
   () => props.timeRange,
   () => {
-    console.info("[statistics:timecharts] timeRange changed", props.timeRange);
+    logger.info("[statistics:timecharts] timeRange changed", props.timeRange);
   }
 );
 </script>

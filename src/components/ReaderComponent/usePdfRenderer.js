@@ -1,6 +1,9 @@
 import { ref, computed, watch, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
+import { createLogger } from '../../utils/logger'
+
+const logger = createLogger('usePdfRenderer')
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -19,7 +22,7 @@ export default function usePdfRenderer(props) {
 
   const dlog = (...args) => {
     if (!isDebug()) return;
-    console.log("[PDFJS]", ...args);
+    logger.info("[PDFJS]", ...args);
   };
 
   // 增强props验证

@@ -274,11 +274,15 @@
 </template>
 
 <script setup>
+
+import { createLogger } from '../../../utils/logger'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
+
+const logger = createLogger('FileTransferAssistantApp')
 
 const { message } = createDiscreteApi(['message'])
 
@@ -372,7 +376,7 @@ const refreshStatus = async () => {
     httpShareStatus.value = st?.httpShare || null
     discoveryRunning.value = !!st?.discoveryRunning
   } catch (e) {
-    console.error('[FTA] refreshStatus failed:', e)
+    logger.error('[FTA] refreshStatus failed:', e)
   }
 }
 
@@ -381,7 +385,7 @@ const refreshPeers = async () => {
     const list = await invoke('filetransfer_get_peers')
     peers.value = Array.isArray(list) ? list : []
   } catch (e) {
-    console.error('[FTA] refreshPeers failed:', e)
+    logger.error('[FTA] refreshPeers failed:', e)
   }
 }
 
@@ -390,7 +394,7 @@ const refreshTasks = async () => {
     const list = await invoke('filetransfer_list_tasks')
     tasks.value = Array.isArray(list) ? list : []
   } catch (e) {
-    console.error('[FTA] refreshTasks failed:', e)
+    logger.error('[FTA] refreshTasks failed:', e)
   }
 }
 
@@ -399,7 +403,7 @@ const pickReceiverSaveDir = async () => {
     const p = await open({ directory: true, multiple: false })
     if (typeof p === 'string' && p.trim()) receiverSaveDir.value = p
   } catch (e) {
-    console.error('[FTA] pickReceiverSaveDir failed:', e)
+    logger.error('[FTA] pickReceiverSaveDir failed:', e)
   }
 }
 
@@ -413,7 +417,7 @@ const startReceiver = async () => {
     message.success('接收服务已启动')
     await refreshStatus()
   } catch (e) {
-    console.error('[FTA] startReceiver failed:', e)
+    logger.error('[FTA] startReceiver failed:', e)
     message.error(String(e?.message || e || '启动失败'))
   }
 }
@@ -424,7 +428,7 @@ const stopReceiver = async () => {
     message.success('接收服务已停止')
     await refreshStatus()
   } catch (e) {
-    console.error('[FTA] stopReceiver failed:', e)
+    logger.error('[FTA] stopReceiver failed:', e)
     message.error(String(e?.message || e || '停止失败'))
   }
 }
@@ -436,7 +440,7 @@ const startDiscovery = async () => {
     await refreshStatus()
     await refreshPeers()
   } catch (e) {
-    console.error('[FTA] startDiscovery failed:', e)
+    logger.error('[FTA] startDiscovery failed:', e)
     message.error(String(e?.message || e || '开启失败'))
   }
 }
@@ -447,7 +451,7 @@ const stopDiscovery = async () => {
     message.success('局域网发现已关闭')
     await refreshStatus()
   } catch (e) {
-    console.error('[FTA] stopDiscovery failed:', e)
+    logger.error('[FTA] stopDiscovery failed:', e)
     message.error(String(e?.message || e || '关闭失败'))
   }
 }
@@ -457,7 +461,7 @@ const pickShareRoot = async () => {
     const p = await open({ directory: true, multiple: false })
     if (typeof p === 'string' && p.trim()) shareRootDir.value = p
   } catch (e) {
-    console.error('[FTA] pickShareRoot failed:', e)
+    logger.error('[FTA] pickShareRoot failed:', e)
   }
 }
 
@@ -471,7 +475,7 @@ const startHttpShare = async () => {
     message.success('HTTP 分享已启动')
     await refreshStatus()
   } catch (e) {
-    console.error('[FTA] startHttpShare failed:', e)
+    logger.error('[FTA] startHttpShare failed:', e)
     message.error(String(e?.message || e || '启动失败'))
   }
 }
@@ -482,7 +486,7 @@ const stopHttpShare = async () => {
     message.success('HTTP 分享已停止')
     await refreshStatus()
   } catch (e) {
-    console.error('[FTA] stopHttpShare failed:', e)
+    logger.error('[FTA] stopHttpShare failed:', e)
     message.error(String(e?.message || e || '停止失败'))
   }
 }
@@ -506,7 +510,7 @@ const sendFilesToPeer = async (peer) => {
     message.success('已创建发送任务')
     await refreshTasks()
   } catch (e) {
-    console.error('[FTA] sendFilesToPeer failed:', e)
+    logger.error('[FTA] sendFilesToPeer failed:', e)
     message.error(String(e?.message || e || '发送失败'))
   }
 }
@@ -527,7 +531,7 @@ const sendFilesToCustomUrl = async () => {
     message.success('已创建发送任务')
     await refreshTasks()
   } catch (e) {
-    console.error('[FTA] sendFilesToCustomUrl failed:', e)
+    logger.error('[FTA] sendFilesToCustomUrl failed:', e)
     message.error(String(e?.message || e || '发送失败'))
   }
 }
@@ -538,7 +542,7 @@ const copyPeerUrl = async (peer) => {
     await navigator.clipboard.writeText(url)
     message.success('已复制')
   } catch (e) {
-    console.error('[FTA] copyPeerUrl failed:', e)
+    logger.error('[FTA] copyPeerUrl failed:', e)
     message.error('复制失败')
   }
 }
@@ -547,7 +551,7 @@ const pauseTask = async (taskId) => {
   try {
     await invoke('filetransfer_pause_task', { taskId })
   } catch (e) {
-    console.error('[FTA] pauseTask failed:', e)
+    logger.error('[FTA] pauseTask failed:', e)
   }
 }
 
@@ -555,7 +559,7 @@ const resumeTask = async (taskId) => {
   try {
     await invoke('filetransfer_resume_task', { taskId })
   } catch (e) {
-    console.error('[FTA] resumeTask failed:', e)
+    logger.error('[FTA] resumeTask failed:', e)
   }
 }
 
@@ -563,7 +567,7 @@ const cancelTask = async (taskId) => {
   try {
     await invoke('filetransfer_cancel_task', { taskId })
   } catch (e) {
-    console.error('[FTA] cancelTask failed:', e)
+    logger.error('[FTA] cancelTask failed:', e)
   }
 }
 
@@ -574,7 +578,7 @@ const copyText = async (text) => {
     await navigator.clipboard.writeText(s)
     message.success('已复制')
   } catch (e) {
-    console.error('[FTA] copyText failed:', e)
+    logger.error('[FTA] copyText failed:', e)
     message.error('复制失败')
   }
 }
@@ -658,7 +662,7 @@ const maybeStartOffer = async () => {
   const shouldOffer = me < peer
   if (!shouldOffer) return
 
-  console.log('[FTA][WebRTC][Signal] start offer, me=', me, 'peer=', peer)
+  logger.info('[FTA][WebRTC][Signal] start offer, me=', me, 'peer=', peer)
 
   webrtcBusy.value = true
   webrtcLastError.value = ''
@@ -688,7 +692,7 @@ const maybeStartOffer = async () => {
       data: { t: 'sdp', sdp: payload },
     })
   } catch (e) {
-    console.error('[FTA][WebRTC][Signal] start offer failed:', e)
+    logger.error('[FTA][WebRTC][Signal] start offer failed:', e)
     webrtcLastError.value = String(e?.message || e || '创建 Offer 失败')
   } finally {
     webrtcBusy.value = false
@@ -708,7 +712,7 @@ const handleSignalMsg = async (msg) => {
     const peers = Array.isArray(msg?.peers) ? msg.peers.map(x => String(x || '')).filter(Boolean) : []
     webrtcTargetPeerId.value = peers[0] || ''
 
-    console.log('[FTA][WebRTC][Signal] joined room=', webrtcSignalRoom, 'clientId=', webrtcClientId.value, 'peers=', peers)
+    logger.info('[FTA][WebRTC][Signal] joined room=', webrtcSignalRoom, 'clientId=', webrtcClientId.value, 'peers=', peers)
 
     await maybeStartOffer()
     return
@@ -718,7 +722,7 @@ const handleSignalMsg = async (msg) => {
     const pid = String(msg?.clientId || '')
     if (pid && !webrtcTargetPeerId.value) {
       webrtcTargetPeerId.value = pid
-      console.log('[FTA][WebRTC][Signal] peer joined, set target=', pid)
+      logger.info('[FTA][WebRTC][Signal] peer joined, set target=', pid)
       await maybeStartOffer()
     }
     return
@@ -727,7 +731,7 @@ const handleSignalMsg = async (msg) => {
   if (t === 'peer_left') {
     const pid = String(msg?.clientId || '')
     if (pid && pid === webrtcTargetPeerId.value) {
-      console.log('[FTA][WebRTC][Signal] target left:', pid)
+      logger.info('[FTA][WebRTC][Signal] target left:', pid)
       webrtcTargetPeerId.value = ''
     }
     return
@@ -739,7 +743,7 @@ const handleSignalMsg = async (msg) => {
 
     if (!from) return
     if (webrtcTargetPeerId.value && from !== webrtcTargetPeerId.value) {
-      console.warn('[FTA][WebRTC][Signal] ignore signal from unexpected peer:', from)
+      logger.warn('[FTA][WebRTC][Signal] ignore signal from unexpected peer:', from)
       return
     }
     if (!webrtcTargetPeerId.value) webrtcTargetPeerId.value = from
@@ -753,7 +757,7 @@ const handleSignalMsg = async (msg) => {
       if (!type || !sdpText) return
 
       if (type === 'offer') {
-        console.log('[FTA][WebRTC][Signal] recv offer from=', from)
+        logger.info('[FTA][WebRTC][Signal] recv offer from=', from)
 
         webrtcBusy.value = true
         webrtcLastError.value = ''
@@ -780,7 +784,7 @@ const handleSignalMsg = async (msg) => {
             data: { t: 'sdp', sdp: payload },
           })
         } catch (e) {
-          console.error('[FTA][WebRTC][Signal] answer failed:', e)
+          logger.error('[FTA][WebRTC][Signal] answer failed:', e)
           webrtcLastError.value = String(e?.message || e || '创建 Answer 失败')
         } finally {
           webrtcBusy.value = false
@@ -790,7 +794,7 @@ const handleSignalMsg = async (msg) => {
       }
 
       if (type === 'answer') {
-        console.log('[FTA][WebRTC][Signal] recv answer from=', from)
+        logger.info('[FTA][WebRTC][Signal] recv answer from=', from)
 
         webrtcBusy.value = true
         webrtcLastError.value = ''
@@ -799,7 +803,7 @@ const handleSignalMsg = async (msg) => {
           const pc = await ensureWebrtcPc('apply')
           await pc.setRemoteDescription({ type: 'answer', sdp: sdpText })
         } catch (e) {
-          console.error('[FTA][WebRTC][Signal] apply answer failed:', e)
+          logger.error('[FTA][WebRTC][Signal] apply answer failed:', e)
           webrtcLastError.value = String(e?.message || e || '设置远端描述失败')
         } finally {
           webrtcBusy.value = false
@@ -813,13 +817,13 @@ const handleSignalMsg = async (msg) => {
   }
 
   if (t === 'left') {
-    console.log('[FTA][WebRTC][Signal] left')
+    logger.info('[FTA][WebRTC][Signal] left')
     return
   }
 
   if (t === 'error') {
     const err = String(msg?.error || '')
-    console.warn('[FTA][WebRTC][Signal] error:', err)
+    logger.warn('[FTA][WebRTC][Signal] error:', err)
     if (err) webrtcLastError.value = err
     return
   }
@@ -846,19 +850,19 @@ const webrtcJoinRoom = async () => {
   webrtcLastError.value = ''
 
   try {
-    console.log('[FTA][WebRTC][Signal] connect url=', url, 'room=', room)
+    logger.info('[FTA][WebRTC][Signal] connect url=', url, 'room=', room)
     webrtcSignalConn.value = 'connecting'
 
     const ws = new WebSocket(url)
     webrtcSignalWs = ws
 
     ws.onopen = () => {
-      console.log('[FTA][WebRTC][Signal] ws open')
+      logger.info('[FTA][WebRTC][Signal] ws open')
       webrtcSignalConn.value = 'open'
       try {
         ws.send(JSON.stringify({ t: 'join', room }))
       } catch (e) {
-        console.error('[FTA][WebRTC][Signal] send join failed:', e)
+        logger.error('[FTA][WebRTC][Signal] send join failed:', e)
       }
     }
 
@@ -868,17 +872,17 @@ const webrtcJoinRoom = async () => {
         const msg = JSON.parse(raw)
         await handleSignalMsg(msg)
       } catch (e) {
-        console.error('[FTA][WebRTC][Signal] onmessage parse failed:', e)
+        logger.error('[FTA][WebRTC][Signal] onmessage parse failed:', e)
       }
     }
 
     ws.onerror = (e) => {
-      console.error('[FTA][WebRTC][Signal] ws error:', e)
+      logger.error('[FTA][WebRTC][Signal] ws error:', e)
       webrtcSignalConn.value = 'error'
     }
 
     ws.onclose = () => {
-      console.log('[FTA][WebRTC][Signal] ws close')
+      logger.info('[FTA][WebRTC][Signal] ws close')
       webrtcSignalConn.value = 'closed'
       webrtcSignalJoined.value = false
       webrtcClientId.value = ''
@@ -888,7 +892,7 @@ const webrtcJoinRoom = async () => {
 
     await new Promise((resolve) => setTimeout(resolve, 150))
   } catch (e) {
-    console.error('[FTA][WebRTC][Signal] join failed:', e)
+    logger.error('[FTA][WebRTC][Signal] join failed:', e)
     webrtcSignalConn.value = 'error'
     webrtcLastError.value = String(e?.message || e || '加入房间失败')
   } finally {
@@ -902,7 +906,7 @@ const webrtcLeaveRoom = async () => {
       try {
         webrtcSignalWs.send(JSON.stringify({ t: 'leave' }))
       } catch (e) {
-        console.error('[FTA][WebRTC][Signal] send leave failed:', e)
+        logger.error('[FTA][WebRTC][Signal] send leave failed:', e)
       }
     }
   } finally {
@@ -978,9 +982,9 @@ const webrtcCanSend = computed(() => {
 const bindDataChannel = (dc) => {
   if (!dc) return
 
-  dc.onopen = () => console.log('[FTA][WebRTC] dc open')
-  dc.onclose = () => console.log('[FTA][WebRTC] dc close')
-  dc.onerror = (e) => console.error('[FTA][WebRTC] dc error', e)
+  dc.onopen = () => logger.info('[FTA][WebRTC] dc open')
+  dc.onclose = () => logger.info('[FTA][WebRTC] dc close')
+  dc.onerror = (e) => logger.error('[FTA][WebRTC] dc error', e)
 
   dc.onmessage = async (ev) => {
     try {
@@ -990,7 +994,7 @@ const bindDataChannel = (dc) => {
       const t = String(msg?.t || '')
 
       if (t === 'init') {
-        console.log('[FTA][WebRTC] recv init uploadId=', msg?.uploadId)
+        logger.info('[FTA][WebRTC] recv init uploadId=', msg?.uploadId)
         const resp = await invoke('filetransfer_webrtc_recv_init', {
           saveDir: null,
           uploadId: msg.uploadId,
@@ -1019,7 +1023,7 @@ const bindDataChannel = (dc) => {
         return
       }
     } catch (e) {
-      console.error('[FTA][WebRTC] onmessage failed:', e)
+      logger.error('[FTA][WebRTC] onmessage failed:', e)
       webrtcLastError.value = String(e?.message || e || 'WebRTC 消息处理失败')
     }
   }
@@ -1030,19 +1034,19 @@ const ensureWebrtcPc = async (role) => {
 
   webrtcLastError.value = ''
   const iceServers = parseIceServers()
-  console.log('[FTA][WebRTC] create pc role=', role, 'iceServers=', iceServers)
+  logger.info('[FTA][WebRTC] create pc role=', role, 'iceServers=', iceServers)
 
   const pc = new RTCPeerConnection({ iceServers })
 
   pc.onconnectionstatechange = () => {
-    console.log('[FTA][WebRTC] connectionState=', pc.connectionState)
+    logger.info('[FTA][WebRTC] connectionState=', pc.connectionState)
     updateWebrtcState()
   }
 
-  pc.onicecandidateerror = (ev) => console.warn('[FTA][WebRTC] icecandidateerror:', ev)
+  pc.onicecandidateerror = (ev) => logger.warn('[FTA][WebRTC] icecandidateerror:', ev)
 
   pc.ondatachannel = (ev) => {
-    console.log('[FTA][WebRTC] ondatachannel label=', ev?.channel?.label)
+    logger.info('[FTA][WebRTC] ondatachannel label=', ev?.channel?.label)
     webrtcDc = ev.channel
     bindDataChannel(webrtcDc)
   }
@@ -1071,7 +1075,7 @@ const webrtcCreateOffer = async () => {
     const d = pc.localDescription
     webrtcLocalSdp.value = JSON.stringify({ type: d?.type, sdp: d?.sdp })
   } catch (e) {
-    console.error('[FTA][WebRTC] create offer failed:', e)
+    logger.error('[FTA][WebRTC] create offer failed:', e)
     webrtcLastError.value = String(e?.message || e || '创建 Offer 失败')
   } finally {
     webrtcBusy.value = false
@@ -1106,7 +1110,7 @@ const webrtcCreateAnswer = async () => {
     const d = pc.localDescription
     webrtcLocalSdp.value = JSON.stringify({ type: d?.type, sdp: d?.sdp })
   } catch (e) {
-    console.error('[FTA][WebRTC] create answer failed:', e)
+    logger.error('[FTA][WebRTC] create answer failed:', e)
     webrtcLastError.value = String(e?.message || e || '创建 Answer 失败')
   } finally {
     webrtcBusy.value = false
@@ -1133,9 +1137,9 @@ const webrtcApplyRemote = async () => {
     }
 
     await pc.setRemoteDescription({ type: obj.type, sdp: obj.sdp })
-    console.log('[FTA][WebRTC] remote applied type=', obj.type)
+    logger.info('[FTA][WebRTC] remote applied type=', obj.type)
   } catch (e) {
-    console.error('[FTA][WebRTC] apply remote failed:', e)
+    logger.error('[FTA][WebRTC] apply remote failed:', e)
     webrtcLastError.value = String(e?.message || e || '设置远端描述失败')
   } finally {
     webrtcBusy.value = false
@@ -1145,7 +1149,7 @@ const webrtcApplyRemote = async () => {
 
 const webrtcClose = async () => {
   try {
-    console.log('[FTA][WebRTC] close')
+    logger.info('[FTA][WebRTC] close')
     try { webrtcDc?.close?.() } catch { }
     try { webrtcPc?.close?.() } catch { }
 
@@ -1157,7 +1161,7 @@ const webrtcClose = async () => {
     webrtcLastError.value = ''
     webrtcConnState.value = 'closed'
   } catch (e) {
-    console.error('[FTA][WebRTC] close failed:', e)
+    logger.error('[FTA][WebRTC] close failed:', e)
   }
 }
 
@@ -1191,7 +1195,7 @@ const webrtcPickAndSendFiles = async () => {
 
     message.success('WebRTC 发送完成')
   } catch (e) {
-    console.error('[FTA][WebRTC] send files failed:', e)
+    logger.error('[FTA][WebRTC] send files failed:', e)
     webrtcLastError.value = String(e?.message || e || 'WebRTC 发送失败')
   } finally {
     webrtcBusy.value = false
@@ -1203,7 +1207,7 @@ const webrtcSendOneFile = async (filePath) => {
   const uploadId = await invoke('filetransfer_compute_upload_id', { filePath })
 
   const total = Number(st?.totalBytes || 0)
-  console.log('[FTA][WebRTC] send init file=', st?.fileName, 'bytes=', total, 'uploadId=', uploadId)
+  logger.info('[FTA][WebRTC] send init file=', st?.fileName, 'bytes=', total, 'uploadId=', uploadId)
 
   await sendDcJson({
     t: 'init',
@@ -1268,14 +1272,14 @@ const webrtcSendOneFile = async (filePath) => {
 }
 
 onMounted(async () => {
-  console.log('[FTA] mounted')
+  logger.info('[FTA] mounted')
 
   try {
     const signalUrl = await invoke('get_webrtc_signal_url')
     webrtcSignalUrl.value = typeof signalUrl === 'string' ? signalUrl : ''
-    console.log('[FTA][WebRTC][Signal] loaded signal url from config:', webrtcSignalUrl.value)
+    logger.info('[FTA][WebRTC][Signal] loaded signal url from config:', webrtcSignalUrl.value)
   } catch (e) {
-    console.error('[FTA][WebRTC][Signal] load signal url failed:', e)
+    logger.error('[FTA][WebRTC][Signal] load signal url failed:', e)
     webrtcSignalUrl.value = ''
   }
 
@@ -1299,7 +1303,7 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
-  console.log('[FTA] unmounted')
+  logger.info('[FTA] unmounted')
   try { if (typeof unlistenTaskUpdate === 'function') await unlistenTaskUpdate() } catch { }
   try { if (typeof unlistenPeersUpdate === 'function') await unlistenPeersUpdate() } catch { }
   await webrtcLeaveRoom()

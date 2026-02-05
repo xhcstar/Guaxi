@@ -5,6 +5,9 @@ import hljs from "highlight.js";
 import "highlight.js/styles/atom-one-light.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
 import { nextTick } from "vue";
+import { createLogger } from '../../utils/logger'
+
+const logger = createLogger('GuaxiMarker')
 
 const RenderOptions = {
   mermaid: undefined,
@@ -163,7 +166,7 @@ export const addCopyButtons = (container, options = {}) => {
 
         copyButton.dataset.timeoutId = timeoutId.toString();
       } catch (err) {
-        console.error("复制失败:", err);
+        logger.error("复制失败:", err);
 
         // 保存原始状态
         copyButton.dataset.isCopying = "true";
@@ -258,9 +261,9 @@ export const addMediaViewerButtons = (container, options = {}) => {
 
         observer.observe(container, { childList: true, subtree: true });
         container.__mvObserver = observer;
-        console.info('[MediaViewer] observer installed');
+        logger.info('[MediaViewer] observer installed');
       } catch (e) {
-        console.warn('[MediaViewer] observer install failed:', e);
+        logger.warn('[MediaViewer] observer install failed:', e);
       }
     }
 
@@ -537,7 +540,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
         document.body.appendChild(overlay);
         applyZoom();
       } catch (e) {
-        console.error('[MediaViewer] 打开预览失败:', e);
+        logger.error('[MediaViewer] 打开预览失败:', e);
       }
     };
 
@@ -550,7 +553,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
         const buf = new Uint8Array(await blob.arrayBuffer());
         await writeFile(path, buf);
       } catch (e) {
-        console.error('[MediaViewer] 保存失败:', e);
+        logger.error('[MediaViewer] 保存失败:', e);
       }
     };
 
@@ -641,9 +644,9 @@ export const addMediaViewerButtons = (container, options = {}) => {
                 const decoded = decodeURIComponent(data);
                 blob = new Blob([decoded], { type: mime || `image/${ext}` });
               }
-              console.info('[MediaViewer] 保存图片: 使用 dataURL');
+              logger.info('[MediaViewer] 保存图片: 使用 dataURL');
             } catch (e) {
-              console.warn('[MediaViewer] dataURL 转换失败:', e);
+              logger.warn('[MediaViewer] dataURL 转换失败:', e);
             }
           }
         }
@@ -654,7 +657,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
             if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
             blob = await resp.blob();
           } catch (e) {
-            console.warn('[MediaViewer] fetch 图片失败，尝试本地路径兜底:', e);
+            logger.warn('[MediaViewer] fetch 图片失败，尝试本地路径兜底:', e);
           }
         }
 
@@ -674,9 +677,9 @@ export const addMediaViewerButtons = (container, options = {}) => {
               }
               const bytes = await readFile(filePath);
               blob = new Blob([bytes], { type: `image/${ext === 'jpg' ? 'jpeg' : ext}` });
-              console.info('[MediaViewer] 保存图片: 使用 readFile 读取本地路径:', { filePath });
+              logger.info('[MediaViewer] 保存图片: 使用 readFile 读取本地路径:', { filePath });
             } catch (e) {
-              console.warn('[MediaViewer] readFile 兜底失败:', e);
+              logger.warn('[MediaViewer] readFile 兜底失败:', e);
             }
           }
         }
@@ -685,7 +688,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
 
         await saveBlob(blob, `image.${ext}`, [{ name: 'Image', extensions: [ext] }]);
       } catch (e) {
-        console.error('[MediaViewer] 保存图片失败:', e);
+        logger.error('[MediaViewer] 保存图片失败:', e);
       }
     };
 
@@ -693,7 +696,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
       try {
         const svg = resolveMermaidSvg(mermaidEl);
         if (!svg) {
-          console.warn('[MediaViewer] 未找到 Mermaid SVG');
+          logger.warn('[MediaViewer] 未找到 Mermaid SVG');
           return;
         }
 
@@ -728,13 +731,13 @@ export const addMediaViewerButtons = (container, options = {}) => {
           const buf = new Uint8Array(await pngBlob.arrayBuffer());
           await writeFile(path, buf);
         } catch (e) {
-          console.warn('[MediaViewer] Mermaid 转 PNG 失败，回退保存 SVG:', e);
+          logger.warn('[MediaViewer] Mermaid 转 PNG 失败，回退保存 SVG:', e);
           const fallbackPath = String(path).replace(/\.png$/i, '.svg');
           const buf = new Uint8Array(await svgBlob.arrayBuffer());
           await writeFile(fallbackPath, buf);
         }
       } catch (e) {
-        console.error('[MediaViewer] 保存 Mermaid 失败:', e);
+        logger.error('[MediaViewer] 保存 Mermaid 失败:', e);
       }
     };
 
@@ -801,7 +804,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
           onView: () => {
             const svg = resolveMermaidSvg(mermaidEl);
             if (!svg) {
-              console.warn('[MediaViewer] 未找到 Mermaid SVG');
+              logger.warn('[MediaViewer] 未找到 Mermaid SVG');
               return;
             }
             openOverlay({ kind: 'svg', svg });
@@ -815,7 +818,7 @@ export const addMediaViewerButtons = (container, options = {}) => {
       );
     });
   } catch (e) {
-    console.error('[MediaViewer] addMediaViewerButtons 失败:', e);
+    logger.error('[MediaViewer] addMediaViewerButtons 失败:', e);
   }
 };
 
@@ -830,7 +833,7 @@ function escapeRegExp(string) {
 // }
 
 export const renderMarkdown = async (content, options) => {
-  console.log("原始内容:", content);
+  logger.info("原始内容:", content);
   const {
     preserveOriginal = false, // 新增参数，控制是否保留原始内容
     mermaid: enableMermaid = true,
@@ -874,11 +877,11 @@ export const renderMarkdown = async (content, options) => {
         );
       });
     } catch (err) {
-      console.warn("[MarkdownRender] 图片路径处理失败，继续本地渲染:", err);
+      logger.warn("[MarkdownRender] 图片路径处理失败，继续本地渲染:", err);
     }
 
-    // console.log("result:", result);
-    // console.log("处理后的内容:", finalContent);
+    // logger.info("result:", result);
+    // logger.info("处理后的内容:", finalContent);
 
     // 初始化各组件
     if (enableMermaid) {
@@ -903,7 +906,7 @@ export const renderMarkdown = async (content, options) => {
     }
 
     if (enableMath) {
-      // console.log("初始化MathJax");
+      // logger.info("初始化MathJax");
       initMathJax();
     }
 
@@ -922,7 +925,7 @@ export const renderMarkdown = async (content, options) => {
                   hljs.highlight(code, { language: lang }).value
                 }</code></pre>`;
               } catch (err) {
-                console.warn(`代码高亮错误 (${lang}):`, err);
+                logger.warn(`代码高亮错误 (${lang}):`, err);
               }
             }
             return `<pre><code>${md.utils.escapeHtml(code)}</code></pre>`;
@@ -1076,7 +1079,7 @@ export const renderMarkdown = async (content, options) => {
                 .replace(/&amp;/g, "&");
               el.innerHTML = content;
             } catch (err) {
-              console.error("Mermaid内容处理错误:", err);
+              logger.error("Mermaid内容处理错误:", err);
             }
           });
 
@@ -1091,9 +1094,9 @@ export const renderMarkdown = async (content, options) => {
             });
           });
 
-          // console.log("Mermaid渲染完成: ", container.innerHTML);
+          // logger.info("Mermaid渲染完成: ", container.innerHTML);
         } catch (err) {
-          console.error("Mermaid渲染错误:", err);
+          logger.error("Mermaid渲染错误:", err);
         }
       }
     }
@@ -1127,10 +1130,10 @@ export const renderMarkdown = async (content, options) => {
     if (enableButtons) {
       addCopyButtons(container, { theme });
     }
-    // console.log("渲染后的HTML:", container.innerHTML);
+    // logger.info("渲染后的HTML:", container.innerHTML);
     return container.innerHTML;
   } catch (err) {
-    console.error("Markdown处理失败:", err);
+    logger.error("Markdown处理失败:", err);
     return content;
   }
 };
@@ -1138,7 +1141,7 @@ export const renderMarkdown = async (content, options) => {
 // 安全编码函数（完整实现）
 function safeEncode(content) {
   if (!content) {
-    console.warn("安全编码: 空内容");
+    logger.warn("安全编码: 空内容");
     return "";
   }
 
@@ -1151,6 +1154,6 @@ function safeEncode(content) {
     .replace(/\//g, "%2F")
     .replace(/\\/g, "%5C");
 
-  // console.log("安全编码结果:", { original: content, encoded });
+  // logger.info("安全编码结果:", { original: content, encoded });
   return encoded;
 }

@@ -129,6 +129,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { invoke } from '@tauri-apps/api/core'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
@@ -143,6 +144,7 @@ import {
   AddOutline as Add
 } from '@vicons/ionicons5'
 
+const logger = createLogger('SearchViewSidebar')
 const store = useFlipboardStore()
 const message = useMessage()
 
@@ -184,13 +186,13 @@ const selectCategory = (categoryId) => {
 
 const openFeedManagerWindow = async () => {
   try {
-    console.log('SearchViewSidebar: open feed manager window')
+    logger.info('SearchViewSidebar: open feed manager window')
     await invoke('create_flipboard_feed_window', {
       label: 'flipboard_feeds',
       title: '订阅源管理'
     })
   } catch (error) {
-    console.error('SearchViewSidebar: open feed manager window failed:', error)
+    logger.error('SearchViewSidebar: open feed manager window failed:', error)
     message.error('打开订阅源管理窗口失败')
   }
 }

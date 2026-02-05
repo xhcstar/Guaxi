@@ -225,6 +225,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { NIcon, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -254,7 +255,7 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
-
+const logger = createLogger('GuaxiHeader')
 const rightSiderStore = useRightSiderStore()
 const settingsStore = useSettingsStore()
 const siderStore = useSiderStore();
@@ -308,7 +309,7 @@ const setSyncState = (patch) => {
   try {
     localStorage.setItem(RESOURCE_REPO_SYNC_STATUS_KEY, JSON.stringify(next))
   } catch (e) {
-    console.warn('[GuaxiHeader] write sync state failed', e)
+    logger.warn('[GuaxiHeader] write sync state failed', e)
   }
 
   try {
@@ -318,10 +319,10 @@ const setSyncState = (patch) => {
       })
     )
   } catch (e) {
-    console.warn('[GuaxiHeader] dispatch sync state event failed', e)
+    logger.warn('[GuaxiHeader] dispatch sync state event failed', e)
   }
 
-  console.log('[GuaxiHeader] resource repo sync state', next)
+  logger.info('[GuaxiHeader] resource repo sync state', next)
 }
 
 const autoSyncBusy = ref(false)
@@ -336,18 +337,18 @@ const runResourceRepoSync = async (reason) => {
 
   try {
     setSyncState({ status: 'running', action, at: nowLabel(), detail: '' })
-    console.info('[GuaxiHeader] resource repo auto sync start', { reason })
+    logger.info('[GuaxiHeader] resource repo auto sync start', { reason })
 
     const res = await invoke('resource_repo_sync_now')
     const text = typeof res === 'string' ? res : '同步完成'
 
     setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
-    console.info('[GuaxiHeader] resource repo auto sync success', { reason, text })
+    logger.info('[GuaxiHeader] resource repo auto sync success', { reason, text })
   } catch (e) {
     const msg = formatInvokeError(e)
     const skipped = msg.includes('未启用资源库同步后端')
 
-    console.warn('[GuaxiHeader] resource repo auto sync failed', { reason, msg, raw: e })
+    logger.warn('[GuaxiHeader] resource repo auto sync failed', { reason, msg, raw: e })
 
     setSyncState({
       status: skipped ? 'skipped' : 'error',
@@ -390,18 +391,18 @@ const waitForWindowMinimized = async (timeoutMs = 1200, settleMs = 260) => {
     try {
       const minimized = await appWindow.isMinimized();
       if (minimized) {
-        console.debug('[Screenshot] Window minimized, waiting extra settle time before capture');
+        logger.debug('[Screenshot] Window minimized, waiting extra settle time before capture');
         await sleep(settleMs);
-        console.debug('[Screenshot] Window minimized and settled, ready to capture');
+        logger.debug('[Screenshot] Window minimized and settled, ready to capture');
         return true;
       }
     } catch (e) {
-      console.warn('[Screenshot] Failed to check isMinimized:', e);
+      logger.warn('[Screenshot] Failed to check isMinimized:', e);
       break;
     }
     await sleep(50);
   }
-  console.warn('[Screenshot] Wait for minimized timed out, continue to capture');
+  logger.warn('[Screenshot] Wait for minimized timed out, continue to capture');
   return false;
 };
 
@@ -460,7 +461,7 @@ async function openTemplateManager() {
       message.info('模板管理器窗口已打开')
       return
     }
-    console.error('打开模板管理器失败:', err)
+    logger.error('打开模板管理器失败:', err)
     message.error('打开模板管理器失败')
   }
 }
@@ -478,7 +479,7 @@ async function openResourceRepoManager() {
       message.info('资源库管理窗口已打开')
       return
     }
-    console.error('打开资源库管理失败:', err)
+    logger.error('打开资源库管理失败:', err)
     message.error('打开资源库管理失败')
   }
 }
@@ -486,26 +487,26 @@ async function openResourceRepoManager() {
 async function CaptureScreenshot() {
   try {
     try {
-      console.debug('[Screenshot] Minimizing window before capture')
+      logger.debug('[Screenshot] Minimizing window before capture')
       await appWindow.minimize()
       await waitForWindowMinimized()
     } catch (minErr) {
-      console.warn('[Screenshot] Failed to minimize window:', minErr)
+      logger.warn('[Screenshot] Failed to minimize window:', minErr)
     }
 
     const originalPath = fileTreeStore.selectedFile?.path
-    console.debug('[Screenshot] Triggered', {
+    logger.debug('[Screenshot] Triggered', {
       activeTab: fileTreeStore.activeTab,
       selectedPath: originalPath
     })
 
     if (!originalPath) {
       message.warning('请先打开一个文件')
-      console.warn('[Screenshot] Aborted: no selected file path')
+      logger.warn('[Screenshot] Aborted: no selected file path')
       return
     }
 
-    console.debug('[Screenshot] Invoking take_screenshot_markdown', {
+    logger.debug('[Screenshot] Invoking take_screenshot_markdown', {
       ownerFilePath: originalPath,
       alt: 'screenshot'
     })
@@ -515,7 +516,7 @@ async function CaptureScreenshot() {
       alt: 'screenshot'
     })
 
-    console.debug('[Screenshot] Backend returned', {
+    logger.debug('[Screenshot] Backend returned', {
       relative_path: result?.relative_path,
       absolute_path: result?.absolute_path,
       url: result?.url,
@@ -527,24 +528,24 @@ async function CaptureScreenshot() {
       throw new Error('后端未返回 markdown')
     }
 
-    console.debug('[Screenshot] Inserting markdown into editor')
+    logger.debug('[Screenshot] Inserting markdown into editor')
     const inserted = await editorStore.insertContent(`${markdown}\n`)
-    console.debug('[Screenshot] Insert result', { inserted })
+    logger.debug('[Screenshot] Insert result', { inserted })
 
     if (!inserted) {
       throw new Error('插入失败：编辑器未就绪')
     }
   } catch (err) {
-    console.error('[Screenshot] Failed:', err)
+    logger.error('[Screenshot] Failed:', err)
     message.error('截图失败')
   } finally {
     try {
-      console.debug('[Screenshot] Restoring window after capture')
+      logger.debug('[Screenshot] Restoring window after capture')
       await appWindow.unminimize()
       await appWindow.show()
       await appWindow.setFocus()
     } catch (restoreErr) {
-      console.warn('[Screenshot] Failed to restore window:', restoreErr)
+      logger.warn('[Screenshot] Failed to restore window:', restoreErr)
     }
   }
 }
@@ -1268,7 +1269,7 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
 
   Promise.resolve(initResourceRepoAutoSync()).catch((e) => {
-    console.warn('[GuaxiHeader] init resource repo auto sync failed', e)
+    logger.warn('[GuaxiHeader] init resource repo auto sync failed', e)
   })
 })
 

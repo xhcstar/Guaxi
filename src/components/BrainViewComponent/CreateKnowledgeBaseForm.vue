@@ -42,6 +42,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed } from 'vue';
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { useMessage } from 'naive-ui';
@@ -50,6 +51,7 @@ import {
   CheckmarkCircleOutline,
 } from '@vicons/ionicons5';
 
+const logger = createLogger('CreateKnowledgeBaseForm')
 // 使用知识库 store 和消息组件
 const knowledgeBaseStore = useKnowledgeBaseStore();
 const message = useMessage();
@@ -97,7 +99,7 @@ const handleSubmit = async () => {
     // 关闭表单
     closeForm();
   } catch (e) {
-    console.error('知识库创建失败:', e);
+    logger.error('知识库创建失败:', e);
 
     // 显示错误消息（使用 store 返回的错误或默认消息）
     message.error(e.message || '知识库创建失败');

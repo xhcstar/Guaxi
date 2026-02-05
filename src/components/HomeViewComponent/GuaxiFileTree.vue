@@ -180,6 +180,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
 import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
@@ -194,7 +195,7 @@ import { NList, NListItem, NCollapseTransition, NText, NTooltip, NIconWrapper } 
 import { RefreshOutline as RefreshIcon, ChevronDownOutline as ChevronDownIcon, ChevronForwardOutline as ChevronForwardIcon } from '@vicons/ionicons5'
 import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, FolderAdd20Regular as FolderAddIcon } from '@vicons/fluent'
 
-
+const logger = createLogger('GuaxiFileTree')
 const message = useMessage();
 // 处理文件树容器的右键点击事件
 const treeRef = ref(null)
@@ -243,7 +244,7 @@ const toggleGitPanel = async () => {
       message.info('Git 窗口已打开')
       return
     }
-    console.error('创建 Git 窗口失败:', err)
+    logger.error('创建 Git 窗口失败:', err)
     message.error('打开 Git 窗口失败')
   }
 }
@@ -261,7 +262,7 @@ const openKnowledgeBaseManager = async () => {
       message.info('知识库管理器窗口已打开')
       return
     }
-    console.error('打开知识库管理器失败:', err)
+    logger.error('打开知识库管理器失败:', err)
     message.error('打开知识库管理器失败')
   }
 }
@@ -459,7 +460,7 @@ const confirmImportAsTemplate = async () => {
     message.success('已导入到模板库')
     importTemplateModalVisible.value = false
   } catch (error) {
-    console.error('导入模板失败:', error)
+    logger.error('导入模板失败:', error)
     message.error('导入模板失败')
   } finally {
     importTemplateLoading.value = false
@@ -629,7 +630,7 @@ const handleDeleteKnowledgeBase = async (repoPath) => {
 
     message.success('知识库已删除')
   } catch (error) {
-    console.error('删除知识库失败:', error)
+    logger.error('删除知识库失败:', error)
     message.error('删除知识库失败')
   }
 }
@@ -637,13 +638,13 @@ const handleDeleteKnowledgeBase = async (repoPath) => {
 // 获取仓库显示名称
 const getRepoName = (path) => {
   const name = path.split(/[\\/]/).pop() || path
-  // console.log('[Util] 获取仓库名称:', { path, name })
+  // logger.info('[Util] 获取仓库名称:', { path, name })
   return name
 }
 
 const toggleRepo = async (path) => {
-  // console.log('目标路径:', path)
-  // console.log('当前激活路径:', fileTreeStore.activeRepoPath)
+  // logger.info('目标路径:', path)
+  // logger.info('当前激活路径:', fileTreeStore.activeRepoPath)
 
   if (fileTreeStore.activeRepoPath === path) {
     // 如果点击的是当前已激活的仓库，则切换展开状态
@@ -657,21 +658,21 @@ const toggleRepo = async (path) => {
 }
 
 const loadRepoTree = async (path) => {
-  // console.log('[API] 加载仓库树')
+  // logger.info('[API] 加载仓库树')
   try {
     // 无论数据是否为空都重新加载
     await loadFileTree()
     // 确保仓库在加载后保持展开状态
     // fileTreeStore.expandedRepos.set(path, false)
   } catch (error) {
-    console.error('[API] 加载仓库树失败:', error)
+    logger.error('[API] 加载仓库树失败:', error)
   }
 }
 
 const refreshAll = async () => {
   const activePath = fileTreeStore.activeRepoPath
   if (!activePath) return
-  console.log('[Refresh] 刷新仓库:', activePath)
+  logger.info('[Refresh] 刷新仓库:', activePath)
   await loadRepoTree(activePath)
 }
 
@@ -689,17 +690,17 @@ const normalizeTreeIds = (tree) => {
 // 加载文件树数据
 const loadFileTree = async (options = {}) => {
   const { force = false } = options || {}
-  console.log('[API] 加载文件树');
+  logger.info('[API] 加载文件树');
   isTreeLoading.value = true
   try {
-    console.log('当前仓库路径:', fileTreeStore.activeRepoPath);
+    logger.info('当前仓库路径:', fileTreeStore.activeRepoPath);
     await fileTreeStore.fetchFileTree(fileTreeStore.activeRepoPath, { force });
 
     const filteredTree = filterHiddenTree(fileTreeStore.fileTree);
 
     fileTree.value = [...sortFileTree(normalizeTreeIds(filteredTree))];
   } catch (error) {
-    console.error('获取文件树数据失败', error);
+    logger.error('获取文件树数据失败', error);
     fileTree.value = [];
   } finally {
     isTreeLoading.value = false
@@ -763,15 +764,15 @@ const renderPrefix = ({ option }) => {
 }
 
 const handleSelect = async (keys) => {
-  console.log('触发选中事件, keys 参数:', keys);
+  logger.info('触发选中事件, keys 参数:', keys);
 
   // 1. 处理空选中情况
   if (!keys || keys.length === 0) {
     if (isTreeLoading.value) {
-      console.log('空选中（加载中），忽略本次清空事件');
+      logger.info('空选中（加载中），忽略本次清空事件');
       return;
     }
-    console.log('空选中，清空选中状态');
+    logger.info('空选中，清空选中状态');
     lastSelectedKey.value = null;
     selectedKeys.value = [];
     return;
@@ -782,7 +783,7 @@ const handleSelect = async (keys) => {
 
   // 检查是否是隐藏路径
   if (isHiddenPath(normalizedKey)) {
-    console.log('跳过隐藏目录/文件:', normalizedKey);
+    logger.info('跳过隐藏目录/文件:', normalizedKey);
     return;
   }
 
@@ -790,7 +791,7 @@ const handleSelect = async (keys) => {
   if (normalizedKey === normalizePath(lastSelectedKey.value)) {
     const existingTab = fileTreeStore.openTabs.find(tab => normalizePath(tab.path) === normalizedKey)
     if (existingTab) {
-      console.log('忽略重复选中（已打开标签页）:', normalizedKey);
+      logger.info('忽略重复选中（已打开标签页）:', normalizedKey);
       fileTreeStore.setActiveTab(existingTab.path)
       return;
     }
@@ -800,17 +801,17 @@ const handleSelect = async (keys) => {
   selectedKeys.value = [selectedKey];
   lastSelectedKey.value = selectedKey;
 
-  console.log('查找选中节点, key:', normalizedKey);
+  logger.info('查找选中节点, key:', normalizedKey);
   const selectedNode = findNodeById(fileTree.value, normalizedKey);
 
   if (!selectedNode) {
-    console.warn('未找到选中节点');
+    logger.warn('未找到选中节点');
     lastSelectedKey.value = null;
     selectedKeys.value = [];
     return;
   }
 
-  console.log('找到选中节点:', selectedNode);
+  logger.info('找到选中节点:', selectedNode);
 
   if (editingNode.value || selectedNode.isNew) {
     lastSelectedKey.value = null
@@ -822,7 +823,7 @@ const handleSelect = async (keys) => {
       // 检查是否已存在标签页
       const existingTab = fileTreeStore.openTabs.find(tab => tab.path === selectedNode.id);
       if (existingTab) {
-        console.log('文件已在标签页中打开');
+        logger.info('文件已在标签页中打开');
         fileTreeStore.setActiveTab(selectedNode.id);
         return;
       }
@@ -841,7 +842,7 @@ const handleSelect = async (keys) => {
         await handleFileRemoved(selectedNode.id)
       }
     } catch (error) {
-      console.error('处理文件选中时出错:', error);
+      logger.error('处理文件选中时出错:', error);
     }
   } else {
     try {
@@ -857,7 +858,7 @@ const handleSelect = async (keys) => {
 
       await scrollToKey(dirId)
     } catch (error) {
-      console.error('加载子目录内容失败:', error);
+      logger.error('加载子目录内容失败:', error);
     }
   }
 };
@@ -865,11 +866,11 @@ const handleSelect = async (keys) => {
 // 递归查找节点
 const findNodeById = (tree, targetId) => {
   const normalizedTargetId = normalizePath(targetId);
-  console.log('查找节点:', normalizedTargetId);
+  logger.info('查找节点:', normalizedTargetId);
 
   // 跳过隐藏目录
   if (isHiddenPath(normalizedTargetId)) {
-    console.log('跳过隐藏目录:', normalizedTargetId);
+    logger.info('跳过隐藏目录:', normalizedTargetId);
     return null;
   }
 
@@ -920,7 +921,7 @@ const nodeProps = ({ option }) => ({
 
     isContextMenuVisible.value = true
     contextMenuPosition.value = { x: e.clientX, y: e.clientY }
-    console.log('节点右键菜单触发:', option.name)
+    logger.info('节点右键菜单触发:', option.name)
   }
 })
 
@@ -1100,7 +1101,7 @@ const handleEditComplete = async (node, parentNode, isDirectory, isRoot, resolve
 
     resolve(node);
   } catch (error) {
-    console.error('创建失败:', error);
+    logger.error('创建失败:', error);
     removeTempNode()
     message.error(`创建失败: ${error.message}`);
     resolve(null);
@@ -1124,7 +1125,7 @@ const handleBlur = async () => {
     // 名称为空，如果是新节点则删除
     if (node.isNew) {
       if (!parentNode) {
-        // console.warn('未找到父节点，无法删除新节点');
+        // logger.warn('未找到父节点，无法删除新节点');
         // 根目录下直接从 fileTree.value 里移除
         fileTree.value = fileTree.value.filter(n => n.id !== oldId);
         // 新增：刷新根目录
@@ -1183,7 +1184,7 @@ const handleBlur = async () => {
       }
     }
   } catch (error) {
-    console.error('重命名操作失败:', error);
+    logger.error('重命名操作失败:', error);
     node.name = oldId.split(/[\\/]/).pop();
     node.id = oldId;
     message.error(`重命名失败: ${error.message}`);
@@ -1236,7 +1237,7 @@ const renameNode = async (nodeId) => {
 // 修改后的 findParentNode 函数
 const findParentNode = (tree, targetId) => {
   const normalizedTargetId = normalizePath(targetId);
-  console.log('查找父节点:', normalizedTargetId);
+  logger.info('查找父节点:', normalizedTargetId);
 
   // 深度优先搜索
   const dfs = (nodes, parent) => {
@@ -1260,16 +1261,16 @@ const findParentNode = (tree, targetId) => {
 
 // 开始编辑节点
 const startEditing = (node) => {
-  console.log('startEditing 开始编辑节点:', node.name);
+  logger.info('startEditing 开始编辑节点:', node.name);
   editingNode.value = node
   editName.value = node.name
-  console.log('startEditing ==> ', node);
+  logger.info('startEditing ==> ', node);
 }
 
 const renderLabel = ({ option }) => {
   // 用 id 判断是否为正在编辑的节点
   if (editingNode.value && normalizePath(editingNode.value.id) === normalizePath(option.id)) {
-    console.log('EEE ======> renderLabel editingNode.value:', editingNode.value);
+    logger.info('EEE ======> renderLabel editingNode.value:', editingNode.value);
     return h('input', {
       class: 'editable-input',
       'data-node-id': normalizePath(option.id),
@@ -1279,8 +1280,8 @@ const renderLabel = ({ option }) => {
       onKeydown: handleKeydown,
     })
   } else {
-    // console.log('======> renderLabel option:', option);
-    // console.log('======> renderLabel editingNode.value:', editingNode.value);
+    // logger.info('======> renderLabel option:', option);
+    // logger.info('======> renderLabel editingNode.value:', editingNode.value);
     return option.name
   }
 }
@@ -1292,7 +1293,7 @@ watch(editingNode, async (val) => {
 
 // 处理输入框的 keydown 事件
 const handleKeydown = async (e) => {
-  console.log('handleKeydown triggered'); // 添加日志
+  logger.info('handleKeydown triggered'); // 添加日志
   if (e.key === 'Enter') {
     e.target.blur(); // 触发 input 失焦事件
   } else if (e.key === 'Escape') {
@@ -1336,8 +1337,8 @@ const moveNode = async (node) => {
   const sourceParentPath = sourcePath.split('/').slice(0, -1).join('/') || normalizePath(fileTreeStore.activeRepoPath);
 
   try {
-    console.log('源路径:', sourcePath);
-    console.log('目标路径:', destinationPath);
+    logger.info('源路径:', sourcePath);
+    logger.info('目标路径:', destinationPath);
 
     await invoke('move_path', { sourcePath, destinationPath });
 
@@ -1378,9 +1379,9 @@ const moveNode = async (node) => {
     await refreshDirectory(sourceParentPath);
     await refreshDirectory(targetDir);
 
-    console.log('移动成功');
+    logger.info('移动成功');
   } catch (error) {
-    console.error('移动失败:', error);
+    logger.error('移动失败:', error);
     await refreshDirectory(sourceParentPath);
     await refreshDirectory(targetDir);
   }
@@ -1403,10 +1404,10 @@ const selectTargetPath = async () => {
 const refreshDirectory = async (directoryId) => {
   const activeRepo = normalizePath(fileTreeStore.activeRepoPath)
   const normalizedId = normalizePath(directoryId)
-  console.log('刷新目录:', normalizedId)
+  logger.info('刷新目录:', normalizedId)
 
   if (isHiddenPath(normalizedId)) {
-    console.log('跳过隐藏目录刷新:', normalizedId)
+    logger.info('跳过隐藏目录刷新:', normalizedId)
     return
   }
 
@@ -1452,9 +1453,9 @@ const refreshDirectory = async (directoryId) => {
       expandedKeys.value.push(targetDir)
     }
 
-    console.log('目录局部刷新成功:', directoryNode)
+    logger.info('目录局部刷新成功:', directoryNode)
   } catch (error) {
-    console.error('目录刷新失败:', error)
+    logger.error('目录刷新失败:', error)
   }
 };
 
@@ -1485,7 +1486,7 @@ const handleFileCreated = async (filePath) => {
 
   // 检查是否是隐藏路径
   if (isHiddenPath(normalizedPath) || isHiddenPath(parentPath)) {
-    console.log('跳过隐藏目录的文件创建事件:', normalizedPath);
+    logger.info('跳过隐藏目录的文件创建事件:', normalizedPath);
     return;
   }
 
@@ -1502,7 +1503,7 @@ const handleFileRenamed = async (oldPath, newPath) => {
 
     // 检查是否是隐藏路径
     if (isHiddenPath(normalizedNewPath) || (normalizedOldPath && isHiddenPath(normalizedOldPath))) {
-      console.log('跳过隐藏目录的文件重命名事件:', normalizedOldPath, '->', normalizedNewPath);
+      logger.info('跳过隐藏目录的文件重命名事件:', normalizedOldPath, '->', normalizedNewPath);
       return;
     }
 
@@ -1533,14 +1534,14 @@ const handleFileRenamed = async (oldPath, newPath) => {
 
     await refreshDirectory(parentPath || fileTreeStore.activeRepoPath);
   } catch (error) {
-    console.error('处理文件重命名时出错:', error);
+    logger.error('处理文件重命名时出错:', error);
   }
 };
 
 // 文件监控函数
 const setupFileWatcher = async () => {
   try {
-    console.log('开始监控目录:', fileTreeStore.activeRepoPath)
+    logger.info('开始监控目录:', fileTreeStore.activeRepoPath)
 
     // 启动后端监控
     await invoke('start_file_watching', {
@@ -1557,30 +1558,30 @@ const setupFileWatcher = async () => {
     // 监听文件变化事件
     const unlisten = await listen('file_change', (event) => {
       const payload = event.payload
-      console.log('文件系统变化事件:', payload)
+      logger.info('文件系统变化事件:', payload)
 
       switch (payload.kind) {
         case 'Create':
-          // console.log('文件创建事件:', payload.path)
+          // logger.info('文件创建事件:', payload.path)
           handleFileCreated(payload.path)
           break
         case 'Remove':
-          // console.log('文件删除事件:', payload.path)
+          // logger.info('文件删除事件:', payload.path)
           handleFileRemoved(payload.path)
           break
         case 'Rename':
           // 处理old_path可能为null的情况
           const oldPath = payload.old_path || extractOldPathFromEvent(payload)
-          // console.log('文件重命名事件:', oldPath, '->', payload.path)
+          // logger.info('文件重命名事件:', oldPath, '->', payload.path)
           handleFileRenamed(oldPath, payload.path)
           break
       }
     })
     unlistenRef.value = unlisten; // ★ 保存监听器
 
-    console.log('文件监控已启动')
+    logger.info('文件监控已启动')
   } catch (error) {
-    console.error('启动文件监控失败:', error)
+    logger.error('启动文件监控失败:', error)
   }
 }
 
@@ -1596,7 +1597,7 @@ const handleFileRemoved = async (filePath) => {
   const parentPath = removedPath.split('/').slice(0, -1).join('/')
 
   if (isHiddenPath(removedPath) || isHiddenPath(parentPath)) {
-    console.log('跳过隐藏目录的文件删除事件:', removedPath)
+    logger.info('跳过隐藏目录的文件删除事件:', removedPath)
     return
   }
 
@@ -1655,13 +1656,13 @@ const cleanupFileWatcher = async () => {
       await unlistenRef.value()
       unlistenRef.value = null
     }
-    console.log('文件监控已停止')
+    logger.info('文件监控已停止')
   } catch (error) {
     if (error && error.message && error.message.includes('unregisterListener')) {
-      console.warn('文件监控已经停止，无需重复停止')
+      logger.warn('文件监控已经停止，无需重复停止')
       return
     }
-    console.error('停止文件监控失败:', error)
+    logger.error('停止文件监控失败:', error)
   }
 }
 
@@ -1684,24 +1685,24 @@ const syncRepoPathsFromKnowledgeBases = (knowledgeBases) => {
 
 // 新增初始化函数
 const initializeRepositories = async () => {
-  console.log('[Init] 开始初始化知识库')
+  logger.info('[Init] 开始初始化知识库')
 
   try {
     let knowledgeBases = knowledgeBaseStore.knowledgeBases
     if (!knowledgeBases || knowledgeBases.length === 0) {
       knowledgeBases = await knowledgeBaseStore.fetchKnowledgeBases()
     }
-    console.log('[Load] 获取知识库列表:', knowledgeBases)
+    logger.info('[Load] 获取知识库列表:', knowledgeBases)
 
     const paths = syncRepoPathsFromKnowledgeBases(knowledgeBases)
 
     if (!fileTreeStore.activeRepoPath && paths.length > 0) {
-      console.log('[Set] 设置默认激活路径:', paths[0])
+      logger.info('[Set] 设置默认激活路径:', paths[0])
     }
 
     return paths
   } catch (error) {
-    console.error('[Error] 初始化知识库失败:', error)
+    logger.error('[Error] 初始化知识库失败:', error)
     throw error
   } finally {
     if (fileTreeStore.activeRepoPath) {
@@ -1762,7 +1763,7 @@ onUnmounted(() => {
 
   // 清理文件监控 - 不使用 await
   cleanupFileWatcher().catch(error => {
-    console.error('清理文件监控时出错:', error)
+    logger.error('清理文件监控时出错:', error)
   })
 })
 

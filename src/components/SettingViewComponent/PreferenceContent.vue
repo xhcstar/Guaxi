@@ -96,10 +96,13 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, onMounted, watch } from 'vue'
 import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
+
+const logger = createLogger('PreferenceContent')
 
 const settingsStore = useSettingsStore()
 
@@ -149,7 +152,7 @@ onMounted(async () => {
 
     themeValue.value = settingsStore.appearanceTheme
   } catch (error) {
-    console.error('加载偏好设置失败:', error)
+    logger.error('加载偏好设置失败:', error)
     gcCycleHours.value = 1
     lspHighlightEnabled.value = false
     themeValue.value = 'light'
@@ -167,7 +170,7 @@ const handleThemeChange = async (value) => {
   try {
     themeSaving.value = true
 
-    console.log('[Preference] 切换主题:', {
+    logger.info('[Preference] 切换主题:', {
       next,
       current: settingsStore.appearanceTheme,
     })
@@ -176,14 +179,14 @@ const handleThemeChange = async (value) => {
 
     try {
       const appearance = await invoke('get_appearance_config')
-      console.log('[Preference] 后端返回的 appearance（用于确认是否写入配置文件）:', appearance)
+      logger.info('[Preference] 后端返回的 appearance（用于确认是否写入配置文件）:', appearance)
     } catch (e) {
-      console.error('[Preference] 获取后端 appearance 失败（无法确认是否写入配置文件）:', e)
+      logger.error('[Preference] 获取后端 appearance 失败（无法确认是否写入配置文件）:', e)
     }
 
-    console.log('[Preference] 主题切换完成（已应用并已尝试写入配置文件）:', next)
+    logger.info('[Preference] 主题切换完成（已应用并已尝试写入配置文件）:', next)
   } catch (error) {
-    console.error('[Preference] 主题切换失败（可能未写入配置文件）:', error)
+    logger.error('[Preference] 主题切换失败（可能未写入配置文件）:', error)
   } finally {
     themeSaving.value = false
   }
@@ -198,7 +201,7 @@ const handleGcCycleChange = async (value) => {
     const seconds = gcCycleHours.value * 3600
     await invoke('set_gc_cycle_seconds', { seconds })
   } catch (error) {
-    console.error('更新 GC 周期配置失败:', error)
+    logger.error('更新 GC 周期配置失败:', error)
   } finally {
     loading.value = false
   }
@@ -209,7 +212,7 @@ const handleLspHighlightChange = async (value) => {
     loading.value = true
     await invoke('set_lsp_syntax_highlight_enabled', { enabled: value })
   } catch (error) {
-    console.error('更新 LSP 语法高亮配置失败:', error)
+    logger.error('更新 LSP 语法高亮配置失败:', error)
   } finally {
     loading.value = false
   }
@@ -220,19 +223,19 @@ const handleWebrtcSignalUrlSave = async () => {
     webrtcSignalSaving.value = true
     const url = String(webrtcSignalUrl.value || '').trim()
 
-    console.log('[Preference] 保存 WebRTC 信令服务地址:', url)
+    logger.info('[Preference] 保存 WebRTC 信令服务地址:', url)
 
     await invoke('set_webrtc_signal_url', { url })
 
     try {
       const saved = await invoke('get_webrtc_signal_url')
-      console.log('[Preference] WebRTC 信令服务地址已保存（后端读取确认）:', saved)
+      logger.info('[Preference] WebRTC 信令服务地址已保存（后端读取确认）:', saved)
       webrtcSignalUrl.value = typeof saved === 'string' ? saved : url
     } catch (e) {
-      console.error('[Preference] 读取 WebRTC 信令服务地址失败（无法确认是否写入配置文件）:', e)
+      logger.error('[Preference] 读取 WebRTC 信令服务地址失败（无法确认是否写入配置文件）:', e)
     }
   } catch (error) {
-    console.error('保存 WebRTC 信令服务地址失败:', error)
+    logger.error('保存 WebRTC 信令服务地址失败:', error)
   } finally {
     webrtcSignalSaving.value = false
   }

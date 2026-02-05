@@ -214,6 +214,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 import {
   NCard,
@@ -241,6 +242,8 @@ import {
 import { repoStore } from '../../stores/repoStore'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
+
+const logger = createLogger('NoteRepoContent')
 
 const store = repoStore();
 
@@ -310,7 +313,7 @@ const readSyncState = () => {
       detail: String(v?.detail || ''),
     }
   } catch (e) {
-    console.warn('[NoteRepoContent][ResourceRepoSync] read sync state failed', e)
+    logger.warn('[NoteRepoContent][ResourceRepoSync] read sync state failed', e)
     return { status: 'idle', action: '', at: '', detail: '' }
   }
 }
@@ -319,7 +322,7 @@ const writeSyncState = (next) => {
   try {
     localStorage.setItem(RESOURCE_REPO_SYNC_STATUS_KEY, JSON.stringify(next))
   } catch (e) {
-    console.warn('[NoteRepoContent][ResourceRepoSync] write sync state failed', e)
+    logger.warn('[NoteRepoContent][ResourceRepoSync] write sync state failed', e)
   }
 }
 
@@ -335,7 +338,7 @@ const applySyncState = (next, source) => {
     at: String(next?.at || ''),
     detail: String(next?.detail || ''),
   }
-  console.log('[NoteRepoContent][ResourceRepoSync] state update', { source, state: syncState.value })
+  logger.info('[NoteRepoContent][ResourceRepoSync] state update', { source, state: syncState.value })
 }
 
 const refreshSyncStateFromStorage = (source) => {
@@ -350,7 +353,7 @@ const refreshSyncStateFromStorage = (source) => {
     const v = JSON.parse(raw)
     applySyncState(v, source)
   } catch (e) {
-    console.warn('[NoteRepoContent][ResourceRepoSync] refresh sync state failed', e)
+    logger.warn('[NoteRepoContent][ResourceRepoSync] refresh sync state failed', e)
   }
 }
 
@@ -380,10 +383,10 @@ const setSyncState = (patch) => {
       })
     )
   } catch (e) {
-    console.warn('[NoteRepoContent][ResourceRepoSync] dispatch sync state event failed', e)
+    logger.warn('[NoteRepoContent][ResourceRepoSync] dispatch sync state event failed', e)
   }
 
-  console.log('[NoteRepoContent][ResourceRepoSync] state', next)
+  logger.info('[NoteRepoContent][ResourceRepoSync] state', next)
 }
 
 const syncUi = computed(() => {
@@ -415,10 +418,10 @@ const handleOpenFileBrowserForLibraryRoot = async () => {
       await invoke('set_libraries_root', { path: selectedPath });
       librariesRoot.value = selectedPath;
       store.set_librariesRoot(selectedPath);
-      console.log('文件库根目录已更新为:', store.librariesRoot);
+      logger.info('文件库根目录已更新为:', store.librariesRoot);
     }
   } catch (error) {
-    console.error('打开文件浏览器失败:', error);
+    logger.error('打开文件浏览器失败:', error);
   }
 };
 
@@ -434,7 +437,7 @@ onMounted(async () => {
       refreshSyncStateFromStorage('poll')
     }, 800)
   } catch (e) {
-    console.warn('[NoteRepoContent][ResourceRepoSync] start sync state poll failed', e)
+    logger.warn('[NoteRepoContent][ResourceRepoSync] start sync state poll failed', e)
   }
 
   librariesRoot.value = await invoke('get_libraries_root');
@@ -442,7 +445,7 @@ onMounted(async () => {
   try {
     knowledgeBasesRoot.value = await invoke('get_knowledge_bases_root');
   } catch (error) {
-    console.error('加载知识库根目录失败:', error);
+    logger.error('加载知识库根目录失败:', error);
     knowledgeBasesRoot.value = '';
   }
 
@@ -452,7 +455,7 @@ onMounted(async () => {
     const gitUsername = remoteConfig?.gitUsername ?? remoteConfig?.git_username;
     const gitEmail = remoteConfig?.gitEmail ?? remoteConfig?.git_email;
 
-    console.log('[NoteRepoContent][KB Remote] loaded', {
+    logger.info('[NoteRepoContent][KB Remote] loaded', {
       remoteUrl: remoteUrl ? String(remoteUrl) : '',
       gitUsername: gitUsername ? String(gitUsername) : '',
       gitEmail: gitEmail ? String(gitEmail) : '',
@@ -462,7 +465,7 @@ onMounted(async () => {
     knowledgeBasesGitUsername.value = gitUsername ? String(gitUsername) : '';
     knowledgeBasesGitEmail.value = gitEmail ? String(gitEmail) : '';
   } catch (error) {
-    console.error('加载知识库远程仓库配置失败:', error);
+    logger.error('加载知识库远程仓库配置失败:', error);
     knowledgeBasesRemoteUrl.value = '';
     knowledgeBasesGitUsername.value = '';
     knowledgeBasesGitEmail.value = '';
@@ -472,7 +475,7 @@ onMounted(async () => {
     const tplPath = await invoke('get_template_repo_path');
     templateRepoPath.value = typeof tplPath === 'string' ? tplPath : '';
   } catch (error) {
-    console.error('加载模板库路径失败:', error);
+    logger.error('加载模板库路径失败:', error);
     templateRepoPath.value = '';
   }
 
@@ -485,7 +488,7 @@ onMounted(async () => {
       resourceRoot.value = '';
     }
   } catch (error) {
-    console.error('加载资源库根目录失败:', error);
+    logger.error('加载资源库根目录失败:', error);
     resourceRoot.value = '';
   } finally {
     loading.value = false;
@@ -506,7 +509,7 @@ onMounted(async () => {
     syncthingApiKey.value = cfg?.syncthing?.api_key ? String(cfg.syncthing.api_key) : '';
     syncthingFolderId.value = cfg?.syncthing?.folder_id ? String(cfg.syncthing.folder_id) : '';
 
-    console.log('[NoteRepoContent][ResourceRepoSync] loaded', {
+    logger.info('[NoteRepoContent][ResourceRepoSync] loaded', {
       provider: syncProvider.value,
       preferPull: preferPull.value,
       webdavUrl: webdavUrl.value,
@@ -515,7 +518,7 @@ onMounted(async () => {
       syncthingFolderId: syncthingFolderId.value,
     });
   } catch (error) {
-    console.error('加载资源库同步配置失败:', error);
+    logger.error('加载资源库同步配置失败:', error);
   }
 });
 
@@ -529,7 +532,7 @@ onUnmounted(() => {
       syncPollTimer = null
     }
   } catch (e) {
-    console.warn('[NoteRepoContent][ResourceRepoSync] stop sync state poll failed', e)
+    logger.warn('[NoteRepoContent][ResourceRepoSync] stop sync state poll failed', e)
   }
 })
 
@@ -545,7 +548,7 @@ const handleKnowledgeBasesRootPick = async () => {
       knowledgeBasesRoot.value = selectedPath;
     }
   } catch (error) {
-    console.error('更新知识库根目录失败:', error);
+    logger.error('更新知识库根目录失败:', error);
   } finally {
     loading.value = false;
   }
@@ -564,7 +567,7 @@ const handleTemplateRepoPick = async () => {
     await invoke('set_template_repo_path', { path: selectedPath });
     templateRepoPath.value = selectedPath;
   } catch (error) {
-    console.error('更新模板库路径失败:', error);
+    logger.error('更新模板库路径失败:', error);
   } finally {
     loading.value = false;
   }
@@ -575,7 +578,7 @@ const handleTemplateRepoSave = async () => {
     loading.value = true;
     await invoke('set_template_repo_path', { path: templateRepoPath.value });
   } catch (error) {
-    console.error('更新模板库路径失败:', error);
+    logger.error('更新模板库路径失败:', error);
   } finally {
     loading.value = false;
   }
@@ -587,7 +590,7 @@ const handleKnowledgeBasesRemoteSave = async () => {
 
     const remoteUrl = String(knowledgeBasesRemoteUrl.value || '').trim();
 
-    console.log('[NoteRepoContent][KB Remote] saving', {
+    logger.info('[NoteRepoContent][KB Remote] saving', {
       remoteUrl: remoteUrl,
       gitUsername: String(knowledgeBasesGitUsername.value || '').trim(),
       gitEmail: String(knowledgeBasesGitEmail.value || '').trim(),
@@ -603,14 +606,14 @@ const handleKnowledgeBasesRemoteSave = async () => {
 
     try {
       const remoteConfig = await invoke('get_knowledge_bases_remote_config');
-      console.log('[NoteRepoContent][KB Remote] saved, backend says', {
+      logger.info('[NoteRepoContent][KB Remote] saved, backend says', {
         remoteUrl: remoteConfig?.remote_url ?? remoteConfig?.remoteUrl,
       });
     } catch (e) {
-      console.warn('[NoteRepoContent][KB Remote] verify after save failed', e);
+      logger.warn('[NoteRepoContent][KB Remote] verify after save failed', e);
     }
   } catch (error) {
-    console.error('保存知识库远程仓库配置失败:', error);
+    logger.error('保存知识库远程仓库配置失败:', error);
   } finally {
     loading.value = false;
   }
@@ -629,7 +632,7 @@ const handleResourceRootPick = async () => {
       resourceRoot.value = selectedPath;
     }
   } catch (error) {
-    console.error('更新资源库根目录失败:', error);
+    logger.error('更新资源库根目录失败:', error);
   } finally {
     loading.value = false;
   }
@@ -671,7 +674,7 @@ const handleResourceRepoSyncSave = async () => {
     setSyncState({ status: 'success', action, at: nowLabel(), detail: '配置已保存' })
   } catch (error) {
     const msg = formatInvokeError(error)
-    console.error('保存资源库同步配置失败:', error);
+    logger.error('保存资源库同步配置失败:', error);
     setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
   } finally {
     loading.value = false;
@@ -689,7 +692,7 @@ const handleResourceRepoSyncTest = async () => {
     setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
   } catch (error) {
     const msg = formatInvokeError(error)
-    console.error('测试资源库同步连接失败:', error);
+    logger.error('测试资源库同步连接失败:', error);
     setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
   } finally {
     loading.value = false;
@@ -707,7 +710,7 @@ const handleResourceRepoSyncNow = async () => {
     setSyncState({ status: 'success', action, at: nowLabel(), detail: text })
   } catch (error) {
     const msg = formatInvokeError(error)
-    console.error('资源库同步失败:', error);
+    logger.error('资源库同步失败:', error);
     setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
   } finally {
     loading.value = false;

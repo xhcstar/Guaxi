@@ -3,7 +3,9 @@ import { ref, computed } from "vue";
 import { platform } from "@tauri-apps/plugin-os";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { createLogger } from '../../../utils/logger'
 
+const logger = createLogger('useFormHandling')
 export function useFormHandling({
   store,
   message,
@@ -42,7 +44,7 @@ export function useFormHandling({
 
   // 校验文件路径函数
   const validateFilePath = async (rule, value) => {
-    console.log("validateFilePath", value);
+    logger.info("validateFilePath", value);
 
     if (!value || value.trim() === "") {
       return new Error("文件路径不能为空");
@@ -56,7 +58,7 @@ export function useFormHandling({
         const linuxPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
         const macPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
 
-        console.log("osPlatform", osPlatform);
+        logger.info("osPlatform", osPlatform);
         if (osPlatform === "windows") {
           if (!windowsPathRegex.test(value)) {
             resolve(new Error("Windows 文件路径不合法，请检查路径格式"));
@@ -86,7 +88,7 @@ export function useFormHandling({
 
   // 校验标签函数
   const validateTags = (rule, value) => {
-    console.log("validateTags", value);
+    logger.info("validateTags", value);
 
     if (!value || value.trim() === "") {
       return new Error("标签不能为空");
@@ -188,7 +190,7 @@ export function useFormHandling({
 
         // 调用后台接口获取文件信息
         const fileInfo = await invoke("get_file_info", { filePath });
-        console.log("File Info:", fileInfo);
+        logger.info("File Info:", fileInfo);
 
         // 根据当前数据库类型更新表单数据
         currentForm.value.importFileName = fileInfo.file_name;
@@ -197,14 +199,14 @@ export function useFormHandling({
         currentForm.value.importFileSize = fileInfo.file_size;
       }
     } catch (error) {
-      console.error("Error opening file browser:", error);
+      logger.error("Error opening file browser:", error);
     }
   };
 
   // 校验表单
   const validateForm = async () => {
     const form = currentForm.value;
-    console.log(">>>>>>>>>>>> validateForm", currentForm.value);
+    logger.info(">>>>>>>>>>>> validateForm", currentForm.value);
 
     if (!form.filePath || form.filePath.trim() === "") {
       return "文件路径不能为空";
@@ -216,7 +218,7 @@ export function useFormHandling({
     const linuxPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
     const macPathRegex = /^\/([^\/:*?"<>|\r\n]+\/?)*$/;
 
-    console.log("osPlatform", osPlatform);
+    logger.info("osPlatform", osPlatform);
     if (osPlatform === "windows") {
       if (!windowsPathRegex.test(form.filePath)) {
         return "Windows 文件路径不合法，请检查路径格式";
@@ -234,8 +236,8 @@ export function useFormHandling({
     }
 
     if (!form.importedFileTags || form.importedFileTags.trim() === "") {
-      console.log(">>>>>>>>>>>>> form", form.importedFileTags);
-      console.log(">>>>>>>>>>>>> form.importedFileTags", form.importedFileTags);
+      logger.info(">>>>>>>>>>>>> form", form.importedFileTags);
+      logger.info(">>>>>>>>>>>>> form.importedFileTags", form.importedFileTags);
       currentForm.value.importedFileTags = "default";
     } else {
       const tags = form.importedFileTags.split(",").map((tag) => tag.trim());
@@ -274,7 +276,7 @@ export function useFormHandling({
   const addFile = async () => {
     const flowId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-    console.info("[import] addFile start", {
+    logger.info("[import] addFile start", {
       flowId,
       filePath: currentForm.value.filePath,
       importFileName: currentForm.value.importFileName,
@@ -285,12 +287,12 @@ export function useFormHandling({
     try {
       const validationError = await validateForm();
       if (validationError) {
-        console.warn("[import] validateForm failed", { flowId, validationError });
+        logger.warn("[import] validateForm failed", { flowId, validationError });
         message.error(validationError);
         return;
       }
 
-      console.info("[import] validateForm ok", { flowId });
+      logger.info("[import] validateForm ok", { flowId });
 
       if (!currentForm.value.library || !currentForm.value.importFileName) {
         message.error(
@@ -301,7 +303,7 @@ export function useFormHandling({
       }
 
       // 调用 Tauri 后端接口，将文件拷贝到 Libraries 目录下
-      console.info("[import] invoke add_repo_import_file", {
+      logger.info("[import] invoke add_repo_import_file", {
         flowId,
         library: currentForm.value.library,
         filePath: currentForm.value.filePath,
@@ -311,7 +313,7 @@ export function useFormHandling({
         library: currentForm.value.library,
         filePath: currentForm.value.filePath,
       }).catch((error) => {
-        console.error("[import] add_repo_import_file failed", { flowId, error });
+        logger.error("[import] add_repo_import_file failed", { flowId, error });
         let errorMessage = "Failed to import file";
         if (error.includes("Unsupported file type")) {
           errorMessage = "Unsupported file type";
@@ -320,7 +322,7 @@ export function useFormHandling({
         throw new Error(errorMessage);
       });
 
-      console.info("[import] add_repo_import_file ok", { flowId, addResultInfo });
+      logger.info("[import] add_repo_import_file ok", { flowId, addResultInfo });
 
       // 创建 importfileList
       const importfileList = createImportFileList(
@@ -328,7 +330,7 @@ export function useFormHandling({
       );
 
       // 将 importfileList 写入数据库
-      console.log("importfileList:", importfileList);
+      logger.info("importfileList:", importfileList);
       const fileId = await addFileToDatabase(importfileList);
 
       // 添加导入的文件到 store
@@ -345,7 +347,7 @@ export function useFormHandling({
       });
 
       // 转换完成后刷新数据
-      console.log("add_file currentDatabase", store.currentDatabase);
+      logger.info("add_file currentDatabase", store.currentDatabase);
       await store.fetchRepos();
       await store.fetchFiles(store.currentDatabase);
 
@@ -358,14 +360,14 @@ export function useFormHandling({
           currentForm.value.library
         );
 
-        console.info("[import] buildConvertOutputFilePath", {
+        logger.info("[import] buildConvertOutputFilePath", {
           flowId,
           outputDir,
           fileToCheck,
         });
 
         // 检查文件是否已转换
-        console.info("[import] invoke check_file_converted", {
+        logger.info("[import] invoke check_file_converted", {
           flowId,
           outputDir: fileToCheck,
         });
@@ -374,18 +376,18 @@ export function useFormHandling({
           outputDir: fileToCheck,
         });
 
-        console.info("[import] check_file_converted result", {
+        logger.info("[import] check_file_converted result", {
           flowId,
           isConverted,
         });
 
-        console.log("isConverted", isConverted);
-        console.log("addResultInfo", addResultInfo);
-        console.log("currentForm: ", currentForm.value);
+        logger.info("isConverted", isConverted);
+        logger.info("addResultInfo", addResultInfo);
+        logger.info("currentForm: ", currentForm.value);
 
         if (isConverted || addResultInfo.notConverted) {
-          console.log("isConverted", isConverted);
-          console.log(
+          logger.info("isConverted", isConverted);
+          logger.info(
             "convetToMarkdownFilename: ",
             currentForm.value.convetToMarkdownFilename
           );
@@ -396,7 +398,7 @@ export function useFormHandling({
         }
 
         // 开始监听进度事件
-        console.info("[import] startProgressListener", {
+        logger.info("[import] startProgressListener", {
           flowId,
           filePath: currentForm.value.filePath,
         });
@@ -409,7 +411,7 @@ export function useFormHandling({
         isAddFileModalVisible.value = false;
 
         // 开始转换流程
-        console.info("[import] convertFile start", {
+        logger.info("[import] convertFile start", {
           flowId,
           filePath: currentForm.value.filePath,
           outputDir,
@@ -417,21 +419,21 @@ export function useFormHandling({
 
         await convertFile(currentForm.value.filePath, outputDir);
 
-        console.info("[import] convertFile ok", { flowId });
+        logger.info("[import] convertFile ok", { flowId });
 
         // 转换完成后刷新数据
-        console.log("add_file currentDatabase", store.currentDatabase);
+        logger.info("add_file currentDatabase", store.currentDatabase);
         await store.fetchFiles(store.currentDatabase);
         resetForm();
 
         // 转换完成后取消监听
-        console.info("[import] unlisten conversion_progress", { flowId });
+        logger.info("[import] unlisten conversion_progress", { flowId });
         if (unlisten) {
           unlisten();
           unlisten = null;
         }
       } catch (error) {
-        console.error("[import] conversion flow failed", { flowId, error });
+        logger.error("[import] conversion flow failed", { flowId, error });
 
         if (unlisten) {
           unlisten();
@@ -444,7 +446,7 @@ export function useFormHandling({
       isAddFileModalVisible.value = false;
       resetForm();
     } catch (error) {
-      console.error("Error adding file:", error);
+      logger.error("Error adding file:", error);
     }
   };
 
@@ -477,7 +479,7 @@ export function useFormHandling({
       );
 
       // 将 importfileList 写入数据库
-      console.log("importfileList:", importfileList);
+      logger.info("importfileList:", importfileList);
       const fileId = await addFileToDatabase(importfileList);
 
       // 添加导入的文件到 store
@@ -494,7 +496,7 @@ export function useFormHandling({
       });
 
       // 转换完成后刷新数据
-      console.log("add_file currentDatabase", store.currentDatabase);
+      logger.info("add_file currentDatabase", store.currentDatabase);
       await store.fetchRepos();
       await store.fetchFiles(store.currentDatabase);
 
@@ -502,20 +504,20 @@ export function useFormHandling({
       isAddFileModalVisible.value = false;
       resetForm();
     } catch (error) {
-      console.error("Error adding file:", error);
+      logger.error("Error adding file:", error);
     }
   };
 
   const handleFileInfoEvent = async (payload) => {
     if (!payload) {
-      console.error("事件 payload 为空");
+      logger.error("事件 payload 为空");
       return;
     }
 
     const fileInfo = payload;
-    console.log("handleFileInfoEvent", payload);
+    logger.info("handleFileInfoEvent", payload);
     if (!fileInfo || !fileInfo.file_path) {
-      console.error("fileInfo 或 file_path 为空:", fileInfo)
+      logger.error("fileInfo 或 file_path 为空:", fileInfo)
       message.error("Web Clipper 传来的文件路径为空，无法导入")
       return
     }
@@ -539,7 +541,7 @@ export function useFormHandling({
       await addFileFromWeb();
       message.success("文件添加成功");
     } catch (error) {
-      console.error("添加文件失败:", error);
+      logger.error("添加文件失败:", error);
       message.error(`添加文件失败: ${error.message || error}`);
     }
   };
@@ -577,14 +579,14 @@ export function useFormHandling({
   // 添加文件到数据库
   const addFileToDatabase = async (fileInfo) => {
     try {
-      console.log("Adding info into table imported_files database:", fileInfo);
+      logger.info("Adding info into table imported_files database:", fileInfo);
       const fileId = await invoke("add_imported_file", {
         file: fileInfo,
       });
-      console.log("File info successfully added to database, id: ", fileId);
+      logger.info("File info successfully added to database, id: ", fileId);
       return fileId;
     } catch (error) {
-      console.error(
+      logger.error(
         "Error adding info into table imported_files database:",
         error
       );
@@ -607,8 +609,8 @@ export function useFormHandling({
         ? `${basePath}\\${fileNameWithoutExt}\\${fileNameWithoutExt}.md`
         : `${basePath}/${fileNameWithoutExt}/${fileNameWithoutExt}.md`;
 
-    console.log("basePath:", basePath);
-    console.log("fullPath:", fullPath);
+    logger.info("basePath:", basePath);
+    logger.info("fullPath:", fullPath);
 
     return {
       outputDir: basePath,

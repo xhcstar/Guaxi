@@ -72,6 +72,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../../../utils/logger'
 import { ref, watch, computed } from 'vue'
 import {
   NModal, NForm, NFormItem, NInput, NButton, NIcon, NInputGroup,
@@ -79,6 +80,7 @@ import {
 } from 'naive-ui'
 import { FolderAdd20Regular } from '@vicons/fluent'
 
+const logger = createLogger('AddFileModal')
 const props = defineProps({
   show: {
     type: Boolean,
@@ -150,13 +152,13 @@ const handleValueUpdate = (key, value) => {
 
 // 处理文件库变化
 const handleLibraryChange = (value) => {
-  console.log('文件库变化信号发出:', value)
+  logger.info('文件库变化信号发出:', value)
   handleValueUpdate('library', value)
 }
 
 // 处理文件库搜索
 const handleLibrarySearch = (value) => {
-  console.log('文件库搜索信号发出:', value)
+  logger.info('文件库搜索信号发出:', value)
   emit('library-search-complete', value)
 }
 
@@ -177,7 +179,7 @@ const handleKnowledgeRepoChange = (value) => {
 
 // 处理知识库搜索
 const handleKnowledgeRepoSearch = (value) => {
-  console.log('知识库搜索信号发出:', value)
+  logger.info('知识库搜索信号发出:', value)
   emit('knowledge-repo-search-complete', value)
 }
 
@@ -188,7 +190,7 @@ const handleSubmit = async () => {
 
     emit('submit')
   } catch (errors) {
-    console.error('表单验证失败:', errors)
+    logger.error('表单验证失败:', errors)
   } finally {
     submitting.value = false
   }
@@ -196,7 +198,7 @@ const handleSubmit = async () => {
 
 // 处理取消
 const handleCancel = () => {
-  console.log('取消按钮被点击')
+  logger.info('取消按钮被点击')
   // 发出 cancel 事件
   emit('cancel')
   // 同时关闭模态框
@@ -205,7 +207,7 @@ const handleCancel = () => {
 
 // 监听外部form变化，同步到本地
 watch(() => props.form, (newForm) => {
-  console.log('表单数据更新:', newForm)
+  logger.info('表单数据更新:', newForm)
 }, { deep: true, immediate: true })
 
 // 计算表单列配置

@@ -2,7 +2,9 @@ import { ref, computed } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
+import { createLogger } from '../../../utils/logger'
 
+const logger = createLogger('useProgress')
 const sharedProgresses = ref([]);
 const sharedShowTaskList = ref(false);
 let baseListenersInitialized = false;
@@ -231,7 +233,7 @@ export function useProgress({ store, message }) {
   const startProgressListener = async (filePath) => {
     const fileName = filePath.split(/[\\/]/).pop() || "未知文件";
 
-    console.info("[conversion] startProgressListener", {
+    logger.info("[conversion] startProgressListener", {
       fileName,
       filePath,
       ts: new Date().toISOString(),
@@ -252,7 +254,7 @@ export function useProgress({ store, message }) {
 
     const unlisten = await listen("conversion_progress", (event) => {
       if (event.payload?.fileName && event.payload.fileName !== fileName) {
-        console.debug("[conversion] progress ignored", {
+        logger.debug("[conversion] progress ignored", {
           listeningFor: fileName,
           got: event.payload.fileName,
         });
@@ -266,7 +268,7 @@ export function useProgress({ store, message }) {
         return;
       }
 
-      console.debug("[conversion] progress", {
+      logger.debug("[conversion] progress", {
         fileName,
         current: event.payload.current,
         message: event.payload.message,
@@ -291,7 +293,7 @@ export function useProgress({ store, message }) {
         !event.payload?.message?.includes("失败");
 
       if (shouldAutoRemove) {
-        console.info("[conversion] completed", { fileName });
+        logger.info("[conversion] completed", { fileName });
         setTimeout(() => {
           const i = progresses.value.findIndex(
             (p) => p?.type === "conversion" && p?.fileName === fileName && p?.id === taskId
@@ -304,7 +306,7 @@ export function useProgress({ store, message }) {
     });
 
     return () => {
-      console.info("[conversion] stopProgressListener", { fileName });
+      logger.info("[conversion] stopProgressListener", { fileName });
       return unlisten();
     };
   };
@@ -314,7 +316,7 @@ export function useProgress({ store, message }) {
     const fileName = inputPath.split(/[\\/]/).pop() || "未知文件";
     const startedAt = Date.now();
 
-    console.info("[conversion] invoke convert_to_markdown", {
+    logger.info("[conversion] invoke convert_to_markdown", {
       fileName,
       inputPath,
       outputDir,
@@ -334,12 +336,12 @@ export function useProgress({ store, message }) {
         }
       );
 
-      console.info("[conversion] convert_to_markdown ok", {
+      logger.info("[conversion] convert_to_markdown ok", {
         fileName,
         durationMs: Date.now() - startedAt,
       });
     } catch (error) {
-      console.error("[conversion] convert_to_markdown failed", {
+      logger.error("[conversion] convert_to_markdown failed", {
         fileName,
         durationMs: Date.now() - startedAt,
         error,
@@ -365,8 +367,8 @@ export function useProgress({ store, message }) {
         ? `${basePath}\\${fileNameWithoutExt}\\${fileNameWithoutExt}.md`
         : `${basePath}/${fileNameWithoutExt}/${fileNameWithoutExt}.md`;
 
-    console.log("basePath:", basePath);
-    console.log("fullPath:", fullPath);
+    logger.info("basePath:", basePath);
+    logger.info("fullPath:", fullPath);
 
     return {
       outputDir: basePath,
@@ -435,14 +437,14 @@ export function useProgress({ store, message }) {
 
       return results;
     } catch (error) {
-      console.error("批量转换失败:", error);
+      logger.error("批量转换失败:", error);
       throw error;
     }
   };
 
   // 取消转换任务
   const cancelConversion = async (fileName) => {
-    console.info("[conversion] cancelConversion", { fileName });
+    logger.info("[conversion] cancelConversion", { fileName });
 
     try {
       await invoke("cancel_conversion", {
@@ -457,7 +459,7 @@ export function useProgress({ store, message }) {
 
       message.info(`已取消转换任务: ${fileName}`);
     } catch (error) {
-      console.error("[conversion] cancelConversion failed", { fileName, error });
+      logger.error("[conversion] cancelConversion failed", { fileName, error });
       message.error(`取消转换失败: ${error.message || error}`);
     }
   };
@@ -563,7 +565,7 @@ export function useProgress({ store, message }) {
 
         message.info(`重新开始转换: ${task.fileName}`);
       } catch (error) {
-        console.error(`重试失败: ${task.fileName}`, error);
+        logger.error(`重试失败: ${task.fileName}`, error);
       }
     }
   };

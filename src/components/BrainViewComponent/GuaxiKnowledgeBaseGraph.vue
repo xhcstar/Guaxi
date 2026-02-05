@@ -175,6 +175,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 // Vue composition API imports
 import { ref, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue';
 
@@ -216,6 +217,7 @@ import {
   SparklesOutline
 } from '@vicons/ionicons5';
 
+const logger = createLogger('GuaxiKnowledgeBaseGraph')
 // Initialize Pinia store
 const store = useKnowledgeBaseStore();
 const fileTreeStore = useFileTreeStore();
@@ -233,9 +235,9 @@ const selectedKB = computed(() => {
 
 // Debug configuration
 const DEBUG = true;
-const log = (...args) => DEBUG && console.log('[KnowledgeGraph]', ...args);
-const warn = (...args) => DEBUG && console.warn('[KnowledgeGraph]', ...args);
-const error = (...args) => DEBUG && console.error('[KnowledgeGraph]', ...args);
+const log = (...args) => DEBUG && logger.info('[KnowledgeGraph]', ...args);
+const warn = (...args) => DEBUG && logger.warn('[KnowledgeGraph]', ...args);
+const error = (...args) => DEBUG && logger.error('[KnowledgeGraph]', ...args);
 
 // Reactive state variables
 const container = ref(null); // Reference to DOM container
@@ -592,7 +594,7 @@ const initThreeJS = () => {
   scene.background = new THREE.Color(darkMode.value ? 0x121212 : 0xbbbbbb);
   scene.fog = new THREE.FogExp2(scene.background, 0.002);
 
-  console.log('[initThreeJS]');
+  logger.info('[initThreeJS]');
   // 2. Create perspective camera
   camera = new THREE.PerspectiveCamera(
     60, // Field of view
@@ -602,7 +604,7 @@ const initThreeJS = () => {
   );
   camera.position.set(120, 140, 160); // Initial camera position (match resetCamera)
 
-  console.log('[initThreeJS]', 'camera', camera);
+  logger.info('[initThreeJS]', 'camera', camera);
   // 3. Create WebGL renderer with performance settings
   renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -611,7 +613,7 @@ const initThreeJS = () => {
   });
 
   if (!renderer.getContext()) {
-    console.error('WebGL 渲染器初始化失败');
+    logger.error('WebGL 渲染器初始化失败');
     showError.value = true;
     errorMessage.value = '浏览器不支持 WebGL 或初始化失败';
     return;
@@ -627,7 +629,7 @@ const initThreeJS = () => {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.value.appendChild(renderer.domElement);
-  console.log("renderer", renderer);
+  logger.info("renderer", renderer);
 
   // 4. Create CSS2D renderer for labels
   labelRenderer = new CSS2DRenderer();
@@ -641,7 +643,7 @@ const initThreeJS = () => {
   composer = new EffectComposer(renderer);
   const renderPass = new RenderPass(scene, camera);
   composer.addPass(renderPass);
-  console.log('composer', composer);
+  logger.info('composer', composer);
 
   if (camera && renderer?.domElement) {
     controls = new OrbitControls(camera, renderer.domElement);
@@ -683,7 +685,7 @@ const initThreeJS = () => {
     // 移除 change 事件监听，避免死循环导致的视角漂移
     // controls.addEventListener('change', () => { ... });
   } else {
-    console.error('初始化控制器失败: camera或renderer.domElement未定义');
+    logger.error('初始化控制器失败: camera或renderer.domElement未定义');
   }
 
   // Add bloom effect for glowing highlights
@@ -696,7 +698,7 @@ const initThreeJS = () => {
   bloomPass.enabled = glowEnabled.value;
   bloomPass.strength = (Number(glowStrength.value) || 0) * 0.5;
   composer.addPass(bloomPass);
-  console.log('bloomPass', bloomPass);
+  logger.info('bloomPass', bloomPass);
 
   watch([glowEnabled, glowStrength, glowSize], () => {
     if (!bloomPass) return;
@@ -707,13 +709,13 @@ const initThreeJS = () => {
   });
 
   setupLighting();
-  console.log('setupLighting', setupLighting)
+  logger.info('setupLighting', setupLighting)
   raycaster = new THREE.Raycaster();
 
-  console.log('raycaster', raycaster)
+  logger.info('raycaster', raycaster)
   // 9. Set up event listeners
   setupEventListeners();
-  console.log('setupEventListeners', setupEventListeners)
+  logger.info('setupEventListeners', setupEventListeners)
 };
 
 const getVisibleBoundingSphere = () => {
@@ -1479,7 +1481,7 @@ const fetchGraphData = async () => {
 const createNodesAndEdges = async (data) => {
   if (!data) return;
 
-  console.log('开始创建节点和边...');
+  logger.info('开始创建节点和边...');
 
   // 1. 创建节点
   data.nodes.forEach(nodeData => {
@@ -2064,7 +2066,7 @@ const highlightNode = (object) => {
       }
     });
   } catch (e) {
-    console.warn('高亮节点时出错:', e);
+    logger.warn('高亮节点时出错:', e);
   }
 };
 
@@ -2105,7 +2107,7 @@ const buildGraph = async () => {
   const runId = ++buildGraphRunId;
   const kbId = selectedKB.value?.id;
 
-  console.log('开始构建知识图谱...');
+  logger.info('开始构建知识图谱...');
   isLoading.value = true;
   loadingProgress.value = 0;
 
@@ -2117,26 +2119,26 @@ const buildGraph = async () => {
     if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
     loadingProgress.value = 30;
 
-    console.log('获取知识图谱数据成功！');
+    logger.info('获取知识图谱数据成功！');
     loadingProgress.value = 60;
 
     await createNodesAndEdges(treeData);
     if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
     loadingProgress.value = 70;
-    console.log('创建节点和边成功！');
+    logger.info('创建节点和边成功！');
 
     await applyLayout(currentLayout.value);
     if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
     loadingProgress.value = 90;
-    console.log('应用布局成功！');
+    logger.info('应用布局成功！');
 
     const meshes = nodes.map(n => n.mesh).filter(Boolean);
-    console.log('准备初始化八叉树，网格数量:', meshes.length);
+    logger.info('准备初始化八叉树，网格数量:', meshes.length);
     await initOctree(meshes);
     if (runId !== buildGraphRunId || kbId !== selectedKB.value?.id) return;
 
     startAnimate();
-    console.log('开始动画循环！');
+    logger.info('开始动画循环！');
     loadingProgress.value = 100;
   } catch (err) {
     showError.value = true;
@@ -2168,9 +2170,9 @@ const initOctree = async (meshes) => {
     }
 
     console.timeEnd('八叉树初始化耗时');
-    console.log(`八叉树初始化完成，共处理${meshes.length}个网格`);
+    logger.info(`八叉树初始化完成，共处理${meshes.length}个网格`);
   } catch (e) {
-    console.error('八叉树初始化失败:', e);
+    logger.error('八叉树初始化失败:', e);
     octree = new GraphOctree();
   }
 };
@@ -2305,7 +2307,7 @@ const applyStarGlow = (node) => {
 const applyLayout = async (layoutType) => {
   if (!nodes.length) return;
 
-  console.log(`应用布局: ${layoutType}`);
+  logger.info(`应用布局: ${layoutType}`);
 
   nodes.forEach(node => {
     node.targetPosition = node.mesh.position.clone();
@@ -2535,7 +2537,7 @@ const testRender = () => {
 
     // 手动渲染
     renderer.render(scene, camera);
-    console.log('测试立方体已渲染，应该看到红色立方体');
+    logger.info('测试立方体已渲染，应该看到红色立方体');
   }
 };
 
@@ -2585,13 +2587,13 @@ watch(
   () => store.selectedKnowledgeBase,
   (newVal) => {
     if (!scene) {
-      console.warn('场景未初始化，将延迟处理知识库变化');
+      logger.warn('场景未初始化，将延迟处理知识库变化');
       pendingKnowledgeBaseChange.value = newVal;
       return;
     }
 
     if (isValidKnowledgeBase(newVal)) {
-      console.log('检测到有效知识库:', newVal.knowledge_base_name);
+      logger.info('检测到有效知识库:', newVal.knowledge_base_name);
       nextTick(() => buildGraph());
     } else if (knowledgeBases.value.length > 0) {
       store.setSelectedKnowledgeBase(knowledgeBases.value[0]);
@@ -2836,7 +2838,7 @@ onBeforeUnmount(() => {
   // 添加八叉树清理
   if (octree) {
     octree = null;
-    console.log('已释放八叉树');
+    logger.info('已释放八叉树');
   }
 
   // 6. Clear references

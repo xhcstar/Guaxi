@@ -1,7 +1,9 @@
 // useTableConfig.js
 import { ref, computed, h } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { createLogger } from '../../../utils/logger'
 
+const logger = createLogger('useTableConfig')
 export function useTableConfig({ store, message, ShowOrEdit }) {
   const tableRef = ref(null);
   const checkedRowKeys = ref([]);
@@ -47,7 +49,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
 
   // 校验表格单元格
   const validateTableCell = (row) => {
-    console.log("validateTableCell", row);
+    logger.info("validateTableCell", row);
 
     // 校验标签
     if (!row.importedFileTags || row.importedFileTags.trim() === "") {
@@ -97,7 +99,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
           ? row.importedFileTags.split(",").map((tag) => tag.trim()) 
           : row.importedFileTags;
 
-      console.log("updateImportedFile row:", row);
+      logger.info("updateImportedFile row:", row);
       const file = {
         import_file_name: row.importFileName,
         description: row.description,
@@ -109,16 +111,16 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
         knowledge_repo: row.knowledgeRepo,
       };
 
-      console.log("row.id:", row.id);
-      console.log("file:", JSON.stringify(file, null, 2));
+      logger.info("row.id:", row.id);
+      logger.info("file:", JSON.stringify(file, null, 2));
 
       await invoke("update_imported_file", {
         id: row.id,
         file: file,
       });
-      console.log("更新导入文件成功:", row);
+      logger.info("更新导入文件成功:", row);
     } catch (error) {
-      console.error("更新导入文件失败:", error);
+      logger.error("更新导入文件失败:", error);
       if (message) {
         message.error("更新文件失败: " + error.message);
       }
@@ -181,7 +183,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
                 await updateImportedFile(updatedRow);
                 Object.assign(row, updatedRow);
               } catch (error) {
-                console.error("更新失败:", error);
+                logger.error("更新失败:", error);
               }
             },
           }),
@@ -208,7 +210,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
                 await updateImportedFile(updatedRow);
                 Object.assign(row, updatedRow);
               } catch (error) {
-                console.error("更新失败:", error);
+                logger.error("更新失败:", error);
               }
             },
             enableAutoComplete: false,
@@ -240,7 +242,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
                 await updateImportedFile(updatedRow);
                 Object.assign(row, updatedRow);
               } catch (error) {
-                console.error("更新失败:", error);
+                logger.error("更新失败:", error);
               }
             },
             enableAutoComplete: true,
@@ -271,7 +273,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
                 await updateImportedFile(updatedRow);
                 Object.assign(row, updatedRow);
               } catch (error) {
-                console.error("更新失败:", error);
+                logger.error("更新失败:", error);
               }
             },
             enableAutoComplete: true,
@@ -372,7 +374,7 @@ export function useTableConfig({ store, message, ShowOrEdit }) {
   // 处理选中行更新
   const handleCheckboxUpdate = (rowKeys) => {
     checkedRowKeys.value = rowKeys;
-    console.log("选中的行 keys:", rowKeys);
+    logger.info("选中的行 keys:", rowKeys);
   };
 
   // 排序方法

@@ -64,6 +64,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
@@ -89,6 +90,7 @@ import {
 
 import { SearchOutline } from '@vicons/ionicons5'
 
+const logger = createLogger('GuaxiRightContentBrainView')
 const store = useKnowledgeBaseStore()
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
@@ -211,7 +213,7 @@ const openSelected = async () => {
 
     window.location.hash = '/'
   } catch (e) {
-    console.error('打开节点失败:', e)
+    logger.error('打开节点失败:', e)
   }
 }
 

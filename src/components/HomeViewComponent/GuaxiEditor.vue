@@ -424,6 +424,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, watch, onMounted, onUnmounted, onActivated, nextTick, provide, h } from 'vue'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
@@ -501,6 +502,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { save, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 
+const logger = createLogger('GuaxiEditor')
 const outlineStore = useOutlineStore()
 // 添加 GitPanel 组件引用
 const gitPanel = ref(null)
@@ -533,7 +535,7 @@ const openMarkdownManual = async () => {
       message.info('Markdown 语法手册窗口已打开')
       return
     }
-    console.error('[MarkdownManual] open window failed:', err)
+    logger.error('[MarkdownManual] open window failed:', err)
     message.error('打开 Markdown 语法手册失败')
   }
 }
@@ -1223,10 +1225,10 @@ const safeUnlistenTemplateInsert = () => {
   if (typeof unlistenTemplateInsert !== 'function') return
   try {
     Promise.resolve(unlistenTemplateInsert()).catch((e) => {
-      console.debug('反注册模板插入事件失败:', e)
+      logger.debug('反注册模板插入事件失败:', e)
     })
   } catch (e) {
-    console.debug('反注册模板插入事件失败:', e)
+    logger.debug('反注册模板插入事件失败:', e)
   }
   unlistenTemplateInsert = null
 }
@@ -1248,17 +1250,17 @@ onMounted(async () => {
     if (templateInsertListenerUnmounted) {
       try {
         Promise.resolve(unlisten()).catch((e) => {
-          console.debug('反注册模板插入事件失败:', e)
+          logger.debug('反注册模板插入事件失败:', e)
         })
       } catch (e) {
-        console.debug('反注册模板插入事件失败:', e)
+        logger.debug('反注册模板插入事件失败:', e)
       }
       return
     }
 
     unlistenTemplateInsert = unlisten
   } catch (e) {
-    console.error('注册模板插入事件失败:', e)
+    logger.error('注册模板插入事件失败:', e)
   }
 })
 
@@ -1688,7 +1690,7 @@ const registerFilesystemPathCompletionFeatures = () => {
           .slice(0, 50);
 
         if (!matching.length) {
-          console.debug('[PathCompletion] no match', {
+          logger.debug('[PathCompletion] no match', {
             token,
             dirPrefix,
             partial,
@@ -1706,7 +1708,7 @@ const registerFilesystemPathCompletionFeatures = () => {
           position.column
         );
 
-        console.debug('[PathCompletion] suggest', {
+        logger.debug('[PathCompletion] suggest', {
           token,
           dirPrefix,
           partial,
@@ -1996,7 +1998,7 @@ const registerMarkdownLanguageFeatures = () => {
         const insertText = buildMarkdownTableSnippet(rows, cols);
 
         if (insertText) {
-          console.debug('[MarkdownSnippet] table param', { word, rows, cols });
+          logger.debug('[MarkdownSnippet] table param', { word, rows, cols });
 
           const range = new monaco.Range(
             position.lineNumber,
@@ -2021,7 +2023,7 @@ const registerMarkdownLanguageFeatures = () => {
           };
         }
 
-        console.warn('[MarkdownSnippet] invalid table param', { word, rows, cols });
+        logger.warn('[MarkdownSnippet] invalid table param', { word, rows, cols });
         return { suggestions: [] };
       }
 
@@ -2110,15 +2112,15 @@ const ensureLanguagePairingConfig = (languageId) => {
     })
 
     languagePairingConfigured.add(id)
-    console.debug('[Editor] language pairing configured', { languageId: id })
+    logger.debug('[Editor] language pairing configured', { languageId: id })
   } catch (e) {
-    console.warn('[Editor] failed to configure language pairing', { languageId: id, error: e })
+    logger.warn('[Editor] failed to configure language pairing', { languageId: id, error: e })
   }
 }
 
 // 初始化编辑器
 const initEditor = () => {
-  console.debug('[Editor] initEditor called', {
+  logger.debug('[Editor] initEditor called', {
     hasContainer: !!editorContainer.value,
     selectedPath: selectedFile.value?.path,
     activeTab: fileTreeStore.activeTab
@@ -2136,7 +2138,7 @@ const initEditor = () => {
         }
       });
     }
-    console.debug('[Editor] editor container not ready');
+    logger.debug('[Editor] editor container not ready');
     return;
   }
 
@@ -2409,19 +2411,19 @@ const initEditor = () => {
       const enableLspSyntaxHighlight = !!result
       if (enableLspSyntaxHighlight) {
         initTextmate(editor, language).catch((e) => {
-          console.warn('[Editor] initTextmate failed, ignored', { language }, e)
+          logger.warn('[Editor] initTextmate failed, ignored', { language }, e)
         })
         initLspClient(editor, language, selectedFile.value?.path || '');
       }
     })
     .catch((error) => {
-      console.error('加载 LSP 语法高亮配置失败:', error)
+      logger.error('加载 LSP 语法高亮配置失败:', error)
     });
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
   editorStore.setLanguage(language);
-  console.debug('[Editor] Monaco editor instance registered')
+  logger.debug('[Editor] Monaco editor instance registered')
 
   if (editorEffectsLeft) {
     editorEffectsLeft.destroy();
@@ -2866,13 +2868,13 @@ const initGitService = async () => {
   const filePath = selectedFile.value?.path
   if (filePath) {
     const dir = await dirname(filePath)
-    console.debug('[Git] initGitService', { filePath, dir })
+    logger.debug('[Git] initGitService', { filePath, dir })
     gitService.value = new GitService(dir)
     await updateGitStatus()
     return
   }
 
-  console.debug('[Git] initGitService skipped (no selected file)')
+  logger.debug('[Git] initGitService skipped (no selected file)')
 }
 
 // 更新 Git 状态
@@ -2881,7 +2883,7 @@ const updateGitStatus = async () => {
   const workspacePath = gitService.value?.workspacePath
 
   if (!gitService.value || !filePath) {
-    console.debug('[Git] updateGitStatus skipped', {
+    logger.debug('[Git] updateGitStatus skipped', {
       hasGitService: !!gitService.value,
       filePath
     })
@@ -2889,7 +2891,7 @@ const updateGitStatus = async () => {
   }
 
   try {
-    console.debug('[Git] updateGitStatus start', { filePath, workspacePath })
+    logger.debug('[Git] updateGitStatus start', { filePath, workspacePath })
 
     const branch = await gitService.value.getCurrentBranch()
     editorStore.setGitBranch(branch)
@@ -2901,7 +2903,7 @@ const updateGitStatus = async () => {
       deleted: status.filter(s => s.status === 'D').length
     }
 
-    console.debug('[Git] fileStatus', {
+    logger.debug('[Git] fileStatus', {
       filePath,
       statusCount: Array.isArray(status) ? status.length : null,
       counts,
@@ -2911,12 +2913,12 @@ const updateGitStatus = async () => {
     editorStore.setGitChanges(counts)
 
     await updateGitDecorations()
-    console.debug('[Git] updateGitStatus done', {
+    logger.debug('[Git] updateGitStatus done', {
       gitDecorationsCount: editorStore.gitDecorations?.length || 0,
       gitDecorationIdsCount: editorStore.gitDecorationIds?.length || 0
     })
   } catch (error) {
-    console.error('[Git] updateGitStatus failed:', error)
+    logger.error('[Git] updateGitStatus failed:', error)
   }
 }
 
@@ -2941,7 +2943,7 @@ const updateGitDecorations = async () => {
   }
 
   if (!editor || !filePath || !gitService.value) {
-    console.debug('[Git] updateGitDecorations skipped', {
+    logger.debug('[Git] updateGitDecorations skipped', {
       hasEditor: !!editor,
       filePath,
       hasGitService: !!gitService.value
@@ -2954,7 +2956,7 @@ const updateGitDecorations = async () => {
   const preferUnsaved = !!tab?.dirty
 
   try {
-    console.debug('[Git] updateGitDecorations start', {
+    logger.debug('[Git] updateGitDecorations start', {
       filePath,
       hasEditorStoreInstance: !!editorStore.editorInstance,
       preferUnsaved
@@ -2963,7 +2965,7 @@ const updateGitDecorations = async () => {
     if (preferUnsaved) {
       const changes = computeUnsavedLineChanges()
       apply(changes)
-      console.debug('[Git] updateGitDecorations done (unsaved)', {
+      logger.debug('[Git] updateGitDecorations done (unsaved)', {
         gitDecorationsCount: editorStore.gitDecorations?.length || 0,
         gitDecorationIdsCount: editorStore.gitDecorationIds?.length || 0
       })
@@ -2973,12 +2975,12 @@ const updateGitDecorations = async () => {
     const changes = await gitService.value.getLineChanges(filePath)
     apply(changes)
 
-    console.debug('[Git] updateGitDecorations done', {
+    logger.debug('[Git] updateGitDecorations done', {
       gitDecorationsCount: editorStore.gitDecorations?.length || 0,
       gitDecorationIdsCount: editorStore.gitDecorationIds?.length || 0
     })
   } catch (error) {
-    console.error('[Git] updateGitDecorations failed:', error)
+    logger.error('[Git] updateGitDecorations failed:', error)
     apply(null)
   }
 }
@@ -2988,8 +2990,8 @@ const toggleGitPanel = async () => {
   const windowLabel = `git-${Date.now()}` // 唯一窗口标识
   const windowTitle = `${fileTreeStore.activeRepoPath || '未命名文件'}` // 使用不带后缀的文件名
 
-  console.log('打开 Git 窗口:', windowLabel, windowTitle)
-  console.log('workspace_path:', fileTreeStore.activeRepoPath)
+  logger.info('打开 Git 窗口:', windowLabel, windowTitle)
+  logger.info('workspace_path:', fileTreeStore.activeRepoPath)
   try {
     await invoke('create_git_window', {
       label: windowLabel,
@@ -2998,7 +3000,7 @@ const toggleGitPanel = async () => {
       theme: settingsStore.appearanceTheme,
     })
   } catch (error) {
-    console.error('创建窗口失败:', error)
+    logger.error('创建窗口失败:', error)
     alert(`无法打开文件: ${error.message || '未知错误'}`)
   }
 }
@@ -3152,7 +3154,7 @@ const setupEditorListeners = () => {
 
     if (!/[0-9a-zA-Z._\-~\/\\:]/.test(ch)) return;
 
-    console.debug('[PathCompletion] triggerSuggest', {
+    logger.debug('[PathCompletion] triggerSuggest', {
       ch,
       token,
       pathContext
@@ -3468,7 +3470,7 @@ const formatMarkdownDocument = async () => {
 
     editor.focus();
   } catch (e) {
-    console.error('Markdown 格式化失败:', e);
+    logger.error('Markdown 格式化失败:', e);
     message.error(e instanceof Error ? e.message : 'Markdown 格式化失败');
   } finally {
     suppressEditLocationRecording = false;
@@ -3511,7 +3513,7 @@ const formatMarkdownSelection = async () => {
 
     editor.focus();
   } catch (e) {
-    console.error('Markdown 格式化失败:', e);
+    logger.error('Markdown 格式化失败:', e);
     message.error(e instanceof Error ? e.message : 'Markdown 格式化失败');
   } finally {
     suppressEditLocationRecording = false;
@@ -3698,14 +3700,14 @@ const handleSelectionTranslatePanelUpdatePos = (pos) => {
 
 const toggleSelectionTranslatePinned = () => {
   selectionTranslatePinned.value = !selectionTranslatePinned.value;
-  console.info('[SelectionTranslate] pin:', { pinned: selectionTranslatePinned.value });
+  logger.info('[SelectionTranslate] pin:', { pinned: selectionTranslatePinned.value });
 };
 
 const swapSelectionTranslateLangs = () => {
   const tmp = selectionTranslateFrom.value
   selectionTranslateFrom.value = selectionTranslateTo.value
   selectionTranslateTo.value = tmp
-  console.info('[SelectionTranslate] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+  logger.info('[SelectionTranslate] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
   if (selectionTranslatePanelVisible.value && !selectionTranslateBusy.value) {
     translateSelectionText(selectionTranslateRaw.value)
@@ -3764,7 +3766,7 @@ const translateSelectionText = async (overrideText) => {
   selectionTranslateItems.value = [];
   selectionTranslateBusy.value = true;
 
-  console.info('[SelectionTranslate] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value });
+  logger.info('[SelectionTranslate] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value });
 
   try {
     if (selectionTranslateMultiAvailable.value) {
@@ -3787,7 +3789,7 @@ const translateSelectionText = async (overrideText) => {
       if (primary) {
         selectionTranslateResult.value = String(primary.text || '')
         selectionTranslateError.value = ''
-        console.info('[SelectionTranslate] multi success', { engines: selectionTranslateItems.value.length })
+        logger.info('[SelectionTranslate] multi success', { engines: selectionTranslateItems.value.length })
         return
       }
 
@@ -3799,10 +3801,10 @@ const translateSelectionText = async (overrideText) => {
           selectionTranslateMultiAvailable.value = false
           if (!selectionTranslateMultiNotFoundWarned) {
             selectionTranslateMultiNotFoundWarned = true
-            console.warn('[SelectionTranslate] multi command not found, disabled multi path. Please restart tauri backend.')
+            logger.warn('[SelectionTranslate] multi command not found, disabled multi path. Please restart tauri backend.')
           }
         } else {
-          console.warn('[SelectionTranslate] multi failed, fallback to single:', err)
+          logger.warn('[SelectionTranslate] multi failed, fallback to single:', err)
         }
       }
     }
@@ -3821,12 +3823,12 @@ const translateSelectionText = async (overrideText) => {
 
     selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
     selectionTranslateResult.value = translated;
-    console.info('[SelectionTranslate] single success', { len: translated.length });
+    logger.info('[SelectionTranslate] single success', { len: translated.length });
   } catch (err) {
     const msg = String(err?.message || err || '翻译失败');
     selectionTranslateError.value = msg;
     selectionTranslateItems.value = [{ engine: 'Free', success: false, text: '', error: msg }]
-    console.error('[SelectionTranslate] failed:', err);
+    logger.error('[SelectionTranslate] failed:', err);
     message.error(`翻译失败: ${msg}`);
   } finally {
     selectionTranslateBusy.value = false;
@@ -3931,7 +3933,7 @@ const handleMarkdownListEnter = (e) => {
   e.stopPropagation();
 
   if (isMarkdownListDebug()) {
-    console.debug('[MarkdownList] enter', {
+    logger.debug('[MarkdownList] enter', {
       lineNumber: pos.lineNumber,
       kind: parsed.kind,
       isEmptyItem
@@ -4271,7 +4273,7 @@ const scheduleAutoFormatActiveTable = debounce(() => {
   const offset = Math.max(0, (pos.column || 1) - currentCellColumn);
 
   if (isTableAutoFormatDebug()) {
-    console.debug('[MarkdownTable] auto-format', {
+    logger.debug('[MarkdownTable] auto-format', {
       startLine: ctx.startLine,
       endLine: ctx.endLine,
       activeRowIndex,
@@ -4381,7 +4383,7 @@ const updateTableToolbar = () => {
   };
 
   if (isTableAutoFormatDebug()) {
-    console.debug('[MarkdownTable] toolbar', {
+    logger.debug('[MarkdownTable] toolbar', {
       left: clampedLeft,
       top: clampedTop,
       contentLeft,
@@ -4710,7 +4712,7 @@ const autoSaveDirtyTabs = async () => {
     await updateGitStatus();
     editorStore.setLastAutoSaveAt(Date.now())
   } catch (e) {
-    console.error('自动保存失败:', e)
+    logger.error('自动保存失败:', e)
   } finally {
     autoSaving.value = false
   }
@@ -4991,7 +4993,7 @@ const renderDebounced = debounce(async (content) => {
       }
     });
   } catch (error) {
-    console.error('渲染错误:', error);
+    logger.error('渲染错误:', error);
     renderedHtml.value = `
       <div class="render-error">
         <p>渲染错误: ${error instanceof Error ? error.message : String(error)}</p>
@@ -5287,10 +5289,10 @@ const setHomePreviewModeKeySafe = (key) => {
       setter.call(editorStore, next);
       return;
     } catch (e) {
-      console.warn('[Editor] setHomePreviewModeKey failed, fallback to direct write', e);
+      logger.warn('[Editor] setHomePreviewModeKey failed, fallback to direct write', e);
     }
   } else {
-    console.warn('[Editor] editorStore.setHomePreviewModeKey is not a function, fallback to direct write', {
+    logger.warn('[Editor] editorStore.setHomePreviewModeKey is not a function, fallback to direct write', {
       type: typeof setter,
       key: next,
     });
@@ -5299,7 +5301,7 @@ const setHomePreviewModeKeySafe = (key) => {
   try {
     editorStore.homePreviewModeKey = next;
   } catch (e) {
-    console.error('[Editor] fallback write homePreviewModeKey failed', e);
+    logger.error('[Editor] fallback write homePreviewModeKey failed', e);
   }
 };
 
@@ -5379,7 +5381,7 @@ const restoreHomePreviewMode = async (from = 'mounted') => {
   const currentKey = getHomePreviewModeKeyFromState();
   if (currentKey === desiredKey) return;
 
-  console.debug('[Editor] restoreHomePreviewMode', { from, desiredKey, currentKey });
+  logger.debug('[Editor] restoreHomePreviewMode', { from, desiredKey, currentKey });
   await handlePreviewModeSelect(desiredKey);
 };
 
@@ -5723,7 +5725,7 @@ const handleExportSelect = async (format) => {
 
     message.success(`已导出为 ${filterName}`);
   } catch (error) {
-    console.error('导出 Markdown 失败:', error);
+    logger.error('导出 Markdown 失败:', error);
     message.error('导出 Markdown 失败');
   }
 };
@@ -5731,7 +5733,7 @@ const handleExportSelect = async (format) => {
 const switchTab = (path, region) => {
   const targetRegion = region || 'left';
 
-  console.debug('[Editor] switchTab', {
+  logger.debug('[Editor] switchTab', {
     from: targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft,
     to: path,
     region: targetRegion,
@@ -5835,7 +5837,7 @@ const applyHighlights = () => {
 
   const { lineNumber, matches = [], text } = editorStore.highlightInfo;
 
-  console.log("WWW>>> applyHighlights", { lineNumber, matches, text });
+  logger.info("WWW>>> applyHighlights", { lineNumber, matches, text });
 
   let newDecorations = [];
 
@@ -5901,7 +5903,7 @@ const applyHighlights = () => {
 // 监听编辑器store的变化
 watch(() => editorStore.currentFile, (file) => {
   if (file && editor) {
-    console.log("WWW>>> editorStore.currentFile", file)
+    logger.info("WWW>>> editorStore.currentFile", file)
     editor.setValue(file.content);
     nextTick(applyHighlights);
   }
@@ -5909,7 +5911,7 @@ watch(() => editorStore.currentFile, (file) => {
 
 watch(() => editorStore.highlightInfo, () => {
   if (editor) {
-    console.log("WWW>>> editorStore.highlightInfo", editorStore.highlightInfo)
+    logger.info("WWW>>> editorStore.highlightInfo", editorStore.highlightInfo)
     applyHighlights();
   }
 }, { deep: true });

@@ -45,11 +45,13 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, onMounted, onUnmounted } from "vue"
 import { useChatStore } from "../../stores/chatStore";
 import { useMessage } from "naive-ui";
 import { invoke } from '@tauri-apps/api/core';
 
+const logger = createLogger('ChatList')
 const chatStore = useChatStore();
 const message = useMessage();
 const activeChat = computed(() => chatStore.SelectModelchatSessions.find((chatmodel) => chatmodel.id === chatStore.selectedModel));
@@ -125,7 +127,7 @@ const renameChatItem = async () => {
     await persistSelectedChat();
     message.success('已更新会话名称');
   } catch (e) {
-    console.error('重命名失败:', e);
+    logger.error('重命名失败:', e);
     message.error('重命名失败');
   } finally {
     showMenu.value = false;
@@ -153,7 +155,7 @@ const saveChatItem = async () => {
 
     message.success(`已保存到: ${filePath}`)
   } catch (e) {
-    console.error('保存对话失败:', e)
+    logger.error('保存对话失败:', e)
     message.error('保存对话失败')
   } finally {
     showMenu.value = false;

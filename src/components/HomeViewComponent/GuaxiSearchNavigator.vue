@@ -87,6 +87,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { h, defineComponent, reactive, ref, watch, onMounted, computed, onBeforeUnmount } from 'vue';
 import { Icon } from '@iconify/vue';
 import { debounce } from 'lodash-es';
@@ -103,6 +104,7 @@ import { useEditorStore } from '../../stores/editorStore';
 import { useRightSiderStore } from '../../stores/rightSiderStore';
 import GuaxiNoteExcerpt from './GuaxiNoteExcerpt.vue';
 
+const logger = createLogger('GuaxiSearchNavigator')
 const IconifyIcon = defineComponent({
   name: 'IconifyIcon',
   props: {
@@ -237,12 +239,12 @@ const validNoteResults = computed(() => {
     const hasContent = (item.preview || item.text) && typeof (item.preview || item.text) === 'string';
 
     if (!hasPath && !hasFileName) {
-      console.warn('[InvalidItem] Missing path/file_name:', item);
+      logger.warn('[InvalidItem] Missing path/file_name:', item);
       return false;
     }
 
     if (!hasContent) {
-      console.warn('[InvalidItem] Missing content:', item);
+      logger.warn('[InvalidItem] Missing content:', item);
       return false;
     }
 
@@ -265,7 +267,7 @@ const invalidNoteItems = computed(() => {
 // 滚动事件处理
 const handleScroll = (e) => {
   // 这里可以添加滚动时的逻辑
-  console.log('Scrolling:', e);
+  logger.info('Scrolling:', e);
 };
 
 // 使用防抖
@@ -352,7 +354,7 @@ const FILE_ICON_MAP = {
 const getFileIconPropsWithLog = (path) => {
   const props = getFileIconProps(path);
   if (!props.icon) {
-    console.warn('[n-icon] icon prop missing!', path, props);
+    logger.warn('[n-icon] icon prop missing!', path, props);
     // 返回一个默认的图标
     return {
       icon: FILE_ICON_MAP.default,
@@ -372,7 +374,7 @@ const getFileIconProps = (path) => {
       icon: FILE_ICON_MAP.folder,
       color: isActive ? '#3366ff' : '#666'
     };
-    console.log('[IconProps][folder]', path, folderIcon);
+    logger.info('[IconProps][folder]', path, folderIcon);
     return folderIcon;
   }
   // 特殊处理复合扩展名
@@ -389,7 +391,7 @@ const getFileIconProps = (path) => {
     icon,
     color: isActive ? '#3366ff' : '#666'
   };
-  // console.log('[IconProps][file]', path, { ext, finalExt, icon, props });
+  // logger.info('[IconProps][file]', path, { ext, finalExt, icon, props });
   return props;
 };
 
@@ -478,7 +480,7 @@ const openSearchResult = async (item) => {
       content: result.content || '',
     });
   } catch (err) {
-    console.error('打开搜索结果失败:', err);
+    logger.error('打开搜索结果失败:', err);
   }
 };
 
@@ -487,12 +489,12 @@ const getKeyField = (item) => {
   // 防御性编程：确保 item 存在
   if (!item) {
     const fallback = `null_${Math.random().toString(36).substring(2, 9)}`;
-    console.error('[KeyError] Item is null/undefined, using fallback:', fallback);
+    logger.error('[KeyError] Item is null/undefined, using fallback:', fallback);
     return fallback;
   }
 
   // 调试信息
-  // console.log('[KeyDebug] Generating key for:', {
+  // logger.info('[KeyDebug] Generating key for:', {
   //   path: item.path,
   //   file_name: item.file_name,
   //   line_number: item.line_number
@@ -516,23 +518,23 @@ const getKeyField = (item) => {
 
   // 最终 fallback
   const fallback = `fb_${Math.random().toString(36).substring(2, 9)}`;
-  console.warn('[KeyFallback] Using fallback key:', fallback, 'for item:', item);
+  logger.warn('[KeyFallback] Using fallback key:', fallback, 'for item:', item);
   return fallback;
 };
 
 // 添加调试信息
 onMounted(() => {
-  console.log('[SearchNavigator] Component mounted with initial props:', {
+  logger.info('[SearchNavigator] Component mounted with initial props:', {
     fileResults: props.fileResults,
     noteResults: props.noteResults,
     excerptResults: props.excerptResults,
     searchQuery: props.searchQuery
   });
 
-  console.log('[KeyDebug] Sample key for first file result:',
+  logger.info('[KeyDebug] Sample key for first file result:',
     props.fileResults[0] ? getKeyField(props.fileResults[0]) : 'No file results');
 
-  console.log('[KeyDebug] Sample key for first note result:',
+  logger.info('[KeyDebug] Sample key for first note result:',
     props.noteResults[0] ? getKeyField(props.noteResults[0]) : 'No note results');
 });
 
@@ -590,7 +592,7 @@ const generateItemKey = (item, fallbackIndex) => {
 
     return `search_${hash}`;
   } catch (err) {
-    console.error('[KeyError] Failed to generate key:', err, 'for item:', item);
+    logger.error('[KeyError] Failed to generate key:', err, 'for item:', item);
     return `err_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 };
@@ -609,7 +611,7 @@ const keyedNoteResults = computed(() => {
     .filter(item => {
       const isValid = item.path && item.preview;
       if (!isValid) {
-        console.warn('[InvalidItem] Filtered out note result:', item);
+        logger.warn('[InvalidItem] Filtered out note result:', item);
       }
       return isValid;
     })
@@ -622,13 +624,13 @@ const keyedNoteResults = computed(() => {
 // 确保搜索结果数据有效
 watch(() => props.fileResults, (newVal) => {
   if (newVal.some(item => !item.path)) {
-    console.warn('发现无效的搜索结果项:', newVal.filter(item => !item.path));
+    logger.warn('发现无效的搜索结果项:', newVal.filter(item => !item.path));
   }
 }, { immediate: true });
 
 watch(() => props.noteResults, (newVal) => {
   if (newVal.some(item => !item.path)) {
-    console.warn('发现无效的笔记结果项:', newVal.filter(item => !item.path));
+    logger.warn('发现无效的笔记结果项:', newVal.filter(item => !item.path));
   }
 }, { immediate: true });
 

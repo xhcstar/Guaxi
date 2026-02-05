@@ -113,6 +113,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../../utils/logger'
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { createDiscreteApi } from 'naive-ui'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
@@ -123,6 +124,9 @@ import L from 'leaflet'
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
 import markerIcon from 'leaflet/dist/images/marker-icon.png'
 import markerShadow from 'leaflet/dist/images/marker-shadow.png'
+
+const logger = createLogger('LifeAlbumApp')
+
 
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -234,7 +238,7 @@ const toSrc = (p) => {
     const assetUrl = convertFileSrc(raw)
     return typeof assetUrl === 'string' && assetUrl ? assetUrl : raw
   } catch (e) {
-    console.warn('[LifeAlbum] convertFileSrc failed:', e)
+    logger.warn('[LifeAlbum] convertFileSrc failed:', e)
     return raw
   }
 }
@@ -539,7 +543,7 @@ const enrichVisible = async () => {
       }
     })
   } catch (e) {
-    console.error('EXIF 增强失败:', e)
+    logger.error('EXIF 增强失败:', e)
   }
 }
 
@@ -565,7 +569,7 @@ const enrichAll = async () => {
       for (const p of batch) enriched.add(p)
 
       const metas = await invoke('life_album_enrich_files', { paths: batch }).catch((e) => {
-        console.error('EXIF 全量增强失败:', e)
+        logger.error('EXIF 全量增强失败:', e)
         return []
       })
 
@@ -614,7 +618,7 @@ const ensureCitiesForGeo = async () => {
       })
       cityByCoordKey.value[k] = String(place || '').trim() || '未知位置'
     } catch (e) {
-      console.error('城市反查失败:', e)
+      logger.error('城市反查失败:', e)
       cityByCoordKey.value[k] = '未知位置'
     } finally {
       geocodingKeys.delete(k)
@@ -635,7 +639,7 @@ const loadDir = async (dirPath, persist) => {
     try {
       await invoke('set_life_album_album_dir', { path: albumDir.value })
     } catch (e) {
-      console.error('保存相册目录失败:', e)
+      logger.error('保存相册目录失败:', e)
     }
   }
 
@@ -647,7 +651,7 @@ const loadDir = async (dirPath, persist) => {
     enrichVisible()
     enrichAll()
   } catch (e) {
-    console.error('加载目录失败:', e)
+    logger.error('加载目录失败:', e)
     message.error('加载目录失败')
   } finally {
     loading.value = false
@@ -679,7 +683,7 @@ const importFiles = async () => {
     enrichVisible()
     enrichAll()
   } catch (e) {
-    console.error('导入失败:', e)
+    logger.error('导入失败:', e)
     message.error('导入失败')
   } finally {
     loading.value = false
@@ -722,7 +726,7 @@ onMounted(async () => {
     const dir = await invoke('get_life_album_album_dir')
     if (dir) await loadDir(dir, false)
   } catch (e) {
-    console.error('读取相册目录失败:', e)
+    logger.error('读取相册目录失败:', e)
   }
 })
 </script>

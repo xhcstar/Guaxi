@@ -249,6 +249,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, watchEffect, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { Book } from 'epubjs';
@@ -284,6 +285,7 @@ import {
   SearchOutline
 } from '@vicons/ionicons5'
 
+const logger = createLogger('GuaxiEpubReader')
 // 组件属性定义
 const props = defineProps({
   filePath: {
@@ -558,7 +560,7 @@ const isSelectionDebug = () => {
 
 const selDlog = (...args) => {
   if (!isSelectionDebug()) return
-  console.log('[Selection][EpubReader]', ...args)
+  logger.info('[Selection][EpubReader]', ...args)
 }
 
 const handleSelectionTranslatePanelUpdatePos = (pos) => {
@@ -575,14 +577,14 @@ const handleSelectionTranslatePanelUpdatePos = (pos) => {
 
 const toggleSelectionTranslatePinned = () => {
   selectionTranslatePinned.value = !selectionTranslatePinned.value
-  console.info('[SelectionTranslate][EpubReader] pin:', { pinned: selectionTranslatePinned.value })
+  logger.info('[SelectionTranslate][EpubReader] pin:', { pinned: selectionTranslatePinned.value })
 }
 
 const swapSelectionTranslateLangs = () => {
   const tmp = selectionTranslateFrom.value
   selectionTranslateFrom.value = selectionTranslateTo.value
   selectionTranslateTo.value = tmp
-  console.info('[SelectionTranslate][EpubReader] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+  logger.info('[SelectionTranslate][EpubReader] swap langs', { from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
   if (selectionTranslatePanelVisible.value && !selectionTranslateBusy.value) {
     translateSelectionText(selectionTranslateRaw.value)
@@ -849,10 +851,10 @@ const altKeyCollector = ref({
 
 // 新增日志记录函数
 const log = {
-  debug: (...args) => console.debug('[DEBUG]', ...args),
-  info: (...args) => console.info('[INFO]', ...args),
-  warn: (...args) => console.warn('[WARN]', ...args),
-  error: (...args) => console.error('[ERROR]', ...args)
+  debug: (...args) => logger.debug('[DEBUG]', ...args),
+  info: (...args) => logger.info('[INFO]', ...args),
+  warn: (...args) => logger.warn('[WARN]', ...args),
+  error: (...args) => logger.error('[ERROR]', ...args)
 }
 
 const handleEpubContentsSelectionMouseUp = (contents) => {
@@ -923,7 +925,7 @@ const bindEpubSelectionListeners = (rendition) => {
 // 修改后的 loadWithEpubPreview 函数
 const loadWithEpubPreview = async () => {
   try {
-    console.log('开始加载EPUB文档:', props.filePath);
+    logger.info('开始加载EPUB文档:', props.filePath);
     isLoading.value = true;
 
     if (!epubPreviewContainer.value) {
@@ -981,10 +983,10 @@ const loadWithEpubPreview = async () => {
       resizeHandler // 保存以便卸载时移除
     };
 
-    console.log('EPUB文档加载完成');
+    logger.info('EPUB文档加载完成');
     applyZoomLevel();
   } catch (error) {
-    console.error('加载EPUB文件失败:', error);
+    logger.error('加载EPUB文件失败:', error);
     if (epubPreviewContainer.value) {
       epubPreviewContainer.value.innerHTML = `
         <div class="error-message">
@@ -1002,10 +1004,10 @@ const loadWithEpubPreview = async () => {
 const loadEpubDocument = async () => {
   isLoading.value = true;
   try {
-    console.log('开始加载EPUB文档:', props.filePath);
+    logger.info('开始加载EPUB文档:', props.filePath);
     await loadWithEpubPreview();
   } catch (error) {
-    console.error('加载EPUB文件失败:', error);
+    logger.error('加载EPUB文件失败:', error);
     message.error(`加载EPUB文件失败: ${error.message}`);
   } finally {
     isLoading.value = false;
@@ -1035,7 +1037,7 @@ const adjustContainerHeight = (rendition) => {
   try {
     // 确保所有必要的对象都存在
     if (!rendition.manager || !rendition.manager.content) {
-      console.warn('EPUB渲染管理器或内容未准备好');
+      logger.warn('EPUB渲染管理器或内容未准备好');
       return;
     }
 
@@ -1055,7 +1057,7 @@ const adjustContainerHeight = (rendition) => {
     // 强制重新渲染
     rendition.resize();
   } catch (error) {
-    console.error('调整容器高度时出错:', error);
+    logger.error('调整容器高度时出错:', error);
   }
 };
 
@@ -1091,7 +1093,7 @@ async function processImages(content, basePath = '') {
         const safeSrc = await convertFileSrc(fullPath);
         replacements.push({ from: full, to: `![${alt}](${safeSrc})` });
       } catch (error) {
-        console.warn(`路径转换失败: ${src}`, error);
+        logger.warn(`路径转换失败: ${src}`, error);
       }
     }
   }
@@ -1231,7 +1233,7 @@ async function convertMarkdownToLines(content, options = {}) {
 
     return lines;
   } catch (error) {
-    console.error('[ERROR] 渲染失败:', error);
+    logger.error('[ERROR] 渲染失败:', error);
     return [{
       raw: content,
       html: `<div class="render-error">${error.message}</div>`,
@@ -1285,7 +1287,7 @@ function shouldSkipTranslation(node) {
 
     return false;
   } catch (error) {
-    console.error('Error checking node:', error);
+    logger.error('Error checking node:', error);
     return false;
   }
 }
@@ -1357,7 +1359,7 @@ async function processNoteImage(imgElement) {
 
     return `../images/${relativePath}`;
   } catch (error) {
-    console.error('图片处理失败:', error);
+    logger.error('图片处理失败:', error);
     return imgElement.src;
   }
 }
@@ -1415,7 +1417,7 @@ const handleMarkdownClick = async (e) => {
       noteContent = `![图片](${processedSrc})`;
       originalMarkdown = noteContent;
     } catch (error) {
-      console.error('图片处理失败:', error);
+      logger.error('图片处理失败:', error);
       message = '图片处理失败，使用原始链接';
       noteContent = `![图片](${imgElement.src})`;
       originalMarkdown = noteContent;
@@ -1772,7 +1774,7 @@ const translateSelectionText = async (overrideText) => {
   selectionTranslateError.value = ''
   selectionTranslateItems.value = []
 
-  console.info('[SelectionTranslate][EpubReader] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
+  logger.info('[SelectionTranslate][EpubReader] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
   try {
     if (selectionTranslateMultiAvailable.value) {
@@ -1797,7 +1799,7 @@ const translateSelectionText = async (overrideText) => {
           selectionTranslateResult.value = translated
           selectionTranslateError.value = ''
           selectionInsertText.value = `**${text}**\n\n${translated}`
-          console.info('[SelectionTranslate][EpubReader] multi success', { engines: selectionTranslateItems.value.length })
+          logger.info('[SelectionTranslate][EpubReader] multi success', { engines: selectionTranslateItems.value.length })
           return
         }
 
@@ -1809,10 +1811,10 @@ const translateSelectionText = async (overrideText) => {
           selectionTranslateMultiAvailable.value = false
           if (!selectionTranslateMultiNotFoundWarned) {
             selectionTranslateMultiNotFoundWarned = true
-            console.warn('[SelectionTranslate][EpubReader] multi command not found, disabled multi path. Please restart tauri backend.')
+            logger.warn('[SelectionTranslate][EpubReader] multi command not found, disabled multi path. Please restart tauri backend.')
           }
         } else {
-          console.warn('[SelectionTranslate][EpubReader] multi failed, fallback to single:', err)
+          logger.warn('[SelectionTranslate][EpubReader] multi failed, fallback to single:', err)
         }
       }
     }
@@ -1834,14 +1836,14 @@ const translateSelectionText = async (overrideText) => {
     selectionTranslateResult.value = translated
     selectionTranslateError.value = ''
     selectionInsertText.value = `**${text}**\n\n${translated}`
-    console.info('[SelectionTranslate][EpubReader] single success', { len: translated.length })
+    logger.info('[SelectionTranslate][EpubReader] single success', { len: translated.length })
   } catch (err) {
     const msg = String(err?.message || err || '翻译失败')
     selectionTranslateError.value = msg
     selectionTranslateItems.value = [{ engine: 'Free', success: false, text: '', error: msg }]
     selectionTranslateResult.value = ''
     selectionInsertText.value = ''
-    console.error('[SelectionTranslate][EpubReader] failed:', err)
+    logger.error('[SelectionTranslate][EpubReader] failed:', err)
     message.error(`翻译失败: ${msg}`)
   } finally {
     selectionTranslateBusy.value = false
@@ -2133,7 +2135,7 @@ const loadMarkdownPage = async () => {
       await updateMarkdownPath();
     }
 
-    console.log('Loading markdown from:', markdownFilePath.value);
+    logger.info('Loading markdown from:', markdownFilePath.value);
     const response = await invoke('markdown_reader_load_markdown_file', {
       filepath: markdownFilePath.value,
     });
@@ -2153,7 +2155,7 @@ const loadMarkdownPage = async () => {
         const theme = resolveMarkdownTheme();
         addCopyButtons(container, { theme });
         addMediaViewerButtons(container, { theme });
-        console.info('[EpubReader] media buttons refreshed:', {
+        logger.info('[EpubReader] media buttons refreshed:', {
           images: container.querySelectorAll('img').length,
           mermaid: container.querySelectorAll('.mermaid, svg').length,
         });
@@ -2163,7 +2165,7 @@ const loadMarkdownPage = async () => {
     generateOutlineFromMarkdown(markdownContent.value);
 
   } catch (error) {
-    console.error('加载Markdown失败:', error);
+    logger.error('加载Markdown失败:', error);
     markdownLines.value = [{
       raw: '',
       html: `<div class="error">加载错误: ${error.message}</div>`
@@ -2177,7 +2179,7 @@ const ensureNotesPath = async () => {
     const notesDir = await getNotesDirectory()
     notesFilePath.value = await join(notesDir, `${props.fileName.replace('.md', '')}.json`)
   }
-  console.log('Notes file path:', notesFilePath.value);
+  logger.info('Notes file path:', notesFilePath.value);
   return notesFilePath.value
 }
 
@@ -2305,7 +2307,7 @@ const loadExistingNotes = async () => {
       });
     }
   } catch (error) {
-    console.error('加载笔记失败:', error);
+    logger.error('加载笔记失败:', error);
     noteCards.value = [];
   }
 };
@@ -2346,7 +2348,7 @@ const updateBackendNotes = async (action, cardData) => {
       ? error.message || error.toString()
       : String(error);
 
-    console.error('更新笔记失败:', {
+    logger.error('更新笔记失败:', {
       error: errorMessage,
       cardData: JSON.parse(JSON.stringify(cardData || {}))
     });
@@ -2375,7 +2377,7 @@ const handleMissingNote = async (action, cardData) => {
       await updateBackendNotes('add', completeCard);
     }
   } catch (error) {
-    console.error('处理缺失笔记失败:', error);
+    logger.error('处理缺失笔记失败:', error);
     message.error('自动恢复失败，请手动添加笔记');
   }
 };
@@ -2439,7 +2441,7 @@ const startDrag = (e) => {
 
     e.preventDefault();
   } catch (error) {
-    console.error('Error in startDrag:', error);
+    logger.error('Error in startDrag:', error);
     resetDragState();
   }
 };
@@ -2467,7 +2469,7 @@ const handleDrag = (e) => {
 
     e.preventDefault();
   } catch (error) {
-    console.error('Error in handleDrag:', error);
+    logger.error('Error in handleDrag:', error);
     endDrag();
   }
 };
@@ -2485,7 +2487,7 @@ const endDrag = () => {
       decelerate();
     }
   } catch (error) {
-    console.error('Error in endDrag:', error);
+    logger.error('Error in endDrag:', error);
     resetDragState();
   }
 };
@@ -2569,7 +2571,7 @@ const nextPage = async () => {
 
     syncMarkdownToChapter(currentPage.value)
   } catch (error) {
-    console.error('翻页失败:', error);
+    logger.error('翻页失败:', error);
     message.error('翻页失败');
   }
 };
@@ -2588,7 +2590,7 @@ const prevPage = async () => {
 
     syncMarkdownToChapter(currentPage.value)
   } catch (error) {
-    console.error('翻页失败:', error);
+    logger.error('翻页失败:', error);
     message.error('翻页失败');
   }
 };
@@ -2606,7 +2608,7 @@ const goToPage = async (page) => {
 
     syncMarkdownToChapter(targetPage)
   } catch (error) {
-    console.error('跳转页面失败:', error);
+    logger.error('跳转页面失败:', error);
     message.error('跳转页面失败');
   }
 };
@@ -2774,12 +2776,12 @@ const processTranslateQueue = async () => {
       currentBatch.forEach(item => {
         item.line.translationError = `翻译失败: ${errorMsg}`;
       });
-      console.error('翻译错误:', response);
+      logger.error('翻译错误:', response);
     }
 
     lastTranslateTime.value = Date.now();
   } catch (error) {
-    console.error('翻译异常:', error);
+    logger.error('翻译异常:', error);
     translateQueue.value.forEach(item => {
       item.line.translationError = `翻译异常: ${error.message || '未知错误'}`;
     });
@@ -2930,7 +2932,7 @@ const saveCardEdit = async (index) => {
     activeCardIndex.value = -1;
 
   } catch (error) {
-    console.error('保存编辑失败:', {
+    logger.error('保存编辑失败:', {
       error,
       index,
       card: noteCards.value[index]

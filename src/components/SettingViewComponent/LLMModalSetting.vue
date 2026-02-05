@@ -122,11 +122,14 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { reactive, ref, onMounted, computed } from 'vue'
 import { NCard, NSpace, NAlert, NForm, NFormItem, NInput, NButton, NDivider, NIcon, NText, useMessage } from 'naive-ui'
 import { CheckmarkCircleOutline, CloseCircleOutline, ConstructOutline, CubeOutline, InformationCircleOutline, KeyOutline, TimeOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+
+const logger = createLogger('LLMModalSetting')
 
 const loading = ref(false)
 const message = useMessage()
@@ -223,7 +226,7 @@ const loadConfig = async () => {
       expected_path: typeof envStatus?.expected_path === 'string' ? envStatus.expected_path : '',
     }
   } catch (e) {
-    console.error('加载大模型配置失败:', e)
+    logger.error('加载大模型配置失败:', e)
   } finally {
     loading.value = false
   }
@@ -243,7 +246,7 @@ const saveConfig = async () => {
     })
     message.success('已保存大模型秘钥')
   } catch (e) {
-    console.error('保存大模型配置失败:', e)
+    logger.error('保存大模型配置失败:', e)
     message.error('保存大模型秘钥失败')
   } finally {
     loading.value = false
@@ -255,7 +258,7 @@ const pickChatRecordRoot = async () => {
     const selected = await open({ directory: true, multiple: false })
     if (selected) chatRecordRoot.value = String(selected)
   } catch (e) {
-    console.error('选择 ChatRecord 目录失败:', e)
+    logger.error('选择 ChatRecord 目录失败:', e)
   }
 }
 
@@ -267,7 +270,7 @@ const saveChatRecordRoot = async () => {
     chatRecordRoot.value = typeof root === 'string' ? root : chatRecordRoot.value
     message.success('已保存 ChatRecord 路径')
   } catch (e) {
-    console.error('保存 ChatRecord 路径失败:', e)
+    logger.error('保存 ChatRecord 路径失败:', e)
     message.error('保存 ChatRecord 路径失败')
   } finally {
     loading.value = false
@@ -282,7 +285,7 @@ const pickMarkdownModelsArchive = async () => {
     })
     if (selected) markdownModelsArchivePath.value = String(selected)
   } catch (e) {
-    console.error('选择 Markdown 转换模型压缩包失败:', e)
+    logger.error('选择 Markdown 转换模型压缩包失败:', e)
   }
 }
 
@@ -299,7 +302,7 @@ const installMarkdownModels = async () => {
     const installedTo = await invoke('install_markdown_models_archive', { archivePath: p })
     message.success(`模型已安装到: ${installedTo}`)
   } catch (e) {
-    console.error('安装 Markdown 转换模型失败:', e)
+    logger.error('安装 Markdown 转换模型失败:', e)
     message.error('安装 Markdown 转换模型失败')
   } finally {
     installingModels.value = false
@@ -314,7 +317,7 @@ const pickMarkdownConvertorEnvArchive = async () => {
     })
     if (selected) markdownConvertorEnvArchivePath.value = String(selected)
   } catch (e) {
-    console.error('选择模型运行环境压缩包失败:', e)
+    logger.error('选择模型运行环境压缩包失败:', e)
   }
 }
 
@@ -331,7 +334,7 @@ const installMarkdownConvertorEnv = async () => {
     const installedTo = await invoke('install_markdown_convertor_env_archive', { archivePath: p })
     message.success(`运行环境压缩包已拷贝到: ${installedTo}`)
   } catch (e) {
-    console.error('拷贝模型运行环境压缩包失败:', e)
+    logger.error('拷贝模型运行环境压缩包失败:', e)
     message.error('拷贝模型运行环境压缩包失败')
   } finally {
     copyingEnv.value = false

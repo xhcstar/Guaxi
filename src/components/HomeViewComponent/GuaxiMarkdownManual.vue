@@ -56,6 +56,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import mdiCheck from '@iconify-icons/mdi/check'
@@ -64,6 +65,7 @@ import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker.js'
 import markdownManualRaw from '../../assets/MarkdownTest.md?raw'
 import { useSettingsStore } from '../../stores/settingsStore'
 
+const logger = createLogger('GuaxiMarkdownManual')
 const props = defineProps({
   theme: {
     type: String,
@@ -141,7 +143,7 @@ const stopResize = () => {
   }
   window.removeEventListener('mousemove', onResizeMove)
   window.removeEventListener('mouseup', stopResize)
-  console.info('[MarkdownManual] resize end:', { previewWidthPx: previewWidthPx.value })
+  logger.info('[MarkdownManual] resize end:', { previewWidthPx: previewWidthPx.value })
 }
 
 const startResize = (e) => {
@@ -158,12 +160,12 @@ const startResize = (e) => {
   }
   window.addEventListener('mousemove', onResizeMove)
   window.addEventListener('mouseup', stopResize)
-  console.info('[MarkdownManual] resize start:', resizeState.value)
+  logger.info('[MarkdownManual] resize start:', resizeState.value)
 }
 
 const resetSplit = () => {
   previewWidthPx.value = clampPreviewWidth(Math.round(window.innerWidth * 0.5))
-  console.info('[MarkdownManual] resize reset:', { previewWidthPx: previewWidthPx.value })
+  logger.info('[MarkdownManual] resize reset:', { previewWidthPx: previewWidthPx.value })
 }
 
 const scrollToCard = (containerRef, cardId, { behavior = 'smooth' } = {}) => {
@@ -184,7 +186,7 @@ const selectCard = (cardId) => {
   activeCardId.value = id
   scrollToCard(previewContainerRef, id, { behavior: 'smooth' })
   scrollToCard(sourceContainerRef, id, { behavior: 'smooth' })
-  console.info('[MarkdownManual] select card:', { cardId: id })
+  logger.info('[MarkdownManual] select card:', { cardId: id })
 }
 
 const copyCard = async (card) => {
@@ -198,13 +200,13 @@ const copyCard = async (card) => {
     try {
       await navigator.clipboard.writeText(raw)
     } catch (e2) {
-      console.error('[MarkdownManual] copy failed:', { e, e2 })
+      logger.error('[MarkdownManual] copy failed:', { e, e2 })
       return
     }
   }
 
   copiedCardId.value = String(card?.id || '')
-  console.info('[MarkdownManual] copied:', { cardId: copiedCardId.value, len: raw.length })
+  logger.info('[MarkdownManual] copied:', { cardId: copiedCardId.value, len: raw.length })
   window.setTimeout(() => {
     if (copiedCardId.value === String(card?.id || '')) copiedCardId.value = ''
   }, 1200)
@@ -231,9 +233,9 @@ const renderMermaidIn = async (rootEl) => {
     } catch {
     }
     await mermaid.run({ nodes })
-    console.info('[MarkdownManual] mermaid rendered:', { nodes: nodes.length })
+    logger.info('[MarkdownManual] mermaid rendered:', { nodes: nodes.length })
   } catch (e) {
-    console.warn('[MarkdownManual] mermaid render failed:', e)
+    logger.warn('[MarkdownManual] mermaid render failed:', e)
   }
 }
 
@@ -254,14 +256,14 @@ const parseCards = (src) => {
     out.push({ id: `${s + 1}-${e}`, startLine: s + 1, endLine: e, raw, html: '' })
   }
 
-  console.info('[MarkdownManual] parsed cards:', { cards: out.length })
+  logger.info('[MarkdownManual] parsed cards:', { cards: out.length })
   return out
 }
 
 const doRender = async () => {
   loading.value = true
   try {
-    console.info('[MarkdownManual] cards render start:', {
+    logger.info('[MarkdownManual] cards render start:', {
       theme: normalizedTheme.value,
       len: markdownSource.value.length,
       fontSize: settingsStore.appearanceFontSize,
@@ -283,9 +285,9 @@ const doRender = async () => {
 
     if (!activeCardId.value && cards.value.length) activeCardId.value = cards.value[0].id
 
-    console.info('[MarkdownManual] cards render done:', { cards: cards.value.length })
+    logger.info('[MarkdownManual] cards render done:', { cards: cards.value.length })
   } catch (e) {
-    console.error('[MarkdownManual] cards render failed:', e)
+    logger.error('[MarkdownManual] cards render failed:', e)
     cards.value = []
   } finally {
     loading.value = false
@@ -307,13 +309,13 @@ onMounted(async () => {
   try {
     await settingsStore.loadAppearanceConfig()
   } catch (e) {
-    console.warn('[MarkdownManual] loadAppearanceConfig failed:', e)
+    logger.warn('[MarkdownManual] loadAppearanceConfig failed:', e)
   }
 
   previewWidthPx.value = clampPreviewWidth(Math.round(window.innerWidth * 0.5))
   window.addEventListener('resize', resetSplit)
 
-  console.info('[MarkdownManual] mounted:', {
+  logger.info('[MarkdownManual] mounted:', {
     theme: normalizedTheme.value,
     previewWidthPx: previewWidthPx.value,
     fontSize: settingsStore.appearanceFontSize,

@@ -57,6 +57,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 /**
  * FlipboardFeedManager
  * - 订阅源独立管理窗口页面（配合 /flipboard-feeds 路由 + tauri create_flipboard_feed_window 命令）
@@ -70,6 +71,8 @@ import { computed, h, onMounted, ref } from 'vue'
 import { NButton, NSwitch, NTag, NModal, NForm, NFormItem, NSelect, createDiscreteApi } from 'naive-ui'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import FeedSourceConfigDialog from './FeedSourceConfigDialog.vue'
+
+const logger = createLogger('FlipboardFeedManager')
 
 const props = defineProps({
   // 路由 query 透传：/flipboard-feeds?category=xxx
@@ -222,13 +225,13 @@ const columns = computed(() => {
           disabled: isBusy,
           async onUpdateValue(val) {
             if (!id) return
-            console.log('FlipboardFeedManager: toggle enabled', { id, enabled: val })
+            logger.info('FlipboardFeedManager: toggle enabled', { id, enabled: val })
             busyIds.value.add(id)
             try {
               await store.setFeedEnabled(id, !!val)
               message.success(val ? '已启用' : '已禁用')
             } catch (e) {
-              console.error('FlipboardFeedManager: setFeedEnabled failed', e)
+              logger.error('FlipboardFeedManager: setFeedEnabled failed', e)
               message.error(String(e || '操作失败'))
             } finally {
               busyIds.value.delete(id)
@@ -285,15 +288,15 @@ const scrollX = computed(() => {
 const refresh = async () => {
   try {
     loading.value = true
-    console.log('FlipboardFeedManager: refresh start')
+    logger.info('FlipboardFeedManager: refresh start')
     await store.fetchCategories()
     await store.fetchFeeds()
-    console.log('FlipboardFeedManager: refresh done', {
+    logger.info('FlipboardFeedManager: refresh done', {
       categories: store.categories?.value?.length,
       feeds: store.feeds?.value?.length
     })
   } catch (e) {
-    console.error('FlipboardFeedManager: refresh failed', e)
+    logger.error('FlipboardFeedManager: refresh failed', e)
     message.error(String(e || '刷新失败'))
   } finally {
     loading.value = false
@@ -311,7 +314,7 @@ const handleSimpleSubmit = async () => {
 
   try {
     simpleLoading.value = true
-    console.log('FlipboardFeedManager: simple submit', { categoryId, platforms })
+    logger.info('FlipboardFeedManager: simple submit', { categoryId, platforms })
     const created = await store.generateFeedsByPlatform(platforms, categoryId)
     if (created && created.length) {
       message.success(`已为所选平台生成 ${created.length} 个信息源`)
@@ -320,7 +323,7 @@ const handleSimpleSubmit = async () => {
     }
     showSimpleDialog.value = false
   } catch (e) {
-    console.error('FlipboardFeedManager: simple submit failed', e)
+    logger.error('FlipboardFeedManager: simple submit failed', e)
     message.error(String(e || '生成信息源失败'))
   } finally {
     simpleLoading.value = false
@@ -328,13 +331,13 @@ const handleSimpleSubmit = async () => {
 }
 
 const openAddDialog = () => {
-  console.log('FlipboardFeedManager: open add dialog')
+  logger.info('FlipboardFeedManager: open add dialog')
   editingFeed.value = null
   showDialog.value = true
 }
 
 const openSimpleDialog = () => {
-  console.log('FlipboardFeedManager: open simple dialog')
+  logger.info('FlipboardFeedManager: open simple dialog')
   simpleForm.value = {
     categoryId: filterCategory.value || 'all',
     platforms: []
@@ -343,22 +346,22 @@ const openSimpleDialog = () => {
 }
 
 const openEditDialog = (row) => {
-  console.log('FlipboardFeedManager: open edit dialog', row)
+  logger.info('FlipboardFeedManager: open edit dialog', row)
   editingFeed.value = row ? { ...row } : null
   showDialog.value = true
 }
 
 const handleDialogCancel = () => {
-  console.log('FlipboardFeedManager: dialog cancel')
+  logger.info('FlipboardFeedManager: dialog cancel')
 }
 
 const handleSimpleCancel = () => {
-  console.log('FlipboardFeedManager: simple dialog cancel')
+  logger.info('FlipboardFeedManager: simple dialog cancel')
   showSimpleDialog.value = false
 }
 
 const handleDialogSubmit = async (payload) => {
-  console.log('FlipboardFeedManager: dialog submit', payload)
+  logger.info('FlipboardFeedManager: dialog submit', payload)
 
   const id = String(payload?.id || '').trim()
   const name = String(payload?.name || '').trim()
@@ -395,12 +398,12 @@ const handleDialogSubmit = async (payload) => {
       const enabled = original ? !!original.enabled : true
       const merged = { ...source, enabled }
 
-      console.log('FlipboardFeedManager: update feed', merged)
+      logger.info('FlipboardFeedManager: update feed', merged)
       await store.updateFeed(merged)
       message.success('订阅源已更新')
     } else {
       const merged = { ...source, enabled: true }
-      console.log('FlipboardFeedManager: add feed', merged)
+      logger.info('FlipboardFeedManager: add feed', merged)
       await store.addFeed(merged)
       message.success('订阅源已添加')
     }
@@ -408,7 +411,7 @@ const handleDialogSubmit = async (payload) => {
     showDialog.value = false
     editingFeed.value = null
   } catch (e) {
-    console.error('FlipboardFeedManager: add/update failed', e)
+    logger.error('FlipboardFeedManager: add/update failed', e)
     message.error(String(e || '保存失败'))
   } finally {
     loading.value = false
@@ -428,11 +431,11 @@ const confirmDelete = (row) => {
     onPositiveClick: async () => {
       busyIds.value.add(id)
       try {
-        console.log('FlipboardFeedManager: delete feed', { id })
+        logger.info('FlipboardFeedManager: delete feed', { id })
         await store.deleteFeed(id)
         message.success('已删除')
       } catch (e) {
-        console.error('FlipboardFeedManager: delete failed', e)
+        logger.error('FlipboardFeedManager: delete failed', e)
         message.error(String(e || '删除失败'))
       } finally {
         busyIds.value.delete(id)
@@ -444,7 +447,7 @@ const confirmDelete = (row) => {
 onMounted(async () => {
   // 初始筛选：优先使用路由传入
   filterCategory.value = (props.category || '').trim() || ''
-  console.log('FlipboardFeedManager: mounted', { category: props.category })
+  logger.info('FlipboardFeedManager: mounted', { category: props.category })
   await refresh()
 })
 </script>

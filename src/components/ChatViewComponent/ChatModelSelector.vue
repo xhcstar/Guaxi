@@ -10,9 +10,12 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { ChevronDown16Filled } from '@vicons/fluent'
+
+const logger = createLogger('ChatModelSelector')
 
 // 引入 Pinia 的 ChatStore
 const chatStore = useChatStore();
@@ -45,9 +48,9 @@ const dropdownOptions = computed(() => {
 
 // 处理模型选择变化
 const handleModelChange = (key) => {
-  console.log('key', key);
+  logger.info('key', key);
   const selectModelId = parseInt(key.split('-')[1], 10);
-  console.log('selectModelId', selectModelId);
+  logger.info('selectModelId', selectModelId);
   chatStore.setChatModel(selectModelId);
 };
 </script>

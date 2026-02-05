@@ -205,6 +205,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NCollapse, NCollapseItem, NDynamicTags, NForm, NFormItem, NIcon, NIconWrapper, NInput, NSelect, NSpace, NTooltip, NTree, createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -212,6 +213,7 @@ import { LayersOutline, ListOutline, RefreshOutline, SyncOutline } from '@vicons
 import { PanelLeftContract24Regular, PanelRightContract24Regular } from '@vicons/fluent'
 import GuaxiKnowledgeBaseGraphEditor from './GuaxiKnowledgeBaseGraphEditor.vue'
 
+const logger = createLogger('GuaxiKnowledgeBaseManager')
 // 顶部工具条使用 createDiscreteApi，避免依赖组件上下文
 const { message } = createDiscreteApi(['message'])
 
@@ -399,7 +401,7 @@ const ensureParagraphChildrenForFile = async (fileRelPath) => {
   }
 
   try {
-    console.info('[KBManager] load paragraph nodes', { relPath: rel })
+    logger.info('[KBManager] load paragraph nodes', { relPath: rel })
     const meta = await invoke('kbmeta_read_file_meta', { knowledgeBaseName: selectedKbName.value, relPath: rel })
     const children = makeParagraphChildrenFromFileMeta(rel, meta)
     fileParagraphChildrenCache.set(rel, children)
@@ -409,10 +411,10 @@ const ensureParagraphChildrenForFile = async (fileRelPath) => {
       expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ROOT_KEY, rel]))
     }
 
-    console.info('[KBManager] paragraph nodes ready', { relPath: rel, count: children.length })
+    logger.info('[KBManager] paragraph nodes ready', { relPath: rel, count: children.length })
     return true
   } catch (e) {
-    console.error('[KBManager] load paragraph nodes failed:', e)
+    logger.error('[KBManager] load paragraph nodes failed:', e)
     return false
   }
 }
@@ -476,7 +478,7 @@ const loadKbMeta = async (kbName) => {
   currentKind.value = 'kb'
   currentRelPath.value = ''
 
-  console.info('[KBManager] kb meta loaded', { kbName, hasTree: !!rootNode })
+  logger.info('[KBManager] kb meta loaded', { kbName, hasTree: !!rootNode })
 }
 
 const refresh = async () => {
@@ -489,7 +491,7 @@ const refresh = async () => {
     kbRootPath.value = typeof root === 'string' ? root : ''
     kbList.value = Array.isArray(list) ? list : []
   } catch (e) {
-    console.error('加载知识库元数据失败:', e)
+    logger.error('加载知识库元数据失败:', e)
     message.error('加载知识库元数据失败')
   } finally {
     loading.value = false
@@ -521,7 +523,7 @@ const handleKbChange = async (kbName) => {
     loading.value = true
     await loadKbMeta(kbName)
   } catch (e) {
-    console.error('加载知识库配置失败:', e)
+    logger.error('加载知识库配置失败:', e)
     message.error('加载知识库配置失败')
   } finally {
     loading.value = false
@@ -561,7 +563,7 @@ const handleSelectNode = async (keys, options) => {
       expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ROOT_KEY, normalizeRelKey(currentRelPath.value)]))
     }
   } catch (e) {
-    console.error('读取文件配置失败:', e)
+    logger.error('读取文件配置失败:', e)
     message.error('读取文件配置失败')
   } finally {
     loading.value = false
@@ -584,7 +586,7 @@ const reloadCurrent = async () => {
 
     await loadKbMeta(selectedKbName.value)
   } catch (e) {
-    console.error('重新加载失败:', e)
+    logger.error('重新加载失败:', e)
     message.error('重新加载失败')
   } finally {
     loading.value = false
@@ -676,19 +678,19 @@ const handleGraphPatchTree = (payload) => {
   const newKey = String(payload?.newKey || '')
 
   if (!oldKey || !newKey) {
-    console.warn('[KBManager] patch-tree invalid payload', payload)
+    logger.warn('[KBManager] patch-tree invalid payload', payload)
     return
   }
 
   const root = Array.isArray(treeData.value) ? treeData.value[0] : null
   if (!root) {
-    console.warn('[KBManager] patch-tree missed: empty tree', payload)
+    logger.warn('[KBManager] patch-tree missed: empty tree', payload)
     return
   }
 
   const ok = patchTreeAfterRename(root, oldKey, newKey)
   if (!ok) {
-    console.warn('[KBManager] patch-tree missed: node not found', payload)
+    logger.warn('[KBManager] patch-tree missed: node not found', payload)
     return
   }
 
@@ -702,7 +704,7 @@ const handleGraphPatchTree = (payload) => {
   if (!selectedKeys.value.length) selectedKeys.value = [newKey]
   expandToRelPath(newKey)
 
-  console.info('[KBManager] patch-tree ok', { oldKey, newKey })
+  logger.info('[KBManager] patch-tree ok', { oldKey, newKey })
 }
 
 // 图形模式：选中节点时按需补齐段落节点（避免启动时扫描全库）
@@ -733,7 +735,7 @@ const handleGraphReload = async (payload) => {
       expandToRelPath(nextKey)
     }
   } catch (e) {
-    console.error('图形模式刷新树失败:', e)
+    logger.error('图形模式刷新树失败:', e)
     message.error('图形模式刷新树失败')
   } finally {
     loading.value = false
@@ -790,7 +792,7 @@ const saveCurrent = async () => {
       return
     }
   } catch (e) {
-    console.error('保存失败:', e)
+    logger.error('保存失败:', e)
     message.error(String(e?.message || '保存失败'))
   } finally {
     loading.value = false

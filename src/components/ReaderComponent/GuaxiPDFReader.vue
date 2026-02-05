@@ -130,9 +130,11 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
+const logger = createLogger('GuaxiPDFReader')
 const props = defineProps({
   filePath: {
     type: String,
@@ -211,7 +213,7 @@ const loadPdfPage = async (pageNum) => {
       }
     });
 
-    console.log('Raw response:', response);
+    logger.info('Raw response:', response);
 
     if (!response.success) {
       throw new Error(response.error || 'Unknown error from backend');
@@ -234,7 +236,7 @@ const loadPdfPage = async (pageNum) => {
     elements.value = data.elements || [];
 
   } catch (error) {
-    console.error('加载PDF失败:', error);
+    logger.error('加载PDF失败:', error);
     // 显示用户友好的错误信息
     alert(`加载PDF失败: ${error.message}`);
     // 重置状态

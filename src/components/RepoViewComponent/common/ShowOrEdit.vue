@@ -26,10 +26,12 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../../utils/logger'
 import { ref, nextTick, watch, onMounted, onUnmounted, computed, h } from 'vue';
 import { NInput, NAutoComplete, NTooltip } from 'naive-ui';
 import { invoke } from '@tauri-apps/api/core';
 
+const logger = createLogger('ShowOrEdit')
 const props = defineProps({
   value: [String, Number], // 单元格的值
   onUpdateValue: Function, // 更新值的回调函数
@@ -113,7 +115,7 @@ const handleChange = () => {
     isEdit.value = false;
     return;
   }
-  console.log(`handleChange 被调用，输入值: ${inputValue.value}`);
+  logger.info(`handleChange 被调用，输入值: ${inputValue.value}`);
   if (props.onUpdateValue) {
     props.onUpdateValue(next);
   }
@@ -125,7 +127,7 @@ const handleChange = () => {
 const handleSearch = async (query) => {
   if (!props.enableAutoComplete || !props.searchType) return;
 
-  console.log(`handleSearch 被调用，搜索关键字: ${query}, 搜索类型: ${props.searchType}`);
+  logger.info(`handleSearch 被调用，搜索关键字: ${query}, 搜索类型: ${props.searchType}`);
   isLoading.value = true;
   try {
     let result;
@@ -150,17 +152,17 @@ const handleSearch = async (query) => {
     }
 
     if (!result) {
-      console.error('搜索结果为空');
+      logger.error('搜索结果为空');
       return;
     } else if (result.length === 0) {
-      console.log('搜索结果为空');
+      logger.info('搜索结果为空');
     } else {
-      console.log(`handleSearch 返回结果:`, result);
+      logger.info(`handleSearch 返回结果:`, result);
       options.value = result;
     }
 
   } catch (error) {
-    console.error('搜索失败:', error);
+    logger.error('搜索失败:', error);
   } finally {
     isLoading.value = false;
   }

@@ -20,7 +20,10 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed } from "vue";
+
+const logger = createLogger('GuaxiStatisticsHeatmap')
 
 /**
  * GitHub 风格热力图：
@@ -88,7 +91,7 @@ const weeks = computed(() => {
     out.push(days.slice(i, i + 7));
   }
 
-  console.info("[statistics:heatmap] build weeks", {
+  logger.info("[statistics:heatmap] build weeks", {
     start: toLocalDayKey(start),
     end: toLocalDayKey(end),
     weekCount: out.length,

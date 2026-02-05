@@ -107,6 +107,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed } from 'vue'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -120,6 +121,7 @@ import {
   PulseOutline
 } from '@vicons/ionicons5'
 
+const logger = createLogger('FlipboardHeader')
 const SearchIcon = SearchOutline
 const GridIcon = GridOutline
 const ListIcon = ListOutline
@@ -207,10 +209,10 @@ const refreshArticles = () => {
 
 const refreshHealth = async () => {
   try {
-    console.log('FlipboardHeader: refreshHealth')
+    logger.info('FlipboardHeader: refreshHealth')
     await store.fetchFeedHealth()
   } catch (e) {
-    console.error('FlipboardHeader: refreshHealth failed', e)
+    logger.error('FlipboardHeader: refreshHealth failed', e)
   }
 }
 

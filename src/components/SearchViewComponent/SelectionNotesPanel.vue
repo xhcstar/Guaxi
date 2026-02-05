@@ -98,6 +98,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 /**
  * SelectionNotesPanel
  * -------------------
@@ -116,6 +117,7 @@ import { join } from '@tauri-apps/api/path'
 import { NCard, NButton, NIcon, NText, useMessage } from 'naive-ui'
 import { AddOutline as Add, SaveOutline as Save, CloseOutline as Close, TrashOutline as Trash } from '@vicons/ionicons5'
 
+const logger = createLogger('SelectionNotesPanel')
 /**
  * props.articleId     用于区分每篇文章的笔记存储 key
  * props.articleTitle  用于生成默认卡片标题
@@ -187,7 +189,7 @@ const ensureNotesFilePath = async () => {
     const exeDir = await invoke('get_executable_dir')
     const dir = await join(exeDir, 'Fliprepo', 'flipboard-notes')
 
-    console.debug('[SelectionNotesPanel] resolve notes dir', {
+    logger.debug('[SelectionNotesPanel] resolve notes dir', {
       exeDir,
       dir,
       rawArticleId,
@@ -198,12 +200,12 @@ const ensureNotesFilePath = async () => {
     await invoke('create_directory', { path: dir })
 
     notesFilePath.value = await join(dir, `${fileBaseName}.json`)
-    console.debug('[SelectionNotesPanel] notesFilePath ready:', notesFilePath.value)
+    logger.debug('[SelectionNotesPanel] notesFilePath ready:', notesFilePath.value)
 
     return notesFilePath.value
   } catch (error) {
     const msg = error?.message || String(error)
-    console.error('[SelectionNotesPanel] ensureNotesFilePath failed:', msg)
+    logger.error('[SelectionNotesPanel] ensureNotesFilePath failed:', msg)
     message.error('初始化笔记目录失败', { duration: 2500 })
     throw error
   }
@@ -242,7 +244,7 @@ const loadNotesFromFile = async () => {
         return false
       }
 
-      console.info('[SelectionNotesPanel] migrated notes from legacy localStorage', {
+      logger.info('[SelectionNotesPanel] migrated notes from legacy localStorage', {
         legacyKey,
         filePath: fp,
         count: noteCards.value.length
@@ -251,7 +253,7 @@ const loadNotesFromFile = async () => {
       await saveNotesToFile()
       return true
     } catch (e) {
-      console.warn('[SelectionNotesPanel] migrate legacy localStorage failed', e)
+      logger.warn('[SelectionNotesPanel] migrate legacy localStorage failed', e)
       return false
     }
   }
@@ -264,7 +266,7 @@ const loadNotesFromFile = async () => {
       const msg = e?.message || String(e)
       if (!isNotFoundError(msg)) throw e
 
-      console.debug('[SelectionNotesPanel] notes file not found, treat as empty', {
+      logger.debug('[SelectionNotesPanel] notes file not found, treat as empty', {
         filePath: fp,
         msg
       })
@@ -278,7 +280,7 @@ const loadNotesFromFile = async () => {
     }
 
     if (!String(raw || '').trim()) {
-      console.debug('[SelectionNotesPanel] notes file empty, treat as empty', { filePath: fp })
+      logger.debug('[SelectionNotesPanel] notes file empty, treat as empty', { filePath: fp })
       noteCards.value = []
 
       const migrated = await tryMigrateFromLegacyLocalStorage()
@@ -292,7 +294,7 @@ const loadNotesFromFile = async () => {
     try {
       data = JSON.parse(raw)
     } catch (e) {
-      console.warn('[SelectionNotesPanel] notes file is not valid json, reset to empty', {
+      logger.warn('[SelectionNotesPanel] notes file is not valid json, reset to empty', {
         filePath: fp,
         error: e?.message || String(e)
       })
@@ -309,13 +311,13 @@ const loadNotesFromFile = async () => {
       noteCards.value = []
     }
 
-    console.debug('[SelectionNotesPanel] notes loaded from file', {
+    logger.debug('[SelectionNotesPanel] notes loaded from file', {
       filePath: fp,
       count: noteCards.value.length
     })
   } catch (error) {
     const msg = error?.message || String(error)
-    console.error('[SelectionNotesPanel] loadNotesFromFile failed:', msg)
+    logger.error('[SelectionNotesPanel] loadNotesFromFile failed:', msg)
     message.error(`读取笔记失败: ${msg}`, { duration: 2500 })
   }
 }
@@ -341,13 +343,13 @@ const saveNotesToFile = async () => {
 
     await invoke('write_file_content', { path: fp, content: payload })
 
-    console.debug('[SelectionNotesPanel] notes saved to file', {
+    logger.debug('[SelectionNotesPanel] notes saved to file', {
       filePath: fp,
       count: noteCards.value.length
     })
   } catch (error) {
     const msg = error?.message || String(error)
-    console.error('[SelectionNotesPanel] saveNotesToFile failed:', msg)
+    logger.error('[SelectionNotesPanel] saveNotesToFile failed:', msg)
     message.error('保存笔记失败', { duration: 2500 })
   }
 }
@@ -421,12 +423,12 @@ const handleSelectionMouseUp = () => {
     selectionToolbarLeft.value = Math.round(left)
     selectionToolbarVisible.value = true
 
-    console.debug('[SelectionNotesPanel] selection captured', {
+    logger.debug('[SelectionNotesPanel] selection captured', {
       text: text.slice(0, 50),
       rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
     })
   } catch (error) {
-    console.error('[SelectionNotesPanel] handleSelectionMouseUp error:', error)
+    logger.error('[SelectionNotesPanel] handleSelectionMouseUp error:', error)
     closeSelectionToolbar()
   }
 }
@@ -469,7 +471,7 @@ const insertSelectionResult = async () => {
 
     showNoteAddedBubble()
   } catch (error) {
-    console.error('[SelectionNotesPanel] insertSelectionResult failed:', error)
+    logger.error('[SelectionNotesPanel] insertSelectionResult failed:', error)
     message.error('插入笔记失败', { duration: 2000 })
   } finally {
     selectionBusy.value = false
@@ -517,7 +519,7 @@ const addToNotes = async (element) => {
   noteCards.value.push(newCard)
   await persistNotes()
 
-  console.debug('[SelectionNotesPanel] note card added', {
+  logger.debug('[SelectionNotesPanel] note card added', {
     articleId: props.articleId,
     cardId: newCard.id,
     title: newCard.title
@@ -569,7 +571,7 @@ const addNewCard = () => {
   noteCards.value.push(newCard)
   persistNotes()
 
-  console.debug('[SelectionNotesPanel] empty note card created', {
+  logger.debug('[SelectionNotesPanel] empty note card created', {
     articleId: props.articleId,
     cardId: newCard.id
   })
@@ -592,7 +594,7 @@ const deleteCard = async (index) => {
 
   await persistNotes()
 
-  console.debug('[SelectionNotesPanel] note card deleted', {
+  logger.debug('[SelectionNotesPanel] note card deleted', {
     articleId: props.articleId,
     cardId
   })
@@ -629,7 +631,7 @@ const saveCardEdit = async (index) => {
   await persistNotes()
   message.success('笔记已保存', { duration: 1500 })
 
-  console.debug('[SelectionNotesPanel] note card updated', {
+  logger.debug('[SelectionNotesPanel] note card updated', {
     articleId: props.articleId,
     cardId: card.id
   })

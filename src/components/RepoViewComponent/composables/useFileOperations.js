@@ -1,7 +1,9 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { createLogger } from '../../../utils/logger'
 
+const logger = createLogger('useFileOperations')
 export function useFileOperations({ store, message }) {
   // 备份数据库
   const backupDatabase = async (scope = "current") => {
@@ -27,17 +29,17 @@ export function useFileOperations({ store, message }) {
         .then((result) => {
           if (result.success) {
             message.success("资料库备份成功");
-            console.log("备份文件路径:", result.backupPath);
+            logger.info("备份文件路径:", result.backupPath);
           } else {
             throw new Error(result.error || "备份失败");
           }
         })
         .catch((error) => {
-          console.error("备份失败:", error);
+          logger.error("备份失败:", error);
           message.error(`资料库备份失败: ${error.message || error}`);
         });
     } catch (error) {
-      console.error("备份失败:", error);
+      logger.error("备份失败:", error);
       message.error(`资料库备份失败: ${error.message || error}`);
     }
   };
@@ -69,7 +71,7 @@ export function useFileOperations({ store, message }) {
         throw new Error(result.error || "恢复失败");
       }
     } catch (error) {
-      console.error("恢复失败:", error);
+      logger.error("恢复失败:", error);
       message.error(`资料库恢复失败: ${error.message || error}`);
     }
   };
@@ -94,7 +96,7 @@ export function useFileOperations({ store, message }) {
         throw new Error(result.error || "导入失败");
       }
     } catch (error) {
-      console.error("导入失败:", error);
+      logger.error("导入失败:", error);
       message.error(`条目导入失败: ${error.message || error}`);
     }
   };
@@ -119,12 +121,12 @@ export function useFileOperations({ store, message }) {
       });
       if (result.success) {
         message.success(`成功导出 ${result.exportedCount} 个条目`);
-        console.log("导出文件路径:", result.exportPath);
+        logger.info("导出文件路径:", result.exportPath);
       } else {
         throw new Error(result.error || "导出失败");
       }
     } catch (error) {
-      console.error("导出失败:", error);
+      logger.error("导出失败:", error);
       message.error(`条目导出失败: ${error.message || error}`);
     }
   };
@@ -151,7 +153,7 @@ export function useFileOperations({ store, message }) {
         throw new Error(result.error || "批量删除失败");
       }
     } catch (error) {
-      console.error("批量删除失败:", error);
+      logger.error("批量删除失败:", error);
       message.error(`批量删除失败: ${error.message || error}`);
     }
   };
@@ -185,7 +187,7 @@ export function useFileOperations({ store, message }) {
         throw new Error(result.error || "批量移动失败");
       }
     } catch (error) {
-      console.error("批量移动失败:", error);
+      logger.error("批量移动失败:", error);
       message.error(`批量移动失败: ${error.message || error}`);
     }
   };
@@ -211,7 +213,7 @@ export function useFileOperations({ store, message }) {
         throw new Error(result.error || "批量导出失败");
       }
     } catch (error) {
-      console.error("批量导出失败:", error);
+      logger.error("批量导出失败:", error);
       message.error(`批量导出失败: ${error.message || error}`);
     }
   };
@@ -225,7 +227,7 @@ export function useFileOperations({ store, message }) {
 
       return stats;
     } catch (error) {
-      console.error("获取文件统计信息失败:", error);
+      logger.error("获取文件统计信息失败:", error);
       return null;
     }
   };
@@ -241,7 +243,7 @@ export function useFileOperations({ store, message }) {
         throw new Error(result.error || "清理失败");
       }
     } catch (error) {
-      console.error("清理临时文件失败:", error);
+      logger.error("清理临时文件失败:", error);
       message.error(`清理临时文件失败: ${error.message || error}`);
     }
   };
@@ -260,14 +262,14 @@ export function useFileOperations({ store, message }) {
           message.success("所有文件完整性验证通过");
         } else {
           message.warning(`发现 ${result.corruptedFiles.length} 个损坏文件`);
-          console.log("损坏文件列表:", result.corruptedFiles);
+          logger.info("损坏文件列表:", result.corruptedFiles);
         }
         return result;
       } else {
         throw new Error(result.error || "验证失败");
       }
     } catch (error) {
-      console.error("验证文件完整性失败:", error);
+      logger.error("验证文件完整性失败:", error);
       message.error(`验证文件完整性失败: ${error.message || error}`);
       return null;
     }
@@ -281,7 +283,7 @@ export function useFileOperations({ store, message }) {
       await store.fetchFiles(store.currentDatabase);
       await store.fetchRepos();
     } catch (error) {
-      console.error("垃圾回收失败:", error);
+      logger.error("垃圾回收失败:", error);
       message.error(`垃圾回收失败: ${error.message || error}`);
     }
   };

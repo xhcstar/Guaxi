@@ -64,12 +64,14 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, h, onMounted, onUnmounted, ref } from 'vue'
 import { NButton, NCard, NMessageProvider, NSpace, NSpin, NTag, NText, NTree, useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { Folder20Regular, Document20Regular } from '@vicons/fluent'
 import { NIcon } from 'naive-ui'
 
+const logger = createLogger('GuaxiResourceRepoManager')
 const message = useMessage()
 
 const RESOURCE_REPO_SYNC_STATUS_KEY = 'guaxi:resourceRepoSyncStatus:v1'
@@ -100,7 +102,7 @@ const readSyncState = () => {
       detail: String(v?.detail || ''),
     }
   } catch (e) {
-    console.warn('[ResourceRepoManager] read sync state failed', e)
+    logger.warn('[ResourceRepoManager] read sync state failed', e)
     return { status: 'idle', action: '', at: '', detail: '' }
   }
 }
@@ -109,7 +111,7 @@ const writeSyncState = (next) => {
   try {
     localStorage.setItem(RESOURCE_REPO_SYNC_STATUS_KEY, JSON.stringify(next))
   } catch (e) {
-    console.warn('[ResourceRepoManager] write sync state failed', e)
+    logger.warn('[ResourceRepoManager] write sync state failed', e)
   }
 }
 
@@ -125,7 +127,7 @@ const applySyncState = (next, source) => {
     at: String(next?.at || ''),
     detail: String(next?.detail || ''),
   }
-  console.log('[ResourceRepoManager] sync state update', { source, state: syncState.value })
+  logger.info('[ResourceRepoManager] sync state update', { source, state: syncState.value })
 }
 
 const refreshSyncStateFromStorage = (source) => {
@@ -140,7 +142,7 @@ const refreshSyncStateFromStorage = (source) => {
     const v = JSON.parse(raw)
     applySyncState(v, source)
   } catch (e) {
-    console.warn('[ResourceRepoManager] refresh sync state failed', e)
+    logger.warn('[ResourceRepoManager] refresh sync state failed', e)
   }
 }
 
@@ -170,10 +172,10 @@ const setSyncState = (patch) => {
       })
     )
   } catch (e) {
-    console.warn('[ResourceRepoManager] dispatch sync state event failed', e)
+    logger.warn('[ResourceRepoManager] dispatch sync state event failed', e)
   }
 
-  console.log('[ResourceRepoManager] sync state', next)
+  logger.info('[ResourceRepoManager] sync state', next)
 }
 
 const syncUi = computed(() => {
@@ -238,12 +240,12 @@ const refresh = async () => {
     expandedKeys.value = []
     selectedKeys.value = []
     selectedPath.value = ''
-    console.log('[ResourceRepoManager] refreshed', {
+    logger.info('[ResourceRepoManager] refreshed', {
       root: resourceRoot.value,
       count: treeData.value.length,
     })
   } catch (e) {
-    console.error('[ResourceRepoManager] refresh failed', e)
+    logger.error('[ResourceRepoManager] refresh failed', e)
     message.error('刷新失败')
   } finally {
     loadingTree.value = false
@@ -284,7 +286,7 @@ const handleExpandedKeysUpdate = async (keys) => {
     const children = await loadChildren(node.key)
     node.children = children
   } catch (e) {
-    console.error('[ResourceRepoManager] load children failed', e)
+    logger.error('[ResourceRepoManager] load children failed', e)
     message.error('加载目录失败')
   } finally {
     loadingTree.value = false
@@ -296,7 +298,7 @@ const openInExplorer = async () => {
     if (!resourceRoot.value) return
     await invoke('open_in_file_explorer', { path: resourceRoot.value })
   } catch (e) {
-    console.error('[ResourceRepoManager] open explorer failed', e)
+    logger.error('[ResourceRepoManager] open explorer failed', e)
     message.error('打开失败')
   }
 }
@@ -306,7 +308,7 @@ const openSelectedInExplorer = async () => {
     if (!selectedPath.value) return
     await invoke('open_in_file_explorer', { path: selectedPath.value })
   } catch (e) {
-    console.error('[ResourceRepoManager] open selected failed', e)
+    logger.error('[ResourceRepoManager] open selected failed', e)
     message.error('打开失败')
   }
 }
@@ -319,7 +321,7 @@ const deleteSelected = async () => {
     message.success('已删除')
     await refresh()
   } catch (e) {
-    console.error('[ResourceRepoManager] delete failed', e)
+    logger.error('[ResourceRepoManager] delete failed', e)
     message.error('删除失败')
   } finally {
     loading.value = false
@@ -338,7 +340,7 @@ const testConnection = async () => {
     message.success(text)
   } catch (e) {
     const msg = formatInvokeError(e)
-    console.error('[ResourceRepoManager] test connection failed', e)
+    logger.error('[ResourceRepoManager] test connection failed', e)
     setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
     message.error(msg)
   } finally {
@@ -358,7 +360,7 @@ const syncNow = async () => {
     message.success(text)
   } catch (e) {
     const msg = formatInvokeError(e)
-    console.error('[ResourceRepoManager] sync failed', e)
+    logger.error('[ResourceRepoManager] sync failed', e)
     setSyncState({ status: 'error', action, at: nowLabel(), detail: msg })
     message.error(msg)
   } finally {
@@ -377,7 +379,7 @@ onMounted(async () => {
       refreshSyncStateFromStorage('poll')
     }, 800)
   } catch (e) {
-    console.warn('[ResourceRepoManager] start sync state poll failed', e)
+    logger.warn('[ResourceRepoManager] start sync state poll failed', e)
   }
 
   await refresh()
@@ -393,7 +395,7 @@ onUnmounted(() => {
       syncPollTimer = null
     }
   } catch (e) {
-    console.warn('[ResourceRepoManager] stop sync state poll failed', e)
+    logger.warn('[ResourceRepoManager] stop sync state poll failed', e)
   }
 })
 </script>

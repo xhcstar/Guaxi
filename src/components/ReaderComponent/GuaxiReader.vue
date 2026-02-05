@@ -12,6 +12,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed } from 'vue'
 // import GuaxiPDFReader from './GuaxiPDFReader.vue'
 import GuaxiConvertPDFReader from './GuaxiConvertPDFReader.vue'
@@ -20,6 +21,8 @@ import GuaxiHtmlReader from './GuaxiHtmlReader.vue'
 import GuaxiEpubReader from './GuaxiEpubReader.vue'
 import GuaxiWordReader from './GauxiWordReader.vue'
 import GuaxiTextReader from './GuaxiTextReader.vue'
+
+const logger = createLogger('GuaxiReader')
 // import { Base64 } from 'js-base64'
 
 const props = defineProps({
@@ -51,10 +54,10 @@ const props = defineProps({
 //   try {
 //     // 先URL解码，再Base64解码
 //     const urlDecoded = decodeURIComponent(props.filePath)
-// 	console.log('urlDecoded', urlDecoded)
+// 	logger.info('urlDecoded', urlDecoded)
 //     return Base64.decode(urlDecoded)
 //   } catch (error) {
-//     console.error('路径解码失败:', error)
+//     logger.error('路径解码失败:', error)
 //     return null
 //   }
 // })
@@ -62,10 +65,10 @@ const props = defineProps({
 // 更严格的组件选择逻辑
 const readerComponent = computed(() => {
   const { fileType, filePath, fileName, library } = props
-  console.log('readerComponent', fileType, filePath, fileName, library)
+  logger.info('readerComponent', fileType, filePath, fileName, library)
 
   if (!fileType || !fileName) {
-    console.error('Missing required props')
+    logger.error('Missing required props')
     return null
   }
 

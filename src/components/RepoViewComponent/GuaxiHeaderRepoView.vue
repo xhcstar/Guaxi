@@ -33,6 +33,7 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, ref, h } from "vue";
 import { NIcon, NDropdown, useMessage } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -52,6 +53,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { sep } from '@tauri-apps/api/path'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 
+const logger = createLogger('GuaxiHeaderRepoView')
 const rightSiderStore = useRightSiderStore()
 const viewKey = 'repo'
 const siderStore = useSiderStore();
@@ -72,7 +74,7 @@ const toggleRightSider = () => {
 async function CaptureScreenshot() {
   try {
     const originalPath = fileTreeStore.selectedFile.path
-    console.log("[Screenshot] Original path:", originalPath)
+    logger.info("[Screenshot] Original path:", originalPath)
 
     const pathSeparator = await sep()
 
@@ -83,17 +85,17 @@ async function CaptureScreenshot() {
     )
 
     const imagesDir = `${dirPath}${pathSeparator}images`
-    console.log("[Screenshot] Images directory:", imagesDir)
+    logger.info("[Screenshot] Images directory:", imagesDir)
     await invoke('create_screenshot_dir', { path: imagesDir })
 
     const screenshotPath = `${imagesDir}${pathSeparator}${fileName}.png`
-    console.log("[Screenshot] Will be saved to:", screenshotPath)
+    logger.info("[Screenshot] Will be saved to:", screenshotPath)
 
     await invoke('take_screenshot', { path: screenshotPath })
 
-    console.log("[Screenshot] Saved successfully:", screenshotPath)
+    logger.info("[Screenshot] Saved successfully:", screenshotPath)
   } catch (err) {
-    console.error('[Screenshot] Failed:', err)
+    logger.error('[Screenshot] Failed:', err)
   }
 }
 
@@ -157,7 +159,7 @@ const showSearchOptions = (e) => {
 
     isSearchDropdownVisible.value = true
 
-    console.log('[Search] Show options menu', {
+    logger.info('[Search] Show options menu', {
       position: contextMenuPosition.value,
       width: dropdownWidth.value,
       searchType: searchType.value
@@ -173,7 +175,7 @@ const handleSearchBlur = () => {
 
 const handleSearchEnter = () => {
   if (searchQuery.value.trim()) {
-    console.log('[Search] Executing search:', {
+    logger.info('[Search] Executing search:', {
       query: searchQuery.value,
       type: searchType.value
     })
@@ -183,7 +185,7 @@ const handleSearchEnter = () => {
 }
 
 const handleSearchSelect = (key) => {
-  console.log('[Search] Selected search type:', key)
+  logger.info('[Search] Selected search type:', key)
   searchType.value = key
   isSearchDropdownVisible.value = false
 
@@ -270,7 +272,7 @@ async function handleSearchImported() {
     })
     handleTableSearch()
   } catch (err) {
-    console.error('[Search] Imported files search failed:', err);
+    logger.error('[Search] Imported files search failed:', err);
   }
 }
 </script>

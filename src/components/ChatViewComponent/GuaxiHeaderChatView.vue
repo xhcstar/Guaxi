@@ -27,7 +27,7 @@
 </template>
 
 <script setup>
-
+import { createLogger } from '../../utils/logger'
 import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -43,6 +43,7 @@ import {
   Open20Regular,
 } from '@vicons/fluent'
 
+const logger = createLogger('GuaxiHeaderChatView')
 const viewKey = 'chat'
 const siderStore = useSiderStore();
 const chatStore = useChatStore();
@@ -58,15 +59,15 @@ const toggleRightSider = () => {
 };
 
 const showSearchPlaceholder = () => {
-  console.log('搜索框获得焦点 - 占位功能');
+  logger.info('搜索框获得焦点 - 占位功能');
 };
 
 const showNotes = () => {
-  console.log('显示笔记点击');
+  logger.info('显示笔记点击');
 };
 
 const CaptureScreenshot = () => {
-  console.log('截图功能点击');
+  logger.info('截图功能点击');
 };
 
 
@@ -80,7 +81,7 @@ const openWebModel = async () => {
     const provider = modelId === 7 ? 'yuanbao' : 'chatgpt'
     await invoke('open_web_model_window', { provider })
   } catch (e) {
-    console.error('打开网页模型失败:', e)
+    logger.error('打开网页模型失败:', e)
     message.error('打开网页模型失败')
   }
 }

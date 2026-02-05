@@ -570,6 +570,9 @@ import { listen } from '@tauri-apps/api/event'
 import * as monaco from 'monaco-editor'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { registerDiffLanguages } from './utils/monaco-diff' // 自定义语言注册
+import { createLogger } from '../../utils/logger'
+
+const frontendLogger = createLogger('GitPanel')
 
 const { notification } = createDiscreteApi(['notification'])
 
@@ -724,40 +727,7 @@ watch(
   { immediate: true }
 )
 
-// 日志级别枚举
-const LogLevel = {
-  DEBUG: 0,
-  INFO: 1,
-  WARN: 2,
-  ERROR: 3
-}
-
-// 当前日志级别 (可根据环境变量设置)
-const currentLogLevel = import.meta.env.DEV ? LogLevel.DEBUG : LogLevel.INFO
-
-// 自定义日志记录器
-const logger = {
-  debug: (...args) => {
-    if (currentLogLevel <= LogLevel.DEBUG) {
-      console.debug('[GitPanel][DEBUG]', ...args)
-    }
-  },
-  info: (...args) => {
-    if (currentLogLevel <= LogLevel.INFO) {
-      console.log('[GitPanel][INFO]', ...args)
-    }
-  },
-  warn: (...args) => {
-    if (currentLogLevel <= LogLevel.WARN) {
-      console.warn('[GitPanel][WARN]', ...args)
-    }
-  },
-  error: (...args) => {
-    if (currentLogLevel <= LogLevel.ERROR) {
-      console.error('[GitPanel][ERROR]', ...args)
-    }
-  }
-}
+const logger = createLogger('GitPanel')
 
 const props = defineProps({
   workspacePath: {
@@ -1248,7 +1218,7 @@ const fetchBranches = async () => {
 
     currentBranch.value = current;
   } catch (error) {
-    console.error('Failed to fetch branches:', error);
+    frontendLogger.error('Failed to fetch branches:', error);
     notification.error({
       title: '获取分支失败',
       content: error.toString(),
@@ -1296,7 +1266,7 @@ const handleBranchItemClick = async (branch) => {
         duration: 2000
       });
     } catch (error) {
-      console.error('Failed to checkout branch:', error);
+      frontendLogger.error('Failed to checkout branch:', error);
       notification.error({
         title: '分支切换失败',
         content: error.toString(),
@@ -1620,7 +1590,7 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
   isRefreshingStatus.value = true
 
   logger.debug('Refreshing Git status')
-  console.log('repo path:', props.workspacePath)
+  frontendLogger.info('repo path:', props.workspacePath)
 
   const prevSelectedFilePath = selectedFile.value?.path
   const prevSelectedCommitId = selectedCommit.value?.id
@@ -1838,7 +1808,7 @@ const initMonacoEditor = async () => {
     resizeObserver.observe(editorContainer);
 
   } catch (error) {
-    console.error('Failed to initialize Monaco diff editor:', error);
+    frontendLogger.error('Failed to initialize Monaco diff editor:', error);
     notification.error({
       title: '编辑器初始化失败',
       content: error.message,
@@ -1848,14 +1818,14 @@ const initMonacoEditor = async () => {
 }
 
 const updateFileDiff = async (file) => {
-  console.log('updateFileDiff: isEditorInitialized.value ', isEditorInitialized.value, 'diffEditorContainer.value', diffEditorContainer.value);
+  frontendLogger.info('updateFileDiff: isEditorInitialized.value ', isEditorInitialized.value, 'diffEditorContainer.value', diffEditorContainer.value);
   if (!isEditorInitialized.value || !diffEditorContainer.value) {
     await initMonacoEditor();
   }
 
-  console.log('updateFileDiff: diffEditor ', diffEditor, 'diffEditorContainer.value', diffEditorContainer.value);
+  frontendLogger.info('updateFileDiff: diffEditor ', diffEditor, 'diffEditorContainer.value', diffEditorContainer.value);
   if (!diffEditor || !diffEditorContainer.value) {
-    console.error('Diff editor not available');
+    frontendLogger.error('Diff editor not available');
     return;
   }
 
@@ -1863,7 +1833,7 @@ const updateFileDiff = async (file) => {
 
   try {
     const filePath = file.path.replace(/\\/g, '/');
-    console.log('[Diff] Loading diff for:', filePath);
+    frontendLogger.info('[Diff] Loading diff for:', filePath);
 
     // 先获取新内容
     const [originalContent, modifiedContent] = await Promise.all([
@@ -1872,14 +1842,14 @@ const updateFileDiff = async (file) => {
         filePath: filePath,
         revision: 'HEAD'
       }).catch(e => {
-        console.warn('Failed to get original content:', e);
+        frontendLogger.warn('Failed to get original content:', e);
         return ''; // 对于新文件，原始内容为空
       }),
       invoke('get_file_content', {
         path: props.workspacePath,
         filePath: filePath
       }).catch(e => {
-        console.error('Failed to get modified content:', e);
+        frontendLogger.error('Failed to get modified content:', e);
         throw e;
       })
     ]);
@@ -1934,7 +1904,7 @@ const updateFileDiff = async (file) => {
       }, 100);
     }
   } catch (error) {
-    console.error('[Diff] Error in updateFileDiff:', error);
+    frontendLogger.error('[Diff] Error in updateFileDiff:', error);
     const errorModel = monaco.editor.createModel(
       `Error loading file diff:\n${error.message}`,
       'text/plain'
@@ -1970,7 +1940,7 @@ const handleFileClick = async (file) => {
     await nextTick()
     await updateFileDiff(file)
   } catch (error) {
-    console.error('Failed to load file content', error)
+    frontendLogger.error('Failed to load file content', error)
     notification.error({
       title: '加载文件失败',
       content: `无法加载文件 ${file.path} 的内容: ${error}`,
@@ -2345,7 +2315,7 @@ onMounted(() => {
       ])
 
       // 初始化编辑器但不等待
-      initMonacoEditor().catch(console.error)
+      initMonacoEditor().catch(frontendLogger.error)
 
       // 设置面板高度
       nextTick(() => {
@@ -2366,12 +2336,12 @@ onMounted(() => {
         }
       })
     } catch (error) {
-      console.error('Initialization error:', error)
+      frontendLogger.error('Initialization error:', error)
     }
   }
 
   // 执行初始化但不等待
-  initialize().catch(console.error)
+  initialize().catch(frontendLogger.error)
 })
 
 onUnmounted(() => {

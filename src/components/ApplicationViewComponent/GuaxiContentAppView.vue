@@ -28,6 +28,7 @@
 
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, onBeforeUnmount } from "vue"
 import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
@@ -41,6 +42,7 @@ import FileTransferAssistantApp from "./apps/FileTransferAssistantApp.vue"
 import PlaceholderApp from "./apps/PlaceholderApp.vue"
 import TODOApp from "./apps/TODO.vue"
 
+const logger = createLogger('GuaxiContentAppView')
 
 const categories = [
   { key: 'tools', label: '工具类' },
@@ -142,7 +144,7 @@ const handleOpenApp = async (app) => {
       title: app.name,
     })
   } catch (err) {
-    console.error('打开应用窗口失败:', err)
+    logger.error('打开应用窗口失败:', err)
   }
 }
 
@@ -188,7 +190,7 @@ const onMouseUpLeftSidebar = () => {
 };
 
 const onMouseDownRightSidebar = (event) => {
-  console.log("onMouseDownRightSidebar");
+  logger.info("onMouseDownRightSidebar");
   rightSidebarresizing.value = true;
   rightSidebarStartX.value = event.clientX;
   rightSidebarStartWidth.value = rightSiderbarWidth.value;

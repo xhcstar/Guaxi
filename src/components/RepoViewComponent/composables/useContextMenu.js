@@ -3,7 +3,9 @@ import { NIcon } from "naive-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { useSettingsStore } from "../../../stores/settingsStore";
+import { createLogger } from '../../../utils/logger'
 
+const logger = createLogger('useContextMenu')
 export function useContextMenu({ store, message }) {
   const showDropdown = ref(false);
   const x = ref(0);
@@ -92,7 +94,7 @@ export function useContextMenu({ store, message }) {
         handleExport(selectedRow.value);
         break;
       default:
-        console.warn("未知操作:", key);
+        logger.warn("未知操作:", key);
     }
 
     showDropdown.value = false;
@@ -141,7 +143,7 @@ export function useContextMenu({ store, message }) {
 
       const fileType = mapFileType(rowFileType);
       if (!fileType) {
-        console.warn("未知文件类型:", rowFileType, row);
+        logger.warn("未知文件类型:", rowFileType, row);
         message.warning("不支持的文件类型");
         return;
       }
@@ -156,7 +158,7 @@ export function useContextMenu({ store, message }) {
       const osPlatform = await platform();
       let readFilePath = "";
 
-      console.log("store.librariesRoot:", store.librariesRoot);
+      logger.info("store.librariesRoot:", store.librariesRoot);
 
       if (store.currentDatabase.length > 0) {
         if (osPlatform === "windows") {
@@ -164,11 +166,11 @@ export function useContextMenu({ store, message }) {
         } else if (osPlatform === "linux") {
           readFilePath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/${fileType}/${rowFileName}`;
         } else {
-          console.error("未知的操作系统平台:", osPlatform);
+          logger.error("未知的操作系统平台:", osPlatform);
           return;
         }
       } else {
-        console.error("未知的数据库类型:", store.currentDatabase);
+        logger.error("未知的数据库类型:", store.currentDatabase);
         return;
       }
 
@@ -191,7 +193,7 @@ export function useContextMenu({ store, message }) {
         theme,
       });
 
-      console.log("窗口创建成功:", {
+      logger.info("窗口创建成功:", {
         label: windowLabel,
         title: windowTitle,
         fileData: {
@@ -203,7 +205,7 @@ export function useContextMenu({ store, message }) {
         },
       });
     } catch (error) {
-      console.error("创建窗口失败:", error);
+      logger.error("创建窗口失败:", error);
       message.error(`无法打开文件: ${error.message || "未知错误"}`);
     }
   };
@@ -242,7 +244,7 @@ export function useContextMenu({ store, message }) {
 
       await store.fetchFiles(store.currentDatabase);
     } catch (error) {
-      console.error("编辑失败:", error);
+      logger.error("编辑失败:", error);
       message.error("编辑失败");
     }
   };
@@ -255,7 +257,7 @@ export function useContextMenu({ store, message }) {
       await store.fetchFiles(store.currentDatabase);
       await store.fetchRepos();
     } catch (error) {
-      console.error("删除失败:", error);
+      logger.error("删除失败:", error);
       message.error("删除失败");
     }
   };
@@ -286,26 +288,26 @@ export function useContextMenu({ store, message }) {
       await store.fetchFiles(store.currentDatabase);
       await store.fetchRepos();
     } catch (error) {
-      console.error("删除失败:", error);
+      logger.error("删除失败:", error);
       message.error("删除失败");
     }
   };
 
   // 方法：分享文件
   const handleShare = (row) => {
-    console.log("分享", row);
+    logger.info("分享", row);
     message.info("分享功能待实现");
   };
 
   // 方法：移动文件
   const handleMove = (row) => {
-    console.log("移动", row);
+    logger.info("移动", row);
     message.info("移动功能待实现");
   };
 
   // 方法：导出文件
   const handleExport = (row) => {
-    console.log("导出", row);
+    logger.info("导出", row);
     message.info("导出功能待实现");
   };
 
@@ -331,9 +333,9 @@ export function useContextMenu({ store, message }) {
       }
 
       await invoke("open_in_file_explorer", { path: dirPath });
-      console.log("在文件资源管理器中打开导入文件目录:", dirPath);
+      logger.info("在文件资源管理器中打开导入文件目录:", dirPath);
     } catch (error) {
-      console.error("打开导入文件目录失败:", error);
+      logger.error("打开导入文件目录失败:", error);
       message.error(`打开目录失败: ${error.message || error}`);
     }
   };
@@ -359,11 +361,11 @@ export function useContextMenu({ store, message }) {
         dirPath = `${store.librariesRoot}/Libraries/${row.library}/${baseFileName}/notes`;
       }
 
-      console.log("笔记文件所在目录:", dirPath);
+      logger.info("笔记文件所在目录:", dirPath);
       await invoke("open_in_file_explorer", { path: dirPath });
-      console.log("在文件资源管理器中打开笔记文件目录:", dirPath);
+      logger.info("在文件资源管理器中打开笔记文件目录:", dirPath);
     } catch (error) {
-      console.error("打开笔记文件目录失败:", error);
+      logger.error("打开笔记文件目录失败:", error);
       message.error(`打开目录失败: ${error.message || error}`);
     }
   };

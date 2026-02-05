@@ -4,6 +4,9 @@ import { SVG } from 'mathjax-full/js/output/svg';
 import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor';
 import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html';
 import { nextTick } from 'vue';
+import { createLogger } from '../../utils/logger'
+
+const logger = createLogger('mathjaxConfig')
 
 // 初始化适配器
 const adaptor = liteAdaptor();
@@ -43,7 +46,7 @@ export const initMathJax = () => {
 
 // 渲染数学公式
 export const renderMath = async (element, isBlock) => {
-  console.log('renderMath', element, isBlock);
+  logger.info('renderMath', element, isBlock);
   if (!mathjaxDocument) initMathJax();
 
   await nextTick(); // Vue 组件更新后再渲染
@@ -58,7 +61,7 @@ export const renderMath = async (element, isBlock) => {
       .replace(/\\begin\{aligned\}/g, '\\begin{align*}')
       .replace(/\\end\{aligned\}/g, '\\end{align*}');
 
-    console.log('处理后数学公式:', rawContent);
+    logger.info('处理后数学公式:', rawContent);
 
     // 解析 LaTeX 并转换为 SVG
     const converted = mathjaxDocument.convert(rawContent, {
@@ -74,7 +77,7 @@ export const renderMath = async (element, isBlock) => {
       svgElement.style.verticalAlign = 'middle';
     }
   } catch (err) {
-    console.error('数学公式渲染错误:', err);
+    logger.error('数学公式渲染错误:', err);
     element.innerHTML = `<span class="math-error">${err instanceof Error ? err.message : String(err)}</span>`;
   }
 };

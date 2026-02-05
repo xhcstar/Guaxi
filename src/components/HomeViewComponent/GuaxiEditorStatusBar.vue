@@ -63,12 +63,14 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed } from 'vue'
 import * as monaco from 'monaco-editor'
 import { useEditorStore } from '../../stores/editorStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { NPopover } from 'naive-ui'
 
+const logger = createLogger('GuaxiEditorStatusBar')
 const editorStore = useEditorStore()
 const fileTreeStore = useFileTreeStore()
 
@@ -158,7 +160,7 @@ const changeLanguage = (langId) => {
 // 处理问题计数点击
 const handleProblemsClick = () => {
   // 这里可以跳转到问题面板或显示问题详情
-  console.log('Show problems panel')
+  logger.info('Show problems panel')
 }
 
 // 处理编码点击
@@ -177,7 +179,7 @@ const changeEncoding = (enc) => {
   editorStore.updateEncoding(enc)
   showEncodingMenu.value = false
   // 这里需要实际更改文件编码的实现
-  console.log('Change encoding to:', enc)
+  logger.info('Change encoding to:', enc)
 }
 
 // 切换行尾符

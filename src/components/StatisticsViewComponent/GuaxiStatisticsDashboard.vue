@@ -176,10 +176,13 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { createDiscreteApi } from "naive-ui";
 import GuaxiStatisticsHeatmap from "./GuaxiStatisticsHeatmap.vue";
+
+const logger = createLogger('GuaxiStatisticsDashboard')
 
 /**
  * 统计看板主实现：
@@ -327,19 +330,19 @@ function scanReaderState() {
           completedAt,
         });
       } catch (e) {
-        console.warn("[statistics] parse reader state failed", { key: k, err: e });
+        logger.warn("[statistics] parse reader state failed", { key: k, err: e });
       }
     }
 
     out.sort((a, b) => (b.totalReadingMs || 0) - (a.totalReadingMs || 0));
     readerDocs.value = out;
 
-    console.info("[statistics] scanReaderState done", {
+    logger.info("[statistics] scanReaderState done", {
       total: out.length,
       completed: out.filter((x) => !!x.completedAt).length,
     });
   } catch (e) {
-    console.warn("[statistics] scanReaderState failed", e);
+    logger.warn("[statistics] scanReaderState failed", e);
     readerDocs.value = [];
   }
 }
@@ -574,7 +577,7 @@ function getVolumeSnapshotIntervalMs() {
     const n = Number(raw);
     if (Number.isFinite(n) && n >= 1000) return Math.floor(n);
   } catch (e) {
-    console.warn("[statistics] read snapshot interval failed", e);
+    logger.warn("[statistics] read snapshot interval failed", e);
   }
   return KB_VOLUME_SNAPSHOT_INTERVAL_MS_DEFAULT;
 }
@@ -586,7 +589,7 @@ function readVolumeSnapshotsFromLocal() {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
-    console.warn("[statistics] read volume snapshots failed", e);
+    logger.warn("[statistics] read volume snapshots failed", e);
     return [];
   }
 }
@@ -595,7 +598,7 @@ function writeVolumeSnapshotsToLocal(list) {
   try {
     localStorage.setItem(KB_VOLUME_SNAPSHOTS_KEY, JSON.stringify(list));
   } catch (e) {
-    console.warn("[statistics] write volume snapshots failed", e);
+    logger.warn("[statistics] write volume snapshots failed", e);
   }
 }
 
@@ -625,7 +628,7 @@ function recordVolumeSnapshotIfNeeded() {
   kbVolumeSnapshots.value = trimmed;
   writeVolumeSnapshotsToLocal(trimmed);
 
-  console.info("[statistics] recordVolumeSnapshot", { ts: now, kbCount: Object.keys(items).length });
+  logger.info("[statistics] recordVolumeSnapshot", { ts: now, kbCount: Object.keys(items).length });
 }
 
 async function loadKbSummaries(opts) {
@@ -633,7 +636,7 @@ async function loadKbSummaries(opts) {
   const list = await invoke("kbmeta_sync_all");
   const arr = Array.isArray(list) ? list : [];
   kbSummaries.value = arr;
-  console.info("[statistics] kbmeta_sync_all", { kbCount: arr.length, reason });
+  logger.info("[statistics] kbmeta_sync_all", { kbCount: arr.length, reason });
   recordVolumeSnapshotIfNeeded();
 }
 
@@ -656,7 +659,7 @@ function scheduleNextVolumeSnapshot() {
   const dueAt = lastTs ? lastTs + intervalMs : now;
   const delay = Math.max(1000, dueAt - now);
 
-  console.info("[statistics] scheduleNextVolumeSnapshot", {
+  logger.info("[statistics] scheduleNextVolumeSnapshot", {
     intervalMs,
     lastTs,
     dueAt,
@@ -665,10 +668,10 @@ function scheduleNextVolumeSnapshot() {
 
   volumeSnapshotTimer = setTimeout(async () => {
     try {
-      console.info("[statistics] auto volume snapshot tick", { ts: new Date().toISOString() });
+      logger.info("[statistics] auto volume snapshot tick", { ts: new Date().toISOString() });
       await loadKbSummaries({ reason: "auto" });
     } catch (e) {
-      console.warn("[statistics] auto volume snapshot failed", e);
+      logger.warn("[statistics] auto volume snapshot failed", e);
     } finally {
       scheduleNextVolumeSnapshot();
     }
@@ -689,7 +692,7 @@ async function loadKnowledgeBasesGitLog() {
       const b = await invoke("get_current_branch", { path: repoPath });
       branch = typeof b === "string" && b ? b : branch;
     } catch (e) {
-      console.warn("[statistics] get_current_branch failed, fallback to list_branches", e);
+      logger.warn("[statistics] get_current_branch failed, fallback to list_branches", e);
       try {
         const brs = await invoke("list_branches", { path: repoPath });
         const arr = Array.isArray(brs) ? brs : [];
@@ -697,17 +700,17 @@ async function loadKnowledgeBasesGitLog() {
         const first = arr[0]?.name;
         branch = String(current || first || branch);
       } catch (e2) {
-        console.warn("[statistics] list_branches failed", e2);
+        logger.warn("[statistics] list_branches failed", e2);
       }
     }
 
     try {
       const commits = await invoke("get_git_log", { path: repoPath, branchName: branch, limit: 2000 });
       gitCommits.value = Array.isArray(commits) ? commits : [];
-      console.info("[statistics] get_git_log", { branch, count: gitCommits.value.length });
+      logger.info("[statistics] get_git_log", { branch, count: gitCommits.value.length });
       return;
     } catch (e) {
-      console.warn("[statistics] get_git_log failed, retry with fallback branch", { branch, err: e });
+      logger.warn("[statistics] get_git_log failed, retry with fallback branch", { branch, err: e });
     }
 
     let fallback = branch === "main" ? "master" : "main";
@@ -717,14 +720,14 @@ async function loadKnowledgeBasesGitLog() {
       const alt = arr.find((x) => x?.name && String(x.name) !== String(branch))?.name;
       fallback = String(alt || fallback);
     } catch (e3) {
-      console.warn("[statistics] list_branches failed (fallback)", e3);
+      logger.warn("[statistics] list_branches failed (fallback)", e3);
     }
 
     const commits2 = await invoke("get_git_log", { path: repoPath, branchName: fallback, limit: 2000 });
     gitCommits.value = Array.isArray(commits2) ? commits2 : [];
-    console.info("[statistics] get_git_log", { branch: fallback, count: gitCommits.value.length, fallback: true });
+    logger.info("[statistics] get_git_log", { branch: fallback, count: gitCommits.value.length, fallback: true });
   } catch (e) {
-    console.warn("[statistics] loadKnowledgeBasesGitLog failed", e);
+    logger.warn("[statistics] loadKnowledgeBasesGitLog failed", e);
     gitCommits.value = [];
   }
 }
@@ -750,7 +753,7 @@ async function loadRepoImportedFiles() {
         });
       }
     } catch (e) {
-      console.warn("[statistics] get_imported_files failed", { repo: r, err: e });
+      logger.warn("[statistics] get_imported_files failed", { repo: r, err: e });
     }
   }
 
@@ -807,7 +810,7 @@ async function reloadAll() {
   loading.value = true;
   loadError.value = "";
 
-  console.info("[statistics] reloadAll start", {
+  logger.info("[statistics] reloadAll start", {
     timeRange: timeRange.value,
     ts: new Date().toISOString(),
   });
@@ -824,23 +827,23 @@ async function reloadAll() {
 
     message.success("统计数据已刷新");
   } catch (e) {
-    console.error("[statistics] reloadAll failed", e);
+    logger.error("[statistics] reloadAll failed", e);
     loadError.value = String(e?.message || e || "加载失败");
     message.error("统计数据加载失败");
   } finally {
     loading.value = false;
-    console.info("[statistics] reloadAll end", { ts: new Date().toISOString() });
+    logger.info("[statistics] reloadAll end", { ts: new Date().toISOString() });
   }
 }
 
 watch(timeRange, () => {
-  console.info("[statistics] timeRange changed", timeRange.value);
+  logger.info("[statistics] timeRange changed", timeRange.value);
 
   // 说明：切换时间范围只影响顶部时间分布图；数据源无需重新拉取
 });
 
 onMounted(async () => {
-  console.info("[statistics] dashboard mounted");
+  logger.info("[statistics] dashboard mounted");
 
   kbVolumeSnapshots.value = readVolumeSnapshotsFromLocal();
 
@@ -866,7 +869,7 @@ onBeforeUnmount(() => {
     if (ro) ro.disconnect();
     if (mo) mo.disconnect();
   } catch (e) {
-    console.warn("[statistics] cleanup observers failed", e);
+    logger.warn("[statistics] cleanup observers failed", e);
   }
 });
 </script>

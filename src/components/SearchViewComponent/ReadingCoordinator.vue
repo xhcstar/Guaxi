@@ -17,11 +17,14 @@
 </template>
 
 <script setup>
+import { createLogger } from '../../utils/logger'
 import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { useFlipboardStore } from '../../stores/flipboardStore.js'
 import { useSiderStore } from '../../stores/useSiderStore'
 import FlipboardMagazineView from './FlipboardMagazineView.vue'
 import FlipboardDetailView from './FlipboardDetailView.vue'
+
+const logger = createLogger('ReadingCoordinator')
 
 /**
  * 允许外部指定 viewKey（与 useSiderStore 的右侧栏折叠状态绑定）
@@ -75,20 +78,20 @@ const isLoading = computed(() => store.isLoading.value)
 /** 交互：点击卡片进入阅读模式，并展开右侧面板 */
 const handleArticleSelect = async (article) => {
   try {
-    console.log('ReadingCoordinator: enter reading mode', { articleId: article?.id })
+    logger.info('ReadingCoordinator: enter reading mode', { articleId: article?.id })
     await store.fetchArticleDetail(article.id)
     if (isRightSiderCollapsed.value) {
       isRightSiderCollapsed.value = false
     }
     isReadingMode.value = true
   } catch (error) {
-    console.error('ReadingCoordinator: failed to load article detail', error)
+    logger.error('ReadingCoordinator: failed to load article detail', error)
   }
 }
 
 /** 交互：阅读面板关闭，折叠右侧面板并退出阅读模式 */
 const handleReaderClose = () => {
-  console.log('ReadingCoordinator: close reader')
+  logger.info('ReadingCoordinator: close reader')
   isRightSiderCollapsed.value = true
   isReadingMode.value = false
   store.currentArticle.value = null
@@ -97,16 +100,16 @@ const handleReaderClose = () => {
 /** 交互：阅读模式内切换相关文章 */
 const handleRelatedArticleSelect = async (article) => {
   try {
-    console.log('ReadingCoordinator: select related article', { articleId: article?.id })
+    logger.info('ReadingCoordinator: select related article', { articleId: article?.id })
     await store.fetchArticleDetail(article.id)
   } catch (error) {
-    console.error('ReadingCoordinator: failed to load related article detail', error)
+    logger.error('ReadingCoordinator: failed to load related article detail', error)
   }
 }
 
 /** 视图模式切换（网格/杂志/列表）时退出阅读模式，恢复中间内容区域显示 */
 watch(() => store.currentView.value, () => {
-  console.log('ReadingCoordinator: view mode changed, exit reading mode')
+  logger.info('ReadingCoordinator: view mode changed, exit reading mode')
   isReadingMode.value = false
 })
 

@@ -1,7 +1,9 @@
 // useSearch.js
 import { ref, computed, watch, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { createLogger } from '../../../utils/logger'
 
+const logger = createLogger('useSearch')
 export const useSearch = ({ store, message, externalState = {} }) => {
   // 使用外部状态或创建默认状态
   const isLibraryLoadingAdvanceSearch = externalState.isLibraryLoadingAdvanceSearch || ref(false);
@@ -124,7 +126,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
   // 预加载搜索选项 - 优化预加载逻辑
   const preloadSearchOptions = async () => {
-    console.log("🔄 预加载搜索选项");
+    logger.info("🔄 预加载搜索选项");
 
     try {
       // 设置加载中的占位符
@@ -150,9 +152,9 @@ export const useSearch = ({ store, message, externalState = {} }) => {
         handleKnowledgeRepoSearch("", true)
       ]);
 
-      console.log("✅ 预加载搜索选项完成");
+      logger.info("✅ 预加载搜索选项完成");
     } catch (error) {
-      console.error("❌ 预加载搜索选项失败:", error);
+      logger.error("❌ 预加载搜索选项失败:", error);
     }
   };
 
@@ -164,7 +166,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
   // 格式化搜索选项 - 优化格式化逻辑
   const formatSearchOptions = (data, type) => {
     if (!Array.isArray(data)) {
-      console.warn(`❌ ${type}数据格式错误:`, data);
+      logger.warn(`❌ ${type}数据格式错误:`, data);
       return [{ label: `暂无${type}数据`, value: "", disabled: true }];
     }
 
@@ -185,13 +187,13 @@ export const useSearch = ({ store, message, externalState = {} }) => {
       }
     });
 
-    console.log(`📋 ${type}格式化结果:`, options);
+    logger.info(`📋 ${type}格式化结果:`, options);
     return options;
   };
 
   // 库搜索
   const handleLibrarySearch = async (query = "", isPreload = false) => {
-    console.log("📚 文件库搜索被调用:", { query, isPreload });
+    logger.info("📚 文件库搜索被调用:", { query, isPreload });
 
     if (librarySearchTimer) {
       clearTimeout(librarySearchTimer);
@@ -208,14 +210,14 @@ export const useSearch = ({ store, message, externalState = {} }) => {
           }
 
           const libraries = await invoke("search_libraries", { query: searchQuery });
-          console.log("✅ 文件库搜索结果:", libraries);
+          logger.info("✅ 文件库搜索结果:", libraries);
 
           searchLibraryOptions.value = formatSearchOptions(libraries, "文件库");
-          console.log("📋 格式化后的文件库选项:", searchLibraryOptions.value);
+          logger.info("📋 格式化后的文件库选项:", searchLibraryOptions.value);
 
           resolve(searchLibraryOptions.value);
         } catch (error) {
-          console.error("❌ 搜索文件库失败:", error);
+          logger.error("❌ 搜索文件库失败:", error);
           searchLibraryOptions.value = [{ label: "搜索失败，请重试", value: "", disabled: true }];
           resolve(searchLibraryOptions.value);
         } finally {
@@ -227,7 +229,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
   // 标签搜索
   const handleImportedFileTagSearch = async (query = "", isPreload = false) => {
-    console.log("🏷️ 标签搜索被调用:", { query, isPreload });
+    logger.info("🏷️ 标签搜索被调用:", { query, isPreload });
 
     if (tagSearchTimer) {
       clearTimeout(tagSearchTimer);
@@ -244,14 +246,14 @@ export const useSearch = ({ store, message, externalState = {} }) => {
           }
 
           const tags = await invoke("search_imported_files_tags", { query: searchQuery });
-          console.log("✅ 标签搜索结果:", tags);
+          logger.info("✅ 标签搜索结果:", tags);
 
           searchImportedFileTagOptions.value = formatSearchOptions(tags, "标签");
-          console.log("📋 格式化后的标签选项:", searchImportedFileTagOptions.value);
+          logger.info("📋 格式化后的标签选项:", searchImportedFileTagOptions.value);
 
           resolve(searchImportedFileTagOptions.value);
         } catch (error) {
-          console.error("❌ 搜索标签失败:", error);
+          logger.error("❌ 搜索标签失败:", error);
           searchImportedFileTagOptions.value = [{ label: "搜索失败，请重试", value: "", disabled: true }];
           resolve(searchImportedFileTagOptions.value);
         } finally {
@@ -263,7 +265,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
   // 知识库搜索功能
   const handleKnowledgeRepoSearch = async (query = "", isPreload = false) => {
-    console.log("📖 知识库搜索被调用:", { query, isPreload });
+    logger.info("📖 知识库搜索被调用:", { query, isPreload });
 
     if (knowledgeRepoSearchTimer) {
       clearTimeout(knowledgeRepoSearchTimer);
@@ -281,15 +283,15 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
           // 调用后端接口搜索知识库
           const repos = await invoke("get_knowledge_repos", { query: searchQuery });
-          console.log("✅ 知识库搜索结果:", repos);
+          logger.info("✅ 知识库搜索结果:", repos);
 
           // 格式化数据
           searchKnowledgeRepoOptions.value = formatSearchOptions(repos, "知识库");
-          console.log("📖 格式化后的知识库选项:", searchKnowledgeRepoOptions.value);
+          logger.info("📖 格式化后的知识库选项:", searchKnowledgeRepoOptions.value);
 
           resolve(searchKnowledgeRepoOptions.value);
         } catch (error) {
-          console.error("❌ 搜索知识库失败:", error);
+          logger.error("❌ 搜索知识库失败:", error);
           searchKnowledgeRepoOptions.value = [{ label: "搜索失败，请重试", value: "", disabled: true }];
           resolve(searchKnowledgeRepoOptions.value);
         } finally {
@@ -370,7 +372,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
       localStorage.setItem("searchPresets", JSON.stringify(presets));
       message.success(`搜索条件 "${name}" 已保存`);
     } catch (error) {
-      console.error("保存搜索预设失败:", error);
+      logger.error("保存搜索预设失败:", error);
       message.error("保存搜索预设失败");
     }
   };
@@ -391,7 +393,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
         message.warning(`未找到搜索条件 "${name}"`);
       }
     } catch (error) {
-      console.error("加载搜索预设失败:", error);
+      logger.error("加载搜索预设失败:", error);
       message.error("加载搜索预设失败");
     }
   };
@@ -401,7 +403,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
     try {
       return JSON.parse(localStorage.getItem("searchPresets") || "[]");
     } catch (error) {
-      console.error("获取搜索预设列表失败:", error);
+      logger.error("获取搜索预设列表失败:", error);
       return [];
     }
   };
@@ -414,7 +416,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
       localStorage.setItem("searchPresets", JSON.stringify(filteredPresets));
       message.success(`已删除搜索条件 "${name}"`);
     } catch (error) {
-      console.error("删除搜索预设失败:", error);
+      logger.error("删除搜索预设失败:", error);
       message.error("删除搜索预设失败");
     }
   };
@@ -451,7 +453,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
       searchHistory.value = history;
       localStorage.setItem("searchHistory", JSON.stringify(history));
     } catch (error) {
-      console.error("添加到搜索历史失败:", error);
+      logger.error("添加到搜索历史失败:", error);
     }
   };
 
@@ -472,7 +474,7 @@ export const useSearch = ({ store, message, externalState = {} }) => {
 
   // 初始化搜索功能
   const initializeSearch = async () => {
-    console.log("🚀 初始化搜索功能");
+    logger.info("🚀 初始化搜索功能");
     await preloadSearchOptions();
   };
 
