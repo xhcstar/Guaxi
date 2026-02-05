@@ -1,5 +1,15 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
+import { createLogger } from "../utils/logger";
+
+const logger = createLogger("fileTreeStore");
+const console = {
+  debug: (...args) => logger.debug(...args),
+  log: (...args) => logger.info(...args),
+  info: (...args) => logger.info(...args),
+  warn: (...args) => logger.warn(...args),
+  error: (...args) => logger.error(...args),
+};
 
 const classifyReadFileError = (error) => {
   const msg = String(error?.message || error || "");

@@ -1,6 +1,16 @@
 import { defineStore } from "pinia";
 import * as monaco from "monaco-editor";
 import { markRaw } from "vue";
+import { createLogger } from "../utils/logger";
+
+const logger = createLogger("editorStore");
+const console = {
+  debug: (...args) => logger.debug(...args),
+  log: (...args) => logger.info(...args),
+  info: (...args) => logger.info(...args),
+  warn: (...args) => logger.warn(...args),
+  error: (...args) => logger.error(...args),
+};
 
 export const useEditorStore = defineStore("editor", {
   state: () => ({

@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { renderMarkdown } from "../components/GuaxiMarkdownRender/GuaxiMarker";
+import { createLogger } from "../utils/logger";
 import chatgptImg from '@/assets/chatgpt.png';
 import deepseekImg from '@/assets/deepseek.png';
 import qwenImg from '@/assets/qwen.png';
@@ -9,6 +10,15 @@ import doubaoImg from '@/assets/doubao.png';
 import localQwenImg from '@/assets/local_qwen.png';
 import localDeepseekImg from '@/assets/local_deepseek.png';
 import meImg from '@/assets/me.png';
+
+const logger = createLogger("chatStore");
+const console = {
+  debug: (...args) => logger.debug(...args),
+  log: (...args) => logger.info(...args),
+  info: (...args) => logger.info(...args),
+  warn: (...args) => logger.warn(...args),
+  error: (...args) => logger.error(...args),
+};
 
 export const useChatStore = defineStore("chatStore", {
   state: () => ({

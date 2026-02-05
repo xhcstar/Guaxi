@@ -1,6 +1,16 @@
 // src/stores/settingsStore.js
 import { defineStore } from "pinia";
 import { invoke } from '@tauri-apps/api/core'
+import { createLogger } from "../utils/logger"
+
+const logger = createLogger("settingsStore")
+const console = {
+  debug: (...args) => logger.debug(...args),
+  log: (...args) => logger.info(...args),
+  info: (...args) => logger.info(...args),
+  warn: (...args) => logger.warn(...args),
+  error: (...args) => logger.error(...args),
+}
 
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
