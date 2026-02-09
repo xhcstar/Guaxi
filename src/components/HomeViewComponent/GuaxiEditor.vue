@@ -391,7 +391,8 @@
         <GuaxiSelectionTranslatePanel v-if="selectionTranslatePanelVisible" :pos="selectionTranslatePanelPos"
           :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
           :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" :items="selectionTranslateItems"
-          :from-lang="selectionTranslateFrom" :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions"
+          :from-lang="selectionTranslateFrom" :to-lang="selectionTranslateTo"
+          :lang-options="selectionTranslateLangOptions"
           @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
           @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
           @translate="translateSelectionText" @copy="copySelectionTranslateResult"
@@ -429,6 +430,7 @@ import { ref, computed, watch, onMounted, onUnmounted, onActivated, nextTick, pr
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber } from 'naive-ui'
@@ -467,6 +469,7 @@ import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
 import tableColumnPlusAfter from '@iconify-icons/mdi/table-column-plus-after'
 import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
@@ -512,6 +515,7 @@ const gitPanel = ref(null)
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
+const knowledgeBaseStore = useKnowledgeBaseStore()
 const mode = ref('edit');
 const previewMode = ref('toggle');
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
@@ -793,13 +797,18 @@ const realtimeVditorReady = ref(false);
 const pendingRealtimeVditorValue = ref(null);
 let realtimeVditor = null;
 let settingRealtimeVditorValue = false;
+let realtimeVditorLinkInterceptorCleanup = null;
+
 const syncRealtimeValueToRawContent = debounce((value) => {
   rawContent.value = value;
   const path = fileTreeStore.activeTab;
   if (path) fileTreeStore.updateTabContent(path, value);
 }, 120);
+
 let editor = null;
 let secondaryEditor = null;
+let monacoCtrlClickDisposable = null;
+let secondaryMonacoCtrlClickDisposable = null;
 let editorEffectsLeft = null;
 let editorEffectsRight = null;
 
@@ -1465,6 +1474,480 @@ const joinFsPath = (base, sub) => {
   if (!a) return b;
   if (!b) return a;
   return `${a}/${b}`;
+};
+
+const stripLinkBoundaryPunct = (raw) => {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  s = s.replace(/^(["'`<({\[])+/, '');
+  s = s.replace(/(["'`>)}\].,;!?])+$/, '');
+  return s;
+};
+
+const isHttpUrl = (raw) => {
+  const s = String(raw || '').trim().toLowerCase();
+  return s.startsWith('http://') || s.startsWith('https://');
+};
+
+// 从 `path.md#标题` / `path.md#^blockId` 中拆出 anchor（仅用于非 http 链接）
+const splitFsLinkAndAnchor = (rawLink) => {
+  const raw = stripLinkBoundaryPunct(rawLink);
+  if (!raw) return { link: '', anchor: '' };
+  if (isHttpUrl(raw)) return { link: raw, anchor: '' };
+
+  const idx = raw.indexOf('#');
+  if (idx <= 0) return { link: raw, anchor: '' };
+  return { link: raw.slice(0, idx), anchor: raw.slice(idx + 1) };
+};
+
+// 说明：为避免误判普通文本，仅对“明显路径特征”放行；另外允许 `xxx.md` 这种相对文件名。
+const isPathLikeToken = (raw) => {
+  const s0 = String(raw || '').trim();
+  if (!s0) return false;
+  const s = stripLinkBoundaryPunct(s0);
+  if (!s) return false;
+
+  const lower = s.toLowerCase();
+  if (lower.startsWith('file://')) return true;
+  if (s.startsWith('~/') || s.startsWith('./') || s.startsWith('../')) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(s)) return true;
+  if (s.includes('/') || s.includes('\\')) return true;
+  return /\.(md|markdown)$/i.test(s);
+};
+
+// Markdown 链接目标提取：当光标位于 `](` 与 `)` 之间时，返回括号内真实目标
+const extractMarkdownLinkTargetAtLineColumn = (line, idx0) => {
+  const i = Math.max(0, Math.min(line.length, idx0));
+
+  const left = line.lastIndexOf('](', i);
+  if (left >= 0) {
+    const open = left + 1; // '(' index
+    const close = line.indexOf(')', open + 1);
+    if (close > open + 1 && i >= open + 1 && i <= close - 1) {
+      return line.slice(open + 1, close).trim();
+    }
+  }
+
+  const lt = line.lastIndexOf('<', i);
+  if (lt >= 0) {
+    const gt = line.indexOf('>', lt + 1);
+    if (gt > lt + 1 && i >= lt + 1 && i <= gt - 1) {
+      return line.slice(lt + 1, gt).trim();
+    }
+  }
+
+  return '';
+};
+
+// Monaco 行内 token 提取：优先走 Markdown 语法提取，避免把 `xxx](` 左侧吞进来
+const extractClickableTokenAtLineColumn = (lineContent, column) => {
+  const line = String(lineContent || '');
+  const idx0 = Math.max(0, Math.min(line.length, Number(column || 1) - 1));
+  if (!line) return '';
+
+  const mdTarget = extractMarkdownLinkTargetAtLineColumn(line, idx0);
+  if (mdTarget) return mdTarget;
+
+  // 注意：这里刻意不把 `[` `]` 当作 token 字符，避免得到类似 `path](../a.md` 的 token
+  const isLinkChar = (ch) => /[0-9A-Za-z\-._~:/?#@!$&'()*+,;=%\\]/.test(ch);
+
+  let l = idx0;
+  while (l > 0 && isLinkChar(line[l - 1])) l -= 1;
+
+  let r = idx0;
+  while (r < line.length && isLinkChar(line[r])) r += 1;
+
+  if (r <= l) return '';
+  return line.slice(l, r);
+};
+
+const isMarkdownFilePath = (p) => {
+  const v = String(p || '').toLowerCase();
+  return v.endsWith('.md') || v.endsWith('.markdown');
+};
+
+const ensureMarkdownExt = (p) => {
+  const s = String(p || '').trim();
+  if (!s) return '';
+  if (isMarkdownFilePath(s)) return s;
+  const lastSlash = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  const lastDot = s.lastIndexOf('.');
+  const hasExt = lastDot > lastSlash;
+  if (hasExt) return s;
+  return `${s}.md`;
+};
+
+const ensureKnowledgeBasesLoaded = async () => {
+  const list = knowledgeBaseStore?.knowledgeBases;
+  if (Array.isArray(list) && list.length) return list;
+  try {
+    const next = await knowledgeBaseStore.fetchKnowledgeBases();
+    logger.debug('[LinkOpen] knowledge bases loaded', { count: Array.isArray(next) ? next.length : 0 });
+    return next;
+  } catch (e) {
+    logger.warn('[LinkOpen] fetchKnowledgeBases failed', e);
+    return [];
+  }
+};
+
+const isPathInKnowledgeBase = async (absPath) => {
+  const p = normalizeFsPath(absPath);
+  if (!p) return false;
+  const list = await ensureKnowledgeBasesLoaded();
+  for (const kb of Array.isArray(list) ? list : []) {
+    const root = normalizeFsPath(kb?.location);
+    if (root && (p === root || p.startsWith(`${root}/`))) return true;
+  }
+  return false;
+};
+
+const decodeFileUrlToPath = (href) => {
+  const s = String(href || '').trim();
+  if (!s.toLowerCase().startsWith('file://')) return '';
+  try {
+    let rest = s.replace(/^file:\/\//i, '');
+    if (rest.startsWith('/')) rest = rest.slice(1);
+    return decodeURIComponent(rest);
+  } catch {
+    return '';
+  }
+};
+
+// 将 path 规范化（处理 `.`/`..`，并尽量保留 Windows 盘符/UNC 前缀）
+const normalizeResolvedFsPath = (rawPath) => {
+  let s = normalizeFsPath(rawPath);
+  if (!s) return '';
+
+  // 兼容 `/C:/...`
+  if (/^\/[a-zA-Z]:\//.test(s)) s = s.slice(1);
+
+  let anchored = false;
+  let prefix = '';
+  let parts = [];
+
+  if (/^[a-zA-Z]:\//.test(s)) {
+    anchored = true;
+    prefix = s.slice(0, 3); // `C:/`
+    parts = s.slice(3).split('/');
+  } else if (s.startsWith('//')) {
+    const p = s.slice(2).split('/').filter(Boolean);
+    if (p.length >= 2) {
+      anchored = true;
+      prefix = `//${p[0]}/${p[1]}`;
+      parts = p.slice(2);
+    } else {
+      return s;
+    }
+  } else if (s.startsWith('/')) {
+    anchored = true;
+    prefix = '/';
+    parts = s.slice(1).split('/');
+  } else {
+    parts = s.split('/');
+  }
+
+  const out = [];
+  for (const seg0 of parts) {
+    const seg = String(seg0 || '').trim();
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (out.length && out[out.length - 1] !== '..') {
+        out.pop();
+      } else if (!anchored) {
+        out.push('..');
+      }
+      continue;
+    }
+    out.push(seg);
+  }
+
+  if (!out.length) return prefix;
+  if (!prefix) return out.join('/');
+  return prefix.endsWith('/') ? `${prefix}${out.join('/')}` : `${prefix}/${out.join('/')}`;
+};
+
+const resolveFsLinkToAbsolute = async (rawLink, { baseDocPath } = {}) => {
+  const raw = stripLinkBoundaryPunct(rawLink);
+  if (!raw) return '';
+
+  const fileUrlDecoded = decodeFileUrlToPath(raw);
+  const link = normalizeFsPath(fileUrlDecoded || raw);
+  if (!link) return '';
+
+  const isAbs = /^[a-zA-Z]:\//.test(link) || link.startsWith('/') || link.startsWith('\\\\');
+  if (isAbs) return normalizeResolvedFsPath(link);
+
+  if (link.startsWith('~/')) {
+    try {
+      const base = await getFilesystemCompletionHomeDir();
+      return normalizeResolvedFsPath(joinFsPath(base, link.slice(2)));
+    } catch {
+      return '';
+    }
+  }
+
+  let baseDir = '';
+  if (baseDocPath) {
+    try {
+      baseDir = await dirname(baseDocPath);
+    } catch (e) {
+      logger.warn('[LinkOpen] dirname(baseDocPath) failed, fallback to getFilesystemCompletionDocDir', { baseDocPath }, e);
+      baseDir = '';
+    }
+  }
+  if (!baseDir) {
+    baseDir = await getFilesystemCompletionDocDir();
+  }
+
+  return normalizeResolvedFsPath(joinFsPath(baseDir, link));
+};
+
+const findMarkdownAnchorLine = (content, anchorRaw) => {
+  const anchor = String(anchorRaw || '').trim();
+  if (!anchor) return 1;
+
+  const lines = String(content || '').replace(/\r/g, '').split('\n');
+
+  if (anchor.startsWith('^')) {
+    const id = anchor.slice(1);
+    if (!id) return 1;
+    const re = new RegExp(`\\^${id.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (re.test(lines[i])) return i + 1;
+    }
+    return 1;
+  }
+
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const want = norm(anchor.replace(/_/g, ' '));
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = lines[i].match(/^\s{0,3}#{1,6}\s+(.*)$/);
+    if (!m) continue;
+    const got = norm(m[1].replace(/#+\s*$/, ''));
+    if (got === want) return i + 1;
+  }
+
+  return 1;
+};
+
+const openPathInExplorer = async (absPath) => {
+  const p = normalizeFsPath(absPath);
+  if (!p) return;
+  try {
+    await invoke('open_in_file_explorer', { path: p });
+  } catch (e) {
+    logger.error('[LinkOpen] open_in_file_explorer failed', { path: p }, e);
+    message.error('打开文件资源管理器失败');
+  }
+};
+
+const openMarkdownInEditor = async (absPath, anchor) => {
+  const p = normalizeFsPath(absPath);
+  if (!p) return;
+
+  try {
+    await fileTreeStore.openFileInTab(p);
+    await nextTick();
+
+    const content = fileTreeStore.selectedFile?.content || '';
+    const line = findMarkdownAnchorLine(content, anchor);
+    syncEditorToLine(line, { focus: true });
+  } catch (e) {
+    logger.error('[LinkOpen] open markdown in editor failed', { path: p, anchor }, e);
+    message.error('打开文件失败');
+  }
+};
+
+const openFsLinkSmart = async (rawLink, { anchor, viaCtrl = false, baseDocPath } = {}) => {
+  const abs = await resolveFsLinkToAbsolute(rawLink, { baseDocPath });
+  if (!abs) return;
+
+  const isMd = isMarkdownFilePath(abs) || isMarkdownFilePath(ensureMarkdownExt(abs));
+  const mdPath = isMd ? ensureMarkdownExt(abs) : abs;
+
+  if (isMd && (await isPathInKnowledgeBase(mdPath))) {
+    await openMarkdownInEditor(mdPath, anchor);
+    return;
+  }
+
+  if (viaCtrl) {
+    await openPathInExplorer(abs);
+  }
+};
+
+// Monaco：编辑模式 Ctrl+Click 打开 URL/路径
+const installMonacoCtrlClickOpen = (targetEditor, { tag = 'left' } = {}) => {
+  if (!targetEditor) return null;
+
+  const disposable = targetEditor.onMouseDown((ev) => {
+    const ctrl = !!(ev?.event?.ctrlKey || ev?.event?.metaKey);
+    if (!ctrl) return;
+
+    const pos = ev?.target?.position;
+    const model = targetEditor.getModel?.();
+    if (!pos || !model) return;
+
+    const lineContent = model.getLineContent(pos.lineNumber);
+    const token0 = extractClickableTokenAtLineColumn(lineContent, pos.column);
+    const token = stripLinkBoundaryPunct(token0);
+    if (!token) return;
+
+    const isUrl = isHttpUrl(token);
+    const isPath = !isUrl && isPathLikeToken(token);
+    if (!isUrl && !isPath) return;
+
+    try {
+      ev.event?.preventDefault?.();
+      ev.event?.stopPropagation?.();
+      ev.event?.browserEvent?.preventDefault?.();
+      ev.event?.browserEvent?.stopPropagation?.();
+    } catch {
+      // ignore
+    }
+
+    const baseDocPath = fileTreeStore.activeTab || selectedFile.value?.path || '';
+    logger.info('[LinkOpen] monaco ctrl+click', {
+      tag,
+      token,
+      baseDocPath,
+      line: pos.lineNumber,
+      column: pos.column
+    });
+
+    (async () => {
+      if (isUrl) {
+        try {
+          await openUrl(token);
+        } catch (err) {
+          logger.error('[LinkOpen] openUrl failed', { href: token }, err);
+          message.error('打开浏览器失败');
+        }
+        return;
+      }
+
+      const { link, anchor } = splitFsLinkAndAnchor(token);
+      if (!link) return;
+      await openFsLinkSmart(link, { anchor, viaCtrl: true, baseDocPath });
+    })();
+  });
+
+  logger.debug('[LinkOpen] monaco ctrl+click handler installed', { tag });
+  return disposable;
+};
+
+// Vditor realtime：点击链接时拦截为“系统浏览器/资源管理器”，避免内部跳转
+const installRealtimeVditorLinkInterceptor = () => {
+  const root = document.getElementById(realtimeVditorId);
+  if (!root) {
+    logger.warn('[LinkOpen] realtime vditor root not found, skip interceptor');
+    return;
+  }
+
+  if (typeof realtimeVditorLinkInterceptorCleanup === 'function') {
+    realtimeVditorLinkInterceptorCleanup();
+    realtimeVditorLinkInterceptorCleanup = null;
+  }
+
+  const handler = (e) => {
+    const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
+    if (!base) return;
+
+    const a = base.closest?.('a');
+    if (!a || !root.contains(a)) return;
+
+    const href0 = a.getAttribute('href') || '';
+    const href = String(href0 || '').trim();
+    if (!href) return;
+
+    if (isHttpUrl(href)) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      logger.info('[LinkOpen] realtime openUrl', { href });
+      void (async () => {
+        try {
+          await openUrl(href);
+        } catch (err) {
+          logger.error('[LinkOpen] openUrl failed', { href }, err);
+          message.error('打开浏览器失败');
+        }
+      })();
+      return;
+    }
+
+    if (!isPathLikeToken(href)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const { link, anchor } = splitFsLinkAndAnchor(href);
+    if (!link) return;
+
+    const baseDocPath = fileTreeStore.activeTab || selectedFile.value?.path || '';
+    logger.info('[LinkOpen] realtime openFsLink', { link, anchor, baseDocPath });
+    void (async () => {
+      await openFsLinkSmart(link, { anchor, viaCtrl: true, baseDocPath });
+    })();
+  };
+
+  root.addEventListener('click', handler, true);
+  realtimeVditorLinkInterceptorCleanup = () => {
+    root.removeEventListener('click', handler, true);
+  };
+
+  logger.debug('[LinkOpen] realtime vditor link interceptor installed');
+};
+
+const preprocessObsidianWikilinks = (content) => {
+  const text = String(content || '');
+  if (!text.includes('[[')) return text;
+
+  const lines = text.replace(/\r/g, '').split('\n');
+  let inFence = false;
+  let fenceToken = '';
+
+  const out = lines.map((line) => {
+    const fence = line.match(/^\s*(```+|~~~+)/);
+    if (fence) {
+      const token = fence[1];
+      if (!inFence) {
+        inFence = true;
+        fenceToken = token;
+      } else if (token.startsWith(fenceToken)) {
+        inFence = false;
+        fenceToken = '';
+      }
+      return line;
+    }
+
+    if (inFence || !line.includes('[[')) return line;
+
+    return line.replace(/\[\[([^\]]+?)\]\]/g, (_m, innerRaw) => {
+      const inner = String(innerRaw || '').trim();
+      if (!inner) return _m;
+
+      const parts = inner.split('|');
+      const target = String(parts[0] || '').trim();
+      const alias = String(parts[1] || '').trim();
+
+      let filePart = target;
+      let anchorPart = '';
+      const hashIdx = target.indexOf('#');
+      if (hashIdx >= 0) {
+        filePart = target.slice(0, hashIdx).trim();
+        anchorPart = target.slice(hashIdx + 1).trim();
+      }
+
+      const display = alias || anchorPart || filePart || target;
+      const safeText = display.replace(/([\[\]\\])/g, '\\$1');
+
+      const href = `guaxi://wikilink?file=${encodeURIComponent(filePart)}&anchor=${encodeURIComponent(anchorPart)}`;
+      return `[${safeText}](${href})`;
+    });
+  });
+
+  return out.join('\n');
 };
 
 const getFilesystemCompletionDocDir = async () => {
@@ -2715,6 +3198,12 @@ const ensureSecondaryEditor = () => {
     editorEffectsRight?.updateCursorTarget();
   });
 
+  if (secondaryMonacoCtrlClickDisposable) {
+    secondaryMonacoCtrlClickDisposable.dispose();
+    secondaryMonacoCtrlClickDisposable = null;
+  }
+  secondaryMonacoCtrlClickDisposable = installMonacoCtrlClickOpen(secondaryEditor, { tag: 'right' });
+
   const model = secondaryEditor.getModel();
   if (model) {
     model.onDidChangeContent(
@@ -2736,6 +3225,12 @@ const disposeSecondaryEditor = () => {
     editorEffectsRight.destroy();
     editorEffectsRight = null;
   }
+
+  if (secondaryMonacoCtrlClickDisposable) {
+    secondaryMonacoCtrlClickDisposable.dispose();
+    secondaryMonacoCtrlClickDisposable = null;
+  }
+
   if (secondaryEditor) {
     secondaryEditor.dispose();
     secondaryEditor = null;
@@ -3028,6 +3523,12 @@ const setupEditorListeners = () => {
   editor.onDidFocusEditorText(() => {
     activateRegion('left');
   });
+
+  if (monacoCtrlClickDisposable) {
+    monacoCtrlClickDisposable.dispose();
+    monacoCtrlClickDisposable = null;
+  }
+  monacoCtrlClickDisposable = installMonacoCtrlClickOpen(editor, { tag: 'left' });
 
   editor.onDidChangeCursorPosition((e) => {
     editorStore.setCursorPosition(e.position);
@@ -3777,21 +4278,21 @@ const translateSelectionText = async (overrideText) => {
           to: selectionTranslateTo.value
         });
 
-      const items = Array.isArray(response?.items) ? response.items : []
-      selectionTranslateItems.value = items.map((it) => ({
-        engine: String(it?.engine || ''),
-        success: Boolean(it?.success),
-        text: String(it?.text || ''),
-        error: it?.error ? String(it.error) : ''
-      }))
+        const items = Array.isArray(response?.items) ? response.items : []
+        selectionTranslateItems.value = items.map((it) => ({
+          engine: String(it?.engine || ''),
+          success: Boolean(it?.success),
+          text: String(it?.text || ''),
+          error: it?.error ? String(it.error) : ''
+        }))
 
-      const primary = selectionTranslateItems.value.find((it) => it.success && String(it.text || '').trim())
-      if (primary) {
-        selectionTranslateResult.value = String(primary.text || '')
-        selectionTranslateError.value = ''
-        logger.info('[SelectionTranslate] multi success', { engines: selectionTranslateItems.value.length })
-        return
-      }
+        const primary = selectionTranslateItems.value.find((it) => it.success && String(it.text || '').trim())
+        if (primary) {
+          selectionTranslateResult.value = String(primary.text || '')
+          selectionTranslateError.value = ''
+          logger.info('[SelectionTranslate] multi success', { engines: selectionTranslateItems.value.length })
+          return
+        }
 
         const err = String(response?.error || '翻译结果为空')
         throw new Error(err)
@@ -4920,9 +5421,81 @@ const syncEditorToLine = (lineNumber, { focus = true } = {}) => {
   }
 };
 
-const handlePreviewClick = (e) => {
+const handlePreviewClick = async (e) => {
   const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
   if (!base) return;
+
+  const a = base.closest('a');
+  if (a && previewContainer.value && previewContainer.value.contains(a)) {
+    const href0 = a.getAttribute('href') || '';
+    const href = String(href0 || '').trim();
+    const ctrl = !!(e?.ctrlKey || e?.metaKey);
+
+    if (href) {
+      if (href.toLowerCase().startsWith('guaxi://wikilink')) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        try {
+          const u = new URL(href);
+          const file = u.searchParams.get('file') || '';
+          const anchor = u.searchParams.get('anchor') || '';
+          const rawFile = stripLinkBoundaryPunct(file);
+          const rawAnchor = stripLinkBoundaryPunct(anchor);
+
+          if (rawFile) {
+            const abs = await resolveFsLinkToAbsolute(ensureMarkdownExt(rawFile));
+            await openMarkdownInEditor(abs, rawAnchor);
+          } else {
+            const cur = selectedFile.value?.path || '';
+            if (cur) await openMarkdownInEditor(cur, rawAnchor);
+          }
+        } catch (err) {
+          logger.warn('[LinkOpen] parse wikilink failed', { href }, err);
+        }
+
+        return;
+      }
+
+      if (href.startsWith('#')) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const id = decodeURIComponent(href.slice(1));
+        const container = previewContainer.value;
+        if (container) {
+          const target = container.querySelector(`#${CSS.escape(id)}`);
+          target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        }
+        return;
+      }
+
+      if (isHttpUrl(href)) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        try {
+          await openUrl(href);
+        } catch (err) {
+          logger.error('[LinkOpen] openUrl failed', { href }, err);
+          message.error('打开浏览器失败');
+        }
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const { link, anchor } = splitFsLinkAndAnchor(href);
+      if (!link) return;
+      const baseDocPath = selectedFile.value?.path || fileTreeStore.activeTab || '';
+
+      logger.debug('[LinkOpen] preview openFsLink', { link, anchor, ctrl, baseDocPath });
+      await openFsLinkSmart(link, { anchor, viaCtrl: ctrl, baseDocPath });
+      return;
+    }
+  }
+
   const hit = base.closest('[data-md-start-line]');
   if (!hit) return;
 
@@ -4971,7 +5544,8 @@ const renderDebounced = debounce(async (content) => {
 
   try {
     const basePath = selectedFile.value.path ? await dirname(selectedFile.value.path) : '';
-    renderedHtml.value = await renderMarkdown(content, {
+    const processed = preprocessObsidianWikilinks(content);
+    renderedHtml.value = await renderMarkdown(processed, {
       basePath: basePath,
       mermaid: true,
       math: true,
@@ -5219,6 +5793,8 @@ const initRealtimeVditor = async () => {
       after: () => {
         realtimeVditorReady.value = true;
 
+        installRealtimeVditorLinkInterceptor();
+
         if (pendingRealtimeVditorValue.value != null && realtimeVditor) {
           const v = pendingRealtimeVditorValue.value;
           pendingRealtimeVditorValue.value = null;
@@ -5258,6 +5834,12 @@ const initRealtimeVditor = async () => {
 
 const destroyRealtimeVditor = () => {
   syncRealtimeValueToRawContent.cancel();
+
+  if (typeof realtimeVditorLinkInterceptorCleanup === 'function') {
+    realtimeVditorLinkInterceptorCleanup();
+    realtimeVditorLinkInterceptorCleanup = null;
+  }
+
   if (!realtimeVditor) return;
   try {
     realtimeVditor.destroy();
@@ -5986,6 +6568,15 @@ onActivated(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
   destroyRealtimeVditor();
+
+  if (monacoCtrlClickDisposable) {
+    monacoCtrlClickDisposable.dispose();
+    monacoCtrlClickDisposable = null;
+  }
+  if (secondaryMonacoCtrlClickDisposable) {
+    secondaryMonacoCtrlClickDisposable.dispose();
+    secondaryMonacoCtrlClickDisposable = null;
+  }
 
   if (autoSaveTimerId) {
     window.clearInterval(autoSaveTimerId)
