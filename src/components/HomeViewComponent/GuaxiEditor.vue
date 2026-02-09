@@ -1771,6 +1771,37 @@ const findMarkdownAnchorLine = (content, anchorRaw) => {
   return 1;
 };
 
+const findFootnoteDefinitionLine = (content, numRaw) => {
+  const num = String(numRaw || '').trim();
+  if (!num) return 0;
+
+  const lines = String(content || '').replace(/\r/g, '').split('\n');
+  const esc = num.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+  const re = new RegExp(`^\\s*\\[\\s*${esc}\\s*\\]\\s*\\(@ref\\)\\s*:`, 'i');
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (re.test(lines[i])) return i + 1;
+  }
+  return 0;
+};
+
+const jumpToFootnoteDefinition = (num, { source = 'preview' } = {}) => {
+  const content = editor?.getModel?.()?.getValue?.() ?? rawContent.value ?? '';
+  const line = findFootnoteDefinitionLine(content, num);
+  if (!line) {
+    logger.debug('[Footnote] definition not found', { num, source });
+    return false;
+  }
+
+  scrollPreviewToLine(line);
+  if (showEditor.value) {
+    syncEditorToLine(line, { focus: false });
+  }
+
+  logger.info('[Footnote] jumped to definition', { num, line, source });
+  return true;
+};
+
 const openPathInExplorer = async (absPath) => {
   const p = normalizeFsPath(absPath);
   if (!p) return;
@@ -5996,6 +6027,22 @@ const handlePreviewClick = async (e) => {
     const ctrl = !!(e?.ctrlKey || e?.metaKey);
 
     if (href) {
+      if (href.toLowerCase() === '@ref') {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const text = String(a.textContent || '').trim();
+        const m = text.match(/\d+/);
+        const num = m ? m[0] : '';
+        if (!num) {
+          logger.debug('[Footnote] invalid ref click: missing number', { href, text });
+          return;
+        }
+
+        jumpToFootnoteDefinition(num, { source: 'preview' });
+        return;
+      }
+
       if (href.toLowerCase().startsWith('guaxi://wikilink')) {
         e.preventDefault();
         e.stopPropagation();
