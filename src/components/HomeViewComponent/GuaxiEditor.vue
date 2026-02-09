@@ -1802,6 +1802,108 @@ const jumpToFootnoteDefinition = (num, { source = 'preview' } = {}) => {
   return true;
 };
 
+// ==================== Markdown 任务列表（Task List）交互 ====================
+// 目标：预览模式点击 checklist 时：
+// 1) 回写源 Markdown：- [ ] <-> - [x]
+// 2) 不触发整篇 Markdown 的重渲染（大文件会卡顿）；只更新被点击条目的 DOM
+// 注意：
+// - 回写优先使用 Monaco 的 executeEdits 做最小范围替换，保留 undo/redo 以及光标状态。
+// - 为避免 watch(rawContent) 触发 renderDebounced() 重渲染，使用一次性“抑制自动渲染”标记。
+let suppressPreviewAutoRenderState = { until: 0, reason: '' };
+
+const suppressPreviewAutoRenderOnce = (reason, ttlMs = 900) => {
+  const ttl = Math.max(120, Number(ttlMs || 0) || 0);
+  suppressPreviewAutoRenderState = {
+    until: Date.now() + ttl,
+    reason: String(reason || 'unknown')
+  };
+  logger.debug('[TaskList] suppress preview auto render', { reason: suppressPreviewAutoRenderState.reason, ttlMs: ttl });
+};
+
+const consumeSuppressPreviewAutoRender = (from) => {
+  const now = Date.now();
+  if (!suppressPreviewAutoRenderState?.until) return false;
+  if (now > suppressPreviewAutoRenderState.until) {
+    suppressPreviewAutoRenderState = { until: 0, reason: '' };
+    return false;
+  }
+
+  logger.debug('[TaskList] preview auto render suppressed', {
+    from: String(from || ''),
+    reason: suppressPreviewAutoRenderState.reason,
+    remainMs: suppressPreviewAutoRenderState.until - now
+  });
+  suppressPreviewAutoRenderState = { until: 0, reason: '' };
+  return true;
+};
+
+const toggleMarkdownTaskAtLine = (lineNumber, checked, { source = 'preview' } = {}) => {
+  const ln = Number(lineNumber || 0);
+  if (!ln || ln < 1) return false;
+
+  const desired = checked ? 'x' : ' ';
+  const taskRe = /^(\s*(?:[-+*]|\d+[.)])\s+)\[( |x|X)\](\s+)/;
+
+  // 预览点击触发的“回写源 Markdown”属于局部更新：抑制一次自动渲染，避免整篇重渲染。
+  // 备注：抑制逻辑由 watch(rawContent) 处消费。
+  suppressPreviewAutoRenderOnce(`task-toggle:${source}`, 1200);
+
+  const targetEditor = editor;
+  const model = targetEditor?.getModel?.();
+  const lineText = model ? model.getLineContent(ln) : (String(rawContent.value || '').replace(/\r/g, '').split('\n')[ln - 1] || '');
+
+  const m = taskRe.exec(String(lineText || ''));
+  if (!m) {
+    logger.debug('[TaskList] no task marker on line', { ln, source, lineText: String(lineText || '').slice(0, 120) });
+    return false;
+  }
+
+  const current = String(m[2] || ' ');
+  const nextChar = desired;
+  if (current.toLowerCase() === nextChar) {
+    logger.debug('[TaskList] already desired', { ln, checked, source });
+    return true;
+  }
+
+  // '[' 的 0-based index = m[1].length；括号内字符的位置 = index + 1
+  const insideIdx0 = String(m[1] || '').length + 1;
+
+  if (model && targetEditor) {
+    try {
+      targetEditor.executeEdits('md-task-toggle', [
+        {
+          range: new monaco.Range(ln, insideIdx0 + 1, ln, insideIdx0 + 2),
+          text: nextChar,
+          forceMoveMarkers: true
+        }
+      ]);
+      logger.info('[TaskList] toggled', { ln, checked, source });
+      return true;
+    } catch (e) {
+      logger.warn('[TaskList] executeEdits failed, fallback to full replace', { ln, checked, source }, e);
+    }
+  }
+
+  try {
+    const lines = String(rawContent.value || '').replace(/\r/g, '').split('\n');
+    if (ln > lines.length) return false;
+    const src = String(lines[ln - 1] || '');
+    const m2 = taskRe.exec(src);
+    if (!m2) return false;
+
+    const head = src.slice(0, m2[1].length + 1);
+    const tail = src.slice(m2[1].length + 2);
+    lines[ln - 1] = `${head}${nextChar}${tail}`;
+    updateEditorContent(lines.join('\n'));
+
+    logger.info('[TaskList] toggled via fallback replace', { ln, checked, source });
+    return true;
+  } catch (e) {
+    logger.error('[TaskList] fallback replace failed', { ln, checked, source }, e);
+    return false;
+  }
+};
+
 const openPathInExplorer = async (absPath) => {
   const p = normalizeFsPath(absPath);
   if (!p) return;
@@ -6020,6 +6122,40 @@ const handlePreviewClick = async (e) => {
   const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
   if (!base) return;
 
+  // 任务列表：点击 checkbox 时，直接更新 Markdown 源内容（并仅更新当前条目 DOM）
+  const checkbox = base.closest?.('input.task-list-item-checkbox');
+  if (checkbox && previewContainer.value && previewContainer.value.contains(checkbox)) {
+    const lineFromAttr = Number(checkbox.getAttribute('data-md-task-line') || 0);
+    const lineFromParent = Number(
+      checkbox.closest?.('[data-md-start-line]')?.getAttribute?.('data-md-start-line') || 0
+    );
+    const ln = lineFromAttr || lineFromParent || 0;
+    const checked = !!checkbox.checked;
+
+    if (!ln) {
+      logger.warn('[TaskList] preview toggle ignored: missing line', { checked });
+      return;
+    }
+
+    const ok = toggleMarkdownTaskAtLine(ln, checked, { source: 'preview' });
+
+    // 仅更新被点击的条目：不依赖整篇 Markdown 重渲染
+    const li = checkbox.closest?.('li.task-list-item');
+    if (li) {
+      li.classList.toggle('task-list-item-checked', checked);
+      li.setAttribute('data-md-task', checked ? '1' : '0');
+    }
+
+    if (!ok) {
+      logger.warn('[TaskList] preview toggle failed', { ln, checked });
+    } else {
+      logger.info('[TaskList] preview toggled (dom patched)', { ln, checked });
+    }
+
+    e.stopPropagation();
+    return;
+  }
+
   const a = base.closest('a');
   if (a && previewContainer.value && previewContainer.value.contains(a)) {
     const href0 = a.getAttribute('href') || '';
@@ -6592,9 +6728,12 @@ watch(previewMode, async (nextMode, prevMode) => {
 });
 
 watch([rawContent, shouldAutoRenderPreview], () => {
-  if (shouldAutoRenderPreview.value) {
-    renderDebounced(rawContent.value);
-  }
+  if (!shouldAutoRenderPreview.value) return;
+
+  // 任务列表点击会回写 rawContent，但预览仅做局部 DOM 更新；此处抑制整篇重渲染。
+  if (consumeSuppressPreviewAutoRender('watch:rawContent')) return;
+
+  renderDebounced(rawContent.value);
 });
 
 // 监听内容变化
@@ -7684,6 +7823,69 @@ onUnmounted(() => {
 
 .preview :deep(a:hover) {
   opacity: 0.92;
+}
+
+/* ==================== Markdown 任务列表（Task List）样式 ==================== */
+.preview :deep(li.task-list-item) {
+  list-style: none;
+}
+
+.preview :deep(input.task-list-item-checkbox) {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  cursor: pointer;
+
+  /* 圆圈样式：替代默认方形 checkbox */
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  border-radius: 999px;
+  border: 2px solid var(--primary-color, #4acadb);
+  background: transparent;
+  display: inline-grid;
+  place-content: center;
+  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+.preview :deep(input.task-list-item-checkbox:hover) {
+  transform: scale(1.05);
+}
+
+.preview :deep(input.task-list-item-checkbox::after) {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #ffffff;
+  transform: scale(0);
+  transition: transform 0.12s ease;
+}
+
+.preview :deep(input.task-list-item-checkbox:checked) {
+  background: var(--primary-color, #4acadb);
+  border-color: var(--primary-color, #4acadb);
+}
+
+.preview :deep(input.task-list-item-checkbox:checked::after) {
+  transform: scale(1);
+}
+
+.dark-mode .preview :deep(input.task-list-item-checkbox),
+.dark .preview :deep(input.task-list-item-checkbox) {
+  border-color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.dark-mode .preview :deep(input.task-list-item-checkbox:checked),
+.dark .preview :deep(input.task-list-item-checkbox:checked) {
+  background: var(--guaxi-text-link-dark, #4acadb);
+  border-color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.preview :deep(li.task-list-item.task-list-item-checked .task-list-item-text) {
+  text-decoration: line-through;
+  opacity: 0.78;
 }
 
 :deep(.monaco-editor .guaxi-link-like),

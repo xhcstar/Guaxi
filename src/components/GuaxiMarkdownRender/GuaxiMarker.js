@@ -990,6 +990,121 @@ export const renderMarkdown = async (content, options) => {
       return defaultHeadingClose(tokens, idx, options, env, self);
     };
 
+    // ==================== GFM 任务列表（Task List）支持 ====================
+    // 支持语法：
+    // - [ ] 未完成
+    // - [x] 已完成
+    // 说明：
+    // - 这里不引入第三方 markdown-it-task-lists 依赖，而是通过 core ruler 直接改写 token。
+    // - 渲染结果包含：
+    //   - <li class="task-list-item ..." data-md-task-line="..."> ...
+    //   - <input class="task-list-item-checkbox" type="checkbox" ...>
+    //   - <span class="task-list-item-text">...</span> 便于 CSS 做删除线
+    const installTaskListSupport = () => {
+      const taskPrefixRe = /^\s*\[( |x|X)\]\s+/;
+
+      const addTokenClass = (token, cls) => {
+        if (!token) return;
+        const prev = token.attrGet("class") || "";
+        const parts = String(prev).split(/\s+/).filter(Boolean);
+        if (!parts.includes(cls)) parts.push(cls);
+        token.attrSet("class", parts.join(" "));
+      };
+
+      const stripPrefixFromInlineChildren = (inlineToken, prefixLen) => {
+        if (!inlineToken || !Array.isArray(inlineToken.children) || prefixLen <= 0) return;
+        let remain = prefixLen;
+        for (let i = 0; i < inlineToken.children.length && remain > 0; ) {
+          const c = inlineToken.children[i];
+          if (!c || c.type !== "text") break;
+
+          const txt = String(c.content || "");
+          if (!txt) {
+            i += 1;
+            continue;
+          }
+
+          if (txt.length <= remain) {
+            remain -= txt.length;
+            inlineToken.children.splice(i, 1);
+            continue;
+          }
+
+          c.content = txt.slice(remain);
+          remain = 0;
+          break;
+        }
+      };
+
+      md.core.ruler.after("inline", "guaxi_task_list", (state) => {
+        const tokens = state.tokens || [];
+        let hit = 0;
+
+        for (let i = 0; i < tokens.length; i += 1) {
+          const t = tokens[i];
+          if (!t || t.type !== "list_item_open") continue;
+
+          const startLine = Array.isArray(t.map) ? t.map[0] + 1 : 0;
+
+          // 找到当前 list item 内的第一个 inline token
+          let inline = null;
+          for (let j = i + 1; j < tokens.length && tokens[j].type !== "list_item_close"; j += 1) {
+            if (tokens[j].type === "inline") {
+              inline = tokens[j];
+              break;
+            }
+          }
+          if (!inline) continue;
+
+          const m = taskPrefixRe.exec(String(inline.content || ""));
+          if (!m) continue;
+
+          const checked = String(m[1] || "").toLowerCase() === "x";
+          const prefix = String(m[0] || "");
+
+          // 去掉文本中的 "[ ] " / "[x] " 前缀
+          inline.content = String(inline.content || "").slice(prefix.length);
+          stripPrefixFromInlineChildren(inline, prefix.length);
+
+          addTokenClass(t, "task-list-item");
+          if (checked) addTokenClass(t, "task-list-item-checked");
+          if (startLine) t.attrSet("data-md-task-line", String(startLine));
+          t.attrSet("data-md-task", checked ? "1" : "0");
+
+          // 在行内内容最前插入 checkbox；并用 span 包裹正文，便于 CSS 统一加删除线
+          const mkHtml = (html) => {
+            const tok = new state.Token("html_inline", "", 0);
+            tok.content = html;
+            return tok;
+          };
+
+          const checkboxHtml = `<input class="task-list-item-checkbox" type="checkbox"${checked ? " checked" : ""}${startLine ? ` data-md-task-line="${startLine}"` : ""} /> `;
+
+          const children = Array.isArray(inline.children) ? inline.children : [];
+          inline.children = [
+            mkHtml(checkboxHtml),
+            mkHtml('<span class="task-list-item-text">'),
+            ...children,
+            mkHtml("</span>"),
+          ];
+
+          hit += 1;
+        }
+
+        if (hit) {
+          logger.info("[MarkdownRender] task list parsed", { items: hit });
+        }
+
+        return false;
+      });
+    };
+
+    try {
+      installTaskListSupport();
+    } catch (e) {
+      logger.warn("[MarkdownRender] installTaskListSupport failed", e);
+    }
+
     // 添加Mermaid支持（同时保留原始内容功能）
     if (enableMermaid) {
       const defaultFence = md.renderer.rules.fence;
