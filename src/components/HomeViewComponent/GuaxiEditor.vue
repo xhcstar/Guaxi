@@ -2016,9 +2016,11 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
 
   const classLinkLike = 'guaxi-link-like';
   const classMdBracket = 'guaxi-mdlink-bracket';
+  const classMdAngle = 'guaxi-mdlink-angle';
   const classMdText = 'guaxi-mdlink-text';
   const classMdParen = 'guaxi-mdlink-paren';
   const classMdTarget = 'guaxi-mdlink-target';
+  const classMdRefTarget = 'guaxi-mdref-target';
   const classWikiBracket = 'guaxi-wikilink-bracket';
   const classWikiText = 'guaxi-wikilink-text';
 
@@ -2027,6 +2029,10 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
 
   const wikiRe = /\[\[[^\]]+?\]\]/g;
   const mdInlineLinkRe = /\[([^\]\n]+?)\]\(\s*([^\s)]+)(?:\s+"[^"]*")?\s*\)/g;
+  const mdRefLinkRe = /\[([^\]\n]+?)\]\s*\[([^\]\n]*?)\]/g;
+  const mdAutoLinkUrlRe = /<((?:https?|ftp):\/\/[^>\s]+)>/g;
+  const mdAutoLinkEmailRe = /<((?:mailto:)?[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)>/g;
+  const mdFootnoteRefRe = /\[(\d+)\]\s*\(@ref\)/g;
   const urlRe = /(?:https?:\/\/|file:\/\/)[0-9A-Za-z\-._~:\/?#@!$&'()*+,;=%\\]+/g;
   const pathRe = /(?:\.\.\/|\.\/|~\/|[a-zA-Z]:[\\/]|\\\\)[0-9A-Za-z\-._~:\/?#@!$&'()*+,;=%\\]+/g;
 
@@ -2119,7 +2125,7 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
       }
 
       // Markdown 内联链接：[text](target "title")
-      // 目标：括号符号易区分（次要色），链接文本/目标易识别（链接色，不同于普通文本）。
+      // 目标：括号符号易区分（#f35f4c），链接文本用独立色，URL/路径目标用链接色且仅目标下划线。
       mdInlineLinkRe.lastIndex = 0;
       for (const m of line.matchAll(mdInlineLinkRe)) {
         const rawText = String(m[1] || '');
@@ -2138,74 +2144,134 @@ const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) =
 
         const openParenRel = whole.indexOf('(', closeBracketRel);
         const closeParenRel = whole.lastIndexOf(')');
-        if (openParenRel < 0 || closeParenRel <= openParenRel) {
-          // 兜底：保证至少能看出“这是一段链接”
-          decs.push({
-            range: new monaco.Range(ln, startWhole + 1, ln, startWhole + whole.length + 1),
-            options: {
-              inlineClassName: classLinkLike,
-              stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-            }
-          });
-          continue;
-        }
+        if (openParenRel < 0 || closeParenRel <= openParenRel) continue;
 
-        // '['
-        decs.push({
-          range: new monaco.Range(ln, startWhole + 1, ln, startWhole + 1 + 1),
-          options: {
-            inlineClassName: classMdBracket,
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-          }
-        });
-        // 'text'
-        if (rawText) {
-          decs.push({
-            range: new monaco.Range(ln, startWhole + 1 + 1, ln, startWhole + closeBracketRel + 1),
-            options: {
-              inlineClassName: classMdText,
-              stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-            }
-          });
-        }
-        // ']'
-        decs.push({
-          range: new monaco.Range(ln, startWhole + closeBracketRel + 1, ln, startWhole + closeBracketRel + 1 + 1),
-          options: {
-            inlineClassName: classMdBracket,
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-          }
-        });
+        // '[' text ']'
+        decs.push({ range: new monaco.Range(ln, startWhole + 1, ln, startWhole + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (rawText) decs.push({ range: new monaco.Range(ln, startWhole + 2, ln, startWhole + closeBracketRel + 1), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        decs.push({ range: new monaco.Range(ln, startWhole + closeBracketRel + 1, ln, startWhole + closeBracketRel + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
 
-        // '('
-        decs.push({
-          range: new monaco.Range(ln, startWhole + openParenRel + 1, ln, startWhole + openParenRel + 1 + 1),
-          options: {
-            inlineClassName: classMdParen,
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-          }
-        });
-
-        // 'target'
+        // '(' target ')'（括号不下划线）
+        decs.push({ range: new monaco.Range(ln, startWhole + openParenRel + 1, ln, startWhole + openParenRel + 2), options: { inlineClassName: classMdParen, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
         const targetRel = whole.indexOf(rawTarget, openParenRel + 1);
-        if (targetRel >= 0) {
-          decs.push({
-            range: new monaco.Range(ln, startWhole + targetRel + 1, ln, startWhole + targetRel + rawTarget.length + 1),
-            options: {
-              inlineClassName: classMdTarget,
-              stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-            }
-          });
+        if (targetRel >= 0) decs.push({ range: new monaco.Range(ln, startWhole + targetRel + 1, ln, startWhole + targetRel + rawTarget.length + 1), options: { inlineClassName: classMdTarget, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        decs.push({ range: new monaco.Range(ln, startWhole + closeParenRel + 1, ln, startWhole + closeParenRel + 2), options: { inlineClassName: classMdParen, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+      }
+
+      // Markdown 引用链接：[text][id] / [text][]
+      mdRefLinkRe.lastIndex = 0;
+      for (const m of line.matchAll(mdRefLinkRe)) {
+        const rawText = String(m[1] || '');
+        const rawId = String(m[2] || '');
+        const whole = String(m[0] || '');
+        const startWhole = Number(m.index || 0);
+
+        const firstClose = whole.indexOf(']');
+        const secondOpen = whole.indexOf('[', firstClose + 1);
+        const secondClose = whole.lastIndexOf(']');
+        if (firstClose < 1 || secondOpen < 0 || secondClose <= secondOpen) continue;
+
+        // '[' text ']'
+        decs.push({ range: new monaco.Range(ln, startWhole + 1, ln, startWhole + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (rawText) decs.push({ range: new monaco.Range(ln, startWhole + 2, ln, startWhole + firstClose + 1), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        decs.push({ range: new monaco.Range(ln, startWhole + firstClose + 1, ln, startWhole + firstClose + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+
+        // '[' id ']'
+        decs.push({ range: new monaco.Range(ln, startWhole + secondOpen + 1, ln, startWhole + secondOpen + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (rawId) decs.push({ range: new monaco.Range(ln, startWhole + secondOpen + 2, ln, startWhole + secondClose + 1), options: { inlineClassName: classMdRefTarget, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        decs.push({ range: new monaco.Range(ln, startWhole + secondClose + 1, ln, startWhole + secondClose + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+      }
+
+      // Markdown 自动链接：<https://...> / <contact@example.com>
+      const decorateAngle = (start, innerLen) => {
+        decs.push({ range: new monaco.Range(ln, start + 1, ln, start + 2), options: { inlineClassName: classMdAngle, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        decs.push({ range: new monaco.Range(ln, start + innerLen + 2, ln, start + innerLen + 3), options: { inlineClassName: classMdAngle, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+      };
+
+      mdAutoLinkUrlRe.lastIndex = 0;
+      for (const m of line.matchAll(mdAutoLinkUrlRe)) {
+        const inner = String(m[1] || '');
+        if (!inner) continue;
+        const start = Number(m.index || 0);
+        decorateAngle(start, inner.length);
+        decs.push({ range: new monaco.Range(ln, start + 2, ln, start + 2 + inner.length), options: { inlineClassName: classLinkLike, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+      }
+
+      mdAutoLinkEmailRe.lastIndex = 0;
+      for (const m of line.matchAll(mdAutoLinkEmailRe)) {
+        const inner = String(m[1] || '');
+        if (!inner) continue;
+        const start = Number(m.index || 0);
+        decorateAngle(start, inner.length);
+        decs.push({ range: new monaco.Range(ln, start + 2, ln, start + 2 + inner.length), options: { inlineClassName: classLinkLike, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+      }
+
+      // 脚注引用（当前工程语法）：[1](@ref)
+      mdFootnoteRefRe.lastIndex = 0;
+      for (const m of line.matchAll(mdFootnoteRefRe)) {
+        const num = String(m[1] || '');
+        const start = Number(m.index || 0);
+        // '[' num ']'
+        decs.push({ range: new monaco.Range(ln, start + 1, ln, start + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (num) decs.push({ range: new monaco.Range(ln, start + 2, ln, start + 2 + num.length), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        decs.push({ range: new monaco.Range(ln, start + 2 + num.length, ln, start + 3 + num.length), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+
+        // '(@ref)'
+        const open = line.indexOf('(', start);
+        const close = line.indexOf(')', start);
+        if (open >= 0) decs.push({ range: new monaco.Range(ln, open + 1, ln, open + 2), options: { inlineClassName: classMdParen, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (close > open + 1) decs.push({ range: new monaco.Range(ln, open + 2, ln, close + 1), options: { inlineClassName: classMdRefTarget, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (close >= 0) decs.push({ range: new monaco.Range(ln, close + 1, ln, close + 2), options: { inlineClassName: classMdParen, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+      }
+
+      // 引用链接定义：[id]: url "title"（仅 URL/路径下划线）
+      const def = /^\s*\[([^\]]+?)\]\s*:\s*(.*)$/.exec(line);
+      if (def) {
+        const id = String(def[1] || '');
+        const after = String(def[2] || '');
+        const openIdx = line.indexOf('[');
+        const closeIdx = line.indexOf(']', openIdx + 1);
+        const colonIdx = line.indexOf(':', closeIdx + 1);
+
+        if (openIdx >= 0) decs.push({ range: new monaco.Range(ln, openIdx + 1, ln, openIdx + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (id && closeIdx > openIdx + 1) decs.push({ range: new monaco.Range(ln, openIdx + 2, ln, closeIdx + 1), options: { inlineClassName: classMdText, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        if (closeIdx >= 0) decs.push({ range: new monaco.Range(ln, closeIdx + 1, ln, closeIdx + 2), options: { inlineClassName: classMdBracket, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+
+        const base = colonIdx >= 0 ? colonIdx + 1 : closeIdx + 1;
+        const raw = after.trimStart();
+        const pad = after.length - raw.length;
+        const rawOffset = base + pad;
+
+        let tok = '';
+        let tokStart = 0;
+        let tokEnd = 0;
+        if (raw.startsWith('`')) {
+          const endTick = raw.indexOf('`', 1);
+          if (endTick > 1) {
+            tok = raw.slice(1, endTick);
+            tokStart = 1;
+            tokEnd = endTick;
+          }
+        } else if (raw.startsWith('<')) {
+          const gt = raw.indexOf('>', 1);
+          if (gt > 1) {
+            tok = raw.slice(1, gt);
+            tokStart = 1;
+            tokEnd = gt;
+          }
+        } else {
+          const m0 = /^\S+/.exec(raw);
+          if (m0) {
+            tok = m0[0];
+            tokStart = 0;
+            tokEnd = tok.length;
+          }
         }
 
-        // ')'
-        decs.push({
-          range: new monaco.Range(ln, startWhole + closeParenRel + 1, ln, startWhole + closeParenRel + 1 + 1),
-          options: {
-            inlineClassName: classMdParen,
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
-          }
-        });
+        const cleaned = stripLinkBoundaryPunct(tok);
+        if (cleaned && (isHttpUrl(cleaned) || isPathLikeToken(cleaned))) {
+          decs.push({ range: new monaco.Range(ln, rawOffset + tokStart + 1, ln, rawOffset + tokEnd + 1), options: { inlineClassName: classLinkLike, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } });
+        }
       }
 
       urlRe.lastIndex = 0;
@@ -7589,9 +7655,19 @@ onUnmounted(() => {
 
 :deep(.monaco-editor .guaxi-mdlink-bracket),
 :deep(.monaco-editor .guaxi-mdlink-paren),
+:deep(.monaco-editor .guaxi-mdlink-angle),
 :deep(.monaco-editor .guaxi-wikilink-bracket) {
   color: #f35f4c !important;
   text-decoration: none !important;
+}
+
+:deep(.monaco-editor .guaxi-mdref-target) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da)) !important;
+  text-decoration: none !important;
+}
+
+:root[data-guaxi-theme='dark'] :deep(.monaco-editor .guaxi-mdref-target) {
+  color: var(--guaxi-text-link-dark, #4acadb) !important;
 }
 
 :root[data-guaxi-theme='dark'] :deep(.monaco-editor .guaxi-link-like),
