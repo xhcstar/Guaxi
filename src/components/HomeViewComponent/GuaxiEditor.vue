@@ -4340,13 +4340,39 @@ function analyzeMarkdown(content, model) {
   });
 
   const fenceLines = [];
+  let inFence = false;
+  let fenceToken = '';
+
   lines.forEach((line, index) => {
     const trimmed = line.trim();
-    if (trimmed.startsWith('```')) {
+
+    // 1) fenced code block（```/~~~）：记录行号用于“未闭合”错误，同时在代码块内部跳过链接语法检查。
+    const fence = /^(```+|~~~+)/.exec(trimmed);
+    if (fence) {
+      const token = fence[1];
       fenceLines.push(index + 1);
+
+      if (!inFence) {
+        inFence = true;
+        fenceToken = token;
+      } else if (token[0] === fenceToken[0] && token.length >= fenceToken.length) {
+        inFence = false;
+        fenceToken = '';
+      }
+      return;
     }
 
-    const lintLine = line.replace(/\[\[[\s\S]*?\]\]/g, '');
+    if (inFence) return;
+
+    // 2) 任务列表 `- [ ] xxx` / `- [x] xxx`：方括号是合法语法，不参与“不完整链接”检查。
+    if (/^\s*(?:[-*+]|\d+\.)\s+\[(?: |x|X)\]\s+/.test(line)) {
+      return;
+    }
+
+    // 3) 剔除 Obsidian 双链与行内代码，降低误报。
+    const lintLine = line
+      .replace(/\[\[[\s\S]*?\]\]/g, '')
+      .replace(/`[^`]*`/g, '');
 
     const openBracket = (lintLine.match(/\[/g) || []).length;
     const linkStart = (lintLine.match(/\]\s*\(/g) || []).length;
