@@ -809,6 +809,8 @@ let editor = null;
 let secondaryEditor = null;
 let monacoCtrlClickDisposable = null;
 let secondaryMonacoCtrlClickDisposable = null;
+let monacoLinkLikeDecorDisposable = null;
+let secondaryMonacoLinkLikeDecorDisposable = null;
 let editorEffectsLeft = null;
 let editorEffectsRight = null;
 
@@ -1539,11 +1541,49 @@ const extractMarkdownLinkTargetAtLineColumn = (line, idx0) => {
   return '';
 };
 
-// Monaco 行内 token 提取：优先走 Markdown 语法提取，避免把 `xxx](` 左侧吞进来
+// 统一生成内部 wikilink href（给 Monaco Ctrl+Click / Preview / Realtime 共用）
+const buildGuaxiWikilinkHref = (filePart, anchorPart) => {
+  const file = String(filePart || '').trim();
+  const anchor = String(anchorPart || '').trim();
+  return `guaxi://wikilink?file=${encodeURIComponent(file)}&anchor=${encodeURIComponent(anchor)}`;
+};
+
+// Obsidian 双链提取：当光标位于 `[[...]]` 内时，返回内部可点击 href
+// 支持：[[file]] / [[file#heading]] / [[file#^blockId]] / [[#heading]] / [[file|alias]]
+const extractObsidianWikilinkHrefAtLineColumn = (line, idx0) => {
+  const i = Math.max(0, Math.min(line.length, idx0));
+  const left = line.lastIndexOf('[[', i);
+  if (left < 0) return '';
+  const right = line.indexOf(']]', left + 2);
+  if (right < 0) return '';
+  if (i < left + 2 || i > right - 1) return '';
+
+  const inner = String(line.slice(left + 2, right) || '').trim();
+  if (!inner) return '';
+
+  const parts = inner.split('|');
+  const target = String(parts[0] || '').trim();
+  if (!target) return '';
+
+  let filePart = target;
+  let anchorPart = '';
+  const hashIdx = target.indexOf('#');
+  if (hashIdx >= 0) {
+    filePart = target.slice(0, hashIdx).trim();
+    anchorPart = target.slice(hashIdx + 1).trim();
+  }
+
+  return buildGuaxiWikilinkHref(filePart, anchorPart);
+};
+
+// Monaco 行内 token 提取：优先走 Obsidian/Markdown 语法提取，避免把 `xxx](` 左侧吞进来
 const extractClickableTokenAtLineColumn = (lineContent, column) => {
   const line = String(lineContent || '');
   const idx0 = Math.max(0, Math.min(line.length, Number(column || 1) - 1));
   if (!line) return '';
+
+  const wikiHref = extractObsidianWikilinkHrefAtLineColumn(line, idx0);
+  if (wikiHref) return wikiHref;
 
   const mdTarget = extractMarkdownLinkTargetAtLineColumn(line, idx0);
   if (mdTarget) return mdTarget;
@@ -1742,20 +1782,149 @@ const openPathInExplorer = async (absPath) => {
   }
 };
 
-const openMarkdownInEditor = async (absPath, anchor) => {
+const openMarkdownInEditor = async (absPath, anchor, { silent = false, focus = true } = {}) => {
   const p = normalizeFsPath(absPath);
-  if (!p) return;
+  if (!p) return false;
 
   try {
-    await fileTreeStore.openFileInTab(p);
+    // 先读取内容确认文件可打开（并避免 openFileInTab 内部失败但不抛错导致无法做 fallback）。
+    const res = await fileTreeStore.fetchFileContent(p);
+    if (!res?.ok) {
+      logger.warn('[LinkOpen] openMarkdownInEditor: fetchFileContent failed', { path: p, anchor, code: res?.code, error: res?.error });
+      if (!silent) message.error('打开文件失败');
+      return false;
+    }
+
+    // 用已读取的内容打开/激活标签页，避免重复读取。
+    await fileTreeStore.openFileInTab(p, res.content, { unsupported: !!res.unsupported });
     await nextTick();
 
-    const content = fileTreeStore.selectedFile?.content || '';
+    const content = String(res.content || fileTreeStore.selectedFile?.content || '');
     const line = findMarkdownAnchorLine(content, anchor);
-    syncEditorToLine(line, { focus: true });
+    syncEditorToLine(line, { focus });
+    return true;
   } catch (e) {
-    logger.error('[LinkOpen] open markdown in editor failed', { path: p, anchor }, e);
-    message.error('打开文件失败');
+    logger.error('[LinkOpen] openMarkdownInEditor failed', { path: p, anchor }, e);
+    if (!silent) message.error('打开文件失败');
+    return false;
+  }
+};
+
+// Obsidian 风格：[[Note]] 这种不带路径的文件名，允许在知识库内按 basename 做一次兜底查找。
+// 说明：前端没有轻量 exists API，这里通过 get_file_tree 做“限量 BFS”，只在相对解析失败时触发。
+const isBareWikilinkFileName = (filePart) => {
+  const s = String(filePart || '').trim();
+  if (!s) return false;
+  if (s.startsWith('./') || s.startsWith('../') || s.startsWith('~/')) return false;
+  if (s.includes('/') || s.includes('\\')) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(s)) return false;
+  if (s.toLowerCase().startsWith('file://')) return false;
+  return true;
+};
+
+const findMarkdownByBasenameInRepo = async (filePart, { repoRoot, maxDirs = 300 } = {}) => {
+  const root = normalizeFsPath(repoRoot);
+  if (!root) return '';
+
+  const wantRaw = String(filePart || '').trim();
+  if (!wantRaw) return '';
+
+  const wantWithExt = ensureMarkdownExt(wantRaw);
+  const wantNames = new Set([String(wantRaw).toLowerCase(), String(wantWithExt).toLowerCase()]);
+
+  const queue = [root];
+  const visited = new Set();
+  let walked = 0;
+
+  while (queue.length) {
+    const dir0 = queue.shift();
+    const dir = normalizeFsPath(dir0);
+    if (!dir || visited.has(dir)) continue;
+    visited.add(dir);
+
+    walked += 1;
+    if (walked > maxDirs) {
+      logger.warn('[LinkOpen] wikilink basename search aborted: too many dirs', { repoRoot: root, want: wantRaw, maxDirs });
+      return '';
+    }
+
+    let children = [];
+    try {
+      children = await invoke('get_file_tree', { path: dir });
+    } catch (e) {
+      logger.warn('[LinkOpen] wikilink basename search: get_file_tree failed', { dir }, e);
+      continue;
+    }
+
+    for (const node of Array.isArray(children) ? children : []) {
+      const id = normalizeFsPath(node?.id);
+      const name = String(node?.name || '').trim();
+
+      if (node?.is_directory) {
+        if (id) queue.push(id);
+        continue;
+      }
+
+      if (!id || !name) continue;
+      if (!/\.(md|markdown)$/i.test(name)) continue;
+
+      if (wantNames.has(name.toLowerCase())) {
+        logger.info('[LinkOpen] wikilink basename search hit', { want: wantRaw, path: id, walked });
+        return id;
+      }
+    }
+  }
+
+  logger.info('[LinkOpen] wikilink basename search miss', { want: wantRaw, repoRoot: root, walked });
+  return '';
+};
+
+const openWikilinkFromHref = async (href, { baseDocPath, source } = {}) => {
+  const src = String(source || 'unknown');
+  const baseDoc = normalizeFsPath(baseDocPath || '');
+
+  try {
+    const u = new URL(String(href || '').trim());
+    const file = stripLinkBoundaryPunct(u.searchParams.get('file') || '');
+    const anchor = stripLinkBoundaryPunct(u.searchParams.get('anchor') || '');
+
+    logger.info('[LinkOpen] open wikilink', { source: src, file, anchor, baseDocPath: baseDoc });
+
+    // [[#heading]]：不带 file 时视为当前文件。
+    if (!file) {
+      if (baseDoc) return await openMarkdownInEditor(baseDoc, anchor);
+      return false;
+    }
+
+    // 1) 优先按“当前文档所在目录”解析（Obsidian 默认行为）。
+    const primaryAbs = await resolveFsLinkToAbsolute(ensureMarkdownExt(file), { baseDocPath: baseDoc });
+    if (await openMarkdownInEditor(primaryAbs, anchor, { silent: true })) return true;
+
+    // 2) 若是纯文件名（不含路径），在知识库内做一次限量 basename 搜索兜底。
+    if (isBareWikilinkFileName(file)) {
+      let repoRoot = normalizeFsPath(fileTreeStore.activeRepoPath || '');
+      if (!repoRoot && baseDoc) {
+        const list = await ensureKnowledgeBasesLoaded();
+        for (const kb of Array.isArray(list) ? list : []) {
+          const root = normalizeFsPath(kb?.location);
+          if (root && (baseDoc === root || baseDoc.startsWith(`${root}/`))) {
+            repoRoot = root;
+            break;
+          }
+        }
+      }
+
+      const hit = await findMarkdownByBasenameInRepo(file, { repoRoot });
+      if (hit && (await openMarkdownInEditor(hit, anchor, { silent: true }))) return true;
+    }
+
+    // 3) 最终失败：给用户一次明确反馈。
+    logger.warn('[LinkOpen] wikilink target not found', { source: src, file, anchor, baseDocPath: baseDoc, primaryAbs });
+    message.error('未找到目标文件');
+    return false;
+  } catch (err) {
+    logger.warn('[LinkOpen] parse/open wikilink failed', { href, source: src, baseDocPath: baseDoc }, err);
+    return false;
   }
 };
 
@@ -1793,9 +1962,11 @@ const installMonacoCtrlClickOpen = (targetEditor, { tag = 'left' } = {}) => {
     const token = stripLinkBoundaryPunct(token0);
     if (!token) return;
 
+    const lower = String(token || '').trim().toLowerCase();
+    const isWikilink = lower.startsWith('guaxi://wikilink');
     const isUrl = isHttpUrl(token);
-    const isPath = !isUrl && isPathLikeToken(token);
-    if (!isUrl && !isPath) return;
+    const isPath = !isUrl && !isWikilink && isPathLikeToken(token);
+    if (!isUrl && !isPath && !isWikilink) return;
 
     try {
       ev.event?.preventDefault?.();
@@ -1816,6 +1987,11 @@ const installMonacoCtrlClickOpen = (targetEditor, { tag = 'left' } = {}) => {
     });
 
     (async () => {
+      if (isWikilink) {
+        await openWikilinkFromHref(token, { baseDocPath, source: `monaco:${tag}` });
+        return;
+      }
+
       if (isUrl) {
         try {
           await openUrl(token);
@@ -1834,6 +2010,270 @@ const installMonacoCtrlClickOpen = (targetEditor, { tag = 'left' } = {}) => {
 
   logger.debug('[LinkOpen] monaco ctrl+click handler installed', { tag });
   return disposable;
+};
+const installMonacoLinkLikeDecorations = (targetEditor, { tag = 'left' } = {}) => {
+  if (!targetEditor) return null;
+
+  const classLinkLike = 'guaxi-link-like';
+  const classMdBracket = 'guaxi-mdlink-bracket';
+  const classMdText = 'guaxi-mdlink-text';
+  const classMdParen = 'guaxi-mdlink-paren';
+  const classMdTarget = 'guaxi-mdlink-target';
+  const classWikiBracket = 'guaxi-wikilink-bracket';
+  const classWikiText = 'guaxi-wikilink-text';
+
+  let decorationIds = [];
+  let timerId = null;
+
+  const wikiRe = /\[\[[^\]]+?\]\]/g;
+  const mdInlineLinkRe = /\[([^\]\n]+?)\]\(\s*([^\s)]+)(?:\s+"[^"]*")?\s*\)/g;
+  const urlRe = /(?:https?:\/\/|file:\/\/)[0-9A-Za-z\-._~:\/?#@!$&'()*+,;=%\\]+/g;
+  const pathRe = /(?:\.\.\/|\.\/|~\/|[a-zA-Z]:[\\/]|\\\\)[0-9A-Za-z\-._~:\/?#@!$&'()*+,;=%\\]+/g;
+
+  const isFence = (text) => /^\s*(```+|~~~+)/.test(String(text || ''));
+
+  const update = (reason) => {
+    const model = targetEditor.getModel?.();
+    if (!model || model.getLanguageId?.() !== 'markdown') {
+      if (decorationIds.length) decorationIds = targetEditor.deltaDecorations(decorationIds, []);
+      return;
+    }
+
+    const ranges = targetEditor.getVisibleRanges?.() || [];
+    if (!ranges.length) return;
+
+    let startLine = Math.max(1, Math.min(...ranges.map((r) => r.startLineNumber)) - 80);
+    let endLine = Math.min(model.getLineCount(), Math.max(...ranges.map((r) => r.endLineNumber)) + 80);
+
+    const scanBack = 500;
+    const scanStart = Math.max(1, startLine - scanBack);
+
+    let inFence = false;
+    let fenceToken = '';
+
+    for (let ln = scanStart; ln < startLine; ln += 1) {
+      const t = model.getLineContent(ln);
+      const m = /^\s*(```+|~~~+)/.exec(t);
+      if (!m) continue;
+      const token = m[1];
+      if (!inFence) {
+        inFence = true;
+        fenceToken = token;
+      } else if (token[0] === fenceToken[0] && token.length >= fenceToken.length) {
+        inFence = false;
+        fenceToken = '';
+      }
+    }
+
+    const decs = [];
+
+    for (let ln = startLine; ln <= endLine; ln += 1) {
+      const line = model.getLineContent(ln);
+      const fenceHit = /^\s*(```+|~~~+)/.exec(line);
+      if (fenceHit) {
+        const token = fenceHit[1];
+        if (!inFence) {
+          inFence = true;
+          fenceToken = token;
+        } else if (token[0] === fenceToken[0] && token.length >= fenceToken.length) {
+          inFence = false;
+          fenceToken = '';
+        }
+        continue;
+      }
+      if (inFence) continue;
+
+      wikiRe.lastIndex = 0;
+      for (const m of line.matchAll(wikiRe)) {
+        const raw = String(m[0] || '');
+        if (!raw) continue;
+        const start = Number(m.index || 0);
+        const end = start + raw.length;
+        if (raw.length < 4) continue;
+
+        // Obsidian 双链：[[...]]
+        // 目标：括号用次要色，内部文本用链接色，避免 "[[" 左侧第二个括号颜色割裂。
+        decs.push({
+          range: new monaco.Range(ln, start + 1, ln, start + 2 + 1),
+          options: {
+            inlineClassName: classWikiBracket,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+        decs.push({
+          range: new monaco.Range(ln, end - 2 + 1, ln, end + 1),
+          options: {
+            inlineClassName: classWikiBracket,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+        if (end - start > 4) {
+          decs.push({
+            range: new monaco.Range(ln, start + 2 + 1, ln, end - 2 + 1),
+            options: {
+              inlineClassName: classWikiText,
+              stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+            }
+          });
+        }
+      }
+
+      // Markdown 内联链接：[text](target "title")
+      // 目标：括号符号易区分（次要色），链接文本/目标易识别（链接色，不同于普通文本）。
+      mdInlineLinkRe.lastIndex = 0;
+      for (const m of line.matchAll(mdInlineLinkRe)) {
+        const rawText = String(m[1] || '');
+        const rawTarget = String(m[2] || '');
+        if (!rawTarget) continue;
+
+        const token = stripLinkBoundaryPunct(rawTarget);
+        if (!token) continue;
+        if (!isPathLikeToken(token) && !isHttpUrl(token)) continue;
+
+        const whole = String(m[0] || '');
+        const startWhole = Number(m.index || 0);
+
+        const closeBracketRel = whole.indexOf(']');
+        if (closeBracketRel < 1) continue;
+
+        const openParenRel = whole.indexOf('(', closeBracketRel);
+        const closeParenRel = whole.lastIndexOf(')');
+        if (openParenRel < 0 || closeParenRel <= openParenRel) {
+          // 兜底：保证至少能看出“这是一段链接”
+          decs.push({
+            range: new monaco.Range(ln, startWhole + 1, ln, startWhole + whole.length + 1),
+            options: {
+              inlineClassName: classLinkLike,
+              stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+            }
+          });
+          continue;
+        }
+
+        // '['
+        decs.push({
+          range: new monaco.Range(ln, startWhole + 1, ln, startWhole + 1 + 1),
+          options: {
+            inlineClassName: classMdBracket,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+        // 'text'
+        if (rawText) {
+          decs.push({
+            range: new monaco.Range(ln, startWhole + 1 + 1, ln, startWhole + closeBracketRel + 1),
+            options: {
+              inlineClassName: classMdText,
+              stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+            }
+          });
+        }
+        // ']'
+        decs.push({
+          range: new monaco.Range(ln, startWhole + closeBracketRel + 1, ln, startWhole + closeBracketRel + 1 + 1),
+          options: {
+            inlineClassName: classMdBracket,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+
+        // '('
+        decs.push({
+          range: new monaco.Range(ln, startWhole + openParenRel + 1, ln, startWhole + openParenRel + 1 + 1),
+          options: {
+            inlineClassName: classMdParen,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+
+        // 'target'
+        const targetRel = whole.indexOf(rawTarget, openParenRel + 1);
+        if (targetRel >= 0) {
+          decs.push({
+            range: new monaco.Range(ln, startWhole + targetRel + 1, ln, startWhole + targetRel + rawTarget.length + 1),
+            options: {
+              inlineClassName: classMdTarget,
+              stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+            }
+          });
+        }
+
+        // ')'
+        decs.push({
+          range: new monaco.Range(ln, startWhole + closeParenRel + 1, ln, startWhole + closeParenRel + 1 + 1),
+          options: {
+            inlineClassName: classMdParen,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+      }
+
+      urlRe.lastIndex = 0;
+      for (const m of line.matchAll(urlRe)) {
+        const raw = String(m[0] || '');
+        const token = stripLinkBoundaryPunct(raw);
+        if (!token || !isHttpUrl(token)) continue;
+        const start = Number(m.index || 0);
+        const end = start + raw.length;
+        decs.push({
+          range: new monaco.Range(ln, start + 1, ln, end + 1),
+          options: {
+            inlineClassName: classLinkLike,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+      }
+
+      pathRe.lastIndex = 0;
+      for (const m of line.matchAll(pathRe)) {
+        const raw = String(m[0] || '');
+        const token = stripLinkBoundaryPunct(raw);
+        if (!token || !isPathLikeToken(token)) continue;
+        const start = Number(m.index || 0);
+        const end = start + raw.length;
+        decs.push({
+          range: new monaco.Range(ln, start + 1, ln, end + 1),
+          options: {
+            inlineClassName: classLinkLike,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+      }
+    }
+
+    decorationIds = targetEditor.deltaDecorations(decorationIds, decs);
+    logger.debug('[LinkDecor] updated', { tag, reason, startLine, endLine, count: decs.length });
+  };
+
+  const schedule = (reason) => {
+    if (timerId) window.clearTimeout(timerId);
+    timerId = window.setTimeout(() => update(reason), 120);
+  };
+
+  const d1 = targetEditor.onDidScrollChange(() => schedule('scroll'));
+  const d2 = targetEditor.onDidChangeModel(() => schedule('model'));
+  const d3 = targetEditor.onDidChangeModelContent(() => schedule('content'));
+
+  schedule('init');
+
+  return {
+    dispose() {
+      try {
+        d1?.dispose?.();
+        d2?.dispose?.();
+        d3?.dispose?.();
+      } catch {
+        // ignore
+      }
+      if (timerId) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+      if (decorationIds.length) {
+        decorationIds = targetEditor.deltaDecorations(decorationIds, []);
+      }
+    }
+  };
 };
 
 // Vditor realtime：点击链接时拦截为“系统浏览器/资源管理器”，避免内部跳转
@@ -1859,6 +2299,19 @@ const installRealtimeVditorLinkInterceptor = () => {
     const href0 = a.getAttribute('href') || '';
     const href = String(href0 || '').trim();
     if (!href) return;
+
+    if (href.toLowerCase().startsWith('guaxi://wikilink')) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const baseDocPath = fileTreeStore.activeTab || selectedFile.value?.path || '';
+      logger.info('[LinkOpen] realtime wikilink', { href, baseDocPath });
+
+      void (async () => {
+        await openWikilinkFromHref(href, { baseDocPath, source: 'realtime' });
+      })();
+      return;
+    }
 
     if (isHttpUrl(href)) {
       e.preventDefault();
@@ -3204,6 +3657,12 @@ const ensureSecondaryEditor = () => {
   }
   secondaryMonacoCtrlClickDisposable = installMonacoCtrlClickOpen(secondaryEditor, { tag: 'right' });
 
+  if (secondaryMonacoLinkLikeDecorDisposable) {
+    secondaryMonacoLinkLikeDecorDisposable.dispose();
+    secondaryMonacoLinkLikeDecorDisposable = null;
+  }
+  secondaryMonacoLinkLikeDecorDisposable = installMonacoLinkLikeDecorations(secondaryEditor, { tag: 'right' });
+
   const model = secondaryEditor.getModel();
   if (model) {
     model.onDidChangeContent(
@@ -3229,6 +3688,11 @@ const disposeSecondaryEditor = () => {
   if (secondaryMonacoCtrlClickDisposable) {
     secondaryMonacoCtrlClickDisposable.dispose();
     secondaryMonacoCtrlClickDisposable = null;
+  }
+
+  if (secondaryMonacoLinkLikeDecorDisposable) {
+    secondaryMonacoLinkLikeDecorDisposable.dispose();
+    secondaryMonacoLinkLikeDecorDisposable = null;
   }
 
   if (secondaryEditor) {
@@ -3529,6 +3993,12 @@ const setupEditorListeners = () => {
     monacoCtrlClickDisposable = null;
   }
   monacoCtrlClickDisposable = installMonacoCtrlClickOpen(editor, { tag: 'left' });
+
+  if (monacoLinkLikeDecorDisposable) {
+    monacoLinkLikeDecorDisposable.dispose();
+    monacoLinkLikeDecorDisposable = null;
+  }
+  monacoLinkLikeDecorDisposable = installMonacoLinkLikeDecorations(editor, { tag: 'left' });
 
   editor.onDidChangeCursorPosition((e) => {
     editorStore.setCursorPosition(e.position);
@@ -3876,9 +4346,11 @@ function analyzeMarkdown(content, model) {
       fenceLines.push(index + 1);
     }
 
-    const openBracket = (line.match(/\[/g) || []).length;
-    const linkStart = (line.match(/\]\(/g) || []).length;
-    const closeParen = (line.match(/\)/g) || []).length;
+    const lintLine = line.replace(/\[\[[\s\S]*?\]\]/g, '');
+
+    const openBracket = (lintLine.match(/\[/g) || []).length;
+    const linkStart = (lintLine.match(/\]\s*\(/g) || []).length;
+    const closeParen = (lintLine.match(/\)/g) || []).length;
     if (openBracket && (linkStart === 0 || closeParen < linkStart)) {
       pushMarker(index + 1, '可能存在不完整的链接语法', 'warning');
     }
@@ -5436,24 +5908,8 @@ const handlePreviewClick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
 
-        try {
-          const u = new URL(href);
-          const file = u.searchParams.get('file') || '';
-          const anchor = u.searchParams.get('anchor') || '';
-          const rawFile = stripLinkBoundaryPunct(file);
-          const rawAnchor = stripLinkBoundaryPunct(anchor);
-
-          if (rawFile) {
-            const abs = await resolveFsLinkToAbsolute(ensureMarkdownExt(rawFile));
-            await openMarkdownInEditor(abs, rawAnchor);
-          } else {
-            const cur = selectedFile.value?.path || '';
-            if (cur) await openMarkdownInEditor(cur, rawAnchor);
-          }
-        } catch (err) {
-          logger.warn('[LinkOpen] parse wikilink failed', { href }, err);
-        }
-
+        const baseDocPath = selectedFile.value?.path || fileTreeStore.activeTab || '';
+        await openWikilinkFromHref(href, { baseDocPath, source: 'preview' });
         return;
       }
 
@@ -6577,6 +7033,14 @@ onUnmounted(() => {
     secondaryMonacoCtrlClickDisposable.dispose();
     secondaryMonacoCtrlClickDisposable = null;
   }
+  if (monacoLinkLikeDecorDisposable) {
+    monacoLinkLikeDecorDisposable.dispose();
+    monacoLinkLikeDecorDisposable = null;
+  }
+  if (secondaryMonacoLinkLikeDecorDisposable) {
+    secondaryMonacoLinkLikeDecorDisposable.dispose();
+    secondaryMonacoLinkLikeDecorDisposable = null;
+  }
 
   if (autoSaveTimerId) {
     window.clearInterval(autoSaveTimerId)
@@ -7081,6 +7545,37 @@ onUnmounted(() => {
 
 .preview :deep(a:hover) {
   opacity: 0.92;
+}
+
+:deep(.monaco-editor .guaxi-link-like),
+:deep(.monaco-editor .guaxi-mdlink-target) {
+  color: var(--guaxi-text-link, var(--primary-color, #4acadb)) !important;
+  text-decoration: underline !important;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+:deep(.monaco-editor .guaxi-mdlink-text),
+:deep(.monaco-editor .guaxi-wikilink-text) {
+  color: var(--guaxi-mdlink-text-color, #c99016) !important;
+  text-decoration: none !important;
+}
+
+:deep(.monaco-editor .guaxi-mdlink-bracket),
+:deep(.monaco-editor .guaxi-mdlink-paren),
+:deep(.monaco-editor .guaxi-wikilink-bracket) {
+  color: #f35f4c !important;
+  text-decoration: none !important;
+}
+
+:root[data-guaxi-theme='dark'] :deep(.monaco-editor .guaxi-link-like),
+:root[data-guaxi-theme='dark'] :deep(.monaco-editor .guaxi-mdlink-target) {
+  color: var(--guaxi-text-link-dark, #4acadb) !important;
+}
+
+:root[data-guaxi-theme='dark'] :deep(.monaco-editor .guaxi-mdlink-text),
+:root[data-guaxi-theme='dark'] :deep(.monaco-editor .guaxi-wikilink-text) {
+  color: var(--guaxi-mdlink-text-color-dark, #c678dd) !important;
 }
 
 .preview code {
