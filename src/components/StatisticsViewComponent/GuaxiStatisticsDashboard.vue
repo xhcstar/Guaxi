@@ -37,6 +37,7 @@
                       style="min-width: 240px"
                     />
                     <n-select size="small" v-model:value="volumeMetric" :options="volumeMetricOptions" style="width: 140px" />
+                    <n-select size="small" v-model:value="trendUnit" :options="trendUnitOptions" style="width: 110px" />
                   </div>
                 </div>
 
@@ -44,7 +45,14 @@
 
                 <div v-else class="trend-body">
                   <div class="kb-legend">
-                    <span v-for="s in volumeSeries" :key="s.name" class="kb-legend-item">
+                    <span
+                      v-for="s in volumeSeries"
+                      :key="s.name"
+                      class="kb-legend-item"
+                      :class="{ active: activeKbName === s.name, dim: !!activeKbName && activeKbName !== s.name }"
+                      :title="s.name"
+                      @click="toggleActiveKb(s.name)"
+                    >
                       <span class="kb-dot" :style="{ background: s.color }"></span>
                       <span class="kb-name">{{ s.name }}</span>
                       <span class="kb-val">{{ s.lastValue }}</span>
@@ -53,19 +61,25 @@
 
                   <svg class="trend-chart" :viewBox="`0 0 ${trendW} ${trendH}`" preserveAspectRatio="xMidYMid meet">
                     <g v-for="s in volumeSeries" :key="`line-${s.name}`">
-                      <path :d="s.linePath" fill="none" :stroke="s.color" stroke-width="2" />
+                      <path
+                        :d="s.linePath"
+                        fill="none"
+                        :stroke="s.color"
+                        :stroke-width="isKbSeriesActive(s.name) ? 2.5 : 1.5"
+                        :opacity="isKbSeriesActive(s.name) ? 1 : 0.15"
+                      />
                     </g>
 
-                    <g v-for="(l, i) in trendLabels" :key="`v-${l}`">
+                    <g v-for="t in trendTicks" :key="`v-${t.i}-${t.label}`">
                       <text
-                        :x="trendX(i)"
+                        :x="trendX(t.i, trendPointCount)"
                         :y="trendH - 6"
                         text-anchor="middle"
                         class="axis-text"
                         :style="`fill: ${axisLabelFill} !important`"
                         font-size="11"
                       >
-                        {{ l }}
+                        {{ t.label }}
                       </text>
                     </g>
                   </svg>
@@ -112,8 +126,14 @@
                 <div v-if="readerDocRows.length === 0" class="empty">暂无阅读器记录（localStorage：guaxi_reader_state_v1:*）</div>
 
                 <div v-else class="read-list">
-                  <div v-for="r in readerDocRows" :key="r.key" class="read-row">
-                    <div class="read-name" :title="r.title">{{ r.title }}</div>
+                  <div
+                    v-for="r in readerDocRows"
+                    :key="r.key"
+                    class="read-row"
+                    :class="{ active: activeReaderKey === r.key, dim: !!activeReaderKey && activeReaderKey !== r.key }"
+                    @click="toggleActiveReader(r.key)"
+                  >
+                    <div class="read-name" :title="r.titleFull">{{ r.title }}</div>
                     <div class="read-progress">
                       <div class="read-progress-bar" :style="{ width: `${r.progress}%` }"></div>
                       <div class="read-progress-text">{{ r.progress }}%</div>
@@ -139,29 +159,44 @@
 
                 <div v-if="repoTagBars.length === 0" class="empty">暂无资料库数据</div>
 
-                <svg v-else class="chart" :viewBox="`0 0 ${barChartWidth} ${repoTagChartHeight}`" preserveAspectRatio="none">
-                  <defs>
-                    <linearGradient id="repoTagGrad" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stop-color="rgba(168, 85, 247, 0.85)" />
-                      <stop offset="100%" stop-color="rgba(59, 130, 246, 0.85)" />
-                    </linearGradient>
-                  </defs>
-
-                  <g v-for="(b, idx) in repoTagBars" :key="b.label">
-                    <title>{{ b.label }}：{{ b.value }}</title>
-                    <rect
-                      :x="0"
-                      :y="idx * (barRowHeight + barRowGap)"
-                      :width="b.w"
-                      :height="barRowHeight"
-                      rx="8"
-                      fill="url(#repoTagGrad)"
-                    />
-                    <text x="8" :y="idx * (barRowHeight + barRowGap) + 14" fill="rgba(255,255,255,0.92)" font-size="12">
-                      {{ b.label }} · {{ b.value }}
-                    </text>
-                  </g>
-                </svg>
+                <div v-else class="tag-chart-wrap">
+                  <svg
+                    class="chart"
+                    :viewBox="`0 0 ${barChartWidth} ${repoTagChartHeight}`"
+                    preserveAspectRatio="xMinYMin meet"
+                  >
+                    <g
+                      v-for="(b, idx) in repoTagBars"
+                      :key="b.label"
+                      style="cursor: pointer"
+                      @click="toggleRepoTag(b.label)"
+                    >
+                      <title>{{ b.label }}：{{ b.value }}</title>
+                      <rect
+                        :x="0"
+                        :y="idx * (barRowHeight + barRowGap)"
+                        :width="b.w"
+                        :height="barRowHeight"
+                        rx="8"
+                        :fill="b.color"
+                        :opacity="selectedRepoTag && selectedRepoTag !== b.label ? 0.25 : 1"
+                        :stroke="selectedRepoTag === b.label ? axisLabelFill : 'transparent'"
+                        :stroke-width="selectedRepoTag === b.label ? 2 : 0"
+                      />
+                      <text
+                        x="10"
+                        :y="idx * (barRowHeight + barRowGap) + barRowHeight / 2"
+                        :fill="b.textFill"
+                        font-size="12"
+                        font-weight="700"
+                        dominant-baseline="middle"
+                        :opacity="selectedRepoTag && selectedRepoTag !== b.label ? 0.35 : 1"
+                      >
+                        {{ b.label }} · {{ b.value }}
+                      </text>
+                    </g>
+                  </svg>
+                </div>
 
                 <div class="stat-sub" style="margin-top: 10px">
                   说明：每个文件可含多个标签；未打标签的文件计入“未标注”。
@@ -219,6 +254,24 @@ const volumeMetricOptions = [
   { label: "分类（目录数）", value: "dir" },
 ];
 
+const trendUnit = ref("auto");
+const trendUnitOptions = [
+  { label: "自动", value: "auto" },
+  { label: "天", value: "day" },
+  { label: "月", value: "month" },
+  { label: "年", value: "year" },
+];
+
+const effectiveTrendUnit = computed(() => {
+  const v = String(trendUnit.value || "auto");
+  if (v !== "auto") return v;
+
+  if (timeRange.value === "week" || timeRange.value === "month") return "day";
+  if (timeRange.value === "year") return "month";
+  if (/^\d+y$/.test(String(timeRange.value || ""))) return "year";
+  return "day";
+});
+
 const repoImportedFiles = ref([]);
 const repoNames = ref([]);
 const repoFilter = ref("__all__");
@@ -226,6 +279,33 @@ const repoFilter = ref("__all__");
 const gitCommits = ref([]);
 
 const readerDocs = ref([]);
+
+const activeKbName = ref("");
+const selectedRepoTag = ref("");
+const activeReaderKey = ref("");
+
+function toggleActiveKb(name) {
+  const nm = String(name || "");
+  if (!nm) return;
+  activeKbName.value = activeKbName.value === nm ? "" : nm;
+}
+
+function isKbSeriesActive(name) {
+  const nm = String(name || "");
+  return !activeKbName.value || activeKbName.value === nm;
+}
+
+function toggleRepoTag(tag) {
+  const t = String(tag || "");
+  if (!t) return;
+  selectedRepoTag.value = selectedRepoTag.value === t ? "" : t;
+}
+
+function toggleActiveReader(key) {
+  const k = String(key || "");
+  if (!k) return;
+  activeReaderKey.value = activeReaderKey.value === k ? "" : k;
+}
 
 const trendRootEl = ref(null);
 const trendW = ref(760);
@@ -265,6 +345,21 @@ const repoOptions = computed(() => {
   return base.concat(list.map((r) => ({ label: String(r), value: String(r) })));
 });
 
+const importedFilesById = computed(() => {
+  const map = new Map();
+  const list = Array.isArray(repoImportedFiles.value) ? repoImportedFiles.value : [];
+  for (const f of list) {
+    const id = f?.id ?? f?.import_file_id ?? f?.importFileId;
+    if (id == null) continue;
+    const key = String(id);
+    if (!key) continue;
+    map.set(key, f);
+  }
+  return map;
+});
+
+const warnedUnresolvedReaderIds = new Set();
+
 function formatDuration(ms) {
   const v = Number(ms);
   if (!Number.isFinite(v) || v <= 0) return "0s";
@@ -287,19 +382,32 @@ function parseReaderKey(k) {
   const fileType = parts[2] || "";
   const safeId = parts.slice(3).join(":");
 
+  let kind = "other";
+  let id = "";
   let display = safeId;
+
   if (safeId.startsWith("path:")) {
+    kind = "path";
     const p = safeId.slice("path:".length).replace(/\\/g, "/");
     const name = p.split("/").filter(Boolean).pop() || p;
     display = name;
+  } else if (safeId.startsWith("id:")) {
+    kind = "id";
+    id = safeId.slice("id:".length);
+    display = "导入文件";
+  } else {
+    const p = safeId.replace(/\\/g, "/");
+    const name = p.split("/").filter(Boolean).pop();
+    if (name) display = name;
   }
 
-  return { library, fileType, safeId, display };
+  return { library, fileType, safeId, kind, id, display };
 }
 
 function scanReaderState() {
   try {
     const out = [];
+    const imported = importedFilesById.value;
 
     for (let i = 0; i < localStorage.length; i += 1) {
       const k = localStorage.key(i);
@@ -322,9 +430,27 @@ function scanReaderState() {
             ? 100
             : 0;
 
+        let title = parsedKey.display;
+        if (parsedKey.kind === "id" && parsedKey.id) {
+          const f = imported.get(String(parsedKey.id));
+          const nm = String(f?.import_file_name || f?.importFileName || "").trim();
+          if (nm) title = nm;
+          else if (!warnedUnresolvedReaderIds.has(parsedKey.id)) {
+            warnedUnresolvedReaderIds.add(parsedKey.id);
+            logger.warn("[statistics] resolve import file name failed", {
+              importFileId: parsedKey.id,
+              library: parsedKey.library,
+              fileType: parsedKey.fileType,
+            });
+          }
+        }
+
+        const titleFull = `${title}（${parsedKey.library}/${parsedKey.fileType}）`;
+
         out.push({
           key: k,
-          title: `${parsedKey.display}（${parsedKey.library}/${parsedKey.fileType}）`,
+          title,
+          titleFull,
           progress,
           totalReadingMs,
           completedAt,
@@ -357,9 +483,10 @@ const readerTotalTimeText = computed(() => {
 
 const readerDocRows = computed(() => {
   const list = Array.isArray(readerDocs.value) ? readerDocs.value : [];
-  return list.slice(0, 40).map((x) => ({
+  return list.slice(0, 200).map((x) => ({
     key: x.key,
     title: x.title,
+    titleFull: x.titleFull || x.title,
     progress: Number(x.progress) || 0,
     timeFull: `${Number(x.totalReadingMs) || 0}ms`,
     timeText: formatDuration(x.totalReadingMs),
@@ -435,14 +562,24 @@ const rangeLabel = computed(() => {
   return `${toLocalDayKey(start)} ~ ${toLocalDayKey(end)}`;
 });
 
+function toSnapshotTsMs(ts) {
+  const d = parseDateSafe(ts);
+  return d ? d.getTime() : NaN;
+}
+
 const snapshotsInRange = computed(() => {
   const list = Array.isArray(kbVolumeSnapshots.value) ? kbVolumeSnapshots.value : [];
   const { start, end } = range.value;
   const s = start.getTime();
   const e = end.getTime();
+
   return list
-    .filter((x) => Number(x?.ts) >= s && Number(x?.ts) <= e)
-    .sort((a, b) => (Number(a?.ts) || 0) - (Number(b?.ts) || 0));
+    .map((x) => ({
+      ...x,
+      tsMs: toSnapshotTsMs(x?.ts),
+    }))
+    .filter((x) => Number.isFinite(x?.tsMs) && x.tsMs >= s && x.tsMs <= e)
+    .sort((a, b) => (Number(a?.tsMs) || 0) - (Number(b?.tsMs) || 0));
 });
 
 function pickColor(name) {
@@ -452,48 +589,108 @@ function pickColor(name) {
   return palette[h % palette.length];
 }
 
-function labelForTs(ts) {
-  const d = new Date(Number(ts) || 0);
-  const diffDays = Math.max(1, Math.round((range.value.end.getTime() - range.value.start.getTime()) / (24 * 3600 * 1000)));
-  if (diffDays <= 35) return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  if (diffDays <= 370) return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  if (diffDays <= 365 * 3) return `${String(d.getFullYear()).slice(2)}-${pad2(d.getMonth() + 1)}`;
+function toLocalMonthKey(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+function toLocalYearKey(d) {
   return `${d.getFullYear()}`;
 }
 
-const trendLabels = computed(() => {
-  const snaps = snapshotsInRange.value;
-  if (snaps.length === 0) return [];
-  const n = snaps.length;
-  if (n <= 6) return snaps.map((x) => labelForTs(x.ts));
-  const idxs = [0, 1, 2, 3, 4, 5].map((i) => Math.round((i / 5) * (n - 1)));
-  return idxs.map((i) => labelForTs(snaps[i]?.ts));
+const trendPlot = computed(() => {
+  const plotTop = 12;
+  const plotBottom = trendH - 26;
+  const plotLeft = 18;
+  const plotRight = trendW.value - 18;
+  return {
+    plotTop,
+    plotBottom,
+    plotLeft,
+    plotRight,
+    plotW: Math.max(1, plotRight - plotLeft),
+    plotH: Math.max(1, plotBottom - plotTop),
+  };
 });
 
-function trendX(i) {
-  const n = Math.max(trendLabels.value.length, 1);
-  const padL = 18;
-  const padR = 18;
-  if (n <= 1) return padL;
-  return padL + (i / (n - 1)) * (trendW.value - padL - padR);
+const trendPoints = computed(() => {
+  const snaps = snapshotsInRange.value;
+  if (snaps.length === 0) return [];
+
+  const unit = effectiveTrendUnit.value;
+  const buckets = new Map();
+
+  for (const s of snaps) {
+    const t = Number(s?.tsMs);
+    if (!Number.isFinite(t) || t <= 0) continue;
+    const d = new Date(t);
+
+    let k = "";
+    if (unit === "year") k = toLocalYearKey(d);
+    else if (unit === "month") k = toLocalMonthKey(d);
+    else k = toLocalDayKey(d);
+
+    const prev = buckets.get(k);
+    if (!prev || Number(prev?.tsMs) < t) buckets.set(k, { ...s, bucketKey: k, tsMs: t });
+  }
+
+  return Array.from(buckets.values()).sort((a, b) => (Number(a?.tsMs) || 0) - (Number(b?.tsMs) || 0));
+});
+
+const trendPointCount = computed(() => trendPoints.value.length);
+
+function formatTickLabel(tsMs, unit) {
+  const t = Number(tsMs);
+  if (!Number.isFinite(t) || t <= 0) return "";
+  const d = new Date(t);
+  if (unit === "year") return `${d.getFullYear()}`;
+  if (unit === "month") return `${String(d.getFullYear()).slice(2)}-${pad2(d.getMonth() + 1)}`;
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+const trendTicks = computed(() => {
+  const pts = trendPoints.value;
+  const n = pts.length;
+  if (n === 0) return [];
+
+  const unit = effectiveTrendUnit.value;
+  const maxTicks = Math.min(8, n);
+  const idxs =
+    maxTicks === n
+      ? Array.from({ length: n }, (_, i) => i)
+      : Array.from({ length: maxTicks }, (_, k) => Math.round((k / (maxTicks - 1)) * (n - 1)));
+
+  const uniq = [];
+  for (const i of idxs) {
+    if (uniq.length === 0 || uniq[uniq.length - 1] !== i) uniq.push(i);
+  }
+
+  return uniq.map((i) => ({
+    i,
+    label: formatTickLabel(pts[i]?.tsMs, unit),
+  }));
+});
+
+function trendX(pointIndex, totalPoints) {
+  const p = trendPlot.value;
+  const n = Math.max(1, Number(totalPoints) || 0);
+  if (n <= 1) return p.plotLeft;
+  return p.plotLeft + (Number(pointIndex) / (n - 1)) * p.plotW;
 }
 
 const volumeSeries = computed(() => {
-  const snaps = snapshotsInRange.value;
+  const snaps = trendPoints.value;
   if (snaps.length === 0) return [];
 
   const selected = Array.isArray(selectedKbNames.value) ? selectedKbNames.value.map((x) => String(x)).filter(Boolean) : [];
   const lastItems = snaps[snaps.length - 1]?.items || {};
   const allNames = Object.keys(lastItems);
-  const names = (selected.length > 0 ? selected : allNames).slice(0, 8);
+  const names =
+    selected.length > 0
+      ? selected
+      : allNames.slice().sort((a, b) => String(a).localeCompare(String(b), "zh"));
 
   const metric = volumeMetric.value === "dir" ? "dir" : "file";
-  const plotTop = 12;
-  const plotBottom = trendH - 26;
-  const plotLeft = 18;
-  const plotRight = trendW.value - 18;
-  const plotW = Math.max(1, plotRight - plotLeft);
-  const plotH = Math.max(1, plotBottom - plotTop);
+  const p = trendPlot.value;
 
   let maxV = 1;
   for (const nm of names) {
@@ -510,12 +707,12 @@ const volumeSeries = computed(() => {
     const pts = [];
     for (let i = 0; i < n; i += 1) {
       const v = Number(snaps[i]?.items?.[nm]?.[metric]) || 0;
-      const x = plotLeft + (n <= 1 ? 0 : (i / (n - 1)) * plotW);
-      const y = plotBottom - (v / maxV) * plotH;
+      const x = p.plotLeft + (n <= 1 ? 0 : (i / (n - 1)) * p.plotW);
+      const y = p.plotBottom - (v / maxV) * p.plotH;
       pts.push([x, y]);
     }
 
-    const linePath = pts.map((p, idx) => `${idx === 0 ? "M" : "L"}${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(" ");
+    const linePath = pts.map((p2, idx) => `${idx === 0 ? "M" : "L"}${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`).join(" ");
     const lastValue = Number(snaps[n - 1]?.items?.[nm]?.[metric]) || 0;
     series.push({ name: nm, color, lastValue, linePath });
   }
@@ -534,12 +731,37 @@ function topN(map, n = 8) {
     .map(([label, value]) => ({ label, value }));
 }
 
+function colorForTag(label) {
+  const palette = ["#3b82f6", "#22c55e", "#a855f7", "#f97316", "#06b6d4", "#f43f5e", "#84cc16", "#eab308", "#14b8a6", "#6366f1", "#ec4899", "#f59e0b"]; 
+  const s = String(label || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+
+function textColorForBgHex(hex) {
+  const s = String(hex || "").trim();
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(s);
+  if (!m) return "rgba(255,255,255,0.92)";
+  const v = m[1];
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 150 ? "rgba(0,0,0,0.78)" : "rgba(255,255,255,0.92)";
+}
+
 function toBarRows(items) {
   const max = Math.max(...items.map((x) => x.value), 1);
-  return items.map((x) => ({
-    ...x,
-    w: Math.round((x.value / max) * barChartWidth),
-  }));
+  return items.map((x) => {
+    const color = colorForTag(x.label);
+    return {
+      ...x,
+      w: Math.round((x.value / max) * barChartWidth),
+      color,
+      textFill: textColorForBgHex(color),
+    };
+  });
 }
 
 const repoTagMap = computed(() => {
@@ -558,7 +780,7 @@ const repoTagMap = computed(() => {
   return out;
 });
 
-const repoTagBars = computed(() => toBarRows(topN(repoTagMap.value, 12)));
+const repoTagBars = computed(() => toBarRows(topN(repoTagMap.value, 30)));
 const repoTagChartHeight = computed(() => {
   const rows = Math.max(repoTagBars.value.length, 1);
   return rows * (barRowHeight + barRowGap) - barRowGap;
@@ -604,11 +826,11 @@ function writeVolumeSnapshotsToLocal(list) {
 
 function recordVolumeSnapshotIfNeeded() {
   const list = Array.isArray(kbVolumeSnapshots.value) ? kbVolumeSnapshots.value.slice() : [];
-  const lastTs = Number(list[list.length - 1]?.ts) || 0;
+  const lastTs = toSnapshotTsMs(list[list.length - 1]?.ts);
   const now = Date.now();
   const intervalMs = getVolumeSnapshotIntervalMs();
 
-  if (lastTs && now - lastTs < intervalMs) return;
+  if (Number.isFinite(lastTs) && lastTs > 0 && now - lastTs < intervalMs) return;
 
   const summaries = Array.isArray(kbSummaries.value) ? kbSummaries.value : [];
   if (summaries.length === 0) return;
@@ -653,10 +875,10 @@ function scheduleNextVolumeSnapshot() {
 
   const intervalMs = getVolumeSnapshotIntervalMs();
   const list = Array.isArray(kbVolumeSnapshots.value) ? kbVolumeSnapshots.value : [];
-  const lastTs = Number(list[list.length - 1]?.ts) || 0;
+  const lastTs = toSnapshotTsMs(list[list.length - 1]?.ts);
   const now = Date.now();
 
-  const dueAt = lastTs ? lastTs + intervalMs : now;
+  const dueAt = Number.isFinite(lastTs) && lastTs > 0 ? lastTs + intervalMs : now;
   const delay = Math.max(1000, dueAt - now);
 
   logger.info("[statistics] scheduleNextVolumeSnapshot", {
@@ -946,7 +1168,13 @@ onBeforeUnmount(() => {
 
 .chart {
   width: 100%;
-  height: 220px;
+  height: auto;
+  display: block;
+}
+
+.tag-chart-wrap {
+  max-height: 320px;
+  overflow: auto;
 }
 
 .trend-head {
@@ -987,6 +1215,9 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+  max-height: 84px;
+  overflow: auto;
+  padding-right: 6px;
 }
 
 .kb-legend-item {
@@ -994,6 +1225,19 @@ onBeforeUnmount(() => {
   gap: 6px;
   align-items: center;
   font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.kb-legend-item.active {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.kb-legend-item.dim {
+  opacity: 0.55;
 }
 
 .kb-dot {
@@ -1028,6 +1272,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 6px;
 }
 
 .read-row {
@@ -1035,6 +1282,18 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(120px, 1fr) 220px 80px;
   gap: 10px;
   align-items: center;
+  padding: 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.read-row.active {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.read-row.dim {
+  opacity: 0.6;
 }
 
 .read-name {
