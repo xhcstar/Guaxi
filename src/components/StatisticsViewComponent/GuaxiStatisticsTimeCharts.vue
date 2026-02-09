@@ -263,7 +263,9 @@ function buildPaths(arr) {
 
   let d = "";
   for (let i = 0; i < arr.length; i += 1) {
-    d += `${i === 0 ? "M" : "L"} ${x(i).toFixed(2)} ${y(arr[i], maxY).toFixed(2)} `;
+    const sx = Math.round(x(i) * 2) / 2;
+    const sy = Math.round(y(arr[i], maxY) * 2) / 2;
+    d += `${i === 0 ? "M" : "L"} ${sx.toFixed(2)} ${sy.toFixed(2)} `;
   }
   const linePath = d.trim();
 

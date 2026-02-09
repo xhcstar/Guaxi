@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use urlencoding::encode;
+use tracing::warn;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct KbStats {
@@ -155,10 +156,24 @@ fn collect_stats(dir: &Path) -> Result<KbStats, String> {
     let mut file_count: u64 = 0;
     let mut dir_count: u64 = 0;
 
-    fn walk(p: &Path, file_count: &mut u64, dir_count: &mut u64) -> Result<(), String> {
-        let entries = fs::read_dir(p).map_err(|e| e.to_string())?;
+    fn walk(p: &Path, file_count: &mut u64, dir_count: &mut u64) {
+        let entries = match fs::read_dir(p) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("kbmeta collect_stats read_dir failed: {}", e);
+                return;
+            }
+        };
+
         for ent in entries {
-            let ent = ent.map_err(|e| e.to_string())?;
+            let ent = match ent {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("kbmeta collect_stats read_dir entry failed: {}", e);
+                    continue;
+                }
+            };
+
             let path = ent.path();
             let name = path
                 .file_name()
@@ -173,18 +188,24 @@ fn collect_stats(dir: &Path) -> Result<KbStats, String> {
                 continue;
             }
 
-            let md = ent.metadata().map_err(|e| e.to_string())?;
+            let md = match ent.metadata() {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("kbmeta collect_stats metadata failed: {}", e);
+                    continue;
+                }
+            };
+
             if md.is_dir() {
                 *dir_count += 1;
-                walk(&path, file_count, dir_count)?;
+                walk(&path, file_count, dir_count);
             } else {
                 *file_count += 1;
             }
         }
-        Ok(())
     }
 
-    walk(dir, &mut file_count, &mut dir_count)?;
+    walk(dir, &mut file_count, &mut dir_count);
     Ok(KbStats { file_count, dir_count })
 }
 

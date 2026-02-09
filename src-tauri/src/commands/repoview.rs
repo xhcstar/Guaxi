@@ -5,6 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 use tracing::{error, info};
 use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Emitter};
+use serde_json::json;
 use hex;
 use uuid::Uuid;
 use chrono::Local;
@@ -471,7 +473,7 @@ pub fn get_imported_files(knowledge_repo: Option<String>) -> Result<Vec<Imported
 }
 
 #[tauri::command]
-pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
+pub fn add_imported_file(app: AppHandle, file: ImportedFileInput) -> Result<i32, String> {
     let mut conn = init_db().map_err(|e: rusqlite::Error| e.to_string())?;
     let tx = conn.transaction().map_err(|e: rusqlite::Error| e.to_string())?;
 
@@ -490,18 +492,18 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
         create_time, original_filesize, knowledge_repo, hash) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
-            uuid,
-            file.import_file_name,
-            file.description,
-            file.library,
-            file.file_type,
-            file.import_file_create_time,
-            file.import_file_size,
-            file.knowledge_repo,
-            hash,
+            &uuid,
+            &file.import_file_name,
+            &file.description,
+            &file.library,
+            &file.file_type,
+            &file.import_file_create_time,
+            &file.import_file_size,
+            &file.knowledge_repo,
+            &hash,
         ],
     ).map_err(|e: rusqlite::Error| e.to_string())?;
-    
+
     let file_id = tx.last_insert_rowid() as i32;
 
     // 处理标签
@@ -570,6 +572,21 @@ pub fn add_imported_file(file: ImportedFileInput) -> Result<i32, String> {
     // }
 
     tx.commit().map_err(|e: rusqlite::Error| e.to_string())?;
+
+    if let Err(e) = app.emit(
+        "repo_imported_files_changed",
+        json!({
+            "action": "add",
+            "id": file_id,
+            "knowledge_repo": file.knowledge_repo,
+            "library": file.library,
+        }),
+    ) {
+        error!("Failed to emit repo_imported_files_changed: {}", e);
+    } else {
+        info!("Emitted repo_imported_files_changed: add id={}", file_id);
+    }
+
     Ok(file_id)
 }
 

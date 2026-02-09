@@ -9,21 +9,21 @@
 
         <div class="header-actions">
           <n-select size="small" v-model:value="timeRange" :options="timeRangeOptions" style="width: 140px" />
-          <n-button size="small" :loading="loading" @click="reloadAll">刷新</n-button>
+          <n-button size="small" :loading="loading" @click="onManualRefresh">刷新</n-button>
         </div>
       </div>
     </div>
 
     <div class="main-content">
       <n-scrollbar style="height: 100%">
-        <div class="page">
+        <div class="page" :class="{ 'theme-dark': isDark }">
           <n-alert v-if="loadError" type="error" :show-icon="true" style="margin-bottom: 12px">
             {{ loadError }}
           </n-alert>
 
           <n-grid :x-gap="12" :y-gap="12" :cols="12">
             <n-grid-item :span="12">
-              <n-card ref="trendRootEl" size="small" title="知识量趋势（按知识库）" class="panel-card">
+              <n-card ref="trendRootEl" size="small" title="知识量趋势" class="panel-card">
                 <div class="trend-head">
                   <div class="trend-sub">{{ rangeLabel }}</div>
                   <div class="trend-actions">
@@ -59,7 +59,13 @@
                     </span>
                   </div>
 
-                  <svg class="trend-chart" :viewBox="`0 0 ${trendW} ${trendH}`" preserveAspectRatio="xMidYMid meet">
+                  <svg
+                    class="trend-chart"
+                    :viewBox="`0 0 ${trendW} ${trendH}`"
+                    preserveAspectRatio="xMidYMid meet"
+                    @mousemove="onTrendMouseMove"
+                    @mouseleave="onTrendMouseLeave"
+                  >
                     <g v-for="s in volumeSeries" :key="`line-${s.name}`">
                       <path
                         :d="s.linePath"
@@ -68,6 +74,45 @@
                         :stroke-width="isKbSeriesActive(s.name) ? 2.5 : 1.5"
                         :opacity="isKbSeriesActive(s.name) ? 1 : 0.15"
                       />
+                    </g>
+
+                    <g v-if="trendHoverIndex >= 0">
+                      <line
+                        :x1="trendHoverX"
+                        :x2="trendHoverX"
+                        :y1="trendPlot.plotTop"
+                        :y2="trendPlot.plotBottom"
+                        stroke="rgba(148, 163, 184, 0.85)"
+                        stroke-width="1"
+                      />
+
+                      <g v-for="s in volumeSeries" :key="`hp-${s.name}`">
+                        <circle
+                          v-if="isKbSeriesActive(s.name) && s.points && s.points[trendHoverIndex]"
+                          :cx="s.points[trendHoverIndex].x"
+                          :cy="s.points[trendHoverIndex].y"
+                          r="3.5"
+                          :fill="s.color"
+                          stroke="rgba(255, 255, 255, 0.95)"
+                          stroke-width="1"
+                        />
+                      </g>
+
+                      <foreignObject
+                        :x="trendTooltipX"
+                        :y="trendPlot.plotTop"
+                        :width="TREND_TOOLTIP_W"
+                        :height="trendTooltipH"
+                      >
+                        <div xmlns="http://www.w3.org/1999/xhtml" class="trend-tooltip">
+                          <div class="tt-title">{{ trendHoverTitle }}</div>
+                          <div v-for="r in trendHoverRows" :key="`tt-${r.name}`" class="tt-row">
+                            <span class="tt-dot" :style="{ background: r.color }"></span>
+                            <span class="tt-name">{{ r.name }}</span>
+                            <span class="tt-val">{{ r.value }}</span>
+                          </div>
+                        </div>
+                      </foreignObject>
                     </g>
 
                     <g v-for="t in trendTicks" :key="`v-${t.i}-${t.label}`">
@@ -92,7 +137,7 @@
             </n-grid-item>
 
             <n-grid-item :span="12">
-              <n-card size="small" title="活跃热力图（近一年）" class="panel-card">
+              <n-card size="small" title="活跃热力图" class="panel-card">
                 <div class="heatmap-head">
                   <div class="heatmap-sub">说明：统计 KnowledgeBases 所在 Git 仓库的每日 commit 数（近一年）。</div>
                   <div class="heatmap-meta">
@@ -111,7 +156,7 @@
             </n-grid-item>
 
             <n-grid-item :span="12">
-              <n-card size="small" title="阅读进度与耗时（阅读器本地记录）" class="panel-card">
+              <n-card size="small" title="阅读进度" class="panel-card">
                 <div class="read-head">
                   <div class="read-meta">
                     <span class="muted">文档：{{ readerDocsTotal }}</span>
@@ -125,11 +170,12 @@
 
                 <div v-if="readerDocRows.length === 0" class="empty">暂无阅读器记录（localStorage：guaxi_reader_state_v1:*）</div>
 
-                <div v-else class="read-list">
+                <div v-else ref="readListEl" class="read-list">
                   <div
                     v-for="r in readerDocRows"
                     :key="r.key"
                     class="read-row"
+                    :data-read-key="r.key"
                     :class="{ active: activeReaderKey === r.key, dim: !!activeReaderKey && activeReaderKey !== r.key }"
                     @click="toggleActiveReader(r.key)"
                   >
@@ -149,7 +195,7 @@
             </n-grid-item>
 
             <n-grid-item :span="12">
-              <n-card size="small" title="资料库文档分类（按标签）" class="panel-card">
+              <n-card size="small" title="资料库文档" class="panel-card">
                 <div class="trend-head">
                   <div class="trend-sub">按导入文件 tags 统计（可切换知识库）</div>
                   <div class="trend-actions">
@@ -157,43 +203,55 @@
                   </div>
                 </div>
 
-                <div v-if="repoTagBars.length === 0" class="empty">暂无资料库数据</div>
+                <div v-if="repoTagPieSlices.length === 0" class="empty">暂无资料库数据</div>
 
-                <div v-else class="tag-chart-wrap">
-                  <svg
-                    class="chart"
-                    :viewBox="`0 0 ${barChartWidth} ${repoTagChartHeight}`"
-                    preserveAspectRatio="xMinYMin meet"
-                  >
-                    <g
-                      v-for="(b, idx) in repoTagBars"
-                      :key="b.label"
-                      style="cursor: pointer"
-                      @click="toggleRepoTag(b.label)"
-                    >
-                      <title>{{ b.label }}：{{ b.value }}</title>
-                      <rect
-                        :x="0"
-                        :y="idx * (barRowHeight + barRowGap)"
-                        :width="b.w"
-                        :height="barRowHeight"
-                        rx="8"
-                        :fill="b.color"
-                        :opacity="selectedRepoTag && selectedRepoTag !== b.label ? 0.25 : 1"
-                        :stroke="selectedRepoTag === b.label ? axisLabelFill : 'transparent'"
-                        :stroke-width="selectedRepoTag === b.label ? 2 : 0"
-                      />
-                      <text
-                        x="10"
-                        :y="idx * (barRowHeight + barRowGap) + barRowHeight / 2"
-                        :fill="b.textFill"
-                        font-size="12"
-                        font-weight="700"
-                        dominant-baseline="middle"
-                        :opacity="selectedRepoTag && selectedRepoTag !== b.label ? 0.35 : 1"
+                <div v-else class="tag-pie-wrap">
+                  <svg class="chart" :viewBox="`0 0 ${repoTagPieW} ${repoTagPieH}`" preserveAspectRatio="xMinYMin meet">
+                    <g>
+                      <g
+                        v-for="s in repoTagPieSlices"
+                        :key="`pie-${s.label}`"
+                        style="cursor: pointer"
+                        @mouseenter="setHoveredRepoTag(s.label)"
+                        @mouseleave="clearHoveredRepoTag"
+                        @click="toggleRepoTag(s.label)"
                       >
-                        {{ b.label }} · {{ b.value }}
+                        <title>{{ s.label }}：{{ s.value }}（{{ s.percentText }}）</title>
+                        <path
+                          :d="s.path"
+                          :fill="s.color"
+                          :opacity="repoTagSliceOpacity(s)"
+                          :stroke="repoTagSliceStroke(s)"
+                          :stroke-width="repoTagSliceStrokeWidth(s)"
+                          :transform="repoTagSliceTransform(s)"
+                        />
+                      </g>
+
+                      <circle :cx="repoTagPieCx" :cy="repoTagPieCy" :r="repoTagPieInnerR" fill="var(--guaxi-panel-bg)" />
+
+                      <text :x="repoTagPieCx" :y="repoTagPieCy - 6" text-anchor="middle" font-size="12" :fill="axisLabelFill" style="font-weight: 700">
+                        {{ repoTagCenterTitle }}
                       </text>
+                      <text :x="repoTagPieCx" :y="repoTagPieCy + 14" text-anchor="middle" font-size="12" :fill="axisLabelFill" style="opacity: 0.92">
+                        {{ repoTagCenterSub }}
+                      </text>
+                    </g>
+
+                    <g :transform="`translate(${repoTagLegendX} ${repoTagLegendY})`">
+                      <g
+                        v-for="(s, idx) in repoTagPieSlices"
+                        :key="`leg-${s.label}`"
+                        style="cursor: pointer"
+                        :transform="`translate(0 ${idx * repoTagLegendRowH})`"
+                        @mouseenter="setHoveredRepoTag(s.label)"
+                        @mouseleave="clearHoveredRepoTag"
+                        @click="toggleRepoTag(s.label)"
+                      >
+                        <rect x="0" y="-9" width="10" height="10" rx="2" :fill="s.color" :opacity="repoTagSliceOpacity(s)" />
+                        <text x="16" y="0" dominant-baseline="middle" font-size="12" :fill="axisLabelFill" :opacity="repoTagSliceOpacity(s)">
+                          {{ s.label }} · {{ s.value }} · {{ s.percentText }}
+                        </text>
+                      </g>
                     </g>
                   </svg>
                 </div>
@@ -212,8 +270,9 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { createDiscreteApi } from "naive-ui";
 import GuaxiStatisticsHeatmap from "./GuaxiStatisticsHeatmap.vue";
 
@@ -243,6 +302,8 @@ const loading = ref(false);
 const loadError = ref("");
 
 const KB_VOLUME_SNAPSHOTS_KEY = "guaxi_kb_volume_snapshots_v1";
+
+const knowledgeBasesRoot = ref("");
 
 const kbSummaries = ref([]);
 const kbVolumeSnapshots = ref([]);
@@ -282,7 +343,43 @@ const readerDocs = ref([]);
 
 const activeKbName = ref("");
 const selectedRepoTag = ref("");
+const hoveredRepoTag = ref("");
 const activeReaderKey = ref("");
+
+const readListEl = ref(null);
+
+function cssEscapeForAttr(v) {
+  const s = String(v || "");
+  try {
+    if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(s);
+  } catch (e) {
+    logger.warn("[statistics] CSS.escape failed", e);
+  }
+  return s.replace(/["\\]/g, "\\$&");
+}
+
+async function scrollReaderRowIntoView(key, reason) {
+  const wrap = readListEl.value;
+  const k = String(key || "");
+  if (!wrap || !k) return;
+
+  await nextTick();
+
+  const selector = `[data-read-key="${cssEscapeForAttr(k)}"]`;
+  const row = wrap.querySelector?.(selector);
+  if (!row || typeof row.scrollIntoView !== "function") return;
+
+  row.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  logger.info("[statistics] scroll reader row into view", { reason: String(reason || "auto"), key: k });
+}
+
+function setHoveredRepoTag(tag) {
+  hoveredRepoTag.value = String(tag || "");
+}
+
+function clearHoveredRepoTag() {
+  hoveredRepoTag.value = "";
+}
 
 function toggleActiveKb(name) {
   const nm = String(name || "");
@@ -299,6 +396,7 @@ function toggleRepoTag(tag) {
   const t = String(tag || "");
   if (!t) return;
   selectedRepoTag.value = selectedRepoTag.value === t ? "" : t;
+  logger.info("[statistics] toggleRepoTag", { tag: t, selected: selectedRepoTag.value || "" });
 }
 
 function toggleActiveReader(key) {
@@ -306,6 +404,13 @@ function toggleActiveReader(key) {
   if (!k) return;
   activeReaderKey.value = activeReaderKey.value === k ? "" : k;
 }
+
+watch(activeReaderKey, (k, prev) => {
+  const cur = String(k || "");
+  if (!cur) return;
+  if (cur === String(prev || "")) return;
+  scrollReaderRowIntoView(cur, "active_changed");
+});
 
 const trendRootEl = ref(null);
 const trendW = ref(760);
@@ -677,6 +782,73 @@ function trendX(pointIndex, totalPoints) {
   return p.plotLeft + (Number(pointIndex) / (n - 1)) * p.plotW;
 }
 
+const trendHoverIndex = ref(-1);
+const trendHoverX = ref(0);
+const TREND_TOOLTIP_W = 240;
+
+const trendHoverTitle = computed(() => {
+  const idx = Number(trendHoverIndex.value);
+  if (!Number.isFinite(idx) || idx < 0) return "";
+  const p = trendPoints.value[idx];
+  if (!p) return "";
+  const unit = effectiveTrendUnit.value;
+  const label = formatTickLabel(p?.tsMs, unit);
+  const metricLabel = volumeMetric.value === "dir" ? "目录数" : "文件数";
+  return `${label} · ${metricLabel}`;
+});
+
+const trendHoverRows = computed(() => {
+  const idx = Number(trendHoverIndex.value);
+  if (!Number.isFinite(idx) || idx < 0) return [];
+
+  const rows = [];
+  for (const s of volumeSeries.value) {
+    if (!isKbSeriesActive(s.name)) continue;
+    const v = Array.isArray(s.values) ? s.values[idx] : undefined;
+    rows.push({ name: s.name, color: s.color, value: Number(v) || 0 });
+  }
+
+  rows.sort((a, b) => b.value - a.value);
+  return rows.slice(0, 10);
+});
+
+const trendTooltipH = computed(() => {
+  const n = trendHoverRows.value.length;
+  return 28 + n * 18;
+});
+
+const trendTooltipX = computed(() => {
+  const w = Number(trendW.value) || 0;
+  const x = Number(trendHoverX.value) || 0;
+  const next = x + 10;
+  const maxX = Math.max(4, w - TREND_TOOLTIP_W - 4);
+  return Math.max(4, Math.min(next, maxX));
+});
+
+function onTrendMouseMove(e) {
+  const el = e?.currentTarget;
+  const rect = el?.getBoundingClientRect?.();
+  if (!rect) return;
+
+  const n = trendPointCount.value;
+  if (!n) return;
+
+  const xPx = Number(e?.clientX) - rect.left;
+  const ratio = rect.width > 0 ? xPx / rect.width : 0;
+  const x = Math.max(0, Math.min(1, ratio)) * trendW.value;
+
+  const p = trendPlot.value;
+  const idx = n <= 1 ? 0 : Math.round(((x - p.plotLeft) / p.plotW) * (n - 1));
+  const clamped = Math.max(0, Math.min(n - 1, idx));
+
+  trendHoverIndex.value = clamped;
+  trendHoverX.value = trendX(clamped, n);
+}
+
+function onTrendMouseLeave() {
+  trendHoverIndex.value = -1;
+}
+
 const volumeSeries = computed(() => {
   const snaps = trendPoints.value;
   if (snaps.length === 0) return [];
@@ -704,25 +876,34 @@ const volumeSeries = computed(() => {
   const series = [];
   for (const nm of names) {
     const color = pickColor(nm);
-    const pts = [];
+    const points = [];
+    const values = [];
+
     for (let i = 0; i < n; i += 1) {
       const v = Number(snaps[i]?.items?.[nm]?.[metric]) || 0;
       const x = p.plotLeft + (n <= 1 ? 0 : (i / (n - 1)) * p.plotW);
       const y = p.plotBottom - (v / maxV) * p.plotH;
-      pts.push([x, y]);
+
+      const sx = Math.round(x * 2) / 2;
+      const sy = Math.round(y * 2) / 2;
+
+      values.push(v);
+      points.push({ x: sx, y: sy, v, tsMs: snaps[i]?.tsMs });
     }
 
-    const linePath = pts.map((p2, idx) => `${idx === 0 ? "M" : "L"}${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`).join(" ");
+    const linePath = points
+      .map((pt, idx) => `${idx === 0 ? "M" : "L"}${pt.x.toFixed(2)} ${pt.y.toFixed(2)}`)
+      .join(" ");
     const lastValue = Number(snaps[n - 1]?.items?.[nm]?.[metric]) || 0;
-    series.push({ name: nm, color, lastValue, linePath });
+    series.push({ name: nm, color, lastValue, linePath, points, values });
   }
 
   return series;
 });
 
 const barChartWidth = 520;
-const barRowHeight = 20;
-const barRowGap = 10;
+const barRowHeight = 16;
+const barRowGap = 8;
 
 function topN(map, n = 8) {
   return Array.from(map.entries())
@@ -780,10 +961,131 @@ const repoTagMap = computed(() => {
   return out;
 });
 
-const repoTagBars = computed(() => toBarRows(topN(repoTagMap.value, 30)));
-const repoTagChartHeight = computed(() => {
-  const rows = Math.max(repoTagBars.value.length, 1);
-  return rows * (barRowHeight + barRowGap) - barRowGap;
+const repoTagPieW = 520;
+const repoTagPieH = 220;
+const repoTagPieCx = 110;
+const repoTagPieCy = 110;
+const repoTagPieR = 88;
+const repoTagPieInnerR = 52;
+const repoTagLegendX = 230;
+const repoTagLegendY = 26;
+const repoTagLegendRowH = 18;
+const REPO_TAG_PIE_MAX_SLICES = 10;
+
+function piePoint(cx, cy, r, aRad) {
+  return { x: cx + r * Math.cos(aRad), y: cy + r * Math.sin(aRad) };
+}
+
+function pieSlicePath(cx, cy, r, a0, a1) {
+  const delta = a1 - a0;
+  if (delta >= Math.PI * 2 - 1e-6) {
+    const p0 = piePoint(cx, cy, r, a0);
+    const pm = piePoint(cx, cy, r, a0 + Math.PI);
+    return `M ${cx} ${cy} L ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} A ${r} ${r} 0 1 1 ${pm.x.toFixed(2)} ${pm.y.toFixed(2)} A ${r} ${r} 0 1 1 ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} Z`;
+  }
+
+  const p0 = piePoint(cx, cy, r, a0);
+  const p1 = piePoint(cx, cy, r, a1);
+  const largeArc = delta > Math.PI ? 1 : 0;
+  return `M ${cx} ${cy} L ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} Z`;
+}
+
+const repoTagPieSlices = computed(() => {
+  const entries = Array.from((repoTagMap.value || new Map()).entries()).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((sum, it) => sum + (Number(it[1]) || 0), 0);
+  if (!total) return [];
+
+  const head = entries.slice(0, REPO_TAG_PIE_MAX_SLICES);
+  const tail = entries.slice(REPO_TAG_PIE_MAX_SLICES);
+  const tailSum = tail.reduce((sum, it) => sum + (Number(it[1]) || 0), 0);
+
+  const items = head.map(([label, value]) => ({ label: String(label), value: Number(value) || 0 }));
+  if (tailSum > 0) items.push({ label: "其他", value: tailSum });
+
+  let a = -Math.PI / 2;
+  const out = [];
+  for (const it of items) {
+    const ratio = total > 0 ? it.value / total : 0;
+    const next = a + ratio * Math.PI * 2;
+    const mid = (a + next) / 2;
+
+    const color = colorForTag(it.label);
+    const path = pieSlicePath(repoTagPieCx, repoTagPieCy, repoTagPieR, a, next);
+
+    const dx = Math.round(Math.cos(mid) * 6 * 2) / 2;
+    const dy = Math.round(Math.sin(mid) * 6 * 2) / 2;
+
+    const percent = ratio * 100;
+    const percentText = `${percent.toFixed(1)}%`;
+
+    out.push({
+      label: it.label,
+      value: it.value,
+      color,
+      ratio,
+      percentText,
+      path,
+      dx,
+      dy,
+    });
+
+    a = next;
+  }
+
+  return out;
+});
+
+function isRepoTagEmphasized(slice) {
+  const label = String(slice?.label || "");
+  if (!label) return false;
+  if (hoveredRepoTag.value && hoveredRepoTag.value === label) return true;
+  if (selectedRepoTag.value && selectedRepoTag.value === label) return true;
+  return false;
+}
+
+function repoTagSliceOpacity(slice) {
+  const label = String(slice?.label || "");
+  if (!label) return 1;
+
+  if (selectedRepoTag.value && selectedRepoTag.value !== label) return 0.22;
+  if (hoveredRepoTag.value && hoveredRepoTag.value !== label) return 0.45;
+  return 1;
+}
+
+function repoTagSliceStroke(slice) {
+  return isRepoTagEmphasized(slice) ? axisLabelFill.value : "transparent";
+}
+
+function repoTagSliceStrokeWidth(slice) {
+  return isRepoTagEmphasized(slice) ? 1.25 : 0;
+}
+
+function repoTagSliceTransform(slice) {
+  if (!slice) return "";
+  if (!isRepoTagEmphasized(slice)) return "";
+  const dx = Number(slice?.dx) || 0;
+  const dy = Number(slice?.dy) || 0;
+  if (!dx && !dy) return "";
+  return `translate(${dx.toFixed(2)} ${dy.toFixed(2)})`;
+}
+
+const repoTagCenterTitle = computed(() => {
+  const key = String(hoveredRepoTag.value || selectedRepoTag.value || "");
+  if (!key) return "资料分类";
+  return key;
+});
+
+const repoTagCenterSub = computed(() => {
+  const key = String(hoveredRepoTag.value || selectedRepoTag.value || "");
+  const slices = Array.isArray(repoTagPieSlices.value) ? repoTagPieSlices.value : [];
+  const total = slices.reduce((sum, s) => sum + (Number(s?.value) || 0), 0);
+
+  if (!key) return `总计 ${total}`;
+
+  const hit = slices.find((s) => String(s?.label) === key);
+  if (!hit) return "";
+
+  return `${hit.value} · ${hit.percentText}`;
 });
 
 // 说明：默认 6 小时采样一次，避免频繁扫盘影响性能。
@@ -824,13 +1126,15 @@ function writeVolumeSnapshotsToLocal(list) {
   }
 }
 
-function recordVolumeSnapshotIfNeeded() {
+function recordVolumeSnapshotIfNeeded(opts) {
+  const force = !!opts?.force;
+
   const list = Array.isArray(kbVolumeSnapshots.value) ? kbVolumeSnapshots.value.slice() : [];
   const lastTs = toSnapshotTsMs(list[list.length - 1]?.ts);
   const now = Date.now();
   const intervalMs = getVolumeSnapshotIntervalMs();
 
-  if (Number.isFinite(lastTs) && lastTs > 0 && now - lastTs < intervalMs) return;
+  if (!force && Number.isFinite(lastTs) && lastTs > 0 && now - lastTs < intervalMs) return;
 
   const summaries = Array.isArray(kbSummaries.value) ? kbSummaries.value : [];
   if (summaries.length === 0) return;
@@ -855,11 +1159,13 @@ function recordVolumeSnapshotIfNeeded() {
 
 async function loadKbSummaries(opts) {
   const reason = String(opts?.reason || "manual");
+  const forceSnapshot = !!opts?.forceSnapshot;
+
   const list = await invoke("kbmeta_sync_all");
   const arr = Array.isArray(list) ? list : [];
   kbSummaries.value = arr;
-  logger.info("[statistics] kbmeta_sync_all", { kbCount: arr.length, reason });
-  recordVolumeSnapshotIfNeeded();
+  logger.info("[statistics] kbmeta_sync_all", { kbCount: arr.length, reason, forceSnapshot });
+  recordVolumeSnapshotIfNeeded({ force: forceSnapshot });
 }
 
 let volumeSnapshotTimer;
@@ -1026,36 +1332,85 @@ const heatmapActiveDays = computed(() => {
   return Object.values(obj).filter((v) => (Number(v) || 0) > 0).length;
 });
 
-async function reloadAll() {
+async function reloadAll(opts) {
   if (loading.value) return;
+
+  const reason = String(opts?.reason || "reload");
+  const silent = !!opts?.silent;
+  const includeGit = opts?.includeGit !== false;
+  const forceSnapshot = !!opts?.forceSnapshot;
 
   loading.value = true;
   loadError.value = "";
 
   logger.info("[statistics] reloadAll start", {
     timeRange: timeRange.value,
+    reason,
+    silent,
+    includeGit,
+    forceSnapshot,
     ts: new Date().toISOString(),
   });
 
   try {
-    await Promise.all([
-      loadKbSummaries({ reason: "reload" }),
-      loadRepoImportedFiles(),
-      loadKnowledgeBasesGitLog(),
-    ]);
+    const tasks = [loadKbSummaries({ reason, forceSnapshot }), loadRepoImportedFiles()];
+    if (includeGit) tasks.push(loadKnowledgeBasesGitLog());
 
-    // 扫描阅读器状态是同步的，不要放到并发里避免与刷新 UI 抢占节奏
+    await Promise.all(tasks);
+
     scanReaderState();
 
-    message.success("统计数据已刷新");
+    if (!silent) message.success("统计数据已刷新");
   } catch (e) {
     logger.error("[statistics] reloadAll failed", e);
     loadError.value = String(e?.message || e || "加载失败");
-    message.error("统计数据加载失败");
+    if (!silent) message.error("统计数据加载失败");
   } finally {
     loading.value = false;
     logger.info("[statistics] reloadAll end", { ts: new Date().toISOString() });
   }
+}
+
+async function onManualRefresh() {
+  logger.info("[statistics] manual refresh clicked", { ts: new Date().toISOString() });
+  await reloadAll({ reason: "manual", silent: false, includeGit: true, forceSnapshot: true });
+}
+
+let autoReloadTimer = null;
+let lastAutoReloadAt = 0;
+let cleanupAutoRefreshHooks = null;
+
+let unlistenFileChange = null;
+let unlistenConversionProgress = null;
+let unlistenAddWebClipper = null;
+let unlistenAddBrowserSavedHtml = null;
+let unlistenRepoImportedFilesChanged = null;
+
+const AUTO_RELOAD_DEBOUNCE_MS = 1200;
+const AUTO_RELOAD_MIN_INTERVAL_MS = 4500;
+
+function scheduleAutoReload(reason, opts) {
+  const r = String(reason || "auto");
+  const forceSnapshot = !!opts?.forceSnapshot;
+
+  if (autoReloadTimer) clearTimeout(autoReloadTimer);
+  autoReloadTimer = setTimeout(() => {
+    autoReloadTimer = null;
+
+    const now = Date.now();
+    if (now - lastAutoReloadAt < AUTO_RELOAD_MIN_INTERVAL_MS) {
+      logger.info("[statistics] auto reload skipped (min-interval)", {
+        reason: r,
+        lastAutoReloadAt,
+        now,
+        minIntervalMs: AUTO_RELOAD_MIN_INTERVAL_MS,
+      });
+      return;
+    }
+
+    lastAutoReloadAt = now;
+    reloadAll({ reason: r, silent: true, includeGit: false, forceSnapshot });
+  }, AUTO_RELOAD_DEBOUNCE_MS);
 }
 
 watch(timeRange, () => {
@@ -1066,6 +1421,21 @@ watch(timeRange, () => {
 
 onMounted(async () => {
   logger.info("[statistics] dashboard mounted");
+
+  try {
+    const root = await invoke("get_knowledge_bases_root");
+    const kbRoot = typeof root === "string" ? root : "";
+    knowledgeBasesRoot.value = kbRoot;
+
+    if (kbRoot) {
+      await invoke("start_file_watching", { path: kbRoot });
+      logger.info("[statistics] file watcher started (KnowledgeBases root)", { path: kbRoot });
+    } else {
+      logger.warn("[statistics] get_knowledge_bases_root returned empty path");
+    }
+  } catch (e) {
+    logger.warn("[statistics] start_file_watching failed (KnowledgeBases root)", e);
+  }
 
   kbVolumeSnapshots.value = readVolumeSnapshotsFromLocal();
 
@@ -1079,15 +1449,95 @@ onMounted(async () => {
   if (el) ro.observe(el);
 
   scanReaderState();
-  await reloadAll();
+  await reloadAll({ reason: "mounted", silent: true, includeGit: true, forceSnapshot: false });
 
-  // 后台自动采样：按间隔到点后才触发 kbmeta_sync_all + 写快照
+  cleanupAutoRefreshHooks = (() => {
+    const onFocus = () => scheduleAutoReload("window_focus", { forceSnapshot: false });
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  })();
+
+  try {
+    unlistenFileChange = await listen("file_change", (event) => {
+      const payload = event?.payload || {};
+      const kind = String(payload?.kind || "");
+      if (kind === "Create" || kind === "Remove" || kind === "Rename") {
+        scheduleAutoReload(`file_change:${kind}`, { forceSnapshot: true });
+      }
+    });
+
+    unlistenConversionProgress = await listen("conversion_progress", (event) => {
+      const p = event?.payload || {};
+      const current = Number(p?.current) || 0;
+      const msg = String(p?.message || "");
+      const failed = !!p?.failed || msg.includes("失败");
+      if (current >= 100 && !failed) {
+        scheduleAutoReload("conversion_progress:done", { forceSnapshot: true });
+      }
+    });
+
+    unlistenAddWebClipper = await listen("add_web_clipper_file_event", () => {
+      scheduleAutoReload("add_web_clipper_file_event", { forceSnapshot: true });
+    });
+
+    unlistenAddBrowserSavedHtml = await listen("add_browser_saved_html_file_event", () => {
+      scheduleAutoReload("add_browser_saved_html_file_event", { forceSnapshot: true });
+    });
+
+    unlistenRepoImportedFilesChanged = await listen("repo_imported_files_changed", (event) => {
+      const payload = event?.payload || {};
+      scheduleAutoReload("repo_imported_files_changed", { forceSnapshot: true });
+      logger.info("[statistics] repo_imported_files_changed", payload);
+    });
+
+    logger.info("[statistics] auto refresh listeners ready");
+  } catch (e) {
+    logger.warn("[statistics] init auto refresh listeners failed", e);
+  }
+
   scheduleNextVolumeSnapshot();
 });
 
 onBeforeUnmount(() => {
   try {
     clearVolumeSnapshotTimer();
+
+    if (autoReloadTimer) {
+      clearTimeout(autoReloadTimer);
+      autoReloadTimer = null;
+    }
+
+    Promise.resolve(invoke("stop_file_watching")).catch((e) => {
+      logger.warn("[statistics] stop_file_watching failed", e);
+    });
+
+    if (typeof cleanupAutoRefreshHooks === "function") {
+      try {
+        cleanupAutoRefreshHooks();
+      } catch (e) {
+        logger.warn("[statistics] cleanup auto refresh hooks failed", e);
+      }
+      cleanupAutoRefreshHooks = null;
+    }
+
+    const unlistens = [
+      unlistenFileChange,
+      unlistenConversionProgress,
+      unlistenAddWebClipper,
+      unlistenAddBrowserSavedHtml,
+      unlistenRepoImportedFilesChanged,
+    ];
+    for (const fn of unlistens) {
+      if (typeof fn === "function") {
+        Promise.resolve(fn()).catch((e) => logger.warn("[statistics] unlisten failed", e));
+      }
+    }
+    unlistenFileChange = null;
+    unlistenConversionProgress = null;
+    unlistenAddWebClipper = null;
+    unlistenAddBrowserSavedHtml = null;
+    unlistenRepoImportedFilesChanged = null;
+
     if (ro) ro.disconnect();
     if (mo) mo.disconnect();
   } catch (e) {
@@ -1172,9 +1622,9 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-.tag-chart-wrap {
-  max-height: 320px;
-  overflow: auto;
+.tag-pie-wrap {
+  width: 100%;
+  overflow: hidden;
 }
 
 .trend-head {
@@ -1210,6 +1660,60 @@ onBeforeUnmount(() => {
   height: 220px;
 }
 
+.trend-tooltip {
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: rgba(15, 23, 42, 0.92);
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.theme-dark .trend-tooltip {
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(15, 23, 42, 0.64);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+}
+
+.trend-tooltip .tt-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  opacity: 0.95;
+}
+
+.trend-tooltip .tt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.trend-tooltip .tt-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.trend-tooltip .tt-name {
+  flex: 1 1 auto;
+  opacity: 0.92;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trend-tooltip .tt-val {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.95;
+}
+
 .kb-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1229,7 +1733,12 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   cursor: pointer;
   user-select: none;
+  color: var(--guaxi-text-primary);
   transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.theme-dark .kb-legend-item {
+  color: rgba(255, 255, 255, 0.92);
 }
 
 .kb-legend-item.active {
@@ -1251,7 +1760,24 @@ onBeforeUnmount(() => {
 }
 
 .kb-val {
-  opacity: 0.75;
+  opacity: 0.95;
+  font-variant-numeric: tabular-nums;
+  padding: 0 8px;
+  border-radius: 999px;
+  line-height: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(15, 23, 42, 0.66);
+  border: 1px solid rgba(15, 23, 42, 0.2);
+}
+
+.theme-dark .kb-val {
+  color: rgba(0, 0, 0, 0.78);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.22);
 }
 
 .read-head {
@@ -1285,15 +1811,35 @@ onBeforeUnmount(() => {
   padding: 6px 8px;
   border-radius: 10px;
   cursor: pointer;
-  transition: background-color 0.15s ease, opacity 0.15s ease;
+  transition: background-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.read-row:hover {
+  background: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 6px 18px rgba(16, 24, 40, 0.08);
+  transform: translateY(-1px);
+  opacity: 1;
+}
+
+.theme-dark .read-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 .read-row.active {
   background: rgba(34, 197, 94, 0.12);
 }
 
+.read-row.active:hover {
+  background: rgba(34, 197, 94, 0.16);
+}
+
 .read-row.dim {
   opacity: 0.6;
+}
+
+.read-row.dim:hover {
+  opacity: 0.92;
 }
 
 .read-name {
@@ -1312,8 +1858,9 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-:global(:root[data-guaxi-theme="dark"]) .read-progress {
-  background: rgba(255, 255, 255, 0.08);
+.theme-dark .read-progress {
+  background: rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .read-progress-bar {
@@ -1328,7 +1875,15 @@ onBeforeUnmount(() => {
   top: 50%;
   transform: translateY(-50%);
   font-size: 11px;
-  opacity: 0.85;
+  opacity: 0.9;
+}
+
+.theme-dark .read-progress-text {
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.28);
+  padding: 0 6px;
+  border-radius: 999px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
 }
 
 .read-time {
