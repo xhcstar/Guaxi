@@ -39,6 +39,7 @@ import LifeAlbumApp from "./apps/LifeAlbumApp.vue"
 import MusicPlayerApp from "./apps/MusicPlayerApp.vue"
 import LanguageTranslatorApp from "./apps/LanguageTranslatorApp.vue"
 import FileTransferAssistantApp from "./apps/FileTransferAssistantApp.vue"
+import PythonPlaygroundApp from "./apps/PythonPlaygroundApp.vue"
 import PlaceholderApp from "./apps/PlaceholderApp.vue"
 import TODOApp from "./apps/TODO.vue"
 
@@ -102,6 +103,16 @@ const apps = [
     icon: '📤',
     color: 'linear-gradient(135deg, #ff9a9e, #fecfef)',
     component: FileTransferAssistantApp
+  },
+  {
+    id: 'tools-python-playground',
+    name: 'Python Playground',
+    category: 'tools',
+    categoryLabel: '工具类',
+    description: '运行/调试 Python 脚本：自动化、数据分析与智能处理',
+    icon: '🐍',
+    color: 'linear-gradient(135deg, #a1c4fd, #c2e9fb)',
+    component: PythonPlaygroundApp
   },
   {
     id: 'tools-table',

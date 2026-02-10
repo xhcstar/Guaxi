@@ -348,6 +348,8 @@ async fn main() {
             commands::filetransfer::filetransfer_webrtc_recv_init,
             commands::filetransfer::filetransfer_webrtc_recv_chunk_base64,
             commands::filetransfer::filetransfer_webrtc_recv_complete,
+            commands::python_runtime::python_exec,
+            commands::python_runtime::python_reset_repl,
             commands::frontend_logging::frontend_log,
             commands::frontend_logging::frontend_log_batch,
         ])

@@ -20,6 +20,7 @@ import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumA
 import MusicPlayerApp from '../components/ApplicationViewComponent/apps/MusicPlayerApp.vue'
 import LanguageTranslatorApp from '../components/ApplicationViewComponent/apps/LanguageTranslatorApp.vue'
 import FileTransferAssistantApp from '../components/ApplicationViewComponent/apps/FileTransferAssistantApp.vue'
+import PythonPlaygroundApp from '../components/ApplicationViewComponent/apps/PythonPlaygroundApp.vue'
 import PlaceholderApp from '../components/ApplicationViewComponent/apps/PlaceholderApp.vue'
 import TODOApp from '../components/ApplicationViewComponent/apps/TODO.vue'
 
@@ -29,6 +30,7 @@ const APP_COMPONENT_MAP = {
   'music-player': MusicPlayerApp,
   'language-translator': LanguageTranslatorApp,
   'tools-file-transfer': FileTransferAssistantApp,
+  'tools-python-playground': PythonPlaygroundApp,
 }
 
 const GuaxiAppWindow = {
