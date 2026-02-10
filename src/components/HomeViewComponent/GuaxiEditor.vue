@@ -4571,7 +4571,8 @@ function analyzeMarkdown(content, model) {
     // 3) 剔除 Obsidian 双链与行内代码，降低误报。
     const lintLine = line
       .replace(/\[\[[\s\S]*?\]\]/g, '')
-      .replace(/`[^`]*`/g, '');
+      .replace(/`[^`]*`/g, '')
+      .replace(/\\[\[\]\(\)]/g, '');
 
     const openBracket = (lintLine.match(/\[/g) || []).length;
     const linkStart = (lintLine.match(/\]\s*\(/g) || []).length;
