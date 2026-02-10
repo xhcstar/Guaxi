@@ -840,6 +840,7 @@ export const renderMarkdown = async (content, options) => {
     math: enableMath = true,
     codeHighlight: enableCodeHighlight = true,
     buttons: enableButtons = true,
+    pythonCells: enablePythonCells = false,
     theme = "default",
   } = options;
 
@@ -1199,27 +1200,67 @@ export const renderMarkdown = async (content, options) => {
       logger.warn("[MarkdownRender] installTocSupport failed", e);
     }
 
-    // 添加Mermaid支持（同时保留原始内容功能）
-    if (enableMermaid) {
+    // 可执行代码块 / Mermaid：统一改写 fence，避免多次覆盖 renderer.rules.fence
+    if (enableMermaid || enablePythonCells) {
       const defaultFence = md.renderer.rules.fence;
       md.renderer.rules.fence = (tokens, idx, options, env, self) => {
         const token = tokens[idx];
-        if (token.info.trim() === "mermaid") {
-          const content = token.content
+        const info = String(token?.info || '').trim();
+
+        if (enableMermaid && info === "mermaid") {
+          const content = String(token.content || '')
             .replace(/&gt;/g, ">")
             .replace(/&lt;/g, "<")
             .replace(/&amp;/g, "&");
 
-          // 如果需要保留原始内容，添加data-md-original属性
           if (preserveOriginal) {
             const original = `\`\`\`mermaid\n${content}\n\`\`\``;
-            return `<pre class="mermaid" data-md-original="${safeEncode(
-              original
-            )}">${content}</pre>`;
+            return `<pre class="mermaid" data-md-original="${safeEncode(original)}">${content}</pre>`;
           }
           return `<pre class="mermaid">${content}</pre>`;
         }
-        return defaultFence(tokens, idx, options, env, self);
+
+        if (enablePythonCells && /^(python|py)(\s|$)/i.test(info)) {
+          const startLine = Array.isArray(token.map) ? token.map[0] + 1 : null;
+          const endLine = Array.isArray(token.map) ? token.map[1] + 1 : null;
+          const cellId = `py-${startLine || 'na'}-${endLine || 'na'}`;
+
+          const original = preserveOriginal
+            ? `\`\`\`${info || 'python'}\n${String(token.content || '')}\n\`\`\``
+            : '';
+
+          const codeHtml = defaultFence ? defaultFence(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
+          const attrs = [
+            `class="guaxi-pycell"`,
+            `data-guaxi-py="1"`,
+            `data-guaxi-py-lang="${safeEncode(info || 'python')}"`,
+            `data-guaxi-py-code="${safeEncode(String(token.content || ''))}"`,
+            `data-guaxi-py-cell="${safeEncode(cellId)}"`,
+            startLine ? `data-guaxi-md-start-line="${startLine}"` : '',
+            endLine ? `data-guaxi-md-end-line="${endLine}"` : '',
+            preserveOriginal ? `data-md-original="${safeEncode(original)}"` : '',
+          ].filter(Boolean).join(' ');
+
+          return `
+            <div ${attrs}>
+              <div class="guaxi-pycell-toolbar" style="display:flex;align-items:center;gap:8px;margin:8px 0;">
+                <button type="button" class="guaxi-pycell-btn guaxi-pycell-run" data-guaxi-py-action="run" style="padding:4px 8px;border-radius:6px;border:1px solid var(--guaxi-border);background:var(--guaxi-panel-bg);color:var(--guaxi-text-primary);cursor:pointer;">
+                  运行
+                </button>
+                <button type="button" class="guaxi-pycell-btn guaxi-pycell-run-save" data-guaxi-py-action="run-save" style="padding:4px 8px;border-radius:6px;border:1px solid var(--guaxi-border);background:var(--guaxi-panel-bg);color:var(--guaxi-text-primary);cursor:pointer;">
+                  运行并写回
+                </button>
+                <span class="guaxi-pycell-hint" style="opacity:.7;font-size:12px;">输出会显示在下方（写回会保存到笔记 Markdown）</span>
+              </div>
+              ${codeHtml}
+              <pre class="hljs guaxi-pycell-output" style="margin:8px 0 0;display:none;">
+                <code class="language-text" data-guaxi-py-output="${safeEncode(cellId)}"></code>
+              </pre>
+            </div>
+          `;
+        }
+
+        return defaultFence ? defaultFence(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
       };
     }
 

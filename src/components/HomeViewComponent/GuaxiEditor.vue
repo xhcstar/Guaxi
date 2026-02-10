@@ -6128,6 +6128,366 @@ const handlePreviewClick = async (e) => {
   const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
   if (!base) return;
 
+  const guaxiSafeDecode = (v) => {
+    try {
+      return decodeURIComponent(String(v || ''))
+    } catch {
+      return String(v || '')
+    }
+  }
+
+  const formatPythonExecOutput = (res) => {
+    const ok = res?.ok
+    const stdout = String(res?.stdout || '')
+    const stderr = String(res?.stderr || '')
+    const resultJson = res?.result_json
+    const resultRepr = res?.result_repr
+
+    let out = ''
+    if (stdout) out += `[stdout]\n${stdout}\n`
+    if (stderr) out += `${out ? '\n' : ''}[stderr]\n${stderr}\n`
+
+    if (resultJson != null) {
+      try {
+        out += `${out ? '\n' : ''}[_result.json]\n${JSON.stringify(resultJson, null, 2)}\n`
+      } catch {
+        out += `${out ? '\n' : ''}[_result.json]\n${String(resultJson)}\n`
+      }
+    } else if (resultRepr) {
+      out += `${out ? '\n' : ''}[_result]\n${String(resultRepr)}\n`
+    }
+
+    if (ok === false) {
+      return out.trim() || '(执行失败：无错误输出)'
+    }
+
+    return out.trim() || '(本单元未产生输出)'
+  }
+
+  const getGuaxiDisplayFromResult = (res) => {
+    const rj = res?.result_json
+    if (!rj || typeof rj !== 'object') return null
+
+    const display = rj?.__guaxi_display__ || rj?.guaxi_display || null
+    if (!display || typeof display !== 'object') return null
+
+    const t = String(display?.type || '').trim().toLowerCase()
+    if (t !== 'image') return null
+
+    const mime = String(display?.mime || '').trim() || 'image/png'
+    const dataUrl = String(display?.data_url || '').trim()
+    const dataBase64 = String(display?.data_base64 || '').trim()
+    const data = display?.data
+
+    return {
+      type: 'image',
+      mime,
+      dataUrl,
+      dataBase64,
+      data: typeof data === 'string' ? data : null,
+    }
+  }
+
+  const ensurePyCellMediaContainer = (cell, afterEl) => {
+    if (!(cell instanceof Element)) return null
+
+    let media = cell.querySelector('.guaxi-pycell-media')
+    if (media) return media
+
+    media = document.createElement('div')
+    media.className = 'guaxi-pycell-media'
+    media.style.marginTop = '8px'
+    media.style.display = 'none'
+    media.style.flexDirection = 'column'
+    media.style.alignItems = 'center'
+    media.style.justifyContent = 'center'
+
+    const border = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-border') || '#e1e4e8'
+    const panelBg = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-panel-bg') || '#fff'
+
+    media.style.border = `1px solid ${String(border).trim() || '#e1e4e8'}`
+    media.style.borderRadius = '8px'
+    media.style.padding = '10px'
+    media.style.background = String(panelBg).trim() || '#fff'
+
+    if (afterEl && afterEl.parentNode) {
+      afterEl.parentNode.insertBefore(media, afterEl.nextSibling)
+    } else {
+      cell.appendChild(media)
+    }
+
+    return media
+  }
+
+  const renderPyCellDisplay = (cell, outputPre, res, outputText) => {
+    const display = getGuaxiDisplayFromResult(res)
+    const shouldHideDefaultText =
+      !!display &&
+      ['(本单元未产生输出)', '(无输出)'].includes(String(outputText || '').trim())
+
+    if (!display) {
+      const media = cell?.querySelector?.('.guaxi-pycell-media')
+      if (media) {
+        media.innerHTML = ''
+        media.style.display = 'none'
+      }
+      if (outputPre && shouldHideDefaultText) outputPre.style.display = 'none'
+      return
+    }
+
+    const media = ensurePyCellMediaContainer(cell, outputPre)
+    if (!media) return
+
+    const img = document.createElement('img')
+    img.style.maxWidth = '100%'
+    img.style.height = 'auto'
+    img.style.display = 'block'
+    img.style.marginLeft = 'auto'
+    img.style.marginRight = 'auto'
+
+    let src = ''
+    if (display.dataUrl && display.dataUrl.startsWith('data:')) {
+      src = display.dataUrl
+    } else if (display.dataBase64) {
+      src = `data:${display.mime};base64,${display.dataBase64}`
+    } else if (display.data != null) {
+      src = `data:${display.mime},${encodeURIComponent(display.data)}`
+    }
+
+    if (!src) {
+      media.innerHTML = ''
+      media.style.display = 'none'
+      return
+    }
+
+    img.src = src
+    media.innerHTML = ''
+    media.appendChild(img)
+    media.style.display = 'flex'
+
+    if (outputPre && shouldHideDefaultText) {
+      outputPre.style.display = 'none'
+    }
+  }
+
+  const upsertPythonOutputBlock = (markdown, startLine, cellId, outputText) => {
+    const marker = `<!-- guaxi:pyout:${cellId} -->`
+    const outputFenceStart = '```text'
+    const outputFenceEnd = '```'
+
+    const lines = String(markdown || '').split(/\r?\n|\r/)
+
+    const findOpenFenceFrom = (idx) => {
+      for (let i = Math.max(0, idx); i < lines.length; i += 1) {
+        const t = String(lines[i] || '').trim()
+        if (/^```\s*(python|py)(\s|$)/i.test(t)) return i
+      }
+      return -1
+    }
+
+    const openIdx = Number.isFinite(startLine)
+      ? findOpenFenceFrom(Math.max(0, startLine - 1))
+      : findOpenFenceFrom(0)
+
+    if (openIdx < 0) {
+      return `${String(markdown || '').trim()}\n\n${marker}\n${outputFenceStart}\n${outputText}\n${outputFenceEnd}\n`
+    }
+
+    let closeIdx = -1
+    for (let i = openIdx + 1; i < lines.length; i += 1) {
+      if (String(lines[i] || '').trim() === '```') {
+        closeIdx = i
+        break
+      }
+    }
+
+    if (closeIdx < 0) {
+      return `${String(markdown || '').trim()}\n\n${marker}\n${outputFenceStart}\n${outputText}\n${outputFenceEnd}\n`
+    }
+
+    const markerIdx = lines.findIndex((l) => String(l || '').trim() === marker)
+    if (markerIdx >= 0) {
+      let fenceStartIdx = -1
+      for (let i = markerIdx + 1; i < lines.length; i += 1) {
+        if (String(lines[i] || '').trim().startsWith('```')) {
+          fenceStartIdx = i
+          break
+        }
+      }
+      if (fenceStartIdx >= 0) {
+        let fenceEndIdx = -1
+        for (let i = fenceStartIdx + 1; i < lines.length; i += 1) {
+          if (String(lines[i] || '').trim() === '```') {
+            fenceEndIdx = i
+            break
+          }
+        }
+        if (fenceEndIdx >= 0) {
+          lines.splice(markerIdx, fenceEndIdx - markerIdx + 1, marker, outputFenceStart, outputText, outputFenceEnd)
+          return `${lines.join('\n')}\n`
+        }
+      }
+    }
+
+    lines.splice(closeIdx + 1, 0, '', marker, outputFenceStart, outputText, outputFenceEnd)
+    return `${lines.join('\n')}\n`
+  }
+
+  const applyMarkdownReplaceFromPreview = (nextMarkdown, { action = 'pycell-run-save' } = {}) => {
+    const targetEditor = editor
+    const model = targetEditor?.getModel?.()
+
+    if (targetEditor && model) {
+      try {
+        const selection = targetEditor.getSelection?.()
+        targetEditor.executeEdits(action, [
+          {
+            range: model.getFullModelRange(),
+            text: String(nextMarkdown || ''),
+            forceMoveMarkers: true
+          }
+        ])
+        if (selection) targetEditor.setSelection(selection)
+        return true
+      } catch (err) {
+        logger.warn('[PyCell] executeEdits failed, fallback to updateEditorContent', err)
+      }
+    }
+
+    updateEditorContent(String(nextMarkdown || ''))
+    return true
+  }
+
+  // 可执行 Python 代码块：预览点击“运行/运行并写回”
+  const pyBtn = base.closest?.('[data-guaxi-py-action]')
+  if (pyBtn && previewContainer.value && previewContainer.value.contains(pyBtn)) {
+    const action = String(pyBtn.getAttribute('data-guaxi-py-action') || '').trim()
+    if (action === 'run' || action === 'run-save') {
+      const cell = pyBtn.closest?.('.guaxi-pycell')
+      if (!cell) return
+
+      const code = guaxiSafeDecode(cell.getAttribute('data-guaxi-py-code'))
+      const cellId = guaxiSafeDecode(cell.getAttribute('data-guaxi-py-cell'))
+      const startLine = Number(cell.getAttribute('data-guaxi-md-start-line'))
+
+      if (!code) {
+        message.warning('Python 代码为空')
+        e.stopPropagation()
+        return
+      }
+
+      const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
+      const outputPre = outputEl ? outputEl.closest?.('pre') : null
+
+      // 说明：输出容器默认隐藏（避免未运行时占位）；运行时再展示。
+      if (outputPre) {
+        outputPre.style.display = ''
+      }
+      if (outputEl) outputEl.textContent = '运行中...'
+
+      const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
+      relatedBtns.forEach((b) => {
+        try {
+          b.setAttribute('disabled', 'true')
+          b.style.opacity = '0.6'
+          b.style.cursor = 'not-allowed'
+        } catch {
+        }
+      })
+
+      try {
+        const docPath = selectedFile.value?.path || ''
+        const sessionId = docPath ? String(docPath) : 'guaxi:pycell:global'
+
+        logger.info('[PyCell] python_exec', {
+          action,
+          cellId,
+          codeLen: code.length,
+          docPath,
+          sessionId,
+        })
+
+        const res = await invoke('python_exec', {
+          request: {
+            code,
+            persist: true,
+            expect_json: true,
+            vars: {
+              _guaxi_session: sessionId,
+              _doc_path: String(docPath),
+              _py_cell_id: String(cellId || ''),
+            },
+          },
+        })
+
+        logger.info('[PyCell] python_exec result', {
+          ok: res?.ok,
+          stdoutLen: String(res?.stdout || '').length,
+          stderrLen: String(res?.stderr || '').length,
+          hasResultRepr: !!res?.result_repr,
+          hasResultJson: res?.result_json != null,
+        })
+
+        const outputText = formatPythonExecOutput(res)
+
+        if (outputPre) {
+          const trimmed = String(outputText || '').trim()
+          const hideDefault = ['(本单元未产生输出)', '(无输出)'].includes(trimmed)
+          outputPre.style.display = hideDefault ? 'none' : ''
+        }
+
+        if (outputEl) {
+          const trimmed = String(outputText || '').trim()
+          const hideDefault = ['(本单元未产生输出)', '(无输出)'].includes(trimmed)
+          outputEl.textContent = hideDefault ? '' : outputText
+        }
+
+        renderPyCellDisplay(cell, outputPre, res, outputText)
+
+        if (res?.ok === false) {
+          message.error('Python 执行失败')
+        }
+
+        if (action === 'run-save') {
+          suppressPreviewAutoRenderOnce(`pycell:${action}`, 1500)
+
+          const current = String(editor?.getModel?.()?.getValue?.() || rawContent.value || '')
+          const nextMarkdown = upsertPythonOutputBlock(
+            current,
+            Number.isFinite(startLine) ? startLine : null,
+            cellId || 'pycell',
+            outputText
+          )
+
+          applyMarkdownReplaceFromPreview(nextMarkdown, { action: 'pycell-run-save' })
+          message.success('已写回到文档（未自动保存）')
+        } else {
+          message.success('运行完成')
+        }
+      } catch (err) {
+        logger.error('[PyCell] run failed', err)
+        if (outputPre) {
+          outputPre.style.display = ''
+        }
+        if (outputEl) outputEl.textContent = `运行失败：${String(err?.message || err)}`
+        message.error('运行失败')
+      } finally {
+        relatedBtns.forEach((b) => {
+          try {
+            b.removeAttribute('disabled')
+            b.style.opacity = ''
+            b.style.cursor = ''
+          } catch {
+          }
+        })
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+  }
+
   // 任务列表：点击 checkbox 时，直接更新 Markdown 源内容（并仅更新当前条目 DOM）
   const checkbox = base.closest?.('input.task-list-item-checkbox');
   if (checkbox && previewContainer.value && previewContainer.value.contains(checkbox)) {
@@ -6287,6 +6647,7 @@ const renderDebounced = debounce(async (content) => {
       mermaid: true,
       math: true,
       codeHighlight: true,
+      pythonCells: true,
       theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
     });
 
