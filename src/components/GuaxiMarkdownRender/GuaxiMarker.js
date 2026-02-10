@@ -1107,7 +1107,8 @@ export const renderMarkdown = async (content, options) => {
       const tocMarkerRe = /^\s*(?:\[\[\s*(?:toc|\u76ee\u5f55)\s*\]\]|\[\s*(?:toc|\u76ee\u5f55)\s*\])\s*$/i;
 
       const slugify = (text) => {
-        const raw = String(text || "").trim().toLowerCase();
+        const raw0 = String(text || "").trim().toLowerCase();
+        const raw = raw0.replace(/(\d)[\.\uFF0E](\d)/g, "$1$2");
         const normalized = raw.normalize ? raw.normalize("NFKD") : raw;
         const cleaned = normalized
           .replace(/[^\p{L}\p{N}\s-]/gu, " ")
@@ -1150,24 +1151,10 @@ export const renderMarkdown = async (content, options) => {
         const minLevel = Math.min(...headings.map((h) => h.level));
         const buildTocHtml = () => {
           let html = '<nav class="md-toc" data-md-toc="1"><ul class="md-toc-list">';
-          let cur = 1;
 
           for (const h of headings) {
             const lvl = Math.max(1, (h.level - minLevel) + 1);
-            while (cur < lvl) {
-              html += '<ul class="md-toc-list">';
-              cur += 1;
-            }
-            while (cur > lvl) {
-              html += "</ul>";
-              cur -= 1;
-            }
             html += `<li class="md-toc-item md-toc-level-${lvl}"><a class="md-toc-link" href="#${encodeURIComponent(String(h.id))}"${h.startLine ? ` data-md-start-line="${h.startLine}"` : ""}>${md.utils.escapeHtml(String(h.text))}</a></li>`;
-          }
-
-          while (cur > 1) {
-            html += "</ul>";
-            cur -= 1;
           }
 
           html += "</ul></nav>";
@@ -1204,12 +1191,6 @@ export const renderMarkdown = async (content, options) => {
       installTaskListSupport();
     } catch (e) {
       logger.warn("[MarkdownRender] installTaskListSupport failed", e);
-    }
-
-    try {
-      installTocSupport();
-    } catch (e) {
-      logger.warn("[MarkdownRender] installTocSupport failed", e);
     }
 
     try {
