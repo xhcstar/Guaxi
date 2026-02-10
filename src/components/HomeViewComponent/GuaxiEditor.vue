@@ -4568,6 +4568,11 @@ function analyzeMarkdown(content, model) {
       return;
     }
 
+    // 2.5) 目录标记：[TOC] / [toc] / [目录] / [[toc]]
+    if (/^\s*(?:\[\[\s*(?:toc|\u76ee\u5f55)\s*\]\]|\[\s*(?:toc|\u76ee\u5f55)\s*\])\s*$/i.test(trimmed)) {
+      return;
+    }
+
     // 3) 剔除 Obsidian 双链与行内代码，降低误报。
     const lintLine = line
       .replace(/\[\[[\s\S]*?\]\]/g, '')
@@ -7887,6 +7892,51 @@ onUnmounted(() => {
 .preview :deep(li.task-list-item.task-list-item-checked .task-list-item-text) {
   text-decoration: line-through;
   opacity: 0.78;
+}
+
+.preview :deep(.md-toc) {
+  border: 1px solid var(--guaxi-border, #e1e4e8);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  background: rgba(175, 184, 193, 0.12);
+}
+
+.preview :deep(.md-toc .md-toc-list) {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+
+.preview :deep(.md-toc .md-toc-list .md-toc-list) {
+  padding-left: 16px;
+  margin-top: 6px;
+}
+
+.preview :deep(.md-toc-item) {
+  margin: 6px 0;
+  line-height: 1.35;
+}
+
+.preview :deep(a.md-toc-link) {
+  color: var(--guaxi-text-link, var(--primary-color, #4acadb));
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.preview :deep(a.md-toc-link:hover) {
+  text-decoration: underline;
+}
+
+.dark-mode .preview :deep(.md-toc),
+.dark .preview :deep(.md-toc) {
+  border-color: #30363d;
+  background: rgba(110, 118, 129, 0.12);
+}
+
+.dark-mode .preview :deep(a.md-toc-link),
+.dark .preview :deep(a.md-toc-link) {
+  color: var(--guaxi-text-link-dark, #4acadb);
 }
 
 :deep(.monaco-editor .guaxi-link-like),

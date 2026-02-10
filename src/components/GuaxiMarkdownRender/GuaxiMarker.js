@@ -897,10 +897,10 @@ export const renderMarkdown = async (content, options) => {
         securityLevel: "loose",
         ...(keepMermaidLight
           ? {
-              themeVariables: {
-                background: "#ffffff",
-              },
-            }
+            themeVariables: {
+              background: "#ffffff",
+            },
+          }
           : {}),
       });
     }
@@ -919,17 +919,16 @@ export const renderMarkdown = async (content, options) => {
       xhtmlOut: true, // 使用XHTML兼容的闭合标签
       highlight: enableCodeHighlight
         ? (code, lang) => {
-            if (lang && hljs.getLanguage(lang)) {
-              try {
-                return `<pre class="hljs"><code class="language-${lang}">${
-                  hljs.highlight(code, { language: lang }).value
+          if (lang && hljs.getLanguage(lang)) {
+            try {
+              return `<pre class="hljs"><code class="language-${lang}">${hljs.highlight(code, { language: lang }).value
                 }</code></pre>`;
-              } catch (err) {
-                logger.warn(`代码高亮错误 (${lang}):`, err);
-              }
+            } catch (err) {
+              logger.warn(`代码高亮错误 (${lang}):`, err);
             }
-            return `<pre><code>${md.utils.escapeHtml(code)}</code></pre>`;
           }
+          return `<pre><code>${md.utils.escapeHtml(code)}</code></pre>`;
+        }
         : undefined,
     });
 
@@ -976,6 +975,11 @@ export const renderMarkdown = async (content, options) => {
       const tag = token.tag || "h1";
       const attrs = [`class="md-heading md-heading-${tag}"`];
 
+      const headingId = token?.meta?.guaxiHeadingId;
+      if (headingId) {
+        attrs.push(`id="${md.utils.escapeHtml(String(headingId))}"`);
+      }
+
       if (token && Array.isArray(token.map)) {
         const startLine = token.map[0] + 1;
         const endLine = token.map[1] + 1;
@@ -1014,7 +1018,7 @@ export const renderMarkdown = async (content, options) => {
       const stripPrefixFromInlineChildren = (inlineToken, prefixLen) => {
         if (!inlineToken || !Array.isArray(inlineToken.children) || prefixLen <= 0) return;
         let remain = prefixLen;
-        for (let i = 0; i < inlineToken.children.length && remain > 0; ) {
+        for (let i = 0; i < inlineToken.children.length && remain > 0;) {
           const c = inlineToken.children[i];
           if (!c || c.type !== "text") break;
 
@@ -1099,10 +1103,119 @@ export const renderMarkdown = async (content, options) => {
       });
     };
 
+    const installTocSupport = () => {
+      const tocMarkerRe = /^\s*(?:\[\[\s*(?:toc|\u76ee\u5f55)\s*\]\]|\[\s*(?:toc|\u76ee\u5f55)\s*\])\s*$/i;
+
+      const slugify = (text) => {
+        const raw = String(text || "").trim().toLowerCase();
+        const normalized = raw.normalize ? raw.normalize("NFKD") : raw;
+        const cleaned = normalized
+          .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        const slug = cleaned.replace(/\s+/g, "-").replace(/-+/g, "-");
+        return slug || "section";
+      };
+
+      md.core.ruler.after("inline", "guaxi_toc", (state) => {
+        const tokens = state.tokens || [];
+        const slugCount = new Map();
+        const headings = [];
+
+        for (let i = 0; i < tokens.length; i += 1) {
+          const t = tokens[i];
+          if (!t || t.type !== "heading_open") continue;
+          const next = tokens[i + 1];
+          if (!next || next.type !== "inline") continue;
+
+          const level = Number(String(t.tag || "h1").slice(1)) || 1;
+          const text = String(next.content || "").trim();
+          if (!text) continue;
+
+          const base = slugify(text);
+          const n = (slugCount.get(base) || 0) + 1;
+          slugCount.set(base, n);
+          const id = n > 1 ? `${base}-${n}` : base;
+
+          t.meta = { ...(t.meta || {}), guaxiHeadingId: id };
+
+          const startLine = Array.isArray(t.map) ? t.map[0] + 1 : 0;
+          headings.push({ level, text, id, startLine });
+        }
+
+        if (!headings.length) return false;
+
+        let injected = 0;
+
+        const minLevel = Math.min(...headings.map((h) => h.level));
+        const buildTocHtml = () => {
+          let html = '<nav class="md-toc" data-md-toc="1"><ul class="md-toc-list">';
+          let cur = 1;
+
+          for (const h of headings) {
+            const lvl = Math.max(1, (h.level - minLevel) + 1);
+            while (cur < lvl) {
+              html += '<ul class="md-toc-list">';
+              cur += 1;
+            }
+            while (cur > lvl) {
+              html += "</ul>";
+              cur -= 1;
+            }
+            html += `<li class="md-toc-item md-toc-level-${lvl}"><a class="md-toc-link" href="#${encodeURIComponent(String(h.id))}"${h.startLine ? ` data-md-start-line="${h.startLine}"` : ""}>${md.utils.escapeHtml(String(h.text))}</a></li>`;
+          }
+
+          while (cur > 1) {
+            html += "</ul>";
+            cur -= 1;
+          }
+
+          html += "</ul></nav>";
+          return html;
+        };
+
+        for (let i = 0; i < tokens.length - 2; i += 1) {
+          const t0 = tokens[i];
+          const t1 = tokens[i + 1];
+          const t2 = tokens[i + 2];
+          if (!t0 || !t1 || !t2) continue;
+          if (t0.type !== "paragraph_open" || t1.type !== "inline" || t2.type !== "paragraph_close") continue;
+
+          const raw = String(t1.content || "");
+          if (!tocMarkerRe.test(raw)) continue;
+
+          const tok = new state.Token("html_block", "", 0);
+          tok.content = buildTocHtml();
+          tok.map = t0.map;
+
+          tokens.splice(i, 3, tok);
+          injected += 1;
+        }
+
+        if (injected) {
+          logger.info("[MarkdownRender] toc generated", { items: headings.length, markers: injected });
+        }
+
+        return false;
+      });
+    };
+
     try {
       installTaskListSupport();
     } catch (e) {
       logger.warn("[MarkdownRender] installTaskListSupport failed", e);
+    }
+
+    try {
+      installTocSupport();
+    } catch (e) {
+      logger.warn("[MarkdownRender] installTocSupport failed", e);
+    }
+
+    try {
+      installTocSupport();
+    } catch (e) {
+      logger.warn("[MarkdownRender] installTocSupport failed", e);
     }
 
     // 添加Mermaid支持（同时保留原始内容功能）
