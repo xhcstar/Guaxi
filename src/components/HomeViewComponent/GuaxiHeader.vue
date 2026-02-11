@@ -569,8 +569,28 @@ const trimmedQuery = computed(() => searchQuery.value.trim())
 
 watch(trimmedQuery, (q) => {
   if (q) return
+
   if (editorStore.highlightInfo) {
     editorStore.highlightInfo = null
+  }
+
+  previewResultsByType.value = { file: [], note: [], excerpt: [] }
+  previewResults.value = []
+  previewError.value = ''
+  previewHasMore.value = false
+  selectedRowKey.value = ''
+
+  try {
+    const prev = rightSiderStore.searchResults
+    rightSiderStore.setSearchResults({
+      ...prev,
+      searchQuery: '',
+      loading: false,
+      error: ''
+    })
+    logger.debug('[GuaxiHeader] cleared search query (kept right sider results)')
+  } catch (e) {
+    logger.warn('[GuaxiHeader] clear right sider search query failed', e)
   }
 })
 
@@ -1021,16 +1041,31 @@ const handleSearchBlur = () => {
 }
 
 const openResultInEditor = async (item) => {
-  const result = await fileTreeStore.fileTreeOpenSearchResult({
-    ...item,
-    searchText: searchQuery.value
+  const t = item?._searchType || searchType.value
+  const q = String(searchQuery.value || '').trim()
+  const shouldHighlight = t === 'note' && !!q
+
+  logger.debug('[openResultInEditor] open', {
+    type: t,
+    hasQuery: !!q,
+    path: item?.path,
+    line_number: item?.line_number
   })
 
-  editorStore.highlightInfo = {
-    path: result.path,
-    lineNumber: result.lineNumber,
-    matches: result.matches,
-    text: result.text,
+  const result = await fileTreeStore.fileTreeOpenSearchResult({
+    ...item,
+    searchText: shouldHighlight ? q : ''
+  })
+
+  if (shouldHighlight) {
+    editorStore.highlightInfo = {
+      path: result.path,
+      lineNumber: result.lineNumber,
+      matches: result.matches,
+      text: result.text,
+    }
+  } else {
+    editorStore.highlightInfo = null
   }
 
   editorStore.setFile({

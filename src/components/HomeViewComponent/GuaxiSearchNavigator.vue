@@ -403,8 +403,11 @@ const getFileIconProps = (path) => {
 const formatPreview = (item) => {
   if (!item.preview) return '';
 
+  const q = String(props.searchQuery || '').trim()
   const matches = item.matches || [];
   const { escaped, indexMap } = escapeHtmlWithIndexMap(item.preview);
+
+  if (!q) return escaped
 
   // 1. 先在转义后的字符串插入高亮标签（用映射后的索引）
   let result = escaped;
@@ -462,27 +465,41 @@ function escapeHtmlWithIndexMap(str) {
  */
 const openSearchResult = async (item) => {
   try {
-    // 通过 fileTreeStore 统一打开并获取内容和高亮信息
+    const itemType = item?._searchType || (item?.preview ? 'note' : 'file')
+    const q = String(props.searchQuery || '').trim()
+    const shouldHighlight = itemType === 'note' && !!q
+
+    logger.debug('[openSearchResult] open', {
+      itemType,
+      hasQuery: !!q,
+      path: item?.path,
+      line_number: item?.line_number
+    })
+
     const result = await fileTreeStore.fileTreeOpenSearchResult({
       ...item,
-      searchText: props.searchQuery,
-    });
+      searchText: shouldHighlight ? q : ''
+    })
 
-    // 设置高亮和当前文件
-    editorStore.highlightInfo = {
-      path: result.path,
-      lineNumber: result.lineNumber,
-      matches: result.matches,
-      text: result.text, // 这里用 text 字段
-    };
+    if (shouldHighlight) {
+      editorStore.highlightInfo = {
+        path: result.path,
+        lineNumber: result.lineNumber,
+        matches: result.matches,
+        text: result.text,
+      }
+    } else {
+      editorStore.highlightInfo = null
+    }
+
     editorStore.setFile({
       path: result.path,
       content: result.content || '',
-    });
+    })
   } catch (err) {
-    logger.error('打开搜索结果失败:', err);
+    logger.error('打开搜索结果失败:', err)
   }
-};
+}
 
 // 更健壮的 keyField 生成函数
 const getKeyField = (item) => {

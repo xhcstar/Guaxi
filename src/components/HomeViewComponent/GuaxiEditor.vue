@@ -8546,8 +8546,9 @@ const applyHighlights = () => {
     } else {
       editor.revealLineInCenter(lineNumber);
     }
-  } else if (text) {
-    const foundMatches = model.findMatches(text, false, false, true, null, true);
+  } else if (typeof text === 'string' && text.trim()) {
+    const query = text.trim();
+    const foundMatches = model.findMatches(query, false, false, true, null, true);
 
     newDecorations = foundMatches.map(match => ({
       range: match.range,
