@@ -692,11 +692,11 @@ const handleDeleteKnowledgeBase = async (repoPath) => {
   if (!kbName) return
 
   const ok = await confirmDialog(
-    `确定删除知识库 “${kbName}” 吗？\n\n将删除该知识库目录及其所有子目录和文件，并从数据库中移除该知识库条目。此操作不可恢复。`,
+    `确定将知识库 “${kbName}” 移入回收站吗？\n\n将把该知识库目录（以及对应元数据）移动到回收站目录，避免误删后无法找回。`,
     {
-      title: '删除知识库',
+      title: '移入回收站',
       kind: 'warning',
-      okLabel: '删除',
+      okLabel: '移入回收站',
       cancelLabel: '取消'
     }
   )
@@ -708,9 +708,11 @@ const handleDeleteKnowledgeBase = async (repoPath) => {
     const activeNorm = normalizePath(fileTreeStore.activeRepoPath)
 
     closeTabsUnderRepo(repoPath)
+    logger.info('[KnowledgeBase] move to trash start', { kbName, repoPath })
     await invoke('delete_knowledge_base', {
       input: { knowledge_base_name: kbName }
     })
+    logger.info('[KnowledgeBase] move to trash success', { kbName })
 
     let refreshed = []
     try {
@@ -739,10 +741,10 @@ const handleDeleteKnowledgeBase = async (repoPath) => {
       }
     }
 
-    message.success('知识库已删除')
+    message.success('知识库已移入回收站')
   } catch (error) {
-    logger.error('删除知识库失败:', error)
-    message.error('删除知识库失败')
+    logger.error('移入回收站失败:', error)
+    message.error('移入回收站失败')
   }
 }
 

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::Local;
 use rusqlite::{params, Connection};
 use std::env;
+use tracing::{info, warn};
 
 /// 知识库新建时的输入结构体
 #[derive(Deserialize)]
@@ -194,15 +195,31 @@ pub fn delete_knowledge_base(input: DeleteKnowledgeBaseInput) -> Result<(), Stri
         if parent_canon != root_canon {
             return Err("非法删除路径".to_string());
         }
-
-        fs::remove_dir_all(&kb_dir).map_err(|e| e.to_string())?;
     }
 
     let kb_meta_dir = root_dir
         .join(".meta")
         .join(format!("{}_meta", sanitize_meta_stem(&kb_name)));
-    if kb_meta_dir.exists() {
-        let _ = fs::remove_dir_all(&kb_meta_dir);
+
+    if !kb_dir.exists() && !kb_meta_dir.exists() {
+        info!(knowledge_base = %kb_name, "delete_knowledge_base: paths not found, deleting db record only");
+    } else {
+        if kb_dir.exists() {
+            info!(knowledge_base = %kb_name, path = %kb_dir.display(), "delete_knowledge_base: move to system trash");
+            trash::delete(&kb_dir).map_err(|e| {
+                warn!(knowledge_base = %kb_name, error = %e, path = %kb_dir.display(), "delete_knowledge_base: system trash failed");
+                format!("移动到系统回收站失败: {}", e)
+            })?;
+        }
+
+        if kb_meta_dir.exists() {
+            info!(knowledge_base = %kb_name, path = %kb_meta_dir.display(), "delete_knowledge_base: move meta to system trash");
+            if let Err(e) = trash::delete(&kb_meta_dir) {
+                warn!(knowledge_base = %kb_name, error = %e, path = %kb_meta_dir.display(), "delete_knowledge_base: meta trash failed");
+            }
+        }
+
+        info!(knowledge_base = %kb_name, "delete_knowledge_base: moved to system trash");
     }
 
     let conn = init_db().map_err(|e| e.to_string())?;
