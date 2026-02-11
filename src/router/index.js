@@ -7,6 +7,7 @@ import GuaxiApplicationPage from '../views/GuaxiApplicationPage.vue'
 import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
+import ExcalidrawPage from '../views/ExcalidrawPage.vue'
 import GuaxiReader from '../components/ReaderComponent/GuaxiReader.vue'
 import GuaxiMainLayout from '../components/GuaxiMainLayout.vue'
 import GitPanel from '../components/HomeViewComponent/GitPanel.vue'
@@ -92,6 +93,11 @@ export const routes = [
     path: '/search',
     name: 'search',
     component: GuaxiSearchPage,
+  },
+  {
+    path: '/excalidraw',
+    name: 'excalidraw',
+    component: ExcalidrawPage,
   },
   {
     path: '/setting',

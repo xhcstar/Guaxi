@@ -74,5 +74,8 @@ export default defineConfig(async () => ({
   },
   optimizeDeps: {
     include: ["monaco-editor", "monaco-vim"],
+    esbuildOptions: {
+      target: "es2022",
+    },
   },
 }));

@@ -16,6 +16,7 @@ import GuaxiSearchPage from '../views/GuaxiSearchPage.vue'
 import GuaxiSettingPage from '../views/GuaxiSettingPage.vue'
 import GuaxiRepoPage from '../views/GuaxiRepoPage.vue'
 import GuaxiStatisticsPage from '../views/GuaxiStatisticsPage.vue'
+import ExcalidrawPage from '../views/ExcalidrawPage.vue'
 import NotFound from '../views/NotFound.vue'
 
 const routes = {
@@ -26,6 +27,7 @@ const routes = {
   '/application': GuaxiApplicationPage,
   '/search': GuaxiSearchPage,
   '/statistics': GuaxiStatisticsPage,
+  '/excalidraw': ExcalidrawPage,
   '/setting': GuaxiSettingPage,
 }
 
