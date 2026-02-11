@@ -122,9 +122,17 @@ fn is_binary_extension(ext: &OsStr) -> bool {
     )
 }
 
+fn is_ignored_dir_component(c: &OsStr) -> bool {
+    c == OsStr::new(".git") || c == OsStr::new(".meta") || c == OsStr::new(".trash")
+}
+
+fn has_ignored_dir(path: &Path) -> bool {
+    path.components()
+        .any(|c| is_ignored_dir_component(c.as_os_str()))
+}
+
 fn should_skip_path(path: &Path) -> bool {
-    path.components().any(|c| c.as_os_str() == ".git")
-        || path.extension().map_or(false, is_binary_extension)
+    has_ignored_dir(path) || path.extension().map_or(false, is_binary_extension)
 }
 
 #[tauri::command]
@@ -178,6 +186,7 @@ pub async fn fd_search(
     let file_paths: Vec<_> = WalkBuilder::new(path)
         .hidden(false)
         .add_custom_ignore_filename(".ignore")
+        .filter_entry(|e| !has_ignored_dir(e.path()))
         .build()
         .filter_map(Result::ok)
         .filter(|entry| {
@@ -276,6 +285,7 @@ pub async fn rg_search(
     let file_paths: Vec<_> = WalkBuilder::new(path)
         .hidden(false)
         .add_custom_ignore_filename(".ignore")
+        .filter_entry(|e| !has_ignored_dir(e.path()))
         .build()
         .filter_map(Result::ok)
         .filter(|entry| {
