@@ -68,6 +68,14 @@
           <div class="repo-actions">
             <n-tooltip trigger="hover">
               <template #trigger>
+                <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleImportMarkdownFile(activeRepoPathItem)">
+                  <n-icon :component="DownloadOutline" size="16" />
+                </n-icon-wrapper>
+              </template>
+              导入 Markdown 文件
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
                 <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleAddFile(activeRepoPathItem)">
                   <n-icon :component="FileAddIcon" size="16" />
                 </n-icon-wrapper>
@@ -120,6 +128,14 @@
               <div class="repo-actions">
                 <n-tooltip trigger="hover">
                   <template #trigger>
+                    <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleImportMarkdownFile(path)">
+                      <n-icon :component="DownloadOutline" size="16" />
+                    </n-icon-wrapper>
+                  </template>
+                  导入 Markdown 文件
+                </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
                     <n-icon-wrapper :size="22" :border-radius="4" class="action-icon" @click.stop="handleAddFile(path)">
                       <n-icon :component="FileAddIcon" size="16" />
                     </n-icon-wrapper>
@@ -157,7 +173,7 @@
       :x="contextMenuPosition.x" :y="contextMenuPosition.y" @select="handleContextMenuSelect"
       @clickoutside="handleClickoutside" />
 
-    <n-modal v-model:show="importTemplateModalVisible" preset="dialog" title="导入到模板库" :mask-closable="false">
+    <n-modal v-model:show="importTemplateModalVisible" preset="dialog" title="导入Markdown文件" :mask-closable="false">
       <div class="import-template-modal-content">
         <n-form label-placement="left" label-width="auto" :show-require-mark="false">
           <n-form-item label="模板名称">
@@ -182,7 +198,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { NTree, NIcon, useMessage, NModal, NForm, NFormItem, NInput, NButton, NSpace } from 'naive-ui'
-import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline } from '@vicons/ionicons5'
+import { DocumentTextOutline, FolderOutline, AddOutline, TrashOutline, CreateOutline, MoveOutline, FolderOpenOutline, GlobeOutline, SettingsOutline, GitBranchOutline, DownloadOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore';
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -480,7 +496,7 @@ const contextMenuOptions = ref([
     icon: () => h(NIcon, null, { default: () => h(FolderOpenOutline) })
   },
   {
-    label: '导入到模板库',
+    label: '导入Markdown文件',
     key: 'importAsTemplate',
     disabled: true,
     icon: () => h(NIcon, null, { default: () => h(DocumentTextOutline) })
@@ -519,22 +535,117 @@ const isHiddenPath = (path) => {
   return normalized.split('/').some(part => part.startsWith('.'));
 };
 
+const normalizeNewMarkdownFileName = (rawName) => {
+  const name = String(rawName || '').trim();
+  if (!name) return '';
+
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.md')) return name;
+
+  if (lower.endsWith('.markdown')) {
+    const next = name.slice(0, -'.markdown'.length) + '.md';
+    logger.info('[NewFile] normalize .markdown -> .md', { input: name, output: next });
+    return next;
+  }
+
+  const lastDot = name.lastIndexOf('.');
+  if (lastDot > 0 && lastDot < name.length - 1) {
+    const base = name.slice(0, lastDot);
+    const next = `${base}.md`;
+    logger.info('[NewFile] replace extension -> .md', { input: name, output: next });
+    return next;
+  }
+
+  return `${name}.md`;
+};
+
+const makeUniqueFileName = (existingNames, desiredName) => {
+  const set = new Set((existingNames || []).map((x) => String(x || '').toLowerCase()));
+  const original = String(desiredName || '').trim();
+  if (!original) return '';
+
+  if (!set.has(original.toLowerCase())) return original;
+
+  const dot = original.lastIndexOf('.');
+  const hasExt = dot > 0 && dot < original.length - 1;
+  const base = hasExt ? original.slice(0, dot) : original;
+  const ext = hasExt ? original.slice(dot) : '';
+
+  for (let i = 2; i < 2000; i += 1) {
+    const next = `${base} (${i})${ext}`;
+    if (!set.has(next.toLowerCase())) return next;
+  }
+
+  return `${base} (${Date.now()})${ext}`;
+};
+
+const guessImportTargetDir = (repoPath) => {
+  let parentPath = repoPath;
+
+  if (selectedKeys.value.length > 0) {
+    const selectedKey = selectedKeys.value[0];
+    const selectedNode = findNodeById(fileTree.value, selectedKey);
+    if (selectedNode?.is_directory) {
+      parentPath = selectedNode.id;
+    }
+  }
+
+  return normalizePath(parentPath);
+};
+
+const handleImportMarkdownFile = async (repoPath) => {
+  const targetDir = guessImportTargetDir(repoPath);
+  if (!targetDir) {
+    message.warning('未找到导入目标目录');
+    return;
+  }
+
+  try {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
+    });
+
+    if (!picked) return;
+
+    const srcPath = normalizePath(picked);
+    const fileName = srcPath.split('/').pop();
+    if (!fileName) {
+      message.error('导入失败：无法解析文件名');
+      return;
+    }
+
+    const dirNodes = await invoke('get_file_tree', { path: targetDir });
+    const existingNames = Array.isArray(dirNodes) ? dirNodes.map((n) => n?.name).filter(Boolean) : [];
+
+    const uniqueName = makeUniqueFileName(existingNames, fileName);
+    const dstPath = normalizePath(`${targetDir}/${uniqueName}`);
+
+    logger.info('[ImportMarkdown] start', {
+      repoPath: normalizePath(repoPath),
+      targetDir,
+      srcPath,
+      dstPath
+    });
+
+    const content = await invoke('read_file_content', { path: srcPath });
+    await invoke('write_file_content', { path: dstPath, content: String(content ?? '') });
+
+    await refreshDirectory(targetDir);
+
+    logger.info('[ImportMarkdown] success', { dstPath, len: String(content ?? '').length });
+    message.success('Markdown 文件已导入');
+  } catch (error) {
+    logger.error('[ImportMarkdown] failed:', error);
+    message.error(`导入失败: ${error.message || error}`);
+    await refreshDirectory(targetDir);
+  }
+};
+
 // 修改后的handleAddFile函数
 const handleAddFile = async (repoPath) => {
   try {
-    let parentPath = repoPath; // 默认使用仓库路径
-
-    // 如果有选中的节点，获取其路径
-    if (selectedKeys.value.length > 0) {
-      const selectedKey = selectedKeys.value[0];
-      const selectedNode = findNodeById(fileTree.value, selectedKey);
-
-      // 如果选中的是目录，则使用该目录路径
-      if (selectedNode?.is_directory) {
-        parentPath = selectedNode.id;
-      }
-    }
-
+    const parentPath = guessImportTargetDir(repoPath); // 与导入一致：优先用选中的目录
     await addNode(parentPath, false);
   } catch (error) {
     message.error(`添加文件失败: ${error.message}`);
@@ -1149,6 +1260,14 @@ const handleBlur = async () => {
     return;
   }
 
+  if (node?.isNew && !node?.is_directory) {
+    const normalized = normalizeNewMarkdownFileName(editName.value);
+    if (normalized && normalized !== editName.value) {
+      logger.info('[NewFile] auto append .md', { input: editName.value, output: normalized });
+      editName.value = normalized;
+    }
+  }
+
   // 构建新路径（统一规范化，避免 Windows 路径分隔符导致创建/读取不一致）
   const basePath = normalizePath(parentPath)
   const newId = normalizePath(`${basePath}/${editName.value}`)
@@ -1394,11 +1513,10 @@ const selectTargetPath = async () => {
     title: '选择目标路径',
   });
 
-  if (result) {
-    return result;
-  } else {
-    return null;
-  }
+  if (!result) return null;
+
+  const pickedPath = Array.isArray(result) ? result[0] : result;
+  return pickedPath || null;
 };
 
 const refreshDirectory = async (directoryId) => {
