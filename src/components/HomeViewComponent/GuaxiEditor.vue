@@ -6140,28 +6140,21 @@ const handlePreviewClick = async (e) => {
     const ok = res?.ok
     const stdout = String(res?.stdout || '')
     const stderr = String(res?.stderr || '')
-    const resultJson = res?.result_json
-    const resultRepr = res?.result_repr
 
-    let out = ''
-    if (stdout) out += `[stdout]\n${stdout}\n`
-    if (stderr) out += `${out ? '\n' : ''}[stderr]\n${stderr}\n`
-
-    if (resultJson != null) {
-      try {
-        out += `${out ? '\n' : ''}[_result.json]\n${JSON.stringify(resultJson, null, 2)}\n`
-      } catch {
-        out += `${out ? '\n' : ''}[_result.json]\n${String(resultJson)}\n`
-      }
-    } else if (resultRepr) {
-      out += `${out ? '\n' : ''}[_result]\n${String(resultRepr)}\n`
-    }
+    const hasStdout = stdout.trim().length > 0
+    const hasStderr = stderr.trim().length > 0
 
     if (ok === false) {
-      return out.trim() || '(执行失败：无错误输出)'
+      if (hasStderr) return stderr.trimEnd()
+      if (hasStdout) return stdout.trimEnd()
+      return '(执行失败：无错误输出)'
     }
 
-    return out.trim() || '(本单元未产生输出)'
+    const parts = []
+    if (hasStdout) parts.push(stdout.trimEnd())
+    if (hasStderr) parts.push(stderr.trimEnd())
+
+    return parts.join('\n\n')
   }
 
   const getGuaxiDisplayFromResult = (res) => {
@@ -6221,9 +6214,7 @@ const handlePreviewClick = async (e) => {
 
   const renderPyCellDisplay = (cell, outputPre, res, outputText) => {
     const display = getGuaxiDisplayFromResult(res)
-    const shouldHideDefaultText =
-      !!display &&
-      ['(本单元未产生输出)', '(无输出)'].includes(String(outputText || '').trim())
+    const shouldHideText = String(outputText || '').trim().length === 0
 
     if (!display) {
       const media = cell?.querySelector?.('.guaxi-pycell-media')
@@ -6231,7 +6222,7 @@ const handlePreviewClick = async (e) => {
         media.innerHTML = ''
         media.style.display = 'none'
       }
-      if (outputPre && shouldHideDefaultText) outputPre.style.display = 'none'
+      if (outputPre && shouldHideText) outputPre.style.display = 'none'
       return
     }
 
@@ -6265,7 +6256,7 @@ const handlePreviewClick = async (e) => {
     media.appendChild(img)
     media.style.display = 'flex'
 
-    if (outputPre && shouldHideDefaultText) {
+    if (outputPre && shouldHideText) {
       outputPre.style.display = 'none'
     }
   }
@@ -6358,10 +6349,59 @@ const handlePreviewClick = async (e) => {
     return true
   }
 
-  // 可执行 Python 代码块：预览点击“运行/运行并写回”
+  // 可执行 Python 代码块：预览点击“运行/运行并写回/显示结果”
   const pyBtn = base.closest?.('[data-guaxi-py-action]')
   if (pyBtn && previewContainer.value && previewContainer.value.contains(pyBtn)) {
     const action = String(pyBtn.getAttribute('data-guaxi-py-action') || '').trim()
+
+    if (action === 'toggle-output') {
+      const cell = pyBtn.closest?.('.guaxi-pycell')
+      if (!cell) return
+
+      const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
+      const outputPre = outputEl ? outputEl.closest?.('pre') : null
+      const media = cell.querySelector?.('.guaxi-pycell-media')
+
+      if (!outputPre && !media) {
+        message.warning('未找到运行结果区域')
+        e.stopPropagation()
+        return
+      }
+
+      const hasText = String(outputEl?.textContent || '').trim().length > 0
+      const hasImage = !!media?.querySelector?.('img')
+
+      const isVisible = (el) => {
+        if (!el) return false
+        return String(el.style.display || '').trim() !== 'none'
+      }
+
+      const currentlyVisible = isVisible(outputPre) || isVisible(media)
+      const nextShow = !currentlyVisible
+
+      if (outputPre) {
+        outputPre.style.display = nextShow && hasText ? '' : 'none'
+      }
+      if (media) {
+        media.style.display = nextShow && hasImage ? 'flex' : 'none'
+      }
+
+      const anyVisibleAfter = isVisible(outputPre) || isVisible(media)
+      pyBtn.textContent = anyVisibleAfter ? '隐藏结果' : '显示结果'
+
+      logger.info('[PyCell] toggle output', {
+        nextShow,
+        hasText,
+        hasImage,
+        textVisible: isVisible(outputPre),
+        imageVisible: isVisible(media),
+      })
+
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
     if (action === 'run' || action === 'run-save') {
       const cell = pyBtn.closest?.('.guaxi-pycell')
       if (!cell) return
@@ -6378,11 +6418,20 @@ const handlePreviewClick = async (e) => {
 
       const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
       const outputPre = outputEl ? outputEl.closest?.('pre') : null
+      const toggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-output"]')
+      const syncToggleText = () => {
+        if (!toggleBtn) return
+        const media = cell.querySelector?.('.guaxi-pycell-media')
+        const textVisible = outputPre ? String(outputPre.style.display || '').trim() !== 'none' : false
+        const imageVisible = media ? String(media.style.display || '').trim() !== 'none' : false
+        toggleBtn.textContent = textVisible || imageVisible ? '隐藏结果' : '显示结果'
+      }
 
       // 说明：输出容器默认隐藏（避免未运行时占位）；运行时再展示。
       if (outputPre) {
         outputPre.style.display = ''
       }
+      syncToggleText()
       if (outputEl) outputEl.textContent = '运行中...'
 
       const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
@@ -6430,16 +6479,15 @@ const handlePreviewClick = async (e) => {
 
         const outputText = formatPythonExecOutput(res)
 
+        const hideText = String(outputText || '').trim().length === 0
+
         if (outputPre) {
-          const trimmed = String(outputText || '').trim()
-          const hideDefault = ['(本单元未产生输出)', '(无输出)'].includes(trimmed)
-          outputPre.style.display = hideDefault ? 'none' : ''
+          outputPre.style.display = hideText ? 'none' : ''
         }
+        syncToggleText()
 
         if (outputEl) {
-          const trimmed = String(outputText || '').trim()
-          const hideDefault = ['(本单元未产生输出)', '(无输出)'].includes(trimmed)
-          outputEl.textContent = hideDefault ? '' : outputText
+          outputEl.textContent = hideText ? '' : outputText
         }
 
         renderPyCellDisplay(cell, outputPre, res, outputText)
@@ -6449,18 +6497,24 @@ const handlePreviewClick = async (e) => {
         }
 
         if (action === 'run-save') {
-          suppressPreviewAutoRenderOnce(`pycell:${action}`, 1500)
+          const hasTextOutput = String(outputText || '').trim().length > 0
+          if (!hasTextOutput) {
+            logger.info('[PyCell] run-save skipped: empty text output', { cellId })
+            message.success('运行完成（无文字输出，未写回）')
+          } else {
+            suppressPreviewAutoRenderOnce(`pycell:${action}`, 1500)
 
-          const current = String(editor?.getModel?.()?.getValue?.() || rawContent.value || '')
-          const nextMarkdown = upsertPythonOutputBlock(
-            current,
-            Number.isFinite(startLine) ? startLine : null,
-            cellId || 'pycell',
-            outputText
-          )
+            const current = String(editor?.getModel?.()?.getValue?.() || rawContent.value || '')
+            const nextMarkdown = upsertPythonOutputBlock(
+              current,
+              Number.isFinite(startLine) ? startLine : null,
+              cellId || 'pycell',
+              outputText
+            )
 
-          applyMarkdownReplaceFromPreview(nextMarkdown, { action: 'pycell-run-save' })
-          message.success('已写回到文档（未自动保存）')
+            applyMarkdownReplaceFromPreview(nextMarkdown, { action: 'pycell-run-save' })
+            message.success('已写回到文档（未自动保存）')
+          }
         } else {
           message.success('运行完成')
         }
@@ -6469,6 +6523,7 @@ const handlePreviewClick = async (e) => {
         if (outputPre) {
           outputPre.style.display = ''
         }
+        syncToggleText()
         if (outputEl) outputEl.textContent = `运行失败：${String(err?.message || err)}`
         message.error('运行失败')
       } finally {

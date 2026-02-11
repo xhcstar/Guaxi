@@ -1250,6 +1250,9 @@ export const renderMarkdown = async (content, options) => {
                 <button type="button" class="guaxi-pycell-btn guaxi-pycell-run-save" data-guaxi-py-action="run-save" style="padding:4px 8px;border-radius:6px;border:1px solid var(--guaxi-border);background:var(--guaxi-panel-bg);color:var(--guaxi-text-primary);cursor:pointer;">
                   运行并写回
                 </button>
+                <button type="button" class="guaxi-pycell-btn guaxi-pycell-output-toggle" data-guaxi-py-action="toggle-output" style="padding:4px 8px;border-radius:6px;border:1px solid var(--guaxi-border);background:var(--guaxi-panel-bg);color:var(--guaxi-text-primary);cursor:pointer;">
+                  显示结果
+                </button>
                 <span class="guaxi-pycell-hint" style="opacity:.7;font-size:12px;">输出会显示在下方（写回会保存到笔记 Markdown）</span>
               </div>
               ${codeHtml}
