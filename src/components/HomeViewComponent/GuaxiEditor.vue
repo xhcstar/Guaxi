@@ -29,6 +29,8 @@
           </div>
         </div>
       </div>
+
+
       <div class="toolbar">
         <div v-if="previewMode !== 'realtime'" class="toolbar-editing-actions">
           <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
@@ -388,6 +390,24 @@
           </n-tooltip>
         </div>
 
+        <div class="breadcrumb-bar">
+          <div ref="breadcrumbScrollRef" class="breadcrumb-scroll" @wheel.prevent="handleBreadcrumbWheel">
+            <n-breadcrumb separator="›">
+              <n-breadcrumb-item v-for="it in breadcrumbItems" :key="it.key">
+                <span class="breadcrumb-item" :class="{ disabled: !!it.disabled }" :title="it.title"
+                  @click.stop="openBreadcrumbPicker(it, $event)">
+                  <Icon v-if="it.icon" class="breadcrumb-icon" :icon="it.icon" width="14" height="14" />
+                  <span class="breadcrumb-label">{{ it.label }}</span>
+                </span>
+              </n-breadcrumb-item>
+            </n-breadcrumb>
+          </div>
+
+          <n-dropdown v-model:show="breadcrumbPickerVisible" trigger="manual" placement="bottom-start"
+            :x="breadcrumbPickerPosition.x" :y="breadcrumbPickerPosition.y" :options="breadcrumbPickerOptions"
+            @select="handleBreadcrumbPickerSelect" @clickoutside="closeBreadcrumbPicker" />
+        </div>
+
         <GuaxiSelectionTranslatePanel v-if="selectionTranslatePanelVisible" :pos="selectionTranslatePanelPos"
           :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
           :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" :items="selectionTranslateItems"
@@ -433,7 +453,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
-import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber } from 'naive-ui'
+import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
 import { DocumentEdit16Regular, Edit16Filled, Image28Regular } from '@vicons/fluent'
@@ -463,6 +483,9 @@ import eyeIcon from '@iconify-icons/lucide/eye'
 import columns2Icon from '@iconify-icons/lucide/columns'
 import bookOpenIcon from '@iconify-icons/lucide/book-open'
 import languagesIcon from '@iconify-icons/lucide/languages'
+import folderIcon from '@iconify-icons/lucide/folder'
+import fileTextIcon from '@iconify-icons/lucide/file-text'
+import hashIcon from '@iconify-icons/lucide/hash'
 
 import tableRowPlusAfter from '@iconify-icons/mdi/table-row-plus-after'
 import tableRowRemove from '@iconify-icons/mdi/table-row-remove'
@@ -502,7 +525,7 @@ import { GitBranchOutline } from '@vicons/ionicons5'
 import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { listen, emit } from '@tauri-apps/api/event'
 import { save, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 
 const logger = createLogger('GuaxiEditor')
@@ -1208,6 +1231,401 @@ const rawContent = ref(selectedFile.value?.content || '')
 // 1. 获取当前激活tab对象和内容
 const activeTab = computed(() => fileTreeStore.openTabs.find(tab => tab.path === fileTreeStore.activeTab));
 const activeTabContent = computed(() => activeTab.value?.content || '');
+
+// 面包屑导航：点击后联动文件树定位/展开
+const EVENT_REVEAL_IN_FILE_TREE = 'guaxi_editor_reveal_in_file_tree'
+
+// 统一路径分隔符（用于面包屑展示与前缀判断）
+const normalizeSlashes = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$|\s+$/g, '').trim()
+
+const cursorLineNumber = computed(() => {
+  const n = Number(editorStore.cursorPosition?.lineNumber || 1)
+  return Number.isFinite(n) && n > 0 ? n : 1
+})
+
+const safeOutlineFlat = computed(() => {
+  const v = outlineStore?.outline
+  if (Array.isArray(v)) return v
+  if (Array.isArray(v?.value)) return v.value
+  return []
+})
+
+const buildHeadingBreadcrumbItems = (outlineFlat, lineNumber) => {
+  const arr = Array.isArray(outlineFlat) ? outlineFlat : []
+  if (!arr.length) return []
+
+  const ln = Number(lineNumber || 1)
+  const stack = []
+
+  for (const h of arr) {
+    const hLine = Number(h?.line || 0)
+    const level = Number(h?.level || 0)
+    const text = String(h?.text || '').trim()
+    if (!text || !Number.isFinite(hLine) || hLine <= 0 || !Number.isFinite(level) || level <= 0) continue
+    if (hLine > ln) break
+
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop()
+    stack.push({ level, text, line: hLine })
+  }
+
+  return stack.map((h) => ({
+    key: `heading:${h.line}:${h.level}:${h.text}`,
+    label: h.text,
+    title: `Ln ${h.line}: ${h.text}`,
+    icon: hashIcon,
+    kind: 'heading',
+    line: h.line
+  }))
+}
+
+// 从 repopathlist 中找出“最匹配”的知识库根路径
+const findRepoRootForPath = (absPath) => {
+  const target = normalizeSlashes(absPath)
+  if (!target) return ''
+
+  const repos = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
+  let best = ''
+  for (const raw of repos) {
+    const repo = normalizeSlashes(raw)
+    if (!repo) continue
+    if (target === repo || target.startsWith(`${repo}/`)) {
+      if (repo.length > best.length) best = repo
+    }
+  }
+
+  // 兜底：如果当前 activeRepoPath 能匹配，也返回
+  const active = normalizeSlashes(fileTreeStore.activeRepoPath)
+  if (!best && active && (target === active || target.startsWith(`${active}/`))) {
+    best = active
+  }
+
+  return best
+}
+
+// 折叠过长的路径面包屑，避免把“标题/函数”等大纲面包屑挤出可视区（行为参考 VSCode：保留头部与尾部，中间用“…”折叠）
+const collapsePathBreadcrumbItems = (items, maxVisible = 4) => {
+  const arr = Array.isArray(items) ? items : []
+  if (arr.length <= maxVisible) return arr
+
+  const head = arr[0]
+  const tailCount = Math.max(1, maxVisible - 2)
+  const tail = arr.slice(-tailCount)
+
+  const full = arr.map((it) => String(it?.title || it?.label || '')).filter(Boolean).join(' › ')
+
+  return [
+    head,
+    {
+      key: `ellipsis:${head?.key || 'path'}`,
+      label: '…',
+      title: full || '路径已折叠',
+      kind: 'ellipsis',
+      disabled: true
+    },
+    ...tail
+  ]
+}
+
+const buildBreadcrumbItems = (absPath) => {
+  const target = normalizeSlashes(absPath)
+  if (!target) {
+    return [{ key: 'placeholder', label: '未打开文件', title: '未打开文件', icon: fileTextIcon, kind: 'placeholder', disabled: true }]
+  }
+
+  const repoRoot = findRepoRootForPath(target)
+  const items = []
+
+  if (repoRoot) {
+    const repoName = repoRoot.split('/').pop() || repoRoot
+    items.push({ key: `repo:${repoRoot}`, label: repoName, title: repoRoot, icon: bookOpenIcon, kind: 'repo', path: repoRoot })
+
+    const rel = target === repoRoot ? '' : target.slice(repoRoot.length + 1)
+    const parts = rel ? rel.split('/').filter(Boolean) : []
+
+    let cursor = repoRoot
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      cursor = `${cursor}/${part}`
+      const isLast = i === parts.length - 1
+      items.push({
+        key: `path:${cursor}`,
+        label: part,
+        title: cursor,
+        icon: isLast ? fileTextIcon : folderIcon,
+        kind: isLast ? 'file' : 'dir',
+        path: cursor
+      })
+    }
+
+    return collapsePathBreadcrumbItems(items)
+  }
+
+  const leaf = target.split('/').pop() || target
+  return [{ key: `leaf:${target}`, label: leaf, title: target, icon: fileTextIcon, kind: 'leaf', path: target }]
+}
+
+const breadcrumbItems = computed(() => {
+  const absPath = activeTab.value?.path || selectedFile.value?.path || ''
+  const pathItems = buildBreadcrumbItems(absPath)
+  const headingItems = buildHeadingBreadcrumbItems(safeOutlineFlat.value, cursorLineNumber.value)
+  return [...pathItems, ...headingItems]
+})
+
+const handleBreadcrumbClick = async (it) => {
+  if (!it || it.disabled) return
+
+  if (it.kind === 'heading' && Number.isFinite(Number(it.line))) {
+    const ln = Number(it.line)
+    logger.info('[Breadcrumb] jump to heading', { line: ln, label: it.label })
+    try {
+      jumpToLine(ln)
+    } catch (e) {
+      logger.warn('[Breadcrumb] jump failed:', e)
+    }
+    return
+  }
+
+  const path = it?.path ? String(it.path) : ''
+  if (!path) return
+
+  logger.info('[Breadcrumb] reveal in file tree', { label: it?.label, path })
+  try {
+    await emit(EVENT_REVEAL_IN_FILE_TREE, { path })
+  } catch (e) {
+    logger.warn('[Breadcrumb] emit reveal event failed:', e)
+  }
+}
+
+const breadcrumbScrollRef = ref(null)
+
+const handleBreadcrumbWheel = (e) => {
+  const el = breadcrumbScrollRef.value
+  if (!el) return
+
+  const dx = Number(e?.deltaX || 0)
+  const dy = Number(e?.deltaY || 0)
+  const delta = Math.abs(dy) >= Math.abs(dx) ? dy : dx
+
+  if (!Number.isFinite(delta) || delta === 0) return
+
+  el.scrollLeft += delta
+}
+
+const breadcrumbPickerVisible = ref(false)
+const breadcrumbPickerOptions = ref([])
+const breadcrumbPickerPosition = ref({ x: 0, y: 0 })
+const breadcrumbPickerPayloadByKey = ref(new Map())
+
+const closeBreadcrumbPicker = () => {
+  breadcrumbPickerVisible.value = false
+  breadcrumbPickerOptions.value = []
+  breadcrumbPickerPayloadByKey.value = new Map()
+}
+
+const normalizeBreadcrumbPath = (path) => {
+  const raw = normalizeSlashes(path)
+  if (!raw) return ''
+  if (raw.match(/^[a-zA-Z]:\//)) return raw[0].toUpperCase() + raw.slice(1)
+  return raw
+}
+
+const isHiddenPathForBreadcrumb = (path) => {
+  const p = normalizeBreadcrumbPath(path)
+  if (!p) return false
+  return p.split('/').some((part) => String(part || '').startsWith('.'))
+}
+
+const getFileTreeIndex = (() => {
+  let cachedTreeRef = null
+  let cachedRootId = ''
+  let cached = null
+
+  const walk = (nodes, parentId, parentById, childrenByParent, nodeById) => {
+    if (!Array.isArray(nodes)) return
+    for (const node of nodes) {
+      const id = normalizeBreadcrumbPath(node?.id)
+      if (!id) continue
+
+      nodeById.set(id, node)
+      if (parentId) parentById.set(id, parentId)
+
+      const list = childrenByParent.get(parentId) || []
+      list.push(node)
+      childrenByParent.set(parentId, list)
+
+      if (Array.isArray(node?.children) && node.children.length) {
+        walk(node.children, id, parentById, childrenByParent, nodeById)
+      }
+    }
+  }
+
+  return (rootId) => {
+    const treeRef = fileTreeStore.fileTree
+    const rid = normalizeBreadcrumbPath(rootId)
+    if (treeRef && treeRef === cachedTreeRef && rid && rid === cachedRootId && cached) return cached
+
+    const parentById = new Map()
+    const childrenByParent = new Map()
+    const nodeById = new Map()
+
+    walk(treeRef, rid, parentById, childrenByParent, nodeById)
+
+    cachedTreeRef = treeRef
+    cachedRootId = rid
+    cached = { parentById, childrenByParent, nodeById, rootId: rid }
+    return cached
+  }
+})()
+
+const buildOutlineTreeWithParents = (flatOutline) => {
+  const stack = []
+  const root = []
+  const byKey = new Map()
+
+  const arr = Array.isArray(flatOutline) ? flatOutline : []
+  arr.forEach((item, idx) => {
+    const level = Number(item?.level || 0)
+    const text = String(item?.text || '').trim()
+    const line = Number(item?.line || 0)
+    if (!text || !Number.isFinite(level) || level <= 0 || !Number.isFinite(line) || line <= 0) return
+
+    const key = `heading:${line}:${level}:${text}`
+    const node = { key, level, text, line, parent: null, children: [], _idx: idx }
+
+    while (stack.length && stack[stack.length - 1].level >= node.level) stack.pop()
+
+    if (stack.length === 0) {
+      root.push(node)
+    } else {
+      node.parent = stack[stack.length - 1]
+      node.parent.children.push(node)
+    }
+
+    stack.push(node)
+    byKey.set(key, node)
+  })
+
+  return { root, byKey }
+}
+
+const makeBreadcrumbPickerOption = (payload, isActive) => {
+  const key = payload.key
+  return {
+    key,
+    label: () => h('div', { class: ['breadcrumb-picker-item', isActive ? 'active' : ''] }, [
+      payload.icon ? h(Icon, { icon: payload.icon, width: 14, height: 14, class: 'breadcrumb-picker-icon' }) : null,
+      h('span', { class: 'breadcrumb-picker-label', title: payload.title || payload.label }, payload.label),
+    ])
+  }
+}
+
+const openBreadcrumbPicker = (it, ev) => {
+  if (!it || it.disabled) return
+
+  const x = Number(ev?.clientX || 0)
+  const y = Number(ev?.clientY || 0)
+  breadcrumbPickerPosition.value = { x, y }
+
+  const payloadByKey = new Map()
+  let payloads = []
+
+  if (it.kind === 'heading') {
+    const tree = buildOutlineTreeWithParents(safeOutlineFlat.value)
+    const node = tree.byKey.get(String(it.key || ''))
+    const siblings = node?.parent ? node.parent.children : tree.root
+
+    payloads = (siblings || []).map((n) => ({
+      key: `H:${n.key}`,
+      label: n.text,
+      title: `Ln ${n.line}: ${n.text}`,
+      icon: hashIcon,
+      kind: 'heading',
+      line: n.line,
+    }))
+  } else {
+    if (it.kind === 'repo') {
+      payloads = (Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []).map((p) => {
+        const path = normalizeBreadcrumbPath(p)
+        const name = path.split('/').pop() || path
+        return { key: `P:${path}`, label: name, title: path, icon: bookOpenIcon, kind: 'repo', path, isFile: false }
+      })
+    } else {
+      const target = normalizeBreadcrumbPath(it.path)
+      const repoRoot = normalizeBreadcrumbPath(findRepoRootForPath(target) || fileTreeStore.activeRepoPath || '')
+      const index = getFileTreeIndex(repoRoot)
+
+      const parentId = index?.parentById?.get(target) || repoRoot
+      const siblingsRaw = index?.childrenByParent?.get(parentId) || []
+
+      payloads = siblingsRaw
+        .map((n) => {
+          const path = normalizeBreadcrumbPath(n?.id)
+          if (!path) return null
+          if (isHiddenPathForBreadcrumb(path)) return null
+
+          const label = String(n?.label || path.split('/').pop() || path)
+          const isDir = Array.isArray(n?.children) && n.children.length > 0
+          return {
+            key: `P:${path}`,
+            label,
+            title: path,
+            icon: isDir ? folderIcon : fileTextIcon,
+            kind: isDir ? 'dir' : 'file',
+            path,
+            isFile: !isDir
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), 'zh-CN'))
+    }
+  }
+
+  if (!payloads.length) {
+    logger.info('[BreadcrumbPicker] no siblings, fallback click', { key: it.key, kind: it.kind })
+    handleBreadcrumbClick(it)
+    return
+  }
+
+  for (const p of payloads) payloadByKey.set(p.key, p)
+
+  breadcrumbPickerPayloadByKey.value = payloadByKey
+  breadcrumbPickerOptions.value = payloads.map((p) => {
+    const isActive = it.kind === 'heading'
+      ? String(it.key || '') === String(p.key || '').replace(/^H:/, '')
+      : normalizeBreadcrumbPath(it.path) === normalizeBreadcrumbPath(p.path)
+
+    return makeBreadcrumbPickerOption(p, isActive)
+  })
+
+  breadcrumbPickerVisible.value = true
+  logger.info('[BreadcrumbPicker] opened', { kind: it.kind, key: it.key, count: payloads.length })
+}
+
+const handleBreadcrumbPickerSelect = async (key) => {
+  const payload = breadcrumbPickerPayloadByKey.value?.get?.(key)
+  closeBreadcrumbPicker()
+  if (!payload) return
+
+  if (payload.kind === 'heading') {
+    logger.info('[BreadcrumbPicker] select heading', { line: payload.line, label: payload.label })
+    handleBreadcrumbClick({ kind: 'heading', line: payload.line, label: payload.label })
+    return
+  }
+
+  const path = payload.path
+  if (!path) return
+
+  logger.info('[BreadcrumbPicker] select path', { path, kind: payload.kind, isFile: !!payload.isFile })
+
+  try {
+    if (payload.isFile) {
+      await fileTreeStore.openFileInTab(path)
+    }
+    await emit(EVENT_REVEAL_IN_FILE_TREE, { path })
+  } catch (e) {
+    logger.warn('[BreadcrumbPicker] select failed:', e)
+  }
+}
 
 const leftTabs = computed(() => {
   if (layoutMode.value === 'single' || fileTreeStore.splitIndex == null) {
@@ -7850,6 +8268,132 @@ onUnmounted(() => {
   position: sticky;
   top: 0;
   z-index: 50;
+}
+
+.breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 8px;
+  background-color: var(--guaxi-header-bg);
+  border-bottom: 1px solid var(--guaxi-border);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.breadcrumb-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
+}
+
+.breadcrumb-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.breadcrumb-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.breadcrumb-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.breadcrumb-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.28);
+}
+
+:global(:root[data-guaxi-theme='dark']) .breadcrumb-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+:global(:root[data-guaxi-theme='dark']) .breadcrumb-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+:global(:root[data-guaxi-theme='dark']) .breadcrumb-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.26);
+}
+
+.breadcrumb-bar :deep(.n-breadcrumb) {
+  white-space: nowrap;
+}
+
+.breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  cursor: pointer;
+  user-select: none;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.breadcrumb-item.disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.breadcrumb-icon {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.breadcrumb-label {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.breadcrumb-item:hover {
+  color: var(--n-color-primary, #18a058);
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.breadcrumb-item.disabled:hover {
+  color: inherit;
+  background: transparent;
+}
+
+.breadcrumb-picker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+  max-width: 420px;
+}
+
+.breadcrumb-picker-icon {
+  flex: 0 0 auto;
+  opacity: 0.9;
+}
+
+.breadcrumb-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb-picker-item.active .breadcrumb-picker-label {
+  font-weight: 650;
 }
 
 .toolbar {

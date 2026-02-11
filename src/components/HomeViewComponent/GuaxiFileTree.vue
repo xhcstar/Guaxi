@@ -213,6 +213,11 @@ import { Folder20Regular as FolderIcon, ChannelAdd20Regular as FileAddIcon, Fold
 
 const logger = createLogger('GuaxiFileTree')
 const message = useMessage();
+
+// 编辑器面包屑联动：用于从编辑器定位到文件树节点
+const EVENT_REVEAL_IN_FILE_TREE = 'guaxi_editor_reveal_in_file_tree'
+const breadcrumbRevealUnlisten = ref(null)
+
 // 处理文件树容器的右键点击事件
 const treeRef = ref(null)
 
@@ -1599,6 +1604,87 @@ const normalizePath = (path) => {
   return normalized;
 };
 
+// 从路径推断所属知识库根目录（选择“最长前缀匹配”的仓库路径）
+const pickRepoRootForPath = (absPath) => {
+  const target = normalizePath(absPath)
+  if (!target) return ''
+
+  const repos = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
+  let best = ''
+  for (const raw of repos) {
+    const repo = normalizePath(raw)
+    if (!repo) continue
+    if (target === repo || target.startsWith(`${repo}/`)) {
+      if (repo.length > best.length) best = repo
+    }
+  }
+  return best
+}
+
+// 构造从 repoRoot 到 targetPath 的“目录祖先链”，用于展开
+const buildAncestorDirs = (repoRoot, targetPath) => {
+  const root = normalizePath(repoRoot)
+  const target = normalizePath(targetPath)
+  if (!root || !target) return []
+  if (!(target === root || target.startsWith(`${root}/`))) return []
+
+  const rel = target === root ? '' : target.slice(root.length + 1)
+  const parts = rel ? rel.split('/').filter(Boolean) : []
+  if (!parts.length) return []
+
+  const dirs = []
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = `${root}/${parts.slice(0, i + 1).join('/')}`
+    dirs.push(p)
+  }
+  return dirs
+}
+
+// 由编辑器面包屑触发：切换仓库、展开并选中目标节点
+const revealPathInTree = async (absPath) => {
+  const target = normalizePath(absPath)
+  if (!target) return
+
+  if (isHiddenPath(target)) {
+    logger.info('[BreadcrumbReveal] ignored hidden path', { target })
+    return
+  }
+
+  const repoRoot = pickRepoRootForPath(target) || normalizePath(fileTreeStore.activeRepoPath)
+  const activeRepo = normalizePath(fileTreeStore.activeRepoPath)
+
+  try {
+    if (repoRoot && repoRoot !== activeRepo) {
+      logger.info('[BreadcrumbReveal] switch repo', { from: activeRepo, to: repoRoot })
+      fileTreeStore.setActiveRepoPath(repoRoot)
+      fileTreeStore.expandedRepos.set(repoRoot, true)
+      await loadRepoTree(repoRoot)
+    } else if (repoRoot && (!Array.isArray(fileTree.value) || fileTree.value.length === 0)) {
+      await loadRepoTree(repoRoot)
+    }
+
+    const ancestors = buildAncestorDirs(repoRoot || activeRepo, target)
+    if (ancestors.length) {
+      expandedKeys.value = Array.from(new Set([...(expandedKeys.value || []), ...ancestors]))
+    }
+
+    selectedKeys.value = [target]
+    lastSelectedKey.value = target
+
+    await nextTick()
+
+    try {
+      treeRef.value?.scrollTo?.({ key: target })
+    } catch (e) {
+      logger.debug('[BreadcrumbReveal] tree scrollTo not available or failed', e)
+    }
+
+    logger.info('[BreadcrumbReveal] done', { repoRoot, target, expanded: ancestors.length })
+  } catch (e) {
+    logger.error('[BreadcrumbReveal] failed', e)
+  }
+};
+
 // 处理文件创建事件
 const handleFileCreated = async (filePath) => {
   const normalizedPath = normalizePath(filePath);
@@ -1864,6 +1950,20 @@ onMounted(async () => {
     activeRepoResizeObserver.value = ro
   }
 
+  // 监听编辑器面包屑导航事件，用于联动定位
+  try {
+    const unlisten = await listen(EVENT_REVEAL_IN_FILE_TREE, async (event) => {
+      const payload = event?.payload
+      const path = typeof payload === 'string' ? payload : String(payload?.path || '')
+      if (!path) return
+      logger.info('[BreadcrumbReveal] event received', { path })
+      await revealPathInTree(path)
+    })
+    breadcrumbRevealUnlisten.value = unlisten
+  } catch (e) {
+    logger.error('[BreadcrumbReveal] listen failed', e)
+  }
+
   // 添加文件监控
   // setupFileWatcher()
 })
@@ -1873,6 +1973,16 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateActiveRepoMaxHeight)
   activeRepoResizeObserver.value?.disconnect?.()
   activeRepoResizeObserver.value = null
+
+  // 清理编辑器面包屑联动监听
+  try {
+    Promise.resolve(breadcrumbRevealUnlisten.value?.()).catch((e) => {
+      logger.debug('[BreadcrumbReveal] unlisten failed', e)
+    })
+  } catch (e) {
+    logger.debug('[BreadcrumbReveal] unlisten failed', e)
+  }
+  breadcrumbRevealUnlisten.value = null
 
   // 清理所有状态
   editingNode.value = null
