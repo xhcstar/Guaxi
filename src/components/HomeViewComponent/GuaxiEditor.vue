@@ -1108,6 +1108,198 @@ let lastRecordedEditLocationAt = 0;
 let suppressEditLocationRecording = false;
 const maxEditLocationHistory = 200;
 
+const previewLocationBackStack = ref([]);
+const previewLocationForwardStack = ref([]);
+let lastRecordedPreviewLocationKey = null;
+let lastRecordedPreviewLocationAt = 0;
+let suppressPreviewLocationRecording = false;
+const maxPreviewLocationHistory = 200;
+
+const getCurrentPreviewLocation = () => {
+  const path = fileTreeStore.activeTab || selectedFile.value?.path;
+  const container = previewContainer.value;
+  if (!path || !(container instanceof HTMLElement)) return null;
+
+  const scrollTop = container.scrollTop;
+  const height = container.scrollHeight;
+  const scrollRatio = height ? scrollTop / height : 0;
+
+  const containerRect = container.getBoundingClientRect();
+  const els = Array.from(container.querySelectorAll('[data-md-start-line]') || []);
+  if (!els.length) return { path, lineNumber: 1, scrollTop, scrollRatio };
+
+  let bestLine = 1;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const el of els) {
+    const start = Number(el?.dataset?.mdStartLine || 0);
+    if (!Number.isFinite(start) || start <= 0) continue;
+
+    const r = el.getBoundingClientRect();
+    const visible = r.bottom > containerRect.top + 8 && r.top < containerRect.bottom - 8;
+    const score = visible ? Math.abs(r.top - containerRect.top) : (Math.abs(r.top - containerRect.top) + 100000);
+    if (score < bestScore) {
+      bestScore = score;
+      bestLine = start;
+    }
+  }
+
+  return { path, lineNumber: bestLine || 1, scrollTop, scrollRatio };
+};
+
+const isSamePreviewLocation = (a, b) => {
+  if (!a || !b) return false;
+  if (a.path !== b.path) return false;
+
+  const at = Number(a.scrollTop);
+  const bt = Number(b.scrollTop);
+  if (Number.isFinite(at) && Number.isFinite(bt)) {
+    return Math.round(at / 8) === Math.round(bt / 8);
+  }
+
+  if (
+    Number(a.lineNumber) > 0 &&
+    Number(b.lineNumber) > 0 &&
+    Number(a.lineNumber) === Number(b.lineNumber)
+  ) {
+    const ai = a.hitIndex;
+    const bi = b.hitIndex;
+    if (ai == null || bi == null) return true;
+    return Number(ai) === Number(bi);
+  }
+
+  return false;
+};
+
+const recordPreviewLocation = (reason, overrideLoc = null) => {
+  if (suppressPreviewLocationRecording) return;
+
+  const loc = overrideLoc || getCurrentPreviewLocation();
+  if (!loc) return;
+
+  const now = Date.now();
+  const st = Number(loc.scrollTop);
+  const stKey = Number.isFinite(st) ? Math.round(st / 8) : 0;
+  const key = `${loc.path}:${stKey}`;
+  if (key === lastRecordedPreviewLocationKey && now - lastRecordedPreviewLocationAt < 350) return;
+
+  const back = previewLocationBackStack.value;
+  const last = back[back.length - 1];
+  if (last && isSamePreviewLocation(last, loc)) {
+    lastRecordedPreviewLocationKey = key;
+    lastRecordedPreviewLocationAt = now;
+    return;
+  }
+
+  back.push({
+    ...loc,
+    scrollTop: Number.isFinite(st) ? st : 0,
+    scrollTopKey: stKey,
+    ts: now,
+    reason: String(reason || '')
+  });
+  if (back.length > maxPreviewLocationHistory) back.shift();
+  previewLocationForwardStack.value = [];
+
+  lastRecordedPreviewLocationKey = key;
+  lastRecordedPreviewLocationAt = now;
+
+  logger.debug('[PreviewNav] record', { reason, path: loc.path, line: loc.lineNumber, back: back.length });
+};
+
+const goToPreviewLocation = async (loc, { source = 'shortcut' } = {}) => {
+  if (!loc) return false;
+  const path = String(loc.path || '');
+  const st = Number(loc.scrollTop);
+  const ratio = Number(loc.scrollRatio);
+  const line = Number(loc.lineNumber || 0);
+  if (!path) return false;
+
+  suppressPreviewLocationRecording = true;
+  try {
+    if (fileTreeStore.activeTab !== path) {
+      await fileTreeStore.openFileInTab(path);
+      await nextTick();
+    }
+
+    await nextTick();
+
+    const container = previewContainer.value;
+    if (container && container instanceof HTMLElement) {
+      const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      let nextTop = null;
+
+      if (Number.isFinite(st)) {
+        nextTop = Math.min(Math.max(0, st), maxTop);
+      } else if (Number.isFinite(ratio) && ratio > 0) {
+        nextTop = Math.min(Math.max(0, ratio * container.scrollHeight), maxTop);
+      }
+
+      if (nextTop != null) {
+        container.scrollTop = nextTop;
+      } else if (Number.isFinite(line) && line > 0) {
+        scrollPreviewToLine(line);
+      }
+    } else if (Number.isFinite(line) && line > 0) {
+      scrollPreviewToLine(line);
+    }
+
+    logger.info('[PreviewNav] go', {
+      source,
+      path,
+      scrollTop: Number.isFinite(st) ? st : 'na',
+      line: Number.isFinite(line) ? line : 'na'
+    });
+    return true;
+  } finally {
+    window.setTimeout(() => {
+      suppressPreviewLocationRecording = false;
+    }, 0);
+  }
+};
+
+const navigateToPreviousPreviewLocation = async () => {
+  const current = getCurrentPreviewLocation();
+  if (!current) return;
+
+  const back = previewLocationBackStack.value;
+  const forward = previewLocationForwardStack.value;
+
+  const last = back[back.length - 1];
+  if (!last || !isSamePreviewLocation(last, current)) {
+    back.push({ ...current, ts: Date.now(), reason: 'implicit-current' });
+    if (back.length > maxPreviewLocationHistory) back.shift();
+  }
+
+  if (back.length < 2) {
+    message.info('没有上一个预览位置');
+    return;
+  }
+
+  const from = back.pop();
+  forward.push(from);
+  const target = back[back.length - 1];
+  await goToPreviewLocation(target, { source: 'alt-left' });
+};
+
+const navigateToNextPreviewLocation = async () => {
+  const forward = previewLocationForwardStack.value;
+  if (forward.length === 0) {
+    message.info('没有下一个预览位置');
+    return;
+  }
+
+  const target = forward.pop();
+  const back = previewLocationBackStack.value;
+  const last = back[back.length - 1];
+  if (!last || !isSamePreviewLocation(last, target)) {
+    back.push(target);
+    if (back.length > maxPreviewLocationHistory) back.shift();
+  }
+
+  await goToPreviewLocation(target, { source: 'alt-right' });
+};
+
 const getCurrentEditLocation = () => {
   if (!editor) return null;
   const path = fileTreeStore.activeTab || selectedFile.value?.path;
@@ -2211,6 +2403,7 @@ const jumpToFootnoteDefinition = (num, { source = 'preview' } = {}) => {
     return false;
   }
 
+  recordPreviewLocation('footnote');
   scrollPreviewToLine(line);
   if (showEditor.value) {
     syncEditorToLine(line, { focus: false });
@@ -6472,15 +6665,32 @@ const handleKeyDown = (e) => {
 
     if (isEditable) return;
 
-    if (e.key === 'ArrowLeft') {
+    const k = String(e.key || '');
+    const c = String(e.code || '');
+    const isAltLeft = k === 'ArrowLeft' || k === 'Left' || k === 'BrowserBack' || c === 'ArrowLeft';
+    const isAltRight = k === 'ArrowRight' || k === 'Right' || k === 'BrowserForward' || c === 'ArrowRight';
+
+    const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value;
+
+    if (isAltLeft) {
       e.preventDefault();
-      navigateToPreviousEditLocation();
+      e.stopPropagation();
+      if (previewOnly) {
+        navigateToPreviousPreviewLocation();
+      } else {
+        navigateToPreviousEditLocation();
+      }
       return;
     }
 
-    if (e.key === 'ArrowRight') {
+    if (isAltRight) {
       e.preventDefault();
-      navigateToNextEditLocation();
+      e.stopPropagation();
+      if (previewOnly) {
+        navigateToNextPreviewLocation();
+      } else {
+        navigateToNextEditLocation();
+      }
       return;
     }
   }
@@ -6601,6 +6811,45 @@ const syncEditorToLine = (lineNumber, { focus = true } = {}) => {
 const handlePreviewClick = async (e) => {
   const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
   if (!base) return;
+
+  // 纯预览模式：任意点击都记录一次当前位置（优先使用被点击块的 data-md-start-line）。
+  try {
+    const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value
+    const container = previewContainer.value
+    if (previewOnly && container && container.contains(base)) {
+      const hit = base.closest?.('[data-md-start-line]')
+      const ln = Number(hit?.dataset?.mdStartLine || 0)
+      const path = fileTreeStore.activeTab || selectedFile.value?.path
+      const st = container.scrollTop
+      const h = container.scrollHeight
+      const ratio = h ? st / h : 0
+
+      if (path) {
+        let hitIndex = null
+        try {
+          if (hit && Number.isFinite(ln) && ln > 0) {
+            const sameLine = Array.from(container.querySelectorAll(`[data-md-start-line="${ln}"]`) || [])
+            const idx = sameLine.indexOf(hit)
+            hitIndex = idx >= 0 ? idx : null
+          }
+        } catch {
+          hitIndex = null
+        }
+
+        recordPreviewLocation('click', {
+          path,
+          scrollTop: st,
+          scrollRatio: ratio,
+          lineNumber: Number.isFinite(ln) && ln > 0 ? ln : undefined,
+          hitIndex
+        })
+      } else {
+        recordPreviewLocation('click')
+      }
+    }
+  } catch (err) {
+    logger.warn('[PreviewNav] record click failed', err)
+  }
 
   const guaxiSafeDecode = (v) => {
     try {
@@ -7524,6 +7773,8 @@ const handlePreviewClick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
 
+        recordPreviewLocation('anchor');
+
         const id = decodeURIComponent(href.slice(1));
         const container = previewContainer.value;
         if (container) {
@@ -7563,8 +7814,10 @@ const handlePreviewClick = async (e) => {
   if (!hit) return;
 
   const line = Number(hit.dataset.mdStartLine || 1);
-  const shouldFocus = showEditor.value;
-  syncEditorToLine(line, { focus: shouldFocus });
+  if (showEditor.value) {
+    const shouldFocus = showEditor.value;
+    syncEditorToLine(line, { focus: shouldFocus });
+  }
 };
 
 const setMainMode = async (nextMode) => {
@@ -8613,6 +8866,7 @@ const generateOutlineDebounced = debounce((content) => {
 
 function jumpToLine(line) {
   if (mode.value === 'preview') {
+    recordPreviewLocation('outline');
     scrollPreviewToLine(line)
     return
   }
