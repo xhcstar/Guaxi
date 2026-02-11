@@ -15,7 +15,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { onMounted } from "vue";
-import GuaxiSidebar from "../HomeViewComponent/GuaxiSidebar.vue";
+import GuaxiSidebar from "./GuaxiStatisticsSidebar.vue";
 import GuaxiStatisticsDashboard from "./GuaxiStatisticsDashboard.vue";
 
 const logger = createLogger('GuaxiStatisticsView')

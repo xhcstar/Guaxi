@@ -61,15 +61,6 @@
           </svg>
         </n-icon>
 
-        <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/excalidraw' }" @click="navigateTo('/excalidraw')">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-            <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L8 18l-4 1l1-4Z" />
-            </g>
-          </svg>
-        </n-icon>
-
         <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/search' }" @click="navigateTo('/search')">
           <svg t="1735455405203" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
             p-id="10538" width="54" height="54">
@@ -85,6 +76,14 @@
           </svg>
         </n-icon>
 
+        <n-icon size="24" class="nav-icon" :class="{ active: activePath === '/excalidraw' }" @click="navigateTo('/excalidraw')">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L8 18l-4 1l1-4Z" />
+            </g>
+          </svg>
+        </n-icon>
       </div>
 
       <div class="sider-icon-bottom">
