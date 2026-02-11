@@ -1393,7 +1393,20 @@ export const renderMarkdown = async (content, options) => {
           // 尝试requestAnimationFrame()因为它会等到浏览器完成一次帧渲染后再执行.
           nextTick().then(() => {
             requestAnimationFrame(() => {
-              mermaid.run();
+              try {
+                const nodes = Array.from(document.querySelectorAll('.mermaid') || []);
+                if (!nodes.length) return;
+
+                Promise.resolve(mermaid.run({ nodes }))
+                  .then(() => {
+                    logger.debug('Mermaid渲染完成', { count: nodes.length });
+                  })
+                  .catch((err) => {
+                    logger.error('Mermaid渲染失败', err);
+                  });
+              } catch (err) {
+                logger.error('Mermaid渲染失败（同步异常）', err);
+              }
             });
           });
 
