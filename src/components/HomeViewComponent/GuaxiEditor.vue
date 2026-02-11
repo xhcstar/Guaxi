@@ -6650,7 +6650,12 @@ const handlePreviewClick = async (e) => {
     return { name, mime: 'application/pdf', dataBase64 }
   }
 
-  const formatCodeCellExecOutput = (res) => {
+  const isLatexKind = (kind) => {
+    const k = String(kind || '').trim().toLowerCase()
+    return k === 'tex' || k === 'latex'
+  }
+
+  const formatCodeCellExecOutput = (res, kind) => {
     const ok = res?.ok
     const stdout = String(res?.stdout || '')
     const stderr = String(res?.stderr || '')
@@ -6658,21 +6663,21 @@ const handlePreviewClick = async (e) => {
     const hasStdout = stdout.trim().length > 0
     const hasStderr = stderr.trim().length > 0
 
+    const pdf = getPdfArtifactFromCodeCell(res)
+
     if (ok === false) {
       if (hasStderr) return stderr.trimEnd()
       if (hasStdout) return stdout.trimEnd()
       return '(执行失败：无错误输出)'
     }
 
+    if (isLatexKind(kind) && pdf) {
+      return ''
+    }
+
     const parts = []
     if (hasStdout) parts.push(stdout.trimEnd())
     if (hasStderr) parts.push(stderr.trimEnd())
-
-    const pdf = getPdfArtifactFromCodeCell(res)
-    if (pdf) {
-      const bytesLen = Math.floor((pdf.dataBase64.length * 3) / 4)
-      parts.push(`(已生成 PDF：${pdf.name}，约 ${bytesLen} bytes)`)
-    }
 
     return parts.join('\n\n')
   }
@@ -6697,6 +6702,7 @@ const handlePreviewClick = async (e) => {
     media.style.flexDirection = 'column'
     media.style.alignItems = 'center'
     media.style.justifyContent = 'center'
+    media.style.position = 'relative'
 
     const border = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-border') || '#e1e4e8'
     const panelBg = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-panel-bg') || '#fff'
@@ -6715,13 +6721,19 @@ const handlePreviewClick = async (e) => {
     return media
   }
 
-  const renderCodeCellArtifacts = async (cell, outputPre, res, outputText) => {
+  const renderCodeCellArtifacts = async (cell, outputPre, res, outputText, kind) => {
     const pdf = getPdfArtifactFromCodeCell(res)
     const shouldHideText = String(outputText || '').trim().length === 0
 
     if (!pdf) {
       const media = cell?.querySelector?.('.guaxi-codecell-media')
       if (media) {
+        const oldUrl = String(media.getAttribute('data-blob-url') || '').trim()
+        if (oldUrl) {
+          try { URL.revokeObjectURL(oldUrl) } catch { }
+          media.removeAttribute('data-blob-url')
+        }
+
         media.innerHTML = ''
         media.style.display = 'none'
       }
@@ -6732,83 +6744,58 @@ const handlePreviewClick = async (e) => {
     const media = ensureCodeCellMediaContainer(cell, outputPre)
     if (!media) return
 
+    const oldUrl = String(media.getAttribute('data-blob-url') || '').trim()
+    if (oldUrl) {
+      try { URL.revokeObjectURL(oldUrl) } catch { }
+      media.removeAttribute('data-blob-url')
+    }
+
     const bytes = base64ToUint8Array(pdf.dataBase64)
     const blob = new Blob([bytes], { type: pdf.mime })
     const blobUrl = URL.createObjectURL(blob)
+    media.setAttribute('data-blob-url', blobUrl)
 
-    const row = document.createElement('div')
-    row.style.display = 'flex'
-    row.style.flexWrap = 'wrap'
-    row.style.gap = '8px'
-    row.style.alignItems = 'center'
-    row.style.justifyContent = 'center'
+    media.style.padding = '0'
+    media.style.alignItems = 'stretch'
+    media.style.justifyContent = 'stretch'
+    media.style.overflow = 'hidden'
 
-    const btnOpen = document.createElement('button')
-    btnOpen.type = 'button'
-    btnOpen.textContent = '打开 PDF'
-    btnOpen.style.padding = '6px 10px'
-    btnOpen.style.borderRadius = '6px'
-    btnOpen.style.border = '1px solid var(--guaxi-border)'
-    btnOpen.style.background = 'var(--guaxi-panel-bg)'
-    btnOpen.style.color = 'var(--guaxi-text-primary)'
-    btnOpen.style.cursor = 'pointer'
+    const calcPdfHeightPx = () => {
+      const vh = Number(window?.innerHeight || 0)
+      const ideal = Math.floor(vh > 0 ? vh * 0.78 : 820)
+      return Math.max(780, Math.min(1200, ideal || 820))
+    }
 
-    btnOpen.addEventListener('click', () => {
-      try {
-        window.open(blobUrl, '_blank')
-        logger.info('[CodeCell] open pdf', { name: pdf.name, bytes: bytes.length })
-      } catch (e) {
-        logger.warn('[CodeCell] open pdf failed', e)
-      }
-    })
+    const wrap = document.createElement('div')
+    wrap.style.width = '100%'
+    wrap.style.flex = '1 1 auto'
 
-    const btnSave = document.createElement('button')
-    btnSave.type = 'button'
-    btnSave.textContent = '保存 PDF'
-    btnSave.style.padding = '6px 10px'
-    btnSave.style.borderRadius = '6px'
-    btnSave.style.border = '1px solid var(--guaxi-border)'
-    btnSave.style.background = 'var(--guaxi-panel-bg)'
-    btnSave.style.color = 'var(--guaxi-text-primary)'
-    btnSave.style.cursor = 'pointer'
+    const iframe = document.createElement('iframe')
+    // 让 PDF 默认尽量“适应页面/容器”，减少空白浪费
+    // 注意：不同内置 PDF 阅读器对 hash 参数支持不完全一致，但大多支持 zoom=page-fit/page-width 等。
+    iframe.src = `${blobUrl}#zoom=page-fit`
+    iframe.style.display = 'block'
+    iframe.style.width = '100%'
+    iframe.style.height = `${calcPdfHeightPx()}px`
+    iframe.style.border = '0'
+    iframe.style.borderRadius = '8px'
 
-    btnSave.addEventListener('click', async () => {
-      try {
-        const { save } = await import('@tauri-apps/plugin-dialog')
-        const { writeFile } = await import('@tauri-apps/plugin-fs')
-
-        const path = await save({
-          defaultPath: pdf.name,
-          filters: [{ name: 'PDF', extensions: ['pdf'] }]
-        })
-        if (!path) return
-
-        await writeFile(path, bytes)
-        message.success('已保存 PDF')
-        logger.info('[CodeCell] pdf saved', { path })
-      } catch (e) {
-        logger.error('[CodeCell] save pdf failed', e)
-        message.error('保存失败')
-      }
-    })
-
-    row.appendChild(btnOpen)
-    row.appendChild(btnSave)
+    wrap.appendChild(iframe)
 
     media.innerHTML = ''
-    media.appendChild(row)
+    media.appendChild(wrap)
     media.style.display = 'flex'
+
+    try {
+      message.info('PDF 已渲染，可使用预览区工具栏下载/保存')
+    } catch {
+    }
 
     if (outputPre && shouldHideText) {
       outputPre.style.display = 'none'
     }
 
-    window.setTimeout(() => {
-      try {
-        URL.revokeObjectURL(blobUrl)
-      } catch {
-      }
-    }, 60_000)
+    logger.info('[CodeCell] pdf rendered in output area', { kind: String(kind || ''), name: pdf.name, bytes: bytes.length })
   }
 
   const getGuaxiDisplayFromResult = (res) => {
@@ -7159,11 +7146,21 @@ const handlePreviewClick = async (e) => {
       }
 
       // 说明：输出容器默认隐藏（避免未运行时占位）；运行时再展示。
-      if (outputPre) {
-        outputPre.style.display = ''
+      const latexRun = isLatexKind(kind)
+      const mediaForLoading = latexRun ? ensureCodeCellMediaContainer(cell, outputPre) : null
+
+      if (latexRun && mediaForLoading) {
+        mediaForLoading.style.display = 'flex'
+        mediaForLoading.innerHTML = '<div style="padding: 8px; color: var(--guaxi-text-secondary);">渲染中...</div>'
+        if (outputPre) outputPre.style.display = 'none'
+      } else {
+        if (outputPre) {
+          outputPre.style.display = ''
+        }
       }
+
       syncToggleText()
-      if (outputEl) outputEl.textContent = '运行中...'
+      if (outputEl) outputEl.textContent = latexRun ? '' : '运行中...'
 
       const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
       relatedBtns.forEach((b) => {
@@ -7398,7 +7395,7 @@ const handlePreviewClick = async (e) => {
           hasArtifacts: Array.isArray(res?.artifacts) && res.artifacts.length > 0,
         })
 
-        const outputText = formatCodeCellExecOutput(res)
+        const outputText = formatCodeCellExecOutput(res, kind)
         const hideText = String(outputText || '').trim().length === 0
 
         if (outputPre) {
@@ -7410,7 +7407,7 @@ const handlePreviewClick = async (e) => {
           outputEl.textContent = hideText ? '' : outputText
         }
 
-        await renderCodeCellArtifacts(cell, outputPre, res, outputText)
+        await renderCodeCellArtifacts(cell, outputPre, res, outputText, kind)
         syncToggleText()
 
         if (res?.ok === false) {
@@ -8287,21 +8284,29 @@ const exportOptions = [
 
 const handleExportSelect = async (format) => {
   if (!selectedFile.value || !selectedFile.value.path) {
-    message.warning('当前没有选中的 Markdown 文件');
+    message.warning('当前没有选中的文件');
     return;
   }
 
-  const ext = selectedFile.value.path.split('.').pop()?.toLowerCase() || '';
-  if (ext !== 'md') {
-    message.warning('仅支持对 Markdown 文件进行导出');
-    return;
-  }
+  const path = selectedFile.value.path || '';
+  const ext = path.split('.').pop()?.toLowerCase() || '';
 
   if (mode.value === 'edit' && editor) {
     saveContent();
   }
 
-  const path = selectedFile.value.path || '';
+  // 说明：.tex 文件导出 PDF 走 tectonic（不走 pandoc）
+  const isTexFile = ext === 'tex'
+  const isMarkdownFile = ext === 'md'
+
+  if (!isMarkdownFile && !(isTexFile && format === 'pdf')) {
+    if (isTexFile) {
+      message.warning('当前为 .tex 文件，仅支持导出为 PDF')
+    } else {
+      message.warning('仅支持对 Markdown(.md) 文件进行导出')
+    }
+    return
+  }
 
   const formatExtMap = {
     pdf: 'pdf',
@@ -8365,7 +8370,12 @@ const handleExportSelect = async (format) => {
       return;
     }
 
-    if (format === 'pdf') {
+    if (isTexFile && format === 'pdf') {
+      await invoke('export_tex_pdf_tectonic', {
+        inputPath: path,
+        outputPath
+      })
+    } else if (format === 'pdf') {
       await invoke('export_markdown_pdf_pandoc', {
         inputPath: path,
         outputPath

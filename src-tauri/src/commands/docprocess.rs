@@ -1205,6 +1205,140 @@ pub async fn export_markdown_pdf_pandoc(
     export_markdown_pandoc(input_path, output_path, "pdf".to_string()).await
 }
 
+fn find_tectonic_exe_for_export() -> Result<(PathBuf, bool), String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current exe path: {e}"))?;
+    let exe_dir = current_exe
+        .parent()
+        .ok_or_else(|| "Failed to get parent directory of exe".to_string())?;
+
+    #[cfg(windows)]
+    {
+        let bundled = exe_dir.join("utils").join("tectonic.exe");
+        if bundled.is_file() {
+            return Ok((bundled, true));
+        }
+        return Ok((PathBuf::from("tectonic"), false));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let bundled = exe_dir.join("utils").join("tectonic");
+        if bundled.is_file() {
+            return Ok((bundled, true));
+        }
+        return Ok((PathBuf::from("tectonic"), false));
+    }
+}
+
+#[tauri::command]
+pub async fn export_tex_pdf_tectonic(input_path: String, output_path: String) -> Result<(), String> {
+    // 说明：用于“当前文件是 .tex，导出为 PDF”的场景；保留相对路径依赖（图片/\input）时，必须在 tex 文件所在目录运行。
+    info!(
+        input_path = input_path.as_str(),
+        output_path = output_path.as_str(),
+        "Exporting tex via tectonic"
+    );
+
+    let input = PathBuf::from(input_path.trim());
+    if !input.is_file() {
+        return Err(format!("tex file not found: {}", input.to_string_lossy()));
+    }
+
+    let input_dir = input
+        .parent()
+        .ok_or_else(|| "Failed to get tex parent dir".to_string())?
+        .to_path_buf();
+
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "Failed to get tex file stem".to_string())?
+        .to_string();
+
+    let (tectonic_path, is_bundled) = find_tectonic_exe_for_export()?;
+
+    // 临时输出目录：tectonic 的输出先落地，再 copy 到用户选择的 output_path。
+    let tmp_base = std::env::temp_dir().join("guaxi_tectonic_export");
+    let _ = fs::create_dir_all(&tmp_base);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    let outdir = tmp_base.join(format!("{}", now.as_millis()));
+    let _ = fs::remove_dir_all(&outdir);
+    fs::create_dir_all(&outdir).map_err(|e| format!("create outdir failed: {e}"))?;
+
+    info!(
+        tectonic = %tectonic_path.display(),
+        bundled = is_bundled,
+        input_dir = %input_dir.display(),
+        tmp_outdir = %outdir.display(),
+        "[ExportTex] running tectonic"
+    );
+
+    let mut cmd = Command::new(&tectonic_path);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    cmd.current_dir(&input_dir)
+        .arg("-X")
+        .arg("compile")
+        .arg("--outdir")
+        .arg(&outdir)
+        .arg("--untrusted")
+        .arg(&input);
+
+    let out = cmd
+        .output()
+        .map_err(|e| format!("spawn tectonic failed: {e} (path={})", tectonic_path.display()))?;
+
+    if !out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+        error!(
+            code = out.status.code(),
+            stdout_len = stdout.len(),
+            stderr_len = stderr.len(),
+            "[ExportTex] tectonic failed"
+        );
+
+        let mut hint = String::new();
+        if !is_bundled {
+            hint.push_str("\n\nHint: 未找到内置 tectonic，可将对应平台的二进制放到 src-tauri/utils 下，或确保系统 PATH 中存在 tectonic。\n");
+        }
+
+        return Err(format!("tectonic export failed (code={:?})\n{}\n{}{}", out.status.code(), stdout, stderr, hint));
+    }
+
+    let pdf_path = outdir.join(format!("{stem}.pdf"));
+    if !pdf_path.is_file() {
+        return Err(format!(
+            "tectonic finished but PDF not found: {}",
+            pdf_path.to_string_lossy()
+        ));
+    }
+
+    let output = PathBuf::from(output_path.trim());
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    fs::copy(&pdf_path, &output)
+        .map_err(|e| format!("copy pdf failed: {e} (from={}, to={})", pdf_path.to_string_lossy(), output.to_string_lossy()))?;
+
+    info!(
+        from = %pdf_path.display(),
+        to = %output.display(),
+        "[ExportTex] pdf exported"
+    );
+
+    let _ = fs::remove_dir_all(&outdir);
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn export_markdown_pandoc(
     input_path: String,
