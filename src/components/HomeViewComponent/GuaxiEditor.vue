@@ -7146,21 +7146,19 @@ const handlePreviewClick = async (e) => {
       }
 
       // 说明：输出容器默认隐藏（避免未运行时占位）；运行时再展示。
-      const latexRun = isLatexKind(kind)
-      const mediaForLoading = latexRun ? ensureCodeCellMediaContainer(cell, outputPre) : null
+      // 运行前清理上次的展示（例如 __guaxi_display__ 生成的图片），避免旧内容闪现。
+      const media = cell.querySelector?.('.guaxi-pycell-media')
+      if (media) {
+        media.innerHTML = ''
+        media.style.display = 'none'
+      }
 
-      if (latexRun && mediaForLoading) {
-        mediaForLoading.style.display = 'flex'
-        mediaForLoading.innerHTML = '<div style="padding: 8px; color: var(--guaxi-text-secondary);">渲染中...</div>'
-        if (outputPre) outputPre.style.display = 'none'
-      } else {
-        if (outputPre) {
-          outputPre.style.display = ''
-        }
+      if (outputPre) {
+        outputPre.style.display = ''
       }
 
       syncToggleText()
-      if (outputEl) outputEl.textContent = latexRun ? '' : '运行中...'
+      if (outputEl) outputEl.textContent = '运行中...'
 
       const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
       relatedBtns.forEach((b) => {
