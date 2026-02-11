@@ -43,8 +43,96 @@ const autosaveTimer = ref(null)
 
 const reactRoot = ref(null)
 const excalidrawApi = ref(null)
+const renderVersion = ref(0)
 
 const theme = computed(() => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light'))
+
+class ExcalidrawErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error: error ?? null }
+  }
+
+  componentDidCatch(error, info) {
+    try {
+      this.props?.onError?.(error, info)
+    } catch {
+      // ignore
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const raw = this.state.error
+      const details = raw
+        ? String(raw?.stack || raw?.message || raw)
+        : 'Unknown error'
+
+      return React.createElement(
+        'div',
+        {
+          style: {
+            height: '100%',
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+            padding: '12px',
+            boxSizing: 'border-box',
+            background: 'var(--guaxi-content-bg)',
+            color: 'var(--guaxi-text-primary)',
+          },
+        },
+        React.createElement('div', { style: { fontSize: '14px', fontWeight: 600 } }, '白板渲染发生异常'),
+        React.createElement(
+          'div',
+          { style: { fontSize: '12px', color: 'var(--guaxi-text-secondary)' } },
+          '请打开开发者工具查看更完整的报错堆栈（包含触发异常的具体原因）。',
+        ),
+        React.createElement(
+          'pre',
+          {
+            style: {
+              margin: 0,
+              padding: '10px',
+              borderRadius: '8px',
+              background: 'var(--guaxi-panel-bg)',
+              border: '1px solid var(--guaxi-border)',
+              overflow: 'auto',
+              flex: '1 1 auto',
+              minHeight: 0,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            },
+          },
+          details,
+        ),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: () => this.props?.onRetry?.(),
+            style: {
+              alignSelf: 'flex-start',
+              padding: '6px 10px',
+              borderRadius: '8px',
+              border: '1px solid var(--guaxi-border)',
+              background: 'var(--guaxi-panel-bg)',
+              cursor: 'pointer',
+            },
+          },
+          '重试渲染',
+        ),
+      )
+    }
+
+    return this.props?.children
+  }
+}
 
 const lastScene = ref({
   elements: [],
@@ -60,6 +148,31 @@ function safeJsonParse(raw) {
   }
 }
 
+function toSerializableAppState(appState) {
+  const src = appState && typeof appState === 'object' ? appState : {}
+  const cloned = { ...src }
+
+  // Excalidraw 的 collaborators 在运行时通常是 Map。
+  // Map 无法被 JSON.stringify 正确序列化，反序列化后会变成普通对象，导致内部调用 collaborators.forEach 直接崩。
+  if ('collaborators' in cloned) {
+    delete cloned.collaborators
+  }
+
+  return cloned
+}
+
+function toRuntimeAppState(appState) {
+  const src = appState && typeof appState === 'object' ? appState : {}
+  const cloned = { ...src }
+
+  // 运行时保证 collaborators 为 Map（至少是空 Map），避免 Excalidraw 内部 forEach 报错。
+  if (!(cloned.collaborators instanceof Map)) {
+    cloned.collaborators = new Map()
+  }
+
+  return cloned
+}
+
 function scheduleAutosave() {
   if (autosaveTimer.value) {
     clearTimeout(autosaveTimer.value)
@@ -72,7 +185,7 @@ function scheduleAutosave() {
       const payload = {
         ts: new Date().toISOString(),
         elements: lastScene.value?.elements || [],
-        appState: lastScene.value?.appState || null,
+        appState: toSerializableAppState(lastScene.value?.appState || null),
         files: lastScene.value?.files || null,
       }
 
@@ -100,7 +213,7 @@ function applySceneToApi(scene) {
     if (!excalidrawApi.value) return false
 
     const elements = Array.isArray(scene?.elements) ? scene.elements : []
-    const appState = scene?.appState && typeof scene.appState === 'object' ? scene.appState : {}
+    const appState = toRuntimeAppState(scene?.appState)
     const files = scene?.files && typeof scene.files === 'object' ? scene.files : {}
 
     excalidrawApi.value.updateScene({
@@ -170,7 +283,7 @@ function buildExportScene() {
     version: 2,
     source: 'guaxi',
     elements,
-    appState,
+    appState: toSerializableAppState(appState),
     files,
     exportedAt: new Date().toISOString(),
   }
@@ -318,16 +431,46 @@ function renderReactApp(initialData) {
     logger.info('[excalidraw] api ready')
   }
 
+  const onBoundaryError = (error, info) => {
+    logger.error('[excalidraw] react render error', error, info)
+  }
+
+  const onBoundaryRetry = () => {
+    try {
+      renderVersion.value += 1
+      logger.info('[excalidraw] retry render', { renderVersion: renderVersion.value })
+      const initial = readAutosave()
+      renderReactApp(initial)
+    } catch (e) {
+      logger.error('[excalidraw] retry render failed', e)
+    }
+  }
+
+  const normalizedInitialData = initialData
+    ? {
+        ...initialData,
+        appState: toRuntimeAppState(initialData?.appState),
+      }
+    : undefined
+
+  if (initialData?.appState && !(initialData.appState?.collaborators instanceof Map)) {
+    logger.warn('[excalidraw] initialData.appState.collaborators normalized to Map')
+  }
+
   reactRoot.value.render(
     React.createElement(
       'div',
       { style: { height: '100%', width: '100%' } },
-      React.createElement(Excalidraw, {
-        theme: theme.value,
-        initialData: initialData || undefined,
-        excalidrawAPI: onApi,
-        onChange,
-      }),
+      React.createElement(
+        ExcalidrawErrorBoundary,
+        { key: renderVersion.value, onError: onBoundaryError, onRetry: onBoundaryRetry },
+        React.createElement(Excalidraw, {
+          theme: theme.value,
+          initialData: normalizedInitialData,
+          excalidrawAPI: onApi,
+          onChange,
+        }),
+      ),
     ),
   )
 }
