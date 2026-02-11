@@ -841,6 +841,7 @@ export const renderMarkdown = async (content, options) => {
     codeHighlight: enableCodeHighlight = true,
     buttons: enableButtons = true,
     pythonCells: enablePythonCells = false,
+    codeCells: enableCodeCells = false,
     theme = "default",
   } = options;
 
@@ -1201,7 +1202,7 @@ export const renderMarkdown = async (content, options) => {
     }
 
     // 可执行代码块 / Mermaid：统一改写 fence，避免多次覆盖 renderer.rules.fence
-    if (enableMermaid || enablePythonCells) {
+    if (enableMermaid || enablePythonCells || enableCodeCells) {
       const defaultFence = md.renderer.rules.fence;
       md.renderer.rules.fence = (tokens, idx, options, env, self) => {
         const token = tokens[idx];
@@ -1261,6 +1262,55 @@ export const renderMarkdown = async (content, options) => {
               </pre>
             </div>
           `;
+        }
+
+        if (enableCodeCells) {
+          const kind =
+            /^(javascript|js)(\s|$)/i.test(info) ? 'javascript'
+              : /^(latex|tex)(\s|$)/i.test(info) ? 'latex'
+                : /^c(\s|$)/i.test(info) ? 'c'
+                  : /^(cpp|c\+\+)(\s|$)/i.test(info) ? 'cpp'
+                    : /^(rust|rs)(\s|$)/i.test(info) ? 'rust'
+                      : '';
+
+          if (kind) {
+            const startLine = Array.isArray(token.map) ? token.map[0] + 1 : null;
+            const endLine = Array.isArray(token.map) ? token.map[1] + 1 : null;
+            const cellId = `cell-${kind}-${startLine || 'na'}-${endLine || 'na'}`;
+
+            const original = preserveOriginal
+              ? `\`\`\`${info || kind}\n${String(token.content || '')}\n\`\`\``
+              : '';
+
+            const codeHtml = defaultFence ? defaultFence(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
+
+            const attrs = [
+              `class="guaxi-codecell"`,
+              `data-guaxi-cell="1"`,
+              `data-guaxi-cell-kind="${safeEncode(kind)}"`,
+              `data-guaxi-cell-lang="${safeEncode(info || kind)}"`,
+              `data-guaxi-cell-code="${safeEncode(String(token.content || ''))}"`,
+              `data-guaxi-cell-id="${safeEncode(cellId)}"`,
+              startLine ? `data-guaxi-md-start-line="${startLine}"` : '',
+              endLine ? `data-guaxi-md-end-line="${endLine}"` : '',
+              preserveOriginal ? `data-md-original="${safeEncode(original)}"` : '',
+            ].filter(Boolean).join(' ');
+
+            return `
+              <div ${attrs}>
+                <div class="guaxi-codecell-toolbar" style="display:flex;align-items:center;gap:8px;margin:8px 0;">
+                  <button type="button" class="guaxi-codecell-btn guaxi-codecell-run" data-guaxi-cell-action="run" style="padding:4px 8px;border-radius:6px;border:1px solid var(--guaxi-border);background:var(--guaxi-panel-bg);color:var(--guaxi-text-primary);cursor:pointer;">运行</button>
+                  <button type="button" class="guaxi-codecell-btn guaxi-codecell-run-save" data-guaxi-cell-action="run-save" style="padding:4px 8px;border-radius:6px;border:1px solid var(--guaxi-border);background:var(--guaxi-panel-bg);color:var(--guaxi-text-primary);cursor:pointer;">运行并写回</button>
+                  <button type="button" class="guaxi-codecell-btn guaxi-codecell-output-toggle" data-guaxi-cell-action="toggle-output" style="padding:4px 8px;border-radius:6px;border:1px solid var(--guaxi-border);background:var(--guaxi-panel-bg);color:var(--guaxi-text-primary);cursor:pointer;">显示结果</button>
+                  <span class="guaxi-codecell-hint" style="opacity:.7;font-size:12px;">输出会显示在下方（写回会保存到笔记 Markdown）</span>
+                </div>
+                ${codeHtml}
+                <pre class="hljs guaxi-codecell-output" style="margin:8px 0 0;display:none;">
+                  <code class="language-text" data-guaxi-cell-output="${safeEncode(cellId)}"></code>
+                </pre>
+              </div>
+            `;
+          }
         }
 
         return defaultFence ? defaultFence(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);

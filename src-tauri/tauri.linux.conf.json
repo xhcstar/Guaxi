@@ -1,6 +1,17 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "targets": ["appimage", "deb", "rpm"]
+    "targets": ["appimage", "deb", "rpm"],
+    "resources": [
+      "scripts/**/*",
+      "libs/**/*",
+      "utils/lsp/*",
+      "utils/platforms/*",
+      "utils/Qt*",
+      "utils/ScreenShotTool*",
+      "utils/pandoc*",
+      "utils/tectonic",
+      "utils/horizontalrule.lua"
+    ]
   }
 }

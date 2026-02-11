@@ -80,6 +80,8 @@ exif = { git = "https://github.com/kamadak/exif-rs", package = "exif" }
 scraper = "0.25.0"
 aes-gcm = "0.10.3"
 trash = "5.2.5"
+rquickjs = "0.11.0"
+tempfile = "3.25.0"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }

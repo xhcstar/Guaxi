@@ -29,5 +29,6 @@ pub mod flipboard;
 pub mod markdown_manual;
 pub mod todo;
 pub mod filetransfer;
-pub mod python_runtime;
+pub mod code_runtime;
+pub mod code_cell_runtime;
 pub mod frontend_logging;

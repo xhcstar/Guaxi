@@ -6631,6 +6631,186 @@ const handlePreviewClick = async (e) => {
     return parts.join('\n\n')
   }
 
+  const getPdfArtifactFromCodeCell = (res) => {
+    const artifacts = Array.isArray(res?.artifacts) ? res.artifacts : []
+    if (!artifacts.length) return null
+
+    const hit = artifacts.find((a) => {
+      const kind = String(a?.kind || '').trim().toLowerCase()
+      const mime = String(a?.mime || '').trim().toLowerCase()
+      return kind === 'pdf' || mime === 'application/pdf'
+    })
+
+    if (!hit) return null
+
+    const dataBase64 = String(hit?.data_base64 || hit?.dataBase64 || '').trim()
+    const name = String(hit?.name || hit?.filename || hit?.fileName || '').trim() || 'output.pdf'
+    if (!dataBase64) return null
+
+    return { name, mime: 'application/pdf', dataBase64 }
+  }
+
+  const formatCodeCellExecOutput = (res) => {
+    const ok = res?.ok
+    const stdout = String(res?.stdout || '')
+    const stderr = String(res?.stderr || '')
+
+    const hasStdout = stdout.trim().length > 0
+    const hasStderr = stderr.trim().length > 0
+
+    if (ok === false) {
+      if (hasStderr) return stderr.trimEnd()
+      if (hasStdout) return stdout.trimEnd()
+      return '(执行失败：无错误输出)'
+    }
+
+    const parts = []
+    if (hasStdout) parts.push(stdout.trimEnd())
+    if (hasStderr) parts.push(stderr.trimEnd())
+
+    const pdf = getPdfArtifactFromCodeCell(res)
+    if (pdf) {
+      const bytesLen = Math.floor((pdf.dataBase64.length * 3) / 4)
+      parts.push(`(已生成 PDF：${pdf.name}，约 ${bytesLen} bytes)`)
+    }
+
+    return parts.join('\n\n')
+  }
+
+  const base64ToUint8Array = (b64) => {
+    const bin = atob(String(b64 || ''))
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i)
+    return bytes
+  }
+
+  const ensureCodeCellMediaContainer = (cell, afterEl) => {
+    if (!(cell instanceof Element)) return null
+
+    let media = cell.querySelector('.guaxi-codecell-media')
+    if (media) return media
+
+    media = document.createElement('div')
+    media.className = 'guaxi-codecell-media'
+    media.style.marginTop = '8px'
+    media.style.display = 'none'
+    media.style.flexDirection = 'column'
+    media.style.alignItems = 'center'
+    media.style.justifyContent = 'center'
+
+    const border = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-border') || '#e1e4e8'
+    const panelBg = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-panel-bg') || '#fff'
+
+    media.style.border = `1px solid ${String(border).trim() || '#e1e4e8'}`
+    media.style.borderRadius = '8px'
+    media.style.padding = '10px'
+    media.style.background = String(panelBg).trim() || '#fff'
+
+    if (afterEl && afterEl.parentNode) {
+      afterEl.parentNode.insertBefore(media, afterEl.nextSibling)
+    } else {
+      cell.appendChild(media)
+    }
+
+    return media
+  }
+
+  const renderCodeCellArtifacts = async (cell, outputPre, res, outputText) => {
+    const pdf = getPdfArtifactFromCodeCell(res)
+    const shouldHideText = String(outputText || '').trim().length === 0
+
+    if (!pdf) {
+      const media = cell?.querySelector?.('.guaxi-codecell-media')
+      if (media) {
+        media.innerHTML = ''
+        media.style.display = 'none'
+      }
+      if (outputPre && shouldHideText) outputPre.style.display = 'none'
+      return
+    }
+
+    const media = ensureCodeCellMediaContainer(cell, outputPre)
+    if (!media) return
+
+    const bytes = base64ToUint8Array(pdf.dataBase64)
+    const blob = new Blob([bytes], { type: pdf.mime })
+    const blobUrl = URL.createObjectURL(blob)
+
+    const row = document.createElement('div')
+    row.style.display = 'flex'
+    row.style.flexWrap = 'wrap'
+    row.style.gap = '8px'
+    row.style.alignItems = 'center'
+    row.style.justifyContent = 'center'
+
+    const btnOpen = document.createElement('button')
+    btnOpen.type = 'button'
+    btnOpen.textContent = '打开 PDF'
+    btnOpen.style.padding = '6px 10px'
+    btnOpen.style.borderRadius = '6px'
+    btnOpen.style.border = '1px solid var(--guaxi-border)'
+    btnOpen.style.background = 'var(--guaxi-panel-bg)'
+    btnOpen.style.color = 'var(--guaxi-text-primary)'
+    btnOpen.style.cursor = 'pointer'
+
+    btnOpen.addEventListener('click', () => {
+      try {
+        window.open(blobUrl, '_blank')
+        logger.info('[CodeCell] open pdf', { name: pdf.name, bytes: bytes.length })
+      } catch (e) {
+        logger.warn('[CodeCell] open pdf failed', e)
+      }
+    })
+
+    const btnSave = document.createElement('button')
+    btnSave.type = 'button'
+    btnSave.textContent = '保存 PDF'
+    btnSave.style.padding = '6px 10px'
+    btnSave.style.borderRadius = '6px'
+    btnSave.style.border = '1px solid var(--guaxi-border)'
+    btnSave.style.background = 'var(--guaxi-panel-bg)'
+    btnSave.style.color = 'var(--guaxi-text-primary)'
+    btnSave.style.cursor = 'pointer'
+
+    btnSave.addEventListener('click', async () => {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog')
+        const { writeFile } = await import('@tauri-apps/plugin-fs')
+
+        const path = await save({
+          defaultPath: pdf.name,
+          filters: [{ name: 'PDF', extensions: ['pdf'] }]
+        })
+        if (!path) return
+
+        await writeFile(path, bytes)
+        message.success('已保存 PDF')
+        logger.info('[CodeCell] pdf saved', { path })
+      } catch (e) {
+        logger.error('[CodeCell] save pdf failed', e)
+        message.error('保存失败')
+      }
+    })
+
+    row.appendChild(btnOpen)
+    row.appendChild(btnSave)
+
+    media.innerHTML = ''
+    media.appendChild(row)
+    media.style.display = 'flex'
+
+    if (outputPre && shouldHideText) {
+      outputPre.style.display = 'none'
+    }
+
+    window.setTimeout(() => {
+      try {
+        URL.revokeObjectURL(blobUrl)
+      } catch {
+      }
+    }, 60_000)
+  }
+
   const getGuaxiDisplayFromResult = (res) => {
     const rj = res?.result_json
     if (!rj || typeof rj !== 'object') return null
@@ -6746,6 +6926,83 @@ const handlePreviewClick = async (e) => {
       for (let i = Math.max(0, idx); i < lines.length; i += 1) {
         const t = String(lines[i] || '').trim()
         if (/^```\s*(python|py)(\s|$)/i.test(t)) return i
+      }
+      return -1
+    }
+
+    const openIdx = Number.isFinite(startLine)
+      ? findOpenFenceFrom(Math.max(0, startLine - 1))
+      : findOpenFenceFrom(0)
+
+    if (openIdx < 0) {
+      return `${String(markdown || '').trim()}\n\n${marker}\n${outputFenceStart}\n${outputText}\n${outputFenceEnd}\n`
+    }
+
+    let closeIdx = -1
+    for (let i = openIdx + 1; i < lines.length; i += 1) {
+      if (String(lines[i] || '').trim() === '```') {
+        closeIdx = i
+        break
+      }
+    }
+
+    if (closeIdx < 0) {
+      return `${String(markdown || '').trim()}\n\n${marker}\n${outputFenceStart}\n${outputText}\n${outputFenceEnd}\n`
+    }
+
+    const markerIdx = lines.findIndex((l) => String(l || '').trim() === marker)
+    if (markerIdx >= 0) {
+      let fenceStartIdx = -1
+      for (let i = markerIdx + 1; i < lines.length; i += 1) {
+        if (String(lines[i] || '').trim().startsWith('```')) {
+          fenceStartIdx = i
+          break
+        }
+      }
+      if (fenceStartIdx >= 0) {
+        let fenceEndIdx = -1
+        for (let i = fenceStartIdx + 1; i < lines.length; i += 1) {
+          if (String(lines[i] || '').trim() === '```') {
+            fenceEndIdx = i
+            break
+          }
+        }
+        if (fenceEndIdx >= 0) {
+          lines.splice(markerIdx, fenceEndIdx - markerIdx + 1, marker, outputFenceStart, outputText, outputFenceEnd)
+          return `${lines.join('\n')}\n`
+        }
+      }
+    }
+
+    lines.splice(closeIdx + 1, 0, '', marker, outputFenceStart, outputText, outputFenceEnd)
+    return `${lines.join('\n')}\n`
+  }
+
+  const upsertCodeCellOutputBlock = (markdown, startLine, cellId, kind, outputText) => {
+    const marker = `<!-- guaxi:cellout:${cellId} -->`
+    const outputFenceStart = '```text'
+    const outputFenceEnd = '```'
+
+    const lines = String(markdown || '').split(/\r?\n|\r/)
+
+    const kindToFenceRe = (k) => {
+      const t = String(k || '').trim().toLowerCase()
+      if (t === 'javascript') return /^(javascript|js)(\s|$)/i
+      if (t === 'latex') return /^(latex|tex)(\s|$)/i
+      if (t === 'c') return /^c(\s|$)/i
+      if (t === 'cpp') return /^(cpp|c\+\+)(\s|$)/i
+      if (t === 'rust') return /^(rust|rs)(\s|$)/i
+      return null
+    }
+
+    const fenceRe = kindToFenceRe(kind)
+
+    const findOpenFenceFrom = (idx) => {
+      for (let i = Math.max(0, idx); i < lines.length; i += 1) {
+        const t = String(lines[i] || '').trim()
+        if (!t.startsWith('```')) continue
+        const info = t.replace(/^```\s*/, '')
+        if (fenceRe ? fenceRe.test(info) : true) return i
       }
       return -1
     }
@@ -7017,6 +7274,191 @@ const handlePreviewClick = async (e) => {
     }
   }
 
+  // 可执行通用代码块：预览点击“运行/运行并写回/显示结果”
+  const cellBtn = base.closest?.('[data-guaxi-cell-action]')
+  if (cellBtn && previewContainer.value && previewContainer.value.contains(cellBtn)) {
+    const action = String(cellBtn.getAttribute('data-guaxi-cell-action') || '').trim()
+
+    if (action === 'toggle-output') {
+      const cell = cellBtn.closest?.('.guaxi-codecell')
+      if (!cell) return
+
+      const outputEl = cell.querySelector?.('[data-guaxi-cell-output]')
+      const outputPre = outputEl ? outputEl.closest?.('pre') : null
+      const media = cell.querySelector?.('.guaxi-codecell-media')
+
+      if (!outputPre && !media) {
+        message.warning('未找到运行结果区域')
+        e.stopPropagation()
+        return
+      }
+
+      const hasText = String(outputEl?.textContent || '').trim().length > 0
+      const hasMedia = !!media && media.childNodes && media.childNodes.length > 0
+
+      const isVisible = (el) => {
+        if (!el) return false
+        return String(el.style.display || '').trim() !== 'none'
+      }
+
+      const currentlyVisible = isVisible(outputPre) || isVisible(media)
+      const nextShow = !currentlyVisible
+
+      if (outputPre) {
+        outputPre.style.display = nextShow && hasText ? '' : 'none'
+      }
+      if (media) {
+        media.style.display = nextShow && hasMedia ? 'flex' : 'none'
+      }
+
+      const anyVisibleAfter = isVisible(outputPre) || isVisible(media)
+      cellBtn.textContent = anyVisibleAfter ? '隐藏结果' : '显示结果'
+
+      logger.info('[CodeCell] toggle output', {
+        nextShow,
+        hasText,
+        hasMedia,
+        textVisible: isVisible(outputPre),
+        mediaVisible: isVisible(media),
+      })
+
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (action === 'run' || action === 'run-save') {
+      const cell = cellBtn.closest?.('.guaxi-codecell')
+      if (!cell) return
+
+      const kind = guaxiSafeDecode(cell.getAttribute('data-guaxi-cell-kind'))
+      const code = guaxiSafeDecode(cell.getAttribute('data-guaxi-cell-code'))
+      const cellId = guaxiSafeDecode(cell.getAttribute('data-guaxi-cell-id'))
+      const startLine = Number(cell.getAttribute('data-guaxi-md-start-line'))
+
+      if (!code) {
+        message.warning('代码为空')
+        e.stopPropagation()
+        return
+      }
+
+      const outputEl = cell.querySelector?.('[data-guaxi-cell-output]')
+      const outputPre = outputEl ? outputEl.closest?.('pre') : null
+      const toggleBtn = cell.querySelector?.('[data-guaxi-cell-action="toggle-output"]')
+      const syncToggleText = () => {
+        if (!toggleBtn) return
+        const media = cell.querySelector?.('.guaxi-codecell-media')
+        const textVisible = outputPre ? String(outputPre.style.display || '').trim() !== 'none' : false
+        const mediaVisible = media ? String(media.style.display || '').trim() !== 'none' : false
+        toggleBtn.textContent = textVisible || mediaVisible ? '隐藏结果' : '显示结果'
+      }
+
+      if (outputPre) {
+        outputPre.style.display = ''
+      }
+      syncToggleText()
+      if (outputEl) outputEl.textContent = '运行中...'
+
+      const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-cell-action]') || [])
+      relatedBtns.forEach((b) => {
+        try {
+          b.setAttribute('disabled', 'true')
+          b.style.opacity = '0.6'
+          b.style.cursor = 'not-allowed'
+        } catch {
+        }
+      })
+
+      try {
+        const docPath = selectedFile.value?.path || ''
+
+        logger.info('[CodeCell] code_cell_exec', {
+          action,
+          kind,
+          cellId,
+          codeLen: code.length,
+          docPath,
+        })
+
+        const res = await invoke('code_cell_exec', {
+          request: {
+            kind: String(kind || '').trim(),
+            code,
+            vars: {
+              _doc_path: String(docPath),
+              _cell_id: String(cellId || ''),
+            },
+          }
+        })
+
+        logger.info('[CodeCell] code_cell_exec result', {
+          ok: res?.ok,
+          stdoutLen: String(res?.stdout || '').length,
+          stderrLen: String(res?.stderr || '').length,
+          hasArtifacts: Array.isArray(res?.artifacts) && res.artifacts.length > 0,
+        })
+
+        const outputText = formatCodeCellExecOutput(res)
+        const hideText = String(outputText || '').trim().length === 0
+
+        if (outputPre) {
+          outputPre.style.display = hideText ? 'none' : ''
+        }
+        syncToggleText()
+
+        if (outputEl) {
+          outputEl.textContent = hideText ? '' : outputText
+        }
+
+        await renderCodeCellArtifacts(cell, outputPre, res, outputText)
+        syncToggleText()
+
+        if (res?.ok === false) {
+          message.error('执行失败')
+        }
+
+        if (action === 'run-save') {
+          suppressPreviewAutoRenderOnce(`codecell:${action}`, 1500)
+
+          const current = String(editor?.getModel?.()?.getValue?.() || rawContent.value || '')
+          const nextMarkdown = upsertCodeCellOutputBlock(
+            current,
+            Number.isFinite(startLine) ? startLine : null,
+            cellId || `cell-${String(kind || 'code')}`,
+            kind,
+            outputText
+          )
+
+          applyMarkdownReplaceFromPreview(nextMarkdown, { action: 'codecell-run-save' })
+          message.success('已写回到文档（未自动保存）')
+        } else {
+          message.success('运行完成')
+        }
+      } catch (err) {
+        logger.error('[CodeCell] run failed', err)
+        if (outputPre) {
+          outputPre.style.display = ''
+        }
+        syncToggleText()
+        if (outputEl) outputEl.textContent = `运行失败：${String(err?.message || err)}`
+        message.error('运行失败')
+      } finally {
+        relatedBtns.forEach((b) => {
+          try {
+            b.removeAttribute('disabled')
+            b.style.opacity = ''
+            b.style.cursor = ''
+          } catch {
+          }
+        })
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+  }
+
   // 任务列表：点击 checkbox 时，直接更新 Markdown 源内容（并仅更新当前条目 DOM）
   const checkbox = base.closest?.('input.task-list-item-checkbox');
   if (checkbox && previewContainer.value && previewContainer.value.contains(checkbox)) {
@@ -7177,6 +7619,7 @@ const renderDebounced = debounce(async (content) => {
       math: true,
       codeHighlight: true,
       pythonCells: true,
+      codeCells: true,
       theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
     });
 
