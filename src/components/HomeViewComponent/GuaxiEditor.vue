@@ -3162,9 +3162,21 @@ const registerMarkdownLanguageFeatures = () => {
         return { suggestions: [] };
       }
 
+      const range = new monaco.Range(
+        position.lineNumber,
+        wordInfo.startColumn,
+        position.lineNumber,
+        wordInfo.endColumn
+      );
+
       const suggestions = markdownSnippets
         .filter((s) => String(s.label || '').toLowerCase().startsWith(lower))
-        .slice(0, 50);
+        .slice(0, 50)
+        .map((s, index) => ({
+          ...s,
+          range,
+          sortText: s.sortText || `1_${String(index).padStart(3, '0')}_${String(s.label || '')}`
+        }));
 
       return { suggestions };
     }
@@ -4294,6 +4306,50 @@ const setupEditorListeners = () => {
     updateTableToolbar();
   });
 
+  const isSuggestWidgetVisible = () => {
+    const dom = editor?.getDomNode?.();
+    if (!dom) return false;
+    return !!dom.querySelector('.suggest-widget.visible');
+  };
+
+  let lastSnipasteSuggestAt = 0;
+
+  const forceTriggerSuggest = (source, meta) => {
+    if (!editor) return;
+
+    const now = Date.now();
+    if (now - lastSnipasteSuggestAt < 120) {
+      logger.debug('[KeywordSuggest] triggerSuggest skipped (too frequent)', {
+        ...meta,
+        dt: now - lastSnipasteSuggestAt
+      });
+      return;
+    }
+    lastSnipasteSuggestAt = now;
+
+    const visibleBefore = isSuggestWidgetVisible();
+
+    try {
+      editor.trigger(source, 'hideSuggestWidget', null);
+    } catch {
+    }
+
+    logger.debug('[KeywordSuggest] triggerSuggest (force)', {
+      ...meta,
+      visibleBefore
+    });
+
+    editor.trigger(source, 'editor.action.triggerSuggest', {});
+
+    window.setTimeout(() => {
+      if (!editor) return;
+      const visibleAfter = isSuggestWidgetVisible();
+      logger.debug('[KeywordSuggest] triggerSuggest check', { ...meta, visibleAfter });
+      if (visibleAfter) return;
+      editor.trigger(source, 'editor.action.triggerSuggest', {});
+    }, 80);
+  };
+
   editor.onDidType((text) => {
     if (!editor) return;
     const ch = text ? text[text.length - 1] : '';
@@ -4305,6 +4361,12 @@ const setupEditorListeners = () => {
     const model = editor.getModel();
     const pos = editor.getPosition();
     if (!model || !pos) return;
+
+    const word = model.getWordUntilPosition(pos)?.word || '';
+    const lowerWord = String(word || '').trim().toLowerCase();
+    if (lowerWord === 'snipaste') {
+      forceTriggerSuggest('guaxi-keyword', { word: lowerWord, line: pos.lineNumber, col: pos.column });
+    }
 
     const lineContent = model.getLineContent(pos.lineNumber);
     const beforeCursor = lineContent.slice(0, pos.column - 1);
@@ -4331,12 +4393,6 @@ const setupEditorListeners = () => {
     });
     editor.trigger('guaxi-path', 'editor.action.triggerSuggest', {});
   });
-
-  const isSuggestWidgetVisible = () => {
-    const dom = editor?.getDomNode?.();
-    if (!dom) return false;
-    return !!dom.querySelector('.suggest-widget.visible');
-  };
 
   editor.onKeyDown((e) => {
     if (e.keyCode === monaco.KeyCode.Enter) {
