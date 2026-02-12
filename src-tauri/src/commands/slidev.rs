@@ -64,6 +64,13 @@ fn resolve_slidev_runtime() -> Result<(PathBuf, PathBuf, SlidevEnvStatus), Strin
     #[cfg(not(windows))]
     let node = root.join("node");
 
+    #[cfg(windows)]
+    let cli = root
+        .join("node_modules")
+        .join(".bin")
+        .join("slidev.cmd");
+
+    #[cfg(not(windows))]
     let cli = root
         .join("node_modules")
         .join(".bin")
@@ -95,6 +102,27 @@ fn resolve_slidev_runtime() -> Result<(PathBuf, PathBuf, SlidevEnvStatus), Strin
 
     Ok((node, cli, status))
 }
+
+fn inject_slidev_env_path(cmd: &mut Command, env_root: &Path) {
+    let mut paths: Vec<PathBuf> = vec![
+        env_root.to_path_buf(),
+        env_root.join("node_modules").join(".bin"),
+    ];
+
+    if let Some(old) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&old));
+    }
+
+    match std::env::join_paths(paths) {
+        Ok(joined) => {
+            cmd.env("PATH", joined);
+        }
+        Err(e) => {
+            warn!("[Slidev] join_paths failed: {}", e);
+        }
+    }
+}
+
 
 #[tauri::command]
 pub fn slidev_get_env_status() -> Result<SlidevEnvStatus, String> {
@@ -209,29 +237,30 @@ pub fn slidev_start_dev(entry_path: String, port: Option<u16>) -> Result<SlidevD
         }
     }
 
-    let (node_path, cli_path, env_status) = resolve_slidev_runtime()?;
+    let (_node_path, cli_path, env_status) = resolve_slidev_runtime()?;
+    let env_root = PathBuf::from(&env_status.expected_root);
 
     info!(
-        "[Slidev] using bundled runtime: root={} node={} cli={}",
+        "[Slidev] using bundled slidev cli: root={} cli={}",
         env_status.expected_root,
-        node_path.display(),
         cli_path.display()
     );
 
-    let mut cmd = Command::new(&node_path);
+    let mut cmd = Command::new(&cli_path);
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    cmd.arg(&cli_path)
-        .arg(&entry_path_norm)
+    inject_slidev_env_path(&mut cmd, &env_root);
+
+    cmd.arg(&entry_path_norm)
         .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("127.0.0.1")
         .arg("--open")
         .arg("false")
-        .current_dir(&workdir)
+        .current_dir(&env_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -300,28 +329,29 @@ pub fn slidev_export_pptx(entry_path: String, output_path: String) -> Result<(),
         workdir.display()
     );
 
-    let (node_path, cli_path, env_status) = resolve_slidev_runtime()?;
+    let (_node_path, cli_path, env_status) = resolve_slidev_runtime()?;
+    let env_root = PathBuf::from(&env_status.expected_root);
 
     info!(
-        "[Slidev] using bundled runtime: root={} node={} cli={}",
+        "[Slidev] using bundled slidev cli: root={} cli={}",
         env_status.expected_root,
-        node_path.display(),
         cli_path.display()
     );
 
-    let mut cmd = Command::new(&node_path);
+    let mut cmd = Command::new(&cli_path);
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    cmd.arg(&cli_path)
-        .arg("export")
+    inject_slidev_env_path(&mut cmd, &env_root);
+
+    cmd.arg("export")
         .arg(&entry_path_norm)
         .arg("--format")
         .arg("pptx")
         .arg("--output")
         .arg(&output_path_norm)
-        .current_dir(&workdir);
+        .current_dir(&env_root);
 
     let out = cmd
         .output()
