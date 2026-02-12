@@ -278,7 +278,10 @@
                 v-model:selected-key="kbSelectedKey"
                 v-model:expanded-keys="kbExpandedKeys"
                 empty-text="暂无知识库文件"
+                :show-action="true"
+                action-title="插入到PPT"
                 @select="handleKbSelectNode"
+                @action="handleKbInsertAction"
               />
             </div>
           </n-spin>
@@ -288,11 +291,35 @@
           <n-card v-if="material.path" size="small" title="素材预览">
             <n-space vertical size="small">
               <n-text depth="3" class="path-text" :title="material.path">{{ material.path }}</n-text>
-              <n-input :value="materialPreview" type="textarea" :rows="10" readonly />
+              <textarea
+                ref="materialPreviewRef"
+                class="material-preview-textarea"
+                :value="materialPreview"
+                readonly
+                @mouseup="updateMaterialSelection"
+                @keyup="updateMaterialSelection"
+                @select="updateMaterialSelection"
+              ></textarea>
+              <n-text v-if="materialSelectedLen > 0" depth="3" class="select-tip">已选中 {{ materialSelectedLen }} 字符</n-text>
               <n-space size="small">
-                <n-button size="small" type="primary" :disabled="material.loading" @click="insertMaterial">插入到
-                  PPT</n-button>
-                <n-button size="small" quaternary :disabled="material.loading" @click="reloadMaterial">重新读取</n-button>
+                <n-button size="small" type="primary" :disabled="material.loading" @click="insertMaterial">
+                  <template #icon>
+                    <n-icon :component="DocumentTextOutline" />
+                  </template>
+                  插入全部
+                </n-button>
+                <n-button size="small" :disabled="material.loading" @click="insertSelectedMaterial">
+                  <template #icon>
+                    <n-icon :component="AddOutline" />
+                  </template>
+                  插入选中
+                </n-button>
+                <n-button size="small" quaternary :disabled="material.loading" @click="reloadMaterial">
+                  <template #icon>
+                    <n-icon :component="RefreshOutline" />
+                  </template>
+                  重新读取
+                </n-button>
               </n-space>
             </n-space>
           </n-card>
@@ -318,7 +345,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, nextTick, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { confirm as confirmDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
@@ -613,7 +640,13 @@ const ensureDirExists = async (dir) => {
 const mapFileNodes = (nodes) => {
   const list = Array.isArray(nodes) ? nodes : []
   return list
-    .filter((n) => !isHiddenName(n?.name))
+    .filter((n) => {
+      const name = String(n?.name || '').trim()
+      if (!name) return false
+      if (isHiddenName(name)) return false
+      if (name.toLowerCase() === 'node_modules') return false
+      return true
+    })
     .map((n) => {
       const key = normalizePath(n?.id)
       const isDir = !!n?.is_directory
@@ -1121,6 +1154,7 @@ const loadKbTree = async () => {
     const root = await invoke('get_knowledge_base_tree', { rootPath })
     const node = toKbTreeNode(root)
     kbTree.value = node ? [node] : []
+    kbExpandedKeys.value = node ? [node.key] : []
     logger.info('[KB] tree loaded', { rootPath })
   } catch (e) {
     logger.error('[KB] load tree failed', e)
@@ -1129,6 +1163,25 @@ const loadKbTree = async () => {
     kbLoading.value = false
   }
 }
+
+watch(
+  () => selectedKbPath.value,
+  async (next, prev) => {
+    const n = normalizePath(next)
+    const p = normalizePath(prev)
+    if (n === p) return
+
+    clearMaterial()
+    kbTree.value = []
+    kbExpandedKeys.value = []
+    kbSelectedKeys.value = []
+
+    if (!n) return
+
+    logger.info('[KB] selected', { rootPath: n })
+    await loadKbTree()
+  }
+)
 
 const filterTree = (nodes, q) => {
   const query = String(q || '').trim().toLowerCase()
@@ -1157,6 +1210,34 @@ const material = reactive({
   loading: false,
 })
 
+const materialPreviewRef = ref(null)
+
+const materialSelection = reactive({
+  start: 0,
+  end: 0,
+})
+
+const materialSelectedLen = computed(() => {
+  const s = Math.max(0, materialSelection.start)
+  const e = Math.max(s, materialSelection.end)
+  return Math.max(0, e - s)
+})
+
+const updateMaterialSelection = () => {
+  const el = materialPreviewRef.value
+  if (!el) return
+  materialSelection.start = el.selectionStart ?? 0
+  materialSelection.end = el.selectionEnd ?? 0
+}
+
+const getSelectedMaterialText = () => {
+  const preview = String(materialPreview.value || '')
+  const start = Math.max(0, materialSelection.start)
+  const end = Math.max(start, materialSelection.end)
+  if (!preview || start === end) return ''
+  return preview.slice(start, end)
+}
+
 const materialPreview = computed(() => {
   const s = String(material.content || '')
   if (!s) return ''
@@ -1179,6 +1260,8 @@ const readMaterial = async (path) => {
     const content = await invoke('read_file_content', { path: p })
     material.path = p
     material.content = String(content ?? '')
+    materialSelection.start = 0
+    materialSelection.end = 0
     logger.info('[KB] material loaded', { path: p, len: material.content.length })
   } catch (e) {
     logger.error('[KB] material read failed', e)
@@ -1210,14 +1293,70 @@ const insertMaterial = async () => {
   try {
     const text = content.endsWith('\n') ? content : `${content}\n`
     const ok = await pptEditorRef.value?.insertContent?.(`\n${text}`)
-    logger.info('[KB] insert to editor', { ok: !!ok, path: material.path, len: text.length })
+    logger.info('[KB] insert all', { ok: !!ok, path: material.path, len: text.length })
     if (!ok) {
       message.warning('插入失败：请先打开一个 PPT 源文件')
       return
     }
     message.success('已插入到 PPT 源文件')
   } catch (e) {
-    logger.error('[KB] insert failed', e)
+    logger.error('[KB] insert all failed', e)
+    message.error('插入失败')
+  }
+}
+
+const handleKbInsertAction = async (node) => {
+  const key = normalizePath(node?.key)
+  if (!key || node?.isDir) return
+
+  try {
+    if (material.path !== key) {
+      await readMaterial(key)
+    }
+
+    const content = String(material.content || '')
+    if (!content) {
+      message.warning('素材为空')
+      return
+    }
+
+    const text = content.endsWith('\n') ? content : `${content}\n`
+    const ok = await pptEditorRef.value?.insertContent?.(`\n${text}`)
+    logger.info('[KB] insert by action', { ok: !!ok, path: key, len: text.length })
+    if (!ok) {
+      message.warning('插入失败：请先打开一个 PPT 源文件')
+      return
+    }
+    message.success('已插入到 PPT 源文件')
+  } catch (e) {
+    logger.error('[KB] insert action failed', e)
+    message.error('插入失败')
+  }
+}
+
+const insertSelectedMaterial = async () => {
+  if (!material.path) {
+    message.warning('请先选择一个素材文件')
+    return
+  }
+
+  const picked = getSelectedMaterialText()
+  if (!picked) {
+    message.warning('请先在素材预览中选择一段内容')
+    return
+  }
+
+  try {
+    const text = picked.endsWith('\n') ? picked : `${picked}\n`
+    const ok = await pptEditorRef.value?.insertContent?.(`\n${text}`)
+    logger.info('[KB] insert selected', { ok: !!ok, path: material.path, len: text.length })
+    if (!ok) {
+      message.warning('插入失败：请先打开一个 PPT 源文件')
+      return
+    }
+    message.success('已插入选中内容')
+  } catch (e) {
+    logger.error('[KB] insert selected failed', e)
     message.error('插入失败')
   }
 }
@@ -1442,5 +1581,24 @@ onMounted(async () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.material-preview-textarea {
+  width: 100%;
+  min-height: 180px;
+  border: 1px solid var(--n-border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--n-color);
+  color: var(--n-text-color);
+  font-size: 12px;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.select-tip {
+  color: var(--n-text-color-3);
+  font-size: 12px;
 }
 </style>

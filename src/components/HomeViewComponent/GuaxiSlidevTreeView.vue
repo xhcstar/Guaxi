@@ -19,6 +19,19 @@
 
         <span class="label" :title="item.label">{{ item.label }}</span>
 
+        <span v-if="showAction && !item.isDir" class="action">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-button size="tiny" quaternary circle @click.stop="onActionClick(item)">
+                <template #icon>
+                  <n-icon :component="actionIcon" />
+                </template>
+              </n-button>
+            </template>
+            {{ actionTitle }}
+          </n-tooltip>
+        </span>
+
         <span v-if="loadingKeys.has(item.key)" class="loading" title="加载中">
           <span class="dot"></span>
           <span class="dot"></span>
@@ -31,8 +44,9 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { NIcon } from 'naive-ui'
+import { NButton, NIcon, NTooltip } from 'naive-ui'
 import {
+  AddOutline,
   ChevronDownOutline,
   ChevronForwardOutline,
   DocumentTextOutline,
@@ -50,9 +64,12 @@ const props = defineProps({
   basePadding: { type: Number, default: 10 },
   emptyText: { type: String, default: '暂无数据' },
   loadChildren: { type: Function, default: null },
+  showAction: { type: Boolean, default: false },
+  actionTitle: { type: String, default: '插入到PPT' },
+  actionIcon: { type: Object, default: () => AddOutline },
 })
 
-const emit = defineEmits(['update:selectedKey', 'update:expandedKeys', 'select'])
+const emit = defineEmits(['update:selectedKey', 'update:expandedKeys', 'select', 'action'])
 
 const normalizeKey = (k) => String(k || '')
 
@@ -149,6 +166,11 @@ const onTwistyClick = async (item) => {
   if (!item.isDir) return
   await toggleDir(item.node)
 }
+
+const onActionClick = (item) => {
+  emit('action', item.node)
+  logger.info('[action]', { key: item?.key })
+}
 </script>
 
 <style scoped>
@@ -220,6 +242,14 @@ const onTwistyClick = async (item) => {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
 }
 
 .loading {
