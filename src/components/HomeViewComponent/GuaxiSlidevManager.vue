@@ -1,6 +1,6 @@
 <template>
   <div class="slidev-page">
-    <div class="sider-toggle sider-toggle-left" :style="{ left: (leftCollapsed ? 0 : leftSiderWidth) + 'px' }">
+    <div class="sider-toggle sider-toggle-left" :class="{ collapsed: leftCollapsed }" :style="{ left: (leftCollapsed ? 0 : leftSiderWidth) + 'px' }">
       <n-tooltip trigger="hover">
         <template #trigger>
           <n-button size="small" quaternary circle @click="toggleLeftCollapsed">
@@ -13,7 +13,7 @@
       </n-tooltip>
     </div>
 
-    <div class="sider-toggle sider-toggle-right" :style="{ right: (rightCollapsed ? 0 : rightSiderWidth) + 'px' }">
+    <div class="sider-toggle sider-toggle-right" :class="{ collapsed: rightCollapsed }" :style="{ right: (rightCollapsed ? 0 : rightSiderWidth) + 'px' }">
       <n-tooltip trigger="hover">
         <template #trigger>
           <n-button size="small" quaternary circle @click="toggleRightCollapsed">
@@ -198,7 +198,13 @@
       </div>
 
       <div class="editor-host">
-        <GuaxiSlidevLiteEditor ref="pptEditorRef" />
+        <GuaxiSlidevLiteEditor
+          ref="pptEditorRef"
+          :active-path="activeEditorPath"
+          :content="activeEditorContent"
+          :unsupported="activeEditorUnsupported"
+          @draft-flush="onEditorDraftFlush"
+        />
       </div>
     </n-layout-content>
 
@@ -391,6 +397,42 @@ const knowledgeBaseStore = useKnowledgeBaseStore()
 const pptEditorRef = ref(null)
 
 const normalizePath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/g, '')
+
+const getTabByPath = (path) => {
+  const p = normalizePath(path)
+  if (!p) return null
+  return (Array.isArray(slidevEditorStore.openTabs) ? slidevEditorStore.openTabs : []).find(
+    (t) => normalizePath(t?.path) === p
+  ) || null
+}
+
+const activeEditorPath = computed(() => {
+  const p = slidevEditorStore.activeTab || slidevEditorStore.selectedFile?.path || ''
+  return normalizePath(p)
+})
+
+const activeEditorContent = computed(() => {
+  const p = activeEditorPath.value
+  if (!p) return ''
+  const tab = getTabByPath(p)
+  return String(tab?.content ?? slidevEditorStore.selectedFile?.content ?? '')
+})
+
+const activeEditorUnsupported = computed(() => {
+  const p = activeEditorPath.value
+  if (!p) return false
+  const tab = getTabByPath(p)
+  return !!tab?.unsupported || !!slidevEditorStore.selectedFile?.unsupported
+})
+
+const onEditorDraftFlush = (payload) => {
+  const path = normalizePath(payload?.path)
+  if (!path) return
+  const content = String(payload?.content ?? '')
+  slidevEditorStore.applyDraft(path, content)
+  logger.info('[Slidev] draft flush', { path, len: content.length, tag: payload?.tag })
+}
+
 const isHiddenName = (name) => {
   const s = String(name || '').trim()
   return !s || s.startsWith('.')
@@ -698,6 +740,9 @@ const handleSlidevSelectNode = async (node) => {
       })
     }, 1500)
 
+    await nextTick()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+
     const tRead0 = performance.now()
     logger.info('[Slidev] read start', { traceId, key })
     logCenterLayout('read-start', { traceId, key })
@@ -889,8 +934,20 @@ const saveActive = async () => {
   }
 
   try {
-    logger.info('[Slidev] save', { path, len: content.length })
-    await slidevEditorStore.updateFileContent(path, content)
+    let finalContent = content
+    let source = 'store'
+    const editorPayload = pptEditorRef.value?.getContent?.()
+    if (editorPayload?.ok && normalizePath(editorPayload.path) === path) {
+      finalContent = String(editorPayload.content ?? '')
+      source = 'editor'
+    }
+
+    logger.info('[Slidev] save', { path, len: finalContent.length, source })
+    await slidevEditorStore.updateFileContent(path, finalContent)
+
+    // 说明：保存成功后重置编辑器脏状态
+    pptEditorRef.value?.markSaved?.(path)
+
     message.success('已保存')
   } catch (e) {
     logger.error('[Slidev] save failed', e)
@@ -1188,15 +1245,35 @@ onMounted(async () => {
 <style scoped>
 .slidev-page {
   position: relative;
-  height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: 100vh;
   min-height: 0;
   width: 100%;
   overflow: hidden;
+  background: var(--guaxi-app-bg);
 }
 
 .slidev-layout {
+  flex: 1 1 auto;
+  min-height: 0;
   height: 100%;
   background: var(--guaxi-app-bg);
+}
+
+.slidev-page :deep(.n-layout) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.slidev-page :deep(.n-layout-content) {
+  min-height: 0;
+}
+
+.slidev-page :deep(.n-layout-sider) {
+  min-height: 0;
 }
 
 .slidev-sider {
@@ -1217,7 +1294,7 @@ onMounted(async () => {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 20;
+  z-index: 60;
   pointer-events: auto;
 }
 
@@ -1225,8 +1302,16 @@ onMounted(async () => {
   margin-left: -14px;
 }
 
+.sider-toggle-left.collapsed {
+  margin-left: 12px;
+}
+
 .sider-toggle-right {
   margin-right: -14px;
+}
+
+.sider-toggle-right.collapsed {
+  margin-right: 12px;
 }
 
 .slidev-center {
