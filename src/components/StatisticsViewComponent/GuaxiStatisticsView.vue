@@ -2,7 +2,7 @@
   <div class="guaxi-content">
     <n-layout has-sider>
       <n-layout-sider :width="SIDER_WIDTH" bordered content-style="padding: 0px;">
-        <GuaxiSidebar icon-only />
+        <GuaxiStatisticsSidebar />
       </n-layout-sider>
 
       <n-layout-content class="main-content-area">
@@ -15,7 +15,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { onMounted } from "vue";
-import GuaxiSidebar from "../HomeViewComponent/GuaxiSidebar.vue"; //There is a bug in the sidebar, so we use the home view sidebar
+import GuaxiStatisticsSidebar from "./GuaxiStatisticsSidebar.vue";
 import GuaxiStatisticsDashboard from "./GuaxiStatisticsDashboard.vue";
 
 const logger = createLogger('GuaxiStatisticsView')
