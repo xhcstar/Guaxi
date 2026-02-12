@@ -76,7 +76,7 @@ let modelPathKey = ''
 let modelSwitchSeq = 0
 
 let applyingModelUpdate = false
-let syncRaf = 0
+let syncTimer = 0
 let pendingSync = { path: '', content: '' }
 let lastSyncLogAt = 0
 
@@ -237,10 +237,10 @@ const ensureEditor = async (initialValue = '', language = 'plaintext') => {
 
   const scheduleSyncNoPreview = (path, content) => {
     pendingSync = { path, content }
-    if (syncRaf) return
+    if (syncTimer) return
 
-    syncRaf = requestAnimationFrame(() => {
-      syncRaf = 0
+    syncTimer = window.setTimeout(() => {
+      syncTimer = 0
       applyToStoreNoPreview(pendingSync.path, pendingSync.content)
 
       const now = Date.now()
@@ -248,7 +248,7 @@ const ensureEditor = async (initialValue = '', language = 'plaintext') => {
         lastSyncLogAt = now
         logger.debug('[sync] applied (no preview)', { path: pendingSync.path, len: pendingSync.content?.length ?? 0 })
       }
-    })
+    }, 120)
   }
 
   editor.value.onDidChangeModelContent(() => {
@@ -256,7 +256,13 @@ const ensureEditor = async (initialValue = '', language = 'plaintext') => {
     if (!p || !editor.value) return
     if (applyingModelUpdate) return
 
+    const t0 = performance.now()
     const value = editor.value.getValue() ?? ''
+    const costMs = Math.round(performance.now() - t0)
+    if (costMs >= 30) {
+      logger.warn('[sync] getValue slow', { path: p, costMs, len: value.length })
+    }
+
     scheduleSyncNoPreview(p, value)
   })
 }
@@ -475,9 +481,9 @@ onUnmounted(() => {
     prewarmTimer = 0
   }
 
-  if (syncRaf) {
-    cancelAnimationFrame(syncRaf)
-    syncRaf = 0
+  if (syncTimer) {
+    clearTimeout(syncTimer)
+    syncTimer = 0
   }
 
   try {

@@ -1,9 +1,35 @@
 <template>
   <div class="slidev-page">
+    <div class="sider-toggle sider-toggle-left" :style="{ left: (leftCollapsed ? 0 : leftSiderWidth) + 'px' }">
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-button size="small" quaternary circle @click="toggleLeftCollapsed">
+            <template #icon>
+              <n-icon :component="leftCollapsed ? ChevronForwardOutline : ChevronBackOutline" />
+            </template>
+          </n-button>
+        </template>
+        {{ leftCollapsed ? '展开左侧' : '折叠左侧' }}
+      </n-tooltip>
+    </div>
+
+    <div class="sider-toggle sider-toggle-right" :style="{ right: (rightCollapsed ? 0 : rightSiderWidth) + 'px' }">
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <n-button size="small" quaternary circle @click="toggleRightCollapsed">
+            <template #icon>
+              <n-icon :component="rightCollapsed ? ChevronBackOutline : ChevronForwardOutline" />
+            </template>
+          </n-button>
+        </template>
+        {{ rightCollapsed ? '展开右侧' : '折叠右侧' }}
+      </n-tooltip>
+    </div>
+
     <n-layout class="slidev-layout" has-sider>
       <n-layout-sider
         v-model:collapsed="leftCollapsed"
-        class="slidev-sider slidev-sider-left"
+        :class="['slidev-sider', 'slidev-sider-left', { 'is-collapsed': leftCollapsed }]"
         :width="leftSiderWidth"
         bordered
         collapse-mode="width"
@@ -178,7 +204,7 @@
 
     <n-layout-sider
       v-model:collapsed="rightCollapsed"
-      class="slidev-sider slidev-sider-right"
+      :class="['slidev-sider', 'slidev-sider-right', { 'is-collapsed': rightCollapsed }]"
       :width="rightSiderWidth"
       bordered
       position="right"
@@ -266,6 +292,7 @@
           </n-card>
         </div>
       </div>
+      <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSider" />
     </n-layout-sider>
   </n-layout>
 
@@ -884,20 +911,36 @@ const previewSlidev = async () => {
     return
   }
 
+  const traceId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+  const t0 = performance.now()
+
   try {
     await saveActive()
     const port = parsePort()
+    logger.info('[Slidev] preview start', { traceId, entryPath: path, port })
+
     const info = await invoke('slidev_start_dev', { entryPath: path, port })
     const url = String(info?.url || '')
-    logger.info('[Slidev] preview url', { url })
+    logger.info('[Slidev] preview start_dev ok', { traceId, info, url })
+
     if (!url) {
       message.error('未获取到预览地址')
       return
     }
-    await openUrl(url)
+
+    try {
+      logger.info('[Slidev] openUrl start', { traceId, url })
+      await openUrl(url)
+      logger.info('[Slidev] openUrl done', { traceId, url })
+    } catch (err) {
+      logger.error('[Slidev] openUrl failed', { traceId, url, err })
+      message.error('打开浏览器失败')
+    }
   } catch (e) {
-    logger.error('[Slidev] preview failed', e)
+    logger.error('[Slidev] preview failed', { traceId, err: e })
     message.error('启动预览失败（需要本机可用的 Node.js / npx）')
+  } finally {
+    logger.info('[Slidev] preview end', { traceId, costMs: Math.round(performance.now() - t0) })
   }
 }
 
@@ -908,21 +951,37 @@ const presentSlidev = async () => {
     return
   }
 
+  const traceId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+  const t0 = performance.now()
+
   try {
     await saveActive()
     const port = parsePort()
+    logger.info('[Slidev] presenter start', { traceId, entryPath: path, port })
+
     const info = await invoke('slidev_start_dev', { entryPath: path, port })
     const base = String(info?.url || '')
     if (!base) {
       message.error('未获取到预览地址')
       return
     }
+
     const url = `${base}presenter`
-    logger.info('[Slidev] presenter url', { url })
-    await openUrl(url)
+    logger.info('[Slidev] presenter start_dev ok', { traceId, info, url })
+
+    try {
+      logger.info('[Slidev] openUrl start', { traceId, url })
+      await openUrl(url)
+      logger.info('[Slidev] openUrl done', { traceId, url })
+    } catch (err) {
+      logger.error('[Slidev] openUrl failed', { traceId, url, err })
+      message.error('打开浏览器失败')
+    }
   } catch (e) {
-    logger.error('[Slidev] presenter failed', e)
+    logger.error('[Slidev] presenter failed', { traceId, err: e })
     message.error('启动演示失败')
+  } finally {
+    logger.info('[Slidev] presenter end', { traceId, costMs: Math.round(performance.now() - t0) })
   }
 }
 
@@ -1128,29 +1187,46 @@ onMounted(async () => {
 
 <style scoped>
 .slidev-page {
-  height: 100vh;
+  position: relative;
+  height: 100%;
+  min-height: 0;
   width: 100%;
+  overflow: hidden;
 }
 
 .slidev-layout {
-  height: 100vh;
+  height: 100%;
   background: var(--guaxi-app-bg);
 }
 
 .slidev-sider {
-  height: 100vh;
+  height: 100%;
 }
 
-.slidev-sider-left {
-  min-width: 220px;
-  max-width: 560px;
-  overflow: hidden;
-}
-
+.slidev-sider-left,
 .slidev-sider-right {
-  min-width: 260px;
-  max-width: 760px;
   overflow: hidden;
+}
+
+.slidev-sider-left.is-collapsed,
+.slidev-sider-right.is-collapsed {
+  min-width: 0;
+}
+
+.sider-toggle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  pointer-events: auto;
+}
+
+.sider-toggle-left {
+  margin-left: -14px;
+}
+
+.sider-toggle-right {
+  margin-right: -14px;
 }
 
 .slidev-center {
