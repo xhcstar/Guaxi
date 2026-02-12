@@ -176,6 +176,34 @@
         <n-divider />
 
         <div>
+          <h3>Slidev PPT 源文件根目录</h3>
+          <p class="description">
+            用于存放 Slidev PPT 源文件。建议每个 PPT 使用一个子目录存放（主题、素材等），避免相互污染。未配置时将使用程序同级目录下的 SlideRepo 文件夹。
+          </p>
+
+          <n-alert type="info" v-if="slidevRepoRoot" style="max-width: 95%;">
+            当前 Slidev 根目录：{{ slidevRepoRoot }}
+          </n-alert>
+          <n-alert type="warning" v-else style="max-width: 95%;">
+            未配置 Slidev 根目录，将使用默认位置。
+          </n-alert>
+
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false" style="margin-top: 8px">
+            <n-form-item label="Slidev 根目录">
+              <n-input v-model:value="slidevRepoRoot" :disabled="loading" placeholder="Slidev 根目录" />
+            </n-form-item>
+            <n-form-item label="操作">
+              <n-space>
+                <n-button :disabled="loading" @click="handleSlidevRepoPick">浏览文件夹...</n-button>
+                <n-button :disabled="loading" type="primary" @click="handleSlidevRepoSave">保存</n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>知识库远程仓库</h3>
           <p class="description">
             配置后将应用到 KnowledgeBases 根目录下的 Git 仓库。push / pull 将直接调用系统 git 命令（类似 VSCode），使用你的本机 Git 配置与凭据环境。
@@ -258,6 +286,9 @@ const knowledgeBasesRoot = ref('');
 
 // 模板库路径
 const templateRepoPath = ref('');
+
+// Slidev PPT 源文件根目录
+const slidevRepoRoot = ref('');
 
 // 资源库同步配置
 const syncProvider = ref('none');
@@ -480,6 +511,14 @@ onMounted(async () => {
   }
 
   try {
+    const slideRoot = await invoke('get_slidev_repo_root');
+    slidevRepoRoot.value = typeof slideRoot === 'string' ? slideRoot : '';
+  } catch (error) {
+    logger.error('加载 Slidev 根目录失败:', error);
+    slidevRepoRoot.value = '';
+  }
+
+  try {
     loading.value = true;
     const imageBedRoot = await invoke('get_image_bed_root');
     if (typeof imageBedRoot === 'string') {
@@ -579,6 +618,36 @@ const handleTemplateRepoSave = async () => {
     await invoke('set_template_repo_path', { path: templateRepoPath.value });
   } catch (error) {
     logger.error('更新模板库路径失败:', error);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleSlidevRepoPick = async () => {
+  try {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+    });
+
+    if (!selectedPath) return;
+
+    loading.value = true;
+    await invoke('set_slidev_repo_root', { path: selectedPath });
+    slidevRepoRoot.value = selectedPath;
+  } catch (error) {
+    logger.error('更新 Slidev 根目录失败:', error);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleSlidevRepoSave = async () => {
+  try {
+    loading.value = true;
+    await invoke('set_slidev_repo_root', { path: slidevRepoRoot.value });
+  } catch (error) {
+    logger.error('更新 Slidev 根目录失败:', error);
   } finally {
     loading.value = false;
   }

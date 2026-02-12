@@ -48,6 +48,17 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
+          <n-icon class="header-icon" size="20" @click="openSlidevManager">
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5zm2 0v8.5h12V5H6zm-1 14a1 1 0 0 1 1-1h4v-1h4v1h4a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1z" />
+            </svg>
+          </n-icon>
+        </template>
+        PPT 制作与管理
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
           <n-icon class="header-icon" size="20" :component="Folder20Regular" @click="openResourceRepoManager" />
         </template>
         知识库资源管理
@@ -463,6 +474,24 @@ async function openTemplateManager() {
     }
     logger.error('打开模板管理器失败:', err)
     message.error('打开模板管理器失败')
+  }
+}
+
+async function openSlidevManager() {
+  try {
+    await invoke('create_slidev_manager_window', {
+      label: 'slidev_manager',
+      title: 'PPT 制作与管理',
+      theme: settingsStore.appearanceTheme,
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('PPT 窗口已打开')
+      return
+    }
+    logger.error('打开 PPT 窗口失败:', err)
+    message.error('打开 PPT 窗口失败')
   }
 }
 

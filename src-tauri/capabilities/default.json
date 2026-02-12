@@ -12,7 +12,8 @@
     "git-*",
     "markdown-manual",
     "life-habits",
-    "tools-file-transfer"
+    "tools-file-transfer",
+    "slidev_manager"
   ],
   "permissions": [
     "core:default",

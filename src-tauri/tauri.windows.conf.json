@@ -10,7 +10,8 @@
       "utils/ScreenShotTool*",
       "utils/pandoc*",
       "utils/tectonic.exe",
-      "utils/horizontalrule.lua"
+      "utils/horizontalrule.lua",
+      "utils/SlidevEnv/**/*"
     ]
   }
 }

@@ -46,6 +46,8 @@ pub struct AppConfig {
     life_album_album_dir: String,
     #[serde(default)]
     template_repo_path: String,
+    #[serde(default)]
+    slidev_repo_root: String,
     #[serde(default = "default_chat_record_root")]
     chat_record_root: String,
     #[serde(default)]
@@ -157,6 +159,15 @@ fn default_template_repo_path() -> String {
         .expect("无法获取可执行文件所在目录")
         .to_path_buf();
     exe_dir.join("Template").to_string_lossy().to_string()
+}
+
+fn default_slidev_repo_root() -> String {
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("SlideRepo").to_string_lossy().to_string()
 }
 
 fn default_chat_record_root() -> String {
@@ -410,6 +421,7 @@ impl Default for AppConfig {
             resource_repo_sync: ResourceRepoSyncConfig::default(),
             life_album_album_dir: "".to_string(),
             template_repo_path: "".to_string(),
+            slidev_repo_root: "".to_string(),
             chat_record_root: default_chat_record_root(),
             knowledge_bases_root: "".to_string(),
             knowledge_bases_remote_url: "".to_string(),
@@ -1327,6 +1339,34 @@ pub fn set_template_repo_path(path: String) -> Result<(), String> {
     init_template_root()
 }
 
+#[tauri::command]
+pub fn get_slidev_repo_root() -> String {
+    if let Err(e) = init_slidev_repo_root() {
+        info!("init_slidev_repo_root failed: {}", e);
+    }
+    let config = load_config();
+    config.slidev_repo_root
+}
+
+#[tauri::command]
+pub fn set_slidev_repo_root(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    let root_path = if trimmed.is_empty() {
+        PathBuf::from(default_slidev_repo_root())
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
+    }
+
+    let mut config = load_config();
+    config.slidev_repo_root = root_path.to_string_lossy().to_string();
+    save_config(&config);
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct KnowledgeBasesRemoteConfig {
     pub remote_url: String,
@@ -1498,6 +1538,19 @@ pub fn init_template_root() -> Result<(), String> {
         save_config(&config);
     }
     let root_path = PathBuf::from(&config.template_repo_path);
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn init_slidev_repo_root() -> Result<(), String> {
+    let mut config = load_config();
+    if config.slidev_repo_root.trim().is_empty() {
+        config.slidev_repo_root = default_slidev_repo_root();
+        save_config(&config);
+    }
+    let root_path = PathBuf::from(&config.slidev_repo_root);
     if !root_path.exists() {
         fs::create_dir_all(&root_path).map_err(|e| e.to_string())?;
     }
