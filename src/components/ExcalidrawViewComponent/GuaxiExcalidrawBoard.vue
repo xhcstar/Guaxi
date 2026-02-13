@@ -7,7 +7,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import React from 'react'
-import { createRoot } from 'react-dom/client'
+import ReactDOM from 'react-dom'
 // 使用 Excalidraw 的 dev 构建，避免其生产包内联一份 React，导致 release 版本出现双 React (#168)
 import { Excalidraw } from 'excalidraw-dev'
 import 'excalidraw-dev-css'
@@ -25,7 +25,6 @@ const AUTOSAVE_KEY = 'guaxi:excalidraw:autosave:v1'
 const autosaveStatus = ref('未写入')
 const autosaveTimer = ref(null)
 
-const reactRoot = ref(null)
 const excalidrawApi = ref(null)
 const renderVersion = ref(0)
 const isUnmounted = ref(false)
@@ -256,10 +255,6 @@ function renderReactApp(initialData) {
   }
   logReactDiagnostics('render')
 
-  if (!reactRoot.value) {
-    reactRoot.value = createRoot(mountEl.value)
-  }
-
   const onChange = (elements, appState, files) => {
     lastScene.value = { elements, appState, files }
     autosaveStatus.value = '待写入'
@@ -310,7 +305,7 @@ function renderReactApp(initialData) {
     logger.debug('[excalidraw] initialData.appState.collaborators normalized to Map')
   }
 
-  reactRoot.value.render(
+  ReactDOM.render(
     React.createElement(
       'div',
       { style: { height: '100%', width: '100%' } },
@@ -323,6 +318,7 @@ function renderReactApp(initialData) {
         onChange,
       }),
     ),
+    mountEl.value,
   )
 }
 
@@ -376,9 +372,8 @@ onBeforeUnmount(() => {
       clearTimeout(autosaveTimer.value)
       autosaveTimer.value = null
     }
-    if (reactRoot.value) {
-      reactRoot.value.unmount()
-      reactRoot.value = null
+    if (mountEl.value) {
+      ReactDOM.unmountComponentAtNode(mountEl.value)
     }
     excalidrawApi.value = null
   } catch (e) {
