@@ -134,77 +134,111 @@
       :native-scrollbar="false"
       content-style="height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden;"
     >
-      <div class="editor-toolbar">
-        <n-space size="small" align="center">
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-button size="small" quaternary circle @click="saveActive">
-                <template #icon>
-                  <n-icon :component="SaveOutline" />
-                </template>
-              </n-button>
-            </template>
-            保存
-          </n-tooltip>
+      <div class="editor-header">
+        <div class="tab-bar" ref="tabBarRef" @wheel="onTabBarWheel">
+          <div v-for="tab in slidevEditorStore.openTabs" :key="tab.path"
+            :class="['tab-item', { active: normalizePath(tab.path) === activeEditorPath, dirty: !!tab.dirty }]"
+            @click="setActiveTab(tab.path)" @mousedown.middle="closeTab(tab.path)">
+            <span class="tab-title">{{ tab.fileName }}</span>
+            <span class="tab-affordance">
+              <span class="tab-dirty-dot" v-show="tab.dirty" />
+              <n-icon class="tab-close" size="14" @click.stop="closeTab(tab.path)">
+                <CloseOutline />
+              </n-icon>
+            </span>
+          </div>
+        </div>
 
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-button size="small" quaternary circle @click="previewSlidev">
-                <template #icon>
-                  <n-icon :component="EyeOutline" />
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <n-space size="small" align="center">
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <n-button size="small" quaternary circle @click="saveActive">
+                    <template #icon>
+                      <n-icon :component="SaveOutline" />
+                    </template>
+                  </n-button>
                 </template>
-              </n-button>
-            </template>
-            预览
-          </n-tooltip>
+                保存
+              </n-tooltip>
 
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-button size="small" quaternary circle @click="presentSlidev">
-                <template #icon>
-                  <n-icon :component="PlayCircleOutline" />
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <n-button size="small" quaternary circle @click="previewSlidev">
+                    <template #icon>
+                      <n-icon :component="EyeOutline" />
+                    </template>
+                  </n-button>
                 </template>
-              </n-button>
-            </template>
-            演示
-          </n-tooltip>
+                预览
+              </n-tooltip>
 
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-button size="small" quaternary circle @click="exportPptx">
-                <template #icon>
-                  <n-icon :component="DownloadOutline" />
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <n-button size="small" quaternary circle @click="presentSlidev">
+                    <template #icon>
+                      <n-icon :component="PlayCircleOutline" />
+                    </template>
+                  </n-button>
                 </template>
-              </n-button>
-            </template>
-            导出 PPTX
-          </n-tooltip>
+                演示
+              </n-tooltip>
 
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-button size="small" quaternary circle @click="stopPreview">
-                <template #icon>
-                  <n-icon :component="StopCircleOutline" />
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <n-button size="small" quaternary circle @click="exportPptx">
+                    <template #icon>
+                      <n-icon :component="DownloadOutline" />
+                    </template>
+                  </n-button>
                 </template>
-              </n-button>
-            </template>
-            停止预览
-          </n-tooltip>
-        </n-space>
+                导出 PPTX
+              </n-tooltip>
 
-        <div class="toolbar-right">
-          <n-input v-model:value="devPortText" size="small" placeholder="端口(默认3030)" style="width: 140px" />
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <n-button size="small" quaternary circle @click="stopPreview">
+                    <template #icon>
+                      <n-icon :component="StopCircleOutline" />
+                    </template>
+                  </n-button>
+                </template>
+                停止预览
+              </n-tooltip>
+            </n-space>
+          </div>
+
+          <div class="toolbar-right">
+            <n-space size="small" align="center">
+              <n-button size="small" :type="previewMode === 'edit' ? 'primary' : 'default'" @click="setPreviewMode('edit')">编辑</n-button>
+              <n-button size="small" :type="previewMode === 'split' ? 'primary' : 'default'" @click="setPreviewMode('split')">分栏</n-button>
+              <n-button size="small" :type="previewMode === 'preview' ? 'primary' : 'default'" @click="setPreviewMode('preview')">预览</n-button>
+            </n-space>
+            <n-input v-model:value="devPortText" size="small" placeholder="端口(默认3030)" style="width: 140px" />
+          </div>
         </div>
       </div>
 
-      <div class="editor-host">
-        <GuaxiSlidevLiteEditor
-          ref="pptEditorRef"
-          :active-path="activeEditorPath"
-          :content="activeEditorContent"
-          :unsupported="activeEditorUnsupported"
-          @draft-flush="onEditorDraftFlush"
-        />
+      <div class="editor-content" :class="previewMode">
+        <div v-if="!activeEditorPath" class="editor-empty">请选择一个 PPT 源文件以开始编辑</div>
+        <div v-show="activeEditorPath && showEditor" class="editor-pane">
+          <GuaxiSlidevLiteEditor
+            ref="pptEditorRef"
+            :active-path="activeEditorPath"
+            :content="activeEditorContent"
+            :unsupported="activeEditorUnsupported"
+            @draft-flush="onEditorDraftFlush"
+            @save-request="onEditorSaveRequest"
+          />
+        </div>
+        <div v-show="activeEditorPath && showPreview" class="preview-pane">
+          <div v-if="previewLoading" class="preview-loading">正在启动 Slidev 预览...</div>
+          <div v-else-if="!previewUrl" class="preview-empty">
+            <n-button size="small" @click="previewSlidev">启动预览</n-button>
+          </div>
+          <iframe v-else class="preview-iframe" :src="previewUrl" />
+        </div>
       </div>
     </n-layout-content>
 
@@ -373,6 +407,7 @@ import {
   AddOutline,
   ChevronBackOutline,
   ChevronForwardOutline,
+  CloseOutline,
   DocumentTextOutline,
   DownloadOutline,
   EyeOutline,
@@ -422,6 +457,13 @@ const slidevEditorStore = useSlidevEditorStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 
 const pptEditorRef = ref(null)
+const tabBarRef = ref(null)
+
+const previewMode = ref('edit')
+const previewUrl = ref('')
+const previewLoading = ref(false)
+const previewEntryPath = ref('')
+const previewPort = ref(0)
 
 const normalizePath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/g, '')
 
@@ -452,12 +494,82 @@ const activeEditorUnsupported = computed(() => {
   return !!tab?.unsupported || !!slidevEditorStore.selectedFile?.unsupported
 })
 
+const showEditor = computed(() => previewMode.value !== 'preview')
+const showPreview = computed(() => previewMode.value !== 'edit')
+
 const onEditorDraftFlush = (payload) => {
   const path = normalizePath(payload?.path)
   if (!path) return
   const content = String(payload?.content ?? '')
   slidevEditorStore.applyDraft(path, content)
   logger.info('[Slidev] draft flush', { path, len: content.length, tag: payload?.tag })
+}
+
+const onEditorSaveRequest = () => {
+  logger.info('[Slidev] save request from editor')
+  saveActive()
+}
+
+const setActiveTab = (path) => {
+  slidevEditorStore.setActiveTab(path)
+}
+
+const closeTab = (path) => {
+  const p = normalizePath(path)
+  const tabs = Array.isArray(slidevEditorStore.openTabs) ? slidevEditorStore.openTabs : []
+  const idx = tabs.findIndex((t) => normalizePath(t?.path) === p)
+  if (idx < 0) return
+
+  const wasActive = normalizePath(slidevEditorStore.activeTab) === p
+  tabs.splice(idx, 1)
+
+  if (wasActive) {
+    const next = tabs[idx] || tabs[idx - 1]
+    slidevEditorStore.setActiveTab(next?.path || '')
+  }
+
+  logger.info('[Slidev] tab closed', { path: p, remain: tabs.length })
+}
+
+const onTabBarWheel = (e) => {
+  const el = tabBarRef.value
+  if (!el) return
+  el.scrollLeft += e.deltaY
+}
+
+const setPreviewMode = async (mode) => {
+  previewMode.value = mode
+  logger.info('[Slidev] preview mode', { mode })
+  if (mode !== 'edit') await ensurePreview()
+}
+
+const ensurePreview = async () => {
+  const { path } = getActivePathAndContent()
+  if (!path) return
+
+  const port = parsePort()
+  if (previewUrl.value && previewEntryPath.value === path && previewPort.value === port) return
+  if (previewLoading.value) return
+
+  previewLoading.value = true
+  try {
+    await saveActive()
+    const info = await invoke('slidev_start_dev', { entryPath: path, port })
+    const url = String(info?.url || '')
+    if (!url) {
+      message.error('未获取到预览地址')
+      return
+    }
+    previewUrl.value = url
+    previewEntryPath.value = path
+    previewPort.value = port
+    logger.info('[Slidev] preview ready', { path, url, port })
+  } catch (e) {
+    logger.error('[Slidev] preview init failed', e)
+    message.error('启动预览失败（需要本机可用的 Node.js / npx）')
+  } finally {
+    previewLoading.value = false
+  }
 }
 
 const isHiddenName = (name) => {
@@ -1001,37 +1113,7 @@ const previewSlidev = async () => {
     return
   }
 
-  const traceId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
-  const t0 = performance.now()
-
-  try {
-    await saveActive()
-    const port = parsePort()
-    logger.info('[Slidev] preview start', { traceId, entryPath: path, port })
-
-    const info = await invoke('slidev_start_dev', { entryPath: path, port })
-    const url = String(info?.url || '')
-    logger.info('[Slidev] preview start_dev ok', { traceId, info, url })
-
-    if (!url) {
-      message.error('未获取到预览地址')
-      return
-    }
-
-    try {
-      logger.info('[Slidev] openUrl start', { traceId, url })
-      await openUrl(url)
-      logger.info('[Slidev] openUrl done', { traceId, url })
-    } catch (err) {
-      logger.error('[Slidev] openUrl failed', { traceId, url, err })
-      message.error('打开浏览器失败')
-    }
-  } catch (e) {
-    logger.error('[Slidev] preview failed', { traceId, err: e })
-    message.error('启动预览失败（需要本机可用的 Node.js / npx）')
-  } finally {
-    logger.info('[Slidev] preview end', { traceId, costMs: Math.round(performance.now() - t0) })
-  }
+  await setPreviewMode('preview')
 }
 
 const presentSlidev = async () => {
@@ -1078,7 +1160,12 @@ const presentSlidev = async () => {
 const stopPreview = async () => {
   try {
     await invoke('slidev_stop_dev')
+    previewUrl.value = ''
+    previewEntryPath.value = ''
+    previewPort.value = 0
+    if (previewMode.value === 'preview') previewMode.value = 'edit'
     message.success('已停止预览进程')
+    logger.info('[Slidev] preview cleared')
   } catch (e) {
     logger.error('[Slidev] stop preview failed', e)
     message.error('停止失败')
@@ -1459,28 +1546,143 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-.editor-toolbar {
-  padding: 10px 12px;
+.editor-header {
+  display: flex;
+  flex-direction: column;
   border-bottom: 1px solid var(--n-border-color);
+}
+
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  background: rgba(128, 128, 128, 0.08);
+  color: var(--n-text-color);
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.tab-item.active {
+  background: rgba(24, 144, 255, 0.18);
+}
+
+.tab-title {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-affordance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #d97706;
+}
+
+.tab-close {
+  opacity: 0.7;
+}
+
+.tab-item:hover .tab-close {
+  opacity: 1;
+}
+
+.toolbar {
+  padding: 8px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.editor-host {
-  flex: 1;
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.editor-content {
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   overflow: hidden;
 }
 
-.editor-host :deep(.slidev-lite-editor) {
+.editor-pane,
+.preview-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.editor-pane :deep(.slidev-lite-editor) {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   height: 100%;
   width: 100%;
+}
+
+.editor-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--n-text-color-3);
+  font-size: 13px;
+}
+
+.preview-pane {
+  border-left: 1px solid var(--n-border-color);
+  background: var(--guaxi-content-bg, #111);
+}
+
+.preview-iframe {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.preview-empty,
+.preview-loading {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--n-text-color-3);
+  font-size: 13px;
+}
+
+.editor-content.edit .preview-pane {
+  display: none;
+}
+
+.editor-content.preview .editor-pane {
+  display: none;
 }
 
 .tree-scroll {

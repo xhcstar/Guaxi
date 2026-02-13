@@ -1,17 +1,7 @@
 <template>
   <div class="slidev-lite-editor">
     <div class="host-wrap" ref="hostRef">
-      <textarea
-        v-if="activePath"
-        ref="textareaRef"
-        class="lite-textarea"
-        :value="draft"
-        :disabled="blockedLargeFile || unsupported"
-        @input="onInput"
-        @blur="onBlur"
-        @click="onCursorLike"
-        @keyup="onCursorLike"
-      ></textarea>
+      <div v-show="activePath" ref="editorRef" class="lite-editor"></div>
 
       <div v-if="blockedLargeFile" class="host-mask">
         文件过大，已阻止加载到编辑器以避免卡顿（{{ blockedInfo }}）
@@ -34,11 +24,15 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
+import * as monaco from 'monaco-editor'
+import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import { createLogger } from '../../utils/logger'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 const MAX_EDITABLE_CHARS = 800_000
 
 const logger = createLogger('GuaxiSlidevLiteEditor')
+const settingsStore = useSettingsStore()
 
 const props = defineProps({
   activePath: { type: String, default: '' },
@@ -46,10 +40,16 @@ const props = defineProps({
   unsupported: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['draft-flush'])
+const emit = defineEmits(['draft-flush', 'save-request'])
 
 const hostRef = ref(null)
-const textareaRef = ref(null)
+const editorRef = ref(null)
+
+let editor = null
+let model = null
+let editorReady = false
+let settingModel = false
+let editorDisposables = []
 
 let lastLayoutLogAt = 0
 const logLayout = (stage, extra = {}) => {
@@ -80,6 +80,30 @@ const logLayout = (stage, extra = {}) => {
   } catch (e) {
     logger.warn('[layout] log failed', e)
   }
+}
+
+const getMonacoTheme = () => (settingsStore.appearanceTheme === 'dark' ? 'vs-dark' : 'vs')
+
+const applyMonacoTheme = () => {
+  try {
+    monaco.editor.setTheme(getMonacoTheme())
+  } catch (e) {
+    logger.warn('[theme] apply failed', e)
+  }
+}
+
+const disposeMonaco = () => {
+  editorDisposables.forEach((d) => d?.dispose?.())
+  editorDisposables = []
+  if (editor) {
+    editor.dispose()
+    editor = null
+  }
+  if (model) {
+    model.dispose()
+    model = null
+  }
+  editorReady = false
 }
 
 let localDirty = false
@@ -125,6 +149,84 @@ const flushDraft = (path, tag) => {
 
 const normalizePath = (p) => String(p || '').replace(/\\/g, '/')
 
+const detectLanguage = (p) => {
+  const s = String(p || '').toLowerCase()
+  if (s.endsWith('.md') || s.endsWith('.mdx')) return 'markdown'
+  if (s.endsWith('.yml') || s.endsWith('.yaml')) return 'yaml'
+  if (s.endsWith('.json')) return 'json'
+  if (s.endsWith('.js')) return 'javascript'
+  if (s.endsWith('.ts')) return 'typescript'
+  if (s.endsWith('.vue')) return 'html'
+  return 'plaintext'
+}
+
+const updateEditorOptions = () => {
+  if (!editor) return
+  const readOnly = blockedLargeFile.value || props.unsupported || !activePath.value
+  editor.updateOptions({ readOnly })
+}
+
+const updateCursorFromEditor = () => {
+  if (!editor) return
+  const pos = editor.getPosition()
+  if (!pos) return
+  cursor.value = { lineNumber: pos.lineNumber, column: pos.column }
+}
+
+const ensureEditor = async () => {
+  if (editorReady || !editorRef.value) return
+
+  editor = monaco.editor.create(editorRef.value, {
+    automaticLayout: true,
+    readOnly: true,
+    wordWrap: 'on',
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    fontSize: 16,
+    fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
+    padding: { top: 8, bottom: 8 },
+  })
+
+  editorDisposables.push(
+    editor.onDidChangeModelContent(() => {
+      if (settingModel) return
+      draft.value = editor.getValue()
+      markDirty('typing')
+    }),
+    editor.onDidChangeCursorPosition(() => {
+      updateCursorFromEditor()
+    }),
+    editor.onDidBlurEditorWidget(() => {
+      onBlur()
+    })
+  )
+
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+    const p = activePath.value
+    if (!p) {
+      logger.warn('[save] hotkey ignored: no active file')
+      return
+    }
+    emit('save-request', { path: p })
+    logger.info('[save] hotkey', { path: p })
+  })
+
+  applyMonacoTheme()
+  updateEditorOptions()
+  editorReady = true
+  logger.info('[editor] created')
+}
+
+const clearEditorModel = () => {
+  if (!editor) return
+  if (model) model.dispose()
+  model = monaco.editor.createModel('', 'plaintext')
+  editor.setModel(model)
+  draft.value = ''
+  dirty.value = false
+  localDirty = false
+}
+
 const activePath = computed(() => normalizePath(props.activePath || ''))
 
 const fileName = computed(() => {
@@ -134,6 +236,7 @@ const fileName = computed(() => {
   return parts[parts.length - 1] || p
 })
 
+// 绑定路径并刷新模型内容
 const setModelForPath = async (path, content) => {
   const p = normalizePath(path)
   if (!p) return
@@ -147,37 +250,26 @@ const setModelForPath = async (path, content) => {
     blockedLargeFile.value = true
     blockedInfo.value = `${nextContent.length} chars`
     logger.warn('[model] blocked large file', { path: p, len: nextContent.length, limit: MAX_EDITABLE_CHARS })
+    await ensureEditor()
+    clearEditorModel()
+    updateEditorOptions()
     return
   }
+
+  await ensureEditor()
+  if (!editor) return
+
+  const lang = detectLanguage(p)
+  if (model) model.dispose()
+  model = monaco.editor.createModel(nextContent, lang, monaco.Uri.file(p))
+  editor.setModel(model)
 
   draft.value = nextContent
   dirty.value = false
   localDirty = false
-  logger.info('[model] set draft', { path: p, len: nextContent.length })
-}
-
-const updateCursorFromTextarea = () => {
-  const el = textareaRef.value
-  if (!el) return
-  const pos = Math.max(0, el.selectionStart || 0)
-  const text = String(el.value || '')
-  let line = 1
-  let col = 1
-  for (let i = 0; i < pos; i += 1) {
-    if (text[i] === '\n') {
-      line += 1
-      col = 1
-    } else {
-      col += 1
-    }
-  }
-  cursor.value = { lineNumber: line, column: col }
-}
-
-const onInput = (e) => {
-  const value = String(e?.target?.value ?? '')
-  draft.value = value
-  markDirty('typing')
+  updateEditorOptions()
+  updateCursorFromEditor()
+  logger.info('[model] set model', { path: p, len: nextContent.length, lang })
 }
 
 const onBlur = () => {
@@ -186,32 +278,30 @@ const onBlur = () => {
   flushDraft(p, 'blur')
 }
 
-const onCursorLike = () => {
-  updateCursorFromTextarea()
-}
-
 const insertContent = async (text) => {
   const p = activePath.value
-  const el = textareaRef.value
-  if (!p || !el) {
-    logger.warn('[insert] failed: no active file/textarea', { path: p })
+  if (!p) {
+    logger.warn('[insert] failed: no active file', { path: p })
+    return false
+  }
+
+  await ensureEditor()
+  if (!editor || !model) {
+    logger.warn('[insert] failed: editor not ready', { path: p })
     return false
   }
 
   const t = String(text ?? '')
-  const start = el.selectionStart ?? 0
-  const end = el.selectionEnd ?? start
-  const cur = String(draft.value ?? '')
-  const next = `${cur.slice(0, start)}${t}${cur.slice(end)}`
+  const selection = editor.getSelection()
+  const pos = editor.getPosition() || new monaco.Position(1, 1)
+  const range = selection || new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column)
 
-  draft.value = next
-  markDirty('insert')
+  editor.executeEdits('insert-content', [
+    { range, text: t, forceMoveMarkers: true }
+  ])
 
-  await nextTick()
-  const caret = start + t.length
-  el.focus()
-  el.setSelectionRange(caret, caret)
-  updateCursorFromTextarea()
+  editor.focus()
+  updateCursorFromEditor()
 
   logger.info('[insert] ok', { path: p, len: t.length })
   return true
@@ -219,8 +309,8 @@ const insertContent = async (text) => {
 
 const getContent = () => {
   const p = activePath.value
-  if (!p) return { ok: false, path: '', content: '' }
-  const text = String(draft.value ?? '')
+  if (!p || !model) return { ok: false, path: '', content: '' }
+  const text = model.getValue()
   return { ok: true, path: p, content: text }
 }
 
@@ -247,14 +337,19 @@ watch(
   async (p, prev) => {
     logger.info('[watch] activePath changed', { prev, next: p })
     logLayout('watch-activePath', { prev, next: p })
-    if (!p) return
     if (prev && prev !== p) {
       flushDraft(prev, 'switch')
+    }
+    if (!p) {
+      await ensureEditor()
+      clearEditorModel()
+      updateEditorOptions()
+      return
     }
     await setModelForPath(p, props.content)
     logLayout('after-setModelForPath', { path: p })
     await nextTick()
-    updateCursorFromTextarea()
+    updateCursorFromEditor()
   },
   { immediate: true, flush: 'post' }
 )
@@ -266,17 +361,33 @@ watch(
     if (!p) return
     if (localDirty) return
     const target = String(next ?? '')
-    if (draft.value === target) return
+    if (model && model.getValue() === target) return
     logger.info('[watch] external content update', { path: p, len: target.length })
     await setModelForPath(p, target)
     await nextTick()
-    updateCursorFromTextarea()
+    updateCursorFromEditor()
   },
   { flush: 'post' }
 )
 
+watch(
+  () => settingsStore.appearanceTheme,
+  () => {
+    applyMonacoTheme()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => [activePath.value, props.unsupported, blockedLargeFile.value],
+  () => {
+    updateEditorOptions()
+  }
+)
+
 onMounted(async () => {
   logger.info('[mount]')
+  await ensureEditor()
   await nextTick()
   logLayout('mounted-nextTick')
 })
@@ -286,6 +397,7 @@ onUnmounted(() => {
   if (activePath.value) {
     flushDraft(activePath.value, 'unmount')
   }
+  disposeMonaco()
 })
 </script>
 
@@ -314,20 +426,11 @@ onUnmounted(() => {
   inset: 0;
 }
 
-.lite-textarea {
+.lite-editor {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-  padding: 10px;
-  box-sizing: border-box;
-  font-size: 16px;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
-  background: transparent;
-  color: var(--guaxi-text-primary, #e6e6e6);
 }
 
 .host-mask {
