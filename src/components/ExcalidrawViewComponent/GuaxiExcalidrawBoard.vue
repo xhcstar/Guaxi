@@ -46,6 +46,7 @@ const excalidrawApi = ref(null)
 const renderVersion = ref(0)
 
 const theme = computed(() => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light'))
+const langCode = ref('zh-CN')
 
 class ExcalidrawErrorBoundary extends React.Component {
   constructor(props) {
@@ -466,6 +467,7 @@ function renderReactApp(initialData) {
         { key: renderVersion.value, onError: onBoundaryError, onRetry: onBoundaryRetry },
         React.createElement(Excalidraw, {
           theme: theme.value,
+          langCode: langCode.value,
           initialData: normalizedInitialData,
           excalidrawAPI: onApi,
           onChange,
