@@ -45,6 +45,7 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
       path: "path-browserify",
     },
+    dedupe: ["react", "react-dom"],
   },
 
   worker: {
@@ -98,7 +99,13 @@ export default defineConfig(async () => ({
     },
   },
   optimizeDeps: {
-    include: ["monaco-editor", "monaco-vim"],
+    include: [
+      "monaco-editor", 
+      "monaco-vim",
+      "react",
+      "react-dom",
+      "@excalidraw/excalidraw"
+    ],
     esbuildOptions: {
       target: "es2022",
     },
