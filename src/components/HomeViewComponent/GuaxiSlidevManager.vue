@@ -1899,7 +1899,7 @@ const startKbPolling = () => {
   kbWatchTimer = window.setInterval(async () => {
     if (!selectedKbPath.value || kbLoading.value) return
     await loadKbTree({ silent: true, keepState: true, reason: 'poll' })
-  }, 3000)
+  }, 10 * 60 * 1000)
   kbWatchActive.value = true
   logger.info('[KB] poll start', { rootPath })
 }
