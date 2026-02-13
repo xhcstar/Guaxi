@@ -48,7 +48,21 @@ export default defineConfig(async () => ({
   },
 
   build: {
+    target: "es2022",
+    reportCompressedSize: false,
     chunkSizeWarningLimit: 20000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vue: ["vue", "vue-router", "pinia"],
+          naiveui: ["naive-ui", "@vicons/antd", "@vicons/fa", "@vicons/fluent", "@vicons/tabler", "@vicons/ionicons5"],
+          monaco: ["monaco-editor", "monaco-vim", "monaco-editor-textmate", "monaco-languageclient", "monaco-textmate"],
+          excalidraw: ["react", "react-dom", "@excalidraw/excalidraw"],
+          docs: ["pdfjs-dist", "docx-preview", "epubjs", "markdown-it", "markdown-it-mathjax3", "mathjax-full", "mermaid", "vditor", "prismjs", "highlight.js"],
+          graph3d: ["three", "three-stdlib", "d3-force-3d"],
+        },
+      },
+    },
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

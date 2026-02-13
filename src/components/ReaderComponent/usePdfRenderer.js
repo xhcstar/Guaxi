@@ -224,7 +224,7 @@ export default function usePdfRenderer(props) {
     return hits;
   };
 
-  const imageResourcesPath = new URL("pdfjs-dist/web/images/", import.meta.url).toString();
+  const imageResourcesPath = new URL(/* @vite-ignore */ "pdfjs-dist/web/images/", import.meta.url).toString();
 
   const createLinkService = (onGoToPage) => {
     const onGo = typeof onGoToPage === "function" ? onGoToPage : null;
@@ -312,24 +312,22 @@ export default function usePdfRenderer(props) {
     };
   };
 
-  let renderTextLayerFn = pdfjsLib.renderTextLayer || null;
   let TextLayerCtor = pdfjsLib.TextLayer || null;
 
   const ensureTextLayerApis = async () => {
-    if (TextLayerCtor || renderTextLayerFn) {
-      return { TextLayerCtor, renderTextLayerFn };
+    if (TextLayerCtor) {
+      return { TextLayerCtor };
     }
 
     try {
       const mod = await import("pdfjs-dist/web/pdf_viewer.mjs");
       TextLayerCtor = mod?.TextLayer || null;
-      renderTextLayerFn = renderTextLayerFn || mod?.renderTextLayer || null;
     } catch (err) {
       dlog("textLayer:apiImportFailed", { name: err?.name, message: err?.message });
       TextLayerCtor = null;
     }
 
-    return { TextLayerCtor, renderTextLayerFn };
+    return { TextLayerCtor };
   };
 
   let canvasRenderTask = null;
@@ -415,12 +413,11 @@ export default function usePdfRenderer(props) {
       textLayerEl.style.width = `${Math.floor(viewport.width)}px`;
       textLayerEl.style.height = `${Math.floor(viewport.height)}px`;
 
-      const { TextLayerCtor, renderTextLayerFn } = await ensureTextLayerApis();
+      const { TextLayerCtor } = await ensureTextLayerApis();
       if (token && token !== activeRenderToken) return false;
 
       dlog("textLayer:api", {
         hasTextLayerCtor: Boolean(TextLayerCtor),
-        hasRenderTextLayer: Boolean(renderTextLayerFn),
       });
 
       const useStream = typeof page?.streamTextContent === "function";
@@ -452,14 +449,6 @@ export default function usePdfRenderer(props) {
           });
           await layer.render();
           dlog("textLayer:rendered", { mode: "TextLayer" });
-        } else if (renderTextLayerFn) {
-          const task = renderTextLayerFn({
-            textContentSource,
-            container: textLayerEl,
-            viewport: textViewport,
-          });
-          await (task?.promise || task);
-          dlog("textLayer:rendered", { mode: "renderTextLayer" });
         } else {
           dlog("textLayer:skipped", { reason: "no api" });
         }
