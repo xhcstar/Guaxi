@@ -267,6 +267,7 @@ async fn main() {
             commands::slidev::slidev_get_env_status,
             commands::slidev::slidev_start_dev,
             commands::slidev::slidev_stop_dev,
+            commands::slidev::slidev_split_markdown_paragraphs,
             commands::slidev::slidev_export_pptx,
             commands::excerptsearch::search_excerpt_notes,
             commands::excerptsearch::read_excerpt_file,

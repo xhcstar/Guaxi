@@ -501,12 +501,12 @@
                 <div v-if="materialCards.length === 0" class="panel-empty">
                   {{ material.path ? '素材文件为空' : '请选择一个素材文件' }}
                 </div>
-                <div v-else class="kb-card-list">
+                <div v-else class="kb-card-list" ref="materialCardsRef">
                   <n-card v-for="(card, index) in materialCards" :key="card.id" size="small" class="kb-card"
                     :class="{ 'kb-card-active': card.id === activeMaterialCardId }"
                     @click="handleMaterialCardClick(card)">
                     <template #header>
-                      段落 {{ index + 1 }}
+                      <span class="kb-card-header-spacer"></span>
                     </template>
                     <template #header-extra>
                       <n-tooltip trigger="hover">
@@ -520,7 +520,7 @@
                         插入到PPT
                       </n-tooltip>
                     </template>
-                    <div class="kb-card-content">{{ card.text }}</div>
+                    <div class="kb-card-content" v-html="card.html"></div>
                   </n-card>
                 </div>
               </n-spin>
@@ -580,6 +580,8 @@ import {
   NPopover
 } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
+import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
+import mermaid from 'mermaid'
 import { useSlidevEditorStore } from '../../stores/slidevEditorStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import {
@@ -747,6 +749,13 @@ const tableInputCols = ref(2)
 const tableInsertHint = computed(() => `${tableGridRows.value} 行 × ${tableGridCols.value} 列`)
 
 const normalizePath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/g, '')
+
+const isEditableTarget = (el) => {
+  if (!el || !(el instanceof HTMLElement)) return false
+  const tag = el.tagName ? el.tagName.toLowerCase() : ''
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  return !!el.isContentEditable
+}
 
 const getTabByPath = (path) => {
   const p = normalizePath(path)
@@ -1363,6 +1372,9 @@ const refreshSlidevRoot = async () => {
     return
   }
 
+  const prevExpanded = Array.isArray(slidevExpandedKeys.value) ? slidevExpandedKeys.value : []
+  const prevExpandedSet = new Set(prevExpanded.map(normalizePath).filter(Boolean))
+
   slidevTreeLoading.value = true
   try {
     const root = await withTimeout(invoke('get_slidev_repo_root'), 12000, 'get_slidev_repo_root')
@@ -1379,15 +1391,42 @@ const refreshSlidevRoot = async () => {
       },
     ]
 
-    slidevExpandedKeys.value = [slidevRoot.value]
+    const nextExpanded = new Set([slidevRoot.value])
+    prevExpandedSet.forEach((key) => {
+      if (key && key.startsWith(slidevRoot.value)) nextExpanded.add(key)
+    })
+
+    slidevExpandedKeys.value = Array.from(nextExpanded)
     slidevLoadedDirKeys.value = new Set([slidevRoot.value])
-    logger.info('[Slidev] loaded root', { root: slidevRoot.value, count: children.length })
+    await restoreExpandedNodes(slidevExpandedKeys.value)
+
+    logger.info('[Slidev] loaded root', {
+      root: slidevRoot.value,
+      count: children.length,
+      expanded: slidevExpandedKeys.value.length
+    })
   } catch (e) {
     logger.error('[Slidev] refresh failed', e)
     message.error('加载 PPT 源文件目录失败')
   } finally {
     slidevTreeLoading.value = false
   }
+}
+
+const restoreExpandedNodes = async (keys) => {
+  const list = Array.isArray(keys) ? keys : []
+  const normalized = list.map(normalizePath).filter(Boolean)
+  const uniq = Array.from(new Set(normalized))
+  if (uniq.length === 0) return
+
+  const sorted = uniq.sort((a, b) => a.split('/').length - b.split('/').length)
+  for (const key of sorted) {
+    const node = findTreeNode(slidevTree.value, key)
+    if (!node || !node.isDir) continue
+    await handleSlidevNodeLoad(node)
+  }
+
+  logger.info('[Slidev] restore expanded', { count: sorted.length })
 }
 
 const handleSlidevNodeLoad = async (node) => {
@@ -1886,6 +1925,7 @@ watch(
   }
 )
 
+
 const startKbPolling = () => {
   const rootPath = normalizePath(selectedKbPath.value)
   if (!rootPath) {
@@ -1939,18 +1979,136 @@ const filteredSlidevTree = computed(() => filterTree(slidevTree.value, slidevFil
 const material = reactive({
   path: '',
   content: '',
+  blocks: [],
   loading: false,
 })
 
 const activeMaterialCardId = ref('')
+const materialCardsRef = ref(null)
+
+const splitMaterialFallback = (raw) => {
+  const text = String(raw || '')
+  if (!text) return []
+  return text
+    .split(/\n\s*\n+/g)
+    .map((item) => String(item ?? '').trim())
+    .filter((item) => item)
+}
+
+const resolveMarkdownTheme = () => {
+  try {
+    const root = document?.documentElement
+    const isDark =
+      !!root?.classList?.contains?.('dark') ||
+      !!root?.classList?.contains?.('dark-mode')
+    return isDark ? 'dark' : 'default'
+  } catch {
+    return 'default'
+  }
+}
+
+const renderMaterialBlocks = async (blocks) => {
+  const list = Array.isArray(blocks) ? blocks : []
+  const rendered = []
+  const theme = resolveMarkdownTheme()
+
+  for (const item of list) {
+    const raw = String(item ?? '').trim()
+    if (!raw) continue
+    const html = await renderMarkdown(raw, {
+      preserveOriginal: true,
+      basePath: '',
+      mermaid: true,
+      math: true,
+      codeHighlight: true,
+      theme
+    })
+    rendered.push({ raw, html: String(html ?? '') })
+  }
+
+  return rendered
+}
+
+const renderMaterialMermaid = async () => {
+  try {
+    await nextTick()
+
+    const host = materialCardsRef.value
+    if (!(host instanceof HTMLElement)) return
+
+    const nodes = Array.from(host.querySelectorAll('.mermaid') || [])
+    if (!nodes.length) return
+
+    const theme = 'default'
+    mermaid.initialize({
+      startOnLoad: false,
+      theme,
+      securityLevel: 'loose'
+    })
+
+    nodes.forEach((el) => {
+      try {
+        el.removeAttribute('data-processed')
+        const content = String(el.textContent || '')
+          .replace(/&gt;/g, '>')
+          .replace(/&lt;/g, '<')
+          .replace(/&amp;/g, '&')
+        el.innerHTML = content
+      } catch (err) {
+        logger.error('[KB] mermaid content failed', err)
+      }
+    })
+
+    await nextTick()
+    requestAnimationFrame(() => {
+      Promise.resolve(mermaid.run({ nodes }))
+        .then(() => {
+          logger.info('[KB] mermaid rendered', { count: nodes.length })
+        })
+        .catch((err) => {
+          logger.error('[KB] mermaid render failed', err)
+        })
+    })
+  } catch (e) {
+    logger.error('[KB] mermaid render failed', e)
+  }
+}
+
+const parseMaterialContent = async (raw) => {
+  const text = String(raw || '')
+  if (!text) {
+    material.blocks = []
+    return
+  }
+
+  try {
+    const blocks = await invoke('slidev_split_markdown_paragraphs', { content: text })
+    if (Array.isArray(blocks)) {
+      material.blocks = await renderMaterialBlocks(blocks)
+      await renderMaterialMermaid()
+      logger.info('[KB] material parsed', { path: material.path, count: material.blocks.length })
+      return
+    }
+    material.blocks = []
+    logger.info('[KB] material parsed empty', { path: material.path })
+  } catch (e) {
+    logger.error('[KB] material parse failed', e)
+    const fallbackBlocks = splitMaterialFallback(text)
+    material.blocks = await renderMaterialBlocks(fallbackBlocks)
+    await renderMaterialMermaid()
+  }
+}
 
 const materialCards = computed(() => {
-  const raw = String(material.content || '')
-  if (!raw) return []
-  const parts = raw.split(/\n\s*\n+/g)
-  return parts
-    .map((text, index) => ({ id: `${material.path || 'material'}-${index}`, text: text.trim() }))
-    .filter((item) => item.text)
+  const blocks = Array.isArray(material.blocks) ? material.blocks : []
+
+  return blocks
+    .map((item, index) => ({
+      id: `${material.path || 'material'}-${index}`,
+      raw: String(item?.raw ?? '').trim(),
+      html: String(item?.html ?? '')
+    }))
+    .filter((item) => item.raw)
 })
 
 const materialCardCount = computed(() => materialCards.value.length)
@@ -1965,6 +2123,7 @@ const handleMaterialCardClick = (card) => {
 const clearMaterial = () => {
   material.path = ''
   material.content = ''
+  material.blocks = []
   material.loading = false
   activeMaterialCardId.value = ''
   kbSelectedKeys.value = []
@@ -1979,6 +2138,7 @@ const readMaterial = async (path) => {
     const content = await invoke('read_file_content', { path: p })
     material.path = p
     material.content = String(content ?? '')
+    await parseMaterialContent(material.content)
     activeMaterialCardId.value = ''
     logger.info('[KB] material loaded', { path: p, len: material.content.length })
   } catch (e) {
@@ -2038,7 +2198,7 @@ const insertMaterialFile = async () => {
 }
 
 const insertMaterialCard = async (card, index) => {
-  const content = String(card?.text || '')
+  const content = String(card?.raw || '')
   if (!material.path || !content) {
     message.warning('请选择一个素材段落')
     return
@@ -2642,8 +2802,18 @@ onMounted(async () => {
   box-shadow: 0 8px 20px rgba(24, 144, 255, 0.18);
 }
 
+.kb-card :deep(.n-card__header) {
+  padding: 6px 12px 0;
+  min-height: 0;
+}
+
 .kb-card :deep(.n-card__content) {
   padding-top: 4px;
+}
+
+.kb-card-header-spacer {
+  display: block;
+  height: 0;
 }
 
 .kb-card-content {

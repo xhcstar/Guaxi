@@ -665,6 +665,150 @@ pub fn slidev_stop_dev() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn slidev_split_markdown_paragraphs(content: String) -> Result<Vec<String>, String> {
+    let text = content.replace("\r\n", "\n").replace('\r', "\n");
+    let mut blocks: Vec<String> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut in_fence = false;
+    let mut fence_marker = String::new();
+    let mut in_math = false;
+    let mut in_front_matter = false;
+    let mut front_matter_possible = true;
+    let mut front_matter_lines = 0usize;
+
+    let push_block = |blocks: &mut Vec<String>, current: &mut Vec<String>| {
+        let mut start = 0usize;
+        while start < current.len() && current[start].trim().is_empty() {
+            start += 1;
+        }
+        let mut end = current.len();
+        while end > start && current[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        if end <= start {
+            current.clear();
+            return;
+        }
+        let text = current[start..end].join("\n");
+        blocks.push(text);
+        current.clear();
+    };
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+
+        if front_matter_possible {
+            if trimmed.is_empty() {
+            } else if trimmed == "---" {
+                in_front_matter = true;
+                front_matter_possible = false;
+                front_matter_lines = 0;
+            } else {
+                front_matter_possible = false;
+            }
+        }
+
+        if in_front_matter {
+            front_matter_lines += 1;
+            current.push(line.to_string());
+            if front_matter_lines > 1 && trimmed == "---" {
+                in_front_matter = false;
+            }
+            continue;
+        }
+
+        if !in_fence {
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                let ch = trimmed.chars().next().unwrap_or('`');
+                let count = trimmed.chars().take_while(|c| *c == ch).count();
+                fence_marker = std::iter::repeat(ch).take(count).collect();
+                in_fence = true;
+                current.push(line.to_string());
+                continue;
+            }
+        } else if !fence_marker.is_empty() && trimmed.starts_with(&fence_marker) {
+            in_fence = false;
+            current.push(line.to_string());
+            continue;
+        }
+
+        if !in_fence && trimmed.starts_with("$") {
+            in_math = !in_math;
+            current.push(line.to_string());
+            continue;
+        }
+
+        if !in_fence && !in_math && trimmed.is_empty() {
+            push_block(&mut blocks, &mut current);
+            continue;
+        }
+
+        current.push(line.to_string());
+    }
+
+    push_block(&mut blocks, &mut current);
+
+    fn is_heading_line(line: &str) -> bool {
+        let s = line.trim_start();
+        let mut count = 0usize;
+        for ch in s.chars() {
+            if ch == '#' {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        if count == 0 || count > 6 {
+            return false;
+        }
+        let rest = &s[count..];
+        if !rest.starts_with(' ') {
+            return false;
+        }
+        let tail = rest.trim();
+        !tail.is_empty()
+    }
+
+    fn is_heading_only(block: &str) -> bool {
+        let mut seen = false;
+        for line in block.lines() {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if !is_heading_line(line) {
+                return false;
+            }
+            seen = true;
+        }
+        seen
+    }
+
+    let mut merged: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < blocks.len() {
+        let block = blocks[i].clone();
+        if is_heading_only(&block) && i + 1 < blocks.len() && !is_heading_only(&blocks[i + 1]) {
+            let next = blocks[i + 1].trim_start().to_string();
+            let combined = format!("{}\n\n{}", block.trim_end(), next);
+            merged.push(combined);
+            i += 2;
+            continue;
+        }
+        merged.push(block);
+        i += 1;
+    }
+    blocks = merged;
+
+    info!(
+        "[Slidev] split markdown paragraphs: input={} blocks={}",
+        text.len(),
+        blocks.len()
+    );
+    Ok(blocks)
+}
+
+#[tauri::command]
 pub fn slidev_export_pptx(entry_path: String, output_path: String) -> Result<(), String> {
     let entry_path_norm = entry_path.trim().to_string();
     if entry_path_norm.is_empty() {
