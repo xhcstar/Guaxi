@@ -15,6 +15,11 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 use serde::Serialize;
 use tracing::{error, info, warn};
 
+// Slidev 首次启动可能较慢，放宽就绪等待与探测超时，提升成功率
+const SLIDEV_READY_TIMEOUT_SECS: u64 = 25;
+const SLIDEV_PROBE_TIMEOUT_MS: u64 = 900;
+const SLIDEV_PROBE_INTERVAL_MS: u64 = 160;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SlidevDevInfo {
     pub entry_path: String,
@@ -322,13 +327,13 @@ fn probe_http_root(port: u16) -> Result<String, String> {
 }
 
 fn probe_http_root_addr(addr: SocketAddr, port: u16) -> Result<String, String> {
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(450))
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(SLIDEV_PROBE_TIMEOUT_MS))
         .map_err(|e| format!("connect_timeout failed: {e}"))?;
     stream
-        .set_read_timeout(Some(Duration::from_millis(450)))
+        .set_read_timeout(Some(Duration::from_millis(SLIDEV_PROBE_TIMEOUT_MS)))
         .ok();
     stream
-        .set_write_timeout(Some(Duration::from_millis(450)))
+        .set_write_timeout(Some(Duration::from_millis(SLIDEV_PROBE_TIMEOUT_MS)))
         .ok();
 
     // Host 头用 localhost，避免某些中间件对 IP Host 做限制。
@@ -358,6 +363,12 @@ fn wait_slidev_ready(port: u16, child: &mut Child, timeout: Duration) -> Result<
     let mut attempts: u32 = 0;
     let mut last_log_at = Instant::now();
     let mut last_err = String::new();
+
+    info!(
+        "[Slidev] wait ready start port={} timeoutMs={}",
+        port,
+        timeout.as_millis()
+    );
 
     loop {
         attempts += 1;
@@ -403,7 +414,7 @@ fn wait_slidev_ready(port: u16, child: &mut Child, timeout: Duration) -> Result<
             );
         }
 
-        thread::sleep(Duration::from_millis(120));
+        thread::sleep(Duration::from_millis(SLIDEV_PROBE_INTERVAL_MS));
     }
 }
 
@@ -597,7 +608,11 @@ pub fn slidev_start_dev(entry_path: String, port: Option<u16>) -> Result<SlidevD
         spawn_slidev_pipe_logger(stderr, port, "stderr");
     }
 
-    match wait_slidev_ready(port, &mut child, Duration::from_secs(12)) {
+    match wait_slidev_ready(
+        port,
+        &mut child,
+        Duration::from_secs(SLIDEV_READY_TIMEOUT_SECS),
+    ) {
         Ok(status_line) => {
             info!(
                 "[Slidev] dev ready port={} url={} statusLine={}",

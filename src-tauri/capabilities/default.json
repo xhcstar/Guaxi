@@ -18,6 +18,7 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "opener:allow-open-url",
     "dialog:default",
     "os:default",
     "core:window:allow-start-dragging",

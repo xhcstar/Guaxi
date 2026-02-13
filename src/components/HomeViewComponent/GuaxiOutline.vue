@@ -74,7 +74,7 @@ const handleSelect = (keys, options) => {
     flex: 1 1 0;
     min-height: 0;
     height: 100%;
-    padding: 8px;
+    padding: 0;
     font-size: 14px;
     box-sizing: border-box;
     display: flex;
@@ -87,7 +87,7 @@ const handleSelect = (keys, options) => {
     height: 0;
     min-height: 0;
     overflow: auto;
-    padding: 0 16px;
+    padding: 6px 6px 6px 8px;
     box-sizing: border-box;
 }
 
@@ -106,5 +106,15 @@ const handleSelect = (keys, options) => {
     width: 100%;
     height: 100%;
     min-height: 0;
+}
+
+:deep(.outline-tree .n-tree-node-content__text) {
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.35;
+}
+
+:deep(.outline-tree .n-tree-node-content) {
+    align-items: flex-start;
 }
 </style>

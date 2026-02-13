@@ -8010,10 +8010,10 @@ watch(selectedFile, async (newFile) => {
 }, { immediate: true });
 
 const previewModeOptions = [
-  { label: '编辑模式 (Ctrl+1)', key: 'edit' },
-  { label: '预览模式 (Ctrl+2)', key: 'preview' },
-  { label: '分屏预览 (Ctrl+3)', key: 'split' },
-  { label: '实时预览 (Ctrl+4)', key: 'realtime' }
+  { label: '编辑模式 (Ctrl+1)', key: 'edit', icon: () => h(Icon, { icon: filePenLineIcon, width: 16, height: 16 }) },
+  { label: '预览模式 (Ctrl+2)', key: 'preview', icon: () => h(Icon, { icon: eyeIcon, width: 16, height: 16 }) },
+  { label: '分屏预览 (Ctrl+3)', key: 'split', icon: () => h(Icon, { icon: columns2Icon, width: 16, height: 16 }) },
+  { label: '实时预览 (Ctrl+4)', key: 'realtime', icon: () => h(Icon, { icon: sparklesIcon, width: 16, height: 16 }) }
 ];
 
 const previewModeLabel = computed(() => {
@@ -9434,6 +9434,43 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.editor-wrapper :deep(.monaco-scrollable-element) {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.45) transparent;
+}
+
+.editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar) {
+  width: 8px;
+  height: 8px;
+}
+
+.editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-track) {
+  background: transparent;
+}
+
+.editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb) {
+  background-color: rgba(120, 120, 120, 0.45);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb:hover) {
+  background-color: rgba(120, 120, 120, 0.65);
+}
+
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-scrollable-element) {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb) {
+  background-color: rgba(255, 255, 255, 0.28);
+}
+
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb:hover) {
+  background-color: rgba(255, 255, 255, 0.45);
 }
 
 .editor-split-wrapper {

@@ -7,7 +7,8 @@
     <div v-else class="list">
       <div v-for="item in visibleItems" :key="item.key" class="row"
         :class="{ selected: item.key === selectedKey, dir: item.isDir }"
-        :style="{ paddingLeft: `${basePadding + item.depth * indent}px` }" @click="onRowClick(item)">
+        :style="{ paddingLeft: `${basePadding + item.depth * indent}px` }" @click="onRowClick(item)"
+        @contextmenu.stop.prevent="onRowContextMenu(item, $event)">
         <span class="twisty" @click.stop="onTwistyClick(item)">
           <n-icon v-if="item.isDir" :component="item.expanded ? ChevronDownOutline : ChevronForwardOutline" />
           <span v-else class="twisty-placeholder"></span>
@@ -32,7 +33,7 @@
           </n-tooltip>
         </span>
 
-        <span v-if="loadingKeys.has(item.key)" class="loading" title="加载中">
+        <span v-if="showLoading && loadingKeys.has(item.key)" class="loading" title="加载中">
           <span class="dot"></span>
           <span class="dot"></span>
           <span class="dot"></span>
@@ -67,9 +68,10 @@ const props = defineProps({
   showAction: { type: Boolean, default: false },
   actionTitle: { type: String, default: '插入到PPT' },
   actionIcon: { type: Object, default: () => AddOutline },
+  showLoading: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['update:selectedKey', 'update:expandedKeys', 'select', 'action'])
+const emit = defineEmits(['update:selectedKey', 'update:expandedKeys', 'select', 'action', 'contextmenu'])
 
 const normalizeKey = (k) => String(k || '')
 
@@ -155,6 +157,22 @@ const toggleDir = async (n) => {
   if (next) await ensureChildrenLoaded(n)
 }
 
+const onRowContextMenu = (item, e) => {
+  if (!item) return
+  e?.preventDefault?.()
+  e?.stopPropagation?.()
+  selectKey(item.key, item.node)
+  emit('contextmenu', {
+    key: item.key,
+    label: item.label,
+    isDir: item.isDir,
+    item: item.node,
+    x: e?.clientX ?? 0,
+    y: e?.clientY ?? 0,
+  })
+  logger.info('[contextmenu]', { key: item.key, isDir: item.isDir })
+}
+
 const onRowClick = async (item) => {
   selectKey(item.key, item.node)
   if (item.isDir) {
@@ -178,8 +196,43 @@ const onActionClick = (item) => {
   height: 100%;
   width: 100%;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.45) transparent;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
   font-size: 13px;
+}
+
+.tree-view::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.tree-view::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tree-view::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 120, 120, 0.45);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.tree-view::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(120, 120, 120, 0.65);
+}
+
+:global(:root[data-guaxi-theme='dark']) .tree-view {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+:global(:root[data-guaxi-theme='dark']) .tree-view::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.28);
+}
+
+:global(:root[data-guaxi-theme='dark']) .tree-view::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.45);
 }
 
 .empty {
@@ -194,16 +247,18 @@ const onActionClick = (item) => {
 
 .list {
   padding: 6px 0;
+  width: 100%;
+  min-width: 0;
 }
 
 .row {
-  height: 28px;
+  min-height: 28px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   cursor: pointer;
   user-select: none;
-  white-space: nowrap;
+  padding: 4px 0;
 }
 
 .row:hover {
@@ -240,8 +295,11 @@ const onActionClick = (item) => {
 .label {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
 }
 
 .action {
