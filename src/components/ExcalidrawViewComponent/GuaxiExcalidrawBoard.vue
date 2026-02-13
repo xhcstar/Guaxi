@@ -455,7 +455,7 @@ function renderReactApp(initialData) {
     : undefined
 
   if (initialData?.appState && !(initialData.appState?.collaborators instanceof Map)) {
-    logger.warn('[excalidraw] initialData.appState.collaborators normalized to Map')
+    logger.debug('[excalidraw] initialData.appState.collaborators normalized to Map')
   }
 
   reactRoot.value.render(
