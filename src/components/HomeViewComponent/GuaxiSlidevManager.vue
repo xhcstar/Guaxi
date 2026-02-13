@@ -38,92 +38,138 @@
         content-style="padding: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden;"
         style="height: 100%; position: relative;"
       >
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-header-row">
-            <div class="panel-title">PPT 源文件</div>
-            <n-space size="small" align="center">
-              <n-tooltip trigger="hover">
-                <template #trigger>
-                  <n-button size="tiny" quaternary circle @click="refreshSlidevRoot">
-                    <template #icon>
-                      <n-icon :component="RefreshOutline" />
-                    </template>
-                  </n-button>
-                </template>
-                刷新
-              </n-tooltip>
+      <div ref="leftPanelsRef" class="left-panels">
+        <div class="panel left-panel-top" :style="{ height: `${leftPanelTopHeight}px` }">
+          <div class="panel-header">
+            <div class="panel-header-row">
+              <div class="panel-title">PPT 源文件</div>
+              <n-space size="small" align="center">
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary circle @click="refreshSlidevRoot">
+                      <template #icon>
+                        <n-icon :component="RefreshOutline" />
+                      </template>
+                    </n-button>
+                  </template>
+                  刷新
+                </n-tooltip>
 
-              <n-tooltip trigger="hover">
-                <template #trigger>
-                  <n-button size="tiny" quaternary circle @click="openCreateModal('folder')">
-                    <template #icon>
-                      <n-icon :component="AddOutline" />
-                    </template>
-                  </n-button>
-                </template>
-                新建 PPT 目录
-              </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary circle @click="openCreateModal('folder')">
+                      <template #icon>
+                        <n-icon :component="AddOutline" />
+                      </template>
+                    </n-button>
+                  </template>
+                  新建 PPT 目录
+                </n-tooltip>
 
-              <n-tooltip trigger="hover">
-                <template #trigger>
-                  <n-button size="tiny" quaternary circle @click="openCreateModal('file')">
-                    <template #icon>
-                      <n-icon :component="DocumentTextOutline" />
-                    </template>
-                  </n-button>
-                </template>
-                新建文件
-              </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary circle @click="openCreateModal('file')">
+                      <template #icon>
+                        <n-icon :component="DocumentTextOutline" />
+                      </template>
+                    </n-button>
+                  </template>
+                  新建文件
+                </n-tooltip>
 
-              <n-tooltip trigger="hover">
-                <template #trigger>
-                  <n-button size="tiny" quaternary circle type="error" @click="deleteSelected">
-                    <template #icon>
-                      <n-icon :component="TrashOutline" />
-                    </template>
-                  </n-button>
-                </template>
-                删除
-              </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary circle type="error" @click="deleteSelected">
+                      <template #icon>
+                        <n-icon :component="TrashOutline" />
+                      </template>
+                    </n-button>
+                  </template>
+                  删除
+                </n-tooltip>
+              </n-space>
+            </div>
 
-              <n-tooltip trigger="hover">
-                <template #trigger>
-                  <n-button size="tiny" quaternary circle @click="toggleLeftCollapsed">
-                    <template #icon>
-                      <n-icon :component="leftCollapsed ? ChevronForwardOutline : ChevronBackOutline" />
-                    </template>
-                  </n-button>
-                </template>
-                {{ leftCollapsed ? '展开左侧' : '折叠左侧' }}
-              </n-tooltip>
-            </n-space>
+            <n-input v-model:value="slidevFilter" size="small" clearable placeholder="过滤 PPT 文件...">
+              <template #prefix>
+                <n-icon :component="SearchOutline" />
+              </template>
+            </n-input>
           </div>
 
-          <n-input v-model:value="slidevFilter" size="small" clearable placeholder="过滤 PPT 文件...">
-            <template #prefix>
-              <n-icon :component="SearchOutline" />
-            </template>
-          </n-input>
+          <div class="panel-body">
+            <n-spin :show="slidevTreeLoading">
+              <div class="tree-host">
+                <GuaxiSlidevTreeView
+                  :nodes="filteredSlidevTree"
+                  v-model:selected-key="slidevSelectedKey"
+                  v-model:expanded-keys="slidevExpandedKeys"
+                  :load-children="handleSlidevNodeLoad"
+                  empty-text="暂无 PPT 文件"
+                  @select="handleSlidevSelectNode"
+                />
+              </div>
+            </n-spin>
+          </div>
+
         </div>
 
-        <div class="panel-body">
-          <n-spin :show="slidevTreeLoading">
-            <div class="tree-host">
-              <GuaxiSlidevTreeView
-                :nodes="filteredSlidevTree"
-                v-model:selected-key="slidevSelectedKey"
-                v-model:expanded-keys="slidevExpandedKeys"
-                :load-children="handleSlidevNodeLoad"
-                empty-text="暂无 PPT 文件"
-                @select="handleSlidevSelectNode"
-              />
+        <div class="left-panel-splitter" @mousedown="onMouseDownLeftPanelSplit" />
+
+        <div class="panel left-panel-bottom">
+          <div class="panel-header">
+            <div class="panel-header-row">
+              <div class="panel-title">知识库素材</div>
+              <n-space size="small" align="center">
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary circle @click="loadKbTree">
+                      <template #icon>
+                        <n-icon :component="RefreshOutline" />
+                      </template>
+                    </n-button>
+                  </template>
+                  加载目录树
+                </n-tooltip>
+
+                <n-tooltip trigger="hover">
+                  <template #trigger>
+                    <n-button size="tiny" quaternary circle @click="clearMaterial">
+                      <template #icon>
+                        <n-icon :component="TrashOutline" />
+                      </template>
+                    </n-button>
+                  </template>
+                  清空选中
+                </n-tooltip>
+              </n-space>
             </div>
-          </n-spin>
-        </div>
 
-        <div class="panel-footer">
-          <n-text depth="3" class="path-text" :title="slidevRoot">{{ slidevRoot || 'Slidev 根目录未加载' }}</n-text>
+            <n-select v-model:value="selectedKbPath" size="small" :options="kbOptions" filterable placeholder="选择知识库..."
+              style="width: 100%;" />
+            <n-input v-model:value="kbFilter" size="small" clearable placeholder="过滤文件名...">
+              <template #prefix>
+                <n-icon :component="SearchOutline" />
+              </template>
+            </n-input>
+          </div>
+
+          <div class="panel-body panel-body-scroll">
+            <n-spin :show="kbLoading">
+              <div class="tree-host">
+                <GuaxiSlidevTreeView
+                  :nodes="filteredKbTree"
+                  v-model:selected-key="kbSelectedKey"
+                  v-model:expanded-keys="kbExpandedKeys"
+                  empty-text="暂无知识库文件"
+                  :show-action="true"
+                  action-title="插入到PPT"
+                  @select="handleKbSelectNode"
+                  @action="handleKbInsertAction"
+                />
+              </div>
+            </n-spin>
+          </div>
         </div>
       </div>
       <div class="sider-resize-handle" @mousedown="onMouseDownLeftSider" />
@@ -151,7 +197,176 @@
 
         <div class="toolbar">
           <div class="toolbar-left">
-            <n-space size="small" align="center">
+            <div class="toolbar-editing-actions">
+              <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
+                <n-tooltip placement="top" trigger="hover">
+                  <template #trigger>
+                    <n-button text size="tiny" :disabled="!canEdit">
+                      <Icon :icon="headingIcon" width="16" height="16" />
+                    </n-button>
+                  </template>
+                  标题
+                </n-tooltip>
+              </n-dropdown>
+
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleBold">
+                    <Icon :icon="boldIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                加粗 (Ctrl+B)
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleItalic">
+                    <Icon :icon="italicIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                斜体 (Ctrl+I)
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleStrikethrough">
+                    <Icon :icon="strikethroughIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                删除线 (Ctrl+Shift+X)
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="insertLink">
+                    <Icon :icon="linkIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                链接 (Ctrl+K)
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleBlockquote">
+                    <Icon :icon="quoteIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                引用
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleInlineCode">
+                    <Icon :icon="codeIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                行内代码
+              </n-tooltip>
+              <n-dropdown trigger="click" :options="codeBlockOptions" @select="handleCodeBlockSelect">
+                <n-tooltip placement="top" trigger="hover">
+                  <template #trigger>
+                    <n-button text size="tiny" :disabled="!canEdit">
+                      <Icon :icon="squareTerminalIcon" width="16" height="16" />
+                    </n-button>
+                  </template>
+                  代码块
+                </n-tooltip>
+              </n-dropdown>
+
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleUnorderedList">
+                    <Icon :icon="listIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                无序列表
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleOrderedList">
+                    <Icon :icon="listOrderedIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                有序列表
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="toggleTaskList">
+                    <Icon :icon="listChecksIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                任务列表
+              </n-tooltip>
+
+              <n-popover trigger="click" placement="bottom-start" :show="tableInsertPopoverVisible"
+                @update:show="handleTableInsertPopoverUpdateShow">
+                <template #trigger>
+                  <n-tooltip placement="top" trigger="hover">
+                    <template #trigger>
+                      <n-button text size="tiny" :disabled="!canEdit">
+                        <Icon :icon="tableIcon" width="16" height="16" />
+                      </n-button>
+                    </template>
+                    表格 (Ctrl+Alt+T)
+                  </n-tooltip>
+                </template>
+
+                <div class="table-insert-popover" @mousedown.stop>
+                  <div class="table-insert-hint">{{ tableInsertHint }}</div>
+                  <div class="table-insert-grid" @mouseup="handleTableGridMouseUp" @mouseleave="handleTableGridMouseLeave">
+                    <template v-for="r in tableGridMaxRows" :key="`r-${r}`">
+                      <template v-for="c in tableGridMaxCols" :key="`c-${r}-${c}`">
+                        <div class="table-insert-cell" :class="{ active: r <= tableGridRows && c <= tableGridCols }"
+                          @mousedown.prevent="handleTableGridMouseDown(r, c)" @mouseover="handleTableGridMouseOver(r, c)" />
+                      </template>
+                    </template>
+                  </div>
+
+                  <div class="table-insert-controls">
+                    <div class="table-insert-inputs">
+                      <n-input-number v-model:value="tableInputRows" size="tiny" :min="2" :max="tableInsertMaxRows"
+                        :show-button="false" placeholder="行" />
+                      <span class="table-insert-mul">×</span>
+                      <n-input-number v-model:value="tableInputCols" size="tiny" :min="1" :max="tableInsertMaxCols"
+                        :show-button="false" placeholder="列" />
+                      <n-button size="tiny" type="primary" :disabled="!canEdit" @click="insertTableFromInputs">插入</n-button>
+                    </div>
+                  </div>
+                </div>
+              </n-popover>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="insertImage">
+                    <Icon :icon="imageIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                图片
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="insertHorizontalRule">
+                    <Icon :icon="minusIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                分隔线
+              </n-tooltip>
+
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="undo">
+                    <Icon :icon="undoIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                撤销
+              </n-tooltip>
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny" :disabled="!canEdit" @click="redo">
+                    <Icon :icon="redoIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                重做
+              </n-tooltip>
+            </div>
+
+            <div class="toolbar-spacer"></div>
+
+            <n-space size="small" align="center" :wrap="false" class="toolbar-primary-actions">
               <n-tooltip trigger="hover">
                 <template #trigger>
                   <n-button size="small" quaternary circle @click="saveActive">
@@ -210,12 +425,17 @@
           </div>
 
           <div class="toolbar-right">
-            <n-space size="small" align="center">
-              <n-button size="small" :type="previewMode === 'edit' ? 'primary' : 'default'" @click="setPreviewMode('edit')">编辑</n-button>
-              <n-button size="small" :type="previewMode === 'split' ? 'primary' : 'default'" @click="setPreviewMode('split')">分栏</n-button>
-              <n-button size="small" :type="previewMode === 'preview' ? 'primary' : 'default'" @click="setPreviewMode('preview')">预览</n-button>
-            </n-space>
-            <n-input v-model:value="devPortText" size="small" placeholder="端口(默认3030)" style="width: 140px" />
+            <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
+              <n-tooltip placement="top" trigger="hover">
+                <template #trigger>
+                  <n-button text size="tiny">
+                    <Icon :icon="previewModeIcon" width="16" height="16" />
+                  </n-button>
+                </template>
+                {{ previewModeLabel }}
+              </n-tooltip>
+            </n-dropdown>
+            <n-input v-model:value="devPortText" size="small" placeholder="端口(默认3030)" style="width: 110px" />
           </div>
         </div>
       </div>
@@ -255,108 +475,38 @@
       style="height: 100%; position: relative;"
     >
       <div class="panel">
-        <div class="panel-header" style="gap: 8px;">
+        <div class="panel-header">
           <div class="panel-header-row">
-            <div class="panel-title">知识库素材</div>
-            <n-space size="small" align="center">
-              <n-tooltip trigger="hover">
-                <template #trigger>
-                  <n-button size="tiny" quaternary circle @click="toggleRightCollapsed">
-                    <template #icon>
-                      <n-icon :component="rightCollapsed ? ChevronBackOutline : ChevronForwardOutline" />
-                    </template>
-                  </n-button>
-                </template>
-                {{ rightCollapsed ? '展开右侧' : '折叠右侧' }}
-              </n-tooltip>
-            </n-space>
+            <div class="panel-title">素材卡片</div>
           </div>
-
-          <n-select v-model:value="selectedKbPath" size="small" :options="kbOptions" filterable placeholder="选择知识库..."
-            style="width: 100%;" />
-          <n-input v-model:value="kbFilter" size="small" clearable placeholder="过滤文件名...">
-            <template #prefix>
-              <n-icon :component="SearchOutline" />
-            </template>
-          </n-input>
-          <n-space size="small" justify="space-between">
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <n-button size="tiny" quaternary circle @click="loadKbTree">
-                  <template #icon>
-                    <n-icon :component="RefreshOutline" />
-                  </template>
-                </n-button>
-              </template>
-              加载目录树
-            </n-tooltip>
-
-            <n-tooltip trigger="hover">
-              <template #trigger>
-                <n-button size="tiny" quaternary circle @click="clearMaterial">
-                  <template #icon>
-                    <n-icon :component="TrashOutline" />
-                  </template>
-                </n-button>
-              </template>
-              清空选中
-            </n-tooltip>
-          </n-space>
         </div>
 
-        <div class="panel-body">
-          <n-spin :show="kbLoading">
-            <div class="tree-host">
-              <GuaxiSlidevTreeView
-                :nodes="filteredKbTree"
-                v-model:selected-key="kbSelectedKey"
-                v-model:expanded-keys="kbExpandedKeys"
-                empty-text="暂无知识库文件"
-                :show-action="true"
-                action-title="插入到PPT"
-                @select="handleKbSelectNode"
-                @action="handleKbInsertAction"
-              />
+        <div class="panel-body panel-body-scroll">
+          <n-spin :show="material.loading">
+            <div v-if="materialCards.length === 0" class="panel-empty">
+              {{ material.path ? '素材文件为空' : '请选择一个素材文件' }}
+            </div>
+            <div v-else class="kb-card-list">
+              <n-card v-for="(card, index) in materialCards" :key="card.id" size="small" class="kb-card">
+                <template #header>
+                  段落 {{ index + 1 }}
+                </template>
+                <template #header-extra>
+                  <n-tooltip trigger="hover">
+                    <template #trigger>
+                      <n-button size="tiny" quaternary circle @click="insertMaterialCard(card, index)">
+                        <template #icon>
+                          <n-icon :component="AddOutline" />
+                        </template>
+                      </n-button>
+                    </template>
+                    插入到PPT
+                  </n-tooltip>
+                </template>
+                <div class="kb-card-content">{{ card.text }}</div>
+              </n-card>
             </div>
           </n-spin>
-
-          <n-divider />
-
-          <n-card v-if="material.path" size="small" title="素材预览">
-            <n-space vertical size="small">
-              <n-text depth="3" class="path-text" :title="material.path">{{ material.path }}</n-text>
-              <textarea
-                ref="materialPreviewRef"
-                class="material-preview-textarea"
-                :value="materialPreview"
-                readonly
-                @mouseup="updateMaterialSelection"
-                @keyup="updateMaterialSelection"
-                @select="updateMaterialSelection"
-              ></textarea>
-              <n-text v-if="materialSelectedLen > 0" depth="3" class="select-tip">已选中 {{ materialSelectedLen }} 字符</n-text>
-              <n-space size="small">
-                <n-button size="small" type="primary" :disabled="material.loading" @click="insertMaterial">
-                  <template #icon>
-                    <n-icon :component="DocumentTextOutline" />
-                  </template>
-                  插入全部
-                </n-button>
-                <n-button size="small" :disabled="material.loading" @click="insertSelectedMaterial">
-                  <template #icon>
-                    <n-icon :component="AddOutline" />
-                  </template>
-                  插入选中
-                </n-button>
-                <n-button size="small" quaternary :disabled="material.loading" @click="reloadMaterial">
-                  <template #icon>
-                    <n-icon :component="RefreshOutline" />
-                  </template>
-                  重新读取
-                </n-button>
-              </n-space>
-            </n-space>
-          </n-card>
         </div>
       </div>
       <div class="sider-resize-handle-right" @mousedown="onMouseDownRightSider" />
@@ -392,13 +542,16 @@ import {
   NButton,
   NSpace,
   NInput,
+  NInputNumber,
   NSelect,
   NDivider,
   NCard,
   NModal,
   NText,
   NIcon,
-  NTooltip
+  NTooltip,
+  NDropdown,
+  NPopover
 } from 'naive-ui'
 import { createLogger } from '../../utils/logger'
 import { useSlidevEditorStore } from '../../stores/slidevEditorStore'
@@ -418,6 +571,26 @@ import {
   StopCircleOutline,
   TrashOutline
 } from '@vicons/ionicons5'
+import { Icon } from '@iconify/vue'
+import headingIcon from '@iconify-icons/lucide/heading'
+import boldIcon from '@iconify-icons/lucide/bold'
+import italicIcon from '@iconify-icons/lucide/italic'
+import strikethroughIcon from '@iconify-icons/lucide/strikethrough'
+import linkIcon from '@iconify-icons/lucide/link'
+import quoteIcon from '@iconify-icons/lucide/quote'
+import codeIcon from '@iconify-icons/lucide/code'
+import squareTerminalIcon from '@iconify-icons/lucide/terminal-square'
+import listIcon from '@iconify-icons/lucide/list'
+import listOrderedIcon from '@iconify-icons/lucide/list-ordered'
+import listChecksIcon from '@iconify-icons/lucide/list-checks'
+import tableIcon from '@iconify-icons/lucide/table'
+import imageIcon from '@iconify-icons/lucide/image'
+import minusIcon from '@iconify-icons/lucide/minus'
+import undoIcon from '@iconify-icons/lucide/undo'
+import redoIcon from '@iconify-icons/lucide/redo'
+import filePenLineIcon from '@iconify-icons/lucide/file-edit'
+import eyeIcon from '@iconify-icons/lucide/eye'
+import columns2Icon from '@iconify-icons/lucide/columns'
 import GuaxiSlidevLiteEditor from './GuaxiSlidevLiteEditor.vue'
 import GuaxiSlidevTreeView from './GuaxiSlidevTreeView.vue'
 
@@ -465,6 +638,76 @@ const previewLoading = ref(false)
 const previewEntryPath = ref('')
 const previewPort = ref(0)
 
+const previewModeOptions = [
+  { label: '编辑模式', key: 'edit' },
+  { label: '分栏预览', key: 'split' },
+  { label: '预览模式', key: 'preview' }
+]
+
+const previewModeLabel = computed(() => {
+  if (previewMode.value === 'split') return '分栏预览'
+  if (previewMode.value === 'preview') return '预览模式'
+  return '编辑模式'
+})
+
+const previewModeIcon = computed(() => {
+  if (previewMode.value === 'split') return columns2Icon
+  if (previewMode.value === 'preview') return eyeIcon
+  return filePenLineIcon
+})
+
+const handlePreviewModeSelect = async (key) => {
+  const mode = String(key || '')
+  if (!mode) return
+  await setPreviewMode(mode)
+}
+
+const headingOptions = [
+  { label: '正文', key: 0 },
+  { label: 'H1', key: 1 },
+  { label: 'H2', key: 2 },
+  { label: 'H3', key: 3 },
+  { label: 'H4', key: 4 },
+  { label: 'H5', key: 5 },
+  { label: 'H6', key: 6 }
+]
+
+const codeBlockOptions = [
+  { label: '纯代码块', key: 'plain' },
+  { label: 'C', key: 'c' },
+  { label: 'C++', key: 'cpp' },
+  { label: 'Python', key: 'python' },
+  { label: 'Shell', key: 'bash' },
+  { label: 'Mermaid', key: 'mermaid' },
+  { label: 'Rust', key: 'rust' },
+  { label: 'JavaScript', key: 'javascript' },
+  { label: 'TypeScript', key: 'typescript' },
+  { label: 'Lua', key: 'lua' },
+  { label: 'HTML', key: 'html' },
+  { label: 'Perl', key: 'perl' },
+  { label: 'JSON', key: 'json' },
+  { label: 'XML', key: 'xml' },
+  { label: 'TeX', key: 'tex' },
+  { label: 'C#', key: 'csharp' },
+  { label: 'Lisp', key: 'lisp' },
+  { label: 'TOML', key: 'toml' },
+  { label: 'PowerShell', key: 'powershell' }
+]
+
+const tableInsertPopoverVisible = ref(false)
+const tableGridMaxRows = 10
+const tableGridMaxCols = 10
+const tableGridRows = ref(2)
+const tableGridCols = ref(2)
+const tableGridDragging = ref(false)
+
+const tableInsertMaxRows = 120
+const tableInsertMaxCols = 40
+const tableInputRows = ref(2)
+const tableInputCols = ref(2)
+
+const tableInsertHint = computed(() => `${tableGridRows.value} 行 × ${tableGridCols.value} 列`)
+
 const normalizePath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/g, '')
 
 const getTabByPath = (path) => {
@@ -494,6 +737,8 @@ const activeEditorUnsupported = computed(() => {
   return !!tab?.unsupported || !!slidevEditorStore.selectedFile?.unsupported
 })
 
+const canEdit = computed(() => !!activeEditorPath.value && !activeEditorUnsupported.value)
+
 const showEditor = computed(() => previewMode.value !== 'preview')
 const showPreview = computed(() => previewMode.value !== 'edit')
 
@@ -508,6 +753,106 @@ const onEditorDraftFlush = (payload) => {
 const onEditorSaveRequest = () => {
   logger.info('[Slidev] save request from editor')
   saveActive()
+}
+
+const runEditorMethod = (method, ...args) => {
+  if (!canEdit.value) {
+    message.warning('请先打开一个 PPT 源文件')
+    return
+  }
+  const api = pptEditorRef.value
+  const fn = api?.[method]
+  if (typeof fn !== 'function') {
+    logger.warn('[toolbar] editor method missing', { method })
+    return
+  }
+  fn(...args)
+  logger.info('[toolbar] action', { method, args })
+}
+
+const handleHeadingSelect = (key) => {
+  const level = Number(key)
+  if (Number.isNaN(level)) return
+  runEditorMethod('toggleHeading', level)
+}
+
+const toggleBold = () => runEditorMethod('toggleBold')
+const toggleItalic = () => runEditorMethod('toggleItalic')
+const toggleStrikethrough = () => runEditorMethod('toggleStrikethrough')
+const toggleInlineCode = () => runEditorMethod('toggleInlineCode')
+const insertLink = () => runEditorMethod('insertLink')
+const toggleBlockquote = () => runEditorMethod('toggleBlockquote')
+const toggleUnorderedList = () => runEditorMethod('toggleUnorderedList')
+const toggleOrderedList = () => runEditorMethod('toggleOrderedList')
+const toggleTaskList = () => runEditorMethod('toggleTaskList')
+const insertImage = () => runEditorMethod('insertImage')
+const insertHorizontalRule = () => runEditorMethod('insertHorizontalRule')
+const undo = () => runEditorMethod('undo')
+const redo = () => runEditorMethod('redo')
+
+const handleCodeBlockSelect = (key) => {
+  const k = String(key || '').trim()
+  const lang = k === 'plain' ? '' : k
+  runEditorMethod('insertCodeBlock', lang)
+}
+
+const clampInt = (value, min, max) => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return min
+  return Math.max(min, Math.min(max, Math.floor(n)))
+}
+
+const handleTableInsertPopoverUpdateShow = (val) => {
+  tableInsertPopoverVisible.value = val
+  if (val) {
+    tableGridRows.value = 2
+    tableGridCols.value = 2
+    tableGridDragging.value = false
+    tableInputRows.value = 2
+    tableInputCols.value = 2
+  } else {
+    tableGridDragging.value = false
+  }
+}
+
+const insertTableWithSize = (rows, cols) => {
+  const r = clampInt(rows, 2, tableInsertMaxRows)
+  const c = clampInt(cols, 1, tableInsertMaxCols)
+  runEditorMethod('insertTable', r, c)
+}
+
+const handleTableGridMouseDown = (r, c) => {
+  tableGridDragging.value = true
+  tableGridRows.value = clampInt(r, 1, tableGridMaxRows)
+  tableGridCols.value = clampInt(c, 1, tableGridMaxCols)
+}
+
+const handleTableGridMouseOver = (r, c) => {
+  if (!tableGridDragging.value) {
+    tableGridRows.value = clampInt(r, 1, tableGridMaxRows)
+    tableGridCols.value = clampInt(c, 1, tableGridMaxCols)
+    return
+  }
+  tableGridRows.value = clampInt(r, 1, tableGridMaxRows)
+  tableGridCols.value = clampInt(c, 1, tableGridMaxCols)
+}
+
+const handleTableGridMouseUp = () => {
+  if (!tableInsertPopoverVisible.value) return
+  if (!tableGridDragging.value) return
+  tableGridDragging.value = false
+  insertTableWithSize(tableGridRows.value, tableGridCols.value)
+  tableInsertPopoverVisible.value = false
+}
+
+const handleTableGridMouseLeave = () => {
+  if (!tableGridDragging.value) return
+  tableGridDragging.value = false
+}
+
+const insertTableFromInputs = () => {
+  insertTableWithSize(tableInputRows.value, tableInputCols.value)
+  tableInsertPopoverVisible.value = false
 }
 
 const setActiveTab = (path) => {
@@ -580,6 +925,9 @@ const isHiddenName = (name) => {
 const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
 
+const leftPanelsRef = ref(null)
+const leftPanelTopHeight = ref(360)
+
 // 说明：与主窗口一致，左右侧栏支持拖拽调宽；这里不使用 CSS resize，避免不同平台表现不一致
 const leftSiderWidth = ref(320)
 const rightSiderWidth = ref(380)
@@ -589,12 +937,29 @@ const MAX_LEFT_SIDER_WIDTH = 560
 const MIN_RIGHT_SIDER_WIDTH = 300
 const MAX_RIGHT_SIDER_WIDTH = 760
 
+const MIN_LEFT_PANEL_TOP = 220
+const MIN_LEFT_PANEL_BOTTOM = 220
+
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
 
 const withResizingCursor = (fn) => {
   const prevCursor = document.body.style.cursor
   const prevSelect = document.body.style.userSelect
   document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+
+  try {
+    fn()
+  } finally {
+    document.body.style.cursor = prevCursor
+    document.body.style.userSelect = prevSelect
+  }
+}
+
+const withResizingCursorVertical = (fn) => {
+  const prevCursor = document.body.style.cursor
+  const prevSelect = document.body.style.userSelect
+  document.body.style.cursor = 'ns-resize'
   document.body.style.userSelect = 'none'
 
   try {
@@ -630,6 +995,40 @@ const onMouseDownLeftSider = (event) => {
   }
 
   withResizingCursor(() => {
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  })
+}
+
+const onMouseDownLeftPanelSplit = (event) => {
+  event.preventDefault()
+
+  const container = leftPanelsRef.value
+  if (!container) return
+
+  const rect = container.getBoundingClientRect()
+  const startY = event.clientY
+  const startHeight = leftPanelTopHeight.value || rect.height * 0.6
+  const maxTop = Math.max(MIN_LEFT_PANEL_TOP, rect.height - MIN_LEFT_PANEL_BOTTOM)
+
+  let raf = 0
+  const onMove = (e) => {
+    const dy = e.clientY - startY
+    const next = clamp(startHeight + dy, MIN_LEFT_PANEL_TOP, maxTop)
+    if (raf) cancelAnimationFrame(raf)
+    raf = requestAnimationFrame(() => {
+      leftPanelTopHeight.value = next
+    })
+  }
+
+  const onUp = () => {
+    if (raf) cancelAnimationFrame(raf)
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    logger.info('[UI] left panel split resized', { topHeight: leftPanelTopHeight.value })
+  }
+
+  withResizingCursorVertical(() => {
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   })
@@ -1297,39 +1696,16 @@ const material = reactive({
   loading: false,
 })
 
-const materialPreviewRef = ref(null)
-
-const materialSelection = reactive({
-  start: 0,
-  end: 0,
+const materialCards = computed(() => {
+  const raw = String(material.content || '')
+  if (!raw) return []
+  const parts = raw.split(/\n\s*\n+/g)
+  return parts
+    .map((text, index) => ({ id: `${material.path || 'material'}-${index}`, text: text.trim() }))
+    .filter((item) => item.text)
 })
 
-const materialSelectedLen = computed(() => {
-  const s = Math.max(0, materialSelection.start)
-  const e = Math.max(s, materialSelection.end)
-  return Math.max(0, e - s)
-})
-
-const updateMaterialSelection = () => {
-  const el = materialPreviewRef.value
-  if (!el) return
-  materialSelection.start = el.selectionStart ?? 0
-  materialSelection.end = el.selectionEnd ?? 0
-}
-
-const getSelectedMaterialText = () => {
-  const preview = String(materialPreview.value || '')
-  const start = Math.max(0, materialSelection.start)
-  const end = Math.max(start, materialSelection.end)
-  if (!preview || start === end) return ''
-  return preview.slice(start, end)
-}
-
-const materialPreview = computed(() => {
-  const s = String(material.content || '')
-  if (!s) return ''
-  return s.length > 4000 ? `${s.slice(0, 4000)}\n\n...（已截断）` : s
-})
+const materialCardCount = computed(() => materialCards.value.length)
 
 const clearMaterial = () => {
   material.path = ''
@@ -1347,8 +1723,6 @@ const readMaterial = async (path) => {
     const content = await invoke('read_file_content', { path: p })
     material.path = p
     material.content = String(content ?? '')
-    materialSelection.start = 0
-    materialSelection.end = 0
     logger.info('[KB] material loaded', { path: p, len: material.content.length })
   } catch (e) {
     logger.error('[KB] material read failed', e)
@@ -1370,24 +1744,24 @@ const handleKbSelectNode = async (node) => {
   await readMaterial(key)
 }
 
-const insertMaterial = async () => {
-  const content = String(material.content || '')
+const insertMaterialCard = async (card, index) => {
+  const content = String(card?.text || '')
   if (!material.path || !content) {
-    message.warning('请先选择一个素材文件')
+    message.warning('请选择一个素材段落')
     return
   }
 
   try {
     const text = content.endsWith('\n') ? content : `${content}\n`
     const ok = await pptEditorRef.value?.insertContent?.(`\n${text}`)
-    logger.info('[KB] insert all', { ok: !!ok, path: material.path, len: text.length })
+    logger.info('[KB] insert card', { ok: !!ok, path: material.path, index, len: text.length })
     if (!ok) {
       message.warning('插入失败：请先打开一个 PPT 源文件')
       return
     }
     message.success('已插入到 PPT 源文件')
   } catch (e) {
-    logger.error('[KB] insert all failed', e)
+    logger.error('[KB] insert card failed', e)
     message.error('插入失败')
   }
 }
@@ -1421,32 +1795,6 @@ const handleKbInsertAction = async (node) => {
   }
 }
 
-const insertSelectedMaterial = async () => {
-  if (!material.path) {
-    message.warning('请先选择一个素材文件')
-    return
-  }
-
-  const picked = getSelectedMaterialText()
-  if (!picked) {
-    message.warning('请先在素材预览中选择一段内容')
-    return
-  }
-
-  try {
-    const text = picked.endsWith('\n') ? picked : `${picked}\n`
-    const ok = await pptEditorRef.value?.insertContent?.(`\n${text}`)
-    logger.info('[KB] insert selected', { ok: !!ok, path: material.path, len: text.length })
-    if (!ok) {
-      message.warning('插入失败：请先打开一个 PPT 源文件')
-      return
-    }
-    message.success('已插入选中内容')
-  } catch (e) {
-    logger.error('[KB] insert selected failed', e)
-    message.error('插入失败')
-  }
-}
 
 onMounted(async () => {
   // 说明：Slidev 窗口使用独立 store，避免与主窗口共享 tab/编辑状态
@@ -1522,22 +1870,44 @@ onMounted(async () => {
   transform: translateY(-50%);
   z-index: 60;
   pointer-events: auto;
+  transition: left 0.2s ease, right 0.2s ease, opacity 0.2s ease;
 }
 
 .sider-toggle-left {
-  margin-left: -14px;
-}
-
-.sider-toggle-left.collapsed {
-  margin-left: 12px;
+  transform: translate(-50%, -50%);
 }
 
 .sider-toggle-right {
-  margin-right: -14px;
+  transform: translate(50%, -50%);
 }
 
-.sider-toggle-right.collapsed {
-  margin-right: 12px;
+.left-panels {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.left-panel-top {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.left-panel-bottom {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.left-panel-splitter {
+  height: 6px;
+  cursor: ns-resize;
+  background: transparent;
+}
+
+.left-panel-splitter:hover {
+  background: rgba(0, 0, 0, 0.12);
 }
 
 .slidev-center {
@@ -1613,13 +1983,125 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
-.toolbar-left,
-.toolbar-right {
+.toolbar-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.toolbar-primary-actions {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.toolbar-editing-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.toolbar-editing-actions::-webkit-scrollbar {
+  height: 0;
+}
+
+.toolbar-editing-actions :deep(.n-button) {
+  padding: 0 6px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+.toolbar-editing-actions :deep(.n-button:hover) {
+  background-color: var(--guaxi-panel-bg);
+}
+
+.toolbar-spacer {
+  flex-grow: 1;
+  min-width: 16px;
+  flex-shrink: 1;
+}
+
+.table-insert-popover {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: fit-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 6px;
+}
+
+.table-insert-hint {
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+  opacity: 0.9;
+}
+
+.table-insert-grid {
+  display: inline-grid;
+  width: fit-content;
+  grid-template-columns: repeat(10, 16px);
+  gap: 4px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--guaxi-header-bg);
+  border: 1px solid var(--guaxi-border);
+  user-select: none;
+}
+
+.table-insert-cell {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 75%, transparent);
+}
+
+.table-insert-cell.active {
+  background: rgba(74, 202, 219, 0.65);
+  border-color: rgba(74, 202, 219, 0.9);
+}
+
+.table-insert-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.table-insert-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-insert-inputs :deep(.n-input-number) {
+  width: 74px;
+}
+
+.table-insert-mul {
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
 }
 
 .editor-content {
@@ -1766,6 +2248,39 @@ onMounted(async () => {
   min-height: 0;
   padding: 10px;
   overflow: hidden;
+}
+
+.panel-body-scroll {
+  overflow: auto;
+}
+
+.panel-empty {
+  height: 100%;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--guaxi-text-secondary, #8a8f98);
+  font-size: 13px;
+  user-select: none;
+}
+
+.kb-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kb-card :deep(.n-card__content) {
+  padding-top: 4px;
+}
+
+.kb-card-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  font-size: 12px;
+  color: var(--n-text-color);
 }
 
 .panel-body :deep(.n-tree) {
