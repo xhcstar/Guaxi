@@ -44,6 +44,9 @@ export default defineConfig(async () => ({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       path: "path-browserify",
+      // 将 Excalidraw 强制指向 dev 构建，避免 prod 包内联 React
+      "excalidraw-dev": path.resolve(__dirname, "node_modules/@excalidraw/excalidraw/dist/dev/index.js"),
+      "excalidraw-dev-css": path.resolve(__dirname, "node_modules/@excalidraw/excalidraw/dist/dev/index.css"),
     },
     dedupe: ["react", "react-dom"],
   },
@@ -69,7 +72,7 @@ export default defineConfig(async () => ({
           vue: ["vue", "vue-router", "pinia"],
           naiveui: ["naive-ui", "@vicons/antd", "@vicons/fa", "@vicons/fluent", "@vicons/tabler", "@vicons/ionicons5"],
           monaco: ["monaco-editor", "monaco-vim", "monaco-editor-textmate", "monaco-languageclient", "monaco-textmate"],
-          excalidraw: ["react", "react-dom", "@excalidraw/excalidraw"],
+          excalidraw: ["react", "react-dom", "excalidraw-dev"],
           docs: ["pdfjs-dist", "docx-preview", "epubjs", "markdown-it", "markdown-it-mathjax3", "mathjax-full", "mermaid", "vditor", "prismjs", "highlight.js"],
           graph3d: ["three", "three-stdlib", "d3-force-3d"],
         },
@@ -104,7 +107,7 @@ export default defineConfig(async () => ({
       "monaco-vim",
       "react",
       "react-dom",
-      "@excalidraw/excalidraw"
+      "excalidraw-dev"
     ],
     esbuildOptions: {
       target: "es2022",

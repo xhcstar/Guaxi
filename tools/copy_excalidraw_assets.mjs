@@ -1,22 +1,25 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const log = (...args) => console.log('[copy_excalidraw_assets]', ...args)
 const warn = (...args) => console.warn('[copy_excalidraw_assets]', ...args)
 
-const PROJECT_ROOT = process.cwd()
+// 以脚本所在目录定位项目根，避免从 tools/ 下运行时路径偏移
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const PROJECT_ROOT = path.resolve(__dirname, '..')
 
-// Excalidraw v0.18.x：生产资源在 dist/prod
+// 用 Excalidraw 的 dev 版资产，避免 prod 包内联自己的 React 造成双 React
 const SRC_ASSETS_DIR = path.join(
   PROJECT_ROOT,
   'node_modules',
   '@excalidraw',
   'excalidraw',
   'dist',
-  'prod',
+  'dev',
 )
 
-// 复制到 public/excalidraw，并配合 index.html 的 EXCALIDRAW_ASSET_PATH 使用
+// 复制到 public/excalidraw，与 EXCALIDRAW_ASSET_PATH 对齐
 const DEST_ROOT = path.join(PROJECT_ROOT, 'public', 'excalidraw')
 
 async function pathExists(p) {

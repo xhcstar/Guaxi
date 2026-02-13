@@ -25,8 +25,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useMessage, NButton, NSpace, NText } from 'naive-ui'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { Excalidraw } from '@excalidraw/excalidraw'
-import '@excalidraw/excalidraw/index.css'
+// 使用 Excalidraw 的 dev 构建，避免其生产包内联一份 React，导致 release 版本出现双 React (#168)
+import { Excalidraw } from 'excalidraw-dev'
+import 'excalidraw-dev-css'
 
 import { createLogger } from '../../utils/logger'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -36,6 +37,7 @@ const message = useMessage()
 const settingsStore = useSettingsStore()
 
 const mountEl = ref(null)
+const DIAG_KEY = '__guaxi_excalidraw_react_diag__'
 
 const AUTOSAVE_KEY = 'guaxi:excalidraw:autosave:v1'
 const autosaveStatus = ref('未写入')
@@ -46,7 +48,44 @@ const excalidrawApi = ref(null)
 const renderVersion = ref(0)
 
 const theme = computed(() => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'light'))
-const langCode = ref('zh-CN')
+const FORCED_LANG_CODE = 'zh-CN'
+const langCode = ref(FORCED_LANG_CODE)
+
+function logReactDiagnostics(stage) {
+  try {
+    const g = window
+    const prev = g[DIAG_KEY]
+    const current = {
+      react: React,
+      reactVersion: React?.version || 'unknown',
+      moduleUrl: import.meta.url,
+      timestamp: new Date().toISOString(),
+    }
+
+    if (!prev) {
+      g[DIAG_KEY] = current
+      logger.info('[diag] react baseline', {
+        stage,
+        reactVersion: current.reactVersion,
+        moduleUrl: current.moduleUrl,
+        assetPath: g.EXCALIDRAW_ASSET_PATH || null,
+      })
+      return
+    }
+
+    logger.info('[diag] react compare', {
+      stage,
+      sameReactObject: prev.react === current.react,
+      firstReactVersion: prev.reactVersion,
+      currentReactVersion: current.reactVersion,
+      firstModuleUrl: prev.moduleUrl,
+      currentModuleUrl: current.moduleUrl,
+      assetPath: g.EXCALIDRAW_ASSET_PATH || null,
+    })
+  } catch (e) {
+    logger.warn('[diag] react diagnostics failed', e)
+  }
+}
 
 class ExcalidrawErrorBoundary extends React.Component {
   constructor(props) {
@@ -170,6 +209,9 @@ function toRuntimeAppState(appState) {
   if (!(cloned.collaborators instanceof Map)) {
     cloned.collaborators = new Map()
   }
+
+  // 强制中文界面，避免被历史缓存/导入场景覆盖
+  cloned.langCode = FORCED_LANG_CODE
 
   return cloned
 }
@@ -362,7 +404,7 @@ async function exportWith(type) {
   try {
     if (!excalidrawApi.value) return
 
-    const mod = await import('@excalidraw/excalidraw')
+    const mod = await import('excalidraw-dev')
     const exportToBlob = mod?.exportToBlob
 
     if (typeof exportToBlob !== 'function') {
@@ -416,6 +458,7 @@ function renderReactApp(initialData) {
   if (!window.EXCALIDRAW_ASSET_PATH) {
     window.EXCALIDRAW_ASSET_PATH = '/excalidraw/'
   }
+  logReactDiagnostics('render')
 
   if (!reactRoot.value) {
     reactRoot.value = createRoot(mountEl.value)
@@ -429,6 +472,17 @@ function renderReactApp(initialData) {
 
   const onApi = (api) => {
     excalidrawApi.value = api
+    try {
+      const currentState = api.getAppState?.() || {}
+      api.updateScene({
+        appState: {
+          ...currentState,
+          langCode: FORCED_LANG_CODE,
+        },
+      })
+    } catch (e) {
+      logger.warn('[excalidraw] force lang failed', e)
+    }
     logger.info('[excalidraw] api ready')
   }
 
@@ -479,6 +533,7 @@ function renderReactApp(initialData) {
 
 onMounted(() => {
   try {
+    logReactDiagnostics('mounted')
     const initial = readAutosave()
     if (initial) {
       autosaveStatus.value = '已恢复'
