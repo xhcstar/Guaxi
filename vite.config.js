@@ -4,6 +4,10 @@ import path from "node:path";
 import monacoEditorPlugin from "vite-plugin-monaco-editor";
 
 const host = process.env.TAURI_DEV_HOST;
+const ignoredBuildWarnings = [
+  /Module level directives cause errors when bundled, "use client" .* was ignored\./,
+  /dynamic import will not move module into another chunk\./,
+];
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -52,6 +56,13 @@ export default defineConfig(async () => ({
     reportCompressedSize: false,
     chunkSizeWarningLimit: 20000,
     rollupOptions: {
+      onwarn(warning, defaultHandler) {
+        const message = String(warning?.message || "");
+        if (ignoredBuildWarnings.some((pattern) => pattern.test(message))) {
+          return;
+        }
+        defaultHandler(warning);
+      },
       output: {
         manualChunks: {
           vue: ["vue", "vue-router", "pinia"],
