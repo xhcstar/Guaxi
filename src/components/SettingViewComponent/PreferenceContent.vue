@@ -59,7 +59,57 @@
                 @update:value="handleLspHighlightChange"
               />
             </n-form-item>
+            <n-form-item label="GitHub Token">
+              <n-input
+                v-model:value="lspGithubToken"
+                type="password"
+                autocomplete="new-password"
+                placeholder="可选，用于提升 GitHub API 限额"
+                :disabled="loading || lspTokenSaving"
+              />
+            </n-form-item>
+            <n-form-item>
+              <n-button
+                type="primary"
+                size="small"
+                :disabled="loading || lspTokenSaving"
+                @click="handleLspGithubTokenSave"
+              >
+                保存 Token
+              </n-button>
+            </n-form-item>
           </n-form>
+          <div class="lsp-status-panel">
+            <div class="lsp-status-head">
+              <span class="lsp-status-title">语言 LSP 状态</span>
+              <n-button size="small" :disabled="loading || lspStatusLoading" @click="refreshLspServerStatus">刷新</n-button>
+            </div>
+            <div v-if="lspStatusLoading" class="lsp-status-loading">正在加载 LSP 状态...</div>
+            <div v-else class="lsp-status-list">
+              <div v-for="item in lspServerStatuses" :key="item.language" class="lsp-status-item">
+                <div class="lsp-status-row">
+                  <div class="lsp-status-name">{{ item.language }} / {{ item.server }}</div>
+                  <span :class="['lsp-status-chip', item.installing ? 'loading' : (item.installed ? 'ok' : (item.supported ? 'warn' : 'info'))]">
+                    {{ item.installing ? '下载中' : (item.installed ? '已安装' : (item.supported ? '未安装' : '需手动配置')) }}
+                  </span>
+                </div>
+                <div v-if="item.install_dir" class="lsp-status-path">{{ item.install_dir }}</div>
+                <div v-if="item.message" class="lsp-status-message">{{ item.message }}</div>
+                <div class="lsp-status-actions">
+                  <n-button
+                    size="small"
+                    type="primary"
+                    :loading="item.installing"
+                    :disabled="loading || lspStatusLoading || item.installing"
+                    @click="handleLspInstall(item.language)"
+                  >
+                    下载
+                  </n-button>
+                </div>
+              </div>
+              <div v-if="lspServerStatuses.length === 0" class="lsp-status-empty">暂无 LSP 配置</div>
+            </div>
+          </div>
         </div>
 
         <n-divider />
@@ -114,9 +164,13 @@ const themeOptions = [
 const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
+const lspGithubToken = ref('')
 const webrtcSignalUrl = ref('')
+const lspServerStatuses = ref([])
+const lspStatusLoading = ref(false)
 const loading = ref(false)
 const themeSaving = ref(false)
+const lspTokenSaving = ref(false)
 const webrtcSignalSaving = ref(false)
 
 watch(
@@ -133,10 +187,11 @@ onMounted(async () => {
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
       (async () => {
-        const [seconds, enabled, signalUrl] = await Promise.all([
+        const [seconds, enabled, signalUrl, githubToken] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
           invoke('get_lsp_syntax_highlight_enabled'),
-          invoke('get_webrtc_signal_url')
+          invoke('get_webrtc_signal_url'),
+          invoke('get_lsp_github_token')
         ])
 
         if (typeof seconds === 'number' && seconds > 0) {
@@ -147,6 +202,7 @@ onMounted(async () => {
 
         lspHighlightEnabled.value = !!enabled
         webrtcSignalUrl.value = typeof signalUrl === 'string' ? signalUrl : ''
+        lspGithubToken.value = typeof githubToken === 'string' ? githubToken : ''
       })(),
     ])
 
@@ -155,10 +211,13 @@ onMounted(async () => {
     logger.error('加载偏好设置失败:', error)
     gcCycleHours.value = 1
     lspHighlightEnabled.value = false
+    lspGithubToken.value = ''
     themeValue.value = 'light'
   } finally {
     loading.value = false
   }
+
+  await refreshLspServerStatus()
 })
 
 const handleThemeChange = async (value) => {
@@ -223,6 +282,63 @@ const handleLspHighlightChange = async (value) => {
   }
 }
 
+const refreshLspServerStatus = async (options = {}) => {
+  const silent = !!options.silent
+  if (!silent && lspStatusLoading.value) return
+  try {
+    if (!silent) lspStatusLoading.value = true
+    const data = await invoke('get_lsp_server_statuses')
+    lspServerStatuses.value = Array.isArray(data) ? data : []
+  } catch (error) {
+    logger.error('加载 LSP 状态失败:', error)
+    lspServerStatuses.value = []
+  } finally {
+    if (!silent) lspStatusLoading.value = false
+  }
+}
+
+const updateLspStatusItem = (language, patch) => {
+  const lang = String(language || '').trim()
+  if (!lang) return
+  lspServerStatuses.value = lspServerStatuses.value.map((item) => {
+    if (item.language !== lang) return item
+    return { ...item, ...patch }
+  })
+}
+
+const handleLspGithubTokenSave = async () => {
+  try {
+    lspTokenSaving.value = true
+    const token = String(lspGithubToken.value || '').trim()
+    logger.info('保存 LSP GitHub Token')
+    await invoke('set_lsp_github_token', { token })
+    logger.info('LSP GitHub Token 保存完成')
+  } catch (error) {
+    logger.error('保存 LSP GitHub Token 失败:', error)
+  } finally {
+    lspTokenSaving.value = false
+  }
+}
+
+const handleLspInstall = async (language) => {
+  const lang = String(language || '').trim()
+  if (!lang) return
+
+  updateLspStatusItem(lang, { installing: true })
+  try {
+    logger.info('开始下载 LSP:', { language: lang })
+    await invoke('install_lsp_server', { language: lang })
+    logger.info('LSP 下载完成:', { language: lang })
+    updateLspStatusItem(lang, { message: null })
+  } catch (error) {
+    logger.error('下载 LSP 失败:', error)
+    updateLspStatusItem(lang, { message: `下载失败: ${String(error)}` })
+  } finally {
+    updateLspStatusItem(lang, { installing: false })
+    await refreshLspServerStatus({ silent: true })
+  }
+}
+
 const handleWebrtcSignalUrlSave = async () => {
   try {
     webrtcSignalSaving.value = true
@@ -258,6 +374,102 @@ const handleWebrtcSignalUrlSave = async () => {
   margin-top: 4px;
   color: var(--guaxi-text-secondary);
   font-size: 13px;
+}
+
+.lsp-status-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: var(--guaxi-panel-bg);
+}
+
+.lsp-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.lsp-status-title {
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.lsp-status-loading,
+.lsp-status-empty {
+  color: var(--guaxi-text-secondary);
+  font-size: 13px;
+}
+
+.lsp-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lsp-status-item {
+  padding: 10px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: var(--guaxi-content-bg);
+}
+
+.lsp-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lsp-status-name {
+  font-weight: 500;
+  color: var(--guaxi-text-primary);
+}
+
+.lsp-status-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--guaxi-border);
+  color: var(--guaxi-text-secondary);
+}
+
+.lsp-status-chip.ok {
+  background: rgba(25, 113, 194, 0.12);
+  color: #2b6cb0;
+}
+
+.lsp-status-chip.warn {
+  background: rgba(245, 159, 0, 0.15);
+  color: #c77d00;
+}
+
+.lsp-status-chip.info {
+  background: rgba(132, 94, 194, 0.15);
+  color: #6b46c1;
+}
+
+.lsp-status-chip.loading {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--guaxi-text-secondary);
+}
+
+.lsp-status-path {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  word-break: break-all;
+}
+
+.lsp-status-message {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.lsp-status-actions {
+  margin-top: 6px;
 }
 
 .tip {

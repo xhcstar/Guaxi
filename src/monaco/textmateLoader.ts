@@ -1,7 +1,7 @@
 import * as monaco from 'monaco-editor'
 import { Registry, IGrammarDefinition } from 'monaco-textmate'
 import { wireTmGrammars } from 'monaco-editor-textmate'
-import { loadWASM, OnigScanner } from 'onigasm'
+import { loadWASM, OnigScanner, OnigString } from 'onigasm'
 // Vite: 把 wasm 当资源 url 引入
 // 如果路径报错，可以改为 'onigasm/lib/onigasm.wasm?url'
 import onigWasmUrl from 'onigasm/lib/onigasm.wasm?url'
@@ -49,6 +49,10 @@ const grammarDefinitions: Record<string, () => Promise<IGrammarDefinition>> = {
     format: 'json',
     content: JSON.stringify((await import('../grammar/markdown.tmLanguage.json')).default)
   }),
+  'text.tex.markdown_latex_combined': async () => ({
+    format: 'json',
+    content: JSON.stringify((await import('../grammar/markdown-latex-combined.tmLanguage.json')).default)
+  }),
   'text.tex.latex': async () => ({
     format: 'json',
     content: JSON.stringify((await import('../grammar/latex.tmLanguage.json')).default)
@@ -86,6 +90,9 @@ let onigSupportChecked = false
 let textmateDisabled = false
 let textmateDisableLogged = false
 const missingGrammarLogged = new Set<string>()
+const invalidPatternLogged = new Set<string>()
+const textmateDisabledLanguages = new Set<string>(['markdown'])
+const textmateLanguageSkipLogged = new Set<string>()
 const suppressedMissingGrammars = new Set<string>([
   'source.asm',
   'source.arm',
@@ -110,7 +117,48 @@ const suppressedMissingGrammars = new Set<string>([
   'source.clojure',
   'source.coffee',
   'source.diff',
-  'source.dockerfile'
+  'source.dockerfile',
+  'source.abap',
+  'source.rst',
+  'text.html.derivative',
+  'text.tex',
+  'source.asy',
+  'source.asymptote',
+  'source.cpp.embedded.latex',
+  'source.gnuplot',
+  'source.haskell',
+  'source.dot',
+  'text.tex.markdown_latex_combined',
+  'text.git-commit',
+  'text.git-rebase',
+  'source.go',
+  'source.groovy',
+  'text.pug',
+  'source.ignore',
+  'source.js.regexp',
+  'source.json',
+  'source.json.comments',
+  'source.json.lines',
+  'source.css.less',
+  'source.objc',
+  'source.swift',
+  'source.css.scss',
+  'source.perl.6',
+  'source.powershell',
+  'source.julia',
+  'source.scala',
+  'source.ts',
+  'source.tsx',
+  'source.cs',
+  'source.fsharp',
+  'source.dart',
+  'text.html.handlebars',
+  'text.log',
+  'source.erlang',
+  'source.elixir',
+  'text.bibtex',
+  'source.twig',
+  'source.yang'
 ])
 
 function checkOnigSupport() {
@@ -122,6 +170,27 @@ function checkOnigSupport() {
   } catch (error) {
     textmateDisabled = true
     console.warn('[TextMate] disabled due to onigasm lookbehind unsupported', error)
+  }
+}
+
+function createSafeOnigScanner(patterns: string[]) {
+  try {
+    return new OnigScanner(patterns)
+  } catch (error) {
+    const reason = String((error as Error)?.message || error || 'invalid-pattern')
+    const key = `${reason}:${patterns.join('|')}`
+    if (!invalidPatternLogged.has(key)) {
+      invalidPatternLogged.add(key)
+      console.warn('[TextMate] invalid onig pattern, fallback to empty scanner', {
+        reason,
+        sample: patterns.slice(0, 6)
+      })
+    }
+    return {
+      findNextMatchSync() {
+        return null
+      }
+    } as unknown as OnigScanner
   }
 }
 
@@ -141,6 +210,10 @@ async function ensureRegistry() {
   await ensureOnigReady()
   if (!registry) {
     registry = new Registry({
+      onigLib: Promise.resolve({
+        createOnigScanner: (patterns) => createSafeOnigScanner(patterns),
+        createOnigString: (s) => new OnigString(s)
+      }),
       getGrammarDefinition: async (scopeName: string) => {
         const loader = grammarDefinitions[scopeName]
         if (!loader) {
@@ -169,6 +242,14 @@ export async function initTextmate(
     return
   }
 
+  if (textmateDisabledLanguages.has(lang)) {
+    if (!textmateLanguageSkipLogged.has(lang)) {
+      textmateLanguageSkipLogged.add(lang)
+      console.warn('[TextMate] skipped for language', { languageId: lang, scopeName })
+    }
+    return
+  }
+
   const registry = await ensureRegistry()
 
   if (textmateDisabled) {
@@ -188,6 +269,10 @@ export async function initTextmate(
     await wireTmGrammars(monaco, registry, grammars, editor)
     console.debug('[TextMate] wired', { languageId: lang, scopeName })
   } catch (e) {
+    const message = String((e as Error)?.message || e || '')
+    if (message.includes('endless loop') || message.includes('invalid pattern')) {
+      textmateDisabledLanguages.add(lang)
+    }
     console.warn('[TextMate] wire failed, fallback to Monaco default', { languageId: lang, scopeName }, e)
   }
 }

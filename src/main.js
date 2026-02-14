@@ -50,6 +50,8 @@ import { useSettingsStore } from './stores/settingsStore'
 import { useFileTreeStore } from './stores/fileTreeStore'
 import { useEditorStore } from './stores/editorStore'
 import { initFrontendLogging, createLogger } from './utils/logger'
+import { initialize } from '@codingame/monaco-vscode-api'
+import 'vscode/localExtensionHost'
 
 const iconRegistry = {
   'mdi:folder-outline': mdiFolderOutline,
@@ -95,6 +97,7 @@ for (const [name, data] of Object.entries(iconRegistry)) {
   addIcon(name, data);
 }
 
+const bootstrap = async () => {
 const app = createApp(App);
 
 initFrontendLogging({
@@ -103,6 +106,13 @@ initFrontendLogging({
   forwardErrors: true
 })
 const logger = createLogger('Main')
+
+try {
+  await initialize({})
+  logger.info('[Main] vscode services initialized')
+} catch (error) {
+  logger.error('[Main] vscode services init failed:', error)
+}
 
 const pinia = createPinia()
 
@@ -220,3 +230,9 @@ window.addEventListener('beforeunload', async () => {
 
   await cleanupTauriEvents();
 });
+}
+
+bootstrap().catch((error) => {
+  const logger = createLogger('Main')
+  logger.error('[Main] bootstrap failed:', error)
+})

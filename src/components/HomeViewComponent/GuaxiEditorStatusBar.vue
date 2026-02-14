@@ -21,6 +21,19 @@
         @click="handleProblemsClick">
         <span class="status-bar-text">{{ problemsDisplay }}</span>
       </div>
+
+      <n-tooltip trigger="hover">
+        <template #trigger>
+          <div class="status-bar-item lsp-status-item" :class="lspStatusInfo.status === 'ok' ? 'lsp-status-ok' : 'lsp-status-bad'">
+            <n-icon size="14" class="lsp-status-icon">
+              <CheckmarkCircleOutline v-if="lspStatusInfo.status === 'ok'" />
+              <AlertCircleOutline v-else />
+            </n-icon>
+            <span class="status-bar-text">{{ lspStatusInfo.label }}</span>
+          </div>
+        </template>
+        <div class="lsp-status-tooltip">{{ lspStatusInfo.detail }}</div>
+      </n-tooltip>
     </div>
 
     <!-- 右侧状态项 -->
@@ -64,11 +77,13 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import * as monaco from 'monaco-editor'
 import { useEditorStore } from '../../stores/editorStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
-import { NPopover } from 'naive-ui'
+import { NPopover, NTooltip, NIcon } from 'naive-ui'
+import { CheckmarkCircleOutline, AlertCircleOutline } from '@vicons/ionicons5'
+import { getLspConnectionState, onLspConnectionStateChange } from '../../monaco/lspClient'
 
 const logger = createLogger('GuaxiEditorStatusBar')
 const editorStore = useEditorStore()
@@ -103,6 +118,50 @@ const supportedEncodings = [
   'Shift-JIS'
 ]
 
+const lspSupportedLanguages = new Set([
+  'cpp',
+  'c',
+  'rust',
+  'python',
+  'shell',
+  'lua',
+  'java',
+  'javascript',
+  'typescript',
+  'html',
+  'markdown',
+  'latex'
+])
+
+const lspState = ref(getLspConnectionState(editorStore.language))
+
+const refreshLspState = () => {
+  lspState.value = getLspConnectionState(editorStore.language)
+}
+
+let disposeLspStateListener
+onMounted(() => {
+  disposeLspStateListener = onLspConnectionStateChange((payload) => {
+    if (payload.languageId === editorStore.language) {
+      lspState.value = payload
+    }
+  })
+  refreshLspState()
+})
+
+onUnmounted(() => {
+  if (disposeLspStateListener) {
+    disposeLspStateListener()
+  }
+})
+
+watch(
+  () => editorStore.language,
+  () => {
+    refreshLspState()
+  }
+)
+
 // 计算显示内容
 const languageDisplay = computed(() => {
   const lang = supportedLanguages.find(l => l.id === editorStore.language)
@@ -125,6 +184,29 @@ const lineEnding = computed(() => editorStore.lineEnding)
 const indentation = computed(() => editorStore.indentation)
 const selectionStatus = computed(() => editorStore.selectionStatus)
 const problems = computed(() => editorStore.problems)
+
+const lspStatusInfo = computed(() => {
+  const languageId = String(editorStore.language || '').trim().toLowerCase()
+  if (!languageId) {
+    return { status: 'bad', label: 'LSP 异常', detail: '未识别语言' }
+  }
+  if (!lspSupportedLanguages.has(languageId)) {
+    return { status: 'bad', label: 'LSP 异常', detail: '当前语言未启用 LSP' }
+  }
+  const state = lspState.value?.state || 'idle'
+  if (state === 'connected') {
+    return { status: 'ok', label: 'LSP 正常', detail: '前后端通信正常' }
+  }
+  if (state === 'connecting') {
+    return { status: 'bad', label: 'LSP 异常', detail: '正在连接 LSP' }
+  }
+  if (state === 'disabled') {
+    const reason = lspState.value?.reason ? `: ${lspState.value.reason}` : ''
+    return { status: 'bad', label: 'LSP 异常', detail: `LSP 已禁用${reason}` }
+  }
+  const reason = lspState.value?.reason ? `: ${lspState.value.reason}` : ''
+  return { status: 'bad', label: 'LSP 异常', detail: `LSP 未连接${reason}` }
+})
 
 const lineEndingTooltip = computed(() => {
   return `Line endings: ${editorStore.lineEnding}. Click to toggle between LF and CRLF`
@@ -275,6 +357,27 @@ const toggleIndentation = () => {
   text-overflow: ellipsis;
 }
 
+.lsp-status-item {
+  gap: 4px;
+}
+
+.lsp-status-icon {
+  display: flex;
+  align-items: center;
+}
+
+.lsp-status-ok {
+  color: var(--lsp-ok-color);
+}
+
+.lsp-status-bad {
+  color: var(--lsp-bad-color);
+}
+
+.lsp-status-tooltip {
+  max-width: 220px;
+}
+
 /* 问题计数特殊样式 */
 .has-errors {
   color: var(--error-color);
@@ -311,6 +414,8 @@ const toggleIndentation = () => {
   --menuItem-hoverBackground: rgba(255, 255, 255, 0.1);
   --error-color: #ff5555;
   --warning-color: #ffb86c;
+  --lsp-ok-color: #2f855a;
+  --lsp-bad-color: #c53030;
 }
 
 .vs-dark .status-bar,
@@ -322,5 +427,7 @@ const toggleIndentation = () => {
   --menuItem-hoverBackground: rgba(255, 255, 255, 0.1);
   --error-color: #ff5555;
   --warning-color: #ffb86c;
+  --lsp-ok-color: #68d391;
+  --lsp-bad-color: #fc8181;
 }
 </style>

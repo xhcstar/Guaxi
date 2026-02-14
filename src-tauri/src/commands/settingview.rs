@@ -3,6 +3,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::guaxiservices::lsp;
+
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::{engine::general_purpose, Engine as _};
@@ -68,6 +70,8 @@ pub struct AppConfig {
     pub gc_cycle_seconds: u64,
     #[serde(default)]
     lsp_syntax_highlight_enabled: bool,
+    #[serde(default)]
+    lsp_github_token: String,
     #[serde(default)]
     webrtc_signal_url: String,
     #[serde(default)]
@@ -432,6 +436,7 @@ impl Default for AppConfig {
             device_id: Uuid::new_v4().to_string(),
             gc_cycle_seconds: default_gc_cycle_seconds(),
             lsp_syntax_highlight_enabled: false,
+            lsp_github_token: "".to_string(),
             webrtc_signal_url: "".to_string(),
             llm_config: LlmConfig::default(),
         }
@@ -570,6 +575,7 @@ pub fn load_config() -> AppConfig {
         "/llm_config/kimi_api_key",
         "/llm_config/doubao_api_key",
         "/knowledge_bases_remote_token",
+        "/lsp_github_token",
     ] {
         if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
             let t = s.trim();
@@ -652,6 +658,7 @@ pub fn load_config() -> AppConfig {
     try_decrypt("/llm_config/kimi_api_key");
     try_decrypt("/llm_config/doubao_api_key");
     try_decrypt("/knowledge_bases_remote_token");
+    try_decrypt("/lsp_github_token");
 
     let mut config: AppConfig = serde_json::from_value(v).expect("无法解析配置文件");
 
@@ -786,6 +793,7 @@ pub fn save_config(config: &AppConfig) {
     encrypt_field(&mut val, "/llm_config/kimi_api_key");
     encrypt_field(&mut val, "/llm_config/doubao_api_key");
     encrypt_field(&mut val, "/knowledge_bases_remote_token");
+    encrypt_field(&mut val, "/lsp_github_token");
 
     let json = serde_json::to_string_pretty(&val).unwrap();
     fs::write(&config_path, json).expect("无法写入配置文件");
@@ -821,6 +829,36 @@ pub fn set_lsp_syntax_highlight_enabled(enabled: bool) {
     let mut config = load_config();
     config.lsp_syntax_highlight_enabled = enabled;
     save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_lsp_github_token() -> String {
+    let config = load_config();
+    config.lsp_github_token
+}
+
+#[tauri::command]
+pub fn set_lsp_github_token(token: String) {
+    let mut config = load_config();
+    config.lsp_github_token = token.trim().to_string();
+    save_config(&config);
+}
+
+#[tauri::command]
+pub async fn get_lsp_server_statuses() -> Result<Vec<lsp::LspServerStatus>, String> {
+    Ok(lsp::get_lsp_server_statuses().await)
+}
+
+#[tauri::command]
+pub async fn install_lsp_server(language: String) -> Result<lsp::LspServerStatus, String> {
+    let lang = language.trim().to_string();
+    if lang.is_empty() {
+        return Err("language 不能为空".to_string());
+    }
+    let config = load_config();
+    let token = config.lsp_github_token.trim().to_string();
+    let token = if token.is_empty() { None } else { Some(token) };
+    lsp::install_lsp_server(&lang, token).await
 }
 
 #[tauri::command]
