@@ -1,5 +1,6 @@
 <template>
-  <div class="search-navigator">
+  <div class="search-navigator" ref="navigatorRef" tabindex="0" @keydown="handleNavigatorKeydown"
+    @mousedown="focusNavigator" @click="focusNavigator">
     <n-tabs v-model:value="activeTab" type="line" animated>
       <!-- 文件搜索结果标签页 -->
       <n-tab-pane name="files" :tab="filesTab">
@@ -7,11 +8,11 @@
           <n-empty v-if="fileResults.length === 0" description="暂无文件搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
             <div class="scroller">
-              <n-virtual-list :items="keyedFileResults" :item-size="48" :key-field="'_uniqueKey'" class="virtual-list"
-                @scroll="debouncedScroll">
-                <template #default="{ item }">
-                <n-list-item @click="openSearchResult(item)">
-                  <div class="search-result-item">
+              <n-virtual-list ref="fileListRef" :items="keyedFileResults" :item-size="48" :key-field="'_uniqueKey'"
+                class="virtual-list" @scroll="debouncedScroll">
+                <template #default="{ item, index }">
+                <n-list-item @click="handleResultClick(item, index)">
+                  <div class="search-result-item" :class="{ 'is-active': item._uniqueKey === activeResultKey }">
                     <div class="file-name" :title="getFullPath(item)">
                       <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
                       <span class="filename-text">{{ getFileName(item) }}</span>
@@ -51,11 +52,11 @@
           <n-empty v-if="noteResults.length === 0" description="暂无内容搜索结果" style="margin-top: 20px" />
           <n-list v-else hoverable clickable>
             <div class="scroller">
-              <n-virtual-list :items="keyedNoteResults" :item-size="64" :key-field="'_uniqueKey'" class="virtual-list"
-                @scroll="debouncedScroll">
-                <template #default="{ item }">
-                <n-list-item @click="openSearchResult(item)">
-                  <div class="search-result-item">
+              <n-virtual-list ref="noteListRef" :items="keyedNoteResults" :item-size="64" :key-field="'_uniqueKey'"
+                class="virtual-list" @scroll="debouncedScroll">
+                <template #default="{ item, index }">
+                <n-list-item @click="handleResultClick(item, index)">
+                  <div class="search-result-item" :class="{ 'is-active': item._uniqueKey === activeResultKey }">
                     <div class="file-name" :title="getFullPath(item)">
                       <IconifyIcon v-bind="getFileIconPropsWithLog(item.path)" />
                       <span class="filename-text">{{ getFileName(item) }}</span>
@@ -79,7 +80,7 @@
       <!-- 摘录笔记标签页 -->
       <n-tab-pane name="excerpts" :tab="excerptsTab">
         <div class="tab-content-excerpts">
-          <GuaxiNoteExcerpt :excerpt-results="excerptResults" />
+          <GuaxiNoteExcerpt ref="excerptRef" :excerpt-results="excerptResults" />
         </div>
       </n-tab-pane>
     </n-tabs>
@@ -88,7 +89,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { h, defineComponent, reactive, ref, watch, onMounted, computed, onBeforeUnmount } from 'vue';
+import { h, defineComponent, reactive, ref, watch, onMounted, computed, onBeforeUnmount, nextTick } from 'vue';
 import { Icon } from '@iconify/vue';
 import { debounce } from 'lodash-es';
 import {
@@ -137,6 +138,22 @@ const editorStore = useEditorStore();
 const rightSiderStore = useRightSiderStore();
 const activeTab = ref('files');
 const showInvalidItems = ref(false);
+const navigatorRef = ref(null);
+const fileListRef = ref(null);
+const noteListRef = ref(null);
+const excerptRef = ref(null);
+const activeResultIndex = ref(-1);
+const activeResultKey = ref('');
+
+const focusNavigator = (reason = 'focus') => {
+  const el = navigatorRef.value
+  if (!el) return
+
+  nextTick(() => {
+    el.focus?.()
+    logger.debug('[GuaxiSearchNavigator] focus navigator', { reason, tab: activeTab.value })
+  })
+};
 
 const props = defineProps({
   fileResults: {
@@ -501,6 +518,11 @@ const openSearchResult = async (item) => {
   }
 }
 
+const handleResultClick = (item, index) => {
+  setActiveResultIndex(index)
+  openSearchResult(item)
+}
+
 // 更健壮的 keyField 生成函数
 const getKeyField = (item) => {
   // 防御性编程：确保 item 存在
@@ -593,21 +615,17 @@ const generateItemKey = (item, fallbackIndex) => {
       return `null_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     }
 
-    // 使用更可靠的复合键
-    const components = [
-      item._searchType || 'unknown',
-      item.path || '',
-      item.file_name || '',
-      item.line_number || 0,
-      item.excerpt_id || '',
-      fallbackIndex
-    ];
+    const type = item._searchType || 'unknown'
+    const path = String(item.path || '')
+    const fileName = String(item.file_name || '')
+    const line = Number(item.line_number || 0)
+    const excerptId = String(item.excerpt_id || '')
+    const idx = Number.isFinite(fallbackIndex) ? fallbackIndex : 0
 
-    // 创建唯一键
-    const key = components.join('|');
-    const hash = btoa(encodeURIComponent(key)).substr(0, 16);
+    // 直接拼接，保证 index 参与唯一性
+    const key = `${type}|${path}|${fileName}|${line}|${excerptId}|${idx}`
 
-    return `search_${hash}`;
+    return `search_${key}`
   } catch (err) {
     logger.error('[KeyError] Failed to generate key:', err, 'for item:', item);
     return `err_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -638,6 +656,216 @@ const keyedNoteResults = computed(() => {
     }));
 });
 
+const activeResultList = computed(() => {
+  if (activeTab.value === 'files') return keyedFileResults.value
+  if (activeTab.value === 'notes') return keyedNoteResults.value
+  return []
+})
+
+const scrollActiveIntoView = () => {
+  const idx = activeResultIndex.value
+  if (idx < 0) return
+
+  const listRef = activeTab.value === 'files' ? fileListRef.value : noteListRef.value
+  if (!listRef || typeof listRef.scrollTo !== 'function') return
+  listRef.scrollTo({ index: idx })
+}
+
+const setActiveResultIndex = (index) => {
+  const list = activeResultList.value
+  if (!list.length) {
+    activeResultIndex.value = -1
+    activeResultKey.value = ''
+    return
+  }
+
+  const idx = Number(index)
+  if (!Number.isFinite(idx)) return
+
+  const next = Math.max(0, Math.min(list.length - 1, idx))
+  activeResultIndex.value = next
+  activeResultKey.value = list[next]?._uniqueKey || ''
+  logger.debug('[GuaxiSearchNavigator] set active', {
+    index: next,
+    key: activeResultKey.value
+  })
+  scrollActiveIntoView()
+}
+
+const moveActiveResult = (delta) => {
+  const list = activeResultList.value
+  if (!list.length) return
+
+  const cur = activeResultIndex.value
+  if (cur < 0) {
+    const nextIndex = delta >= 0 ? 0 : list.length - 1
+    activeResultIndex.value = nextIndex
+    activeResultKey.value = list[nextIndex]?._uniqueKey || ''
+    logger.debug('[GuaxiSearchNavigator] move active', {
+      index: nextIndex,
+      key: activeResultKey.value
+    })
+    scrollActiveIntoView()
+    return
+  }
+
+  const next = (cur + delta + list.length) % list.length
+  activeResultIndex.value = next
+  activeResultKey.value = list[next]?._uniqueKey || ''
+  logger.debug('[GuaxiSearchNavigator] move active', {
+    index: next,
+    key: activeResultKey.value
+  })
+  scrollActiveIntoView()
+}
+
+const isActiveResult = (index) => activeResultIndex.value === index
+
+// 判断是否在输入框内，避免抢走输入操作
+const isEditableTarget = (target) => {
+  const el = target
+  if (!el) return false
+
+  const tag = (el.tagName || '').toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  if (el.isContentEditable) return true
+  return false
+}
+
+// 仅处理方向键与回车
+const isNavigationKey = (key) => key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter'
+
+const logKeydownSkip = (reason, e) => {
+  logger.debug('[GuaxiSearchNavigator] skip keydown', {
+    reason,
+    key: e?.key,
+    tab: activeTab.value,
+    isOpen: rightSiderStore.isOpen,
+    panel: rightSiderStore.panel
+  })
+}
+
+const handleNavigatorKeydown = (e) => {
+  logger.debug('[GuaxiSearchNavigator] handle keydown', {
+    key: e?.key,
+    tab: activeTab.value,
+    activeIndex: activeResultIndex.value,
+    listSize: activeResultList.value?.length || 0
+  })
+  if (e?.defaultPrevented) {
+    logKeydownSkip('defaultPrevented', e)
+    return
+  }
+
+  if (activeTab.value === 'excerpts') {
+    // 摘录结果使用子组件处理键盘事件
+    excerptRef.value?.handleKeydown?.(e)
+    return
+  }
+
+  if (activeTab.value !== 'files' && activeTab.value !== 'notes') {
+    logKeydownSkip('tab-not-supported', e)
+    return
+  }
+
+  const key = e?.key
+  if (key === 'ArrowDown') {
+    e.preventDefault()
+    moveActiveResult(1)
+    return
+  }
+
+  if (key === 'ArrowUp') {
+    e.preventDefault()
+    moveActiveResult(-1)
+    return
+  }
+
+  if (key === 'Enter') {
+    const list = activeResultList.value
+    if (!list.length) return
+
+    e.preventDefault()
+
+    if (activeResultIndex.value < 0) {
+      setActiveResultIndex(0)
+      const first = list[0]
+      logger.debug('[GuaxiSearchNavigator] enter open', {
+        index: 0,
+        key: first?._uniqueKey
+      })
+      openSearchResult(first)
+      return
+    }
+
+    const item = list[activeResultIndex.value]
+    logger.debug('[GuaxiSearchNavigator] enter open', {
+      index: activeResultIndex.value,
+      key: item?._uniqueKey
+    })
+    if (item) openSearchResult(item)
+  }
+}
+
+// 全局键盘事件转发，保证面板未聚焦也可操作
+const handleGlobalKeydown = (e) => {
+  const key = e?.key
+  if (!isNavigationKey(key)) return
+  if (!rightSiderStore.isOpen) {
+    logKeydownSkip('panel-closed', e)
+    return
+  }
+  if (rightSiderStore.panel && rightSiderStore.panel !== 'search') {
+    logKeydownSkip('panel-not-search', e)
+    return
+  }
+  if (isEditableTarget(e?.target)) {
+    logKeydownSkip('editable-target', e)
+    return
+  }
+
+  logger.debug('[GuaxiSearchNavigator] global keydown', {
+    key,
+    tab: activeTab.value,
+    isOpen: rightSiderStore.isOpen,
+    panel: rightSiderStore.panel
+  })
+
+  handleNavigatorKeydown(e)
+}
+
+const shouldAutoFocus = computed(() => {
+  return rightSiderStore.isOpen && rightSiderStore.panel === 'search'
+})
+
+watch([activeTab, activeResultList], () => {
+  const list = activeResultList.value
+  if (!list.length) {
+    activeResultIndex.value = -1
+    activeResultKey.value = ''
+    return
+  }
+
+  if (activeResultIndex.value < 0 || activeResultIndex.value >= list.length) {
+    activeResultIndex.value = 0
+  }
+
+  activeResultKey.value = list[activeResultIndex.value]?._uniqueKey || ''
+  logger.debug('[GuaxiSearchNavigator] sync active', {
+    index: activeResultIndex.value,
+    key: activeResultKey.value
+  })
+  scrollActiveIntoView()
+
+  if (shouldAutoFocus.value) {
+    focusNavigator('active-tab')
+  }
+})
+
+watch(shouldAutoFocus, (next) => {
+  if (next) focusNavigator('panel-open')
+})
+
 // 确保搜索结果数据有效
 watch(() => props.fileResults, (newVal) => {
   if (newVal.some(item => !item.path)) {
@@ -659,11 +887,17 @@ onMounted(() => {
   } else if (props.excerptResults.length > 0) {
     activeTab.value = 'excerpts';
   }
+
+  // 注册全局键盘监听，保证方向键可用
+  window.addEventListener('keydown', handleGlobalKeydown, true)
+  logger.debug('[GuaxiSearchNavigator] global keydown listener registered', { capture: true })
 });
 
 // 确保组件卸载时取消防抖
 onBeforeUnmount(() => {
   debouncedScroll.cancel();
+  window.removeEventListener('keydown', handleGlobalKeydown, true)
+  logger.debug('[GuaxiSearchNavigator] global keydown listener removed')
 });
 </script>
 
@@ -910,6 +1144,12 @@ onBeforeUnmount(() => {
   margin-top: 5px;
   transition: all 0.2s ease;
   position: relative;
+}
+
+.search-result-item.is-active {
+  background: var(--guaxi-header-bg);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
+    0 2px 12px 0 rgba(7, 118, 161, 0.15);
 }
 
 .n-list-item:hover .search-result-item {

@@ -15,7 +15,7 @@
     <div class="header-center">
       <div ref="searchContainerRef" class="search-container" :class="{ open: isSearchDropdownVisible }">
         <n-input ref="searchInputRef" v-model:value="searchQuery" placeholder="搜索文件或内容..." round clearable
-          @keyup.enter="handleSearchEnter" @focus="showSearchOptions" @blur="handleSearchBlur">
+          @keydown="handleSearchKeydown" @focus="showSearchOptions" @blur="handleSearchBlur">
           <template #prefix>
             <n-icon :component="Search32Filled" />
           </template>
@@ -108,6 +108,7 @@
   <teleport to="body">
     <div
       v-if="isSearchDropdownVisible"
+      ref="searchDropdownRef"
       class="search-dd-root"
       :style="dropdownFloatingStyle"
       @mousedown.prevent
@@ -117,7 +118,8 @@
           v-for="item in typeMenuItems"
           :key="item.key"
           class="search-dd-row search-dd-row-type"
-          :class="{ active: item.key === searchType }"
+          :class="{ active: item.key === searchType, 'is-selected': selectedRowKey === item.key }"
+          :data-row-key="item.key"
           @click="handleSearchSelect(item.key)"
         >
           <span class="search-dd-icon-wrap">
@@ -135,6 +137,7 @@
           :key="`history:${item._historyKey}`"
           class="search-dd-row"
           :class="{ 'is-selected': selectedRowKey === `historyResult:${item._historyKey}` }"
+          :data-row-key="`historyResult:${item._historyKey}`"
           @click="handleSearchSelect(`historyResult:${item._historyKey}`)"
         >
           <div class="search-dd-item">
@@ -169,6 +172,7 @@
               :key="makeResultKey(item)"
               class="search-dd-row"
               :class="{ 'is-selected': selectedRowKey === makeResultKey(item) }"
+              :data-row-key="makeResultKey(item)"
               @click="handleSearchSelect(makeResultKey(item))"
             >
               <div class="search-dd-item">
@@ -190,6 +194,7 @@
               :key="makeResultKey(item)"
               class="search-dd-row"
               :class="{ 'is-selected': selectedRowKey === makeResultKey(item) }"
+              :data-row-key="makeResultKey(item)"
               @click="handleSearchSelect(makeResultKey(item))"
             >
               <div class="search-dd-item">
@@ -214,6 +219,7 @@
               :key="makeResultKey(item)"
               class="search-dd-row"
               :class="{ 'is-selected': selectedRowKey === makeResultKey(item) }"
+              :data-row-key="makeResultKey(item)"
               @click="handleSearchSelect(makeResultKey(item))"
             >
               <div class="search-dd-item">
@@ -275,6 +281,7 @@ const editorStore = useEditorStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
 const searchInputRef = ref(null)
 const searchContainerRef = ref(null)
+const searchDropdownRef = ref(null)
 const searchType = ref('file')
 
 const viewKey = 'home'
@@ -623,55 +630,18 @@ watch(trimmedQuery, (q) => {
   }
 })
 
+const SEARCH_TYPE_KEYS = ['file', 'note', 'excerpt']
+const SEARCH_TYPE_LABELS = {
+  file: '搜索文件',
+  note: '搜索关键字',
+  excerpt: '搜索摘录笔记'
+}
+
 const typeMenuItems = computed(() => ([
   { key: 'file', label: SEARCH_TYPE_LABELS.file, icon: DocumentSearch20Filled },
   { key: 'note', label: SEARCH_TYPE_LABELS.note, icon: DocumentSearch24Regular },
   { key: 'excerpt', label: SEARCH_TYPE_LABELS.excerpt, icon: NotebookSection24Regular }
 ]))
-
-const historyItems = computed(() => getHistorySuggestions(trimmedQuery.value))
-
-const selectedRowKey = ref('')
-const flashSelectRow = async (key) => {
-  selectedRowKey.value = key
-  await new Promise(resolve => setTimeout(resolve, 140))
-  if (selectedRowKey.value === key) selectedRowKey.value = ''
-}
-
-const getItemAbsPath = (item) => {
-  const t = item?._searchType || searchType.value
-  return t === 'excerpt' ? item.file_path : item.path
-}
-
-const getItemRel = (item) => {
-  const t = item?._searchType || searchType.value
-  const absPath = getItemAbsPath(item)
-  const base = t === 'excerpt' ? settingsStore.librariesRoot : fileTreeStore.activeRepoPath
-  return toRelativePath(absPath, base)
-}
-
-const getItemRelDir = (item) => dirnameFromPath(getItemRel(item))
-
-const getItemFilename = (item) => {
-  const t = item?._searchType || searchType.value
-  const absPath = getItemAbsPath(item)
-  const fileName = t === 'excerpt' ? item.file_name : (item.file_name || basename(absPath))
-  const lineSuffix = item.line_number ? `:${item.line_number}` : ''
-  return `${fileName}${lineSuffix}`
-}
-
-const getItemIcon = (item) => getFileIconName(getItemAbsPath(item))
-
-const previewResultsByType = ref({ file: [], note: [], excerpt: [] })
-const previewResults = ref([])
-const previewLoading = ref(false)
-const previewError = ref('')
-const previewHasMore = ref(false)
-
-const previewHasAnyResults = computed(() => {
-  const v = previewResultsByType.value
-  return (v.file?.length || 0) + (v.note?.length || 0) + (v.excerpt?.length || 0) > 0
-})
 
 const basename = (p) => String(p || '').split(/[\\/]/).pop() || ''
 const dirnameFromPath = (p) => {
@@ -687,50 +657,6 @@ const toRelativePath = (absPath, basePath) => {
   if (abs === base) return ''
   if (abs.startsWith(base + '/')) return abs.slice(base.length + 1)
   return abs
-}
-
-const FILE_ICON_MAP = {
-  folder: 'mdi:folder-outline',
-  js: 'vscode-icons:file-type-js-official',
-  ts: 'vscode-icons:file-type-typescript-official',
-  py: 'vscode-icons:file-type-python',
-  java: 'vscode-icons:file-type-java',
-  cpp: 'vscode-icons:file-type-cpp',
-  cc: 'vscode-icons:file-type-cpp',
-  cxx: 'vscode-icons:file-type-cpp',
-  hpp: 'vscode-icons:file-type-cpp-header',
-  hxx: 'vscode-icons:file-type-cpp-header',
-  c: 'vscode-icons:file-type-c',
-  h: 'vscode-icons:file-type-c-header',
-  cs: 'vscode-icons:file-type-csharp',
-  go: 'vscode-icons:file-type-go',
-  rs: 'vscode-icons:file-type-rust',
-  php: 'vscode-icons:file-type-php',
-  sh: 'mdi:bash',
-  md: 'vscode-icons:file-type-markdown',
-  vue: 'vscode-icons:file-type-vue',
-  json: 'vscode-icons:file-type-json',
-  html: 'vscode-icons:file-type-html',
-  css: 'vscode-icons:file-type-css',
-  yaml: 'vscode-icons:file-type-yaml',
-  yml: 'vscode-icons:file-type-yaml',
-  toml: 'vscode-icons:file-type-toml',
-  xml: 'vscode-icons:file-type-xml',
-  default: 'mdi:file-outline'
-}
-
-const getFileIconName = (p) => {
-  const pathStr = String(p || '')
-  if (pathStr.endsWith('/')) return FILE_ICON_MAP.folder
-  const lower = pathStr.toLowerCase()
-  const specialExtMap = {
-    'd.ts': 'ts',
-    'spec.js': 'js',
-    'test.js': 'js'
-  }
-  const specialExt = Object.keys(specialExtMap).find(e => lower.endsWith('.' + e))
-  const ext = specialExt ? specialExtMap[specialExt] : (lower.split('.').pop() || '')
-  return FILE_ICON_MAP[ext] || FILE_ICON_MAP.default
 }
 
 const HISTORY_STORAGE_KEY = 'guaxi.home.searchResultHistory.v1'
@@ -785,6 +711,227 @@ const historyEntryToItem = (entry) => {
   return item
 }
 
+function getHistorySuggestions(input) {
+  const q = String(input || '').trim().toLowerCase()
+  const now = Date.now()
+
+  const scored = searchHistory.value
+    .filter(e => e && e.key)
+    .map(e => {
+      const t = e.type
+      const absPath = t === 'excerpt' ? String(e.file_path || '') : String(e.path || '')
+      const base = t === 'excerpt' ? settingsStore.librariesRoot : fileTreeStore.activeRepoPath
+      const rel = toRelativePath(absPath, base)
+      const hay = `${String(e.file_name || '')} ${rel}`.toLowerCase()
+
+      if (q && !hay.includes(q)) return null
+
+      const hours = Math.floor((now - Number(e.lastUsed || 0)) / 3600000)
+      const recency = Math.max(0, 72 - hours)
+      const freq = Math.min(50, Number(e.count || 0))
+      const score = freq * 10 + recency
+      return { ...e, _score: score }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b._score - a._score)
+
+  const uniq = new Map()
+  for (const e of scored) {
+    if (!uniq.has(e.key)) uniq.set(e.key, e)
+  }
+
+  return Array.from(uniq.values()).slice(0, 6).map(historyEntryToItem)
+}
+
+const historyItems = computed(() => getHistorySuggestions(trimmedQuery.value))
+
+const selectedRowKey = ref('')
+const flashSelectRow = async (key) => {
+  selectedRowKey.value = key
+  await new Promise(resolve => setTimeout(resolve, 140))
+  if (selectedRowKey.value === key) selectedRowKey.value = ''
+}
+
+const dropdownSelectableKeys = computed(() => {
+  const keys = []
+  for (const t of typeMenuItems.value) keys.push(t.key)
+
+  for (const item of historyItems.value) {
+    const key = item?._historyKey ? `historyResult:${item._historyKey}` : ''
+    if (key) keys.push(key)
+  }
+
+  if (!trimmedQuery.value) return keys
+
+  const fileItems = (previewResultsByType.value.file || []).slice(0, 10)
+  const noteItems = (previewResultsByType.value.note || []).slice(0, 10)
+  const excerptItems = (previewResultsByType.value.excerpt || []).slice(0, 10)
+
+  for (const item of fileItems) keys.push(makeResultKey(item))
+  for (const item of noteItems) keys.push(makeResultKey(item))
+  for (const item of excerptItems) keys.push(makeResultKey(item))
+
+  return keys
+})
+
+const normalizeDropdownSelection = () => {
+  if (!isSearchDropdownVisible.value) return
+  const keys = dropdownSelectableKeys.value
+  if (!keys.length) {
+    selectedRowKey.value = ''
+    return
+  }
+  if (!keys.includes(selectedRowKey.value)) selectedRowKey.value = keys[0]
+}
+
+const moveDropdownSelection = (delta) => {
+  const keys = dropdownSelectableKeys.value
+  if (!keys.length) return
+
+  const cur = keys.indexOf(selectedRowKey.value)
+  if (cur < 0) {
+    selectedRowKey.value = delta >= 0 ? keys[0] : keys[keys.length - 1]
+    return
+  }
+
+  const next = (cur + delta + keys.length) % keys.length
+  selectedRowKey.value = keys[next]
+}
+
+const handleSearchKeydown = (e) => {
+  if (e?.isComposing) return
+  if (!isSearchDropdownVisible.value) return
+
+  const key = e?.key
+  if (key === 'ArrowDown') {
+    e.preventDefault()
+    moveDropdownSelection(1)
+    return
+  }
+
+  if (key === 'ArrowUp') {
+    e.preventDefault()
+    moveDropdownSelection(-1)
+    return
+  }
+
+  if (key === 'Enter') {
+    e.preventDefault()
+    if (selectedRowKey.value) {
+      handleSearchSelect(selectedRowKey.value)
+      return
+    }
+    if (trimmedQuery.value) handleSearchEnter()
+  }
+}
+
+const scrollDropdownSelectionIntoView = async () => {
+  if (!isSearchDropdownVisible.value) return
+
+  const key = selectedRowKey.value
+  if (!key) return
+
+  await nextTick()
+
+  const root = searchDropdownRef.value
+  if (!root) return
+
+  // 将当前选中行滚动到可视区域内
+  const rows = Array.from(root.querySelectorAll('[data-row-key]'))
+  const target = rows.find(row => row.getAttribute('data-row-key') === key)
+  if (!target) return
+
+  logger.debug('[GuaxiHeader] scroll dropdown selection', { key })
+  target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
+watch([isSearchDropdownVisible, dropdownSelectableKeys], () => {
+  normalizeDropdownSelection()
+})
+
+watch([selectedRowKey, isSearchDropdownVisible], () => {
+  scrollDropdownSelectionIntoView()
+})
+
+const getItemAbsPath = (item) => {
+  const t = item?._searchType || searchType.value
+  return t === 'excerpt' ? item.file_path : item.path
+}
+
+const getItemRel = (item) => {
+  const t = item?._searchType || searchType.value
+  const absPath = getItemAbsPath(item)
+  const base = t === 'excerpt' ? settingsStore.librariesRoot : fileTreeStore.activeRepoPath
+  return toRelativePath(absPath, base)
+}
+
+const getItemRelDir = (item) => dirnameFromPath(getItemRel(item))
+
+const getItemFilename = (item) => {
+  const t = item?._searchType || searchType.value
+  const absPath = getItemAbsPath(item)
+  const fileName = t === 'excerpt' ? item.file_name : (item.file_name || basename(absPath))
+  const lineSuffix = item.line_number ? `:${item.line_number}` : ''
+  return `${fileName}${lineSuffix}`
+}
+
+const getItemIcon = (item) => getFileIconName(getItemAbsPath(item))
+
+const previewResultsByType = ref({ file: [], note: [], excerpt: [] })
+const previewResults = ref([])
+const previewLoading = ref(false)
+const previewError = ref('')
+const previewHasMore = ref(false)
+
+const previewHasAnyResults = computed(() => {
+  const v = previewResultsByType.value
+  return (v.file?.length || 0) + (v.note?.length || 0) + (v.excerpt?.length || 0) > 0
+})
+
+const FILE_ICON_MAP = {
+  folder: 'mdi:folder-outline',
+  js: 'vscode-icons:file-type-js-official',
+  ts: 'vscode-icons:file-type-typescript-official',
+  py: 'vscode-icons:file-type-python',
+  java: 'vscode-icons:file-type-java',
+  cpp: 'vscode-icons:file-type-cpp',
+  cc: 'vscode-icons:file-type-cpp',
+  cxx: 'vscode-icons:file-type-cpp',
+  hpp: 'vscode-icons:file-type-cpp-header',
+  hxx: 'vscode-icons:file-type-cpp-header',
+  c: 'vscode-icons:file-type-c',
+  h: 'vscode-icons:file-type-c-header',
+  cs: 'vscode-icons:file-type-csharp',
+  go: 'vscode-icons:file-type-go',
+  rs: 'vscode-icons:file-type-rust',
+  php: 'vscode-icons:file-type-php',
+  sh: 'mdi:bash',
+  md: 'vscode-icons:file-type-markdown',
+  vue: 'vscode-icons:file-type-vue',
+  json: 'vscode-icons:file-type-json',
+  html: 'vscode-icons:file-type-html',
+  css: 'vscode-icons:file-type-css',
+  yaml: 'vscode-icons:file-type-yaml',
+  yml: 'vscode-icons:file-type-yaml',
+  toml: 'vscode-icons:file-type-toml',
+  xml: 'vscode-icons:file-type-xml',
+  default: 'mdi:file-outline'
+}
+
+const getFileIconName = (p) => {
+  const pathStr = String(p || '')
+  if (pathStr.endsWith('/')) return FILE_ICON_MAP.folder
+  const lower = pathStr.toLowerCase()
+  const specialExtMap = {
+    'd.ts': 'ts',
+    'spec.js': 'js',
+    'test.js': 'js'
+  }
+  const specialExt = Object.keys(specialExtMap).find(e => lower.endsWith('.' + e))
+  const ext = specialExt ? specialExtMap[specialExt] : (lower.split('.').pop() || '')
+  return FILE_ICON_MAP[ext] || FILE_ICON_MAP.default
+}
+
 const recordSearchHistoryResult = (item, query) => {
   const t = item?._searchType || searchType.value
   if (!SEARCH_TYPE_KEYS.includes(t)) return
@@ -837,38 +984,6 @@ const recordSearchHistoryResult = (item, query) => {
   persistSearchHistory()
 }
 
-const getHistorySuggestions = (input) => {
-  const q = String(input || '').trim().toLowerCase()
-  const now = Date.now()
-
-  const scored = searchHistory.value
-    .filter(e => e && e.key)
-    .map(e => {
-      const t = e.type
-      const absPath = t === 'excerpt' ? String(e.file_path || '') : String(e.path || '')
-      const base = t === 'excerpt' ? settingsStore.librariesRoot : fileTreeStore.activeRepoPath
-      const rel = toRelativePath(absPath, base)
-      const hay = `${String(e.file_name || '')} ${rel}`.toLowerCase()
-
-      if (q && !hay.includes(q)) return null
-
-      const hours = Math.floor((now - Number(e.lastUsed || 0)) / 3600000)
-      const recency = Math.max(0, 72 - hours)
-      const freq = Math.min(50, Number(e.count || 0))
-      const score = freq * 10 + recency
-      return { ...e, _score: score }
-    })
-    .filter(Boolean)
-    .sort((a, b) => b._score - a._score)
-
-  const uniq = new Map()
-  for (const e of scored) {
-    if (!uniq.has(e.key)) uniq.set(e.key, e)
-  }
-
-  return Array.from(uniq.values()).slice(0, 6).map(historyEntryToItem)
-}
-
 const normalizeSearchResults = (rawResults, type) => {
   if (!Array.isArray(rawResults)) return []
 
@@ -911,13 +1026,6 @@ const normalizeSearchResults = (rawResults, type) => {
   }
 
   return []
-}
-
-const SEARCH_TYPE_KEYS = ['file', 'note', 'excerpt']
-const SEARCH_TYPE_LABELS = {
-  file: '搜索文件',
-  note: '搜索关键字',
-  excerpt: '搜索摘录笔记'
 }
 
 const makeResultKey = (item) => {

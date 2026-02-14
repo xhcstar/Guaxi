@@ -5,10 +5,11 @@
         <n-text depth="3">尝试不同的搜索词</n-text>
       </template>
     </n-empty>
-    <n-scrollbar v-else class="excerpt-scrollbar">
+    <n-scrollbar v-else ref="scrollbarRef" class="excerpt-scrollbar">
       <n-list hoverable clickable>
-        <n-list-item v-for="item in excerptResults" :key="item.file_path" :data-key="item.file_path" @click="toggleFileExpand(item)">
-        <div class="excerpt-result-item">
+        <n-list-item v-for="(item, index) in excerptResults" :key="item.file_path" :data-key="item.file_path"
+          :data-index="index" @click="toggleFileExpand(item)">
+        <div class="excerpt-result-item" :class="{ 'is-active': activeExcerptIndex === index }">
           <div class="file-name" :title="item.file_path">
             <n-icon :component="item.expanded ? ChevronDown : ChevronRight" size="12" @click.stop="toggleFileExpand(item)"
               class="expand-icon" />
@@ -67,7 +68,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { h, defineComponent, ref, watch } from 'vue';
+import { h, defineComponent, ref, watch, nextTick } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -126,6 +127,8 @@ const rightSiderStore = useRightSiderStore();
 const siderStore = useSiderStore();
 const settingsStore = useSettingsStore()
 const renderedContents = ref({});
+const scrollbarRef = ref(null);
+const activeExcerptIndex = ref(-1);
 
 const props = defineProps({
   excerptResults: {
@@ -493,6 +496,95 @@ const insertCardItem = async (cardItem, parentFilePath) => {
   }
 };
 
+// 滚动激活项到可视区域
+const scrollActiveIntoView = async () => {
+  const idx = activeExcerptIndex.value
+  if (idx < 0) return
+
+  await nextTick()
+
+  const scrollbar = scrollbarRef.value
+  const root = scrollbar?.containerRef?.value
+    || scrollbar?.contentRef?.value
+    || scrollbar?.$el
+
+  if (!root || typeof root.querySelector !== 'function') return
+
+  const target = root.querySelector(`[data-index="${idx}"]`)
+  if (!target) return
+
+  logger.debug('[GuaxiNoteExcerpt] scroll active excerpt', { index: idx })
+  target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
+// 设置激活索引并滚动
+const setActiveExcerptIndex = (index) => {
+  const list = excerptResults.value
+  if (!list.length) {
+    activeExcerptIndex.value = -1
+    return
+  }
+
+  const next = Math.max(0, Math.min(list.length - 1, Number(index)))
+  activeExcerptIndex.value = Number.isFinite(next) ? next : 0
+  scrollActiveIntoView()
+}
+
+// 方向键移动激活项
+const moveActiveExcerpt = (delta) => {
+  const list = excerptResults.value
+  if (!list.length) return
+
+  const cur = activeExcerptIndex.value
+  if (cur < 0) {
+    activeExcerptIndex.value = delta >= 0 ? 0 : list.length - 1
+    scrollActiveIntoView()
+    return
+  }
+
+  const next = (cur + delta + list.length) % list.length
+  activeExcerptIndex.value = next
+  scrollActiveIntoView()
+}
+
+// 回车触发当前激活项
+const activateActiveExcerpt = async () => {
+  const list = excerptResults.value
+  if (!list.length) return
+
+  const idx = activeExcerptIndex.value < 0 ? 0 : activeExcerptIndex.value
+  const item = list[idx]
+  if (!item) return
+
+  logger.debug('[GuaxiNoteExcerpt] activate excerpt', { index: idx, path: item.file_path })
+  await toggleFileExpand(item)
+}
+
+// 对外暴露键盘处理
+const handleKeydown = (e) => {
+  if (e?.defaultPrevented) return
+
+  const key = e?.key
+  if (key === 'ArrowDown') {
+    e.preventDefault()
+    moveActiveExcerpt(1)
+    return
+  }
+
+  if (key === 'ArrowUp') {
+    e.preventDefault()
+    moveActiveExcerpt(-1)
+    return
+  }
+
+  if (key === 'Enter') {
+    e.preventDefault()
+    activateActiveExcerpt()
+  }
+}
+
+defineExpose({ handleKeydown })
+
 // 监听搜索结果变化
 watch(() => props.excerptResults, (newVal) => {
   excerptResults.value = newVal.map(item => ({
@@ -506,6 +598,11 @@ watch(() => props.excerptResults, (newVal) => {
     if (siderStore.isRightSiderCollapsed['home']) {
       siderStore.toggleRightSider('home');
     }
+    // 初始化选中项
+    activeExcerptIndex.value = 0
+    scrollActiveIntoView()
+  } else {
+    activeExcerptIndex.value = -1
   }
 }, { immediate: true });
 </script>
@@ -590,9 +687,12 @@ watch(() => props.excerptResults, (newVal) => {
   box-shadow: none;
   padding: 8px;
   margin-bottom: 2px;
-  margin-left: 0;
-  transition: all 0.2s ease;
-  position: relative;
+}
+
+.excerpt-result-item.is-active {
+  background: var(--guaxi-header-bg);
+  box-shadow: 0 0 0 3px rgba(33, 189, 236, 0.3),
+    0 2px 12px 0 rgba(7, 118, 161, 0.15);
 }
 
 /* 增强的悬停效果 */
