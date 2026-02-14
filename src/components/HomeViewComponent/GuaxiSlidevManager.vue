@@ -371,7 +371,7 @@
                       </template>
                     </n-button>
                   </template>
-                  预览
+                  浏览器预览
                 </n-tooltip>
 
                 <n-tooltip trigger="hover">
@@ -453,7 +453,7 @@
           <div v-show="activeEditorPath && showPreview" class="preview-pane">
             <div v-if="previewLoading" class="preview-loading">正在启动 Slidev 预览...</div>
             <div v-else-if="!previewUrl" class="preview-empty">
-              <n-button size="small" @click="previewSlidev">启动预览</n-button>
+              <n-button size="small" @click="startPreviewInApp">启动预览</n-button>
             </div>
             <iframe v-else class="preview-iframe" :src="previewUrl" />
           </div>
@@ -1712,6 +1712,17 @@ const parsePort = () => {
   return Math.floor(n)
 }
 
+const startPreviewInApp = async () => {
+  const { path } = getActivePathAndContent()
+  if (!path) {
+    message.warning('请先打开 slides.md（或任意 Slidev 源文件）')
+    return
+  }
+
+  logger.info('[Slidev] start preview in app', { path })
+  await ensurePreview()
+}
+
 const previewSlidev = async () => {
   const { path } = getActivePathAndContent()
   if (!path) {
@@ -1719,7 +1730,25 @@ const previewSlidev = async () => {
     return
   }
 
-  await setPreviewMode('preview')
+  const traceId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+  logger.info('[Slidev] open preview in browser', { traceId, path })
+
+  await ensurePreview()
+  const url = String(previewUrl.value || '')
+  if (!url) {
+    message.error('未获取到预览地址')
+    logger.warn('[Slidev] open preview aborted: url empty', { traceId })
+    return
+  }
+
+  try {
+    logger.info('[Slidev] openUrl start', { traceId, url })
+    await openUrl(url)
+    logger.info('[Slidev] openUrl done', { traceId, url })
+  } catch (err) {
+    logger.error('[Slidev] openUrl failed', { traceId, url, err })
+    message.error('打开浏览器失败')
+  }
 }
 
 const presentSlidev = async () => {
