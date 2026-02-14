@@ -5,13 +5,17 @@
         <n-breadcrumb separator="›">
           <n-breadcrumb-item v-for="it in breadcrumbItems" :key="it.key">
             <span class="breadcrumb-item" :class="{ disabled: !!it.disabled }" :title="it.title"
-              @click.stop="handleBreadcrumbClick(it)">
+              @click.stop="openBreadcrumbPicker(it, $event)">
               <Icon v-if="it.icon" class="breadcrumb-icon" :icon="it.icon" width="14" height="14" />
               <span class="breadcrumb-label">{{ it.label }}</span>
             </span>
           </n-breadcrumb-item>
         </n-breadcrumb>
       </div>
+
+      <n-dropdown v-model:show="breadcrumbPickerVisible" trigger="manual" placement="bottom-start"
+        :x="breadcrumbPickerPosition.x" :y="breadcrumbPickerPosition.y" :options="breadcrumbPickerOptions"
+        @select="handleBreadcrumbPickerSelect" @clickoutside="closeBreadcrumbPicker" />
     </div>
 
     <div class="host-wrap" ref="hostRef">
@@ -171,7 +175,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, nextTick, h } from 'vue'
 import * as monaco from 'monaco-editor'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
@@ -183,6 +187,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createLogger } from '../../utils/logger'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useOutlineStore } from '../../stores/outlineStore'
+import { useSlidevEditorStore } from '../../stores/slidevEditorStore'
 import { NDropdown, NButton, NTooltip, NBreadcrumb, NBreadcrumbItem, useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import GuaxiOutline from './GuaxiOutline.vue'
@@ -211,6 +216,7 @@ const MAX_EDITABLE_CHARS = 800_000
 const logger = createLogger('GuaxiSlidevLiteEditor')
 const settingsStore = useSettingsStore()
 const outlineStore = useOutlineStore()
+const slidevEditorStore = useSlidevEditorStore()
 const message = useMessage()
 const appWindow = getCurrentWindow()
 
@@ -218,6 +224,7 @@ const props = defineProps({
   activePath: { type: String, default: '' },
   content: { type: String, default: '' },
   unsupported: { type: Boolean, default: false },
+  slidevRoot: { type: String, default: '' },
 })
 
 const emit = defineEmits(['draft-flush', 'save-request'])
@@ -418,6 +425,11 @@ const outlineVisible = ref(false)
 const breadcrumbScrollRef = ref(null)
 const breadcrumbBarRef = ref(null)
 
+const breadcrumbPickerVisible = ref(false)
+const breadcrumbPickerOptions = ref([])
+const breadcrumbPickerPosition = ref({ x: 0, y: 0 })
+const breadcrumbPickerPayloadByKey = ref(new Map())
+
 const editorContextMenuVisible = ref(false)
 const editorContextMenuPosition = ref({ x: 0, y: 0 })
 const editorContextMenuOptions = ref([])
@@ -538,27 +550,75 @@ const buildHeadingBreadcrumbItems = (outlineFlat, lineNumber) => {
   }))
 }
 
+const buildOutlineTreeWithParents = (flatOutline) => {
+  const stack = []
+  const root = []
+  const byKey = new Map()
+
+  const arr = Array.isArray(flatOutline) ? flatOutline : []
+  arr.forEach((item, idx) => {
+    const level = Number(item?.level || 0)
+    const text = String(item?.text || '').trim()
+    const line = Number(item?.line || 0)
+    if (!text || !Number.isFinite(level) || level <= 0 || !Number.isFinite(line) || line <= 0) return
+
+    const key = `heading:${line}:${level}:${text}`
+    const node = { key, level, text, line, parent: null, children: [], _idx: idx }
+
+    while (stack.length && stack[stack.length - 1].level >= node.level) stack.pop()
+
+    if (stack.length === 0) {
+      root.push(node)
+    } else {
+      node.parent = stack[stack.length - 1]
+      node.parent.children.push(node)
+    }
+
+    stack.push(node)
+    byKey.set(key, node)
+  })
+
+  return { root, byKey }
+}
+
 const buildBreadcrumbItems = (absPath) => {
   const target = normalizeSlashes(absPath)
   if (!target) {
     return [{ key: 'placeholder', label: '未打开文件', title: '未打开文件', icon: fileTextIcon, kind: 'placeholder', disabled: true }]
   }
 
-  const parts = target.split('/').filter(Boolean)
-  const items = []
-  let cursorPath = target.startsWith('/') ? '' : ''
+  const root = normalizeSlashes(props.slidevRoot || '')
+  const rootMatched = !!root && (target === root || target.startsWith(`${root}/`))
+  const relPath = rootMatched ? target.slice(root.length).replace(/^\/+/, '') : target
 
+  const parts = relPath.split('/').filter(Boolean)
+  const items = []
+
+  if (rootMatched) {
+    const rootLabel = root.split('/').pop() || root
+    items.push({
+      key: `root:${root}`,
+      label: rootLabel,
+      title: root,
+      icon: folderIcon,
+      kind: 'dir',
+      path: root
+    })
+  }
+
+  let cursorRel = ''
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i]
-    cursorPath = cursorPath ? `${cursorPath}/${part}` : part
+    cursorRel = cursorRel ? `${cursorRel}/${part}` : part
+    const cursorAbs = rootMatched ? `${root}/${cursorRel}` : cursorRel
     const isLast = i === parts.length - 1
     items.push({
-      key: `path:${cursorPath}`,
+      key: `path:${cursorAbs}`,
       label: part,
-      title: cursorPath,
+      title: cursorAbs,
       icon: isLast ? fileTextIcon : folderIcon,
       kind: isLast ? 'file' : 'dir',
-      path: cursorPath
+      path: cursorAbs
     })
   }
 
@@ -585,16 +645,180 @@ const handleBreadcrumbClick = async (it) => {
   const path = it?.path ? String(it.path) : ''
   if (!path) return
 
-  const target = it.kind === 'dir' ? path : normalizeSlashes(path.split('/').slice(0, -1).join('/'))
-  if (!target) return
-
-  try {
-    await invoke('open_in_file_explorer', { path: target })
-    logger.info('[Breadcrumb] open in explorer', { path: target })
-  } catch (e) {
-    logger.error('[Breadcrumb] open in explorer failed', e)
-    message.error('打开目录失败')
+  if (it.kind === 'file') {
+    try {
+      await slidevEditorStore.openFileInTab(path)
+      logger.info('[Breadcrumb] open file', { path })
+    } catch (e) {
+      logger.error('[Breadcrumb] open file failed', e)
+      message.error('打开文件失败')
+    }
+    return
   }
+
+  logger.info('[Breadcrumb] dir selected', { path, label: it.label })
+}
+
+const closeBreadcrumbPicker = () => {
+  breadcrumbPickerVisible.value = false
+  breadcrumbPickerOptions.value = []
+  breadcrumbPickerPayloadByKey.value = new Map()
+}
+
+const normalizeBreadcrumbPath = (path) => {
+  const raw = normalizeSlashes(path)
+  if (!raw) return ''
+  if (raw.match(/^[a-zA-Z]:\//)) return raw[0].toUpperCase() + raw.slice(1)
+  return raw
+}
+
+const isHiddenName = (name) => {
+  const s = String(name || '').trim()
+  return !s || s.startsWith('.')
+}
+
+const isHiddenPathForBreadcrumb = (path) => {
+  const p = normalizeBreadcrumbPath(path)
+  if (!p) return false
+  return p.split('/').some((part) => String(part || '').startsWith('.'))
+}
+
+const makeBreadcrumbPickerOption = (payload, isActive) => {
+  const key = payload.key
+  return {
+    key,
+    label: () => h('div', { class: ['breadcrumb-picker-item', isActive ? 'active' : ''] }, [
+      payload.icon ? h(Icon, { icon: payload.icon, width: 14, height: 14, class: 'breadcrumb-picker-icon' }) : null,
+      h('span', { class: 'breadcrumb-picker-label', title: payload.title || payload.label }, payload.label),
+    ])
+  }
+}
+
+const openBreadcrumbPicker = async (it, ev) => {
+  if (!it || it.disabled) return
+
+  const x = Number(ev?.clientX || 0)
+  const y = Number(ev?.clientY || 0)
+  breadcrumbPickerPosition.value = { x, y }
+
+  const payloadByKey = new Map()
+  let payloads = []
+
+  if (it.kind === 'heading') {
+    const tree = buildOutlineTreeWithParents(safeOutlineFlat.value)
+    const node = tree.byKey.get(String(it.key || ''))
+    const siblings = node?.parent ? node.parent.children : tree.root
+
+    payloads = (siblings || []).map((n) => ({
+      key: `H:${n.key}`,
+      label: n.text,
+      title: `Ln ${n.line}: ${n.text}`,
+      icon: hashIcon,
+      kind: 'heading',
+      line: n.line,
+    }))
+  } else {
+    const target = normalizeBreadcrumbPath(it.path)
+    if (!target) return
+
+    const root = normalizeBreadcrumbPath(props.slidevRoot || '')
+    const isInRoot = root ? (target === root || target.startsWith(`${root}/`)) : true
+    if (!isInRoot) {
+      logger.warn('[BreadcrumbPicker] target out of root', { target, root })
+      return
+    }
+
+    const parentDir = it.kind === 'file'
+      ? normalizeSlashes(target.split('/').slice(0, -1).join('/'))
+      : target
+    const dirPath = normalizeBreadcrumbPath(parentDir)
+    if (!dirPath) return
+
+    try {
+      const raw = await invoke('get_file_tree', { path: dirPath })
+      const list = Array.isArray(raw) ? raw : []
+      payloads = list
+        .map((n) => {
+          const path = normalizeBreadcrumbPath(n?.id)
+          const name = String(n?.name || '').trim()
+          if (!path || !name) return null
+          if (isHiddenName(name) || name.toLowerCase() === 'node_modules') return null
+          if (root && !(path === root || path.startsWith(`${root}/`))) return null
+          if (isHiddenPathForBreadcrumb(path)) return null
+
+          const isDir = !!n?.is_directory
+          return {
+            key: `P:${path}`,
+            label: name,
+            title: path,
+            icon: isDir ? folderIcon : fileTextIcon,
+            kind: isDir ? 'dir' : 'file',
+            path,
+            isFile: !isDir
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), 'zh-CN'))
+    } catch (e) {
+      logger.error('[BreadcrumbPicker] load failed', e)
+      message.error('加载目录失败')
+    }
+
+    if (!payloads.length) {
+      const fallbackLabel = it.label || target.split('/').pop() || target
+      payloads = [{
+        key: `P:${target}`,
+        label: fallbackLabel,
+        title: target,
+        icon: it.icon || (it.kind === 'file' ? fileTextIcon : folderIcon),
+        kind: it.kind === 'file' ? 'file' : 'dir',
+        path: target,
+        isFile: it.kind === 'file'
+      }]
+    }
+  }
+
+  for (const p of payloads) payloadByKey.set(p.key, p)
+
+  breadcrumbPickerPayloadByKey.value = payloadByKey
+  breadcrumbPickerOptions.value = payloads.map((p) => {
+    const isActive = it.kind === 'heading'
+      ? String(it.key || '') === String(p.key || '').replace(/^H:/, '')
+      : normalizeBreadcrumbPath(it.path) === normalizeBreadcrumbPath(p.path)
+
+    return makeBreadcrumbPickerOption(p, isActive)
+  })
+
+  breadcrumbPickerVisible.value = true
+  logger.info('[BreadcrumbPicker] opened', { kind: it.kind, key: it.key, count: payloads.length })
+}
+
+const handleBreadcrumbPickerSelect = async (key) => {
+  const payload = breadcrumbPickerPayloadByKey.value?.get?.(key)
+  closeBreadcrumbPicker()
+  if (!payload) return
+
+  if (payload.kind === 'heading') {
+    logger.info('[BreadcrumbPicker] select heading', { line: payload.line, label: payload.label })
+    handleBreadcrumbClick({ kind: 'heading', line: payload.line, label: payload.label })
+    return
+  }
+
+  const path = payload.path
+  if (!path) return
+
+  if (payload.isFile) {
+    try {
+      await slidevEditorStore.openFileInTab(path)
+      logger.info('[BreadcrumbPicker] open file', { path })
+    } catch (e) {
+      logger.error('[BreadcrumbPicker] open file failed', e)
+      message.error('打开文件失败')
+    }
+    return
+  }
+
+  logger.info('[BreadcrumbPicker] dir selected', { path })
 }
 
 const handleBreadcrumbWheel = (e) => {
@@ -2497,6 +2721,30 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .breadcrumb-item:hover {
   background: rgba(255, 255, 255, 0.1);
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
+.breadcrumb-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  max-width: 280px;
+}
+
+.breadcrumb-picker-icon {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.breadcrumb-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb-picker-item.active .breadcrumb-picker-label {
+  color: var(--n-color-primary, #18a058);
+  font-weight: 600;
 }
 
 .floating-md-toolbar {

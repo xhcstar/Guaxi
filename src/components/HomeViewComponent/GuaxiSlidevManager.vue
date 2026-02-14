@@ -447,7 +447,7 @@
           <div v-if="!activeEditorPath" class="editor-empty">请选择一个 PPT 源文件以开始编辑</div>
           <div v-show="activeEditorPath && showEditor" class="editor-pane">
             <GuaxiSlidevLiteEditor ref="pptEditorRef" :active-path="activeEditorPath" :content="activeEditorContent"
-              :unsupported="activeEditorUnsupported" @draft-flush="onEditorDraftFlush"
+              :unsupported="activeEditorUnsupported" :slidev-root="slidevRoot" @draft-flush="onEditorDraftFlush"
               @save-request="onEditorSaveRequest" />
           </div>
           <div v-show="activeEditorPath && showPreview" class="preview-pane">
@@ -696,10 +696,10 @@ const previewModeIcon = computed(() => {
   return filePenLineIcon
 })
 
-const handlePreviewModeSelect = async (key) => {
+const handlePreviewModeSelect = (key) => {
   const mode = String(key || '')
   if (!mode) return
-  await setPreviewMode(mode)
+  setPreviewMode(mode)
 }
 
 const headingOptions = [
@@ -955,10 +955,15 @@ const onTabBarWheel = (e) => {
   el.scrollLeft += e.deltaY
 }
 
-const setPreviewMode = async (mode) => {
+const setPreviewMode = (mode) => {
   previewMode.value = mode
   logger.info('[Slidev] preview mode', { mode })
-  if (mode !== 'edit') await ensurePreview()
+  if (mode === 'edit') return
+
+  window.setTimeout(() => {
+    if (previewMode.value === 'edit') return
+    void ensurePreview()
+  }, 0)
 }
 
 const ensurePreview = async () => {
