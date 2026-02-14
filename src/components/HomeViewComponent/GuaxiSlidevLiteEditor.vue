@@ -2457,8 +2457,10 @@ onUnmounted(() => {
   vertical-align: bottom;
   cursor: pointer;
   user-select: none;
-  padding: 0 4px;
-  border-radius: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: transparent;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .breadcrumb-item.disabled {
@@ -2481,11 +2483,20 @@ onUnmounted(() => {
 .breadcrumb-item:hover {
   color: var(--n-color-primary, #18a058);
   background: rgba(127, 127, 127, 0.12);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
 }
 
 .breadcrumb-item.disabled:hover {
   color: inherit;
   background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+:global(:root[data-guaxi-theme='dark']) .breadcrumb-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
 }
 
 .floating-md-toolbar {

@@ -258,15 +258,38 @@ const onActionClick = (item) => {
   gap: 8px;
   cursor: pointer;
   user-select: none;
-  padding: 4px 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .row:hover {
-  background: rgba(128, 128, 128, 0.08);
+  background: rgba(127, 127, 127, 0.12);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
 }
 
 .row.selected {
-  background: rgba(24, 144, 255, 0.16);
+  background: rgba(24, 144, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(24, 144, 255, 0.22);
+}
+
+.row.selected:hover {
+  background: rgba(24, 144, 255, 0.24);
+}
+
+:global(:root[data-guaxi-theme='dark']) .row:hover {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
+:global(:root[data-guaxi-theme='dark']) .row.selected {
+  background: rgba(74, 163, 255, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(74, 163, 255, 0.35);
+}
+
+:global(:root[data-guaxi-theme='dark']) .row.selected:hover {
+  background: rgba(74, 163, 255, 0.28);
 }
 
 .twisty {

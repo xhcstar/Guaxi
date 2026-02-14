@@ -6,27 +6,14 @@ import {
   WebSocketMessageReader,
   WebSocketMessageWriter,
 } from 'vscode-ws-jsonrpc'
-import { MonacoVscodeApiWrapper } from 'monaco-languageclient/vscodeApiWrapper'
-import type { MonacoVscodeApiConfig } from 'monaco-languageclient/vscode'
-
-let currentClient: MonacoLanguageClient | null = null
-let apiWrapper: MonacoVscodeApiWrapper | null = null
-let apiStarted: Promise<void> | null = null
-
-function ensureVscodeApiStarted() {
-  if (!apiWrapper) {
-    const config: MonacoVscodeApiConfig = {
-      $type: 'classic',
-      viewsConfig: { $type: 'EditorService' },
-      logLevel: 0,
-    }
-    apiWrapper = new MonacoVscodeApiWrapper(config)
-  }
-  if (!apiStarted) {
-    apiStarted = apiWrapper.start({ caller: 'GuaxiLsp' })
-  }
-  return apiStarted
+type LspClientEntry = {
+  client: MonacoLanguageClient | null
+  webSocket: WebSocket
+  disposed: boolean
 }
+const lspClients = new Map<string, LspClientEntry>()
+const lspRetryBlockedUntil = new Map<string, number>()
+const LSP_RETRY_BACKOFF_MS = 15000
 
 export function initLspClient(
   editor: monaco.editor.IStandaloneCodeEditor,
@@ -53,42 +40,119 @@ export function initLspClient(
     return
   }
 
+  if (lspClients.has(languageId)) {
+    return
+  }
+  const blockedUntil = lspRetryBlockedUntil.get(languageId) || 0
+  if (Date.now() < blockedUntil) {
+    return
+  }
+
   const protocol =
     window.location.protocol === 'https:' ? 'wss' : 'ws'
   const host = '127.0.0.1:8888'
   const url = `${protocol}://${host}/lsp/${languageId}`
 
-  ensureVscodeApiStarted().then(() => {
-    const webSocket = new WebSocket(url)
+  const webSocket = new WebSocket(url)
+  const entry: LspClientEntry = {
+    client: null,
+    webSocket,
+    disposed: false,
+  }
+  lspClients.set(languageId, entry)
 
-    webSocket.onopen = () => {
-      const socket = toSocket(webSocket)
-      const reader = new WebSocketMessageReader(socket)
-      const writer = new WebSocketMessageWriter(socket)
+  const cleanup = (reason: string) => {
+    const cur = lspClients.get(languageId)
+    if (!cur || cur.disposed) return
+    cur.disposed = true
 
-      const messageTransports: MessageTransports = { reader, writer }
-
-      const client = new MonacoLanguageClient({
-        name: `${languageId} Language Client`,
-        clientOptions: {
-          documentSelector: [languageId],
-          initializationOptions: {
-            workspaceFolders: [],
-            filePath,
-          },
-        },
-        messageTransports,
-      })
-
-      currentClient = client
-      client.start()
-    }
-
-    webSocket.onclose = () => {
-      if (currentClient) {
-        currentClient.stop()
-        currentClient = null
+    if (cur.client) {
+      try {
+        const r = cur.client.stop()
+        if (r && typeof (r as Promise<void>).catch === 'function') {
+          ; (r as Promise<void>).catch(() => { })
+        }
+      } catch {
       }
     }
+
+    try {
+      if (cur.webSocket.readyState === WebSocket.OPEN || cur.webSocket.readyState === WebSocket.CONNECTING) {
+        cur.webSocket.close()
+      }
+    } catch {
+    }
+
+    lspClients.delete(languageId)
+    if (reason !== 'manual-dispose') {
+      lspRetryBlockedUntil.set(languageId, Date.now() + LSP_RETRY_BACKOFF_MS)
+    }
+  }
+
+  webSocket.onopen = () => {
+    const socket = toSocket(webSocket)
+    const reader = new WebSocketMessageReader(socket)
+    const writer = new WebSocketMessageWriter(socket)
+
+    const messageTransports: MessageTransports = { reader, writer }
+
+    const client = new MonacoLanguageClient({
+      name: `${languageId} Language Client`,
+      clientOptions: {
+        documentSelector: [{ language: languageId }],
+        initializationOptions: {
+          workspaceFolders: [],
+          filePath,
+        },
+      },
+      messageTransports,
+    })
+
+    const cur = lspClients.get(languageId)
+    if (!cur || cur.disposed) {
+      try {
+        webSocket.close()
+      } catch {
+      }
+      return
+    }
+    cur.client = client
+
+    const startPromise = client.start()
+    if (startPromise && typeof (startPromise as Promise<void>).catch === 'function') {
+      ; (startPromise as Promise<void>).catch(() => {
+        cleanup('start-failed')
+      })
+    }
+  }
+
+  webSocket.onclose = () => {
+    cleanup('socket-close')
+  }
+
+  webSocket.onerror = () => {
+    cleanup('socket-error')
+  }
+}
+
+export function disposeAllLspClients() {
+  lspClients.forEach((entry, languageId) => {
+    entry.disposed = true
+    try {
+      if (entry.client) {
+        const r = entry.client.stop()
+        if (r && typeof (r as Promise<void>).catch === 'function') {
+          ; (r as Promise<void>).catch(() => { })
+        }
+      }
+    } catch {
+    }
+    try {
+      if (entry.webSocket.readyState === WebSocket.OPEN || entry.webSocket.readyState === WebSocket.CONNECTING) {
+        entry.webSocket.close()
+      }
+    } catch {
+    }
+    lspClients.delete(languageId)
   })
 }

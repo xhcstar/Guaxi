@@ -31,11 +31,27 @@ fn resolve_lsp_binary(name: &str) -> String {
     #[cfg(not(target_os = "windows"))]
     let file_name = name.to_string();
 
-    base_dir
-        .join("lsp")
-        .join(file_name)
-        .to_string_lossy()
-        .into_owned()
+    let mut candidates = vec![
+        base_dir.join("lsp").join(&file_name),
+        base_dir.join("utils").join("lsp").join(&file_name),
+    ];
+
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(
+            std::path::PathBuf::from(manifest_dir)
+                .join("utils")
+                .join("lsp")
+                .join(&file_name),
+        );
+    }
+
+    for p in candidates {
+        if p.exists() {
+            return p.to_string_lossy().into_owned();
+        }
+    }
+
+    file_name
 }
 
 fn lsp_command_for_language(language: &str) -> Option<LspCommandConfig> {
@@ -125,13 +141,37 @@ impl Actor for LspWsSession {
                             let addr_clone = addr.clone();
                             actix::spawn(async move {
                                 let mut buf = vec![0u8; 8192];
+                                let mut pending = Vec::<u8>::new();
                                 loop {
                                     match stdout.read(&mut buf).await {
                                         Ok(0) => break,
                                         Ok(n) => {
-                                            let data =
-                                                String::from_utf8_lossy(&buf[..n]).to_string();
-                                            addr_clone.do_send(LspStdoutMessage { data });
+                                            pending.extend_from_slice(&buf[..n]);
+
+                                            loop {
+                                                let Some((header_end, content_len)) =
+                                                    parse_lsp_frame_header(&pending)
+                                                else {
+                                                    break;
+                                                };
+
+                                                let frame_end = header_end + content_len;
+                                                if pending.len() < frame_end {
+                                                    break;
+                                                }
+
+                                                let payload =
+                                                    pending[header_end..frame_end].to_vec();
+                                                pending.drain(0..frame_end);
+
+                                                if let Ok(data) = String::from_utf8(payload) {
+                                                    addr_clone.do_send(LspStdoutMessage { data });
+                                                }
+                                            }
+
+                                            if pending.len() > 1024 * 1024 {
+                                                pending.clear();
+                                            }
                                         }
                                         Err(_) => break,
                                     }
@@ -223,11 +263,13 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LspWsSession {
         match msg {
             Ok(ws::Message::Text(text)) => {
                 if let Some(stdin_arc) = &self.child_stdin {
-                    let data = text.into_bytes();
+                    let payload = text.into_bytes();
                     let stdin_clone = stdin_arc.clone();
                     actix::spawn(async move {
                         let mut guard = stdin_clone.lock().await;
-                        let _ = guard.write_all(&data).await;
+                        let header = format!("Content-Length: {}\r\n\r\n", payload.len());
+                        let _ = guard.write_all(header.as_bytes()).await;
+                        let _ = guard.write_all(&payload).await;
                         let _ = guard.flush().await;
                     });
                 }
@@ -252,4 +294,23 @@ pub async fn lsp_ws_route(
     let language = path.into_inner().0;
     let session = LspWsSession::new(language);
     ws::start(session, &req, stream)
+}
+
+fn parse_lsp_frame_header(bytes: &[u8]) -> Option<(usize, usize)> {
+    let sep = bytes.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let header_end = sep + 4;
+    let header = std::str::from_utf8(&bytes[..sep]).ok()?;
+
+    let mut content_len = None;
+    for line in header.split("\r\n") {
+        let lower = line.to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix("content-length:") {
+            if let Ok(v) = rest.trim().parse::<usize>() {
+                content_len = Some(v);
+                break;
+            }
+        }
+    }
+
+    content_len.map(|len| (header_end, len))
 }

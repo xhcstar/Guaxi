@@ -2420,7 +2420,8 @@ onMounted(async () => {
 .editor-header {
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid var(--n-border-color);
+  border-bottom: 1px solid var(--guaxi-border);
+  background: var(--guaxi-header-bg);
 }
 
 .tab-bar {
@@ -2441,13 +2442,51 @@ onMounted(async () => {
   border-radius: 6px;
   cursor: pointer;
   background: rgba(128, 128, 128, 0.08);
-  color: var(--n-text-color);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: var(--guaxi-text-primary);
   user-select: none;
   flex: 0 0 auto;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.tab-item:hover {
+  background: rgba(127, 127, 127, 0.12);
+  border-color: rgba(0, 0, 0, 0.14);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
 }
 
 .tab-item.active {
   background: rgba(24, 144, 255, 0.18);
+  border-color: rgba(24, 144, 255, 0.35);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.tab-item.active:hover {
+  background: rgba(24, 144, 255, 0.22);
+  border-color: rgba(24, 144, 255, 0.45);
+}
+
+:global(:root[data-guaxi-theme='dark']) .tab-item {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+:global(:root[data-guaxi-theme='dark']) .tab-item:hover {
+  background: rgba(74, 163, 255, 0.18);
+  border-color: rgba(74, 163, 255, 0.3);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
+:global(:root[data-guaxi-theme='dark']) .tab-item.active {
+  background: rgba(24, 144, 255, 0.28);
+  border-color: rgba(74, 163, 255, 0.45);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+}
+
+:global(:root[data-guaxi-theme='dark']) .tab-item.active:hover {
+  background: rgba(24, 144, 255, 0.32);
+  border-color: rgba(74, 163, 255, 0.55);
 }
 
 .tab-title {
@@ -2472,6 +2511,7 @@ onMounted(async () => {
 
 .tab-close {
   opacity: 0.7;
+  transition: opacity 0.15s ease, color 0.15s ease;
 }
 
 .tab-item:hover .tab-close {

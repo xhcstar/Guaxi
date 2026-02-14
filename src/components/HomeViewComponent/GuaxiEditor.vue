@@ -501,7 +501,7 @@ import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
 import { initTextmate } from '../../monaco/textmateLoader'
-import { initLspClient } from '../../monaco/lspClient'
+import { initLspClient, disposeAllLspClients } from '../../monaco/lspClient'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -3715,8 +3715,148 @@ const registerMarkdownLanguageFeatures = () => {
     return inDisplay || inDollar || inParen || inBracket;
   };
 
+  const getMarkdownFenceContext = (model, position) => {
+    if (!model || !position) return null;
+    if (model.getLanguageId?.() !== 'markdown') return null;
+
+    let inFence = false;
+    let fenceToken = '';
+    let fenceLang = '';
+    let fenceStartLine = 0;
+
+    for (let ln = 1; ln <= position.lineNumber; ln += 1) {
+      const line = model.getLineContent(ln);
+      const hit = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+      if (!hit) continue;
+
+      const token = hit[1];
+      if (!inFence) {
+        inFence = true;
+        fenceToken = token;
+        fenceStartLine = ln;
+        fenceLang = String(hit[2] || '').trim();
+      } else if (token[0] === fenceToken[0] && token.length >= fenceToken.length) {
+        inFence = false;
+        fenceToken = '';
+        fenceLang = '';
+        fenceStartLine = 0;
+      }
+    }
+
+    if (!inFence || position.lineNumber <= fenceStartLine) return null;
+    const languageId = resolveFenceLanguageId(fenceLang);
+    if (!languageId) return null;
+    if (!LSP_SUPPORTED_LANGUAGES.has(languageId)) return null;
+
+    let fenceEndLine = model.getLineCount() + 1;
+    for (let ln = position.lineNumber + 1; ln <= model.getLineCount(); ln += 1) {
+      const line = model.getLineContent(ln);
+      const hit = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (hit && hit[1][0] === fenceToken[0] && hit[1].length >= fenceToken.length) {
+        fenceEndLine = ln;
+        break;
+      }
+    }
+
+    const blockStartLine = fenceStartLine + 1;
+    const blockEndLine = Math.max(blockStartLine, fenceEndLine - 1);
+    const blockLines = [];
+    for (let ln = blockStartLine; ln <= blockEndLine; ln += 1) {
+      blockLines.push(model.getLineContent(ln));
+    }
+
+    return {
+      languageId,
+      blockText: blockLines.join('\n'),
+      positionInBlock: new monaco.Position(
+        Math.max(1, position.lineNumber - blockStartLine + 1),
+        Math.max(1, position.column)
+      ),
+    };
+  };
+
+  const getOrCreateMarkdownFenceModel = (languageId) => {
+    const key = String(languageId || '').trim().toLowerCase();
+    if (!key) return null;
+
+    let model = markdownFenceCompletionModels.get(key);
+    if (model && !model.isDisposed?.()) {
+      if (model.getLanguageId?.() !== key) {
+        monaco.editor.setModelLanguage(model, key);
+      }
+      return model;
+    }
+
+    const uri = monaco.Uri.parse(`inmemory://guaxi/markdown-fence-${key}.tmp`);
+    model = monaco.editor.getModel(uri) || monaco.editor.createModel('', key, uri);
+    markdownFenceCompletionModels.set(key, model);
+    return model;
+  };
+
+  const provideMarkdownFenceLspSuggestions = async (model, position) => {
+    const ctx = getMarkdownFenceContext(model, position);
+    if (!ctx) return [];
+
+    initLspClient(editor, ctx.languageId, selectedFile.value?.path || '');
+
+    const virtualModel = getOrCreateMarkdownFenceModel(ctx.languageId);
+    if (!virtualModel) return [];
+    virtualModel.setValue(ctx.blockText || '');
+
+    const providers = (monaco.languages).CompletionProviderRegistry?.all?.(virtualModel) || [];
+    if (!providers.length) return [];
+
+    const wordInfo = model.getWordUntilPosition(position);
+    const replaceRange = new monaco.Range(
+      position.lineNumber,
+      wordInfo?.startColumn || position.column,
+      position.lineNumber,
+      wordInfo?.endColumn || position.column
+    );
+
+    const fallbackToken = {
+      isCancellationRequested: false,
+      onCancellationRequested: () => ({ dispose() { } })
+    };
+
+    const suggestions = [];
+    const seen = new Set();
+    for (const provider of providers) {
+      if (!provider?.provideCompletionItems) continue;
+      try {
+        const result = await provider.provideCompletionItems(
+          virtualModel,
+          ctx.positionInBlock,
+          { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
+          fallbackToken
+        );
+        const items = Array.isArray(result?.suggestions) ? result.suggestions : [];
+        for (const item of items) {
+          const label = typeof item?.label === 'string'
+            ? item.label
+            : String(item?.label?.label || '');
+          const insertText = String(item?.insertText || item?.textEdit?.text || '');
+          const dedupeKey = `${label}::${insertText}`;
+          if (!label || seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+
+          suggestions.push({
+            ...item,
+            insertText,
+            range: replaceRange,
+            textEdit: undefined,
+            additionalTextEdits: undefined,
+          });
+        }
+      } catch {
+      }
+    }
+
+    return suggestions;
+  };
+
   monaco.languages.registerCompletionItemProvider('markdown', {
-    provideCompletionItems(model, position) {
+    async provideCompletionItems(model, position) {
       const lineContent = model.getLineContent(position.lineNumber);
       const beforeCursor = lineContent.slice(0, position.column - 1);
 
@@ -3731,6 +3871,11 @@ const registerMarkdownLanguageFeatures = () => {
             token.startsWith('~') ||
             /^[a-zA-Z]:/.test(token)));
       if (inPathLike) return { suggestions: [] };
+
+      const fenceLspSuggestions = await provideMarkdownFenceLspSuggestions(model, position);
+      if (fenceLspSuggestions.length) {
+        return { suggestions: fenceLspSuggestions };
+      }
 
       const wordInfo = model.getWordUntilPosition(position);
       const word = wordInfo?.word || '';
@@ -3834,6 +3979,112 @@ const tabRegionLeftRef = ref(null)
 const tabRegionRightRef = ref(null)
 
 const languagePairingConfigured = new Set()
+const lspEnabled = ref(false)
+const markdownFenceCompletionModels = new Map()
+
+const EXT_TO_LANGUAGE = {
+  js: 'javascript',
+  ts: 'typescript',
+  css: 'css',
+  html: 'html',
+  htm: 'html',
+  md: 'markdown',
+  py: 'python',
+  cpp: 'cpp',
+  c: 'cpp',
+  h: 'cpp',
+  hpp: 'cpp',
+  rs: 'rust',
+  sh: 'shell',
+  jsx: 'javascript',
+  tsx: 'javascript',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  lua: 'lua',
+  java: 'java',
+  toml: 'ini',
+}
+
+const MARKDOWN_FENCE_LANG_MAP = {
+  js: 'javascript',
+  javascript: 'javascript',
+  jsx: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  py: 'python',
+  python: 'python',
+  c: 'c',
+  cpp: 'cpp',
+  cxx: 'cpp',
+  cc: 'cpp',
+  h: 'cpp',
+  hpp: 'cpp',
+  rs: 'rust',
+  rust: 'rust',
+  sh: 'shell',
+  shell: 'shell',
+  bash: 'shell',
+  zsh: 'shell',
+  html: 'html',
+  css: 'css',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  lua: 'lua',
+  java: 'java',
+  tex: 'latex',
+  latex: 'latex',
+}
+
+const LSP_SUPPORTED_LANGUAGES = new Set([
+  'cpp',
+  'c',
+  'rust',
+  'python',
+  'shell',
+  'lua',
+  'java',
+  'javascript',
+  'html',
+  'markdown',
+  'latex',
+])
+
+const resolveMonacoLanguageByPath = (path) => {
+  const ext = String(path || '').split('.').pop()?.toLowerCase() || 'markdown'
+  return EXT_TO_LANGUAGE[ext] || 'markdown'
+}
+
+const resolveFenceLanguageId = (infoRaw) => {
+  const info = String(infoRaw || '').trim().toLowerCase()
+  if (!info) return ''
+  const langToken = info.split(/\s+/)[0] || ''
+  return MARKDOWN_FENCE_LANG_MAP[langToken] || ''
+}
+
+const refreshLspEnabledSetting = async () => {
+  try {
+    const enabled = await invoke('get_lsp_syntax_highlight_enabled')
+    lspEnabled.value = !!enabled
+  } catch (error) {
+    logger.error('加载 LSP 配置失败:', error)
+    lspEnabled.value = false
+  }
+}
+
+const enableLspForEditorLanguage = (targetEditor, languageId, filePath = '') => {
+  if (!targetEditor || !lspEnabled.value) return
+  const lang = String(languageId || '').trim().toLowerCase()
+  if (!lang) return
+
+  initTextmate(targetEditor, lang).catch((e) => {
+    logger.warn('[Editor] initTextmate failed, ignored', { language: lang }, e)
+  })
+
+  if (!LSP_SUPPORTED_LANGUAGES.has(lang)) return
+  initLspClient(targetEditor, lang, filePath || '')
+}
 
 const ensureLanguagePairingConfig = (languageId) => {
   const id = languageId || 'plaintext'
@@ -3901,31 +4152,7 @@ const initEditor = () => {
   }
 
   // 获取文件扩展名并确定语言
-  const fileExt = selectedFile.value?.path?.split('.').pop() || 'markdown';
-  const languageMap = {
-    'js': 'javascript',
-    'ts': 'typescript',
-    'css': 'css',
-    'html': 'html',
-    'htm': 'html',
-    'md': 'markdown',
-    'py': 'python',
-    'cpp': 'cpp',
-    'c': 'cpp',
-    'h': 'cpp',
-    'hpp': 'cpp',
-    'rs': 'rust',
-    'sh': 'shell',
-    'jsx': 'javascript',
-    'tsx': 'javascript',
-    'json': 'json',
-    'yaml': 'yaml',
-    'yml': 'yaml',
-    'lua': 'lua',
-    'java': 'java',
-    'toml': 'ini',
-  };
-  const language = languageMap[fileExt] || 'markdown';
+  const language = resolveMonacoLanguageByPath(selectedFile.value?.path || '');
 
   ensureLanguagePairingConfig(language)
 
@@ -4164,19 +4391,9 @@ const initEditor = () => {
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
 
-  invoke('get_lsp_syntax_highlight_enabled')
-    .then((result) => {
-      const enableLspSyntaxHighlight = !!result
-      if (enableLspSyntaxHighlight) {
-        initTextmate(editor, language).catch((e) => {
-          logger.warn('[Editor] initTextmate failed, ignored', { language }, e)
-        })
-        initLspClient(editor, language, selectedFile.value?.path || '');
-      }
-    })
-    .catch((error) => {
-      logger.error('加载 LSP 语法高亮配置失败:', error)
-    });
+  void refreshLspEnabledSetting().then(() => {
+    enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '')
+  })
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
@@ -4401,31 +4618,7 @@ const ensureSecondaryEditor = () => {
   const rightPath = fileTreeStore.activeTabRight;
   const rightTab = rightPath ? fileTreeStore.openTabs.find((t) => t.path === rightPath) : null;
 
-  const fileExt = rightPath?.split('.').pop() || 'markdown';
-  const languageMap = {
-    'js': 'javascript',
-    'ts': 'typescript',
-    'css': 'css',
-    'html': 'html',
-    'htm': 'html',
-    'md': 'markdown',
-    'py': 'python',
-    'cpp': 'cpp',
-    'c': 'cpp',
-    'h': 'cpp',
-    'hpp': 'cpp',
-    'rs': 'rust',
-    'sh': 'shell',
-    'jsx': 'javascript',
-    'tsx': 'javascript',
-    'json': 'json',
-    'yaml': 'yaml',
-    'yml': 'yaml',
-    'lua': 'lua',
-    'java': 'java',
-    'toml': 'ini',
-  };
-  const language = languageMap[fileExt] || 'markdown';
+  const language = resolveMonacoLanguageByPath(rightPath || '');
 
   const baseOptions = editor?.getRawOptions ? editor.getRawOptions() : {};
 
@@ -4446,6 +4639,8 @@ const ensureSecondaryEditor = () => {
     },
     automaticLayout: true,
   });
+
+  enableLspForEditorLanguage(secondaryEditor, language, rightPath || '');
 
   if (editorEffectsRight) {
     editorEffectsRight.destroy();
@@ -4471,6 +4666,11 @@ const ensureSecondaryEditor = () => {
   secondaryEditor.onDidType((text) => {
     editorEffectsRight?.spawnExplosionAtCursor(text);
     editorEffectsRight?.updateCursorTarget();
+  });
+
+  secondaryEditor.onDidChangeModelLanguage(() => {
+    const languageId = secondaryEditor?.getModel?.()?.getLanguageId?.() || 'plaintext';
+    enableLspForEditorLanguage(secondaryEditor, languageId, rightPath || '');
   });
 
   if (secondaryMonacoCtrlClickDisposable) {
@@ -4914,6 +5114,7 @@ const setupEditorListeners = () => {
   editor.onDidChangeModelLanguage(() => {
     const language = editor.getModel()?.getLanguageId() || 'plaintext';
     editorStore.setLanguage(language);
+    enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '');
     updateTableToolbar();
   });
 
@@ -7931,32 +8132,7 @@ watch(selectedFile, async (newFile) => {
 
     lastSelectedFilePath.value = nextPath;
 
-    const fileExt = newFile.path?.split('.').pop() || 'markdown';
-    const languageMap = {
-      'js': 'javascript',
-      'ts': 'typescript',
-      'css': 'css',
-      'html': 'html',
-      'htm': 'html',
-      'md': 'markdown',
-      'py': 'python',
-      'cpp': 'cpp',
-      'c': 'cpp',
-      'h': 'cpp',
-      'hpp': 'cpp',
-      'rs': 'rust',
-      'sh': 'shell',
-      'jsx': 'javascript',
-      'tsx': 'javascript',
-      'json': 'json',
-      'yaml': 'yaml',
-      'yml': 'yaml',
-      'lua': 'lua',
-      'java': 'java',
-      'toml': 'ini',
-    };
-
-    const language = languageMap[fileExt] || 'markdown';
+    const language = resolveMonacoLanguageByPath(newFile.path || '');
 
     // 更新内容
     rawContent.value = newFile.content || '';
@@ -7983,6 +8159,7 @@ watch(selectedFile, async (newFile) => {
       if (model) {
         monaco.editor.setModelLanguage(model, language);
       }
+      enableLspForEditorLanguage(targetEditor, language, newFile.path || '');
     }
 
     if (!selectedFile.value || !mode.value) {
@@ -8882,12 +9059,35 @@ watch([() => fileTreeStore.activeTab, activeTabContent], ([tabPath, content]) =>
   generateOutlineDebounced(content)
 }, { immediate: true })
 
+const handleLspSettingChanged = (evt) => {
+  const enabled = !!evt?.detail?.enabled
+  lspEnabled.value = enabled
+
+  if (!enabled) {
+    disposeAllLspClients()
+    return
+  }
+
+  const mainModel = editor?.getModel?.()
+  if (mainModel) {
+    enableLspForEditorLanguage(editor, mainModel.getLanguageId?.() || 'plaintext', selectedFile.value?.path || '')
+  }
+
+  const rightPath = fileTreeStore.activeTabRight || ''
+  const rightModel = secondaryEditor?.getModel?.()
+  if (rightModel) {
+    enableLspForEditorLanguage(secondaryEditor, rightModel.getLanguageId?.() || 'plaintext', rightPath)
+  }
+}
+
 
 // 生命周期
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   outlineStore.setJumpToLine(jumpToLine)
   initGitService()
+  void refreshLspEnabledSetting()
 
   restoreHomePreviewMode('mounted')
 
@@ -8903,6 +9103,7 @@ onActivated(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
+  window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   destroyRealtimeVditor();
 
   if (monacoCtrlClickDisposable) {
@@ -8964,6 +9165,15 @@ onUnmounted(() => {
   if (vimModeInstance) {
     vimModeInstance.dispose();
   }
+
+  markdownFenceCompletionModels.forEach((m) => {
+    try {
+      m.dispose?.()
+    } catch {
+    }
+  })
+  markdownFenceCompletionModels.clear()
+  disposeAllLspClients()
 });
 
 </script>
@@ -9771,11 +9981,43 @@ onUnmounted(() => {
   background-color: var(--dark-hover-color, #333);
 }
 
+.dark .tab-bar {
+  background: var(--dark-toolbar-bg, #1e1e1e);
+  border-bottom-color: var(--dark-divider-color, #333);
+}
+
+.dark .tab-region-right {
+  border-left-color: var(--dark-divider-color, #333);
+}
+
+.dark .tab-item {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark .tab-item:hover {
+  background: rgba(74, 163, 255, 0.18);
+  border-color: rgba(74, 163, 255, 0.3);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+  transform: translateY(-1px);
+}
+
+.dark .tab-item.active {
+  background: rgba(24, 144, 255, 0.28);
+  border-color: rgba(74, 163, 255, 0.45);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+}
+
+.dark .tab-item.active:hover {
+  background: rgba(24, 144, 255, 0.32);
+  border-color: rgba(74, 163, 255, 0.55);
+}
+
 .tab-bar {
   display: flex;
-  height: 35px;
-  min-height: 35px;
-  flex: 0 0 35px;
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 38px;
   flex-shrink: 0;
   align-items: center;
   background: var(--guaxi-header-bg);
@@ -9790,6 +10032,8 @@ onUnmounted(() => {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+  padding: 4px 8px;
+  gap: 6px;
 }
 
 .tab-region-right {
@@ -9814,14 +10058,17 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
-  padding: 0 10px;
-  border-right: 1px solid #ddd;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
   flex-shrink: 0;
   color: var(--guaxi-text-primary);
+  background: rgba(128, 128, 128, 0.08);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .tab-title {
@@ -9840,7 +10087,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .tab-close {
@@ -9878,13 +10125,22 @@ onUnmounted(() => {
 }
 
 .tab-item.active {
-  background: var(--guaxi-panel-bg);
-  border-bottom: 2px solid var(--primary-color, #18a058);
+  background: rgba(24, 144, 255, 0.18);
+  border-color: rgba(24, 144, 255, 0.35);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
   color: var(--guaxi-text-primary);
 }
 
 .tab-item:hover {
-  background: rgba(74, 163, 255, 0.08);
+  background: rgba(127, 127, 127, 0.12);
+  border-color: rgba(0, 0, 0, 0.14);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+}
+
+.tab-item.active:hover {
+  background: rgba(24, 144, 255, 0.22);
+  border-color: rgba(24, 144, 255, 0.45);
 }
 
 /* Git 行变更装饰器样式 */

@@ -211,6 +211,11 @@ const handleLspHighlightChange = async (value) => {
   try {
     loading.value = true
     await invoke('set_lsp_syntax_highlight_enabled', { enabled: value })
+    window.dispatchEvent(
+      new CustomEvent('guaxi:lsp-setting-changed', {
+        detail: { enabled: !!value }
+      })
+    )
   } catch (error) {
     logger.error('更新 LSP 语法高亮配置失败:', error)
   } finally {

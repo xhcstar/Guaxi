@@ -118,11 +118,6 @@ export async function initTextmate(
 ) {
   const lang = String(languageId || '').trim().toLowerCase()
 
-  if (lang === 'markdown' || lang === 'shell') {
-    console.info('[TextMate] skipped', { languageId: lang })
-    return
-  }
-
   const scopeName = languageScopeMap.get(lang)
   if (!scopeName) {
     return
