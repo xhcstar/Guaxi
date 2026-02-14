@@ -1,7 +1,7 @@
 import * as monaco from 'monaco-editor'
 import { Registry, IGrammarDefinition } from 'monaco-textmate'
 import { wireTmGrammars } from 'monaco-editor-textmate'
-import { loadWASM } from 'onigasm'
+import { loadWASM, OnigScanner } from 'onigasm'
 // Vite: 把 wasm 当资源 url 引入
 // 如果路径报错，可以改为 'onigasm/lib/onigasm.wasm?url'
 import onigWasmUrl from 'onigasm/lib/onigasm.wasm?url'
@@ -82,6 +82,48 @@ function createEmptyGrammarDefinition(scopeName: string): IGrammarDefinition {
 
 let registry: Registry | null = null
 let onigReady: Promise<void> | null = null
+let onigSupportChecked = false
+let textmateDisabled = false
+let textmateDisableLogged = false
+const missingGrammarLogged = new Set<string>()
+const suppressedMissingGrammars = new Set<string>([
+  'source.asm',
+  'source.arm',
+  'source.x86',
+  'source.x86_64',
+  'source.cpp.embedded.macro',
+  'source.regexp.python',
+  'source.glsl',
+  'source.sql',
+  'source.css',
+  'source.ini',
+  'source.makefile',
+  'source.perl',
+  'source.r',
+  'source.ruby',
+  'source.php',
+  'source.asp.vb.net',
+  'text.xml',
+  'text.xml.xsl',
+  'source.yaml',
+  'source.batchfile',
+  'source.clojure',
+  'source.coffee',
+  'source.diff',
+  'source.dockerfile'
+])
+
+function checkOnigSupport() {
+  if (onigSupportChecked) return
+  onigSupportChecked = true
+  try {
+    const scanner = new OnigScanner(['(?<=a)b'])
+    scanner.findNextMatchSync('ab', 0)
+  } catch (error) {
+    textmateDisabled = true
+    console.warn('[TextMate] disabled due to onigasm lookbehind unsupported', error)
+  }
+}
 
 async function ensureOnigReady() {
   if (!onigReady) {
@@ -89,6 +131,7 @@ async function ensureOnigReady() {
       const wasmResponse = await fetch(onigWasmUrl)
       const wasmArrayBuffer = await wasmResponse.arrayBuffer()
       await loadWASM(wasmArrayBuffer)
+      checkOnigSupport()
     })()
   }
   return onigReady
@@ -101,7 +144,10 @@ async function ensureRegistry() {
       getGrammarDefinition: async (scopeName: string) => {
         const loader = grammarDefinitions[scopeName]
         if (!loader) {
-          console.warn('[TextMate] 未找到 scopeName 对应的 grammar:', scopeName)
+          if (!suppressedMissingGrammars.has(scopeName) && !missingGrammarLogged.has(scopeName)) {
+            missingGrammarLogged.add(scopeName)
+            console.warn('[TextMate] 未找到 scopeName 对应的 grammar:', scopeName)
+          }
           return createEmptyGrammarDefinition(scopeName)
         }
         return loader()
@@ -125,7 +171,14 @@ export async function initTextmate(
 
   const registry = await ensureRegistry()
 
-  // 所有开启 TextMate 的语言
+  if (textmateDisabled) {
+    if (!textmateDisableLogged) {
+      textmateDisableLogged = true
+      console.warn('[TextMate] disabled, fallback to Monaco default')
+    }
+    return
+  }
+
   const grammars = new Map<string, string>()
   for (const [k, scope] of languageScopeMap.entries()) {
     grammars.set(k, scope)

@@ -6,6 +6,7 @@ import {
   WebSocketMessageReader,
   WebSocketMessageWriter,
 } from 'vscode-ws-jsonrpc'
+import { createLogger } from '../utils/logger'
 type LspClientEntry = {
   client: MonacoLanguageClient | null
   webSocket: WebSocket
@@ -14,6 +15,30 @@ type LspClientEntry = {
 const lspClients = new Map<string, LspClientEntry>()
 const lspRetryBlockedUntil = new Map<string, number>()
 const LSP_RETRY_BACKOFF_MS = 15000
+const logger = createLogger('lspClient')
+const lspDisabled = new Set<string>()
+const lspDisabledReason = new Map<string, string>()
+const LSP_VSCODE_API_NOT_READY = 'Default api is not ready yet'
+
+const resolveErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message
+  return String(error || '')
+}
+
+const shouldDisableLsp = (error: unknown) => {
+  const message = resolveErrorMessage(error)
+  return message.includes(LSP_VSCODE_API_NOT_READY)
+}
+
+const disableLsp = (languageId: string, reason: string, error?: unknown) => {
+  if (!lspDisabled.has(languageId)) {
+    lspDisabled.add(languageId)
+  }
+  if (!lspDisabledReason.has(languageId)) {
+    lspDisabledReason.set(languageId, reason)
+    logger.warn('[LSP] disabled', { languageId, reason, error })
+  }
+}
 
 export function initLspClient(
   editor: monaco.editor.IStandaloneCodeEditor,
@@ -40,6 +65,9 @@ export function initLspClient(
     return
   }
 
+  if (lspDisabled.has(languageId)) {
+    return
+  }
   if (lspClients.has(languageId)) {
     return
   }
@@ -96,17 +124,28 @@ export function initLspClient(
 
     const messageTransports: MessageTransports = { reader, writer }
 
-    const client = new MonacoLanguageClient({
-      name: `${languageId} Language Client`,
-      clientOptions: {
-        documentSelector: [{ language: languageId }],
-        initializationOptions: {
-          workspaceFolders: [],
-          filePath,
+    let client: MonacoLanguageClient
+    try {
+      client = new MonacoLanguageClient({
+        name: `${languageId} Language Client`,
+        clientOptions: {
+          documentSelector: [{ language: languageId }],
+          initializationOptions: {
+            workspaceFolders: [],
+            filePath,
+          },
         },
-      },
-      messageTransports,
-    })
+        messageTransports,
+      })
+    } catch (error) {
+      if (shouldDisableLsp(error)) {
+        disableLsp(languageId, 'vscode-api-not-ready', error)
+      } else {
+        logger.warn('[LSP] client init failed', { languageId, error })
+      }
+      cleanup('client-init-failed')
+      return
+    }
 
     const cur = lspClients.get(languageId)
     if (!cur || cur.disposed) {
@@ -120,7 +159,12 @@ export function initLspClient(
 
     const startPromise = client.start()
     if (startPromise && typeof (startPromise as Promise<void>).catch === 'function') {
-      ; (startPromise as Promise<void>).catch(() => {
+      ; (startPromise as Promise<void>).catch((error) => {
+        if (shouldDisableLsp(error)) {
+          disableLsp(languageId, 'vscode-api-not-ready', error)
+        } else {
+          logger.warn('[LSP] client start failed', { languageId, error })
+        }
         cleanup('start-failed')
       })
     }
