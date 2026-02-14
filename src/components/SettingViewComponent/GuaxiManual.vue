@@ -482,7 +482,23 @@
               <div class="icon-row">
                 <div class="icon-inline"><n-icon :component="Box20Regular" /></div>
                 <div class="icon-name">模板管理</div>
-                <div class="icon-desc">打开模板管理器窗口。</div>
+                <div class="icon-desc">打开模板管理器窗口，用于管理常用模板。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                      <path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5zm2 0v8.5h12V5H6zm-1 14a1 1 0 0 1 1-1h4v-1h4v1h4a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1z" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">PPT 制作与管理</div>
+                <div class="icon-desc">打开 PPT 管理器，进行演示文稿创建与管理。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="Folder20Regular" /></div>
+                <div class="icon-name">知识库资源管理</div>
+                <div class="icon-desc">打开资源库管理器，查看资源目录与同步状态。</div>
               </div>
               <div class="icon-row">
                 <div class="icon-inline"><n-icon :component="Screenshot24Regular" /></div>
@@ -519,6 +535,22 @@
                 <div class="icon-desc">展开/收起右侧边栏。</div>
               </div>
             </div>
+
+            <div class="manual-subtitle">左侧文件树工具条</div>
+            <ul class="manual-ul">
+              <li>浏览器预览：点击地球图标打开知识库浏览器预览入口。</li>
+              <li>Git 操作：打开 Git 操作窗口，执行提交、拉取与推送等操作。</li>
+              <li>刷新所有目录：重新加载知识库目录树。</li>
+              <li>知识库管理器：打开知识库管理器窗口进行管理。</li>
+            </ul>
+
+            <div class="manual-subtitle">右侧面板：搜索导航</div>
+            <ul class="manual-ul">
+              <li>入口：在顶部搜索框回车执行搜索后，右侧会自动打开“搜索导航”面板。</li>
+              <li>标签页：文件搜索结果 / 内容搜索结果 / 摘录，会随当前搜索类型自动切换。</li>
+              <li>结果信息：展示文件名、行号与预览片段；命中内容会高亮显示。</li>
+              <li>操作：单击结果可打开；支持 ↑/↓ 选择结果、Enter 打开当前结果。</li>
+            </ul>
 
             <div class="figure">
               <div class="figure-box">
@@ -746,10 +778,37 @@
           </div>
 
           <div class="page-section">
+            <div class="page-title">统计（Statistics）</div>
+            <div class="page-desc">
+              统计看板用于查看知识库与资料库的趋势与活跃度，支持选择时间范围与手动刷新（Beta）。
+            </div>
+            <div class="manual-subtitle">主要面板</div>
+            <ul class="manual-ul">
+              <li>知识量趋势：按知识库统计文件/目录数量，支持筛选知识库与指标。</li>
+              <li>活跃热力图：展示知识库 Git 提交的年度活跃热力分布。</li>
+              <li>阅读进度：展示阅读器记录的完成度与耗时汇总。</li>
+              <li>资料库文档：按导入文件标签统计分布，可切换知识库。</li>
+            </ul>
+          </div>
+
+          <div class="page-section">
+            <div class="page-title">白板（Whiteboard）</div>
+            <div class="page-desc">
+              白板用于快速绘制草图、流程图与结构图，基于 Excalidraw 交互体验。
+            </div>
+            <div class="manual-subtitle">使用要点</div>
+            <ul class="manual-ul">
+              <li>绘图：选择形状、文本、连线等工具进行绘制与标注。</li>
+              <li>自动保存：编辑内容会自动保存到本地，重开页面可恢复最近内容。</li>
+            </ul>
+          </div>
+
+          <div class="page-section">
             <div class="page-title">应用（Application）</div>
             <div class="page-desc">
-              应用页面提供可打开的工具/应用集合：左侧为分类，中心为应用卡片列表；点击卡片会打开独立窗口（通过后端命令）。
-              示例应用包含“语言翻译”等，部分应用可能仍为占位实现。
+              应用页面提供可打开的工具/应用集合：左侧为分类（工具/语言/音乐/工作/生活），中心为应用卡片列表；
+              点击卡片会打开独立窗口。示例应用包含相册、TO DO、翻译助手、文件传输助手、Python Playground 等，
+              部分应用仍为占位实现。
             </div>
             <div class="figure">
               <div class="figure-box">
