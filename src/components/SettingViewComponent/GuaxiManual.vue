@@ -2,11 +2,6 @@
   <div class="manual">
     <n-card title="用户手册" size="small">
       <n-space vertical size="large" style="width: 100%">
-        <n-alert type="info" :show-icon="true">
-          本页为 Guaxi 用户手册。需要配图时，请将截图放入 <n-tag size="small">src/assets/manual</n-tag>，
-          并把对应“占位图”替换为真实图片。
-        </n-alert>
-
         <div class="toc">
           <div class="toc-title">目录</div>
           <ul class="toc-list">
@@ -26,16 +21,20 @@
           <h2 class="h2">软件简介</h2>
           <p class="p">
             Guaxi 是一款面向“阅读-整理-检索-对话-知识库”的桌面应用。你可以导入/管理本地资料，阅读并生成笔记，
-            配合大模型进行对话与知识沉淀，并通过知识库能力进行进一步整理。
+            配合大模型进行对话与知识沉淀，并通过知识库能力进行进一步整理。资料库用于承载原始文件与元数据，知识库用于沉淀整理结果与版本管理，
+            二者协同形成完整的知识闭环。
           </p>
 
           <div class="figure">
             <div class="figure-box">
-              <img class="figure-img" src="../../assets/manual/overview.png" alt="软件主界面" />
+              <img class="figure-img" :src="manualImage('overview')" alt="软件主界面" />
             </div>
             <div class="figure-caption">图 1：Guaxi 总览</div>
           </div>
-        </section>
+        <p class="p">
+          本手册按“页面与流程”组织说明，建议先熟悉首页与资料库，再进入聊天与知识库页面完成沉淀与复盘。
+        </p>
+      </section>
 
         <n-divider />
 
@@ -43,30 +42,30 @@
           <h2 class="h2">主要功能</h2>
 
           <div class="feature-grid">
-            <div class="feature-card">
+            <button type="button" class="feature-card" @click="scrollToSection('repository')">
               <div class="feature-title">资料导入与管理</div>
               <div class="feature-desc">建立文件库根目录，集中管理导入资料，支持搜索定位。</div>
-            </div>
-            <div class="feature-card">
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('editor')">
               <div class="feature-title">阅读与摘录</div>
               <div class="feature-desc">内置阅读器能力（Markdown/文本/Word 等），支持导航、检索与辅助操作。</div>
-            </div>
-            <div class="feature-card">
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('chat')">
               <div class="feature-title">聊天与模型选择</div>
               <div class="feature-desc">配置多家模型 Key，进行多会话对话；可切换模型、管理话题与消息。</div>
-            </div>
-            <div class="feature-card">
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('brain')">
               <div class="feature-title">知识库管理</div>
               <div class="feature-desc">设置知识库根目录，创建/管理知识库；支持 Git 远程仓库配置。</div>
-            </div>
-            <div class="feature-card">
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('application')">
               <div class="feature-title">工具与应用</div>
               <div class="feature-desc">应用中心可打开不同工具型应用窗口（示例：翻译等）。</div>
-            </div>
-            <div class="feature-card">
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('setting')">
               <div class="feature-title">全局设置</div>
               <div class="feature-desc">统一管理笔记库/资源库、服务器与大模型等配置。</div>
-            </div>
+            </button>
           </div>
         </section>
 
@@ -74,6 +73,9 @@
 
         <section id="quickstart">
           <h2 class="h2">快速开始</h2>
+          <p class="p">
+            首次使用建议完成基础配置与目录规划，便于后续导入、检索与同步操作。
+          </p>
 
           <h3 class="h3">1）首次启动建议完成的配置</h3>
           <ol class="ol">
@@ -93,7 +95,7 @@
 
           <div class="figure">
             <div class="figure-box">
-              <img class="figure-img" src="../../assets/manual/setting-noterepo.png" alt="设置-笔记库与资源库" />
+              <img class="figure-img" :src="manualImage('setting-noterepo')" alt="设置-笔记库与资源库" />
             </div>
             <div class="figure-caption">图 2：建议的首次配置</div>
           </div>
@@ -111,11 +113,15 @@
 
         <section id="pages">
           <h2 class="h2">页面与功能详解</h2>
+          <p class="p">
+            本节按页面逐一说明入口、布局与主要功能，并给出对应窗口示意图以便快速对照。
+          </p>
 
           <div id="editor" class="page-section">
             <div class="page-title">编辑器/阅读器（重点）</div>
             <div class="page-desc">
               首页（Home）为主要编辑入口，内置 Monaco 编辑器（支持 Markdown 常用操作、右键菜单与表格辅助）。资料库（Repository）右键“打开”后会启动阅读器窗口（Markdown/Text/Word/Epub 等），提供顶部工具栏、页内搜索、书签与右侧“我的笔记”面板。
+              建议在首页完成写作与整理，在阅读器完成资料研读与摘录，二者形成阅读-整理-沉淀的闭环。
             </div>
 
             <div class="manual-subtitle">Home：编辑器工具条图标（顶部）</div>
@@ -552,18 +558,57 @@
               <li>操作：单击结果可打开；支持 ↑/↓ 选择结果、Enter 打开当前结果。</li>
             </ul>
 
+            <div class="manual-subtitle">常用窗口示意（占位）</div>
             <div class="figure">
               <div class="figure-box">
-                <img class="figure-img" src="../../assets/manual/page-home.png" alt="首页布局" />
+                <img class="figure-img" :src="manualImage('window-kb-manager')" alt="知识库管理器窗口" />
+              </div>
+              <div class="figure-caption">图 3-1：知识库管理器（占位）</div>
+            </div>
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('window-template-manager')" alt="模板管理器窗口" />
+              </div>
+              <div class="figure-caption">图 3-2：模板管理器（占位）</div>
+            </div>
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('window-ppt-manager')" alt="PPT 管理器窗口" />
+              </div>
+              <div class="figure-caption">图 3-3：PPT 管理器（占位）</div>
+            </div>
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('window-resource-manager')" alt="知识库资源管理器窗口" />
+              </div>
+              <div class="figure-caption">图 3-4：知识库资源管理器（占位）</div>
+            </div>
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('window-git-panel')" alt="Git 操作窗口" />
+              </div>
+              <div class="figure-caption">图 3-5：Git 操作窗口（占位）</div>
+            </div>
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('window-browser-preview')" alt="浏览器预览窗口" />
+              </div>
+              <div class="figure-caption">图 3-6：浏览器预览（占位）</div>
+            </div>
+
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('page-home')" alt="首页布局" />
               </div>
               <div class="figure-caption">图 3：首页</div>
             </div>
           </div>
 
-          <div class="page-section">
+          <div id="repository" class="page-section">
             <div class="page-title">资料库（Repository）</div>
             <div class="page-desc">
               该页面用于管理导入的本地资料文件。你可以导入文件并补充元数据（文件库/知识库/标签/描述），通过顶部搜索快速定位；在表格中右键条目可打开阅读器窗口进行阅读与做笔记。
+              建议在导入时完善标签与描述，便于后续搜索与统计分析。
             </div>
 
             <div class="manual-subtitle">导入文件（重点）</div>
@@ -659,13 +704,20 @@
 
             <div class="figure">
               <div class="figure-box">
-                <img class="figure-img" src="../../assets/manual/page-repo-search.png" alt="资料库搜索" />
+                <img class="figure-img" :src="manualImage('window-reader')" alt="阅读器窗口" />
+              </div>
+              <div class="figure-caption">图 4-1：阅读器窗口（占位）</div>
+            </div>
+
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('page-repo-search')" alt="资料库搜索" />
               </div>
               <div class="figure-caption">图 4：资料库搜索</div>
             </div>
           </div>
 
-          <div class="page-section">
+          <div id="flipboard" class="page-section">
             <div class="page-title">资讯获取</div>
             <div class="page-desc">
               资讯获取页面采用三栏布局：左侧分类/列表，中间列表视图，右侧详情阅读面板。左右栏可折叠与拖拽调整宽度；
@@ -708,13 +760,13 @@
 
             <div class="figure">
               <div class="figure-box">
-                <img class="figure-img" src="../../assets/manual/page-flipboard.png" alt="资讯获取页面三栏布局" />
+                <img class="figure-img" :src="manualImage('page-flipboard')" alt="资讯获取页面三栏布局" />
               </div>
               <div class="figure-caption">图 5：资讯获取页面（占位）</div>
             </div>
           </div>
 
-          <div class="page-section">
+          <div id="chat" class="page-section">
             <div class="page-title">聊天（Chat）</div>
             <div class="page-desc">
               聊天页面用于与大模型对话。顶部包含模型选择器与搜索占位输入框，并提供打开 Web 模型、侧栏折叠等入口。
@@ -722,13 +774,13 @@
             </div>
             <div class="figure">
               <div class="figure-box">
-                <img class="figure-img" src="../../assets/manual/page-chat.png" alt="聊天页面与模型选择" />
+                <img class="figure-img" :src="manualImage('page-chat')" alt="聊天页面与模型选择" />
               </div>
               <div class="figure-caption">图 6：聊天</div>
             </div>
           </div>
 
-          <div class="page-section">
+          <div id="brain" class="page-section">
             <div class="page-title">知识库（Brain）</div>
             <div class="page-desc">
               知识库页面用于创建与管理知识库内容，并提供“创建知识库”表单入口。建议先在设置中配置知识库根目录，
@@ -771,16 +823,17 @@
 
             <div class="figure">
               <div class="figure-box">
-                <img class="figure-img" src="../../assets/manual/page-brain.png" alt="知识库管理与创建" />
+                <img class="figure-img" :src="manualImage('page-brain')" alt="知识库管理与创建" />
               </div>
               <div class="figure-caption">图 7：知识库</div>
             </div>
           </div>
 
-          <div class="page-section">
+          <div id="statistics" class="page-section">
             <div class="page-title">统计（Statistics）</div>
             <div class="page-desc">
               统计看板用于查看知识库与资料库的趋势与活跃度，支持选择时间范围与手动刷新（Beta）。
+              建议结合时间范围筛选观察近期产出与阅读变化。
             </div>
             <div class="manual-subtitle">主要面板</div>
             <ul class="manual-ul">
@@ -789,30 +842,43 @@
               <li>阅读进度：展示阅读器记录的完成度与耗时汇总。</li>
               <li>资料库文档：按导入文件标签统计分布，可切换知识库。</li>
             </ul>
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('page-statistics')" alt="统计看板" />
+              </div>
+              <div class="figure-caption">图 8：统计看板（占位）</div>
+            </div>
           </div>
 
-          <div class="page-section">
+          <div id="whiteboard" class="page-section">
             <div class="page-title">白板（Whiteboard）</div>
             <div class="page-desc">
               白板用于快速绘制草图、流程图与结构图，基于 Excalidraw 交互体验。
+              适用于头脑风暴、结构梳理与临时标注。
             </div>
             <div class="manual-subtitle">使用要点</div>
             <ul class="manual-ul">
               <li>绘图：选择形状、文本、连线等工具进行绘制与标注。</li>
               <li>自动保存：编辑内容会自动保存到本地，重开页面可恢复最近内容。</li>
             </ul>
+            <div class="figure">
+              <div class="figure-box">
+                <img class="figure-img" :src="manualImage('page-whiteboard')" alt="白板页面" />
+              </div>
+              <div class="figure-caption">图 9：白板（占位）</div>
+            </div>
           </div>
 
-          <div class="page-section">
+          <div id="application" class="page-section">
             <div class="page-title">应用（Application）</div>
             <div class="page-desc">
               应用页面提供可打开的工具/应用集合：左侧为分类（工具/语言/音乐/工作/生活），中心为应用卡片列表；
               点击卡片会打开独立窗口。示例应用包含相册、TO DO、翻译助手、文件传输助手、Python Playground 等，
-              部分应用仍为占位实现。
+              部分应用仍为占位实现。右侧区域可用于展示应用详情或扩展信息（以当前界面为准）。
             </div>
             <div class="figure">
               <div class="figure-box">
-                <img class="figure-img" src="../../assets/manual/page-application.png" alt="应用中心" />
+                <img class="figure-img" :src="manualImage('page-application')" alt="应用中心" />
               </div>
               <div class="figure-caption">图 8：应用中心</div>
             </div>
@@ -875,7 +941,7 @@
 
             <div class="figure">
               <div class="figure-box">
-                <img class="figure-img" src="../../assets/manual/page-setting.png" alt="设置页面与菜单" />
+                <img class="figure-img" :src="manualImage('page-setting')" alt="设置页面与菜单" />
               </div>
               <div class="figure-caption">图 9：设置页面</div>
             </div>
@@ -886,6 +952,9 @@
 
         <section id="setting">
           <h2 class="h2">设置：大模型与 Markdown 转换</h2>
+          <p class="p">
+            本节说明大模型与转换能力的安装与配置流程，配置完成后即可在聊天与转换流程中使用。
+          </p>
 
           <h3 class="h3">大模型 API Key</h3>
           <p class="p">
@@ -912,7 +981,7 @@
 
           <div class="figure">
             <div class="figure-box">
-              <img class="figure-img" src="../../assets/manual/setting-llm.png" alt="大模型与转换配置" />
+              <img class="figure-img" :src="manualImage('setting-llm')" alt="大模型与转换配置" />
             </div>
             <div class="figure-caption">图 10：大模型与转换配置（占位）</div>
           </div>
@@ -938,6 +1007,13 @@
               如遇权限问题，请先在系统终端中确认同一远程仓库可正常 git 操作。
             </div>
           </div>
+
+          <div class="qa">
+            <div class="q">Q：页面图片暂时缺失怎么办？</div>
+            <div class="a">
+              A：先使用占位图正常显示手册结构，后续将截图放入 <b>src/assets/manual</b> 并替换对应文件名即可。
+            </div>
+          </div>
         </section>
       </n-space>
     </n-card>
@@ -945,9 +1021,10 @@
 </template>
 
 <script setup>
-import { h } from 'vue'
+import { computed, h } from 'vue'
 import { Icon } from '@iconify/vue'
 import { NCard, NSpace, NAlert, NDivider, NTag, NIcon } from 'naive-ui'
+import { useSettingsStore } from '../../stores/settingsStore'
 import {
   BookAdd20Regular,
   Box20Regular,
@@ -955,6 +1032,7 @@ import {
   DocumentEdit16Regular,
   DocumentSearch20Filled,
   DocumentSearch24Regular,
+  Folder20Regular,
   FolderAdd20Regular,
   NotebookSection24Regular,
   PanelLeftContract24Regular,
@@ -1018,6 +1096,101 @@ import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import alignLeftIcon from '@iconify-icons/lucide/align-left'
 import alignCenterIcon from '@iconify-icons/lucide/align-center'
 import alignRightIcon from '@iconify-icons/lucide/align-right'
+
+const settingsStore = useSettingsStore()
+
+const isDarkTheme = computed(() => {
+  const storeTheme = String(settingsStore.appearanceTheme || '').trim().toLowerCase()
+  if (storeTheme === 'dark') return true
+  if (storeTheme === 'light') return false
+  const dataTheme = document?.documentElement?.dataset?.guaxiTheme
+  return dataTheme === 'dark'
+})
+
+const manualImages = {
+  overview: {
+    light: new URL('../../assets/manual/overview.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/overview-dark.png', import.meta.url).href
+  },
+  'setting-noterepo': {
+    light: new URL('../../assets/manual/setting-noterepo.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/setting-noterepo-dark.png', import.meta.url).href
+  },
+  'window-kb-manager': {
+    light: new URL('../../assets/manual/window-kb-manager.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/window-kb-manager-dark.png', import.meta.url).href
+  },
+  'window-template-manager': {
+    light: new URL('../../assets/manual/window-template-manager.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/window-template-manager-dark.png', import.meta.url).href
+  },
+  'window-ppt-manager': {
+    light: new URL('../../assets/manual/window-ppt-manager.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/window-ppt-manager-dark.png', import.meta.url).href
+  },
+  'window-resource-manager': {
+    light: new URL('../../assets/manual/window-resource-manager.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/window-resource-manager-dark.png', import.meta.url).href
+  },
+  'window-git-panel': {
+    light: new URL('../../assets/manual/window-git-panel.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/window-git-panel-dark.png', import.meta.url).href
+  },
+  'window-browser-preview': {
+    light: new URL('../../assets/manual/window-browser-preview.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/window-browser-preview-dark.png', import.meta.url).href
+  },
+  'page-home': {
+    light: new URL('../../assets/manual/page-home.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-home-dark.png', import.meta.url).href
+  },
+  'window-reader': {
+    light: new URL('../../assets/manual/window-reader.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/window-reader-dark.png', import.meta.url).href
+  },
+  'page-repo-search': {
+    light: new URL('../../assets/manual/page-repo-search.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-repo-search-dark.png', import.meta.url).href
+  },
+  'page-flipboard': {
+    light: new URL('../../assets/manual/page-flipboard.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-flipboard-dark.png', import.meta.url).href
+  },
+  'page-chat': {
+    light: new URL('../../assets/manual/page-chat.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-chat-dark.png', import.meta.url).href
+  },
+  'page-brain': {
+    light: new URL('../../assets/manual/page-brain.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-brain-dark.png', import.meta.url).href
+  },
+  'page-statistics': {
+    light: new URL('../../assets/manual/page-statistics.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-statistics-dark.png', import.meta.url).href
+  },
+  'page-whiteboard': {
+    light: new URL('../../assets/manual/page-whiteboard.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-whiteboard-dark.png', import.meta.url).href
+  },
+  'page-application': {
+    light: new URL('../../assets/manual/page-application.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-application-dark.png', import.meta.url).href
+  },
+  'page-setting': {
+    light: new URL('../../assets/manual/page-setting.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/page-setting-dark.png', import.meta.url).href
+  },
+  'setting-llm': {
+    light: new URL('../../assets/manual/setting-llm.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/setting-llm-dark.png', import.meta.url).href
+  }
+}
+
+const manualImage = (key) => {
+  const entry = manualImages[String(key || '')]
+  if (!entry) return ''
+  return isDarkTheme.value ? entry.dark : entry.light
+}
 
 const SortAscendingIcon = {
   render() {
@@ -1270,6 +1443,20 @@ const scrollToSection = (id) => {
   border-radius: 12px;
   padding: 12px;
   background: var(--guaxi-panel-bg);
+  appearance: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font: inherit;
+}
+
+.feature-card:hover {
+  border-color: var(--n-color-primary);
+}
+
+.feature-card:focus-visible {
+  outline: 2px solid rgba(64, 158, 255, 0.5);
+  outline-offset: 2px;
 }
 
 .feature-title {
@@ -1329,5 +1516,51 @@ const scrollToSection = (id) => {
 .a {
   color: var(--guaxi-text-primary);
   line-height: 1.8;
+}
+
+:root[data-guaxi-theme='dark'] .manual .h2,
+:root[data-guaxi-theme='dark'] .manual .h3,
+:root[data-guaxi-theme='dark'] .manual .page-title,
+:root[data-guaxi-theme='dark'] .manual .manual-subtitle,
+:root[data-guaxi-theme='dark'] .manual .feature-title,
+:root[data-guaxi-theme='dark'] .manual .toc-title,
+:root[data-guaxi-theme='dark'] .manual .icon-name,
+:root[data-guaxi-theme='dark'] .manual .q {
+  color: #f0f6fc;
+}
+
+:root[data-guaxi-theme='dark'] .manual .p,
+:root[data-guaxi-theme='dark'] .manual .page-desc,
+:root[data-guaxi-theme='dark'] .manual .feature-desc,
+:root[data-guaxi-theme='dark'] .manual .icon-desc,
+:root[data-guaxi-theme='dark'] .manual .manual-ul,
+:root[data-guaxi-theme='dark'] .manual .ol,
+:root[data-guaxi-theme='dark'] .manual .a,
+:root[data-guaxi-theme='dark'] .manual .figure-caption,
+:root[data-guaxi-theme='dark'] .manual .figure-sub {
+  color: #c9d1d9;
+}
+
+.dark-mode .manual .h2,
+.dark-mode .manual .h3,
+.dark-mode .manual .page-title,
+.dark-mode .manual .manual-subtitle,
+.dark-mode .manual .feature-title,
+.dark-mode .manual .toc-title,
+.dark-mode .manual .icon-name,
+.dark-mode .manual .q {
+  color: #f0f6fc;
+}
+
+.dark-mode .manual .p,
+.dark-mode .manual .page-desc,
+.dark-mode .manual .feature-desc,
+.dark-mode .manual .icon-desc,
+.dark-mode .manual .manual-ul,
+.dark-mode .manual .ol,
+.dark-mode .manual .a,
+.dark-mode .manual .figure-caption,
+.dark-mode .manual .figure-sub {
+  color: #c9d1d9;
 }
 </style>
