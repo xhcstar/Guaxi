@@ -558,42 +558,42 @@
               <li>操作：单击结果可打开；支持 ↑/↓ 选择结果、Enter 打开当前结果。</li>
             </ul>
 
-            <div class="manual-subtitle">常用窗口示意（占位）</div>
+            <div class="manual-subtitle">常用窗口示意</div>
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('window-kb-manager')" alt="知识库管理器窗口" />
               </div>
-              <div class="figure-caption">图 3-1：知识库管理器（占位）</div>
+              <div class="figure-caption">图 3-1：知识库管理器</div>
             </div>
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('window-template-manager')" alt="模板管理器窗口" />
               </div>
-              <div class="figure-caption">图 3-2：模板管理器（占位）</div>
+              <div class="figure-caption">图 3-2：模板管理器</div>
             </div>
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('window-ppt-manager')" alt="PPT 管理器窗口" />
               </div>
-              <div class="figure-caption">图 3-3：PPT 管理器（占位）</div>
+              <div class="figure-caption">图 3-3：PPT 管理器</div>
             </div>
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('window-resource-manager')" alt="知识库资源管理器窗口" />
               </div>
-              <div class="figure-caption">图 3-4：知识库资源管理器（占位）</div>
+              <div class="figure-caption">图 3-4：知识库资源管理器</div>
             </div>
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('window-git-panel')" alt="Git 操作窗口" />
               </div>
-              <div class="figure-caption">图 3-5：Git 操作窗口（占位）</div>
+              <div class="figure-caption">图 3-5：Git 操作窗口</div>
             </div>
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('window-browser-preview')" alt="浏览器预览窗口" />
               </div>
-              <div class="figure-caption">图 3-6：浏览器预览（占位）</div>
+              <div class="figure-caption">图 3-6：浏览器预览</div>
             </div>
 
             <div class="figure">
@@ -706,7 +706,7 @@
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('window-reader')" alt="阅读器窗口" />
               </div>
-              <div class="figure-caption">图 4-1：阅读器窗口（占位）</div>
+              <div class="figure-caption">图 4-1：阅读器窗口</div>
             </div>
 
             <div class="figure">
@@ -762,7 +762,7 @@
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('page-flipboard')" alt="资讯获取页面三栏布局" />
               </div>
-              <div class="figure-caption">图 5：资讯获取页面（占位）</div>
+              <div class="figure-caption">图 5：资讯获取页面</div>
             </div>
           </div>
 
@@ -846,7 +846,7 @@
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('page-statistics')" alt="统计看板" />
               </div>
-              <div class="figure-caption">图 8：统计看板（占位）</div>
+              <div class="figure-caption">图 8：统计看板</div>
             </div>
           </div>
 
@@ -865,7 +865,7 @@
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('page-whiteboard')" alt="白板页面" />
               </div>
-              <div class="figure-caption">图 9：白板（占位）</div>
+              <div class="figure-caption">图 9：白板</div>
             </div>
           </div>
 
@@ -983,7 +983,7 @@
             <div class="figure-box">
               <img class="figure-img" :src="manualImage('setting-llm')" alt="大模型与转换配置" />
             </div>
-            <div class="figure-caption">图 10：大模型与转换配置（占位）</div>
+            <div class="figure-caption">图 10：大模型与转换配置</div>
           </div>
         </section>
 
@@ -1008,12 +1008,6 @@
             </div>
           </div>
 
-          <div class="qa">
-            <div class="q">Q：页面图片暂时缺失怎么办？</div>
-            <div class="a">
-              A：先使用占位图正常显示手册结构，后续将截图放入 <b>src/assets/manual</b> 并替换对应文件名即可。
-            </div>
-          </div>
         </section>
       </n-space>
     </n-card>
@@ -1397,14 +1391,15 @@ const scrollToSection = (id) => {
 .figure-box {
   border: 1px dashed var(--guaxi-border);
   border-radius: 12px;
-  min-height: 360px;
-  padding: 10px;
+  min-height: 440px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: stretch;
   align-items: stretch;
   background: rgba(127, 127, 127, 0.08);
   user-select: none;
+  overflow: hidden;
 }
 
 .figure-title {
@@ -1425,10 +1420,10 @@ const scrollToSection = (id) => {
 
 .figure-img {
   width: 100%;
-  height: auto;
-  max-height: 70vh;
-  object-fit: contain;
-  border-radius: 8px;
+  height: 100%;
+  max-height: 80vh;
+  object-fit: cover;
+  border-radius: 0;
 }
 
 .feature-grid {
