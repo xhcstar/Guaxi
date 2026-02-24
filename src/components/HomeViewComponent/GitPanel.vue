@@ -470,6 +470,27 @@
       <div class="content-viewer">
         <div v-if="selectedFile || selectedCommit" class="diff-viewer">
           <div ref="diffEditorContainer" class="diff-editor-container"></div>
+          <div
+            v-if="selectedFile && !selectedCommit && diffHunkActionVisible"
+            class="diff-hunk-action"
+            :style="{ top: `${diffHunkActionTop}px` }"
+          >
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <button
+                  class="diff-hunk-action-button"
+                  type="button"
+                  @click="handleDiscardDiffHunk"
+                  :disabled="!canRevertCurrentHunk"
+                >
+                  <n-icon size="16">
+                    <CloseCircleOutline />
+                  </n-icon>
+                </button>
+              </template>
+              撤销当前差异块
+            </n-tooltip>
+          </div>
         </div>
 
         <div v-else class="empty-state">
@@ -830,8 +851,24 @@ let resizeObserver = null
 const diffLoading = ref({
   file: false,
   commit: false,
-  navigation: false
+  navigation: false,
+  hunk: false
 });
+
+const diffHunkActionTop = ref(8)
+const diffHunkActionVisible = ref(false)
+let diffHunkScrollDisposable = null
+let diffHunkCursorDisposable = null
+
+const canRevertCurrentHunk = computed(() => {
+  if (!selectedFile.value) return false
+  if (selectedCommit.value) return false
+  if (diffLoading.value.file || diffLoading.value.commit || diffLoading.value.hunk) return false
+  const status = selectedFile.value.status
+  if (status === 'D') return false
+  if (!diffHunkActionVisible.value) return false
+  return !!diffEditor
+})
 
 // 添加侧边栏折叠状态
 const isSidebarCollapsed = ref(false)
@@ -975,6 +1012,7 @@ const handleCommitFileClick = async (file) => {
           await diffNavAction.run();
           modifiedEditor.revealPositionInCenter(modifiedEditor.getPosition());
         }
+        updateHunkActionPosition()
       }, 100);
     }
   } catch (error) {
@@ -1050,6 +1088,8 @@ const navigateDiff = async (direction) => {
       editor.focus();
       logger.debug('Navigation completed successfully');
     }
+
+    updateHunkActionPosition()
   } catch (error) {
     logger.error(`Failed to navigate ${direction} diff`, error);
     notification.error({
@@ -1059,6 +1099,149 @@ const navigateDiff = async (direction) => {
     });
   } finally {
     diffLoading.value.navigation = false;
+  }
+}
+
+const getCurrentDiffChange = () => {
+  if (!diffEditor) return null
+  let changes = []
+  try {
+    changes = diffEditor.getLineChanges() || []
+  } catch (error) {
+    frontendLogger.warn('[Diff] Unable to get line changes', error)
+    return null
+  }
+  if (!changes.length) return null
+  const editor = diffEditor.getModifiedEditor()
+  const position = editor?.getPosition()
+  if (!position) return changes[0]
+
+  const line = position.lineNumber || 1
+  const exact = changes.find((c) => {
+    const start = Math.max(1, c.modifiedStartLineNumber || 1)
+    const end = Math.max(start, c.modifiedEndLineNumber || start)
+    return line >= start && line <= end
+  })
+  if (exact) return exact
+
+  let nearest = changes[0]
+  let best = Number.POSITIVE_INFINITY
+  for (const c of changes) {
+    const start = Math.max(1, c.modifiedStartLineNumber || 1)
+    const end = Math.max(start, c.modifiedEndLineNumber || start)
+    const dist = line < start ? start - line : line > end ? line - end : 0
+    if (dist < best) {
+      best = dist
+      nearest = c
+    }
+  }
+  return nearest
+}
+
+const updateHunkActionPosition = () => {
+  if (!diffEditor || !selectedFile.value || selectedCommit.value) {
+    diffHunkActionVisible.value = false
+    return
+  }
+
+  const change = getCurrentDiffChange()
+  if (!change) {
+    diffHunkActionVisible.value = false
+    return
+  }
+
+  const editor = diffEditor.getModifiedEditor()
+  const line = Math.max(1, change.modifiedStartLineNumber || change.modifiedEndLineNumber || 1)
+  const top = editor.getTopForLineNumber(line)
+  const scrollTop = editor.getScrollTop()
+  const layout = editor.getLayoutInfo()
+  const viewTop = top - scrollTop
+  const maxTop = Math.max(8, layout.height - 28)
+
+  diffHunkActionTop.value = Math.min(Math.max(viewTop, 8), maxTop)
+  diffHunkActionVisible.value = true
+}
+
+const getChangeLineForRevert = (change) => {
+  const candidates = [
+    change?.modifiedStartLineNumber,
+    change?.modifiedEndLineNumber,
+    change?.originalStartLineNumber,
+    change?.originalEndLineNumber
+  ].filter((n) => Number.isFinite(n) && n > 0)
+  return candidates.length ? candidates[0] : 1
+}
+
+const handleDiscardDiffHunk = async () => {
+  if (!selectedFile.value || selectedCommit.value || diffLoading.value.hunk) return
+
+  const status = selectedFile.value.status
+  const targetFilePath = selectedFile.value.path
+  if (status === 'D') {
+    notification.warning({
+      title: '无法撤销差异块',
+      content: '已删除文件不支持差异块撤销',
+      duration: 2000
+    })
+    return
+  }
+
+  const change = getCurrentDiffChange()
+  if (!change) {
+    notification.warning({
+      title: '无法撤销差异块',
+      content: '未找到可撤销的差异块',
+      duration: 2000
+    })
+    return
+  }
+
+  const line = getChangeLineForRevert(change)
+
+  diffLoading.value.hunk = true
+  frontendLogger.info('[Diff] Reverting hunk', {
+    filePath: targetFilePath,
+    line,
+    originalStart: change.originalStartLineNumber,
+    originalEnd: change.originalEndLineNumber,
+    modifiedStart: change.modifiedStartLineNumber,
+    modifiedEnd: change.modifiedEndLineNumber
+  })
+
+  try {
+    await invoke('discard_hunk', {
+      path: props.workspacePath,
+      filePath: targetFilePath,
+      line,
+      reverse: true
+    })
+    frontendLogger.info('[Diff] Hunk reverted', { filePath: targetFilePath, line })
+    await refreshGitStatus({ resetSelection: false, includeCommits: false })
+    const fileForDiff = selectedFile.value || {
+      path: targetFilePath,
+      status: ' ',
+      diff: '',
+      staged: false
+    }
+    if (!selectedFile.value) {
+      selectedFile.value = fileForDiff
+    }
+    await updateFileDiff(fileForDiff)
+    notification.success({
+      title: '已撤销差异块',
+      content: targetFilePath,
+      duration: 2000
+    })
+  } catch (error) {
+    frontendLogger.error('[Diff] Failed to revert hunk', error)
+    notification.error({
+      title: '撤销差异块失败',
+      content: String(error?.message || error),
+      duration: 3000
+    })
+  } finally {
+    diffLoading.value.hunk = false
+    updateHunkActionPosition()
   }
 }
 
@@ -1094,6 +1277,8 @@ const updateCommitDiff = async (commit) => {
         oldModel.modified?.dispose();
       }, 100);
     }
+
+    diffHunkActionVisible.value = false
 
     setTimeout(() => {
       const modifiedEditor = diffEditor.getModifiedEditor();
@@ -1656,7 +1841,12 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
             selectedFile.value = matched
           }
         } else {
-          selectedFile.value = null
+          selectedFile.value = {
+            path: prevSelectedFilePath,
+            status: ' ',
+            diff: '',
+            staged: false
+          }
         }
       }
     }
@@ -1797,12 +1987,30 @@ const initMonacoEditor = async () => {
       modified: emptyModel
     });
 
+    if (diffHunkScrollDisposable) {
+      diffHunkScrollDisposable.dispose()
+      diffHunkScrollDisposable = null
+    }
+    if (diffHunkCursorDisposable) {
+      diffHunkCursorDisposable.dispose()
+      diffHunkCursorDisposable = null
+    }
+
+    const modifiedEditor = diffEditor.getModifiedEditor()
+    diffHunkScrollDisposable = modifiedEditor.onDidScrollChange(() => {
+      updateHunkActionPosition()
+    })
+    diffHunkCursorDisposable = modifiedEditor.onDidChangeCursorPosition(() => {
+      updateHunkActionPosition()
+    })
+
     // 添加resize observer
     resizeObserver = new ResizeObserver(() => {
       if (diffEditor && editorContainer) {
         const height = editorContainer.clientHeight;
         const width = editorContainer.clientWidth;
         diffEditor.layout({ width, height });
+        updateHunkActionPosition()
       }
     });
     resizeObserver.observe(editorContainer);
@@ -2383,6 +2591,15 @@ onUnmounted(() => {
     }
   }
 
+  if (diffHunkScrollDisposable) {
+    diffHunkScrollDisposable.dispose()
+    diffHunkScrollDisposable = null
+  }
+  if (diffHunkCursorDisposable) {
+    diffHunkCursorDisposable.dispose()
+    diffHunkCursorDisposable = null
+  }
+
   // 移除resize observer
   if (resizeObserver) {
     resizeObserver.disconnect()
@@ -2838,6 +3055,47 @@ onUnmounted(() => {
   /* 关键：允许内部内容收缩 */
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.diff-hunk-action {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.diff-hunk-action-button {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--divider-color);
+  background-color: var(--card-bg);
+  color: var(--text-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: all 0.15s ease;
+  opacity: 0.9;
+}
+
+.diff-hunk-action-button:hover:not(:disabled) {
+  background-color: var(--hover-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.16);
+  opacity: 1;
+}
+
+.diff-hunk-action-button:disabled {
+  color: var(--text-color-secondary);
+  cursor: default;
+  box-shadow: none;
+  opacity: 0.5;
 }
 
 .empty-state {

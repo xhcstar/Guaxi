@@ -3,8 +3,11 @@ use git2::{
     RepositoryOpenFlags, StatusOptions, StatusShow, Tree,
 };
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info, warn};
@@ -1312,6 +1315,203 @@ pub fn discard_all(path: String) -> Result<(), String> {
         })?;
 
     info!("All changes discarded successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn discard_hunk(
+    path: String,
+    file_path: String,
+    line: u32,
+    reverse: bool,
+) -> Result<(), String> {
+    info!(
+        "Discarding hunk for file: {} in path: {}, line: {}, reverse: {}",
+        file_path, path, line, reverse
+    );
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    let head = repo.head().map_err(|e| {
+        error!("Failed to get HEAD: {}", e);
+        e.to_string()
+    })?;
+
+    let head_tree = head.peel_to_tree().map_err(|e| {
+        error!("Failed to peel to tree: {}", e);
+        e.to_string()
+    })?;
+
+    let mut diff_options = DiffOptions::new();
+    diff_options.pathspec(file_path.clone());
+    diff_options.include_untracked(true);
+    diff_options.recurse_untracked_dirs(true);
+    diff_options.context_lines(0);
+
+    let diff = repo
+        .diff_tree_to_workdir_with_index(Some(&head_tree), Some(&mut diff_options))
+        .map_err(|e| {
+            error!("Failed to get diff for file: {}", e);
+            e.to_string()
+        })?;
+
+    let normalized_path = file_path.replace('\\', "/");
+
+    struct HunkState {
+        patch: String,
+        target_header: String,
+        target_found: bool,
+    }
+
+    let state = RefCell::new(HunkState {
+        patch: String::new(),
+        target_header: String::new(),
+        target_found: false,
+    });
+
+    diff.foreach(
+        &mut |_delta, _| true,
+        None,
+        Some(&mut |delta, hunk| {
+            let mut state = state.borrow_mut();
+            if state.target_found {
+                return true;
+            }
+
+            let new_start = hunk.new_start() as u32;
+            let new_lines = hunk.new_lines() as u32;
+            let old_start = hunk.old_start() as u32;
+            let old_lines = hunk.old_lines() as u32;
+
+            let new_end = new_start.saturating_add(new_lines.saturating_sub(1));
+            let old_end = old_start.saturating_add(old_lines.saturating_sub(1));
+            let in_new = new_lines > 0 && line >= new_start && line <= new_end;
+            let in_old = old_lines > 0 && line >= old_start && line <= old_end;
+
+            if in_new || in_old {
+                state.target_found = true;
+                state.target_header = String::from_utf8_lossy(hunk.header()).to_string();
+
+                state.patch.push_str(&format!(
+                    "diff --git a/{0} b/{0}\n",
+                    normalized_path
+                ));
+
+                match delta.status() {
+                    Delta::Added => {
+                        state.patch.push_str("--- /dev/null\n");
+                        state
+                            .patch
+                            .push_str(&format!("+++ b/{}\n", normalized_path));
+                    }
+                    Delta::Deleted => {
+                        state.patch.push_str(&format!("--- a/{}\n", normalized_path));
+                        state.patch.push_str("+++ /dev/null\n");
+                    }
+                    _ => {
+                        state.patch.push_str(&format!("--- a/{}\n", normalized_path));
+                        state
+                            .patch
+                            .push_str(&format!("+++ b/{}\n", normalized_path));
+                    }
+                }
+
+                let header = state.target_header.clone();
+                state.patch.push_str(&header);
+                if !header.ends_with('\n') {
+                    state.patch.push('\n');
+                }
+            }
+            true
+        }),
+        Some(&mut |_delta, hunk, line_info| {
+            let mut state = state.borrow_mut();
+            if state.target_header.is_empty() {
+                return true;
+            }
+            if let Some(current_hunk) = hunk {
+                let header = String::from_utf8_lossy(current_hunk.header());
+                if header != state.target_header.as_str() {
+                    return true;
+                }
+            }
+            let origin = line_info.origin();
+            // Keep '\ No newline at end of file' metadata lines; omitting them
+            // can make zero-context patches fail to apply in reverse.
+            if origin != ' ' && origin != '+' && origin != '-' && origin != '\\' {
+                return true;
+            }
+            if let Ok(content) = std::str::from_utf8(line_info.content()) {
+                let trimmed = content.trim_end_matches(|c| c == '\n' || c == '\r');
+                state.patch.push(origin);
+                state.patch.push_str(trimmed);
+                state.patch.push('\n');
+            }
+            true
+        }),
+    )
+    .map_err(|e| {
+        error!("Failed to iterate diff hunks: {}", e);
+        e.to_string()
+    })?;
+
+    let state = state.into_inner();
+    let patch = state.patch;
+    let target_found = state.target_found;
+
+    if !target_found || patch.is_empty() {
+        error!("No matching hunk found for line {}", line);
+        return Err("撤销差异块失败：未找到匹配的差异块".to_string());
+    }
+
+    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(repo_dir)
+        .arg("apply")
+        .arg("--whitespace=nowarn")
+        .arg("--unidiff-zero")
+        .arg("--inaccurate-eof")
+        .arg("--recount")
+        .arg("-p1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if reverse {
+        cmd.arg("--reverse");
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("无法执行 git（请确认已安装 Git 且已加入 PATH）：{}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("写入补丁失败：{}", e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("执行 git apply 失败：{}", e))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
+        };
+        error!("git apply failed: {}", msg);
+        return Err(format!("撤销差异块失败：{}", msg));
+    }
+
+    info!("Hunk discarded successfully");
     Ok(())
 }
 
