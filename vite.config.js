@@ -112,6 +112,12 @@ export default defineConfig(async () => ({
       "react-dom",
       "excalidraw-dev"
     ],
+    exclude: [
+      "@codingame/monaco-vscode-api",
+      "vscode",
+      "vscode/localExtensionHost"
+    ],
+    force: true,
     esbuildOptions: {
       target: "es2022",
     },
