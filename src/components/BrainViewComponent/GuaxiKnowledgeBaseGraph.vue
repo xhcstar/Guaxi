@@ -1695,6 +1695,38 @@ const getControlPoint = (start, end) => {
   return mid;
 };
 
+const hashString = (input) => {
+  let h = 2166136261;
+  const str = String(input ?? '');
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+};
+
+const buildStableOrder = (arr, getId) => {
+  return (arr || [])
+    .map((item, idx) => {
+      const id = String(getId(item, idx));
+      return { item, id, hash: hashString(id), idx };
+    })
+    .sort((a, b) => (a.hash - b.hash) || (a.idx - b.idx));
+};
+
+const getFibonacciSpherePosition = (i, n, radius) => {
+  const count = Math.max(1, Number(n) || 1);
+  const t = (i + 0.5) / count;
+  const y = 1 - 2 * t;
+  const r = Math.sqrt(Math.max(0, 1 - y * y));
+  const theta = (i + 1) * 2.399963229728653;
+  return {
+    x: radius * Math.cos(theta) * r,
+    y: radius * y,
+    z: radius * Math.sin(theta) * r
+  };
+};
+
 /**
  * Apply force-directed layout to nodes
  */
@@ -1720,20 +1752,22 @@ const forceDirectedLayout = () => {
   const ringStep = performanceLevel.value === 0 ? 22 : performanceLevel.value === 2 ? 55 : 38;
   const base = performanceLevel.value === 0 ? 20 : performanceLevel.value === 2 ? 45 : 32;
 
+  const ordered = buildStableOrder(nodes, (n, idx) => n?.userData?.id ?? `__i_${idx}`);
+  const orderIndex = new Map(ordered.map((d, i) => [String(d.id), i]));
+  const total = nodes.length;
+
   const nodeDatas = nodes.map((n, idx) => {
     const id = n?.userData?.id ?? `__i_${idx}`;
     const depth = Number.isFinite(n?.userData?.depth) ? Number(n.userData.depth) : (n?.userData?.parentId ? 1 : 0);
     const d = { ...n.userData, id, depth };
 
     const r = String(id) === rootId ? 0 : (base + Math.max(1, depth) * ringStep);
-    const i = idx + 1;
-    const theta = i * 2.399963229728653;
-    const u = (i % 997) / 997;
-    const phi = Math.acos(1 - 2 * u);
+    const i = orderIndex.get(String(id)) ?? idx;
+    const pos = getFibonacciSpherePosition(i, total, r);
 
-    d.x = r * Math.cos(theta) * Math.sin(phi);
-    d.y = r * Math.sin(theta) * Math.sin(phi);
-    d.z = r * Math.cos(phi);
+    d.x = pos.x;
+    d.y = pos.y;
+    d.z = pos.z;
 
     if (String(id) === rootId) {
       d.fx = 0; d.fy = 0; d.fz = 0;
@@ -1833,19 +1867,22 @@ const hierarchicalLayout = () => {
   nodes.forEach((node, idx) => {
     const ud = node?.userData || {};
     const depth = Number.isFinite(ud.depth) ? Number(ud.depth) : (ud.parentId ? 1 : 0);
+    const id = String(ud.id ?? `__i_${idx}`);
+    const hash = hashString(id);
     if (!byDepth.has(depth)) byDepth.set(depth, []);
-    byDepth.get(depth).push({ node, idx });
+    byDepth.get(depth).push({ node, idx, id, hash });
   });
 
   for (const [depth, arr] of byDepth) {
-    const k = arr.length;
+    const sorted = arr.slice().sort((a, b) => (a.hash - b.hash) || (a.idx - b.idx));
+    const k = sorted.length;
     const y = -depth * layerY;
 
     // 同层节点越多，圆盘半径越大
     const discR = Math.max(minDisc + depth * spacing * 1.1, Math.sqrt(Math.max(1, k)) * spacing * 2.2);
 
     for (let i = 0; i < k; i++) {
-      const { node, idx } = arr[i];
+      const { node } = sorted[i];
       if (!node?.targetPosition) continue;
 
       if (depth === 0) {
@@ -1855,7 +1892,7 @@ const hierarchicalLayout = () => {
 
       const t = (i + 0.5) / k;
       const r = discR * Math.sqrt(t);
-      const a = (idx + 1) * golden + depth * 0.37;
+      const a = (i + 1) * golden + depth * 0.37;
 
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
@@ -1884,7 +1921,8 @@ const sphericalLayout = () => {
   rootNode?.targetPosition?.set(0, 0, 0);
 
   const others = nodes.filter(n => n !== rootNode);
-  const m = others.length;
+  const ordered = buildStableOrder(others, (n, idx) => n?.userData?.id ?? `__i_${idx}`);
+  const m = ordered.length;
   if (!m) return;
 
   const forceSphere = (radiusFn, strength = 0.9) => {
@@ -1904,16 +1942,13 @@ const sphericalLayout = () => {
     return f;
   };
 
-  const thetaInc = 2.399963229728653;
-  const nodeDatas = others.map((n, i) => {
-    const u = (i + 0.5) / m;
-    const phi = Math.acos(1 - 2 * u);
-    const theta = (i + 1) * thetaInc;
+  const nodeDatas = ordered.map((entry, i) => {
+    const pos = getFibonacciSpherePosition(i, m, radius);
     return {
-      id: String(n?.userData?.id ?? i),
-      x: radius * Math.cos(theta) * Math.sin(phi),
-      y: radius * Math.sin(theta) * Math.sin(phi),
-      z: radius * Math.cos(phi)
+      id: entry.id,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z
     };
   });
 
@@ -1934,7 +1969,7 @@ const sphericalLayout = () => {
   simulation.stop();
 
   for (let i = 0; i < m; i++) {
-    const n = others[i];
+    const n = ordered[i]?.item;
     const d = nodeDatas[i];
     n?.targetPosition?.set(d.x || 0, d.y || 0, d.z || 0);
   }
