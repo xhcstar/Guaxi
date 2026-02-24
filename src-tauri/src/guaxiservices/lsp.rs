@@ -4,6 +4,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::time::Duration;
 
 use actix::prelude::*;
@@ -744,6 +747,10 @@ impl Actor for LspWsSession {
 
             let program_for_log = cfg.program.clone();
             let mut cmd = Command::new(cfg.program);
+
+            #[cfg(windows)]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+
             cmd.args(cfg.args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
