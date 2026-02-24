@@ -2,15 +2,19 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::guaxiservices::lsp;
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::{engine::general_purpose, Engine as _};
+use futures_util::StreamExt;
 use keyring::Entry;
 use rand::rngs::OsRng;
 use rand::TryRngCore;
+use reqwest::Client;
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -386,6 +390,71 @@ impl Default for AppearanceConfig {
 pub struct MarkdownInstallStatus {
     pub installed: bool,
     pub expected_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LocalDeepseekStatus {
+    pub installed: bool,
+    pub expected_path: String,
+    pub llama_server_exists: bool,
+    pub llama_server_path: String,
+}
+
+const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
+const LOCAL_DEEPSEEK_MODEL_DOWNLOAD_URL: &str = "https://cdn-lfs-cn-1.modelscope.cn/prod/lfs-objects/11/1d/b362d89e14694a5b61838c81c3e46ddbf3150616038f999756148fb8db45?filename=DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf&namespace=unsloth&repository=DeepSeek-R1-0528-Qwen3-8B-GGUF&revision=master&tag=model&auth_key=1771939951-615ed85fadc044838478c859b01428b3-0-f5ee57b1a3193419e12c9f615e5869c6";
+
+fn run_modelscope_download(local_dir: &Path) -> Result<(), String> {
+    let base_args = [
+        "download",
+        "--model",
+        "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
+        LOCAL_DEEPSEEK_MODEL_FILENAME,
+        "--local_dir",
+    ];
+    let local_dir_s = local_dir.to_string_lossy().to_string();
+
+    let candidates: Vec<(&str, Vec<&str>)> = vec![
+        ("modelscope", vec![]),
+        ("python", vec!["-m", "modelscope"]),
+        ("py", vec!["-m", "modelscope"]),
+    ];
+
+    let mut errors: Vec<String> = Vec::new();
+
+    for (bin, prefix_args) in candidates {
+        let mut cmd = Command::new(bin);
+        for arg in prefix_args {
+            cmd.arg(arg);
+        }
+        for arg in base_args {
+            cmd.arg(arg);
+        }
+        cmd.arg(&local_dir_s);
+
+        let output = match cmd.output() {
+            Ok(o) => o,
+            Err(e) => {
+                errors.push(format!("{} launch failed: {}", bin, e));
+                continue;
+            }
+        };
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        errors.push(format!(
+            "{} exit={} stderr={} stdout={}",
+            bin, output.status, stderr, stdout
+        ));
+    }
+
+    Err(format!(
+        "all modelscope command variants failed: {}",
+        errors.join(" | ")
+    ))
 }
 
 impl Default for AppConfig {
@@ -1026,6 +1095,66 @@ fn find_dir_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf
     None
 }
 
+fn find_file_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 || !root.is_dir() {
+        return None;
+    }
+
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_file()
+            && p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+        {
+            return Some(p);
+        }
+
+        if p.is_dir() {
+            if let Some(found) = find_file_by_name(&p, name, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
+fn local_deepseek_model_path(exe: &Path) -> PathBuf {
+    exe.join("utils")
+        .join("Models")
+        .join("chat")
+        .join(LOCAL_DEEPSEEK_MODEL_FILENAME)
+}
+
+fn resolve_llama_server_path(exe: &Path) -> Option<PathBuf> {
+    let llama_dir = exe.join("utils").join("llama");
+    if !llama_dir.exists() {
+        return None;
+    }
+
+    let candidates = if cfg!(windows) {
+        vec!["llama-server.exe", "llama_server.exe"]
+    } else {
+        vec!["llama-server", "llama_server"]
+    };
+
+    for name in candidates {
+        let direct = llama_dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+
+        if let Some(found) = find_file_by_name(&llama_dir, name, 6) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
 #[tauri::command]
 pub async fn get_markdown_models_status() -> Result<MarkdownInstallStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -1042,6 +1171,143 @@ pub async fn get_markdown_models_status() -> Result<MarkdownInstallStatus, Strin
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_local_deepseek_status() -> Result<LocalDeepseekStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = exe_dir()?;
+        let expected = local_deepseek_model_path(&exe);
+        let llama_server_path = resolve_llama_server_path(&exe);
+
+        Ok(LocalDeepseekStatus {
+            installed: expected.is_file(),
+            expected_path: expected.to_string_lossy().to_string(),
+            llama_server_exists: llama_server_path
+                .as_ref()
+                .map(|p| p.is_file())
+                .unwrap_or(false),
+            llama_server_path: llama_server_path
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn download_local_deepseek_model() -> Result<String, String> {
+    let exe = exe_dir()?;
+    let model_path = local_deepseek_model_path(&exe);
+
+    if model_path.is_file() {
+        return Ok(model_path.to_string_lossy().to_string());
+    }
+
+    let parent = model_path
+        .parent()
+        .ok_or("invalid model path".to_string())?
+        .to_path_buf();
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+
+    let direct_download_result: Result<(), String> = async {
+        let tmp_path = model_path.with_extension("download");
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+
+        let client = Client::new();
+        let response = client
+            .get(LOCAL_DEEPSEEK_MODEL_DOWNLOAD_URL)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "direct download failed with status {}",
+                response.status()
+            ));
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut file = tokio::fs::File::create(&tmp_path)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        while let Some(chunk) = stream.next().await {
+            let data = chunk.map_err(|e| e.to_string())?;
+            file.write_all(&data).await.map_err(|e| e.to_string())?;
+        }
+        file.flush().await.map_err(|e| e.to_string())?;
+
+        tokio::fs::rename(&tmp_path, &model_path)
+            .await
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&tmp_path);
+                e.to_string()
+            })?;
+        Ok(())
+    }
+    .await;
+
+    if direct_download_result.is_ok() && model_path.is_file() {
+        return Ok(model_path.to_string_lossy().to_string());
+    }
+
+    let modelscope_result = tauri::async_runtime::spawn_blocking(move || run_modelscope_download(&parent))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if modelscope_result.is_ok() && model_path.is_file() {
+        return Ok(model_path.to_string_lossy().to_string());
+    }
+
+    Err(format!(
+        "download local deepseek model failed. direct_error={}; modelscope_result={:?}. You can manually import GGUF via install_local_deepseek_model_from_file(source_path). target={}",
+        direct_download_result
+            .err()
+            .unwrap_or_else(|| "none".to_string()),
+        modelscope_result.err(),
+        model_path.to_string_lossy()
+    ))
+}
+
+#[tauri::command]
+pub async fn install_local_deepseek_model_from_file(source_path: String) -> Result<String, String> {
+    let src = PathBuf::from(source_path.trim());
+    if !src.is_file() {
+        return Err(format!(
+            "source file not found: {}",
+            src.to_string_lossy()
+        ));
+    }
+
+    let ext_ok = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("gguf"))
+        .unwrap_or(false);
+    if !ext_ok {
+        return Err("source file must be a .gguf model file".to_string());
+    }
+
+    let exe = exe_dir()?;
+    let model_path = local_deepseek_model_path(&exe);
+    let parent = model_path
+        .parent()
+        .ok_or("invalid model path".to_string())?
+        .to_path_buf();
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+
+    let tmp_path = model_path.with_extension("copying");
+    let _ = fs::remove_file(&tmp_path);
+    fs::copy(&src, &tmp_path).map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, &model_path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        e.to_string()
+    })?;
+
+    Ok(model_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]

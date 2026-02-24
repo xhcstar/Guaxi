@@ -14,6 +14,7 @@ import { createLogger } from '../../utils/logger'
 import { computed } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { ChevronDown16Filled } from '@vicons/fluent'
+import { invoke } from '@tauri-apps/api/core'
 
 const logger = createLogger('ChatModelSelector')
 
@@ -47,10 +48,18 @@ const dropdownOptions = computed(() => {
 });
 
 // 处理模型选择变化
-const handleModelChange = (key) => {
+const handleModelChange = async (key) => {
   logger.info('key', key);
   const selectModelId = parseInt(key.split('-')[1], 10);
   logger.info('selectModelId', selectModelId);
   chatStore.setChatModel(selectModelId);
+
+  if (selectModelId === 6) {
+    try {
+      await invoke('ensure_local_deepseek_service')
+    } catch (e) {
+      logger.error('LocalDeepseek 预启动失败:', e)
+    }
+  }
 };
 </script>

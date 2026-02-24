@@ -6,12 +6,36 @@ use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::TryFrom;
+use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 use url::Url;
 // use std::error::Error;
+use once_cell::sync::Lazy;
+
+const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
+const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
+const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/chat/completions";
+
+struct LocalDeepseekProcessState {
+    child: Option<Child>,
+}
+
+static LOCAL_DEEPSEEK_PROCESS: Lazy<Mutex<LocalDeepseekProcessState>> =
+    Lazy::new(|| Mutex::new(LocalDeepseekProcessState { child: None }));
+
+#[derive(Serialize)]
+pub struct LocalDeepseekServiceStatus {
+    pub ready: bool,
+    pub endpoint: String,
+    pub model_path: String,
+}
 
 #[allow(non_camel_case_types)]
 enum ChatModel {
@@ -230,6 +254,228 @@ fn generate_session_id() -> String {
 
     // 将时间戳和随机数组合成 session_id
     format!("session_{}_{}", timestamp, random_number)
+}
+
+fn exe_dir() -> Result<PathBuf, String> {
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
+    exe_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or("failed to locate executable directory".to_string())
+}
+
+fn local_deepseek_model_path(exe: &Path) -> PathBuf {
+    exe.join("utils")
+        .join("Models")
+        .join("chat")
+        .join(LOCAL_DEEPSEEK_MODEL_FILENAME)
+}
+
+fn find_file_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 || !root.is_dir() {
+        return None;
+    }
+
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_file()
+            && p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+        {
+            return Some(p);
+        }
+
+        if p.is_dir() {
+            if let Some(found) = find_file_by_name(&p, name, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_llama_server_path(exe: &Path) -> Result<PathBuf, String> {
+    let llama_dir = exe.join("utils").join("llama");
+    if !llama_dir.exists() {
+        return Err(format!(
+            "llama directory not found: {}",
+            llama_dir.to_string_lossy()
+        ));
+    }
+
+    let candidates = if cfg!(windows) {
+        vec!["llama-server.exe", "llama_server.exe"]
+    } else {
+        vec!["llama-server", "llama_server"]
+    };
+
+    for name in candidates {
+        let direct = llama_dir.join(name);
+        if direct.is_file() {
+            return Ok(direct);
+        }
+        if let Some(found) = find_file_by_name(&llama_dir, name, 6) {
+            return Ok(found);
+        }
+    }
+
+    Err(format!(
+        "llama-server executable not found under {}",
+        llama_dir.to_string_lossy()
+    ))
+}
+
+async fn is_local_deepseek_server_ready() -> bool {
+    let client = match ClientBuilder::new().no_proxy().build() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    if let Ok(resp) = client
+        .get(format!("{}/health", LOCAL_DEEPSEEK_SERVER_URL))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return true;
+        }
+    }
+
+    if let Ok(resp) = client
+        .get(format!("{}/v1/models", LOCAL_DEEPSEEK_SERVER_URL))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn refresh_local_deepseek_process_state() {
+    if let Ok(mut guard) = LOCAL_DEEPSEEK_PROCESS.lock() {
+        if let Some(child) = guard.child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(_)) => guard.child = None,
+                Ok(None) => {}
+                Err(_) => guard.child = None,
+            }
+        }
+    }
+}
+
+async fn ensure_local_deepseek_server_started() -> Result<PathBuf, String> {
+    let exe = exe_dir()?;
+    let model_path = local_deepseek_model_path(&exe);
+    let log_dir = exe.join("logs");
+    fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    let log_path = log_dir.join("local_deepseek_server.log");
+    if !model_path.is_file() {
+        return Err(format!(
+            "LocalDeepseek model not found: {}",
+            model_path.to_string_lossy()
+        ));
+    }
+
+    if is_local_deepseek_server_ready().await {
+        return Ok(model_path);
+    }
+
+    refresh_local_deepseek_process_state();
+
+    {
+        let mut guard = LOCAL_DEEPSEEK_PROCESS
+            .lock()
+            .map_err(|_| "local deepseek process lock poisoned".to_string())?;
+        if guard.child.is_none() {
+            let server_path = resolve_llama_server_path(&exe)?;
+            let log_file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .map_err(|e| format!("failed to open llama-server log file: {}", e))?;
+            let log_file_err = log_file
+                .try_clone()
+                .map_err(|e| format!("failed to clone log handle: {}", e))?;
+            let mut command = Command::new(&server_path);
+            command
+                .arg("--model")
+                .arg(&model_path)
+                .arg("--host")
+                .arg("127.0.0.1")
+                .arg("--port")
+                .arg("18080")
+                .arg("--threads")
+                .arg("-1")
+                .arg("--n-gpu-layers")
+                .arg("99")
+                .arg("--ctx-size")
+                .arg("16384")
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
+                .stdin(Stdio::null());
+
+            if let Some(parent) = server_path.parent() {
+                command.current_dir(parent);
+            }
+
+            let child = command.spawn().map_err(|e| {
+                format!(
+                    "failed to start llama-server: {} ({}), log={}",
+                    e,
+                    server_path.to_string_lossy(),
+                    log_path.to_string_lossy()
+                )
+            })?;
+            guard.child = Some(child);
+        }
+    }
+
+    for _ in 0..120 {
+        if is_local_deepseek_server_ready().await {
+            return Ok(model_path);
+        }
+        if let Ok(mut guard) = LOCAL_DEEPSEEK_PROCESS.lock() {
+            if let Some(child) = guard.child.as_mut() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    guard.child = None;
+                    return Err(format!(
+                        "llama-server exited early with status {}. log={}",
+                        status,
+                        log_path.to_string_lossy()
+                    ));
+                }
+            }
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    if let Ok(mut guard) = LOCAL_DEEPSEEK_PROCESS.lock() {
+        if let Some(mut child) = guard.child.take() {
+            let _ = child.kill();
+        }
+    }
+
+    Err(format!(
+        "LocalDeepseek service start timeout. log={}",
+        log_path.to_string_lossy()
+    ))
+}
+
+#[tauri::command]
+pub async fn ensure_local_deepseek_service() -> Result<LocalDeepseekServiceStatus, String> {
+    let model_path = ensure_local_deepseek_server_started().await?;
+    Ok(LocalDeepseekServiceStatus {
+        ready: true,
+        endpoint: LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL.to_string(),
+        model_path: model_path.to_string_lossy().to_string(),
+    })
 }
 
 // 调用 DeepSeek API 获取回答
@@ -697,30 +943,25 @@ pub async fn get_answer_from_local_deepseek(
     question: &str,
     sessionid: &str,
 ) -> Result<ChatResponse, String> {
-    let url = "http://localhost:11434/api/chat";
-    let session_id;
+    ensure_local_deepseek_server_started().await?;
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
 
     info!(
         "get_answer_from_local_deepseek: Received request: {} {}",
         question, sessionid
     );
 
-    if sessionid.is_empty() {
-        session_id = generate_session_id();
-        info!("get_answer_from_local_deepseek: sessionid is empty, generating a new one.");
-    } else {
-        session_id = sessionid.to_string();
-        info!("get_answer_from_local_deepseek: session_id: {}", session_id);
-    }
-
     let request_body = json!({
-        "model": "deepseek-r1:8b",
+        "model": "local-deepseek-r1",
         "messages": [
             {"role": "system", "content": local_math_system_prompt()},
             {"role": "user", "content": question}
         ],
-        "stream": false,
-        "session_id": session_id
+        "stream": false
     });
 
     info!(
@@ -735,66 +976,35 @@ pub async fn get_answer_from_local_deepseek(
         .map_err(|e| e.to_string())?;
 
     let response = client
-        .post(url)
+        .post(LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL)
         .json(&request_body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        error!(
-            "get_answer_from_local_deepseek: response error: {:?} ",
-            response.status()
-        );
-        eprintln!("Request failed: {:?}", response.status());
-    } else {
-        info!("get_answer_from_local_deepseek: response: {:?} ", response);
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Error calling Local DeepSeek API: {} {}", status, body));
     }
 
-    let mut stream = response.bytes_stream();
-    let mut full_data = Vec::new();
+    let data = response.text().await.map_err(|e| e.to_string())?;
+    let mut chat_response: DeepSeekResponse =
+        serde_json::from_str(&data).map_err(|e| e.to_string())?;
 
-    while let Some(chunk_result) = stream.next().await {
-        match chunk_result {
-            Ok(chunk) => full_data.extend_from_slice(&chunk),
-            Err(e) => {
-                eprintln!("Error while reading stream: {}", e);
-            }
-        }
+    if let Some(message) = chat_response
+        .choices
+        .get_mut(0)
+        .map(|choice| &mut choice.message)
+    {
+        message.content = normalize_math_symbols(message.content.clone());
     }
-    debug!(
-        "get_answer_from_local_deepseek: full_data: {:?} ",
-        full_data
-    );
 
-    let data = String::from_utf8(full_data).expect("Failed to convert bytes to string");
-    info!("get_answer_from_local_deepseek: Data: {:?} ", data);
-
-    // // 替换 `\[` 和 `\]` 及相关换行符
-    // let re_block = Regex::new(r"\\\[\s*\n|\n\s*\\\]").unwrap();
-    // // 替换 \( 和 \) 及相关换行符
-    // let re_inline = Regex::new(r"\\\(\s*|\s*\\\)").unwrap();
-
-    // // 对 content 进行替换
-    // if let Some(message) = chat_response
-    //     .choices
-    //     .get_mut(0)
-    //     .map(|choice| &mut choice.message)
-    // {
-    //     message.content = re_block.replace_all(&message.content, "$$").to_string();
-    //     message.content = re_inline.replace_all(&message.content, "$").to_string();
-    // }
-
-    // info!("get_answer_from_local_deepseek: Answer replaced for math symble: {}", chat_response.choices[0].message.content);
-
-    // let answer_content = chat_response
-    //     .choices
-    //     .get(0)
-    //     .map(|choice| choice.message.content.clone())
-    //     .unwrap_or_else(|| "No answer received.".to_string());
-
-    // 使用?运算符传播错误
-    let answer_content = collect_content_from_local_deepseek(&data).await?;
+    let answer_content = chat_response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.clone())
+        .unwrap_or_else(|| "No answer received.".to_string());
 
     let chatrsp = ChatResponse {
         answer: answer_content,
@@ -1053,7 +1263,7 @@ pub async fn get_answer_from_local_deepseek_stream(
     question: &str,
     sessionid: &str,
 ) -> Result<(), String> {
-    let url = "http://localhost:11434/api/chat";
+    ensure_local_deepseek_server_started().await?;
     let session_id = if sessionid.is_empty() {
         generate_session_id()
     } else {
@@ -1061,13 +1271,12 @@ pub async fn get_answer_from_local_deepseek_stream(
     };
 
     let request_body = json!({
-        "model": "deepseek-r1:8b",
+        "model": "local-deepseek-r1",
         "messages": [
             {"role": "system", "content": local_math_system_prompt()},
             {"role": "user", "content": question}
         ],
-        "stream": true,  // 启用流式传输
-        "session_id": session_id,
+        "stream": true,
     });
 
     info!(
@@ -1082,27 +1291,24 @@ pub async fn get_answer_from_local_deepseek_stream(
         .map_err(|e| e.to_string())?;
 
     let response = client
-        .post(url)
+        .post(LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL)
         .json(&request_body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "Error calling DeepSeek API: {:?}",
-            response.status()
-        ));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Error calling Local DeepSeek API: {} {}", status, body));
     }
 
     let mut stream = response.bytes_stream();
     let mut carry = String::new();
-    let mut buffer = String::new();
     let mut full_raw = String::new();
-    let mut last_emitted = String::new(); // 新增：记录上次发送的内容
     let mut fence = CodeFenceTracker::default();
 
-    // 流式输出数据
+    // Stream each delta immediately so UI can render token-by-token.
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(data) => {
@@ -1126,42 +1332,18 @@ pub async fn get_answer_from_local_deepseek_stream(
 
                         full_raw.push_str(&content);
                         fence.push(&content);
-                        buffer.push_str(&content);
+
+                        let out = normalize_math_symbols(content);
+                        if !out.is_empty() {
+                            app.emit("modle-streaming-respond-output", &out)
+                                .map_err(|e| e.to_string())?;
+                            debug!(
+                                "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
+                                out
+                            );
+                        }
                     }
                 }
-
-                debug!(
-                    "get_answer_from_local_deepseek_stream: origin buffer: {:?}",
-                    buffer
-                );
-
-                if buffer.is_empty() {
-                    continue;
-                }
-
-                // 跳过特定字符的情况保持不变
-                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
-                    continue;
-                }
-
-                debug!(
-                    "get_answer_from_local_deepseek_stream: buffer: {:?}",
-                    buffer
-                );
-
-                let out = normalize_math_symbols(buffer.clone());
-
-                if out != last_emitted && !out.is_empty() {
-                    app.emit("modle-streaming-respond-output", &out)
-                        .map_err(|e| e.to_string())?;
-                    last_emitted = out.clone();
-                    debug!(
-                        "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
-                        out
-                    );
-                }
-
-                buffer.clear();
             }
             Err(e) => {
                 return Err(format!("Error while reading stream: {}", e));
@@ -1173,24 +1355,13 @@ pub async fn get_answer_from_local_deepseek_stream(
     if !tail.is_empty() {
         if let Some(content) = stream_extract_content(tail) {
             fence.push(&content);
-            buffer.push_str(&content);
+            full_raw.push_str(&content);
+            let out = normalize_math_symbols(content);
+            if !out.is_empty() {
+                app.emit("modle-streaming-respond-output", &out)
+                    .map_err(|e| e.to_string())?;
+            }
         }
-    }
-
-    // 流结束后，处理剩余的缓冲区数据
-    if !buffer.is_empty() {
-        let out = normalize_math_symbols(buffer);
-
-        if out != last_emitted && !out.is_empty() {
-            app.emit("modle-streaming-respond-output", &out)
-                .map_err(|e| e.to_string())?;
-            debug!(
-                "get_answer_from_local_deepseek_stream: Emitting remaining buffered data: {}",
-                out
-            );
-        }
-
-        debug!("get_answer_from_local_deepseek_stream: emit event modle-streaming-respond-output");
     }
 
     if let Some(closer) = fence.closing_delta() {

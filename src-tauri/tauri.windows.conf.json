@@ -10,7 +10,8 @@
       "utils/pandoc*",
       "utils/tectonic.exe",
       "utils/horizontalrule.lua",
-      "utils/SlidevEnv/**/*"
+      "utils/SlidevEnv/**/*",
+      "utils/llama/**/*"
     ]
   }
 }

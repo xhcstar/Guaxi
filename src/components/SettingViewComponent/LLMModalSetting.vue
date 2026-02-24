@@ -115,6 +115,47 @@
               </div>
             </div>
           </div>
+
+          <div class="status-item" :class="`is-${localDeepseekState}`" role="listitem">
+            <div class="status-left">
+              <n-icon :component="CubeOutline" />
+              <span class="status-name">LocalDeepseek 模型</span>
+            </div>
+            <div class="status-right">
+              <n-button
+                size="tiny"
+                type="primary"
+                ghost
+                :loading="downloadingLocalDeepseek"
+                :disabled="loading || downloadingLocalDeepseek || localDeepseekStatus.installed"
+                @click="downloadLocalDeepseekModel"
+              >
+                下载
+              </n-button>
+              <n-button
+                size="tiny"
+                ghost
+                :disabled="loading || downloadingLocalDeepseek"
+                @click="importLocalDeepseekModel"
+              >
+                导入
+              </n-button>
+              <div class="status-pop-wrap" tabindex="0">
+                <span class="status-badge">
+                  <n-icon :component="localDeepseekBadgeIcon" />
+                  <span>{{ localDeepseekBadgeText }}</span>
+                </span>
+                <div class="status-popover" role="tooltip">
+                  <div class="status-tip-title">LocalDeepseek</div>
+                  <div class="status-tip-desc">模型路径: {{ localDeepseekStatus.expected_path || '-' }}</div>
+                  <div class="status-tip-desc">llama-server: {{ localDeepseekStatus.llama_server_path || '-' }}</div>
+                  <div class="status-tip-desc">
+                    {{ localDeepseekStatus.llama_server_exists ? 'llama.cpp 服务端可用' : '请将 llama.cpp 构建版本放到 utils/llama' }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </n-space>
     </n-card>
@@ -143,6 +184,28 @@ const copyingEnv = ref(false)
 
 const markdownModelsStatus = ref({ installed: false, expected_path: '' })
 const markdownEnvStatus = ref({ installed: false, expected_path: '' })
+const localDeepseekStatus = ref({
+  installed: false,
+  expected_path: '',
+  llama_server_exists: false,
+  llama_server_path: '',
+})
+const downloadingLocalDeepseek = ref(false)
+
+const localDeepseekState = computed(() => {
+  if (downloadingLocalDeepseek.value) return 'info'
+  return localDeepseekStatus.value.installed ? 'ok' : 'warn'
+})
+
+const localDeepseekBadgeText = computed(() => {
+  if (downloadingLocalDeepseek.value) return 'Downloading'
+  return localDeepseekStatus.value.installed ? 'Installed' : 'Not installed'
+})
+
+const localDeepseekBadgeIcon = computed(() => {
+  if (downloadingLocalDeepseek.value) return TimeOutline
+  return localDeepseekStatus.value.installed ? CheckmarkCircleOutline : CloseCircleOutline
+})
 
 const hasKey = (v) => typeof v === 'string' && v.trim().length > 0
 
@@ -224,6 +287,14 @@ const loadConfig = async () => {
     markdownEnvStatus.value = {
       installed: Boolean(envStatus?.installed),
       expected_path: typeof envStatus?.expected_path === 'string' ? envStatus.expected_path : '',
+    }
+
+    const localStatus = await invoke('get_local_deepseek_status')
+    localDeepseekStatus.value = {
+      installed: Boolean(localStatus?.installed),
+      expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
+      llama_server_exists: Boolean(localStatus?.llama_server_exists),
+      llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
     }
   } catch (e) {
     logger.error('加载大模型配置失败:', e)
@@ -341,6 +412,57 @@ const installMarkdownConvertorEnv = async () => {
   }
 }
 
+const downloadLocalDeepseekModel = async () => {
+  downloadingLocalDeepseek.value = true
+  try {
+    message.info('开始下载 LocalDeepseek 模型，请稍候')
+    const installedTo = await invoke('download_local_deepseek_model')
+    message.success(`模型已下载到: ${installedTo}`)
+
+    const localStatus = await invoke('get_local_deepseek_status')
+    localDeepseekStatus.value = {
+      installed: Boolean(localStatus?.installed),
+      expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
+      llama_server_exists: Boolean(localStatus?.llama_server_exists),
+      llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
+    }
+  } catch (e) {
+    logger.error('下载 LocalDeepseek 模型失败:', e)
+    message.error('下载 LocalDeepseek 模型失败')
+  } finally {
+    downloadingLocalDeepseek.value = false
+  }
+}
+
+const importLocalDeepseekModel = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'GGUF Model', extensions: ['gguf'] }],
+    })
+    if (!selected) return
+
+    downloadingLocalDeepseek.value = true
+    const installedTo = await invoke('install_local_deepseek_model_from_file', {
+      sourcePath: String(selected),
+    })
+    message.success(`模型已导入到: ${installedTo}`)
+
+    const localStatus = await invoke('get_local_deepseek_status')
+    localDeepseekStatus.value = {
+      installed: Boolean(localStatus?.installed),
+      expected_path: typeof localStatus?.expected_path === 'string' ? localStatus.expected_path : '',
+      llama_server_exists: Boolean(localStatus?.llama_server_exists),
+      llama_server_path: typeof localStatus?.llama_server_path === 'string' ? localStatus.llama_server_path : '',
+    }
+  } catch (e) {
+    logger.error('导入 LocalDeepseek 模型失败:', e)
+    message.error('导入 LocalDeepseek 模型失败')
+  } finally {
+    downloadingLocalDeepseek.value = false
+  }
+}
+
 onMounted(loadConfig)
 </script>
 
@@ -397,6 +519,7 @@ onMounted(loadConfig)
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .status-pop-wrap {
