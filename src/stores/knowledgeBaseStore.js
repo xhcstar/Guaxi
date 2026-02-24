@@ -32,7 +32,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     tagOptions: [],
 
     searchQuery: "",
-    visibleTypes: ["knowledge-base", "directory", "file", "section", "paragraph"],
+    visibleTypes: ["knowledge-base", "directory", "file"],
     selectedTags: [],
 
     selectedGraphNode: null,
@@ -206,7 +206,12 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     },
 
     setVisibleTypes(types) {
-      this.visibleTypes = Array.isArray(types) ? types.map(String) : [];
+      const next = Array.isArray(types) ? types.map(String) : [];
+      if (next.includes("paragraph") && !next.includes("section")) {
+        next.push("section");
+        console.info("已自动启用标题节点以支持段落显示");
+      }
+      this.visibleTypes = next;
     },
 
     setSelectedTags(tags) {

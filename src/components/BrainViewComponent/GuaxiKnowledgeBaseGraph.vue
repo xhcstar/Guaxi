@@ -256,6 +256,7 @@ const glowEnabled = ref(true);
 const glowStrength = ref(0.9);
 const glowSize = ref(16);
 const isFocusMode = ref(false);
+const focusContext = ref(null);
 
 let activeCameraTween = null;
 let initialViewSnapshot = null;
@@ -1189,11 +1190,26 @@ const resolveGraphNode = (nodeLike) => {
   );
 };
 
+const getNodeKey = (nodeLike) => {
+  const node = resolveGraphNode(nodeLike);
+  if (!node) return '';
+  const ud = node?.userData || {};
+  if (ud.id != null) return `id:${String(ud.id)}`;
+  if (ud.stable_id) return `stable:${String(ud.stable_id)}`;
+  const p = ud.path || ud.file_path || '';
+  return p ? `path:${normalizePath(p)}` : '';
+};
+
+const nodePassesTypeFilter = (n) => {
+  const ud = n?.userData || {};
+  const allowedTypes = new Set(Array.isArray(visibleTypes.value) ? visibleTypes.value : []);
+  return allowedTypes.has(ud.type);
+};
+
 const nodePassesFilters = (n) => {
   const ud = n?.userData || {};
 
-  const allowedTypes = new Set(Array.isArray(visibleTypes.value) ? visibleTypes.value : []);
-  if (!allowedTypes.has(ud.type)) return false;
+  if (!nodePassesTypeFilter(n)) return false;
 
   const selTags = Array.isArray(selectedTags.value) ? selectedTags.value : [];
   if (selTags.length > 0) {
@@ -1208,17 +1224,84 @@ const nodePassesFilters = (n) => {
   return normalize(hay).includes(q);
 };
 
-const applyGraphVisibility = () => {
+const buildFocusContext = (nodeLike) => {
+  const node = resolveGraphNode(nodeLike);
+  if (!node) return null;
+
+  const relatedNodes = new Set();
+  const relatedEdges = new Set();
+  const nodeKey = getNodeKey(node);
+
+  relatedNodes.add(node);
+
+  const byId = new Map();
   nodes.forEach((n) => {
-    const ok = nodePassesFilters(n);
+    const nid = n?.userData?.id;
+    if (nid != null) byId.set(String(nid), n);
+  });
+
+  const parentId = node.userData?.parentId;
+  if (parentId != null) {
+    const parent = byId.get(String(parentId));
+    if (parent) relatedNodes.add(parent);
+  }
+
+  if (node.userData?.id != null) {
+    const idStr = String(node.userData.id);
+    nodes.forEach((n) => {
+      if (String(n?.userData?.parentId ?? '') === idStr) relatedNodes.add(n);
+    });
+  }
+
+  edges.forEach((edge) => {
+    const from = edge?.userData?.from;
+    const to = edge?.userData?.to;
+    if (!from || !to) return;
+    if (from === node || to === node) {
+      relatedEdges.add(edge);
+      relatedNodes.add(from);
+      relatedNodes.add(to);
+    }
+  });
+
+  return { node, nodeKey, nodes: relatedNodes, edges: relatedEdges };
+};
+
+const applyGraphVisibility = (context) => {
+  const scope = context || focusContext.value;
+  const hasScope = !!(scope && scope.nodes && scope.nodes.size);
+
+  nodes.forEach((n) => {
+    const ok = hasScope
+      ? nodePassesTypeFilter(n) && scope.nodes.has(n)
+      : nodePassesFilters(n);
     if (n?.mesh) n.mesh.visible = ok;
   });
 
   edges.forEach((e) => {
     const from = e?.userData?.from;
     const to = e?.userData?.to;
-    e.visible = !!from && !!to && !!from.mesh?.visible && !!to.mesh?.visible;
+    let ok = !!from && !!to && !!from.mesh?.visible && !!to.mesh?.visible;
+    if (hasScope) ok = ok && scope.edges.has(e);
+    e.visible = ok;
   });
+};
+
+const applyFocusContext = (nodeLike) => {
+  const context = buildFocusContext(nodeLike);
+  if (!context) return;
+  focusContext.value = context;
+  applyGraphVisibility(context);
+  highlightConnectedNodes(context.node);
+  log('已进入关联聚焦模式', context.node?.userData?.name || '');
+};
+
+const clearFocusContext = () => {
+  if (!focusContext.value) return;
+  focusContext.value = null;
+  applyGraphVisibility();
+  resetNodeHighlights();
+  log('已退出关联聚焦模式');
 };
 
 watch([visibleTypes, selectedTags, searchQuery], () => applyGraphVisibility(), { deep: true });
@@ -1357,7 +1440,7 @@ const highlightConnectedNodes = (nodeLike) => {
 
   edges.forEach((edge) => {
     if (edge.userData.from === node || edge.userData.to === node) {
-      edge.material.color.setHex(0xff0000);
+      edge.material.color.setHex(0x2196F3);
       edge.material.opacity = 1;
 
       const otherNode = edge.userData.from === node ? edge.userData.to : edge.userData.from;
@@ -1410,6 +1493,7 @@ const clearScene = () => {
 
   selectedNode.value = null;
   store.setSelectedGraphNode(null);
+  focusContext.value = null;
 
   if (labelRenderer?.domElement) {
     labelRenderer.domElement.innerHTML = '';
@@ -2061,7 +2145,7 @@ const highlightNode = (object) => {
     // 高亮连接的边
     edges.forEach(edge => {
       if (edge.userData.from === object || edge.userData.to === object) {
-        edge.material.color.setHex(0xff0000);
+        edge.material.color.setHex(0x2196F3);
         edge.material.opacity = 1;
       }
     });
@@ -2610,7 +2694,7 @@ watch(
     if (!n) {
       selectedNode.value = null;
       isFocusMode.value = false;
-      resetNodeHighlights();
+      clearFocusContext();
       return;
     }
 
@@ -2618,6 +2702,19 @@ watch(
     if (!hit) return;
 
     selectedNode.value = { ...hit.userData, object: hit.mesh };
+
+    if (focusContext.value) {
+      const hitKey = getNodeKey(hit);
+      if (!focusContext.value.nodeKey || focusContext.value.nodeKey !== hitKey) {
+        const nextContext = buildFocusContext(hit);
+        if (nextContext) {
+          focusContext.value = nextContext;
+          applyGraphVisibility(nextContext);
+          log('已更新关联聚焦上下文', hit.userData?.name || '');
+        }
+      }
+    }
+
     highlightConnectedNodes(hit);
   },
   { deep: true }
@@ -2642,7 +2739,7 @@ watch(
       focusOnNode(hit);
       selectedNode.value = { ...hit.userData, object: hit.mesh };
       store.setSelectedGraphNode({ ...hit.userData });
-      highlightConnectedNodes(hit);
+      applyFocusContext(hit);
     }
   },
   { deep: true }
@@ -2681,6 +2778,7 @@ const handleCanvasClick = (event) => {
     }
   } else {
     selectedNode.value = null;
+    store.setSelectedGraphNode(null);
   }
 };
 
