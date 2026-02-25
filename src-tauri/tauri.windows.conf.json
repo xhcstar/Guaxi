@@ -11,7 +11,8 @@
       "utils/tectonic.exe",
       "utils/horizontalrule.lua",
       "utils/SlidevEnv/**/*",
-      "utils/llama/**/*"
+      "utils/llama/**/*",
+      "utils/python_libs/**/*"
     ]
   }
 }
