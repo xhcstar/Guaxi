@@ -64,7 +64,7 @@ def main() -> int:
     if revision:
         kwargs["revision"] = revision
     if filename:
-        kwargs["allow_patterns"] = [f"**/{filename}"]
+        kwargs["allow_patterns"] = [filename, f"**/{filename}"]
 
     try:
         download_path = snapshot_download(model_id, **kwargs)
@@ -87,6 +87,26 @@ def main() -> int:
             if p.is_file():
                 model_file = p
                 break
+
+        if model_file is None:
+            lower_name = filename.lower()
+            for p in download_path.rglob("*"):
+                if p.is_file() and p.name.lower() == lower_name:
+                    model_file = p
+                    break
+
+        if model_file is None:
+            candidates = []
+            for p in download_path.rglob("*.gguf"):
+                if p.is_file():
+                    candidates.append(p)
+            if len(candidates) == 1:
+                model_file = candidates[0]
+                print(f"model_file_fallback={model_file}")
+            elif candidates:
+                preview = [str(p) for p in candidates[:20]]
+                print(f"gguf_candidates={preview}", file=sys.stderr)
+                return 5
 
         if model_file is None:
             print(f"model file not found: {filename}", file=sys.stderr)
