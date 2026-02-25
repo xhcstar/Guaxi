@@ -399,6 +399,21 @@ pub struct LocalDeepseekStatus {
 
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
 
+fn cleanup_modelscope_download_dir(local_dir: &Path) {
+    let download_root = local_dir.join("_modelscope_download");
+    if !download_root.exists() {
+        return;
+    }
+    match fs::remove_dir_all(&download_root) {
+        Ok(_) => {
+            info!(path = download_root.to_string_lossy().as_ref(), "modelscope cache removed");
+        }
+        Err(e) => {
+            warn!(path = download_root.to_string_lossy().as_ref(), error = %e, "modelscope cache cleanup failed");
+        }
+    }
+}
+
 fn run_modelscope_download(exe_dir: &Path, local_dir: &Path) -> Result<(), String> {
     let marker_src_dir = exe_dir
         .join("utils")
@@ -1226,6 +1241,10 @@ pub async fn download_local_deepseek_model() -> Result<String, String> {
     let model_path = local_deepseek_model_path(&exe);
 
     if model_path.is_file() {
+        if let Some(parent) = model_path.parent() {
+            cleanup_modelscope_download_dir(parent);
+        }
+        info!(path = model_path.to_string_lossy().as_ref(), "local deepseek model exists, skip download");
         return Ok(model_path.to_string_lossy().to_string());
     }
 
@@ -1244,6 +1263,7 @@ pub async fn download_local_deepseek_model() -> Result<String, String> {
     .map_err(|e| e.to_string())?;
 
     if modelscope_result.is_ok() && model_path.is_file() {
+        cleanup_modelscope_download_dir(&parent);
         return Ok(model_path.to_string_lossy().to_string());
     }
 

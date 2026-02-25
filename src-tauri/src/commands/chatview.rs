@@ -23,6 +23,102 @@ const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gg
 const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
 const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/chat/completions";
 
+#[derive(Default)]
+struct StreamBlockTracker {
+    in_fence: bool,
+    at_line_start: bool,
+    leading_spaces: usize,
+    tick_run: usize,
+    in_inline_math: bool,
+    in_block_math: bool,
+    backslash_run: usize,
+}
+
+impl StreamBlockTracker {
+    fn push(&mut self, s: &str) {
+        let chars: Vec<char> = s.chars().collect();
+        let mut i = 0usize;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch == '\n' {
+                self.at_line_start = true;
+                self.leading_spaces = 0;
+                self.tick_run = 0;
+                self.backslash_run = 0;
+                i += 1;
+                continue;
+            }
+
+            if self.at_line_start {
+                if ch == ' ' {
+                    if self.leading_spaces < 3 {
+                        self.leading_spaces += 1;
+                        self.backslash_run = 0;
+                        i += 1;
+                        continue;
+                    }
+                    self.at_line_start = false;
+                    self.tick_run = 0;
+                } else if ch == '`' {
+                    self.tick_run += 1;
+                    if self.tick_run == 3 {
+                        self.in_fence = !self.in_fence;
+                    }
+                    self.backslash_run = 0;
+                    i += 1;
+                    continue;
+                } else {
+                    self.at_line_start = false;
+                    self.tick_run = 0;
+                }
+            }
+
+            let escaped = self.backslash_run % 2 == 1;
+            if !self.in_fence && ch == '$' && !escaped {
+                let next_is_dollar = i + 1 < chars.len() && chars[i + 1] == '$';
+                if self.in_block_math {
+                    if next_is_dollar {
+                        self.in_block_math = false;
+                        i += 2;
+                        self.backslash_run = 0;
+                        continue;
+                    }
+                } else if self.in_inline_math {
+                    if !next_is_dollar {
+                        self.in_inline_math = false;
+                        i += 1;
+                        self.backslash_run = 0;
+                        continue;
+                    }
+                } else {
+                    if next_is_dollar {
+                        self.in_block_math = true;
+                        i += 2;
+                        self.backslash_run = 0;
+                        continue;
+                    }
+                    self.in_inline_math = true;
+                    i += 1;
+                    self.backslash_run = 0;
+                    continue;
+                }
+            }
+
+            if ch == '\\' {
+                self.backslash_run += 1;
+            } else {
+                self.backslash_run = 0;
+            }
+
+            i += 1;
+        }
+    }
+
+    fn is_blocked(&self) -> bool {
+        self.in_fence || self.in_inline_math || self.in_block_math
+    }
+}
+
 struct LocalDeepseekProcessState {
     child: Option<Child>,
 }
@@ -632,22 +728,120 @@ fn normalize_math_symbols(content: String) -> String {
 
     let raw = content;
     let out = raw
-        .replace("\\[", "$")
-        .replace("\\]", "$")
+        .replace("\\[", "$$")
+        .replace("\\]", "$$")
         .replace("\\(", "$")
         .replace("\\)", "$");
+    let tightened = tighten_math_spacing(&out);
 
     if raw.contains("\\[")
         || raw.contains("\\]")
         || raw.contains("\\(")
         || raw.contains("\\)")
         || raw.contains("```")
+        || out != tightened
     {
         info!(
-            "normalize_math_symbols: raw={} out={}",
+            "normalize_math_symbols: raw={} out={} tightened={}",
             excerpt_for_log(&raw),
-            excerpt_for_log(&out)
+            excerpt_for_log(&out),
+            excerpt_for_log(&tightened)
         );
+    }
+
+    tightened
+}
+
+fn trim_output_whitespace(out: &mut String) {
+    while out
+        .chars()
+        .last()
+        .map(|ch| ch.is_whitespace())
+        .unwrap_or(false)
+    {
+        out.pop();
+    }
+}
+
+fn is_math_delimiter_escaped(chars: &[char], index: usize) -> bool {
+    if index == 0 {
+        return false;
+    }
+    let mut backslashes = 0usize;
+    let mut i = index;
+    while i > 0 {
+        i -= 1;
+        if chars[i] == '\\' {
+            backslashes += 1;
+        } else {
+            break;
+        }
+    }
+    backslashes % 2 == 1
+}
+
+fn tighten_math_spacing(input: &str) -> String {
+    if input.is_empty() {
+        return String::new();
+    }
+
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+    let mut state = 0u8;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '$' && !is_math_delimiter_escaped(&chars, i) {
+            let next_is_dollar = i + 1 < chars.len() && chars[i + 1] == '$';
+
+            if state == 0 {
+                if next_is_dollar {
+                    out.push('$');
+                    out.push('$');
+                    i += 2;
+                    while i < chars.len() && chars[i].is_whitespace() {
+                        i += 1;
+                    }
+                    state = 2;
+                    continue;
+                }
+
+                out.push('$');
+                i += 1;
+                while i < chars.len() && chars[i].is_whitespace() {
+                    i += 1;
+                }
+                state = 1;
+                continue;
+            }
+
+            if state == 1 && !next_is_dollar {
+                trim_output_whitespace(&mut out);
+                out.push('$');
+                i += 1;
+                state = 0;
+                if i < chars.len() && !chars[i].is_whitespace() {
+                    out.push('\n');
+                }
+                continue;
+            }
+
+            if state == 2 && next_is_dollar {
+                trim_output_whitespace(&mut out);
+                out.push('$');
+                out.push('$');
+                i += 2;
+                state = 0;
+                if i < chars.len() && !chars[i].is_whitespace() {
+                    out.push('\n');
+                }
+                continue;
+            }
+        }
+
+        out.push(ch);
+        i += 1;
     }
 
     out
@@ -691,6 +885,7 @@ async fn openai_compat_sse_stream(
     let mut buffer = String::new();
     let mut full_raw = String::new();
     let mut fence = CodeFenceTracker::default();
+    let mut block = StreamBlockTracker::default();
 
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -712,11 +907,16 @@ async fn openai_compat_sse_stream(
 
                         full_raw.push_str(&content);
                         fence.push(&content);
+                        block.push(&content);
                         buffer.push_str(&content);
                     }
                 }
 
                 if buffer.is_empty() {
+                    continue;
+                }
+
+                if block.is_blocked() {
                     continue;
                 }
 
@@ -750,6 +950,7 @@ async fn openai_compat_sse_stream(
 
             full_raw.push_str(&content);
             fence.push(&content);
+            block.push(&content);
             buffer.push_str(&content);
         }
     }
@@ -985,7 +1186,10 @@ pub async fn get_answer_from_local_deepseek(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Error calling Local DeepSeek API: {} {}", status, body));
+        return Err(format!(
+            "Error calling Local DeepSeek API: {} {}",
+            status, body
+        ));
     }
 
     let data = response.text().await.map_err(|e| e.to_string())?;
@@ -1178,6 +1382,7 @@ pub async fn get_answer_from_local_qwen_stream(
     let mut buffer = String::new();
     let mut full_raw = String::new();
     let mut fence = CodeFenceTracker::default();
+    let mut block = StreamBlockTracker::default();
 
     // 流式输出数据
     while let Some(chunk) = stream.next().await {
@@ -1203,11 +1408,16 @@ pub async fn get_answer_from_local_qwen_stream(
 
                         full_raw.push_str(&content);
                         fence.push(&content);
+                        block.push(&content);
                         buffer.push_str(&content);
                     }
                 }
 
                 if buffer.is_empty() {
+                    continue;
+                }
+
+                if block.is_blocked() {
                     continue;
                 }
 
@@ -1231,6 +1441,7 @@ pub async fn get_answer_from_local_qwen_stream(
     if !tail.is_empty() {
         if let Some(content) = stream_extract_content(tail) {
             fence.push(&content);
+            block.push(&content);
             buffer.push_str(&content);
         }
     }
@@ -1300,13 +1511,18 @@ pub async fn get_answer_from_local_deepseek_stream(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Error calling Local DeepSeek API: {} {}", status, body));
+        return Err(format!(
+            "Error calling Local DeepSeek API: {} {}",
+            status, body
+        ));
     }
 
     let mut stream = response.bytes_stream();
     let mut carry = String::new();
     let mut full_raw = String::new();
+    let mut buffer = String::new();
     let mut fence = CodeFenceTracker::default();
+    let mut block = StreamBlockTracker::default();
 
     // Stream each delta immediately so UI can render token-by-token.
     while let Some(chunk) = stream.next().await {
@@ -1332,18 +1548,34 @@ pub async fn get_answer_from_local_deepseek_stream(
 
                         full_raw.push_str(&content);
                         fence.push(&content);
-
-                        let out = normalize_math_symbols(content);
-                        if !out.is_empty() {
-                            app.emit("modle-streaming-respond-output", &out)
-                                .map_err(|e| e.to_string())?;
-                            debug!(
-                                "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
-                                out
-                            );
-                        }
+                        block.push(&content);
+                        buffer.push_str(&content);
                     }
                 }
+
+                if buffer.is_empty() {
+                    continue;
+                }
+
+                if block.is_blocked() {
+                    continue;
+                }
+
+                if buffer.ends_with('\\') || buffer.ends_with(' ') || buffer.ends_with('\n') {
+                    continue;
+                }
+
+                let out = normalize_math_symbols(buffer.clone());
+                if !out.is_empty() {
+                    app.emit("modle-streaming-respond-output", &out)
+                        .map_err(|e| e.to_string())?;
+                    debug!(
+                        "get_answer_from_local_deepseek_stream: Streaming data: {:?}",
+                        out
+                    );
+                }
+
+                buffer.clear();
             }
             Err(e) => {
                 return Err(format!("Error while reading stream: {}", e));
@@ -1355,12 +1587,17 @@ pub async fn get_answer_from_local_deepseek_stream(
     if !tail.is_empty() {
         if let Some(content) = stream_extract_content(tail) {
             fence.push(&content);
+            block.push(&content);
             full_raw.push_str(&content);
-            let out = normalize_math_symbols(content);
-            if !out.is_empty() {
-                app.emit("modle-streaming-respond-output", &out)
-                    .map_err(|e| e.to_string())?;
-            }
+            buffer.push_str(&content);
+        }
+    }
+
+    if !buffer.is_empty() {
+        let out = normalize_math_symbols(buffer);
+        if !out.is_empty() {
+            app.emit("modle-streaming-respond-output", &out)
+                .map_err(|e| e.to_string())?;
         }
     }
 

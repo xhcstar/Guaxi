@@ -413,6 +413,12 @@ const installMarkdownConvertorEnv = async () => {
 }
 
 const downloadLocalDeepseekModel = async () => {
+  if (localDeepseekStatus.value.installed) {
+    logger.info('LocalDeepseek 模型已存在，跳过下载')
+    message.info('模型已存在，无需重复下载')
+    return
+  }
+
   downloadingLocalDeepseek.value = true
   try {
     message.info('开始下载 LocalDeepseek 模型，请稍候')

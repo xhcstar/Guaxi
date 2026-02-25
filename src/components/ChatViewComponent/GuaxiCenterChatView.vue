@@ -305,14 +305,6 @@ const scheduleAutosave = () => {
   }, 800);
 };
 
-const normalizeMathDelimiters = (text) => {
-  return (text ?? '').toString()
-    .replace(/\\\[/g, '$$')
-    .replace(/\\\]/g, '$$')
-    .replace(/\\\(/g, '$')
-    .replace(/\\\)/g, '$');
-};
-
 const isAtBottom = ref(true);
 const showJumpToBottom = computed(() => !isAtBottom.value);
 
@@ -666,13 +658,9 @@ onMounted(() => {
     const shouldFollow = isAtBottom.value;
     bumpGenerating();
     const rawPayload = typeof event.payload === 'string' ? event.payload : '';
-    const payload = typeof event.payload === 'string' ? normalizeMathDelimiters(event.payload) : event.payload;
+    const payload = event.payload;
     if (rawPayload && (rawPayload.includes('$') || rawPayload.includes('`') || rawPayload.includes('```') || rawPayload.includes('\\[') || rawPayload.includes('\\]') || rawPayload.includes('\\(') || rawPayload.includes('\\)'))) {
       logger.info('[modle-streaming-respond-output raw]', rawPayload.slice(0, 400));
-    }
-
-    if (typeof payload === 'string' && payload && (payload.includes('$') || payload.includes('`') || payload.includes('```'))) {
-      logger.info('[modle-streaming-respond-output normalized]', payload.slice(0, 400));
     }
 
     chatStore.collectChatSessionStream(payload);
@@ -720,12 +708,7 @@ onMounted(() => {
     const title = payload.title;
     const messages = payload.messages;
 
-    const normalizedMessages = Array.isArray(messages)
-      ? messages.map((m) => ({
-        ...m,
-        content: normalizeMathDelimiters(m?.content),
-      }))
-      : messages;
+    const normalizedMessages = Array.isArray(messages) ? messages : messages;
 
     chatStore.appendMessagesToTopic({
       modelId,
@@ -976,6 +959,12 @@ const setMessageRef = (el, index) => {
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.35);
   animation: typingDot 1.2s infinite ease-in-out;
+}
+
+.dark-mode .typing-dots i,
+.dark .typing-dots i,
+:root[data-guaxi-theme='dark'] .typing-dots i {
+  background: rgba(255, 255, 255, 0.75);
 }
 
 .typing-dots i:nth-child(2) {

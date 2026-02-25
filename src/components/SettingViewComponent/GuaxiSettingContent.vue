@@ -1,7 +1,9 @@
 <template>
   <div class="setting-content">
     <n-card class="setting-card">
-      <component :is="currentComponent" />
+      <keep-alive>
+        <component :is="currentComponent" />
+      </keep-alive>
     </n-card>
   </div>
 </template>

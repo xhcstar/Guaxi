@@ -353,11 +353,7 @@ export const useChatStore = defineStore("chatStore", {
       this.lastMessageTime = now;
 
       if (typeof message === "string" && message.length > 0) {
-        const processedMessage = message
-          .replace(/(\s*)\$(\s*)/g, "$")
-          .replace(/(\s*)\$\$(\s*)/g, "$$");
-
-        this.accumulatedMessage += processedMessage;
+        this.accumulatedMessage += message;
         this.updateMessageContent();
       }
     },
