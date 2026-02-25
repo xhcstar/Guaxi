@@ -333,6 +333,7 @@ export const useChatStore = defineStore("chatStore", {
                 msgid: topicitem.topic.length + 1,
                 sender: session.name,
                 chatSessionId: answer.sessionid,
+                raw: answer.answer,
                 content: answer.answer,
               });
               this.sendChatSessionId = answer.sessionid;
@@ -368,6 +369,7 @@ export const useChatStore = defineStore("chatStore", {
             if (topicitem.topicid === topicId) {
               const latestTopic = topicitem.topic[topicitem.topic.length - 1];
               if (latestTopic && latestTopic.sender !== "me") {
+                latestTopic.raw = this.accumulatedMessage;
                 this.renderDebounced(this.accumulatedMessage).then(
                   (renderedMessage) => {
                     latestTopic.content = renderedMessage;
@@ -377,6 +379,7 @@ export const useChatStore = defineStore("chatStore", {
                 topicitem.topic.push({
                   msgid: topicitem.topic.length,
                   sender: session.name,
+                  raw: this.accumulatedMessage,
                   content: this.accumulatedMessage,
                 });
               }

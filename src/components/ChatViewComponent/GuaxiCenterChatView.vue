@@ -21,15 +21,23 @@
           <div v-else class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
 
           <div v-if="!message.isPlaceholder && message.sender !== 'me'" class="message-actions">
-            <button class="message-action-btn" type="button" title="复制" @click="copyMessage(message)">
+            <button class="message-action-btn" type="button" :class="{ copied: copiedMessageId === String(message.msgid) }"
+              :title="copiedMessageId === String(message.msgid) ? '已复制' : '复制'" @click="copyMessage(message)">
               <n-icon>
-                <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+                <svg v-if="copiedMessageId === String(message.msgid)" viewBox="0 0 24 24" width="16" height="16"
+                  xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M9.00002 16.2L4.80002 12L3.40002 13.4L9.00002 19L21 7.00001L19.6 5.60001L9.00002 16.2Z"
+                    fill="currentColor" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
                   <path
                     d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm4 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h12v14z"
                     fill="currentColor" />
                 </svg>
               </n-icon>
             </button>
+            <span v-if="copiedMessageId === String(message.msgid)" class="message-copy-hint">已复制</span>
 
             <button class="message-action-btn" type="button" title="分享" @click="shareMessage(message)">
               <n-icon>
@@ -345,27 +353,46 @@ const messageToText = (message) => {
   return stripHtml(message.content);
 };
 
+const copiedMessageId = ref('');
+let copyHintTimer = null;
+
 const writeClipboard = async (text) => {
   const value = (text ?? '').toString();
-  if (!value) return;
+  if (!value) return false;
 
   if (navigator?.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(value);
-      return;
+      return true;
     } catch (e) { }
   }
 
   try {
     const mod = await import('@tauri-apps/plugin-clipboard-manager');
     await mod.writeText(value);
+    return true;
   } catch (e) {
     logger.error('写入剪贴板失败:', e);
+    return false;
   }
 };
 
 const copyMessage = async (message) => {
-  await writeClipboard(messageToText(message));
+  const text = messageToText(message);
+  const ok = await writeClipboard(text);
+  if (!ok) return;
+
+  const id = String(message?.msgid ?? '');
+  copiedMessageId.value = id;
+  logger.info('复制消息成功:', { msgid: id, len: text.length });
+
+  if (copyHintTimer) {
+    clearTimeout(copyHintTimer);
+  }
+  copyHintTimer = setTimeout(() => {
+    if (copiedMessageId.value === id) copiedMessageId.value = '';
+    copyHintTimer = null;
+  }, 1200);
 };
 
 const shareMessage = async (message) => {
@@ -568,13 +595,26 @@ const sendMessage = async () => {
 };
 
 const handleKeydown = (event) => {
-  const el = event?.target;
+  const resolveInputEl = () => {
+    let el = event?.target;
+    if (!el || typeof el.selectionStart !== 'number') {
+      const current = event?.currentTarget;
+      if (current && typeof current.querySelector === 'function') {
+        const found = current.querySelector('textarea, input');
+        if (found) el = found;
+      }
+    }
+    return el;
+  };
 
   if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey) {
+    const el = resolveInputEl();
     const hasSelectionApi = el && typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number';
     if (hasSelectionApi) {
-      const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
-      const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+      const value = (el.value ?? '').toString();
+      const isEmpty = value.length === 0;
+      const atStart = isEmpty || (el.selectionStart === 0 && el.selectionEnd === 0);
+      const atEnd = isEmpty || (el.selectionStart === value.length && el.selectionEnd === value.length);
 
       if (event.key === 'ArrowUp' && atStart && inputHistory.value.length > 0) {
         event.preventDefault();
@@ -584,6 +624,7 @@ const handleKeydown = (event) => {
         historyIndex.value = Math.max(0, historyIndex.value - 1);
         messageInput.value = inputHistory.value[historyIndex.value] ?? '';
         requestAnimationFrame(() => {
+          if (!el) return;
           el.selectionStart = el.selectionEnd = el.value.length;
         });
         return;
@@ -594,6 +635,7 @@ const handleKeydown = (event) => {
         historyIndex.value = Math.min(inputHistory.value.length, historyIndex.value + 1);
         messageInput.value = historyIndex.value >= inputHistory.value.length ? '' : (inputHistory.value[historyIndex.value] ?? '');
         requestAnimationFrame(() => {
+          if (!el) return;
           el.selectionStart = el.selectionEnd = el.value.length;
         });
         return;
@@ -1017,6 +1059,17 @@ const setMessageRef = (el, index) => {
   align-items: center;
   justify-content: center;
   cursor: pointer;
+}
+
+.message-action-btn.copied {
+  color: var(--guaxi-success, #2db55d);
+  border-color: color-mix(in srgb, var(--guaxi-success, #2db55d), var(--guaxi-border) 40%);
+}
+
+.message-copy-hint {
+  font-size: 12px;
+  color: var(--guaxi-success, #2db55d);
+  align-self: center;
 }
 
 .message-action-btn:disabled {
