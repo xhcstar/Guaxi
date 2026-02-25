@@ -11,6 +11,28 @@ const console = {
   error: (...args) => logger.error(...args),
 };
 
+const normalizeGraphNodeType = (rawType) => {
+  const t = String(rawType || "").trim().toLowerCase();
+  const map = {
+    "knowledge-base": "knowledge-base",
+    knowledge_base: "knowledge-base",
+    kb: "knowledge-base",
+    directory: "directory",
+    dir: "directory",
+    folder: "directory",
+    file: "file",
+    section: "section",
+    heading: "section",
+    header: "section",
+    title: "section",
+    paragraph: "paragraph",
+    para: "paragraph",
+    content: "paragraph",
+    text: "paragraph",
+  };
+  return map[t] || "unknown";
+};
+
 export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
   state: () => ({
     knowledgeBases: [], // 知识库列表
@@ -32,7 +54,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     tagOptions: [],
 
     searchQuery: "",
-    visibleTypes: ["knowledge-base", "directory", "file"],
+    visibleTypes: ["knowledge-base", "directory", "file", "section", "paragraph"],
     selectedTags: [],
 
     selectedGraphNode: null,
@@ -56,7 +78,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
         const out = {
           nodes: graphData.nodes.map((node) => ({
             ...node,
-            type: node.type || "unknown",
+            type: normalizeGraphNodeType(node.type),
           })),
           edges: graphData.edges.map((edge) => ({
             ...edge,
@@ -206,12 +228,7 @@ export const useKnowledgeBaseStore = defineStore("knowledgeBase", {
     },
 
     setVisibleTypes(types) {
-      const next = Array.isArray(types) ? types.map(String) : [];
-      if (next.includes("paragraph") && !next.includes("section")) {
-        next.push("section");
-        console.info("已自动启用标题节点以支持段落显示");
-      }
-      this.visibleTypes = next;
+      this.visibleTypes = Array.isArray(types) ? types.map(String) : [];
     },
 
     setSelectedTags(tags) {

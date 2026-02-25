@@ -257,6 +257,7 @@ const glowStrength = ref(0.9);
 const glowSize = ref(16);
 const isFocusMode = ref(false);
 const focusContext = ref(null);
+const suppressNextSelectionHighlight = ref(false);
 
 let activeCameraTween = null;
 let initialViewSnapshot = null;
@@ -347,11 +348,17 @@ const layoutViewConfig = {
     maxDistanceFactor: 20,
     maxRadius: 800
   },
+  hierarchical: {
+    biasY: -0.75,
+    minDistanceFactor: 0.08,
+    maxDistanceFactor: 20,
+    maxRadius: 800
+  },
   spherical: {
-    biasY: -0.6,
-    minDistanceFactor: 0.12,
-    maxDistanceFactor: 14,
-    maxRadius: 600
+    biasY: -0.75,
+    minDistanceFactor: 0.08,
+    maxDistanceFactor: 20,
+    maxRadius: 800
   }
 };
 
@@ -1234,34 +1241,53 @@ const buildFocusContext = (nodeLike) => {
 
   relatedNodes.add(node);
 
-  const byId = new Map();
+  const childrenByParent = new Map();
   nodes.forEach((n) => {
-    const nid = n?.userData?.id;
-    if (nid != null) byId.set(String(nid), n);
+    const pid = getParentIdValue(n);
+    if (pid == null) return;
+    const key = String(pid);
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(n);
   });
 
-  const parentId = node.userData?.parentId;
-  if (parentId != null) {
-    const parent = byId.get(String(parentId));
-    if (parent) relatedNodes.add(parent);
+  const rootId = getNodeIdValue(node);
+  if (rootId != null) {
+    const stack = [String(rootId)];
+    const seen = new Set();
+    while (stack.length) {
+      const id = stack.pop();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+
+      const children = childrenByParent.get(id) || [];
+      for (const child of children) {
+        relatedNodes.add(child);
+        const cid = child?.userData?.id;
+        if (cid != null) stack.push(String(cid));
+      }
+    }
   }
 
-  if (node.userData?.id != null) {
-    const idStr = String(node.userData.id);
-    nodes.forEach((n) => {
-      if (String(n?.userData?.parentId ?? '') === idStr) relatedNodes.add(n);
-    });
+  // Fallback for path-based focus targets when parent id linkage is incomplete.
+  if (relatedNodes.size <= 1) {
+    const rawPath = node?.userData?.path || node?.userData?.file_path || '';
+    const basePath = normalizePath(rawPath);
+    if (basePath) {
+      const prefix = `${basePath.replace(/\/+$/, '')}/`;
+      nodes.forEach((n) => {
+        const p = normalizePath(n?.userData?.path || n?.userData?.file_path || '');
+        if (!p) return;
+        if (p === basePath || p.startsWith(prefix)) relatedNodes.add(n);
+      });
+    }
   }
 
   edges.forEach((edge) => {
     const from = edge?.userData?.from;
     const to = edge?.userData?.to;
     if (!from || !to) return;
-    if (from === node || to === node) {
-      relatedEdges.add(edge);
-      relatedNodes.add(from);
-      relatedNodes.add(to);
-    }
+    if (!relatedNodes.has(from) || !relatedNodes.has(to)) return;
+    relatedEdges.add(edge);
   });
 
   return { node, nodeKey, nodes: relatedNodes, edges: relatedEdges };
@@ -1292,7 +1318,7 @@ const applyFocusContext = (nodeLike) => {
   if (!context) return;
   focusContext.value = context;
   applyGraphVisibility(context);
-  highlightConnectedNodes(context.node);
+  resetNodeHighlights();
   log('已进入关联聚焦模式', context.node?.userData?.name || '');
 };
 
@@ -1569,6 +1595,7 @@ const createNodesAndEdges = async (data) => {
 
   // 1. 创建节点
   data.nodes.forEach(nodeData => {
+    nodeData.type = normalizeGraphNodeType(nodeData.type);
     const geometry = new THREE.SphereGeometry(2, 32, 32);
 
     nodeData.originalColor = getNodeColor(nodeData.type);
@@ -1714,6 +1741,60 @@ const buildStableOrder = (arr, getId) => {
     .sort((a, b) => (a.hash - b.hash) || (a.idx - b.idx));
 };
 
+const normalizeGraphNodeType = (rawType) => {
+  const t = String(rawType || '').trim().toLowerCase();
+  const map = {
+    'knowledge-base': 'knowledge-base',
+    'knowledge_base': 'knowledge-base',
+    'kb': 'knowledge-base',
+    'directory': 'directory',
+    'dir': 'directory',
+    'folder': 'directory',
+    'file': 'file',
+    'section': 'section',
+    'heading': 'section',
+    'header': 'section',
+    'title': 'section',
+    'paragraph': 'paragraph',
+    'para': 'paragraph',
+    'content': 'paragraph',
+    'text': 'paragraph'
+  };
+  return map[t] || 'default';
+};
+
+const NODE_SPHERE_RADIUS = 2;
+const NODE_MIN_GAP = 1.4;
+
+const getMinCenterDistance = () => (NODE_SPHERE_RADIUS * 2) + NODE_MIN_GAP;
+
+const estimateSphereOrbitRadius = (childCount, baseRadius) => {
+  const n = Math.max(0, Number(childCount) || 0);
+  const base = Math.max(8, Number(baseRadius) || 8);
+  if (n <= 1) return base;
+  const theta = Math.sqrt((4 * Math.PI) / n) * 0.9;
+  const minCenter = getMinCenterDistance();
+  const packRadius = minCenter / Math.max(0.12, theta);
+  return Math.max(base, packRadius);
+};
+
+const estimateDiscRadius = (count, minCenterDistance, fallback = 10) => {
+  const k = Math.max(0, Number(count) || 0);
+  if (k <= 0) return Math.max(1, Number(fallback) || 1);
+  const r = Math.sqrt(k) * minCenterDistance * 0.62;
+  return Math.max(fallback, r);
+};
+
+const getNodeIdValue = (nodeLike) => {
+  const ud = nodeLike?.userData || nodeLike || {};
+  return ud.id ?? ud.node_id ?? ud.nodeId ?? null;
+};
+
+const getParentIdValue = (nodeLike) => {
+  const ud = nodeLike?.userData || nodeLike || {};
+  return ud.parentId ?? ud.parent_id ?? ud.parentID ?? ud.parent ?? null;
+};
+
 const getFibonacciSpherePosition = (i, n, radius) => {
   const count = Math.max(1, Number(n) || 1);
   const t = (i + 0.5) / count;
@@ -1725,6 +1806,86 @@ const getFibonacciSpherePosition = (i, n, radius) => {
     y: radius * y,
     z: radius * Math.sin(theta) * r
   };
+};
+
+const placeNodesOnConcentricSpheres = (parentPos, orderedChildren, baseRadius, minCenterDistance, bias = 0) => {
+  const list = Array.isArray(orderedChildren) ? orderedChildren : [];
+  const total = list.length;
+  if (!total) return;
+
+  const safeBase = Math.max(minCenterDistance * 1.15, Number(baseRadius) || 1);
+  const areaUnit = Math.max(1, Math.pow(minCenterDistance * 1.08, 2));
+  let cursor = 0;
+  let shell = 0;
+
+  while (cursor < total) {
+    const r = safeBase + shell * minCenterDistance * 0.95;
+    const cap = Math.max(1, Math.floor((4 * Math.PI * r * r) / areaUnit));
+    const take = Math.min(cap, total - cursor);
+    const yaw = bias + shell * 0.6180339887;
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+
+    for (let i = 0; i < take; i++) {
+      const child = list[cursor + i]?.item ?? list[cursor + i];
+      if (!child?.targetPosition) continue;
+      const p = getFibonacciSpherePosition(i, take, r);
+      const x = p.x * cy - p.z * sy;
+      const z = p.x * sy + p.z * cy;
+      child.targetPosition.set(parentPos.x + x, parentPos.y + p.y, parentPos.z + z);
+      child.__shellRadius = r;
+    }
+
+    cursor += take;
+    shell += 1;
+  }
+};
+
+const buildHierarchyIndex = () => {
+  const byId = new Map();
+  const byPath = new Map();
+  const childrenById = new Map();
+  const roots = [];
+
+  for (const node of nodes) {
+    const id = getNodeIdValue(node);
+    if (id != null) byId.set(String(id), node);
+
+    const p = normalizePath(node?.userData?.path || node?.userData?.file_path || '');
+    if (p) byPath.set(p, node);
+  }
+
+  const findParentByPath = (node) => {
+    const p = normalizePath(node?.userData?.path || node?.userData?.file_path || '');
+    if (!p) return null;
+    let cur = p;
+    while (cur.includes('/')) {
+      cur = cur.slice(0, cur.lastIndexOf('/'));
+      if (!cur) break;
+      const parent = byPath.get(cur);
+      if (parent && parent !== node) return parent;
+    }
+    return null;
+  };
+
+  for (const node of nodes) {
+    const pid = getParentIdValue(node);
+    const parent = pid != null ? (byId.get(String(pid)) || findParentByPath(node)) : findParentByPath(node);
+    if (!parent) {
+      roots.push(node);
+      continue;
+    }
+    const key = String(parent.userData.id);
+    if (!childrenById.has(key)) childrenById.set(key, []);
+    childrenById.get(key).push(node);
+  }
+
+  return { byId, childrenById, roots };
+};
+
+const getNodeStableId = (node, idx = 0) => {
+  const id = getNodeIdValue(node);
+  return String(id ?? node?.userData?.stable_id ?? `__i_${idx}`);
 };
 
 /**
@@ -1744,13 +1905,39 @@ const forceDirectedLayout = () => {
 
   const rootNode =
     nodes.find(n => n?.userData?.type === 'knowledge-base') ||
-    nodes.find(n => n?.userData?.parentId == null) ||
+    nodes.find(n => getParentIdValue(n) == null) ||
     nodes[0];
 
-  const rootId = String(rootNode?.userData?.id ?? '__i_0');
+  const rootId = String(getNodeIdValue(rootNode) ?? '__i_0');
 
   const ringStep = performanceLevel.value === 0 ? 22 : performanceLevel.value === 2 ? 55 : 38;
   const base = performanceLevel.value === 0 ? 20 : performanceLevel.value === 2 ? 45 : 32;
+  const seedRootSpread = performanceLevel.value === 0 ? 32 : performanceLevel.value === 2 ? 62 : 48;
+  const minCenterDistance = getMinCenterDistance();
+
+  const { childrenById, roots } = buildHierarchyIndex();
+  const orderedRoots = buildStableOrder(roots, (n, idx) => getNodeStableId(n, idx));
+  if (orderedRoots.length === 1) {
+    orderedRoots[0].item.targetPosition.set(0, 0, 0);
+  } else if (orderedRoots.length > 1) {
+    for (let i = 0; i < orderedRoots.length; i++) {
+      const rp = getFibonacciSpherePosition(i, orderedRoots.length, seedRootSpread);
+      orderedRoots[i].item.targetPosition.set(rp.x, rp.y, rp.z);
+    }
+  }
+
+  const seedQueue = orderedRoots.map((r) => r.item);
+  while (seedQueue.length) {
+    const parent = seedQueue.shift();
+    const pid = getNodeIdValue(parent);
+    if (pid == null) continue;
+    const children = childrenById.get(String(pid)) || [];
+    if (!children.length) continue;
+    const orderedChildren = buildStableOrder(children, (n, idx) => getNodeStableId(n, idx));
+    const bias = ((hashString(String(pid)) % 2048) / 2048) * Math.PI * 2;
+    placeNodesOnConcentricSpheres(parent.targetPosition, orderedChildren, base, minCenterDistance, bias);
+    for (const ent of orderedChildren) seedQueue.push(ent.item);
+  }
 
   const ordered = buildStableOrder(nodes, (n, idx) => n?.userData?.id ?? `__i_${idx}`);
   const orderIndex = new Map(ordered.map((d, i) => [String(d.id), i]));
@@ -1758,12 +1945,17 @@ const forceDirectedLayout = () => {
 
   const nodeDatas = nodes.map((n, idx) => {
     const id = n?.userData?.id ?? `__i_${idx}`;
-    const depth = Number.isFinite(n?.userData?.depth) ? Number(n.userData.depth) : (n?.userData?.parentId ? 1 : 0);
+    const depth = Number.isFinite(n?.userData?.depth) ? Number(n.userData.depth) : (getParentIdValue(n) != null ? 1 : 0);
     const d = { ...n.userData, id, depth };
+    d.parentRefId = getParentIdValue(n) != null ? String(getParentIdValue(n)) : null;
+    d.desiredParentRadius = base + Math.max(1, depth) * ringStep;
 
     const r = String(id) === rootId ? 0 : (base + Math.max(1, depth) * ringStep);
     const i = orderIndex.get(String(id)) ?? idx;
-    const pos = getFibonacciSpherePosition(i, total, r);
+    const seeded = n?.targetPosition;
+    const pos = (seeded && isFiniteVec3(seeded))
+      ? { x: seeded.x, y: seeded.y, z: seeded.z }
+      : getFibonacciSpherePosition(i, total, r);
 
     d.x = pos.x;
     d.y = pos.y;
@@ -1805,11 +1997,36 @@ const forceDirectedLayout = () => {
     return f;
   };
 
+  const forceParentAttract = (strength = 0.2) => {
+    let ns = [];
+    function f(alpha) {
+      for (const d of ns) {
+        if (d.fx != null || d.fy != null || d.fz != null) continue;
+        const pid = d.parentRefId;
+        if (!pid) continue;
+        const p = ndById.get(String(pid));
+        if (!p) continue;
+
+        const x = (d.x || 0) - (p.x || 0);
+        const y = (d.y || 0) - (p.y || 0);
+        const z = (d.z || 0) - (p.z || 0);
+        const dist = Math.sqrt(x * x + y * y + z * z) || 1e-6;
+        const target = Math.max(minCenterDistance * 1.1, Number(d.desiredParentRadius) || base);
+        const k = ((dist - target) / dist) * strength * alpha;
+        d.vx = (d.vx || 0) - x * k;
+        d.vy = (d.vy || 0) - y * k;
+        d.vz = (d.vz || 0) - z * k;
+      }
+    }
+    f.initialize = (_) => { ns = _ || []; };
+    return f;
+  };
+
   const simulation = d3.forceSimulation(nodeDatas)
     .numDimensions(3)
     .alpha(1)
-    .alphaDecay(0.06)
-    .velocityDecay(0.35)
+    .alphaDecay(0.05)
+    .velocityDecay(0.32)
     .force('link', d3.forceLink(edgeDatas)
       .id(d => String(d.id))
       .distance(l => {
@@ -1818,15 +2035,16 @@ const forceDirectedLayout = () => {
         const depth = Number.isFinite(td?.depth) ? td.depth : 1;
         return base + Math.max(1, depth) * ringStep;
       })
-      .strength(0.9)
+      .strength(0.72)
     )
-    .force('charge', d3.forceManyBody().strength(d => (String(d.id) === rootId ? -120 : -28)))
-    .force('collision', d3.forceCollide().radius(d => (String(d.id) === rootId ? 10 : 6)))
+    .force('charge', d3.forceManyBody().strength(d => (String(d.id) === rootId ? -140 : -34)))
+    .force('collision', d3.forceCollide().radius(d => (String(d.id) === rootId ? 12 : 6.5)))
+    .force('parentAttract', forceParentAttract(0.2))
     .force('orbit', forceSphere(d => {
       if (String(d.id) === rootId) return 0;
       const depth = Number.isFinite(d.depth) ? d.depth : 1;
       return base + Math.max(1, depth) * ringStep;
-    }, 0.35));
+    }, 0.12));
 
   activeSimulation = simulation;
 
@@ -1843,7 +2061,7 @@ const forceDirectedLayout = () => {
     }
   });
 
-  setTimeout(() => simulation.stop(), 1200);
+  setTimeout(() => simulation.stop(), 1500);
 };
 
 /**
@@ -1851,56 +2069,70 @@ const forceDirectedLayout = () => {
  */
 const hierarchicalLayout = () => {
   stopActiveSimulation();
-  log('应用层次布局(千层饼：同级同平面 + 均匀铺开)');
+  log('应用层次布局(金字塔：父在上，子在下方平面均匀分布)');
 
   if (!nodes.length) return;
 
-  // 规则：
-  // - 同一 depth 的节点放在同一平面(y 固定)，像“千层饼”
-  // - 在 xz 平面用黄金角(向日葵)均匀铺开，并随该层节点数自适应半径，减少重叠
   const golden = 2.399963229728653;
-  const layerY = performanceLevel.value === 0 ? 34 : performanceLevel.value === 2 ? 64 : 46;
-  const minDisc = performanceLevel.value === 0 ? 30 : performanceLevel.value === 2 ? 85 : 55;
-  const spacing = performanceLevel.value === 0 ? 10 : performanceLevel.value === 2 ? 18 : 13;
+  const minDrop = performanceLevel.value === 0 ? 24 : performanceLevel.value === 2 ? 40 : 32;
+  const coneHalfAngle = THREE.MathUtils.degToRad(
+    performanceLevel.value === 0 ? 30 : performanceLevel.value === 2 ? 36 : 33
+  );
+  const minCenterDistance = getMinCenterDistance();
 
-  const byDepth = new Map();
-  nodes.forEach((node, idx) => {
-    const ud = node?.userData || {};
-    const depth = Number.isFinite(ud.depth) ? Number(ud.depth) : (ud.parentId ? 1 : 0);
-    const id = String(ud.id ?? `__i_${idx}`);
-    const hash = hashString(id);
-    if (!byDepth.has(depth)) byDepth.set(depth, []);
-    byDepth.get(depth).push({ node, idx, id, hash });
-  });
+  const { childrenById, roots } = buildHierarchyIndex();
+  const orderedRoots = buildStableOrder(roots, (n, idx) => getNodeStableId(n, idx));
 
-  for (const [depth, arr] of byDepth) {
-    const sorted = arr.slice().sort((a, b) => (a.hash - b.hash) || (a.idx - b.idx));
-    const k = sorted.length;
-    const y = -depth * layerY;
+  const placeChildrenOnPlane = (parent) => {
+    const pid = getNodeIdValue(parent);
+    if (pid == null) return;
+    const children = childrenById.get(String(pid)) || [];
+    if (!children.length) return;
 
-    // 同层节点越多，圆盘半径越大
-    const discR = Math.max(minDisc + depth * spacing * 1.1, Math.sqrt(Math.max(1, k)) * spacing * 2.2);
+    const ordered = buildStableOrder(children, (n, idx) => getNodeStableId(n, idx));
+    const k = ordered.length;
+    const discRadius = estimateDiscRadius(k, minCenterDistance, minDrop * 0.9);
+    const coneDrop = Math.max(minDrop, discRadius / Math.max(0.18, Math.tan(coneHalfAngle)));
+    const planeY = parent.targetPosition.y - coneDrop;
+    const parentHashBias = (hashString(String(pid)) % 628) / 100;
 
     for (let i = 0; i < k; i++) {
-      const { node } = sorted[i];
-      if (!node?.targetPosition) continue;
-
-      if (depth === 0) {
-        node.targetPosition.set(0, 0, 0);
-        continue;
-      }
+      const child = ordered[i].item;
+      if (!child?.targetPosition) continue;
 
       const t = (i + 0.5) / k;
-      const r = discR * Math.sqrt(t);
-      const a = (i + 1) * golden + depth * 0.37;
+      const r = discRadius * Math.sqrt(Math.max(0, t));
+      const a = i * golden + parentHashBias;
+      child.targetPosition.set(
+        parent.targetPosition.x + Math.cos(a) * r,
+        planeY,
+        parent.targetPosition.z + Math.sin(a) * r
+      );
+      placeChildrenOnPlane(child);
+    }
+  };
 
-      const x = Math.cos(a) * r;
-      const z = Math.sin(a) * r;
-      node.targetPosition.set(x, y, z);
+  if (!orderedRoots.length) return;
+  if (orderedRoots.length === 1) {
+    orderedRoots[0].item.targetPosition.set(0, 0, 0);
+  } else {
+    const topRadius = estimateDiscRadius(
+      orderedRoots.length,
+      minCenterDistance * 1.3,
+      minDrop * 0.8
+    );
+    for (let i = 0; i < orderedRoots.length; i++) {
+      const root = orderedRoots[i].item;
+      const a = (i + 1) * golden;
+      root.targetPosition.set(Math.cos(a) * topRadius, 0, Math.sin(a) * topRadius);
     }
   }
 
-  log('层次布局完成', { layers: byDepth.size, nodes: nodes.length });
+  for (const root of orderedRoots) {
+    placeChildrenOnPlane(root.item);
+  }
+
+  log('层次布局完成', { roots: orderedRoots.length, nodes: nodes.length });
 };
 
 /**
@@ -1912,66 +2144,41 @@ const sphericalLayout = () => {
 
   if (!nodes.length) return;
 
-  const rootNode =
-    nodes.find(n => n?.userData?.type === 'knowledge-base') ||
-    nodes.find(n => n?.userData?.parentId == null) ||
-    nodes[0];
+  const baseOrbitRadius = performanceLevel.value === 0 ? 36 : performanceLevel.value === 2 ? 72 : 54;
+  const rootSpread = performanceLevel.value === 0 ? 36 : performanceLevel.value === 2 ? 72 : 54;
+  const { childrenById, roots } = buildHierarchyIndex();
+  const orderedRoots = buildStableOrder(roots, (n, idx) => getNodeStableId(n, idx));
 
-  const radius = performanceLevel.value === 0 ? 45 : performanceLevel.value === 2 ? 110 : 75;
-  rootNode?.targetPosition?.set(0, 0, 0);
-
-  const others = nodes.filter(n => n !== rootNode);
-  const ordered = buildStableOrder(others, (n, idx) => n?.userData?.id ?? `__i_${idx}`);
-  const m = ordered.length;
-  if (!m) return;
-
-  const forceSphere = (radiusFn, strength = 0.9) => {
-    let ns = [];
-    function f(alpha) {
-      for (const d of ns) {
-        const r = radiusFn(d);
-        const x = d.x || 0, y = d.y || 0, z = d.z || 0;
-        const dist = Math.sqrt(x * x + y * y + z * z) || 1e-6;
-        const k = (r - dist) / dist * strength * alpha;
-        d.vx = (d.vx || 0) + x * k;
-        d.vy = (d.vy || 0) + y * k;
-        d.vz = (d.vz || 0) + z * k;
-      }
+  if (!orderedRoots.length) return;
+  if (orderedRoots.length === 1) {
+    orderedRoots[0].item.targetPosition.set(0, 0, 0);
+  } else {
+    for (let i = 0; i < orderedRoots.length; i++) {
+      const rootPos = getFibonacciSpherePosition(i, orderedRoots.length, rootSpread);
+      orderedRoots[i].item.targetPosition.set(rootPos.x, rootPos.y, rootPos.z);
     }
-    f.initialize = (_) => { ns = _ || []; };
-    return f;
+  }
+
+  const placeChildrenOnSphere = (parent) => {
+    const pid = getNodeIdValue(parent);
+    if (pid == null) return;
+    const children = childrenById.get(String(pid)) || [];
+    if (!children.length) return;
+
+    const ordered = buildStableOrder(children, (n, idx) => getNodeStableId(n, idx));
+    const c = parent.targetPosition;
+    const minCenterDistance = getMinCenterDistance();
+    const base = estimateSphereOrbitRadius(Math.min(ordered.length, 8), baseOrbitRadius);
+    const bias = ((hashString(String(pid)) % 2048) / 2048) * Math.PI * 2;
+    placeNodesOnConcentricSpheres(c, ordered, base, minCenterDistance, bias);
+
+    for (const ent of ordered) {
+      placeChildrenOnSphere(ent.item);
+    }
   };
 
-  const nodeDatas = ordered.map((entry, i) => {
-    const pos = getFibonacciSpherePosition(i, m, radius);
-    return {
-      id: entry.id,
-      x: pos.x,
-      y: pos.y,
-      z: pos.z
-    };
-  });
-
-  const collisionRadius = performanceLevel.value === 0 ? 5 : performanceLevel.value === 2 ? 8 : 6;
-  const chargeStrength = performanceLevel.value === 0 ? -20 : performanceLevel.value === 2 ? -40 : -28;
-  const ticks = performanceLevel.value === 0 ? 60 : performanceLevel.value === 2 ? 140 : 100;
-
-  const simulation = d3.forceSimulation(nodeDatas)
-    .numDimensions(3)
-    .alpha(1)
-    .alphaDecay(0.08)
-    .velocityDecay(0.45)
-    .force('charge', d3.forceManyBody().strength(chargeStrength))
-    .force('collision', d3.forceCollide().radius(collisionRadius))
-    .force('sphere', forceSphere(() => radius, 0.9));
-
-  for (let k = 0; k < ticks; k++) simulation.tick();
-  simulation.stop();
-
-  for (let i = 0; i < m; i++) {
-    const n = ordered[i]?.item;
-    const d = nodeDatas[i];
-    n?.targetPosition?.set(d.x || 0, d.y || 0, d.z || 0);
+  for (const root of orderedRoots) {
+    placeChildrenOnSphere(root.item);
   }
 };
 
@@ -2296,18 +2503,10 @@ const initOctree = async (meshes) => {
   }
 };
 
-// 确保亮色模式返回明亮的颜色
+// Use one palette so legend colors and node colors stay consistent in both themes.
 const getNodeColor = (type) => {
-  const lightColors = {
-    'knowledge-base': 0xFFA500,
-    'directory': 0x1E90FF,
-    'file': 0x32CD32,
-    'section': 0x9B59B6,
-    'paragraph': 0xE67E22,
-    'default': 0x777777
-  };
-
-  const darkColors = {
+  const normalized = normalizeGraphNodeType(type);
+  const palette = {
     'knowledge-base': 0xF39C12,
     'directory': 0x3498DB,
     'file': 0x2ECC71,
@@ -2316,8 +2515,7 @@ const getNodeColor = (type) => {
     'default': 0xCCCCCC
   };
 
-  return darkMode.value ? darkColors[type] || darkColors.default
-    : lightColors[type] || lightColors.default;
+  return palette[normalized] || palette.default;
 }
 
 let starGlowTexture = null;
@@ -2638,6 +2836,10 @@ const startAnimate = () => {
 watch(currentLayout, async (newLayout) => {
   if (scene && nodes.length > 0) {
     await applyLayout(newLayout);
+    if (focusContext.value?.nodes?.size) {
+      applyGraphVisibility(focusContext.value);
+      resetNodeHighlights();
+    }
 
     if (!isUserInteracting.value) {
       ensureViewInBounds({ mode: 'graph', recenter: false, useTargetPositions: true });
@@ -2703,13 +2905,15 @@ const showEmptyState = (reason = '') => {
 
 // Watch for changes in selected knowledge base
 watch(
-  () => store.selectedKnowledgeBase,
-  (newVal) => {
+  () => store.selectedKnowledgeBase?.id ?? null,
+  (newId) => {
     if (!scene) {
       logger.warn('场景未初始化，将延迟处理知识库变化');
-      pendingKnowledgeBaseChange.value = newVal;
+      pendingKnowledgeBaseChange.value = newId;
       return;
     }
+
+    const newVal = store.selectedKnowledgeBase;
 
     if (isValidKnowledgeBase(newVal)) {
       logger.info('检测到有效知识库:', newVal.knowledge_base_name);
@@ -2720,7 +2924,7 @@ watch(
       showEmptyState('没有可用的知识库');
     }
   },
-  { immediate: true, deep: true }
+  { immediate: true }
 );
 
 watch(
@@ -2738,6 +2942,12 @@ watch(
 
     selectedNode.value = { ...hit.userData, object: hit.mesh };
 
+    if (suppressNextSelectionHighlight.value) {
+      suppressNextSelectionHighlight.value = false;
+      resetNodeHighlights();
+      return;
+    }
+
     if (focusContext.value) {
       const hitKey = getNodeKey(hit);
       if (!focusContext.value.nodeKey || focusContext.value.nodeKey !== hitKey) {
@@ -2748,6 +2958,8 @@ watch(
           log('已更新关联聚焦上下文', hit.userData?.name || '');
         }
       }
+      resetNodeHighlights();
+      return;
     }
 
     highlightConnectedNodes(hit);
@@ -2773,7 +2985,8 @@ watch(
     if (hit) {
       focusOnNode(hit);
       selectedNode.value = { ...hit.userData, object: hit.mesh };
-      store.setSelectedGraphNode({ ...hit.userData });
+      suppressNextSelectionHighlight.value = true;
+      store.setSelectedGraphNode({ ...hit.userData, __from_focus_target: true });
       applyFocusContext(hit);
     }
   },
