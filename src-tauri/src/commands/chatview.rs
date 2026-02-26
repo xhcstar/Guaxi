@@ -718,7 +718,7 @@ fn log_model_reply(tag: &str, session_id: &str, raw: &str) {
 }
 
 fn local_math_system_prompt() -> &'static str {
-    "当输出数学公式时：行内公式用 $...$，块级公式用 $$...$$。不要用反引号 `...` 包裹任何数学公式或公式片段。$$或者$周围不要添加不必要的`等符号。"
+    "输出数学公式时请严格遵循：行内公式用 $...$；块级公式用 $$...$$ 且 $$ 必须独占一行。块级公式格式必须为：\n$$\n公式内容\n$$\n并且闭合 $$ 后下一行开始正文，严禁在同一行继续文字。若处于列表项中，公式块前后都要留空行。不要用反引号包裹任何数学公式。若提供代码，必须带注释。"
 }
 
 fn normalize_math_symbols(content: String) -> String {
@@ -733,6 +733,7 @@ fn normalize_math_symbols(content: String) -> String {
         .replace("\\(", "$")
         .replace("\\)", "$");
     let tightened = tighten_math_spacing(&out);
+    let layout = soften_block_math_boundaries(&tightened);
 
     if raw.contains("\\[")
         || raw.contains("\\]")
@@ -740,16 +741,18 @@ fn normalize_math_symbols(content: String) -> String {
         || raw.contains("\\)")
         || raw.contains("```")
         || out != tightened
+        || tightened != layout
     {
         info!(
-            "normalize_math_symbols: raw={} out={} tightened={}",
+            "normalize_math_symbols: raw={} out={} tightened={} layout={}",
             excerpt_for_log(&raw),
             excerpt_for_log(&out),
-            excerpt_for_log(&tightened)
+            excerpt_for_log(&tightened),
+            excerpt_for_log(&layout)
         );
     }
 
-    tightened
+    layout
 }
 
 fn trim_output_whitespace(out: &mut String) {
@@ -821,9 +824,6 @@ fn tighten_math_spacing(input: &str) -> String {
                 out.push('$');
                 i += 1;
                 state = 0;
-                if i < chars.len() && !chars[i].is_whitespace() {
-                    out.push('\n');
-                }
                 continue;
             }
 
@@ -833,11 +833,87 @@ fn tighten_math_spacing(input: &str) -> String {
                 out.push('$');
                 i += 2;
                 state = 0;
-                if i < chars.len() && !chars[i].is_whitespace() {
-                    out.push('\n');
+                continue;
+            }
+        }
+
+        out.push(ch);
+        i += 1;
+    }
+
+    out
+}
+
+fn soften_block_math_boundaries(input: &str) -> String {
+    if input.is_empty() || !input.contains("$$") {
+        return input.to_string();
+    }
+
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len() + 8);
+    let mut i = 0usize;
+    let mut in_fence = false;
+    let mut at_line_start = true;
+    let mut leading_spaces = 0usize;
+    let mut tick_run = 0usize;
+
+    let is_line_break = |ch: char| ch == '\n' || ch == '\r';
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        if ch == '\n' || ch == '\r' {
+            out.push(ch);
+            at_line_start = true;
+            leading_spaces = 0;
+            tick_run = 0;
+            i += 1;
+            continue;
+        }
+
+        if at_line_start {
+            if ch == ' ' && leading_spaces < 3 {
+                leading_spaces += 1;
+                out.push(ch);
+                i += 1;
+                continue;
+            }
+
+            if ch == '`' {
+                tick_run += 1;
+                out.push(ch);
+                i += 1;
+                if tick_run == 3 {
+                    in_fence = !in_fence;
+                    at_line_start = false;
                 }
                 continue;
             }
+
+            at_line_start = false;
+            tick_run = 0;
+        }
+
+        if !in_fence && ch == '$' && i + 1 < chars.len() && chars[i + 1] == '$' {
+            let prev = out.chars().last();
+            if let Some(p) = prev {
+                if !p.is_whitespace() && !is_line_break(p) {
+                    out.push('\n');
+                }
+            }
+
+            out.push('$');
+            out.push('$');
+            i += 2;
+
+            if i < chars.len() {
+                let next = chars[i];
+                if !next.is_whitespace() && !is_line_break(next) {
+                    out.push('\n');
+                }
+            }
+
+            continue;
         }
 
         out.push(ch);
