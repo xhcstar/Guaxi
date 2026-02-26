@@ -1,5 +1,6 @@
 import * as monaco from 'monaco-editor'
 import { MonacoLanguageClient } from 'monaco-languageclient'
+import { CloseAction, ErrorAction } from 'vscode-languageclient'
 import type { MessageTransports } from 'vscode-languageclient/browser.js'
 import {
   toSocket,
@@ -11,6 +12,9 @@ type LspClientEntry = {
   client: MonacoLanguageClient | null
   webSocket: WebSocket
   disposed: boolean
+  manualDisposing: boolean
+  reader: WebSocketMessageReader | null
+  writer: WebSocketMessageWriter | null
 }
 const lspClients = new Map<string, LspClientEntry>()
 const lspRetryBlockedUntil = new Map<string, number>()
@@ -83,6 +87,35 @@ const resolveErrorMessage = (error: unknown) => {
 const shouldDisableLsp = (error: unknown) => {
   const message = resolveErrorMessage(error)
   return message.includes(LSP_VSCODE_API_NOT_READY)
+}
+
+const safeDisposeTransport = (value: unknown) => {
+  try {
+    const candidate = value as { dispose?: () => void } | null | undefined
+    candidate?.dispose?.()
+  } catch {
+  }
+}
+
+const stopClientSafely = (client: MonacoLanguageClient | null) => {
+  if (!client) return Promise.resolve()
+  try {
+    const result = client.stop()
+    if (result && typeof (result as Promise<void>).then === 'function') {
+      return (result as Promise<void>).catch(() => { })
+    }
+  } catch {
+  }
+  return Promise.resolve()
+}
+
+const closeSocketSafely = (webSocket: WebSocket) => {
+  try {
+    if (webSocket.readyState === WebSocket.OPEN || webSocket.readyState === WebSocket.CONNECTING) {
+      webSocket.close()
+    }
+  } catch {
+  }
 }
 
 const disableLsp = (languageId: string, reason: string, error?: unknown) => {
@@ -196,6 +229,9 @@ export function initLspClient(
     client: null,
     webSocket,
     disposed: false,
+    manualDisposing: false,
+    reader: null,
+    writer: null,
   }
   lspClients.set(languageId, entry)
   setLspConnectionState(languageId, 'connecting')
@@ -203,24 +239,24 @@ export function initLspClient(
   const cleanup = (reason: string) => {
     const cur = lspClients.get(languageId)
     if (!cur || cur.disposed) return
+    if (reason === 'manual-dispose') {
+      cur.manualDisposing = true
+    }
     cur.disposed = true
 
-    if (cur.client) {
-      try {
-        const r = cur.client.stop()
-        if (r && typeof (r as Promise<void>).catch === 'function') {
-          ; (r as Promise<void>).catch(() => { })
-        }
-      } catch {
-      }
-    }
+    // Prevent close/error callbacks from re-entering cleanup during manual shutdown.
+    cur.webSocket.onopen = null
+    cur.webSocket.onclose = null
+    cur.webSocket.onerror = null
 
-    try {
-      if (cur.webSocket.readyState === WebSocket.OPEN || cur.webSocket.readyState === WebSocket.CONNECTING) {
-        cur.webSocket.close()
-      }
-    } catch {
-    }
+    safeDisposeTransport(cur.reader)
+    cur.reader = null
+    safeDisposeTransport(cur.writer)
+    cur.writer = null
+
+    void stopClientSafely(cur.client).finally(() => {
+      closeSocketSafely(cur.webSocket)
+    })
 
     lspClients.delete(languageId)
     if (lspDisabled.has(languageId)) {
@@ -238,6 +274,8 @@ export function initLspClient(
     const socket = toSocket(webSocket)
     const reader = new WebSocketMessageReader(socket)
     const writer = new WebSocketMessageWriter(socket)
+    entry.reader = reader
+    entry.writer = writer
 
     const messageTransports: MessageTransports = { reader, writer }
 
@@ -250,6 +288,11 @@ export function initLspClient(
           initializationOptions: {
             workspaceFolders: [],
             filePath,
+          },
+          // Avoid restart loop/noisy reconnect logs when socket is intentionally closed.
+          errorHandler: {
+            error: () => ({ action: ErrorAction.Continue }),
+            closed: () => ({ action: CloseAction.DoNotRestart }),
           },
         },
         messageTransports,
@@ -304,22 +347,22 @@ export function initLspClient(
 
 export function disposeAllLspClients() {
   lspClients.forEach((entry, languageId) => {
+    if (entry.disposed) return
+    entry.manualDisposing = true
+    // Reuse the same shutdown path to keep ordering consistent.
+    safeDisposeTransport(entry.reader)
+    entry.reader = null
+    safeDisposeTransport(entry.writer)
+    entry.writer = null
+
+    entry.webSocket.onopen = null
+    entry.webSocket.onclose = null
+    entry.webSocket.onerror = null
+
     entry.disposed = true
-    try {
-      if (entry.client) {
-        const r = entry.client.stop()
-        if (r && typeof (r as Promise<void>).catch === 'function') {
-          ; (r as Promise<void>).catch(() => { })
-        }
-      }
-    } catch {
-    }
-    try {
-      if (entry.webSocket.readyState === WebSocket.OPEN || entry.webSocket.readyState === WebSocket.CONNECTING) {
-        entry.webSocket.close()
-      }
-    } catch {
-    }
+    void stopClientSafely(entry.client).finally(() => {
+      closeSocketSafely(entry.webSocket)
+    })
     lspClients.delete(languageId)
     setLspConnectionState(languageId, 'disconnected', 'manual-dispose')
   })
