@@ -101,7 +101,8 @@ import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { addCopyButtons, addMediaViewerButtons } from "../GuaxiMarkdownRender/GuaxiMarker";
+import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from "../GuaxiMarkdownRender/GuaxiMarker";
+import mermaid from 'mermaid';
 
 const logger = createLogger('GuaxiCenterChatView')
 const chatStore = useChatStore();
@@ -317,6 +318,82 @@ const isAtBottom = ref(true);
 const showJumpToBottom = computed(() => !isAtBottom.value);
 
 const messageContainer = ref(null);
+let rerenderSeq = 0;
+
+const renderMermaidInContainer = async (container) => {
+  if (!(container instanceof HTMLElement)) return;
+  const nodes = Array.from(container.querySelectorAll('.mermaid') || []);
+  if (!nodes.length) return;
+
+  try {
+    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+  } catch (e) {
+    logger.warn('Mermaid初始化失败:', e);
+  }
+
+  nodes.forEach((el) => {
+    try {
+      el.removeAttribute('data-processed');
+      const content = String(el.textContent || '')
+        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<')
+        .replace(/&amp;/g, '&');
+      el.innerHTML = content;
+    } catch (err) {
+      logger.error('Mermaid内容处理失败:', err);
+    }
+  });
+
+  await nextTick();
+  requestAnimationFrame(() => {
+    Promise.resolve(mermaid.run({ nodes }))
+      .then(() => {
+        logger.info('Mermaid渲染完成', { count: nodes.length });
+      })
+      .catch((err) => {
+        logger.error('Mermaid渲染失败', err);
+      });
+  });
+};
+
+const rerenderActiveTopic = async () => {
+  const token = ++rerenderSeq;
+  const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+  if (!topic.length) return;
+
+  let updated = 0;
+  for (const msg of topic) {
+    if (!msg || msg.sender === 'me') continue;
+    const raw = (msg.raw ?? '').toString();
+    if (!raw.trim()) continue;
+    try {
+      const html = await renderMarkdown(raw, {
+        preserveOriginal: true,
+        basePath: '',
+        mermaid: true,
+        math: true,
+        codeHighlight: true,
+      });
+      if (token !== rerenderSeq) return;
+      msg.content = String(html ?? '');
+      updated += 1;
+    } catch (e) {
+      logger.error('重新渲染消息失败:', e);
+    }
+  }
+
+  if (updated) {
+    logger.info('切换会话后重渲染消息', { count: updated });
+  }
+
+  await nextTick();
+  const container = messageContainer.value;
+  if (container) {
+    addCopyButtons(container);
+    addMediaViewerButtons(container);
+    await renderMermaidInContainer(container);
+  }
+};
 
 const updateIsAtBottom = () => {
   const el = messageContainer.value;
@@ -355,6 +432,15 @@ const messageToText = (message) => {
 
 const copiedMessageId = ref('');
 let copyHintTimer = null;
+
+watch(
+  [() => chatStore.selectedModel, () => chatStore.selectedTopic],
+  async () => {
+    await nextTick();
+    rerenderActiveTopic();
+  },
+  { immediate: true }
+);
 
 const writeClipboard = async (text) => {
   const value = (text ?? '').toString();
