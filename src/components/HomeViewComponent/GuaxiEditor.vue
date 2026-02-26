@@ -9526,6 +9526,10 @@ onUnmounted(() => {
 
 
 <style scoped>
+.guaxi-editor {
+  --editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+}
+
 .editor-header {
   position: sticky;
   top: 0;
@@ -9542,6 +9546,7 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--guaxi-border);
   box-sizing: border-box;
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .breadcrumb-scroll {
@@ -10415,6 +10420,7 @@ onUnmounted(() => {
   background: var(--guaxi-header-bg);
   border-bottom: 1px solid var(--guaxi-border);
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .tab-region {
