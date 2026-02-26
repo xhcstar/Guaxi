@@ -842,6 +842,7 @@ export const renderMarkdown = async (content, options) => {
     buttons: enableButtons = true,
     pythonCells: enablePythonCells = false,
     codeCells: enableCodeCells = false,
+    chatPreprocess = false,
     theme = "default",
   } = options;
 
@@ -851,8 +852,11 @@ export const renderMarkdown = async (content, options) => {
 
     // 调用后端处理图片路径（接口不可用时，不影响后续 Markdown 本地渲染）
     try {
+      const preprocessApi = chatPreprocess
+        ? "http://localhost:8888/api/markdown/chat_process"
+        : "http://localhost:8888/api/markdown/image_process";
       const response = await fetch(
-        "http://localhost:8888/api/markdown/image_process",
+        preprocessApi,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

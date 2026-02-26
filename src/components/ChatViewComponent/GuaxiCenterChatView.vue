@@ -373,6 +373,7 @@ const rerenderActiveTopic = async () => {
         mermaid: true,
         math: true,
         codeHighlight: true,
+        chatPreprocess: true,
       });
       if (token !== rerenderSeq) return;
       msg.content = String(html ?? '');

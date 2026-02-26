@@ -424,6 +424,7 @@ export const useChatStore = defineStore("chatStore", {
               mermaid: true,
               math: true,
               codeHighlight: true,
+              chatPreprocess: true,
               theme: "default",
             });
           } catch (error) {

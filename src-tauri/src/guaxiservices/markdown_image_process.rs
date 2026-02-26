@@ -9,6 +9,129 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use urlencoding::{decode, encode};
 
+fn normalize_list_display_math(markdown: &str) -> String {
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_fence = false;
+    let mut fence_marker: Option<char> = None;
+    let mut i = 0usize;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim_start();
+
+        let fence = if trimmed.starts_with("```") {
+            Some('`')
+        } else if trimmed.starts_with("~~~") {
+            Some('~')
+        } else {
+            None
+        };
+
+        if let Some(marker) = fence {
+            if !in_fence {
+                in_fence = true;
+                fence_marker = Some(marker);
+            } else if fence_marker == Some(marker) {
+                in_fence = false;
+                fence_marker = None;
+            }
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        if in_fence {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        let open_is_math = line.trim() == "$$";
+        if !open_is_math {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        let mut close_at: Option<usize> = None;
+        let mut j = i + 1;
+        while j < lines.len() {
+            let inner = lines[j];
+            let inner_trim = inner.trim_start();
+            if inner.trim() == "$$" {
+                close_at = Some(j);
+                break;
+            }
+            if inner_trim.starts_with("```") || inner_trim.starts_with("~~~") {
+                break;
+            }
+            j += 1;
+        }
+
+        let Some(close_idx) = close_at else {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        };
+
+        let prev_non_empty = (0..i)
+            .rev()
+            .find_map(|k| {
+                let s = lines[k];
+                if s.trim().is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            })
+            .unwrap_or("");
+
+        let indent_len = line.len() - line.trim_start().len();
+        let list_context = {
+            let prev_trim = prev_non_empty.trim_start();
+            let is_list_marker = prev_trim.starts_with("- ")
+                || prev_trim.starts_with("* ")
+                || prev_trim.starts_with("+ ")
+                || prev_trim
+                    .split_once('.')
+                    .map(|(left, right)| {
+                        !left.is_empty()
+                            && left.chars().all(|c| c.is_ascii_digit())
+                            && right.starts_with(' ')
+                    })
+                    .unwrap_or(false);
+            is_list_marker || prev_non_empty.starts_with(' ') || indent_len >= 2
+        };
+
+        if !list_context {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        let expr = lines[(i + 1)..close_idx]
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        if expr.is_empty() {
+            out.push(line.to_string());
+            out.push(lines[close_idx].to_string());
+            i = close_idx + 1;
+            continue;
+        }
+
+        let indent = " ".repeat(indent_len);
+        out.push(format!("{indent}$$ {expr} $$"));
+        i = close_idx + 1;
+    }
+
+    out.join("\n")
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MarkdownRequest {
     content: String,
@@ -32,63 +155,75 @@ pub struct ResourceRegisterRequest {
     extra: Option<serde_json::Value>,
 }
 
-#[post("/api/markdown/image_process")]
-async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
-    let base_path = req
-        .base_path
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    // info!("Received Markdown content: {}", req.content);
-    // info!("Base path: {:?}", base_path);
+fn process_image_paths(content: &str, base_path: &Path) -> (String, Vec<ImageMapping>) {
     let mut mappings = Vec::new();
-    let mut processed = req.content.clone();
-
+    let mut processed = content.to_string();
     let re = Regex::new(r#"!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)"#).unwrap();
 
-    for cap in re.captures_iter(&req.content) {
+    for cap in re.captures_iter(content) {
         let img_path = cap.get(2).unwrap().as_str();
         info!("Found image path: {}", img_path);
 
-        if !img_path.starts_with("http") {
-            let normalized_path = img_path.replace('\\', "/");
-            let joined_path = base_path.join(&normalized_path);
-            info!("Joined path: {:?}", joined_path);
+        if img_path.starts_with("http") {
+            continue;
+        }
 
-            // 尝试规范化路径
-            let full_path = joined_path.canonicalize().ok();
+        let normalized_path = img_path.replace('\\', "/");
+        let joined_path = base_path.join(&normalized_path);
+        info!("Joined path: {:?}", joined_path);
 
-            info!("Normalized path: {}", normalized_path);
-            info!("Full path: {:?}", full_path);
+        let full_path = joined_path.canonicalize().ok();
+        info!("Normalized path: {}", normalized_path);
+        info!("Full path: {:?}", full_path);
 
-            if let Some(full_path) = full_path {
-                // 转换为适合 URL 的路径格式（对绝对路径做 URL 编码，避免空格/中文等导致 URL 无效）
-                let abs = full_path
-                    .to_string_lossy()
-                    .trim_start_matches(r"\\?\")
-                    .trim_start_matches('/')
-                    .replace('\\', "/")
-                    .to_string();
-                let served_path = format!(
-                    "http://localhost:8888/markdown/api/images/{}",
-                    encode(&abs)
-                );
-                info!("Served path: {}", served_path);
+        if let Some(full_path) = full_path {
+            let abs = full_path
+                .to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .trim_start_matches('/')
+                .replace('\\', "/")
+                .to_string();
+            let served_path = format!("http://localhost:8888/markdown/api/images/{}", encode(&abs));
+            info!("Served path: {}", served_path);
 
-                mappings.push(ImageMapping {
-                    original_path: img_path.to_string(),
-                    served_path: served_path.clone(),
-                });
-                info!("Mapping: {:?}", mappings.last());
+            mappings.push(ImageMapping {
+                original_path: img_path.to_string(),
+                served_path: served_path.clone(),
+            });
+            info!("Mapping: {:?}", mappings.last());
 
-                processed =
-                    processed.replace(&format!("]({})", img_path), &format!("]({})", served_path));
-                // info!("Processed content: {}", processed);
-            } else {
-                info!("Failed to resolve path: {}", img_path);
-            }
+            processed = processed.replace(&format!("]({})", img_path), &format!("]({})", served_path));
+        } else {
+            info!("Failed to resolve path: {}", img_path);
         }
     }
+
+    (processed, mappings)
+}
+
+fn resolve_base_path(req: &MarkdownRequest) -> PathBuf {
+    req.base_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
+#[post("/api/markdown/image_process")]
+async fn process_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
+    let base_path = resolve_base_path(&req);
+    let (processed, mappings) = process_image_paths(&req.content, &base_path);
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "processed_content": processed,
+        "mappings": mappings
+    }))
+}
+
+#[post("/api/markdown/chat_process")]
+async fn process_chat_markdown(req: web::Json<MarkdownRequest>) -> HttpResponse {
+    let base_path = resolve_base_path(&req);
+    let (processed, mappings) = process_image_paths(&req.content, &base_path);
+    let processed = normalize_list_display_math(&processed);
 
     HttpResponse::Ok().json(serde_json::json!({
         "processed_content": processed,
@@ -286,6 +421,7 @@ async fn register_resource(req: web::Json<ResourceRegisterRequest>) -> HttpRespo
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(process_markdown)
+        .service(process_chat_markdown)
         .service(serve_image)
         .service(serve_bed_image)
         .service(register_resource);
