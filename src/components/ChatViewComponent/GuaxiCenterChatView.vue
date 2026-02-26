@@ -1059,8 +1059,9 @@ const setMessageRef = (el, index) => {
 
 .jump-to-bottom {
   position: absolute;
-  right: 14px;
+  left: 50%;
   bottom: 14px;
+  transform: translateX(-50%);
   width: 34px;
   height: 34px;
   border-radius: 999px;
