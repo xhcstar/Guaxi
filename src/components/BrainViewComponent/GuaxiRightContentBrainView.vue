@@ -1,7 +1,7 @@
 <template>
   <div class="right-sider-content">
     <n-space vertical :size="12" class="panel">
-      <n-card title="节点信息" size="small">
+      <n-card title="节点信息" size="small" class="node-info-card">
         <n-space v-if="selectedGraphNode" vertical>
           <n-tag :type="getNodeTagType(selectedGraphNode.type)" size="small">
             {{ typeLabel(selectedGraphNode.type) }}
@@ -243,13 +243,24 @@ const focusNode = (n) => {
   flex: 1 1 auto;
   height: 100%;
   width: 100%;
-  overflow: auto;
+  overflow: hidden;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
   font-size: 14px;
 }
 
 .panel {
   padding: 8px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.node-info-card :deep(.n-card__content) {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.node-info-card :deep(.n-text) {
+  word-break: break-all;
 }
 
 .search-results {
