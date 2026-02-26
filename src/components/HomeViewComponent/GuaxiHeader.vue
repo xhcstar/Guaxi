@@ -1726,6 +1726,7 @@ onMounted(async () => {
   box-sizing: border-box;
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.26) transparent;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .search-dd-root::-webkit-scrollbar {

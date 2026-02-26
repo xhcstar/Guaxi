@@ -912,6 +912,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   padding: 0;
   box-sizing: border-box;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .n-tabs {
