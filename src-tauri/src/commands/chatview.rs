@@ -1913,6 +1913,8 @@ pub struct WebModelSendRequest {
     topic_id: i32,
     session_id: String,
     content: String,
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 #[tauri::command]
@@ -1930,6 +1932,7 @@ pub async fn web_model_send_message(
 
     let content_json = serde_json::to_string(&request.content).map_err(|e| e.to_string())?;
     let session_json = serde_json::to_string(&request.session_id).map_err(|e| e.to_string())?;
+    let attachments_json = serde_json::to_string(&request.attachments).map_err(|e| e.to_string())?;
 
     let js = format!(
         r#"(() => {{
@@ -1940,6 +1943,7 @@ pub async fn web_model_send_message(
 
     const provider = {provider};
     const text = {content};
+    const attachments = Array.isArray({attachments}) ? {attachments} : [];
 
     function findInput() {{
       const sendBtn = document.querySelector('#yuanbao-send-btn');
@@ -1991,14 +1995,14 @@ pub async fn web_model_send_message(
       return false;
     }}
 
-    function setValue(el) {{
+    function setValue(el, valueText) {{
       if (!el) return false;
 
       try {{ el.focus(); }} catch (e) {{}}
 
       if (typeof el.value === 'string') {{
-        if (!setNativeValue(el, text)) return false;
-        try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: text }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+        if (!setNativeValue(el, valueText)) return false;
+        try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: valueText }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
         try {{ el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch (e) {{}}
         return true;
       }}
@@ -2008,15 +2012,15 @@ pub async fn web_model_send_message(
           el.textContent = '';
           if (document.execCommand) {{
             document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, text);
+            document.execCommand('insertText', false, valueText);
           }} else {{
-            el.textContent = text;
+            el.textContent = valueText;
           }}
         }} catch (e) {{
-          try {{ el.textContent = text; }} catch (e2) {{ return false; }}
+          try {{ el.textContent = valueText; }} catch (e2) {{ return false; }}
         }}
 
-        try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: text }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+        try {{ el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: valueText }})); }} catch (e) {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
         return true;
       }}
 
@@ -2040,6 +2044,36 @@ pub async fn web_model_send_message(
         return true;
       }} catch (e) {{}}
       return false;
+    }}
+
+    function findUploadButtons(input) {{
+      const root = (input && (input.closest('form') || input.closest('main, [role="main"], body'))) || document.body;
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], label, a, div'));
+      const out = [];
+      for (const node of nodes) {{
+        if (!node) continue;
+        const label = ((node.getAttribute && (node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('data-testid') || node.getAttribute('id'))) || '').toString();
+        const txt = ((node.innerText || node.textContent) || '').toString().trim();
+        const cls = (node.className || '').toString();
+        if (/上传|附件|attach|upload|paperclip|plus|添加文件/i.test(label) || /上传|附件|attach|upload/i.test(txt) || /attach|upload|paperclip/i.test(cls)) {{
+          out.push(node);
+        }}
+      }}
+      return out.slice(0, 4);
+    }}
+
+    function openAttachmentEntrances(input) {{
+      if (!attachments.length) return;
+      const candidates = findUploadButtons(input);
+      for (const el of candidates) {{
+        try {{ click(el); }} catch (e) {{}}
+      }}
+    }}
+
+    function appendAttachmentHint(base) {{
+      if (!attachments.length) return base;
+      const list = attachments.map((p, i) => `${{i + 1}}. ${{p}}`).join('\n');
+      return `${{base}}\n\n[本地附件路径]\n${{list}}\n[/本地附件路径]\n请结合这些附件路径中指向的文件完成回答。`;
     }}
 
     function bestSendButton(input) {{
@@ -2118,7 +2152,12 @@ pub async fn web_model_send_message(
 
     function sendNow() {{
       const input = findInput();
-      if (!setValue(input)) return;
+      if (!input) return;
+
+      openAttachmentEntrances(input);
+
+      const finalText = appendAttachmentHint(text);
+      if (!setValue(input, finalText)) return;
 
       if (trySubmitForm(input)) return;
 
@@ -2143,7 +2182,8 @@ pub async fn web_model_send_message(
         topic_id = request.topic_id,
         session_id = session_json,
         provider = serde_json::to_string(&provider_key).unwrap_or_else(|_| "\"\"".to_string()),
-        content = content_json
+        content = content_json,
+        attachments = attachments_json
     );
 
     w.eval(js.as_str()).map_err(|e| e.to_string())?;
@@ -2268,6 +2308,7 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
                     topic_id: request.topicid,
                     session_id,
                     content: request.question.to_string(),
+                    attachments: vec![],
                 },
             )
             .await?;
@@ -2289,6 +2330,7 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
                     topic_id: request.topicid,
                     session_id,
                     content: request.question.to_string(),
+                    attachments: vec![],
                 },
             )
             .await?;

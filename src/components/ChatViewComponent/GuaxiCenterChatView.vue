@@ -61,7 +61,8 @@
           </div>
         </div>
       </div>
-
+    </div>
+    <div class="input-area">
       <div v-show="showJumpToBottom" class="jump-to-bottom" @click="jumpToBottom">
         <n-spin v-if="isGenerating" size="small" />
         <n-icon v-else>
@@ -70,27 +71,70 @@
           </svg>
         </n-icon>
       </div>
+      <div class="composer-shell">
+        <div v-if="pendingAttachments.length" class="attachment-list">
+          <div v-for="file in pendingAttachments" :key="file.id" class="attachment-chip">
+            <span class="attachment-name" :title="file.path">{{ file.name }}</span>
+            <span class="attachment-size">{{ formatAttachmentSize(file.size) }}</span>
+            <button class="attachment-remove" type="button" title="移除附件" @click="removeAttachment(file.id)">×</button>
+          </div>
+        </div>
 
-    </div>
+        <n-input
+          type="textarea"
+          class="composer-input"
+          :placeholder="isTranslateMode ? `翻译模式：将发送后返回${getTranslateLangLabel(translateToLang.value)}译文` : '给 Guaxi 发送消息...'"
+          v-model:value="messageInput"
+          :disabled="isGenerating"
+          @keydown="handleKeydown"
+        />
 
-    <div class="input-area">
-      <div class="chat-input-height-handle" @mousedown="startResize"></div>
-      <n-input type="textarea" placeholder="请输入您的问题..." v-model:value="messageInput" :disabled="isGenerating"
-        @keydown="handleKeydown" style="flex-grow: 1; height: 100%; padding: 2px; border-radius: 5px; box-sizing: border-box;   font-size: 17px;
-  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;" />
-      <n-button @click="sendMessage" type="primary" :disabled="isGenerating"
-        style="position: absolute; right: 10px; bottom: 8px; border-radius: 50%; padding: 0 20px; height: 36px; min-width: 36px; font-size: 12px;">
-        <template #icon>
-          <n-icon>
-            <svg t="1737646310254" class="icon" viewBox="0 0 1178 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
-              p-id="5954" width="48" height="48">
-              <path
-                d="M1145.732473 24.529036A96.502796 96.502796 0 0 0 1047.167948 6.302655L62.5449 378.38417a96.762677 96.762677 0 0 0-8.229592 177.44733l153.746105 75.175158a32.918368 32.918368 0 0 1 8.229592 5.804029c15.974071 41.130635 79.05606 202.292036 107.123301 260.540222a120.758435 120.758435 0 0 0 64.520002 59.530271c-1.611268-0.155929-3.465091-0.485113-5.318915-0.814297a88.359831 88.359831 0 0 0 14.518733 4.192761 96.190937 96.190937 0 0 0 87.59751-26.455973l57.260636-57.260636a32.485232 32.485232 0 0 1 38.722396-5.318915l246.662532 140.024344a97.143838 97.143838 0 0 0 47.748959 12.751536 97.022559 97.022559 0 0 0 94.042581-73.56389l205.999684-830.478457a95.671174 95.671174 0 0 0-29.453277-95.290014z m-868.005397 592.3747L805.56445 314.903695l-297.997861 305.222576a48.112794 48.112794 0 0 0-10.811085 17.325457c-0.155929 0.329184-0.155929 0.485113-0.329184 0.814297-0.641042 1.940451-59.53027 175.680134-94.371764 254.233756a58.404116 58.404116 0 0 1-20.651945-22.748325c-25.814931-54.211355-85.986243-207.628277-103.727511-252.795743z"
-                fill="currentColor" p-id="5955"></path>
+        <div class="composer-toolbar">
+          <button
+            class="composer-icon-btn"
+            type="button"
+            title="添加附件"
+            :disabled="isGenerating"
+            @click="pickAttachments"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+              <path d="M17.5 6.5v9a5.5 5.5 0 0 1-11 0v-10a4 4 0 0 1 8 0v9a2.5 2.5 0 1 1-5 0V8h1.8v6.5a.7.7 0 1 0 1.4 0v-9a2.2 2.2 0 0 0-4.4 0v10a3.7 3.7 0 0 0 7.4 0v-9h1.8z" fill="currentColor" />
             </svg>
-          </n-icon>
-        </template>
-      </n-button>
+          </button>
+
+          <div class="translate-group">
+          <button
+            class="composer-icon-btn"
+            :class="{ active: isTranslateMode }"
+            type="button"
+            :title="isTranslateMode ? '退出翻译模式' : '进入翻译模式'"
+            :disabled="isGenerating"
+            @click="toggleTranslateMode"
+          >
+              <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12.87 15.07l-2.54-2.55.03-.03A18.4 18.4 0 0 0 13.07 7h2V5h-5V3H8v2H3v2h8.17a16.2 16.2 0 0 1-2.39 3.5A15.9 15.9 0 0 1 7.26 8H5.24a18 18 0 0 0 2.25 3.53l-5.09 5.1L3.82 18l5.05-5.05 3.15 3.15.85-1.03zM17.5 10h-2l-4.5 12h2l1.12-3h4.76l1.12 3h2l-4.5-12zm-2.49 7l1.87-5 1.87 5h-3.74z" fill="currentColor" />
+              </svg>
+            </button>
+            <select class="translate-select" v-model="translateToLang" :disabled="isGenerating">
+              <option v-for="opt in translateLangOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+
+          <div class="composer-spacer"></div>
+
+          <button
+            class="send-btn"
+            type="button"
+            :disabled="isGenerating || !messageInput.trim()"
+            @click="sendMessage"
+            :title="isGenerating ? '正在生成中' : '发送'"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 4l-7 7 1.4 1.4 4.6-4.6V20h2V7.8l4.6 4.6L19 11z" fill="currentColor" />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -100,6 +144,7 @@ import { createLogger } from '../../utils/logger'
 import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from "../GuaxiMarkdownRender/GuaxiMarker";
 import mermaid from 'mermaid';
 
@@ -109,6 +154,19 @@ const messageInput = ref("");
 const inputHistory = ref([]);
 const historyIndex = ref(-1);
 const messageRefs = ref([]);
+const isTranslateMode = ref(false);
+const translateToLang = ref('en');
+const translateLangOptions = [
+  { value: 'en', label: '英语' },
+  { value: 'zh-CN', label: '简体中文' },
+  { value: 'ja', label: '日语' },
+  { value: 'ko', label: '韩语' },
+  { value: 'fr', label: '法语' },
+  { value: 'de', label: '德语' },
+  { value: 'ru', label: '俄语' },
+  { value: 'es', label: '西班牙语' },
+];
+const pendingAttachments = ref([]);
 
 
 // 当前激活的聊天会话
@@ -395,6 +453,76 @@ const jumpToBottom = () => {
   scrollToBottom();
 };
 
+const formatAttachmentSize = (size) => {
+  const n = Number(size);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+};
+
+const parseAttachmentName = (path) => {
+  const p = (path ?? '').toString();
+  if (!p) return '';
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  return i >= 0 ? p.slice(i + 1) : p;
+};
+
+const pickAttachments = async () => {
+  try {
+    const picked = await open({ multiple: true, directory: false });
+    const paths = Array.isArray(picked) ? picked : (typeof picked === 'string' ? [picked] : []);
+    if (!paths.length) return;
+
+    const exists = new Set(pendingAttachments.value.map((x) => x.path));
+    for (const p of paths) {
+      const path = (p ?? '').toString();
+      if (!path || exists.has(path)) continue;
+      exists.add(path);
+      pendingAttachments.value.push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        path,
+        name: parseAttachmentName(path),
+        size: 0,
+      });
+    }
+  } catch (e) {
+    logger.error('选择附件失败:', e);
+  }
+};
+
+const removeAttachment = (id) => {
+  pendingAttachments.value = pendingAttachments.value.filter((x) => x.id !== id);
+};
+
+const getTranslateLangLabel = (value) => {
+  const v = (value ?? '').toString();
+  const hit = translateLangOptions.find((x) => x.value === v);
+  return hit?.label || v || '目标语言';
+};
+
+const toggleTranslateMode = () => {
+  isTranslateMode.value = !isTranslateMode.value;
+};
+
+const buildQuestionWithAttachments = (question) => {
+  const text = (question ?? '').toString().trim();
+  const files = Array.isArray(pendingAttachments.value) ? pendingAttachments.value : [];
+  if (!files.length) return text;
+  const list = files.map((f, idx) => `${idx + 1}. ${f.name} (${f.path})`).join('\n');
+  return `${text}\n\n[附件]\n${list}\n[/附件]`;
+};
+
+const buildTranslatePrompt = (text) => {
+  const target = getTranslateLangLabel(translateToLang.value);
+  return [
+    `请将下面文本准确翻译为${target}。`,
+    '只输出译文，不要解释，不要添加额外内容。',
+    '',
+    text,
+  ].join('\n');
+};
+
 const stripHtml = (html) => {
   const s = (html ?? '').toString();
   if (!s) return '';
@@ -570,6 +698,7 @@ const regenerateFrom = async (assistantIndex) => {
           topic_id: chatStore.selectedTopic,
           session_id: sessionId,
           content: question,
+          attachments: [],
         },
       });
     } catch (e) {
@@ -613,16 +742,24 @@ const askDeepSeek = async (question, sessionId) => {
 };
 
 // 发送消息
-const sendMessage = async () => {
+const sendMessage = async (options = {}) => {
   if (!messageInput.value.trim() || !activeChat.value) return;
 
+  const translateMode = typeof options.translateMode === 'boolean' ? options.translateMode : isTranslateMode.value;
   const isWeb = isWebModel.value;
+  const attachmentsForSend = pendingAttachments.value.map((x) => x.path);
 
-  const question = messageInput.value.trim();
+  const plainQuestion = messageInput.value.trim();
+  let question = plainQuestion;
+  if (translateMode) {
+    question = buildTranslatePrompt(plainQuestion);
+  } else {
+    question = buildQuestionWithAttachments(plainQuestion);
+  }
 
   startGenerating();
 
-  inputHistory.value.push(question);
+  inputHistory.value.push(plainQuestion);
   historyIndex.value = inputHistory.value.length;
 
   const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
@@ -647,8 +784,8 @@ const sendMessage = async () => {
     msgid: topic.length + 1,
     sender: "me",
     chatSessionId: sessionId,
-    raw: question,
-    content: question
+    raw: plainQuestion,
+    content: plainQuestion
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -684,6 +821,7 @@ const sendMessage = async () => {
           topic_id: chatStore.selectedTopic,
           session_id: sessionId,
           content: question,
+          attachments: attachmentsForSend,
         },
       });
     } catch (e) {
@@ -692,6 +830,7 @@ const sendMessage = async () => {
       return;
     }
 
+    pendingAttachments.value = [];
     scrollToBottom();
     scheduleAutosave();
     return;
@@ -705,8 +844,10 @@ const sendMessage = async () => {
   } catch (error) {
     logger.error('Error during askDeepSeek:', error);
     stopGenerating();
+    return;
   }
 
+  pendingAttachments.value = [];
   scrollToBottom();
   scheduleAutosave();
 };
@@ -767,47 +908,6 @@ const handleKeydown = (event) => {
   }
 };
 
-let startY = 0;
-let startHeight = 0;
-
-const startResize = (e) => {
-  e.preventDefault(); // 防止选中文本
-
-  const inputArea = document.querySelector('.input-area');
-  startY = e.clientY; // 记录鼠标初始位置
-  startHeight = inputArea.offsetHeight; // 记录初始高度
-
-  // 添加监听器，实时跟踪鼠标位置
-  document.addEventListener('mousemove', onMouseMove);
-  document.addEventListener('mouseup', stopResize);
-
-  // 禁用文本框的选中
-  document.body.style.userSelect = 'none';
-};
-
-const onMouseMove = (e) => {
-  let diff = startY - e.clientY;
-  if (diff < 0) {
-    diff = 0;
-  }
-  const newHeight = startHeight + diff;
-  logger.info('newHeight:', newHeight);
-  if (newHeight > 85) { // 限制最小高度
-    const inputArea = document.querySelector('.input-area');
-    inputArea.style.height = newHeight + 'px'; // 修改 height
-    // inputArea.style.height = `${Math.max(180, newHeight)}px`
-  }
-};
-
-const stopResize = () => {
-  // 移除鼠标移动和鼠标松开事件监听器
-  document.removeEventListener('mousemove', onMouseMove);
-  document.removeEventListener('mouseup', stopResize);
-
-  // 恢复文本框的选中功能
-  document.body.style.userSelect = '';
-};
-
 onMounted(() => {
   nextTick(() => {
     updateIsAtBottom();
@@ -855,6 +955,7 @@ const setMessageRef = (el, index) => {
   box-sizing: border-box;
   min-height: 0;
   background: var(--guaxi-content-bg);
+  position: relative;
 }
 
 .chat-header {
@@ -904,7 +1005,7 @@ const setMessageRef = (el, index) => {
 .message-list {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 16px;
+  padding: 16px 16px 8px;
   background: radial-gradient(1200px 600px at 20% 0%, rgba(45, 212, 191, 0.10) 0%, rgba(45, 212, 191, 0) 60%),
     radial-gradient(1000px 500px at 90% 10%, rgba(99, 102, 241, 0.08) 0%, rgba(99, 102, 241, 0) 55%),
     var(--guaxi-content-bg);
@@ -958,45 +1059,178 @@ const setMessageRef = (el, index) => {
 
 .input-area {
   flex: 0 0 auto;
-  border-top: 1px solid var(--guaxi-border);
   position: relative;
-  background-color: var(--guaxi-panel-bg);
-  padding-bottom: 2px;
-  height: 80px;
-  min-height: 80px;
+  background: var(--guaxi-panel-bg);
+  padding: 0 12px 12px;
+  min-height: 120px;
   font-size: 17px;
   font-family: 'Maple Mono NF CN', 'Noto Sans CJK SC', Consolas, 'Courier New', Courier, monospace;
 }
 
-.input-area :deep(.n-input) {
-  flex: 1 1 auto;
-  height: calc(100% - 2px);
+.composer-shell {
+  min-height: 96px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 20px;
+  background: var(--guaxi-panel-bg);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.1);
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.input-area :deep(.n-input .n-input-wrapper) {
-  background-color: var(--guaxi-content-bg) !important;
+.attachment-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-height: 64px;
+  overflow: auto;
 }
 
-.input-area :deep(.n-input .n-input__border),
-.input-area :deep(.n-input .n-input__state-border) {
-  border-color: var(--guaxi-border) !important;
-}
-
-.input-area :deep(.n-input__textarea-el) {
-  height: 100% !important;
-  background-color: var(--guaxi-content-bg) !important;
-  color: var(--guaxi-text-primary) !important;
-}
-
-.input-area :deep(.n-input__textarea-el::placeholder) {
+.attachment-chip {
+  max-width: 260px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 999px;
+  background: var(--guaxi-panel-bg);
+  font-size: 12px;
   color: var(--guaxi-text-secondary);
+}
+
+.attachment-name {
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-size {
   opacity: 0.85;
+}
+
+.attachment-remove {
+  border: none;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.composer-input {
+  flex: 1 1 auto;
+}
+
+.composer-input :deep(.n-input-wrapper) {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.composer-input :deep(.n-input__textarea) {
+  min-height: 46px !important;
+}
+
+.composer-input :deep(.n-input__textarea-el) {
+  background: transparent !important;
+  color: var(--guaxi-text-primary) !important;
+  font-size: 16px;
+  line-height: 1.45;
+  resize: none !important;
+}
+
+.composer-input :deep(.n-input__textarea-el::placeholder) {
+  color: var(--guaxi-text-secondary);
+  opacity: 0.78;
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-icon-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  line-height: 0;
+  border-radius: 999px;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.composer-icon-btn svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  overflow: visible;
+}
+
+.composer-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer-icon-btn.active {
+  color: #ffffff;
+  background: #0ea5a4;
+  border-color: #0ea5a4;
+}
+
+.translate-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.translate-select {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 999px;
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+  padding: 4px 10px;
+  outline: none;
+}
+
+.composer-spacer {
+  flex: 1 1 auto;
+}
+
+.send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: none;
+  background: #111827;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 14px rgba(17, 24, 39, 0.24);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .jump-to-bottom {
   position: absolute;
   left: 50%;
-  bottom: 14px;
+  top: -40px;
   transform: translateX(-50%);
   width: 34px;
   height: 34px;
@@ -1009,7 +1243,21 @@ const setMessageRef = (el, index) => {
   justify-content: center;
   cursor: pointer;
   color: var(--guaxi-text-secondary);
-  z-index: 3;
+  z-index: 6;
+}
+
+:root[data-guaxi-theme='dark'] .composer-shell,
+.dark .composer-shell,
+.dark-mode .composer-shell {
+  background: var(--guaxi-panel-bg);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-guaxi-theme='dark'] .send-btn,
+.dark .send-btn,
+.dark-mode .send-btn {
+  background: #e5e7eb;
+  color: #111827;
 }
 
 .typing-dots {
@@ -1101,13 +1349,6 @@ const setMessageRef = (el, index) => {
   opacity: 0.55;
 }
 
-.chat-input-height-handle {
-  position: relative;
-  width: 100%;
-  height: 2px;
-  cursor: ns-resize;
-  background-color: var(--guaxi-border);
-}
 </style>
 
 <style>
