@@ -2,6 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use once_cell::sync::OnceCell;
+use std::fs;
+use std::path::Path;
+use std::time::{Duration as StdDuration, SystemTime};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, Level};
 use tracing_subscriber::filter::filter_fn;
@@ -64,6 +67,85 @@ fn start_background_gc() {
     });
 }
 
+fn cleanup_old_logs() {
+    let logs_dir = Path::new("logs");
+    if !logs_dir.exists() {
+        info!("Log cleanup skipped: logs directory not found");
+        return;
+    }
+
+    let cutoff = match SystemTime::now().checked_sub(StdDuration::from_secs(60 * 60 * 24 * 7)) {
+        Some(t) => t,
+        None => {
+            error!("Log cleanup skipped: failed to compute cutoff time");
+            return;
+        }
+    };
+
+    let entries = match fs::read_dir(logs_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            error!("Log cleanup failed to read logs directory: {}", e);
+            return;
+        }
+    };
+
+    let mut scanned = 0u64;
+    let mut removed = 0u64;
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                error!("Log cleanup failed to read log entry: {}", e);
+                continue;
+            }
+        };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        scanned += 1;
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                error!("Log cleanup failed to read metadata: {}", e);
+                continue;
+            }
+        };
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(e) => {
+                error!("Log cleanup failed to read modified time: {}", e);
+                continue;
+            }
+        };
+
+        if modified < cutoff {
+            match fs::remove_file(&path) {
+                Ok(_) => {
+                    removed += 1;
+                    info!("Log cleanup removed file: {}", path.display());
+                }
+                Err(e) => {
+                    error!("Log cleanup failed to remove file {}: {}", path.display(), e);
+                }
+            }
+        }
+    }
+
+    info!("Log cleanup finished: scanned={}, removed={}", scanned, removed);
+}
+
+fn start_log_cleanup() {
+    tokio::spawn(async {
+        loop {
+            cleanup_old_logs();
+            sleep(Duration::from_secs(60 * 60 * 24 * 7)).await;
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     let has_debug_flag = std::env::args().any(|arg| arg == "--debug");
@@ -114,6 +196,7 @@ async fn main() {
     }
     tokio::spawn(app_init());
     start_background_gc();
+    start_log_cleanup();
     let file_watcher = FileWatcher::new();
 
     let shared_state = SharedState::new();
