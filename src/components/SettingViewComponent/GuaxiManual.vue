@@ -1148,12 +1148,15 @@ import {
   DocumentSearch24Regular,
   Folder20Regular,
   FolderAdd20Regular,
+  Image28Regular,
+  Key24Regular,
   NotebookSection24Regular,
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
   SaveSync20Regular,
   Screenshot24Regular,
   Search32Filled,
+  Server24Regular,
   SignOut20Regular,
   TasksApp20Regular,
   TextBulletListAdd20Filled,
@@ -1164,6 +1167,7 @@ import {
   AddOutline,
   ArrowBackOutline,
   ArrowForwardOutline,
+  BookOutline,
   BookmarksOutline,
   ChevronDownOutline,
   CloseOutline,
@@ -1173,6 +1177,7 @@ import {
   ExitOutline,
   ExpandOutline,
   GridOutline,
+  InformationCircleOutline,
   LanguageOutline,
   LayersOutline,
   LibraryOutline,
@@ -1353,6 +1358,7 @@ const scrollToSection = (id) => {
 .manual {
   width: 100%;
   box-sizing: border-box;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
 }
 
 .icon-inline {

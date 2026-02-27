@@ -476,6 +476,7 @@ onMounted(loadConfig)
 .llm-setting {
   width: 100%;
   box-sizing: border-box;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
 }
 
 .status-header {
