@@ -91,6 +91,9 @@
               若需要 Markdown 转换能力（模型/运行环境），在 <n-tag size="small">设置</n-tag> → <n-tag size="small">大模型</n-tag> 中安装：
               <b>Markdown 转换模型</b>（解压到 utils/Models/surya_models）与 <b>模型运行环境</b>（拷贝到 utils/MarkdownConvertor）。
             </li>
+            <li>
+              如需本地模型（LocalDeepseek），在 <n-tag size="small">设置</n-tag> → <n-tag size="small">大模型</n-tag> 中点击“下载/导入”下载或者导入对应的本地大模型。
+            </li>
           </ol>
 
           <div class="figure">
@@ -769,9 +772,111 @@
           <div id="chat" class="page-section">
             <div class="page-title">聊天（Chat）</div>
             <div class="page-desc">
-              聊天页面用于与大模型对话。顶部包含模型选择器与搜索占位输入框，并提供打开 Web 模型、侧栏折叠等入口。
-              中间区域为消息流与输入区，通常支持多会话/多话题管理（以当前界面为准）。
+              聊天页面用于与大模型对话。支持会话管理、会话内消息搜索、翻译模式、附件上传、多选消息发送到编辑器等能力。
+              输入区已与消息区视觉融合，滚动不在底部时会显示“回到底部”按钮；切换页面后返回聊天页，会继续渲染当前会话消息流。
             </div>
+            <div class="manual-subtitle">聊天页顶部与会话列表</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SearchOutline" /></div>
+                <div class="icon-name">搜索会话</div>
+                <div class="icon-desc">左侧会话列表顶部输入框，可按会话标题、首条用户消息或会话消息内容过滤。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z" fill="currentColor" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">新建会话</div>
+                <div class="icon-desc">在会话列表创建新会话（鼠标悬停提示“新建会话”）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="SearchOutline" /></div>
+                <div class="icon-name">搜索当前会话消息</div>
+                <div class="icon-desc">聊天页顶部搜索框，按关键字过滤当前会话消息（匹配原始 Markdown 与渲染文本）。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="OpenOutline" /></div>
+                <div class="icon-name">打开网页模型窗口</div>
+                <div class="icon-desc">当模型为网页模式（如元宝/ChatGPT 网页）时，可快速打开对应网页窗口。</div>
+              </div>
+            </div>
+
+            <div class="manual-subtitle">消息区操作图标</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M9 11l3 3L22 4l-1.4-1.4L12 11.2 10.4 9.6zM2 6h8V4H2zm0 6h5v-2H2zm0 6h8v-2H2z" fill="currentColor" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">多选模式</div>
+                <div class="icon-desc">位于聊天标题栏右侧；进入后可勾选多条消息，并执行“全选可见 / 清空 / 发送到编辑器”。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="CopyOutline" /></div>
+                <div class="icon-name">复制消息</div>
+                <div class="icon-desc">用户消息和模型消息均支持复制；模型消息复制优先返回原始 Markdown 内容。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="ShareSocialOutline" /></div>
+                <div class="icon-name">分享（模型消息）</div>
+                <div class="icon-desc">分享当前模型回复内容。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="RefreshOutline" /></div>
+                <div class="icon-name">重新生成（模型消息）</div>
+                <div class="icon-desc">以当前上下文重新请求大模型生成回复。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="ChevronDownOutline" /></div>
+                <div class="icon-name">回到底部</div>
+                <div class="icon-desc">当未停留在最新消息底部时显示，位于输入框上方中间；点击快速跳转到最后一条消息。</div>
+              </div>
+            </div>
+
+            <div class="manual-subtitle">输入区图标与模式</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M17.5 6.5v9a5.5 5.5 0 0 1-11 0v-10a4 4 0 0 1 8 0v9a2.5 2.5 0 1 1-5 0V8h1.8v6.5a.7.7 0 1 0 1.4 0v-9a2.2 2.2 0 0 0-4.4 0v10a3.7 3.7 0 0 0 7.4 0v-9h1.8z" fill="currentColor" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">添加附件</div>
+                <div class="icon-desc">为当前提问附加文件路径；已选附件会显示在输入框上方，可单独移除。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="LanguageOutline" /></div>
+                <div class="icon-name">翻译模式</div>
+                <div class="icon-desc">点击进入/退出翻译模式（图标高亮表示已开启）。开启后发送按钮仍用于发送消息，但模型将按目标语言返回译文。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12 4l-7 7 1.4 1.4 4.6-4.6V20h2V7.8l4.6 4.6L19 11z" fill="currentColor" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">发送</div>
+                <div class="icon-desc">发送输入内容；输入框默认至少显示三行高度，支持 Shift+Enter 换行。</div>
+              </div>
+            </div>
+
+            <div class="manual-subtitle">会话行为说明</div>
+            <ul class="manual-ul">
+              <li>会话标题会在回复后自动生成摘要标题；你也可以在聊天标题处双击手动重命名并锁定标题。</li>
+              <li>左侧会话列表的小字预览优先显示该会话首条用户消息，而非模型欢迎语。</li>
+              <li>“发送到编辑器”会把多选消息写入首页当前激活标签文件的光标位置。</li>
+            </ul>
             <div class="figure">
               <div class="figure-box">
                 <img class="figure-img" :src="manualImage('page-chat')" alt="聊天页面与模型选择" />
@@ -985,6 +1090,21 @@
             </div>
             <div class="figure-caption">图 10：大模型与转换配置</div>
           </div>
+
+          <h3 class="h3">本地模型（LocalDeepseek）</h3>
+          <p class="p">
+            本地模型用于离线或内网环境下的推理场景，在同一页面可完成下载、导入与状态检查。
+          </p>
+          <ul class="manual-ul">
+            <li>下载：点击“下载”获取模型文件，完成后状态显示已安装。</li>
+            <li>导入：已有模型包时点击“导入”并选择本地文件。</li>
+          </ul>
+          <div class="figure">
+            <div class="figure-box">
+              <img class="figure-img" :src="manualImage('setting-local-llm')" alt="本地模型配置" />
+            </div>
+            <div class="figure-caption">图 11：本地模型配置</div>
+          </div>
         </section>
 
         <n-divider />
@@ -1045,8 +1165,10 @@ import {
   ArrowBackOutline,
   ArrowForwardOutline,
   BookmarksOutline,
+  ChevronDownOutline,
   CloseOutline,
   CompassOutline,
+  CopyOutline,
   DocumentTextOutline,
   ExitOutline,
   ExpandOutline,
@@ -1058,11 +1180,13 @@ import {
   LogoVimeo,
   MoonOutline,
   NewspaperOutline,
+  OpenOutline,
   OptionsOutline,
   RefreshOutline,
   RemoveOutline,
   SaveOutline,
   SearchOutline,
+  ShareSocialOutline,
   SparklesOutline,
   SpeedometerOutline,
   SyncOutline,
@@ -1177,6 +1301,10 @@ const manualImages = {
   'setting-llm': {
     light: new URL('../../assets/manual/setting-llm.png', import.meta.url).href,
     dark: new URL('../../assets/manual/setting-llm-dark.png', import.meta.url).href
+  },
+  'setting-local-llm': {
+    light: new URL('../../assets/manual/setting-local-llm-light.png', import.meta.url).href,
+    dark: new URL('../../assets/manual/setting-local-llm-dark.png', import.meta.url).href
   }
 }
 
