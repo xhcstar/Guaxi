@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { renderMarkdown } from "../components/GuaxiMarkdownRender/GuaxiMarker";
 import { createLogger } from "../utils/logger";
+import { listen } from '@tauri-apps/api/event';
 import chatgptImg from '@/assets/chatgpt.png';
 import deepseekImg from '@/assets/deepseek.png';
 import qwenImg from '@/assets/qwen.png';
@@ -232,6 +233,10 @@ export const useChatStore = defineStore("chatStore", {
 
     streamTargetModelId: null,
     streamTargetTopicId: null,
+
+    chatStreamUnlisten: null,
+    webModelPushUnlisten: null,
+    chatEventListenersReady: false,
   }),
   actions: {
     // 更新激活的会话 ID
@@ -252,6 +257,45 @@ export const useChatStore = defineStore("chatStore", {
       this.streamTargetTopicId = topicId;
       this.lastMessage = null;
       this.lastMessageTime = 0;
+    },
+
+    async initChatEventListeners() {
+      if (this.chatEventListenersReady) return;
+
+      this.chatEventListenersReady = true;
+
+      try {
+        this.chatStreamUnlisten = await listen("modle-streaming-respond-output", (event) => {
+          const payload = event?.payload;
+          this.collectChatSessionStream(payload);
+        });
+      } catch (error) {
+        this.chatEventListenersReady = false;
+        logger.error("注册 modle-streaming-respond-output 监听失败:", error);
+        throw error;
+      }
+
+      try {
+        this.webModelPushUnlisten = await listen("web-model-chat-push", (event) => {
+          const payload = event?.payload || {};
+          const modelId = payload.model_id;
+          const topicId = payload.topic_id;
+          const sessionId = payload.session_id;
+          const title = payload.title;
+          const messages = payload.messages;
+          const normalizedMessages = Array.isArray(messages) ? messages : [];
+
+          this.appendMessagesToTopic({
+            modelId,
+            topicId,
+            sessionId,
+            title,
+            messages: normalizedMessages,
+          });
+        });
+      } catch (error) {
+        logger.error("注册 web-model-chat-push 监听失败:", error);
+      }
     },
 
     appendMessagesToTopic({ modelId, topicId, sessionId, title, messages }) {
@@ -369,6 +413,7 @@ export const useChatStore = defineStore("chatStore", {
             if (topicitem.topicid === topicId) {
               const latestTopic = topicitem.topic[topicitem.topic.length - 1];
               if (latestTopic && latestTopic.sender !== "me") {
+                latestTopic.isPlaceholder = false;
                 latestTopic.raw = this.accumulatedMessage;
                 this.renderDebounced(this.accumulatedMessage).then(
                   (renderedMessage) => {

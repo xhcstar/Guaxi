@@ -100,7 +100,6 @@ import { createLogger } from '../../utils/logger'
 import { ref, nextTick, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from "../../stores/chatStore";
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from "../GuaxiMarkdownRender/GuaxiMarker";
 import mermaid from 'mermaid';
 
@@ -109,8 +108,6 @@ const chatStore = useChatStore();
 const messageInput = ref("");
 const inputHistory = ref([]);
 const historyIndex = ref(-1);
-let unsubscribeStream = null;
-let unsubscribeWebModel = null;
 const messageRefs = ref([]);
 
 
@@ -186,24 +183,6 @@ const pickAutoTitle = (raw) => {
   const MAX = 24;
   if (title.length <= MAX) return title;
   return title.slice(0, MAX).trimEnd() + '…';
-};
-
-const streamTitleBuffer = new Map();
-
-const maybeAutoSetTitle = (sessionId) => {
-  const topic = activeChatMessages.value;
-  if (!topic) return;
-  if (topic.__titleLocked) return;
-
-  const current = (topic.title ?? '').toString().trim();
-  if (current) return;
-
-  const buf = streamTitleBuffer.get(sessionId) || '';
-  const nextTitle = pickAutoTitle(buf);
-  if (!nextTitle) return;
-
-  topic.title = nextTitle;
-  topic.__titleLocked = false;
 };
 
 const autosaveTimer = ref(null);
@@ -441,6 +420,57 @@ watch(
     rerenderActiveTopic();
   },
   { immediate: true }
+);
+
+watch(
+  () => {
+    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    const latest = topic[topic.length - 1];
+    return {
+      modelId: chatStore.selectedModel,
+      topicId: chatStore.selectedTopic,
+      len: topic.length,
+      sender: latest?.sender || '',
+      raw: (latest?.raw ?? '').toString(),
+      content: (latest?.content ?? '').toString(),
+      isPlaceholder: !!latest?.isPlaceholder,
+    };
+  },
+  () => {
+    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+    const latest = topic[topic.length - 1];
+    if (!latest || latest.sender === 'me') return;
+
+    const raw = (latest.raw ?? '').toString();
+    const content = (latest.content ?? '').toString();
+    if (latest.isPlaceholder && (raw || content)) {
+      latest.isPlaceholder = false;
+    }
+
+    if (raw || content) {
+      bumpGenerating();
+      const topicMeta = activeChatMessages.value;
+      if (topicMeta && !topicMeta.__titleLocked) {
+        const current = (topicMeta.title ?? '').toString().trim();
+        if (!current) {
+          const autoTitle = pickAutoTitle(raw || content);
+          if (autoTitle) {
+            topicMeta.title = autoTitle;
+            topicMeta.__titleLocked = false;
+          }
+        }
+      }
+    }
+
+    if (isAtBottom.value) {
+      scrollToBottom();
+    } else {
+      nextTick(updateIsAtBottom);
+    }
+
+    scheduleAutosave();
+  },
+  { flush: 'post' }
 );
 
 const writeClipboard = async (text) => {
@@ -782,103 +812,9 @@ onMounted(() => {
   nextTick(() => {
     updateIsAtBottom();
   });
-
-  listen("modle-streaming-respond-output", (event) => {
-    const shouldFollow = isAtBottom.value;
-    bumpGenerating();
-    const rawPayload = typeof event.payload === 'string' ? event.payload : '';
-    const payload = event.payload;
-    if (rawPayload && (rawPayload.includes('$') || rawPayload.includes('`') || rawPayload.includes('```') || rawPayload.includes('\\[') || rawPayload.includes('\\]') || rawPayload.includes('\\(') || rawPayload.includes('\\)'))) {
-      logger.info('[modle-streaming-respond-output raw]', rawPayload.slice(0, 400));
-    }
-
-    chatStore.collectChatSessionStream(payload);
-
-    const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
-    const latest = topic[topic.length - 1];
-    if (latest && latest.sender !== 'me') {
-      if (!latest.chatSessionId) {
-        latest.chatSessionId = chatStore.sendChatSessionId || '';
-      }
-      if (latest.isPlaceholder && typeof payload === 'string' && payload.length > 0) {
-        latest.isPlaceholder = false;
-      }
-
-      const sid = (latest.chatSessionId || '').toString().trim();
-      if (sid && typeof payload === 'string' && payload) {
-        const prev = streamTitleBuffer.get(sid) || '';
-        const next = (prev + payload).slice(0, 800);
-        streamTitleBuffer.set(sid, next);
-        maybeAutoSetTitle(sid);
-      }
-    }
-
-    if (shouldFollow) {
-      scrollToBottom();
-    } else {
-      nextTick(updateIsAtBottom);
-    }
-    scheduleAutosave();
-  })
-    .then((unsubFn) => {
-      unsubscribeStream = unsubFn;
-    })
-    .catch((err) => {
-      logger.error('监听事件失败:', err);
-      unsubscribeStream = null;
-    });
-
-  listen("web-model-chat-push", (event) => {
-    const shouldFollow = isAtBottom.value;
-    const payload = event.payload || {};
-    const modelId = payload.model_id;
-    const topicId = payload.topic_id;
-    const sessionId = payload.session_id;
-    const title = payload.title;
-    const messages = payload.messages;
-
-    const normalizedMessages = Array.isArray(messages) ? messages : messages;
-
-    chatStore.appendMessagesToTopic({
-      modelId,
-      topicId,
-      sessionId,
-      title,
-      messages: normalizedMessages,
-    });
-
-    if (modelId === chatStore.selectedModel && topicId === chatStore.selectedTopic) {
-      bumpGenerating();
-      if (shouldFollow) {
-        scrollToBottom();
-      } else {
-        nextTick(updateIsAtBottom);
-      }
-      scheduleAutosave();
-    }
-  })
-    .then((unsubFn) => {
-      unsubscribeWebModel = unsubFn;
-    })
-    .catch((err) => {
-      logger.error('监听 web-model-chat-push 失败:', err);
-      unsubscribeWebModel = null;
-    });
 });
 
 onUnmounted(() => {
-  if (unsubscribeStream && typeof unsubscribeStream === 'function') {
-    try {
-      Promise.resolve(unsubscribeStream()).catch(() => {})
-    } catch {
-    }
-  }
-  if (unsubscribeWebModel && typeof unsubscribeWebModel === 'function') {
-    try {
-      Promise.resolve(unsubscribeWebModel()).catch(() => {})
-    } catch {
-    }
-  }
   if (autosaveTimer.value) {
     clearTimeout(autosaveTimer.value);
     autosaveTimer.value = null;

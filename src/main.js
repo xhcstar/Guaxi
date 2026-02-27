@@ -49,6 +49,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useSettingsStore } from './stores/settingsStore'
 import { useFileTreeStore } from './stores/fileTreeStore'
 import { useEditorStore } from './stores/editorStore'
+import { useChatStore } from './stores/chatStore'
 import { initFrontendLogging, createLogger } from './utils/logger'
 import { initialize } from '@codingame/monaco-vscode-api'
 import 'vscode/localExtensionHost'
@@ -123,6 +124,7 @@ app.use(pinia);
 const settingsStore = useSettingsStore(pinia)
 const fileTreeStore = useFileTreeStore(pinia)
 const editorStore = useEditorStore(pinia)
+const chatStore = useChatStore(pinia)
 
 const OPEN_FILE_IN_HOME_EVENT = 'open_file_in_home'
 let unlistenOpenFileInHome = null
@@ -210,6 +212,10 @@ if (theme) {
 // 初始化Tauri事件系统
 initTauriEvents().catch(error => {
   logger.error('全局事件初始化失败:', error);
+});
+
+chatStore.initChatEventListeners().catch((error) => {
+  logger.error('聊天事件初始化失败:', error);
 });
 
 invoke('init_backend_services').catch(error => {
