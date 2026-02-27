@@ -433,10 +433,6 @@ export const addMediaViewerButtons = (container, options = {}) => {
           return item;
         };
 
-        legend.appendChild(mkLegendItem(ICONS.minus, '缩小'));
-        legend.appendChild(mkLegendItem(ICONS.plus, '放大'));
-        legend.appendChild(mkLegendItem(ICONS.close, '关闭'));
-
         const mkTool = (iconSvg, title) => {
           const b = document.createElement('button');
           b.type = 'button';
