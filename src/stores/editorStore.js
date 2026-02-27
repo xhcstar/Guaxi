@@ -216,18 +216,41 @@ export const useEditorStore = defineStore("editor", {
 
       try {
         this.isInserting = true; // 标记正在插入
+        const model = this.editorInstance.getModel();
 
-        // 获取当前光标位置
-        const position = this.editorInstance.getPosition();
+        // 优先使用缓存光标，避免页面切换后临时重置到文件开头
+        const livePos = this.editorInstance.getPosition();
+        const cached = this.cursorPosition || {};
+        const safeLineFromCache = Number(cached.lineNumber);
+        const safeColFromCache = Number(cached.column);
+
+        let lineNumber = Number(livePos?.lineNumber || 1);
+        let column = Number(livePos?.column || 1);
+
+        if (
+          Number.isFinite(safeLineFromCache) && safeLineFromCache > 0 &&
+          Number.isFinite(safeColFromCache) && safeColFromCache > 0
+        ) {
+          const liveLooksLikeReset = lineNumber === 1 && column === 1;
+          if (liveLooksLikeReset) {
+            lineNumber = safeLineFromCache;
+            column = safeColFromCache;
+          }
+        }
+
+        const maxLine = Math.max(1, model.getLineCount());
+        lineNumber = Math.min(Math.max(1, lineNumber), maxLine);
+        const maxColumn = Math.max(1, model.getLineMaxColumn(lineNumber));
+        column = Math.min(Math.max(1, column), maxColumn);
 
         // 执行插入操作
         this.editorInstance.executeEdits("insert-content", [
           {
             range: new monaco.Range(
-              position.lineNumber,
-              position.column,
-              position.lineNumber,
-              position.column
+              lineNumber,
+              column,
+              lineNumber,
+              column
             ),
             text: content,
             forceMoveMarkers: true,
@@ -236,8 +259,8 @@ export const useEditorStore = defineStore("editor", {
 
         // 计算新光标位置
         const lines = content.split("\n");
-        let newLineNumber = position.lineNumber;
-        let newColumn = position.column;
+        let newLineNumber = lineNumber;
+        let newColumn = column;
 
         if (lines.length > 1) {
           newLineNumber += lines.length - 1;
@@ -260,6 +283,7 @@ export const useEditorStore = defineStore("editor", {
         );
         this.editorInstance.setSelection(newSelection);
         this.editorInstance.focus();
+        this.cursorPosition = { lineNumber: newLineNumber, column: newColumn };
 
         return true;
       } catch (error) {

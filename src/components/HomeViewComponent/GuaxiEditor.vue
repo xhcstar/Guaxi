@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="editor-container guaxi-editor">
     <div class="editor-header" ref="editorHeaderRef">
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
@@ -1855,7 +1855,47 @@ const message = useMessage()
 
 let unlistenTemplateInsert = null
 let templateInsertListenerUnmounted = false
+const PENDING_TEMPLATE_INSERT_KEY = 'guaxi.pending_template_insert'
+const TEMPLATE_INSERT_DEDUP_MS = 1500
+let lastTemplateInsertPayload = ''
+let lastTemplateInsertAt = 0
 
+const isDuplicateTemplateInsert = (raw) => {
+  const text = String(raw || '')
+  if (!text) return false
+  const now = Date.now()
+  return text === lastTemplateInsertPayload && (now - lastTemplateInsertAt) < TEMPLATE_INSERT_DEDUP_MS
+}
+
+const markTemplateInsertApplied = (raw) => {
+  lastTemplateInsertPayload = String(raw || '')
+  lastTemplateInsertAt = Date.now()
+}
+
+const applyTemplateInsert = async (content) => {
+  const raw = typeof content === 'string' ? content : ''
+  if (!raw) return false
+  if (isDuplicateTemplateInsert(raw)) return true
+  const text = raw.endsWith('\n') ? raw : `${raw}\n`
+  const inserted = !!(await editorStore.insertContent(text))
+  if (inserted) {
+    markTemplateInsertApplied(raw)
+  }
+  return inserted
+}
+
+const consumePendingTemplateInsert = async () => {
+  try {
+    const pending = localStorage.getItem(PENDING_TEMPLATE_INSERT_KEY) || ''
+    if (!pending) return
+    const inserted = await applyTemplateInsert(pending)
+    if (inserted) {
+      localStorage.removeItem(PENDING_TEMPLATE_INSERT_KEY)
+    }
+  } catch (e) {
+    logger.debug('处理待插入模板内容失败:', e)
+  }
+}
 const safeUnlistenTemplateInsert = () => {
   if (typeof unlistenTemplateInsert !== 'function') return
   try {
@@ -1875,10 +1915,12 @@ onMounted(async () => {
       const content = typeof event?.payload?.content === 'string' ? event.payload.content : ''
       if (!content) return
 
-      const text = content.endsWith('\n') ? content : `${content}\n`
-      const inserted = await editorStore.insertContent(text)
+      const inserted = await applyTemplateInsert(content)
       if (!inserted) {
+        localStorage.setItem(PENDING_TEMPLATE_INSERT_KEY, content)
         message.warning('插入模板失败：请先打开一个文件')
+      } else {
+        localStorage.removeItem(PENDING_TEMPLATE_INSERT_KEY)
       }
     })
 
@@ -1894,6 +1936,7 @@ onMounted(async () => {
     }
 
     unlistenTemplateInsert = unlisten
+    await consumePendingTemplateInsert()
   } catch (e) {
     logger.error('注册模板插入事件失败:', e)
   }
@@ -10792,3 +10835,4 @@ img {
   color: #000 !important;
 }
 </style>
+

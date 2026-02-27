@@ -10,7 +10,7 @@
     <!-- 中间：搜索框 (占位实现) -->
     <div class="header-center">
       <div class="search-container">
-        <n-input round clearable placeholder="搜索..." @focus="showSearchPlaceholder">
+        <n-input round clearable placeholder="搜索当前会话消息..." v-model:value="chatMessageSearchQuery" @focus="showSearchPlaceholder">
           <template #prefix>
             <n-icon :component="Search20Filled" />
           </template>
@@ -32,6 +32,7 @@ import { useMessage } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useChatStore } from '../../stores/chatStore'
+import { computed } from 'vue'
 import ChatModelSelector from "./ChatModelSelector.vue"
 import {
   PanelLeftContract24Regular,
@@ -48,6 +49,10 @@ const viewKey = 'chat'
 const siderStore = useSiderStore();
 const chatStore = useChatStore();
 const message = useMessage();
+const chatMessageSearchQuery = computed({
+  get: () => chatStore.chatMessageSearchQuery,
+  set: (v) => chatStore.setChatMessageSearchQuery(v),
+})
 
 
 const toggleLeftSider = () => {

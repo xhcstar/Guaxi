@@ -2,10 +2,15 @@
   <div class="chat-list-container">
     <div class="chat-list-header">
       <div style="flex-grow: 2; align-items: center; vertical-align: middle;">
-        <n-input round size="small" placeholder="搜索" class="chat-search-input" />
+        <n-input round size="small" placeholder="搜索会话" class="chat-search-input" v-model:value="sessionSearchQuery" />
       </div>
       <div>
-        <n-icon size="20" style="flex-grow: 1; align-items: center; vertical-align: middle;" @click="handleAddChat">
+        <n-icon
+          size="20"
+          style="flex-grow: 1; align-items: center; vertical-align: middle;"
+          title="新建会话"
+          @click="handleAddChat"
+        >
           <svg t="1736598327807" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg"
             p-id="21966" width="20" height="20">
             <path
@@ -17,7 +22,7 @@
     </div>
 
     <div class="chat-list">
-      <div v-for="curtopic in (activeChat?.MessagesList || [])" :key="curtopic.topicid" class="chat-item"
+      <div v-for="curtopic in filteredTopics" :key="curtopic.topicid" class="chat-item"
         :class="{ active: curtopic.topicid === chatStore.selectedTopic }" @click="selectChat(curtopic.topicid)"
         @contextmenu="showContextMenu($event, curtopic)">
         <div class="chat-avatar">
@@ -29,7 +34,7 @@
             <!-- <span class="chat-timestamp">{{ formatTimestamp(curmodel.MessagesList.at(0)) }}</span> -->
           </div>
           <div class="chat-last-message">
-            {{ curtopic.topic?.[0]?.content || '' }}
+            {{ getTopicPreview(curtopic) }}
           </div>
         </div>
       </div>
@@ -60,6 +65,45 @@ const showMenu = ref(false);
 const menuTop = ref(0);
 const menuLeft = ref(0);
 const selectedChat = ref(null);
+const sessionSearchQuery = ref('');
+
+const normalizeText = (v) => (v ?? '').toString().replace(/\s+/g, ' ').trim().toLowerCase();
+
+const stripHtml = (html) => {
+  const s = (html ?? '').toString();
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.innerHTML = s.replace(/<br\s*\/?\s*>/gi, '\n');
+  return (div.textContent || div.innerText || '').toString();
+};
+
+const getTopicFirstUserMessage = (topic) => {
+  const list = Array.isArray(topic?.topic) ? topic.topic : [];
+  const firstUser = list.find((m) => m?.sender === 'me');
+  if (!firstUser) return '';
+  const raw = (firstUser.raw ?? '').toString().trim();
+  if (raw) return raw;
+  return stripHtml(firstUser.content).trim();
+};
+
+const getTopicPreview = (topic) => {
+  return getTopicFirstUserMessage(topic) || '';
+};
+
+const filteredTopics = computed(() => {
+  const list = Array.isArray(activeChat.value?.MessagesList) ? activeChat.value.MessagesList : [];
+  const q = normalizeText(sessionSearchQuery.value);
+  if (!q) return list;
+
+  return list.filter((t) => {
+    const title = normalizeText(t?.title || activeChat.value?.name || '');
+    const preview = normalizeText(getTopicPreview(t));
+    if (title.includes(q) || preview.includes(q)) return true;
+
+    const msgs = Array.isArray(t?.topic) ? t.topic : [];
+    return msgs.some((m) => normalizeText(m?.raw || stripHtml(m?.content || '')).includes(q));
+  });
+});
 
 const selectChat = (id) => {
   chatStore.setModelTopic(id);

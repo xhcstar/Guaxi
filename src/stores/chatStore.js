@@ -233,6 +233,7 @@ export const useChatStore = defineStore("chatStore", {
 
     streamTargetModelId: null,
     streamTargetTopicId: null,
+    chatMessageSearchQuery: "",
 
     chatStreamUnlisten: null,
     webModelPushUnlisten: null,
@@ -257,6 +258,10 @@ export const useChatStore = defineStore("chatStore", {
       this.streamTargetTopicId = topicId;
       this.lastMessage = null;
       this.lastMessageTime = 0;
+    },
+
+    setChatMessageSearchQuery(query) {
+      this.chatMessageSearchQuery = (query ?? "").toString();
     },
 
     async initChatEventListeners() {

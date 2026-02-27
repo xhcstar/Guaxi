@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="chat-container">
     <div class="chat-header">
       <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
@@ -7,20 +7,47 @@
           @keydown.enter.prevent="commitTitle" @blur="commitTitle" />
         <span v-else class="chat-title" @dblclick="beginEditTitle">{{ displayTitle }}</span>
       </div>
+      <button
+        class="header-select-btn"
+        :class="{ active: isSelectingMessages }"
+        type="button"
+        :title="isSelectingMessages ? '退出多选' : '进入多选'"
+        :disabled="isGenerating"
+        @click="toggleSelectMode"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9 11l3 3L22 4l-1.4-1.4L12 11.2 10.4 9.6zM2 6h8V4H2zm0 6h5v-2H2zm0 6h8v-2H2z" fill="currentColor" />
+        </svg>
+      </button>
     </div>
-
     <div class="message-list" ref="messageContainer" @scroll="updateIsAtBottom">
-      <div v-for="(message, index) in activeChatMessages.topic" :key="message.msgid" class="message-item"
+      <div v-if="isSelectingMessages" class="select-toolbar">
+        <span class="select-toolbar-text">已选 {{ selectedMessageIds.size }} 条</span>
+        <button class="select-toolbar-btn" type="button" @click="selectAllVisibleMessages">全选可见</button>
+        <button class="select-toolbar-btn" type="button" @click="clearSelectedMessages">清空</button>
+        <button class="select-toolbar-btn primary" type="button" :disabled="selectedMessageIds.size === 0" @click="sendSelectedMessagesToEditor">发送到编辑器</button>
+      </div>
+      <div v-if="displayedMessages.length === 0" class="message-empty">
+        未找到匹配消息
+      </div>
+      <div v-for="(message, index) in displayedMessages" :key="message.msgid" class="message-item"
         :class="message.sender === 'me' ? 'message-right' : 'message-left'">
+        <label v-if="isSelectingMessages" class="msg-select-box">
+          <input
+            type="checkbox"
+            :checked="selectedMessageIds.has(String(message.msgid))"
+            @change="toggleSelectMessage(message)"
+          />
+        </label>
         <n-avatar v-if="message.sender === 'me'" :src="activeChat.MeAvatar" size="medium" round />
         <n-avatar v-else :src="activeChat.ModelAvatar" size="medium" round />
-        <div class="message-bubble">
+        <div class="message-bubble" :class="{ 'message-bubble-selected': selectedMessageIds.has(String(message.msgid)) }">
           <div v-if="message.isPlaceholder" class="message-content" :ref="el => setMessageRef(el, index)">
             <span class="typing-dots"><i></i><i></i><i></i></span>
           </div>
           <div v-else class="message-content" v-html="message.content" :ref="el => setMessageRef(el, index)"></div>
 
-          <div v-if="!message.isPlaceholder && message.sender !== 'me'" class="message-actions">
+          <div v-if="!message.isPlaceholder" class="message-actions">
             <button class="message-action-btn" type="button" :class="{ copied: copiedMessageId === String(message.msgid) }"
               :title="copiedMessageId === String(message.msgid) ? '已复制' : '复制'" @click="copyMessage(message)">
               <n-icon>
@@ -39,7 +66,7 @@
             </button>
             <span v-if="copiedMessageId === String(message.msgid)" class="message-copy-hint">已复制</span>
 
-            <button class="message-action-btn" type="button" title="分享" @click="shareMessage(message)">
+            <button v-if="message.sender !== 'me'" class="message-action-btn" type="button" title="分享" @click="shareMessage(message)">
               <n-icon>
                 <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
                   <path
@@ -49,8 +76,8 @@
               </n-icon>
             </button>
 
-            <button class="message-action-btn" type="button" title="重新生成" :disabled="isGenerating"
-              @click="regenerateFrom(index)">
+            <button v-if="message.sender !== 'me'" class="message-action-btn" type="button" title="重新生成" :disabled="isGenerating"
+              @click="regenerateFrom(message)">
               <n-icon>
                 <svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
                   <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 13.65-6.65z"
@@ -71,7 +98,7 @@
           </svg>
         </n-icon>
       </div>
-      <div class="composer-shell">
+      <div class="composer-shell" @click="focusComposerInput">
         <div v-if="pendingAttachments.length" class="attachment-list">
           <div v-for="file in pendingAttachments" :key="file.id" class="attachment-chip">
             <span class="attachment-name" :title="file.path">{{ file.name }}</span>
@@ -80,11 +107,11 @@
           </div>
         </div>
 
-        <n-input
-          type="textarea"
+        <textarea
+          ref="composerInputRef"
           class="composer-input"
           :placeholder="isTranslateMode ? `翻译模式：将发送后返回${getTranslateLangLabel(translateToLang.value)}译文` : '给 Guaxi 发送消息...'"
-          v-model:value="messageInput"
+          v-model="messageInput"
           :disabled="isGenerating"
           @keydown="handleKeydown"
         />
@@ -119,7 +146,6 @@
               <option v-for="opt in translateLangOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
           </div>
-
           <div class="composer-spacer"></div>
 
           <button
@@ -154,6 +180,9 @@ const messageInput = ref("");
 const inputHistory = ref([]);
 const historyIndex = ref(-1);
 const messageRefs = ref([]);
+const composerInputRef = ref(null);
+const isSelectingMessages = ref(false);
+const selectedMessageIds = ref(new Set());
 const isTranslateMode = ref(false);
 const translateToLang = ref('en');
 const translateLangOptions = [
@@ -178,6 +207,17 @@ const activeChat = computed(() =>
 const activeChatMessages = computed(() =>
   activeChat.value?.MessagesList.find((topic) => topic.topicid === chatStore.selectedTopic) || { topicid: chatStore.selectedTopic, topic: [] }
 );
+
+const displayedMessages = computed(() => {
+  const list = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+  const q = (chatStore.chatMessageSearchQuery ?? '').toString().trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((m) => {
+    const raw = (m?.raw ?? '').toString().toLowerCase();
+    const htmlText = stripHtml(m?.content || '').toLowerCase();
+    return raw.includes(q) || htmlText.includes(q);
+  });
+});
 
 const displayTitle = computed(() => {
   const t = (activeChatMessages.value?.title ?? '').toString().trim();
@@ -427,8 +467,11 @@ const rerenderActiveTopic = async () => {
   await nextTick();
   const container = messageContainer.value;
   if (container) {
-    addCopyButtons(container);
-    addMediaViewerButtons(container);
+    const contentNodes = Array.from(container.querySelectorAll('.message-content') || []);
+    contentNodes.forEach((node) => {
+      addCopyButtons(node);
+      addMediaViewerButtons(node);
+    });
     await renderMermaidInContainer(container);
   }
 };
@@ -501,8 +544,97 @@ const getTranslateLangLabel = (value) => {
   return hit?.label || v || '目标语言';
 };
 
+const getFirstUserMessageText = (topic) => {
+  const list = Array.isArray(topic) ? topic : [];
+  const first = list.find((m) => m?.sender === 'me');
+  if (!first) return '';
+  return messageToText(first).trim();
+};
+
+const updateTopicSummaryTitle = () => {
+  const topicMeta = activeChatMessages.value;
+  if (!topicMeta || topicMeta.__titleLocked) return;
+
+  const list = Array.isArray(topicMeta?.topic) ? topicMeta.topic : [];
+  const firstUser = getFirstUserMessageText(list);
+  const latestAssistant = [...list].reverse().find((m) => m?.sender !== 'me' && !m?.isPlaceholder);
+  const basis = (latestAssistant?.raw ?? '').toString().trim() || firstUser;
+  const nextTitle = pickAutoTitle(basis);
+  if (!nextTitle) return;
+
+  if ((topicMeta.title ?? '').toString().trim() !== nextTitle) {
+    topicMeta.title = nextTitle;
+    topicMeta.__titleLocked = false;
+  }
+};
+
 const toggleTranslateMode = () => {
   isTranslateMode.value = !isTranslateMode.value;
+};
+
+const toggleSelectMode = () => {
+  isSelectingMessages.value = !isSelectingMessages.value;
+  if (!isSelectingMessages.value) {
+    selectedMessageIds.value = new Set();
+  }
+};
+
+const toggleSelectMessage = (message) => {
+  const id = String(message?.msgid ?? '');
+  if (!id) return;
+  const next = new Set(selectedMessageIds.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selectedMessageIds.value = next;
+};
+
+const clearSelectedMessages = () => {
+  selectedMessageIds.value = new Set();
+};
+
+const selectAllVisibleMessages = () => {
+  const next = new Set();
+  for (const m of displayedMessages.value) {
+    const id = String(m?.msgid ?? '');
+    if (id) next.add(id);
+  }
+  selectedMessageIds.value = next;
+};
+
+const sendSelectedMessagesToEditor = async () => {
+  const selected = [];
+  const all = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+  for (const m of all) {
+    const id = String(m?.msgid ?? '');
+    if (!selectedMessageIds.value.has(id)) continue;
+    const text = messageToText(m);
+    if (!text.trim()) continue;
+    selected.push(text.trim());
+  }
+  if (!selected.length) return;
+
+  const content = selected.join('\n\n');
+  try {
+    const pendingKey = 'guaxi.pending_template_insert';
+    localStorage.setItem(pendingKey, content);
+    if (window.location.hash !== '#/') {
+      window.location.hash = '/';
+    }
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    await invoke('emit_template_insert', { content });
+    isSelectingMessages.value = false;
+    selectedMessageIds.value = new Set();
+  } catch (e) {
+    logger.error('发送选中消息到编辑器失败:', e);
+  }
+};
+
+const focusComposerInput = () => {
+  if (isGenerating.value) return;
+  const el = composerInputRef.value;
+  if (el && typeof el.focus === 'function') {
+    el.focus();
+  }
 };
 
 const buildQuestionWithAttachments = (question) => {
@@ -544,6 +676,8 @@ let copyHintTimer = null;
 watch(
   [() => chatStore.selectedModel, () => chatStore.selectedTopic],
   async () => {
+    isSelectingMessages.value = false;
+    selectedMessageIds.value = new Set();
     await nextTick();
     rerenderActiveTopic();
   },
@@ -577,6 +711,7 @@ watch(
 
     if (raw || content) {
       bumpGenerating();
+      updateTopicSummaryTitle();
       const topicMeta = activeChatMessages.value;
       if (topicMeta && !topicMeta.__titleLocked) {
         const current = (topicMeta.title ?? '').toString().trim();
@@ -655,9 +790,12 @@ const shareMessage = async (message) => {
   await writeClipboard(text);
 };
 
-const regenerateFrom = async (assistantIndex) => {
+const regenerateFrom = async (assistantMessage) => {
   if (isGenerating.value || !activeChat.value) return;
   const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
+  const assistantMsgId = String(assistantMessage?.msgid ?? '');
+  const assistantIndex = topic.findIndex((m) => String(m?.msgid ?? '') === assistantMsgId);
+  if (assistantIndex <= 0) return;
 
   let question = '';
   for (let i = assistantIndex - 1; i >= 0; i--) {
@@ -967,6 +1105,33 @@ const setMessageRef = (el, index) => {
   background: var(--guaxi-panel-bg);
 }
 
+.header-select-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  line-height: 0;
+  border-radius: 999px;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transform: translateY(-2px);
+}
+
+.header-select-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.header-select-btn.active {
+  color: #ffffff;
+  background: #0ea5a4;
+  border-color: #0ea5a4;
+}
+
 .chat-header-title {
   display: flex;
   align-items: center;
@@ -1019,12 +1184,68 @@ const setMessageRef = (el, index) => {
   margin-bottom: 12px;
 }
 
+.message-empty {
+  padding: 18px 10px;
+  color: var(--guaxi-text-secondary);
+  font-size: 13px;
+}
+
+.select-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, white 8%);
+}
+
+.select-toolbar-text {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.select-toolbar-btn {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.select-toolbar-btn.primary {
+  background: #0ea5a4;
+  color: #fff;
+  border-color: #0ea5a4;
+}
+
+.select-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .message-left {
   flex-direction: row;
 }
 
 .message-right {
   flex-direction: row-reverse;
+}
+
+.msg-select-box {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 8px;
+}
+
+.message-bubble-selected {
+  outline: 2px solid color-mix(in srgb, #0ea5a4 60%, var(--guaxi-border) 40%);
 }
 
 .message-bubble {
@@ -1060,7 +1281,7 @@ const setMessageRef = (el, index) => {
 .input-area {
   flex: 0 0 auto;
   position: relative;
-  background: var(--guaxi-panel-bg);
+  background: var(--guaxi-content-bg);
   padding: 0 12px 12px;
   min-height: 120px;
   font-size: 17px;
@@ -1122,29 +1343,28 @@ const setMessageRef = (el, index) => {
 }
 
 .composer-input {
-  flex: 1 1 auto;
-}
-
-.composer-input :deep(.n-input-wrapper) {
-  border: none !important;
-  box-shadow: none !important;
-  background: transparent !important;
-  padding: 0 !important;
-}
-
-.composer-input :deep(.n-input__textarea) {
-  min-height: 46px !important;
-}
-
-.composer-input :deep(.n-input__textarea-el) {
-  background: transparent !important;
-  color: var(--guaxi-text-primary) !important;
+  width: 100%;
+  min-height: 72px;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--guaxi-text-primary);
+  caret-color: var(--guaxi-text-primary);
+  -webkit-text-fill-color: var(--guaxi-text-primary);
   font-size: 16px;
   line-height: 1.45;
-  resize: none !important;
+  resize: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
 }
 
-.composer-input :deep(.n-input__textarea-el::placeholder) {
+.composer-input:focus {
+  caret-color: var(--guaxi-text-primary);
+}
+
+.composer-input::placeholder {
   color: var(--guaxi-text-secondary);
   opacity: 0.78;
 }
@@ -1251,6 +1471,12 @@ const setMessageRef = (el, index) => {
 .dark-mode .composer-shell {
   background: var(--guaxi-panel-bg);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-guaxi-theme='dark'] .input-area,
+.dark .input-area,
+.dark-mode .input-area {
+  background: var(--guaxi-content-bg);
 }
 
 :root[data-guaxi-theme='dark'] .send-btn,
@@ -1515,3 +1741,4 @@ img {
   margin: 0 auto;
 }
 </style>
+
