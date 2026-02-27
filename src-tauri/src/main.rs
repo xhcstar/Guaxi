@@ -3,7 +3,8 @@
 
 use once_cell::sync::OnceCell;
 use tokio::time::{sleep, Duration};
-use tracing::{error, info};
+use tracing::{error, info, Level};
+use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
@@ -65,6 +66,9 @@ fn start_background_gc() {
 
 #[tokio::main]
 async fn main() {
+    let has_debug_flag = std::env::args().any(|arg| arg == "--debug");
+    let enable_verbose_logs = cfg!(debug_assertions) || has_debug_flag;
+
     // 创建文件 appender - 禁用 ANSI 颜色
     let file_appender = tracing_appender::rolling::daily("logs", "logfile.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
@@ -91,12 +95,23 @@ async fn main() {
 
     // 使用 registry 组合多个 layer
     tracing_subscriber::registry()
+        .with(filter_fn(move |metadata| {
+            if enable_verbose_logs {
+                true
+            } else {
+                matches!(*metadata.level(), Level::INFO | Level::ERROR)
+            }
+        }))
         .with(file_layer)
         .with(stdout_layer)
         .init();
 
     // 示例日志输出
-    info!("Project started!");
+    if enable_verbose_logs {
+        info!("Project started with verbose logging (all levels enabled)");
+    } else {
+        info!("Project started with restricted logging (INFO/ERROR only)");
+    }
     tokio::spawn(app_init());
     start_background_gc();
     let file_watcher = FileWatcher::new();
