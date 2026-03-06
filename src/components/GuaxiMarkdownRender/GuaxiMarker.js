@@ -42,6 +42,7 @@ export const addCopyButtons = (container, options = {}) => {
   const codeContainers = Array.from(
     container.querySelectorAll(".hljs, pre code")
   );
+  const processedBlocks = new Set();
 
   codeContainers.forEach((codeContainer) => {
     // 确保容器存在且没有重复按钮
@@ -53,8 +54,21 @@ export const addCopyButtons = (container, options = {}) => {
       : codeContainer.parentElement;
 
     if (!codeBlock) return;
+    if (processedBlocks.has(codeBlock)) return;
+    processedBlocks.add(codeBlock);
 
     if (shouldSkipForNotes(codeBlock)) return;
+
+    let anchor = codeBlock.parentElement;
+    if (!anchor || !anchor.classList?.contains("guaxi-code-block-anchor")) {
+      anchor = document.createElement("div");
+      anchor.className = "guaxi-code-block-anchor";
+      anchor.style.cssText = `
+        position: relative;
+      `;
+      codeBlock.parentNode?.insertBefore(anchor, codeBlock);
+      anchor.appendChild(codeBlock);
+    }
 
     // 创建复制按钮
     const copyButton = document.createElement("button");
@@ -124,13 +138,8 @@ export const addCopyButtons = (container, options = {}) => {
       gap: 4px;
     `;
 
-    // 确保代码块容器有相对定位
-    if (!codeBlock.style.position) {
-      codeBlock.style.position = "relative";
-    }
-
-    // 添加按钮到代码块
-    codeBlock.appendChild(copyButton);
+    // 添加按钮到锚点容器，避免与代码块横向滚动绑定
+    anchor.appendChild(copyButton);
 
     copyButton.onclick = async (e) => {
       e.stopPropagation();
