@@ -1,6 +1,8 @@
 <template>
   <div class="app-layout">
-    <component :is="currentView" />
+    <KeepAlive>
+      <component :is="currentView" />
+    </KeepAlive>
   </div>
 </template>
 

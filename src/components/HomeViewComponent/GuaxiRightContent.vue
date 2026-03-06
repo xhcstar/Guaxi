@@ -1,13 +1,15 @@
 <template>
   <div class="right-sider-content">
-    <GuaxiOutline v-if="rightSiderStore.panel === 'outline'" />
-    <GuaxiSearchNavigator v-else-if="rightSiderStore.panel === 'search'"
+    <GuaxiOutline v-show="rightSiderStore.panel === 'outline'" />
+    <GuaxiSearchNavigator v-show="rightSiderStore.panel === 'search'"
       :file-results="rightSiderStore.searchResults.fileResults"
       :note-results="rightSiderStore.searchResults.noteResults"
       :search-query="rightSiderStore.searchResults.searchQuery"
       :excerpt-results="rightSiderStore.searchResults.excerptResults"
       :last-search-type="rightSiderStore.searchResults.lastSearchType" />
-    <GuaxiAgentAssistant v-else-if="rightSiderStore.panel === 'assistant'" />
+    <KeepAlive>
+      <GuaxiAgentAssistant v-if="rightSiderStore.panel === 'assistant'" />
+    </KeepAlive>
   </div>
 </template>
 
