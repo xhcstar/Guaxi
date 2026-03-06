@@ -16,6 +16,7 @@
 
 <script setup>
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 
 
 import {
@@ -34,6 +35,11 @@ const toggleLeftSider = () => {
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 };
+
+useSiderHotkeys({
+  toggleLeft: toggleLeftSider,
+  toggleRight: toggleRightSider,
+})
 </script>
 
 <style scoped>

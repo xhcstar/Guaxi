@@ -18,6 +18,7 @@
 <script setup>
 import { computed } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import {
   PanelLeftContract24Regular,
   PanelRightContract24Regular,
@@ -35,6 +36,11 @@ const toggleLeftSider = () => {
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 };
+
+useSiderHotkeys({
+  toggleLeft: toggleLeftSider,
+  toggleRight: toggleRightSider,
+})
 </script>
 
 <style scoped>

@@ -37,6 +37,7 @@ import { createLogger } from '../../utils/logger'
 import { computed, ref, h } from "vue";
 import { NIcon, NDropdown, useMessage } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { repoStore } from '../../stores/repoStore'
 import { useSearch } from './composables/useSearch.js'
@@ -70,6 +71,11 @@ const toggleLeftSider = () => {
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 };
+
+useSiderHotkeys({
+  toggleLeft: toggleLeftSider,
+  toggleRight: toggleRightSider,
+})
 
 async function CaptureScreenshot() {
   try {

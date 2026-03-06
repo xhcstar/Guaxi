@@ -246,6 +246,7 @@ import { createLogger } from '../../utils/logger'
 import { computed, ref, h, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { NIcon, NTooltip } from 'naive-ui'
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -446,6 +447,12 @@ const toggleLeftSider = () => {
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 }
+
+useSiderHotkeys({
+  toggleLeft: toggleLeftSider,
+  toggleRight: toggleRightSider,
+})
+
 function openOutlinePanel() {
   const isCollapsed = siderStore.isRightSiderCollapsed?.[viewKey]
   const isVisible = isCollapsed === false

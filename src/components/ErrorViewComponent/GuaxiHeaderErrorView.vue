@@ -57,6 +57,7 @@
 <script setup>
 import { computed } from "vue";
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 
 const viewKey = 'error'
 const siderStore = useSiderStore();
@@ -68,6 +69,11 @@ const toggleLeftSider = () => {
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 };
+
+useSiderHotkeys({
+  toggleLeft: toggleLeftSider,
+  toggleRight: toggleRightSider,
+})
 </script>
 
 

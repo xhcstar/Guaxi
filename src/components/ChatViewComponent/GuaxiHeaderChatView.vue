@@ -33,6 +33,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
 import { useChatStore } from '../../stores/chatStore'
 import { computed } from 'vue'
+import { useSiderHotkeys } from '../../composables/useSiderHotkeys'
 import ChatModelSelector from "./ChatModelSelector.vue"
 import {
   PanelLeftContract24Regular,
@@ -62,6 +63,11 @@ const toggleLeftSider = () => {
 const toggleRightSider = () => {
   siderStore.toggleRightSider(viewKey)
 };
+
+useSiderHotkeys({
+  toggleLeft: toggleLeftSider,
+  toggleRight: toggleRightSider,
+})
 
 const showSearchPlaceholder = () => {
   logger.info('搜索框获得焦点 - 占位功能');
