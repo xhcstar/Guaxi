@@ -78,13 +78,30 @@
             <a
               v-for="(refItem, idx) in message.meta.webReferences"
               :key="`${message.id}-ref-${idx}`"
-              class="assistant-reference-item"
+              class="assistant-reference-card"
               :href="refItem.url"
               target="_blank"
               rel="noopener noreferrer"
               :title="refItem.url"
             >
-              [{{ idx + 1 }}] {{ refItem.title || refItem.url }}
+              <div class="assistant-reference-head">
+                <img
+                  class="assistant-reference-favicon"
+                  :src="getFaviconUrl(refItem.url)"
+                  alt=""
+                  loading="lazy"
+                >
+                <div class="assistant-reference-host">
+                  {{ getHostFromUrl(refItem.url) || '来源站点' }}
+                </div>
+                <div class="assistant-reference-index">#{{ idx + 1 }}</div>
+              </div>
+              <div class="assistant-reference-link-title">
+                {{ refItem.title || refItem.url }}
+              </div>
+              <div v-if="refItem.snippet" class="assistant-reference-snippet">
+                {{ refItem.snippet }}
+              </div>
             </a>
           </div>
           <div v-if="message.role === 'assistant'" class="assistant-message-actions">
@@ -363,6 +380,21 @@ const normalizeWebReferences = (webItems) => {
       url: String(item?.url || '').trim(),
     }))
     .filter((item) => item.url.length > 0)
+}
+
+const getHostFromUrl = (url) => {
+  try {
+    const host = new URL(String(url || '')).hostname || ''
+    return host.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+
+const getFaviconUrl = (url) => {
+  const host = getHostFromUrl(url)
+  if (!host) return ''
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`
 }
 
 const queryWebSearch = async (rawQuestion) => {
@@ -703,7 +735,7 @@ const sendQuestion = async () => {
   margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .assistant-reference-title {
@@ -711,17 +743,71 @@ const sendQuestion = async () => {
   color: var(--guaxi-text-secondary);
 }
 
-.assistant-reference-item {
-  font-size: 11px;
-  color: #4f7dff;
+.assistant-reference-card {
+  display: block;
+  border-radius: 10px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-header-bg) 80%, transparent);
+  padding: 8px 10px;
+  color: inherit;
   text-decoration: none;
+  transition: all 0.16s ease;
+}
+
+.assistant-reference-card:hover {
+  border-color: color-mix(in srgb, #4f7dff 45%, var(--guaxi-border));
+  background: color-mix(in srgb, #4f7dff 12%, var(--guaxi-header-bg));
+}
+
+.assistant-reference-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.assistant-reference-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+.assistant-reference-host {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.assistant-reference-item:hover {
-  text-decoration: underline;
+.assistant-reference-index {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--guaxi-text-secondary);
+}
+
+.assistant-reference-link-title {
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.assistant-reference-snippet {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .assistant-message-actions {
