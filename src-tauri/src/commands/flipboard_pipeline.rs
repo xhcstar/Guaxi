@@ -24,8 +24,6 @@ pub struct FeedBlueprint {
 
 #[derive(Debug, Clone)]
 pub struct SiteDiscoveryResult {
-    pub site_name: String,
-    pub base_url: String,
     pub feeds: Vec<FeedBlueprint>,
 }
 
@@ -154,7 +152,6 @@ pub fn build_site_discovery(seed: SiteSeedInput) -> Result<SiteDiscoveryResult, 
         .host_str()
         .ok_or_else(|| "无法解析主站 host".to_string())?
         .to_string();
-    let base_url = base.to_string();
     let name = host_label(&host);
     let mut urls = HashSet::new();
     let mut feeds = Vec::new();
@@ -197,11 +194,7 @@ pub fn build_site_discovery(seed: SiteSeedInput) -> Result<SiteDiscoveryResult, 
         });
     }
 
-    Ok(SiteDiscoveryResult {
-        site_name: name,
-        base_url,
-        feeds,
-    })
+    Ok(SiteDiscoveryResult { feeds })
 }
 
 pub fn compact_plain_text(raw: &str) -> String {
