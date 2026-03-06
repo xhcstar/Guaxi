@@ -3,7 +3,9 @@
         <div class="outline-scroll">
             <n-tree :data="outlineTree" key-field="id" label-field="text" :render-label="renderLabel"
                 :render-prefix="renderPrefix" :expand-on-click="true" :show-line="true" :virtual-scroll="true"
-                :virtual-scroll-item-height="28" @update:selected-keys="handleSelect" class="outline-tree" />
+                :virtual-scroll-item-height="28" :expanded-keys="expandedKeys"
+                @update:expanded-keys="handleExpandedKeysUpdate" @update:selected-keys="handleSelect"
+                class="outline-tree" />
         </div>
     </div>
 </template>
@@ -13,7 +15,7 @@ import { NTree, NIcon } from 'naive-ui'
 import { TextBulletListTree20Filled, List24Filled } from '@vicons/fluent'
 import { storeToRefs } from 'pinia'
 import { useOutlineStore } from '../../stores/outlineStore'
-import { h, computed } from 'vue'
+import { h, computed, ref, watch } from 'vue'
 
 const outlineStore = useOutlineStore()
 const { outline, jumpToLine } = storeToRefs(outlineStore)
@@ -42,6 +44,35 @@ function buildTree(flatOutline) {
 }
 
 const outlineTree = computed(() => buildTree(outline.value || []))
+const expandedKeys = ref([])
+
+function collectAllKeys(nodes, bucket = []) {
+    nodes.forEach((node) => {
+        bucket.push(node.id)
+        if (Array.isArray(node.children) && node.children.length) {
+            collectAllKeys(node.children, bucket)
+        }
+    })
+    return bucket
+}
+
+function getLevelOneExpandedKeys(tree) {
+    return tree.map((node) => node.id)
+}
+
+watch(
+    outlineTree,
+    (tree) => {
+        const allKeys = new Set(collectAllKeys(tree))
+        const kept = expandedKeys.value.filter((key) => allKeys.has(key))
+        if (kept.length > 0) {
+            expandedKeys.value = kept
+            return
+        }
+        expandedKeys.value = getLevelOneExpandedKeys(tree)
+    },
+    { immediate: true }
+)
 
 // 渲染标签
 const renderLabel = ({ option }) => {
@@ -66,6 +97,10 @@ const handleSelect = (keys, options) => {
     if (options && options[0] && jumpToLine.value) {
         jumpToLine.value(options[0].line)
     }
+}
+
+const handleExpandedKeysUpdate = (keys) => {
+    expandedKeys.value = keys
 }
 </script>
 
