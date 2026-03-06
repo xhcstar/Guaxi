@@ -9,6 +9,8 @@ use std::convert::TryFrom;
 use std::env;
 use std::fs;
 use std::fs::OpenOptions;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -22,6 +24,9 @@ use once_cell::sync::Lazy;
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
 const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
 const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/chat/completions";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Default)]
 struct StreamBlockTracker {
@@ -516,6 +521,9 @@ async fn ensure_local_deepseek_server_started() -> Result<PathBuf, String> {
                 .stdout(Stdio::from(log_file))
                 .stderr(Stdio::from(log_file_err))
                 .stdin(Stdio::null());
+
+            #[cfg(windows)]
+            command.creation_flags(CREATE_NO_WINDOW);
 
             if let Some(parent) = server_path.parent() {
                 command.current_dir(parent);
