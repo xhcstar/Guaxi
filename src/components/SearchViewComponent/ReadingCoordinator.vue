@@ -79,7 +79,7 @@ const isLoading = computed(() => store.isLoading.value)
 const handleArticleSelect = async (article) => {
   try {
     logger.info('ReadingCoordinator: enter reading mode', { articleId: article?.id })
-    await store.fetchArticleDetail(article.id)
+    await store.fetchArticleDetail(article)
     if (isRightSiderCollapsed.value) {
       isRightSiderCollapsed.value = false
     }
@@ -101,7 +101,7 @@ const handleReaderClose = () => {
 const handleRelatedArticleSelect = async (article) => {
   try {
     logger.info('ReadingCoordinator: select related article', { articleId: article?.id })
-    await store.fetchArticleDetail(article.id)
+    await store.fetchArticleDetail(article)
   } catch (error) {
     logger.error('ReadingCoordinator: failed to load related article detail', error)
   }

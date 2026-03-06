@@ -52,7 +52,7 @@
         >
           <div 
             v-for="article in articles" 
-            :key="article.id"
+            :key="articleKey(article)"
             class="grid-card"
             @click="selectArticle(article)"
           >
@@ -70,7 +70,7 @@
         >
           <div 
             v-for="article in articles" 
-            :key="article.id"
+            :key="articleKey(article)"
             :class="['magazine-card', getCardSize(article)]"
             @click="selectArticle(article)"
           >
@@ -88,7 +88,7 @@
         >
           <div 
             v-for="article in articles" 
-            :key="article.id"
+            :key="articleKey(article)"
             class="list-card"
             @click="selectArticle(article)"
           >
@@ -160,6 +160,12 @@ const store = useFlipboardStore()
 
 const selectArticle = (article) => {
   emit('article-select', article)
+}
+
+const articleKey = (article) => {
+  const url = String(article?.url || '').trim()
+  if (url) return url
+  return `${String(article?.id || '')}|${String(article?.title || '')}|${String(article?.published_at || '')}`
 }
 
 const setViewMode = (mode) => {

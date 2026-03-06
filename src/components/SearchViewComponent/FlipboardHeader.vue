@@ -15,13 +15,13 @@
           切换左侧边栏
         </n-tooltip>
         <div class="logo">
-          <span class="logo-text">FlipGuaxi</span>
+          <span class="logo-text">KnowGuaxi</span>
         </div>
       </div>
 
       <!-- 中间搜索框 -->
       <div class="header-center">
-        <n-input round placeholder="搜索文章、主题..." clearable class="search-input" :value="searchQuery"
+        <n-input round placeholder="搜索知识主题、术语、问题..." clearable class="search-input" :value="searchQuery"
           @update:value="handleSearch">
           <template #prefix>
             <n-icon :component="SearchIcon" />
@@ -80,7 +80,7 @@
           <div class="health-tooltip">
             <div class="health-title">抓取健康</div>
             <div class="health-line">总源：{{ healthSummary.total }} / 成功：{{ healthSummary.ok }} / 失败：{{ healthSummary.failed }}</div>
-            <div class="health-line">RSS：{{ healthSummary.rss }} / HTML：{{ healthSummary.html }} / Fallback：{{ healthSummary.fallback }}</div>
+            <div class="health-line">RSS：{{ healthSummary.rss }} / Spider：{{ healthSummary.spider }} / HTML：{{ healthSummary.html }} / 其他：{{ healthSummary.fallback }}</div>
             <div v-if="healthSummary.failedItems.length" class="health-failed">
               <div class="health-line">最近失败：</div>
               <div v-for="x in healthSummary.failedItems" :key="x.feed_id" class="health-failed-item">
@@ -99,7 +99,7 @@
               </n-icon>
             </n-button>
           </template>
-          刷新文章
+          刷新知识流
         </n-tooltip>
       </div>
     </div>
@@ -149,6 +149,7 @@ const healthSummary = computed(() => {
   let ok = 0
   let failed = 0
   let rss = 0
+  let spider = 0
   let html = 0
   let fallback = 0
 
@@ -165,6 +166,7 @@ const healthSummary = computed(() => {
 
     const method = String(h?.last_method || '').trim()
     if (method === 'rss') rss += 1
+    else if (method.startsWith('spider')) spider += 1
     else if (method === 'html') html += 1
     else if (method) fallback += 1
   }
@@ -176,6 +178,7 @@ const healthSummary = computed(() => {
     ok,
     failed,
     rss,
+    spider,
     html,
     fallback,
     failedItems: failedItems.slice(0, 3)

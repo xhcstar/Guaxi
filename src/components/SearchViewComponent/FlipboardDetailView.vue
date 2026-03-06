@@ -68,7 +68,7 @@
           <h1 class="article-title">{{ currentArticle.title }}</h1>
 
           <div class="article-image" v-if="currentArticle.image_url">
-
+            <img :src="currentArticle.image_url" :alt="currentArticle.title" loading="lazy" />
           </div>
         </div>
 
@@ -164,13 +164,72 @@ const relatedArticles = computed(() => {
     .slice(0, 3)
 })
 
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const linkifyText = (value) => {
+  const escaped = escapeHtml(value)
+  return escaped.replace(/(https?:\/\/[^\s<]+)/g, (m) => {
+    const href = m.replace(/"/g, '&quot;')
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${m}</a>`
+  })
+}
+
+const isImageUrl = (url) => /\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(url)
+const isMediaUrl = (url) => /(youtube\.com|youtu\.be|bilibili\.com|vimeo\.com|\.mp4(\?|$)|\.webm(\?|$)|\.m3u8(\?|$))/i.test(url)
+const toEmbedUrl = (url) => {
+  if (/youtube\.com\/watch\?v=([^&]+)/i.test(url)) {
+    return `https://www.youtube.com/embed/${url.match(/youtube\.com\/watch\?v=([^&]+)/i)?.[1] || ''}`
+  }
+  if (/youtu\.be\/([^?&]+)/i.test(url)) {
+    return `https://www.youtube.com/embed/${url.match(/youtu\.be\/([^?&]+)/i)?.[1] || ''}`
+  }
+  if (/bilibili\.com\/video\/(BV[0-9A-Za-z]+)/i.test(url)) {
+    return `https://player.bilibili.com/player.html?bvid=${url.match(/bilibili\.com\/video\/(BV[0-9A-Za-z]+)/i)?.[1] || ''}&page=1`
+  }
+  return url
+}
+
 const formattedContent = computed(() => {
-  if (!props.currentArticle?.content) return ''
-  // 简单的格式化，将换行转换为段落
-  return props.currentArticle.content
+  const raw = String(props.currentArticle?.content || '').trim()
+  if (!raw) return ''
+  if (/<(p|img|h1|h2|h3|ul|ol|li|blockquote|a)(\s|>)/i.test(raw)) {
+    return raw
+  }
+  return raw
     .split('\n')
-    .filter(p => p.trim())
-    .map(p => `<p>${p}</p>`)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      if (/^-\s+https?:\/\//i.test(line)) {
+        const url = line.replace(/^-+\s*/, '')
+        const escapedUrl = escapeHtml(url)
+        if (isMediaUrl(url)) {
+          const embed = escapeHtml(toEmbedUrl(url))
+          return `<p>• <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><div class="media-placeholder"><iframe src="${embed}" loading="lazy" referrerpolicy="no-referrer" allowfullscreen></iframe></div>`
+        }
+        if (isImageUrl(url)) {
+          return `<p>• <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><p><img src="${escapedUrl}" loading="lazy" alt="image" /></p>`
+        }
+        return `<p>• <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p>`
+      }
+      if (/^https?:\/\//i.test(line)) {
+        const escapedUrl = escapeHtml(line)
+        if (isMediaUrl(line)) {
+          const embed = escapeHtml(toEmbedUrl(line))
+          return `<p><a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><div class="media-placeholder"><iframe src="${embed}" loading="lazy" referrerpolicy="no-referrer" allowfullscreen></iframe></div>`
+        }
+        if (isImageUrl(line)) {
+          return `<p><a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p><p><img src="${escapedUrl}" loading="lazy" alt="image" /></p>`
+        }
+        return `<p><a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${escapedUrl}</a></p>`
+      }
+      return `<p>${linkifyText(line)}</p>`
+    })
     .join('')
 })
 
@@ -323,6 +382,22 @@ const formatTime = (timeString) => {
   font-weight: 600;
   margin: 1.5em 0 0.5em;
   color: var(--guaxi-text-primary);
+}
+
+.article-content :deep(.media-placeholder) {
+  width: 100%;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 8px 0 20px;
+  background: var(--guaxi-panel-bg);
+}
+
+.article-content :deep(.media-placeholder iframe) {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  display: block;
 }
 
 .related-articles {

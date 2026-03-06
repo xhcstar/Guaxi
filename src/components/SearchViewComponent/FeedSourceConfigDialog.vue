@@ -1,10 +1,10 @@
 <template>
-  <n-modal v-model:show="innerVisible" preset="dialog" title="配置订阅源" :mask-closable="false" :close-on-esc="false"
+  <n-modal v-model:show="innerVisible" preset="dialog" title="配置知识源" :mask-closable="false" :close-on-esc="false"
     :style="{ width: '640px' }">
     <n-form ref="formRef" :model="form" :rules="rules" label-placement="top" label-width="auto">
       <n-grid :cols="2" :x-gap="16">
         <n-form-item-gi label="名称" path="name">
-          <n-input v-model:value="form.name" placeholder="为订阅源起一个名字，便于识别" />
+          <n-input v-model:value="form.name" placeholder="为知识源起一个名字，便于识别" />
         </n-form-item-gi>
         <n-form-item-gi label="平台类型" path="sourceType">
           <n-select v-model:value="form.sourceType" :options="sourceTypeOptions" placeholder="选择平台类型" />
@@ -12,7 +12,7 @@
       </n-grid>
 
       <n-form-item label="入口 URL" path="url">
-        <n-input v-model:value="form.url" placeholder="请输入要抓取的平台入口 URL，例如 https://example.com" />
+        <n-input v-model:value="form.url" placeholder="请输入要抓取的知识入口 URL，例如 https://example.com" />
       </n-form-item>
 
       <n-grid :cols="2" :x-gap="16">
@@ -111,8 +111,11 @@ const form = ref({
 
 const sourceTypeOptions = [
   { label: 'RSS / Atom', value: 'rss' },
+  { label: 'Spider 网页探索', value: 'spider' },
   { label: '知乎', value: 'zhihu' },
   { label: 'B 站', value: 'bilibili' },
+  { label: 'Quora', value: 'quora' },
+  { label: '小红书', value: 'xiaohongshu' },
   { label: '微信公众号', value: 'wechat' },
   { label: '博客 / 专栏', value: 'blog' },
   { label: '论坛 / 社区', value: 'forum' },

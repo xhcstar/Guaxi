@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="header">
-      <div class="title">订阅源管理</div>
+      <div class="title">知识源管理</div>
 
       <n-space align="center" :wrap="true">
         <n-select v-model:value="filterCategory" size="small" clearable placeholder="筛选分类" :options="categoryOptions"
@@ -31,15 +31,14 @@
       :initial-feed="editingFeed" @update:show="val => (showDialog = val)" @submit="handleDialogSubmit"
       @cancel="handleDialogCancel" />
 
-    <n-modal v-model:show="showSimpleDialog" preset="dialog" title="快速添加信息源" :mask-closable="false"
+    <n-modal v-model:show="showSimpleDialog" preset="dialog" title="快速添加知识源" :mask-closable="false"
       :close-on-esc="false" :style="{ width: '520px' }">
       <n-form :model="simpleForm">
+        <n-form-item label="主站 URL">
+          <n-input v-model:value="simpleForm.seedUrl" placeholder="例如 https://medium.com 或 https://www.zhihu.com" />
+        </n-form-item>
         <n-form-item label="归属分类">
           <n-select v-model:value="simpleForm.categoryId" :options="categoryOptions" placeholder="选择归属分类" />
-        </n-form-item>
-        <n-form-item label="平台">
-          <n-select v-model:value="simpleForm.platforms" :options="platformOptions" multiple
-            placeholder="请选择至少一个平台" />
         </n-form-item>
       </n-form>
       <template #action>
@@ -48,7 +47,7 @@
             取消
           </n-button>
           <n-button type="primary" @click="handleSimpleSubmit" :loading="simpleLoading">
-            生成信息源
+            自动发现并添加
           </n-button>
         </n-space>
       </template>
@@ -95,13 +94,8 @@ const showSimpleDialog = ref(false)
 const simpleLoading = ref(false)
 const simpleForm = ref({
   categoryId: 'all',
-  platforms: []
+  seedUrl: ''
 })
-
-const platformOptions = [
-  { label: '知乎', value: 'zhihu' },
-  { label: 'B 站', value: 'bilibili' }
-]
 
 // 行级别的“忙碌”集合：避免用户连续点击导致重复请求
 const busyIds = ref(new Set())
@@ -305,26 +299,26 @@ const refresh = async () => {
 
 const handleSimpleSubmit = async () => {
   const categoryId = String(simpleForm.value.categoryId || 'all').trim() || 'all'
-  const platforms = Array.isArray(simpleForm.value.platforms) ? simpleForm.value.platforms.slice() : []
+  const seedUrl = String(simpleForm.value.seedUrl || '').trim()
 
-  if (!platforms.length) {
-    message.error('请至少选择一个平台')
+  if (!seedUrl) {
+    message.error('请输入主站 URL')
     return
   }
 
   try {
     simpleLoading.value = true
-    logger.info('FlipboardFeedManager: simple submit', { categoryId, platforms })
-    const created = await store.generateFeedsByPlatform(platforms, categoryId)
+    logger.info('FlipboardFeedManager: simple submit', { categoryId, seedUrl })
+    const created = await store.addSite(seedUrl, categoryId)
     if (created && created.length) {
-      message.success(`已为所选平台生成 ${created.length} 个信息源`)
+      message.success(`已自动发现并添加 ${created.length} 个信息源`)
     } else {
-      message.warning('未生成新的信息源，请尝试使用高级配置')
+      message.warning('未发现可添加的信息源，请尝试其他主站 URL')
     }
     showSimpleDialog.value = false
   } catch (e) {
     logger.error('FlipboardFeedManager: simple submit failed', e)
-    message.error(String(e || '生成信息源失败'))
+    message.error(String(e || '自动发现失败'))
   } finally {
     simpleLoading.value = false
   }
@@ -340,7 +334,7 @@ const openSimpleDialog = () => {
   logger.info('FlipboardFeedManager: open simple dialog')
   simpleForm.value = {
     categoryId: filterCategory.value || 'all',
-    platforms: []
+    seedUrl: ''
   }
   showSimpleDialog.value = true
 }

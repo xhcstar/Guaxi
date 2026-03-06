@@ -33,3 +33,5 @@ pub mod filetransfer;
 pub mod code_runtime;
 pub mod code_cell_runtime;
 pub mod frontend_logging;
+pub mod flipboard_pipeline;
+pub mod site_category_discovery;

@@ -104,7 +104,7 @@
     </div>
     <div class="flipboard-sidebar">
       <div class="sidebar-header">
-        <h3 class="sidebar-title">分类</h3>
+        <h3 class="sidebar-title">知识领域</h3>
       </div>
 
       <n-scrollbar class="sidebar-scroll">
@@ -130,7 +130,7 @@
               <Add />
             </n-icon>
           </template>
-          添加订阅源
+          管理知识源
         </n-button>
       </div>
     </div>
@@ -146,10 +146,14 @@ import { useMessage } from 'naive-ui'
 import {
   GlobeOutline as Globe,
   BusinessOutline as Business,
-  Football as Sports,
   HeartOutline as Heart,
   CameraOutline as Camera,
   TrendingUpOutline as Technology,
+  CashOutline as Cash,
+  MedkitOutline as Medkit,
+  ScaleOutline as Scale,
+  SchoolOutline as School,
+  SparklesOutline as Sparkles,
   AddOutline as Add
 } from '@vicons/ionicons5'
 
@@ -184,12 +188,22 @@ const getCategoryIcon = (categoryId) => {
     'physics': Globe,
     'lifestyle': Heart,
     'entertainment': Camera,
-    'news': Globe
+    'news': Globe,
+    'ai': Sparkles,
+    'finance': Cash,
+    'medicine': Medkit,
+    'law': Scale,
+    'education': School
   }
   return iconMap[categoryId] || Globe
 }
 
 const selectCategory = (categoryId) => {
+  const topic = String(store.searchQuery?.value || '').trim()
+  if (topic) {
+    store.fetchTopicKnowledge(topic, categoryId)
+    return
+  }
   store.fetchArticles(categoryId)
 }
 
@@ -198,11 +212,11 @@ const openFeedManagerWindow = async () => {
     logger.info('SearchViewSidebar: open feed manager window')
     await invoke('create_flipboard_feed_window', {
       label: 'flipboard_feeds',
-      title: '订阅源管理'
+      title: '知识源管理'
     })
   } catch (error) {
     logger.error('SearchViewSidebar: open feed manager window failed:', error)
-    message.error('打开订阅源管理窗口失败')
+    message.error('打开知识源管理窗口失败')
   }
 }
 

@@ -6,8 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration as StdDuration, SystemTime};
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, Level};
-use tracing_subscriber::filter::filter_fn;
+use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
@@ -150,6 +149,13 @@ fn start_log_cleanup() {
 async fn main() {
     let has_debug_flag = std::env::args().any(|arg| arg == "--debug");
     let enable_verbose_logs = cfg!(debug_assertions) || has_debug_flag;
+    let default_filter = if enable_verbose_logs {
+        "guaxi=debug,guaxi_lib=debug,html5ever=warn,selectors=warn,reqwest=info,warn"
+    } else {
+        "guaxi=info,guaxi_lib=info,warn"
+    };
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
 
     // 创建文件 appender - 禁用 ANSI 颜色
     let file_appender = tracing_appender::rolling::daily("logs", "logfile.log");
@@ -177,26 +183,21 @@ async fn main() {
 
     // 使用 registry 组合多个 layer
     tracing_subscriber::registry()
-        .with(filter_fn(move |metadata| {
-            if enable_verbose_logs {
-                true
-            } else {
-                matches!(*metadata.level(), Level::INFO | Level::ERROR)
-            }
-        }))
+        .with(env_filter)
         .with(file_layer)
         .with(stdout_layer)
         .init();
 
     // 示例日志输出
     if enable_verbose_logs {
-        info!("Project started with verbose logging (all levels enabled)");
+        info!("Project started with verbose logging (app debug + dependency filtering)");
     } else {
-        info!("Project started with restricted logging (INFO/ERROR only)");
+        info!("Project started with restricted logging (app info + dependency warnings)");
     }
     tokio::spawn(app_init());
     start_background_gc();
     start_log_cleanup();
+    commands::flipboard::start_feed_scheduler_loop();
     let file_watcher = FileWatcher::new();
 
     let shared_state = SharedState::new();
@@ -418,12 +419,22 @@ async fn main() {
             commands::flipboard::get_feed_health,
             commands::flipboard::generate_feeds_for_platforms,
             commands::flipboard::add_feed,
+            commands::flipboard::add_site,
+            commands::flipboard::import_feeds_from_website_markdown,
             commands::flipboard::set_feed_enabled,
             commands::flipboard::update_feed,
             commands::flipboard::delete_feed,
             commands::flipboard::create_flipboard_feed_window,
             commands::flipboard::fetch_rss_feed,
+            commands::flipboard::fetch_knowledge_from_feed_ids,
+            commands::flipboard::get_cached_articles,
             commands::flipboard::refresh_articles_from_feeds,
+            commands::flipboard::refresh_topic_knowledge_from_feeds,
+            commands::flipboard::run_feed_scheduler_tick,
+            commands::flipboard::get_feed_schedule_status,
+            commands::flipboard::set_feed_scheduler_enabled,
+            commands::flipboard::create_kb_note_from_topic,
+            commands::flipboard::create_kb_note_from_article_ids,
             commands::flipboard::get_featured_articles,
             commands::flipboard::get_recommendations,
             commands::flipboard::get_popular_articles,

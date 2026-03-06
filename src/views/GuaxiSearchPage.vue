@@ -71,7 +71,7 @@ const isLoading = computed(() => store.isLoading.value)
 
 const handleArticleSelect = async (article) => {
   try {
-    await store.fetchArticleDetail(article.id)
+    await store.fetchArticleDetail(article)
     if (isRightSiderCollapsed.value) {
       isRightSiderCollapsed.value = false
     }
@@ -89,7 +89,7 @@ const handleReaderClose = () => {
 
 const handleRelatedArticleSelect = async (article) => {
   try {
-    await store.fetchArticleDetail(article.id)
+    await store.fetchArticleDetail(article)
   } catch (error) {
     console.error('Failed to load related article detail:', error)
   }

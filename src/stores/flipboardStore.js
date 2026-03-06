@@ -15,6 +15,8 @@ let store
 
 export const useFlipboardStore = () => {
   if (store) return store
+  let activeFetchToken = 0
+  const inMemoryArticleCache = new Map()
   // 状态
   const articles = ref([])
   const categories = ref([])
@@ -29,45 +31,250 @@ export const useFlipboardStore = () => {
   const currentView = ref('grid') // 'grid' | 'list' | 'magazine'
   const feedHealth = ref([])
 
-  // 获取文章列表（基于订阅源的真实抓取）
-  const fetchArticles = async (category = null, forceRefresh = false) => {
+  const scoreByTopic = (article, topicTokens) => {
+    if (!topicTokens.length) return 0
+    const title = String(article?.title || '').toLowerCase()
+    const description = String(article?.description || '').toLowerCase()
+    const content = String(article?.content || '').toLowerCase()
+    const source = String(article?.source || '').toLowerCase()
+    return topicTokens.reduce((sum, token) => {
+      const t = String(token || '').trim().toLowerCase()
+      if (!t) return sum
+      const titleCount = title.split(t).length - 1
+      const descriptionCount = description.split(t).length - 1
+      const contentCount = content.split(t).length - 1
+      const sourceCount = source.split(t).length - 1
+      return sum + titleCount * 4 + descriptionCount * 3 + contentCount + sourceCount * 2
+    }, 0)
+  }
+
+  const runSchedulerTick = async (topic = '', force = false, limit = 120) => {
+    try {
+      const category = selectedCategory.value || null
+      const data = await invoke('run_feed_scheduler_tick', {
+        category,
+        topic: String(topic || '').trim() || null,
+        force,
+        limit
+      })
+      if (Array.isArray(data?.reports)) {
+        await fetchFeedHealth()
+      }
+      return data
+    } catch (error) {
+      console.error('FlipboardStore: runSchedulerTick failed:', error)
+      throw error
+    }
+  }
+
+  const fetchFeedSchedule = async () => {
+    try {
+      return await invoke('get_feed_schedule_status')
+    } catch (error) {
+      console.error('FlipboardStore: fetchFeedSchedule failed:', error)
+      throw error
+    }
+  }
+
+  const createKbNoteFromTopic = async (payload) => {
+    try {
+      return await invoke('create_kb_note_from_topic', payload || {})
+    } catch (error) {
+      console.error('FlipboardStore: createKbNoteFromTopic failed:', error)
+      throw error
+    }
+  }
+
+  const addSite = async (seedUrl, category = 'all') => {
+    try {
+      console.log('FlipboardStore: addSite', { seedUrl, category })
+      const created = await invoke('add_site', { seedUrl, category })
+      await fetchFeeds()
+      return Array.isArray(created) ? created : []
+    } catch (error) {
+      console.error('FlipboardStore: addSite failed:', error)
+      throw error
+    }
+  }
+
+  const importFeedsFromWebsiteMarkdown = async (path = null) => {
+    try {
+      const created = await invoke('import_feeds_from_website_markdown', { path })
+      await fetchFeeds()
+      return Array.isArray(created) ? created : []
+    } catch (error) {
+      console.error('FlipboardStore: importFeedsFromWebsiteMarkdown failed:', error)
+      throw error
+    }
+  }
+
+  const buildSourcePreference = () => {
+    const weight = new Map()
+    const add = (source, delta) => {
+      const key = String(source || '').trim().toLowerCase()
+      if (!key) return
+      weight.set(key, (weight.get(key) || 0) + delta)
+    }
+    ;(Array.isArray(readingHistory.value) ? readingHistory.value : []).forEach(item => add(item?.source, 2))
+    ;(Array.isArray(bookmarks.value) ? bookmarks.value : []).forEach(item => add(item?.source, 3))
+    return weight
+  }
+
+  const scoreByPreference = (article, sourceWeight) => {
+    const key = String(article?.source || '').trim().toLowerCase()
+    const sourceScore = sourceWeight.get(key) || 0
+    const hasImageScore = article?.image_url ? 1 : 0
+    return sourceScore + hasImageScore
+  }
+
+  const mergeAndSortArticles = (current, incoming, topicText) => {
+    const map = new Map()
+    const add = (item) => {
+      const key = `${String(item?.url || '').trim().toLowerCase()}|${String(item?.title || '').trim().toLowerCase()}`
+      if (!key || key === '|') return
+      if (!map.has(key)) map.set(key, item)
+    }
+    ;(Array.isArray(current) ? current : []).forEach(add)
+    ;(Array.isArray(incoming) ? incoming : []).forEach(add)
+    const merged = Array.from(map.values())
+    const tokens = String(topicText || '')
+      .split(/[,\s]+/)
+      .map(x => x.trim().toLowerCase())
+      .filter(Boolean)
+    const sourceWeight = buildSourcePreference()
+    if (tokens.length) {
+      merged.sort((a, b) => {
+        const sa = scoreByTopic(a, tokens)
+        const sb = scoreByTopic(b, tokens)
+        if (sb !== sa) return sb - sa
+        const pa = scoreByPreference(a, sourceWeight)
+        const pb = scoreByPreference(b, sourceWeight)
+        if (pb !== pa) return pb - pa
+        return new Date(b?.published_at || 0) - new Date(a?.published_at || 0)
+      })
+    } else {
+      merged.sort((a, b) => {
+        const pa = scoreByPreference(a, sourceWeight)
+        const pb = scoreByPreference(b, sourceWeight)
+        if (pb !== pa) return pb - pa
+        return new Date(b?.published_at || 0) - new Date(a?.published_at || 0)
+      })
+    }
+    return merged
+  }
+
+  const pickRelevantFeedIds = (category) => {
+    const list = Array.isArray(feeds.value) ? feeds.value : []
+    const cat = String(category || '').trim()
+    return list
+      .filter(f => {
+        if (!f?.enabled) return false
+        if (!cat || cat === 'all') return true
+        return String(f?.category || '') === cat || String(f?.category || '') === 'all'
+      })
+      .map(f => String(f?.id || '').trim())
+      .filter(Boolean)
+  }
+
+  const fetchKnowledgeProgressively = async (topicText, category = null, forceRefresh = false) => {
+    const normalizedTopic = String(topicText || '').trim()
+    const normalizedCategory = category || null
+    const requestToken = ++activeFetchToken
+    const isStale = () => requestToken !== activeFetchToken
+    const cacheKey = `${String(normalizedCategory || 'all')}|${normalizedTopic.toLowerCase()}`
     if (forceRefresh) {
       isRefreshing.value = true
     } else {
       isLoading.value = true
     }
-
-    selectedCategory.value = category
+    selectedCategory.value = normalizedCategory
 
     try {
-      console.log('FlipboardStore: fetchArticles from feeds', { category })
-      const data = await invoke('refresh_articles_from_feeds', {
-        category,
-        limit: 50
-      })
-      articles.value = Array.isArray(data) ? data : []
+      if (!forceRefresh) {
+        const memoryCached = inMemoryArticleCache.get(cacheKey)
+        if (Array.isArray(memoryCached) && memoryCached.length) {
+          articles.value = memoryCached.slice(0, 80)
+          isLoading.value = false
+        }
+        const persisted = await invoke('get_cached_articles', {
+          category: normalizedCategory,
+          topic: normalizedTopic || null,
+          limit: 80
+        })
+        if (isStale()) return
+        if (Array.isArray(persisted) && persisted.length) {
+          articles.value = persisted
+          inMemoryArticleCache.set(cacheKey, persisted.slice(0, 120))
+          isLoading.value = false
+          if (persisted.length >= 40) {
+            return
+          }
+        }
+      }
 
+      if (!Array.isArray(feeds.value) || feeds.value.length === 0) {
+        await fetchFeeds()
+      }
+      if (isStale()) return
+      const feedIds = pickRelevantFeedIds(normalizedCategory)
+
+      if (!feedIds.length) {
+        const fallback = normalizedTopic
+          ? await invoke('refresh_topic_knowledge_from_feeds', { topic: normalizedTopic, category: normalizedCategory, limit: 80 })
+          : await invoke('refresh_articles_from_feeds', { category: normalizedCategory, limit: 80 })
+        if (isStale()) return
+        const next = Array.isArray(fallback) ? fallback : []
+        articles.value = next
+        inMemoryArticleCache.set(cacheKey, next.slice(0, 120))
+        return
+      }
+
+      const batchSize = 3
+      const perBatchLimit = 24
+      let merged = []
+
+      for (let i = 0; i < feedIds.length; i += batchSize) {
+        const batchIds = feedIds.slice(i, i + batchSize)
+        const chunk = await invoke('fetch_knowledge_from_feed_ids', {
+          feedIds: batchIds,
+          topic: normalizedTopic || null,
+          limit: perBatchLimit,
+          force: forceRefresh
+        })
+        if (isStale()) return
+        merged = mergeAndSortArticles(merged, Array.isArray(chunk) ? chunk : [], normalizedTopic)
+      }
+      const next = merged.slice(0, 80)
+      articles.value = next
+      inMemoryArticleCache.set(cacheKey, next.slice(0, 120))
+    } catch (error) {
+      console.error('FlipboardStore: fetchKnowledgeProgressively failed:', error)
+      throw error
+    } finally {
+      if (isStale()) return
       try {
         await fetchFeedHealth()
       } catch (e) {
-        console.warn('FlipboardStore: fetchFeedHealth failed after fetchArticles', e)
+        console.warn('FlipboardStore: fetchFeedHealth failed after progressive fetch', e)
       }
-
-      // 保存到本地存储
       localStorage.setItem('flipboard_last_fetch', new Date().toISOString())
-    } catch (error) {
-      console.error('Failed to fetch articles:', error)
-    } finally {
       isLoading.value = false
       isRefreshing.value = false
     }
   }
 
+  const fetchArticles = async (category = null, forceRefresh = false) => {
+    console.log('FlipboardStore: fetchArticles from feeds', { category })
+    await fetchKnowledgeProgressively('', category, forceRefresh)
+  }
+
   // 获取单个文章详情
-  const fetchArticleDetail = async (articleId) => {
+  const fetchArticleDetail = async (articleRef) => {
+    const articleId = typeof articleRef === 'string' ? articleRef : String(articleRef?.id || '')
+    const articleUrl = typeof articleRef === 'string' ? null : String(articleRef?.url || '').trim() || null
     isLoading.value = true
     try {
-      const data = await invoke('get_article_detail', { id: articleId })
+      const data = await invoke('get_article_detail', { id: articleId, url: articleUrl })
       currentArticle.value = data
 
       // 添加到阅读历史
@@ -82,6 +289,27 @@ export const useFlipboardStore = () => {
 
   // 搜索文章
   const searchArticles = async (query) => {
+    if (!query.trim()) {
+      fetchArticles(selectedCategory.value)
+      return
+    }
+
+    searchQuery.value = query
+    await fetchTopicKnowledge(query, selectedCategory.value)
+  }
+
+  const fetchTopicKnowledge = async (topic, category = null, forceRefresh = false) => {
+    const topicText = String(topic || '').trim()
+    if (!topicText) {
+      return fetchArticles(category, forceRefresh)
+    }
+    console.log('FlipboardStore: fetchTopicKnowledge', { topic: topicText, category })
+    searchQuery.value = topicText
+    await fetchKnowledgeProgressively(topicText, category, forceRefresh)
+  }
+
+  // 搜索文章
+  const searchArticlesLocal = async (query) => {
     if (!query.trim()) {
       fetchArticles(selectedCategory.value)
       return
@@ -309,21 +537,32 @@ export const useFlipboardStore = () => {
   // 刷新文章（强制从订阅源重新抓取）
   const refreshArticles = async () => {
     console.log('FlipboardStore: manual refresh articles')
+    const topic = String(searchQuery.value || '').trim()
+    if (topic) {
+      await fetchTopicKnowledge(topic, selectedCategory.value, true)
+      return
+    }
     await fetchArticles(selectedCategory.value, true)
   }
 
   // 计算属性
   const filteredArticles = computed(() => {
+    const base = Array.isArray(articles.value) ? articles.value : []
+    const category = String(selectedCategory.value || '').trim()
+    const byCategory = !category || category === 'all'
+      ? base
+      : base.filter(article => String(article?.category || '').trim() === category)
+
     if (!searchQuery.value.trim()) {
-      return articles.value
+      return byCategory
     }
 
     const query = searchQuery.value.toLowerCase()
-    return articles.value.filter(article =>
-      article.title.toLowerCase().includes(query) ||
-      article.description.toLowerCase().includes(query) ||
-      article.content.toLowerCase().includes(query) ||
-      article.source.toLowerCase().includes(query)
+    return byCategory.filter(article =>
+      String(article?.title || '').toLowerCase().includes(query) ||
+      String(article?.description || '').toLowerCase().includes(query) ||
+      String(article?.content || '').toLowerCase().includes(query) ||
+      String(article?.source || '').toLowerCase().includes(query)
     )
   })
 
@@ -364,6 +603,11 @@ export const useFlipboardStore = () => {
   const init = async () => {
     loadLocalData()
     await fetchCategories()
+    try {
+      await importFeedsFromWebsiteMarkdown(null)
+    } catch (error) {
+      console.warn('FlipboardStore: importFeedsFromWebsiteMarkdown skipped:', error)
+    }
     await fetchFeeds()
     await fetchArticles()
 
@@ -398,12 +642,19 @@ export const useFlipboardStore = () => {
 
     // 方法
     fetchArticles,
+    fetchTopicKnowledge,
     fetchArticleDetail,
     searchArticles,
+    searchArticlesLocal,
     fetchCategories,
     fetchFeeds,
     fetchFeedHealth,
+    runSchedulerTick,
+    fetchFeedSchedule,
+    createKbNoteFromTopic,
+    importFeedsFromWebsiteMarkdown,
     addFeed,
+    addSite,
     generateFeedsByPlatform,
     setFeedEnabled,
     updateFeed,
