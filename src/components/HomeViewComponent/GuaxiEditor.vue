@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="editor-container guaxi-editor">
     <div class="editor-header" ref="editorHeaderRef">
       <div class="tab-bar" ref="tabBarRef" @wheel="handleWheelScroll">
@@ -388,6 +388,14 @@
             </template>
             翻译
           </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="sendSelectionToAssistant">
+                <Icon :icon="squareTerminalIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            发送到助手
+          </n-tooltip>
         </div>
 
         <div class="breadcrumb-bar">
@@ -451,6 +459,8 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
@@ -553,6 +563,8 @@ const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
 const settingsStore = useSettingsStore()
 const knowledgeBaseStore = useKnowledgeBaseStore()
+const rightSiderStore = useRightSiderStore()
+const siderStore = useSiderStore()
 const mode = ref('edit');
 const previewMode = ref('toggle');
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
@@ -5665,7 +5677,7 @@ const setupEditorListeners = () => {
     const clampedTop = Math.min(Math.max(minTop, top), Math.max(minTop, wrapperRect.height - toolbarH - 8));
 
     const left = leftBase + selLeft;
-    const clampedLeft = Math.min(Math.max(8, left), Math.max(8, wrapperRect.width - 310));
+    const clampedLeft = Math.min(Math.max(8, left), Math.max(8, wrapperRect.width - 360));
 
     floatingToolbarStyle.value = {
       left: `${clampedLeft}px`,
@@ -6190,6 +6202,19 @@ const openSelectionTranslatePanel = async () => {
 
   await translateSelectionText(text);
 };
+
+const sendSelectionToAssistant = () => {
+  const text = getSelectedTextForTranslate().trim()
+  if (!text) {
+    message.warning('请先框选要发送到助手的文本')
+    return
+  }
+  rightSiderStore.setPanel('assistant')
+  rightSiderStore.open()
+  siderStore.setRightSiderCollapsed('home', false)
+  rightSiderStore.appendAssistantDraft(text)
+  message.success('已插入到助手输入框')
+}
 
 const translateSelectionText = async (overrideText) => {
   const text = String((overrideText ?? getSelectedTextForTranslate()) || '').trim();
@@ -10835,4 +10860,3 @@ img {
   color: #000 !important;
 }
 </style>
-

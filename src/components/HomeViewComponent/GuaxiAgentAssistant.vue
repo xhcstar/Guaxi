@@ -1,0 +1,990 @@
+<template>
+  <div class="assistant-root">
+    <div class="assistant-topbar">
+      <div class="assistant-title-group">
+        <div class="assistant-orb" />
+        <div class="assistant-title-wrap">
+          <div class="assistant-title">智能助手</div>
+          <div class="assistant-subtitle">知识库问答 · 联网增强</div>
+        </div>
+      </div>
+      <div class="assistant-topbar-right">
+        <n-switch
+          :value="webSearchEnabled"
+          size="small"
+          @update:value="handleWebSearchEnabledChange"
+        >
+          <template #checked>联网</template>
+          <template #unchecked>离线</template>
+        </n-switch>
+        <n-button quaternary size="small" @click="clearHistory">清空</n-button>
+      </div>
+    </div>
+
+    <div ref="messagesRef" class="assistant-messages">
+      <div v-if="messages.length === 0" class="assistant-empty">
+        <div class="assistant-empty-icon">
+          <svg viewBox="0 0 24 24" width="24" height="24">
+            <path
+              fill="currentColor"
+              d="M12 2a7 7 0 0 1 7 7v1.1a4.9 4.9 0 0 1 2.34 4.18A4.72 4.72 0 0 1 16.62 19H12.5L9 22v-3H7.38A4.72 4.72 0 0 1 2.66 14.3a4.9 4.9 0 0 1 2.34-4.2V9a7 7 0 0 1 7-7m0 2a5 5 0 0 0-5 5v2.39l-.63.32a2.9 2.9 0 0 0-1.71 2.59A2.73 2.73 0 0 0 7.38 17H11v.66l.83-.66h4.79a2.73 2.73 0 0 0 2.72-2.7a2.9 2.9 0 0 0-1.7-2.59l-.64-.32V9a5 5 0 0 0-5-5"
+            />
+          </svg>
+        </div>
+        <div class="assistant-empty-title">开始一次智能问答</div>
+        <div class="assistant-empty-desc">支持本地 DeepSeek 与联网搜索增强</div>
+      </div>
+
+      <div
+        v-for="message in messages"
+        :key="message.id"
+        class="assistant-message"
+        :class="message.role === 'user' ? 'assistant-message-user' : 'assistant-message-ai'"
+      >
+        <div class="assistant-message-avatar">
+          <span v-if="message.role === 'user'">我</span>
+          <span v-else>AI</span>
+        </div>
+        <div class="assistant-message-body">
+          <div class="assistant-message-meta">
+            <span>{{ message.role === 'user' ? '你' : '智能助手' }}</span>
+            <span>{{ formatTime(message.createdAt) }}</span>
+          </div>
+          <div
+            v-if="message.role === 'assistant'"
+            class="assistant-message-content markdown-body"
+            v-html="message.html || message.content"
+          />
+          <div
+            v-else
+            class="assistant-message-content assistant-message-plain"
+          >
+            {{ message.content }}
+          </div>
+          <div
+            v-if="message.meta?.webContextCount"
+            class="assistant-message-source"
+          >
+            参考了 {{ message.meta.webContextCount }} 条联网结果
+          </div>
+          <div v-else-if="message.meta?.webSearchTriggered" class="assistant-message-source">
+            已启用联网搜索，但未检索到可用结果，本次按离线答案回复
+          </div>
+          <div
+            v-if="Array.isArray(message.meta?.webReferences) && message.meta.webReferences.length"
+            class="assistant-reference-list"
+          >
+            <div class="assistant-reference-title">参考来源</div>
+            <a
+              v-for="(refItem, idx) in message.meta.webReferences"
+              :key="`${message.id}-ref-${idx}`"
+              class="assistant-reference-item"
+              :href="refItem.url"
+              target="_blank"
+              rel="noopener noreferrer"
+              :title="refItem.url"
+            >
+              [{{ idx + 1 }}] {{ refItem.title || refItem.url }}
+            </a>
+          </div>
+          <div v-if="message.role === 'assistant'" class="assistant-message-actions">
+            <button type="button" class="assistant-action-btn" @click="copyAssistantMessage(message)">
+              复制
+            </button>
+            <button type="button" class="assistant-action-btn" @click="insertAssistantToCurrentFile(message)">
+              插入当前文件
+            </button>
+            <button type="button" class="assistant-action-btn" @click="createAssistantAsNewFile(message)">
+              创建新文件
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="pending" class="assistant-thinking-wrap">
+        <div class="assistant-thinking-card">
+          <div class="assistant-thinking-ring" />
+          <div class="assistant-thinking-text">模型思考中</div>
+          <div class="assistant-thinking-dots">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="assistant-footer">
+      <div class="composer-shell" @click="focusComposerInput">
+        <div v-if="pendingAttachments.length" class="attachment-list">
+          <div v-for="file in pendingAttachments" :key="file.id" class="attachment-chip">
+            <span class="attachment-name" :title="file.path">{{ file.name }}</span>
+            <span class="attachment-size">{{ formatAttachmentSize(file.size) }}</span>
+            <button class="attachment-remove" type="button" title="移除附件" @click="removeAttachment(file.id)">
+              ×
+            </button>
+          </div>
+        </div>
+
+        <textarea
+          ref="composerInputRef"
+          class="composer-input"
+          placeholder="输入问题，Enter 发送，Shift + Enter 换行"
+          v-model="question"
+          :disabled="pending"
+          @keydown="handleInputKeydown"
+        />
+
+        <div class="composer-toolbar">
+          <button
+            class="composer-icon-btn"
+            type="button"
+            title="添加附件"
+            :disabled="pending"
+            @click="pickAttachments"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+              <path d="M17.5 6.5v9a5.5 5.5 0 0 1-11 0v-10a4 4 0 0 1 8 0v9a2.5 2.5 0 1 1-5 0V8h1.8v6.5a.7.7 0 1 0 1.4 0v-9a2.2 2.2 0 0 0-4.4 0v10a3.7 3.7 0 0 0 7.4 0v-9h1.8z" fill="currentColor" />
+            </svg>
+          </button>
+          <n-select
+            class="composer-model-select"
+            size="small"
+            :value="modelId"
+            :options="modelOptions"
+            @update:value="handleModelChange"
+          />
+          <div class="composer-spacer"></div>
+          <button
+            class="send-btn"
+            type="button"
+            :disabled="!canSend"
+            @click="sendQuestion"
+            :title="pending ? '模型响应中' : '发送'"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 4l-7 7 1.4 1.4 4.6-4.6V20h2V7.8l4.6 4.6L19 11z" fill="currentColor" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { useMessage } from 'naive-ui'
+import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { useEditorStore } from '../../stores/editorStore'
+import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { createLogger } from '../../utils/logger'
+
+const logger = createLogger('GuaxiAgentAssistant')
+const message = useMessage()
+const rightSiderStore = useRightSiderStore()
+const editorStore = useEditorStore()
+const fileTreeStore = useFileTreeStore()
+const messagesRef = ref(null)
+const composerInputRef = ref(null)
+const question = ref('')
+const pendingAttachments = ref([])
+
+const modelOptions = [
+  { label: '本地 DeepSeek（推荐）', value: 6 },
+  { label: 'DeepSeek（在线）', value: 1 },
+  { label: 'Qwen（在线）', value: 2 },
+  { label: 'Kimi（在线）', value: 3 },
+  { label: '豆包（在线）', value: 4 },
+]
+
+const messages = computed(() => rightSiderStore.assistant.messages)
+const pending = computed(() => rightSiderStore.assistant.pending)
+const modelId = computed(() => rightSiderStore.assistant.modelId)
+const webSearchEnabled = computed(() => rightSiderStore.assistant.webSearchEnabled)
+const canSend = computed(() => !pending.value && question.value.trim().length > 0)
+
+const enhanceRenderedMessages = () => {
+  nextTick(() => {
+    const root = messagesRef.value
+    if (!root) return
+    const nodes = Array.from(root.querySelectorAll('.assistant-message-content.markdown-body'))
+    nodes.forEach((node) => {
+      addCopyButtons(node)
+      addMediaViewerButtons(node)
+    })
+  })
+}
+
+const scrollToBottom = () => {
+  nextTick(() => {
+    const el = messagesRef.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  })
+}
+
+watch(messages, () => {
+  scrollToBottom()
+  enhanceRenderedMessages()
+}, { deep: true })
+
+watch(pending, () => {
+  scrollToBottom()
+})
+
+const applyDraftFromStore = () => {
+  const draft = String(rightSiderStore.consumeAssistantDraft() || '').trim()
+  if (!draft) return
+  question.value = question.value.trim() ? `${question.value.trim()}\n${draft}` : draft
+  nextTick(focusComposerInput)
+}
+
+watch(() => rightSiderStore.assistant.draftInput, (value) => {
+  if (!value) return
+  applyDraftFromStore()
+})
+
+onMounted(() => {
+  applyDraftFromStore()
+  enhanceRenderedMessages()
+})
+
+const formatTime = (ts) => {
+  if (!ts) return ''
+  try {
+    return new Date(ts).toLocaleTimeString()
+  } catch {
+    return ''
+  }
+}
+
+const clearHistory = () => {
+  rightSiderStore.clearAssistantMessages()
+}
+
+const handleModelChange = (value) => {
+  rightSiderStore.setAssistantModelId(value)
+}
+
+const handleWebSearchEnabledChange = (value) => {
+  rightSiderStore.setAssistantWebSearchEnabled(value)
+}
+
+const handleInputKeydown = (event) => {
+  if (event.key !== 'Enter') return
+  if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return
+  event.preventDefault()
+  sendQuestion()
+}
+
+const focusComposerInput = () => {
+  const el = composerInputRef.value
+  if (el && typeof el.focus === 'function') {
+    el.focus()
+  }
+}
+
+const formatAttachmentSize = (size) => {
+  const n = Number(size)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  if (n < 1024) return `${n}B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`
+  return `${(n / (1024 * 1024)).toFixed(1)}MB`
+}
+
+const parseAttachmentName = (path) => {
+  const p = (path ?? '').toString()
+  if (!p) return ''
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i >= 0 ? p.slice(i + 1) : p
+}
+
+const pickAttachments = async () => {
+  try {
+    const picked = await open({ multiple: true, directory: false })
+    const paths = Array.isArray(picked) ? picked : (typeof picked === 'string' ? [picked] : [])
+    if (!paths.length) return
+
+    const exists = new Set(pendingAttachments.value.map((x) => x.path))
+    for (const p of paths) {
+      const path = (p ?? '').toString()
+      if (!path || exists.has(path)) continue
+      exists.add(path)
+      pendingAttachments.value.push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        path,
+        name: parseAttachmentName(path),
+        size: 0,
+      })
+    }
+  } catch (err) {
+    logger.error('[assistant] pick attachments failed', err)
+    message.error('选择附件失败')
+  }
+}
+
+const removeAttachment = (id) => {
+  pendingAttachments.value = pendingAttachments.value.filter((x) => x.id !== id)
+}
+
+const buildQuestionWithAttachments = (text) => {
+  const base = (text ?? '').toString().trim()
+  const files = Array.isArray(pendingAttachments.value) ? pendingAttachments.value : []
+  if (!files.length) return base
+  const list = files.map((f, idx) => `${idx + 1}. ${f.name} (${f.path})`).join('\n')
+  return `${base}\n\n[附件]\n${list}\n[/附件]`
+}
+
+const buildWebContextPrompt = (rawQuestion, webItems) => {
+  if (!Array.isArray(webItems) || webItems.length === 0) {
+    return rawQuestion
+  }
+
+  const lines = webItems.map((item, idx) => {
+    const title = String(item?.title || '').trim()
+    const snippet = String(item?.snippet || '').trim()
+    const link = String(item?.url || '').trim()
+    return `[${idx + 1}] ${title}\n${snippet}\n来源: ${link}`
+  })
+
+  return `${rawQuestion}\n\n请结合以下联网结果回答，并在回答结尾补充“参考来源”小节：\n${lines.join('\n\n')}`
+}
+
+const normalizeWebReferences = (webItems) => {
+  if (!Array.isArray(webItems)) return []
+  return webItems
+    .map((item) => ({
+      title: String(item?.title || '').trim(),
+      snippet: String(item?.snippet || '').trim(),
+      url: String(item?.url || '').trim(),
+    }))
+    .filter((item) => item.url.length > 0)
+}
+
+const queryWebSearch = async (rawQuestion) => {
+  if (!webSearchEnabled.value) return []
+  try {
+    const items = await invoke('search_web_duckduckgo', { query: rawQuestion, limit: 5 })
+    return Array.isArray(items) ? items : []
+  } catch (err) {
+    logger.warn('[assistant] web search failed', err)
+    message.warning('联网搜索失败，已自动使用离线问答')
+    return []
+  }
+}
+
+const renderAssistantMarkdown = async (content) => {
+  try {
+    return await renderMarkdown(content, {
+      mermaid: false,
+      includeNotes: false,
+    })
+  } catch (err) {
+    logger.warn('[assistant] render markdown failed', err)
+    return content
+  }
+}
+
+const writeClipboard = async (text) => {
+  const value = (text ?? '').toString()
+  if (!value) return false
+
+  if (navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {}
+  }
+
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager')
+    await mod.writeText(value)
+    return true
+  } catch (err) {
+    logger.error('[assistant] write clipboard failed', err)
+    return false
+  }
+}
+
+const copyAssistantMessage = async (chatMessage) => {
+  const text = String(chatMessage?.content || '').trim()
+  if (!text) return
+  const ok = await writeClipboard(text)
+  if (ok) {
+    message.success('已复制回复内容')
+  } else {
+    message.error('复制失败')
+  }
+}
+
+const insertAssistantToCurrentFile = async (chatMessage) => {
+  const text = String(chatMessage?.content || '').trim()
+  if (!text) {
+    message.warning('无可插入内容')
+    return
+  }
+
+  const editor = editorStore.editorInstance
+  if (!editor) {
+    message.warning('当前没有可编辑的文件')
+    return
+  }
+
+  editorStore.insertContent(text)
+  message.success('已插入到当前文件')
+}
+
+const createAssistantAsNewFile = async (chatMessage) => {
+  const text = String(chatMessage?.content || '').trim()
+  if (!text) {
+    message.warning('无可保存内容')
+    return
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const baseDir = String(fileTreeStore.activeRepoPath || '')
+  const defaultName = `assistant-${stamp}.md`
+  const defaultPath = baseDir ? `${baseDir}/${defaultName}` : defaultName
+
+  try {
+    const path = await save({
+      defaultPath,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    })
+    if (!path) return
+
+    await invoke('create_file_with_content', { path: String(path), content: text })
+    if (baseDir) {
+      await fileTreeStore.fetchFileTree(baseDir, { force: true })
+    }
+    await fileTreeStore.openFileInTab(String(path), text)
+    editorStore.setFile({
+      path: String(path),
+      content: text,
+      highlightInfo: { lineNumber: 1, matches: [] },
+    })
+    message.success('已创建新文件')
+  } catch (err) {
+    logger.error('[assistant] create file from response failed', err)
+    message.error('创建新文件失败')
+  }
+}
+
+const sendQuestion = async () => {
+  const rawQuestion = question.value.trim()
+  if (!rawQuestion || pending.value) return
+
+  question.value = ''
+  rightSiderStore.setAssistantPending(true)
+  rightSiderStore.addAssistantMessage({
+    role: 'user',
+    content: rawQuestion,
+  })
+
+  try {
+    if (Number(modelId.value) === 6) {
+      await invoke('ensure_local_deepseek_service')
+    }
+
+    const webItems = await queryWebSearch(rawQuestion)
+    const withAttachments = buildQuestionWithAttachments(rawQuestion)
+    const mergedQuestion = buildWebContextPrompt(withAttachments, webItems)
+
+    const response = await invoke('get_chat_answer', {
+      request: {
+        modelid: Number(modelId.value),
+        question: mergedQuestion,
+        topicid: 0,
+        sessionid: rightSiderStore.assistant.sessionId || '',
+      }
+    })
+
+    const answer = String(response?.answer || '').trim() || '模型未返回内容。'
+    const html = await renderAssistantMarkdown(answer)
+    const webReferences = normalizeWebReferences(webItems)
+
+    rightSiderStore.addAssistantMessage({
+      role: 'assistant',
+      content: answer,
+      html,
+      meta: {
+        webSearchTriggered: webSearchEnabled.value,
+        webContextCount: webItems.length,
+        webReferences,
+      }
+    })
+    rightSiderStore.setAssistantSessionId(response?.sessionid || '')
+    pendingAttachments.value = []
+  } catch (err) {
+    const text = String(err?.message || err || '请求失败')
+    logger.error('[assistant] send question failed', err)
+    message.error(text)
+    rightSiderStore.addAssistantMessage({
+      role: 'assistant',
+      content: `请求失败：${text}`,
+      html: `请求失败：${text}`,
+    })
+  } finally {
+    rightSiderStore.setAssistantPending(false)
+  }
+}
+</script>
+
+<style scoped>
+.assistant-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  background:
+    radial-gradient(1200px 300px at 20% -40%, rgba(33, 189, 236, 0.12), transparent 60%),
+    radial-gradient(1000px 280px at 90% -45%, rgba(152, 95, 255, 0.12), transparent 60%),
+    var(--guaxi-panel-bg);
+}
+
+.assistant-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--guaxi-border);
+  backdrop-filter: blur(12px);
+}
+
+.assistant-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.assistant-orb {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #21bdec, #8b5cf6);
+  box-shadow: 0 0 18px rgba(97, 120, 255, 0.45);
+  animation: orb-breathe 2.2s ease-in-out infinite;
+}
+
+.assistant-title-wrap {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  gap: 3px;
+}
+
+.assistant-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+}
+
+.assistant-subtitle {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.assistant-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-messages {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.assistant-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--guaxi-text-secondary);
+}
+
+.assistant-empty-icon {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 10px auto;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: #7d61ff;
+  background: linear-gradient(145deg, rgba(125, 97, 255, 0.15), rgba(33, 189, 236, 0.15));
+}
+
+.assistant-empty-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.assistant-empty-desc {
+  font-size: 12px;
+}
+
+.assistant-message {
+  display: flex;
+  gap: 10px;
+}
+
+.assistant-message-avatar {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.assistant-message-user .assistant-message-avatar {
+  background: linear-gradient(135deg, #21bdec, #1492d8);
+}
+
+.assistant-message-ai .assistant-message-avatar {
+  background: linear-gradient(135deg, #8b5cf6, #5b7cfa);
+}
+
+.assistant-message-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.assistant-message-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+  margin-bottom: 5px;
+}
+
+.assistant-message-content {
+  border-radius: 12px;
+  padding: 10px 12px;
+  line-height: 1.6;
+  font-size: 13px;
+  border: 1px solid var(--guaxi-border);
+  overflow: hidden;
+}
+
+.assistant-message-user .assistant-message-content {
+  background: linear-gradient(135deg, rgba(33, 189, 236, 0.12), rgba(33, 189, 236, 0.05));
+}
+
+.assistant-message-ai .assistant-message-content {
+  background: linear-gradient(135deg, rgba(125, 97, 255, 0.1), rgba(125, 97, 255, 0.04));
+}
+
+.assistant-message-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-message-source {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+}
+
+.assistant-reference-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assistant-reference-title {
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+}
+
+.assistant-reference-item {
+  font-size: 11px;
+  color: #4f7dff;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-reference-item:hover {
+  text-decoration: underline;
+}
+
+.assistant-message-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+}
+
+.assistant-action-btn {
+  border: 1px solid var(--guaxi-border);
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.assistant-action-btn:hover {
+  color: var(--guaxi-text-primary);
+  background: color-mix(in srgb, var(--guaxi-header-bg) 86%, transparent);
+}
+
+.assistant-thinking-wrap {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.assistant-thinking-card {
+  position: relative;
+  min-width: 180px;
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(123, 97, 255, 0.08);
+  border: 1px solid rgba(123, 97, 255, 0.2);
+  overflow: hidden;
+}
+
+.assistant-thinking-ring {
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -70px;
+  top: -110px;
+  border-radius: 999px;
+  border: 2px solid rgba(125, 97, 255, 0.25);
+  animation: ring-spin 5s linear infinite;
+}
+
+.assistant-thinking-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.assistant-thinking-dots {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.assistant-thinking-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #21bdec, #8b5cf6);
+  animation: dot-wave 1.1s ease-in-out infinite;
+}
+
+.assistant-thinking-dots span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.assistant-thinking-dots span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+.assistant-footer {
+  border-top: 1px solid var(--guaxi-border);
+  padding: 10px 12px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 84%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.composer-shell {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, #ffffff 10%);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.06);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: text;
+}
+
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--guaxi-border);
+  padding: 2px 8px;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--guaxi-header-bg) 80%, transparent);
+}
+
+.attachment-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--guaxi-text-primary);
+}
+
+.attachment-size {
+  font-size: 10px;
+  color: var(--guaxi-text-secondary);
+}
+
+.attachment-remove {
+  border: none;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.attachment-remove:hover {
+  color: var(--guaxi-text-primary);
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 72px;
+  max-height: 200px;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--guaxi-text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: inherit;
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-model-select {
+  width: 172px;
+}
+
+.composer-model-select :deep(.n-base-selection) {
+  border-radius: 8px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 86%, transparent);
+}
+
+.composer-icon-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.composer-icon-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--guaxi-header-bg) 86%, transparent);
+  color: var(--guaxi-text-primary);
+  border-color: var(--guaxi-border);
+}
+
+.composer-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.composer-spacer {
+  flex: 1 1 auto;
+}
+
+.send-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: none;
+  color: #fff;
+  background: linear-gradient(135deg, #20c0ef 0%, #4f7dff 45%, #8d5eff 100%);
+  box-shadow: 0 6px 16px rgba(79, 125, 255, 0.35);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+
+.send-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(79, 125, 255, 0.45);
+}
+
+.send-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.send-btn svg {
+  transform: rotate(90deg);
+}
+
+.markdown-body :deep(pre) {
+  overflow: auto;
+}
+
+@keyframes dot-wave {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes ring-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orb-breathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 16px rgba(97, 120, 255, 0.35);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 24px rgba(97, 120, 255, 0.55);
+  }
+}
+</style>

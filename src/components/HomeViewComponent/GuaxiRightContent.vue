@@ -7,11 +7,13 @@
       :search-query="rightSiderStore.searchResults.searchQuery"
       :excerpt-results="rightSiderStore.searchResults.excerptResults"
       :last-search-type="rightSiderStore.searchResults.lastSearchType" />
+    <GuaxiAgentAssistant v-else-if="rightSiderStore.panel === 'assistant'" />
   </div>
 </template>
 
 <script setup>
 import GuaxiSearchNavigator from "./GuaxiSearchNavigator.vue"
+import GuaxiAgentAssistant from "./GuaxiAgentAssistant.vue"
 import GuaxiOutline from './GuaxiOutline.vue'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 

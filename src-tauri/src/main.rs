@@ -9,6 +9,8 @@ use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
+#[cfg(desktop)]
+use tauri::{Emitter, Manager};
 
 static LOG_GUARD: OnceCell<tracing_appender::non_blocking::WorkerGuard> = OnceCell::new();
 
@@ -217,6 +219,7 @@ async fn main() {
             commands::chatview::get_chat_answer,
             commands::chatview::get_chat_answer_stream,
             commands::chatview::ensure_local_deepseek_service,
+            commands::chatview::search_web_duckduckgo,
             commands::docprocess::reader_open_file,
             commands::docprocess::convert_to_markdown,
             commands::docprocess::check_file_converted,
@@ -496,18 +499,43 @@ async fn main() {
                 use tauri_plugin_global_shortcut::ShortcutState;
 
                 let plugin = tauri_plugin_global_shortcut::Builder::new()
-                    .with_shortcuts(["ctrl+alt+z"])
+                    .with_shortcuts(["ctrl+alt+z", "ctrl+alt+a"])
                     .map(|builder| {
                         builder
                             .with_handler(|_app, shortcut, event| {
-                                if event.state == ShortcutState::Pressed {
-                                    info!("Shortcut pressed: {:?}", shortcut);
+                                if event.state != ShortcutState::Pressed {
+                                    return;
+                                }
+
+                                let shortcut_text = shortcut.to_string().to_lowercase();
+                                info!("Shortcut pressed: {}", shortcut_text);
+
+                                if shortcut_text == "ctrl+alt+z" {
                                     tauri::async_runtime::spawn(async move {
                                         match commands::guaxiscreencap::trigger_screenshot_tool_once().await {
                                             Ok(_) => info!("截图成功"),
                                             Err(e) => error!("截图失败: {}", e),
                                         }
                                     });
+                                    return;
+                                }
+
+                                if shortcut_text == "ctrl+alt+a" {
+                                    if let Some(window) = _app.get_webview_window("main") {
+                                        if let Err(e) = window.show() {
+                                            error!("显示主窗口失败: {}", e);
+                                        }
+                                        if let Err(e) = window.unminimize() {
+                                            error!("取消主窗口最小化失败: {}", e);
+                                        }
+                                        if let Err(e) = window.set_focus() {
+                                            error!("主窗口聚焦失败: {}", e);
+                                        }
+                                    }
+                                    if let Err(e) = _app.emit("assistant_global_shortcut", "wake_assistant")
+                                    {
+                                        error!("发送助手唤醒事件失败: {}", e);
+                                    }
                                 }
                             })
                             .build()

@@ -3,6 +3,7 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use rand::Rng;
 use reqwest::{Client, ClientBuilder};
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::TryFrom;
@@ -14,9 +15,10 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration as StdDuration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use url::Url;
 // use std::error::Error;
 use once_cell::sync::Lazy;
@@ -136,6 +138,13 @@ pub struct LocalDeepseekServiceStatus {
     pub ready: bool,
     pub endpoint: String,
     pub model_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WebSearchItem {
+    pub title: String,
+    pub snippet: String,
+    pub url: String,
 }
 
 #[allow(non_camel_case_types)]
@@ -580,6 +589,260 @@ pub async fn ensure_local_deepseek_service() -> Result<LocalDeepseekServiceStatu
         endpoint: LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL.to_string(),
         model_path: model_path.to_string_lossy().to_string(),
     })
+}
+
+fn collect_duckduckgo_topics(items: &Vec<Value>, out: &mut Vec<WebSearchItem>, limit: usize) {
+    for item in items {
+        if out.len() >= limit {
+            return;
+        }
+
+        if let Some(nested) = item.get("Topics").and_then(|v| v.as_array()) {
+            collect_duckduckgo_topics(&nested.to_vec(), out, limit);
+            continue;
+        }
+
+        let title = item
+            .get("Text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let url = item
+            .get("FirstURL")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        if title.is_empty() || url.is_empty() {
+            continue;
+        }
+
+        out.push(WebSearchItem {
+            title: title.clone(),
+            snippet: title,
+            url,
+        });
+    }
+}
+
+fn normalize_text(input: &str) -> String {
+    input
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+async fn search_web_bing(
+    client: &Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<WebSearchItem>, String> {
+    let params = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("q", query)
+        .append_pair("setlang", "zh-Hans")
+        .finish();
+    let request_url = format!("https://www.bing.com/search?{}", params);
+
+    let response = client
+        .get(&request_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("bing request failed: {}", e))?;
+    let html = response
+        .text()
+        .await
+        .map_err(|e| format!("bing response parse failed: {}", e))?;
+
+    let document = Html::parse_document(&html);
+    let item_sel = Selector::parse("li.b_algo").map_err(|e| format!("bing selector parse failed: {}", e))?;
+    let link_sel = Selector::parse("h2 a").map_err(|e| format!("bing link selector parse failed: {}", e))?;
+    let snippet_sel = Selector::parse("p").map_err(|e| format!("bing snippet selector parse failed: {}", e))?;
+
+    let mut items = Vec::new();
+    for item in document.select(&item_sel) {
+        if items.len() >= limit {
+            break;
+        }
+        let Some(link) = item.select(&link_sel).next() else {
+            continue;
+        };
+        let url = link.value().attr("href").unwrap_or("").trim().to_string();
+        if url.is_empty() || !url.starts_with("http") {
+            continue;
+        }
+        let title = normalize_text(&link.text().collect::<Vec<_>>().join(" "));
+        if title.is_empty() {
+            continue;
+        }
+        let snippet = item
+            .select(&snippet_sel)
+            .next()
+            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
+            .unwrap_or_default();
+
+        items.push(WebSearchItem { title, snippet, url });
+    }
+    Ok(items)
+}
+
+async fn search_web_google(
+    client: &Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<WebSearchItem>, String> {
+    let params = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("q", query)
+        .append_pair("hl", "zh-CN")
+        .append_pair("num", &limit.to_string())
+        .finish();
+    let request_url = format!("https://www.google.com/search?{}", params);
+
+    let response = client
+        .get(&request_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("google request failed: {}", e))?;
+    let html = response
+        .text()
+        .await
+        .map_err(|e| format!("google response parse failed: {}", e))?;
+
+    let document = Html::parse_document(&html);
+    let item_sel = Selector::parse("div.g, div.MjjYud")
+        .map_err(|e| format!("google selector parse failed: {}", e))?;
+    let link_sel = Selector::parse("a[href]").map_err(|e| format!("google link selector parse failed: {}", e))?;
+    let h3_sel = Selector::parse("h3").map_err(|e| format!("google title selector parse failed: {}", e))?;
+    let snippet_sel = Selector::parse("div.VwiC3b, span.aCOpRe, div.IsZvec")
+        .map_err(|e| format!("google snippet selector parse failed: {}", e))?;
+
+    let mut items = Vec::new();
+    for item in document.select(&item_sel) {
+        if items.len() >= limit {
+            break;
+        }
+
+        let Some(link) = item.select(&link_sel).next() else {
+            continue;
+        };
+        let url = link.value().attr("href").unwrap_or("").trim().to_string();
+        if url.is_empty() || !url.starts_with("http") {
+            continue;
+        }
+
+        let title = item
+            .select(&h3_sel)
+            .next()
+            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| normalize_text(&link.text().collect::<Vec<_>>().join(" ")));
+        if title.is_empty() {
+            continue;
+        }
+
+        let snippet = item
+            .select(&snippet_sel)
+            .next()
+            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
+            .unwrap_or_default();
+
+        items.push(WebSearchItem { title, snippet, url });
+    }
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn search_web_duckduckgo(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<WebSearchItem>, String> {
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let cap = limit.unwrap_or(5).clamp(1, 8);
+    let client = ClientBuilder::new()
+        .no_proxy()
+        .timeout(StdDuration::from_secs(10))
+        .build()
+        .map_err(|e| format!("build web search client failed: {}", e))?;
+    info!("search_web: query_len={} limit={}", q.len(), cap);
+
+    let mut errors: Vec<String> = Vec::new();
+
+    match search_web_bing(&client, &q, cap).await {
+        Ok(items) if !items.is_empty() => return Ok(items),
+        Ok(_) => errors.push("bing empty result".to_string()),
+        Err(e) => errors.push(e),
+    }
+
+    match search_web_google(&client, &q, cap).await {
+        Ok(items) if !items.is_empty() => return Ok(items),
+        Ok(_) => errors.push("google empty result".to_string()),
+        Err(e) => errors.push(e),
+    }
+
+    let params = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("q", &q)
+        .append_pair("format", "json")
+        .append_pair("no_html", "1")
+        .append_pair("skip_disambig", "1")
+        .finish();
+    let request_url = format!("https://api.duckduckgo.com/?{}", params);
+
+    match client.get(&request_url).send().await {
+        Ok(resp) => match resp.json::<Value>().await {
+            Ok(payload) => {
+                let mut hits = vec![];
+                if let Some(items) = payload.get("RelatedTopics").and_then(|v| v.as_array()) {
+                    collect_duckduckgo_topics(&items.to_vec(), &mut hits, cap);
+                }
+
+                if hits.is_empty() {
+                    if let Some(text) = payload.get("AbstractText").and_then(|v| v.as_str()) {
+                        let abstract_text = text.trim().to_string();
+                        if !abstract_text.is_empty() {
+                            hits.push(WebSearchItem {
+                                title: payload
+                                    .get("Heading")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("搜索摘要")
+                                    .to_string(),
+                                snippet: abstract_text,
+                                url: payload
+                                    .get("AbstractURL")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            });
+                        }
+                    }
+                }
+
+                if !hits.is_empty() {
+                    return Ok(hits);
+                }
+                errors.push("duckduckgo empty result".to_string());
+            }
+            Err(e) => errors.push(format!("duckduckgo parse failed: {}", e)),
+        },
+        Err(e) => errors.push(format!("duckduckgo request failed: {}", e)),
+    }
+
+    warn!("search_web all engines failed: {}", errors.join(" | "));
+    Ok(vec![])
 }
 
 // 调用 DeepSeek API 获取回答

@@ -50,6 +50,8 @@ import { useSettingsStore } from './stores/settingsStore'
 import { useFileTreeStore } from './stores/fileTreeStore'
 import { useEditorStore } from './stores/editorStore'
 import { useChatStore } from './stores/chatStore'
+import { useRightSiderStore } from './stores/rightSiderStore'
+import { useSiderStore } from './stores/useSiderStore'
 import { initFrontendLogging, createLogger } from './utils/logger'
 import { initialize } from '@codingame/monaco-vscode-api'
 import 'vscode/localExtensionHost'
@@ -125,9 +127,27 @@ const settingsStore = useSettingsStore(pinia)
 const fileTreeStore = useFileTreeStore(pinia)
 const editorStore = useEditorStore(pinia)
 const chatStore = useChatStore(pinia)
+const rightSiderStore = useRightSiderStore(pinia)
+const siderStore = useSiderStore(pinia)
 
 const OPEN_FILE_IN_HOME_EVENT = 'open_file_in_home'
+const OPEN_ASSISTANT_EVENT = 'assistant_global_shortcut'
 let unlistenOpenFileInHome = null
+let unlistenOpenAssistant = null
+
+const openAssistantPanel = async (source = 'unknown') => {
+  try {
+    rightSiderStore.setPanel('assistant')
+    rightSiderStore.open()
+    siderStore.setRightSiderCollapsed('home', false)
+    if (router?.currentRoute?.value?.path !== '/') {
+      await router.push('/').catch(() => {})
+    }
+    logger.info('[Main] assistant panel opened', { source })
+  } catch (e) {
+    logger.error('[Main] open assistant panel failed:', e)
+  }
+}
 
 const windowLabel = (() => {
   try {
@@ -184,6 +204,15 @@ if (windowLabel === 'main') {
   }).catch((e) => {
     logger.error('[Main] open_file_in_home listener register failed:', e)
   })
+
+  listen(OPEN_ASSISTANT_EVENT, () => {
+    openAssistantPanel('global_shortcut')
+  }).then((unlisten) => {
+    unlistenOpenAssistant = unlisten
+    logger.info('[Main] assistant_global_shortcut listener registered')
+  }).catch((e) => {
+    logger.error('[Main] assistant_global_shortcut listener register failed:', e)
+  })
 } else {
   logger.info('[Main] skip open_file_in_home listener (not main window)', { windowLabel })
 }
@@ -232,6 +261,14 @@ window.addEventListener('beforeunload', async () => {
     }
   } catch (e) {
     logger.error('[Main] unlisten open_file_in_home failed:', e)
+  }
+
+  try {
+    if (typeof unlistenOpenAssistant === 'function') {
+      await unlistenOpenAssistant()
+    }
+  } catch (e) {
+    logger.error('[Main] unlisten assistant_global_shortcut failed:', e)
   }
 
   await cleanupTauriEvents();

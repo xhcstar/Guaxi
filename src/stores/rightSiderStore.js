@@ -25,6 +25,14 @@ export const useRightSiderStore = defineStore("rightSider", {
     panel: "",
     // 新增：右侧边栏是否展开
     isOpen: false,
+    assistant: {
+      messages: [],
+      sessionId: "",
+      modelId: 6,
+      webSearchEnabled: true,
+      pending: false,
+      draftInput: "",
+    },
   }),
   actions: {
     setSearchResults(results) {
@@ -57,6 +65,47 @@ export const useRightSiderStore = defineStore("rightSider", {
     // 新增：关闭右侧边栏
     close() {
       this.isOpen = false;
+    },
+    addAssistantMessage(message) {
+      if (!message || typeof message !== "object") return;
+      this.assistant.messages.push({
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        role: message.role || "assistant",
+        content: String(message.content || ""),
+        html: String(message.html || ""),
+        createdAt: Date.now(),
+        meta: message.meta || null,
+      });
+    },
+    clearAssistantMessages() {
+      this.assistant.messages = [];
+      this.assistant.sessionId = "";
+    },
+    setAssistantSessionId(sessionId) {
+      this.assistant.sessionId = String(sessionId || "");
+    },
+    setAssistantModelId(modelId) {
+      const n = Number(modelId);
+      if (!Number.isFinite(n)) return;
+      this.assistant.modelId = n;
+    },
+    setAssistantWebSearchEnabled(enabled) {
+      this.assistant.webSearchEnabled = !!enabled;
+    },
+    setAssistantPending(pending) {
+      this.assistant.pending = !!pending;
+    },
+    appendAssistantDraft(text) {
+      const value = String(text || "").trim();
+      if (!value) return;
+      this.assistant.draftInput = this.assistant.draftInput
+        ? `${this.assistant.draftInput}\n${value}`
+        : value;
+    },
+    consumeAssistantDraft() {
+      const value = String(this.assistant.draftInput || "");
+      this.assistant.draftInput = "";
+      return value;
     },
   },
 });
