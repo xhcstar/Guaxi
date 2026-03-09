@@ -126,7 +126,7 @@ export const useChatStore = defineStore("chatStore", {
 
       {
         id: 5,
-        name: "Local-Qwen",
+        name: "硅基流动Deepseek-Qwen",
         ModelAvatar: localQwenImg,
         MeAvatar: meImg,
         MessagesList: [
@@ -135,9 +135,9 @@ export const useChatStore = defineStore("chatStore", {
             topic: [
               {
                 msgid: 0,
-                sender: "Local-Qwen",
+                sender: "硅基流动Deepseek-Qwen",
                 chatSessionId: "",
-                content: "您好, 我是通义千问, 有什么可以帮忙的吗?",
+                content: "您好, 我是硅基流动 Deepseek-Qwen, 有什么可以帮忙的吗?",
               },
             ],
           },
@@ -222,7 +222,7 @@ export const useChatStore = defineStore("chatStore", {
       ],
 
       localModel: [
-        { name: "Local-Qwen", selectedModel: "5" },
+        { name: "硅基流动Deepseek-Qwen", selectedModel: "5" },
         { name: "Local-DeepSeek", selectedModel: "6" },
       ],
     },

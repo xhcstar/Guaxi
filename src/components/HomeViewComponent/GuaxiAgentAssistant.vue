@@ -236,6 +236,7 @@ import filePenLineIcon from '@iconify-icons/lucide/file-edit'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { useChatStore } from '../../stores/chatStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { createLogger } from '../../utils/logger'
@@ -243,6 +244,7 @@ import { createLogger } from '../../utils/logger'
 const logger = createLogger('GuaxiAgentAssistant')
 const message = useMessage()
 const rightSiderStore = useRightSiderStore()
+const chatStore = useChatStore()
 const editorStore = useEditorStore()
 const fileTreeStore = useFileTreeStore()
 const STREAM_EVENT = 'modle-streaming-respond-output'
@@ -265,22 +267,23 @@ const currentStreamingMessageId = ref('')
 const currentRequestModelId = ref(0)
 const currentRequestSessionId = ref('')
 
-const modelOptions = [
-  { label: '本地 DeepSeek（推荐）', value: 6 },
-  { label: 'DeepSeek（在线）', value: 1 },
-  { label: 'Qwen（在线）', value: 2 },
-  { label: 'Kimi（在线）', value: 3 },
-  { label: '豆包（在线）', value: 4 },
-  { label: '腾讯元宝（网页免费）', value: 7 },
-  { label: 'ChatGPT（网页免费）', value: 8 },
-]
-
 const messages = computed(() => rightSiderStore.assistant.messages)
 const pending = computed(() => rightSiderStore.assistant.pending)
 const modelId = computed(() => rightSiderStore.assistant.modelId)
 const webSearchEnabled = computed(() => rightSiderStore.assistant.webSearchEnabled)
 const canSend = computed(() => !pending.value && question.value.trim().length > 0)
 const canClickSend = computed(() => pending.value || question.value.trim().length > 0)
+const modelOptions = computed(() => {
+  const remote = Array.isArray(chatStore.LLMlist?.remoteModel) ? chatStore.LLMlist.remoteModel : []
+  const local = Array.isArray(chatStore.LLMlist?.localModel) ? chatStore.LLMlist.localModel : []
+  return [...remote, ...local]
+    .map((item) => {
+      const value = Number(item?.selectedModel)
+      const label = String(item?.name || '')
+      return { value, label }
+    })
+    .filter((item) => Number.isFinite(item.value) && item.value !== 7 && item.value !== 8)
+})
 
 const enhanceRenderedMessages = () => {
   nextTick(() => {
@@ -336,6 +339,14 @@ watch(
     applyDraftFromStore()
   }
 )
+
+watch(modelOptions, (list) => {
+  const current = Number(modelId.value)
+  const exists = Array.isArray(list) && list.some((x) => Number(x?.value) === current)
+  if (!exists) {
+    rightSiderStore.setAssistantModelId(6)
+  }
+}, { immediate: true })
 
 onMounted(() => {
   applyDraftFromStore()

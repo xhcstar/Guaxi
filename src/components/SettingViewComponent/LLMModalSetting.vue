@@ -32,6 +32,11 @@
               placeholder="请输入 豆包 Key" />
           </n-form-item>
 
+          <n-form-item label="硅基流动 API Key">
+            <n-input v-model:value="form.siliconflow_api_key" :disabled="loading" type="password" show-password-on="click"
+              placeholder="请输入 硅基流动 Key" />
+          </n-form-item>
+
           <n-form-item label="操作">
             <n-space>
               <n-button :disabled="loading" @click="loadConfig">刷新</n-button>
@@ -233,6 +238,7 @@ const statusItems = computed(() => {
     keyItem('qwen', 'Qwen', form.qwen_api_key),
     keyItem('kimi', 'Kimi', form.kimi_api_key),
     keyItem('doubao', '豆包', form.doubao_api_key),
+    keyItem('siliconflow', '硅基流动', form.siliconflow_api_key),
     {
       id: 'markdown_models',
       name: 'Markdown模型',
@@ -262,6 +268,7 @@ const form = reactive({
   qwen_api_key: '',
   kimi_api_key: '',
   doubao_api_key: '',
+  siliconflow_api_key: '',
 })
 
 const loadConfig = async () => {
@@ -273,6 +280,7 @@ const loadConfig = async () => {
     form.qwen_api_key = typeof cfg?.qwen_api_key === 'string' ? cfg.qwen_api_key : ''
     form.kimi_api_key = typeof cfg?.kimi_api_key === 'string' ? cfg.kimi_api_key : ''
     form.doubao_api_key = typeof cfg?.doubao_api_key === 'string' ? cfg.doubao_api_key : ''
+    form.siliconflow_api_key = typeof cfg?.siliconflow_api_key === 'string' ? cfg.siliconflow_api_key : ''
 
     const root = await invoke('get_chat_record_root')
     chatRecordRoot.value = typeof root === 'string' ? root : ''
@@ -307,12 +315,13 @@ const saveConfig = async () => {
   loading.value = true
   try {
     await invoke('set_llm_config', {
-      llm_config: {
+      llmConfig: {
         chatgpt_api_key: form.chatgpt_api_key,
         deepseek_api_key: form.deepseek_api_key,
         qwen_api_key: form.qwen_api_key,
         kimi_api_key: form.kimi_api_key,
         doubao_api_key: form.doubao_api_key,
+        siliconflow_api_key: form.siliconflow_api_key,
       },
     })
     message.success('已保存大模型秘钥')

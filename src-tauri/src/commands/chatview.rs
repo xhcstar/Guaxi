@@ -27,6 +27,8 @@ use once_cell::sync::Lazy;
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
 const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
 const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/chat/completions";
+const SILICONFLOW_CHAT_COMPLETIONS_URL: &str = "https://api.siliconflow.cn/v1/chat/completions";
+const SILICONFLOW_DEEPSEEK_QWEN_MODEL: &str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -137,6 +139,64 @@ static STREAM_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(
 
 fn reset_stream_cancel_flag() {
     STREAM_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+}
+
+pub async fn get_answer_from_siliconflow(
+    question: &str,
+    sessionid: &str,
+) -> Result<ChatResponse, String> {
+    info!(
+        "get_answer_from_siliconflow: Received request: {} {}",
+        question, sessionid
+    );
+
+    let api_key = settingview::get_llm_config().siliconflow_api_key;
+    if api_key.trim().is_empty() {
+        return Err("硅基流动 API Key 未配置".to_string());
+    }
+
+    let session_id = if sessionid.is_empty() {
+        generate_session_id()
+    } else {
+        sessionid.to_string()
+    };
+
+    let answer_content = openai_compat_chat(
+        SILICONFLOW_CHAT_COMPLETIONS_URL,
+        &api_key,
+        SILICONFLOW_DEEPSEEK_QWEN_MODEL,
+        question,
+    )
+    .await?;
+
+    Ok(ChatResponse {
+        answer: answer_content,
+        sessionid: session_id,
+    })
+}
+
+pub async fn get_answer_from_siliconflow_stream(
+    app: AppHandle,
+    question: &str,
+    sessionid: &str,
+) -> Result<(), String> {
+    let api_key = settingview::get_llm_config().siliconflow_api_key;
+    if api_key.trim().is_empty() {
+        return Err("硅基流动 API Key 未配置".to_string());
+    }
+
+    info!(
+        "get_answer_from_siliconflow_stream: Received request: {:?} {}",
+        question, sessionid
+    );
+
+    let request_body = json!({
+        "model": SILICONFLOW_DEEPSEEK_QWEN_MODEL,
+        "messages": [{"role": "user", "content": question}],
+        "stream": true,
+    });
+
+    openai_compat_sse_stream(&app, SILICONFLOW_CHAT_COMPLETIONS_URL, &api_key, request_body).await
 }
 
 fn request_stream_cancel() {
@@ -1804,6 +1864,7 @@ pub async fn get_answer_from_qwen_stream(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn get_answer_from_local_qwen_stream(
     app: AppHandle,
     question: &str,
@@ -2121,6 +2182,7 @@ pub async fn get_answer_from_local_deepseek_stream(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn get_answer_from_local_qwen(
     question: &str,
     sessionid: &str,
@@ -2703,14 +2765,14 @@ pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Res
             }
         }
         ChatModel::LOCALQWEN => {
-            match get_answer_from_local_qwen_stream(app, &request.question, &request.sessionid)
+            match get_answer_from_siliconflow_stream(app, &request.question, &request.sessionid)
                 .await
             {
                 Ok(()) => {
                     info!("get_chat_answer_stream LOCALQWEN: respond stream successfully");
                     Ok(())
                 }
-                Err(err) => Err(format!("Error calling Local Qwen API: {}", err)),
+                Err(err) => Err(format!("Error calling SiliconFlow API: {}", err)),
             }
         }
         ChatModel::LOCALDEEPSEEK => {
@@ -2843,7 +2905,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
             }
         }
         ChatModel::LOCALQWEN => {
-            match get_answer_from_local_qwen(&request.question, &request.sessionid).await {
+            match get_answer_from_siliconflow(&request.question, &request.sessionid).await {
                 Ok(answer) => {
                     info!(
                         "get_chat_answer LOCALQWEN: respond ChatResponse  {} {}",
@@ -2851,7 +2913,7 @@ pub async fn get_chat_answer(request: ChatRequest) -> Result<ChatResponse, Strin
                     );
                     Ok(answer)
                 }
-                Err(err) => Err(format!("Error calling Local Qwen API: {}", err)),
+                Err(err) => Err(format!("Error calling SiliconFlow API: {}", err)),
             }
         }
         ChatModel::LOCALDEEPSEEK => {

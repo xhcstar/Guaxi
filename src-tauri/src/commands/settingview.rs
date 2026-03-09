@@ -97,6 +97,8 @@ pub struct LlmConfig {
     pub kimi_api_key: String,
     #[serde(default)]
     pub doubao_api_key: String,
+    #[serde(default)]
+    pub siliconflow_api_key: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -682,6 +684,7 @@ pub fn load_config() -> AppConfig {
         "/llm_config/qwen_api_key",
         "/llm_config/kimi_api_key",
         "/llm_config/doubao_api_key",
+        "/llm_config/siliconflow_api_key",
         "/knowledge_bases_remote_token",
         "/lsp_github_token",
     ] {
@@ -765,6 +768,7 @@ pub fn load_config() -> AppConfig {
     try_decrypt("/llm_config/qwen_api_key");
     try_decrypt("/llm_config/kimi_api_key");
     try_decrypt("/llm_config/doubao_api_key");
+    try_decrypt("/llm_config/siliconflow_api_key");
     try_decrypt("/knowledge_bases_remote_token");
     try_decrypt("/lsp_github_token");
 
@@ -900,6 +904,7 @@ pub fn save_config(config: &AppConfig) {
     encrypt_field(&mut val, "/llm_config/qwen_api_key");
     encrypt_field(&mut val, "/llm_config/kimi_api_key");
     encrypt_field(&mut val, "/llm_config/doubao_api_key");
+    encrypt_field(&mut val, "/llm_config/siliconflow_api_key");
     encrypt_field(&mut val, "/knowledge_bases_remote_token");
     encrypt_field(&mut val, "/lsp_github_token");
 
