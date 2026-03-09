@@ -188,13 +188,15 @@
               <path d="M17.5 6.5v9a5.5 5.5 0 0 1-11 0v-10a4 4 0 0 1 8 0v9a2.5 2.5 0 1 1-5 0V8h1.8v6.5a.7.7 0 1 0 1.4 0v-9a2.2 2.2 0 0 0-4.4 0v10a3.7 3.7 0 0 0 7.4 0v-9h1.8z" fill="currentColor" />
             </svg>
           </button>
-          <n-select
-            class="composer-model-select"
-            size="small"
-            :value="modelId"
-            :options="modelOptions"
-            @update:value="handleModelChange"
-          />
+          <div @mousedown.stop @click.stop>
+            <n-select
+              class="composer-model-select"
+              size="small"
+              :value="modelId"
+              :options="modelOptions"
+              @update:value="handleModelChange"
+            />
+          </div>
           <div class="composer-spacer"></div>
           <button
             class="send-btn"
