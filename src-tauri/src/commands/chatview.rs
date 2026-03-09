@@ -33,7 +33,9 @@ const SILICONFLOW_CHAT_COMPLETIONS_URL: &str = "https://api.siliconflow.cn/v1/ch
 const SILICONFLOW_DEEPSEEK_QWEN_MODEL: &str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
 const SILICONFLOW_AUDIO_SPEECH_URL: &str = "https://api.siliconflow.cn/v1/audio/speech";
 const SILICONFLOW_AUDIO_TRANSCRIPTIONS_URL: &str = "https://api.siliconflow.cn/v1/audio/transcriptions";
-const SILICONFLOW_AUDIO_DEFAULT_MODEL: &str = "FunAudioLLM/SenseVoiceSmall";
+const SILICONFLOW_AUDIO_TTS_DEFAULT_MODEL: &str = "FunAudioLLM/CosyVoice2-0.5B";
+const SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE: &str = "FunAudioLLM/CosyVoice2-0.5B:alex";
+const SILICONFLOW_AUDIO_STT_DEFAULT_MODEL: &str = "FunAudioLLM/SenseVoiceSmall";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -338,12 +340,30 @@ fn resolve_audio_provider(provider: &str) -> Result<String, String> {
     Err(format!("不支持的音频 provider: {}", provider))
 }
 
-fn resolve_audio_model(model: &str) -> String {
+fn resolve_audio_tts_model(model: &str) -> String {
     let m = model.trim();
     if m.is_empty() {
-        SILICONFLOW_AUDIO_DEFAULT_MODEL.to_string()
+        SILICONFLOW_AUDIO_TTS_DEFAULT_MODEL.to_string()
     } else {
         m.to_string()
+    }
+}
+
+fn resolve_audio_stt_model(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        SILICONFLOW_AUDIO_STT_DEFAULT_MODEL.to_string()
+    } else {
+        m.to_string()
+    }
+}
+
+fn resolve_audio_tts_voice(voice: &str) -> String {
+    let v = voice.trim();
+    if v.is_empty() {
+        SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE.to_string()
+    } else {
+        v.to_string()
     }
 }
 
@@ -372,7 +392,8 @@ fn extract_trace_id(headers: &reqwest::header::HeaderMap) -> String {
 pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextToSpeechResponse, String> {
     let _provider = resolve_audio_provider(&request.common.provider)?;
     let api_key = resolve_audio_api_key(&request.common.api_key)?;
-    let model = resolve_audio_model(&request.common.model);
+    let model = resolve_audio_tts_model(&request.common.model);
+    let voice = resolve_audio_tts_voice(&request.voice);
     let endpoint = {
         let custom = request.common.endpoint.trim();
         if custom.is_empty() {
@@ -404,9 +425,7 @@ pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextTo
     if let Some(gain) = request.gain {
         body["gain"] = json!(gain);
     }
-    if !request.voice.trim().is_empty() {
-        body["voice"] = json!(request.voice.trim());
-    }
+    body["voice"] = json!(voice);
     if !request.response_format.trim().is_empty() {
         body["response_format"] = json!(request.response_format.trim());
     }
@@ -444,7 +463,7 @@ pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextTo
         audio_base64,
         content_type,
         trace_id,
-        model: resolve_audio_model(&request.common.model),
+        model,
         response_format: request.response_format.trim().to_string(),
     })
 }
@@ -453,7 +472,7 @@ pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextTo
 pub async fn audio_speech_to_text(request: SpeechToTextRequest) -> Result<SpeechToTextResponse, String> {
     let _provider = resolve_audio_provider(&request.common.provider)?;
     let api_key = resolve_audio_api_key(&request.common.api_key)?;
-    let model = resolve_audio_model(&request.common.model);
+    let model = resolve_audio_stt_model(&request.common.model);
     let endpoint = {
         let custom = request.common.endpoint.trim();
         if custom.is_empty() {

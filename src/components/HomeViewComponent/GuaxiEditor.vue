@@ -404,6 +404,14 @@
             </template>
             用AI翻译
           </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
+                <Icon :icon="volume2Icon" width="16" height="16" />
+              </n-button>
+            </template>
+            朗读
+          </n-tooltip>
         </div>
 
         <div class="breadcrumb-bar">
@@ -519,6 +527,7 @@ import bookOpenIcon from '@iconify-icons/lucide/book-open'
 import languagesIcon from '@iconify-icons/lucide/languages'
 import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
+import volume2Icon from '@iconify-icons/lucide/volume-2'
 import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
 import hashIcon from '@iconify-icons/lucide/hash'
@@ -659,6 +668,10 @@ const selectionTranslateRaw = ref('');
 const selectionTranslateResult = ref('');
 const selectionTranslateError = ref('');
 const selectionTranslateItems = ref([]);
+const selectionReadAloudBusy = ref(false)
+
+let selectionAudioElement = null
+let selectionAudioObjectUrl = ''
 
 const selectionTranslateMultiAvailable = ref(true)
 let selectionTranslateMultiNotFoundWarned = false
@@ -672,6 +685,88 @@ const scheduleSelectionTranslate = debounce(() => {
 
   translateSelectionText(raw)
 }, 250)
+
+const normalizeSelectionTextForLanguageTasks = (raw) => {
+  const text = String(raw || '').replace(/\r\n?/g, '\n')
+  if (!text.trim()) return ''
+  return text
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/([^\n。！？.!?;；:：])\n(?!\n)/g, '$1 ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+const stopSelectionAudioPlayback = () => {
+  if (selectionAudioElement) {
+    try {
+      selectionAudioElement.pause()
+      selectionAudioElement.src = ''
+    } catch { }
+    selectionAudioElement = null
+  }
+  if (selectionAudioObjectUrl) {
+    try {
+      URL.revokeObjectURL(selectionAudioObjectUrl)
+    } catch { }
+    selectionAudioObjectUrl = ''
+  }
+}
+
+const base64ToUint8Array = (b64) => {
+  const binary = atob(String(b64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
+const readSelectionAloud = async () => {
+  if (selectionReadAloudBusy.value) return
+  const text = normalizeSelectionTextForLanguageTasks(getSelectedTextForTranslate())
+  if (!text) {
+    message.warning('请先框选要朗读的文本')
+    return
+  }
+
+  selectionReadAloudBusy.value = true
+  try {
+    const response = await invoke('audio_text_to_speech', {
+      request: {
+        common: {
+          provider: 'siliconflow',
+          model: 'FunAudioLLM/CosyVoice2-0.5B',
+        },
+        input: text,
+        voice: 'FunAudioLLM/CosyVoice2-0.5B:alex',
+        response_format: 'mp3',
+        stream: false,
+      },
+    })
+    const audioBase64 = String(response?.audio_base64 || '')
+    if (!audioBase64) {
+      throw new Error('语音数据为空')
+    }
+    const contentType = String(response?.content_type || 'audio/mpeg')
+    const bytes = base64ToUint8Array(audioBase64)
+    const blob = new Blob([bytes], { type: contentType })
+    stopSelectionAudioPlayback()
+    selectionAudioObjectUrl = URL.createObjectURL(blob)
+    const audio = new Audio(selectionAudioObjectUrl)
+    selectionAudioElement = audio
+    audio.onended = () => {
+      stopSelectionAudioPlayback()
+    }
+    await audio.play()
+  } catch (err) {
+    logger.error('朗读失败:', err)
+    message.error(`朗读失败: ${String(err?.message || err || '')}`)
+  } finally {
+    selectionReadAloudBusy.value = false
+  }
+}
 
 watch([selectionTranslateFrom, selectionTranslateTo], ([from, to], [prevFrom, prevTo]) => {
   if (!selectionTranslatePanelVisible.value) return
@@ -6202,7 +6297,7 @@ const closeSelectionTranslatePanel = () => {
 };
 
 const openSelectionTranslatePanel = async () => {
-  const text = getSelectedTextForTranslate().trim();
+  const text = normalizeSelectionTextForLanguageTasks(getSelectedTextForTranslate());
   if (!text) {
     message.warning('请先框选要翻译的文本');
     return;
@@ -6259,7 +6354,7 @@ const getTranslateLangLabel = (value) => {
 }
 
 const openAssistantTranslateDialog = () => {
-  const text = getSelectedTextForTranslate().trim()
+  const text = normalizeSelectionTextForLanguageTasks(getSelectedTextForTranslate())
   if (!text) {
     message.warning('请先框选要翻译的文本')
     return
@@ -6269,7 +6364,7 @@ const openAssistantTranslateDialog = () => {
 }
 
 const sendSelectionAsAiTranslate = () => {
-  const text = String(assistantTranslateSourceText.value || '').trim()
+  const text = normalizeSelectionTextForLanguageTasks(assistantTranslateSourceText.value)
   if (!text) {
     assistantTranslateDialogVisible.value = false
     message.warning('请先框选要翻译的文本')
@@ -6289,7 +6384,7 @@ const sendSelectionAsAiTranslate = () => {
 }
 
 const translateSelectionText = async (overrideText) => {
-  const text = String((overrideText ?? getSelectedTextForTranslate()) || '').trim();
+  const text = normalizeSelectionTextForLanguageTasks(overrideText ?? getSelectedTextForTranslate());
   if (!text) {
     message.warning('请先框选要翻译的文本');
     return;
@@ -9588,6 +9683,7 @@ onActivated(() => {
 })
 
 onUnmounted(() => {
+  stopSelectionAudioPlayback()
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   destroyRealtimeVditor();
