@@ -819,6 +819,7 @@ const regenerateFrom = async (assistantMessage) => {
 
   const isWeb = isWebModel.value;
   const sessionId = ensureTopicSessionId(topic);
+  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
 
   startGenerating();
 
@@ -852,13 +853,13 @@ const regenerateFrom = async (assistantMessage) => {
     } catch (e) {
       logger.error('重新生成（网页模式）失败:', e);
       stopGenerating();
+      chatStore.clearStreamTarget();
     }
 
     scheduleAutosave();
     return;
   }
 
-  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
   chatStore.accumulatedMessage = '';
 
   try {
@@ -866,6 +867,8 @@ const regenerateFrom = async (assistantMessage) => {
   } catch (e) {
     logger.error('重新生成失败:', e);
     stopGenerating();
+  } finally {
+    chatStore.clearStreamTarget();
   }
 
   scheduleAutosave();
@@ -913,6 +916,7 @@ const sendMessage = async (options = {}) => {
   const topic = Array.isArray(activeChatMessages.value?.topic) ? activeChatMessages.value.topic : [];
 
   const sessionId = ensureTopicSessionId(topic);
+  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
 
   let provider = '';
   if (isWeb) {
@@ -975,6 +979,7 @@ const sendMessage = async (options = {}) => {
     } catch (e) {
       logger.error('发送到网页模型失败:', e);
       stopGenerating();
+      chatStore.clearStreamTarget();
       return;
     }
 
@@ -984,7 +989,6 @@ const sendMessage = async (options = {}) => {
     return;
   }
 
-  chatStore.setStreamTarget(chatStore.selectedModel, chatStore.selectedTopic);
   chatStore.accumulatedMessage = '';
 
   try {
@@ -993,6 +997,8 @@ const sendMessage = async (options = {}) => {
     logger.error('Error during askDeepSeek:', error);
     stopGenerating();
     return;
+  } finally {
+    chatStore.clearStreamTarget();
   }
 
   pendingAttachments.value = [];
@@ -1008,6 +1014,7 @@ const stopQuestion = async () => {
     logger.warn('停止生成失败:', error)
   }
   stopGenerating()
+  chatStore.clearStreamTarget()
 }
 
 const handleSendButtonClick = () => {
@@ -1086,6 +1093,7 @@ onUnmounted(() => {
     autosaveTimer.value = null;
   }
   stopGenerating();
+  chatStore.clearStreamTarget();
 });
 
 const setMessageRef = (el, index) => {

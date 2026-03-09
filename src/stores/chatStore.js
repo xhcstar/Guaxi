@@ -260,6 +260,14 @@ export const useChatStore = defineStore("chatStore", {
       this.lastMessageTime = 0;
     },
 
+    clearStreamTarget() {
+      this.streamTargetModelId = null;
+      this.streamTargetTopicId = null;
+      this.lastMessage = null;
+      this.lastMessageTime = 0;
+      this.accumulatedMessage = "";
+    },
+
     setChatMessageSearchQuery(query) {
       this.chatMessageSearchQuery = (query ?? "").toString();
     },
@@ -304,8 +312,23 @@ export const useChatStore = defineStore("chatStore", {
     },
 
     appendMessagesToTopic({ modelId, topicId, sessionId, title, messages }) {
-      const targetModelId = typeof modelId === 'number' ? modelId : this.selectedModel;
-      const targetTopicId = typeof topicId === 'number' ? topicId : this.selectedTopic;
+      if (
+        !Number.isFinite(this.streamTargetModelId) ||
+        !Number.isFinite(this.streamTargetTopicId)
+      ) {
+        return;
+      }
+      const targetModelId = Number(modelId);
+      const targetTopicId = Number(topicId);
+      if (!Number.isFinite(targetModelId) || !Number.isFinite(targetTopicId)) {
+        return;
+      }
+      if (
+        targetModelId !== Number(this.streamTargetModelId) ||
+        targetTopicId !== Number(this.streamTargetTopicId)
+      ) {
+        return;
+      }
       const safeMessages = Array.isArray(messages) ? messages : [];
       const safeTitle = (title ?? '').toString().trim();
 
@@ -392,6 +415,12 @@ export const useChatStore = defineStore("chatStore", {
       });
     },
     collectChatSessionStream(message) {
+      if (
+        !Number.isFinite(this.streamTargetModelId) ||
+        !Number.isFinite(this.streamTargetTopicId)
+      ) {
+        return;
+      }
       const now = Date.now();
 
       if (message === this.lastMessage && now - this.lastMessageTime < 100) {
@@ -409,8 +438,14 @@ export const useChatStore = defineStore("chatStore", {
     },
 
     updateMessageContent() {
-      const modelId = this.streamTargetModelId ?? this.selectedModel;
-      const topicId = this.streamTargetTopicId ?? this.selectedTopic;
+      if (
+        !Number.isFinite(this.streamTargetModelId) ||
+        !Number.isFinite(this.streamTargetTopicId)
+      ) {
+        return;
+      }
+      const modelId = this.streamTargetModelId;
+      const topicId = this.streamTargetTopicId;
 
       this.SelectModelchatSessions.find((session) => {
         if (session.id === modelId) {
