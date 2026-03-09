@@ -71,6 +71,9 @@
         <button class="toggle-notes" @click="toggleNotesPanel" :title="showNotes ? '隐藏笔记' : '显示笔记'">
           <n-icon :component="DocumentTextOutline" />
         </button>
+        <button class="toggle-assistant" @click="toggleAssistantPanel" :title="showAssistant ? '隐藏助手' : '显示助手'">
+          <n-icon :component="ChatbubbleEllipsesOutline" />
+        </button>
 
         <button class="toggle-translate" @click="toggleTranslate" :title="showTranslation ? '隐藏译文' : '显示译文'"
           :class="{ 'translating': isTranslating }">
@@ -230,6 +233,14 @@
               @click="querySelection">
               <n-icon :component="SearchOutline" />
             </button>
+            <button class="selection-tool-btn" type="button" title="问AI" :disabled="selectionBusy || !selectionText"
+              @click="askSelectionWithAssistant">
+              <n-icon :component="ChatbubbleEllipsesOutline" />
+            </button>
+            <button class="selection-tool-btn" type="button" title="用AI翻译" :disabled="selectionBusy || !selectionText"
+              @click="openAssistantTranslateDialog">
+              <n-icon :component="ColorWandOutline" />
+            </button>
             <button class="selection-tool-btn" type="button" title="插入笔记" :disabled="selectionBusy || !selectionInsertText"
               @click="insertSelectionResult">
               <n-icon :component="AddOutline" />
@@ -249,6 +260,30 @@
               @update:pos="handleSelectionTranslatePanelUpdatePos" @close="closeSelectionTranslatePanel" />
           </div>
         </div>
+
+        <n-modal v-model:show="assistantTranslateDialogVisible" preset="card" title="用AI翻译" style="width: 420px">
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <n-text depth="3">请选择目标语言后发送到智能助手翻译。</n-text>
+            <n-select v-model:value="assistantTranslateTargetLang" size="small" :options="assistantTranslateLangOptions"
+              placeholder="请选择目标语言" />
+            <div style="display: flex; justify-content: flex-end; gap: 8px;">
+              <n-button size="small" @click="assistantTranslateDialogVisible = false">取消</n-button>
+              <n-button size="small" type="primary" @click="sendSelectionAsAiTranslate">发送并翻译</n-button>
+            </div>
+          </div>
+        </n-modal>
+      </div>
+    </div>
+
+    <div class="assistant-panel" :class="{ 'assistant-panel-visible': showAssistant }">
+      <div class="assistant-header">
+        <h3>智能助手</h3>
+        <button @click="toggleAssistantPanel" class="close-btn">
+          <n-icon :component="CloseOutline" size="18" />
+        </button>
+      </div>
+      <div class="assistant-content">
+        <GuaxiAgentAssistant />
       </div>
     </div>
 
@@ -343,11 +378,13 @@ import { platform } from '@tauri-apps/plugin-os';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
-import { NCard, NButton, NIcon, NText, useMessage, NDropdown } from 'naive-ui'
+import { NCard, NButton, NIcon, NText, NModal, NSelect, useMessage, NDropdown } from 'naive-ui'
 import usePdfRenderer from './usePdfRenderer'
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
 import GuaxiOutline from '../HomeViewComponent/GuaxiOutline.vue'
+import GuaxiAgentAssistant from '../HomeViewComponent/GuaxiAgentAssistant.vue'
 import GuaxiSelectionTranslatePanel from '../HomeViewComponent/GuaxiSelectionTranslatePanel.vue'
 import {
   ArrowBackOutline,
@@ -369,7 +406,8 @@ import {
   LibraryOutline,
   SearchOutline,
   ColorWandOutline,
-  ChatboxEllipsesOutline
+  ChatboxEllipsesOutline,
+  ChatbubbleEllipsesOutline
 } from '@vicons/ionicons5'
 
 const logger = createLogger('GuaxiConvertPDFReader')
@@ -403,6 +441,7 @@ const message = useMessage()
 const store = repoStore()
 const { librariesRoot } = storeToRefs(store)
 const outlineStore = useOutlineStore()
+const rightSiderStore = useRightSiderStore()
 const md = new MarkdownIt()
 
 const resolveMarkdownTheme = () => {
@@ -584,6 +623,7 @@ const selectionToolbarLeft = ref(0)
 const selectionText = ref('')
 const selectionBusy = ref(false)
 const selectionInsertText = ref('')
+const showAssistant = ref(false)
 
 const selectionTranslatePanelVisible = ref(false)
 const selectionTranslatePinned = ref(false)
@@ -608,6 +648,10 @@ const selectionTranslateLangOptions = [
   { label: '越南语', value: 'vi' },
   { label: '泰语', value: 'th' }
 ]
+const assistantTranslateDialogVisible = ref(false)
+const assistantTranslateTargetLang = ref('en')
+const assistantTranslateSourceText = ref('')
+const assistantTranslateLangOptions = selectionTranslateLangOptions.filter((x) => x.value !== 'auto')
 
 const selectionTranslateBusy = ref(false)
 const selectionTranslateRaw = ref('')
@@ -1797,6 +1841,18 @@ const closeSelectionToolbar = () => {
   selectionInsertText.value = ''
 }
 
+const normalizeSelectionTextForLanguageTasks = (raw) => {
+  const text = String(raw || '').replace(/\r\n?/g, '\n')
+  if (!text.trim()) return ''
+  return text
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/([^\n。！？.!?;；:：])\n(?!\n)/g, '$1 ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 const insertIntoActiveNoteEditor = (text) => {
   const idx = activeCardIndex.value
   if (idx < 0) return false
@@ -1973,6 +2029,63 @@ const querySelection = () => {
 
   const url = `https://www.bing.com/search?q=${encodeURIComponent(text)}`
   selectionInsertText.value = `[查询：${text}](${url})`
+}
+
+const getTranslateLangLabel = (value) => {
+  const item = selectionTranslateLangOptions.find((x) => x.value === value)
+  return item ? String(item.label || '') : '目标语言'
+}
+
+const sendSelectionToAssistant = (overrideText, options = {}) => {
+  const text = normalizeSelectionTextForLanguageTasks(overrideText ?? selectionText.value)
+  if (!text) {
+    message.warning('请先框选要发送到助手的文本')
+    return false
+  }
+  const autoSend = options.autoSend !== false
+  const disableWebSearch = !!options.disableWebSearch
+  rightSiderStore.setPanel('assistant')
+  rightSiderStore.open()
+  rightSiderStore.appendAssistantDraft(text, { autoSend, disableWebSearch })
+  showAssistant.value = true
+  selectionToolbarVisible.value = false
+  message.success(options.successMessage || (autoSend ? '已发送到助手并开始提问' : '已插入到助手输入框'))
+  return true
+}
+
+const askSelectionWithAssistant = () => {
+  sendSelectionToAssistant(undefined, { autoSend: true, successMessage: '已发送到助手并开始提问' })
+}
+
+const openAssistantTranslateDialog = () => {
+  const text = normalizeSelectionTextForLanguageTasks(selectionText.value)
+  if (!text) {
+    message.warning('请先框选要翻译的文本')
+    return
+  }
+  assistantTranslateSourceText.value = text
+  assistantTranslateDialogVisible.value = true
+  selectionToolbarVisible.value = false
+}
+
+const sendSelectionAsAiTranslate = () => {
+  const text = normalizeSelectionTextForLanguageTasks(assistantTranslateSourceText.value)
+  if (!text) {
+    assistantTranslateDialogVisible.value = false
+    message.warning('请先框选要翻译的文本')
+    return
+  }
+  const lang = String(assistantTranslateTargetLang.value || 'en')
+  const label = getTranslateLangLabel(lang)
+  const prompt = `请将以下内容翻译成${label}，保持原意并保留术语、代码与格式，只输出译文：\n\n${text}`
+  const ok = sendSelectionToAssistant(prompt, {
+    autoSend: true,
+    disableWebSearch: true,
+    successMessage: `已发送到助手并翻译为${label}`,
+  })
+  if (ok) {
+    assistantTranslateDialogVisible.value = false
+  }
 }
 
 const insertSelectionResult = async () => {
@@ -3885,6 +3998,15 @@ const toggleNotesPanel = () => {
   }
 };
 
+const toggleAssistantPanel = () => {
+  showAssistant.value = !showAssistant.value
+  if (showAssistant.value) {
+    showNotes.value = false
+    rightSiderStore.setPanel('assistant')
+    rightSiderStore.open()
+  }
+}
+
 // 25. 缩放功能
 const zoomIn = async () => {
   zoomLevel.value = Math.min(zoomLevel.value + 0.1, 2)
@@ -4776,6 +4898,18 @@ button:disabled {
   box-shadow: 0 2px 8px rgba(77, 171, 247, 0.3);
 }
 
+.toggle-assistant {
+  background-color: #7048e8;
+  color: white;
+  border: 1px solid #5f3dc4;
+  transition: all 0.2s;
+}
+
+.toggle-assistant:hover {
+  background-color: #5f3dc4;
+  box-shadow: 0 2px 8px rgba(112, 72, 232, 0.3);
+}
+
 /* 43. 导出按钮样式 */
 .export-notes {
   background-color: #20c997;
@@ -5483,6 +5617,48 @@ button:disabled {
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
+}
+
+.assistant-panel {
+  position: fixed;
+  top: 0;
+  right: -600px;
+  width: 600px;
+  height: 100%;
+  background-color: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+  transition: right 0.3s ease;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--guaxi-border);
+}
+
+.assistant-panel-visible {
+  right: 0;
+}
+
+.assistant-header {
+  padding: 12px 16px;
+  background-color: #7048e8;
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.assistant-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.assistant-content {
+  flex: 1;
+  min-height: 0;
+  background-color: var(--guaxi-content-bg);
 }
 
 /* 60. 笔记内容样式 */

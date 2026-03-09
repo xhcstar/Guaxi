@@ -23,6 +23,10 @@
           <i :class="showNotes ? 'icon-notes-active' : 'icon-notes'"></i>
           {{ showNotes ? '隐藏笔记' : '显示笔记' }}
         </button>
+        <button class="toggle-assistant" @click="toggleAssistantPanel">
+          <i class="icon-notes"></i>
+          {{ showAssistant ? '隐藏助手' : '显示助手' }}
+        </button>
         <button class="export-notes" @click="exportNotes">
           <i class="icon-download"></i> 导出笔记
         </button>
@@ -116,6 +120,17 @@
         <textarea v-model="notesContent" placeholder="点击PDF内容添加到笔记..." class="notes-textarea"></textarea>
       </div>
     </div>
+    <div class="assistant-panel" :class="{ 'assistant-panel-visible': showAssistant }">
+      <div class="notes-header">
+        <h3>智能助手</h3>
+        <button @click="toggleAssistantPanel" class="close-btn">
+          <i class="icon-close">×</i>
+        </button>
+      </div>
+      <div class="assistant-content">
+        <GuaxiAgentAssistant />
+      </div>
+    </div>
 
     <!-- 添加笔记的提示气泡 -->
     <transition name="fade">
@@ -133,6 +148,7 @@
 import { createLogger } from '../../utils/logger'
 import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import GuaxiAgentAssistant from '../HomeViewComponent/GuaxiAgentAssistant.vue'
 
 const logger = createLogger('GuaxiPDFReader')
 const props = defineProps({
@@ -167,6 +183,7 @@ const thumbnail = ref('')
 const elements = ref([])
 // 笔记状态
 const showNotes = ref(false)
+const showAssistant = ref(false)
 const notesContent = ref('')
 // UI状态
 const showLargeThumbnail = ref(false)
@@ -320,6 +337,13 @@ const toggleNotesPanel = () => {
   showNotes.value = !showNotes.value
 }
 
+const toggleAssistantPanel = () => {
+  showAssistant.value = !showAssistant.value
+  if (showAssistant.value) {
+    showNotes.value = false
+  }
+}
+
 const handleThumbnailScroll = (e) => {
   // 实现缩略图滚动逻辑
 }
@@ -369,6 +393,20 @@ watch(() => props.filePath, (newPath) => {
 
 .toggle-notes:hover {
   background-color: #2980b9;
+}
+
+.toggle-assistant {
+  padding: 6px 12px;
+  background-color: #7048e8;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toggle-assistant:hover {
+  background-color: #5f3dc4;
 }
 
 .icon-notes::before {
@@ -722,6 +760,29 @@ button:disabled {
   display: flex;
   overflow: hidden;
   /* 防止内容溢出 */
+}
+
+.assistant-panel {
+  position: fixed;
+  right: -600px;
+  top: 0;
+  bottom: 0;
+  width: 600px;
+  background-color: white;
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+  transition: right 0.3s ease;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+}
+
+.assistant-panel-visible {
+  right: 0;
+}
+
+.assistant-content {
+  flex: 1;
+  min-height: 0;
 }
 
 .notes-textarea {
