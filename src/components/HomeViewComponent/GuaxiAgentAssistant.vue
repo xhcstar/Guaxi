@@ -137,6 +137,11 @@
               <Icon :icon="filePlusIcon" width="14" height="14" />
             </button>
           </div>
+          <div v-else-if="message.role === 'user'" class="assistant-message-actions">
+            <button type="button" class="assistant-action-btn" title="复制提问" @click="copyAssistantMessage(message)">
+              <Icon :icon="copyIcon" width="14" height="14" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -344,7 +349,7 @@ watch(modelOptions, (list) => {
   const current = Number(modelId.value)
   const exists = Array.isArray(list) && list.some((x) => Number(x?.value) === current)
   if (!exists) {
-    rightSiderStore.setAssistantModelId(6)
+    rightSiderStore.setAssistantModelId(5)
   }
 }, { immediate: true })
 
@@ -1225,7 +1230,8 @@ const sendQuestion = async () => {
   transition: all 0.16s ease;
 }
 
-.assistant-message-ai:hover .assistant-message-actions {
+.assistant-message-ai:hover .assistant-message-actions,
+.assistant-message-user:hover .assistant-message-actions {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);

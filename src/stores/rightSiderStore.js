@@ -28,7 +28,7 @@ export const useRightSiderStore = defineStore("rightSider", {
     assistant: {
       messages: [],
       sessionId: "",
-      modelId: 6,
+      modelId: 5,
       webSearchEnabled: true,
       pending: false,
       draftInput: "",

@@ -852,6 +852,7 @@ const regenerateFrom = async (assistantMessage) => {
       });
     } catch (e) {
       logger.error('重新生成（网页模式）失败:', e);
+    } finally {
       stopGenerating();
       chatStore.clearStreamTarget();
     }
@@ -866,8 +867,8 @@ const regenerateFrom = async (assistantMessage) => {
     await askDeepSeek(question, sessionId);
   } catch (e) {
     logger.error('重新生成失败:', e);
-    stopGenerating();
   } finally {
+    stopGenerating();
     chatStore.clearStreamTarget();
   }
 
@@ -978,9 +979,10 @@ const sendMessage = async (options = {}) => {
       });
     } catch (e) {
       logger.error('发送到网页模型失败:', e);
+      return;
+    } finally {
       stopGenerating();
       chatStore.clearStreamTarget();
-      return;
     }
 
     pendingAttachments.value = [];
@@ -995,9 +997,9 @@ const sendMessage = async (options = {}) => {
     await askDeepSeek(question, sessionId);
   } catch (error) {
     logger.error('Error during askDeepSeek:', error);
-    stopGenerating();
     return;
   } finally {
+    stopGenerating();
     chatStore.clearStreamTarget();
   }
 

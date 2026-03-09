@@ -205,8 +205,8 @@ export const useChatStore = defineStore("chatStore", {
       },
     ],
 
-    activeChatId: 0,
-    selectedModel: 0,
+    activeChatId: 5,
+    selectedModel: 5,
     selectedTopic: 0,
     sendChatSessionId: "",
 
