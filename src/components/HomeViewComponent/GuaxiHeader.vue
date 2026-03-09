@@ -42,9 +42,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="openAssistantPanel">
-            <svg viewBox="0 0 24 24" width="18" height="18">
-              <path fill="currentColor" d="M12 2a7 7 0 0 1 7 7v1.1a4.9 4.9 0 0 1 2.34 4.18A4.72 4.72 0 0 1 16.62 19H12.5L9 22v-3H7.38A4.72 4.72 0 0 1 2.66 14.3a4.9 4.9 0 0 1 2.34-4.2V9a7 7 0 0 1 7-7m0 2a5 5 0 0 0-5 5v2.39l-.63.32a2.9 2.9 0 0 0-1.71 2.59A2.73 2.73 0 0 0 7.38 17H11v.66l.83-.66h4.79a2.73 2.73 0 0 0 2.72-2.7a2.9 2.9 0 0 0-1.7-2.59l-.64-.32V9a5 5 0 0 0-5-5" />
-            </svg>
+            <Icon icon="mdi:robot-excited-outline" width="18" height="18" />
           </n-icon>
         </template>
         智能助手
