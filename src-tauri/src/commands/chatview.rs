@@ -1,7 +1,9 @@
 use crate::commands::settingview;
+use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use futures_util::StreamExt;
 use rand::Rng;
+use reqwest::multipart::{Form, Part};
 use reqwest::{Client, ClientBuilder};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,9 @@ const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
 const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/chat/completions";
 const SILICONFLOW_CHAT_COMPLETIONS_URL: &str = "https://api.siliconflow.cn/v1/chat/completions";
 const SILICONFLOW_DEEPSEEK_QWEN_MODEL: &str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
+const SILICONFLOW_AUDIO_SPEECH_URL: &str = "https://api.siliconflow.cn/v1/audio/speech";
+const SILICONFLOW_AUDIO_TRANSCRIPTIONS_URL: &str = "https://api.siliconflow.cn/v1/audio/transcriptions";
+const SILICONFLOW_AUDIO_DEFAULT_MODEL: &str = "FunAudioLLM/SenseVoiceSmall";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -261,10 +266,269 @@ pub struct ChatRequest {
     sessionid: String,
 }
 
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct AudioCommonRequest {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub endpoint: String,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct TextToSpeechRequest {
+    #[serde(flatten)]
+    pub common: AudioCommonRequest,
+    pub input: String,
+    #[serde(default)]
+    pub voice: String,
+    #[serde(default)]
+    pub response_format: String,
+    pub sample_rate: Option<u32>,
+    pub stream: Option<bool>,
+    pub speed: Option<f32>,
+    pub gain: Option<f32>,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct TextToSpeechResponse {
+    pub audio_base64: String,
+    pub content_type: String,
+    pub trace_id: String,
+    pub model: String,
+    pub response_format: String,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct SpeechToTextRequest {
+    #[serde(flatten)]
+    pub common: AudioCommonRequest,
+    #[serde(default)]
+    pub file_path: String,
+    #[serde(default)]
+    pub file_base64: String,
+    #[serde(default)]
+    pub file_name: String,
+    #[serde(default)]
+    pub mime_type: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct SpeechToTextResponse {
+    pub text: String,
+    pub trace_id: String,
+    pub model: String,
+}
+
 #[derive(Serialize, Debug)]
 pub struct ChatResponse {
     answer: String,
     sessionid: String,
+}
+
+fn resolve_audio_provider(provider: &str) -> Result<String, String> {
+    let p = provider.trim().to_lowercase();
+    if p.is_empty() || p == "siliconflow" {
+        return Ok("siliconflow".to_string());
+    }
+    Err(format!("不支持的音频 provider: {}", provider))
+}
+
+fn resolve_audio_model(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() {
+        SILICONFLOW_AUDIO_DEFAULT_MODEL.to_string()
+    } else {
+        m.to_string()
+    }
+}
+
+fn resolve_audio_api_key(api_key: &str) -> Result<String, String> {
+    let inline = api_key.trim();
+    if !inline.is_empty() {
+        return Ok(inline.to_string());
+    }
+    let cfg = settingview::get_llm_config();
+    let key = cfg.siliconflow_api_key.trim().to_string();
+    if key.is_empty() {
+        return Err("硅基流动 API Key 未配置".to_string());
+    }
+    Ok(key)
+}
+
+fn extract_trace_id(headers: &reqwest::header::HeaderMap) -> String {
+    headers
+        .get("x-siliconcloud-trace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[tauri::command]
+pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextToSpeechResponse, String> {
+    let _provider = resolve_audio_provider(&request.common.provider)?;
+    let api_key = resolve_audio_api_key(&request.common.api_key)?;
+    let model = resolve_audio_model(&request.common.model);
+    let endpoint = {
+        let custom = request.common.endpoint.trim();
+        if custom.is_empty() {
+            SILICONFLOW_AUDIO_SPEECH_URL.to_string()
+        } else {
+            custom.to_string()
+        }
+    };
+    let input = request.input.trim().to_string();
+    if input.is_empty() {
+        return Err("input 不能为空".to_string());
+    }
+
+    let mut body = json!({
+        "model": model,
+        "input": input,
+        "stream": request.stream.unwrap_or(false)
+    });
+
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_tokens"] = json!(max_tokens);
+    }
+    if let Some(sample_rate) = request.sample_rate {
+        body["sample_rate"] = json!(sample_rate);
+    }
+    if let Some(speed) = request.speed {
+        body["speed"] = json!(speed);
+    }
+    if let Some(gain) = request.gain {
+        body["gain"] = json!(gain);
+    }
+    if !request.voice.trim().is_empty() {
+        body["voice"] = json!(request.voice.trim());
+    }
+    if !request.response_format.trim().is_empty() {
+        body["response_format"] = json!(request.response_format.trim());
+    }
+
+    let client = ClientBuilder::new()
+        .timeout(StdDuration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("文本转语音失败: {} {}", status, body));
+    }
+
+    let headers = response.headers().clone();
+    let content_type = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let trace_id = extract_trace_id(&headers);
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let audio_base64 = general_purpose::STANDARD.encode(bytes);
+
+    Ok(TextToSpeechResponse {
+        audio_base64,
+        content_type,
+        trace_id,
+        model: resolve_audio_model(&request.common.model),
+        response_format: request.response_format.trim().to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn audio_speech_to_text(request: SpeechToTextRequest) -> Result<SpeechToTextResponse, String> {
+    let _provider = resolve_audio_provider(&request.common.provider)?;
+    let api_key = resolve_audio_api_key(&request.common.api_key)?;
+    let model = resolve_audio_model(&request.common.model);
+    let endpoint = {
+        let custom = request.common.endpoint.trim();
+        if custom.is_empty() {
+            SILICONFLOW_AUDIO_TRANSCRIPTIONS_URL.to_string()
+        } else {
+            custom.to_string()
+        }
+    };
+
+    let file_bytes = if !request.file_path.trim().is_empty() {
+        fs::read(request.file_path.trim()).map_err(|e| e.to_string())?
+    } else if !request.file_base64.trim().is_empty() {
+        general_purpose::STANDARD
+            .decode(request.file_base64.trim())
+            .map_err(|e| format!("file_base64 解码失败: {}", e))?
+    } else {
+        return Err("file_path 或 file_base64 至少提供一个".to_string());
+    };
+
+    let file_name = if !request.file_name.trim().is_empty() {
+        request.file_name.trim().to_string()
+    } else if !request.file_path.trim().is_empty() {
+        Path::new(request.file_path.trim())
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("audio.wav")
+            .to_string()
+    } else {
+        "audio.wav".to_string()
+    };
+    let mime_type = if request.mime_type.trim().is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        request.mime_type.trim().to_string()
+    };
+
+    let part = Part::bytes(file_bytes)
+        .file_name(file_name)
+        .mime_str(&mime_type)
+        .map_err(|e| e.to_string())?;
+    let form = Form::new().text("model", model.clone()).part("file", part);
+
+    let client = ClientBuilder::new()
+        .timeout(StdDuration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("语音转文本失败: {} {}", status, body));
+    }
+
+    let headers = response.headers().clone();
+    let trace_id = extract_trace_id(&headers);
+    let payload: Value = response.json().await.map_err(|e| e.to_string())?;
+    let text = payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(SpeechToTextResponse {
+        text,
+        trace_id,
+        model,
+    })
 }
 
 #[derive(Deserialize)]
