@@ -8,6 +8,7 @@ use reqwest::{Client, ClientBuilder};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::env;
 use std::fs;
@@ -993,6 +994,135 @@ fn normalize_text(input: &str) -> String {
         .to_string()
 }
 
+fn is_cjk(ch: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&ch)
+        || ('\u{3400}'..='\u{4DBF}').contains(&ch)
+        || ('\u{F900}'..='\u{FAFF}').contains(&ch)
+}
+
+fn flush_cjk_token_buf(buf: &mut String, token_set: &mut HashSet<String>) {
+    if buf.chars().count() >= 3 {
+        let full = buf.to_lowercase();
+        token_set.insert(full.clone());
+        let chars: Vec<char> = full.chars().collect();
+        if chars.len() >= 4 {
+            for window in chars.windows(3) {
+                let part: String = window.iter().collect();
+                token_set.insert(part);
+            }
+        }
+    }
+    buf.clear();
+}
+
+fn flush_ascii_token_buf(buf: &mut String, token_set: &mut HashSet<String>) {
+    let cleaned = buf.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    if cleaned.len() >= 4 {
+        token_set.insert(cleaned.to_lowercase());
+    }
+    buf.clear();
+}
+
+#[derive(Default)]
+struct RelevanceTokens {
+    strong: Vec<String>,
+    weak: Vec<String>,
+}
+
+fn unique_relevance_tokens(query: &str) -> RelevanceTokens {
+    let mut strong_set = HashSet::new();
+    let mut weak_set = HashSet::new();
+    let mut cjk_buf = String::new();
+    let mut ascii_buf = String::new();
+
+    for ch in query.chars() {
+        if is_cjk(ch) {
+            if !ascii_buf.is_empty() {
+                flush_ascii_token_buf(&mut ascii_buf, &mut strong_set);
+            }
+            cjk_buf.push(ch);
+            continue;
+        }
+        if ch.is_ascii_alphanumeric() {
+            if !cjk_buf.is_empty() {
+                flush_cjk_token_buf(&mut cjk_buf, &mut strong_set);
+            }
+            ascii_buf.push(ch);
+            continue;
+        }
+        if !cjk_buf.is_empty() {
+            flush_cjk_token_buf(&mut cjk_buf, &mut strong_set);
+        }
+        if !ascii_buf.is_empty() {
+            flush_ascii_token_buf(&mut ascii_buf, &mut strong_set);
+        }
+    }
+    if !cjk_buf.is_empty() {
+        flush_cjk_token_buf(&mut cjk_buf, &mut strong_set);
+    }
+    if !ascii_buf.is_empty() {
+        flush_ascii_token_buf(&mut ascii_buf, &mut strong_set);
+    }
+
+    let compact = query
+        .chars()
+        .filter(|c| is_cjk(*c) || c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+    if compact.chars().count() >= 4 {
+        strong_set.insert(compact);
+    }
+
+    for token in strong_set.clone() {
+        if token.chars().all(is_cjk) {
+            let chars: Vec<char> = token.chars().collect();
+            if chars.len() >= 3 {
+                for window in chars.windows(2) {
+                    weak_set.insert(window.iter().collect::<String>());
+                }
+            }
+        }
+    }
+    let weak = weak_set
+        .into_iter()
+        .filter(|x| !strong_set.contains(x))
+        .collect::<Vec<_>>();
+    RelevanceTokens {
+        strong: strong_set.into_iter().collect(),
+        weak,
+    }
+}
+
+fn web_result_relevance_score(item: &WebSearchItem, query: &str, tokens: &RelevanceTokens) -> (i32, usize, usize) {
+    let text = format!("{} {} {}", item.title, item.snippet, item.url).to_lowercase();
+    let compact_query = query
+        .chars()
+        .filter(|c| is_cjk(*c) || c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+
+    let mut score = 0i32;
+    let mut strong_hits = 0usize;
+    let mut weak_hits = 0usize;
+    if compact_query.len() >= 4 && text.contains(&compact_query) {
+        score += 12;
+        strong_hits += 1;
+    }
+    for token in &tokens.strong {
+        if token.len() >= 3 && text.contains(token) {
+            score += if token.chars().all(|c| is_cjk(c)) { 3 } else { 2 };
+            strong_hits += 1;
+        }
+    }
+    for token in &tokens.weak {
+        if token.len() >= 2 && text.contains(token) {
+            score += 1;
+            weak_hits += 1;
+        }
+    }
+    (score, strong_hits, weak_hits)
+}
+
 fn is_preferred_host(host: &str) -> bool {
     const PREFERRED: [&str; 28] = [
         "microsoft.com",
@@ -1027,9 +1157,9 @@ fn is_preferred_host(host: &str) -> bool {
     PREFERRED.iter().any(|suffix| host == *suffix || host.ends_with(&format!(".{}", suffix)))
 }
 
-fn rank_and_filter_web_results(items: Vec<WebSearchItem>, limit: usize) -> Vec<WebSearchItem> {
-    let mut preferred = Vec::new();
-    let mut normal = Vec::new();
+fn rank_and_filter_web_results(items: Vec<WebSearchItem>, query: &str, limit: usize) -> Vec<WebSearchItem> {
+    let tokens = unique_relevance_tokens(query);
+    let mut ranked_items: Vec<(WebSearchItem, i32, bool)> = Vec::new();
 
     for item in items {
         let url_text = item.url.trim().to_lowercase();
@@ -1043,20 +1173,21 @@ fn rank_and_filter_web_results(items: Vec<WebSearchItem>, limit: usize) -> Vec<W
             .ok()
             .and_then(|u| u.host_str().map(|x| x.to_lowercase()))
             .unwrap_or_default();
-        if host.is_empty() {
-            normal.push(item);
+        let preferred = !host.is_empty() && is_preferred_host(&host);
+        let (score, strong_hits, weak_hits) = web_result_relevance_score(&item, query, &tokens);
+        if strong_hits == 0 && weak_hits < 3 {
             continue;
         }
-        if is_preferred_host(&host) {
-            preferred.push(item);
-        } else {
-            normal.push(item);
-        }
+        ranked_items.push((item, score, preferred));
     }
 
-    preferred.extend(normal);
-    preferred.truncate(limit);
-    preferred
+    ranked_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
+    let mut out = ranked_items
+        .into_iter()
+        .map(|(item, _, _)| item)
+        .collect::<Vec<_>>();
+    out.truncate(limit);
+    out
 }
 
 async fn search_web_bing(
@@ -1207,7 +1338,7 @@ pub async fn search_web_duckduckgo(
 
     match search_web_bing(&client, &q, cap).await {
         Ok(items) if !items.is_empty() => {
-            let ranked = rank_and_filter_web_results(items, cap);
+            let ranked = rank_and_filter_web_results(items, &q, cap);
             if !ranked.is_empty() {
                 return Ok(ranked);
             }
@@ -1219,7 +1350,7 @@ pub async fn search_web_duckduckgo(
 
     match search_web_google(&client, &q, cap).await {
         Ok(items) if !items.is_empty() => {
-            let ranked = rank_and_filter_web_results(items, cap);
+            let ranked = rank_and_filter_web_results(items, &q, cap);
             if !ranked.is_empty() {
                 return Ok(ranked);
             }
@@ -1267,7 +1398,7 @@ pub async fn search_web_duckduckgo(
                 }
 
                 if !hits.is_empty() {
-                    let ranked = rank_and_filter_web_results(hits, cap);
+                    let ranked = rank_and_filter_web_results(hits, &q, cap);
                     if !ranked.is_empty() {
                         return Ok(ranked);
                     }

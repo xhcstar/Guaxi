@@ -532,6 +532,7 @@ const buildWebSearchPlannerPrompt = (rawQuestion) => {
     '1) queries 最多 4 条，去重，单条 6~24 字符',
     '2) 每条 query 必须完整表达一个检索意图，不能只取零碎关键词',
     '3) 若问题不需要联网，need_search=false 且 queries=[]',
+    '4) query 必须保留用户问题中的核心对象与限定词，禁止扩展到无关领域',
     '',
     `用户问题：${question}`,
   ].join('\n')
@@ -559,7 +560,7 @@ const parseWebSearchPlan = (rawAnswer) => {
     const queries = Array.isArray(parsed?.queries)
       ? parsed.queries
         .map((x) => String(x || '').trim())
-        .filter((x) => x.length > 0)
+        .filter((x) => x.length >= 2 && x.length <= 64)
       : []
     const reason = String(parsed?.reason || '').trim()
     return {
@@ -571,6 +572,43 @@ const parseWebSearchPlan = (rawAnswer) => {
     logger.warn('[assistant] parse web search plan failed', err)
     return null
   }
+}
+
+const extractCoreQueryTokens = (text) => {
+  const source = String(text || '').toLowerCase()
+  if (!source) return []
+  const tokens = new Set()
+  const cjkChunks = source.match(/[\u4e00-\u9fff]{2,}/g) || []
+  for (const chunk of cjkChunks) {
+    if (chunk.length >= 3) tokens.add(chunk)
+    for (let i = 0; i < chunk.length - 2; i += 1) {
+      tokens.add(chunk.slice(i, i + 3))
+    }
+  }
+  const asciiChunks = source.match(/[a-z0-9][a-z0-9._:+-]{2,}/g) || []
+  for (const chunk of asciiChunks) {
+    if (chunk.length >= 4) tokens.add(chunk)
+  }
+  return Array.from(tokens)
+}
+
+const queryHasCoreOverlap = (query, coreTokens) => {
+  const q = String(query || '').toLowerCase()
+  if (!q) return false
+  if (!Array.isArray(coreTokens) || !coreTokens.length) return true
+  return coreTokens.some((token) => token.length >= 3 && q.includes(token))
+}
+
+const sanitizePlannedQueries = (queries, rawQuestion) => {
+  const list = Array.isArray(queries)
+    ? queries.map((x) => String(x || '').trim()).filter((x) => x.length > 0)
+    : []
+  const deduped = Array.from(new Set(list)).slice(0, 4)
+  const coreTokens = extractCoreQueryTokens(rawQuestion)
+  const filtered = deduped.filter((q) => queryHasCoreOverlap(q, coreTokens))
+  if (filtered.length > 0) return filtered
+  const fallback = normalizeWebSearchQuery(rawQuestion)
+  return fallback ? [fallback] : []
 }
 
 const buildWebSearchPlanWithAi = async (rawQuestion, selectedModelId) => {
@@ -624,6 +662,76 @@ const normalizeWebReferences = (webItems) => {
     .filter((item) => item.url.length > 0)
 }
 
+const buildWebRelevanceTokens = (text) => {
+  const source = String(text || '').toLowerCase()
+  if (!source) return []
+  const strongTokens = new Set()
+  const weakTokens = new Set()
+  const cjkChunks = source.match(/[\u4e00-\u9fff]{2,}/g) || []
+  for (const chunk of cjkChunks) {
+    if (chunk.length >= 3) strongTokens.add(chunk)
+    for (let i = 0; i < chunk.length - 2; i += 1) {
+      strongTokens.add(chunk.slice(i, i + 3))
+    }
+    for (let i = 0; i < chunk.length - 1; i += 1) {
+      weakTokens.add(chunk.slice(i, i + 2))
+    }
+  }
+  const asciiChunks = source.match(/[a-z0-9][a-z0-9._:+-]{2,}/g) || []
+  for (const chunk of asciiChunks) {
+    if (chunk.length >= 4) strongTokens.add(chunk)
+    else weakTokens.add(chunk)
+  }
+  const compact = source.replace(/[^a-z0-9\u4e00-\u9fff]/g, '')
+  if (compact.length >= 4) strongTokens.add(compact)
+  return {
+    strong: Array.from(strongTokens),
+    weak: Array.from(weakTokens).filter((x) => !strongTokens.has(x)),
+  }
+}
+
+const scoreWebItemRelevance = (item, tokens, rawQuestion) => {
+  const hay = `${String(item?.title || '')} ${String(item?.snippet || '')} ${String(item?.url || '')}`.toLowerCase()
+  const compactQuestion = String(rawQuestion || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '')
+  let score = 0
+  let strongHits = 0
+  let weakHits = 0
+  if (compactQuestion.length >= 3 && hay.includes(compactQuestion)) {
+    score += 12
+    strongHits += 1
+  }
+  for (const token of (tokens?.strong || [])) {
+    if (token.length < 2) continue
+    if (hay.includes(token)) {
+      score += /[\u4e00-\u9fff]/.test(token) ? 3 : 2
+      strongHits += 1
+    }
+  }
+  for (const token of (tokens?.weak || [])) {
+    if (token.length < 2) continue
+    if (hay.includes(token)) {
+      score += /[\u4e00-\u9fff]/.test(token) ? 1 : 1
+      weakHits += 1
+    }
+  }
+  return { score, strongHits, weakHits }
+}
+
+const filterRelevantWebItems = (items, rawQuestion, queries) => {
+  if (!Array.isArray(items) || !items.length) return []
+  const tokenSource = [String(rawQuestion || ''), ...(Array.isArray(queries) ? queries : [])].join(' ')
+  const tokens = buildWebRelevanceTokens(tokenSource)
+  if (!(tokens.strong.length || tokens.weak.length)) return items
+  const scored = items
+    .map((item) => ({ item, metrics: scoreWebItemRelevance(item, tokens, rawQuestion) }))
+    .filter((x) => x.metrics.strongHits >= 1 || x.metrics.weakHits >= 3)
+    .sort((a, b) => b.metrics.score - a.metrics.score)
+  if (!scored.length) {
+    return []
+  }
+  return scored.map((x) => x.item)
+}
+
 const getHostFromUrl = (url) => {
   try {
     const host = new URL(String(url || '')).hostname || ''
@@ -669,10 +777,7 @@ const queryWebSearch = async (rawQuestion, selectedModelId, shouldSearch = true)
   }
   const plan = await buildWebSearchPlanWithAi(rawQuestion, selectedModelId)
   const plannedQueries = Array.isArray(plan?.queries) ? plan.queries : []
-  const queries = plannedQueries
-    .map((x) => String(x || '').trim())
-    .filter((x) => x.length > 0)
-    .slice(0, 4)
+  const queries = sanitizePlannedQueries(plannedQueries, rawQuestion).slice(0, 4)
   const needSearch = Boolean(plan?.needSearch) && queries.length > 0
   logger.info('[assistant] web search plan prepared', {
     rawQuestion,
@@ -692,8 +797,14 @@ const queryWebSearch = async (rawQuestion, selectedModelId, shouldSearch = true)
   try {
     const settled = await Promise.all(queries.map((query) => invoke('search_web_duckduckgo', { query, limit: 4 })))
     const all = settled.flatMap((items) => (Array.isArray(items) ? items : []))
+    const mergedItems = mergeWebSearchItems(all)
+    const filteredItems = filterRelevantWebItems(mergedItems, rawQuestion, queries)
+    logger.info('[assistant] web search relevance filtered', {
+      before: mergedItems.length,
+      after: filteredItems.length,
+    })
     return {
-      items: mergeWebSearchItems(all),
+      items: filteredItems,
       queries,
       reason: String(plan?.reason || ''),
       plannedByAi: true,
