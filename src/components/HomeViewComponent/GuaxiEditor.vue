@@ -390,11 +390,19 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" @click="sendSelectionToAssistant">
-                <Icon :icon="squareTerminalIcon" width="16" height="16" />
+              <n-button text size="tiny" @click="askSelectionWithAssistant">
+                <Icon :icon="messageCircleIcon" width="16" height="16" />
               </n-button>
             </template>
-            发送到助手
+            问AI
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="openAssistantTranslateDialog">
+                <Icon :icon="botIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            用AI翻译
           </n-tooltip>
         </div>
 
@@ -426,6 +434,22 @@
           @translate="translateSelectionText" @copy="copySelectionTranslateResult"
           @toggle-pin="toggleSelectionTranslatePinned" @update:pos="handleSelectionTranslatePanelUpdatePos"
           @close="closeSelectionTranslatePanel" />
+
+        <n-modal v-model:show="assistantTranslateDialogVisible" preset="card" title="用AI翻译" style="width: 420px">
+          <div class="assistant-translate-dialog-row">
+            <Icon :icon="languagesIcon" width="16" height="16" />
+            <span>选择目标语言</span>
+          </div>
+          <n-select
+            v-model:value="assistantTranslateTargetLang"
+            size="small"
+            :options="assistantTranslateLangOptions"
+          />
+          <div class="assistant-translate-dialog-actions">
+            <n-button size="small" @click="assistantTranslateDialogVisible = false">取消</n-button>
+            <n-button size="small" type="primary" @click="sendSelectionAsAiTranslate">发送并翻译</n-button>
+          </div>
+        </n-modal>
 
         <div class="editor-split-wrapper" :class="[layoutMode, { 'vim-enabled': vimMode }]">
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
@@ -493,6 +517,8 @@ import eyeIcon from '@iconify-icons/lucide/eye'
 import columns2Icon from '@iconify-icons/lucide/columns'
 import bookOpenIcon from '@iconify-icons/lucide/book-open'
 import languagesIcon from '@iconify-icons/lucide/languages'
+import messageCircleIcon from '@iconify-icons/lucide/message-circle'
+import botIcon from '@iconify-icons/lucide/bot'
 import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
 import hashIcon from '@iconify-icons/lucide/hash'
@@ -623,6 +649,10 @@ const selectionTranslateLangOptions = [
   { label: '越南语', value: 'vi' },
   { label: '泰语', value: 'th' }
 ]
+const assistantTranslateDialogVisible = ref(false)
+const assistantTranslateTargetLang = ref('en')
+const assistantTranslateSourceText = ref('')
+const assistantTranslateLangOptions = selectionTranslateLangOptions.filter((x) => x.value !== 'auto')
 
 const selectionTranslateBusy = ref(false);
 const selectionTranslateRaw = ref('');
@@ -6203,17 +6233,59 @@ const openSelectionTranslatePanel = async () => {
   await translateSelectionText(text);
 };
 
-const sendSelectionToAssistant = () => {
-  const text = getSelectedTextForTranslate().trim()
+const sendSelectionToAssistant = (overrideText, options = {}) => {
+  const text = String(overrideText ?? getSelectedTextForTranslate()).trim()
   if (!text) {
     message.warning('请先框选要发送到助手的文本')
-    return
+    return false
   }
+  const autoSend = options.autoSend !== false
+  const disableWebSearch = !!options.disableWebSearch
   rightSiderStore.setPanel('assistant')
   rightSiderStore.open()
   siderStore.setRightSiderCollapsed('home', false)
-  rightSiderStore.appendAssistantDraft(text)
-  message.success('已插入到助手输入框')
+  rightSiderStore.appendAssistantDraft(text, { autoSend, disableWebSearch })
+  message.success(options.successMessage || (autoSend ? '已发送到助手并开始提问' : '已插入到助手输入框'))
+  return true
+}
+
+const askSelectionWithAssistant = () => {
+  sendSelectionToAssistant(undefined, { autoSend: true, successMessage: '已发送到助手并开始提问' })
+}
+
+const getTranslateLangLabel = (value) => {
+  const item = assistantTranslateLangOptions.find((x) => x.value === value)
+  return item ? String(item.label || '') : '目标语言'
+}
+
+const openAssistantTranslateDialog = () => {
+  const text = getSelectedTextForTranslate().trim()
+  if (!text) {
+    message.warning('请先框选要翻译的文本')
+    return
+  }
+  assistantTranslateSourceText.value = text
+  assistantTranslateDialogVisible.value = true
+}
+
+const sendSelectionAsAiTranslate = () => {
+  const text = String(assistantTranslateSourceText.value || '').trim()
+  if (!text) {
+    assistantTranslateDialogVisible.value = false
+    message.warning('请先框选要翻译的文本')
+    return
+  }
+  const lang = String(assistantTranslateTargetLang.value || 'en')
+  const label = getTranslateLangLabel(lang)
+  const prompt = `请将以下内容翻译成${label}，保持原意并保留术语、代码与格式，只输出译文：\n\n${text}`
+  const ok = sendSelectionToAssistant(prompt, {
+    autoSend: true,
+    disableWebSearch: true,
+    successMessage: `已发送到助手并翻译为${label}`,
+  })
+  if (ok) {
+    assistantTranslateDialogVisible.value = false
+  }
 }
 
 const translateSelectionText = async (overrideText) => {
@@ -9781,6 +9853,21 @@ onUnmounted(() => {
   padding: 0 4px;
   height: 22px;
   border-radius: 6px;
+}
+
+.assistant-translate-dialog-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--guaxi-text-secondary);
+}
+
+.assistant-translate-dialog-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 

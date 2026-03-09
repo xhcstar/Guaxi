@@ -32,6 +32,8 @@ export const useRightSiderStore = defineStore("rightSider", {
       webSearchEnabled: true,
       pending: false,
       draftInput: "",
+      draftAutoSend: false,
+      draftDisableWebSearch: false,
     },
   }),
   actions: {
@@ -109,17 +111,30 @@ export const useRightSiderStore = defineStore("rightSider", {
     setAssistantPending(pending) {
       this.assistant.pending = !!pending;
     },
-    appendAssistantDraft(text) {
+    appendAssistantDraft(text, options) {
       const value = String(text || "").trim();
       if (!value) return;
+      const autoSend = !!(options && options.autoSend);
+      const disableWebSearch = !!(options && options.disableWebSearch);
       this.assistant.draftInput = this.assistant.draftInput
         ? `${this.assistant.draftInput}\n${value}`
         : value;
+      this.assistant.draftAutoSend = this.assistant.draftAutoSend || autoSend;
+      this.assistant.draftDisableWebSearch =
+        this.assistant.draftDisableWebSearch || disableWebSearch;
     },
-    consumeAssistantDraft() {
+    consumeAssistantDraftPayload() {
       const value = String(this.assistant.draftInput || "");
+      const autoSend = !!this.assistant.draftAutoSend;
+      const disableWebSearch = !!this.assistant.draftDisableWebSearch;
       this.assistant.draftInput = "";
-      return value;
+      this.assistant.draftAutoSend = false;
+      this.assistant.draftDisableWebSearch = false;
+      return {
+        text: value,
+        autoSend,
+        disableWebSearch,
+      };
     },
   },
 });

@@ -127,14 +127,14 @@
             </a>
           </div>
           <div v-if="message.role === 'assistant'" class="assistant-message-actions">
-            <button type="button" class="assistant-action-btn" @click="copyAssistantMessage(message)">
-              复制
+            <button type="button" class="assistant-action-btn" title="复制" @click="copyAssistantMessage(message)">
+              <Icon :icon="copyIcon" width="14" height="14" />
             </button>
-            <button type="button" class="assistant-action-btn" @click="insertAssistantToCurrentFile(message)">
-              插入当前文件
+            <button type="button" class="assistant-action-btn" title="插入当前文件" @click="insertAssistantToCurrentFile(message)">
+              <Icon :icon="filePenLineIcon" width="14" height="14" />
             </button>
-            <button type="button" class="assistant-action-btn" @click="createAssistantAsNewFile(message)">
-              创建新文件
+            <button type="button" class="assistant-action-btn" title="创建新文件" @click="createAssistantAsNewFile(message)">
+              <Icon :icon="filePlusIcon" width="14" height="14" />
             </button>
           </div>
         </div>
@@ -228,6 +228,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { useMessage } from 'naive-ui'
+import { Icon } from '@iconify/vue'
+import copyIcon from '@iconify-icons/lucide/copy'
+import filePenLineIcon from '@iconify-icons/lucide/file-edit'
+import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useEditorStore } from '../../stores/editorStore'
@@ -253,6 +257,7 @@ const isComposing = ref(false)
 const inputHistory = ref([])
 const historyIndex = ref(-1)
 const collapsedWebMessageIds = ref(new Set())
+const disableWebSearchNextSend = ref(false)
 const currentStreamText = ref('')
 const currentStreamingMessageId = ref('')
 const currentRequestModelId = ref(0)
@@ -305,16 +310,30 @@ watch(pending, () => {
 })
 
 const applyDraftFromStore = () => {
-  const draft = String(rightSiderStore.consumeAssistantDraft() || '').trim()
+  const payload = rightSiderStore.consumeAssistantDraftPayload?.() || {}
+  const draft = String(payload?.text || '').trim()
   if (!draft) return
+  if (payload?.disableWebSearch) {
+    disableWebSearchNextSend.value = true
+  }
   question.value = question.value.trim() ? `${question.value.trim()}\n${draft}` : draft
   nextTick(focusComposerInput)
+  if (payload?.autoSend && !pending.value) {
+    sendQuestion()
+  }
 }
 
-watch(() => rightSiderStore.assistant.draftInput, (value) => {
-  if (!value) return
-  applyDraftFromStore()
-})
+watch(
+  () => [
+    rightSiderStore.assistant.draftInput,
+    rightSiderStore.assistant.draftAutoSend,
+    rightSiderStore.assistant.draftDisableWebSearch
+  ],
+  ([value, autoSend, disableWebSearch]) => {
+    if (!value && !autoSend && !disableWebSearch) return
+    applyDraftFromStore()
+  }
+)
 
 onMounted(() => {
   applyDraftFromStore()
@@ -534,8 +553,8 @@ const normalizeWebSearchQuery = (rawQuestion) => {
   return optimized || compact
 }
 
-const queryWebSearch = async (rawQuestion) => {
-  if (!webSearchEnabled.value) return []
+const queryWebSearch = async (rawQuestion, shouldSearch = true) => {
+  if (!shouldSearch) return []
   const query = normalizeWebSearchQuery(rawQuestion)
   logger.info('[assistant] web search query prepared', {
     rawQuestion,
@@ -849,6 +868,8 @@ const sendQuestion = async () => {
   const selectedModelId = Number(modelId.value)
   const isWebModel = WEB_MODEL_IDS.has(selectedModelId)
   const sessionId = rightSiderStore.assistant.sessionId || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const shouldUseWebSearch = webSearchEnabled.value && !disableWebSearchNextSend.value
+  disableWebSearchNextSend.value = false
 
   currentRequestModelId.value = selectedModelId
   currentRequestSessionId.value = sessionId
@@ -868,11 +889,13 @@ const sendQuestion = async () => {
       await invoke('ensure_local_deepseek_service')
     }
 
-    const webItems = await queryWebSearch(rawQuestion)
+    const webItems = await queryWebSearch(rawQuestion, shouldUseWebSearch)
     const withAttachments = buildQuestionWithAttachments(rawQuestion)
     const mergedQuestion = buildWebContextPrompt(withAttachments, webItems)
     const webReferences = normalizeWebReferences(webItems)
-    appendWebSearchMessage(webReferences)
+    if (shouldUseWebSearch) {
+      appendWebSearchMessage(webReferences)
+    }
 
     if (isWebModel) {
       const provider = resolveWebProvider(selectedModelId)
@@ -1183,6 +1206,16 @@ const sendQuestion = async () => {
   margin-top: 6px;
   display: flex;
   gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: all 0.16s ease;
+}
+
+.assistant-message-ai:hover .assistant-message-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .assistant-action-btn {
@@ -1190,7 +1223,11 @@ const sendQuestion = async () => {
   background: transparent;
   color: var(--guaxi-text-secondary);
   border-radius: 8px;
-  padding: 3px 8px;
+  width: 26px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
   cursor: pointer;
   transition: all 0.16s ease;

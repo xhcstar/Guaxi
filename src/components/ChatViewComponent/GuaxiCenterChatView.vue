@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="chat-container">
     <div class="chat-header">
       <n-avatar :src="activeChat?.ModelAvatar" size="medium" round />
@@ -151,11 +151,20 @@
           <button
             class="send-btn"
             type="button"
-            :disabled="isGenerating || !messageInput.trim()"
-            @click="sendMessage"
-            :title="isGenerating ? '正在生成中' : '发送'"
+            :disabled="!canClickSend"
+            @click="handleSendButtonClick"
+            :title="isGenerating ? '停止生成' : '发送'"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+            <svg
+              v-if="isGenerating"
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M7 7h10v10H7z" fill="currentColor" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 4l-7 7 1.4 1.4 4.6-4.6V20h2V7.8l4.6 4.6L19 11z" fill="currentColor" />
             </svg>
           </button>
@@ -286,6 +295,7 @@ const pickAutoTitle = (raw) => {
 const autosaveTimer = ref(null);
 
 const isWebModel = computed(() => chatStore.selectedModel === 7 || chatStore.selectedModel === 8);
+const canClickSend = computed(() => isGenerating.value || messageInput.value.trim().length > 0)
 
 const isGenerating = ref(false);
 const waitingFirstToken = ref(false);
@@ -990,6 +1000,24 @@ const sendMessage = async (options = {}) => {
   scheduleAutosave();
 };
 
+const stopQuestion = async () => {
+  if (!isGenerating.value) return
+  try {
+    await invoke('cancel_chat_stream')
+  } catch (error) {
+    logger.warn('停止生成失败:', error)
+  }
+  stopGenerating()
+}
+
+const handleSendButtonClick = () => {
+  if (isGenerating.value) {
+    stopQuestion()
+    return
+  }
+  sendMessage()
+}
+
 const handleKeydown = (event) => {
   const resolveInputEl = () => {
     let el = event?.target;
@@ -1042,7 +1070,7 @@ const handleKeydown = (event) => {
   if (event.key === 'Enter') {
     if (event.shiftKey) return;
     event.preventDefault();
-    sendMessage();
+    handleSendButtonClick();
   }
 };
 
