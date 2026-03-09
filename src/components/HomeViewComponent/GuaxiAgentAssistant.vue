@@ -43,11 +43,12 @@
       >
         <div class="assistant-message-avatar">
           <span v-if="message.role === 'user'">我</span>
+          <span v-else-if="message.role === 'web'">网</span>
           <span v-else>AI</span>
         </div>
         <div class="assistant-message-body">
           <div class="assistant-message-meta">
-            <span>{{ message.role === 'user' ? '你' : '智能助手' }}</span>
+            <span>{{ message.role === 'user' ? '你' : (message.role === 'web' ? '联网检索' : '智能助手') }}</span>
             <span>{{ formatTime(message.createdAt) }}</span>
           </div>
           <div
@@ -56,22 +57,43 @@
             v-html="message.html || message.content"
           />
           <div
+            v-else-if="message.role === 'web'"
+            class="assistant-message-content assistant-message-plain"
+          >
+            {{ message.content || '联网搜索结果' }}
+          </div>
+          <div
             v-else
             class="assistant-message-content assistant-message-plain"
           >
             {{ message.content }}
           </div>
           <div
-            v-if="message.meta?.webContextCount"
+            v-if="message.role === 'web'"
+            class="assistant-web-toggle-wrap"
+          >
+            <button
+              type="button"
+              class="assistant-web-toggle-btn"
+              @click="toggleWebMessageCollapse(message.id)"
+            >
+              {{ isWebMessageCollapsed(message.id) ? '展开联网结果' : '收起联网结果' }}
+            </button>
+          </div>
+          <div
+            v-if="message.meta?.webContextCount && (message.role !== 'web' || !isWebMessageCollapsed(message.id))"
             class="assistant-message-source"
           >
             参考了 {{ message.meta.webContextCount }} 条联网结果
           </div>
-          <div v-else-if="message.meta?.webSearchTriggered" class="assistant-message-source">
+          <div
+            v-else-if="message.meta?.webSearchTriggered && (message.role !== 'web' || !isWebMessageCollapsed(message.id))"
+            class="assistant-message-source"
+          >
             已启用联网搜索，但未检索到可用结果，本次按离线答案回复
           </div>
           <div
-            v-if="Array.isArray(message.meta?.webReferences) && message.meta.webReferences.length"
+            v-if="Array.isArray(message.meta?.webReferences) && message.meta.webReferences.length && (message.role !== 'web' || !isWebMessageCollapsed(message.id))"
             class="assistant-reference-list"
           >
             <div class="assistant-reference-title">参考来源</div>
@@ -149,6 +171,8 @@
           placeholder="输入问题，Enter 发送，Shift + Enter 换行"
           v-model="question"
           :disabled="pending"
+          @compositionstart="handleCompositionStart"
+          @compositionend="handleCompositionEnd"
           @keydown="handleInputKeydown"
         />
 
@@ -175,11 +199,20 @@
           <button
             class="send-btn"
             type="button"
-            :disabled="!canSend"
-            @click="sendQuestion"
-            :title="pending ? '模型响应中' : '发送'"
+            :disabled="!canClickSend"
+            @click="handleSendButtonClick"
+            :title="pending ? '停止生成' : '发送'"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+            <svg
+              v-if="pending"
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M7 7h10v10H7z" fill="currentColor" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 4l-7 7 1.4 1.4 4.6-4.6V20h2V7.8l4.6 4.6L19 11z" fill="currentColor" />
             </svg>
           </button>
@@ -190,8 +223,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { useMessage } from 'naive-ui'
 import { addCopyButtons, addMediaViewerButtons, renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
@@ -205,10 +239,24 @@ const message = useMessage()
 const rightSiderStore = useRightSiderStore()
 const editorStore = useEditorStore()
 const fileTreeStore = useFileTreeStore()
+const STREAM_EVENT = 'modle-streaming-respond-output'
+const WEB_PUSH_EVENT = 'web-model-chat-push'
+const WEB_MODEL_IDS = new Set([7, 8])
 const messagesRef = ref(null)
 const composerInputRef = ref(null)
 const question = ref('')
 const pendingAttachments = ref([])
+const streamUnlisten = ref(null)
+const webPushUnlisten = ref(null)
+const streamRenderTimer = ref(null)
+const isComposing = ref(false)
+const inputHistory = ref([])
+const historyIndex = ref(-1)
+const collapsedWebMessageIds = ref(new Set())
+const currentStreamText = ref('')
+const currentStreamingMessageId = ref('')
+const currentRequestModelId = ref(0)
+const currentRequestSessionId = ref('')
 
 const modelOptions = [
   { label: '本地 DeepSeek（推荐）', value: 6 },
@@ -216,6 +264,8 @@ const modelOptions = [
   { label: 'Qwen（在线）', value: 2 },
   { label: 'Kimi（在线）', value: 3 },
   { label: '豆包（在线）', value: 4 },
+  { label: '腾讯元宝（网页免费）', value: 7 },
+  { label: 'ChatGPT（网页免费）', value: 8 },
 ]
 
 const messages = computed(() => rightSiderStore.assistant.messages)
@@ -223,6 +273,7 @@ const pending = computed(() => rightSiderStore.assistant.pending)
 const modelId = computed(() => rightSiderStore.assistant.modelId)
 const webSearchEnabled = computed(() => rightSiderStore.assistant.webSearchEnabled)
 const canSend = computed(() => !pending.value && question.value.trim().length > 0)
+const canClickSend = computed(() => pending.value || question.value.trim().length > 0)
 
 const enhanceRenderedMessages = () => {
   nextTick(() => {
@@ -268,6 +319,24 @@ watch(() => rightSiderStore.assistant.draftInput, (value) => {
 onMounted(() => {
   applyDraftFromStore()
   enhanceRenderedMessages()
+  initAssistantEventListeners().catch((err) => {
+    logger.error('[assistant] init event listeners failed', err)
+  })
+})
+
+onBeforeUnmount(() => {
+  if (typeof streamUnlisten.value === 'function') {
+    streamUnlisten.value()
+    streamUnlisten.value = null
+  }
+  if (typeof webPushUnlisten.value === 'function') {
+    webPushUnlisten.value()
+    webPushUnlisten.value = null
+  }
+  if (streamRenderTimer.value) {
+    clearTimeout(streamRenderTimer.value)
+    streamRenderTimer.value = null
+  }
 })
 
 const formatTime = (ts) => {
@@ -281,6 +350,21 @@ const formatTime = (ts) => {
 
 const clearHistory = () => {
   rightSiderStore.clearAssistantMessages()
+  collapsedWebMessageIds.value = new Set()
+}
+
+const isWebMessageCollapsed = (messageId) => collapsedWebMessageIds.value.has(String(messageId || ''))
+
+const toggleWebMessageCollapse = (messageId) => {
+  const id = String(messageId || '')
+  if (!id) return
+  const next = new Set(collapsedWebMessageIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  collapsedWebMessageIds.value = next
 }
 
 const handleModelChange = (value) => {
@@ -292,10 +376,39 @@ const handleWebSearchEnabledChange = (value) => {
 }
 
 const handleInputKeydown = (event) => {
+  if (isComposing.value || event.isComposing || event.keyCode === 229) return
+  if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey) {
+    const inputEl = composerInputRef.value
+    const hasSelectionApi = inputEl && typeof inputEl.selectionStart === 'number' && typeof inputEl.selectionEnd === 'number'
+    if (hasSelectionApi) {
+      const value = (inputEl.value ?? '').toString()
+      const isEmpty = value.length === 0
+      const atStart = isEmpty || (inputEl.selectionStart === 0 && inputEl.selectionEnd === 0)
+      const atEnd = isEmpty || (inputEl.selectionStart === value.length && inputEl.selectionEnd === value.length)
+      if (event.key === 'ArrowUp' && atStart) {
+        event.preventDefault()
+        moveHistory(-1)
+        return
+      }
+      if (event.key === 'ArrowDown' && atEnd) {
+        event.preventDefault()
+        moveHistory(1)
+        return
+      }
+    }
+  }
   if (event.key !== 'Enter') return
   if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return
   event.preventDefault()
-  sendQuestion()
+  handleSendButtonClick()
+}
+
+const handleCompositionStart = () => {
+  isComposing.value = true
+}
+
+const handleCompositionEnd = () => {
+  isComposing.value = false
 }
 
 const focusComposerInput = () => {
@@ -397,10 +510,39 @@ const getFaviconUrl = (url) => {
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`
 }
 
+const normalizeWebSearchQuery = (rawQuestion) => {
+  const raw = String(rawQuestion || '').trim()
+  if (!raw) return ''
+  const compact = raw
+    .replace(/[“”"‘’'`]/g, ' ')
+    .replace(/[，。！？；：,.!?;:()[\]{}<>《》]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const engTokens = compact.match(/[A-Za-z0-9._:+-]{2,}/g) || []
+  const cjk = compact
+    .replace(/^(给我|请问|请|帮我|我想|麻烦|能否|可以|告诉我)+/g, '')
+    .replace(/(怎么|如何|一下|一下子|的使用方法|使用方法|教程)$/g, '')
+    .trim()
+  const parts = []
+  if (engTokens.length) {
+    parts.push(engTokens.join(' '))
+  }
+  if (cjk) {
+    parts.push(cjk)
+  }
+  const optimized = parts.join(' ').trim()
+  return optimized || compact
+}
+
 const queryWebSearch = async (rawQuestion) => {
   if (!webSearchEnabled.value) return []
+  const query = normalizeWebSearchQuery(rawQuestion)
+  logger.info('[assistant] web search query prepared', {
+    rawQuestion,
+    query,
+  })
   try {
-    const items = await invoke('search_web_duckduckgo', { query: rawQuestion, limit: 5 })
+    const items = await invoke('search_web_duckduckgo', { query, limit: 5 })
     return Array.isArray(items) ? items : []
   } catch (err) {
     logger.warn('[assistant] web search failed', err)
@@ -419,6 +561,200 @@ const renderAssistantMarkdown = async (content) => {
     logger.warn('[assistant] render markdown failed', err)
     return content
   }
+}
+
+const ensureStreamingAssistantMessage = () => {
+  const id = String(currentStreamingMessageId.value || '')
+  if (id) return id
+  const createdId = rightSiderStore.addAssistantMessage({
+    role: 'assistant',
+    content: '',
+    html: '',
+    meta: {},
+  })
+  currentStreamingMessageId.value = String(createdId || '')
+  return currentStreamingMessageId.value
+}
+
+const appendWebSearchMessage = (references) => {
+  if (!webSearchEnabled.value) return
+  const refs = Array.isArray(references) ? references : []
+  rightSiderStore.addAssistantMessage({
+    role: 'web',
+    content: refs.length ? `已检索到 ${refs.length} 条联网结果` : '联网搜索已启用',
+    meta: {
+      webSearchTriggered: true,
+      webContextCount: refs.length,
+      webReferences: refs,
+    },
+  })
+}
+
+const scheduleStreamingRender = () => {
+  if (streamRenderTimer.value) {
+    clearTimeout(streamRenderTimer.value)
+  }
+  streamRenderTimer.value = setTimeout(async () => {
+    streamRenderTimer.value = null
+    const messageId = ensureStreamingAssistantMessage()
+    if (!messageId) return
+    const raw = String(currentStreamText.value || '')
+    const html = await renderAssistantMarkdown(raw)
+    rightSiderStore.updateAssistantMessage(messageId, {
+      content: raw,
+      html,
+    })
+    scrollToBottom()
+  }, 60)
+}
+
+const pushInputHistory = (text) => {
+  const value = String(text || '').trim()
+  if (!value) return
+  const list = inputHistory.value
+  const last = list[list.length - 1]
+  if (last === value) {
+    historyIndex.value = list.length
+    return
+  }
+  list.push(value)
+  if (list.length > 60) {
+    list.splice(0, list.length - 60)
+  }
+  historyIndex.value = list.length
+}
+
+const moveHistory = (delta) => {
+  if (!inputHistory.value.length) return
+  if (historyIndex.value === -1) {
+    historyIndex.value = inputHistory.value.length
+  }
+  const next = Math.min(inputHistory.value.length, Math.max(0, historyIndex.value + delta))
+  historyIndex.value = next
+  question.value = next >= inputHistory.value.length ? '' : (inputHistory.value[next] || '')
+  requestAnimationFrame(() => {
+    const el = composerInputRef.value
+    if (!el) return
+    const len = (el.value ?? '').length
+    el.selectionStart = len
+    el.selectionEnd = len
+  })
+}
+
+const finishAssistantStreaming = async ({ fallbackText = '', keepPending = false } = {}) => {
+  if (streamRenderTimer.value) {
+    clearTimeout(streamRenderTimer.value)
+    streamRenderTimer.value = null
+  }
+
+  const messageId = ensureStreamingAssistantMessage()
+  const text = String(currentStreamText.value || '').trim() || String(fallbackText || '').trim()
+  if (messageId) {
+    const finalText = text || '模型未返回内容。'
+    const html = await renderAssistantMarkdown(finalText)
+    rightSiderStore.updateAssistantMessage(messageId, {
+      content: finalText,
+      html,
+    })
+  }
+
+  if (!keepPending) {
+    rightSiderStore.setAssistantPending(false)
+  }
+}
+
+const resolveWebProvider = (id) => {
+  if (Number(id) === 7) return 'yuanbao'
+  if (Number(id) === 8) return 'chatgpt'
+  return ''
+}
+
+const updateAssistantMessageMeta = (metaPatch) => {
+  const messageId = ensureStreamingAssistantMessage()
+  if (!messageId) return
+  const list = rightSiderStore.assistant.messages
+  const target = Array.isArray(list) ? list.find((x) => x.id === messageId) : null
+  if (!target) return
+  rightSiderStore.updateAssistantMessage(messageId, {
+    meta: {
+      ...(target.meta || {}),
+      ...(metaPatch || {}),
+    },
+  })
+}
+
+const initAssistantEventListeners = async () => {
+  if (typeof streamUnlisten.value !== 'function') {
+    streamUnlisten.value = await listen(STREAM_EVENT, (event) => {
+      if (!pending.value) return
+      if (WEB_MODEL_IDS.has(Number(currentRequestModelId.value))) return
+      const chunk = String(event?.payload || '')
+      if (!chunk) return
+      currentStreamText.value += chunk
+      scheduleStreamingRender()
+    })
+  }
+
+  if (typeof webPushUnlisten.value !== 'function') {
+    webPushUnlisten.value = await listen(WEB_PUSH_EVENT, async (event) => {
+      if (!pending.value) return
+      if (!WEB_MODEL_IDS.has(Number(currentRequestModelId.value))) return
+
+      const payload = event?.payload || {}
+      const model = Number(payload?.model_id)
+      if (model !== Number(currentRequestModelId.value)) return
+
+      const incomingSessionId = String(payload?.session_id || '').trim()
+      const currentSessionId = String(currentRequestSessionId.value || '').trim()
+      if (currentSessionId && incomingSessionId && currentSessionId !== incomingSessionId) return
+
+      if (incomingSessionId) {
+        currentRequestSessionId.value = incomingSessionId
+        rightSiderStore.setAssistantSessionId(incomingSessionId)
+      }
+
+      const status = String(payload?.status || '').trim().toLowerCase()
+      const webMessages = Array.isArray(payload?.messages) ? payload.messages : []
+      const lastAssistant = [...webMessages]
+        .reverse()
+        .find((x) => String(x?.role || '').toLowerCase() !== 'user' && String(x?.content || '').trim())
+
+      let hasAssistantContent = false
+      if (lastAssistant?.content) {
+        hasAssistantContent = true
+        currentStreamText.value = String(lastAssistant.content)
+        await finishAssistantStreaming({ keepPending: status !== 'ready' })
+      }
+
+      if (status === 'need_login') {
+        updateAssistantMessageMeta({ webLoginRequired: true })
+        message.warning('请先在弹出的网页窗口完成登录，登录后会继续回复')
+      }
+
+      if (status === 'ready' && !hasAssistantContent) {
+        await finishAssistantStreaming({ fallbackText: '网页模型已就绪，但未返回有效内容。' })
+      }
+    })
+  }
+}
+
+const stopQuestion = async () => {
+  if (!pending.value) return
+  try {
+    await invoke('cancel_chat_stream')
+  } catch (err) {
+    logger.warn('[assistant] cancel stream invoke failed', err)
+  }
+  await finishAssistantStreaming({ fallbackText: '已停止本次回答。' })
+  message.info('已停止本次回答')
+}
+
+const handleSendButtonClick = () => {
+  if (pending.value) {
+    stopQuestion()
+    return
+  }
+  sendQuestion()
 }
 
 const writeClipboard = async (text) => {
@@ -510,6 +846,16 @@ const sendQuestion = async () => {
   const rawQuestion = question.value.trim()
   if (!rawQuestion || pending.value) return
 
+  const selectedModelId = Number(modelId.value)
+  const isWebModel = WEB_MODEL_IDS.has(selectedModelId)
+  const sessionId = rightSiderStore.assistant.sessionId || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+  currentRequestModelId.value = selectedModelId
+  currentRequestSessionId.value = sessionId
+  currentStreamText.value = ''
+  currentStreamingMessageId.value = ''
+  pushInputHistory(rawQuestion)
+
   question.value = ''
   rightSiderStore.setAssistantPending(true)
   rightSiderStore.addAssistantMessage({
@@ -525,43 +871,38 @@ const sendQuestion = async () => {
     const webItems = await queryWebSearch(rawQuestion)
     const withAttachments = buildQuestionWithAttachments(rawQuestion)
     const mergedQuestion = buildWebContextPrompt(withAttachments, webItems)
+    const webReferences = normalizeWebReferences(webItems)
+    appendWebSearchMessage(webReferences)
 
-    const response = await invoke('get_chat_answer', {
+    if (isWebModel) {
+      const provider = resolveWebProvider(selectedModelId)
+      if (provider) {
+        await invoke('prepare_web_model_window', { provider })
+      }
+    }
+
+    await invoke('get_chat_answer_stream', {
       request: {
-        modelid: Number(modelId.value),
+        modelid: selectedModelId,
         question: mergedQuestion,
         topicid: 0,
-        sessionid: rightSiderStore.assistant.sessionId || '',
+        sessionid: sessionId,
       }
     })
-
-    const answer = String(response?.answer || '').trim() || '模型未返回内容。'
-    const html = await renderAssistantMarkdown(answer)
-    const webReferences = normalizeWebReferences(webItems)
-
-    rightSiderStore.addAssistantMessage({
-      role: 'assistant',
-      content: answer,
-      html,
-      meta: {
-        webSearchTriggered: webSearchEnabled.value,
-        webContextCount: webItems.length,
-        webReferences,
-      }
-    })
-    rightSiderStore.setAssistantSessionId(response?.sessionid || '')
+    rightSiderStore.setAssistantSessionId(sessionId)
     pendingAttachments.value = []
+    if (!isWebModel) {
+      await finishAssistantStreaming()
+    }
   } catch (err) {
     const text = String(err?.message || err || '请求失败')
     logger.error('[assistant] send question failed', err)
     message.error(text)
-    rightSiderStore.addAssistantMessage({
-      role: 'assistant',
-      content: `请求失败：${text}`,
-      html: `请求失败：${text}`,
-    })
+    await finishAssistantStreaming({ fallbackText: `请求失败：${text}` })
   } finally {
-    rightSiderStore.setAssistantPending(false)
+    if (!isWebModel) {
+      rightSiderStore.setAssistantPending(false)
+    }
   }
 }
 </script>
@@ -723,6 +1064,34 @@ const sendQuestion = async () => {
 .assistant-message-plain {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.assistant-message-content.markdown-body :deep(a) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+}
+
+:global([data-guaxi-theme="dark"]) .assistant-message-content.markdown-body :deep(a) {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.assistant-web-toggle-wrap {
+  margin-top: 6px;
+}
+
+.assistant-web-toggle-btn {
+  border: 1px solid var(--guaxi-border);
+  background: transparent;
+  color: var(--guaxi-text-secondary);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.assistant-web-toggle-btn:hover {
+  color: var(--guaxi-text-primary);
+  background: color-mix(in srgb, var(--guaxi-header-bg) 86%, transparent);
 }
 
 .assistant-message-source {

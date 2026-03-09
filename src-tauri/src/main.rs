@@ -218,6 +218,7 @@ async fn main() {
             commands::file_watcher::stop_file_watching,
             commands::chatview::get_chat_answer,
             commands::chatview::get_chat_answer_stream,
+            commands::chatview::cancel_chat_stream,
             commands::chatview::ensure_local_deepseek_service,
             commands::chatview::search_web_duckduckgo,
             commands::docprocess::reader_open_file,

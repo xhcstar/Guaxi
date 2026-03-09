@@ -14,6 +14,7 @@ use std::fs::OpenOptions;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -132,6 +133,19 @@ struct LocalDeepseekProcessState {
 
 static LOCAL_DEEPSEEK_PROCESS: Lazy<Mutex<LocalDeepseekProcessState>> =
     Lazy::new(|| Mutex::new(LocalDeepseekProcessState { child: None }));
+static STREAM_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+
+fn reset_stream_cancel_flag() {
+    STREAM_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+}
+
+fn request_stream_cancel() {
+    STREAM_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+fn is_stream_cancel_requested() -> bool {
+    STREAM_CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
 
 #[derive(Serialize)]
 pub struct LocalDeepseekServiceStatus {
@@ -636,6 +650,72 @@ fn normalize_text(input: &str) -> String {
         .to_string()
 }
 
+fn is_preferred_host(host: &str) -> bool {
+    const PREFERRED: [&str; 28] = [
+        "microsoft.com",
+        "learn.microsoft.com",
+        "stackoverflow.com",
+        "github.com",
+        "docs.github.com",
+        "mozilla.org",
+        "developer.mozilla.org",
+        "wikipedia.org",
+        "arxiv.org",
+        "python.org",
+        "pypi.org",
+        "nodejs.org",
+        "npmjs.com",
+        "rust-lang.org",
+        "crates.io",
+        "golang.org",
+        "go.dev",
+        "kubernetes.io",
+        "docker.com",
+        "openai.com",
+        "deepseek.com",
+        "qwenlm.ai",
+        "moonshot.cn",
+        "cloudflare.com",
+        "aws.amazon.com",
+        "cloud.google.com",
+        "azure.microsoft.com",
+        "tauri.app",
+    ];
+    PREFERRED.iter().any(|suffix| host == *suffix || host.ends_with(&format!(".{}", suffix)))
+}
+
+fn rank_and_filter_web_results(items: Vec<WebSearchItem>, limit: usize) -> Vec<WebSearchItem> {
+    let mut preferred = Vec::new();
+    let mut normal = Vec::new();
+
+    for item in items {
+        let url_text = item.url.trim().to_lowercase();
+        if url_text.is_empty() {
+            continue;
+        }
+        if url_text.contains("baidu.com") || url_text.contains("m.baidu.com") {
+            continue;
+        }
+        let host = Url::parse(&url_text)
+            .ok()
+            .and_then(|u| u.host_str().map(|x| x.to_lowercase()))
+            .unwrap_or_default();
+        if host.is_empty() {
+            normal.push(item);
+            continue;
+        }
+        if is_preferred_host(&host) {
+            preferred.push(item);
+        } else {
+            normal.push(item);
+        }
+    }
+
+    preferred.extend(normal);
+    preferred.truncate(limit);
+    preferred
+}
+
 async fn search_web_bing(
     client: &Client,
     query: &str,
@@ -783,13 +863,25 @@ pub async fn search_web_duckduckgo(
     let mut errors: Vec<String> = Vec::new();
 
     match search_web_bing(&client, &q, cap).await {
-        Ok(items) if !items.is_empty() => return Ok(items),
+        Ok(items) if !items.is_empty() => {
+            let ranked = rank_and_filter_web_results(items, cap);
+            if !ranked.is_empty() {
+                return Ok(ranked);
+            }
+            errors.push("bing filtered empty result".to_string());
+        }
         Ok(_) => errors.push("bing empty result".to_string()),
         Err(e) => errors.push(e),
     }
 
     match search_web_google(&client, &q, cap).await {
-        Ok(items) if !items.is_empty() => return Ok(items),
+        Ok(items) if !items.is_empty() => {
+            let ranked = rank_and_filter_web_results(items, cap);
+            if !ranked.is_empty() {
+                return Ok(ranked);
+            }
+            errors.push("google filtered empty result".to_string());
+        }
         Ok(_) => errors.push("google empty result".to_string()),
         Err(e) => errors.push(e),
     }
@@ -832,7 +924,11 @@ pub async fn search_web_duckduckgo(
                 }
 
                 if !hits.is_empty() {
-                    return Ok(hits);
+                    let ranked = rank_and_filter_web_results(hits, cap);
+                    if !ranked.is_empty() {
+                        return Ok(ranked);
+                    }
+                    errors.push("duckduckgo filtered empty result".to_string());
                 }
                 errors.push("duckduckgo empty result".to_string());
             }
@@ -843,6 +939,13 @@ pub async fn search_web_duckduckgo(
 
     warn!("search_web all engines failed: {}", errors.join(" | "));
     Ok(vec![])
+}
+
+#[tauri::command]
+pub async fn cancel_chat_stream() -> Result<(), String> {
+    request_stream_cancel();
+    info!("cancel_chat_stream: cancellation requested");
+    Ok(())
 }
 
 // 调用 DeepSeek API 获取回答
@@ -1235,6 +1338,10 @@ async fn openai_compat_sse_stream(
     let mut block = StreamBlockTracker::default();
 
     while let Some(chunk) = stream.next().await {
+        if is_stream_cancel_requested() {
+            info!("{}: stream canceled by user", tag);
+            return Ok(());
+        }
         match chunk {
             Ok(data) => {
                 carry.push_str(&String::from_utf8_lossy(&data));
@@ -1272,6 +1379,10 @@ async fn openai_compat_sse_stream(
                 }
 
                 let out = normalize_math_symbols(buffer.clone());
+                if is_stream_cancel_requested() {
+                    info!("{}: stream canceled before emit", tag);
+                    return Ok(());
+                }
                 app.emit("modle-streaming-respond-output", &out)
                     .map_err(|e| e.to_string())?;
 
@@ -1304,11 +1415,19 @@ async fn openai_compat_sse_stream(
 
     if !buffer.is_empty() {
         let out = normalize_math_symbols(buffer);
+        if is_stream_cancel_requested() {
+            info!("{}: stream canceled before tail emit", tag);
+            return Ok(());
+        }
         app.emit("modle-streaming-respond-output", &out)
             .map_err(|e| e.to_string())?;
     }
 
     if let Some(closer) = fence.closing_delta() {
+        if is_stream_cancel_requested() {
+            info!("{}: stream canceled before closer emit", tag);
+            return Ok(());
+        }
         app.emit("modle-streaming-respond-output", &closer)
             .map_err(|e| e.to_string())?;
     }
@@ -1661,6 +1780,10 @@ pub async fn get_answer_from_doubao_stream(
     sessionid: &str,
 ) -> Result<(), String> {
     let rsp = get_answer_from_doubao(question, sessionid).await?;
+    if is_stream_cancel_requested() {
+        info!("get_answer_from_doubao_stream: canceled before emit");
+        return Ok(());
+    }
     app.emit("modle-streaming-respond-output", &rsp.answer)
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -1672,6 +1795,10 @@ pub async fn get_answer_from_qwen_stream(
     sessionid: &str,
 ) -> Result<(), String> {
     let rsp = get_answer_from_qwen(question, sessionid).await?;
+    if is_stream_cancel_requested() {
+        info!("get_answer_from_qwen_stream: canceled before emit");
+        return Ok(());
+    }
     app.emit("modle-streaming-respond-output", &rsp.answer)
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -1733,6 +1860,10 @@ pub async fn get_answer_from_local_qwen_stream(
 
     // 流式输出数据
     while let Some(chunk) = stream.next().await {
+        if is_stream_cancel_requested() {
+            info!("get_answer_from_local_qwen_stream: canceled by user");
+            return Ok(());
+        }
         match chunk {
             Ok(data) => {
                 carry.push_str(&String::from_utf8_lossy(&data));
@@ -1773,6 +1904,10 @@ pub async fn get_answer_from_local_qwen_stream(
                 }
 
                 let out = normalize_math_symbols(buffer.clone());
+                if is_stream_cancel_requested() {
+                    info!("get_answer_from_local_qwen_stream: canceled before emit");
+                    return Ok(());
+                }
                 app.emit("modle-streaming-respond-output", &out)
                     .map_err(|e| e.to_string())?;
 
@@ -1796,6 +1931,10 @@ pub async fn get_answer_from_local_qwen_stream(
     // 流结束后，处理剩余的缓冲区数据
     if !buffer.is_empty() {
         let out = normalize_math_symbols(buffer);
+        if is_stream_cancel_requested() {
+            info!("get_answer_from_local_qwen_stream: canceled before tail emit");
+            return Ok(());
+        }
 
         app.emit("modle-streaming-respond-output", &out)
             .map_err(|e| e.to_string())?;
@@ -1807,6 +1946,10 @@ pub async fn get_answer_from_local_qwen_stream(
     }
 
     if let Some(closer) = fence.closing_delta() {
+        if is_stream_cancel_requested() {
+            info!("get_answer_from_local_qwen_stream: canceled before closer emit");
+            return Ok(());
+        }
         app.emit("modle-streaming-respond-output", &closer)
             .map_err(|e| e.to_string())?;
     }
@@ -1873,6 +2016,10 @@ pub async fn get_answer_from_local_deepseek_stream(
 
     // Stream each delta immediately so UI can render token-by-token.
     while let Some(chunk) = stream.next().await {
+        if is_stream_cancel_requested() {
+            info!("get_answer_from_local_deepseek_stream: canceled by user");
+            return Ok(());
+        }
         match chunk {
             Ok(data) => {
                 carry.push_str(&String::from_utf8_lossy(&data));
@@ -1914,6 +2061,10 @@ pub async fn get_answer_from_local_deepseek_stream(
 
                 let out = normalize_math_symbols(buffer.clone());
                 if !out.is_empty() {
+                    if is_stream_cancel_requested() {
+                        info!("get_answer_from_local_deepseek_stream: canceled before emit");
+                        return Ok(());
+                    }
                     app.emit("modle-streaming-respond-output", &out)
                         .map_err(|e| e.to_string())?;
                     debug!(
@@ -1943,12 +2094,20 @@ pub async fn get_answer_from_local_deepseek_stream(
     if !buffer.is_empty() {
         let out = normalize_math_symbols(buffer);
         if !out.is_empty() {
+            if is_stream_cancel_requested() {
+                info!("get_answer_from_local_deepseek_stream: canceled before tail emit");
+                return Ok(());
+            }
             app.emit("modle-streaming-respond-output", &out)
                 .map_err(|e| e.to_string())?;
         }
     }
 
     if let Some(closer) = fence.closing_delta() {
+        if is_stream_cancel_requested() {
+            info!("get_answer_from_local_deepseek_stream: canceled before closer emit");
+            return Ok(());
+        }
         app.emit("modle-streaming-respond-output", &closer)
             .map_err(|e| e.to_string())?;
     }
@@ -2488,6 +2647,7 @@ pub async fn prepare_web_model_window(
 #[tauri::command]
 pub async fn get_chat_answer_stream(app: AppHandle, request: ChatRequest) -> Result<(), String> {
     info!("Enter get_chat_answer_stream");
+    reset_stream_cancel_flag();
     let model =
         ChatModel::try_from(request.modelid).map_err(|e| format!("Invalid model ID: {}", e))?;
     info!(

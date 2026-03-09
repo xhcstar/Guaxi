@@ -68,14 +68,28 @@ export const useRightSiderStore = defineStore("rightSider", {
     },
     addAssistantMessage(message) {
       if (!message || typeof message !== "object") return;
-      this.assistant.messages.push({
+      const next = {
         id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         role: message.role || "assistant",
         content: String(message.content || ""),
         html: String(message.html || ""),
         createdAt: Date.now(),
         meta: message.meta || null,
-      });
+      };
+      this.assistant.messages.push(next);
+      return next.id;
+    },
+    updateAssistantMessage(messageId, payload) {
+      const id = String(messageId || "");
+      if (!id || !payload || typeof payload !== "object") return;
+      const index = this.assistant.messages.findIndex((x) => x.id === id);
+      if (index < 0) return;
+      const current = this.assistant.messages[index];
+      const next = {
+        ...current,
+        ...payload,
+      };
+      this.assistant.messages.splice(index, 1, next);
     },
     clearAssistantMessages() {
       this.assistant.messages = [];
