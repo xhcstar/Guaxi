@@ -521,6 +521,98 @@ const buildWebContextPrompt = (rawQuestion, webItems) => {
   return `${rawQuestion}\n\n请结合以下联网结果回答，并在回答结尾补充“参考来源”小节：\n${lines.join('\n\n')}`
 }
 
+const buildWebSearchPlannerPrompt = (rawQuestion) => {
+  const question = String(rawQuestion || '').trim()
+  return [
+    '你是联网检索规划器。',
+    '请先理解用户问题，再生成最少且必要的联网检索需求。',
+    '仅输出 JSON，禁止输出额外文本。',
+    'JSON 格式：{"need_search":boolean,"queries":string[],"reason":string}',
+    '约束：',
+    '1) queries 最多 4 条，去重，单条 6~24 字符',
+    '2) 每条 query 必须完整表达一个检索意图，不能只取零碎关键词',
+    '3) 若问题不需要联网，need_search=false 且 queries=[]',
+    '',
+    `用户问题：${question}`,
+  ].join('\n')
+}
+
+const extractJsonObject = (raw) => {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fenced?.[1]) return fenced[1].trim()
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    return text.slice(first, last + 1).trim()
+  }
+  return ''
+}
+
+const parseWebSearchPlan = (rawAnswer) => {
+  const jsonText = extractJsonObject(rawAnswer)
+  if (!jsonText) return null
+  try {
+    const parsed = JSON.parse(jsonText)
+    const needSearch = Boolean(parsed?.need_search)
+    const queries = Array.isArray(parsed?.queries)
+      ? parsed.queries
+        .map((x) => String(x || '').trim())
+        .filter((x) => x.length > 0)
+      : []
+    const reason = String(parsed?.reason || '').trim()
+    return {
+      needSearch,
+      queries: Array.from(new Set(queries)).slice(0, 4),
+      reason,
+    }
+  } catch (err) {
+    logger.warn('[assistant] parse web search plan failed', err)
+    return null
+  }
+}
+
+const buildWebSearchPlanWithAi = async (rawQuestion, selectedModelId) => {
+  const modelForPlanning = WEB_MODEL_IDS.has(Number(selectedModelId)) ? 5 : Number(selectedModelId)
+  const plannerRequest = {
+    modelid: modelForPlanning,
+    question: buildWebSearchPlannerPrompt(rawQuestion),
+    topicid: 0,
+    sessionid: `assistant-web-plan-${Date.now()}`,
+  }
+  try {
+    const res = await invoke('get_chat_answer', { request: plannerRequest })
+    const answer = String(res?.answer || '')
+    const parsed = parseWebSearchPlan(answer)
+    if (parsed) {
+      return parsed
+    }
+  } catch (err) {
+    logger.warn('[assistant] build web search plan with ai failed', err)
+  }
+  const fallback = normalizeWebSearchQuery(rawQuestion)
+  return {
+    needSearch: Boolean(fallback),
+    queries: fallback ? [fallback] : [],
+    reason: 'fallback',
+  }
+}
+
+const mergeWebSearchItems = (items) => {
+  if (!Array.isArray(items)) return []
+  const seen = new Set()
+  const merged = []
+  for (const item of items) {
+    const url = String(item?.url || '').trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    merged.push(item)
+    if (merged.length >= 8) break
+  }
+  return merged
+}
+
 const normalizeWebReferences = (webItems) => {
   if (!Array.isArray(webItems)) return []
   return webItems
@@ -571,20 +663,50 @@ const normalizeWebSearchQuery = (rawQuestion) => {
   return optimized || compact
 }
 
-const queryWebSearch = async (rawQuestion, shouldSearch = true) => {
-  if (!shouldSearch) return []
-  const query = normalizeWebSearchQuery(rawQuestion)
-  logger.info('[assistant] web search query prepared', {
+const queryWebSearch = async (rawQuestion, selectedModelId, shouldSearch = true) => {
+  if (!shouldSearch) {
+    return { items: [], queries: [], reason: '', plannedByAi: false }
+  }
+  const plan = await buildWebSearchPlanWithAi(rawQuestion, selectedModelId)
+  const plannedQueries = Array.isArray(plan?.queries) ? plan.queries : []
+  const queries = plannedQueries
+    .map((x) => String(x || '').trim())
+    .filter((x) => x.length > 0)
+    .slice(0, 4)
+  const needSearch = Boolean(plan?.needSearch) && queries.length > 0
+  logger.info('[assistant] web search plan prepared', {
     rawQuestion,
-    query,
+    queries,
+    reason: plan?.reason || '',
+    needSearch,
   })
+  if (!needSearch) {
+    return {
+      items: [],
+      queries,
+      reason: String(plan?.reason || ''),
+      plannedByAi: true,
+    }
+  }
+
   try {
-    const items = await invoke('search_web_duckduckgo', { query, limit: 5 })
-    return Array.isArray(items) ? items : []
+    const settled = await Promise.all(queries.map((query) => invoke('search_web_duckduckgo', { query, limit: 4 })))
+    const all = settled.flatMap((items) => (Array.isArray(items) ? items : []))
+    return {
+      items: mergeWebSearchItems(all),
+      queries,
+      reason: String(plan?.reason || ''),
+      plannedByAi: true,
+    }
   } catch (err) {
     logger.warn('[assistant] web search failed', err)
     message.warning('联网搜索失败，已自动使用离线问答')
-    return []
+    return {
+      items: [],
+      queries,
+      reason: String(plan?.reason || ''),
+      plannedByAi: true,
+    }
   }
 }
 
@@ -613,16 +735,26 @@ const ensureStreamingAssistantMessage = () => {
   return currentStreamingMessageId.value
 }
 
-const appendWebSearchMessage = (references) => {
+const appendWebSearchMessage = (references, queries = [], plannedByAi = false) => {
   if (!webSearchEnabled.value) return
   const refs = Array.isArray(references) ? references : []
+  const queryList = Array.isArray(queries) ? queries : []
+  const content = refs.length
+    ? (plannedByAi
+      ? `AI已规划 ${queryList.length} 个检索需求，检索到 ${refs.length} 条联网结果`
+      : `已检索到 ${refs.length} 条联网结果`)
+    : (plannedByAi
+      ? `AI已规划 ${queryList.length} 个检索需求，未检索到可用结果`
+      : '联网搜索已启用')
   rightSiderStore.addAssistantMessage({
     role: 'web',
-    content: refs.length ? `已检索到 ${refs.length} 条联网结果` : '联网搜索已启用',
+    content,
     meta: {
       webSearchTriggered: true,
       webContextCount: refs.length,
       webReferences: refs,
+      webQueries: queryList,
+      webPlannedByAi: plannedByAi,
     },
   })
 }
@@ -907,12 +1039,17 @@ const sendQuestion = async () => {
       await invoke('ensure_local_deepseek_service')
     }
 
-    const webItems = await queryWebSearch(rawQuestion, shouldUseWebSearch)
+    const searchOutcome = await queryWebSearch(rawQuestion, selectedModelId, shouldUseWebSearch)
+    const webItems = Array.isArray(searchOutcome?.items) ? searchOutcome.items : []
     const withAttachments = buildQuestionWithAttachments(rawQuestion)
     const mergedQuestion = buildWebContextPrompt(withAttachments, webItems)
     const webReferences = normalizeWebReferences(webItems)
     if (shouldUseWebSearch) {
-      appendWebSearchMessage(webReferences)
+      appendWebSearchMessage(
+        webReferences,
+        Array.isArray(searchOutcome?.queries) ? searchOutcome.queries : [],
+        Boolean(searchOutcome?.plannedByAi),
+      )
     }
 
     if (isWebModel) {
