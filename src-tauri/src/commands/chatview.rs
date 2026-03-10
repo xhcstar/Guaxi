@@ -269,6 +269,27 @@ pub struct ChatRequest {
     sessionid: String,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct KbMetaAgentRequest {
+    pub modelid: i32,
+    #[serde(default)]
+    pub sessionid: String,
+    #[serde(default)]
+    pub task: String,
+    #[serde(default)]
+    pub kb_name: String,
+    #[serde(default)]
+    pub rel_path: String,
+    #[serde(default)]
+    pub kb_meta: Value,
+    #[serde(default)]
+    pub file_meta: Value,
+    #[serde(default)]
+    pub kb_context_files: Value,
+    #[serde(default)]
+    pub file_content: String,
+}
+
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct AudioCommonRequest {
     #[serde(default)]
@@ -331,6 +352,453 @@ pub struct SpeechToTextResponse {
 pub struct ChatResponse {
     answer: String,
     sessionid: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct KbMetaAgentResponse {
+    pub sessionid: String,
+    pub modelid: i32,
+    pub task: String,
+    pub result: Value,
+    pub raw_answer: String,
+}
+
+fn normalize_kb_agent_task(task: &str) -> String {
+    let t = task.trim().to_lowercase();
+    if t == "file" {
+        "file".to_string()
+    } else {
+        "kb".to_string()
+    }
+}
+
+fn find_first_json_segment(raw: &str) -> Option<String> {
+    let starts: Vec<usize> = raw
+        .char_indices()
+        .filter_map(|(i, ch)| if ch == '{' || ch == '[' { Some(i) } else { None })
+        .collect();
+    if starts.is_empty() {
+        return None;
+    }
+
+    for start in starts {
+        let mut stack: Vec<char> = Vec::new();
+        let mut in_string = false;
+        let mut escaped = false;
+
+        for (i, ch) in raw.char_indices().skip_while(|(idx, _)| *idx < start) {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                if ch == '\\' {
+                    escaped = true;
+                    continue;
+                }
+                if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match ch {
+                '"' => in_string = true,
+                '{' => stack.push('}'),
+                '[' => stack.push(']'),
+                '}' | ']' => {
+                    if stack.pop() != Some(ch) {
+                        stack.clear();
+                        break;
+                    }
+                    if stack.is_empty() {
+                        let end = i + ch.len_utf8();
+                        return Some(raw[start..end].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_kb_agent_json(raw_answer: &str) -> Result<Value, String> {
+    let trimmed = raw_answer.trim();
+    if trimmed.is_empty() {
+        return Err("模型未返回内容".to_string());
+    }
+
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(v);
+    }
+
+    if trimmed.starts_with("```") {
+        let mut lines = trimmed.lines();
+        let _ = lines.next();
+        let mut body = lines.collect::<Vec<_>>().join("\n");
+        if let Some(pos) = body.rfind("```") {
+            body.truncate(pos);
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(body.trim()) {
+            return Ok(v);
+        }
+    }
+
+    if let Some(seg) = find_first_json_segment(trimmed) {
+        if let Ok(v) = serde_json::from_str::<Value>(seg.trim()) {
+            return Ok(v);
+        }
+    }
+
+    Err("模型返回内容不是有效 JSON".to_string())
+}
+
+fn alias_object_value(map: &serde_json::Map<String, Value>, names: &[&str]) -> Option<Value> {
+    for name in names {
+        if let Some(v) = map.get(*name) {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn normalize_kb_agent_result(value: Value) -> Value {
+    let Some(obj) = value.as_object() else {
+        return value;
+    };
+
+    let mut out = serde_json::Map::new();
+
+    if let Some(v) = alias_object_value(
+        obj,
+        &["knowledge_base_type", "knowledgeBaseType", "kb_type", "kbType"],
+    ) {
+        out.insert("knowledge_base_type".to_string(), v);
+    }
+    if let Some(v) = alias_object_value(obj, &["file_tags", "fileTags"]) {
+        out.insert("file_tags".to_string(), v);
+    }
+    if let Some(v) = alias_object_value(obj, &["related_nodes", "relatedNodes"]) {
+        out.insert("related_nodes".to_string(), v);
+    }
+    if let Some(v) = alias_object_value(obj, &["kb_tags", "kbTags"]) {
+        out.insert("kb_tags".to_string(), v);
+    }
+    if let Some(v) = alias_object_value(obj, &["summary"]) {
+        out.insert("summary".to_string(), v);
+    }
+
+    if let Some(nodes_v) = alias_object_value(obj, &["structure_nodes", "structureNodes", "nodes"]) {
+        if let Some(nodes) = nodes_v.as_array() {
+            let mut mapped = Vec::new();
+            for n in nodes {
+                if let Some(nobj) = n.as_object() {
+                    let mut one = serde_json::Map::new();
+                    if let Some(v) = alias_object_value(nobj, &["stable_id", "stableId", "id", "node_id"]) {
+                        one.insert("stable_id".to_string(), v);
+                    }
+                    if let Some(v) = alias_object_value(nobj, &["title", "name"]) {
+                        one.insert("title".to_string(), v);
+                    }
+                    if let Some(v) = alias_object_value(nobj, &["level"]) {
+                        one.insert("level".to_string(), v);
+                    }
+                    if let Some(v) = alias_object_value(nobj, &["tags"]) {
+                        one.insert("tags".to_string(), v);
+                    }
+                    if let Some(v) = alias_object_value(nobj, &["related_nodes", "relatedNodes"]) {
+                        one.insert("related_nodes".to_string(), v);
+                    }
+                    if let Some(v) = alias_object_value(nobj, &["attrs_patch", "attrsPatch", "attrs"]) {
+                        one.insert("attrs_patch".to_string(), v);
+                    }
+                    if !one.is_empty() {
+                        mapped.push(Value::Object(one));
+                    }
+                }
+            }
+            out.insert("structure_nodes".to_string(), Value::Array(mapped));
+        }
+    }
+
+    if let Some(edges_v) = alias_object_value(obj, &["knowledge_relations", "knowledgeRelations", "relations"]) {
+        if let Some(edges) = edges_v.as_array() {
+            let mut mapped = Vec::new();
+            for e in edges {
+                if let Some(eobj) = e.as_object() {
+                    let mut one = serde_json::Map::new();
+                    if let Some(v) = alias_object_value(eobj, &["from_stable_id", "fromStableId", "from"]) {
+                        one.insert("from_stable_id".to_string(), v);
+                    }
+                    if let Some(v) = alias_object_value(eobj, &["to_stable_id", "toStableId", "to"]) {
+                        one.insert("to_stable_id".to_string(), v);
+                    }
+                    if let Some(v) = alias_object_value(eobj, &["relation", "type", "label"]) {
+                        one.insert("relation".to_string(), v);
+                    }
+                    if !one.is_empty() {
+                        mapped.push(Value::Object(one));
+                    }
+                }
+            }
+            out.insert("knowledge_relations".to_string(), Value::Array(mapped));
+        }
+    }
+
+    if out.is_empty() {
+        value
+    } else {
+        Value::Object(out)
+    }
+}
+
+fn trim_rel_path_to_label(rel_path: &str) -> String {
+    let p = rel_path.trim().replace('\\', "/");
+    if p.is_empty() {
+        return String::new();
+    }
+    p.rsplit('/').next().unwrap_or("").trim_end_matches(".md").trim_end_matches(".markdown").to_string()
+}
+
+fn fallback_file_tags_from_request(request: &KbMetaAgentRequest) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+
+    if let Some(arr) = request.file_meta.get("file_tags").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(s) = v.as_str() {
+                let t = s.trim();
+                if !t.is_empty() && !out.contains(&t.to_string()) {
+                    out.push(t.to_string());
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        if let Some(arr) = request.file_meta.get("structure_nodes").and_then(|v| v.as_array()) {
+            for n in arr.iter().take(8) {
+                if let Some(title) = n.get("title").and_then(|v| v.as_str()) {
+                    let t = title.trim();
+                    if !t.is_empty() && !out.contains(&t.to_string()) {
+                        out.push(t.to_string());
+                    }
+                }
+                if out.len() >= 5 {
+                    break;
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        let label = trim_rel_path_to_label(&request.rel_path);
+        if !label.is_empty() {
+            out.push(label);
+        }
+    }
+
+    out.truncate(5);
+    out
+}
+
+fn fallback_related_nodes_from_request(request: &KbMetaAgentRequest) -> Vec<String> {
+    let self_rel = request.rel_path.trim().replace('\\', "/");
+    let self_parent = self_rel.rsplit_once('/').map(|(a, _)| a.to_string()).unwrap_or_default();
+    let mut same_parent: Vec<String> = Vec::new();
+    let mut others: Vec<String> = Vec::new();
+
+    if let Some(arr) = request.kb_context_files.as_array() {
+        for one in arr {
+            let rel = one
+                .get("rel_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .replace('\\', "/");
+            if rel.is_empty() || rel == self_rel {
+                continue;
+            }
+            let label = trim_rel_path_to_label(&rel);
+            if label.is_empty() {
+                continue;
+            }
+            let parent = rel.rsplit_once('/').map(|(a, _)| a.to_string()).unwrap_or_default();
+            if !self_parent.is_empty() && parent == self_parent {
+                if !same_parent.contains(&label) {
+                    same_parent.push(label);
+                }
+            } else if !others.contains(&label) {
+                others.push(label);
+            }
+        }
+    }
+
+    let mut out = same_parent;
+    out.extend(others);
+    out.truncate(5);
+    out
+}
+
+fn ensure_non_empty_file_fields(request: &KbMetaAgentRequest, mut result: Value) -> Value {
+    let Some(obj) = result.as_object_mut() else {
+        return result;
+    };
+
+    let tags_len = obj
+        .get("file_tags")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    if tags_len == 0 {
+        let fallback = fallback_file_tags_from_request(request)
+            .into_iter()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+        obj.insert("file_tags".to_string(), Value::Array(fallback));
+    }
+
+    let rel_len = obj
+        .get("related_nodes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    if rel_len == 0 {
+        let fallback = fallback_related_nodes_from_request(request)
+            .into_iter()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+        obj.insert("related_nodes".to_string(), Value::Array(fallback));
+    }
+
+    result
+}
+
+fn build_kb_agent_prompt(request: &KbMetaAgentRequest, task: &str) -> Result<String, String> {
+    let kb_name = request.kb_name.trim();
+    if kb_name.is_empty() {
+        return Err("kb_name 不能为空".to_string());
+    }
+
+    let kb_meta_json =
+        serde_json::to_string_pretty(&request.kb_meta).map_err(|e| format!("kb_meta 序列化失败: {}", e))?;
+    let file_meta_json = if request.file_meta.is_null() {
+        "null".to_string()
+    } else {
+        serde_json::to_string_pretty(&request.file_meta)
+            .map_err(|e| format!("file_meta 序列化失败: {}", e))?
+    };
+    let kb_context_files_json = if request.kb_context_files.is_null() {
+        "[]".to_string()
+    } else {
+        serde_json::to_string_pretty(&request.kb_context_files)
+            .map_err(|e| format!("kb_context_files 序列化失败: {}", e))?
+    };
+    let file_content = request.file_content.trim().to_string();
+    let file_content_json = if file_content.is_empty() {
+        "\"\"".to_string()
+    } else {
+        serde_json::to_string(&file_content).map_err(|e| format!("file_content 序列化失败: {}", e))?
+    };
+
+    let schema_text = if task == "file" {
+        r#"{
+  "knowledge_base_type": "string，可选",
+  "file_tags": ["string"],
+  "related_nodes": ["string"],
+  "structure_nodes": [
+    {
+      "stable_id": "string，可选",
+      "title": "string，可选",
+      "level": 1,
+      "tags": ["string"],
+      "related_nodes": ["string"],
+      "attrs_patch": { "key": "value" }
+    }
+  ],
+  "knowledge_relations": [
+    {
+      "from_stable_id": "string",
+      "to_stable_id": "string",
+      "relation": "string"
+    }
+  ],
+  "summary": "string"
+}"#
+    } else {
+        r#"{
+  "knowledge_base_type": "string",
+  "kb_tags": ["string"],
+  "summary": "string"
+}"#
+    };
+
+    Ok(format!(
+        "你是知识工程助手。请根据输入的知识库元数据做“知识属性配置、分类归纳”，输出严格 JSON，不要输出任何额外文字。\n\n任务类型: {task}\n知识库: {kb_name}\n文件相对路径: {rel_path}\n\n输出 JSON Schema:\n{schema}\n\n规则:\n1. 只返回一个 JSON 对象，不能使用 markdown 代码块。\n2. 结果必须可被 JSON.parse 解析。\n3. 不确定时给出保守建议，不要编造事实。\n4. tags/related_nodes 去重、简短、语义清晰。\n5. 文件任务中必须同时关注 file_tags、文件 related_nodes、structure_nodes 的 tags 与 related_nodes，不要只返回 attrs_patch。\n6. 节点关联关系要体现“文件级知识主题”与“段落/小节级知识分类描述”的映射，可通过 structure_nodes[*].related_nodes 与 knowledge_relations 表达。\n7. 必须结合整个知识库上下文（kb_context_files）进行分类与关系判断，不要只看单文件。\n8. 文件任务必须给出非空 file_tags 和 non-empty related_nodes（至少各 1 条）。\n9. 若结构节点无法可靠判断，可少给或不改 structure_nodes，但 file_tags 与 related_nodes 不能为空。\n\n输入 kb_meta:\n{kb_meta}\n\n输入 kb_context_files:\n{kb_context_files}\n\n输入 file_meta:\n{file_meta}\n\n输入 file_content:\n{file_content}\n",
+        task = task,
+        kb_name = kb_name,
+        rel_path = request.rel_path.trim(),
+        schema = schema_text,
+        kb_meta = kb_meta_json,
+        kb_context_files = kb_context_files_json,
+        file_meta = file_meta_json,
+        file_content = file_content_json
+    ))
+}
+
+async fn kb_agent_call_model(model: ChatModel, prompt: &str, sessionid: &str) -> Result<ChatResponse, String> {
+    match model {
+        ChatModel::CHATGPT => get_answer_from_chatgpt(prompt, sessionid).await,
+        ChatModel::DEEPSEEK => get_answer_from_deepseek(prompt, sessionid).await,
+        ChatModel::QWEN => get_answer_from_qwen(prompt, sessionid).await,
+        ChatModel::KIMI => get_answer_from_kimi(prompt, sessionid).await,
+        ChatModel::DOUBAO => get_answer_from_doubao(prompt, sessionid).await,
+        ChatModel::LOCALQWEN => get_answer_from_siliconflow(prompt, sessionid).await,
+        ChatModel::LOCALDEEPSEEK => get_answer_from_local_deepseek(prompt, sessionid).await,
+        ChatModel::YUANBAO_WEB | ChatModel::CHATGPT_WEB => {
+            Err("当前网页模型不支持知识处理 Agent 命令，请切换到 API 模型".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn kbmeta_agent_process(request: KbMetaAgentRequest) -> Result<KbMetaAgentResponse, String> {
+    let model = ChatModel::try_from(request.modelid).map_err(|e| format!("Invalid model ID: {}", e))?;
+    let task = normalize_kb_agent_task(&request.task);
+    let prompt = build_kb_agent_prompt(&request, &task)?;
+
+    info!(
+        "kbmeta_agent_process: modelid={} task={} kb_name={} rel_path={}",
+        request.modelid,
+        task,
+        request.kb_name,
+        request.rel_path
+    );
+
+    let rsp = kb_agent_call_model(model, &prompt, &request.sessionid).await?;
+    let parsed = parse_kb_agent_json(&rsp.answer)?;
+    let normalized = normalize_kb_agent_result(parsed);
+    let normalized = if task == "file" {
+        ensure_non_empty_file_fields(&request, normalized)
+    } else {
+        normalized
+    };
+    info!(
+        "kbmeta_agent_process: normalized_result_keys={:?}",
+        normalized
+            .as_object()
+            .map(|m| m.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+
+    Ok(KbMetaAgentResponse {
+        sessionid: rsp.sessionid,
+        modelid: request.modelid,
+        task,
+        result: normalized,
+        raw_answer: rsp.answer,
+    })
 }
 
 fn resolve_audio_provider(provider: &str) -> Result<String, String> {

@@ -107,6 +107,7 @@
             <div class="editor-title">{{ editorTitle }}</div>
             <n-space justify="end">
               <n-button size="small" @click="reloadCurrent" :disabled="loading || !selectedKbName">重新加载</n-button>
+              <n-button size="small" tertiary @click="runKbMetaAgent" :loading="kbAgentProcessing" :disabled="loading || kbAgentProcessing || !canRunKbAgent">AI整理</n-button>
               <n-button type="primary" size="small" @click="saveCurrent" :disabled="loading || !canSave">保存</n-button>
             </n-space>
           </div>
@@ -212,10 +213,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { LayersOutline, ListOutline, RefreshOutline, SyncOutline } from '@vicons/ionicons5'
 import { PanelLeftContract24Regular, PanelRightContract24Regular } from '@vicons/fluent'
 import GuaxiKnowledgeBaseGraphEditor from './GuaxiKnowledgeBaseGraphEditor.vue'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
 
 const logger = createLogger('GuaxiKnowledgeBaseManager')
 // 顶部工具条使用 createDiscreteApi，避免依赖组件上下文
 const { message } = createDiscreteApi(['message'])
+const rightSiderStore = useRightSiderStore()
 
 // 主界面模式：meta（当前 JSON/表单编辑） / graph（图形化目录树编辑）
 const viewMode = ref('graph')
@@ -258,11 +261,37 @@ const currentKind = ref('')
 const currentRelPath = ref('')
 
 const fileDraft = ref(null)
+const kbAgentProcessing = ref(false)
+const kbAgentSessionId = ref('')
 
 const canSave = computed(() => {
   if (!selectedKbName.value) return false
   if (currentKind.value === 'kb') return !!kbDraft.value
   if (currentKind.value === 'file') return !!fileDraft.value
+  return false
+})
+
+const kbAgentModelId = computed(() => {
+  const n = Number(rightSiderStore?.assistant?.modelId)
+  return Number.isFinite(n) ? n : 5
+})
+
+const isMarkdownRelPath = (relPath) => {
+  const p = String(relPath || '').trim().toLowerCase()
+  return p.endsWith('.md') || p.endsWith('.markdown')
+}
+
+const toAbsPathByRel = (relPath) => {
+  const base = String(currentKbLocation.value || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  const rel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '')
+  if (!base || !rel) return ''
+  return `${base}/${rel}`
+}
+
+const canRunKbAgent = computed(() => {
+  if (!selectedKbName.value) return false
+  if (currentKind.value === 'kb') return !!kbDraft.value
+  if (currentKind.value === 'file') return !!fileDraft.value && isMarkdownRelPath(currentRelPath.value)
   return false
 })
 
@@ -421,6 +450,40 @@ const ensureParagraphChildrenForFile = async (fileRelPath) => {
 
 const deepClone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)))
 
+const uniqueStringList = (arr) => {
+  const list = Array.isArray(arr) ? arr : []
+  const normalized = list.map(x => String(x || '').trim()).filter(Boolean)
+  return Array.from(new Set(normalized))
+}
+
+const mergeUniqueStringList = (base, patch) => {
+  return uniqueStringList([...(Array.isArray(base) ? base : []), ...(Array.isArray(patch) ? patch : [])])
+}
+
+const pickResultArray = (obj, names) => {
+  if (!obj || typeof obj !== 'object') return []
+  for (const key of names) {
+    const v = obj?.[key]
+    if (Array.isArray(v)) return v
+  }
+  return []
+}
+
+const pickResultValue = (obj, names) => {
+  if (!obj || typeof obj !== 'object') return undefined
+  for (const key of names) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key]
+  }
+  return undefined
+}
+
+const relationHint = (toStableId, relation) => {
+  const toId = String(toStableId || '').trim()
+  const rel = String(relation || '').trim()
+  if (!toId) return ''
+  return rel ? `${toId}(${rel})` : toId
+}
+
 const makeFileDraft = (meta) => {
   const d = deepClone(meta) || {}
   d.file_tags = Array.isArray(d.file_tags) ? d.file_tags : []
@@ -453,6 +516,424 @@ const makeFileDraft = (meta) => {
   }).filter(n => n.title)
 
   return d
+}
+
+const parseAttrsJsonObject = (raw) => {
+  const text = String(raw || '').trim()
+  if (!text) return {}
+  try {
+    const parsed = JSON.parse(text)
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {}
+  } catch (e) {
+    logger.warn('[KBManager] parse attrs_json failed, fallback empty object', e)
+    return {}
+  }
+}
+
+const buildFileMetaForKbAgent = (draft) => {
+  const d = deepClone(draft) || {}
+  const nodes = Array.isArray(d.structure_nodes) ? d.structure_nodes : []
+  const structure_nodes = nodes.map(n => {
+    const attrs = parseAttrsJsonObject(n?.attrs_json)
+    const stable_id = String(n?.stable_id || '').trim()
+    if (stable_id && !attrs.stable_id) attrs.stable_id = stable_id
+    return {
+      title: String(n?.title || ''),
+      level: Number(n?.level || 0),
+      tags: uniqueStringList(n?.tags),
+      related_nodes: uniqueStringList(n?.related_nodes),
+      attrs
+    }
+  })
+
+  return {
+    file_name: String(d.file_name || ''),
+    rel_path: String(d.rel_path || currentRelPath.value || ''),
+    file_tags: uniqueStringList(d.file_tags),
+    related_nodes: uniqueStringList(d.related_nodes),
+    structure_nodes
+  }
+}
+
+const applyKbAgentResultToKbDraft = (result) => {
+  if (!kbDraft.value || !result || typeof result !== 'object') return false
+  let changed = false
+  const next = deepClone(kbDraft.value)
+  const nextType = String(pickResultValue(result, ['knowledge_base_type', 'knowledgeBaseType', 'kb_type', 'kbType']) || '').trim()
+  if (nextType && next.knowledge_base_type !== nextType) {
+    next.knowledge_base_type = nextType
+    changed = true
+  }
+  if (changed) kbDraft.value = next
+  return changed
+}
+
+const applyKbAgentResultToFileDraft = (result) => {
+  if (!fileDraft.value || !result || typeof result !== 'object') return false
+  let changed = false
+  const next = deepClone(fileDraft.value)
+
+  const fileTags = pickResultArray(result, ['file_tags', 'fileTags'])
+  if (fileTags.length) {
+    const merged = mergeUniqueStringList(next.file_tags, fileTags)
+    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.file_tags))) {
+      next.file_tags = merged
+      changed = true
+    }
+  }
+
+  const fileRelated = pickResultArray(result, ['related_nodes', 'relatedNodes'])
+  if (fileRelated.length) {
+    const merged = mergeUniqueStringList(next.related_nodes, fileRelated)
+    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.related_nodes))) {
+      next.related_nodes = merged
+      changed = true
+    }
+  }
+
+  const patches = pickResultArray(result, ['structure_nodes', 'structureNodes', 'nodes'])
+  if (patches.length && Array.isArray(next.structure_nodes)) {
+    for (const patch of patches) {
+      if (!patch || typeof patch !== 'object') continue
+      const stableId = String(pickResultValue(patch, ['stable_id', 'stableId', 'id', 'node_id']) || '').trim()
+      const title = String(pickResultValue(patch, ['title', 'name']) || '').trim()
+      const level = Number(pickResultValue(patch, ['level']) || 0)
+      const hit = next.structure_nodes.find(n => {
+        if (stableId && String(n?.stable_id || '').trim() === stableId) return true
+        if (title && Number(n?.level || 0) === level && String(n?.title || '').trim() === title) return true
+        return false
+      })
+      if (!hit) continue
+
+      const patchTags = pickResultArray(patch, ['tags'])
+      if (patchTags.length) {
+        const merged = mergeUniqueStringList(hit.tags, patchTags)
+        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.tags))) {
+          hit.tags = merged
+          changed = true
+        }
+      }
+
+      const patchRelated = pickResultArray(patch, ['related_nodes', 'relatedNodes'])
+      if (patchRelated.length) {
+        const merged = mergeUniqueStringList(hit.related_nodes, patchRelated)
+        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.related_nodes))) {
+          hit.related_nodes = merged
+          changed = true
+        }
+      }
+
+      const attrsPatch = pickResultValue(patch, ['attrs_patch', 'attrsPatch', 'attrs'])
+      if (attrsPatch && typeof attrsPatch === 'object' && !Array.isArray(attrsPatch)) {
+        const currentAttrs = parseAttrsJsonObject(hit.attrs_json)
+        const mergedAttrs = { ...currentAttrs, ...attrsPatch }
+        const nextJson = JSON.stringify(mergedAttrs, null, 2)
+        if (nextJson !== String(hit.attrs_json || '')) {
+          hit.attrs_json = nextJson
+          changed = true
+        }
+      }
+    }
+  }
+
+  const knowledgeRelations = pickResultArray(result, ['knowledge_relations', 'knowledgeRelations', 'relations'])
+  if (knowledgeRelations.length && Array.isArray(next.structure_nodes)) {
+    for (const edge of knowledgeRelations) {
+      if (!edge || typeof edge !== 'object') continue
+      const fromId = String(pickResultValue(edge, ['from_stable_id', 'fromStableId', 'from']) || '').trim()
+      const toId = String(pickResultValue(edge, ['to_stable_id', 'toStableId', 'to']) || '').trim()
+      const hint = relationHint(toId, pickResultValue(edge, ['relation', 'type', 'label']))
+      if (!fromId || !hint) continue
+      const fromNode = next.structure_nodes.find(n => String(n?.stable_id || '').trim() === fromId)
+      if (!fromNode) continue
+      const merged = mergeUniqueStringList(fromNode.related_nodes, [hint])
+      if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(fromNode.related_nodes))) {
+        fromNode.related_nodes = merged
+        changed = true
+      }
+    }
+  }
+
+  if (changed) fileDraft.value = next
+  return changed
+}
+
+const applyKbAgentResultToRawFileMeta = (fileMeta, result) => {
+  if (!fileMeta || typeof fileMeta !== 'object') return { ok: false, changed: false, meta: fileMeta }
+  if (!result || typeof result !== 'object') return { ok: false, changed: false, meta: fileMeta }
+  let changed = false
+  const next = deepClone(fileMeta)
+
+  const fileTags = pickResultArray(result, ['file_tags', 'fileTags'])
+  if (fileTags.length) {
+    const merged = mergeUniqueStringList(next.file_tags, fileTags)
+    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.file_tags))) {
+      next.file_tags = merged
+      changed = true
+    }
+  }
+
+  const fileRelated = pickResultArray(result, ['related_nodes', 'relatedNodes'])
+  if (fileRelated.length) {
+    const merged = mergeUniqueStringList(next.related_nodes, fileRelated)
+    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.related_nodes))) {
+      next.related_nodes = merged
+      changed = true
+    }
+  }
+
+  const patches = pickResultArray(result, ['structure_nodes', 'structureNodes', 'nodes'])
+  const nodes = Array.isArray(next.structure_nodes) ? next.structure_nodes : []
+  if (patches.length && nodes.length) {
+    for (const patch of patches) {
+      if (!patch || typeof patch !== 'object') continue
+      const stableId = String(pickResultValue(patch, ['stable_id', 'stableId', 'id', 'node_id']) || '').trim()
+      const title = String(pickResultValue(patch, ['title', 'name']) || '').trim()
+      const level = Number(pickResultValue(patch, ['level']) || 0)
+      const hit = nodes.find(n => {
+        const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
+        const sid = String(attrs?.stable_id || '').trim()
+        if (stableId && sid === stableId) return true
+        if (title && Number(n?.level || 0) === level && String(n?.title || '').trim() === title) return true
+        return false
+      })
+      if (!hit) continue
+
+      const patchTags = pickResultArray(patch, ['tags'])
+      if (patchTags.length) {
+        const merged = mergeUniqueStringList(hit.tags, patchTags)
+        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.tags))) {
+          hit.tags = merged
+          changed = true
+        }
+      }
+
+      const patchRelated = pickResultArray(patch, ['related_nodes', 'relatedNodes'])
+      if (patchRelated.length) {
+        const merged = mergeUniqueStringList(hit.related_nodes, patchRelated)
+        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.related_nodes))) {
+          hit.related_nodes = merged
+          changed = true
+        }
+      }
+
+      const attrsPatch = pickResultValue(patch, ['attrs_patch', 'attrsPatch', 'attrs'])
+      if (attrsPatch && typeof attrsPatch === 'object' && !Array.isArray(attrsPatch)) {
+        const attrs = (hit?.attrs && typeof hit.attrs === 'object') ? hit.attrs : {}
+        hit.attrs = { ...attrs, ...attrsPatch }
+        changed = true
+      }
+    }
+  }
+
+  const knowledgeRelations = pickResultArray(result, ['knowledge_relations', 'knowledgeRelations', 'relations'])
+  if (knowledgeRelations.length && nodes.length) {
+    for (const edge of knowledgeRelations) {
+      if (!edge || typeof edge !== 'object') continue
+      const fromId = String(pickResultValue(edge, ['from_stable_id', 'fromStableId', 'from']) || '').trim()
+      const toId = String(pickResultValue(edge, ['to_stable_id', 'toStableId', 'to']) || '').trim()
+      const hint = relationHint(toId, pickResultValue(edge, ['relation', 'type', 'label']))
+      if (!fromId || !hint) continue
+      const fromNode = nodes.find(n => {
+        const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
+        return String(attrs?.stable_id || '').trim() === fromId
+      })
+      if (!fromNode) continue
+      const merged = mergeUniqueStringList(fromNode.related_nodes, [hint])
+      if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(fromNode.related_nodes))) {
+        fromNode.related_nodes = merged
+        changed = true
+      }
+    }
+  }
+
+  return { ok: true, changed, meta: next }
+}
+
+const collectFileRelPathsFromTreeNode = (node, out = []) => {
+  if (!node || typeof node !== 'object') return out
+  const isDir = !!node.isDir
+  const key = String(node.key || '')
+  if (!isDir && key && key !== ROOT_KEY && !key.includes(PARA_MARK)) {
+    out.push(normalizeRelKey(key))
+    return out
+  }
+  const kids = Array.isArray(node.children) ? node.children : []
+  for (const ch of kids) collectFileRelPathsFromTreeNode(ch, out)
+  return out
+}
+
+const runKbMetaAgent = async () => {
+  if (!canRunKbAgent.value || !selectedKbName.value) return
+
+  const task = currentKind.value === 'file' ? 'file' : 'kb'
+  const kbMetaPayload = deepClone(kbDraft.value || kbMeta.value || {})
+  const fileMetaPayload = task === 'file' ? buildFileMetaForKbAgent(fileDraft.value) : null
+
+  try {
+    kbAgentProcessing.value = true
+    logger.info('[KBManager] kbmeta_agent_process start', {
+      task,
+      kbName: selectedKbName.value,
+      relPath: currentRelPath.value,
+      modelid: kbAgentModelId.value
+    })
+
+    if (task === 'kb') {
+      const root = Array.isArray(treeData.value) ? treeData.value[0] : null
+      const relPaths = Array.from(new Set(collectFileRelPathsFromTreeNode(root, [])))
+        .filter(Boolean)
+        .filter(isMarkdownRelPath)
+      if (!relPaths.length) {
+        message.info('当前知识库没有可处理的 Markdown 文件')
+        return
+      }
+
+      const fileMetaMap = new Map()
+      const fileContentMap = new Map()
+      for (const relPath of relPaths) {
+        try {
+          const currentMeta = await invoke('kbmeta_read_file_meta', {
+            knowledgeBaseName: selectedKbName.value,
+            relPath
+          })
+          fileMetaMap.set(relPath, currentMeta)
+          const absPath = toAbsPathByRel(relPath)
+          if (absPath) {
+            const content = await invoke('read_file_content', { path: absPath })
+            fileContentMap.set(relPath, String(content || ''))
+          }
+        } catch (e) {
+          logger.warn('[KBManager] read file meta failed in batch pre-load', { relPath, error: String(e?.message || e) })
+        }
+      }
+
+      const kbContextFiles = Array.from(fileMetaMap.entries()).map(([relPath, meta]) => ({
+        rel_path: relPath,
+        file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
+        related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
+        content_excerpt: String(fileContentMap.get(relPath) || '').slice(0, 3000),
+        structure_outline: Array.isArray(meta?.structure_nodes)
+          ? meta.structure_nodes.slice(0, 50).map(n => ({
+            title: String(n?.title || ''),
+            level: Number(n?.level || 0),
+            stable_id: String(n?.attrs?.stable_id || '')
+          }))
+          : []
+      }))
+
+      let updatedCount = 0
+      for (const relPath of relPaths) {
+        try {
+          const currentMeta = fileMetaMap.get(relPath)
+          if (!currentMeta) continue
+          const response = await invoke('kbmeta_agent_process', {
+            request: {
+              modelid: kbAgentModelId.value,
+              sessionid: kbAgentSessionId.value,
+              task: 'file',
+              kb_name: selectedKbName.value,
+              rel_path: relPath,
+              kb_meta: kbMetaPayload,
+              file_meta: currentMeta,
+              kb_context_files: kbContextFiles,
+              file_content: String(fileContentMap.get(relPath) || '')
+            }
+          })
+
+          if (response?.sessionid) kbAgentSessionId.value = String(response.sessionid)
+          const result = response?.result
+          logger.info('[KBManager] batch kbmeta_agent_process result keys', { relPath, keys: Object.keys(result || {}) })
+          const applied = applyKbAgentResultToRawFileMeta(currentMeta, result)
+          if (applied.ok && applied.changed) {
+            await invoke('kbmeta_save_file_meta', {
+              knowledgeBaseName: selectedKbName.value,
+              relPath,
+              meta: applied.meta
+            })
+            updatedCount += 1
+          }
+        } catch (e) {
+          logger.warn('[KBManager] batch kbmeta_agent_process failed on file', { relPath, error: String(e?.message || e) })
+        }
+      }
+
+      await loadKbMeta(selectedKbName.value)
+      if (updatedCount > 0) {
+        message.success(`AI 已批量更新 ${updatedCount} 个文件元数据`)
+      } else {
+        message.info('AI 已完成分析，但没有可应用的变更')
+      }
+      return
+    }
+
+    const root = Array.isArray(treeData.value) ? treeData.value[0] : null
+    const allRelPaths = Array.from(new Set(collectFileRelPathsFromTreeNode(root, [])))
+      .filter(Boolean)
+      .filter(isMarkdownRelPath)
+    const kbContextFiles = []
+    const fileContentMap = new Map()
+    for (const relPath of allRelPaths) {
+      try {
+        const meta = await invoke('kbmeta_read_file_meta', {
+          knowledgeBaseName: selectedKbName.value,
+          relPath
+        })
+        const absPath = toAbsPathByRel(relPath)
+        let fileContent = ''
+        if (absPath) {
+          fileContent = String(await invoke('read_file_content', { path: absPath }) || '')
+          fileContentMap.set(relPath, fileContent)
+        }
+        kbContextFiles.push({
+          rel_path: relPath,
+          file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
+          related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
+          content_excerpt: fileContent.slice(0, 3000),
+          structure_outline: Array.isArray(meta?.structure_nodes)
+            ? meta.structure_nodes.slice(0, 50).map(n => ({
+              title: String(n?.title || ''),
+              level: Number(n?.level || 0),
+              stable_id: String(n?.attrs?.stable_id || '')
+            }))
+            : []
+        })
+      } catch (e) {
+        logger.warn('[KBManager] read file meta failed in single context', { relPath, error: String(e?.message || e) })
+      }
+    }
+
+    const response = await invoke('kbmeta_agent_process', {
+      request: {
+        modelid: kbAgentModelId.value,
+        sessionid: kbAgentSessionId.value,
+        task,
+        kb_name: selectedKbName.value,
+        rel_path: currentRelPath.value,
+        kb_meta: kbMetaPayload,
+        file_meta: fileMetaPayload,
+        kb_context_files: kbContextFiles,
+        file_content: String(fileContentMap.get(currentRelPath.value) || '')
+      }
+    })
+
+    if (response?.sessionid) kbAgentSessionId.value = String(response.sessionid)
+
+    const result = response?.result
+    logger.info('[KBManager] kbmeta_agent_process result keys', { keys: Object.keys(result || {}) })
+    const changed = applyKbAgentResultToFileDraft(result)
+
+    if (changed) {
+      message.success('AI 建议已应用到当前草稿，请点击保存落盘')
+    } else {
+      message.info('AI 已完成分析，但没有可应用的变更')
+    }
+  } catch (e) {
+    logger.error('[KBManager] kbmeta_agent_process failed:', e)
+    message.error(String(e?.message || 'AI 处理失败'))
+  } finally {
+    kbAgentProcessing.value = false
+  }
 }
 
 const loadKbMeta = async (kbName) => {

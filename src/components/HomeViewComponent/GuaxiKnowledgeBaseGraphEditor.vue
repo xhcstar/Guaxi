@@ -166,6 +166,7 @@
               <n-button-group size="small">
                 <n-button @click="focusSelected">聚焦</n-button>
                 <n-button v-if="canOpenSelected" @click.stop="openSelectedInHome">打开</n-button>
+                <n-button v-if="canRunKbAgentForSelected" :loading="kbAgentProcessing" @click="runKbAgentForSelected">AI补全</n-button>
                 <n-button v-if="selectedKey && selectedKey !== graphRootKey" @click="enterSubGraph(selectedKey)">子图</n-button>
                 <n-button @click="clearSelected">清除</n-button>
               </n-button-group>
@@ -253,6 +254,7 @@ import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { ArrowBackOutline, DownloadOutline } from '@vicons/ionicons5'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
 
 const logger = createLogger('GuaxiKnowledgeBaseGraphEditor')
 const props = defineProps({
@@ -286,6 +288,7 @@ const { message } = createDiscreteApi(['message'])
 
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
+const rightSiderStore = useRightSiderStore()
 
 // 左右面板显隐与拖拽调整宽度
 const leftVisible = ref(!!props.leftVisible)
@@ -457,6 +460,8 @@ const fileContentCache = new Map()
 const nodeContentLoading = ref(false)
 const nodeContentText = ref('')
 const nodeContentFullText = ref('')
+const kbAgentProcessing = ref(false)
+const kbAgentSessionId = ref('')
 
 const expandedNodeKey = ref('')
 
@@ -509,6 +514,251 @@ const canOpenSelected = computed(() => {
   if (!n) return false
   return ['file', 'paragraph'].includes(String(n.kind || '')) && !!String(n.absPath || '')
 })
+
+const kbAgentModelId = computed(() => {
+  const n = Number(rightSiderStore?.assistant?.modelId)
+  return Number.isFinite(n) ? n : 5
+})
+
+const isMarkdownRelPath = (relPath) => {
+  const p = String(relPath || '').trim().toLowerCase()
+  return p.endsWith('.md') || p.endsWith('.markdown')
+}
+
+const canRunKbAgentForSelected = computed(() => {
+  const n = selectedNode.value
+  if (!n) return false
+  if (!props.selectedKbName) return false
+  if (!['file', 'paragraph'].includes(String(n.kind || ''))) return false
+  if (!String(n.relPath || '').trim()) return false
+  if (!isMarkdownRelPath(n.relPath)) return false
+  return true
+})
+
+const uniqueStringList = (arr) => {
+  const list = Array.isArray(arr) ? arr : []
+  const normalized = list.map(x => String(x || '').trim()).filter(Boolean)
+  return Array.from(new Set(normalized))
+}
+
+const mergeUniqueStringList = (base, patch) => {
+  return uniqueStringList([...(Array.isArray(base) ? base : []), ...(Array.isArray(patch) ? patch : [])])
+}
+
+const pickResultArray = (obj, names) => {
+  if (!obj || typeof obj !== 'object') return []
+  for (const key of names) {
+    const v = obj?.[key]
+    if (Array.isArray(v)) return v
+  }
+  return []
+}
+
+const pickResultValue = (obj, names) => {
+  if (!obj || typeof obj !== 'object') return undefined
+  for (const key of names) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key]
+  }
+  return undefined
+}
+
+const relationHint = (toStableId, relation) => {
+  const toId = String(toStableId || '').trim()
+  const rel = String(relation || '').trim()
+  if (!toId) return ''
+  return rel ? `${toId}(${rel})` : toId
+}
+
+const collectMarkdownRelPathsFromTreeNode = (node, out = []) => {
+  if (!node || typeof node !== 'object') return out
+  const key = String(node.key || '')
+  const isDir = !!node.isDir
+  const isParagraph = String(node.kind || '').toLowerCase() === 'paragraph' || !!node.isParagraph
+  if (!isDir && !isParagraph && key && key !== props.rootKey && isMarkdownRelPath(key)) {
+    out.push(normalizeRel(key))
+    return out
+  }
+  const kids = Array.isArray(node.children) ? node.children : []
+  for (const ch of kids) collectMarkdownRelPathsFromTreeNode(ch, out)
+  return out
+}
+
+const applyKbAgentResultToFileMeta = (fileMeta, result) => {
+  if (!fileMeta || typeof fileMeta !== 'object') return { ok: false, changed: false, meta: fileMeta }
+  if (!result || typeof result !== 'object') return { ok: false, changed: false, meta: fileMeta }
+
+  let changed = false
+  const next = JSON.parse(JSON.stringify(fileMeta))
+
+  const fileTags = pickResultArray(result, ['file_tags', 'fileTags'])
+  if (fileTags.length) {
+    const merged = mergeUniqueStringList(next.file_tags, fileTags)
+    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.file_tags))) {
+      next.file_tags = merged
+      changed = true
+    }
+  }
+
+  const fileRelated = pickResultArray(result, ['related_nodes', 'relatedNodes'])
+  if (fileRelated.length) {
+    const merged = mergeUniqueStringList(next.related_nodes, fileRelated)
+    if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(next.related_nodes))) {
+      next.related_nodes = merged
+      changed = true
+    }
+  }
+
+  const patches = pickResultArray(result, ['structure_nodes', 'structureNodes', 'nodes'])
+  const nodes = Array.isArray(next.structure_nodes) ? next.structure_nodes : []
+  if (patches.length && nodes.length) {
+    for (const patch of patches) {
+      if (!patch || typeof patch !== 'object') continue
+      const stableId = String(pickResultValue(patch, ['stable_id', 'stableId', 'id', 'node_id']) || '').trim()
+      const title = String(pickResultValue(patch, ['title', 'name']) || '').trim()
+      const level = Number(pickResultValue(patch, ['level']) || 0)
+
+      const hit = nodes.find(n => {
+        const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
+        const sid = String(attrs?.stable_id || '').trim()
+        if (stableId && sid === stableId) return true
+        if (title && Number(n?.level || 0) === level && String(n?.title || '').trim() === title) return true
+        return false
+      })
+      if (!hit) continue
+
+      const patchTags = pickResultArray(patch, ['tags'])
+      if (patchTags.length) {
+        const merged = mergeUniqueStringList(hit.tags, patchTags)
+        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.tags))) {
+          hit.tags = merged
+          changed = true
+        }
+      }
+
+      const patchRelated = pickResultArray(patch, ['related_nodes', 'relatedNodes'])
+      if (patchRelated.length) {
+        const merged = mergeUniqueStringList(hit.related_nodes, patchRelated)
+        if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(hit.related_nodes))) {
+          hit.related_nodes = merged
+          changed = true
+        }
+      }
+
+      const attrsPatch = pickResultValue(patch, ['attrs_patch', 'attrsPatch', 'attrs'])
+      if (attrsPatch && typeof attrsPatch === 'object' && !Array.isArray(attrsPatch)) {
+        const attrs = (hit?.attrs && typeof hit.attrs === 'object') ? hit.attrs : {}
+        hit.attrs = { ...attrs, ...attrsPatch }
+        changed = true
+      }
+    }
+  }
+
+  const knowledgeRelations = pickResultArray(result, ['knowledge_relations', 'knowledgeRelations', 'relations'])
+  if (knowledgeRelations.length && nodes.length) {
+    for (const edge of knowledgeRelations) {
+      if (!edge || typeof edge !== 'object') continue
+      const fromId = String(pickResultValue(edge, ['from_stable_id', 'fromStableId', 'from']) || '').trim()
+      const toId = String(pickResultValue(edge, ['to_stable_id', 'toStableId', 'to']) || '').trim()
+      const hint = relationHint(toId, pickResultValue(edge, ['relation', 'type', 'label']))
+      if (!fromId || !hint) continue
+
+      const fromNode = nodes.find(n => {
+        const attrs = (n?.attrs && typeof n.attrs === 'object') ? n.attrs : {}
+        return String(attrs?.stable_id || '').trim() === fromId
+      })
+      if (!fromNode) continue
+
+      const merged = mergeUniqueStringList(fromNode.related_nodes, [hint])
+      if (JSON.stringify(merged) !== JSON.stringify(uniqueStringList(fromNode.related_nodes))) {
+        fromNode.related_nodes = merged
+        changed = true
+      }
+    }
+  }
+
+  return { ok: true, changed, meta: next }
+}
+
+const runKbAgentForSelected = async () => {
+  if (!canRunKbAgentForSelected.value) return
+  if (kbAgentProcessing.value) return
+
+  const n = selectedNode.value
+  const kbName = String(props.selectedKbName || '').trim()
+  const relPath = String(n?.relPath || '').trim()
+  if (!kbName || !relPath) return
+
+  try {
+    kbAgentProcessing.value = true
+    logger.info('[KBGraphEditor] kbmeta_agent_process start', { kbName, relPath, modelid: kbAgentModelId.value })
+
+    const kbMeta = await invoke('kbmeta_read_kb_meta', { knowledgeBaseName: kbName })
+    const fileMeta = await invoke('kbmeta_read_file_meta', { knowledgeBaseName: kbName, relPath })
+    const root = Array.isArray(props.treeData) ? props.treeData[0] : null
+    const allRelPaths = Array.from(new Set(collectMarkdownRelPathsFromTreeNode(root, []))).filter(Boolean)
+    const kbContextFiles = []
+    const fileContentMap = new Map()
+    for (const p of allRelPaths) {
+      try {
+        const meta = await invoke('kbmeta_read_file_meta', { knowledgeBaseName: kbName, relPath: p })
+        const absPath = toAbsPath(p)
+        const content = absPath ? String(await invoke('read_file_content', { path: absPath }) || '') : ''
+        fileContentMap.set(p, content)
+        kbContextFiles.push({
+          rel_path: p,
+          file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
+          related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
+          content_excerpt: content.slice(0, 3000),
+          structure_outline: Array.isArray(meta?.structure_nodes)
+            ? meta.structure_nodes.slice(0, 50).map(n => ({
+              title: String(n?.title || ''),
+              level: Number(n?.level || 0),
+              stable_id: String(n?.attrs?.stable_id || '')
+            }))
+            : []
+        })
+      } catch (e) {
+        logger.warn('[KBGraphEditor] read file meta failed in context', { relPath: p, error: String(e?.message || e) })
+      }
+    }
+
+    const response = await invoke('kbmeta_agent_process', {
+      request: {
+        modelid: kbAgentModelId.value,
+        sessionid: kbAgentSessionId.value,
+        task: 'file',
+        kb_name: kbName,
+        rel_path: relPath,
+        kb_meta: kbMeta,
+        file_meta: fileMeta,
+        kb_context_files: kbContextFiles,
+        file_content: String(fileContentMap.get(relPath) || '')
+      }
+    })
+
+    if (response?.sessionid) kbAgentSessionId.value = String(response.sessionid)
+
+    logger.info('[KBGraphEditor] kbmeta_agent_process result keys', { keys: Object.keys(response?.result || {}) })
+    const applied = applyKbAgentResultToFileMeta(fileMeta, response?.result)
+    if (!applied.ok) {
+      message.error('AI 返回结果不可用')
+      return
+    }
+    if (!applied.changed) {
+      message.info('AI 已完成分析，但没有可应用的变更')
+      return
+    }
+
+    await invoke('kbmeta_save_file_meta', { knowledgeBaseName: kbName, relPath, meta: applied.meta })
+    message.success('AI 已补全并保存元数据')
+    emit('reload', { selectKey: relPath })
+  } catch (e) {
+    logger.error('[KBGraphEditor] kbmeta_agent_process failed:', e)
+    message.error(String(e?.message || 'AI 处理失败'))
+  } finally {
+    kbAgentProcessing.value = false
+  }
+}
 
 const normalizeNewline = (s) => String(s || '').replace(/\r\n/g, '\n')
 

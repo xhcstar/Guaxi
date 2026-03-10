@@ -223,6 +223,7 @@ async fn main() {
             commands::chatview::cancel_chat_stream,
             commands::chatview::ensure_local_deepseek_service,
             commands::chatview::search_web_duckduckgo,
+            commands::chatview::kbmeta_agent_process,
             commands::docprocess::reader_open_file,
             commands::docprocess::convert_to_markdown,
             commands::docprocess::check_file_converted,
