@@ -212,7 +212,7 @@
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
               <n-button text @click="saveContent">
-                <n-icon :component="SaveOutline" width="16" height="16" />
+                <n-icon :component="SaveOutline" size="18" />
               </n-button>
             </template>
             保存 (Ctrl+S)
@@ -233,7 +233,7 @@
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
                 <n-button text>
-                  <n-icon :component="ExitOutline" width="16" height="16" />
+                  <n-icon :component="ExitOutline" size="18" />
                 </n-button>
               </template>
               导出

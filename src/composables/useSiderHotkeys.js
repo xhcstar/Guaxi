@@ -1,4 +1,4 @@
-import { onMounted, onUnmounted } from 'vue'
+import { onActivated, onDeactivated, onMounted, onUnmounted } from 'vue'
 
 const isEditableElement = (target) => {
   if (!(target instanceof Element)) {
@@ -17,6 +17,8 @@ const isEditableElement = (target) => {
 }
 
 export function useSiderHotkeys({ toggleLeft, toggleRight }) {
+  let isListening = false
+
   const handleKeydown = (event) => {
     if (!toggleLeft && !toggleRight) return
     if (event.defaultPrevented || event.isComposing) return
@@ -37,11 +39,20 @@ export function useSiderHotkeys({ toggleLeft, toggleRight }) {
     }
   }
 
-  onMounted(() => {
+  const startListening = () => {
+    if (isListening) return
+    isListening = true
     window.addEventListener('keydown', handleKeydown, true)
-  })
+  }
 
-  onUnmounted(() => {
+  const stopListening = () => {
+    if (!isListening) return
+    isListening = false
     window.removeEventListener('keydown', handleKeydown, true)
-  })
+  }
+
+  onMounted(startListening)
+  onActivated(startListening)
+  onDeactivated(stopListening)
+  onUnmounted(stopListening)
 }
