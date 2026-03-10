@@ -42,7 +42,7 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="openAssistantPanel">
-            <Icon icon="mdi:robot-excited-outline" width="18" height="18" />
+            <Icon :icon="assistantIcon" width="18" height="18" />
           </n-icon>
         </template>
         智能助手
@@ -266,6 +266,7 @@ import CreateKnowledgeBaseForm from '../BrainViewComponent/CreateKnowledgeBaseFo
 import { useMessage } from 'naive-ui';
 import { debounce } from 'lodash-es'
 import { Icon } from '@iconify/vue'
+import assistantIcon from '@iconify-icons/mdi/robot-excited-outline'
 import {
   Screenshot24Regular,
   Search32Filled,
