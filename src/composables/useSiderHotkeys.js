@@ -5,11 +5,11 @@ const isEditableElement = (target) => {
     return false
   }
 
-  if (target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]')) {
-    return true
+  if (target.closest('.monaco-editor')) {
+    return false
   }
 
-  if (target.closest('.monaco-editor')) {
+  if (target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]')) {
     return true
   }
 
