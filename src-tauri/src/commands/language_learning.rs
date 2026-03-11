@@ -198,6 +198,9 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_translation_records_created_at ON translation_records(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_translation_records_record_type ON translation_records(record_type);
         CREATE INDEX IF NOT EXISTS idx_translation_records_word ON translation_records(word);
+        CREATE INDEX IF NOT EXISTS idx_translation_records_record_word ON translation_records(record_type, word);
+        CREATE INDEX IF NOT EXISTS idx_translation_records_record_source ON translation_records(record_type, source_text);
+        CREATE INDEX IF NOT EXISTS idx_translation_records_source_text ON translation_records(source_text);
 
         CREATE TABLE IF NOT EXISTS audio_resources (
             id TEXT PRIMARY KEY,
@@ -227,6 +230,13 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE translation_records ADD COLUMN example_translations_json TEXT NOT NULL DEFAULT '[]'",
     ];
     for sql in migrations {
+        let _ = conn.execute(sql, []);
+    }
+    for sql in [
+        "CREATE INDEX IF NOT EXISTS idx_translation_records_record_word ON translation_records(record_type, word)",
+        "CREATE INDEX IF NOT EXISTS idx_translation_records_record_source ON translation_records(record_type, source_text)",
+        "CREATE INDEX IF NOT EXISTS idx_translation_records_source_text ON translation_records(source_text)",
+    ] {
         let _ = conn.execute(sql, []);
     }
 
@@ -418,6 +428,9 @@ fn ensure_lang_tables(conn: &Connection, lang: &str) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_{table}_created_at ON {table}(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_{table}_record_type ON {table}(record_type);
         CREATE INDEX IF NOT EXISTS idx_{table}_word ON {table}(word);
+        CREATE INDEX IF NOT EXISTS idx_{table}_record_word ON {table}(record_type, word);
+        CREATE INDEX IF NOT EXISTS idx_{table}_record_source ON {table}(record_type, source_text);
+        CREATE INDEX IF NOT EXISTS idx_{table}_source_text ON {table}(source_text);
         "#,
         table = records_table
     );
@@ -451,6 +464,30 @@ fn ensure_lang_tables(conn: &Connection, lang: &str) -> Result<(), String> {
         format!(
             "ALTER TABLE {} ADD COLUMN phrase_translations_json TEXT NOT NULL DEFAULT '[]'",
             records_table
+        ),
+        format!(
+            "ALTER TABLE {} ADD COLUMN examples_json TEXT NOT NULL DEFAULT '[]'",
+            records_table
+        ),
+        format!(
+            "ALTER TABLE {} ADD COLUMN example_translations_json TEXT NOT NULL DEFAULT '[]'",
+            records_table
+        ),
+    ] {
+        let _ = conn.execute(&sql, []);
+    }
+    for sql in [
+        format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_record_word ON {}(record_type, word)",
+            records_table, records_table
+        ),
+        format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_record_source ON {}(record_type, source_text)",
+            records_table, records_table
+        ),
+        format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_source_text ON {}(source_text)",
+            records_table, records_table
         ),
     ] {
         let _ = conn.execute(&sql, []);
@@ -616,6 +653,61 @@ pub fn language_learning_record_translation(
                 .map_err(|e| format!("查询重复记录失败: {}", e))?
         };
         if let Some(existing_id) = duplicate_id {
+            let update_sql = format!(
+                r#"
+                UPDATE {table}
+                SET
+                  translated_text = ?1,
+                  source_lang = ?2,
+                  target_lang = ?3,
+                  engine = ?4,
+                  phonetic = ?5,
+                  phonetic_uk = ?6,
+                  phonetic_us = ?7,
+                  part_of_speech = ?8,
+                  meanings_json = ?9,
+                  synonyms_json = ?10,
+                  antonyms_json = ?11,
+                  associates_json = ?12,
+                  synonyms_translations_json = ?13,
+                  antonyms_translations_json = ?14,
+                  associates_translations_json = ?15,
+                  phrases_json = ?16,
+                  phrase_translations_json = ?17,
+                  examples_json = ?18,
+                  example_translations_json = ?19,
+                  updated_at = ?20
+                WHERE id = ?21
+                "#,
+                table = records_table
+            );
+            conn.execute(
+                &update_sql,
+                params![
+                    translated_text,
+                    source_lang,
+                    target_lang,
+                    engine,
+                    phonetic,
+                    phonetic_uk,
+                    phonetic_us,
+                    part_of_speech,
+                    meanings_json,
+                    synonyms_json,
+                    antonyms_json,
+                    associates_json,
+                    synonyms_translations_json,
+                    antonyms_translations_json,
+                    associates_translations_json,
+                    phrases_json,
+                    phrase_translations_json,
+                    examples_json,
+                    example_translations_json,
+                    now,
+                    existing_id
+                ],
+            )
+            .map_err(|e| format!("更新重复记录失败: {}", e))?;
             return load_record_by_id(conn, &records_table, &existing_id)?
                 .ok_or_else(|| "读取重复记录失败".to_string());
         }
@@ -1067,6 +1159,20 @@ fn collect_meanings(item: &serde_json::Value) -> (String, Vec<String>, Vec<Strin
     (part_of_speech, meanings, examples, synonyms)
 }
 
+fn fallback_examples(word: &str, phrases: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(p) = phrases.first() {
+        out.push(p.trim().to_string());
+    }
+    if out.is_empty() && !word.trim().is_empty() {
+        out.push(format!("This is a {}.", word.trim()));
+    }
+    if out.is_empty() {
+        out.push("This is commonly used in daily communication.".to_string());
+    }
+    dedup_limit(out, 3)
+}
+
 fn dedup_limit(mut arr: Vec<String>, limit: usize) -> Vec<String> {
     arr.retain(|s| !s.trim().is_empty());
     let mut out = Vec::new();
@@ -1079,6 +1185,25 @@ fn dedup_limit(mut arr: Vec<String>, limit: usize) -> Vec<String> {
         }
     }
     out
+}
+
+fn env_or_default(key: &str, default_value: &str) -> String {
+    let raw = env::var(key).unwrap_or_default();
+    let v = raw.trim();
+    if v.is_empty() {
+        default_value.to_string()
+    } else {
+        v.trim_end_matches('/').to_string()
+    }
+}
+
+fn cn_accel_enabled(target_lang: &str) -> bool {
+    let flag = env::var("GUAXI_CN_ACCEL").unwrap_or_default().to_ascii_lowercase();
+    if flag == "1" || flag == "true" || flag == "yes" {
+        return true;
+    }
+    let to = target_lang.trim().to_ascii_lowercase();
+    to == "zh" || to == "zh-cn" || to == "zh_hans" || to == "zh-hans"
 }
 
 async fn translate_aligned(texts: &[String], target_lang: &str) -> Vec<String> {
@@ -1117,28 +1242,39 @@ pub async fn language_learning_enrich_word(
     if clean.is_empty() {
         return Err("单词为空".into());
     }
+    let to = target_lang.clone().unwrap_or_else(|| "zh".into());
+    let cn_accel = cn_accel_enabled(&to);
+    let (connect_timeout_s, request_timeout_s) = if cn_accel { (4, 8) } else { (8, 12) };
 
     let client = Client::builder()
         .user_agent("Mozilla/5.0")
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .timeout(std::time::Duration::from_secs(12))
+        .connect_timeout(std::time::Duration::from_secs(connect_timeout_s))
+        .timeout(std::time::Duration::from_secs(request_timeout_s))
         .build()
         .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
 
+    let dict_base = env_or_default(
+        "GUAXI_DICT_API_BASE",
+        "https://api.dictionaryapi.dev/api/v2/entries/en",
+    );
+    let datamuse_base = env_or_default("GUAXI_DATAMUSE_API_BASE", "https://api.datamuse.com/words");
     let dict_url = format!(
-        "https://api.dictionaryapi.dev/api/v2/entries/en/{}",
+        "{}/{}",
+        dict_base,
         encode(&clean)
     );
-    let syn_url = format!("https://api.datamuse.com/words?ml={}&max=16", encode(&clean));
-    let ant_url = format!("https://api.datamuse.com/words?rel_ant={}&max=16", encode(&clean));
-    let bga_url = format!("https://api.datamuse.com/words?rel_bga={}&max=10", encode(&clean));
-    let bgb_url = format!("https://api.datamuse.com/words?rel_bgb={}&max=10", encode(&clean));
+    let syn_url = format!("{}?ml={}&max=16", datamuse_base, encode(&clean));
+    let ant_url = format!("{}?rel_ant={}&max=16", datamuse_base, encode(&clean));
+    let bga_url = format!("{}?rel_bga={}&max=10", datamuse_base, encode(&clean));
+    let bgb_url = format!("{}?rel_bgb={}&max=10", datamuse_base, encode(&clean));
 
-    let dict_json = fetch_json(&client, &dict_url).await;
-    let syn_json = fetch_json(&client, &syn_url).await;
-    let ant_json = fetch_json(&client, &ant_url).await;
-    let bga_json = fetch_json(&client, &bga_url).await;
-    let bgb_json = fetch_json(&client, &bgb_url).await;
+    let (dict_json, syn_json, ant_json, bga_json, bgb_json) = tokio::join!(
+        fetch_json(&client, &dict_url),
+        fetch_json(&client, &syn_url),
+        fetch_json(&client, &ant_url),
+        fetch_json(&client, &bga_url),
+        fetch_json(&client, &bgb_url)
+    );
 
     let mut phonetic = String::new();
     let mut phonetic_uk = String::new();
@@ -1151,13 +1287,21 @@ pub async fn language_learning_enrich_word(
 
     if let Some(v) = dict_json {
         if let Some(arr) = v.as_array() {
-            if let Some(first) = arr.first() {
-                let (p, p_uk, p_us) = pick_phonetics(first);
-                phonetic = p;
-                phonetic_uk = p_uk;
-                phonetic_us = p_us;
-                let (pos, defs, exs, syns) = collect_meanings(first);
-                part_of_speech = pos;
+            for item in arr.iter().take(3) {
+                let (p, p_uk, p_us) = pick_phonetics(item);
+                if phonetic.is_empty() {
+                    phonetic = p;
+                }
+                if phonetic_uk.is_empty() {
+                    phonetic_uk = p_uk;
+                }
+                if phonetic_us.is_empty() {
+                    phonetic_us = p_us;
+                }
+                let (pos, defs, exs, syns) = collect_meanings(item);
+                if part_of_speech.is_empty() {
+                    part_of_speech = pos;
+                }
                 meanings.extend(defs);
                 examples.extend(exs);
                 synonyms.extend(syns);
@@ -1194,16 +1338,14 @@ pub async fn language_learning_enrich_word(
     }
 
     let from = source_lang.unwrap_or_else(|| "auto".into());
-    let to = target_lang.unwrap_or_else(|| "zh".into());
     let target_lang_for_defs = if to.trim().is_empty() {
         "zh".to_string()
     } else {
         to.clone()
     };
     let meanings = dedup_limit(meanings, 12);
-    let examples = dedup_limit(examples, 12);
-    let synonyms = dedup_limit(synonyms, 24);
-    let antonyms = dedup_limit(antonyms, 24);
+    let synonyms = dedup_limit(synonyms, 12);
+    let antonyms = dedup_limit(antonyms, 12);
     let associates = {
         let mut out = Vec::new();
         for x in synonyms.iter().skip(10).take(12) {
@@ -1214,6 +1356,10 @@ pub async fn language_learning_enrich_word(
     let mut phrases = collect_phrases_from_edges(bga_json, &clean, false);
     phrases.extend(collect_phrases_from_edges(bgb_json, &clean, true));
     phrases = dedup_limit(phrases, 12);
+    let mut examples = dedup_limit(examples, 12);
+    if examples.is_empty() {
+        examples = fallback_examples(&clean, &phrases);
+    }
 
     let translated = translator_free::translate_text_free(vec![clean.clone()], Some(from), Some(to))
         .await
@@ -1221,13 +1367,25 @@ pub async fn language_learning_enrich_word(
         .and_then(|res| res.translated_texts.first().cloned())
         .unwrap_or_default();
 
-    let meanings_translated = translate_aligned(&meanings, &target_lang_for_defs).await;
-    let example_translations = translate_aligned(&examples, &target_lang_for_defs).await;
-    let synonyms_translations = translate_aligned(&synonyms, &target_lang_for_defs).await;
-    let antonyms_translations = translate_aligned(&antonyms, &target_lang_for_defs).await;
-    let associates_translations = translate_aligned(&associates, &target_lang_for_defs).await;
-    let phrase_translations = translate_aligned(&phrases, &target_lang_for_defs).await;
     let simple_translations = split_simple_translations(&translated);
+    let meanings_translated = if simple_translations.is_empty() {
+        translate_aligned(&meanings, &target_lang_for_defs).await
+    } else {
+        Vec::new()
+    };
+    let (
+        example_translations,
+        synonyms_translations,
+        antonyms_translations,
+        associates_translations,
+        phrase_translations,
+    ) = tokio::join!(
+        translate_aligned(&examples, &target_lang_for_defs),
+        translate_aligned(&synonyms, &target_lang_for_defs),
+        translate_aligned(&antonyms, &target_lang_for_defs),
+        translate_aligned(&associates, &target_lang_for_defs),
+        translate_aligned(&phrases, &target_lang_for_defs)
+    );
     let meanings_simple = if simple_translations.is_empty() {
         if meanings_translated.is_empty() {
             meanings.into_iter().take(5).collect::<Vec<_>>()

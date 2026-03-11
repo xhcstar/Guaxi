@@ -198,6 +198,15 @@ type TranslateFn = for<'a> fn(
     &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>>;
 
+fn accel_cn_mode(to: &str) -> bool {
+    let flag = env::var("GUAXI_CN_ACCEL").unwrap_or_default().to_ascii_lowercase();
+    if flag == "1" || flag == "true" || flag == "yes" {
+        return true;
+    }
+    let t = normalize_lang_lower(to);
+    t == "zh" || t == "zh-cn" || t == "zh-hans" || t == "zh_hans"
+}
+
 // 4. 处理每批翻译
 async fn process_batch(
     texts: &[String],
@@ -205,6 +214,7 @@ async fn process_batch(
     to: &str,
 ) -> Result<(Vec<String>, String), TranslationError> {
     let clean_texts: Vec<String> = texts.iter().map(|t| preprocess_text(t)).collect();
+    let cn_mode = accel_cn_mode(to);
 
     if let Some((secret_id, secret_key)) = load_vendor_secret_pair() {
         match translator::translate_text(clean_texts.clone(), secret_id, secret_key).await {
@@ -220,17 +230,39 @@ async fn process_batch(
         }
     }
 
-    // 定义所有翻译服务（按优先级排序）
-    let services: [TranslateFn; 4] = [
-        bing_translate_service,
-        google_translate_service,
-        lingva_translate_service,
-        yandex_translate_service,
-    ];
+    let primary_pair: (TranslateFn, TranslateFn) = if cn_mode {
+        (bing_translate_service, transmart_translate_service)
+    } else {
+        (bing_translate_service, google_translate_service)
+    };
+    let (p1, p2) = tokio::join!(
+        primary_pair.0(&clean_texts, from, to),
+        primary_pair.1(&clean_texts, from, to)
+    );
+    if let Ok((results, engine)) = p1 {
+        return Ok((results, engine));
+    }
+    if let Ok((results, engine)) = p2 {
+        return Ok((results, engine));
+    }
+
+    let services: Vec<TranslateFn> = if cn_mode {
+        vec![
+            google_translate_service,
+            yandex_translate_service,
+            lingva_translate_service,
+        ]
+    } else {
+        vec![
+            yandex_translate_service,
+            lingva_translate_service,
+            transmart_translate_service,
+        ]
+    };
 
     let mut last_error = None;
 
-    for service in services.iter() {
+    for service in services {
         match service(&clean_texts, from, to).await {
             Ok((results, engine)) => return Ok((results, engine)),
             Err(e) => {

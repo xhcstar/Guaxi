@@ -502,10 +502,19 @@ const allRows = computed(() => {
       note: String((r.examples && r.examples[0]) || ''),
       createdAt: String(r.created_at || ''),
       examples: Array.isArray(r.examples) ? r.examples : [],
-      examplePairs: (Array.isArray(r.examples) ? r.examples : []).map((source, idx) => ({
-        source: String(source || '').trim(),
-        target: String((Array.isArray(r.example_translations) ? r.example_translations : [])[idx] || '').trim(),
-      })),
+      examplePairs: (() => {
+        const sources = Array.isArray(r.examples) ? r.examples : []
+        const targets = Array.isArray(r.example_translations) ? r.example_translations : []
+        const list = sources.map((source, idx) => ({
+          source: String(source || '').trim(),
+          target: String(targets[idx] || '').trim(),
+        })).filter((x) => x.source)
+        if (list.length) return list
+        const fallback = String(((Array.isArray(r.phrases) ? r.phrases : [])[0]) || '').trim() || `This is a ${String(r.word || r.source_text || '').trim()}.`
+        const fallbackTarget = String(((Array.isArray(r.phrase_translations) ? r.phrase_translations : [])[0]) || '').trim()
+          || normalizeList(Array.isArray(r.meanings) ? r.meanings : splitSimpleTranslations(r.translated_text)).slice(0, 1).join('')
+        return [{ source: fallback, target: fallbackTarget }]
+      })(),
       phrasePairs: (Array.isArray(r.phrases) ? r.phrases : []).map((source, idx) => ({
         source: String(source || '').trim(),
         target: String((Array.isArray(r.phrase_translations) ? r.phrase_translations : [])[idx] || '').trim(),
@@ -676,10 +685,15 @@ const activeWordExamplePairs = computed(() => {
   const targets = Array.isArray(row.example_translations)
     ? row.example_translations.map((x) => String(x || '').trim())
     : []
-  return examples.map((source, idx) => ({
+  const pairs = examples.map((source, idx) => ({
     source,
     target: String(targets[idx] || '').trim(),
   }))
+  if (pairs.length) return pairs
+  const fallbackSource = String(activeWordPhrasePairs.value[0]?.source || '').trim()
+    || `This is a ${String(row.word || row.source_text || '').trim()}.`
+  const fallbackTarget = String(activeWordPhrasePairs.value[0]?.target || '').trim() || activeWordCombinedTranslation.value
+  return [{ source: fallbackSource, target: String(fallbackTarget || '').trim() }]
 })
 
 const getMasteryLevel = (sourceType, rawId) => getMasteryEntry(sourceType, rawId).level

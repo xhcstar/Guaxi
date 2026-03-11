@@ -344,10 +344,14 @@ const examplePairs = computed(() => {
   const targets = Array.isArray(props.wordMeta?.example_translations)
     ? props.wordMeta.example_translations.map((x) => String(x || '').trim())
     : []
-  return sources.slice(0, 18).map((source, i) => ({
+  const pairs = sources.slice(0, 18).map((source, i) => ({
     source,
     target: String(targets[i] || '').trim()
   }))
+  if (pairs.length) return pairs
+  const fallbackSource = String(phrasePairs.value[0]?.source || '').trim() || `This is a ${wordMetaWord.value}.`
+  const fallbackTarget = String(phrasePairs.value[0]?.target || '').trim() || combinedWordTranslationText.value
+  return [{ source: fallbackSource, target: String(fallbackTarget || '').trim() }]
 })
 
 const phrasePairs = computed(() => {
