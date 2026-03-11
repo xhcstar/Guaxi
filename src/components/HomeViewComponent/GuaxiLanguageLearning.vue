@@ -437,7 +437,7 @@ const keyword = ref('')
 const recordKind = ref('all')
 const learningLangStorageKey = 'guaxi_language_learning_target_lang'
 const learningLang = ref(window.localStorage.getItem(learningLangStorageKey) || 'zh')
-const selectedShelf = ref('my_sentences')
+const selectedShelf = ref('my_vocab')
 const records = ref([])
 const audioResources = ref([])
 const activeRow = ref(null)
@@ -671,6 +671,7 @@ const matchesKeyword = (row) => {
 
 const shelfFilteredRows = computed(() => {
   const rows = allRows.value
+  if (selectedShelf.value === 'my_vocab') return rows.filter((r) => r.rowType === 'word')
   if (selectedShelf.value === 'my_sentences') return rows.filter((r) => r.rowType === 'sentence')
   if (selectedShelf.value === 'my_paragraphs') return rows.filter((r) => r.rowType === 'paragraph')
   if (selectedShelf.value === 'my_listening') return rows.filter((r) => r.rowType === 'listening')
@@ -689,6 +690,7 @@ const leftShelfItems = computed(() => {
   const rows = allRows.value
   const count = (fn) => rows.filter(fn).length
   return [
+    { key: 'my_vocab', label: '我的单词本', count: count((r) => r.rowType === 'word') },
     { key: 'my_sentences', label: '我摘录的例句', count: count((r) => r.rowType === 'sentence') },
     { key: 'my_paragraphs', label: '我摘录的段落', count: count((r) => r.rowType === 'paragraph') },
     { key: 'my_listening', label: '我的听力', count: count((r) => r.rowType === 'listening') },
@@ -902,6 +904,7 @@ const masteryPercent = computed(() => {
 })
 
 const resolveQueryKind = () => {
+  if (selectedShelf.value === 'my_vocab') return 'word'
   if (selectedShelf.value === 'my_sentences') return 'sentence'
   if (selectedShelf.value === 'my_paragraphs') return 'paragraph'
   if (recordKind.value === 'listening') return 'all'
