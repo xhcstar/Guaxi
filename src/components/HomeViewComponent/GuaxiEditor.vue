@@ -258,6 +258,21 @@
         class="realtime-vditor">
       </div>
       <div v-show="previewMode !== 'realtime' && showPreview" class="preview-shell" ref="previewShellRef">
+        <div v-show="previewSearchVisible" class="preview-search-panel" @mousedown.stop>
+          <input
+            ref="previewSearchInputRef"
+            v-model="previewSearchKeyword"
+            class="preview-search-input"
+            type="text"
+            placeholder="搜索预览内容..."
+            @keydown.enter.prevent="focusNextPreviewSearchMatch"
+            @keydown.shift.enter.prevent="focusPrevPreviewSearchMatch"
+          />
+          <span class="preview-search-count">{{ previewSearchMatchCountText }}</span>
+          <button class="preview-search-btn" type="button" @click="focusPrevPreviewSearchMatch">上一个</button>
+          <button class="preview-search-btn" type="button" @click="focusNextPreviewSearchMatch">下一个</button>
+          <button class="preview-search-btn preview-search-close" type="button" @click="closePreviewSearch">关闭</button>
+        </div>
         <div v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"
           @mouseup="handlePreviewSelectionMouseUp"></div>
         <div v-show="previewFloatingToolbarVisible" class="floating-md-toolbar" :style="previewFloatingToolbarStyle"
@@ -670,12 +685,17 @@ const secondaryEditorContainer = ref(null);
 const editorWrapperRef = ref(null);
 const editorHeaderRef = ref(null);
 const previewShellRef = ref(null);
+const previewSearchInputRef = ref(null)
 const floatingToolbarVisible = ref(false);
 const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
 const previewFloatingToolbarVisible = ref(false)
 const previewFloatingToolbarStyle = ref({ left: '0px', top: '0px' })
 const previewSelectionText = ref('')
 const selectionSurface = ref('editor')
+const previewSearchVisible = ref(false)
+const previewSearchKeyword = ref('')
+const previewSearchMatches = ref([])
+const previewSearchActiveIndex = ref(-1)
 
 const selectionTranslatePanelVisible = ref(false);
 const selectionTranslatePinned = ref(false);
@@ -6316,6 +6336,146 @@ const clearPreviewSelectionState = () => {
   hidePreviewFloatingToolbar()
 }
 
+const previewSearchMatchCountText = computed(() => {
+  const total = Array.isArray(previewSearchMatches.value) ? previewSearchMatches.value.length : 0
+  if (!total) return '0 / 0'
+  const idx = Math.max(0, Number(previewSearchActiveIndex.value || 0))
+  return `${Math.min(idx + 1, total)} / ${total}`
+})
+
+const escapeRegExp = (raw) => String(raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const clearPreviewSearchHighlights = () => {
+  const container = previewContainer.value
+  if (!container) {
+    previewSearchMatches.value = []
+    previewSearchActiveIndex.value = -1
+    return
+  }
+  const marks = container.querySelectorAll('span.preview-search-hit')
+  marks.forEach((mark) => {
+    const parent = mark.parentNode
+    if (!parent) return
+    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+    parent.normalize?.()
+  })
+  previewSearchMatches.value = []
+  previewSearchActiveIndex.value = -1
+}
+
+const focusPreviewSearchMatchAt = (index, options = {}) => {
+  const matches = Array.isArray(previewSearchMatches.value) ? previewSearchMatches.value : []
+  const total = matches.length
+  if (!total) {
+    previewSearchActiveIndex.value = -1
+    return
+  }
+  let idx = Number(index)
+  if (!Number.isFinite(idx)) idx = 0
+  if (idx < 0) idx = total - 1
+  if (idx >= total) idx = 0
+
+  matches.forEach((el) => el?.classList?.remove('preview-search-hit-active'))
+  const active = matches[idx]
+  if (active) {
+    active.classList.add('preview-search-hit-active')
+    if (options.scroll !== false) {
+      active.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    }
+  }
+  previewSearchActiveIndex.value = idx
+}
+
+const applyPreviewSearchHighlights = () => {
+  clearPreviewSearchHighlights()
+
+  const container = previewContainer.value
+  const keyword = String(previewSearchKeyword.value || '').trim()
+  if (!container || !keyword) return
+
+  const regex = new RegExp(escapeRegExp(keyword), 'gi')
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const text = String(node?.nodeValue || '')
+      if (!text) return NodeFilter.FILTER_REJECT
+      const parent = node.parentElement
+      if (!parent) return NodeFilter.FILTER_REJECT
+      if (parent.closest('.preview-search-panel')) return NodeFilter.FILTER_REJECT
+      if (parent.closest('.preview-search-hit')) return NodeFilter.FILTER_REJECT
+      if (parent.closest('script, style, code')) return NodeFilter.FILTER_REJECT
+      regex.lastIndex = 0
+      return regex.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    },
+  })
+
+  const textNodes = []
+  let cur = walker.nextNode()
+  while (cur) {
+    textNodes.push(cur)
+    cur = walker.nextNode()
+  }
+
+  const matches = []
+  textNodes.forEach((node) => {
+    const text = String(node.nodeValue || '')
+    const parent = node.parentNode
+    if (!parent) return
+
+    regex.lastIndex = 0
+    let lastIdx = 0
+    let m = regex.exec(text)
+    if (!m) return
+
+    const frag = document.createDocumentFragment()
+    while (m) {
+      const i = Number(m.index || 0)
+      const matchedText = String(m[0] || '')
+      if (i > lastIdx) {
+        frag.appendChild(document.createTextNode(text.slice(lastIdx, i)))
+      }
+      const span = document.createElement('span')
+      span.className = 'preview-search-hit'
+      span.textContent = matchedText
+      frag.appendChild(span)
+      matches.push(span)
+      lastIdx = i + matchedText.length
+      m = regex.exec(text)
+    }
+    if (lastIdx < text.length) {
+      frag.appendChild(document.createTextNode(text.slice(lastIdx)))
+    }
+    parent.replaceChild(frag, node)
+  })
+
+  previewSearchMatches.value = matches
+  if (matches.length) {
+    focusPreviewSearchMatchAt(0, { scroll: false })
+  }
+}
+
+const openPreviewSearch = async () => {
+  previewSearchVisible.value = true
+  await nextTick()
+  const input = previewSearchInputRef.value
+  if (input?.focus) input.focus()
+  if (input?.select) input.select()
+  applyPreviewSearchHighlights()
+}
+
+const closePreviewSearch = () => {
+  previewSearchVisible.value = false
+  previewSearchKeyword.value = ''
+  clearPreviewSearchHighlights()
+}
+
+const focusNextPreviewSearchMatch = () => {
+  focusPreviewSearchMatchAt(previewSearchActiveIndex.value + 1)
+}
+
+const focusPrevPreviewSearchMatch = () => {
+  focusPreviewSearchMatchAt(previewSearchActiveIndex.value - 1)
+}
+
 const updatePreviewSelectionFromWindow = () => {
   const selection = window.getSelection?.()
   const container = previewContainer.value
@@ -7584,6 +7744,29 @@ const saveContent = async () => {
 
 // 快捷键处理
 const handleKeyDown = (e) => {
+  const isFindShortcut =
+    !e.altKey &&
+    !e.shiftKey &&
+    (e.ctrlKey || e.metaKey) &&
+    String(e.key || '').toLowerCase() === 'f'
+
+  if (isFindShortcut) {
+    const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value && previewMode.value !== 'realtime'
+    if (previewOnly) {
+      e.preventDefault()
+      e.stopPropagation()
+      openPreviewSearch()
+      return
+    }
+  }
+
+  if (e.key === 'Escape' && previewSearchVisible.value) {
+    e.preventDefault()
+    e.stopPropagation()
+    closePreviewSearch()
+    return
+  }
+
   if (e.ctrlKey && e.key === 's') {
     e.preventDefault();
     saveContent();
@@ -9280,9 +9463,23 @@ watch(renderedHtml, () => {
         scrollPreviewToLine(pendingPreviewScrollLine.value);
         pendingPreviewScrollLine.value = null;
       }
+      applyPreviewSearchHighlights()
     }
   });
 });
+
+watch(previewSearchKeyword, () => {
+  nextTick(() => {
+    applyPreviewSearchHighlights()
+  })
+})
+
+watch([showPreview, previewMode, mode], ([previewShown, currentPreviewMode, currentMode]) => {
+  const previewOnly = previewShown && currentPreviewMode !== 'realtime' && currentMode === 'preview' && !showEditor.value
+  if (!previewOnly && previewSearchVisible.value) {
+    closePreviewSearch()
+  }
+})
 
 // 添加Vim模式切换函数
 const toggleVimMode = () => {
@@ -9886,6 +10083,7 @@ onActivated(() => {
 
 onUnmounted(() => {
   stopSelectionAudioPlayback()
+  closePreviewSearch()
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.removeEventListener('selectionchange', handleGlobalSelectionChange, true)
@@ -10630,6 +10828,71 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.preview-search-panel {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 94%, transparent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.preview-search-input {
+  width: 220px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-border);
+  outline: none;
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+}
+
+.preview-search-input:focus {
+  border-color: var(--primary-color, #4acadb);
+}
+
+.preview-search-count {
+  font-size: 12px;
+  opacity: 0.8;
+  min-width: 52px;
+  text-align: center;
+}
+
+.preview-search-btn {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+  cursor: pointer;
+}
+
+.preview-search-btn:hover {
+  background: var(--guaxi-header-bg);
+}
+
+.preview-search-close {
+  color: var(--error-color, #ff6b6b);
+}
+
+.preview :deep(.preview-search-hit) {
+  background: rgba(255, 208, 0, 0.38);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.preview :deep(.preview-search-hit-active) {
+  background: rgba(255, 145, 0, 0.65);
 }
 
 .preview {
