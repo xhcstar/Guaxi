@@ -1,12 +1,14 @@
 use reqwest::{header, Client};
 use serde::Serialize;
 use std::error::Error;
+use std::env;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
 use uuid::Uuid;
+use crate::commands::translator;
 
 // 1. 定义数据结构
 #[derive(Debug, Serialize, Clone)]
@@ -88,7 +90,7 @@ pub async fn translate_text_free(
         }
 
         // 控制请求频率
-        sleep(Duration::from_millis(200)).await;
+        sleep(Duration::from_millis(80)).await;
     }
 
     Ok(TranslationResult {
@@ -204,6 +206,20 @@ async fn process_batch(
 ) -> Result<(Vec<String>, String), TranslationError> {
     let clean_texts: Vec<String> = texts.iter().map(|t| preprocess_text(t)).collect();
 
+    if let Some((secret_id, secret_key)) = load_vendor_secret_pair() {
+        match translator::translate_text(clean_texts.clone(), secret_id, secret_key).await {
+            Ok(resp) if resp.success && !resp.translated_texts.is_empty() => {
+                return Ok((resp.translated_texts, "Tencent".to_string()));
+            }
+            Ok(_) => {
+                warn!("Vendor translation returned empty result, fallback to free providers");
+            }
+            Err(e) => {
+                warn!("Vendor translation failed, fallback to free providers: {}", e);
+            }
+        }
+    }
+
     // 定义所有翻译服务（按优先级排序）
     let services: [TranslateFn; 4] = [
         bing_translate_service,
@@ -225,6 +241,22 @@ async fn process_batch(
     }
     
     Err(last_error.unwrap_or_else(|| TranslationError("All translation services failed".into())))
+}
+
+fn load_vendor_secret_pair() -> Option<(String, String)> {
+    let candidates = [
+        ("TENCENT_SECRET_ID", "TENCENT_SECRET_KEY"),
+        ("TMT_SECRET_ID", "TMT_SECRET_KEY"),
+        ("GUAXI_TENCENT_SECRET_ID", "GUAXI_TENCENT_SECRET_KEY"),
+    ];
+    for (id_key, key_key) in candidates {
+        let id = env::var(id_key).unwrap_or_default().trim().to_string();
+        let key = env::var(key_key).unwrap_or_default().trim().to_string();
+        if !id.is_empty() && !key.is_empty() {
+            return Some((id, key));
+        }
+    }
+    None
 }
 
 // 5. 文本预处理

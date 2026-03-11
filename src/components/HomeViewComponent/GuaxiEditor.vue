@@ -6787,11 +6787,20 @@ const translateSelectionText = async (overrideText) => {
         selectionTranslateWordMeta.value = {
           word: String(enriched?.word || text).trim(),
           phonetic: String(enriched?.phonetic || '').trim(),
+          phonetic_uk: String(enriched?.phonetic_uk || '').trim(),
+          phonetic_us: String(enriched?.phonetic_us || '').trim(),
           part_of_speech: String(enriched?.part_of_speech || '').trim(),
           meanings: Array.isArray(enriched?.meanings) ? enriched.meanings : [],
           synonyms: Array.isArray(enriched?.synonyms) ? enriched.synonyms : [],
           antonyms: Array.isArray(enriched?.antonyms) ? enriched.antonyms : [],
-          examples: Array.isArray(enriched?.examples) ? enriched.examples : []
+          associates: Array.isArray(enriched?.associates) ? enriched.associates : [],
+          synonyms_translations: Array.isArray(enriched?.synonyms_translations) ? enriched.synonyms_translations : [],
+          antonyms_translations: Array.isArray(enriched?.antonyms_translations) ? enriched.antonyms_translations : [],
+          associates_translations: Array.isArray(enriched?.associates_translations) ? enriched.associates_translations : [],
+          phrases: Array.isArray(enriched?.phrases) ? enriched.phrases : [],
+          phrase_translations: Array.isArray(enriched?.phrase_translations) ? enriched.phrase_translations : [],
+          examples: Array.isArray(enriched?.examples) ? enriched.examples : [],
+          example_translations: Array.isArray(enriched?.example_translations) ? enriched.example_translations : [],
         }
       } catch (err) {
         logger.warn('[SelectionTranslate] enrich word failed:', err)
