@@ -176,7 +176,7 @@
             <GuaxiSelectionTranslatePanel :pos="selectionTranslatePanelPos" :raw="selectionTranslateRaw"
               :result="selectionTranslateResult" :error="selectionTranslateError" :busy="selectionTranslateBusy"
               :pinned="selectionTranslatePinned" :items="selectionTranslateItems" :from-lang="selectionTranslateFrom"
-              :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions"
+              :to-lang="selectionTranslateTo" :lang-options="selectionTranslateLangOptions" :word-meta="selectionTranslateWordMeta"
               @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
               @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
               @translate="translateSelectionText" @copy="copySelectionTranslateResult" @toggle-pin="toggleSelectionTranslatePinned"
@@ -569,6 +569,7 @@ const selectionTranslateRaw = ref('')
 const selectionTranslateResult = ref('')
 const selectionTranslateError = ref('')
 const selectionTranslateItems = ref([])
+const selectionTranslateWordMeta = ref(null)
 
 const selectionTranslateMultiAvailable = ref(true)
 let selectionTranslateMultiNotFoundWarned = false
@@ -1580,6 +1581,14 @@ const normalizeSelectionTextForLanguageTasks = (raw) => {
     .trim()
 }
 
+const isWordSelection = (text) => {
+  const t = String(text || '').trim()
+  if (!t) return false
+  if (t.length > 48) return false
+  if (/\s/.test(t)) return false
+  return /^[\p{L}\p{N}'-]+$/u.test(t)
+}
+
 const insertIntoActiveNoteEditor = (text) => {
   const idx = activeCardIndex.value
   if (idx < 0) return false
@@ -1667,6 +1676,7 @@ const translateSelectionText = async (overrideText) => {
   selectionTranslateResult.value = ''
   selectionTranslateError.value = ''
   selectionTranslateItems.value = []
+  selectionTranslateWordMeta.value = null
 
   logger.info('[SelectionTranslate][MarkdownReader] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value })
 
@@ -1689,16 +1699,13 @@ const translateSelectionText = async (overrideText) => {
 
         const primary = selectionTranslateItems.value.find((it) => it.success && String(it.text || '').trim())
         if (primary) {
-          const translated = String(primary.text || '')
-          selectionTranslateResult.value = translated
+          selectionTranslateResult.value = String(primary.text || '')
           selectionTranslateError.value = ''
-          selectionInsertText.value = `**${text}**\n\n${translated}`
           logger.info('[SelectionTranslate][MarkdownReader] multi success', { engines: selectionTranslateItems.value.length })
-          return
+        } else {
+          const err = String(response?.error || '翻译结果为空')
+          throw new Error(err)
         }
-
-        const err = String(response?.error || '翻译结果为空')
-        throw new Error(err)
       } catch (err) {
         const msg = String(err?.message || err || '')
         if (msg.includes('selection_translate_free_multi') && msg.toLowerCase().includes('not found')) {
@@ -1726,11 +1733,63 @@ const translateSelectionText = async (overrideText) => {
       throw new Error(err)
     }
 
-    selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
-    selectionTranslateResult.value = translated
-    selectionTranslateError.value = ''
-    selectionInsertText.value = `**${text}**\n\n${translated}`
-    logger.info('[SelectionTranslate][MarkdownReader] single success', { len: translated.length })
+    if (!selectionTranslateResult.value) {
+      selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
+      selectionTranslateResult.value = translated
+      selectionTranslateError.value = ''
+      logger.info('[SelectionTranslate][MarkdownReader] single success', { len: translated.length })
+    }
+
+    const finalTranslated = String(selectionTranslateResult.value || '').trim()
+    if (isWordSelection(text)) {
+      try {
+        const enriched = await invoke('language_learning_enrich_word', {
+          word: text,
+          sourceLang: selectionTranslateFrom.value,
+          targetLang: selectionTranslateTo.value
+        })
+        selectionTranslateWordMeta.value = {
+          word: String(enriched?.word || text).trim(),
+          phonetic: String(enriched?.phonetic || '').trim(),
+          phonetic_uk: String(enriched?.phonetic_uk || '').trim(),
+          phonetic_us: String(enriched?.phonetic_us || '').trim(),
+          part_of_speech: String(enriched?.part_of_speech || '').trim(),
+          meanings: Array.isArray(enriched?.meanings) ? enriched.meanings : [],
+          synonyms: Array.isArray(enriched?.synonyms) ? enriched.synonyms : [],
+          antonyms: Array.isArray(enriched?.antonyms) ? enriched.antonyms : [],
+          associates: Array.isArray(enriched?.associates) ? enriched.associates : [],
+          synonyms_translations: Array.isArray(enriched?.synonyms_translations) ? enriched.synonyms_translations : [],
+          antonyms_translations: Array.isArray(enriched?.antonyms_translations) ? enriched.antonyms_translations : [],
+          associates_translations: Array.isArray(enriched?.associates_translations) ? enriched.associates_translations : [],
+          phrases: Array.isArray(enriched?.phrases) ? enriched.phrases : [],
+          phrase_translations: Array.isArray(enriched?.phrase_translations) ? enriched.phrase_translations : [],
+          examples: Array.isArray(enriched?.examples) ? enriched.examples : [],
+          example_translations: Array.isArray(enriched?.example_translations) ? enriched.example_translations : [],
+        }
+      } catch (err) {
+        logger.warn('[SelectionTranslate][MarkdownReader] enrich word failed:', err)
+      }
+    }
+
+    if (finalTranslated) {
+      selectionInsertText.value = `**${text}**\n\n${finalTranslated}`
+      try {
+        const primaryItem = selectionTranslateItems.value.find((it) => it.success && String(it.text || '').trim())
+        await invoke('language_learning_record_translation', {
+          input: {
+            source_text: text,
+            translated_text: finalTranslated,
+            source_lang: selectionTranslateFrom.value,
+            target_lang: selectionTranslateTo.value,
+            engine: String(primaryItem?.engine || 'Free'),
+            record_type: isWordSelection(text) ? 'word' : undefined,
+            word_meta: selectionTranslateWordMeta.value || undefined,
+          }
+        })
+      } catch (err) {
+        logger.warn('[SelectionTranslate][MarkdownReader] record save failed:', err)
+      }
+    }
   } catch (err) {
     const msg = String(err?.message || err || '翻译失败')
     selectionTranslateError.value = msg
