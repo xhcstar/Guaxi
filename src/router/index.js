@@ -16,6 +16,7 @@ import GuaxiResourceRepoManager from '../components/HomeViewComponent/GuaxiResou
 import GuaxiSlidevManager from '../components/HomeViewComponent/GuaxiSlidevManager.vue'
 import GuaxiKnowledgeBaseManager from '../components/HomeViewComponent/GuaxiKnowledgeBaseManager.vue'
 import GuaxiMarkdownManual from '../components/HomeViewComponent/GuaxiMarkdownManual.vue'
+import GuaxiLanguageLearning from '../components/HomeViewComponent/GuaxiLanguageLearning.vue'
 import FlipboardFeedManager from '../components/SearchViewComponent/FlipboardFeedManager.vue'
 
 import LifeAlbumApp from '../components/ApplicationViewComponent/apps/LifeAlbumApp.vue'
@@ -150,6 +151,11 @@ export const routes = [
     props: (route) => ({
       theme: route.query.theme,
     })
+  },
+  {
+    path: '/language-learning',
+    name: 'language-learning',
+    component: GuaxiLanguageLearning,
   },
   {
     path: '/kb-manager',

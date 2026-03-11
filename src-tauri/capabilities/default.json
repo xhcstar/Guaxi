@@ -13,7 +13,8 @@
     "markdown-manual",
     "life-habits",
     "tools-file-transfer",
-    "slidev_manager"
+    "slidev_manager",
+    "language_learning"
   ],
   "permissions": [
     "core:default",

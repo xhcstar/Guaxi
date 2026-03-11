@@ -48,6 +48,20 @@
 
         <div v-else-if="error" class="section-content section-error">{{ error }}</div>
 
+        <div v-else-if="isWordPanel" class="word-panel">
+          <div class="word-head">
+            <div class="word-text">{{ wordMetaWord }}</div>
+            <div class="word-extra">
+              <span v-if="wordMeta?.phonetic">{{ wordMeta.phonetic }}</span>
+              <span v-if="wordMeta?.part_of_speech">· {{ wordMeta.part_of_speech }}</span>
+            </div>
+          </div>
+          <div class="section-content section-result">{{ primaryText || '—' }}</div>
+          <div v-if="wordMeta?.meanings?.length" class="word-chip-wrap">
+            <n-tag v-for="(x, i) in wordMeta.meanings" :key="`wm-${i}`" size="small" type="success">{{ x }}</n-tag>
+          </div>
+        </div>
+
         <div v-else class="engine-list">
           <div v-for="it in items" :key="it.engine" class="engine-item">
             <div class="engine-item-header">
@@ -70,7 +84,7 @@
 
 <script setup>
 import { ref, onUnmounted, computed, onMounted, nextTick } from 'vue'
-import { NButton, NSpin, NSelect } from 'naive-ui'
+import { NButton, NSpin, NSelect, NTag } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import pinIcon from '@iconify-icons/lucide/pin'
 import pinOffIcon from '@iconify-icons/lucide/pin-off'
@@ -87,6 +101,7 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
   pinned: { type: Boolean, default: false },
   items: { type: Array, default: () => [] },
+  wordMeta: { type: Object, default: null },
   fromLang: { type: String, default: 'auto' },
   toLang: { type: String, default: 'zh' },
   langOptions: { type: Array, default: () => [] }
@@ -128,6 +143,22 @@ const primaryEngine = computed(() => {
   const it = primaryItem.value
   if (it && it.engine) return String(it.engine || '')
   return ''
+})
+
+const isWordLikeRaw = computed(() => {
+  const raw = String(props.raw || '').trim()
+  if (!raw || /\s/.test(raw)) return false
+  return /^[A-Za-z][A-Za-z'-]{0,47}$/.test(raw)
+})
+
+const isWordPanel = computed(() => {
+  return !!(props.wordMeta && isWordLikeRaw.value)
+})
+
+const wordMetaWord = computed(() => {
+  const raw = String(props.raw || '').trim()
+  const w = String(props.wordMeta?.word || '').trim()
+  return w || raw || '—'
 })
 
 const panelRef = ref(null)
@@ -280,6 +311,37 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.word-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.word-head {
+  padding: 8px 10px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+}
+
+.word-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+}
+
+.word-extra {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.word-chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .engine-item {

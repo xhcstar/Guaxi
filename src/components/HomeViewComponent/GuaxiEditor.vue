@@ -257,8 +257,45 @@
       <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor"
         class="realtime-vditor">
       </div>
-      <div v-show="previewMode !== 'realtime' && showPreview" v-html="renderedHtml" class="preview"
-        ref="previewContainer" @click="handlePreviewClick"></div>
+      <div v-show="previewMode !== 'realtime' && showPreview" class="preview-shell" ref="previewShellRef">
+        <div v-html="renderedHtml" class="preview" ref="previewContainer" @click="handlePreviewClick"
+          @mouseup="handlePreviewSelectionMouseUp"></div>
+        <div v-show="previewFloatingToolbarVisible" class="floating-md-toolbar" :style="previewFloatingToolbarStyle"
+          @mousedown.prevent>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" :disabled="selectionTranslateBusy" @click="openSelectionTranslatePanel">
+                <Icon :icon="languagesIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            翻译
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="askSelectionWithAssistant">
+                <Icon :icon="messageCircleIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            问AI
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="openAssistantTranslateDialog">
+                <Icon :icon="botIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            用AI翻译
+          </n-tooltip>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
+                <Icon :icon="volume2Icon" width="16" height="16" />
+              </n-button>
+            </template>
+            朗读
+          </n-tooltip>
+        </div>
+      </div>
       <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
         <div v-show="tableToolbarVisible" class="floating-table-toolbar" :style="tableToolbarStyle" @mousedown.prevent>
           <n-tooltip placement="top" trigger="hover">
@@ -432,17 +469,6 @@
             @select="handleBreadcrumbPickerSelect" @clickoutside="closeBreadcrumbPicker" />
         </div>
 
-        <GuaxiSelectionTranslatePanel v-if="selectionTranslatePanelVisible" :pos="selectionTranslatePanelPos"
-          :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
-          :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" :items="selectionTranslateItems"
-          :from-lang="selectionTranslateFrom" :to-lang="selectionTranslateTo"
-          :lang-options="selectionTranslateLangOptions"
-          @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
-          @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
-          @translate="translateSelectionText" @copy="copySelectionTranslateResult"
-          @toggle-pin="toggleSelectionTranslatePinned" @update:pos="handleSelectionTranslatePanelUpdatePos"
-          @close="closeSelectionTranslatePanel" />
-
         <n-modal v-model:show="assistantTranslateDialogVisible" preset="card" title="用AI翻译" style="width: 420px">
           <div class="assistant-translate-dialog-row">
             <Icon :icon="languagesIcon" width="16" height="16" />
@@ -475,6 +501,17 @@
         <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
+
+      <GuaxiSelectionTranslatePanel v-if="selectionTranslatePanelVisible" :pos="selectionTranslatePanelPos"
+        :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
+        :busy="selectionTranslateBusy" :pinned="selectionTranslatePinned" :items="selectionTranslateItems"
+        :word-meta="selectionTranslateWordMeta" :from-lang="selectionTranslateFrom" :to-lang="selectionTranslateTo"
+        :lang-options="selectionTranslateLangOptions"
+        @update:from-lang="(v) => (selectionTranslateFrom = String(v || 'auto'))"
+        @update:to-lang="(v) => (selectionTranslateTo = String(v || 'zh'))" @swap-langs="swapSelectionTranslateLangs"
+        @translate="translateSelectionText" @copy="copySelectionTranslateResult"
+        @toggle-pin="toggleSelectionTranslatePinned" @update:pos="handleSelectionTranslatePanelUpdatePos"
+        @close="closeSelectionTranslatePanel" />
 
     </div>
     <!-- 添加 GitPanel 组件 -->
@@ -632,8 +669,13 @@ const editorContainer = ref(null);
 const secondaryEditorContainer = ref(null);
 const editorWrapperRef = ref(null);
 const editorHeaderRef = ref(null);
+const previewShellRef = ref(null);
 const floatingToolbarVisible = ref(false);
 const floatingToolbarStyle = ref({ left: '0px', top: '0px' });
+const previewFloatingToolbarVisible = ref(false)
+const previewFloatingToolbarStyle = ref({ left: '0px', top: '0px' })
+const previewSelectionText = ref('')
+const selectionSurface = ref('editor')
 
 const selectionTranslatePanelVisible = ref(false);
 const selectionTranslatePinned = ref(false);
@@ -668,6 +710,7 @@ const selectionTranslateRaw = ref('');
 const selectionTranslateResult = ref('');
 const selectionTranslateError = ref('');
 const selectionTranslateItems = ref([]);
+const selectionTranslateWordMeta = ref(null)
 const selectionReadAloudBusy = ref(false)
 
 let selectionAudioElement = null
@@ -5748,6 +5791,7 @@ const setupEditorListeners = () => {
     if (model.getLanguageId() !== 'markdown') {
       floatingToolbarVisible.value = false;
       tableToolbarVisible.value = false;
+      hidePreviewFloatingToolbar()
       return;
     }
 
@@ -5808,6 +5852,8 @@ const setupEditorListeners = () => {
       left: `${clampedLeft}px`,
       top: `${clampedTop}px`
     };
+    selectionSurface.value = 'editor'
+    hidePreviewFloatingToolbar()
     floatingToolbarVisible.value = true;
   });
 };
@@ -6255,13 +6301,118 @@ const toggleBlockquote = () => {
   toggleLinePrefix('> ', /^>\s+/, null);
 };
 
+const isWordSelection = (raw) => {
+  const text = String(raw || '').trim()
+  if (!text || /\s/.test(text)) return false
+  return /^[A-Za-z][A-Za-z'-]{0,47}$/.test(text)
+}
+
+const hidePreviewFloatingToolbar = () => {
+  previewFloatingToolbarVisible.value = false
+}
+
+const clearPreviewSelectionState = () => {
+  previewSelectionText.value = ''
+  hidePreviewFloatingToolbar()
+}
+
+const updatePreviewSelectionFromWindow = () => {
+  const selection = window.getSelection?.()
+  const container = previewContainer.value
+  if (!selection || !container || selection.rangeCount === 0) return ''
+  const text = String(selection.toString() || '')
+  if (!text.trim()) return ''
+  const range = selection.getRangeAt(0)
+  const target = range.commonAncestorContainer
+  const el = target instanceof Element ? target : target?.parentElement
+  if (!el || !container.contains(el)) return ''
+  return text
+}
+
 const getSelectedTextForTranslate = () => {
-  if (!editor) return '';
-  const model = editor.getModel();
-  const selection = editor.getSelection();
-  if (!model || !selection || selection.isEmpty()) return '';
-  return model.getValueInRange(selection) || '';
+  if (selectionSurface.value === 'preview') {
+    const text = normalizeSelectionTextForLanguageTasks(previewSelectionText.value || updatePreviewSelectionFromWindow())
+    if (text) return text
+  }
+
+  if (editor) {
+    const model = editor.getModel();
+    const selection = editor.getSelection();
+    if (model && selection && !selection.isEmpty()) {
+      const text = normalizeSelectionTextForLanguageTasks(model.getValueInRange(selection) || '')
+      if (text) {
+        selectionSurface.value = 'editor'
+        return text
+      }
+    }
+  }
+
+  const previewText = normalizeSelectionTextForLanguageTasks(previewSelectionText.value || updatePreviewSelectionFromWindow())
+  if (previewText) {
+    selectionSurface.value = 'preview'
+    return previewText
+  }
+
+  return '';
 };
+
+const handlePreviewSelectionMouseUp = (e) => {
+  if (!showPreview.value || previewMode.value === 'realtime') return
+  const container = previewContainer.value
+  const shell = previewShellRef.value
+  if (!container || !shell) return
+
+  const text = normalizeSelectionTextForLanguageTasks(updatePreviewSelectionFromWindow())
+  if (!text) {
+    clearPreviewSelectionState()
+    return
+  }
+
+  previewSelectionText.value = text
+  selectionSurface.value = 'preview'
+
+  const shellRect = shell.getBoundingClientRect()
+  const x = Number(e?.clientX || shellRect.left)
+  const y = Number(e?.clientY || shellRect.top)
+  const toolbarW = 232
+  const toolbarH = 34
+  const pad = 8
+  const gap = 10
+
+  let left = x - shellRect.left
+  let top = y - shellRect.top - toolbarH - gap
+  if (top < pad) {
+    top = y - shellRect.top + gap
+  }
+  const maxLeft = Math.max(pad, shellRect.width - toolbarW - pad)
+  const maxTop = Math.max(pad, shellRect.height - toolbarH - pad)
+
+  previewFloatingToolbarStyle.value = {
+    left: `${Math.min(Math.max(pad, left), maxLeft)}px`,
+    top: `${Math.min(Math.max(pad, top), maxTop)}px`,
+  }
+  previewFloatingToolbarVisible.value = true
+}
+
+const handleGlobalSelectionChange = () => {
+  if (selectionSurface.value !== 'preview') return
+  const text = normalizeSelectionTextForLanguageTasks(updatePreviewSelectionFromWindow())
+  if (!text) {
+    clearPreviewSelectionState()
+  } else {
+    previewSelectionText.value = text
+  }
+}
+
+const handleGlobalMouseDownForPreviewToolbar = (event) => {
+  if (!previewFloatingToolbarVisible.value) return
+  const target = event?.target instanceof Element ? event.target : null
+  if (!target) return
+  if (target.closest('.floating-md-toolbar')) return
+  if (target.closest('.pot-selection-translate-panel')) return
+  if (target.closest('.preview')) return
+  clearPreviewSelectionState()
+}
 
 const handleSelectionTranslatePanelUpdatePos = (pos) => {
   if (!pos) return;
@@ -6294,6 +6445,7 @@ const swapSelectionTranslateLangs = () => {
 const closeSelectionTranslatePanel = () => {
   selectionTranslatePanelVisible.value = false;
   selectionTranslatePinned.value = false;
+  selectionTranslateWordMeta.value = null
 };
 
 const openSelectionTranslatePanel = async () => {
@@ -6303,10 +6455,12 @@ const openSelectionTranslatePanel = async () => {
     return;
   }
 
-  const left = Number.parseFloat(String(floatingToolbarStyle.value?.left || ''));
-  const top = Number.parseFloat(String(floatingToolbarStyle.value?.top || ''));
+  const usePreviewAnchor = selectionSurface.value === 'preview' && previewFloatingToolbarVisible.value
+  const anchorStyle = usePreviewAnchor ? previewFloatingToolbarStyle.value : floatingToolbarStyle.value
+  const left = Number.parseFloat(String(anchorStyle?.left || ''));
+  const top = Number.parseFloat(String(anchorStyle?.top || ''));
 
-  const wrapperEl = editorWrapperRef.value
+  const wrapperEl = usePreviewAnchor ? previewShellRef.value : editorWrapperRef.value
   const pw = wrapperEl?.clientWidth ?? window.innerWidth
   const ph = wrapperEl?.clientHeight ?? window.innerHeight
 
@@ -6324,6 +6478,9 @@ const openSelectionTranslatePanel = async () => {
     top: Math.min(Math.max(pad, nextTop), maxTop)
   };
   selectionTranslatePanelVisible.value = true;
+  if (usePreviewAnchor) {
+    hidePreviewFloatingToolbar()
+  }
 
   await translateSelectionText(text);
 };
@@ -6396,6 +6553,7 @@ const translateSelectionText = async (overrideText) => {
   selectionTranslateResult.value = '';
   selectionTranslateError.value = '';
   selectionTranslateItems.value = [];
+  selectionTranslateWordMeta.value = null
   selectionTranslateBusy.value = true;
 
   logger.info('[SelectionTranslate] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value });
@@ -6422,11 +6580,10 @@ const translateSelectionText = async (overrideText) => {
           selectionTranslateResult.value = String(primary.text || '')
           selectionTranslateError.value = ''
           logger.info('[SelectionTranslate] multi success', { engines: selectionTranslateItems.value.length })
-          return
+        } else {
+          const err = String(response?.error || '翻译结果为空')
+          throw new Error(err)
         }
-
-        const err = String(response?.error || '翻译结果为空')
-        throw new Error(err)
       } catch (err) {
         const msg = String(err?.message || err || '')
         if (msg.includes('selection_translate_free_multi') && msg.toLowerCase().includes('not found')) {
@@ -6453,9 +6610,52 @@ const translateSelectionText = async (overrideText) => {
       throw new Error(err);
     }
 
-    selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
-    selectionTranslateResult.value = translated;
-    logger.info('[SelectionTranslate] single success', { len: translated.length });
+    if (!selectionTranslateResult.value) {
+      selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
+      selectionTranslateResult.value = translated;
+      logger.info('[SelectionTranslate] single success', { len: translated.length });
+    }
+
+    const finalTranslated = String(selectionTranslateResult.value || '').trim()
+    if (isWordSelection(text)) {
+      try {
+        const enriched = await invoke('language_learning_enrich_word', {
+          word: text,
+          sourceLang: selectionTranslateFrom.value,
+          targetLang: selectionTranslateTo.value
+        })
+        selectionTranslateWordMeta.value = {
+          word: String(enriched?.word || text).trim(),
+          phonetic: String(enriched?.phonetic || '').trim(),
+          part_of_speech: String(enriched?.part_of_speech || '').trim(),
+          meanings: Array.isArray(enriched?.meanings) ? enriched.meanings : [],
+          synonyms: Array.isArray(enriched?.synonyms) ? enriched.synonyms : [],
+          antonyms: Array.isArray(enriched?.antonyms) ? enriched.antonyms : [],
+          examples: Array.isArray(enriched?.examples) ? enriched.examples : []
+        }
+      } catch (err) {
+        logger.warn('[SelectionTranslate] enrich word failed:', err)
+      }
+    }
+
+    if (finalTranslated) {
+      try {
+        const primaryItem = selectionTranslateItems.value.find((it) => it.success && String(it.text || '').trim())
+        await invoke('language_learning_record_translation', {
+          input: {
+            source_text: text,
+            translated_text: finalTranslated,
+            source_lang: selectionTranslateFrom.value,
+            target_lang: selectionTranslateTo.value,
+            engine: String(primaryItem?.engine || 'Free'),
+            record_type: isWordSelection(text) ? 'word' : undefined,
+            word_meta: selectionTranslateWordMeta.value || undefined,
+          }
+        })
+      } catch (err) {
+        logger.warn('[SelectionTranslate] record save failed:', err)
+      }
+    }
   } catch (err) {
     const msg = String(err?.message || err || '翻译失败');
     selectionTranslateError.value = msg;
@@ -9666,6 +9866,8 @@ watch(lspEnabled, (enabled) => {
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
+  document.addEventListener('selectionchange', handleGlobalSelectionChange, true)
+  document.addEventListener('mousedown', handleGlobalMouseDownForPreviewToolbar, true)
   outlineStore.setJumpToLine(jumpToLine)
   initGitService()
   void refreshLspEnabledSetting()
@@ -9686,6 +9888,9 @@ onUnmounted(() => {
   stopSelectionAudioPlayback()
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
+  document.removeEventListener('selectionchange', handleGlobalSelectionChange, true)
+  document.removeEventListener('mousedown', handleGlobalMouseDownForPreviewToolbar, true)
+  clearPreviewSelectionState()
   destroyRealtimeVditor();
 
   if (monacoCtrlClickDisposable) {
@@ -10172,14 +10377,14 @@ onUnmounted(() => {
   flex-direction: row;
 }
 
-.editor-content.split .preview,
-.editor-content.split .editor-wrapper {
+.editor-content.split > .preview-shell,
+.editor-content.split > .editor-wrapper {
   flex: 1 1 0;
   min-width: 0;
   width: 0;
 }
 
-.editor-content.split .editor-wrapper {
+.editor-content.split > .editor-wrapper {
   border-left: 1px solid var(--divider-color, #e0e0e0);
 }
 
@@ -10417,6 +10622,16 @@ onUnmounted(() => {
   /* 确保在编辑器上方 */
 }
 
+.preview-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .preview {
   flex: 1 1 auto;
   min-height: 0;
@@ -10428,6 +10643,7 @@ onUnmounted(() => {
   overflow-x: hidden;
   word-wrap: break-word;
   box-sizing: border-box;
+  position: relative;
 }
 
 .preview :deep(a),

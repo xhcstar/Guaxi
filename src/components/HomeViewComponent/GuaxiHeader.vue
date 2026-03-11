@@ -75,6 +75,15 @@
 
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
+          <n-icon class="header-icon" size="20" @click="openLanguageLearningWindow">
+            <Icon :icon="languageLearningIcon" width="18" height="18" />
+          </n-icon>
+        </template>
+        语言学习
+      </n-tooltip>
+
+      <n-tooltip placement="bottom" trigger="hover">
+        <template #trigger>
           <n-icon class="header-icon" size="20" :component="Screenshot24Regular" @click="CaptureScreenshot"></n-icon>
         </template>
         截图并插入
@@ -267,6 +276,7 @@ import { useMessage } from 'naive-ui';
 import { debounce } from 'lodash-es'
 import { Icon } from '@iconify/vue'
 import assistantIcon from '@iconify-icons/mdi/robot-excited-outline'
+import languageLearningIcon from '@iconify-icons/mdi/book-education-outline'
 import {
   Screenshot24Regular,
   Search32Filled,
@@ -550,6 +560,24 @@ async function openResourceRepoManager() {
     }
     logger.error('打开资源库管理失败:', err)
     message.error('打开资源库管理失败')
+  }
+}
+
+async function openLanguageLearningWindow() {
+  try {
+    await invoke('create_language_learning_window', {
+      label: 'language_learning',
+      title: '语言学习中心',
+      theme: settingsStore.appearanceTheme,
+    })
+  } catch (err) {
+    const msg = String(err?.message || err || '')
+    if (msg.includes('已存在')) {
+      message.info('语言学习窗口已打开')
+      return
+    }
+    logger.error('打开语言学习窗口失败:', err)
+    message.error('打开语言学习窗口失败')
   }
 }
 
