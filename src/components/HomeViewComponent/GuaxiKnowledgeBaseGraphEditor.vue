@@ -583,6 +583,43 @@ const collectMarkdownRelPathsFromTreeNode = (node, out = []) => {
   return out
 }
 
+const AGENT_FILE_CONTENT_LIMIT = 12000
+const AGENT_CONTEXT_EXCERPT_LIMIT = 1000
+const AGENT_CONTEXT_MAX_FILES = 18
+
+const parentDirOfRelPath = (relPath) => {
+  const rel = normalizeRel(relPath)
+  const i = rel.lastIndexOf('/')
+  return i >= 0 ? rel.slice(0, i) : ''
+}
+
+const topDirOfRelPath = (relPath) => {
+  const rel = normalizeRel(relPath)
+  const i = rel.indexOf('/')
+  return i >= 0 ? rel.slice(0, i) : rel
+}
+
+const pickContextFilesForTarget = (targetRelPath, entries) => {
+  const target = normalizeRel(targetRelPath)
+  const targetParent = parentDirOfRelPath(target)
+  const targetTop = topDirOfRelPath(target)
+  const arr = Array.isArray(entries) ? entries : []
+  return arr
+    .filter(x => normalizeRel(x?.rel_path) && normalizeRel(x?.rel_path) !== target)
+    .map(x => {
+      const rel = normalizeRel(x.rel_path)
+      const parent = parentDirOfRelPath(rel)
+      const top = topDirOfRelPath(rel)
+      let score = 0
+      if (parent && targetParent && parent === targetParent) score += 10
+      if (top && targetTop && top === targetTop) score += 4
+      return { score, data: x }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, AGENT_CONTEXT_MAX_FILES)
+    .map(x => x.data)
+}
+
 const applyKbAgentResultToFileMeta = (fileMeta, result) => {
   if (!fileMeta || typeof fileMeta !== 'object') return { ok: false, changed: false, meta: fileMeta }
   if (!result || typeof result !== 'object') return { ok: false, changed: false, meta: fileMeta }
@@ -702,15 +739,15 @@ const runKbAgentForSelected = async () => {
       try {
         const meta = await invoke('kbmeta_read_file_meta', { knowledgeBaseName: kbName, relPath: p })
         const absPath = toAbsPath(p)
-        const content = absPath ? String(await invoke('read_file_content', { path: absPath }) || '') : ''
+        const content = absPath ? String(await invoke('read_file_content', { path: absPath }) || '').slice(0, AGENT_FILE_CONTENT_LIMIT) : ''
         fileContentMap.set(p, content)
         kbContextFiles.push({
           rel_path: p,
           file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
           related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
-          content_excerpt: content.slice(0, 3000),
+          content_excerpt: content.slice(0, AGENT_CONTEXT_EXCERPT_LIMIT),
           structure_outline: Array.isArray(meta?.structure_nodes)
-            ? meta.structure_nodes.slice(0, 50).map(n => ({
+            ? meta.structure_nodes.slice(0, 20).map(n => ({
               title: String(n?.title || ''),
               level: Number(n?.level || 0),
               stable_id: String(n?.attrs?.stable_id || '')
@@ -731,7 +768,7 @@ const runKbAgentForSelected = async () => {
         rel_path: relPath,
         kb_meta: kbMeta,
         file_meta: fileMeta,
-        kb_context_files: kbContextFiles,
+        kb_context_files: pickContextFilesForTarget(relPath, kbContextFiles),
         file_content: String(fileContentMap.get(relPath) || '')
       }
     })

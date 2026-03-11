@@ -112,6 +112,30 @@
             </n-space>
           </div>
 
+          <div v-if="showBatchStatusPanel" class="batch-panel">
+            <div class="batch-progress-head">
+              <div class="batch-progress-title">批处理进度</div>
+              <div class="batch-progress-text">{{ batchProgressDone }}/{{ batchProgressTotal }} ({{ batchProgressPercent }}%)</div>
+            </div>
+            <div v-if="batchProgressPhaseText" class="batch-progress-phase">{{ batchProgressPhaseText }}</div>
+            <n-progress
+              type="line"
+              :percentage="batchProgressPercent"
+              :processing="batchProgressVisible"
+              :height="10"
+              indicator-placement="inside"
+            />
+            <div class="batch-status-list">
+              <div v-for="item in batchFileStatuses" :key="item.relPath" class="batch-status-item">
+                <div class="batch-status-main">
+                  <div class="batch-status-path">{{ item.relPath }}</div>
+                  <n-tag size="small" :type="batchStatusTagType(item.status)">{{ batchStatusLabel(item.status) }}</n-tag>
+                </div>
+                <div v-if="item.reason" class="batch-status-reason">{{ item.reason }}</div>
+              </div>
+            </div>
+          </div>
+
           <div class="editor-body">
             <div v-if="!selectedKbName" class="empty">请选择一个知识库</div>
 
@@ -208,7 +232,7 @@
 <script setup>
 import { createLogger } from '../../utils/logger'
 import { computed, onMounted, ref, watch } from 'vue'
-import { NButton, NCollapse, NCollapseItem, NDynamicTags, NForm, NFormItem, NIcon, NIconWrapper, NInput, NSelect, NSpace, NTooltip, NTree, createDiscreteApi } from 'naive-ui'
+import { NButton, NCollapse, NCollapseItem, NDynamicTags, NForm, NFormItem, NIcon, NIconWrapper, NInput, NProgress, NSelect, NSpace, NTag, NTooltip, NTree, createDiscreteApi } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { LayersOutline, ListOutline, RefreshOutline, SyncOutline } from '@vicons/ionicons5'
 import { PanelLeftContract24Regular, PanelRightContract24Regular } from '@vicons/fluent'
@@ -263,6 +287,11 @@ const currentRelPath = ref('')
 const fileDraft = ref(null)
 const kbAgentProcessing = ref(false)
 const kbAgentSessionId = ref('')
+const batchProgressVisible = ref(false)
+const batchProgressTotal = ref(0)
+const batchProgressDone = ref(0)
+const batchProgressPhase = ref('')
+const batchFileStatuses = ref([])
 
 const canSave = computed(() => {
   if (!selectedKbName.value) return false
@@ -275,6 +304,67 @@ const kbAgentModelId = computed(() => {
   const n = Number(rightSiderStore?.assistant?.modelId)
   return Number.isFinite(n) ? n : 5
 })
+
+const batchProgressPercent = computed(() => {
+  const total = Number(batchProgressTotal.value || 0)
+  if (!total) return 0
+  return Math.min(100, Math.max(0, Math.round((Number(batchProgressDone.value || 0) / total) * 100)))
+})
+
+const showBatchStatusPanel = computed(() => {
+  return batchProgressVisible.value || (Array.isArray(batchFileStatuses.value) && batchFileStatuses.value.length > 0)
+})
+
+const batchProgressPhaseText = computed(() => {
+  const phase = String(batchProgressPhase.value || '')
+  if (!phase) return ''
+  return `阶段：${phase}`
+})
+
+const batchStatusLabel = (status) => {
+  const s = String(status || '').toLowerCase()
+  if (s === 'success') return '成功'
+  if (s === 'degraded') return '降级'
+  if (s === 'failed') return '失败'
+  if (s === 'running') return '处理中'
+  return '待处理'
+}
+
+const batchStatusTagType = (status) => {
+  const s = String(status || '').toLowerCase()
+  if (s === 'success') return 'success'
+  if (s === 'degraded') return 'warning'
+  if (s === 'failed') return 'error'
+  if (s === 'running') return 'info'
+  return 'default'
+}
+
+const startBatchStatus = (relPaths) => {
+  const list = Array.isArray(relPaths) ? relPaths : []
+  batchProgressVisible.value = true
+  batchProgressTotal.value = list.length * 2
+  batchProgressDone.value = 0
+  batchProgressPhase.value = '预加载文件元数据与内容'
+  batchFileStatuses.value = list.map(relPath => ({
+    relPath: String(relPath || ''),
+    status: 'pending',
+    reason: ''
+  }))
+}
+
+const patchBatchStatus = (relPath, status, reason = '') => {
+  const key = String(relPath || '')
+  const idx = batchFileStatuses.value.findIndex(x => String(x?.relPath || '') === key)
+  const next = { relPath: key, status: String(status || 'pending'), reason: String(reason || '') }
+  if (idx < 0) batchFileStatuses.value = [...batchFileStatuses.value, next]
+  else batchFileStatuses.value[idx] = next
+  batchFileStatuses.value = [...batchFileStatuses.value]
+}
+
+const tickBatchProgress = (step = 1) => {
+  const s = Math.max(1, Number(step || 1))
+  batchProgressDone.value = Math.min(batchProgressTotal.value, Number(batchProgressDone.value || 0) + s)
+}
 
 const isMarkdownRelPath = (relPath) => {
   const p = String(relPath || '').trim().toLowerCase()
@@ -763,6 +853,57 @@ const collectFileRelPathsFromTreeNode = (node, out = []) => {
   return out
 }
 
+const AGENT_FILE_CONTENT_LIMIT = 12000
+const AGENT_CONTEXT_EXCERPT_LIMIT = 1000
+const AGENT_CONTEXT_MAX_FILES = 18
+
+const parentDirOfRelPath = (relPath) => {
+  const rel = normalizeRelKey(relPath)
+  const i = rel.lastIndexOf('/')
+  return i >= 0 ? rel.slice(0, i) : ''
+}
+
+const topDirOfRelPath = (relPath) => {
+  const rel = normalizeRelKey(relPath)
+  const i = rel.indexOf('/')
+  return i >= 0 ? rel.slice(0, i) : rel
+}
+
+const pickContextFilesForTarget = (targetRelPath, entries) => {
+  const target = normalizeRelKey(targetRelPath)
+  const targetParent = parentDirOfRelPath(target)
+  const targetTop = topDirOfRelPath(target)
+  const arr = Array.isArray(entries) ? entries : []
+
+  const scored = arr
+    .filter(x => normalizeRelKey(x?.rel_path) && normalizeRelKey(x?.rel_path) !== target)
+    .map(x => {
+      const rel = normalizeRelKey(x.rel_path)
+      const parent = parentDirOfRelPath(rel)
+      const top = topDirOfRelPath(rel)
+      let score = 0
+      if (parent && targetParent && parent === targetParent) score += 10
+      if (top && targetTop && top === targetTop) score += 4
+      const tagsA = new Set((x.file_tags || []).map(v => String(v || '').trim()).filter(Boolean))
+      const tagsB = new Set()
+      for (const t of arr) {
+        if (normalizeRelKey(t?.rel_path) === target) {
+          for (const vv of (t.file_tags || [])) tagsB.add(String(vv || '').trim())
+          break
+        }
+      }
+      for (const tg of tagsA) {
+        if (tg && tagsB.has(tg)) score += 1
+      }
+      return { score, data: x }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, AGENT_CONTEXT_MAX_FILES)
+    .map(x => x.data)
+
+  return scored
+}
+
 const runKbMetaAgent = async () => {
   if (!canRunKbAgent.value || !selectedKbName.value) return
 
@@ -784,7 +925,9 @@ const runKbMetaAgent = async () => {
       const relPaths = Array.from(new Set(collectFileRelPathsFromTreeNode(root, [])))
         .filter(Boolean)
         .filter(isMarkdownRelPath)
+      startBatchStatus(relPaths)
       if (!relPaths.length) {
+        batchProgressVisible.value = false
         message.info('当前知识库没有可处理的 Markdown 文件')
         return
       }
@@ -801,10 +944,12 @@ const runKbMetaAgent = async () => {
           const absPath = toAbsPathByRel(relPath)
           if (absPath) {
             const content = await invoke('read_file_content', { path: absPath })
-            fileContentMap.set(relPath, String(content || ''))
+            fileContentMap.set(relPath, String(content || '').slice(0, AGENT_FILE_CONTENT_LIMIT))
           }
         } catch (e) {
           logger.warn('[KBManager] read file meta failed in batch pre-load', { relPath, error: String(e?.message || e) })
+        } finally {
+          tickBatchProgress()
         }
       }
 
@@ -812,9 +957,9 @@ const runKbMetaAgent = async () => {
         rel_path: relPath,
         file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
         related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
-        content_excerpt: String(fileContentMap.get(relPath) || '').slice(0, 3000),
+        content_excerpt: String(fileContentMap.get(relPath) || '').slice(0, AGENT_CONTEXT_EXCERPT_LIMIT),
         structure_outline: Array.isArray(meta?.structure_nodes)
-          ? meta.structure_nodes.slice(0, 50).map(n => ({
+          ? meta.structure_nodes.slice(0, 20).map(n => ({
             title: String(n?.title || ''),
             level: Number(n?.level || 0),
             stable_id: String(n?.attrs?.stable_id || '')
@@ -823,10 +968,16 @@ const runKbMetaAgent = async () => {
       }))
 
       let updatedCount = 0
+      batchProgressPhase.value = '调用AI分析与写回'
       for (const relPath of relPaths) {
         try {
+          patchBatchStatus(relPath, 'running', '正在请求模型')
+          logger.info('[KBManager] batch file start', { relPath })
           const currentMeta = fileMetaMap.get(relPath)
-          if (!currentMeta) continue
+          if (!currentMeta) {
+            patchBatchStatus(relPath, 'failed', '文件元数据缺失')
+            continue
+          }
           const response = await invoke('kbmeta_agent_process', {
             request: {
               modelid: kbAgentModelId.value,
@@ -836,7 +987,7 @@ const runKbMetaAgent = async () => {
               rel_path: relPath,
               kb_meta: kbMetaPayload,
               file_meta: currentMeta,
-              kb_context_files: kbContextFiles,
+              kb_context_files: pickContextFilesForTarget(relPath, kbContextFiles),
               file_content: String(fileContentMap.get(relPath) || '')
             }
           })
@@ -852,13 +1003,26 @@ const runKbMetaAgent = async () => {
               meta: applied.meta
             })
             updatedCount += 1
+            const isDegraded = !String(response?.raw_answer || '').trim()
+            patchBatchStatus(relPath, isDegraded ? 'degraded' : 'success', isDegraded ? '已降级补全（模型结果不可用）' : '已更新')
+          } else if (applied.ok) {
+            patchBatchStatus(relPath, 'success', '无可应用变更')
+          } else {
+            patchBatchStatus(relPath, 'failed', 'AI 返回结果不可用')
           }
         } catch (e) {
-          logger.warn('[KBManager] batch kbmeta_agent_process failed on file', { relPath, error: String(e?.message || e) })
+          const reason = String(e?.message || e)
+          logger.warn('[KBManager] batch kbmeta_agent_process failed on file', { relPath, error: reason })
+          patchBatchStatus(relPath, 'failed', reason)
+        } finally {
+          tickBatchProgress()
         }
       }
 
       await loadKbMeta(selectedKbName.value)
+      batchProgressDone.value = batchProgressTotal.value
+      batchProgressPhase.value = '已完成'
+      batchProgressVisible.value = false
       if (updatedCount > 0) {
         message.success(`AI 已批量更新 ${updatedCount} 个文件元数据`)
       } else {
@@ -883,15 +1047,15 @@ const runKbMetaAgent = async () => {
         let fileContent = ''
         if (absPath) {
           fileContent = String(await invoke('read_file_content', { path: absPath }) || '')
-          fileContentMap.set(relPath, fileContent)
+          fileContentMap.set(relPath, fileContent.slice(0, AGENT_FILE_CONTENT_LIMIT))
         }
         kbContextFiles.push({
           rel_path: relPath,
           file_tags: Array.isArray(meta?.file_tags) ? meta.file_tags : [],
           related_nodes: Array.isArray(meta?.related_nodes) ? meta.related_nodes : [],
-          content_excerpt: fileContent.slice(0, 3000),
+          content_excerpt: fileContent.slice(0, AGENT_CONTEXT_EXCERPT_LIMIT),
           structure_outline: Array.isArray(meta?.structure_nodes)
-            ? meta.structure_nodes.slice(0, 50).map(n => ({
+            ? meta.structure_nodes.slice(0, 20).map(n => ({
               title: String(n?.title || ''),
               level: Number(n?.level || 0),
               stable_id: String(n?.attrs?.stable_id || '')
@@ -912,7 +1076,7 @@ const runKbMetaAgent = async () => {
         rel_path: currentRelPath.value,
         kb_meta: kbMetaPayload,
         file_meta: fileMetaPayload,
-        kb_context_files: kbContextFiles,
+        kb_context_files: pickContextFilesForTarget(currentRelPath.value, kbContextFiles),
         file_content: String(fileContentMap.get(currentRelPath.value) || '')
       }
     })
@@ -933,6 +1097,9 @@ const runKbMetaAgent = async () => {
     message.error(String(e?.message || 'AI 处理失败'))
   } finally {
     kbAgentProcessing.value = false
+    if (task !== 'kb') {
+      batchProgressVisible.value = false
+    }
   }
 }
 
@@ -1431,6 +1598,80 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.batch-panel {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: var(--guaxi-header-bg);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.batch-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.batch-progress-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.batch-progress-text {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.batch-progress-phase {
+  font-size: 12px;
+  opacity: 0.75;
+  line-height: 1.2;
+}
+
+.batch-status-list {
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 2px;
+}
+
+.batch-status-item {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--guaxi-panel-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.batch-status-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.batch-status-path {
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-status-reason {
+  font-size: 12px;
+  opacity: 0.75;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .empty {

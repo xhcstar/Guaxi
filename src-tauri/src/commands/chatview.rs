@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use tracing::{debug, error, info, warn};
 use url::Url;
 // use std::error::Error;
@@ -675,6 +675,83 @@ fn ensure_non_empty_file_fields(request: &KbMetaAgentRequest, mut result: Value)
     result
 }
 
+fn is_prompt_too_large_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("max_prompt_tokens")
+        || m.contains("prompt_tokens")
+        || m.contains("prompt too long")
+        || m.contains("token limit")
+        || m.contains("context length")
+}
+
+fn shorten_text(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for ch in s.chars().take(max_chars) {
+        out.push(ch);
+    }
+    out
+}
+
+fn shrink_kb_agent_request_for_retry(request: &mut KbMetaAgentRequest, round: usize) -> bool {
+    let (max_file_content, max_ctx_files, max_excerpt, max_outline) = match round {
+        0 => (12000usize, 24usize, 1200usize, 20usize),
+        1 => (8000usize, 14usize, 700usize, 12usize),
+        2 => (5000usize, 8usize, 400usize, 8usize),
+        _ => (3000usize, 4usize, 200usize, 5usize),
+    };
+
+    let mut changed = false;
+
+    let trimmed_fc = shorten_text(request.file_content.as_str(), max_file_content);
+    if trimmed_fc.len() < request.file_content.len() {
+        request.file_content = trimmed_fc;
+        changed = true;
+    }
+
+    let Some(arr) = request.kb_context_files.as_array() else {
+        return changed;
+    };
+
+    let mut compact: Vec<Value> = Vec::new();
+    for one in arr.iter().take(max_ctx_files) {
+        if let Some(obj) = one.as_object() {
+            let mut m = serde_json::Map::new();
+            if let Some(v) = obj.get("rel_path") {
+                m.insert("rel_path".to_string(), v.clone());
+            }
+            if let Some(v) = obj.get("file_tags") {
+                m.insert("file_tags".to_string(), v.clone());
+            }
+            if let Some(v) = obj.get("related_nodes") {
+                m.insert("related_nodes".to_string(), v.clone());
+            }
+            let excerpt = obj
+                .get("content_excerpt")
+                .and_then(|v| v.as_str())
+                .map(|s| shorten_text(s, max_excerpt))
+                .unwrap_or_default();
+            m.insert("content_excerpt".to_string(), Value::String(excerpt));
+
+            let outline = obj
+                .get("structure_outline")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().take(max_outline).cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            m.insert("structure_outline".to_string(), Value::Array(outline));
+            compact.push(Value::Object(m));
+        }
+    }
+
+    if compact.len() != arr.len() {
+        changed = true;
+    }
+    request.kb_context_files = Value::Array(compact);
+    changed
+}
+
 fn build_kb_agent_prompt(request: &KbMetaAgentRequest, task: &str) -> Result<String, String> {
     let kb_name = request.kb_name.trim();
     if kb_name.is_empty() {
@@ -764,41 +841,115 @@ async fn kb_agent_call_model(model: ChatModel, prompt: &str, sessionid: &str) ->
 
 #[tauri::command]
 pub async fn kbmeta_agent_process(request: KbMetaAgentRequest) -> Result<KbMetaAgentResponse, String> {
-    let model = ChatModel::try_from(request.modelid).map_err(|e| format!("Invalid model ID: {}", e))?;
+    let _model = ChatModel::try_from(request.modelid).map_err(|e| format!("Invalid model ID: {}", e))?;
     let task = normalize_kb_agent_task(&request.task);
-    let prompt = build_kb_agent_prompt(&request, &task)?;
-
     info!(
         "kbmeta_agent_process: modelid={} task={} kb_name={} rel_path={}",
-        request.modelid,
-        task,
-        request.kb_name,
-        request.rel_path
+        request.modelid, task, request.kb_name, request.rel_path
     );
 
-    let rsp = kb_agent_call_model(model, &prompt, &request.sessionid).await?;
-    let parsed = parse_kb_agent_json(&rsp.answer)?;
-    let normalized = normalize_kb_agent_result(parsed);
-    let normalized = if task == "file" {
-        ensure_non_empty_file_fields(&request, normalized)
-    } else {
-        normalized
-    };
-    info!(
-        "kbmeta_agent_process: normalized_result_keys={:?}",
-        normalized
-            .as_object()
-            .map(|m| m.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
-    );
+    let mut work = request.clone();
+    let mut last_error: Option<String> = None;
 
-    Ok(KbMetaAgentResponse {
-        sessionid: rsp.sessionid,
-        modelid: request.modelid,
-        task,
-        result: normalized,
-        raw_answer: rsp.answer,
-    })
+    for round in 0..5usize {
+        let prompt = build_kb_agent_prompt(&work, &task)?;
+        let model = ChatModel::try_from(request.modelid).map_err(|e| format!("Invalid model ID: {}", e))?;
+        let rsp = match timeout(
+            Duration::from_secs(90),
+            kb_agent_call_model(model, &prompt, &work.sessionid),
+        )
+        .await
+        {
+            Ok(inner) => match inner {
+                Ok(v) => v,
+                Err(e) => {
+                    if is_prompt_too_large_error(&e) {
+                        let shrunk = shrink_kb_agent_request_for_retry(&mut work, round);
+                        warn!(
+                            "kbmeta_agent_process prompt too large round={} rel_path={} shrunk={}",
+                            round, work.rel_path, shrunk
+                        );
+                        last_error = Some(e.clone());
+                        if shrunk {
+                            continue;
+                        }
+                    }
+                    return Err(e);
+                }
+            },
+            Err(_) => {
+                let timeout_err = format!(
+                    "上游响应超时（>90s），rel_path={} round={}",
+                    work.rel_path, round
+                );
+                warn!("kbmeta_agent_process {}", timeout_err);
+                last_error = Some(timeout_err.clone());
+                let shrunk = shrink_kb_agent_request_for_retry(&mut work, round);
+                if shrunk {
+                    continue;
+                }
+                return Err(timeout_err);
+            }
+        };
+
+        let parsed = match parse_kb_agent_json(&rsp.answer) {
+            Ok(v) => v,
+            Err(e) => {
+                last_error = Some(e.clone());
+                if round < 2 {
+                    let shrunk = shrink_kb_agent_request_for_retry(&mut work, round + 1);
+                    warn!(
+                        "kbmeta_agent_process parse failed round={} rel_path={} shrunk={}",
+                        round, work.rel_path, shrunk
+                    );
+                    if shrunk {
+                        continue;
+                    }
+                }
+                return Err(e);
+            }
+        };
+
+        let normalized = normalize_kb_agent_result(parsed);
+        let normalized = if task == "file" {
+            ensure_non_empty_file_fields(&work, normalized)
+        } else {
+            normalized
+        };
+        info!(
+            "kbmeta_agent_process: normalized_result_keys={:?}",
+            normalized
+                .as_object()
+                .map(|m| m.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        );
+
+        return Ok(KbMetaAgentResponse {
+            sessionid: rsp.sessionid,
+            modelid: request.modelid,
+            task,
+            result: normalized,
+            raw_answer: rsp.answer,
+        });
+    }
+
+    if task == "file" {
+        let fallback = ensure_non_empty_file_fields(&work, json!({}));
+        warn!(
+            "kbmeta_agent_process fallback rel_path={} reason={}",
+            work.rel_path,
+            last_error.unwrap_or_else(|| "unknown".to_string())
+        );
+        return Ok(KbMetaAgentResponse {
+            sessionid: work.sessionid.clone(),
+            modelid: request.modelid,
+            task,
+            result: fallback,
+            raw_answer: String::new(),
+        });
+    }
+
+    Err(last_error.unwrap_or_else(|| "知识处理失败".to_string()))
 }
 
 fn resolve_audio_provider(provider: &str) -> Result<String, String> {
