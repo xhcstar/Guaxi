@@ -1,4 +1,6 @@
 use crate::commands::translator_free;
+use keyring::Entry;
+use regex::Regex;
 use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,7 @@ use uuid::Uuid;
 
 const LANG_LEARN_DIR_NAME: &str = "guaxi_language_learning";
 const LANG_LEARN_DB_NAME: &str = "language_learning.sqlite3";
+const KEKENET_KEYRING_SERVICE: &str = "guaxi_language_learning_kekenet";
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct WordMetaPayload {
@@ -129,6 +132,50 @@ pub struct WordEnrichment {
     pub phrase_translations: Vec<String>,
     pub examples: Vec<String>,
     pub example_translations: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UpdateTranslationRecordInput {
+    pub id: String,
+    pub source_text: String,
+    pub translated_text: String,
+    pub record_type: Option<String>,
+    pub source_lang: Option<String>,
+    pub target_lang: Option<String>,
+    pub engine: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LearningDataBundle {
+    pub learning_lang: String,
+    pub exported_at: String,
+    pub records: Vec<TranslationRecord>,
+    pub audio_resources: Vec<AudioResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KekenetCredentialsInput {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KekenetCredentialsOutput {
+    pub username: String,
+    pub has_password: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KekenetImportInput {
+    pub page_url: String,
+    pub title: Option<String>,
+    pub transcript: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LearningCounts {
+    pub records: i64,
+    pub audio_resources: i64,
 }
 
 fn now_iso() -> String {
@@ -360,13 +407,13 @@ fn infer_learning_lang(source_lang: &str, source_text: &str) -> String {
     if text.is_empty() {
         return "zh".to_string();
     }
-    if text.chars().any(|c| (c >= '\u{3040}' && c <= '\u{30ff}')) {
+    if text.chars().any(|c| c >= '\u{3040}' && c <= '\u{30ff}') {
         return "ja".to_string();
     }
-    if text.chars().any(|c| (c >= '\u{ac00}' && c <= '\u{d7af}')) {
+    if text.chars().any(|c| c >= '\u{ac00}' && c <= '\u{d7af}') {
         return "ko".to_string();
     }
-    if text.chars().any(|c| (c >= '\u{0400}' && c <= '\u{04ff}')) {
+    if text.chars().any(|c| c >= '\u{0400}' && c <= '\u{04ff}') {
         return "ru".to_string();
     }
     if text
@@ -375,7 +422,7 @@ fn infer_learning_lang(source_lang: &str, source_text: &str) -> String {
     {
         return "en".to_string();
     }
-    if text.chars().any(|c| (c >= '\u{4e00}' && c <= '\u{9fff}')) {
+    if text.chars().any(|c| c >= '\u{4e00}' && c <= '\u{9fff}') {
         return "zh".to_string();
     }
     "zh".to_string()
@@ -885,6 +932,248 @@ pub fn language_learning_list_records(
 }
 
 #[tauri::command]
+pub fn language_learning_get_counts(
+    app: tauri::AppHandle,
+    keyword: Option<String>,
+    kind: Option<String>,
+    learning_lang: Option<String>,
+) -> Result<LearningCounts, String> {
+    with_db(&app, |conn| {
+        let learning_lang = normalize_learning_lang(learning_lang);
+        ensure_lang_tables(conn, &learning_lang)?;
+        let records_table = records_table_for(&learning_lang);
+        let audio_table = audio_table_for(&learning_lang);
+        let q = keyword.unwrap_or_default().trim().to_string();
+        let kind = kind.unwrap_or_else(|| "all".into()).trim().to_lowercase();
+        let like = format!("%{}%", q);
+        let records_sql = format!(
+            r#"
+            SELECT COUNT(1) FROM {table}
+            WHERE (?1 = '' OR source_text LIKE ?2 OR translated_text LIKE ?2 OR word LIKE ?2)
+              AND (?3 = 'all' OR record_type = ?3)
+            "#,
+            table = records_table
+        );
+        let records: i64 = conn
+            .query_row(&records_sql, params![q, like, kind], |r| r.get(0))
+            .map_err(|e| format!("统计词条数量失败: {}", e))?;
+        let audio_sql = format!(
+            r#"
+            SELECT COUNT(1) FROM {table}
+            WHERE (?1 = '' OR title LIKE ?2 OR transcript LIKE ?2 OR notes LIKE ?2)
+            "#,
+            table = audio_table
+        );
+        let audio_resources: i64 = conn
+            .query_row(&audio_sql, params![q, like], |r| r.get(0))
+            .map_err(|e| format!("统计听力数量失败: {}", e))?;
+        Ok(LearningCounts {
+            records,
+            audio_resources,
+        })
+    })
+}
+
+#[tauri::command]
+pub fn language_learning_update_record(
+    app: tauri::AppHandle,
+    input: UpdateTranslationRecordInput,
+    learning_lang: Option<String>,
+) -> Result<TranslationRecord, String> {
+    with_db(&app, |conn| {
+        let learning_lang = normalize_learning_lang(learning_lang);
+        ensure_lang_tables(conn, &learning_lang)?;
+        let records_table = records_table_for(&learning_lang);
+        let id = input.id.trim().to_string();
+        if id.is_empty() {
+            return Err("记录ID不能为空".into());
+        }
+        let source_text = input.source_text.trim().to_string();
+        let translated_text = input.translated_text.trim().to_string();
+        if source_text.is_empty() || translated_text.is_empty() {
+            return Err("原文和译文不能为空".into());
+        }
+        let record_type = input
+            .record_type
+            .unwrap_or_else(|| classify_text(&source_text))
+            .trim()
+            .to_lowercase();
+        let is_word = record_type == "word";
+        let word = if is_word {
+            normalize_word(&source_text)
+        } else {
+            String::new()
+        };
+        let source_lang = normalize_learning_lang(input.source_lang);
+        let target_lang = normalize_learning_lang(input.target_lang);
+        let engine = input.engine.unwrap_or_default().trim().to_string();
+        let now = now_iso();
+        let sql = format!(
+            r#"
+            UPDATE {table}
+            SET source_text = ?1,
+                translated_text = ?2,
+                source_lang = ?3,
+                target_lang = ?4,
+                engine = ?5,
+                record_type = ?6,
+                is_word = ?7,
+                word = ?8,
+                updated_at = ?9
+            WHERE id = ?10
+            "#,
+            table = records_table
+        );
+        let changes = conn
+            .execute(
+                &sql,
+                params![
+                    source_text,
+                    translated_text,
+                    source_lang,
+                    target_lang,
+                    engine,
+                    record_type,
+                    if is_word { 1 } else { 0 },
+                    word,
+                    now,
+                    id
+                ],
+            )
+            .map_err(|e| format!("更新记录失败: {}", e))?;
+        if changes <= 0 {
+            return Err("未找到要更新的记录".into());
+        }
+        load_record_by_id(conn, &records_table, &id)?
+            .ok_or_else(|| "读取更新后的记录失败".to_string())
+    })
+}
+
+#[tauri::command]
+pub fn language_learning_delete_records(
+    app: tauri::AppHandle,
+    ids: Vec<String>,
+    learning_lang: Option<String>,
+) -> Result<i64, String> {
+    with_db(&app, |conn| {
+        let learning_lang = normalize_learning_lang(learning_lang);
+        ensure_lang_tables(conn, &learning_lang)?;
+        let records_table = records_table_for(&learning_lang);
+        let valid_ids: Vec<String> = ids
+            .into_iter()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect();
+        if valid_ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = (0..valid_ids.len())
+            .map(|_| "?".to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "DELETE FROM {} WHERE id IN ({})",
+            records_table, placeholders
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("准备删除记录失败: {}", e))?;
+        let affected = stmt
+            .execute(rusqlite::params_from_iter(valid_ids.iter()))
+            .map_err(|e| format!("删除记录失败: {}", e))?;
+        Ok(affected as i64)
+    })
+}
+
+#[tauri::command]
+pub fn language_learning_export_bundle(
+    app: tauri::AppHandle,
+    learning_lang: Option<String>,
+) -> Result<LearningDataBundle, String> {
+    let lang = normalize_learning_lang(learning_lang);
+    let records = language_learning_list_records(
+        app.clone(),
+        None,
+        Some("all".to_string()),
+        Some(lang.clone()),
+        Some(100000),
+        Some(0),
+    )?;
+    let audio_resources = language_learning_list_audio_resources(app, None, Some(lang.clone()))?;
+    Ok(LearningDataBundle {
+        learning_lang: lang,
+        exported_at: now_iso(),
+        records,
+        audio_resources,
+    })
+}
+
+#[tauri::command]
+pub fn language_learning_import_bundle(
+    app: tauri::AppHandle,
+    bundle: LearningDataBundle,
+    learning_lang: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let target_lang = normalize_learning_lang(Some(if let Some(v) = learning_lang {
+        v
+    } else if bundle.learning_lang.trim().is_empty() {
+        "zh".to_string()
+    } else {
+        bundle.learning_lang
+    }));
+    let mut imported_records = 0i64;
+    let mut imported_audio_resources = 0i64;
+    for r in bundle.records {
+        let input = TranslationRecordInput {
+            source_text: r.source_text,
+            translated_text: r.translated_text,
+            source_lang: Some(r.source_lang),
+            target_lang: Some(r.target_lang),
+            engine: Some(r.engine),
+            record_type: Some(r.record_type),
+            word_meta: Some(WordMetaPayload {
+                word: r.word,
+                phonetic: Some(r.phonetic),
+                phonetic_uk: Some(r.phonetic_uk),
+                phonetic_us: Some(r.phonetic_us),
+                part_of_speech: Some(r.part_of_speech),
+                meanings: r.meanings,
+                synonyms: r.synonyms,
+                antonyms: r.antonyms,
+                associates: r.associates,
+                synonyms_translations: r.synonyms_translations,
+                antonyms_translations: r.antonyms_translations,
+                associates_translations: r.associates_translations,
+                phrases: r.phrases,
+                phrase_translations: r.phrase_translations,
+                examples: r.examples,
+                example_translations: r.example_translations,
+            }),
+        };
+        let _ = language_learning_record_translation(app.clone(), input)?;
+        imported_records += 1;
+    }
+    for a in bundle.audio_resources {
+        let input = AudioResourceInput {
+            id: Some(a.id),
+            title: a.title,
+            source_kind: a.source_kind,
+            source_uri: a.source_uri,
+            transcript: Some(a.transcript),
+            notes: Some(a.notes),
+            duration_sec: Some(a.duration_sec),
+        };
+        let _ = language_learning_upsert_audio_resource(app.clone(), input, Some(target_lang.clone()))?;
+        imported_audio_resources += 1;
+    }
+    Ok(serde_json::json!({
+        "learning_lang": target_lang,
+        "imported_records": imported_records,
+        "imported_audio_resources": imported_audio_resources
+    }))
+}
+
+#[tauri::command]
 pub fn language_learning_list_audio_resources(
     app: tauri::AppHandle,
     keyword: Option<String>,
@@ -1016,6 +1305,143 @@ pub fn language_learning_delete_audio_resource(
             .map_err(|e| format!("删除音频资源失败: {}", e))?;
         Ok(())
     })
+}
+
+#[tauri::command]
+pub fn language_learning_save_kekenet_credentials(
+    input: KekenetCredentialsInput,
+) -> Result<KekenetCredentialsOutput, String> {
+    let username = input.username.trim().to_string();
+    let password = input.password.trim().to_string();
+    if username.is_empty() || password.is_empty() {
+        return Err("账号和密码不能为空".into());
+    }
+    let entry = Entry::new(KEKENET_KEYRING_SERVICE, "default").map_err(|e| e.to_string())?;
+    let payload = serde_json::json!({
+        "username": username,
+        "password": password
+    })
+    .to_string();
+    entry.set_password(&payload).map_err(|e| e.to_string())?;
+    Ok(KekenetCredentialsOutput {
+        username,
+        has_password: true,
+    })
+}
+
+#[tauri::command]
+pub fn language_learning_get_kekenet_credentials() -> Result<KekenetCredentialsOutput, String> {
+    let entry = Entry::new(KEKENET_KEYRING_SERVICE, "default").map_err(|e| e.to_string())?;
+    let raw = match entry.get_password() {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(KekenetCredentialsOutput {
+                username: String::new(),
+                has_password: false,
+            })
+        }
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    let username = parsed
+        .get("username")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let has_password = parsed
+        .get("password")
+        .and_then(|v| v.as_str())
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    Ok(KekenetCredentialsOutput {
+        username,
+        has_password,
+    })
+}
+
+#[tauri::command]
+pub async fn language_learning_import_kekenet_resource(
+    app: tauri::AppHandle,
+    input: KekenetImportInput,
+    learning_lang: Option<String>,
+) -> Result<AudioResource, String> {
+    let page_url = input.page_url.trim().to_string();
+    if page_url.is_empty() {
+        return Err("页面地址不能为空".into());
+    }
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0")
+        .connect_timeout(std::time::Duration::from_secs(6))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
+    let html = client
+        .get(&page_url)
+        .send()
+        .await
+        .map_err(|e| format!("抓取页面失败: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("读取页面内容失败: {}", e))?;
+    let re_audio = Regex::new(r#"https?://[^"' <>\n\r]+?\.(?:mp3|m4a|wav)"#)
+        .map_err(|e| format!("音频地址解析器初始化失败: {}", e))?;
+    let source_uri = re_audio
+        .find(&html)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| page_url.clone());
+    let title = if let Some(t) = input.title {
+        let v = t.trim().to_string();
+        if v.is_empty() { None } else { Some(v) }
+    } else {
+        None
+    }
+    .or_else(|| {
+        let re_title = Regex::new(r"(?is)<title>(.*?)</title>").ok()?;
+        let caps = re_title.captures(&html)?;
+        Some(caps.get(1)?.as_str().trim().to_string())
+    })
+    .unwrap_or_else(|| "可可英语导入内容".to_string());
+    let transcript = {
+        let input_text = input.transcript.unwrap_or_default().trim().to_string();
+        if !input_text.is_empty() {
+            input_text
+        } else {
+            let re_p = Regex::new(r"(?is)<p[^>]*>(.*?)</p>").ok();
+            let re_tag = Regex::new(r"(?is)<[^>]+>").ok();
+            let mut chunks = Vec::new();
+            if let (Some(pat), Some(tag_re)) = (re_p, re_tag) {
+                for cap in pat.captures_iter(&html).take(120) {
+                    let raw = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+                    let clean = tag_re.replace_all(raw, "");
+                    let text = clean
+                        .replace("&nbsp;", " ")
+                        .replace("&amp;", "&")
+                        .trim()
+                        .to_string();
+                    if text.chars().count() >= 20 {
+                        chunks.push(text);
+                    }
+                    if chunks.len() >= 24 {
+                        break;
+                    }
+                }
+            }
+            chunks.join("\n")
+        }
+    };
+    language_learning_upsert_audio_resource(
+        app,
+        AudioResourceInput {
+            id: None,
+            title,
+            source_kind: "kekenet".to_string(),
+            source_uri,
+            transcript: Some(transcript),
+            notes: Some("来自可可英语在线导入".to_string()),
+            duration_sec: Some(0.0),
+        },
+        learning_lang,
+    )
 }
 
 async fn fetch_json(client: &Client, url: &str) -> Option<serde_json::Value> {

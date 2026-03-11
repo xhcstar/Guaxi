@@ -4,10 +4,10 @@
       <div class="manager-header">
         <div class="title-main">学习记录管理器</div>
         <div class="toolbar-row">
-          <n-button size="small" @click="message.info('在线同步功能即将提供')">在线同步</n-button>
-          <n-button size="small" @click="message.info('导入功能即将提供')">导入</n-button>
+          <n-button size="small" @click="saveKekenetCredentials">保存可可英语账号</n-button>
+          <n-button size="small" @click="importLearningData">导入</n-button>
           <n-button size="small" @click="exportLearningData">导出</n-button>
-          <n-button size="small" @click="message.info('备份恢复功能即将提供')">备份恢复</n-button>
+          <n-button size="small" @click="restoreLearningData">备份恢复</n-button>
           <n-button size="small" @click="playSelectedPronunciation">单词播放</n-button>
           <n-select
             v-model:value="learningLang"
@@ -35,9 +35,12 @@
 
       <n-tabs v-model:value="activeTab" animated type="line" class="page-tabs">
         <n-tab-pane name="manager" tab="学习管理">
-          <div class="manager-layout">
-            <n-card size="small" class="left-tree-card">
-              <div class="tree-group-title">学习分组</div>
+          <div class="manager-layout" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed }">
+            <n-card size="small" class="left-tree-card" v-show="!leftCollapsed">
+              <div class="tree-collapse-row">
+                <div class="tree-group-title">学习分组</div>
+                <n-button text size="tiny" @click="leftCollapsed = true">收起</n-button>
+              </div>
               <div
                 v-for="it in leftShelfItems"
                 :key="it.key"
@@ -52,23 +55,71 @@
 
             <n-card size="small" class="middle-table-card">
               <div class="table-toolbar">
-                <n-button size="small" @click="refreshAll">添加</n-button>
-                <n-button size="small" :disabled="!activeAudio" @click="editAudio(activeAudio)">编辑</n-button>
-                <n-button size="small" type="error" :disabled="!activeAudio" @click="activeAudio && removeAudio(activeAudio)">删除</n-button>
+                <n-button size="small" @click="leftCollapsed = !leftCollapsed">{{ leftCollapsed ? '展开左栏' : '收起左栏' }}</n-button>
+                <n-button size="small" @click="rightCollapsed = !rightCollapsed">{{ rightCollapsed ? '展开右栏' : '收起右栏' }}</n-button>
+                <n-button size="small" type="primary" @click="openCreateDialog">新增</n-button>
+                <n-button size="small" :disabled="!activeRow || activeRow.sourceType === 'audio'" @click="openEditDialog(activeRow)">编辑记录</n-button>
+                <n-button size="small" :disabled="!activeAudio" @click="editAudio(activeAudio)">编辑听力</n-button>
+                <n-button size="small" type="error" :disabled="!checkedRowKeys.length && !activeRow" @click="deleteSelectedRows">删除</n-button>
                 <n-button size="small" type="primary" @click="startReviewFromSelection">开始复习</n-button>
               </div>
-              <n-data-table
-                size="small"
-                :columns="managerColumns"
-                :data="filteredRows"
-                :max-height="610"
-                :row-key="(row) => row.id"
-                :row-props="managerRowProps"
-                :single-line="false"
-              />
+              <template v-if="selectedShelf !== 'my_listening'">
+                <n-data-table
+                  size="small"
+                  :columns="managerColumns"
+                  :data="filteredRows"
+                  :max-height="610"
+                  :row-key="(row) => row.id"
+                  :row-props="managerRowProps"
+                  :single-line="false"
+                  :checked-row-keys="checkedRowKeys"
+                  @update:checked-row-keys="(keys) => (checkedRowKeys = keys)"
+                  virtual-scroll
+                />
+                <div class="table-footer">
+                  <n-pagination
+                    size="small"
+                    :page="recordPage"
+                    :page-size="recordPageSize"
+                    :item-count="recordCounts.records"
+                    show-size-picker
+                    :page-sizes="[50, 100, 200, 500]"
+                    @update:page="onRecordPageChange"
+                    @update:page-size="onRecordPageSizeChange"
+                  />
+                </div>
+              </template>
+              <template v-else>
+                <div class="listening-toolbar">
+                  <n-radio-group v-model:value="listeningKindFilter" size="small">
+                    <n-radio-button value="all">全部听力</n-radio-button>
+                    <n-radio-button value="remote">在线听力</n-radio-button>
+                    <n-radio-button value="local">本地音频</n-radio-button>
+                    <n-radio-button value="dictation">听写素材</n-radio-button>
+                    <n-radio-button value="kekenet">可可英语</n-radio-button>
+                  </n-radio-group>
+                  <n-button size="small" @click="importLocalAudio">导入本地听力</n-button>
+                  <n-button size="small" @click="importKekenetOnline">从可可英语导入</n-button>
+                </div>
+                <n-list bordered hoverable clickable class="listening-list">
+                  <n-list-item
+                    v-for="row in listeningRows"
+                    :key="row.id"
+                    :class="{ active: activeRow?.id === row.id }"
+                    @click="activeRow = row"
+                  >
+                    <div class="list-item-head">
+                      <n-tag size="small" type="warning">{{ row.payload?.source_kind || 'listening' }}</n-tag>
+                      <span class="list-item-title">{{ row.title }}</span>
+                    </div>
+                    <div class="list-item-sub">{{ row.note }}</div>
+                    <div class="list-item-sub">{{ row.summary || '—' }}</div>
+                  </n-list-item>
+                </n-list>
+              </template>
             </n-card>
 
-            <n-card size="small" class="right-detail-card" title="词条详情 / 学习信息">
+            <n-card size="small" class="right-detail-card" v-show="!rightCollapsed" title="词条详情 / 学习信息">
               <template v-if="activeWordRecord">
                 <div class="word-detail-head">
                   <div class="word-detail-title">{{ activeWordRecord.word || activeWordRecord.source_text }}</div>
@@ -297,15 +348,52 @@
                 <n-form-item label="备注">
                   <n-input v-model:value="audioForm.notes" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
                 </n-form-item>
+                <n-form-item label="可可账号">
+                  <n-input v-model:value="kekenetAccount" placeholder="可可英语用户名" />
+                </n-form-item>
+                <n-form-item label="可可密码">
+                  <n-input v-model:value="kekenetPassword" type="password" show-password-on="click" placeholder="密码将加密存储" />
+                </n-form-item>
               </n-form>
               <n-space>
                 <n-button type="primary" @click="saveAudio">保存资源</n-button>
+                <n-button @click="importLocalAudio">导入本地音频</n-button>
+                <n-button @click="importKekenetOnline">在线导入</n-button>
                 <n-button @click="resetAudioForm">清空</n-button>
               </n-space>
             </n-card>
           </div>
         </n-tab-pane>
       </n-tabs>
+
+      <n-modal v-model:show="recordEditVisible" preset="card" style="width: 680px" :title="recordEditMode === 'edit' ? '编辑学习记录' : '新增学习记录'">
+        <n-form :model="recordForm" label-placement="left" label-width="84">
+          <n-form-item label="记录类型">
+            <n-select v-model:value="recordForm.record_type" :options="recordKindOptions.filter((x) => x.value !== 'all' && x.value !== 'listening')" />
+          </n-form-item>
+          <n-form-item label="原文">
+            <n-input v-model:value="recordForm.source_text" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" />
+          </n-form-item>
+          <n-form-item label="译文">
+            <n-input v-model:value="recordForm.translated_text" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" />
+          </n-form-item>
+          <n-form-item label="来源语言">
+            <n-input v-model:value="recordForm.source_lang" />
+          </n-form-item>
+          <n-form-item label="目标语言">
+            <n-input v-model:value="recordForm.target_lang" />
+          </n-form-item>
+          <n-form-item label="引擎">
+            <n-input v-model:value="recordForm.engine" />
+          </n-form-item>
+        </n-form>
+        <template #action>
+          <n-space justify="end">
+            <n-button @click="recordEditVisible = false">取消</n-button>
+            <n-button type="primary" @click="saveRecord">保存</n-button>
+          </n-space>
+        </template>
+      </n-modal>
     </div>
   </n-message-provider>
 </template>
@@ -318,6 +406,7 @@ import speechIcon from '@iconify-icons/lucide/messages-square'
 import badgeInfoIcon from '@iconify-icons/lucide/badge-info'
 import volumeUsIcon from '@iconify-icons/lucide/volume-2'
 import volumeUkIcon from '@iconify-icons/lucide/volume-1'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import {
   NButton,
   NCard,
@@ -327,7 +416,11 @@ import {
   NFormItem,
   NInput,
   NInputNumber,
+  NList,
+  NListItem,
   NMessageProvider,
+  NModal,
+  NPagination,
   NRadioButton,
   NRadioGroup,
   NSelect,
@@ -344,15 +437,36 @@ const keyword = ref('')
 const recordKind = ref('all')
 const learningLangStorageKey = 'guaxi_language_learning_target_lang'
 const learningLang = ref(window.localStorage.getItem(learningLangStorageKey) || 'zh')
-const selectedShelf = ref('my_vocab')
+const selectedShelf = ref('my_sentences')
 const records = ref([])
 const audioResources = ref([])
 const activeRow = ref(null)
+const leftCollapsed = ref(false)
+const rightCollapsed = ref(false)
+const checkedRowKeys = ref([])
+const listeningKindFilter = ref('all')
+const recordPage = ref(1)
+const recordPageSize = ref(100)
+const recordCounts = reactive({ records: 0, audio_resources: 0 })
 const reviewType = ref('mixed')
 const reviewRows = ref([])
 const reviewIndex = ref(0)
 const reviewShowAnswer = ref(false)
 const masteryStore = ref({ record: {}, audio: {} })
+const kekenetAccount = ref('')
+const kekenetPassword = ref('')
+
+const recordEditVisible = ref(false)
+const recordEditMode = ref('create')
+const recordForm = reactive({
+  id: '',
+  source_text: '',
+  translated_text: '',
+  record_type: 'sentence',
+  source_lang: 'auto',
+  target_lang: 'zh',
+  engine: 'Manual',
+})
 
 const recordKindOptions = [
   { label: '全部', value: 'all' },
@@ -557,12 +671,9 @@ const matchesKeyword = (row) => {
 
 const shelfFilteredRows = computed(() => {
   const rows = allRows.value
-  if (selectedShelf.value === 'my_vocab') return rows.filter((r) => r.rowType === 'word')
-  if (selectedShelf.value === 'paused') return rows.filter((r) => r.masteryLevel <= 1)
-  if (selectedShelf.value === 'history') return rows.filter((r) => r.sourceType === 'record')
-  if (selectedShelf.value === 'notes') return rows.filter((r) => normalizeText(r.note).length > 0)
-  if (selectedShelf.value === 'cards') return rows.filter((r) => r.sourceType === 'record')
-  if (selectedShelf.value === 'audio') return rows.filter((r) => r.rowType === 'listening')
+  if (selectedShelf.value === 'my_sentences') return rows.filter((r) => r.rowType === 'sentence')
+  if (selectedShelf.value === 'my_paragraphs') return rows.filter((r) => r.rowType === 'paragraph')
+  if (selectedShelf.value === 'my_listening') return rows.filter((r) => r.rowType === 'listening')
   return rows
 })
 
@@ -578,16 +689,24 @@ const leftShelfItems = computed(() => {
   const rows = allRows.value
   const count = (fn) => rows.filter(fn).length
   return [
-    { key: 'my_vocab', label: '我的生词本', count: count((r) => r.rowType === 'word') },
-    { key: 'paused', label: '暂停', count: count((r) => r.masteryLevel <= 1) },
-    { key: 'history', label: '历史记录', count: count((r) => r.sourceType === 'record') },
-    { key: 'notes', label: '我的笔记', count: count((r) => normalizeText(r.note).length > 0) },
-    { key: 'cards', label: '例卡片', count: count((r) => r.sourceType === 'record') },
-    { key: 'audio', label: '已掌握听力', count: count((r) => r.rowType === 'listening' && r.masteryLevel >= 4) },
+    { key: 'my_sentences', label: '我摘录的例句', count: count((r) => r.rowType === 'sentence') },
+    { key: 'my_paragraphs', label: '我摘录的段落', count: count((r) => r.rowType === 'paragraph') },
+    { key: 'my_listening', label: '我的听力', count: count((r) => r.rowType === 'listening') },
   ]
 })
 
+const listeningRows = computed(() => {
+  const rows = shelfFilteredRows.value.filter(matchesKeyword).filter((r) => r.rowType === 'listening')
+  if (listeningKindFilter.value === 'all') return rows
+  return rows.filter((r) => String(r.payload?.source_kind || '').toLowerCase() === listeningKindFilter.value)
+})
+
 const managerColumns = [
+  {
+    type: 'selection',
+    multiple: true,
+    width: 44,
+  },
   {
     title: '类型',
     key: 'rowType',
@@ -782,17 +901,32 @@ const masteryPercent = computed(() => {
   return Math.min(100, Math.max(0, Math.round((mastered / reviewed) * 100)))
 })
 
+const resolveQueryKind = () => {
+  if (selectedShelf.value === 'my_sentences') return 'sentence'
+  if (selectedShelf.value === 'my_paragraphs') return 'paragraph'
+  if (recordKind.value === 'listening') return 'all'
+  return recordKind.value
+}
+
 const refreshRecords = async () => {
   try {
-    const kind = recordKind.value === 'listening' ? 'all' : recordKind.value
+    const kind = resolveQueryKind()
+    const offset = (recordPage.value - 1) * recordPageSize.value
     const data = await invoke('language_learning_list_records', {
       keyword: keyword.value,
       kind,
       learningLang: learningLang.value,
-      limit: 1200,
-      offset: 0,
+      limit: recordPageSize.value,
+      offset,
     })
     records.value = Array.isArray(data) ? data : []
+    const counts = await invoke('language_learning_get_counts', {
+      keyword: keyword.value,
+      kind,
+      learningLang: learningLang.value,
+    })
+    recordCounts.records = Number(counts?.records || 0)
+    recordCounts.audio_resources = Number(counts?.audio_resources || 0)
   } catch (err) {
     message.error(`读取学习记录失败: ${String(err?.message || err || '')}`)
   }
@@ -810,9 +944,21 @@ const refreshAudio = async () => {
 const refreshAll = async () => {
   await refreshRecords()
   await refreshAudio()
+  checkedRowKeys.value = []
   if (!activeRow.value && filteredRows.value.length) {
     activeRow.value = filteredRows.value[0]
   }
+}
+
+const onRecordPageChange = async (nextPage) => {
+  recordPage.value = Number(nextPage || 1)
+  await refreshRecords()
+}
+
+const onRecordPageSizeChange = async (size) => {
+  recordPageSize.value = Number(size || 100)
+  recordPage.value = 1
+  await refreshRecords()
 }
 
 const refreshWordMeta = async (row) => {
@@ -908,6 +1054,149 @@ const removeAudio = async (row) => {
   }
 }
 
+const openCreateDialog = () => {
+  recordEditMode.value = 'create'
+  recordForm.id = ''
+  recordForm.source_text = ''
+  recordForm.translated_text = ''
+  recordForm.record_type = selectedShelf.value === 'my_paragraphs' ? 'paragraph' : 'sentence'
+  recordForm.source_lang = 'auto'
+  recordForm.target_lang = learningLang.value
+  recordForm.engine = 'Manual'
+  recordEditVisible.value = true
+}
+
+const openEditDialog = (row) => {
+  if (!row || row.sourceType !== 'record') return
+  recordEditMode.value = 'edit'
+  recordForm.id = String(row.rawId || '')
+  recordForm.source_text = String(row.payload?.source_text || '')
+  recordForm.translated_text = String(row.payload?.translated_text || '')
+  recordForm.record_type = String(row.payload?.record_type || 'sentence')
+  recordForm.source_lang = String(row.payload?.source_lang || 'auto')
+  recordForm.target_lang = String(row.payload?.target_lang || learningLang.value)
+  recordForm.engine = String(row.payload?.engine || 'Manual')
+  recordEditVisible.value = true
+}
+
+const saveRecord = async () => {
+  try {
+    if (!String(recordForm.source_text || '').trim() || !String(recordForm.translated_text || '').trim()) {
+      message.warning('请填写原文和译文')
+      return
+    }
+    if (recordEditMode.value === 'edit' && recordForm.id) {
+      await invoke('language_learning_update_record', {
+        input: { ...recordForm },
+        learningLang: learningLang.value,
+      })
+    } else {
+      await invoke('language_learning_record_translation', {
+        input: {
+          source_text: recordForm.source_text,
+          translated_text: recordForm.translated_text,
+          source_lang: recordForm.source_lang,
+          target_lang: recordForm.target_lang,
+          engine: recordForm.engine,
+          record_type: recordForm.record_type,
+        },
+        learningLang: learningLang.value,
+      })
+    }
+    recordEditVisible.value = false
+    message.success('记录已保存')
+    await refreshAll()
+  } catch (err) {
+    message.error(`保存记录失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const deleteSelectedRows = async () => {
+  const selected = allRows.value.filter((r) => checkedRowKeys.value.includes(r.id))
+  const fallback = activeRow.value ? [activeRow.value] : []
+  const rows = selected.length ? selected : fallback
+  if (!rows.length) {
+    message.warning('请先选择要删除的项目')
+    return
+  }
+  try {
+    const recordIds = rows.filter((r) => r.sourceType === 'record').map((r) => r.rawId)
+    const audioIds = rows.filter((r) => r.sourceType === 'audio').map((r) => r.rawId)
+    if (recordIds.length) {
+      await invoke('language_learning_delete_records', {
+        ids: recordIds,
+        learningLang: learningLang.value,
+      })
+    }
+    for (const id of audioIds) {
+      await invoke('language_learning_delete_audio_resource', { id, learningLang: learningLang.value })
+    }
+    message.success(`已删除 ${rows.length} 项`)
+    activeRow.value = null
+    await refreshAll()
+  } catch (err) {
+    message.error(`删除失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const saveKekenetCredentials = async () => {
+  try {
+    if (!String(kekenetAccount.value || '').trim() || !String(kekenetPassword.value || '').trim()) {
+      message.warning('请输入可可英语账号与密码')
+      return
+    }
+    await invoke('language_learning_save_kekenet_credentials', {
+      input: {
+        username: kekenetAccount.value,
+        password: kekenetPassword.value,
+      },
+    })
+    message.success('可可英语账号已加密保存')
+  } catch (err) {
+    message.error(`保存账号失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const importKekenetOnline = async () => {
+  try {
+    if (!String(audioForm.source_uri || '').trim()) {
+      message.warning('请在听力资源维护中填写可可英语页面地址')
+      return
+    }
+    await invoke('language_learning_import_kekenet_resource', {
+      input: {
+        page_url: audioForm.source_uri,
+        title: audioForm.title || undefined,
+        transcript: audioForm.transcript || undefined,
+      },
+      learningLang: learningLang.value,
+    })
+    message.success('可可英语内容已导入')
+    await refreshAudio()
+  } catch (err) {
+    message.error(`在线导入失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const importLocalAudio = async () => {
+  try {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'wav', 'flac', 'ogg'] }],
+    })
+    if (!path || Array.isArray(path)) return
+    audioForm.source_kind = 'local'
+    audioForm.source_uri = String(path)
+    if (!audioForm.title.trim()) {
+      const normalized = String(path).replace(/\\/g, '/')
+      audioForm.title = normalized.split('/').pop() || '本地音频'
+    }
+    message.success('已选择本地音频')
+  } catch (err) {
+    message.error(`选择文件失败: ${String(err?.message || err || '')}`)
+  }
+}
+
 let learningPronounceAudio = null
 const playWordPronunciation = (rawWord, accent = 'us') => {
   const text = String(rawWord || '').trim()
@@ -933,35 +1222,105 @@ const playSelectedPronunciation = () => {
   playWordPronunciation(text, 'us')
 }
 
-const exportLearningData = () => {
+const readTextFileByPath = async (path) => {
+  const { readFile } = await import('@tauri-apps/plugin-fs')
+  const bytes = await readFile(path)
+  const decoder = new TextDecoder('utf-8')
+  return decoder.decode(bytes)
+}
+
+const writeTextFileByPath = async (path, text) => {
+  const { writeFile } = await import('@tauri-apps/plugin-fs')
+  const encoder = new TextEncoder()
+  await writeFile(path, encoder.encode(text))
+}
+
+const exportLearningData = async () => {
   try {
+    const defaultName = `language-learning-export-${Date.now()}.json`
+    const path = await save({
+      defaultPath: defaultName,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    })
+    if (!path) return
+    const bundle = await invoke('language_learning_export_bundle', { learningLang: learningLang.value })
     const payload = {
-      exported_at: new Date().toISOString(),
-      records: records.value,
-      audio_resources: audioResources.value,
+      ...bundle,
       mastery: masteryStore.value,
     }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `language-learning-export-${Date.now()}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    await writeTextFileByPath(String(path), JSON.stringify(payload, null, 2))
     message.success('学习数据已导出')
-  } catch {
-    message.error('导出失败')
+  } catch (err) {
+    message.error(`导出失败: ${String(err?.message || err || '')}`)
   }
 }
 
-watch([recordKind, selectedShelf], () => {
-  if (!filteredRows.value.length) {
+const importLearningData = async () => {
+  try {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    })
+    if (!path || Array.isArray(path)) return
+    const text = await readTextFileByPath(String(path))
+    const payload = JSON.parse(text || '{}')
+    const rowsBefore = allRows.value.length
+    await invoke('language_learning_import_bundle', {
+      bundle: {
+        learning_lang: payload.learning_lang || learningLang.value,
+        exported_at: payload.exported_at || new Date().toISOString(),
+        records: Array.isArray(payload.records) ? payload.records : [],
+        audio_resources: Array.isArray(payload.audio_resources) ? payload.audio_resources : [],
+      },
+      learningLang: learningLang.value,
+    })
+    if (payload?.mastery && typeof payload.mastery === 'object') {
+      masteryStore.value = {
+        record: payload.mastery.record && typeof payload.mastery.record === 'object' ? payload.mastery.record : masteryStore.value.record,
+        audio: payload.mastery.audio && typeof payload.mastery.audio === 'object' ? payload.mastery.audio : masteryStore.value.audio,
+      }
+      saveMasteryStore()
+    }
+    await refreshAll()
+    const rowsAfter = allRows.value.length
+    message.success(`导入完成，新增或更新 ${Math.max(0, rowsAfter - rowsBefore)} 项`)
+  } catch (err) {
+    message.error(`导入失败: ${String(err?.message || err || '')}`)
+  }
+}
+
+const restoreLearningData = async () => {
+  await importLearningData()
+  message.success('恢复完成，已执行差异合并（不覆盖本机独有数据）')
+}
+
+watch(listeningKindFilter, () => {
+  if (selectedShelf.value !== 'my_listening') return
+  if (!listeningRows.value.length) {
     activeRow.value = null
     return
   }
-  if (!activeRow.value || !filteredRows.value.some((x) => x.id === activeRow.value.id)) {
-    activeRow.value = filteredRows.value[0]
+  if (!activeRow.value || !listeningRows.value.some((x) => x.id === activeRow.value.id)) {
+    activeRow.value = listeningRows.value[0]
   }
+})
+
+watch([recordKind, selectedShelf], async () => {
+  recordPage.value = 1
+  await refreshRecords()
+  const targetRows = selectedShelf.value === 'my_listening' ? listeningRows.value : filteredRows.value
+  if (!targetRows.length) {
+    activeRow.value = null
+    return
+  }
+  if (!activeRow.value || !targetRows.some((x) => x.id === activeRow.value.id)) {
+    activeRow.value = targetRows[0]
+  }
+})
+
+watch(keyword, async () => {
+  recordPage.value = 1
+  await refreshAll()
 })
 
 watch(learningLang, async (v) => {
@@ -985,6 +1344,10 @@ watch(activeTab, (tab) => {
 
 onMounted(async () => {
   loadMasteryStore()
+  try {
+    const creds = await invoke('language_learning_get_kekenet_credentials')
+    kekenetAccount.value = String(creds?.username || '')
+  } catch {}
   await refreshAll()
   if (filteredRows.value.length) {
     activeRow.value = filteredRows.value[0]
@@ -1036,6 +1399,18 @@ onMounted(async () => {
   gap: 10px;
 }
 
+.manager-layout.left-collapsed {
+  grid-template-columns: 1fr 420px;
+}
+
+.manager-layout.right-collapsed {
+  grid-template-columns: 260px 1fr;
+}
+
+.manager-layout.left-collapsed.right-collapsed {
+  grid-template-columns: 1fr;
+}
+
 .left-tree-card,
 .middle-table-card,
 .right-detail-card {
@@ -1048,6 +1423,12 @@ onMounted(async () => {
   flex-direction: column;
   gap: 6px;
   overflow: auto;
+}
+
+.tree-collapse-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .tree-group-title {
@@ -1085,8 +1466,54 @@ onMounted(async () => {
 
 .table-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.table-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.listening-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.listening-list {
+  max-height: 610px;
+  overflow: auto;
+}
+
+.listening-list :deep(.n-list-item) {
+  cursor: pointer;
+}
+
+.listening-list :deep(.n-list-item.active) {
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 12%, var(--guaxi-panel-bg));
+}
+
+.list-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.list-item-title {
+  font-weight: 600;
+}
+
+.list-item-sub {
+  margin-top: 4px;
+  color: var(--guaxi-text-secondary);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .mastery-stars {
