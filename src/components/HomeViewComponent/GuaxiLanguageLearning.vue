@@ -51,7 +51,7 @@
                   ref="activeAudioPlayerRef"
                   class="listening-player"
                   controls
-                  :src="sanitizeMediaUri(activeAudio?.source_uri || '')"
+                  :src="activeAudioPlayableSrc"
                   @loadedmetadata="onAudioLoadedMetadata"
                   @timeupdate="handleAudioTimeUpdate"
                 ></audio>
@@ -74,12 +74,13 @@
                 <div class="detail-label">音文对照</div>
                 <div class="transcript-list">
                   <div
-                    v-for="(line, idx) in activeAudioTranscriptLines"
+                    v-for="(line, idx) in activeAudioTranscriptTimeline"
                     :key="`immersive-tr-${idx}`"
                     class="transcript-line"
                     :class="{ active: idx === currentTranscriptLineIndex }"
+                    @click="seekActiveAudioToTranscript(idx)"
                   >
-                    {{ line }}
+                    {{ line.text }}
                   </div>
                 </div>
               </div>
@@ -433,12 +434,12 @@
                     <div class="detail-content">{{ activeAudio.notes || '暂无说明' }}</div>
                   </div>
                   <div class="detail-block">
-                    <div class="detail-label">原文状态</div>
-                    <div class="detail-content">{{ activeAudioTranscriptLines.length ? `已加载 ${activeAudioTranscriptLines.length} 段` : '未获取到完整原文，可尝试重新抓取' }}</div>
+                    <div class="detail-label">同步状态</div>
+                    <div class="detail-content">{{ activeAudioTranscriptTimeline.length ? `已加载 ${activeAudioTranscriptTimeline.length} 段` : '未生成同步数据，可先生成 JSON 配置' }}</div>
                   </div>
                   <div class="detail-actions">
                     <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
-                    <n-button size="small" @click="fetchTranscriptForActiveAudio">抓取原文</n-button>
+                    <n-button size="small" @click="fetchTranscriptForActiveAudio">生成同步数据</n-button>
                     <n-button type="primary" size="small" @click="enterListeningStudy">
                       <template #icon>
                         <Icon :icon="playIcon" width="14" height="14" />
@@ -531,7 +532,7 @@
                         ref="reviewAudioPlayerRef"
                         class="review-listening-player"
                         controls
-                        :src="sanitizeMediaUri(currentReviewItem.payload?.source_uri || '')"
+                        :src="reviewAudioPlayableSrc"
                         @timeupdate="handleReviewAudioTimeUpdate"
                         @loadedmetadata="handleReviewAudioLoadedMetadata"
                       ></audio>
@@ -569,7 +570,7 @@
                         {{ line.text }}
                       </div>
                     </div>
-                    <div v-else class="review-answer-text">暂无完整原文，请先在“听力信息”点击“抓取原文”。</div>
+                    <div v-else class="review-answer-text">暂无同步原文，请先在“听力信息”点击“生成同步数据”。</div>
                   </template>
                   <template v-else>
                     <div class="review-answer-text">{{ currentReviewItem.summary || currentReviewItem.translatedText || '—' }}</div>
@@ -788,9 +789,12 @@ const randomFlippedMap = ref({})
 const currentTranscriptLineIndex = ref(0)
 const activeAudioPlayerRef = ref(null)
 const activeAudioDurationSec = ref(0)
+const activeAudioSyncTimeline = ref([])
+const activeAudioPlayableSrc = ref('')
 const reviewAudioPlayerRef = ref(null)
 const reviewAudioDurationSec = ref(0)
 const currentReviewTranscriptIndex = ref(0)
+const reviewAudioPlayableSrc = ref('')
 const sourceManagerVisible = ref(false)
 const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
 const listeningSources = ref([])
@@ -970,6 +974,7 @@ const audioForm = reactive({
   language_tag: learningLang.value,
   duration_sec: 0,
   transcript: '',
+  sync_json_uri: '',
   notes: '',
 })
 
@@ -1206,6 +1211,147 @@ const sanitizeMediaUri = (raw) => {
   return unwrapped
 }
 
+const normalizeLocalFilePath = (rawPath) => {
+  const cleaned = sanitizeMediaUri(rawPath)
+  if (!cleaned) return ''
+  if (/^[a-zA-Z]:[\\/]/.test(cleaned)) return cleaned
+  if (cleaned.startsWith('/')) {
+    const hit = cleaned.match(/^\/([a-zA-Z]:\/.*)$/)
+    if (hit?.[1]) return hit[1]
+  }
+  return cleaned
+}
+
+const mediaObjectUrlCache = new Map()
+const inferMediaMimeByPath = (rawPath) => {
+  const path = String(rawPath || '').toLowerCase()
+  if (path.endsWith('.mp3')) return 'audio/mpeg'
+  if (path.endsWith('.m4a') || path.endsWith('.mp4')) return 'audio/mp4'
+  if (path.endsWith('.wav')) return 'audio/wav'
+  if (path.endsWith('.flac')) return 'audio/flac'
+  if (path.endsWith('.ogg')) return 'audio/ogg'
+  return 'application/octet-stream'
+}
+
+const readBinaryFileByPath = async (path) => {
+  const { readFile } = await import('@tauri-apps/plugin-fs')
+  return readFile(path)
+}
+
+const bytesFromBase64 = (base64Text) => {
+  const raw = atob(String(base64Text || ''))
+  const out = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i += 1) {
+    out[i] = raw.charCodeAt(i)
+  }
+  return out
+}
+
+const resolvePlayableMediaSrc = async (raw) => {
+  const cleaned = sanitizeMediaUri(raw)
+  if (!cleaned) return ''
+  if (/^(https?:|data:|blob:|asset:)/i.test(cleaned)) return cleaned
+  const localPath = normalizeLocalFilePath(
+    cleaned.startsWith('file://')
+      ? decodeURIComponent(cleaned.replace(/^file:\/\//i, ''))
+      : cleaned
+  )
+  if (/^[a-zA-Z]:[\\/]/.test(localPath) || localPath.startsWith('/')) {
+    if (mediaObjectUrlCache.has(localPath)) {
+      return mediaObjectUrlCache.get(localPath)
+    }
+    try {
+      const payload = await invoke('language_learning_read_local_media_base64', { path: localPath })
+      const mime = String(payload?.mime || inferMediaMimeByPath(localPath))
+      const bytes = bytesFromBase64(payload?.base64 || '')
+      if (bytes.length) {
+        const blob = new Blob([bytes], { type: mime })
+        const objectUrl = URL.createObjectURL(blob)
+        mediaObjectUrlCache.set(localPath, objectUrl)
+        return objectUrl
+      }
+    } catch {}
+    const candidates = [
+      localPath,
+      localPath.replace(/\//g, '\\'),
+      localPath.replace(/\\/g, '/'),
+    ]
+    for (const candidate of candidates) {
+      try {
+        const bytes = await readBinaryFileByPath(candidate)
+        const blob = new Blob([bytes], { type: inferMediaMimeByPath(candidate) })
+        const objectUrl = URL.createObjectURL(blob)
+        mediaObjectUrlCache.set(localPath, objectUrl)
+        return objectUrl
+      } catch {}
+    }
+    return ''
+  }
+  return cleaned
+}
+
+const refreshActiveAudioPlayableSrc = async () => {
+  activeAudioPlayableSrc.value = await resolvePlayableMediaSrc(activeAudio.value?.source_uri || '')
+}
+
+const refreshReviewAudioPlayableSrc = async () => {
+  reviewAudioPlayableSrc.value = await resolvePlayableMediaSrc(currentReviewItem.value?.payload?.source_uri || '')
+}
+
+const parseClockTimestampToSec = (raw) => {
+  const src = String(raw || '').trim().replace(',', '.')
+  if (!src) return null
+  const parts = src.split(':').map((x) => Number(String(x || '').trim()))
+  if (parts.some((x) => !Number.isFinite(x))) return null
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  if (parts.length === 2) return parts[0] * 60 + parts[1]
+  if (parts.length === 1) return parts[0]
+  return null
+}
+
+const normalizeSyncTimeline = (payload) => {
+  const rows = []
+  const customSegments = Array.isArray(payload?.segments) ? payload.segments : []
+  customSegments.forEach((x, idx) => {
+    const start = Number(x?.start_sec ?? x?.start ?? 0)
+    const end = Number(x?.end_sec ?? x?.end ?? (start + 1.2))
+    const text = String(x?.text || '').trim()
+    if (!text) return
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return
+    rows.push({ text, start: Math.max(0, start), end: Math.max(start + 0.3, end), index: idx })
+  })
+  if (!rows.length) {
+    const whisperSegments = Array.isArray(payload?.transcription) ? payload.transcription : []
+    whisperSegments.forEach((x, idx) => {
+      const text = String(x?.text || '').trim()
+      if (!text) return
+      const tsStart = parseClockTimestampToSec(x?.timestamps?.from)
+      const tsEnd = parseClockTimestampToSec(x?.timestamps?.to)
+      const offStart = Number(x?.offsets?.from)
+      const offEnd = Number(x?.offsets?.to)
+      const start = Number.isFinite(tsStart) ? Number(tsStart) : (Number.isFinite(offStart) ? offStart / 1000 : 0)
+      const end = Number.isFinite(tsEnd) ? Number(tsEnd) : (Number.isFinite(offEnd) ? offEnd / 1000 : (start + 1.2))
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return
+      rows.push({ text, start: Math.max(0, start), end: Math.max(start + 0.3, end), index: idx })
+    })
+  }
+  rows.sort((a, b) => Number(a.start || 0) - Number(b.start || 0))
+  return rows
+}
+
+const loadSyncTimelineByJsonPath = async (jsonPath) => {
+  const path = sanitizeMediaUri(jsonPath)
+  if (!path || /^https?:\/\//i.test(path)) return []
+  try {
+    const text = String(await readTextFileByPath(path) || '').trim()
+    if (!text) return []
+    const payload = JSON.parse(text)
+    return normalizeSyncTimeline(payload)
+  } catch {
+    return []
+  }
+}
+
 const listeningColumns = [
   {
     type: 'selection',
@@ -1296,7 +1442,7 @@ const enterListeningStudy = async () => {
     message.warning('请先选择一个听力条目')
     return
   }
-  if (!activeAudioTranscriptLines.value.length) {
+  if (!activeAudioTranscriptTimeline.value.length) {
     await fetchTranscriptForActiveAudio()
   }
   openListeningImmersive(activeRow.value)
@@ -1687,6 +1833,7 @@ const resetAudioForm = () => {
   audioForm.language_tag = learningLang.value
   audioForm.duration_sec = 0
   audioForm.transcript = ''
+  audioForm.sync_json_uri = ''
   audioForm.notes = ''
 }
 
@@ -1701,6 +1848,7 @@ const editAudio = (row) => {
   audioForm.language_tag = row.language_tag || learningLang.value
   audioForm.duration_sec = Number(row.duration_sec || 0)
   audioForm.transcript = row.transcript || ''
+  audioForm.sync_json_uri = row.sync_json_uri || ''
   audioForm.notes = row.notes || ''
   audioManagerVisible.value = true
 }
@@ -1878,7 +2026,9 @@ const importLocalAudio = async () => {
       const normalized = String(path).replace(/\\/g, '/')
       audioForm.title = normalized.split('/').pop() || '本地音频'
     }
-    message.success('已选择本地音频')
+    audioForm.transcript = ''
+    audioForm.sync_json_uri = ''
+    message.success('已选择本地音频，可点击“生成同步数据”生成 JSON')
   } catch (err) {
     message.error(`选择文件失败: ${String(err?.message || err || '')}`)
   }
@@ -1977,8 +2127,13 @@ const openRandomCheckBoard = () => {
 const playRandomCardAudio = (card) => {
   if (!sanitizeMediaUri(card?.payload?.source_uri || '')) return
   try {
-    const player = new Audio(sanitizeMediaUri(String(card.payload.source_uri || '')))
-    player.play().catch(() => {})
+    resolvePlayableMediaSrc(String(card.payload.source_uri || ''))
+      .then((src) => {
+        if (!src) return
+        const player = new Audio(src)
+        player.play().catch(() => {})
+      })
+      .catch(() => {})
   } catch {}
 }
 
@@ -2019,7 +2174,9 @@ const handleRandomBoardKeydown = (evt) => {
 }
 
 const parseTimestampToSec = (raw) => {
-  const t = String(raw || '').trim().replace(',', '.')
+  const src = String(raw || '').trim()
+  const hit = src.match(/(\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?/)
+  const t = String(hit?.[0] || '').trim().replace(',', '.')
   if (!t) return null
   const parts = t.split(':').map((x) => Number(String(x).trim()))
   if (parts.some((x) => !Number.isFinite(x))) return null
@@ -2035,11 +2192,19 @@ const parseTimedTranscript = (rawText) => {
   const out = []
   const lines = text.split(/\r?\n/)
   const lrcPattern = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g
-  const cuePattern = /^(\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?\s*-->\s*(\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?$/
+  const cuePattern = /^(\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?\s*-->\s*(\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?(?:\s+.*)?$/
   let i = 0
   while (i < lines.length) {
     const line = String(lines[i] || '').trim()
     if (!line) {
+      i += 1
+      continue
+    }
+    if (/^WEBVTT$/i.test(line) || /^NOTE(?:\s|$)/i.test(line)) {
+      i += 1
+      continue
+    }
+    if (/^\d+$/.test(line)) {
       i += 1
       continue
     }
@@ -2121,6 +2286,7 @@ const buildTranscriptTimeline = (rawText, durationSec) => {
 }
 
 const activeAudioTranscriptTimeline = computed(() => {
+  if (activeAudioSyncTimeline.value.length) return activeAudioSyncTimeline.value
   return buildTranscriptTimeline(activeAudio.value?.transcript || '', activeAudioDurationSec.value || activeAudio.value?.duration_sec || 0)
 })
 
@@ -2130,7 +2296,14 @@ const currentReviewListeningTranscriptTimeline = computed(() => {
   return buildTranscriptTimeline(row.payload?.transcript || '', reviewAudioDurationSec.value || row.payload?.duration_sec || 0)
 })
 
-const activeAudioTranscriptLines = computed(() => activeAudioTranscriptTimeline.value.map((x) => x.text))
+const seekActiveAudioToTranscript = (idx) => {
+  const timeline = activeAudioTranscriptTimeline.value
+  const item = timeline[Number(idx)]
+  const player = activeAudioPlayerRef.value
+  if (!item || !player || !Number.isFinite(Number(item.start))) return
+  player.currentTime = Math.max(0, Number(item.start || 0))
+  player.play().catch(() => {})
+}
 
 const handleAudioTimeUpdate = (evt) => {
   const player = evt?.target
@@ -2195,41 +2368,16 @@ const fetchTranscriptForActiveAudio = async () => {
   const row = activeAudio.value
   if (!row) return
   try {
-    const transcript = await invoke('language_learning_fetch_transcript_from_source', {
-      input: {
-        source_uri: sanitizeMediaUri(row.source_uri),
-        provider: row.provider || '',
-        topic: row.topic || '',
-        language_tag: row.language_tag || learningLang.value,
-        notes: row.notes || '',
-      },
-    })
-    const nextTranscript = String(transcript || '').trim()
-    if (!nextTranscript) {
-      message.warning('未抓取到可用原文')
-      return
-    }
-    await invoke('language_learning_upsert_audio_resource', {
-      input: {
-        id: row.id,
-        title: row.title,
-        source_kind: row.source_kind,
-        source_uri: sanitizeMediaUri(row.source_uri),
-        provider: row.provider || '',
-        topic: row.topic || '',
-        language_tag: row.language_tag || learningLang.value,
-        transcript: nextTranscript,
-        notes: row.notes || '',
-        duration_sec: row.duration_sec || 0,
-      },
+    await invoke('language_learning_generate_whisper_sync_json', {
+      audioId: row.id,
       learningLang: learningLang.value,
     })
-    message.success('已更新该听力原文')
+    message.success('已生成音频同步数据')
     await refreshAudio()
     const refreshed = allRows.value.find((x) => x.id === `audio:${row.id}`)
     if (refreshed) activeRow.value = refreshed
   } catch (err) {
-    message.error(`抓取原文失败: ${String(err?.message || err || '')}`)
+    message.error(`生成同步数据失败: ${String(err?.message || err || '')}`)
   }
 }
 
@@ -2378,9 +2526,11 @@ watch(playbackRate, () => {
   applyAudioPlaybackRate()
 })
 
-watch(activeAudio, () => {
+watch(activeAudio, async () => {
   currentTranscriptLineIndex.value = 0
   activeAudioDurationSec.value = Number(activeAudio.value?.duration_sec || 0)
+  activeAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(activeAudio.value?.sync_json_uri || '')
+  await refreshActiveAudioPlayableSrc()
   setTimeout(() => {
     applyAudioPlaybackRate()
   }, 0)
@@ -2396,6 +2546,7 @@ watch(activeAudio, () => {
 watch(currentReviewItem, (row) => {
   currentReviewTranscriptIndex.value = 0
   reviewAudioDurationSec.value = Number(row?.payload?.duration_sec || 0)
+  refreshReviewAudioPlayableSrc()
 })
 
 watch(activeRow, (row) => {
@@ -2460,6 +2611,10 @@ onBeforeUnmount(() => {
     learningPronounceAudio.pause()
     learningPronounceAudio = null
   }
+  mediaObjectUrlCache.forEach((url) => {
+    URL.revokeObjectURL(url)
+  })
+  mediaObjectUrlCache.clear()
 })
 </script>
 

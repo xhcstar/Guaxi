@@ -12,7 +12,9 @@
       "utils/horizontalrule.lua",
       "utils/SlidevEnv/**/*",
       "utils/llama/**/*",
-      "utils/python_libs/**/*"
+      "utils/python_libs/**/*",
+      "utils/whisper/**/*",
+      "utils/Models/whisper_models/**/*"
     ]
   }
 }

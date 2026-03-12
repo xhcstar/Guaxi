@@ -421,6 +421,8 @@ async fn main() {
             commands::language_learning::language_learning_delete_audio_resource,
             commands::language_learning::language_learning_collect_audio_by_topic,
             commands::language_learning::language_learning_fetch_transcript_from_source,
+            commands::language_learning::language_learning_generate_whisper_sync_json,
+            commands::language_learning::language_learning_read_local_media_base64,
             commands::git::get_file_content,
             commands::git::get_file_diff,
             commands::git::get_commit_file_diff,

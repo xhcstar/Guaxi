@@ -1,4 +1,6 @@
 use crate::commands::translator_free;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use regex::Regex;
 use reqwest::Client;
 use rss::Channel;
@@ -8,6 +10,9 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
@@ -16,6 +21,9 @@ use uuid::Uuid;
 
 const LANG_LEARN_DIR_NAME: &str = "guaxi_language_learning";
 const LANG_LEARN_DB_NAME: &str = "language_learning.sqlite3";
+const LISTENING_ITEMS_DIR_NAME: &str = "guaxi_listening_items";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct WordMetaPayload {
@@ -99,6 +107,7 @@ pub struct AudioResourceInput {
     pub topic: Option<String>,
     pub language_tag: Option<String>,
     pub transcript: Option<String>,
+    pub sync_json_uri: Option<String>,
     pub notes: Option<String>,
     pub duration_sec: Option<f64>,
 }
@@ -116,10 +125,30 @@ pub struct AudioResource {
     #[serde(default)]
     pub language_tag: String,
     pub transcript: String,
+    #[serde(default)]
+    pub sync_json_uri: String,
     pub notes: String,
     pub duration_sec: f64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WhisperSyncSegment {
+    pub index: usize,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WhisperSyncPayload {
+    pub version: String,
+    pub generated_at: String,
+    pub model_path: String,
+    pub audio_path: String,
+    pub transcript: String,
+    pub segments: Vec<WhisperSyncSegment>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -274,6 +303,7 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
             topic TEXT NOT NULL DEFAULT '',
             language_tag TEXT NOT NULL DEFAULT '',
             transcript TEXT NOT NULL DEFAULT '',
+            sync_json_uri TEXT NOT NULL DEFAULT '',
             notes TEXT NOT NULL DEFAULT '',
             duration_sec REAL NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -305,6 +335,7 @@ fn setup_schema(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE audio_resources ADD COLUMN provider TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE audio_resources ADD COLUMN topic TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE audio_resources ADD COLUMN language_tag TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE audio_resources ADD COLUMN sync_json_uri TEXT NOT NULL DEFAULT ''",
     ] {
         let _ = conn.execute(sql, []);
     }
@@ -573,6 +604,7 @@ fn ensure_lang_tables(conn: &Connection, lang: &str) -> Result<(), String> {
             topic TEXT NOT NULL DEFAULT '',
             language_tag TEXT NOT NULL DEFAULT '',
             transcript TEXT NOT NULL DEFAULT '',
+            sync_json_uri TEXT NOT NULL DEFAULT '',
             notes TEXT NOT NULL DEFAULT '',
             duration_sec REAL NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -595,6 +627,10 @@ fn ensure_lang_tables(conn: &Connection, lang: &str) -> Result<(), String> {
         ),
         format!(
             "ALTER TABLE {} ADD COLUMN language_tag TEXT NOT NULL DEFAULT ''",
+            audio_table
+        ),
+        format!(
+            "ALTER TABLE {} ADD COLUMN sync_json_uri TEXT NOT NULL DEFAULT ''",
             audio_table
         ),
     ] {
@@ -1204,6 +1240,7 @@ pub fn language_learning_import_bundle(
             topic: Some(a.topic),
             language_tag: Some(a.language_tag),
             transcript: Some(a.transcript),
+            sync_json_uri: Some(a.sync_json_uri),
             notes: Some(a.notes),
             duration_sec: Some(a.duration_sec),
         };
@@ -1231,7 +1268,7 @@ pub fn language_learning_list_audio_resources(
         let like = format!("%{}%", q);
         let list_sql = format!(
             r#"
-                SELECT id, title, source_kind, source_uri, provider, topic, language_tag, transcript, notes, duration_sec, created_at, updated_at
+                SELECT id, title, source_kind, source_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at
                 FROM {table}
                 WHERE (?1 = '' OR title LIKE ?2 OR transcript LIKE ?2 OR notes LIKE ?2 OR provider LIKE ?2 OR topic LIKE ?2)
                 ORDER BY datetime(created_at) DESC
@@ -1254,10 +1291,11 @@ pub fn language_learning_list_audio_resources(
                     topic: r.get(5)?,
                     language_tag: r.get(6)?,
                     transcript: r.get(7)?,
-                    notes: r.get(8)?,
-                    duration_sec: r.get::<_, f64>(9)?,
-                    created_at: r.get(10)?,
-                    updated_at: r.get(11)?,
+                    sync_json_uri: r.get(8)?,
+                    notes: r.get(9)?,
+                    duration_sec: r.get::<_, f64>(10)?,
+                    created_at: r.get(11)?,
+                    updated_at: r.get(12)?,
                 })
             })
             .map_err(|e| format!("执行音频查询失败: {}", e))?;
@@ -1300,13 +1338,14 @@ pub fn language_learning_upsert_audio_resource(
         let topic = input.topic.unwrap_or_default().trim().to_string();
         let language_tag = normalize_learning_lang(input.language_tag);
         let transcript = input.transcript.unwrap_or_default().trim().to_string();
+        let sync_json_uri = normalize_media_uri(input.sync_json_uri.unwrap_or_default().as_str());
         let notes = input.notes.unwrap_or_default().trim().to_string();
         let duration_sec = input.duration_sec.unwrap_or(0.0).max(0.0);
 
         let upsert_sql = format!(
             r#"
-            INSERT INTO {table}(id, title, source_kind, source_uri, provider, topic, language_tag, transcript, notes, duration_sec, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            INSERT INTO {table}(id, title, source_kind, source_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             ON CONFLICT(id) DO UPDATE SET
               title=excluded.title,
               source_kind=excluded.source_kind,
@@ -1315,6 +1354,7 @@ pub fn language_learning_upsert_audio_resource(
               topic=excluded.topic,
               language_tag=excluded.language_tag,
               transcript=excluded.transcript,
+              sync_json_uri=excluded.sync_json_uri,
               notes=excluded.notes,
               duration_sec=excluded.duration_sec,
               updated_at=excluded.updated_at
@@ -1332,6 +1372,7 @@ pub fn language_learning_upsert_audio_resource(
                 topic,
                 language_tag,
                 transcript,
+                sync_json_uri,
                 notes,
                 duration_sec,
                 now,
@@ -1349,6 +1390,7 @@ pub fn language_learning_upsert_audio_resource(
             topic,
             language_tag,
             transcript,
+            sync_json_uri,
             notes,
             duration_sec,
             created_at: now.clone(),
@@ -1595,6 +1637,7 @@ async fn collect_from_archive_org(
                 topic: Some(topic.to_string()),
                 language_tag: Some(learning_lang.to_string()),
                 transcript: Some(String::new()),
+                sync_json_uri: Some(String::new()),
                 notes: Some(notes),
                 duration_sec: Some(0.0),
             },
@@ -1698,6 +1741,7 @@ async fn collect_from_wikimedia_commons(
                 topic: Some(topic.to_string()),
                 language_tag: Some(learning_lang.to_string()),
                 transcript: Some(String::new()),
+                sync_json_uri: Some(String::new()),
                 notes: Some("来源：Wikimedia Commons".to_string()),
                 duration_sec: Some(0.0),
             },
@@ -1807,6 +1851,7 @@ async fn collect_from_rss_feed(
                 topic: Some(topic.to_string()),
                 language_tag: Some(learning_lang.to_string()),
                 transcript: Some(transcript),
+                sync_json_uri: Some(String::new()),
                 notes: Some(notes),
                 duration_sec: Some(duration_sec),
             },
@@ -1856,6 +1901,98 @@ pub async fn language_learning_fetch_transcript_from_source(
         return Err("未找到可用原文".to_string());
     }
     Ok(transcript)
+}
+
+#[tauri::command]
+pub fn language_learning_read_local_media_base64(path: String) -> Result<serde_json::Value, String> {
+    let source = normalize_media_uri(&path);
+    if source.is_empty() {
+        return Err("音频路径为空".to_string());
+    }
+    if source.starts_with("http://") || source.starts_with("https://") {
+        return Err("仅支持本地音频路径".to_string());
+    }
+    let local_path = if source.starts_with("file://") {
+        let trimmed = source.trim_start_matches("file://");
+        if cfg!(target_os = "windows") {
+            trimmed.trim_start_matches('/').to_string()
+        } else {
+            format!("/{}", trimmed.trim_start_matches('/'))
+        }
+    } else {
+        source
+    };
+    let p = PathBuf::from(local_path);
+    if !p.exists() {
+        return Err("音频文件不存在".to_string());
+    }
+    let bytes = fs::read(&p).map_err(|e| format!("读取音频文件失败: {}", e))?;
+    let mime = match p
+        .extension()
+        .and_then(|x| x.to_str())
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "mp3" => "audio/mpeg",
+        "m4a" | "mp4" => "audio/mp4",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "ogg" => "audio/ogg",
+        _ => "application/octet-stream",
+    };
+    let base64 = BASE64_STANDARD.encode(bytes);
+    Ok(serde_json::json!({
+        "mime": mime,
+        "base64": base64
+    }))
+}
+
+#[tauri::command]
+pub async fn language_learning_generate_whisper_sync_json(
+    app: tauri::AppHandle,
+    audio_id: String,
+    learning_lang: Option<String>,
+) -> Result<AudioResource, String> {
+    let learning_lang = normalize_learning_lang(learning_lang);
+    let row = with_db(&app, |conn| {
+        ensure_lang_tables(conn, &learning_lang)?;
+        load_audio_resource_by_id(conn, &audio_table_for(&learning_lang), &audio_id)?
+            .ok_or_else(|| "听力条目不存在".to_string())
+    })?;
+    let entry_dir = resolve_listening_entry_dir(&row)?;
+    let local_audio = prepare_entry_audio_file(&row, &entry_dir).await?;
+    let local_json = run_whisper_and_build_sync_json(&local_audio, &entry_dir)?;
+    let json_text = fs::read_to_string(&local_json).map_err(|e| format!("读取同步 JSON 失败: {}", e))?;
+    let payload: WhisperSyncPayload =
+        serde_json::from_str(&json_text).map_err(|e| format!("解析同步 JSON 失败: {}", e))?;
+    let transcript = payload.transcript.trim().to_string();
+    let next = language_learning_upsert_audio_resource(
+        app,
+        AudioResourceInput {
+            id: Some(row.id),
+            title: row.title,
+            source_kind: "local".to_string(),
+            source_uri: local_audio.to_string_lossy().to_string(),
+            provider: Some(if row.provider.trim().is_empty() {
+                "local_whisper".to_string()
+            } else {
+                row.provider
+            }),
+            topic: Some(row.topic),
+            language_tag: Some(if row.language_tag.trim().is_empty() {
+                learning_lang.clone()
+            } else {
+                row.language_tag
+            }),
+            transcript: Some(transcript),
+            sync_json_uri: Some(local_json.to_string_lossy().to_string()),
+            notes: Some(row.notes),
+            duration_sec: Some(row.duration_sec),
+        },
+        Some(learning_lang),
+    )?;
+    Ok(next)
 }
 
 async fn fetch_transcript_from_source(
@@ -1966,6 +2103,318 @@ fn normalize_media_uri(raw: &str) -> String {
         .trim_matches(|c: char| c == '`' || c == '"' || c == '\'' || c == '<' || c == '>')
         .trim()
         .to_string()
+}
+
+fn load_audio_resource_by_id(
+    conn: &Connection,
+    table: &str,
+    id: &str,
+) -> Result<Option<AudioResource>, String> {
+    let sql = format!(
+        r#"
+        SELECT id, title, source_kind, source_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at
+        FROM {table}
+        WHERE id = ?1
+        LIMIT 1
+        "#,
+        table = table
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("准备读取听力条目失败: {}", e))?;
+    stmt.query_row(params![id], |r| {
+        Ok(AudioResource {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            source_kind: r.get(2)?,
+            source_uri: r.get(3)?,
+            provider: r.get(4)?,
+            topic: r.get(5)?,
+            language_tag: r.get(6)?,
+            transcript: r.get(7)?,
+            sync_json_uri: r.get(8)?,
+            notes: r.get(9)?,
+            duration_sec: r.get(10)?,
+            created_at: r.get(11)?,
+            updated_at: r.get(12)?,
+        })
+    })
+    .optional()
+    .map_err(|e| format!("读取听力条目失败: {}", e))
+}
+
+fn resolve_listening_store_root() -> Result<PathBuf, String> {
+    let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件目录".to_string())?
+        .to_path_buf();
+    let root = exe_dir.join(LISTENING_ITEMS_DIR_NAME);
+    if !root.exists() {
+        fs::create_dir_all(&root).map_err(|e| format!("创建听力存储目录失败: {}", e))?;
+    }
+    Ok(root)
+}
+
+fn safe_file_stem(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.trim().chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            out.push('_');
+        }
+    }
+    let compact = out.trim_matches('_').replace("__", "_");
+    if compact.is_empty() {
+        "listening".to_string()
+    } else {
+        compact.chars().take(48).collect::<String>()
+    }
+}
+
+fn resolve_listening_entry_dir(row: &AudioResource) -> Result<PathBuf, String> {
+    let root = resolve_listening_store_root()?;
+    let short_id: String = row.id.chars().take(8).collect();
+    let stem = safe_file_stem(&row.title);
+    let entry = root.join(format!("{}_{}", stem, short_id));
+    if !entry.exists() {
+        fs::create_dir_all(&entry).map_err(|e| format!("创建听力条目目录失败: {}", e))?;
+    }
+    Ok(entry)
+}
+
+fn infer_ext_from_uri(raw: &str) -> String {
+    let cleaned = normalize_media_uri(raw);
+    let uri = cleaned.split('?').next().unwrap_or_default();
+    let p = Path::new(uri);
+    let ext = p
+        .extension()
+        .and_then(|x| x.to_str())
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if ext.is_empty() {
+        "mp3".to_string()
+    } else {
+        ext
+    }
+}
+
+async fn prepare_entry_audio_file(row: &AudioResource, entry_dir: &Path) -> Result<PathBuf, String> {
+    let ext = infer_ext_from_uri(&row.source_uri);
+    let audio_path = entry_dir.join(format!("media.{}", ext));
+    let source = normalize_media_uri(&row.source_uri);
+    if source.starts_with("http://") || source.starts_with("https://") {
+        let client = Client::builder()
+            .user_agent("Mozilla/5.0")
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| format!("初始化下载客户端失败: {}", e))?;
+        let resp = client
+            .get(source.as_str())
+            .send()
+            .await
+            .map_err(|e| format!("下载音频失败: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("下载音频失败，状态码: {}", resp.status()));
+        }
+        let data = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取音频数据失败: {}", e))?;
+        fs::write(&audio_path, &data).map_err(|e| format!("保存音频文件失败: {}", e))?;
+        return Ok(audio_path);
+    }
+    let source_path = PathBuf::from(source);
+    if !source_path.exists() {
+        return Err("本地音频文件不存在".to_string());
+    }
+    let same = source_path
+        .canonicalize()
+        .ok()
+        .zip(audio_path.canonicalize().ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false);
+    if !same {
+        fs::copy(&source_path, &audio_path).map_err(|e| format!("复制音频文件失败: {}", e))?;
+    }
+    Ok(audio_path)
+}
+
+fn parse_ts_to_sec(raw: &str) -> Option<f64> {
+    let t = raw.trim().replace(',', ".");
+    if t.is_empty() {
+        return None;
+    }
+    let parts = t.split(':').collect::<Vec<_>>();
+    if parts.len() == 3 {
+        let h = parts[0].trim().parse::<f64>().ok()?;
+        let m = parts[1].trim().parse::<f64>().ok()?;
+        let s = parts[2].trim().parse::<f64>().ok()?;
+        return Some(h * 3600.0 + m * 60.0 + s);
+    }
+    if parts.len() == 2 {
+        let m = parts[0].trim().parse::<f64>().ok()?;
+        let s = parts[1].trim().parse::<f64>().ok()?;
+        return Some(m * 60.0 + s);
+    }
+    parts[0].trim().parse::<f64>().ok()
+}
+
+fn extract_whisper_segments(v: &serde_json::Value) -> Vec<(f64, f64, String)> {
+    let mut out = Vec::new();
+    if let Some(arr) = v.get("segments").and_then(|x| x.as_array()) {
+        for item in arr {
+            let start = item.get("start").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            let end = item.get("end").and_then(|x| x.as_f64()).unwrap_or(start + 1.2);
+            let text = item
+                .get("text")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if !text.is_empty() {
+                out.push((start.max(0.0), end.max(start + 0.4), text));
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(arr) = v.get("transcription").and_then(|x| x.as_array()) {
+            for item in arr {
+                let mut start = item
+                    .get("offsets")
+                    .and_then(|x| x.get("from"))
+                    .and_then(|x| x.as_f64())
+                    .map(|x| x / 1000.0)
+                    .unwrap_or(0.0);
+                let mut end = item
+                    .get("offsets")
+                    .and_then(|x| x.get("to"))
+                    .and_then(|x| x.as_f64())
+                    .map(|x| x / 1000.0)
+                    .unwrap_or(start + 1.2);
+                if let Some(from) = item
+                    .get("timestamps")
+                    .and_then(|x| x.get("from"))
+                    .and_then(|x| x.as_str())
+                    .and_then(parse_ts_to_sec)
+                {
+                    start = from;
+                }
+                if let Some(to) = item
+                    .get("timestamps")
+                    .and_then(|x| x.get("to"))
+                    .and_then(|x| x.as_str())
+                    .and_then(parse_ts_to_sec)
+                {
+                    end = to;
+                }
+                let text = item
+                    .get("text")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if !text.is_empty() {
+                    out.push((start.max(0.0), end.max(start + 0.4), text));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn resolve_whisper_cli_and_model() -> Result<(PathBuf, PathBuf), String> {
+    let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件目录".to_string())?
+        .to_path_buf();
+    let whisper_cli = if cfg!(target_os = "windows") {
+        exe_dir.join("utils/whisper/whisper-cli.exe")
+    } else {
+        exe_dir.join("utils/whisper/whisper-cli")
+    };
+    if !whisper_cli.exists() {
+        return Err(format!(
+            "未找到 whisper 可执行文件: {}",
+            whisper_cli.to_string_lossy()
+        ));
+    }
+    let model_en = exe_dir.join("utils/Models/whisper_models/ggml-base.en.bin");
+    let model_base = exe_dir.join("utils/Models/whisper_models/ggml-base.bin");
+    let model = if model_en.exists() { model_en } else { model_base };
+    if !model.exists() {
+        return Err(format!(
+            "未找到 whisper 模型文件: {}",
+            model.to_string_lossy()
+        ));
+    }
+    Ok((whisper_cli, model))
+}
+
+fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path) -> Result<PathBuf, String> {
+    let (whisper_cli, model_path) = resolve_whisper_cli_and_model()?;
+    let output_base = entry_dir.join("media");
+    let mut cmd = Command::new(&whisper_cli);
+    cmd.arg("-m")
+        .arg(model_path.to_string_lossy().to_string())
+        .arg("-f")
+        .arg(local_audio.to_string_lossy().to_string())
+        .arg("-oj")
+        .arg("-of")
+        .arg(output_base.to_string_lossy().to_string())
+        .arg("--language")
+        .arg("en");
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("执行 whisper 失败: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("whisper 转写失败: {}", stderr));
+    }
+    let whisper_json = entry_dir.join("media.json");
+    if !whisper_json.exists() {
+        return Err("whisper 未生成 JSON 文件".to_string());
+    }
+    let raw = fs::read_to_string(&whisper_json).map_err(|e| format!("读取 whisper 输出失败: {}", e))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("解析 whisper 输出失败: {}", e))?;
+    let parsed = extract_whisper_segments(&v);
+    if parsed.is_empty() {
+        return Err("whisper 输出不包含可用分段".to_string());
+    }
+    let mut segments = Vec::new();
+    let mut transcript_lines = Vec::new();
+    for (idx, (start, end, text)) in parsed.iter().enumerate() {
+        transcript_lines.push(text.clone());
+        segments.push(WhisperSyncSegment {
+            index: idx,
+            start_sec: *start,
+            end_sec: *end,
+            text: text.clone(),
+        });
+    }
+    let payload = WhisperSyncPayload {
+        version: "1.0".to_string(),
+        generated_at: now_iso(),
+        model_path: model_path.to_string_lossy().to_string(),
+        audio_path: local_audio.to_string_lossy().to_string(),
+        transcript: transcript_lines.join("\n"),
+        segments,
+    };
+    let formatted =
+        serde_json::to_string_pretty(&payload).map_err(|e| format!("构建同步 JSON 失败: {}", e))?;
+    fs::write(&whisper_json, formatted).map_err(|e| format!("写入同步 JSON 失败: {}", e))?;
+    Ok(whisper_json)
 }
 
 fn looks_like_audio_url(url: &str) -> bool {
