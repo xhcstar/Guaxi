@@ -795,6 +795,7 @@ const reviewAudioPlayerRef = ref(null)
 const reviewAudioDurationSec = ref(0)
 const currentReviewTranscriptIndex = ref(0)
 const reviewAudioPlayableSrc = ref('')
+const reviewAudioSyncTimeline = ref([])
 const sourceManagerVisible = ref(false)
 const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
 const listeningSources = ref([])
@@ -2293,6 +2294,7 @@ const activeAudioTranscriptTimeline = computed(() => {
 const currentReviewListeningTranscriptTimeline = computed(() => {
   const row = currentReviewItem.value
   if (!row || row.rowType !== 'listening' || row.sourceType !== 'audio') return []
+  if (reviewAudioSyncTimeline.value.length) return reviewAudioSyncTimeline.value
   return buildTranscriptTimeline(row.payload?.transcript || '', reviewAudioDurationSec.value || row.payload?.duration_sec || 0)
 })
 
@@ -2543,10 +2545,11 @@ watch(activeAudio, async () => {
   })
 })
 
-watch(currentReviewItem, (row) => {
+watch(currentReviewItem, async (row) => {
   currentReviewTranscriptIndex.value = 0
   reviewAudioDurationSec.value = Number(row?.payload?.duration_sec || 0)
-  refreshReviewAudioPlayableSrc()
+  reviewAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(row?.payload?.sync_json_uri || '')
+  await refreshReviewAudioPlayableSrc()
 })
 
 watch(activeRow, (row) => {
