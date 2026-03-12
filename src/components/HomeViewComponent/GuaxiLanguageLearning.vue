@@ -4,22 +4,23 @@
       <div class="manager-header">
         <div class="title-main">学习记录管理器</div>
         <div class="toolbar-row">
-          <n-button size="small" @click="saveKekenetCredentials">保存可可英语账号</n-button>
-          <n-button size="small" @click="importLearningData">导入</n-button>
-          <n-button size="small" @click="exportLearningData">导出</n-button>
-          <n-button size="small" @click="restoreLearningData">备份恢复</n-button>
-          <n-button size="small" @click="playSelectedPronunciation">单词播放</n-button>
+          <n-button quaternary circle size="small" title="听力资源管理" @click="openAudioManager">
+            <Icon :icon="settingsIcon" width="16" height="16" />
+          </n-button>
+          <n-button quaternary circle size="small" title="导入并恢复" @click="importLearningData">
+            <Icon :icon="importIcon" width="16" height="16" />
+          </n-button>
+          <n-button quaternary circle size="small" title="导出学习数据" @click="exportLearningData">
+            <Icon :icon="exportIcon" width="16" height="16" />
+          </n-button>
+          <n-button quaternary circle size="small" title="随机抽查卡牌" @click="openRandomCheckBoard">
+            <Icon :icon="sparkleIcon" width="16" height="16" />
+          </n-button>
           <n-select
             v-model:value="learningLang"
             size="small"
             :options="learningLangOptions"
             style="width: 140px"
-          />
-          <n-select
-            v-model:value="recordKind"
-            size="small"
-            :options="recordKindOptions"
-            style="width: 120px"
           />
           <n-input
             v-model:value="keyword"
@@ -29,7 +30,9 @@
             style="width: 260px"
             @keydown.enter="refreshAll"
           />
-          <n-button size="small" type="primary" @click="refreshAll">刷新</n-button>
+          <n-button quaternary circle size="small" title="刷新数据" @click="refreshAll">
+            <Icon :icon="refreshIcon" width="16" height="16" />
+          </n-button>
         </div>
       </div>
 
@@ -37,10 +40,7 @@
         <n-tab-pane name="manager" tab="学习管理">
           <div class="manager-layout" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed }">
             <n-card size="small" class="left-tree-card" v-show="!leftCollapsed">
-              <div class="tree-collapse-row">
-                <div class="tree-group-title">学习分组</div>
-                <n-button text size="tiny" @click="leftCollapsed = true">收起</n-button>
-              </div>
+              <div class="tree-group-title">学习分组</div>
               <div
                 v-for="it in leftShelfItems"
                 :key="it.key"
@@ -54,16 +54,177 @@
             </n-card>
 
             <n-card size="small" class="middle-table-card">
-              <div class="table-toolbar">
-                <n-button size="small" @click="leftCollapsed = !leftCollapsed">{{ leftCollapsed ? '展开左栏' : '收起左栏' }}</n-button>
-                <n-button size="small" @click="rightCollapsed = !rightCollapsed">{{ rightCollapsed ? '展开右栏' : '收起右栏' }}</n-button>
-                <n-button size="small" type="primary" @click="openCreateDialog">新增</n-button>
-                <n-button size="small" :disabled="!activeRow || activeRow.sourceType === 'audio'" @click="openEditDialog(activeRow)">编辑记录</n-button>
-                <n-button size="small" :disabled="!activeAudio" @click="editAudio(activeAudio)">编辑听力</n-button>
-                <n-button size="small" type="error" :disabled="!checkedRowKeys.length && !activeRow" @click="deleteSelectedRows">删除</n-button>
-                <n-button size="small" type="primary" @click="startReviewFromSelection">开始复习</n-button>
+              <div class="edge-toggle left" :title="leftCollapsed ? '展开左侧栏' : '收起左侧栏'" @click="leftCollapsed = !leftCollapsed">
+                <Icon :icon="leftCollapsed ? chevronRightIcon : chevronLeftIcon" width="16" height="16" />
               </div>
-              <template v-if="selectedShelf !== 'my_listening'">
+              <div class="edge-toggle right" :title="rightCollapsed ? '展开右侧栏' : '收起右侧栏'" @click="rightCollapsed = !rightCollapsed">
+                <Icon :icon="rightCollapsed ? chevronLeftIcon : chevronRightIcon" width="16" height="16" />
+              </div>
+              <div class="table-toolbar">
+                <n-button quaternary circle size="small" title="新增记录" @click="openCreateDialog">
+                  <Icon :icon="plusIcon" width="16" height="16" />
+                </n-button>
+                <n-button quaternary circle size="small" title="编辑记录" :disabled="!activeRow || activeRow.sourceType === 'audio'" @click="openEditDialog(activeRow)">
+                  <Icon :icon="editIcon" width="16" height="16" />
+                </n-button>
+                <n-button quaternary circle size="small" title="编辑听力" :disabled="!activeAudio" @click="editAudio(activeAudio)">
+                  <Icon :icon="settingsIcon" width="16" height="16" />
+                </n-button>
+                <n-button quaternary circle size="small" title="删除选中项" :disabled="!checkedRowKeys.length && !activeRow" @click="deleteSelectedRows">
+                  <Icon :icon="trashIcon" width="16" height="16" />
+                </n-button>
+                <n-button quaternary circle size="small" title="开始复习" @click="startReviewFromSelection">
+                  <Icon :icon="reviewIcon" width="16" height="16" />
+                </n-button>
+              </div>
+              <template v-if="managerMode === 'random'">
+                <div class="random-board">
+                  <div class="random-board-head">
+                    <n-tag size="small" type="success">随机抽查</n-tag>
+                    <span>{{ selectedShelfLabel }}</span>
+                    <span class="random-deck-index">{{ randomDecks.length ? `${randomDeckIndex + 1} / ${randomDecks.length}` : '0 / 0' }}</span>
+                    <div class="random-board-actions">
+                      <n-button quaternary circle size="small" title="上一组卡堆（←）" @click="gotoPrevRandomDeck">
+                        <Icon :icon="chevronLeftIcon" width="16" height="16" />
+                      </n-button>
+                      <n-button quaternary circle size="small" title="下一组卡堆（→）" @click="gotoNextRandomDeck">
+                        <Icon :icon="chevronRightIcon" width="16" height="16" />
+                      </n-button>
+                      <n-button quaternary circle size="small" title="翻牌（空格）" @click="toggleCurrentDeckFlip">
+                        <Icon :icon="reviewIcon" width="16" height="16" />
+                      </n-button>
+                      <n-button quaternary circle size="small" title="抽新卡（回车）" @click="drawRandomCards">
+                        <Icon :icon="shuffleIcon" width="16" height="16" />
+                      </n-button>
+                      <n-button quaternary circle size="small" title="返回列表模式" @click="managerMode = 'list'">
+                        <Icon :icon="listIcon" width="16" height="16" />
+                      </n-button>
+                    </div>
+                  </div>
+                  <div class="random-cards-grid">
+                    <div class="random-board-card" v-for="card in currentRandomCards" :key="card.id" @click="toggleRandomCardFlip(card)">
+                      <div class="random-card-flip" :class="{ flipped: isCardFlipped(card) }">
+                        <div class="random-card-face front">
+                          <div class="random-card-type">{{ rowTypeLabel(card.rowType) }}</div>
+                          <template v-if="card.rowType === 'word'">
+                            <div class="random-card-word">{{ card.title }}</div>
+                            <div class="random-card-phonetic">{{ card.phonetic || '—' }}</div>
+                            <div class="random-card-text">{{ card.sourceText || '—' }}</div>
+                          </template>
+                          <template v-else-if="card.rowType === 'listening'">
+                            <div class="random-card-word">{{ card.title }}</div>
+                            <div class="random-card-text">{{ card.summary || card.note || '—' }}</div>
+                            <div class="random-audio-action" title="播放听力" @click.stop="playRandomCardAudio(card)">
+                              <Icon :icon="playIcon" width="28" height="28" />
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="random-card-text">{{ card.sourceText || '—' }}</div>
+                          </template>
+                        </div>
+                        <div class="random-card-face back">
+                          <template v-if="card.rowType === 'word'">
+                            <div class="random-card-head-row">
+                              <div class="random-card-word">{{ card.title }}</div>
+                              <div class="random-card-stars">{{ masteryStars(card.masteryLevel) }}</div>
+                            </div>
+                            <div class="random-card-meta-row">
+                              <div class="phonetic-group" v-if="card.phoneticUk || card.phonetic">
+                                <n-tag size="small" round :bordered="false" class="phonetic-tag">
+                                  <template #icon><Icon :icon="speechIcon" /></template>
+                                  英 {{ card.phoneticUk || card.phonetic }}
+                                </n-tag>
+                                <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'uk')">
+                                  <Icon :icon="volumeUkIcon" width="14" height="14" />
+                                </n-button>
+                              </div>
+                              <div class="phonetic-group" v-if="card.phoneticUs || card.phonetic">
+                                <n-tag size="small" round :bordered="false" class="phonetic-tag">
+                                  <template #icon><Icon :icon="speechIcon" /></template>
+                                  美 {{ card.phoneticUs || card.phonetic }}
+                                </n-tag>
+                                <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'us')">
+                                  <Icon :icon="volumeUsIcon" width="14" height="14" />
+                                </n-button>
+                              </div>
+                              <n-tag v-if="card.partOfSpeech" size="small" round type="info" :bordered="false">{{ card.partOfSpeech }}</n-tag>
+                            </div>
+                            
+                            <div class="random-card-section">
+                              <div class="random-card-label">释义</div>
+                              <div class="random-card-content">{{ cardWordMeanings(card).join('；') || '—' }}</div>
+                            </div>
+
+                            <div class="random-card-section" v-if="cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations).length">
+                              <div class="random-card-label">近义词</div>
+                              <div class="chip-wrap">
+                                <n-tag v-for="(x, i) in cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations)" :key="`rd-s-${card.id}-${i}`" size="small" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                              </div>
+                            </div>
+
+                            <div class="random-card-section" v-if="cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations).length">
+                              <div class="random-card-label">反义词</div>
+                              <div class="chip-wrap">
+                                <n-tag v-for="(x, i) in cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations)" :key="`rd-a-${card.id}-${i}`" size="small" type="warning" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                              </div>
+                            </div>
+
+                            <div class="random-card-section" v-if="cardWordPairs(card.payload?.associates, card.payload?.associates_translations).length">
+                              <div class="random-card-label">联想词</div>
+                              <div class="chip-wrap">
+                                <n-tag v-for="(x, i) in cardWordPairs(card.payload?.associates, card.payload?.associates_translations)" :key="`rd-r-${card.id}-${i}`" size="small" type="info" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                              </div>
+                            </div>
+
+                            <div class="random-card-section" v-if="card.phrasePairs?.length">
+                              <div class="random-card-label">常用短语</div>
+                              <div class="example-line" v-for="(x, i) in card.phrasePairs" :key="`rd-p-${card.id}-${i}`">
+                                <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
+                                <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                              </div>
+                            </div>
+
+                            <div class="random-card-section" v-if="card.examplePairs?.length">
+                              <div class="random-card-label">常用例句</div>
+                              <div class="example-line" v-for="(x, i) in card.examplePairs" :key="`rd-e-${card.id}-${i}`">
+                                <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
+                                <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                              </div>
+                            </div>
+                          </template>
+                          <template v-else-if="card.rowType === 'listening'">
+                            <div class="random-card-head-row">
+                              <div class="random-card-word">{{ card.title }}</div>
+                            </div>
+                            <div class="random-card-section">
+                              <div class="random-card-label">来源 / 备注</div>
+                              <div class="random-card-content">{{ card.note || '—' }}</div>
+                            </div>
+                            <div class="random-card-section">
+                              <div class="random-card-label">原文 / 摘要</div>
+                              <div class="random-card-content">{{ card.sourceText || card.summary || '—' }}</div>
+                            </div>
+                            <div class="random-audio-action" title="播放听力" @click.stop="playRandomCardAudio(card)">
+                              <Icon :icon="playIcon" width="28" height="28" />
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="random-card-section">
+                              <div class="random-card-label">原文</div>
+                              <div class="random-card-content">{{ card.sourceText || '—' }}</div>
+                            </div>
+                            <div class="random-card-section">
+                              <div class="random-card-label">译文</div>
+                              <div class="random-card-content">{{ card.translatedText || card.summary || '—' }}</div>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <template v-else-if="selectedShelf !== 'my_listening'">
                 <n-data-table
                   size="small"
                   :columns="managerColumns"
@@ -98,8 +259,12 @@
                     <n-radio-button value="dictation">听写素材</n-radio-button>
                     <n-radio-button value="kekenet">可可英语</n-radio-button>
                   </n-radio-group>
-                  <n-button size="small" @click="importLocalAudio">导入本地听力</n-button>
-                  <n-button size="small" @click="importKekenetOnline">从可可英语导入</n-button>
+                  <n-button quaternary circle size="small" title="导入本地听力" @click="importLocalAudio">
+                    <Icon :icon="importIcon" width="16" height="16" />
+                  </n-button>
+                  <n-button quaternary circle size="small" title="从可可英语导入" @click="importKekenetOnline">
+                    <Icon :icon="sparkleIcon" width="16" height="16" />
+                  </n-button>
                 </div>
                 <n-list bordered hoverable clickable class="listening-list">
                   <n-list-item
@@ -196,26 +361,41 @@
               </template>
 
               <template v-else-if="activeAudio">
-                <div class="detail-block">
-                  <div class="detail-label">听力标题</div>
-                  <div class="detail-content">{{ activeAudio.title }}</div>
-                </div>
-                <div class="detail-block">
-                  <div class="detail-label">资源地址</div>
-                  <div class="detail-content">{{ activeAudio.source_uri }}</div>
-                </div>
-                <div class="detail-block">
-                  <div class="detail-label">转写</div>
-                  <div class="detail-content">{{ activeAudio.transcript || '—' }}</div>
-                </div>
-                <div class="detail-block">
-                  <div class="detail-label">备注</div>
-                  <div class="detail-content">{{ activeAudio.notes || '—' }}</div>
-                </div>
-                <div class="detail-actions">
-                  <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
-                  <n-button size="small" @click="applyReviewResult('known')">听懂了</n-button>
-                  <n-button size="small" @click="applyReviewResult('unknown')">听不懂</n-button>
+                <div class="listening-detail-layout">
+                  <div class="listening-player-pane">
+                    <div class="detail-label">听力播放器</div>
+                    <div class="detail-content">{{ activeAudio.title }}</div>
+                    <audio
+                      ref="activeAudioPlayerRef"
+                      class="listening-player"
+                      controls
+                      :src="activeAudio.source_uri"
+                      @timeupdate="handleAudioTimeUpdate"
+                    ></audio>
+                    <div class="detail-block">
+                      <div class="detail-label">资源地址</div>
+                      <div class="detail-content">{{ activeAudio.source_uri }}</div>
+                    </div>
+                    <div class="detail-actions">
+                      <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
+                      <n-button size="small" @click="applyReviewResult('known')">听懂了</n-button>
+                      <n-button size="small" @click="applyReviewResult('fuzzy')">半懂</n-button>
+                      <n-button size="small" @click="applyReviewResult('unknown')">听不懂</n-button>
+                    </div>
+                  </div>
+                  <div class="listening-transcript-pane">
+                    <div class="detail-label">音文对照</div>
+                    <div class="transcript-list">
+                      <div
+                        v-for="(line, idx) in activeAudioTranscriptLines"
+                        :key="`tr-${idx}`"
+                        class="transcript-line"
+                        :class="{ active: idx === currentTranscriptLineIndex }"
+                      >
+                        {{ line }}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </template>
 
@@ -249,8 +429,8 @@
                   <div class="stat-value">{{ totalLearningItemCount }}</div>
                 </div>
                 <div class="stat-cell">
-                  <div class="stat-label">已复习次数</div>
-                  <div class="stat-value">{{ totalReviewedCount }}</div>
+                  <div class="stat-label">当前内容掌握度</div>
+                  <div class="stat-value">{{ currentReviewMasteryLabel }}</div>
                 </div>
                 <div class="stat-cell">
                   <div class="stat-label">掌握占比</div>
@@ -258,7 +438,7 @@
                 </div>
                 <div class="stat-cell">
                   <div class="stat-label">当前卡组</div>
-                  <div class="stat-value">{{ reviewRows.length }}</div>
+                  <div class="stat-value">{{ reviewRows.length ? `${reviewIndex + 1}/${reviewRows.length}` : '0/0' }}</div>
                 </div>
               </div>
               <div class="mastery-bar-track">
@@ -328,43 +508,66 @@
               <n-empty v-else description="当前筛选下暂无可复习内容" />
             </n-card>
 
-            <n-card size="small" class="audio-form-card" title="听力资源维护">
-              <n-form :model="audioForm" label-placement="left" label-width="72">
-                <n-form-item label="标题">
-                  <n-input v-model:value="audioForm.title" placeholder="例如：BBC-News-01" />
+            <n-card size="small" class="audio-form-card" title="复习筛选">
+              <n-form :model="reviewFilter" label-placement="left" label-width="90">
+                <n-form-item label="添加时间">
+                  <n-select v-model:value="reviewFilter.createdPeriod" :options="createdPeriodOptions" />
                 </n-form-item>
-                <n-form-item label="类型">
-                  <n-select v-model:value="audioForm.source_kind" :options="audioKindOptions" />
+                <n-form-item label="上次复习">
+                  <n-select v-model:value="reviewFilter.lastReviewPeriod" :options="lastReviewPeriodOptions" />
                 </n-form-item>
-                <n-form-item label="地址">
-                  <n-input v-model:value="audioForm.source_uri" placeholder="本地路径或在线 URL" />
+                <n-form-item label="掌握程度">
+                  <n-select v-model:value="reviewFilter.masteryBand" :options="masteryBandOptions" />
                 </n-form-item>
-                <n-form-item label="时长">
-                  <n-input-number v-model:value="audioForm.duration_sec" :min="0" />
-                </n-form-item>
-                <n-form-item label="转写">
-                  <n-input v-model:value="audioForm.transcript" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
-                </n-form-item>
-                <n-form-item label="备注">
-                  <n-input v-model:value="audioForm.notes" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
-                </n-form-item>
-                <n-form-item label="可可账号">
-                  <n-input v-model:value="kekenetAccount" placeholder="可可英语用户名" />
-                </n-form-item>
-                <n-form-item label="可可密码">
-                  <n-input v-model:value="kekenetPassword" type="password" show-password-on="click" placeholder="密码将加密存储" />
+                <n-form-item label="排序方式">
+                  <n-select v-model:value="reviewFilter.orderBy" :options="reviewOrderOptions" />
                 </n-form-item>
               </n-form>
               <n-space>
-                <n-button type="primary" @click="saveAudio">保存资源</n-button>
-                <n-button @click="importLocalAudio">导入本地音频</n-button>
-                <n-button @click="importKekenetOnline">在线导入</n-button>
-                <n-button @click="resetAudioForm">清空</n-button>
+                <n-button type="primary" @click="startReviewFromSelection">应用筛选并开始</n-button>
+                <n-button @click="resetReviewFilter">重置筛选</n-button>
               </n-space>
             </n-card>
           </div>
         </n-tab-pane>
       </n-tabs>
+
+      <n-modal v-model:show="audioManagerVisible" preset="card" style="width: 760px" title="听力资源管理">
+        <n-form :model="audioForm" label-placement="left" label-width="72">
+          <n-form-item label="标题">
+            <n-input v-model:value="audioForm.title" placeholder="例如：BBC-News-01" />
+          </n-form-item>
+          <n-form-item label="类型">
+            <n-select v-model:value="audioForm.source_kind" :options="audioKindOptions" />
+          </n-form-item>
+          <n-form-item label="地址">
+            <n-input v-model:value="audioForm.source_uri" placeholder="本地路径或在线 URL" />
+          </n-form-item>
+          <n-form-item label="时长">
+            <n-input-number v-model:value="audioForm.duration_sec" :min="0" />
+          </n-form-item>
+          <n-form-item label="转写">
+            <n-input v-model:value="audioForm.transcript" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
+          </n-form-item>
+          <n-form-item label="备注">
+            <n-input v-model:value="audioForm.notes" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
+          </n-form-item>
+          <n-form-item label="可可账号">
+            <n-input v-model:value="kekenetAccount" placeholder="可可英语用户名" />
+          </n-form-item>
+          <n-form-item label="可可密码">
+            <n-input v-model:value="kekenetPassword" type="password" show-password-on="click" placeholder="密码将加密存储" />
+          </n-form-item>
+        </n-form>
+        <template #action>
+          <n-space justify="end">
+            <n-button @click="saveKekenetCredentials">保存账号</n-button>
+            <n-button @click="importLocalAudio">导入本地音频</n-button>
+            <n-button @click="importKekenetOnline">在线导入</n-button>
+            <n-button type="primary" @click="saveAudio">保存资源</n-button>
+          </n-space>
+        </template>
+      </n-modal>
 
       <n-modal v-model:show="recordEditVisible" preset="card" style="width: 680px" :title="recordEditMode === 'edit' ? '编辑学习记录' : '新增学习记录'">
         <n-form :model="recordForm" label-placement="left" label-width="84">
@@ -399,13 +602,27 @@
 </template>
 
 <script setup>
-import { computed, h, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
 import speechIcon from '@iconify-icons/lucide/messages-square'
 import badgeInfoIcon from '@iconify-icons/lucide/badge-info'
 import volumeUsIcon from '@iconify-icons/lucide/volume-2'
 import volumeUkIcon from '@iconify-icons/lucide/volume-1'
+import chevronLeftIcon from '@iconify-icons/lucide/chevron-left'
+import chevronRightIcon from '@iconify-icons/lucide/chevron-right'
+import settingsIcon from '@iconify-icons/lucide/settings-2'
+import importIcon from '@iconify-icons/lucide/download'
+import exportIcon from '@iconify-icons/lucide/upload'
+import refreshIcon from '@iconify-icons/lucide/refresh-cw'
+import sparkleIcon from '@iconify-icons/lucide/sparkles'
+import shuffleIcon from '@iconify-icons/lucide/shuffle'
+import listIcon from '@iconify-icons/lucide/list'
+import playIcon from '@iconify-icons/lucide/play'
+import plusIcon from '@iconify-icons/lucide/plus'
+import editIcon from '@iconify-icons/lucide/pencil'
+import trashIcon from '@iconify-icons/lucide/trash-2'
+import reviewIcon from '@iconify-icons/lucide/book-open-check'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import {
   NButton,
@@ -434,13 +651,13 @@ import {
 const message = useMessage()
 const activeTab = ref('manager')
 const keyword = ref('')
-const recordKind = ref('all')
 const learningLangStorageKey = 'guaxi_language_learning_target_lang'
 const learningLang = ref(window.localStorage.getItem(learningLangStorageKey) || 'zh')
-const selectedShelf = ref('my_vocab')
+const selectedShelf = ref('all')
 const records = ref([])
 const audioResources = ref([])
 const activeRow = ref(null)
+const managerMode = ref('list')
 const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
 const checkedRowKeys = ref([])
@@ -453,8 +670,22 @@ const reviewRows = ref([])
 const reviewIndex = ref(0)
 const reviewShowAnswer = ref(false)
 const masteryStore = ref({ record: {}, audio: {} })
+const shelfCounts = reactive({ all: 0, my_vocab: 0, my_sentences: 0, my_paragraphs: 0, my_listening: 0 })
 const kekenetAccount = ref('')
 const kekenetPassword = ref('')
+const audioManagerVisible = ref(false)
+const randomDecks = ref([])
+const randomDeckIndex = ref(0)
+const randomFlippedMap = ref({})
+const currentTranscriptLineIndex = ref(0)
+const activeAudioPlayerRef = ref(null)
+
+const reviewFilter = reactive({
+  createdPeriod: 'all',
+  lastReviewPeriod: 'all',
+  masteryBand: 'all',
+  orderBy: 'created_desc',
+})
 
 const recordEditVisible = ref(false)
 const recordEditMode = ref('create')
@@ -491,6 +722,34 @@ const audioKindOptions = [
   { label: '在线音频', value: 'remote' },
   { label: '本地文件', value: 'local' },
   { label: '听写素材', value: 'dictation' },
+  { label: '可可英语', value: 'kekenet' },
+]
+
+const createdPeriodOptions = [
+  { label: '全部时间', value: 'all' },
+  { label: '最近3天', value: '3d' },
+  { label: '最近7天', value: '7d' },
+  { label: '最近30天', value: '30d' },
+]
+
+const lastReviewPeriodOptions = [
+  { label: '全部', value: 'all' },
+  { label: '未复习过', value: 'never' },
+  { label: '最近7天复习', value: '7d' },
+  { label: '最近30天复习', value: '30d' },
+]
+
+const masteryBandOptions = [
+  { label: '全部', value: 'all' },
+  { label: '未掌握(0-1)', value: 'low' },
+  { label: '模糊(2-3)', value: 'mid' },
+  { label: '已掌握(4-5)', value: 'high' },
+]
+
+const reviewOrderOptions = [
+  { label: '添加时间新到旧', value: 'created_desc' },
+  { label: '添加时间旧到新', value: 'created_asc' },
+  { label: '上次复习最久优先', value: 'review_oldest' },
 ]
 
 const audioForm = reactive({
@@ -535,13 +794,14 @@ const getMasteryEntry = (sourceType, rawId) => {
   const key = String(rawId || '')
   const row = box[key]
   if (!row || typeof row !== 'object') {
-    return { level: 0, reviewed: 0, mastered: 0, lastResult: '' }
+    return { level: 0, reviewed: 0, mastered: 0, lastResult: '', lastReviewedAt: '' }
   }
   return {
     level: toNum(row.level),
     reviewed: toNum(row.reviewed),
     mastered: toNum(row.mastered),
     lastResult: String(row.lastResult || ''),
+    lastReviewedAt: String(row.lastReviewedAt || ''),
   }
 }
 
@@ -560,6 +820,7 @@ const upsertMasteryEntry = (sourceType, rawId, result) => {
     reviewed: current.reviewed + 1,
     mastered: current.mastered + (result === 'known' ? 1 : 0),
     lastResult: result,
+    lastReviewedAt: new Date().toISOString(),
   }
   masteryStore.value = {
     ...masteryStore.value,
@@ -637,6 +898,7 @@ const allRows = computed(() => {
       masteryLevel: m.level,
       reviewed: m.reviewed,
       mastered: m.mastered,
+      lastReviewedAt: m.lastReviewedAt,
     }
   })
   const audioRows = (Array.isArray(audioResources.value) ? audioResources.value : []).map((r) => {
@@ -658,6 +920,7 @@ const allRows = computed(() => {
       masteryLevel: m.level,
       reviewed: m.reviewed,
       mastered: m.mastered,
+      lastReviewedAt: m.lastReviewedAt,
     }
   })
   return [...recRows, ...audioRows]
@@ -671,6 +934,7 @@ const matchesKeyword = (row) => {
 
 const shelfFilteredRows = computed(() => {
   const rows = allRows.value
+  if (selectedShelf.value === 'all') return rows
   if (selectedShelf.value === 'my_vocab') return rows.filter((r) => r.rowType === 'word')
   if (selectedShelf.value === 'my_sentences') return rows.filter((r) => r.rowType === 'sentence')
   if (selectedShelf.value === 'my_paragraphs') return rows.filter((r) => r.rowType === 'paragraph')
@@ -679,21 +943,16 @@ const shelfFilteredRows = computed(() => {
 })
 
 const filteredRows = computed(() => {
-  let rows = shelfFilteredRows.value.filter(matchesKeyword)
-  if (recordKind.value !== 'all') {
-    rows = rows.filter((r) => r.rowType === recordKind.value)
-  }
-  return rows
+  return shelfFilteredRows.value.filter(matchesKeyword)
 })
 
 const leftShelfItems = computed(() => {
-  const rows = allRows.value
-  const count = (fn) => rows.filter(fn).length
   return [
-    { key: 'my_vocab', label: '我的单词本', count: count((r) => r.rowType === 'word') },
-    { key: 'my_sentences', label: '我摘录的例句', count: count((r) => r.rowType === 'sentence') },
-    { key: 'my_paragraphs', label: '我摘录的段落', count: count((r) => r.rowType === 'paragraph') },
-    { key: 'my_listening', label: '我的听力', count: count((r) => r.rowType === 'listening') },
+    { key: 'all', label: '全部分类', count: shelfCounts.all },
+    { key: 'my_vocab', label: '我的单词本', count: shelfCounts.my_vocab },
+    { key: 'my_sentences', label: '我摘录的例句', count: shelfCounts.my_sentences },
+    { key: 'my_paragraphs', label: '我摘录的段落', count: shelfCounts.my_paragraphs },
+    { key: 'my_listening', label: '我的听力', count: shelfCounts.my_listening },
   ]
 })
 
@@ -828,7 +1087,22 @@ const applyReviewResult = (result) => {
 }
 
 const reviewRowsByType = computed(() => {
-  const rows = filteredRows.value
+  const rows = filteredRows.value.filter((row) => {
+    const now = Date.now()
+    const createdTs = row.createdAt ? new Date(row.createdAt).getTime() : 0
+    const lastReviewedTs = row.lastReviewedAt ? new Date(row.lastReviewedAt).getTime() : 0
+    if (reviewFilter.createdPeriod !== 'all' && createdTs > 0) {
+      const day = reviewFilter.createdPeriod === '3d' ? 3 : reviewFilter.createdPeriod === '7d' ? 7 : 30
+      if (now - createdTs > day * 24 * 3600 * 1000) return false
+    }
+    if (reviewFilter.lastReviewPeriod === 'never' && lastReviewedTs > 0) return false
+    if (reviewFilter.lastReviewPeriod === '7d' && (!(lastReviewedTs > 0) || now - lastReviewedTs > 7 * 24 * 3600 * 1000)) return false
+    if (reviewFilter.lastReviewPeriod === '30d' && (!(lastReviewedTs > 0) || now - lastReviewedTs > 30 * 24 * 3600 * 1000)) return false
+    if (reviewFilter.masteryBand === 'low' && !(row.masteryLevel <= 1)) return false
+    if (reviewFilter.masteryBand === 'mid' && !(row.masteryLevel >= 2 && row.masteryLevel <= 3)) return false
+    if (reviewFilter.masteryBand === 'high' && !(row.masteryLevel >= 4)) return false
+    return true
+  })
   if (reviewType.value === 'mixed') return rows
   return rows.filter((r) => r.rowType === reviewType.value)
 })
@@ -840,7 +1114,17 @@ const currentReviewItem = computed(() => {
 })
 
 const rebuildReviewRows = () => {
-  reviewRows.value = [...reviewRowsByType.value]
+  const rows = [...reviewRowsByType.value]
+  rows.sort((a, b) => {
+    if (reviewFilter.orderBy === 'created_asc') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    if (reviewFilter.orderBy === 'review_oldest') {
+      const aTs = a.lastReviewedAt ? new Date(a.lastReviewedAt).getTime() : 0
+      const bTs = b.lastReviewedAt ? new Date(b.lastReviewedAt).getTime() : 0
+      return aTs - bTs
+    }
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
+  reviewRows.value = rows
   reviewIndex.value = 0
   reviewShowAnswer.value = false
 }
@@ -885,30 +1169,53 @@ const startReviewFromSelection = () => {
 const totalLearningItemCount = computed(() => allRows.value.length)
 
 const masteryAggregate = computed(() => {
-  let reviewed = 0
   let mastered = 0
   allRows.value.forEach((r) => {
     const m = getMasteryEntry(r.sourceType, r.rawId)
-    reviewed += m.reviewed
-    mastered += m.mastered
+    if (m.level >= 4) mastered += 1
   })
-  return { reviewed, mastered }
+  return { mastered }
 })
 
-const totalReviewedCount = computed(() => masteryAggregate.value.reviewed)
+const currentReviewMasteryLabel = computed(() => {
+  const cur = currentReviewItem.value
+  if (!cur) return '未开始'
+  const m = getMasteryEntry(cur.sourceType, cur.rawId)
+  if (m.lastResult === 'known') return '认识'
+  if (m.lastResult === 'fuzzy') return '模糊'
+  if (m.lastResult === 'unknown') return '不认识'
+  return '未评估'
+})
 const masteryPercent = computed(() => {
-  const reviewed = masteryAggregate.value.reviewed
+  const total = totalLearningItemCount.value
   const mastered = masteryAggregate.value.mastered
-  if (reviewed <= 0) return 0
-  return Math.min(100, Math.max(0, Math.round((mastered / reviewed) * 100)))
+  if (total <= 0) return 0
+  return Math.min(100, Math.max(0, Math.round((mastered / total) * 100)))
 })
 
 const resolveQueryKind = () => {
+  if (selectedShelf.value === 'all') return 'all'
   if (selectedShelf.value === 'my_vocab') return 'word'
   if (selectedShelf.value === 'my_sentences') return 'sentence'
   if (selectedShelf.value === 'my_paragraphs') return 'paragraph'
-  if (recordKind.value === 'listening') return 'all'
-  return recordKind.value
+  return 'all'
+}
+
+const refreshShelfCounts = async () => {
+  try {
+    const [wordC, sentenceC, paragraphC, allRecordC, listeningC] = await Promise.all([
+      invoke('language_learning_get_counts', { keyword: '', kind: 'word', learningLang: learningLang.value }),
+      invoke('language_learning_get_counts', { keyword: '', kind: 'sentence', learningLang: learningLang.value }),
+      invoke('language_learning_get_counts', { keyword: '', kind: 'paragraph', learningLang: learningLang.value }),
+      invoke('language_learning_get_counts', { keyword: '', kind: 'all', learningLang: learningLang.value }),
+      invoke('language_learning_get_counts', { keyword: '', kind: 'all', learningLang: learningLang.value }),
+    ])
+    shelfCounts.my_vocab = Number(wordC?.records || 0)
+    shelfCounts.my_sentences = Number(sentenceC?.records || 0)
+    shelfCounts.my_paragraphs = Number(paragraphC?.records || 0)
+    shelfCounts.my_listening = Number(listeningC?.audio_resources || 0)
+    shelfCounts.all = Number(allRecordC?.records || 0) + shelfCounts.my_listening
+  } catch {}
 }
 
 const refreshRecords = async () => {
@@ -947,6 +1254,7 @@ const refreshAudio = async () => {
 const refreshAll = async () => {
   await refreshRecords()
   await refreshAudio()
+  await refreshShelfCounts()
   checkedRowKeys.value = []
   if (!activeRow.value && filteredRows.value.length) {
     activeRow.value = filteredRows.value[0]
@@ -1027,7 +1335,7 @@ const editAudio = (row) => {
   audioForm.duration_sec = Number(row.duration_sec || 0)
   audioForm.transcript = row.transcript || ''
   audioForm.notes = row.notes || ''
-  activeTab.value = 'review'
+  audioManagerVisible.value = true
 }
 
 const saveAudio = async () => {
@@ -1200,6 +1508,161 @@ const importLocalAudio = async () => {
   }
 }
 
+const openAudioManager = () => {
+  audioManagerVisible.value = true
+}
+
+const resetReviewFilter = () => {
+  reviewFilter.createdPeriod = 'all'
+  reviewFilter.lastReviewPeriod = 'all'
+  reviewFilter.masteryBand = 'all'
+  reviewFilter.orderBy = 'created_desc'
+}
+
+const selectedShelfLabel = computed(() => {
+  const hit = leftShelfItems.value.find((x) => x.key === selectedShelf.value)
+  return hit?.label || '当前分类'
+})
+
+const currentRandomCards = computed(() => {
+  const deck = randomDecks.value[randomDeckIndex.value]
+  return Array.isArray(deck) ? deck : []
+})
+
+const chunkByThree = (list) => {
+  const out = []
+  for (let i = 0; i < list.length; i += 3) {
+    out.push(list.slice(i, i + 3))
+  }
+  return out
+}
+
+const drawRandomCards = () => {
+  const candidates = filteredRows.value
+  if (!candidates.length) {
+    randomDecks.value = []
+    randomDeckIndex.value = 0
+    randomFlippedMap.value = {}
+    return
+  }
+  const pool = [...candidates]
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const t = pool[i]
+    pool[i] = pool[j]
+    pool[j] = t
+  }
+  randomDecks.value = chunkByThree(pool)
+  randomDeckIndex.value = 0
+  randomFlippedMap.value = {}
+}
+
+const gotoPrevRandomDeck = () => {
+  if (!randomDecks.value.length) return
+  randomDeckIndex.value = (randomDeckIndex.value - 1 + randomDecks.value.length) % randomDecks.value.length
+}
+
+const gotoNextRandomDeck = () => {
+  if (!randomDecks.value.length) return
+  randomDeckIndex.value = (randomDeckIndex.value + 1) % randomDecks.value.length
+}
+
+const isCardFlipped = (card) => Boolean(randomFlippedMap.value[String(card.id || '')])
+
+const toggleRandomCardFlip = (card) => {
+  const key = String(card?.id || '')
+  if (!key) return
+  randomFlippedMap.value = {
+    ...randomFlippedMap.value,
+    [key]: !randomFlippedMap.value[key],
+  }
+}
+
+const toggleCurrentDeckFlip = () => {
+  const cards = currentRandomCards.value
+  if (!cards.length) return
+  const allFlipped = cards.every((x) => isCardFlipped(x))
+  const next = { ...randomFlippedMap.value }
+  cards.forEach((card) => {
+    next[String(card.id || '')] = !allFlipped
+  })
+  randomFlippedMap.value = next
+}
+
+const openRandomCheckBoard = () => {
+  activeTab.value = 'manager'
+  managerMode.value = 'random'
+  drawRandomCards()
+  if (!currentRandomCards.value.length) {
+    message.warning('当前分类暂无可抽查内容')
+  }
+}
+
+const playRandomCardAudio = (card) => {
+  if (!card?.payload?.source_uri) return
+  try {
+    const player = new Audio(String(card.payload.source_uri))
+    player.play().catch(() => {})
+  } catch {}
+}
+
+const cardWordPairs = (words, trans) => {
+  const src = normalizeList(words)
+  const target = Array.isArray(trans) ? trans : []
+  return src.map((word, idx) => ({ word, translation: String(target[idx] || '').trim() }))
+}
+
+const cardWordMeanings = (card) => {
+  const meanings = Array.isArray(card?.payload?.meanings) && card.payload.meanings.length
+    ? card.payload.meanings
+    : splitSimpleTranslations(card?.translatedText || '')
+  return normalizeList(meanings)
+}
+
+const handleRandomBoardKeydown = (evt) => {
+  if (managerMode.value !== 'random' || activeTab.value !== 'manager') return
+  if (evt.key === 'ArrowLeft') {
+    evt.preventDefault()
+    gotoPrevRandomDeck()
+    return
+  }
+  if (evt.key === 'ArrowRight') {
+    evt.preventDefault()
+    gotoNextRandomDeck()
+    return
+  }
+  if (evt.key === ' ' || evt.code === 'Space') {
+    evt.preventDefault()
+    toggleCurrentDeckFlip()
+    return
+  }
+  if (evt.key === 'Enter') {
+    evt.preventDefault()
+    drawRandomCards()
+  }
+}
+
+const activeAudioTranscriptLines = computed(() => {
+  const text = String(activeAudio.value?.transcript || '').trim()
+  if (!text) return []
+  return text
+    .split(/\r?\n|(?<=[。！？!?])/g)
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+})
+
+const handleAudioTimeUpdate = (evt) => {
+  const player = evt?.target
+  if (!player || !Number.isFinite(player.currentTime) || !Number.isFinite(player.duration) || player.duration <= 0) return
+  const lines = activeAudioTranscriptLines.value
+  if (!lines.length) {
+    currentTranscriptLineIndex.value = 0
+    return
+  }
+  const ratio = Math.min(1, Math.max(0, player.currentTime / player.duration))
+  currentTranscriptLineIndex.value = Math.min(lines.length - 1, Math.floor(ratio * lines.length))
+}
+
 let learningPronounceAudio = null
 const playWordPronunciation = (rawWord, accent = 'us') => {
   const text = String(rawWord || '').trim()
@@ -1214,15 +1677,6 @@ const playWordPronunciation = (rawWord, accent = 'us') => {
     learningPronounceAudio = new Audio(url)
     learningPronounceAudio.play().catch(() => {})
   } catch {}
-}
-
-const playSelectedPronunciation = () => {
-  const text = activeWordRecord.value?.word || activeWordRecord.value?.source_text || ''
-  if (!text) {
-    message.warning('请先选择一个单词条目')
-    return
-  }
-  playWordPronunciation(text, 'us')
 }
 
 const readTextFileByPath = async (path) => {
@@ -1286,15 +1740,10 @@ const importLearningData = async () => {
     }
     await refreshAll()
     const rowsAfter = allRows.value.length
-    message.success(`导入完成，新增或更新 ${Math.max(0, rowsAfter - rowsBefore)} 项`)
+    message.success(`导入完成，新增或更新 ${Math.max(0, rowsAfter - rowsBefore)} 项，可用于恢复并自动差异合并`)
   } catch (err) {
     message.error(`导入失败: ${String(err?.message || err || '')}`)
   }
-}
-
-const restoreLearningData = async () => {
-  await importLearningData()
-  message.success('恢复完成，已执行差异合并（不覆盖本机独有数据）')
 }
 
 watch(listeningKindFilter, () => {
@@ -1308,9 +1757,12 @@ watch(listeningKindFilter, () => {
   }
 })
 
-watch([recordKind, selectedShelf], async () => {
+watch(selectedShelf, async () => {
   recordPage.value = 1
   await refreshRecords()
+  if (managerMode.value === 'random') {
+    drawRandomCards()
+  }
   const targetRows = selectedShelf.value === 'my_listening' ? listeningRows.value : filteredRows.value
   if (!targetRows.length) {
     activeRow.value = null
@@ -1324,6 +1776,9 @@ watch([recordKind, selectedShelf], async () => {
 watch(keyword, async () => {
   recordPage.value = 1
   await refreshAll()
+  if (managerMode.value === 'random') {
+    drawRandomCards()
+  }
 })
 
 watch(learningLang, async (v) => {
@@ -1335,8 +1790,14 @@ watch(learningLang, async (v) => {
   rebuildReviewRows()
 })
 
-watch([reviewType, filteredRows], () => {
+watch([reviewType, filteredRows, () => reviewFilter.createdPeriod, () => reviewFilter.lastReviewPeriod, () => reviewFilter.masteryBand, () => reviewFilter.orderBy], () => {
   rebuildReviewRows()
+})
+
+watch(filteredRows, () => {
+  if (managerMode.value === 'random') {
+    drawRandomCards()
+  }
 })
 
 watch(activeTab, (tab) => {
@@ -1346,6 +1807,7 @@ watch(activeTab, (tab) => {
 })
 
 onMounted(async () => {
+  window.addEventListener('keydown', handleRandomBoardKeydown)
   loadMasteryStore()
   try {
     const creds = await invoke('language_learning_get_kekenet_credentials')
@@ -1356,6 +1818,14 @@ onMounted(async () => {
     activeRow.value = filteredRows.value[0]
   }
   rebuildReviewRows()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleRandomBoardKeydown)
+  if (learningPronounceAudio) {
+    learningPronounceAudio.pause()
+    learningPronounceAudio = null
+  }
 })
 </script>
 
@@ -1428,12 +1898,6 @@ onMounted(async () => {
   overflow: auto;
 }
 
-.tree-collapse-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
 .tree-group-title {
   font-size: 12px;
   color: var(--guaxi-text-secondary);
@@ -1465,6 +1929,39 @@ onMounted(async () => {
 .middle-table-card {
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.edge-toggle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 46px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--guaxi-border);
+  color: var(--guaxi-text-secondary);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 90%, transparent);
+  cursor: pointer;
+  z-index: 6;
+  transition: all .2s ease;
+}
+
+.edge-toggle.left {
+  left: -12px;
+}
+
+.edge-toggle.right {
+  right: -12px;
+}
+
+.edge-toggle:hover {
+  border-color: var(--primary-color, #4acadb);
+  color: var(--primary-color, #4acadb);
+  transform: translateY(-50%) scale(1.04);
 }
 
 .table-toolbar {
@@ -1478,6 +1975,138 @@ onMounted(async () => {
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+.random-board {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 640px;
+}
+
+.random-board-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--guaxi-text-secondary);
+}
+
+.random-deck-index {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--guaxi-border);
+}
+
+.random-board-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.random-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.random-board-card {
+  min-height: 520px;
+  perspective: 1400px;
+  animation: cardPop .22s ease;
+}
+
+.random-card-flip {
+  position: relative;
+  width: 100%;
+  min-height: 520px;
+  transform-style: preserve-3d;
+  transition: transform .38s ease;
+}
+
+.random-card-flip.flipped {
+  transform: rotateY(180deg);
+}
+
+.random-card-face {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  backface-visibility: hidden;
+  background: linear-gradient(155deg, color-mix(in srgb, var(--guaxi-panel-bg) 93%, #8dd2ff 7%), color-mix(in srgb, var(--guaxi-panel-bg) 93%, #89f0cb 7%));
+  overflow: auto;
+}
+
+.random-card-face.back {
+  transform: rotateY(180deg);
+  background: linear-gradient(155deg, color-mix(in srgb, var(--guaxi-panel-bg) 93%, #b7b8ff 7%), color-mix(in srgb, var(--guaxi-panel-bg) 93%, #8df0d5 7%));
+}
+
+.random-card-type {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.random-card-word {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.random-card-phonetic {
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+}
+
+.random-card-text {
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+.random-card-subtitle {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.random-card-list {
+  border-top: 1px dashed var(--guaxi-border);
+  padding-top: 8px;
+}
+
+.random-card-answer {
+  border-top: 1px dashed var(--guaxi-border);
+  padding-top: 8px;
+  color: color-mix(in srgb, var(--primary-color, #4acadb) 70%, var(--guaxi-text-primary));
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.random-audio-action {
+  margin-top: auto;
+  margin-inline: auto;
+  width: 54px;
+  height: 54px;
+  border-radius: 999px;
+  border: 1px solid var(--guaxi-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--primary-color, #4acadb);
+  transition: transform .2s ease, border-color .2s ease;
+}
+
+.random-audio-action:hover {
+  transform: scale(1.06);
+  border-color: var(--primary-color, #4acadb);
 }
 
 .listening-toolbar {
@@ -1527,6 +2156,41 @@ onMounted(async () => {
 
 .right-detail-card {
   overflow: auto;
+}
+
+.listening-detail-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.listening-player {
+  width: 100%;
+  margin-top: 8px;
+  margin-bottom: 12px;
+}
+
+.transcript-list {
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  max-height: 520px;
+  overflow: auto;
+  background: var(--guaxi-panel-bg);
+}
+
+.transcript-line {
+  line-height: 1.65;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--guaxi-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.transcript-line.active {
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 14%, var(--guaxi-panel-bg));
+  color: var(--guaxi-text-primary);
 }
 
 .word-detail-head {
@@ -1784,5 +2448,67 @@ onMounted(async () => {
 
 .audio-form-card {
   overflow: auto;
+}
+
+@keyframes cardPop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.random-card-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.random-card-stars {
+  font-size: 14px;
+  color: #f5a524;
+  letter-spacing: 2px;
+}
+
+.random-card-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.phonetic-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.phonetic-tag {
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 60%, transparent);
+}
+
+.tag-trans {
+  opacity: 0.8;
+  font-size: 90%;
+}
+
+.random-card-section {
+  margin-bottom: 12px;
+}
+
+.random-card-label {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  margin-bottom: 4px;
+}
+
+.random-card-content {
+  line-height: 1.6;
+  font-size: 14px;
 }
 </style>
