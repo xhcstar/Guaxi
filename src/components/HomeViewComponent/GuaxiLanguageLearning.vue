@@ -38,7 +38,54 @@
 
       <n-tabs v-model:value="activeTab" animated type="line" class="page-tabs">
         <n-tab-pane name="manager" tab="学习管理">
-          <div class="manager-layout" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed }">
+          <div v-if="isListeningImmersiveReady" class="listening-immersive-page">
+            <div class="immersive-global-back">
+              <n-button quaternary circle size="small" title="返回听力管理界面" @click="exitListeningImmersive">
+                <Icon :icon="chevronLeftIcon" width="16" height="16" />
+              </n-button>
+              <span class="immersive-title">{{ activeAudio?.title || '听力学习面板' }}</span>
+            </div>
+            <div class="listening-detail-layout immersive">
+              <div class="listening-player-pane">
+                <audio
+                  ref="activeAudioPlayerRef"
+                  class="listening-player"
+                  controls
+                  :src="sanitizeMediaUri(activeAudio?.source_uri || '')"
+                  @loadedmetadata="onAudioLoadedMetadata"
+                  @timeupdate="handleAudioTimeUpdate"
+                ></audio>
+                <div class="playback-row">
+                  <span class="detail-label">播放速度</span>
+                  <n-select v-model:value="playbackRate" size="small" style="width: 140px" :options="playbackRateOptions" @update:value="applyAudioPlaybackRate" />
+                </div>
+                <div class="detail-block">
+                  <div class="detail-label">资源来源 / 主题</div>
+                  <div class="detail-content">{{ activeAudio?.provider || '—' }} / {{ activeAudio?.topic || '—' }}</div>
+                </div>
+                <div class="detail-actions">
+                  <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
+                  <n-button size="small" @click="applyReviewResult('known')">听懂了</n-button>
+                  <n-button size="small" @click="applyReviewResult('fuzzy')">半懂</n-button>
+                  <n-button size="small" @click="applyReviewResult('unknown')">听不懂</n-button>
+                </div>
+              </div>
+              <div class="listening-transcript-pane">
+                <div class="detail-label">音文对照</div>
+                <div class="transcript-list">
+                  <div
+                    v-for="(line, idx) in activeAudioTranscriptLines"
+                    :key="`immersive-tr-${idx}`"
+                    class="transcript-line"
+                    :class="{ active: idx === currentTranscriptLineIndex }"
+                  >
+                    {{ line }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="manager-layout" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed }">
             <n-card size="small" class="left-tree-card" v-show="!leftCollapsed">
               <div class="tree-group-title">学习分组</div>
               <div
@@ -234,7 +281,7 @@
                   :row-props="managerRowProps"
                   :single-line="false"
                   :checked-row-keys="checkedRowKeys"
-                  @update:checked-row-keys="(keys) => (checkedRowKeys = keys)"
+                  @update:checked-row-keys="onManagerCheckedRowKeysChange"
                   virtual-scroll
                 />
                 <div class="table-footer">
@@ -257,34 +304,41 @@
                     <n-radio-button value="remote">在线听力</n-radio-button>
                     <n-radio-button value="local">本地音频</n-radio-button>
                     <n-radio-button value="dictation">听写素材</n-radio-button>
-                    <n-radio-button value="kekenet">可可英语</n-radio-button>
                   </n-radio-group>
+                  <n-select v-model:value="listeningProviderFilter" size="small" :options="listeningProviderOptions" style="width: 150px" />
+                  <n-input v-model:value="collectTopic" size="small" clearable placeholder="输入主题后采集听力资源" style="width: 220px" />
+                  <n-input-number v-model:value="collectLimit" size="small" :min="1" :max="50" style="width: 110px" />
+                  <n-button quaternary circle size="small" title="听力源管理器" @click="sourceManagerVisible = true">
+                    <Icon :icon="settingsIcon" width="16" height="16" />
+                  </n-button>
                   <n-button quaternary circle size="small" title="导入本地听力" @click="importLocalAudio">
                     <Icon :icon="importIcon" width="16" height="16" />
                   </n-button>
-                  <n-button quaternary circle size="small" title="从可可英语导入" @click="importKekenetOnline">
+                  <n-button quaternary circle size="small" title="按主题采集听力" @click="collectListeningByTopic">
                     <Icon :icon="sparkleIcon" width="16" height="16" />
                   </n-button>
                 </div>
-                <n-list bordered hoverable clickable class="listening-list">
-                  <n-list-item
-                    v-for="row in listeningRows"
-                    :key="row.id"
-                    :class="{ active: activeRow?.id === row.id }"
-                    @click="activeRow = row"
-                  >
-                    <div class="list-item-head">
-                      <n-tag size="small" type="warning">{{ row.payload?.source_kind || 'listening' }}</n-tag>
-                      <span class="list-item-title">{{ row.title }}</span>
-                    </div>
-                    <div class="list-item-sub">{{ row.note }}</div>
-                    <div class="list-item-sub">{{ row.summary || '—' }}</div>
-                  </n-list-item>
-                </n-list>
+                <n-data-table
+                  size="small"
+                  :columns="listeningColumns"
+                  :data="listeningRows"
+                  :max-height="660"
+                  :row-key="(row) => row.id"
+                  :checked-row-keys="checkedRowKeys"
+                  :row-props="listeningRowProps"
+                  :single-line="false"
+                  virtual-scroll
+                  @update:checked-row-keys="onListeningCheckedRowKeysChange"
+                />
               </template>
             </n-card>
 
-            <n-card size="small" class="right-detail-card" v-show="!rightCollapsed" title="词条详情 / 学习信息">
+            <n-card size="small" class="right-detail-card" v-show="selectedShelf === 'my_listening' || !rightCollapsed || isListeningImmersive" :title="selectedShelf === 'my_listening' ? '听力信息' : '词条详情 / 学习信息'">
+              <div v-if="isListeningImmersive" class="immersive-global-back">
+                <n-button quaternary circle size="small" title="返回听力管理界面" @click="exitListeningImmersive">
+                  <Icon :icon="chevronLeftIcon" width="16" height="16" />
+                </n-button>
+              </div>
               <template v-if="activeWordRecord">
                 <div class="word-detail-head">
                   <div class="word-detail-title">{{ activeWordRecord.word || activeWordRecord.source_text }}</div>
@@ -361,41 +415,44 @@
               </template>
 
               <template v-else-if="activeAudio">
-                <div class="listening-detail-layout">
-                  <div class="listening-player-pane">
-                    <div class="detail-label">听力播放器</div>
-                    <div class="detail-content">{{ activeAudio.title }}</div>
-                    <audio
-                      ref="activeAudioPlayerRef"
-                      class="listening-player"
-                      controls
-                      :src="activeAudio.source_uri"
-                      @timeupdate="handleAudioTimeUpdate"
-                    ></audio>
-                    <div class="detail-block">
-                      <div class="detail-label">资源地址</div>
-                      <div class="detail-content">{{ activeAudio.source_uri }}</div>
-                    </div>
-                    <div class="detail-actions">
-                      <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
-                      <n-button size="small" @click="applyReviewResult('known')">听懂了</n-button>
-                      <n-button size="small" @click="applyReviewResult('fuzzy')">半懂</n-button>
-                      <n-button size="small" @click="applyReviewResult('unknown')">听不懂</n-button>
-                    </div>
+                <div class="listening-info-panel">
+                  <div class="detail-block">
+                    <div class="detail-label">标题</div>
+                    <div class="detail-content">{{ activeAudio.title || '—' }}</div>
                   </div>
-                  <div class="listening-transcript-pane">
-                    <div class="detail-label">音文对照</div>
-                    <div class="transcript-list">
-                      <div
-                        v-for="(line, idx) in activeAudioTranscriptLines"
-                        :key="`tr-${idx}`"
-                        class="transcript-line"
-                        :class="{ active: idx === currentTranscriptLineIndex }"
-                      >
-                        {{ line }}
-                      </div>
-                    </div>
+                  <div class="detail-block">
+                    <div class="detail-label">主题 / 来源</div>
+                    <div class="detail-content">{{ activeAudio.topic || '未标注' }} / {{ activeAudio.provider || '未知' }}</div>
                   </div>
+                  <div class="detail-block">
+                    <div class="detail-label">时长 / 创建时间</div>
+                    <div class="detail-content">{{ fmtDuration(activeAudio.duration_sec) }} / {{ activeAudio.created_at || '—' }}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="detail-label">简明信息</div>
+                    <div class="detail-content">{{ activeAudio.notes || '暂无说明' }}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="detail-label">原文状态</div>
+                    <div class="detail-content">{{ activeAudioTranscriptLines.length ? `已加载 ${activeAudioTranscriptLines.length} 段` : '未获取到完整原文，可尝试重新抓取' }}</div>
+                  </div>
+                  <div class="detail-actions">
+                    <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
+                    <n-button size="small" @click="fetchTranscriptForActiveAudio">抓取原文</n-button>
+                    <n-button type="primary" size="small" @click="enterListeningStudy">
+                      <template #icon>
+                        <Icon :icon="playIcon" width="14" height="14" />
+                      </template>
+                      进入听力学习
+                    </n-button>
+                  </div>
+                </div>
+              </template>
+
+              <template v-else-if="isListeningImmersive">
+                <div class="empty-row">
+                  <div class="detail-label">未找到当前听力资源</div>
+                  <div class="detail-content">该条目可能已被筛选或刚被刷新，点击左上返回后重新选择。</div>
                 </div>
               </template>
 
@@ -468,6 +525,19 @@
                     <div class="review-word">{{ currentReviewItem.title }}</div>
                     <div class="review-phonetic">{{ currentReviewItem.phonetic || '—' }}</div>
                   </template>
+                  <template v-else-if="currentReviewItem.rowType === 'listening'">
+                    <div class="review-listening-player-wrap">
+                      <audio
+                        ref="reviewAudioPlayerRef"
+                        class="review-listening-player"
+                        controls
+                        :src="sanitizeMediaUri(currentReviewItem.payload?.source_uri || '')"
+                        @timeupdate="handleReviewAudioTimeUpdate"
+                        @loadedmetadata="handleReviewAudioLoadedMetadata"
+                      ></audio>
+                      <div class="review-phonetic">点击显示答案后可查看完整原文</div>
+                    </div>
+                  </template>
                   <template v-else>
                     <div class="review-text">{{ currentReviewItem.sourceText }}</div>
                   </template>
@@ -487,6 +557,19 @@
                         <div class="review-answer-text review-answer-target" v-if="x.target">{{ x.target }}</div>
                       </div>
                     </div>
+                  </template>
+                  <template v-else-if="currentReviewItem.rowType === 'listening'">
+                    <div v-if="currentReviewListeningTranscriptTimeline.length" class="transcript-list review-transcript-list">
+                      <div
+                        v-for="(line, idx) in currentReviewListeningTranscriptTimeline"
+                        :key="`rv-tr-${idx}`"
+                        class="transcript-line"
+                        :class="{ active: idx === currentReviewTranscriptIndex }"
+                      >
+                        {{ line.text }}
+                      </div>
+                    </div>
+                    <div v-else class="review-answer-text">暂无完整原文，请先在“听力信息”点击“抓取原文”。</div>
                   </template>
                   <template v-else>
                     <div class="review-answer-text">{{ currentReviewItem.summary || currentReviewItem.translatedText || '—' }}</div>
@@ -552,21 +635,44 @@
           <n-form-item label="备注">
             <n-input v-model:value="audioForm.notes" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
           </n-form-item>
-          <n-form-item label="可可账号">
-            <n-input v-model:value="kekenetAccount" placeholder="可可英语用户名" />
+          <n-form-item label="主题标签">
+            <n-input v-model:value="audioForm.topic" placeholder="例如：旅行、科技、商务英语" />
           </n-form-item>
-          <n-form-item label="可可密码">
-            <n-input v-model:value="kekenetPassword" type="password" show-password-on="click" placeholder="密码将加密存储" />
+          <n-form-item label="资源来源">
+            <n-input v-model:value="audioForm.provider" placeholder="例如：archive / wikimedia / local" />
           </n-form-item>
         </n-form>
         <template #action>
           <n-space justify="end">
-            <n-button @click="saveKekenetCredentials">保存账号</n-button>
             <n-button @click="importLocalAudio">导入本地音频</n-button>
-            <n-button @click="importKekenetOnline">在线导入</n-button>
+            <n-button @click="collectListeningByTopic">按主题采集</n-button>
             <n-button type="primary" @click="saveAudio">保存资源</n-button>
           </n-space>
         </template>
+      </n-modal>
+
+      <n-modal v-model:show="sourceManagerVisible" preset="card" style="width: 860px" title="听力源管理器">
+        <div class="source-manager-head">
+          <n-input v-model:value="newSourceName" size="small" placeholder="来源名称（如 TED 技术演讲）" style="width: 180px" />
+          <n-input v-model:value="newSourceProvider" size="small" placeholder="来源标识（如 ted）" style="width: 120px" />
+          <n-input v-model:value="newSourceFeedUrl" size="small" placeholder="RSS地址，可用 {topic} 占位符" style="flex: 1" />
+          <n-select v-model:value="newSourceLanguage" size="small" style="width: 110px" :options="learningLangOptions" />
+          <n-input-number v-model:value="newSourceMaxDurationMin" size="small" :min="1" :max="30" style="width: 92px" />
+          <n-button size="small" type="primary" @click="addListeningSource">新增</n-button>
+        </div>
+        <div class="source-manager-list">
+          <div class="source-item" v-for="src in listeningSources" :key="src.id">
+            <n-switch v-model:value="src.enabled" @update:value="persistListeningSources" />
+            <n-input v-model:value="src.name" size="small" style="width: 170px" @blur="persistListeningSources" />
+            <n-input v-model:value="src.provider" size="small" style="width: 100px" @blur="persistListeningSources" />
+            <n-input v-model:value="src.feed_url" size="small" style="flex: 1" @blur="persistListeningSources" />
+            <n-select v-model:value="src.language_tag" size="small" style="width: 110px" :options="learningLangOptions" @update:value="persistListeningSources" />
+            <n-input-number v-model:value="src.max_duration_min" size="small" :min="1" :max="30" style="width: 92px" @update:value="persistListeningSources" />
+            <n-button quaternary circle size="small" title="删除来源" @click="removeListeningSource(src.id)">
+              <Icon :icon="trashIcon" width="16" height="16" />
+            </n-button>
+          </div>
+        </div>
       </n-modal>
 
       <n-modal v-model:show="recordEditVisible" preset="card" style="width: 680px" :title="recordEditMode === 'edit' ? '编辑学习记录' : '新增学习记录'">
@@ -633,8 +739,6 @@ import {
   NFormItem,
   NInput,
   NInputNumber,
-  NList,
-  NListItem,
   NMessageProvider,
   NModal,
   NPagination,
@@ -642,6 +746,7 @@ import {
   NRadioGroup,
   NSelect,
   NSpace,
+  NSwitch,
   NTabPane,
   NTabs,
   NTag,
@@ -662,6 +767,11 @@ const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
 const checkedRowKeys = ref([])
 const listeningKindFilter = ref('all')
+const listeningProviderFilter = ref('all')
+const collectTopic = ref('')
+const collectLimit = ref(15)
+const listeningImmersiveMode = ref(false)
+const playbackRate = ref(1)
 const recordPage = ref(1)
 const recordPageSize = ref(100)
 const recordCounts = reactive({ records: 0, audio_resources: 0 })
@@ -671,14 +781,24 @@ const reviewIndex = ref(0)
 const reviewShowAnswer = ref(false)
 const masteryStore = ref({ record: {}, audio: {} })
 const shelfCounts = reactive({ all: 0, my_vocab: 0, my_sentences: 0, my_paragraphs: 0, my_listening: 0 })
-const kekenetAccount = ref('')
-const kekenetPassword = ref('')
 const audioManagerVisible = ref(false)
 const randomDecks = ref([])
 const randomDeckIndex = ref(0)
 const randomFlippedMap = ref({})
 const currentTranscriptLineIndex = ref(0)
 const activeAudioPlayerRef = ref(null)
+const activeAudioDurationSec = ref(0)
+const reviewAudioPlayerRef = ref(null)
+const reviewAudioDurationSec = ref(0)
+const currentReviewTranscriptIndex = ref(0)
+const sourceManagerVisible = ref(false)
+const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
+const listeningSources = ref([])
+const newSourceName = ref('')
+const newSourceProvider = ref('')
+const newSourceFeedUrl = ref('')
+const newSourceLanguage = ref('en')
+const newSourceMaxDurationMin = ref(30)
 
 const reviewFilter = reactive({
   createdPeriod: 'all',
@@ -722,8 +842,96 @@ const audioKindOptions = [
   { label: '在线音频', value: 'remote' },
   { label: '本地文件', value: 'local' },
   { label: '听写素材', value: 'dictation' },
-  { label: '可可英语', value: 'kekenet' },
 ]
+
+const listeningProviderOptions = [
+  { label: '全部来源', value: 'all' },
+  { label: 'Archive', value: 'archive' },
+  { label: 'Wikimedia', value: 'wikimedia' },
+  { label: '本地导入', value: 'local' },
+]
+
+const playbackRateOptions = [
+  { label: '0.75x', value: 0.75 },
+  { label: '1.0x', value: 1 },
+  { label: '1.25x', value: 1.25 },
+  { label: '1.5x', value: 1.5 },
+  { label: '1.75x', value: 1.75 },
+  { label: '2.0x', value: 2 },
+]
+
+const defaultListeningSources = () => ([
+  { id: 'src_ted_default', name: 'TED Audio', provider: 'ted', feed_url: 'https://feeds.feedburner.com/TEDTalks_audio', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_bbc_default', name: 'BBC Learning', provider: 'bbc', feed_url: 'https://podcasts.files.bbci.co.uk/p02pc9tn.rss', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_cnn_default', name: 'CNN 5 Things', provider: 'cnn', feed_url: 'https://rss.art19.com/cnn-5-things', language_tag: 'en', max_duration_min: 30, enabled: true },
+])
+
+const normalizeListeningSource = (src, fallbackId = '') => ({
+  id: String(src?.id || fallbackId || `src_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`),
+  name: String(src?.name || '').trim(),
+  provider: String(src?.provider || '').trim().toLowerCase(),
+  feed_url: String(src?.feed_url || '').trim(),
+  language_tag: String(src?.language_tag || 'en').trim().toLowerCase(),
+  max_duration_min: Math.min(30, Math.max(1, Number(src?.max_duration_min || 30))),
+  enabled: Boolean(src?.enabled),
+})
+
+const loadListeningSources = () => {
+  try {
+    const raw = window.localStorage.getItem(listeningSourceStorageKey)
+    if (!raw) {
+      listeningSources.value = defaultListeningSources()
+      return
+    }
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed) || !parsed.length) {
+      listeningSources.value = defaultListeningSources()
+      return
+    }
+    listeningSources.value = parsed.map((x, idx) => normalizeListeningSource(x, `src_${idx}`)).filter((x) => x.name && x.feed_url)
+    if (!listeningSources.value.length) listeningSources.value = defaultListeningSources()
+  } catch {
+    listeningSources.value = defaultListeningSources()
+  }
+}
+
+const persistListeningSources = () => {
+  listeningSources.value = listeningSources.value.map((x, idx) => normalizeListeningSource(x, `src_${idx}`)).filter((x) => x.name && x.feed_url)
+  try {
+    window.localStorage.setItem(listeningSourceStorageKey, JSON.stringify(listeningSources.value))
+  } catch {}
+}
+
+const addListeningSource = () => {
+  const name = String(newSourceName.value || '').trim()
+  const provider = String(newSourceProvider.value || '').trim().toLowerCase()
+  const feedUrl = String(newSourceFeedUrl.value || '').trim()
+  if (!name || !provider || !feedUrl) {
+    message.warning('请填写来源名称、来源标识和RSS地址')
+    return
+  }
+  listeningSources.value = [
+    ...listeningSources.value,
+    normalizeListeningSource({
+      id: `src_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
+      name,
+      provider,
+      feed_url: feedUrl,
+      language_tag: newSourceLanguage.value,
+      max_duration_min: newSourceMaxDurationMin.value,
+      enabled: true,
+    }),
+  ]
+  persistListeningSources()
+  newSourceName.value = ''
+  newSourceProvider.value = ''
+  newSourceFeedUrl.value = ''
+}
+
+const removeListeningSource = (id) => {
+  listeningSources.value = listeningSources.value.filter((x) => x.id !== id)
+  persistListeningSources()
+}
 
 const createdPeriodOptions = [
   { label: '全部时间', value: 'all' },
@@ -757,6 +965,9 @@ const audioForm = reactive({
   title: '',
   source_kind: 'remote',
   source_uri: '',
+  provider: '',
+  topic: '',
+  language_tag: learningLang.value,
   duration_sec: 0,
   transcript: '',
   notes: '',
@@ -957,10 +1168,153 @@ const leftShelfItems = computed(() => {
 })
 
 const listeningRows = computed(() => {
-  const rows = shelfFilteredRows.value.filter(matchesKeyword).filter((r) => r.rowType === 'listening')
-  if (listeningKindFilter.value === 'all') return rows
-  return rows.filter((r) => String(r.payload?.source_kind || '').toLowerCase() === listeningKindFilter.value)
+  let rows = shelfFilteredRows.value.filter(matchesKeyword).filter((r) => r.rowType === 'listening')
+  if (listeningKindFilter.value !== 'all') {
+    rows = rows.filter((r) => String(r.payload?.source_kind || '').toLowerCase() === listeningKindFilter.value)
+  }
+  if (listeningProviderFilter.value !== 'all') {
+    rows = rows.filter((r) => String(r.payload?.provider || '').toLowerCase() === listeningProviderFilter.value)
+  }
+  return rows
 })
+
+const isListeningImmersive = computed(() => {
+  return selectedShelf.value === 'my_listening' && listeningImmersiveMode.value
+})
+
+const isListeningImmersiveReady = computed(() => {
+  return isListeningImmersive.value && Boolean(activeAudio.value)
+})
+
+const fmtDuration = (secRaw) => {
+  const sec = Math.max(0, Number(secRaw || 0))
+  if (!Number.isFinite(sec) || sec <= 0) return '—'
+  const m = Math.floor(sec / 60)
+  const s = Math.floor(sec % 60)
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+const sanitizeMediaUri = (raw) => {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  const unwrapped = text
+    .replace(/^[`'"\s]+/, '')
+    .replace(/[`'"\s]+$/, '')
+    .replace(/^<+/, '')
+    .replace(/>+$/, '')
+    .trim()
+  return unwrapped
+}
+
+const listeningColumns = [
+  {
+    type: 'selection',
+    multiple: true,
+    width: 44,
+  },
+  {
+    title: '主题',
+    key: 'topic',
+    width: 140,
+    render: (row) => h(NTag, { size: 'small', type: 'info' }, { default: () => String(row.payload?.topic || '未标注') }),
+  },
+  { title: '标题', key: 'title', minWidth: 240, ellipsis: { tooltip: true } },
+  {
+    title: '简要描述',
+    key: 'summary',
+    minWidth: 260,
+    ellipsis: { tooltip: true },
+    render: (row) => String(row.summary || '').replace(/\s+/g, ' ').slice(0, 96) || '—',
+  },
+  {
+    title: '分类',
+    key: 'source_kind',
+    width: 90,
+    render: (row) => h(NTag, { size: 'small', type: 'warning' }, { default: () => String(row.payload?.source_kind || 'listening') }),
+  },
+  {
+    title: '掌握度',
+    key: 'masteryLevel',
+    width: 100,
+    render: (row) => h('span', { class: 'mastery-stars' }, masteryStars(row.masteryLevel)),
+  },
+  {
+    title: '时长',
+    key: 'duration',
+    width: 88,
+    render: (row) => fmtDuration(row.payload?.duration_sec),
+  },
+  { title: '创建时间', key: 'createdAt', width: 184, ellipsis: { tooltip: true } },
+]
+
+const openListeningImmersive = (row) => {
+  if (!row || row.sourceType !== 'audio') return
+  const hit = allRows.value.find((x) => x.id === row.id && x.sourceType === 'audio')
+  console.info('[LangLearning] openListeningImmersive:click', {
+    rowId: row?.id || '',
+    rowType: row?.rowType || '',
+    rowSourceType: row?.sourceType || '',
+    hasPayload: Boolean(row?.payload),
+    hasSourceUri: Boolean(row?.payload?.source_uri),
+    hit: Boolean(hit),
+    listeningRows: listeningRows.value.length,
+  })
+  if (!hit && !sanitizeMediaUri(row?.payload?.source_uri || '')) {
+    message.warning('该听力条目暂不可用，请刷新后重试')
+    console.warn('[LangLearning] openListeningImmersive:invalid-row', {
+      rowId: row?.id || '',
+      hasSourceUri: Boolean(row?.payload?.source_uri),
+    })
+    return
+  }
+  activeTab.value = 'manager'
+  selectedShelf.value = 'my_listening'
+  managerMode.value = 'list'
+  activeRow.value = hit || row
+  rightCollapsed.value = false
+  listeningImmersiveMode.value = true
+  console.info('[LangLearning] openListeningImmersive:state-updated', {
+    activeTab: activeTab.value,
+    selectedShelf: selectedShelf.value,
+    managerMode: managerMode.value,
+    activeRow: activeRow.value?.id || '',
+    listeningImmersiveMode: listeningImmersiveMode.value,
+  })
+}
+
+const selectListeningRow = (row) => {
+  if (!row || row.sourceType !== 'audio') return
+  const hit = allRows.value.find((x) => x.id === row.id && x.sourceType === 'audio')
+  activeRow.value = hit || row
+  selectedShelf.value = 'my_listening'
+  managerMode.value = 'list'
+  rightCollapsed.value = false
+}
+
+const enterListeningStudy = () => {
+  if (!activeRow.value || activeRow.value.sourceType !== 'audio') {
+    message.warning('请先选择一个听力条目')
+    return
+  }
+  openListeningImmersive(activeRow.value)
+}
+
+const exitListeningImmersive = () => {
+  listeningImmersiveMode.value = false
+}
+
+const listeningRowProps = (row) => ({
+  onClick: () => {
+    selectListeningRow(row)
+  },
+})
+
+const onListeningCheckedRowKeysChange = (keys) => {
+  checkedRowKeys.value = Array.isArray(keys) ? keys : []
+  console.info('[LangLearning] listening-table:checked-keys', {
+    count: checkedRowKeys.value.length,
+  })
+}
 
 const managerColumns = [
   {
@@ -992,6 +1346,10 @@ const managerRowProps = (row) => ({
     activeRow.value = row
   },
 })
+
+const onManagerCheckedRowKeysChange = (keys) => {
+  checkedRowKeys.value = Array.isArray(keys) ? keys : []
+}
 
 const activeWordRecord = computed(() => {
   const r = activeRow.value
@@ -1321,6 +1679,9 @@ const resetAudioForm = () => {
   audioForm.title = ''
   audioForm.source_kind = 'remote'
   audioForm.source_uri = ''
+  audioForm.provider = ''
+  audioForm.topic = ''
+  audioForm.language_tag = learningLang.value
   audioForm.duration_sec = 0
   audioForm.transcript = ''
   audioForm.notes = ''
@@ -1331,7 +1692,10 @@ const editAudio = (row) => {
   audioForm.id = row.id || ''
   audioForm.title = row.title || ''
   audioForm.source_kind = row.source_kind || 'remote'
-  audioForm.source_uri = row.source_uri || ''
+  audioForm.source_uri = sanitizeMediaUri(row.source_uri || '')
+  audioForm.provider = row.provider || ''
+  audioForm.topic = row.topic || ''
+  audioForm.language_tag = row.language_tag || learningLang.value
   audioForm.duration_sec = Number(row.duration_sec || 0)
   audioForm.transcript = row.transcript || ''
   audioForm.notes = row.notes || ''
@@ -1340,6 +1704,12 @@ const editAudio = (row) => {
 
 const saveAudio = async () => {
   try {
+    if (!String(audioForm.language_tag || '').trim()) {
+      audioForm.language_tag = learningLang.value
+    }
+    if (!String(audioForm.provider || '').trim() && audioForm.source_kind === 'local') {
+      audioForm.provider = 'local'
+    }
     await invoke('language_learning_upsert_audio_resource', {
       input: { ...audioForm },
       learningLang: learningLang.value,
@@ -1450,42 +1820,43 @@ const deleteSelectedRows = async () => {
   }
 }
 
-const saveKekenetCredentials = async () => {
+const collectListeningByTopic = async () => {
   try {
-    if (!String(kekenetAccount.value || '').trim() || !String(kekenetPassword.value || '').trim()) {
-      message.warning('请输入可可英语账号与密码')
+    const topic = String(collectTopic.value || audioForm.topic || '').trim()
+    if (!topic) {
+      message.warning('请先输入听力主题')
       return
     }
-    await invoke('language_learning_save_kekenet_credentials', {
+    const limit = Number(collectLimit.value || 15)
+    const selectedSources = listeningSources.value
+      .filter((x) => x.enabled && x.feed_url)
+      .filter((x) => !x.language_tag || x.language_tag === 'all' || x.language_tag === String(learningLang.value || '').toLowerCase())
+      .map((x) => ({
+        provider: x.provider,
+        name: x.name,
+        feed_url: x.feed_url,
+        language_tag: x.language_tag,
+        max_duration_sec: Math.round(Math.min(30, Math.max(1, Number(x.max_duration_min || 30))) * 60),
+      }))
+    const rows = await invoke('language_learning_collect_audio_by_topic', {
       input: {
-        username: kekenetAccount.value,
-        password: kekenetPassword.value,
-      },
+        topic,
+        learning_lang: learningLang.value,
+        limit,
+        sources: selectedSources,
+      }
     })
-    message.success('可可英语账号已加密保存')
-  } catch (err) {
-    message.error(`保存账号失败: ${String(err?.message || err || '')}`)
-  }
-}
-
-const importKekenetOnline = async () => {
-  try {
-    if (!String(audioForm.source_uri || '').trim()) {
-      message.warning('请在听力资源维护中填写可可英语页面地址')
-      return
+    if (Array.isArray(rows) && rows.length) {
+      message.success(`已采集 ${rows.length} 条听力资源`)
+    } else {
+      message.warning('未采集到可用资源，请更换主题重试')
     }
-    await invoke('language_learning_import_kekenet_resource', {
-      input: {
-        page_url: audioForm.source_uri,
-        title: audioForm.title || undefined,
-        transcript: audioForm.transcript || undefined,
-      },
-      learningLang: learningLang.value,
-    })
-    message.success('可可英语内容已导入')
     await refreshAudio()
+    await refreshShelfCounts()
+    collectTopic.value = topic
+    audioForm.topic = topic
   } catch (err) {
-    message.error(`在线导入失败: ${String(err?.message || err || '')}`)
+    message.error(`主题采集失败: ${String(err?.message || err || '')}`)
   }
 }
 
@@ -1498,6 +1869,8 @@ const importLocalAudio = async () => {
     if (!path || Array.isArray(path)) return
     audioForm.source_kind = 'local'
     audioForm.source_uri = String(path)
+    audioForm.provider = 'local'
+    audioForm.language_tag = learningLang.value
     if (!audioForm.title.trim()) {
       const normalized = String(path).replace(/\\/g, '/')
       audioForm.title = normalized.split('/').pop() || '本地音频'
@@ -1599,9 +1972,9 @@ const openRandomCheckBoard = () => {
 }
 
 const playRandomCardAudio = (card) => {
-  if (!card?.payload?.source_uri) return
+  if (!sanitizeMediaUri(card?.payload?.source_uri || '')) return
   try {
-    const player = new Audio(String(card.payload.source_uri))
+    const player = new Audio(sanitizeMediaUri(String(card.payload.source_uri || '')))
     player.play().catch(() => {})
   } catch {}
 }
@@ -1642,25 +2015,219 @@ const handleRandomBoardKeydown = (evt) => {
   }
 }
 
-const activeAudioTranscriptLines = computed(() => {
-  const text = String(activeAudio.value?.transcript || '').trim()
+const parseTimestampToSec = (raw) => {
+  const t = String(raw || '').trim().replace(',', '.')
+  if (!t) return null
+  const parts = t.split(':').map((x) => Number(String(x).trim()))
+  if (parts.some((x) => !Number.isFinite(x))) return null
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  if (parts.length === 2) return parts[0] * 60 + parts[1]
+  if (parts.length === 1) return parts[0]
+  return null
+}
+
+const parseTimedTranscript = (rawText) => {
+  const text = String(rawText || '').trim()
   if (!text) return []
-  return text
-    .split(/\r?\n|(?<=[。！？!?])/g)
-    .map((x) => String(x || '').trim())
-    .filter(Boolean)
+  const out = []
+  const lines = text.split(/\r?\n/)
+  const lrcPattern = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g
+  const cuePattern = /^(\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?\s*-->\s*(\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?$/
+  let i = 0
+  while (i < lines.length) {
+    const line = String(lines[i] || '').trim()
+    if (!line) {
+      i += 1
+      continue
+    }
+    const cueMatch = cuePattern.test(line)
+    if (cueMatch) {
+      const [left, right] = line.split('-->').map((x) => String(x || '').trim())
+      const start = parseTimestampToSec(left)
+      const end = parseTimestampToSec(right)
+      i += 1
+      const textParts = []
+      while (i < lines.length && String(lines[i] || '').trim()) {
+        textParts.push(String(lines[i] || '').trim())
+        i += 1
+      }
+      const cueText = textParts.join(' ').trim()
+      if (cueText && Number.isFinite(start) && Number.isFinite(end)) {
+        out.push({ text: cueText, start: Number(start), end: Number(end) })
+      }
+      continue
+    }
+    let lrcMatched = false
+    const tags = [...line.matchAll(lrcPattern)]
+    if (tags.length) {
+      const plain = line.replace(lrcPattern, '').trim()
+      if (plain) {
+        tags.forEach((m) => {
+          const mm = Number(m[1] || 0)
+          const ss = Number(m[2] || 0)
+          const ms = Number(String(m[3] || '0').padEnd(3, '0').slice(0, 3))
+          const start = mm * 60 + ss + ms / 1000
+          out.push({ text: plain, start, end: null })
+        })
+        lrcMatched = true
+      }
+    }
+    if (!lrcMatched) {
+      const parts = line
+        .split(/(?<=[。！？!?])|(?<=[.])\s+/g)
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+      parts.forEach((x) => out.push({ text: x, start: null, end: null }))
+    }
+    i += 1
+  }
+  return out
+}
+
+const buildTranscriptTimeline = (rawText, durationSec) => {
+  const parsed = parseTimedTranscript(rawText)
+  if (!parsed.length) return []
+  if (parsed.some((x) => Number.isFinite(x.start) || Number.isFinite(x.end))) {
+    const sorted = [...parsed].sort((a, b) => (Number(a.start ?? Number.MAX_SAFE_INTEGER) - Number(b.start ?? Number.MAX_SAFE_INTEGER)))
+    for (let i = 0; i < sorted.length; i += 1) {
+      if (!Number.isFinite(sorted[i].start)) {
+        sorted[i].start = i === 0 ? 0 : Number(sorted[i - 1].end ?? sorted[i - 1].start ?? 0)
+      }
+      if (!Number.isFinite(sorted[i].end)) {
+        const nextStart = i < sorted.length - 1 ? Number(sorted[i + 1].start ?? NaN) : NaN
+        sorted[i].end = Number.isFinite(nextStart) ? nextStart : Number(sorted[i].start) + 2
+      }
+      if (Number(sorted[i].end) <= Number(sorted[i].start)) {
+        sorted[i].end = Number(sorted[i].start) + 1.6
+      }
+    }
+    return sorted
+  }
+  const duration = Number(durationSec || 0)
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : parsed.length * 2.5
+  const totalWeight = parsed.reduce((sum, x) => sum + Math.max(8, String(x.text || '').length), 0)
+  let cursor = 0
+  return parsed.map((x, idx) => {
+    const weight = Math.max(8, String(x.text || '').length)
+    const seg = (weight / totalWeight) * safeDuration
+    const start = cursor
+    const end = idx === parsed.length - 1 ? safeDuration : cursor + Math.max(0.6, seg)
+    cursor = end
+    return { text: x.text, start, end }
+  })
+}
+
+const activeAudioTranscriptTimeline = computed(() => {
+  return buildTranscriptTimeline(activeAudio.value?.transcript || '', activeAudioDurationSec.value || activeAudio.value?.duration_sec || 0)
 })
+
+const currentReviewListeningTranscriptTimeline = computed(() => {
+  const row = currentReviewItem.value
+  if (!row || row.rowType !== 'listening' || row.sourceType !== 'audio') return []
+  return buildTranscriptTimeline(row.payload?.transcript || '', reviewAudioDurationSec.value || row.payload?.duration_sec || 0)
+})
+
+const activeAudioTranscriptLines = computed(() => activeAudioTranscriptTimeline.value.map((x) => x.text))
 
 const handleAudioTimeUpdate = (evt) => {
   const player = evt?.target
-  if (!player || !Number.isFinite(player.currentTime) || !Number.isFinite(player.duration) || player.duration <= 0) return
-  const lines = activeAudioTranscriptLines.value
-  if (!lines.length) {
+  if (!player || !Number.isFinite(player.currentTime)) return
+  const timeline = activeAudioTranscriptTimeline.value
+  if (!timeline.length) {
     currentTranscriptLineIndex.value = 0
     return
   }
-  const ratio = Math.min(1, Math.max(0, player.currentTime / player.duration))
-  currentTranscriptLineIndex.value = Math.min(lines.length - 1, Math.floor(ratio * lines.length))
+  const t = Number(player.currentTime || 0)
+  let hit = timeline.findIndex((x) => t >= Number(x.start || 0) && t < Number(x.end || Number.MAX_SAFE_INTEGER))
+  if (hit < 0) {
+    hit = timeline.findIndex((x) => t < Number(x.start || 0))
+    if (hit < 0) hit = timeline.length - 1
+    else hit = Math.max(0, hit - 1)
+  }
+  currentTranscriptLineIndex.value = hit
+}
+
+const onAudioLoadedMetadata = (evt) => {
+  const player = evt?.target
+  if (player && Number.isFinite(player.duration) && player.duration > 0) {
+    activeAudioDurationSec.value = Number(player.duration)
+  }
+  applyAudioPlaybackRate()
+}
+
+const handleReviewAudioLoadedMetadata = (evt) => {
+  const player = evt?.target
+  if (player && Number.isFinite(player.duration) && player.duration > 0) {
+    reviewAudioDurationSec.value = Number(player.duration)
+  }
+}
+
+const handleReviewAudioTimeUpdate = (evt) => {
+  const player = evt?.target
+  if (!player || !Number.isFinite(player.currentTime)) return
+  const timeline = currentReviewListeningTranscriptTimeline.value
+  if (!timeline.length) {
+    currentReviewTranscriptIndex.value = 0
+    return
+  }
+  const t = Number(player.currentTime || 0)
+  let hit = timeline.findIndex((x) => t >= Number(x.start || 0) && t < Number(x.end || Number.MAX_SAFE_INTEGER))
+  if (hit < 0) {
+    hit = timeline.findIndex((x) => t < Number(x.start || 0))
+    if (hit < 0) hit = timeline.length - 1
+    else hit = Math.max(0, hit - 1)
+  }
+  currentReviewTranscriptIndex.value = hit
+}
+
+const applyAudioPlaybackRate = () => {
+  const player = activeAudioPlayerRef.value
+  if (!player || typeof player.playbackRate !== 'number') return
+  const nextRate = Number(playbackRate.value || 1)
+  if (!Number.isFinite(nextRate) || nextRate <= 0) return
+  player.playbackRate = nextRate
+}
+
+const fetchTranscriptForActiveAudio = async () => {
+  const row = activeAudio.value
+  if (!row) return
+  try {
+    const transcript = await invoke('language_learning_fetch_transcript_from_source', {
+      input: {
+        source_uri: sanitizeMediaUri(row.source_uri),
+        provider: row.provider || '',
+        topic: row.topic || '',
+        language_tag: row.language_tag || learningLang.value,
+        notes: row.notes || '',
+      },
+    })
+    const nextTranscript = String(transcript || '').trim()
+    if (!nextTranscript) {
+      message.warning('未抓取到可用原文')
+      return
+    }
+    await invoke('language_learning_upsert_audio_resource', {
+      input: {
+        id: row.id,
+        title: row.title,
+        source_kind: row.source_kind,
+        source_uri: sanitizeMediaUri(row.source_uri),
+        provider: row.provider || '',
+        topic: row.topic || '',
+        language_tag: row.language_tag || learningLang.value,
+        transcript: nextTranscript,
+        notes: row.notes || '',
+        duration_sec: row.duration_sec || 0,
+      },
+      learningLang: learningLang.value,
+    })
+    message.success('已更新该听力原文')
+    await refreshAudio()
+    const refreshed = allRows.value.find((x) => x.id === `audio:${row.id}`)
+    if (refreshed) activeRow.value = refreshed
+  } catch (err) {
+    message.error(`抓取原文失败: ${String(err?.message || err || '')}`)
+  }
 }
 
 let learningPronounceAudio = null
@@ -1757,7 +2324,21 @@ watch(listeningKindFilter, () => {
   }
 })
 
+watch(listeningProviderFilter, () => {
+  if (selectedShelf.value !== 'my_listening') return
+  if (!listeningRows.value.length) {
+    activeRow.value = null
+    return
+  }
+  if (!activeRow.value || !listeningRows.value.some((x) => x.id === activeRow.value.id)) {
+    activeRow.value = listeningRows.value[0]
+  }
+})
+
 watch(selectedShelf, async () => {
+  if (selectedShelf.value !== 'my_listening') {
+    listeningImmersiveMode.value = false
+  }
   recordPage.value = 1
   await refreshRecords()
   if (managerMode.value === 'random') {
@@ -1790,6 +2371,58 @@ watch(learningLang, async (v) => {
   rebuildReviewRows()
 })
 
+watch(playbackRate, () => {
+  applyAudioPlaybackRate()
+})
+
+watch(activeAudio, () => {
+  currentTranscriptLineIndex.value = 0
+  activeAudioDurationSec.value = Number(activeAudio.value?.duration_sec || 0)
+  setTimeout(() => {
+    applyAudioPlaybackRate()
+  }, 0)
+  console.info('[LangLearning] activeAudio:changed', {
+    hasAudio: Boolean(activeAudio.value),
+    audioId: activeAudio.value?.id || '',
+    sourceUri: activeAudio.value?.source_uri || '',
+    immersive: listeningImmersiveMode.value,
+    ready: isListeningImmersiveReady.value,
+  })
+})
+
+watch(currentReviewItem, (row) => {
+  currentReviewTranscriptIndex.value = 0
+  reviewAudioDurationSec.value = Number(row?.payload?.duration_sec || 0)
+})
+
+watch(activeRow, (row) => {
+  console.info('[LangLearning] activeRow:changed', {
+    rowId: row?.id || '',
+    rowType: row?.rowType || '',
+    sourceType: row?.sourceType || '',
+    selectedShelf: selectedShelf.value,
+    immersive: listeningImmersiveMode.value,
+  })
+  if (!row || row.sourceType !== 'audio') {
+    if (listeningImmersiveMode.value) listeningImmersiveMode.value = false
+  }
+})
+
+watch([isListeningImmersive, activeAudio], ([immersive, audio]) => {
+  if (!immersive) return
+  if (audio) return
+  console.warn('[LangLearning] immersive:auto-exit-no-audio', {
+    selectedShelf: selectedShelf.value,
+    activeRow: activeRow.value?.id || '',
+  })
+  listeningImmersiveMode.value = false
+  if (selectedShelf.value === 'my_listening' && listeningRows.value.length) {
+    if (!activeRow.value || activeRow.value.sourceType !== 'audio') {
+      activeRow.value = listeningRows.value[0]
+    }
+  }
+})
+
 watch([reviewType, filteredRows, () => reviewFilter.createdPeriod, () => reviewFilter.lastReviewPeriod, () => reviewFilter.masteryBand, () => reviewFilter.orderBy], () => {
   rebuildReviewRows()
 })
@@ -1809,10 +2442,8 @@ watch(activeTab, (tab) => {
 onMounted(async () => {
   window.addEventListener('keydown', handleRandomBoardKeydown)
   loadMasteryStore()
-  try {
-    const creds = await invoke('language_learning_get_kekenet_credentials')
-    kekenetAccount.value = String(creds?.username || '')
-  } catch {}
+  loadListeningSources()
+  persistListeningSources()
   await refreshAll()
   if (filteredRows.value.length) {
     activeRow.value = filteredRows.value[0]
@@ -1865,6 +2496,17 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
+.listening-immersive-page {
+  height: calc(100vh - 150px);
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--guaxi-panel-bg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .manager-layout {
   height: calc(100vh - 150px);
   display: grid;
@@ -1882,6 +2524,15 @@ onBeforeUnmount(() => {
 
 .manager-layout.left-collapsed.right-collapsed {
   grid-template-columns: 1fr;
+}
+
+.manager-layout.listening-immersive {
+  grid-template-columns: 0 0 1fr;
+}
+
+.manager-layout.listening-immersive .left-tree-card,
+.manager-layout.listening-immersive .middle-table-card {
+  display: none;
 }
 
 .left-tree-card,
@@ -2117,17 +2768,22 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
-.listening-list {
-  max-height: 610px;
-  overflow: auto;
+.listening-info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.listening-list :deep(.n-list-item) {
+.middle-table-card :deep(.n-data-table-wrapper) {
+  height: calc(100% - 46px);
+}
+
+.middle-table-card :deep(.n-data-table-tbody .n-data-table-tr) {
   cursor: pointer;
 }
 
-.listening-list :deep(.n-list-item.active) {
-  background: color-mix(in srgb, var(--primary-color, #4acadb) 12%, var(--guaxi-panel-bg));
+.middle-table-card :deep(.n-data-table-tbody .n-data-table-tr:hover) {
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg));
 }
 
 .list-item-head {
@@ -2158,10 +2814,34 @@ onBeforeUnmount(() => {
   overflow: auto;
 }
 
+.immersive-global-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.immersive-title {
+  font-size: 13px;
+  color: var(--guaxi-text-secondary);
+}
+
 .listening-detail-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.listening-detail-layout.immersive {
+  min-height: calc(100vh - 210px);
+}
+
+.listening-player-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .listening-player {
@@ -2170,11 +2850,18 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
 }
 
+.playback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .transcript-list {
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   padding: 8px 10px;
-  max-height: 520px;
+  max-height: calc(100vh - 320px);
   overflow: auto;
   background: var(--guaxi-panel-bg);
 }
@@ -2246,6 +2933,30 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--guaxi-panel-bg);
+}
+
+.source-manager-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.source-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.source-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 8px;
+  padding: 8px;
 }
 
 .chip-wrap {
@@ -2386,6 +3097,16 @@ onBeforeUnmount(() => {
   font-size: 18px;
 }
 
+.review-listening-player-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-listening-player {
+  width: 100%;
+}
+
 .review-card-answer {
   border: 1px solid var(--guaxi-border);
   border-radius: 12px;
@@ -2420,6 +3141,10 @@ onBeforeUnmount(() => {
   font-size: 15px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.review-transcript-list {
+  max-height: 280px;
 }
 
 .review-examples {
