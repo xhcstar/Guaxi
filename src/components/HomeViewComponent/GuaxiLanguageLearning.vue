@@ -1291,10 +1291,13 @@ const selectListeningRow = (row) => {
   rightCollapsed.value = false
 }
 
-const enterListeningStudy = () => {
+const enterListeningStudy = async () => {
   if (!activeRow.value || activeRow.value.sourceType !== 'audio') {
     message.warning('请先选择一个听力条目')
     return
+  }
+  if (!activeAudioTranscriptLines.value.length) {
+    await fetchTranscriptForActiveAudio()
   }
   openListeningImmersive(activeRow.value)
 }
