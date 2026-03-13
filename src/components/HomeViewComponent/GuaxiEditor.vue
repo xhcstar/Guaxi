@@ -303,11 +303,11 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
+              <n-button text size="tiny" :loading="selectionReadAloudBusy" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
                 <Icon :icon="volume2Icon" width="16" height="16" />
               </n-button>
             </template>
-            朗读
+            {{ selectionReadAloudBusy ? '朗读中...' : '朗读' }}
           </n-tooltip>
         </div>
       </div>
@@ -458,11 +458,11 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
+              <n-button text size="tiny" :loading="selectionReadAloudBusy" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
                 <Icon :icon="volume2Icon" width="16" height="16" />
               </n-button>
             </template>
-            朗读
+            {{ selectionReadAloudBusy ? '朗读中...' : '朗读' }}
           </n-tooltip>
         </div>
 
@@ -801,8 +801,15 @@ const readSelectionAloud = async () => {
     const model = String(tts?.model || '').trim() || (provider === 'sherpa-onnx' ? 'utils/Models/tts/kokoro_multi_lang/model.onnx' : 'FunAudioLLM/CosyVoice2-0.5B')
     const tokens = String(tts?.tokens || '').trim()
     const endpoint = provider === 'sherpa-onnx' ? String(tts?.exe || '').trim() : ''
-    const voice = provider === 'sherpa-onnx' ? '0' : 'FunAudioLLM/CosyVoice2-0.5B:alex'
+    const voice = provider === 'sherpa-onnx' ? '0' : 'alex'
     const responseFormat = provider === 'sherpa-onnx' ? 'wav' : 'mp3'
+    logger.info('[GuaxiEditor] 朗读配置', {
+      provider,
+      model,
+      endpoint: provider === 'sherpa-onnx' ? endpoint : '',
+      responseFormat,
+      isSherpaOnnx: provider === 'sherpa-onnx',
+    })
     const response = await invoke('audio_text_to_speech', {
       request: {
         common: {
@@ -828,10 +835,18 @@ const readSelectionAloud = async () => {
     selectionAudioObjectUrl = URL.createObjectURL(blob)
     const audio = new Audio(selectionAudioObjectUrl)
     selectionAudioElement = audio
-    audio.onended = () => {
-      stopSelectionAudioPlayback()
-    }
+    const waitForPlaybackEnd = new Promise((resolve, reject) => {
+      audio.onended = () => {
+        stopSelectionAudioPlayback()
+        resolve()
+      }
+      audio.onerror = () => {
+        stopSelectionAudioPlayback()
+        reject(new Error('音频播放失败'))
+      }
+    })
     await audio.play()
+    await waitForPlaybackEnd
   } catch (err) {
     logger.error('朗读失败:', err)
     message.error(`朗读失败: ${String(err?.message || err || '')}`)

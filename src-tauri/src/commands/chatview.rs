@@ -35,7 +35,7 @@ const SILICONFLOW_DEEPSEEK_QWEN_MODEL: &str = "deepseek-ai/DeepSeek-R1-0528-Qwen
 const SILICONFLOW_AUDIO_SPEECH_URL: &str = "https://api.siliconflow.cn/v1/audio/speech";
 const SILICONFLOW_AUDIO_TRANSCRIPTIONS_URL: &str = "https://api.siliconflow.cn/v1/audio/transcriptions";
 const SILICONFLOW_AUDIO_TTS_DEFAULT_MODEL: &str = "FunAudioLLM/CosyVoice2-0.5B";
-const SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE: &str = "FunAudioLLM/CosyVoice2-0.5B:alex";
+const SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE: &str = "alex";
 const SILICONFLOW_AUDIO_STT_DEFAULT_MODEL: &str = "FunAudioLLM/SenseVoiceSmall";
 const SHERPA_ONNX_TTS_DEFAULT_EXE_WIN: &str = "utils/sherpa-onnx/sherpa-onnx-offline-tts.exe";
 const SHERPA_ONNX_TTS_DEFAULT_EXE_UNIX: &str = "utils/sherpa-onnx/sherpa-onnx-offline-tts";
@@ -960,7 +960,10 @@ pub async fn kbmeta_agent_process(request: KbMetaAgentRequest) -> Result<KbMetaA
 
 fn resolve_audio_provider(provider: &str) -> Result<String, String> {
     let p = provider.trim().to_lowercase();
-    if p.is_empty() || p == "siliconflow" {
+    if p.is_empty() {
+        return Ok("sherpa-onnx".to_string());
+    }
+    if p == "siliconflow" {
         return Ok("siliconflow".to_string());
     }
     if p == "sherpa-onnx" || p == "sherpa_onnx" || p == "sherpa" {
@@ -996,6 +999,35 @@ fn resolve_audio_tts_voice(voice: &str) -> String {
     }
 }
 
+fn build_siliconflow_voice_candidates(voice: &str, model: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let primary = resolve_audio_tts_voice(voice);
+    if !primary.is_empty() {
+        out.push(primary.clone());
+    }
+    if let Some((_, suffix)) = primary.rsplit_once(':') {
+        let s = suffix.trim();
+        if !s.is_empty() {
+            out.push(s.to_string());
+        }
+    }
+    let model_trimmed = model.trim();
+    if !model_trimmed.is_empty() {
+        out.push(format!("{}:{}", model_trimmed, SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE));
+    }
+    out.push(SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE.to_string());
+    if out.is_empty() {
+        out.push(SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE.to_string());
+    }
+    let mut dedup: Vec<String> = Vec::new();
+    for item in out {
+        if !dedup.iter().any(|x| x == &item) {
+            dedup.push(item);
+        }
+    }
+    dedup
+}
+
 fn resolve_audio_api_key(api_key: &str) -> Result<String, String> {
     let inline = api_key.trim();
     if !inline.is_empty() {
@@ -1021,11 +1053,42 @@ struct SherpaOnnxTtsCliConfig {
     exe_path: PathBuf,
     model_path: PathBuf,
     tokens_path: PathBuf,
+    voices_path: Option<PathBuf>,
     data_dir: Option<PathBuf>,
     lexicon: Option<PathBuf>,
     rule_fsts: Option<String>,
     sid: i32,
     speed: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SherpaOnnxTtsCliMode {
+    Kokoro,
+    Vits,
+}
+
+fn detect_sherpa_tts_modes(cfg: &SherpaOnnxTtsCliConfig) -> Vec<SherpaOnnxTtsCliMode> {
+    let model_name = cfg
+        .model_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    let model_dir_name = cfg
+        .model_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    let likely_kokoro = model_name.contains("kokoro")
+        || model_dir_name.contains("kokoro")
+        || cfg.voices_path.as_ref().map(|p| p.exists()).unwrap_or(false);
+    if likely_kokoro {
+        vec![SherpaOnnxTtsCliMode::Kokoro, SherpaOnnxTtsCliMode::Vits]
+    } else {
+        vec![SherpaOnnxTtsCliMode::Vits, SherpaOnnxTtsCliMode::Kokoro]
+    }
 }
 
 fn resolve_exe_dir() -> Result<PathBuf, String> {
@@ -1116,6 +1179,7 @@ fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<S
     let data_env = env::var("GUAXI_SHERPA_ONNX_TTS_DATA_DIR").unwrap_or_default();
     let lexicon_env = env::var("GUAXI_SHERPA_ONNX_TTS_LEXICON").unwrap_or_default();
     let rule_fsts_env = env::var("GUAXI_SHERPA_ONNX_TTS_RULE_FSTS").unwrap_or_default();
+    let voices_env = env::var("GUAXI_SHERPA_ONNX_TTS_VOICES").unwrap_or_default();
 
     let endpoint_path = if endpoint.is_empty() { None } else { resolve_path_with_exe_dir(endpoint) };
     let endpoint_is_exe = endpoint_path
@@ -1179,6 +1243,7 @@ fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<S
     if !model_path.exists() {
         return Err(format!("sherpa-onnx 模型文件不存在: {}", model_path.to_string_lossy()));
     }
+    let model_base_dir = model_path.parent().map(|p| p.to_path_buf());
 
     let request_tokens = resolve_path_with_exe_dir(request.common.tokens.trim());
     let tokens_path = if let Some(p) = request_tokens {
@@ -1199,15 +1264,45 @@ fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<S
         return Err(format!("tokens.txt 不存在: {}", tokens_path.to_string_lossy()));
     }
 
+    let voices_path = if !voices_env.trim().is_empty() {
+        Some(PathBuf::from(voices_env.trim()))
+    } else {
+        let guessed = model_path
+            .parent()
+            .map(|p| p.join("voices.bin"));
+        match guessed {
+            Some(p) if p.exists() => Some(p),
+            _ => None,
+        }
+    };
+
     let data_dir = if !data_env.trim().is_empty() {
         Some(PathBuf::from(data_env.trim()))
+    } else if let Some(p) = guessed.2 {
+        Some(p)
     } else {
-        guessed.2
+        let fallback = model_base_dir
+            .as_ref()
+            .map(|p| p.join("espeak-ng-data"));
+        match fallback {
+            Some(p) if p.exists() => Some(p),
+            _ => None,
+        }
     };
-    let lexicon = if lexicon_env.trim().is_empty() {
-        None
-    } else {
+    let lexicon = if !lexicon_env.trim().is_empty() {
         Some(PathBuf::from(lexicon_env.trim()))
+    } else {
+        let mut candidate: Option<PathBuf> = None;
+        if let Some(base) = model_base_dir.as_ref() {
+            for name in ["lexicon-zh.txt", "lexicon-us-en.txt", "lexicon-gb-en.txt", "lexicon.txt"] {
+                let p = base.join(name);
+                if p.exists() {
+                    candidate = Some(p);
+                    break;
+                }
+            }
+        }
+        candidate
     };
     let rule_fsts = if rule_fsts_env.trim().is_empty() {
         None
@@ -1219,6 +1314,7 @@ fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<S
         exe_path,
         model_path,
         tokens_path,
+        voices_path,
         data_dir,
         lexicon,
         rule_fsts,
@@ -1231,47 +1327,61 @@ fn run_sherpa_onnx_cli_once(
     cfg: &SherpaOnnxTtsCliConfig,
     text: &str,
     output_wav: &Path,
-    use_vits_flags: bool,
+    mode: SherpaOnnxTtsCliMode,
 ) -> Result<(), String> {
     let mut cmd = Command::new(&cfg.exe_path);
-    if use_vits_flags {
-        cmd.arg("--vits-model")
-            .arg(cfg.model_path.to_string_lossy().to_string())
-            .arg("--vits-tokens")
-            .arg(cfg.tokens_path.to_string_lossy().to_string());
-        if let Some(d) = cfg.data_dir.as_ref() {
-            cmd.arg("--vits-data-dir")
-                .arg(d.to_string_lossy().to_string());
+    let mut push_opt = |name: &str, value: &str| {
+        cmd.arg(format!("--{}={}", name, value));
+    };
+    match mode {
+        SherpaOnnxTtsCliMode::Kokoro => {
+            push_opt("kokoro-model", cfg.model_path.to_string_lossy().as_ref());
+            push_opt("kokoro-tokens", cfg.tokens_path.to_string_lossy().as_ref());
+            if let Some(v) = cfg.voices_path.as_ref() {
+                push_opt("kokoro-voices", v.to_string_lossy().as_ref());
+            }
+            if let Some(d) = cfg.data_dir.as_ref() {
+                push_opt("kokoro-data-dir", d.to_string_lossy().as_ref());
+            }
+            if let Some(l) = cfg.lexicon.as_ref() {
+                push_opt("kokoro-lexicon", l.to_string_lossy().as_ref());
+            }
         }
-        if let Some(l) = cfg.lexicon.as_ref() {
-            cmd.arg("--vits-lexicon")
-                .arg(l.to_string_lossy().to_string());
-        }
-    } else {
-        cmd.arg("--model")
-            .arg(cfg.model_path.to_string_lossy().to_string())
-            .arg("--tokens")
-            .arg(cfg.tokens_path.to_string_lossy().to_string());
-        if let Some(d) = cfg.data_dir.as_ref() {
-            cmd.arg("--data-dir")
-                .arg(d.to_string_lossy().to_string());
-        }
-        if let Some(l) = cfg.lexicon.as_ref() {
-            cmd.arg("--lexicon")
-                .arg(l.to_string_lossy().to_string());
+        SherpaOnnxTtsCliMode::Vits => {
+            push_opt("vits-model", cfg.model_path.to_string_lossy().as_ref());
+            push_opt("vits-tokens", cfg.tokens_path.to_string_lossy().as_ref());
+            if let Some(d) = cfg.data_dir.as_ref() {
+                push_opt("vits-data-dir", d.to_string_lossy().as_ref());
+            }
+            if let Some(l) = cfg.lexicon.as_ref() {
+                push_opt("vits-lexicon", l.to_string_lossy().as_ref());
+            }
         }
     }
     if let Some(r) = cfg.rule_fsts.as_ref() {
-        cmd.arg("--tts-rule-fsts").arg(r);
+        push_opt("tts-rule-fsts", r);
     }
-    cmd.arg("--sid")
-        .arg(cfg.sid.to_string())
-        .arg("--speed")
-        .arg(format!("{}", cfg.speed))
-        .arg("--text")
-        .arg(text)
-        .arg("--output-filename")
-        .arg(output_wav.to_string_lossy().to_string());
+    push_opt("print-args", "false");
+    push_opt("sid", cfg.sid.to_string().as_str());
+    push_opt("speed", format!("{}", cfg.speed).as_str());
+    push_opt("output-filename", output_wav.to_string_lossy().as_ref());
+    cmd.arg(text);
+    info!(
+        mode = format!("{:?}", mode),
+        model = cfg.model_path.to_string_lossy().as_ref(),
+        tokens = cfg.tokens_path.to_string_lossy().as_ref(),
+        voices = cfg
+            .voices_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        data_dir = cfg
+            .data_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        "sherpa-onnx cli args prepared"
+    );
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1279,7 +1389,7 @@ fn run_sherpa_onnx_cli_once(
     let output = cmd.output().map_err(|e| format!("执行 sherpa-onnx tts 失败: {}", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("sherpa-onnx tts 失败: {}", stderr));
+        return Err(format!("sherpa-onnx tts 失败({:?}): {}", mode, stderr));
     }
     Ok(())
 }
@@ -1290,10 +1400,32 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
         return Err("input 不能为空".to_string());
     }
     let cfg = resolve_sherpa_onnx_tts_cli_config(&request)?;
+    info!(
+        exe = cfg.exe_path.to_string_lossy().as_ref(),
+        model = cfg.model_path.to_string_lossy().as_ref(),
+        tokens = cfg.tokens_path.to_string_lossy().as_ref(),
+        sid = cfg.sid,
+        speed = cfg.speed,
+        text_len = text.len(),
+        "audio_text_to_speech using sherpa-onnx"
+    );
+    let modes = detect_sherpa_tts_modes(&cfg);
     let output_wav = env::temp_dir().join(format!("guaxi_sherpa_tts_{}.wav", Utc::now().timestamp_millis()));
-    let run_first = run_sherpa_onnx_cli_once(&cfg, &text, &output_wav, true);
-    if run_first.is_err() {
-        run_sherpa_onnx_cli_once(&cfg, &text, &output_wav, false)?;
+    let mut last_err = String::new();
+    for mode in modes {
+        match run_sherpa_onnx_cli_once(&cfg, &text, &output_wav, mode) {
+            Ok(_) => {
+                last_err.clear();
+                break;
+            }
+            Err(e) => {
+                warn!(mode = format!("{:?}", mode), error = e.as_str(), "sherpa-onnx tts attempt failed");
+                last_err = e;
+            }
+        }
+    }
+    if !last_err.is_empty() {
+        return Err(last_err);
     }
     if !output_wav.exists() {
         return Err("sherpa-onnx 未生成音频文件".to_string());
@@ -1312,12 +1444,19 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
 #[tauri::command]
 pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextToSpeechResponse, String> {
     let provider = resolve_audio_provider(&request.common.provider)?;
+    info!(
+        requested_provider = request.common.provider.trim(),
+        resolved_provider = provider.as_str(),
+        requested_model = request.common.model.trim(),
+        has_custom_endpoint = !request.common.endpoint.trim().is_empty(),
+        "audio_text_to_speech provider resolved"
+    );
     if provider == "sherpa-onnx" {
         return audio_text_to_speech_sherpa_onnx(request).await;
     }
     let api_key = resolve_audio_api_key(&request.common.api_key)?;
     let model = resolve_audio_tts_model(&request.common.model);
-    let voice = resolve_audio_tts_voice(&request.voice);
+    let voice_candidates = build_siliconflow_voice_candidates(&request.voice, &model);
     let endpoint = {
         let custom = request.common.endpoint.trim();
         if custom.is_empty() {
@@ -1349,7 +1488,7 @@ pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextTo
     if let Some(gain) = request.gain {
         body["gain"] = json!(gain);
     }
-    body["voice"] = json!(voice);
+    body["voice"] = json!(voice_candidates[0].clone());
     if !request.response_format.trim().is_empty() {
         body["response_format"] = json!(request.response_format.trim());
     }
@@ -1359,28 +1498,56 @@ pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextTo
         .build()
         .map_err(|e| e.to_string())?;
 
-    let response = client
-        .post(&endpoint)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !response.status().is_success() {
+    let mut headers_opt: Option<reqwest::header::HeaderMap> = None;
+    let mut bytes_opt: Option<Vec<u8>> = None;
+    let mut last_error = String::new();
+    let mut attempts: Vec<Option<String>> = voice_candidates.into_iter().map(Some).collect();
+    attempts.push(None);
+    for i in 0..attempts.len() {
+        match &attempts[i] {
+            Some(voice) => {
+                body["voice"] = json!(voice);
+            }
+            None => {
+                if let Some(obj) = body.as_object_mut() {
+                    obj.remove("voice");
+                }
+            }
+        }
+        let response = client
+            .post(&endpoint)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.status().is_success() {
+            headers_opt = Some(response.headers().clone());
+            bytes_opt = Some(response.bytes().await.map_err(|e| e.to_string())?.to_vec());
+            break;
+        }
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("文本转语音失败: {} {}", status, body));
+        let err_text = response.text().await.unwrap_or_default();
+        last_error = format!("文本转语音失败: {} {}", status, err_text);
+        let invalid_voice = err_text.contains("Invalid voice") || err_text.contains("invalid voice");
+        if !invalid_voice || i + 1 >= attempts.len() {
+            return Err(last_error);
+        }
     }
-
-    let headers = response.headers().clone();
+    let headers = match headers_opt {
+        Some(h) => h,
+        None => return Err(last_error),
+    };
+    let bytes = match bytes_opt {
+        Some(b) => b,
+        None => return Err(last_error),
+    };
     let content_type = headers
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
     let trace_id = extract_trace_id(&headers);
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
     let audio_base64 = general_purpose::STANDARD.encode(bytes);
 
     Ok(TextToSpeechResponse {

@@ -180,7 +180,7 @@
                   :disabled="loading || ttsSaving"
                   @click="handleTtsTestReadAloud"
                 >
-                  测试朗读
+                  {{ ttsTesting ? '朗读中...' : '测试朗读' }}
                 </n-button>
               </n-space>
             </n-form-item>
@@ -518,17 +518,27 @@ const handleTtsTestReadAloud = async () => {
   try {
     ttsTesting.value = true
     const provider = String(ttsProvider.value || '').trim() || 'sherpa-onnx'
+    const model = String(ttsModel.value || '').trim()
+    const endpoint = provider === 'sherpa-onnx' ? String(ttsExe.value || '').trim() : ''
+    const tokens = provider === 'sherpa-onnx' ? String(ttsTokens.value || '').trim() : ''
     const responseFormat = provider === 'sherpa-onnx' ? 'wav' : 'mp3'
+    logger.info('[PreferenceContent] 测试朗读配置', {
+      provider,
+      model,
+      endpoint,
+      responseFormat,
+      isSherpaOnnx: provider === 'sherpa-onnx',
+    })
     const response = await invoke('audio_text_to_speech', {
       request: {
         common: {
           provider,
-          model: String(ttsModel.value || '').trim(),
-          endpoint: provider === 'sherpa-onnx' ? String(ttsExe.value || '').trim() : '',
-          tokens: provider === 'sherpa-onnx' ? String(ttsTokens.value || '').trim() : '',
+          model,
+          endpoint,
+          tokens,
         },
         input: text,
-        voice: provider === 'sherpa-onnx' ? '0' : 'FunAudioLLM/CosyVoice2-0.5B:alex',
+        voice: provider === 'sherpa-onnx' ? '0' : 'alex',
         response_format: responseFormat,
         stream: false,
       },
@@ -544,10 +554,18 @@ const handleTtsTestReadAloud = async () => {
     ttsTestAudioObjectUrl = URL.createObjectURL(blob)
     const audio = new Audio(ttsTestAudioObjectUrl)
     ttsTestAudioElement = audio
-    audio.onended = () => {
-      stopTtsTestAudioPlayback()
-    }
+    const waitForPlaybackEnd = new Promise((resolve, reject) => {
+      audio.onended = () => {
+        stopTtsTestAudioPlayback()
+        resolve()
+      }
+      audio.onerror = () => {
+        stopTtsTestAudioPlayback()
+        reject(new Error('音频播放失败'))
+      }
+    })
     await audio.play()
+    await waitForPlaybackEnd
   } catch (error) {
     logger.error('测试朗读失败:', error)
   } finally {
