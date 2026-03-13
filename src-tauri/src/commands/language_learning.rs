@@ -2007,22 +2007,34 @@ pub async fn language_learning_generate_whisper_sync_json(
     audio_id: String,
     learning_lang: Option<String>,
 ) -> Result<AudioResource, String> {
-    let learning_lang = normalize_learning_lang(learning_lang);
-    let row = with_db(&app, |conn| {
-        ensure_lang_tables(conn, &learning_lang)?;
-        load_audio_resource_by_id(conn, &audio_table_for(&learning_lang), &audio_id)?
+    let request_lang = normalize_learning_lang(learning_lang);
+    let (resolved_lang, row) = with_db(&app, |conn| {
+        ensure_lang_tables(conn, &request_lang)?;
+        load_audio_resource_with_fallback_lang(conn, &audio_id, &request_lang)?
             .ok_or_else(|| "听力条目不存在".to_string())
     })?;
     let existing_sync = normalize_media_uri(&row.sync_json_uri);
     if !existing_sync.is_empty() {
         let p = PathBuf::from(&existing_sync);
         if p.exists() && p.is_file() {
-            return Ok(row);
+            let has_full_translation = sync_json_has_full_translation(&existing_sync);
+            let has_transcript = !row.transcript.trim().is_empty();
+            if has_full_translation && has_transcript {
+                return Ok(row);
+            }
+            warn!(
+                audio_id = row.id.as_str(),
+                has_full_translation,
+                has_transcript,
+                sync_json = existing_sync.as_str(),
+                "listening sync exists but incomplete, regenerate whisper sync json"
+            );
         }
     }
     let entry_dir = resolve_listening_entry_dir(&row)?;
     let local_audio = prepare_entry_audio_file(&row, &entry_dir).await?;
-    let local_json = run_whisper_and_build_sync_json(&local_audio, &entry_dir, "zh").await?;
+    let local_json =
+        run_whisper_and_build_sync_json(&local_audio, &entry_dir, resolved_lang.as_str()).await?;
     let json_text = fs::read_to_string(&local_json).map_err(|e| format!("读取同步 JSON 失败: {}", e))?;
     let payload: WhisperSyncPayload =
         serde_json::from_str(&json_text).map_err(|e| format!("解析同步 JSON 失败: {}", e))?;
@@ -2041,7 +2053,7 @@ pub async fn language_learning_generate_whisper_sync_json(
             }),
             topic: Some(row.topic),
             language_tag: Some(if row.language_tag.trim().is_empty() {
-                learning_lang.clone()
+                resolved_lang.clone()
             } else {
                 row.language_tag
             }),
@@ -2050,7 +2062,7 @@ pub async fn language_learning_generate_whisper_sync_json(
             notes: Some(row.notes),
             duration_sec: Some(row.duration_sec),
         },
-        Some(learning_lang),
+        Some(resolved_lang),
     )?;
     Ok(next)
 }
@@ -2227,6 +2239,7 @@ fn load_audio_resource_by_id(
     table: &str,
     id: &str,
 ) -> Result<Option<AudioResource>, String> {
+    ensure_audio_table_columns(conn, table);
     let sql = format!(
         r#"
         SELECT id, title, source_kind, source_uri, provider, topic, language_tag, transcript, sync_json_uri, notes, duration_sec, created_at, updated_at
@@ -2258,6 +2271,79 @@ fn load_audio_resource_by_id(
     })
     .optional()
     .map_err(|e| format!("读取听力条目失败: {}", e))
+}
+
+fn ensure_audio_table_columns(conn: &Connection, table: &str) {
+    for sql in [
+        format!(
+            "ALTER TABLE {} ADD COLUMN provider TEXT NOT NULL DEFAULT ''",
+            table
+        ),
+        format!(
+            "ALTER TABLE {} ADD COLUMN topic TEXT NOT NULL DEFAULT ''",
+            table
+        ),
+        format!(
+            "ALTER TABLE {} ADD COLUMN language_tag TEXT NOT NULL DEFAULT ''",
+            table
+        ),
+        format!(
+            "ALTER TABLE {} ADD COLUMN sync_json_uri TEXT NOT NULL DEFAULT ''",
+            table
+        ),
+    ] {
+        let _ = conn.execute(&sql, []);
+    }
+}
+
+fn list_audio_tables(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name LIKE 'audio_resources_%'
+            ORDER BY name ASC
+            "#,
+        )
+        .map_err(|e| format!("读取音频表列表失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("查询音频表列表失败: {}", e))?;
+    let mut tables = Vec::new();
+    for row in rows {
+        tables.push(row.map_err(|e| format!("读取音频表名称失败: {}", e))?);
+    }
+    Ok(tables)
+}
+
+fn load_audio_resource_with_fallback_lang(
+    conn: &Connection,
+    audio_id: &str,
+    preferred_lang: &str,
+) -> Result<Option<(String, AudioResource)>, String> {
+    let preferred_lang = normalize_learning_lang(Some(preferred_lang.to_string()));
+    let preferred_table = audio_table_for(&preferred_lang);
+    if let Some(row) = load_audio_resource_by_id(conn, &preferred_table, audio_id)? {
+        return Ok(Some((preferred_lang, row)));
+    }
+    let mut tables = list_audio_tables(conn)?;
+    tables.retain(|t| t != &preferred_table);
+    for table in tables {
+        if let Some(row) = load_audio_resource_by_id(conn, &table, audio_id)? {
+            let lang = table
+                .strip_prefix("audio_resources_")
+                .unwrap_or_default()
+                .replace('_', "-");
+            let resolved = if lang.trim().is_empty() {
+                preferred_lang.clone()
+            } else {
+                normalize_learning_lang(Some(lang))
+            };
+            return Ok(Some((resolved, row)));
+        }
+    }
+    Ok(None)
 }
 
 fn resolve_listening_store_root() -> Result<PathBuf, String> {
@@ -2293,10 +2379,14 @@ fn safe_file_stem(text: &str) -> String {
 }
 
 fn resolve_listening_entry_dir(row: &AudioResource) -> Result<PathBuf, String> {
+    if let Some(existing) = resolve_listening_entry_dir_by_id(&row.id)? {
+        if existing.exists() && existing.is_dir() {
+            return Ok(existing);
+        }
+    }
     let root = resolve_listening_store_root()?;
     let short_id: String = row.id.chars().take(8).collect();
-    let stem = safe_file_stem(&row.title);
-    let entry = root.join(format!("{}_{}", stem, short_id));
+    let entry = root.join(format!("item_{}", short_id));
     if !entry.exists() {
         fs::create_dir_all(&entry).map_err(|e| format!("创建听力条目目录失败: {}", e))?;
     }
@@ -2322,7 +2412,7 @@ fn resolve_listening_entry_dir_by_id(id: &str) -> Result<Option<PathBuf>, String
         }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.ends_with(&suffix) {
+        if name == format!("item_{}", short_id) || name.ends_with(&suffix) {
             return Ok(Some(path));
         }
     }
@@ -2388,6 +2478,9 @@ fn infer_ext_from_uri(raw: &str) -> String {
 }
 
 async fn prepare_entry_audio_file(row: &AudioResource, entry_dir: &Path) -> Result<PathBuf, String> {
+    if !entry_dir.exists() {
+        fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
+    }
     let ext = infer_ext_from_uri(&row.source_uri);
     let audio_path = entry_dir.join(format!("media.{}", ext));
     let source = normalize_media_uri(&row.source_uri);
@@ -2542,6 +2635,9 @@ fn resolve_whisper_cli_and_model() -> Result<(PathBuf, PathBuf), String> {
 }
 
 async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, target_lang: &str) -> Result<PathBuf, String> {
+    if !entry_dir.exists() {
+        fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
+    }
     let (whisper_cli, model_path) = resolve_whisper_cli_and_model()?;
     let output_base = entry_dir.join("media");
     let mut cmd = Command::new(&whisper_cli);
@@ -2565,10 +2661,35 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(format!("whisper 转写失败: {}", stderr));
     }
-    let whisper_json = entry_dir.join("media.json");
-    if !whisper_json.exists() {
-        return Err("whisper 未生成 JSON 文件".to_string());
-    }
+    let whisper_json = {
+        let primary = entry_dir.join("media.json");
+        if primary.exists() {
+            primary
+        } else {
+            let mut fallback: Option<PathBuf> = None;
+            let entries = fs::read_dir(entry_dir).map_err(|e| format!("读取听力目录失败: {}", e))?;
+            for it in entries {
+                let entry = match it {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let p = entry.path();
+                if !p.is_file() {
+                    continue;
+                }
+                let is_json = p
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("json"))
+                    .unwrap_or(false);
+                if is_json {
+                    fallback = Some(p);
+                    break;
+                }
+            }
+            fallback.ok_or_else(|| "whisper 未生成 JSON 文件".to_string())?
+        }
+    };
     let raw = fs::read_to_string(&whisper_json).map_err(|e| format!("读取 whisper 输出失败: {}", e))?;
     let v: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("解析 whisper 输出失败: {}", e))?;
@@ -2604,6 +2725,9 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
     };
     let formatted =
         serde_json::to_string_pretty(&payload).map_err(|e| format!("构建同步 JSON 失败: {}", e))?;
+    if !entry_dir.exists() {
+        fs::create_dir_all(entry_dir).map_err(|e| format!("创建听力目录失败: {}", e))?;
+    }
     fs::write(&whisper_json, formatted).map_err(|e| format!("写入同步 JSON 失败: {}", e))?;
     Ok(whisper_json)
 }

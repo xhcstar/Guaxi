@@ -14,7 +14,7 @@
             <Icon :icon="exportIcon" width="16" height="16" />
           </n-button>
           <n-button quaternary circle size="small" title="随机抽查卡牌" @click="openRandomCheckBoard">
-            <Icon :icon="sparkleIcon" width="16" height="16" />
+            <Icon :icon="shuffleIcon" width="16" height="16" />
           </n-button>
           <n-tag v-if="syncQueueRunning" size="small" type="warning">后台转换 {{ Math.min(syncQueueDone, syncQueueTotal) }}/{{ syncQueueTotal }}</n-tag>
           <n-select
@@ -326,14 +326,14 @@
                   <n-select v-model:value="listeningProviderFilter" size="small" :options="listeningProviderOptions" style="width: 150px" />
                   <n-input v-model:value="collectTopic" size="small" clearable placeholder="输入主题后采集听力资源" style="width: 220px" />
                   <n-input-number v-model:value="collectLimit" size="small" :min="1" :max="50" style="width: 110px" />
-                  <n-button quaternary circle size="small" title="听力源管理器" @click="sourceManagerVisible = true">
+                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="听力源管理器" @click="sourceManagerVisible = true">
                     <Icon :icon="settingsIcon" width="16" height="16" />
                   </n-button>
-                  <n-button quaternary circle size="small" title="导入本地听力" @click="importLocalAudio">
+                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="导入本地听力" @click="importLocalAudio">
                     <Icon :icon="importIcon" width="16" height="16" />
                   </n-button>
-                  <n-button quaternary circle size="small" title="按主题采集听力" :loading="collectListeningLoading" @click="collectListeningByTopic">
-                    <Icon :icon="sparkleIcon" width="16" height="16" />
+                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="按主题采集听力" :loading="collectListeningLoading || syncQueueRunning" @click="collectListeningByTopic">
+                    <Icon v-if="!collectListeningLoading && !syncQueueRunning" :icon="sparkleIcon" width="16" height="16" />
                   </n-button>
                 </div>
                 <n-data-table
@@ -351,7 +351,7 @@
               </template>
             </n-card>
 
-            <n-card size="small" class="right-detail-card" v-show="selectedShelf === 'my_listening' || !rightCollapsed || isListeningImmersive" :title="selectedShelf === 'my_listening' ? '听力信息' : '词条详情 / 学习信息'">
+            <n-card size="small" class="right-detail-card" v-show="!rightCollapsed || isListeningImmersive" :title="selectedShelf === 'my_listening' ? '听力信息' : '词条详情 / 学习信息'">
               <div v-if="isListeningImmersive" class="immersive-global-back">
                 <n-button quaternary circle size="small" title="返回听力管理界面" @click="exitListeningImmersive">
                   <Icon :icon="chevronLeftIcon" width="16" height="16" />
@@ -838,7 +838,7 @@ const reviewAudioSyncTimeline = ref([])
 const transcriptDisplayMode = ref('both')
 const syncingAudioIdSet = new Set()
 const syncQueuedIdSet = new Set()
-const syncQueuedIds = []
+const syncQueuedTasks = []
 const sourceManagerVisible = ref(false)
 let randomCardAudioPlayer = null
 const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
@@ -1303,6 +1303,9 @@ const handleWindowResizeObserverWarning = (evt) => {
   if (!msg.includes('ResizeObserver loop completed with undelivered notifications')) return
   if (typeof evt.preventDefault === 'function') {
     evt.preventDefault()
+  }
+  if (typeof evt.stopImmediatePropagation === 'function') {
+    evt.stopImmediatePropagation()
   }
 }
 
@@ -1822,8 +1825,11 @@ const refreshAudio = async () => {
 const runSyncQueueWorker = async () => {
   if (syncQueueRunning.value) return
   syncQueueRunning.value = true
-  while (syncQueuedIds.length) {
-    const id = String(syncQueuedIds.shift() || '').trim()
+  while (syncQueuedTasks.length) {
+    const task = syncQueuedTasks.shift()
+    const id = String(task?.id || '').trim()
+    const taskLearningLang = String(task?.learningLang || learningLang.value || '').trim() || 'zh'
+    const queueKey = `${taskLearningLang}:${id}`
     if (!id) continue
     currentSyncingAudioId.value = id
     if (activeAudio.value?.id === id) {
@@ -1832,12 +1838,16 @@ const runSyncQueueWorker = async () => {
     try {
       await invoke('language_learning_generate_whisper_sync_json', {
         audioId: id,
-        learningLang: learningLang.value,
+        learningLang: taskLearningLang,
       })
-    } catch {}
+    } catch (err) {
+      console.error('[LangLearning] 同步转写失败', { audioId: id, learningLang: taskLearningLang, error: err })
+      const title = String(audioResources.value.find((x) => String(x?.id || '') === id)?.title || id)
+      message.error(`听力转写失败: ${title}，请检查 whisper/翻译配置后重试`)
+    }
     syncQueueDone.value += 1
-    syncQueuedIdSet.delete(id)
-    syncingAudioIdSet.delete(id)
+    syncQueuedIdSet.delete(queueKey)
+    syncingAudioIdSet.delete(queueKey)
     await refreshAudio()
     if (activeAudio.value?.id === id) {
       const refreshed = allRows.value.find((x) => x.id === `audio:${id}`)
@@ -1849,12 +1859,14 @@ const runSyncQueueWorker = async () => {
   currentSyncingAudioId.value = ''
 }
 
-const triggerSyncGenerationForAudioId = (audioId, showHint = false) => {
+const triggerSyncGenerationForAudioId = (audioId, showHint = false, lang = '') => {
   const id = String(audioId || '').trim()
-  if (!id || syncQueuedIdSet.has(id) || syncingAudioIdSet.has(id)) return
-  syncQueuedIdSet.add(id)
-  syncingAudioIdSet.add(id)
-  syncQueuedIds.push(id)
+  const taskLearningLang = String(lang || learningLang.value || '').trim() || 'zh'
+  const queueKey = `${taskLearningLang}:${id}`
+  if (!id || syncQueuedIdSet.has(queueKey) || syncingAudioIdSet.has(queueKey)) return
+  syncQueuedIdSet.add(queueKey)
+  syncingAudioIdSet.add(queueKey)
+  syncQueuedTasks.push({ id, learningLang: taskLearningLang })
   syncQueueTotal.value += 1
   if (activeAudio.value?.id === id) {
     activeAudioSyncGenerating.value = true
@@ -1871,7 +1883,7 @@ const resumePendingSyncTasks = async () => {
       learningLang: learningLang.value,
     })
     const list = Array.isArray(ids) ? ids : []
-    list.forEach((id) => triggerSyncGenerationForAudioId(id, false))
+    list.forEach((id) => triggerSyncGenerationForAudioId(id, false, learningLang.value))
   } catch {}
 }
 
@@ -2825,7 +2837,7 @@ watch(managerMode, (mode) => {
 })
 
 onMounted(async () => {
-  window.addEventListener('error', handleWindowResizeObserverWarning)
+  window.addEventListener('error', handleWindowResizeObserverWarning, true)
   window.addEventListener('keydown', handleRandomBoardKeydown)
   loadMasteryStore()
   loadListeningSources()
@@ -2839,7 +2851,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('error', handleWindowResizeObserverWarning)
+  window.removeEventListener('error', handleWindowResizeObserverWarning, true)
   window.removeEventListener('keydown', handleRandomBoardKeydown)
   if (learningPronounceAudio) {
     learningPronounceAudio.pause()
@@ -3252,6 +3264,29 @@ onBeforeUnmount(() => {
   gap: 8px;
   margin-bottom: 8px;
   align-items: center;
+}
+
+.listening-toolbar-circle-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.listening-toolbar-circle-btn :deep(.n-button__content) {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.listening-toolbar-circle-btn :deep(.n-button__icon) {
+  margin-right: 0 !important;
+}
+
+.listening-toolbar-circle-btn :deep(.n-base-loading) {
+  margin-right: 0 !important;
 }
 
 .listening-info-panel {
