@@ -1,6 +1,7 @@
 use crate::commands::translator_free;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
 use rss::Channel;
@@ -24,6 +25,10 @@ const LANG_LEARN_DB_NAME: &str = "language_learning.sqlite3";
 const LISTENING_ITEMS_DIR_NAME: &str = "guaxi_listening_items";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+static LISTENING_SYNC_LOCK: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
+static LISTENING_SYNC_PENDING_IDS: Lazy<std::sync::Mutex<HashSet<String>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashSet::new()));
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct WordMetaPayload {
@@ -139,6 +144,8 @@ pub struct WhisperSyncSegment {
     pub start_sec: f64,
     pub end_sec: f64,
     pub text: String,
+    #[serde(default)]
+    pub translated_text: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1309,6 +1316,47 @@ pub fn language_learning_list_audio_resources(
 }
 
 #[tauri::command]
+pub fn language_learning_list_pending_sync_audio_ids(
+    app: tauri::AppHandle,
+    learning_lang: Option<String>,
+) -> Result<Vec<String>, String> {
+    with_db(&app, |conn| {
+        let learning_lang = normalize_learning_lang(learning_lang);
+        ensure_lang_tables(conn, &learning_lang)?;
+        let audio_table = audio_table_for(&learning_lang);
+        let sql = format!(
+            r#"
+                SELECT id, transcript, sync_json_uri
+                FROM {table}
+                ORDER BY datetime(created_at) DESC
+            "#,
+            table = audio_table
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("准备待同步条目查询失败: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| format!("执行待同步条目查询失败: {}", e))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, transcript, sync_json_uri) =
+                row.map_err(|e| format!("读取待同步条目失败: {}", e))?;
+            if transcript.trim().is_empty() || !sync_json_has_full_translation(&sync_json_uri) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    })
+}
+
+#[tauri::command]
 pub fn language_learning_upsert_audio_resource(
     app: tauri::AppHandle,
     input: AudioResourceInput,
@@ -1405,15 +1453,20 @@ pub fn language_learning_delete_audio_resource(
     id: String,
     learning_lang: Option<String>,
 ) -> Result<(), String> {
-    with_db(&app, |conn| {
+    let removed = with_db(&app, |conn| {
         let learning_lang = normalize_learning_lang(learning_lang);
         ensure_lang_tables(conn, &learning_lang)?;
         let audio_table = audio_table_for(&learning_lang);
+        let row = load_audio_resource_by_id(conn, &audio_table, &id)?;
         let delete_sql = format!("DELETE FROM {} WHERE id = ?1", audio_table);
         conn.execute(&delete_sql, params![id])
             .map_err(|e| format!("删除音频资源失败: {}", e))?;
-        Ok(())
-    })
+        Ok(row)
+    })?;
+    if let Some(row) = removed {
+        cleanup_listening_entry_files(&row)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1960,9 +2013,16 @@ pub async fn language_learning_generate_whisper_sync_json(
         load_audio_resource_by_id(conn, &audio_table_for(&learning_lang), &audio_id)?
             .ok_or_else(|| "听力条目不存在".to_string())
     })?;
+    let existing_sync = normalize_media_uri(&row.sync_json_uri);
+    if !existing_sync.is_empty() {
+        let p = PathBuf::from(&existing_sync);
+        if p.exists() && p.is_file() {
+            return Ok(row);
+        }
+    }
     let entry_dir = resolve_listening_entry_dir(&row)?;
     let local_audio = prepare_entry_audio_file(&row, &entry_dir).await?;
-    let local_json = run_whisper_and_build_sync_json(&local_audio, &entry_dir)?;
+    let local_json = run_whisper_and_build_sync_json(&local_audio, &entry_dir, "zh").await?;
     let json_text = fs::read_to_string(&local_json).map_err(|e| format!("读取同步 JSON 失败: {}", e))?;
     let payload: WhisperSyncPayload =
         serde_json::from_str(&json_text).map_err(|e| format!("解析同步 JSON 失败: {}", e))?;
@@ -1993,6 +2053,37 @@ pub async fn language_learning_generate_whisper_sync_json(
         Some(learning_lang),
     )?;
     Ok(next)
+}
+
+#[tauri::command]
+pub fn language_learning_generate_whisper_sync_json_async(
+    app: tauri::AppHandle,
+    audio_id: String,
+    learning_lang: Option<String>,
+) -> Result<(), String> {
+    let id = audio_id.trim().to_string();
+    if id.is_empty() {
+        return Err("听力条目ID不能为空".to_string());
+    }
+    {
+        let mut pending = LISTENING_SYNC_PENDING_IDS
+            .lock()
+            .map_err(|_| "后台同步任务状态异常".to_string())?;
+        if pending.contains(&id) {
+            return Ok(());
+        }
+        pending.insert(id.clone());
+    }
+    let app_handle = app.clone();
+    let lang = learning_lang.clone();
+    tauri::async_runtime::spawn(async move {
+        let _guard = LISTENING_SYNC_LOCK.lock().await;
+        let _ = language_learning_generate_whisper_sync_json(app_handle, id.clone(), lang).await;
+        if let Ok(mut pending) = LISTENING_SYNC_PENDING_IDS.lock() {
+            pending.remove(&id);
+        }
+    });
+    Ok(())
 }
 
 async fn fetch_transcript_from_source(
@@ -2105,6 +2196,32 @@ fn normalize_media_uri(raw: &str) -> String {
         .to_string()
 }
 
+fn sync_json_has_full_translation(raw_path: &str) -> bool {
+    let path = normalize_media_uri(raw_path);
+    if path.is_empty() {
+        return false;
+    }
+    let p = PathBuf::from(path);
+    if !p.exists() || !p.is_file() {
+        return false;
+    }
+    let text = match fs::read_to_string(&p) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let payload: WhisperSyncPayload = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if payload.segments.is_empty() {
+        return false;
+    }
+    payload
+        .segments
+        .iter()
+        .all(|x| !x.text.trim().is_empty() && !x.translated_text.trim().is_empty())
+}
+
 fn load_audio_resource_by_id(
     conn: &Connection,
     table: &str,
@@ -2184,6 +2301,73 @@ fn resolve_listening_entry_dir(row: &AudioResource) -> Result<PathBuf, String> {
         fs::create_dir_all(&entry).map_err(|e| format!("创建听力条目目录失败: {}", e))?;
     }
     Ok(entry)
+}
+
+fn resolve_listening_entry_dir_by_id(id: &str) -> Result<Option<PathBuf>, String> {
+    let root = resolve_listening_store_root()?;
+    let short_id: String = id.chars().take(8).collect();
+    if short_id.is_empty() {
+        return Ok(None);
+    }
+    let suffix = format!("_{}", short_id);
+    let entries = fs::read_dir(&root).map_err(|e| format!("读取听力存储目录失败: {}", e))?;
+    for it in entries {
+        let entry = match it {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(&suffix) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+fn cleanup_listening_entry_files(row: &AudioResource) -> Result<(), String> {
+    let mut paths = Vec::new();
+    if let Some(dir) = resolve_listening_entry_dir_by_id(&row.id)? {
+        paths.push(dir);
+    }
+    let source = normalize_media_uri(&row.source_uri);
+    if !source.is_empty() && !source.starts_with("http://") && !source.starts_with("https://") {
+        let p = PathBuf::from(&source);
+        if p.exists() {
+            paths.push(p.clone());
+            if let Some(parent) = p.parent() {
+                if parent
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("listening_"))
+                    .unwrap_or(false)
+                {
+                    paths.push(parent.to_path_buf());
+                }
+            }
+        }
+    }
+    let sync_json = normalize_media_uri(&row.sync_json_uri);
+    if !sync_json.is_empty() {
+        let p = PathBuf::from(sync_json);
+        if p.exists() {
+            paths.push(p);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    for p in paths {
+        if p.is_dir() {
+            let _ = fs::remove_dir_all(&p);
+        } else if p.is_file() {
+            let _ = fs::remove_file(&p);
+        }
+    }
+    Ok(())
 }
 
 fn infer_ext_from_uri(raw: &str) -> String {
@@ -2357,7 +2541,7 @@ fn resolve_whisper_cli_and_model() -> Result<(PathBuf, PathBuf), String> {
     Ok((whisper_cli, model))
 }
 
-fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path) -> Result<PathBuf, String> {
+async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, target_lang: &str) -> Result<PathBuf, String> {
     let (whisper_cli, model_path) = resolve_whisper_cli_and_model()?;
     let output_base = entry_dir.join("media");
     let mut cmd = Command::new(&whisper_cli);
@@ -2394,6 +2578,8 @@ fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path) -> Resu
     }
     let mut segments = Vec::new();
     let mut transcript_lines = Vec::new();
+    let source_lines = parsed.iter().map(|(_, _, text)| text.clone()).collect::<Vec<_>>();
+    let translated_lines = translate_aligned(&source_lines, target_lang).await;
     for (idx, (start, end, text)) in parsed.iter().enumerate() {
         transcript_lines.push(text.clone());
         segments.push(WhisperSyncSegment {
@@ -2401,6 +2587,11 @@ fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path) -> Resu
             start_sec: *start,
             end_sec: *end,
             text: text.clone(),
+            translated_text: translated_lines
+                .get(idx)
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .unwrap_or_default(),
         });
     }
     let payload = WhisperSyncPayload {

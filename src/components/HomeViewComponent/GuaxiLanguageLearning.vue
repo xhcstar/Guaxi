@@ -16,6 +16,7 @@
           <n-button quaternary circle size="small" title="随机抽查卡牌" @click="openRandomCheckBoard">
             <Icon :icon="sparkleIcon" width="16" height="16" />
           </n-button>
+          <n-tag v-if="syncQueueRunning" size="small" type="warning">后台转换 {{ Math.min(syncQueueDone, syncQueueTotal) }}/{{ syncQueueTotal }}</n-tag>
           <n-select
             v-model:value="learningLang"
             size="small"
@@ -71,16 +72,24 @@
                 </div>
               </div>
               <div class="listening-transcript-pane">
-                <div class="detail-label">音文对照</div>
+                <div class="transcript-head">
+                  <div class="detail-label">音文对照</div>
+                  <n-button quaternary circle size="small" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
+                    <Icon :icon="languagesIcon" width="15" height="15" />
+                  </n-button>
+                </div>
                 <div class="transcript-list">
                   <div
                     v-for="(line, idx) in activeAudioTranscriptTimeline"
                     :key="`immersive-tr-${idx}`"
                     class="transcript-line"
-                    :class="{ active: idx === currentTranscriptLineIndex }"
+                    :class="{ active: idx === currentTranscriptLineIndex, hovered: idx === hoveredTranscriptIndex }"
                     @click="seekActiveAudioToTranscript(idx)"
+                    @mouseenter="hoveredTranscriptIndex = idx"
+                    @mouseleave="hoveredTranscriptIndex = -1"
                   >
-                    {{ line.text }}
+                    <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ line.text }}</div>
+                    <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ line.translated_text || '（暂无译文）' }}</div>
                   </div>
                 </div>
               </div>
@@ -315,7 +324,7 @@
                   <n-button quaternary circle size="small" title="导入本地听力" @click="importLocalAudio">
                     <Icon :icon="importIcon" width="16" height="16" />
                   </n-button>
-                  <n-button quaternary circle size="small" title="按主题采集听力" @click="collectListeningByTopic">
+                  <n-button quaternary circle size="small" title="按主题采集听力" :loading="collectListeningLoading" @click="collectListeningByTopic">
                     <Icon :icon="sparkleIcon" width="16" height="16" />
                   </n-button>
                 </div>
@@ -435,11 +444,12 @@
                   </div>
                   <div class="detail-block">
                     <div class="detail-label">同步状态</div>
-                    <div class="detail-content">{{ activeAudioTranscriptTimeline.length ? `已加载 ${activeAudioTranscriptTimeline.length} 段` : '未生成同步数据，可先生成 JSON 配置' }}</div>
+                    <div class="detail-content">
+                      {{ activeAudioTranscriptTimeline.length ? `已加载 ${activeAudioTranscriptTimeline.length} 段` : (activeAudioSyncGenerating ? '后台正在生成同步数据，请稍后进入学习' : '等待后台生成同步数据') }}
+                    </div>
                   </div>
                   <div class="detail-actions">
                     <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
-                    <n-button size="small" @click="fetchTranscriptForActiveAudio">生成同步数据</n-button>
                     <n-button type="primary" size="small" @click="enterListeningStudy">
                       <template #icon>
                         <Icon :icon="playIcon" width="14" height="14" />
@@ -560,17 +570,26 @@
                     </div>
                   </template>
                   <template v-else-if="currentReviewItem.rowType === 'listening'">
+                    <div class="review-answer-title-row">
+                      <div class="review-answer-title">原文与译文</div>
+                      <n-button quaternary circle size="small" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
+                        <Icon :icon="languagesIcon" width="15" height="15" />
+                      </n-button>
+                    </div>
                     <div v-if="currentReviewListeningTranscriptTimeline.length" class="transcript-list review-transcript-list">
                       <div
                         v-for="(line, idx) in currentReviewListeningTranscriptTimeline"
                         :key="`rv-tr-${idx}`"
                         class="transcript-line"
-                        :class="{ active: idx === currentReviewTranscriptIndex }"
+                        :class="{ active: idx === currentReviewTranscriptIndex, hovered: idx === hoveredReviewTranscriptIndex }"
+                        @mouseenter="hoveredReviewTranscriptIndex = idx"
+                        @mouseleave="hoveredReviewTranscriptIndex = -1"
                       >
-                        {{ line.text }}
+                        <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ line.text }}</div>
+                        <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ line.translated_text || '（暂无译文）' }}</div>
                       </div>
                     </div>
-                    <div v-else class="review-answer-text">暂无同步原文，请先在“听力信息”点击“生成同步数据”。</div>
+                    <div v-else class="review-answer-text">同步数据尚未就绪，请稍后重试。</div>
                   </template>
                   <template v-else>
                     <div class="review-answer-text">{{ currentReviewItem.summary || currentReviewItem.translatedText || '—' }}</div>
@@ -726,6 +745,7 @@ import sparkleIcon from '@iconify-icons/lucide/sparkles'
 import shuffleIcon from '@iconify-icons/lucide/shuffle'
 import listIcon from '@iconify-icons/lucide/list'
 import playIcon from '@iconify-icons/lucide/play'
+import languagesIcon from '@iconify-icons/lucide/languages'
 import plusIcon from '@iconify-icons/lucide/plus'
 import editIcon from '@iconify-icons/lucide/pencil'
 import trashIcon from '@iconify-icons/lucide/trash-2'
@@ -771,6 +791,7 @@ const listeningKindFilter = ref('all')
 const listeningProviderFilter = ref('all')
 const collectTopic = ref('')
 const collectLimit = ref(15)
+const collectListeningLoading = ref(false)
 const listeningImmersiveMode = ref(false)
 const playbackRate = ref(1)
 const recordPage = ref(1)
@@ -787,15 +808,26 @@ const randomDecks = ref([])
 const randomDeckIndex = ref(0)
 const randomFlippedMap = ref({})
 const currentTranscriptLineIndex = ref(0)
+const hoveredTranscriptIndex = ref(-1)
 const activeAudioPlayerRef = ref(null)
 const activeAudioDurationSec = ref(0)
 const activeAudioSyncTimeline = ref([])
 const activeAudioPlayableSrc = ref('')
+const activeAudioSyncGenerating = ref(false)
+const syncQueueRunning = ref(false)
+const syncQueueTotal = ref(0)
+const syncQueueDone = ref(0)
+const currentSyncingAudioId = ref('')
 const reviewAudioPlayerRef = ref(null)
 const reviewAudioDurationSec = ref(0)
 const currentReviewTranscriptIndex = ref(0)
+const hoveredReviewTranscriptIndex = ref(-1)
 const reviewAudioPlayableSrc = ref('')
 const reviewAudioSyncTimeline = ref([])
+const transcriptDisplayMode = ref('both')
+const syncingAudioIdSet = new Set()
+const syncQueuedIdSet = new Set()
+const syncQueuedIds = []
 const sourceManagerVisible = ref(false)
 const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
 const listeningSources = ref([])
@@ -863,6 +895,12 @@ const playbackRateOptions = [
   { label: '1.5x', value: 1.5 },
   { label: '1.75x', value: 1.75 },
   { label: '2.0x', value: 2 },
+]
+
+const transcriptDisplayModes = [
+  { label: '原文+译文', value: 'both' },
+  { label: '仅原文', value: 'source' },
+  { label: '仅译文', value: 'target' },
 ]
 
 const defaultListeningSources = () => ([
@@ -1248,6 +1286,14 @@ const bytesFromBase64 = (base64Text) => {
   return out
 }
 
+const handleWindowResizeObserverWarning = (evt) => {
+  const msg = String(evt?.message || '')
+  if (!msg.includes('ResizeObserver loop completed with undelivered notifications')) return
+  if (typeof evt.preventDefault === 'function') {
+    evt.preventDefault()
+  }
+}
+
 const resolvePlayableMediaSrc = async (raw) => {
   const cleaned = sanitizeMediaUri(raw)
   if (!cleaned) return ''
@@ -1317,14 +1363,16 @@ const normalizeSyncTimeline = (payload) => {
     const start = Number(x?.start_sec ?? x?.start ?? 0)
     const end = Number(x?.end_sec ?? x?.end ?? (start + 1.2))
     const text = String(x?.text || '').trim()
+    const translated = String(x?.translated_text || x?.translation || '').trim()
     if (!text) return
     if (!Number.isFinite(start) || !Number.isFinite(end)) return
-    rows.push({ text, start: Math.max(0, start), end: Math.max(start + 0.3, end), index: idx })
+    rows.push({ text, translated_text: translated, start: Math.max(0, start), end: Math.max(start + 0.3, end), index: idx })
   })
   if (!rows.length) {
     const whisperSegments = Array.isArray(payload?.transcription) ? payload.transcription : []
     whisperSegments.forEach((x, idx) => {
       const text = String(x?.text || '').trim()
+      const translated = String(x?.translated_text || x?.translation || '').trim()
       if (!text) return
       const tsStart = parseClockTimestampToSec(x?.timestamps?.from)
       const tsEnd = parseClockTimestampToSec(x?.timestamps?.to)
@@ -1333,7 +1381,7 @@ const normalizeSyncTimeline = (payload) => {
       const start = Number.isFinite(tsStart) ? Number(tsStart) : (Number.isFinite(offStart) ? offStart / 1000 : 0)
       const end = Number.isFinite(tsEnd) ? Number(tsEnd) : (Number.isFinite(offEnd) ? offEnd / 1000 : (start + 1.2))
       if (!Number.isFinite(start) || !Number.isFinite(end)) return
-      rows.push({ text, start: Math.max(0, start), end: Math.max(start + 0.3, end), index: idx })
+      rows.push({ text, translated_text: translated, start: Math.max(0, start), end: Math.max(start + 0.3, end), index: idx })
     })
   }
   rows.sort((a, b) => Number(a.start || 0) - Number(b.start || 0))
@@ -1444,7 +1492,7 @@ const enterListeningStudy = async () => {
     return
   }
   if (!activeAudioTranscriptTimeline.value.length) {
-    await fetchTranscriptForActiveAudio()
+    triggerSyncGenerationForAudioId(activeRow.value.rawId, false)
   }
   openListeningImmersive(activeRow.value)
 }
@@ -1759,6 +1807,62 @@ const refreshAudio = async () => {
   }
 }
 
+const runSyncQueueWorker = async () => {
+  if (syncQueueRunning.value) return
+  syncQueueRunning.value = true
+  while (syncQueuedIds.length) {
+    const id = String(syncQueuedIds.shift() || '').trim()
+    if (!id) continue
+    currentSyncingAudioId.value = id
+    if (activeAudio.value?.id === id) {
+      activeAudioSyncGenerating.value = true
+    }
+    try {
+      await invoke('language_learning_generate_whisper_sync_json', {
+        audioId: id,
+        learningLang: learningLang.value,
+      })
+    } catch {}
+    syncQueueDone.value += 1
+    syncQueuedIdSet.delete(id)
+    syncingAudioIdSet.delete(id)
+    await refreshAudio()
+    if (activeAudio.value?.id === id) {
+      const refreshed = allRows.value.find((x) => x.id === `audio:${id}`)
+      if (refreshed) activeRow.value = refreshed
+      activeAudioSyncGenerating.value = false
+    }
+  }
+  syncQueueRunning.value = false
+  currentSyncingAudioId.value = ''
+}
+
+const triggerSyncGenerationForAudioId = (audioId, showHint = false) => {
+  const id = String(audioId || '').trim()
+  if (!id || syncQueuedIdSet.has(id) || syncingAudioIdSet.has(id)) return
+  syncQueuedIdSet.add(id)
+  syncingAudioIdSet.add(id)
+  syncQueuedIds.push(id)
+  syncQueueTotal.value += 1
+  if (activeAudio.value?.id === id) {
+    activeAudioSyncGenerating.value = true
+  }
+  if (showHint) {
+    message.info('已加入后台转换队列，将依次转写并翻译')
+  }
+  runSyncQueueWorker()
+}
+
+const resumePendingSyncTasks = async () => {
+  try {
+    const ids = await invoke('language_learning_list_pending_sync_audio_ids', {
+      learningLang: learningLang.value,
+    })
+    const list = Array.isArray(ids) ? ids : []
+    list.forEach((id) => triggerSyncGenerationForAudioId(id, false))
+  } catch {}
+}
+
 const refreshAll = async () => {
   await refreshRecords()
   await refreshAudio()
@@ -1862,11 +1966,14 @@ const saveAudio = async () => {
     if (!String(audioForm.provider || '').trim() && audioForm.source_kind === 'local') {
       audioForm.provider = 'local'
     }
-    await invoke('language_learning_upsert_audio_resource', {
+    const saved = await invoke('language_learning_upsert_audio_resource', {
       input: { ...audioForm },
       learningLang: learningLang.value,
     })
     message.success('听力资源已保存')
+    if (saved?.id) {
+      triggerSyncGenerationForAudioId(saved.id, false)
+    }
     resetAudioForm()
     await refreshAudio()
   } catch (err) {
@@ -1973,6 +2080,7 @@ const deleteSelectedRows = async () => {
 }
 
 const collectListeningByTopic = async () => {
+  collectListeningLoading.value = true
   try {
     const topic = String(collectTopic.value || audioForm.topic || '').trim()
     if (!topic) {
@@ -2000,6 +2108,9 @@ const collectListeningByTopic = async () => {
     })
     if (Array.isArray(rows) && rows.length) {
       message.success(`已采集 ${rows.length} 条听力资源`)
+      rows.forEach((item) => {
+        if (item?.id) triggerSyncGenerationForAudioId(item.id, false)
+      })
     } else {
       message.warning('未采集到可用资源，请更换主题重试')
     }
@@ -2009,6 +2120,8 @@ const collectListeningByTopic = async () => {
     audioForm.topic = topic
   } catch (err) {
     message.error(`主题采集失败: ${String(err?.message || err || '')}`)
+  } finally {
+    collectListeningLoading.value = false
   }
 }
 
@@ -2029,7 +2142,7 @@ const importLocalAudio = async () => {
     }
     audioForm.transcript = ''
     audioForm.sync_json_uri = ''
-    message.success('已选择本地音频，可点击“生成同步数据”生成 JSON')
+    message.success('已选择本地音频，保存后将自动在后台生成同步数据')
   } catch (err) {
     message.error(`选择文件失败: ${String(err?.message || err || '')}`)
   }
@@ -2050,6 +2163,17 @@ const selectedShelfLabel = computed(() => {
   const hit = leftShelfItems.value.find((x) => x.key === selectedShelf.value)
   return hit?.label || '当前分类'
 })
+
+const transcriptDisplayModeLabel = computed(() => {
+  const hit = transcriptDisplayModes.find((x) => x.value === transcriptDisplayMode.value)
+  return hit?.label || '原文+译文'
+})
+
+const cycleTranscriptDisplayMode = () => {
+  const idx = transcriptDisplayModes.findIndex((x) => x.value === transcriptDisplayMode.value)
+  const next = idx < 0 ? 0 : (idx + 1) % transcriptDisplayModes.length
+  transcriptDisplayMode.value = transcriptDisplayModes[next].value
+}
 
 const currentRandomCards = computed(() => {
   const deck = randomDecks.value[randomDeckIndex.value]
@@ -2282,7 +2406,7 @@ const buildTranscriptTimeline = (rawText, durationSec) => {
     const start = cursor
     const end = idx === parsed.length - 1 ? safeDuration : cursor + Math.max(0.6, seg)
     cursor = end
-    return { text: x.text, start, end }
+    return { text: x.text, translated_text: '', start, end }
   })
 }
 
@@ -2307,6 +2431,18 @@ const seekActiveAudioToTranscript = (idx) => {
   player.play().catch(() => {})
 }
 
+const resolveTranscriptHighlightIndex = (timeline, currentSec, leadSec = 0.2) => {
+  if (!Array.isArray(timeline) || !timeline.length) return 0
+  const t = Math.max(0, Number(currentSec || 0) + Number(leadSec || 0))
+  let hit = timeline.findIndex((x) => t >= Number(x.start || 0) && t < Number(x.end || Number.MAX_SAFE_INTEGER))
+  if (hit < 0) {
+    hit = timeline.findIndex((x) => t < Number(x.start || 0))
+    if (hit < 0) hit = timeline.length - 1
+    else hit = Math.max(0, hit - 1)
+  }
+  return hit
+}
+
 const handleAudioTimeUpdate = (evt) => {
   const player = evt?.target
   if (!player || !Number.isFinite(player.currentTime)) return
@@ -2315,14 +2451,7 @@ const handleAudioTimeUpdate = (evt) => {
     currentTranscriptLineIndex.value = 0
     return
   }
-  const t = Number(player.currentTime || 0)
-  let hit = timeline.findIndex((x) => t >= Number(x.start || 0) && t < Number(x.end || Number.MAX_SAFE_INTEGER))
-  if (hit < 0) {
-    hit = timeline.findIndex((x) => t < Number(x.start || 0))
-    if (hit < 0) hit = timeline.length - 1
-    else hit = Math.max(0, hit - 1)
-  }
-  currentTranscriptLineIndex.value = hit
+  currentTranscriptLineIndex.value = resolveTranscriptHighlightIndex(timeline, Number(player.currentTime || 0), 0.24)
 }
 
 const onAudioLoadedMetadata = (evt) => {
@@ -2348,14 +2477,7 @@ const handleReviewAudioTimeUpdate = (evt) => {
     currentReviewTranscriptIndex.value = 0
     return
   }
-  const t = Number(player.currentTime || 0)
-  let hit = timeline.findIndex((x) => t >= Number(x.start || 0) && t < Number(x.end || Number.MAX_SAFE_INTEGER))
-  if (hit < 0) {
-    hit = timeline.findIndex((x) => t < Number(x.start || 0))
-    if (hit < 0) hit = timeline.length - 1
-    else hit = Math.max(0, hit - 1)
-  }
-  currentReviewTranscriptIndex.value = hit
+  currentReviewTranscriptIndex.value = resolveTranscriptHighlightIndex(timeline, Number(player.currentTime || 0), 0.24)
 }
 
 const applyAudioPlaybackRate = () => {
@@ -2369,18 +2491,7 @@ const applyAudioPlaybackRate = () => {
 const fetchTranscriptForActiveAudio = async () => {
   const row = activeAudio.value
   if (!row) return
-  try {
-    await invoke('language_learning_generate_whisper_sync_json', {
-      audioId: row.id,
-      learningLang: learningLang.value,
-    })
-    message.success('已生成音频同步数据')
-    await refreshAudio()
-    const refreshed = allRows.value.find((x) => x.id === `audio:${row.id}`)
-    if (refreshed) activeRow.value = refreshed
-  } catch (err) {
-    message.error(`生成同步数据失败: ${String(err?.message || err || '')}`)
-  }
+  triggerSyncGenerationForAudioId(row.id, true)
 }
 
 let learningPronounceAudio = null
@@ -2521,6 +2632,7 @@ watch(learningLang, async (v) => {
   } catch {}
   activeRow.value = null
   await refreshAll()
+  await resumePendingSyncTasks()
   rebuildReviewRows()
 })
 
@@ -2532,10 +2644,16 @@ watch(activeAudio, async () => {
   currentTranscriptLineIndex.value = 0
   activeAudioDurationSec.value = Number(activeAudio.value?.duration_sec || 0)
   activeAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(activeAudio.value?.sync_json_uri || '')
+  if (activeAudioSyncTimeline.value.length) {
+    activeAudioSyncGenerating.value = false
+  }
   await refreshActiveAudioPlayableSrc()
   setTimeout(() => {
     applyAudioPlaybackRate()
   }, 0)
+  if (activeAudio.value?.id && !activeAudio.value?.sync_json_uri && !activeAudioSyncTimeline.value.length) {
+    triggerSyncGenerationForAudioId(activeAudio.value.id, false)
+  }
   console.info('[LangLearning] activeAudio:changed', {
     hasAudio: Boolean(activeAudio.value),
     audioId: activeAudio.value?.id || '',
@@ -2597,11 +2715,13 @@ watch(activeTab, (tab) => {
 })
 
 onMounted(async () => {
+  window.addEventListener('error', handleWindowResizeObserverWarning)
   window.addEventListener('keydown', handleRandomBoardKeydown)
   loadMasteryStore()
   loadListeningSources()
   persistListeningSources()
   await refreshAll()
+  await resumePendingSyncTasks()
   if (filteredRows.value.length) {
     activeRow.value = filteredRows.value[0]
   }
@@ -2609,6 +2729,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('error', handleWindowResizeObserverWarning)
   window.removeEventListener('keydown', handleRandomBoardKeydown)
   if (learningPronounceAudio) {
     learningPronounceAudio.pause()
@@ -3018,6 +3139,12 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
 }
 
+.transcript-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .transcript-list {
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
@@ -3034,11 +3161,27 @@ onBeforeUnmount(() => {
   color: var(--guaxi-text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+  cursor: pointer;
+}
+
+.transcript-line.hovered {
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, var(--guaxi-panel-bg));
 }
 
 .transcript-line.active {
   background: color-mix(in srgb, var(--primary-color, #4acadb) 14%, var(--guaxi-panel-bg));
   color: var(--guaxi-text-primary);
+}
+
+.transcript-source {
+  line-height: 1.65;
+}
+
+.transcript-target {
+  margin-top: 3px;
+  color: color-mix(in srgb, var(--primary-color, #4acadb) 72%, var(--guaxi-text-primary));
+  font-size: 13px;
+  line-height: 1.56;
 }
 
 .word-detail-head {
@@ -3280,6 +3423,12 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--guaxi-text-secondary);
   margin-bottom: 6px;
+}
+
+.review-answer-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .review-answer-meta {
