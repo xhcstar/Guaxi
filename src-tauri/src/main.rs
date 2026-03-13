@@ -321,6 +321,8 @@ async fn main() {
             commands::settingview::set_llm_config,
             commands::settingview::get_tts_config,
             commands::settingview::set_tts_config,
+            commands::settingview::get_asr_config,
+            commands::settingview::set_asr_config,
             commands::settingview::get_chat_record_root,
             commands::settingview::set_chat_record_root,
             commands::settingview::get_markdown_models_status,

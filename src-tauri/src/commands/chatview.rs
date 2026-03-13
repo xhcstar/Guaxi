@@ -41,6 +41,8 @@ const SHERPA_ONNX_TTS_DEFAULT_EXE_WIN: &str = "utils/sherpa-onnx/sherpa-onnx-off
 const SHERPA_ONNX_TTS_DEFAULT_EXE_UNIX: &str = "utils/sherpa-onnx/sherpa-onnx-offline-tts";
 const SHERPA_ONNX_TTS_DEFAULT_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
 const SHERPA_ONNX_TTS_DEFAULT_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
+const SHERPA_ONNX_ASR_DEFAULT_EXE_WIN: &str = "utils/sherpa-onnx/sherpa-onnx-offline.exe";
+const SHERPA_ONNX_ASR_DEFAULT_EXE_UNIX: &str = "utils/sherpa-onnx/sherpa-onnx-offline";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -1109,6 +1111,16 @@ fn resolve_sherpa_default_exe() -> Result<PathBuf, String> {
     Ok(exe_dir.join(rel))
 }
 
+fn resolve_sherpa_default_asr_exe() -> Result<PathBuf, String> {
+    let exe_dir = resolve_exe_dir()?;
+    let rel = if cfg!(target_os = "windows") {
+        SHERPA_ONNX_ASR_DEFAULT_EXE_WIN
+    } else {
+        SHERPA_ONNX_ASR_DEFAULT_EXE_UNIX
+    };
+    Ok(exe_dir.join(rel))
+}
+
 fn resolve_sherpa_default_model_paths() -> Result<(PathBuf, PathBuf), String> {
     let exe_dir = resolve_exe_dir()?;
     Ok((
@@ -1559,9 +1571,197 @@ pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextTo
     })
 }
 
+fn infer_audio_file_ext(file_name: &str, mime_type: &str) -> String {
+    let name = file_name.trim().to_lowercase();
+    if name.ends_with(".wav") {
+        return ".wav".to_string();
+    }
+    if name.ends_with(".mp3") {
+        return ".mp3".to_string();
+    }
+    if name.ends_with(".m4a") {
+        return ".m4a".to_string();
+    }
+    if name.ends_with(".flac") {
+        return ".flac".to_string();
+    }
+    let mime = mime_type.trim().to_lowercase();
+    if mime.contains("wav") {
+        return ".wav".to_string();
+    }
+    if mime.contains("mpeg") || mime.contains("mp3") {
+        return ".mp3".to_string();
+    }
+    if mime.contains("mp4") || mime.contains("m4a") {
+        return ".m4a".to_string();
+    }
+    if mime.contains("flac") {
+        return ".flac".to_string();
+    }
+    ".wav".to_string()
+}
+
+fn resolve_speech_input_file(request: &SpeechToTextRequest) -> Result<(PathBuf, bool), String> {
+    if !request.file_path.trim().is_empty() {
+        let p = PathBuf::from(request.file_path.trim());
+        if !p.exists() {
+            return Err(format!("音频文件不存在: {}", p.to_string_lossy()));
+        }
+        return Ok((p, false));
+    }
+    if request.file_base64.trim().is_empty() {
+        return Err("file_path 或 file_base64 至少提供一个".to_string());
+    }
+    let bytes = general_purpose::STANDARD
+        .decode(request.file_base64.trim())
+        .map_err(|e| format!("file_base64 解码失败: {}", e))?;
+    let ext = infer_audio_file_ext(&request.file_name, &request.mime_type);
+    let path = env::temp_dir().join(format!(
+        "guaxi_sherpa_stt_{}{}",
+        Utc::now().timestamp_millis(),
+        ext
+    ));
+    fs::write(&path, bytes).map_err(|e| format!("写入临时音频失败: {}", e))?;
+    Ok((path, true))
+}
+
+fn parse_sherpa_asr_text(stdout: &str, stderr: &str) -> String {
+    for line in stdout.lines().rev() {
+        let x = line.trim();
+        if x.is_empty() {
+            continue;
+        }
+        if let Some((left, right)) = x.split_once(':') {
+            let key = left.trim().to_lowercase();
+            if key.contains("result") || key.contains("text") || key.contains("transcript") {
+                let v = right.trim();
+                if !v.is_empty() {
+                    return v.to_string();
+                }
+            }
+        }
+        if !x.starts_with('[') && !x.to_lowercase().contains("sherpa-onnx") {
+            return x.to_string();
+        }
+    }
+    for line in stderr.lines().rev() {
+        let x = line.trim();
+        if x.is_empty() {
+            continue;
+        }
+        if let Some((left, right)) = x.split_once(':') {
+            let key = left.trim().to_lowercase();
+            if key.contains("result") || key.contains("text") || key.contains("transcript") {
+                let v = right.trim();
+                if !v.is_empty() {
+                    return v.to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Result<SpeechToTextResponse, String> {
+    let configured = settingview::get_asr_config();
+    let endpoint = request.common.endpoint.trim();
+    let exe_path = if !endpoint.is_empty() {
+        PathBuf::from(endpoint)
+    } else if !configured.exe.trim().is_empty() {
+        resolve_path_with_exe_dir(&configured.exe).unwrap_or_else(|| PathBuf::from(configured.exe.trim()))
+    } else {
+        resolve_sherpa_default_asr_exe()?
+    };
+    if !exe_path.exists() {
+        return Err(format!(
+            "未找到 sherpa-onnx asr 可执行文件: {}",
+            exe_path.to_string_lossy()
+        ));
+    }
+    let model = {
+        let from_req = request.common.model.trim();
+        if !from_req.is_empty() {
+            from_req.to_string()
+        } else {
+            configured.model.trim().to_string()
+        }
+    };
+    let model_path = resolve_path_with_exe_dir(&model).unwrap_or_else(|| PathBuf::from(model.as_str()));
+    let (input_path, should_cleanup_input) = resolve_speech_input_file(&request)?;
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg("--debug=false");
+    if !model.trim().is_empty() {
+        if model_path.is_dir() {
+            let mut added = false;
+            for (key, name) in [
+                ("tokens", "tokens.txt"),
+                ("encoder", "encoder.onnx"),
+                ("decoder", "decoder.onnx"),
+                ("joiner", "joiner.onnx"),
+                ("paraformer", "model.onnx"),
+                ("nemo-ctc", "model.onnx"),
+                ("whisper-encoder", "encoder.int8.onnx"),
+                ("whisper-decoder", "decoder.int8.onnx"),
+            ] {
+                let p = model_path.join(name);
+                if p.exists() {
+                    cmd.arg(format!("--{}={}", key, p.to_string_lossy()));
+                    added = true;
+                }
+            }
+            if !added {
+                return Err(format!(
+                    "ASR 模型目录未识别到可用模型文件: {}",
+                    model_path.to_string_lossy()
+                ));
+            }
+        } else {
+            cmd.arg(format!("--model={}", model_path.to_string_lossy()));
+            let tokens = model_path
+                .parent()
+                .map(|x| x.join("tokens.txt"));
+            if let Some(tp) = tokens {
+                if tp.exists() {
+                    cmd.arg(format!("--tokens={}", tp.to_string_lossy()));
+                }
+            }
+        }
+    }
+    cmd.arg(input_path.to_string_lossy().to_string());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd.output().map_err(|e| format!("执行 sherpa-onnx asr 失败: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if should_cleanup_input {
+        let _ = fs::remove_file(&input_path);
+    }
+    if !output.status.success() {
+        return Err(format!("sherpa-onnx asr 失败: {}", stderr.trim()));
+    }
+    let text = parse_sherpa_asr_text(&stdout, &stderr);
+    if text.trim().is_empty() {
+        return Err("sherpa-onnx 未返回可解析文本，请检查 ASR 模型配置".to_string());
+    }
+    Ok(SpeechToTextResponse {
+        text: text.trim().to_string(),
+        trace_id: "local-sherpa-onnx".to_string(),
+        model: if model.trim().is_empty() {
+            model_path.to_string_lossy().to_string()
+        } else {
+            model
+        },
+    })
+}
+
 #[tauri::command]
 pub async fn audio_speech_to_text(request: SpeechToTextRequest) -> Result<SpeechToTextResponse, String> {
-    let _provider = resolve_audio_provider(&request.common.provider)?;
+    let provider = resolve_audio_provider(&request.common.provider)?;
+    if provider == "sherpa-onnx" {
+        return audio_speech_to_text_sherpa_onnx(request).await;
+    }
     let api_key = resolve_audio_api_key(&request.common.api_key)?;
     let model = resolve_audio_stt_model(&request.common.model);
     let endpoint = {

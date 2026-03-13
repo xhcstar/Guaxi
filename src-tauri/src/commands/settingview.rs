@@ -79,6 +79,8 @@ pub struct AppConfig {
     llm_config: LlmConfig,
     #[serde(default)]
     tts_config: TtsConfig,
+    #[serde(default)]
+    asr_config: AsrConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -122,6 +124,26 @@ impl Default for TtsConfig {
             model: default_tts_model(),
             tokens: default_tts_tokens(),
             exe: default_tts_exe(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AsrConfig {
+    #[serde(default = "default_asr_provider")]
+    pub provider: String,
+    #[serde(default = "default_asr_model")]
+    pub model: String,
+    #[serde(default = "default_asr_exe")]
+    pub exe: String,
+}
+
+impl Default for AsrConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_asr_provider(),
+            model: default_asr_model(),
+            exe: default_asr_exe(),
         }
     }
 }
@@ -228,6 +250,22 @@ fn default_tts_exe() -> String {
         "utils/sherpa-onnx/sherpa-onnx-offline-tts.exe".to_string()
     } else {
         "utils/sherpa-onnx/sherpa-onnx-offline-tts".to_string()
+    }
+}
+
+fn default_asr_provider() -> String {
+    "sherpa-onnx".to_string()
+}
+
+fn default_asr_model() -> String {
+    "".to_string()
+}
+
+fn default_asr_exe() -> String {
+    if cfg!(target_os = "windows") {
+        "utils/sherpa-onnx/sherpa-onnx-offline.exe".to_string()
+    } else {
+        "utils/sherpa-onnx/sherpa-onnx-offline".to_string()
     }
 }
 
@@ -595,6 +633,7 @@ impl Default for AppConfig {
             webrtc_signal_url: "".to_string(),
             llm_config: LlmConfig::default(),
             tts_config: TtsConfig::default(),
+            asr_config: AsrConfig::default(),
         }
     }
 }
@@ -1075,6 +1114,32 @@ pub fn set_tts_config(tts_config: TtsConfig) {
     }
     if config.tts_config.exe.is_empty() {
         config.tts_config.exe = default_tts_exe();
+    }
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_asr_config() -> AsrConfig {
+    let config = load_config();
+    config.asr_config
+}
+
+#[tauri::command]
+pub fn set_asr_config(asr_config: AsrConfig) {
+    let mut config = load_config();
+    config.asr_config = AsrConfig {
+        provider: asr_config.provider.trim().to_string(),
+        model: asr_config.model.trim().to_string(),
+        exe: asr_config.exe.trim().to_string(),
+    };
+    if config.asr_config.provider.is_empty() {
+        config.asr_config.provider = default_asr_provider();
+    }
+    if config.asr_config.model.is_empty() {
+        config.asr_config.model = default_asr_model();
+    }
+    if config.asr_config.exe.is_empty() {
+        config.asr_config.exe = default_asr_exe();
     }
     save_config(&config);
 }

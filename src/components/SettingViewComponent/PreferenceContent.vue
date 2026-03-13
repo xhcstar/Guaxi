@@ -190,6 +190,83 @@
         <n-divider />
 
         <div>
+          <h3>ASR 配置</h3>
+          <p class="description">
+            配置语音转文字提供方与本地 sherpa-onnx 路径。设置保存到 guaxi_config.json。
+          </p>
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+            <n-form-item label="Provider">
+              <n-select
+                v-model:value="asrProvider"
+                :options="asrProviderOptions"
+                :disabled="loading || asrSaving"
+                style="width: 240px"
+              />
+            </n-form-item>
+            <n-form-item label="Model 路径">
+              <n-input
+                v-model:value="asrModel"
+                placeholder="可填模型目录或模型文件路径"
+                :disabled="loading || asrSaving"
+              />
+            </n-form-item>
+            <n-form-item v-if="asrProvider === 'sherpa-onnx'" label="Exe 路径">
+              <n-input
+                v-model:value="asrExe"
+                placeholder="utils/sherpa-onnx/sherpa-onnx-offline.exe"
+                :disabled="loading || asrSaving"
+              />
+            </n-form-item>
+            <n-form-item label="测试音频路径">
+              <n-input
+                v-model:value="asrTestFilePath"
+                placeholder="填写本地音频文件绝对路径（wav/mp3/m4a/flac）"
+                :disabled="loading || asrSaving || asrTesting"
+              />
+            </n-form-item>
+            <n-form-item label="转写结果">
+              <n-input
+                v-model:value="asrTestResult"
+                type="textarea"
+                :autosize="{ minRows: 3, maxRows: 6 }"
+                placeholder="点击“测试转写”后显示结果"
+                :disabled="true"
+              />
+            </n-form-item>
+            <n-form-item>
+              <n-space>
+                <n-button
+                  type="primary"
+                  size="small"
+                  :disabled="loading || asrSaving"
+                  @click="handleAsrConfigSave"
+                >
+                  保存
+                </n-button>
+                <n-button
+                  size="small"
+                  :disabled="loading || asrSaving"
+                  @click="handleAsrConfigReset"
+                >
+                  恢复默认
+                </n-button>
+                <n-button
+                  secondary
+                  size="small"
+                  :loading="asrTesting"
+                  :disabled="loading || asrSaving"
+                  @click="handleAsrTestTranscribe"
+                >
+                  {{ asrTesting ? '转写中...' : '测试转写' }}
+                </n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>WebRTC 文件传输</h3>
           <p class="description">
             房间码模式需要一个“信令服务”（只中转 WebRTC 协商信息，不传文件内容）。此处配置后，文件传输助手将不再需要手动填写信令地址。
@@ -247,6 +324,11 @@ const ttsModel = ref('')
 const ttsTokens = ref('')
 const ttsExe = ref('')
 const ttsTestText = ref('你好，这是测试朗读。')
+const asrProvider = ref('sherpa-onnx')
+const asrModel = ref('')
+const asrExe = ref('')
+const asrTestFilePath = ref('')
+const asrTestResult = ref('')
 const lspStatusLoading = ref(false)
 const loading = ref(false)
 const themeSaving = ref(false)
@@ -254,7 +336,13 @@ const lspTokenSaving = ref(false)
 const webrtcSignalSaving = ref(false)
 const ttsSaving = ref(false)
 const ttsTesting = ref(false)
+const asrSaving = ref(false)
+const asrTesting = ref(false)
 const ttsProviderOptions = [
+  { label: 'sherpa-onnx', value: 'sherpa-onnx' },
+  { label: 'siliconflow', value: 'siliconflow' },
+]
+const asrProviderOptions = [
   { label: 'sherpa-onnx', value: 'sherpa-onnx' },
   { label: 'siliconflow', value: 'siliconflow' },
 ]
@@ -275,12 +363,13 @@ onMounted(async () => {
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
       (async () => {
-        const [seconds, enabled, signalUrl, githubToken, ttsConfig] = await Promise.all([
+        const [seconds, enabled, signalUrl, githubToken, ttsConfig, asrConfig] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
           invoke('get_lsp_syntax_highlight_enabled'),
           invoke('get_webrtc_signal_url'),
           invoke('get_lsp_github_token'),
           invoke('get_tts_config'),
+          invoke('get_asr_config'),
         ])
 
         if (typeof seconds === 'number' && seconds > 0) {
@@ -296,6 +385,9 @@ onMounted(async () => {
         ttsModel.value = String(ttsConfig?.model || '').trim()
         ttsTokens.value = String(ttsConfig?.tokens || '').trim()
         ttsExe.value = String(ttsConfig?.exe || '').trim()
+        asrProvider.value = String(asrConfig?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
+        asrModel.value = String(asrConfig?.model || '').trim()
+        asrExe.value = String(asrConfig?.exe || '').trim()
       })(),
     ])
 
@@ -310,6 +402,9 @@ onMounted(async () => {
     ttsModel.value = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
     ttsTokens.value = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
     ttsExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
+    asrProvider.value = 'sherpa-onnx'
+    asrModel.value = ''
+    asrExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline.exe'
   } finally {
     loading.value = false
   }
@@ -488,6 +583,80 @@ const handleTtsConfigReset = async () => {
   ttsTokens.value = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
   ttsExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
   await handleTtsConfigSave()
+}
+
+const handleAsrConfigSave = async () => {
+  try {
+    asrSaving.value = true
+    await invoke('set_asr_config', {
+      asrConfig: {
+        provider: String(asrProvider.value || '').trim(),
+        model: String(asrModel.value || '').trim(),
+        exe: String(asrExe.value || '').trim(),
+      }
+    })
+    const saved = await invoke('get_asr_config')
+    asrProvider.value = String(saved?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
+    asrModel.value = String(saved?.model || '').trim()
+    asrExe.value = String(saved?.exe || '').trim()
+    logger.info('保存 ASR 配置完成', {
+      provider: asrProvider.value,
+      model: asrModel.value,
+      exe: asrExe.value,
+    })
+  } catch (error) {
+    logger.error('保存 ASR 配置失败:', error)
+  } finally {
+    asrSaving.value = false
+  }
+}
+
+const handleAsrConfigReset = async () => {
+  asrProvider.value = 'sherpa-onnx'
+  asrModel.value = ''
+  asrExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline.exe'
+  await handleAsrConfigSave()
+}
+
+const handleAsrTestTranscribe = async () => {
+  const filePath = String(asrTestFilePath.value || '').trim()
+  if (!filePath || asrTesting.value) return
+  try {
+    asrTesting.value = true
+    asrTestResult.value = ''
+    const provider = String(asrProvider.value || '').trim() || 'sherpa-onnx'
+    const model = String(asrModel.value || '').trim()
+    const endpoint = provider === 'sherpa-onnx' ? String(asrExe.value || '').trim() : ''
+    logger.info('开始测试 ASR 转写', {
+      provider,
+      model,
+      endpoint,
+      filePath,
+    })
+    const response = await invoke('audio_speech_to_text', {
+      request: {
+        common: {
+          provider,
+          model,
+          endpoint,
+        },
+        file_path: filePath,
+        file_name: filePath.split(/[\\/]/).pop() || 'audio.wav',
+        mime_type: 'application/octet-stream',
+      }
+    })
+    asrTestResult.value = String(response?.text || '').trim()
+    logger.info('ASR 测试完成', {
+      textLength: asrTestResult.value.length,
+      traceId: String(response?.trace_id || ''),
+      model: String(response?.model || ''),
+    })
+  } catch (error) {
+    logger.error('测试 ASR 转写失败:', error)
+    asrTestResult.value = ''
+  } finally {
+    asrTesting.value = false
+  }
 }
 
 const base64ToUint8Array = (b64) => {
