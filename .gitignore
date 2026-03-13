@@ -41,6 +41,7 @@ src-tauri/utils/Models/surya_models/
 src-tauri/utils/MarkdownConvertor/*
 src-tauri/utils/Models/surya_models/*
 src-tauri/utils/Models/whisper_models/*
+src-tauri/utils/Models/tts/*
 
 # Generated python libs (do not commit)
 src-tauri/utils/python_libs/*
