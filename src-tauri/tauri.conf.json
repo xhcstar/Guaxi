@@ -58,7 +58,9 @@
       "utils/Qt*",
       "utils/ScreenShotTool*",
       "utils/pandoc*",
-      "utils/horizontalrule.lua"
+      "utils/horizontalrule.lua",
+      "utils/Models/tts/**/*",
+      "utils/sherpa-onnx/**/*"
     ]
   }
 }

@@ -11,7 +11,9 @@
       "utils/pandoc*",
       "utils/tectonic",
       "utils/horizontalrule.lua",
-      "utils/SlidevEnv/**/*"
+      "utils/SlidevEnv/**/*",
+      "utils/Models/tts/**/*",
+      "utils/sherpa-onnx/**/*"
     ]
   }
 }

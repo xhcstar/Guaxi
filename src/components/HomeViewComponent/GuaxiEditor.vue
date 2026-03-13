@@ -796,15 +796,24 @@ const readSelectionAloud = async () => {
 
   selectionReadAloudBusy.value = true
   try {
+    const tts = await invoke('get_tts_config')
+    const provider = String(tts?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
+    const model = String(tts?.model || '').trim() || (provider === 'sherpa-onnx' ? 'utils/Models/tts/kokoro_multi_lang/model.onnx' : 'FunAudioLLM/CosyVoice2-0.5B')
+    const tokens = String(tts?.tokens || '').trim()
+    const endpoint = provider === 'sherpa-onnx' ? String(tts?.exe || '').trim() : ''
+    const voice = provider === 'sherpa-onnx' ? '0' : 'FunAudioLLM/CosyVoice2-0.5B:alex'
+    const responseFormat = provider === 'sherpa-onnx' ? 'wav' : 'mp3'
     const response = await invoke('audio_text_to_speech', {
       request: {
         common: {
-          provider: 'siliconflow',
-          model: 'FunAudioLLM/CosyVoice2-0.5B',
+          provider,
+          model,
+          endpoint,
+          tokens,
         },
         input: text,
-        voice: 'FunAudioLLM/CosyVoice2-0.5B:alex',
-        response_format: 'mp3',
+        voice,
+        response_format: responseFormat,
         stream: false,
       },
     })

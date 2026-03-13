@@ -77,6 +77,8 @@ pub struct AppConfig {
     webrtc_signal_url: String,
     #[serde(default)]
     llm_config: LlmConfig,
+    #[serde(default)]
+    tts_config: TtsConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -99,6 +101,29 @@ pub struct LlmConfig {
     pub doubao_api_key: String,
     #[serde(default)]
     pub siliconflow_api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TtsConfig {
+    #[serde(default = "default_tts_provider")]
+    pub provider: String,
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    #[serde(default = "default_tts_tokens")]
+    pub tokens: String,
+    #[serde(default = "default_tts_exe")]
+    pub exe: String,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_tts_provider(),
+            model: default_tts_model(),
+            tokens: default_tts_tokens(),
+            exe: default_tts_exe(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -184,6 +209,26 @@ fn default_chat_record_root() -> String {
         .expect("无法获取可执行文件所在目录")
         .to_path_buf();
     exe_dir.join("ChatRecord").to_string_lossy().to_string()
+}
+
+fn default_tts_provider() -> String {
+    "sherpa-onnx".to_string()
+}
+
+fn default_tts_model() -> String {
+    "utils/Models/tts/kokoro_multi_lang/model.onnx".to_string()
+}
+
+fn default_tts_tokens() -> String {
+    "utils/Models/tts/kokoro_multi_lang/tokens.txt".to_string()
+}
+
+fn default_tts_exe() -> String {
+    if cfg!(target_os = "windows") {
+        "utils/sherpa-onnx/sherpa-onnx-offline-tts.exe".to_string()
+    } else {
+        "utils/sherpa-onnx/sherpa-onnx-offline-tts".to_string()
+    }
 }
 
 fn default_knowledge_bases_root() -> String {
@@ -549,6 +594,7 @@ impl Default for AppConfig {
             lsp_github_token: "".to_string(),
             webrtc_signal_url: "".to_string(),
             llm_config: LlmConfig::default(),
+            tts_config: TtsConfig::default(),
         }
     }
 }
@@ -1000,6 +1046,36 @@ pub fn get_llm_config() -> LlmConfig {
 pub fn set_llm_config(llm_config: LlmConfig) {
     let mut config = load_config();
     config.llm_config = llm_config;
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_tts_config() -> TtsConfig {
+    let config = load_config();
+    config.tts_config
+}
+
+#[tauri::command]
+pub fn set_tts_config(tts_config: TtsConfig) {
+    let mut config = load_config();
+    config.tts_config = TtsConfig {
+        provider: tts_config.provider.trim().to_string(),
+        model: tts_config.model.trim().to_string(),
+        tokens: tts_config.tokens.trim().to_string(),
+        exe: tts_config.exe.trim().to_string(),
+    };
+    if config.tts_config.provider.is_empty() {
+        config.tts_config.provider = default_tts_provider();
+    }
+    if config.tts_config.model.is_empty() {
+        config.tts_config.model = default_tts_model();
+    }
+    if config.tts_config.tokens.is_empty() {
+        config.tts_config.tokens = default_tts_tokens();
+    }
+    if config.tts_config.exe.is_empty() {
+        config.tts_config.exe = default_tts_exe();
+    }
     save_config(&config);
 }
 

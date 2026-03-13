@@ -37,6 +37,10 @@ const SILICONFLOW_AUDIO_TRANSCRIPTIONS_URL: &str = "https://api.siliconflow.cn/v
 const SILICONFLOW_AUDIO_TTS_DEFAULT_MODEL: &str = "FunAudioLLM/CosyVoice2-0.5B";
 const SILICONFLOW_AUDIO_TTS_DEFAULT_VOICE: &str = "FunAudioLLM/CosyVoice2-0.5B:alex";
 const SILICONFLOW_AUDIO_STT_DEFAULT_MODEL: &str = "FunAudioLLM/SenseVoiceSmall";
+const SHERPA_ONNX_TTS_DEFAULT_EXE_WIN: &str = "utils/sherpa-onnx/sherpa-onnx-offline-tts.exe";
+const SHERPA_ONNX_TTS_DEFAULT_EXE_UNIX: &str = "utils/sherpa-onnx/sherpa-onnx-offline-tts";
+const SHERPA_ONNX_TTS_DEFAULT_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
+const SHERPA_ONNX_TTS_DEFAULT_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -300,6 +304,8 @@ pub struct AudioCommonRequest {
     pub api_key: String,
     #[serde(default)]
     pub endpoint: String,
+    #[serde(default)]
+    pub tokens: String,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -957,6 +963,9 @@ fn resolve_audio_provider(provider: &str) -> Result<String, String> {
     if p.is_empty() || p == "siliconflow" {
         return Ok("siliconflow".to_string());
     }
+    if p == "sherpa-onnx" || p == "sherpa_onnx" || p == "sherpa" {
+        return Ok("sherpa-onnx".to_string());
+    }
     Err(format!("不支持的音频 provider: {}", provider))
 }
 
@@ -1008,9 +1017,304 @@ fn extract_trace_id(headers: &reqwest::header::HeaderMap) -> String {
         .to_string()
 }
 
+struct SherpaOnnxTtsCliConfig {
+    exe_path: PathBuf,
+    model_path: PathBuf,
+    tokens_path: PathBuf,
+    data_dir: Option<PathBuf>,
+    lexicon: Option<PathBuf>,
+    rule_fsts: Option<String>,
+    sid: i32,
+    speed: f32,
+}
+
+fn resolve_exe_dir() -> Result<PathBuf, String> {
+    let exe_path = env::current_exe().map_err(|e| format!("获取可执行目录失败: {}", e))?;
+    exe_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "无法获取可执行目录".to_string())
+}
+
+fn resolve_sherpa_default_exe() -> Result<PathBuf, String> {
+    let exe_dir = resolve_exe_dir()?;
+    let rel = if cfg!(target_os = "windows") {
+        SHERPA_ONNX_TTS_DEFAULT_EXE_WIN
+    } else {
+        SHERPA_ONNX_TTS_DEFAULT_EXE_UNIX
+    };
+    Ok(exe_dir.join(rel))
+}
+
+fn resolve_sherpa_default_model_paths() -> Result<(PathBuf, PathBuf), String> {
+    let exe_dir = resolve_exe_dir()?;
+    Ok((
+        exe_dir.join(SHERPA_ONNX_TTS_DEFAULT_MODEL),
+        exe_dir.join(SHERPA_ONNX_TTS_DEFAULT_TOKENS),
+    ))
+}
+
+fn resolve_path_with_exe_dir(raw: &str) -> Option<PathBuf> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(text);
+    if p.exists() {
+        return Some(p);
+    }
+    let exe_dir = resolve_exe_dir().ok()?;
+    let joined = exe_dir.join(text);
+    if joined.exists() {
+        return Some(joined);
+    }
+    Some(PathBuf::from(text))
+}
+
+fn parse_speaker_id(voice: &str) -> i32 {
+    let s = voice.trim();
+    if s.is_empty() {
+        return 0;
+    }
+    s.parse::<i32>().unwrap_or(0)
+}
+
+fn guess_model_files_from_dir(dir: &Path) -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>) {
+    if !dir.exists() || !dir.is_dir() {
+        return (None, None, None);
+    }
+    let mut model = None;
+    let mut tokens = None;
+    let mut data_dir = None;
+    let entries = match fs::read_dir(dir) {
+        Ok(v) => v,
+        Err(_) => return (None, None, None),
+    };
+    for it in entries {
+        let entry = match it {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let p = entry.path();
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if p.is_file() && name.ends_with(".onnx") && model.is_none() {
+            model = Some(p.clone());
+        } else if p.is_file() && name == "tokens.txt" && tokens.is_none() {
+            tokens = Some(p.clone());
+        } else if p.is_dir() && (name.contains("espeak-ng-data") || name.contains("dict")) && data_dir.is_none() {
+            data_dir = Some(p.clone());
+        }
+    }
+    (model, tokens, data_dir)
+}
+
+fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<SherpaOnnxTtsCliConfig, String> {
+    let endpoint = request.common.endpoint.trim();
+    let exe_env = env::var("GUAXI_SHERPA_ONNX_TTS_EXE").unwrap_or_default();
+    let model_env = env::var("GUAXI_SHERPA_ONNX_TTS_MODEL").unwrap_or_default();
+    let tokens_env = env::var("GUAXI_SHERPA_ONNX_TTS_TOKENS").unwrap_or_default();
+    let data_env = env::var("GUAXI_SHERPA_ONNX_TTS_DATA_DIR").unwrap_or_default();
+    let lexicon_env = env::var("GUAXI_SHERPA_ONNX_TTS_LEXICON").unwrap_or_default();
+    let rule_fsts_env = env::var("GUAXI_SHERPA_ONNX_TTS_RULE_FSTS").unwrap_or_default();
+
+    let endpoint_path = if endpoint.is_empty() { None } else { resolve_path_with_exe_dir(endpoint) };
+    let endpoint_is_exe = endpoint_path
+        .as_ref()
+        .map(|p| {
+            if !p.is_file() {
+                return false;
+            }
+            let ext = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or_default()
+                .to_lowercase();
+            if ext == "exe" {
+                return true;
+            }
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.to_lowercase().contains("sherpa-onnx-offline-tts"))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let endpoint_is_dir = endpoint_path.as_ref().map(|p| p.is_dir()).unwrap_or(false);
+
+    let exe_path = if endpoint_is_exe {
+        endpoint_path.clone().unwrap()
+    } else if !exe_env.trim().is_empty() {
+        PathBuf::from(exe_env.trim())
+    } else {
+        resolve_sherpa_default_exe()?
+    };
+    if !exe_path.exists() {
+        return Err(format!("未找到 sherpa-onnx tts 可执行文件: {}", exe_path.to_string_lossy()));
+    }
+
+    let requested_model_path = resolve_path_with_exe_dir(request.common.model.trim());
+    let model_dir = if endpoint_is_dir {
+        endpoint_path.clone()
+    } else if let Some(p) = requested_model_path.clone() {
+        if p.is_dir() { Some(p) } else { None }
+    } else {
+        None
+    };
+    let guessed = model_dir
+        .as_ref()
+        .map(|d| guess_model_files_from_dir(d))
+        .unwrap_or((None, None, None));
+
+    let defaults = resolve_sherpa_default_model_paths()?;
+    let model_path = if let Some(p) = requested_model_path {
+        if p.is_file() { p } else if !request.common.model.trim().is_empty() { PathBuf::from(request.common.model.trim()) } else { defaults.0.clone() }
+    } else if !model_env.trim().is_empty() {
+        PathBuf::from(model_env.trim())
+    } else if let Some(p) = guessed.0 {
+        p
+    } else if defaults.0.exists() {
+        defaults.0.clone()
+    } else {
+        return Err("未找到 sherpa-onnx 模型文件，请检查 utils/Models/tts/kokoro_multi_lang/model.onnx 或设置 common.model/GUAXI_SHERPA_ONNX_TTS_MODEL".to_string());
+    };
+    if !model_path.exists() {
+        return Err(format!("sherpa-onnx 模型文件不存在: {}", model_path.to_string_lossy()));
+    }
+
+    let request_tokens = resolve_path_with_exe_dir(request.common.tokens.trim());
+    let tokens_path = if let Some(p) = request_tokens {
+        p
+    } else if !tokens_env.trim().is_empty() {
+        PathBuf::from(tokens_env.trim())
+    } else if let Some(p) = guessed.1 {
+        p
+    } else if defaults.1.exists() {
+        defaults.1.clone()
+    } else {
+        model_path
+            .parent()
+            .map(|p| p.join("tokens.txt"))
+            .ok_or_else(|| "无法推断 tokens.txt 路径".to_string())?
+    };
+    if !tokens_path.exists() {
+        return Err(format!("tokens.txt 不存在: {}", tokens_path.to_string_lossy()));
+    }
+
+    let data_dir = if !data_env.trim().is_empty() {
+        Some(PathBuf::from(data_env.trim()))
+    } else {
+        guessed.2
+    };
+    let lexicon = if lexicon_env.trim().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(lexicon_env.trim()))
+    };
+    let rule_fsts = if rule_fsts_env.trim().is_empty() {
+        None
+    } else {
+        Some(rule_fsts_env.trim().to_string())
+    };
+
+    Ok(SherpaOnnxTtsCliConfig {
+        exe_path,
+        model_path,
+        tokens_path,
+        data_dir,
+        lexicon,
+        rule_fsts,
+        sid: parse_speaker_id(&request.voice),
+        speed: request.speed.unwrap_or(1.0).max(0.2).min(3.0),
+    })
+}
+
+fn run_sherpa_onnx_cli_once(
+    cfg: &SherpaOnnxTtsCliConfig,
+    text: &str,
+    output_wav: &Path,
+    use_vits_flags: bool,
+) -> Result<(), String> {
+    let mut cmd = Command::new(&cfg.exe_path);
+    if use_vits_flags {
+        cmd.arg("--vits-model")
+            .arg(cfg.model_path.to_string_lossy().to_string())
+            .arg("--vits-tokens")
+            .arg(cfg.tokens_path.to_string_lossy().to_string());
+        if let Some(d) = cfg.data_dir.as_ref() {
+            cmd.arg("--vits-data-dir")
+                .arg(d.to_string_lossy().to_string());
+        }
+        if let Some(l) = cfg.lexicon.as_ref() {
+            cmd.arg("--vits-lexicon")
+                .arg(l.to_string_lossy().to_string());
+        }
+    } else {
+        cmd.arg("--model")
+            .arg(cfg.model_path.to_string_lossy().to_string())
+            .arg("--tokens")
+            .arg(cfg.tokens_path.to_string_lossy().to_string());
+        if let Some(d) = cfg.data_dir.as_ref() {
+            cmd.arg("--data-dir")
+                .arg(d.to_string_lossy().to_string());
+        }
+        if let Some(l) = cfg.lexicon.as_ref() {
+            cmd.arg("--lexicon")
+                .arg(l.to_string_lossy().to_string());
+        }
+    }
+    if let Some(r) = cfg.rule_fsts.as_ref() {
+        cmd.arg("--tts-rule-fsts").arg(r);
+    }
+    cmd.arg("--sid")
+        .arg(cfg.sid.to_string())
+        .arg("--speed")
+        .arg(format!("{}", cfg.speed))
+        .arg("--text")
+        .arg(text)
+        .arg("--output-filename")
+        .arg(output_wav.to_string_lossy().to_string());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd.output().map_err(|e| format!("执行 sherpa-onnx tts 失败: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("sherpa-onnx tts 失败: {}", stderr));
+    }
+    Ok(())
+}
+
+async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Result<TextToSpeechResponse, String> {
+    let text = request.input.trim().to_string();
+    if text.is_empty() {
+        return Err("input 不能为空".to_string());
+    }
+    let cfg = resolve_sherpa_onnx_tts_cli_config(&request)?;
+    let output_wav = env::temp_dir().join(format!("guaxi_sherpa_tts_{}.wav", Utc::now().timestamp_millis()));
+    let run_first = run_sherpa_onnx_cli_once(&cfg, &text, &output_wav, true);
+    if run_first.is_err() {
+        run_sherpa_onnx_cli_once(&cfg, &text, &output_wav, false)?;
+    }
+    if !output_wav.exists() {
+        return Err("sherpa-onnx 未生成音频文件".to_string());
+    }
+    let bytes = fs::read(&output_wav).map_err(|e| format!("读取生成音频失败: {}", e))?;
+    let _ = fs::remove_file(&output_wav);
+    Ok(TextToSpeechResponse {
+        audio_base64: general_purpose::STANDARD.encode(bytes),
+        content_type: "audio/wav".to_string(),
+        trace_id: "local-sherpa-onnx".to_string(),
+        model: cfg.model_path.to_string_lossy().to_string(),
+        response_format: "wav".to_string(),
+    })
+}
+
 #[tauri::command]
 pub async fn audio_text_to_speech(request: TextToSpeechRequest) -> Result<TextToSpeechResponse, String> {
-    let _provider = resolve_audio_provider(&request.common.provider)?;
+    let provider = resolve_audio_provider(&request.common.provider)?;
+    if provider == "sherpa-onnx" {
+        return audio_text_to_speech_sherpa_onnx(request).await;
+    }
     let api_key = resolve_audio_api_key(&request.common.api_key)?;
     let model = resolve_audio_tts_model(&request.common.model);
     let voice = resolve_audio_tts_voice(&request.voice);

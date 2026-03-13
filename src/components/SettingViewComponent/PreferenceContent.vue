@@ -115,6 +115,81 @@
         <n-divider />
 
         <div>
+          <h3>TTS 配置</h3>
+          <p class="description">
+            配置朗读服务提供方与本地 sherpa-onnx 路径。设置保存到 guaxi_config.json，不再使用 localStorage。
+          </p>
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+            <n-form-item label="Provider">
+              <n-select
+                v-model:value="ttsProvider"
+                :options="ttsProviderOptions"
+                :disabled="loading || ttsSaving"
+                style="width: 240px"
+              />
+            </n-form-item>
+            <n-form-item label="Model 路径">
+              <n-input
+                v-model:value="ttsModel"
+                placeholder="utils/Models/tts/kokoro_multi_lang/model.onnx"
+                :disabled="loading || ttsSaving"
+              />
+            </n-form-item>
+            <n-form-item v-if="ttsProvider === 'sherpa-onnx'" label="Tokens 路径">
+              <n-input
+                v-model:value="ttsTokens"
+                placeholder="utils/Models/tts/kokoro_multi_lang/tokens.txt"
+                :disabled="loading || ttsSaving"
+              />
+            </n-form-item>
+            <n-form-item v-if="ttsProvider === 'sherpa-onnx'" label="Exe 路径">
+              <n-input
+                v-model:value="ttsExe"
+                placeholder="utils/sherpa-onnx/sherpa-onnx-offline-tts.exe"
+                :disabled="loading || ttsSaving"
+              />
+            </n-form-item>
+            <n-form-item label="测试文本">
+              <n-input
+                v-model:value="ttsTestText"
+                placeholder="输入一行用于试听的文本"
+                :disabled="loading || ttsSaving || ttsTesting"
+              />
+            </n-form-item>
+            <n-form-item>
+              <n-space>
+                <n-button
+                  type="primary"
+                  size="small"
+                  :disabled="loading || ttsSaving"
+                  @click="handleTtsConfigSave"
+                >
+                  保存
+                </n-button>
+                <n-button
+                  size="small"
+                  :disabled="loading || ttsSaving"
+                  @click="handleTtsConfigReset"
+                >
+                  恢复默认
+                </n-button>
+                <n-button
+                  secondary
+                  size="small"
+                  :loading="ttsTesting"
+                  :disabled="loading || ttsSaving"
+                  @click="handleTtsTestReadAloud"
+                >
+                  测试朗读
+                </n-button>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>WebRTC 文件传输</h3>
           <p class="description">
             房间码模式需要一个“信令服务”（只中转 WebRTC 协商信息，不传文件内容）。此处配置后，文件传输助手将不再需要手动填写信令地址。
@@ -147,7 +222,7 @@
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { ref, onMounted, watch } from 'vue'
+import { ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -167,11 +242,24 @@ const lspHighlightEnabled = ref(false)
 const lspGithubToken = ref('')
 const webrtcSignalUrl = ref('')
 const lspServerStatuses = ref([])
+const ttsProvider = ref('sherpa-onnx')
+const ttsModel = ref('')
+const ttsTokens = ref('')
+const ttsExe = ref('')
+const ttsTestText = ref('你好，这是测试朗读。')
 const lspStatusLoading = ref(false)
 const loading = ref(false)
 const themeSaving = ref(false)
 const lspTokenSaving = ref(false)
 const webrtcSignalSaving = ref(false)
+const ttsSaving = ref(false)
+const ttsTesting = ref(false)
+const ttsProviderOptions = [
+  { label: 'sherpa-onnx', value: 'sherpa-onnx' },
+  { label: 'siliconflow', value: 'siliconflow' },
+]
+let ttsTestAudioObjectUrl = ''
+let ttsTestAudioElement = null
 
 watch(
   () => settingsStore.appearanceTheme,
@@ -187,11 +275,12 @@ onMounted(async () => {
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
       (async () => {
-        const [seconds, enabled, signalUrl, githubToken] = await Promise.all([
+        const [seconds, enabled, signalUrl, githubToken, ttsConfig] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
           invoke('get_lsp_syntax_highlight_enabled'),
           invoke('get_webrtc_signal_url'),
-          invoke('get_lsp_github_token')
+          invoke('get_lsp_github_token'),
+          invoke('get_tts_config'),
         ])
 
         if (typeof seconds === 'number' && seconds > 0) {
@@ -203,6 +292,10 @@ onMounted(async () => {
         lspHighlightEnabled.value = !!enabled
         webrtcSignalUrl.value = typeof signalUrl === 'string' ? signalUrl : ''
         lspGithubToken.value = typeof githubToken === 'string' ? githubToken : ''
+        ttsProvider.value = String(ttsConfig?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
+        ttsModel.value = String(ttsConfig?.model || '').trim()
+        ttsTokens.value = String(ttsConfig?.tokens || '').trim()
+        ttsExe.value = String(ttsConfig?.exe || '').trim()
       })(),
     ])
 
@@ -213,6 +306,10 @@ onMounted(async () => {
     lspHighlightEnabled.value = false
     lspGithubToken.value = ''
     themeValue.value = 'light'
+    ttsProvider.value = 'sherpa-onnx'
+    ttsModel.value = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
+    ttsTokens.value = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
+    ttsExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
   } finally {
     loading.value = false
   }
@@ -361,6 +458,106 @@ const handleWebrtcSignalUrlSave = async () => {
     webrtcSignalSaving.value = false
   }
 }
+
+const handleTtsConfigSave = async () => {
+  try {
+    ttsSaving.value = true
+    await invoke('set_tts_config', {
+      ttsConfig: {
+        provider: String(ttsProvider.value || '').trim(),
+        model: String(ttsModel.value || '').trim(),
+        tokens: String(ttsTokens.value || '').trim(),
+        exe: String(ttsExe.value || '').trim(),
+      }
+    })
+    const saved = await invoke('get_tts_config')
+    ttsProvider.value = String(saved?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
+    ttsModel.value = String(saved?.model || '').trim()
+    ttsTokens.value = String(saved?.tokens || '').trim()
+    ttsExe.value = String(saved?.exe || '').trim()
+  } catch (error) {
+    logger.error('保存 TTS 配置失败:', error)
+  } finally {
+    ttsSaving.value = false
+  }
+}
+
+const handleTtsConfigReset = async () => {
+  ttsProvider.value = 'sherpa-onnx'
+  ttsModel.value = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
+  ttsTokens.value = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
+  ttsExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline-tts.exe'
+  await handleTtsConfigSave()
+}
+
+const base64ToUint8Array = (b64) => {
+  const binary = atob(String(b64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
+const stopTtsTestAudioPlayback = () => {
+  if (ttsTestAudioElement) {
+    ttsTestAudioElement.pause()
+    ttsTestAudioElement.src = ''
+    ttsTestAudioElement.onended = null
+    ttsTestAudioElement = null
+  }
+  if (ttsTestAudioObjectUrl) {
+    URL.revokeObjectURL(ttsTestAudioObjectUrl)
+    ttsTestAudioObjectUrl = ''
+  }
+}
+
+const handleTtsTestReadAloud = async () => {
+  const text = String(ttsTestText.value || '').trim()
+  if (!text || ttsTesting.value) return
+  try {
+    ttsTesting.value = true
+    const provider = String(ttsProvider.value || '').trim() || 'sherpa-onnx'
+    const responseFormat = provider === 'sherpa-onnx' ? 'wav' : 'mp3'
+    const response = await invoke('audio_text_to_speech', {
+      request: {
+        common: {
+          provider,
+          model: String(ttsModel.value || '').trim(),
+          endpoint: provider === 'sherpa-onnx' ? String(ttsExe.value || '').trim() : '',
+          tokens: provider === 'sherpa-onnx' ? String(ttsTokens.value || '').trim() : '',
+        },
+        input: text,
+        voice: provider === 'sherpa-onnx' ? '0' : 'FunAudioLLM/CosyVoice2-0.5B:alex',
+        response_format: responseFormat,
+        stream: false,
+      },
+    })
+    const audioBase64 = String(response?.audio_base64 || '')
+    if (!audioBase64) {
+      throw new Error('语音数据为空')
+    }
+    const contentType = String(response?.content_type || (responseFormat === 'wav' ? 'audio/wav' : 'audio/mpeg'))
+    const bytes = base64ToUint8Array(audioBase64)
+    const blob = new Blob([bytes], { type: contentType })
+    stopTtsTestAudioPlayback()
+    ttsTestAudioObjectUrl = URL.createObjectURL(blob)
+    const audio = new Audio(ttsTestAudioObjectUrl)
+    ttsTestAudioElement = audio
+    audio.onended = () => {
+      stopTtsTestAudioPlayback()
+    }
+    await audio.play()
+  } catch (error) {
+    logger.error('测试朗读失败:', error)
+  } finally {
+    ttsTesting.value = false
+  }
+}
+
+onBeforeUnmount(() => {
+  stopTtsTestAudioPlayback()
+})
 
 </script>
 

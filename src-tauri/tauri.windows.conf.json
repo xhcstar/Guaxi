@@ -14,7 +14,9 @@
       "utils/llama/**/*",
       "utils/python_libs/**/*",
       "utils/whisper/**/*",
-      "utils/Models/whisper_models/**/*"
+      "utils/Models/whisper_models/**/*",
+      "utils/Models/tts/**/*",
+      "utils/sherpa-onnx/**/*"
     ]
   }
 }

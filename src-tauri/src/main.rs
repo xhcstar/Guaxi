@@ -319,6 +319,8 @@ async fn main() {
             commands::settingview::set_webrtc_signal_url,
             commands::settingview::get_llm_config,
             commands::settingview::set_llm_config,
+            commands::settingview::get_tts_config,
+            commands::settingview::set_tts_config,
             commands::settingview::get_chat_record_root,
             commands::settingview::set_chat_record_root,
             commands::settingview::get_markdown_models_status,
