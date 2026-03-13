@@ -339,15 +339,27 @@
                 <n-data-table
                   size="small"
                   :columns="listeningColumns"
-                  :data="listeningRows"
-                  :max-height="660"
+                  :data="pagedListeningRows"
+                  :max-height="620"
+                  :scroll-x="1300"
                   :row-key="(row) => row.id"
                   :checked-row-keys="checkedRowKeys"
                   :row-props="listeningRowProps"
                   :single-line="false"
-                  virtual-scroll
                   @update:checked-row-keys="onListeningCheckedRowKeysChange"
                 />
+                <div class="table-footer">
+                  <n-pagination
+                    size="small"
+                    :page="listeningPage"
+                    :page-size="listeningPageSize"
+                    :item-count="listeningRows.length"
+                    show-size-picker
+                    :page-sizes="[20, 50, 100, 200]"
+                    @update:page="onListeningPageChange"
+                    @update:page-size="onListeningPageSizeChange"
+                  />
+                </div>
               </template>
             </n-card>
 
@@ -456,6 +468,10 @@
                       {{ activeAudioTranscriptTimeline.length ? `已加载 ${activeAudioTranscriptTimeline.length} 段` : (activeAudioSyncGenerating ? '后台正在生成同步数据，请稍后进入学习' : '等待后台生成同步数据') }}
                     </div>
                   </div>
+                <div class="detail-block">
+                  <div class="detail-label">译文可用率</div>
+                  <div class="detail-content">{{ formatCoverageLabel(activeAudio?.translationCoverage || { translated: 0, total: 0, ratio: 0 }) }}</div>
+                </div>
                   <div class="detail-actions">
                     <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
                     <n-button type="primary" size="small" @click="enterListeningStudy">
@@ -805,6 +821,8 @@ const listeningImmersiveMode = ref(false)
 const playbackRate = ref(1)
 const recordPage = ref(1)
 const recordPageSize = ref(100)
+const listeningPage = ref(1)
+const listeningPageSize = ref(100)
 const recordCounts = reactive({ records: 0, audio_resources: 0 })
 const reviewType = ref('mixed')
 const reviewRows = ref([])
@@ -846,6 +864,10 @@ const syncQueuedIdSet = new Set()
 const syncQueuedTasks = []
 let syncQueueHideTimer = 0
 let syncQueueRunStartAt = 0
+let pendingSyncSweepTimer = 0
+const pendingSyncSweepRunning = ref(false)
+const audioTranslationCoverageMap = ref({})
+let audioTranslationCoverageRefreshSerial = 0
 const sourceManagerVisible = ref(false)
 let randomCardAudioPlayer = null
 const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
@@ -1188,6 +1210,7 @@ const allRows = computed(() => {
       summary: String(r.transcript || r.notes || ''),
       phonetic: '',
       note: String(r.source_uri || ''),
+      translationCoverage: audioTranslationCoverageMap.value[String(r.id || '')] || { translated: 0, total: 0, ratio: 0 },
       createdAt: String(r.created_at || ''),
       examples: [],
       payload: r,
@@ -1239,6 +1262,13 @@ const listeningRows = computed(() => {
     rows = rows.filter((r) => String(r.payload?.provider || '').toLowerCase() === listeningProviderFilter.value)
   }
   return rows
+})
+
+const pagedListeningRows = computed(() => {
+  const pageSize = Math.max(1, Number(listeningPageSize.value || 100))
+  const page = Math.max(1, Number(listeningPage.value || 1))
+  const offset = (page - 1) * pageSize
+  return listeningRows.value.slice(offset, offset + pageSize)
 })
 
 const isListeningImmersive = computed(() => {
@@ -1434,6 +1464,7 @@ const listeningColumns = [
     type: 'selection',
     multiple: true,
     width: 44,
+    fixed: 'left',
   },
   {
     title: '主题',
@@ -1454,6 +1485,19 @@ const listeningColumns = [
     key: 'source_kind',
     width: 90,
     render: (row) => h(NTag, { size: 'small', type: 'warning' }, { default: () => String(row.payload?.source_kind || 'listening') }),
+  },
+  {
+    title: '译文可用率',
+    key: 'translationCoverage',
+    width: 118,
+    render: (row) => {
+      const coverage = row.translationCoverage || { translated: 0, total: 0, ratio: 0 }
+      return h(
+        NTag,
+        { size: 'small', type: resolveCoverageType(coverage) },
+        { default: () => formatCoverageLabel(coverage) }
+      )
+    },
   },
   {
     title: '掌握度',
@@ -1830,9 +1874,88 @@ const refreshAudio = async () => {
   try {
     const data = await invoke('language_learning_list_audio_resources', { keyword: keyword.value, learningLang: learningLang.value })
     audioResources.value = Array.isArray(data) ? data : []
+    await refreshAudioTranslationCoverage(audioResources.value)
+    schedulePendingSyncSweep(220)
   } catch (err) {
     message.error(`读取听力资源失败: ${String(err?.message || err || '')}`)
   }
+}
+
+const schedulePendingSyncSweep = (delayMs = 220) => {
+  if (pendingSyncSweepTimer) {
+    window.clearTimeout(pendingSyncSweepTimer)
+    pendingSyncSweepTimer = 0
+  }
+  pendingSyncSweepTimer = window.setTimeout(async () => {
+    if (pendingSyncSweepRunning.value) return
+    pendingSyncSweepRunning.value = true
+    try {
+      await resumePendingSyncTasks()
+    } finally {
+      pendingSyncSweepRunning.value = false
+    }
+  }, Math.max(0, Number(delayMs || 0)))
+}
+
+const resolveTranslationCoverageFromTimeline = (timeline) => {
+  if (!Array.isArray(timeline) || !timeline.length) {
+    return { translated: 0, total: 0, ratio: 0 }
+  }
+  let translated = 0
+  const total = timeline.length
+  timeline.forEach((line) => {
+    const source = String(line?.text || '').trim()
+    const target = String(line?.translated_text || line?.translation || '').trim()
+    if (target && (!source || target !== source)) {
+      translated += 1
+    }
+  })
+  return {
+    translated,
+    total,
+    ratio: total > 0 ? translated / total : 0,
+  }
+}
+
+const formatCoverageLabel = (coverage) => {
+  const translated = Number(coverage?.translated || 0)
+  const total = Number(coverage?.total || 0)
+  if (total <= 0) return '0/0'
+  return `${translated}/${total}`
+}
+
+const resolveCoverageType = (coverage) => {
+  const total = Number(coverage?.total || 0)
+  const ratio = Number(coverage?.ratio || 0)
+  if (total <= 0) return 'default'
+  if (ratio >= 0.98) return 'success'
+  if (ratio >= 0.6) return 'warning'
+  return 'error'
+}
+
+const refreshAudioTranslationCoverage = async (rows) => {
+  const list = Array.isArray(rows) ? rows : []
+  const serial = audioTranslationCoverageRefreshSerial + 1
+  audioTranslationCoverageRefreshSerial = serial
+  const entries = await Promise.all(list.map(async (row) => {
+    const id = String(row?.id || '').trim()
+    if (!id) return ['', { translated: 0, total: 0, ratio: 0 }]
+    const syncPath = sanitizeMediaUri(row?.sync_json_uri || '')
+    let timeline = []
+    if (syncPath) {
+      timeline = await loadSyncTimelineByJsonPath(syncPath)
+    }
+    if (!timeline.length) {
+      timeline = buildTranscriptTimeline(String(row?.transcript || ''), Number(row?.duration_sec || 0))
+    }
+    return [id, resolveTranslationCoverageFromTimeline(timeline)]
+  }))
+  if (serial !== audioTranslationCoverageRefreshSerial) return
+  const next = {}
+  entries.forEach(([id, stat]) => {
+    if (id) next[id] = stat
+  })
+  audioTranslationCoverageMap.value = next
 }
 
 const runSyncQueueWorker = async () => {
@@ -1860,7 +1983,7 @@ const runSyncQueueWorker = async () => {
       queueLeft: syncQueuedTasks.length,
     })
     try {
-      await invoke('language_learning_generate_whisper_sync_json', {
+      await invoke('language_learning_backfill_sync_translation', {
         audioId: id,
         learningLang: taskLearningLang,
       })
@@ -1947,6 +2070,15 @@ const onRecordPageSizeChange = async (size) => {
   recordPageSize.value = Number(size || 100)
   recordPage.value = 1
   await refreshRecords()
+}
+
+const onListeningPageChange = (nextPage) => {
+  listeningPage.value = Math.max(1, Number(nextPage || 1))
+}
+
+const onListeningPageSizeChange = (size) => {
+  listeningPageSize.value = Math.max(1, Number(size || 100))
+  listeningPage.value = 1
 }
 
 const refreshWordMeta = async (row) => {
@@ -2841,6 +2973,7 @@ const importLearningData = async () => {
 }
 
 watch(listeningKindFilter, () => {
+  listeningPage.value = 1
   if (selectedShelf.value !== 'my_listening') return
   if (!listeningRows.value.length) {
     activeRow.value = null
@@ -2852,6 +2985,7 @@ watch(listeningKindFilter, () => {
 })
 
 watch(listeningProviderFilter, () => {
+  listeningPage.value = 1
   if (selectedShelf.value !== 'my_listening') return
   if (!listeningRows.value.length) {
     activeRow.value = null
@@ -2863,6 +2997,7 @@ watch(listeningProviderFilter, () => {
 })
 
 watch(selectedShelf, async () => {
+  listeningPage.value = 1
   if (selectedShelf.value !== 'my_listening') {
     listeningImmersiveMode.value = false
   }
@@ -2882,6 +3017,7 @@ watch(selectedShelf, async () => {
 })
 
 watch(keyword, async () => {
+  listeningPage.value = 1
   recordPage.value = 1
   await refreshAll()
   if (managerMode.value === 'random') {
@@ -2914,7 +3050,7 @@ watch(syncQueueRunning, (running) => {
     return
   }
   const elapsed = Date.now() - syncQueueRunStartAt
-  const waitMs = Math.max(0, 820 - elapsed)
+  const waitMs = Math.max(0, 1800 - elapsed)
   syncQueueHideTimer = window.setTimeout(() => {
     syncQueueVisualRunning.value = false
     if (syncQueueDone.value >= syncQueueTotal.value) {
@@ -2929,11 +3065,8 @@ watch(activeAudio, async () => {
   currentTranscriptLineIndex.value = 0
   activeAudioDurationSec.value = Number(activeAudio.value?.duration_sec || 0)
   activeAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(activeAudio.value?.sync_json_uri || '')
-  if (activeAudioSyncTimeline.value.length) {
-    activeAudioSyncTimeline.value = await quickTranslateTimelineToZh(activeAudioSyncTimeline.value, activeTimelineQuickTranslating)
-  } else {
-    const fallbackTimeline = buildTranscriptTimeline(activeAudio.value?.transcript || '', activeAudioDurationSec.value || 0)
-    activeAudioSyncTimeline.value = await quickTranslateTimelineToZh(fallbackTimeline, activeTimelineQuickTranslating)
+  if (!activeAudioSyncTimeline.value.length) {
+    activeAudioSyncTimeline.value = buildTranscriptTimeline(activeAudio.value?.transcript || '', activeAudioDurationSec.value || 0)
   }
   if (activeAudio.value?.id && activeAudioSyncTimeline.value.length && timelineHasMissingTranslation(activeAudioSyncTimeline.value)) {
     console.info('[LangLearning] activeAudio:translation-missing', {
@@ -2945,7 +3078,6 @@ watch(activeAudio, async () => {
         return source && (!translated || translated === source)
       }).length,
     })
-    triggerSyncGenerationForAudioId(activeAudio.value.id, false, 'zh')
   }
   if (activeAudioSyncTimeline.value.length) {
     activeAudioSyncGenerating.value = false
@@ -2970,11 +3102,8 @@ watch(currentReviewItem, async (row) => {
   currentReviewTranscriptIndex.value = 0
   reviewAudioDurationSec.value = Number(row?.payload?.duration_sec || 0)
   reviewAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(row?.payload?.sync_json_uri || '')
-  if (reviewAudioSyncTimeline.value.length) {
-    reviewAudioSyncTimeline.value = await quickTranslateTimelineToZh(reviewAudioSyncTimeline.value, reviewTimelineQuickTranslating)
-  } else {
-    const fallbackTimeline = buildTranscriptTimeline(row?.payload?.transcript || '', reviewAudioDurationSec.value || 0)
-    reviewAudioSyncTimeline.value = await quickTranslateTimelineToZh(fallbackTimeline, reviewTimelineQuickTranslating)
+  if (!reviewAudioSyncTimeline.value.length) {
+    reviewAudioSyncTimeline.value = buildTranscriptTimeline(row?.payload?.transcript || '', reviewAudioDurationSec.value || 0)
   }
   if (row?.payload?.id && reviewAudioSyncTimeline.value.length && timelineHasMissingTranslation(reviewAudioSyncTimeline.value)) {
     console.info('[LangLearning] reviewAudio:translation-missing', {
@@ -2986,7 +3115,6 @@ watch(currentReviewItem, async (row) => {
         return source && (!translated || translated === source)
       }).length,
     })
-    triggerSyncGenerationForAudioId(row.payload.id, false, 'zh')
   }
   await refreshReviewAudioPlayableSrc()
 })
@@ -3085,6 +3213,10 @@ onBeforeUnmount(() => {
   if (syncQueueHideTimer) {
     window.clearTimeout(syncQueueHideTimer)
     syncQueueHideTimer = 0
+  }
+  if (pendingSyncSweepTimer) {
+    window.clearTimeout(pendingSyncSweepTimer)
+    pendingSyncSweepTimer = 0
   }
 })
 </script>
@@ -3613,7 +3745,8 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   padding: 8px 10px;
   max-height: calc(100vh - 320px);
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--guaxi-panel-bg);
 }
 
@@ -3624,6 +3757,7 @@ onBeforeUnmount(() => {
   border: 1px solid transparent;
   color: var(--guaxi-text-secondary);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
   cursor: pointer;
   transform-origin: center left;
@@ -3653,6 +3787,9 @@ onBeforeUnmount(() => {
 
 .transcript-source {
   line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .transcript-target {
@@ -3660,6 +3797,9 @@ onBeforeUnmount(() => {
   color: color-mix(in srgb, var(--primary-color, #4acadb) 72%, var(--guaxi-text-primary));
   font-size: 13px;
   line-height: 1.56;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .word-detail-head {

@@ -2067,6 +2067,106 @@ pub async fn language_learning_generate_whisper_sync_json(
     Ok(next)
 }
 
+async fn backfill_existing_sync_json_translation(
+    sync_json_path: &Path,
+    target_lang: &str,
+) -> Result<WhisperSyncPayload, String> {
+    let json_text = fs::read_to_string(sync_json_path)
+        .map_err(|e| format!("读取同步 JSON 失败: {}", e))?;
+    let mut payload: WhisperSyncPayload =
+        serde_json::from_str(&json_text).map_err(|e| format!("解析同步 JSON 失败: {}", e))?;
+    if payload.segments.is_empty() {
+        return Err("同步 JSON 不包含可翻译分段".to_string());
+    }
+    let source_lines = payload
+        .segments
+        .iter()
+        .map(|x| x.text.trim().to_string())
+        .collect::<Vec<_>>();
+    let translated_lines = translate_aligned(&source_lines, target_lang).await;
+    for (idx, seg) in payload.segments.iter_mut().enumerate() {
+        let next = translated_lines
+            .get(idx)
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .unwrap_or_default();
+        if !next.is_empty() {
+            seg.translated_text = next;
+        }
+    }
+    if payload.transcript.trim().is_empty() {
+        payload.transcript = source_lines.join("\n");
+    }
+    let formatted = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("构建同步 JSON 失败: {}", e))?;
+    fs::write(sync_json_path, formatted).map_err(|e| format!("写入同步 JSON 失败: {}", e))?;
+    Ok(payload)
+}
+
+#[tauri::command]
+pub async fn language_learning_backfill_sync_translation(
+    app: tauri::AppHandle,
+    audio_id: String,
+    learning_lang: Option<String>,
+) -> Result<AudioResource, String> {
+    let request_lang = normalize_learning_lang(learning_lang);
+    let (resolved_lang, row) = with_db(&app, |conn| {
+        ensure_lang_tables(conn, &request_lang)?;
+        load_audio_resource_with_fallback_lang(conn, &audio_id, &request_lang)?
+            .ok_or_else(|| "听力条目不存在".to_string())
+    })?;
+    let existing_sync = normalize_media_uri(&row.sync_json_uri);
+    if !existing_sync.is_empty() {
+        let sync_path = PathBuf::from(&existing_sync);
+        if sync_path.exists() && sync_path.is_file() {
+            let has_full_translation = sync_json_has_full_translation(&existing_sync);
+            let has_transcript = !row.transcript.trim().is_empty();
+            if has_full_translation && has_transcript {
+                return Ok(row);
+            }
+            info!(
+                audio_id = row.id.as_str(),
+                learning_lang = resolved_lang.as_str(),
+                has_full_translation,
+                has_transcript,
+                "backfill translation for existing sync json"
+            );
+            if let Ok(payload) = backfill_existing_sync_json_translation(&sync_path, resolved_lang.as_str()).await {
+                let transcript = if row.transcript.trim().is_empty() {
+                    payload.transcript.trim().to_string()
+                } else {
+                    row.transcript.clone()
+                };
+                let next = language_learning_upsert_audio_resource(
+                    app.clone(),
+                    AudioResourceInput {
+                        id: Some(row.id.clone()),
+                        title: row.title.clone(),
+                        source_kind: row.source_kind.clone(),
+                        source_uri: row.source_uri.clone(),
+                        provider: Some(row.provider.clone()),
+                        topic: Some(row.topic.clone()),
+                        language_tag: Some(if row.language_tag.trim().is_empty() {
+                            resolved_lang.clone()
+                        } else {
+                            row.language_tag.clone()
+                        }),
+                        transcript: Some(transcript),
+                        sync_json_uri: Some(existing_sync.clone()),
+                        notes: Some(row.notes.clone()),
+                        duration_sec: Some(row.duration_sec),
+                    },
+                    Some(resolved_lang.clone()),
+                )?;
+                if sync_json_has_full_translation(&existing_sync) {
+                    return Ok(next);
+                }
+            }
+        }
+    }
+    language_learning_generate_whisper_sync_json(app, audio_id, Some(resolved_lang)).await
+}
+
 #[tauri::command]
 pub fn language_learning_generate_whisper_sync_json_async(
     app: tauri::AppHandle,
@@ -3006,7 +3106,7 @@ async fn translate_aligned(texts: &[String], target_lang: &str) -> Vec<String> {
     let mut out = vec![String::new(); texts.len()];
     let resp = translator_free::translate_text_free(
         texts.to_vec(),
-        Some("en".into()),
+        Some("auto".into()),
         Some(target_lang.to_string()),
     )
     .await
