@@ -161,7 +161,7 @@
                   <div class="random-cards-grid">
                     <div class="random-board-card" v-for="card in currentRandomCards" :key="card.id" @click="toggleRandomCardFlip(card)">
                       <div class="random-card-flip" :class="{ flipped: isCardFlipped(card) }">
-                        <div class="random-card-face front">
+                        <div class="random-card-face front" :class="{ 'random-card-face-listening-front': card.rowType === 'listening' }">
                           <div class="random-card-type">{{ rowTypeLabel(card.rowType) }}</div>
                           <template v-if="card.rowType === 'word'">
                             <div class="random-card-word">{{ card.title }}</div>
@@ -169,17 +169,21 @@
                             <div class="random-card-text">{{ card.sourceText || '—' }}</div>
                           </template>
                           <template v-else-if="card.rowType === 'listening'">
-                            <div class="random-card-word">{{ card.title }}</div>
-                            <div class="random-card-text">{{ card.summary || card.note || '—' }}</div>
-                            <div class="random-audio-action" title="播放听力" @click.stop="playRandomCardAudio(card)">
-                              <Icon :icon="playIcon" width="28" height="28" />
+                            <div class="random-card-listening-main">
+                              <div class="random-card-word">{{ card.title }}</div>
+                              <div class="random-card-text random-card-text-clamped">{{ card.summary || card.note || '—' }}</div>
+                            </div>
+                            <div class="random-card-audio-row">
+                              <div class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
+                                <Icon :icon="randomCardAudioActionIcon(card)" width="24" height="24" />
+                              </div>
                             </div>
                           </template>
                           <template v-else>
                             <div class="random-card-text">{{ card.sourceText || '—' }}</div>
                           </template>
                         </div>
-                        <div class="random-card-face back">
+                        <div class="random-card-face back" :class="{ 'random-card-face-listening-back': card.rowType === 'listening' }">
                           <template v-if="card.rowType === 'word'">
                             <div class="random-card-head-row">
                               <div class="random-card-word">{{ card.title }}</div>
@@ -250,19 +254,23 @@
                             </div>
                           </template>
                           <template v-else-if="card.rowType === 'listening'">
-                            <div class="random-card-head-row">
-                              <div class="random-card-word">{{ card.title }}</div>
+                            <div class="random-card-listening-main random-card-listening-main-scroll" tabindex="0" @click.stop @keydown.stop="handleListeningCardScrollKeydown">
+                              <div class="random-card-head-row">
+                                <div class="random-card-word">{{ card.title }}</div>
+                              </div>
+                              <div class="random-card-section">
+                                <div class="random-card-label">来源 / 备注</div>
+                                <div class="random-card-content">{{ card.note || '—' }}</div>
+                              </div>
+                              <div class="random-card-section">
+                                <div class="random-card-label">原文 / 摘要</div>
+                                <div class="random-card-content">{{ card.sourceText || card.summary || '—' }}</div>
+                              </div>
                             </div>
-                            <div class="random-card-section">
-                              <div class="random-card-label">来源 / 备注</div>
-                              <div class="random-card-content">{{ card.note || '—' }}</div>
-                            </div>
-                            <div class="random-card-section">
-                              <div class="random-card-label">原文 / 摘要</div>
-                              <div class="random-card-content">{{ card.sourceText || card.summary || '—' }}</div>
-                            </div>
-                            <div class="random-audio-action" title="播放听力" @click.stop="playRandomCardAudio(card)">
-                              <Icon :icon="playIcon" width="28" height="28" />
+                            <div class="random-card-audio-row">
+                              <div class="random-audio-action" :class="randomCardAudioActionState(card)" :title="randomCardAudioActionTitle(card)" @click.stop="playRandomCardAudio(card)">
+                                <Icon :icon="randomCardAudioActionIcon(card)" width="24" height="24" />
+                              </div>
                             </div>
                           </template>
                           <template v-else>
@@ -745,6 +753,7 @@ import sparkleIcon from '@iconify-icons/lucide/sparkles'
 import shuffleIcon from '@iconify-icons/lucide/shuffle'
 import listIcon from '@iconify-icons/lucide/list'
 import playIcon from '@iconify-icons/lucide/play'
+import pauseIcon from '@iconify-icons/lucide/pause'
 import languagesIcon from '@iconify-icons/lucide/languages'
 import plusIcon from '@iconify-icons/lucide/plus'
 import editIcon from '@iconify-icons/lucide/pencil'
@@ -807,6 +816,8 @@ const audioManagerVisible = ref(false)
 const randomDecks = ref([])
 const randomDeckIndex = ref(0)
 const randomFlippedMap = ref({})
+const randomCardAudioPlayingId = ref('')
+const randomCardAudioPaused = ref(false)
 const currentTranscriptLineIndex = ref(0)
 const hoveredTranscriptIndex = ref(-1)
 const activeAudioPlayerRef = ref(null)
@@ -829,6 +840,7 @@ const syncingAudioIdSet = new Set()
 const syncQueuedIdSet = new Set()
 const syncQueuedIds = []
 const sourceManagerVisible = ref(false)
+let randomCardAudioPlayer = null
 const listeningSourceStorageKey = 'guaxi_language_listening_sources_v1'
 const listeningSources = ref([])
 const newSourceName = ref('')
@@ -2189,6 +2201,7 @@ const chunkByThree = (list) => {
 }
 
 const drawRandomCards = () => {
+  stopRandomCardAudio()
   const candidates = filteredRows.value
   if (!candidates.length) {
     randomDecks.value = []
@@ -2210,11 +2223,13 @@ const drawRandomCards = () => {
 
 const gotoPrevRandomDeck = () => {
   if (!randomDecks.value.length) return
+  stopRandomCardAudio()
   randomDeckIndex.value = (randomDeckIndex.value - 1 + randomDecks.value.length) % randomDecks.value.length
 }
 
 const gotoNextRandomDeck = () => {
   if (!randomDecks.value.length) return
+  stopRandomCardAudio()
   randomDeckIndex.value = (randomDeckIndex.value + 1) % randomDecks.value.length
 }
 
@@ -2250,16 +2265,102 @@ const openRandomCheckBoard = () => {
 }
 
 const playRandomCardAudio = (card) => {
-  if (!sanitizeMediaUri(card?.payload?.source_uri || '')) return
+  if (String(card?.rowType || '') !== 'listening') return
+  const cardId = String(card?.id || '')
+  if (!cardId || !sanitizeMediaUri(card?.payload?.source_uri || '')) return
+  if (randomCardAudioPlayer && randomCardAudioPlayingId.value === cardId) {
+    if (!randomCardAudioPlayer.paused) {
+      randomCardAudioPlayer.pause()
+      randomCardAudioPaused.value = true
+      return
+    }
+    randomCardAudioPlayer.currentTime = 0
+    randomCardAudioPaused.value = false
+    randomCardAudioPlayer.play().catch(() => {
+      stopRandomCardAudio()
+    })
+    return
+  }
   try {
     resolvePlayableMediaSrc(String(card.payload.source_uri || ''))
       .then((src) => {
         if (!src) return
+        stopRandomCardAudio()
         const player = new Audio(src)
-        player.play().catch(() => {})
+        randomCardAudioPlayer = player
+        randomCardAudioPlayingId.value = cardId
+        randomCardAudioPaused.value = false
+        player.onended = () => {
+          stopRandomCardAudio()
+        }
+        player.onerror = () => {
+          stopRandomCardAudio()
+        }
+        player.play().catch(() => {
+          stopRandomCardAudio()
+        })
       })
       .catch(() => {})
   } catch {}
+}
+
+const stopRandomCardAudio = () => {
+  if (randomCardAudioPlayer) {
+    randomCardAudioPlayer.onended = null
+    randomCardAudioPlayer.onerror = null
+    randomCardAudioPlayer.pause()
+    randomCardAudioPlayer = null
+  }
+  randomCardAudioPlayingId.value = ''
+  randomCardAudioPaused.value = false
+}
+
+const isRandomCardAudioActive = (card) => String(card?.id || '') === randomCardAudioPlayingId.value
+
+const isRandomCardAudioPlaying = (card) => isRandomCardAudioActive(card) && !randomCardAudioPaused.value
+
+const isRandomCardAudioPaused = (card) => isRandomCardAudioActive(card) && randomCardAudioPaused.value
+
+const randomCardAudioActionState = (card) => {
+  if (isRandomCardAudioPlaying(card)) return 'playing'
+  if (isRandomCardAudioPaused(card)) return 'paused'
+  return 'idle'
+}
+
+const randomCardAudioActionIcon = (card) => {
+  if (isRandomCardAudioPlaying(card)) return pauseIcon
+  if (isRandomCardAudioPaused(card)) return refreshIcon
+  return playIcon
+}
+
+const randomCardAudioActionTitle = (card) => {
+  if (isRandomCardAudioPlaying(card)) return '暂停听力'
+  if (isRandomCardAudioPaused(card)) return '重新播放听力'
+  return '播放听力'
+}
+
+const handleListeningCardScrollKeydown = (evt) => {
+  const target = evt?.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  let handled = true
+  if (evt.key === 'ArrowDown') {
+    target.scrollBy({ top: 44, behavior: 'smooth' })
+  } else if (evt.key === 'ArrowUp') {
+    target.scrollBy({ top: -44, behavior: 'smooth' })
+  } else if (evt.key === 'PageDown') {
+    target.scrollBy({ top: Math.max(120, Math.round(target.clientHeight * 0.82)), behavior: 'smooth' })
+  } else if (evt.key === 'PageUp') {
+    target.scrollBy({ top: -Math.max(120, Math.round(target.clientHeight * 0.82)), behavior: 'smooth' })
+  } else if (evt.key === 'Home') {
+    target.scrollTo({ top: 0, behavior: 'smooth' })
+  } else if (evt.key === 'End') {
+    target.scrollTo({ top: target.scrollHeight, behavior: 'smooth' })
+  } else {
+    handled = false
+  }
+  if (handled) {
+    evt.preventDefault()
+  }
 }
 
 const cardWordPairs = (words, trans) => {
@@ -2709,8 +2810,17 @@ watch(filteredRows, () => {
 })
 
 watch(activeTab, (tab) => {
+  if (tab !== 'manager') {
+    stopRandomCardAudio()
+  }
   if (tab === 'review') {
     rebuildReviewRows()
+  }
+})
+
+watch(managerMode, (mode) => {
+  if (mode !== 'random') {
+    stopRandomCardAudio()
   }
 })
 
@@ -2735,6 +2845,7 @@ onBeforeUnmount(() => {
     learningPronounceAudio.pause()
     learningPronounceAudio = null
   }
+  stopRandomCardAudio()
   mediaObjectUrlCache.forEach((url) => {
     URL.revokeObjectURL(url)
   })
@@ -2980,6 +3091,14 @@ onBeforeUnmount(() => {
   background: linear-gradient(155deg, color-mix(in srgb, var(--guaxi-panel-bg) 93%, #b7b8ff 7%), color-mix(in srgb, var(--guaxi-panel-bg) 93%, #8df0d5 7%));
 }
 
+.random-card-face-listening-front {
+  overflow: hidden;
+}
+
+.random-card-face-listening-back {
+  overflow: hidden;
+}
+
 .random-card-type {
   font-size: 12px;
   color: var(--guaxi-text-secondary);
@@ -3003,6 +3122,58 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+.random-card-listening-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.random-card-listening-main-scroll {
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--primary-color, #4acadb) 32%, transparent) transparent;
+}
+
+.random-card-listening-main-scroll:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 42%, transparent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.random-card-listening-main-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.random-card-listening-main-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.random-card-listening-main-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 28%, transparent);
+}
+
+.random-card-listening-main-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 42%, transparent);
+}
+
+.random-card-text-clamped {
+  overflow: hidden;
+}
+
+.random-card-audio-row {
+  margin-top: auto;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .random-card-subtitle {
   font-size: 12px;
   color: var(--guaxi-text-secondary);
@@ -3023,7 +3194,6 @@ onBeforeUnmount(() => {
 }
 
 .random-audio-action {
-  margin-top: auto;
   margin-inline: auto;
   width: 54px;
   height: 54px;
@@ -3032,14 +3202,48 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   cursor: pointer;
   color: var(--primary-color, #4acadb);
-  transition: transform .2s ease, border-color .2s ease;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 84%, transparent);
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
+}
+
+.random-audio-action.idle {
+  color: color-mix(in srgb, var(--guaxi-text-secondary) 78%, var(--primary-color, #4acadb));
+  border-color: color-mix(in srgb, var(--guaxi-border) 88%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+}
+
+.random-audio-action.paused {
+  color: color-mix(in srgb, #f59f00 78%, var(--guaxi-text-primary));
+  border-color: color-mix(in srgb, #f59f00 42%, var(--guaxi-border));
+  background: color-mix(in srgb, #f59f00 12%, var(--guaxi-panel-bg));
 }
 
 .random-audio-action:hover {
   transform: scale(1.06);
   border-color: var(--primary-color, #4acadb);
+}
+
+.random-audio-action.playing {
+  color: var(--primary-color, #4acadb);
+  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 80%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 14%, var(--guaxi-panel-bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, #4acadb) 22%, transparent);
+  animation: randomAudioPulse 1.25s ease-in-out infinite;
+}
+
+@keyframes randomAudioPulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .listening-toolbar {
