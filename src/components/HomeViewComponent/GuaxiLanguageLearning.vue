@@ -3751,6 +3751,10 @@ onBeforeUnmount(() => {
 }
 
 .transcript-line {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   line-height: 1.65;
   padding: 6px 8px;
   border-radius: 6px;
@@ -3772,7 +3776,7 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--primary-color, #4acadb) 20%, var(--guaxi-panel-bg));
   border-color: color-mix(in srgb, var(--primary-color, #4acadb) 62%, var(--guaxi-border));
   color: var(--guaxi-text-primary);
-  transform: scale(1.02);
+  transform: scaleY(1.02);
   box-shadow: 0 4px 12px color-mix(in srgb, var(--primary-color, #4acadb) 26%, transparent);
 }
 
