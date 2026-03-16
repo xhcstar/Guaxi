@@ -5,6 +5,9 @@ use std::env;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration as StdDuration, Instant};
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -28,6 +31,187 @@ pub struct TranslationResponse {
 
 #[derive(Debug, Clone)]
 struct TranslationError(String);
+
+#[derive(Debug, Clone)]
+struct BingTokenState {
+    token: String,
+    expires_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct TranslationCacheState {
+    translated_text: String,
+    expires_at: Instant,
+}
+
+fn shared_http_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        let timeout_s = shared_request_timeout_s();
+        Client::builder()
+            .user_agent("Mozilla/5.0")
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(timeout_s))
+            .build()
+            .expect("failed to build shared translation http client")
+    })
+}
+
+fn shared_bing_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        let timeout_s = shared_request_timeout_s();
+        Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.42")
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(timeout_s))
+            .build()
+            .expect("failed to build shared bing http client")
+    })
+}
+
+fn resolve_batch_size() -> usize {
+    let raw = env::var("GUAXI_TRANSLATE_BATCH").unwrap_or_default();
+    let parsed = raw.trim().parse::<usize>().unwrap_or(20);
+    parsed.clamp(1, 64)
+}
+
+fn resolve_inter_batch_sleep_ms() -> u64 {
+    let raw = env::var("GUAXI_TRANSLATE_BATCH_SLEEP_MS").unwrap_or_default();
+    let parsed = raw.trim().parse::<u64>().unwrap_or(0);
+    parsed.min(300)
+}
+
+fn read_cached_bing_token() -> Option<String> {
+    static BING_TOKEN_CACHE: OnceLock<Mutex<Option<BingTokenState>>> = OnceLock::new();
+    let cache = BING_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = cache.lock().ok()?;
+    let state = guard.as_ref()?;
+    if Instant::now() >= state.expires_at {
+        return None;
+    }
+    Some(state.token.clone())
+}
+
+fn write_cached_bing_token(token: &str, ttl: StdDuration) {
+    static BING_TOKEN_CACHE: OnceLock<Mutex<Option<BingTokenState>>> = OnceLock::new();
+    let cache = BING_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(BingTokenState {
+            token: token.to_string(),
+            expires_at: Instant::now() + ttl,
+        });
+    }
+}
+
+fn selection_engine_timeout_ms() -> u64 {
+    let raw = env::var("GUAXI_SELECTION_ENGINE_TIMEOUT_MS").unwrap_or_default();
+    let parsed = raw.trim().parse::<u64>().unwrap_or(3200);
+    parsed.clamp(1200, 8000)
+}
+
+fn shared_request_timeout_s() -> u64 {
+    let raw = env::var("GUAXI_TRANSLATE_TIMEOUT_S").unwrap_or_default();
+    let parsed = raw.trim().parse::<u64>().unwrap_or(7);
+    parsed.clamp(3, 20)
+}
+
+fn translation_cache_key(from: &str, to: &str, text: &str) -> String {
+    format!(
+        "{}|{}|{}",
+        normalize_lang_lower(from),
+        normalize_lang_lower(to),
+        text.trim()
+    )
+}
+
+fn read_cached_translation(from: &str, to: &str, text: &str) -> Option<String> {
+    static CACHE: OnceLock<Mutex<HashMap<String, TranslationCacheState>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().ok()?;
+    let key = translation_cache_key(from, to, text);
+    let now = Instant::now();
+    let item = guard.get(&key).cloned();
+    if let Some(state) = item {
+        if now < state.expires_at {
+            return Some(state.translated_text);
+        }
+        guard.remove(&key);
+    }
+    None
+}
+
+fn write_cached_translation(from: &str, to: &str, text: &str, translated_text: &str) {
+    let source = text.trim();
+    let target = translated_text.trim();
+    if source.is_empty() || target.is_empty() || target.contains("[Translation Failed]") {
+        return;
+    }
+    static CACHE: OnceLock<Mutex<HashMap<String, TranslationCacheState>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(
+            translation_cache_key(from, to, source),
+            TranslationCacheState {
+                translated_text: target.to_string(),
+                expires_at: Instant::now() + StdDuration::from_secs(20 * 60),
+            },
+        );
+    }
+}
+
+async fn run_service_with_timeout(
+    name: &str,
+    service: TranslateFn,
+    texts: &[String],
+    from: &str,
+    to: &str,
+    timeout_ms: u64,
+) -> SelectionTranslateEngineItem {
+    let timeout_result = tokio::time::timeout(
+        Duration::from_millis(timeout_ms),
+        service(texts, from, to),
+    )
+    .await;
+    match timeout_result {
+        Ok(Ok((results, _engine))) => {
+            let t = results.get(0).cloned().unwrap_or_default();
+            if t.trim().is_empty() {
+                SelectionTranslateEngineItem {
+                    engine: name.to_string(),
+                    success: false,
+                    text: String::new(),
+                    error: Some("Empty result".into()),
+                }
+            } else {
+                SelectionTranslateEngineItem {
+                    engine: name.to_string(),
+                    success: true,
+                    text: t,
+                    error: None,
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            warn!("SelectionTranslate engine {} failed: {}", name, e);
+            SelectionTranslateEngineItem {
+                engine: name.to_string(),
+                success: false,
+                text: String::new(),
+                error: Some(e.to_string()),
+            }
+        }
+        Err(_) => {
+            warn!("SelectionTranslate engine {} timeout", name);
+            SelectionTranslateEngineItem {
+                engine: name.to_string(),
+                success: false,
+                text: String::new(),
+                error: Some("Request timeout".into()),
+            }
+        }
+    }
+}
 
 impl fmt::Display for TranslationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -69,13 +253,46 @@ pub async fn translate_text_free(
         to_norm
     );
 
-    let mut translated_texts = Vec::with_capacity(texts.len());
+    let mut translated_texts = vec![String::new(); texts.len()];
     let mut last_error = None;
 
-    // 分批处理，每批5条
-    for chunk in texts.chunks(5) {
-        match process_batch(chunk, &from_norm, &to_norm).await {
-            Ok((results, _engine)) => translated_texts.extend(results),
+    let batch_size = resolve_batch_size();
+    let inter_batch_sleep_ms = resolve_inter_batch_sleep_ms();
+    info!(
+        "translate_text_free config: batch_size={}, inter_batch_sleep_ms={}",
+        batch_size,
+        inter_batch_sleep_ms
+    );
+
+    let mut text_index = 0usize;
+    for chunk in texts.chunks(batch_size) {
+        let chunk_start = text_index;
+        let chunk_len = chunk.len();
+        let mut unresolved_positions = Vec::new();
+        let mut unresolved_texts = Vec::new();
+        for (offset, text) in chunk.iter().enumerate() {
+            if let Some(hit) = read_cached_translation(&from_norm, &to_norm, text) {
+                translated_texts[chunk_start + offset] = hit;
+            } else {
+                unresolved_positions.push(chunk_start + offset);
+                unresolved_texts.push(text.clone());
+            }
+        }
+        if unresolved_texts.is_empty() {
+            text_index += chunk_len;
+            continue;
+        }
+        match process_batch(&unresolved_texts, &from_norm, &to_norm).await {
+            Ok((results, _engine)) => {
+                for (offset, translated) in results.into_iter().enumerate() {
+                    if offset >= unresolved_positions.len() {
+                        break;
+                    }
+                    let pos = unresolved_positions[offset];
+                    translated_texts[pos] = translated.clone();
+                    write_cached_translation(&from_norm, &to_norm, &texts[pos], &translated);
+                }
+            }
             Err(e) => {
                 let error_str = e.to_string();
                 last_error = Some(error_str.clone());
@@ -85,12 +302,31 @@ pub async fn translate_text_free(
                     to_norm,
                     error_str
                 );
-                translated_texts.extend(vec!["[Translation Failed]".to_string(); chunk.len()]);
+                for pos in unresolved_positions {
+                    let source = texts[pos].clone();
+                    let single_result = process_batch(&[source.clone()], &from_norm, &to_norm).await;
+                    match single_result {
+                        Ok((results, _engine)) => {
+                            let translated = results.get(0).cloned().unwrap_or_default();
+                            if translated.trim().is_empty() {
+                                translated_texts[pos] = "[Translation Failed]".to_string();
+                            } else {
+                                translated_texts[pos] = translated.clone();
+                                write_cached_translation(&from_norm, &to_norm, &source, &translated);
+                            }
+                        }
+                        Err(_) => {
+                            translated_texts[pos] = "[Translation Failed]".to_string();
+                        }
+                    }
+                }
             }
         }
 
-        // 控制请求频率
-        sleep(Duration::from_millis(80)).await;
+        if inter_batch_sleep_ms > 0 {
+            sleep(Duration::from_millis(inter_batch_sleep_ms)).await;
+        }
+        text_index += chunk_len;
     }
 
     Ok(TranslationResult {
@@ -142,39 +378,16 @@ pub async fn selection_translate_free_multi(
         ("Lingva", lingva_translate_service),
         ("Yandex", yandex_translate_service),
     ];
-
-    let mut items = Vec::with_capacity(services.len());
-
-    for (name, service) in services.iter() {
-        match service(&texts, &from, &to).await {
-            Ok((results, _engine)) => {
-                let t = results.get(0).cloned().unwrap_or_default();
-                if t.trim().is_empty() {
-                    items.push(SelectionTranslateEngineItem {
-                        engine: name.to_string(),
-                        success: false,
-                        text: String::new(),
-                        error: Some("Empty result".into()),
-                    });
-                } else {
-                    items.push(SelectionTranslateEngineItem {
-                        engine: name.to_string(),
-                        success: true,
-                        text: t,
-                        error: None,
-                    });
-                }
-            }
-            Err(e) => {
-                warn!("SelectionTranslate engine {} failed: {}", name, e);
-                items.push(SelectionTranslateEngineItem {
-                    engine: name.to_string(),
-                    success: false,
-                    text: String::new(),
-                    error: Some(e.to_string()),
-                });
-            }
-        }
+    let timeout_ms = selection_engine_timeout_ms();
+    let (i1, i2, i3, i4) = tokio::join!(
+        run_service_with_timeout(services[0].0, services[0].1, &texts, &from, &to, timeout_ms),
+        run_service_with_timeout(services[1].0, services[1].1, &texts, &from, &to, timeout_ms),
+        run_service_with_timeout(services[2].0, services[2].1, &texts, &from, &to, timeout_ms),
+        run_service_with_timeout(services[3].0, services[3].1, &texts, &from, &to, timeout_ms),
+    );
+    let items = vec![i1, i2, i3, i4];
+    if let Some(primary) = items.iter().find(|it| it.success) {
+        write_cached_translation(&from, &to, &texts[0], &primary.text);
     }
 
     let success = items.iter().any(|it| it.success);
@@ -235,14 +448,24 @@ async fn process_batch(
     } else {
         (bing_translate_service, google_translate_service)
     };
-    let (p1, p2) = tokio::join!(
-        primary_pair.0(&clean_texts, from, to),
-        primary_pair.1(&clean_texts, from, to)
-    );
-    if let Ok((results, engine)) = p1 {
-        return Ok((results, engine));
-    }
-    if let Ok((results, engine)) = p2 {
+    let mut p1 = primary_pair.0(&clean_texts, from, to);
+    let mut p2 = primary_pair.1(&clean_texts, from, to);
+    let first_from_p1 = tokio::select! {
+        r1 = &mut p1 => {
+            if let Ok((results, engine)) = r1 {
+                return Ok((results, engine));
+            }
+            false
+        }
+        r2 = &mut p2 => {
+            if let Ok((results, engine)) = r2 {
+                return Ok((results, engine));
+            }
+            true
+        }
+    };
+    let second = if first_from_p1 { p1.await } else { p2.await };
+    if let Ok((results, engine)) = second {
         return Ok((results, engine));
     }
 
@@ -385,12 +608,7 @@ fn lingva_translate_service<'a>(
     to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0")
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(TranslationError::from)?;
+        let client = shared_http_client();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 
@@ -469,12 +687,7 @@ fn yandex_translate_service<'a>(
     to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0")
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(TranslationError::from)?;
+        let client = shared_http_client();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 
@@ -557,12 +770,7 @@ fn transmart_translate_service<'a>(
     to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0")
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(TranslationError::from)?;
+        let client = shared_http_client();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 
@@ -651,12 +859,7 @@ fn bing_dict_translate_service<'a>(
     _to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0")
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(TranslationError::from)?;
+        let client = shared_http_client();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 
@@ -854,12 +1057,7 @@ fn ecdict_translate_service<'a>(
     _to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0")
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(TranslationError::from)?;
+        let client = shared_http_client();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 
@@ -926,12 +1124,7 @@ fn google_translate_service<'a>(
     to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0")
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(TranslationError::from)?;
+        let client = shared_http_client();
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 
@@ -1010,46 +1203,45 @@ fn bing_translate_service<'a>(
     to: &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>> {
     Box::pin(async move {
-        let client = Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.42")
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(TranslationError::from)?;
+        let client = shared_bing_client();
+        let token = if let Some(cached_token) = read_cached_bing_token() {
+            cached_token
+        } else {
+            let token_response = client
+                .get("https://edge.microsoft.com/translate/auth")
+                .send()
+                .await
+                .map_err(TranslationError::from)?;
 
-        let token_response = client
-            .get("https://edge.microsoft.com/translate/auth")
-            .send()
-            .await
-            .map_err(TranslationError::from)?;
+            let token_status = token_response.status();
+            let token_content_type = token_response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
 
-        let token_status = token_response.status();
-        let token_content_type = token_response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            let token_body = token_response.text().await.map_err(TranslationError::from)?;
 
-        let token_body = token_response.text().await.map_err(TranslationError::from)?;
-
-        if !token_status.is_success() {
-            return Err(TranslationError(format!(
-                "Bing token HTTP {}: {}",
-                token_status.as_u16(),
-                summarize_body(&token_body)
-            )));
-        }
-        if token_body.trim().is_empty() {
-            return Err(TranslationError("Bing token empty response".into()));
-        }
-        if response_is_probably_html(token_content_type.as_deref(), &token_body) {
-            return Err(TranslationError(format!(
-                "Bing token non-plain response: {}",
-                summarize_body(&token_body)
-            )));
-        }
-
-        let token = token_body.trim().to_string();
+            if !token_status.is_success() {
+                return Err(TranslationError(format!(
+                    "Bing token HTTP {}: {}",
+                    token_status.as_u16(),
+                    summarize_body(&token_body)
+                )));
+            }
+            if token_body.trim().is_empty() {
+                return Err(TranslationError("Bing token empty response".into()));
+            }
+            if response_is_probably_html(token_content_type.as_deref(), &token_body) {
+                return Err(TranslationError(format!(
+                    "Bing token non-plain response: {}",
+                    summarize_body(&token_body)
+                )));
+            }
+            let fresh_token = token_body.trim().to_string();
+            write_cached_bing_token(&fresh_token, StdDuration::from_secs(8 * 60));
+            fresh_token
+        };
 
         let mut translated_texts = Vec::with_capacity(texts.len());
 

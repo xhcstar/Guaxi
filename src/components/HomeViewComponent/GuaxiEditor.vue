@@ -6743,6 +6743,7 @@ const translateSelectionText = async (overrideText) => {
   logger.info('[SelectionTranslate] start', { len: text.length, from: selectionTranslateFrom.value, to: selectionTranslateTo.value });
 
   try {
+    let hasUsableMultiResult = false
     if (selectionTranslateMultiAvailable.value) {
       try {
         const response = await invoke('selection_translate_free_multi', {
@@ -6763,6 +6764,7 @@ const translateSelectionText = async (overrideText) => {
         if (primary) {
           selectionTranslateResult.value = String(primary.text || '')
           selectionTranslateError.value = ''
+          hasUsableMultiResult = true
           logger.info('[SelectionTranslate] multi success', { engines: selectionTranslateItems.value.length })
         } else {
           const err = String(response?.error || '翻译结果为空')
@@ -6782,22 +6784,24 @@ const translateSelectionText = async (overrideText) => {
       }
     }
 
-    const response = await invoke('translate_text_free', {
-      texts: [text],
-      from: selectionTranslateFrom.value,
-      to: selectionTranslateTo.value
-    });
-    const translated = (response?.translated_texts?.[0] || '').toString();
+    if (!hasUsableMultiResult) {
+      const response = await invoke('translate_text_free', {
+        texts: [text],
+        from: selectionTranslateFrom.value,
+        to: selectionTranslateTo.value
+      });
+      const translated = (response?.translated_texts?.[0] || '').toString();
 
-    if (!translated.trim() || translated.includes('[Translation Failed]')) {
-      const err = String(response?.error || '翻译结果为空');
-      throw new Error(err);
-    }
+      if (!translated.trim() || translated.includes('[Translation Failed]')) {
+        const err = String(response?.error || '翻译结果为空');
+        throw new Error(err);
+      }
 
-    if (!selectionTranslateResult.value) {
-      selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
-      selectionTranslateResult.value = translated;
-      logger.info('[SelectionTranslate] single success', { len: translated.length });
+      if (!selectionTranslateResult.value) {
+        selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
+        selectionTranslateResult.value = translated;
+        logger.info('[SelectionTranslate] single success', { len: translated.length });
+      }
     }
 
     const finalTranslated = String(selectionTranslateResult.value || '').trim()

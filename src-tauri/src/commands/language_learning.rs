@@ -458,6 +458,10 @@ fn normalize_learning_lang(lang: Option<String>) -> String {
     out
 }
 
+fn resolve_listening_translate_target_lang() -> String {
+    "zh".to_string()
+}
+
 fn infer_learning_lang(source_lang: &str, source_text: &str) -> String {
     let normalized = normalize_learning_lang(Some(source_lang.to_string()));
     if normalized != "auto" {
@@ -2008,6 +2012,7 @@ pub async fn language_learning_generate_whisper_sync_json(
     learning_lang: Option<String>,
 ) -> Result<AudioResource, String> {
     let request_lang = normalize_learning_lang(learning_lang);
+    let translate_target_lang = resolve_listening_translate_target_lang();
     let (resolved_lang, row) = with_db(&app, |conn| {
         ensure_lang_tables(conn, &request_lang)?;
         load_audio_resource_with_fallback_lang(conn, &audio_id, &request_lang)?
@@ -2034,7 +2039,7 @@ pub async fn language_learning_generate_whisper_sync_json(
     let entry_dir = resolve_listening_entry_dir(&row)?;
     let local_audio = prepare_entry_audio_file(&row, &entry_dir).await?;
     let local_json =
-        run_whisper_and_build_sync_json(&local_audio, &entry_dir, resolved_lang.as_str()).await?;
+        run_whisper_and_build_sync_json(&local_audio, &entry_dir, translate_target_lang.as_str()).await?;
     let json_text = fs::read_to_string(&local_json).map_err(|e| format!("读取同步 JSON 失败: {}", e))?;
     let payload: WhisperSyncPayload =
         serde_json::from_str(&json_text).map_err(|e| format!("解析同步 JSON 失败: {}", e))?;
@@ -2078,15 +2083,29 @@ async fn backfill_existing_sync_json_translation(
     if payload.segments.is_empty() {
         return Err("同步 JSON 不包含可翻译分段".to_string());
     }
-    let source_lines = payload
-        .segments
-        .iter()
-        .map(|x| x.text.trim().to_string())
-        .collect::<Vec<_>>();
-    let translated_lines = translate_aligned(&source_lines, target_lang).await;
-    for (idx, seg) in payload.segments.iter_mut().enumerate() {
+    let mut source_lines = Vec::new();
+    let mut missing_indices = Vec::new();
+    for (idx, seg) in payload.segments.iter().enumerate() {
+        let src = seg.text.trim().to_string();
+        if src.is_empty() {
+            continue;
+        }
+        let translated = seg.translated_text.trim().to_string();
+        if translated.is_empty() || translated.contains("[Translation Failed]") || translated == src {
+            source_lines.push(src);
+            missing_indices.push(idx);
+        }
+    }
+    if source_lines.is_empty() {
+        return Ok(payload);
+    }
+    let translated_lines = translate_segments_with_sentence_groups(&source_lines, target_lang).await;
+    for (local_idx, next_idx) in missing_indices.iter().enumerate() {
+        let Some(seg) = payload.segments.get_mut(*next_idx) else {
+            continue;
+        };
         let next = translated_lines
-            .get(idx)
+            .get(local_idx)
             .map(|x| x.trim().to_string())
             .filter(|x| !x.is_empty())
             .unwrap_or_default();
@@ -2110,6 +2129,7 @@ pub async fn language_learning_backfill_sync_translation(
     learning_lang: Option<String>,
 ) -> Result<AudioResource, String> {
     let request_lang = normalize_learning_lang(learning_lang);
+    let translate_target_lang = resolve_listening_translate_target_lang();
     let (resolved_lang, row) = with_db(&app, |conn| {
         ensure_lang_tables(conn, &request_lang)?;
         load_audio_resource_with_fallback_lang(conn, &audio_id, &request_lang)?
@@ -2131,7 +2151,7 @@ pub async fn language_learning_backfill_sync_translation(
                 has_transcript,
                 "backfill translation for existing sync json"
             );
-            if let Ok(payload) = backfill_existing_sync_json_translation(&sync_path, resolved_lang.as_str()).await {
+            if let Ok(payload) = backfill_existing_sync_json_translation(&sync_path, translate_target_lang.as_str()).await {
                 let transcript = if row.transcript.trim().is_empty() {
                     payload.transcript.trim().to_string()
                 } else {
@@ -2302,36 +2322,97 @@ fn strip_html_tags(text: &str) -> String {
 }
 
 fn normalize_media_uri(raw: &str) -> String {
-    raw.trim()
+    let cleaned = raw
+        .trim()
         .trim_matches(|c: char| c == '`' || c == '"' || c == '\'' || c == '<' || c == '>')
         .trim()
-        .to_string()
+        .to_string();
+    if cleaned.to_ascii_lowercase().starts_with("file://") {
+        let mut stripped = cleaned.as_str();
+        if cleaned.len() >= 7 && cleaned[..7].eq_ignore_ascii_case("file://") {
+            stripped = &cleaned[7..];
+        }
+        let stripped = stripped.trim_start_matches('/');
+        if stripped.contains(':') {
+            return stripped.to_string();
+        }
+    }
+    cleaned
 }
 
 fn sync_json_has_full_translation(raw_path: &str) -> bool {
     let path = normalize_media_uri(raw_path);
     if path.is_empty() {
+        info!("sync_json_has_full_translation: empty path");
         return false;
     }
     let p = PathBuf::from(path);
     if !p.exists() || !p.is_file() {
+        info!(
+            raw_path = raw_path,
+            normalized_path = p.to_string_lossy().as_ref(),
+            "sync_json_has_full_translation: path missing"
+        );
         return false;
     }
     let text = match fs::read_to_string(&p) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(e) => {
+            warn!(
+                normalized_path = p.to_string_lossy().as_ref(),
+                error = e.to_string().as_str(),
+                "sync_json_has_full_translation: read failed"
+            );
+            return false;
+        }
     };
     let payload: WhisperSyncPayload = match serde_json::from_str(&text) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(e) => {
+            warn!(
+                normalized_path = p.to_string_lossy().as_ref(),
+                error = e.to_string().as_str(),
+                "sync_json_has_full_translation: parse failed"
+            );
+            return false;
+        }
     };
     if payload.segments.is_empty() {
         return false;
     }
-    payload
-        .segments
-        .iter()
-        .all(|x| !x.text.trim().is_empty() && !x.translated_text.trim().is_empty())
+    let mut total = 0usize;
+    let mut translated = 0usize;
+    for seg in payload.segments {
+        let source = seg.text.trim().to_string();
+        if source.is_empty() {
+            continue;
+        }
+        total += 1;
+        let target = seg.translated_text.trim().to_string();
+        if target.is_empty() || target.contains("[Translation Failed]") {
+            continue;
+        }
+        if target == source {
+            continue;
+        }
+        translated += 1;
+    }
+    if total == 0 {
+        info!(
+            normalized_path = p.to_string_lossy().as_ref(),
+            "sync_json_has_full_translation: no valid source segment"
+        );
+        return false;
+    }
+    let ratio = (translated as f64) / (total as f64);
+    info!(
+        normalized_path = p.to_string_lossy().as_ref(),
+        translated,
+        total,
+        ratio,
+        "sync_json_has_full_translation: computed ratio"
+    );
+    ratio >= 0.98
 }
 
 fn load_audio_resource_by_id(
@@ -2457,25 +2538,6 @@ fn resolve_listening_store_root() -> Result<PathBuf, String> {
         fs::create_dir_all(&root).map_err(|e| format!("创建听力存储目录失败: {}", e))?;
     }
     Ok(root)
-}
-
-fn safe_file_stem(text: &str) -> String {
-    let mut out = String::new();
-    for ch in text.trim().chars() {
-        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
-            out.push(ch);
-            continue;
-        }
-        if ch.is_whitespace() {
-            out.push('_');
-        }
-    }
-    let compact = out.trim_matches('_').replace("__", "_");
-    if compact.is_empty() {
-        "listening".to_string()
-    } else {
-        compact.chars().take(48).collect::<String>()
-    }
 }
 
 fn resolve_listening_entry_dir(row: &AudioResource) -> Result<PathBuf, String> {
@@ -2800,7 +2862,7 @@ async fn run_whisper_and_build_sync_json(local_audio: &Path, entry_dir: &Path, t
     let mut segments = Vec::new();
     let mut transcript_lines = Vec::new();
     let source_lines = parsed.iter().map(|(_, _, text)| text.clone()).collect::<Vec<_>>();
-    let translated_lines = translate_aligned(&source_lines, target_lang).await;
+    let translated_lines = translate_segments_with_sentence_groups(&source_lines, target_lang).await;
     for (idx, (start, end, text)) in parsed.iter().enumerate() {
         transcript_lines.push(text.clone());
         segments.push(WhisperSyncSegment {
@@ -3120,6 +3182,123 @@ async fn translate_aligned(texts: &[String], target_lang: &str) -> Vec<String> {
                 continue;
             }
             out[idx] = t.trim().to_string();
+        }
+    }
+    out
+}
+
+fn is_sentence_terminal_text(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    t.ends_with('.')
+        || t.ends_with('!')
+        || t.ends_with('?')
+        || t.ends_with('。')
+        || t.ends_with('！')
+        || t.ends_with('？')
+        || t.ends_with("…")
+}
+
+fn build_sentence_groups_for_segment_texts(texts: &[String]) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    let mut current_len = 0usize;
+    for (idx, raw) in texts.iter().enumerate() {
+        let s = raw.trim();
+        if s.is_empty() {
+            continue;
+        }
+        current.push(idx);
+        current_len += s.chars().count();
+        let should_flush = is_sentence_terminal_text(s) || current_len >= 220 || current.len() >= 6;
+        if should_flush {
+            groups.push(current);
+            current = Vec::new();
+            current_len = 0;
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
+}
+
+fn split_translation_by_weights(translated: &str, weights: &[usize]) -> Vec<String> {
+    if weights.is_empty() {
+        return Vec::new();
+    }
+    if weights.len() == 1 {
+        return vec![translated.trim().to_string()];
+    }
+    let chars = translated.trim().chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return vec![String::new(); weights.len()];
+    }
+    let total_chars = chars.len();
+    let total_weight: usize = weights.iter().copied().sum::<usize>().max(1);
+    let mut out = Vec::with_capacity(weights.len());
+    let mut consumed = 0usize;
+    let mut used_weight = 0usize;
+    for (idx, w) in weights.iter().enumerate() {
+        if idx == weights.len() - 1 {
+            let tail = chars[consumed..].iter().collect::<String>().trim().to_string();
+            out.push(tail);
+            break;
+        }
+        used_weight += *w;
+        let mut end = ((used_weight as f64 / total_weight as f64) * total_chars as f64).round() as usize;
+        if end <= consumed {
+            end = (consumed + 1).min(total_chars);
+        }
+        let chunk = chars[consumed..end].iter().collect::<String>().trim().to_string();
+        out.push(chunk);
+        consumed = end;
+    }
+    out
+}
+
+async fn translate_segments_with_sentence_groups(texts: &[String], target_lang: &str) -> Vec<String> {
+    if texts.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![String::new(); texts.len()];
+    let groups = build_sentence_groups_for_segment_texts(texts);
+    if groups.is_empty() {
+        return out;
+    }
+    let mut sentence_sources = Vec::with_capacity(groups.len());
+    let mut sentence_weights = Vec::with_capacity(groups.len());
+    for group in &groups {
+        let mut merged = Vec::new();
+        let mut weights = Vec::new();
+        for idx in group {
+            let s = texts.get(*idx).map(|x| x.trim()).unwrap_or("");
+            if s.is_empty() {
+                continue;
+            }
+            merged.push(s.to_string());
+            weights.push(s.chars().count().max(1));
+        }
+        sentence_sources.push(merged.join(" "));
+        sentence_weights.push(weights);
+    }
+    let sentence_translated = translate_aligned(&sentence_sources, target_lang).await;
+    for (gidx, group) in groups.iter().enumerate() {
+        let translated_sentence = sentence_translated
+            .get(gidx)
+            .map(|x| x.trim().to_string())
+            .unwrap_or_default();
+        if translated_sentence.is_empty() {
+            continue;
+        }
+        let weights = sentence_weights.get(gidx).cloned().unwrap_or_default();
+        let split = split_translation_by_weights(&translated_sentence, &weights);
+        for (local_idx, seg_idx) in group.iter().enumerate() {
+            if let Some(slot) = out.get_mut(*seg_idx) {
+                *slot = split.get(local_idx).cloned().unwrap_or_else(|| translated_sentence.clone());
+            }
         }
     }
     out

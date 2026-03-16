@@ -74,22 +74,24 @@
               <div class="listening-transcript-pane">
                 <div class="transcript-head">
                   <div class="detail-label">音文对照</div>
+                  <n-tag v-if="activeTranscriptTranslating" size="small" type="warning">译文加载中...</n-tag>
                   <n-button quaternary circle size="small" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
                     <Icon :icon="languagesIcon" width="15" height="15" />
                   </n-button>
                 </div>
-                <div ref="immersiveTranscriptListRef" class="transcript-list">
+                <div ref="immersiveTranscriptListRef" class="transcript-list" @scroll="handleActiveTranscriptScroll">
                   <div
-                    v-for="(line, idx) in activeAudioTranscriptTimeline"
-                    :key="`immersive-tr-${idx}`"
+                    v-for="item in visibleActiveAudioTranscriptTimeline"
+                    :key="`immersive-tr-${item.idx}`"
                     class="transcript-line"
-                    :class="{ active: idx === currentTranscriptLineIndex, hovered: idx === hoveredTranscriptIndex }"
-                    @click="seekActiveAudioToTranscript(idx)"
-                    @mouseenter="hoveredTranscriptIndex = idx"
+                    :class="{ active: item.idx === currentTranscriptLineIndex, hovered: item.idx === hoveredTranscriptIndex }"
+                    :data-transcript-idx="item.idx"
+                    @click="seekActiveAudioToTranscript(item.idx)"
+                    @mouseenter="hoveredTranscriptIndex = item.idx"
                     @mouseleave="hoveredTranscriptIndex = -1"
                   >
-                    <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ line.text }}</div>
-                    <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ resolveTranscriptTargetText(line) }}</div>
+                    <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ item.line.text }}</div>
+                    <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ resolveTranscriptTargetText(item.line) }}</div>
                   </div>
                 </div>
               </div>
@@ -600,17 +602,18 @@
                         <Icon :icon="languagesIcon" width="15" height="15" />
                       </n-button>
                     </div>
-                    <div v-if="currentReviewListeningTranscriptTimeline.length" ref="reviewTranscriptListRef" class="transcript-list review-transcript-list">
+                    <div v-if="currentReviewListeningTranscriptTimeline.length" ref="reviewTranscriptListRef" class="transcript-list review-transcript-list" @scroll="handleReviewTranscriptScroll">
                       <div
-                        v-for="(line, idx) in currentReviewListeningTranscriptTimeline"
-                        :key="`rv-tr-${idx}`"
+                        v-for="item in visibleReviewListeningTranscriptTimeline"
+                        :key="`rv-tr-${item.idx}`"
                         class="transcript-line"
-                        :class="{ active: idx === currentReviewTranscriptIndex, hovered: idx === hoveredReviewTranscriptIndex }"
-                        @mouseenter="hoveredReviewTranscriptIndex = idx"
+                        :class="{ active: item.idx === currentReviewTranscriptIndex, hovered: item.idx === hoveredReviewTranscriptIndex }"
+                        :data-transcript-idx="item.idx"
+                        @mouseenter="hoveredReviewTranscriptIndex = item.idx"
                         @mouseleave="hoveredReviewTranscriptIndex = -1"
                       >
-                        <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ line.text }}</div>
-                        <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ resolveTranscriptTargetText(line) }}</div>
+                        <div class="transcript-source" v-if="transcriptDisplayMode !== 'target'">{{ item.line.text }}</div>
+                        <div class="transcript-target" v-if="transcriptDisplayMode !== 'source'">{{ resolveTranscriptTargetText(item.line) }}</div>
                       </div>
                     </div>
                     <div v-else class="review-answer-text">同步数据尚未就绪，请稍后重试。</div>
@@ -856,12 +859,20 @@ const hoveredReviewTranscriptIndex = ref(-1)
 const reviewAudioPlayableSrc = ref('')
 const reviewAudioSyncTimeline = ref([])
 const reviewTimelineQuickTranslating = ref(false)
+const quickTimelineTranslateCooldownMs = 12000
+const quickTimelineTranslateLastRun = new Map()
 const immersiveTranscriptListRef = ref(null)
 const reviewTranscriptListRef = ref(null)
+const transcriptScreenPageSize = 36
+const transcriptScreenPreloadSize = 28
+const activeTranscriptVisibleCount = ref(transcriptScreenPageSize)
+const reviewTranscriptVisibleCount = ref(transcriptScreenPageSize)
 const transcriptDisplayMode = ref('both')
 const syncingAudioIdSet = new Set()
 const syncQueuedIdSet = new Set()
 const syncQueuedTasks = []
+const syncRequeueCooldownMs = 45000
+const syncLastEnqueueAtMap = new Map()
 let syncQueueHideTimer = 0
 let syncQueueRunStartAt = 0
 let pendingSyncSweepTimer = 0
@@ -1408,6 +1419,18 @@ const parseClockTimestampToSec = (raw) => {
   return null
 }
 
+const resolveSegmentTranslatedText = (segment) => {
+  const raw = segment?.translated_text
+    ?? segment?.translation
+    ?? segment?.translatedText
+    ?? segment?.translated
+    ?? segment?.target_text
+    ?? segment?.targetText
+    ?? segment?.target
+    ?? ''
+  return String(raw || '').trim()
+}
+
 const normalizeSyncTimeline = (payload) => {
   const rows = []
   const customSegments = Array.isArray(payload?.segments) ? payload.segments : []
@@ -1415,7 +1438,7 @@ const normalizeSyncTimeline = (payload) => {
     const start = Number(x?.start_sec ?? x?.start ?? 0)
     const end = Number(x?.end_sec ?? x?.end ?? (start + 1.2))
     const text = String(x?.text || '').trim()
-    const translated = String(x?.translated_text || x?.translation || '').trim()
+    const translated = resolveSegmentTranslatedText(x)
     if (!text) return
     if (!Number.isFinite(start) || !Number.isFinite(end)) return
     rows.push({ text, translated_text: translated, start: Math.max(0, start), end: Math.max(start + 0.3, end), index: idx })
@@ -1424,7 +1447,7 @@ const normalizeSyncTimeline = (payload) => {
     const whisperSegments = Array.isArray(payload?.transcription) ? payload.transcription : []
     whisperSegments.forEach((x, idx) => {
       const text = String(x?.text || '').trim()
-      const translated = String(x?.translated_text || x?.translation || '').trim()
+      const translated = resolveSegmentTranslatedText(x)
       if (!text) return
       const tsStart = parseClockTimestampToSec(x?.timestamps?.from)
       const tsEnd = parseClockTimestampToSec(x?.timestamps?.to)
@@ -1447,14 +1470,73 @@ const normalizeSyncTimeline = (payload) => {
 }
 
 const loadSyncTimelineByJsonPath = async (jsonPath) => {
-  const path = sanitizeMediaUri(jsonPath)
+  const rawPath = sanitizeMediaUri(jsonPath)
+  const isFileUri = /^file:\/\//i.test(rawPath)
+  let decodedPath = rawPath
+  if (isFileUri) {
+    try {
+      decodedPath = decodeURIComponent(rawPath.replace(/^file:\/\//i, ''))
+    } catch {
+      decodedPath = rawPath.replace(/^file:\/\//i, '')
+    }
+  } else if (/%[0-9a-f]{2}/i.test(rawPath)) {
+    try {
+      decodedPath = decodeURIComponent(rawPath)
+    } catch {}
+  }
+  const path = normalizeLocalFilePath(
+    decodedPath
+  )
   if (!path || /^https?:\/\//i.test(path)) return []
-  try {
-    const text = String(await readTextFileByPath(path) || '').trim()
-    if (!text) return []
-    const payload = JSON.parse(text)
+  const candidates = [...new Set([
+    path,
+    path.replace(/\\/g, '/'),
+    path.replace(/\//g, '\\'),
+    /^[a-zA-Z]:[\\/]/.test(path) ? `/${path.replace(/\\/g, '/')}` : '',
+  ].filter(Boolean))]
+  const parseTimelineText = (text, loadedPath, mode) => {
+    const payload = JSON.parse(String(text || '').trim())
+    console.info('[LangLearning] syncJson:loaded', {
+      rawPath,
+      path: loadedPath,
+      mode,
+      segmentCount: Array.isArray(payload?.segments) ? payload.segments.length : 0,
+      transcriptionCount: Array.isArray(payload?.transcription) ? payload.transcription.length : 0,
+    })
     return normalizeSyncTimeline(payload)
-  } catch {
+  }
+  try {
+    for (const candidate of candidates) {
+      try {
+        const text = String(await readTextFileByPath(candidate) || '').trim()
+        if (!text) continue
+        return parseTimelineText(text, candidate, 'fs')
+      } catch {}
+      try {
+        const payload = await invoke('language_learning_read_local_media_base64', { path: candidate })
+        const base64Text = String(payload?.base64 || '').trim()
+        if (!base64Text) continue
+        const bytes = bytesFromBase64(base64Text)
+        if (!bytes.length) continue
+        const text = new TextDecoder('utf-8').decode(bytes).trim()
+        if (!text) continue
+        return parseTimelineText(text, candidate, 'backend-base64')
+      } catch {}
+    }
+    console.warn('[LangLearning] syncJson:load-failed', {
+      rawPath,
+      path,
+      candidates,
+      error: 'all candidates failed',
+    })
+    return []
+  } catch (err) {
+    console.warn('[LangLearning] syncJson:load-failed', {
+      rawPath,
+      path,
+      candidates,
+      error: String(err?.message || err || ''),
+    })
     return []
   }
 }
@@ -1563,8 +1645,42 @@ const enterListeningStudy = async () => {
     message.warning('请先选择一个听力条目')
     return
   }
-  if (!activeAudioTranscriptTimeline.value.length) {
-    triggerSyncGenerationForAudioId(activeRow.value.rawId, false)
+  const audioId = String(activeRow.value.rawId || '').trim()
+  if (audioId) {
+    activeAudioSyncGenerating.value = true
+    try {
+      const refreshed = await invoke('language_learning_backfill_sync_translation', {
+        audioId,
+        learningLang: learningLang.value,
+      })
+      if (refreshed?.id) {
+        const idx = audioResources.value.findIndex((x) => String(x?.id || '') === String(refreshed.id))
+        if (idx >= 0) {
+          audioResources.value[idx] = refreshed
+        }
+      }
+      const latestSyncPath = String(refreshed?.sync_json_uri || activeAudio.value?.sync_json_uri || '').trim()
+      const timeline = await loadSyncTimelineByJsonPath(latestSyncPath)
+      if (Array.isArray(timeline) && timeline.length) {
+        activeAudioSyncTimeline.value = timeline
+        audioTranslationCoverageMap.value = {
+          ...audioTranslationCoverageMap.value,
+          [audioId]: resolveTranslationCoverageFromTimeline(timeline),
+        }
+      }
+    } catch {
+      activeAudioSyncGenerating.value = triggerSyncGenerationForAudioId(audioId, false, learningLang.value)
+      if (shouldRunQuickTimelineTranslate(audioId)) {
+        const patchedTimeline = await quickTranslateTimelineToZh(activeAudioTranscriptTimeline.value, activeTimelineQuickTranslating)
+        if (Array.isArray(patchedTimeline) && patchedTimeline.length) {
+          activeAudioSyncTimeline.value = patchedTimeline
+        }
+      }
+    } finally {
+      if (!timelineHasMissingTranslation(activeAudioTranscriptTimeline.value)) {
+        activeAudioSyncGenerating.value = false
+      }
+    }
   }
   openListeningImmersive(activeRow.value)
 }
@@ -1636,7 +1752,12 @@ const activeSentenceRecord = computed(() => {
 const activeAudio = computed(() => {
   const r = activeRow.value
   if (!r || r.sourceType !== 'audio') return null
-  return r.payload
+  const id = String(r.rawId || r.payload?.id || '').trim()
+  const coverage = r.translationCoverage || audioTranslationCoverageMap.value[id] || { translated: 0, total: 0, ratio: 0 }
+  return {
+    ...(r.payload || {}),
+    translationCoverage: coverage,
+  }
 })
 
 const normalizeList = (arr) => {
@@ -1875,7 +1996,9 @@ const refreshAudio = async () => {
     const data = await invoke('language_learning_list_audio_resources', { keyword: keyword.value, learningLang: learningLang.value })
     audioResources.value = Array.isArray(data) ? data : []
     await refreshAudioTranslationCoverage(audioResources.value)
-    schedulePendingSyncSweep(220)
+    if (!syncQueueRunning.value) {
+      schedulePendingSyncSweep(220)
+    }
   } catch (err) {
     message.error(`读取听力资源失败: ${String(err?.message || err || '')}`)
   }
@@ -1905,7 +2028,7 @@ const resolveTranslationCoverageFromTimeline = (timeline) => {
   const total = timeline.length
   timeline.forEach((line) => {
     const source = String(line?.text || '').trim()
-    const target = String(line?.translated_text || line?.translation || '').trim()
+    const target = resolveSegmentTranslatedText(line)
     if (target && (!source || target !== source)) {
       translated += 1
     }
@@ -1948,7 +2071,19 @@ const refreshAudioTranslationCoverage = async (rows) => {
     if (!timeline.length) {
       timeline = buildTranscriptTimeline(String(row?.transcript || ''), Number(row?.duration_sec || 0))
     }
-    return [id, resolveTranslationCoverageFromTimeline(timeline)]
+    const stat = resolveTranslationCoverageFromTimeline(timeline)
+    if (stat.total <= 0 || stat.ratio <= 0) {
+      console.warn('[LangLearning] coverage:zero', {
+        id,
+        title: String(row?.title || ''),
+        syncPath,
+        transcriptLength: String(row?.transcript || '').trim().length,
+        timelineSize: timeline.length,
+        translated: stat.translated,
+        total: stat.total,
+      })
+    }
+    return [id, stat]
   }))
   if (serial !== audioTranslationCoverageRefreshSerial) return
   const next = {}
@@ -1956,6 +2091,20 @@ const refreshAudioTranslationCoverage = async (rows) => {
     if (id) next[id] = stat
   })
   audioTranslationCoverageMap.value = next
+  const summary = entries.reduce((acc, [, stat]) => {
+    const total = Number(stat?.total || 0)
+    const translated = Number(stat?.translated || 0)
+    acc.totalSegments += total
+    acc.translatedSegments += translated
+    if (total > 0 && translated > 0) acc.nonZeroRows += 1
+    return acc
+  }, { totalSegments: 0, translatedSegments: 0, nonZeroRows: 0 })
+  console.info('[LangLearning] coverage:refresh', {
+    rowCount: entries.length,
+    nonZeroRows: summary.nonZeroRows,
+    translatedSegments: summary.translatedSegments,
+    totalSegments: summary.totalSegments,
+  })
 }
 
 const runSyncQueueWorker = async () => {
@@ -1983,10 +2132,29 @@ const runSyncQueueWorker = async () => {
       queueLeft: syncQueuedTasks.length,
     })
     try {
-      await invoke('language_learning_backfill_sync_translation', {
+      const refreshed = await invoke('language_learning_backfill_sync_translation', {
         audioId: id,
         learningLang: taskLearningLang,
       })
+      if (refreshed?.id) {
+        const idx = audioResources.value.findIndex((x) => String(x?.id || '') === String(refreshed.id))
+        if (idx >= 0) {
+          audioResources.value[idx] = refreshed
+        }
+      }
+      const syncPath = String(refreshed?.sync_json_uri || '').trim()
+      if (syncPath) {
+        const timeline = await loadSyncTimelineByJsonPath(syncPath)
+        if (Array.isArray(timeline) && timeline.length) {
+          audioTranslationCoverageMap.value = {
+            ...audioTranslationCoverageMap.value,
+            [id]: resolveTranslationCoverageFromTimeline(timeline),
+          }
+          if (activeAudio.value?.id === id) {
+            activeAudioSyncTimeline.value = timeline
+          }
+        }
+      }
       console.info('[LangLearning] syncQueue:task-success', {
         audioId: id,
         learningLang: taskLearningLang,
@@ -2000,15 +2168,17 @@ const runSyncQueueWorker = async () => {
     syncQueueDone.value += 1
     syncQueuedIdSet.delete(queueKey)
     syncingAudioIdSet.delete(queueKey)
-    await refreshAudio()
     if (activeAudio.value?.id === id) {
-      const refreshed = allRows.value.find((x) => x.id === `audio:${id}`)
-      if (refreshed) activeRow.value = refreshed
       activeAudioSyncGenerating.value = false
     }
   }
   syncQueueRunning.value = false
   currentSyncingAudioId.value = ''
+  await refreshAudio()
+  if (activeAudio.value?.id) {
+    const refreshed = allRows.value.find((x) => x.id === `audio:${activeAudio.value.id}`)
+    if (refreshed) activeRow.value = refreshed
+  }
   console.info('[LangLearning] syncQueue:worker-idle', {
     total: syncQueueTotal.value,
     done: syncQueueDone.value,
@@ -2019,7 +2189,12 @@ const triggerSyncGenerationForAudioId = (audioId, showHint = false, lang = '') =
   const id = String(audioId || '').trim()
   const taskLearningLang = String(lang || learningLang.value || '').trim() || 'zh'
   const queueKey = `${taskLearningLang}:${id}`
-  if (!id || syncQueuedIdSet.has(queueKey) || syncingAudioIdSet.has(queueKey)) return
+  const now = Date.now()
+  const lastEnqueueAt = Number(syncLastEnqueueAtMap.get(queueKey) || 0)
+  if (lastEnqueueAt > 0 && now - lastEnqueueAt < syncRequeueCooldownMs) return false
+  if (!id) return false
+  if (syncQueuedIdSet.has(queueKey) || syncingAudioIdSet.has(queueKey)) return true
+  syncLastEnqueueAtMap.set(queueKey, now)
   syncQueuedIdSet.add(queueKey)
   syncingAudioIdSet.add(queueKey)
   syncQueuedTasks.push({ id, learningLang: taskLearningLang })
@@ -2039,6 +2214,7 @@ const triggerSyncGenerationForAudioId = (audioId, showHint = false, lang = '') =
     message.info('已加入后台转换队列，将依次转写并翻译')
   }
   runSyncQueueWorker()
+  return true
 }
 
 const resumePendingSyncTasks = async () => {
@@ -2701,11 +2877,77 @@ const activeAudioTranscriptTimeline = computed(() => {
   if (activeAudioSyncTimeline.value.length) return activeAudioSyncTimeline.value
   return buildTranscriptTimeline(activeAudio.value?.transcript || '', activeAudioDurationSec.value || activeAudio.value?.duration_sec || 0)
 })
+const visibleActiveAudioTranscriptTimeline = computed(() => {
+  const timeline = activeAudioTranscriptTimeline.value
+  const minCount = Math.max(activeTranscriptVisibleCount.value, currentTranscriptLineIndex.value + 8)
+  return timeline.slice(0, minCount).map((line, idx) => ({ line, idx }))
+})
+const isAudioSyncQueued = (audioId) => {
+  const id = String(audioId || '').trim()
+  if (!id) return false
+  return syncQueuedTasks.some((task) => String(task?.id || '').trim() === id)
+}
+const activeTranscriptTranslating = computed(() => {
+  const id = String(activeAudio.value?.id || '').trim()
+  if (!id) return activeTimelineQuickTranslating.value
+  if (!timelineHasMissingTranslation(activeAudioTranscriptTimeline.value)) return false
+  if (currentSyncingAudioId.value === id) return true
+  if (isAudioSyncQueued(id)) return true
+  return activeAudioSyncGenerating.value || activeTimelineQuickTranslating.value
+})
 
 const resolveTranscriptTargetText = (line) => {
   const translated = String(line?.translated_text || line?.translation || '').trim()
   if (translated) return translated
   return '（译文生成中）'
+}
+
+const isSentenceTail = (text) => /[.!?。！？…]["')\]]*$/.test(String(text || '').trim())
+
+const buildSentenceGroupsFromTimeline = (timeline) => {
+  const list = Array.isArray(timeline) ? timeline : []
+  const groups = []
+  let current = []
+  let currentLen = 0
+  list.forEach((line, idx) => {
+    const source = String(line?.text || '').trim()
+    if (!source) return
+    current.push(idx)
+    currentLen += source.length
+    if (isSentenceTail(source) || currentLen >= 220 || current.length >= 6) {
+      groups.push(current)
+      current = []
+      currentLen = 0
+    }
+  })
+  if (current.length) groups.push(current)
+  return groups
+}
+
+const splitTranslationByWeights = (translated, weights) => {
+  const text = String(translated || '').trim()
+  const ws = Array.isArray(weights) ? weights : []
+  if (!ws.length) return []
+  if (ws.length === 1) return [text]
+  const chars = [...text]
+  if (!chars.length) return ws.map(() => '')
+  const totalChars = chars.length
+  const totalWeight = Math.max(1, ws.reduce((sum, n) => sum + Math.max(1, Number(n || 1)), 0))
+  const out = []
+  let cursor = 0
+  let usedWeight = 0
+  ws.forEach((w, idx) => {
+    if (idx === ws.length - 1) {
+      out.push(chars.slice(cursor).join('').trim())
+      return
+    }
+    usedWeight += Math.max(1, Number(w || 1))
+    let end = Math.round((usedWeight / totalWeight) * totalChars)
+    if (end <= cursor) end = Math.min(totalChars, cursor + 1)
+    out.push(chars.slice(cursor, end).join('').trim())
+    cursor = end
+  })
+  return out
 }
 
 const timelineHasMissingTranslation = (timeline) =>
@@ -2716,52 +2958,57 @@ const timelineHasMissingTranslation = (timeline) =>
     return source && translated === source
   })
 
-const patchTimelineByQuickTranslations = (timeline, translatedTexts) => {
-  if (!Array.isArray(timeline) || !Array.isArray(translatedTexts) || !translatedTexts.length) return timeline
-  let translatedCursor = 0
-  return timeline.map((line) => {
-    const translated = String(line?.translated_text || line?.translation || '').trim()
-    const source = String(line?.text || '').trim()
-    const missing = !translated || (source && translated === source)
-    if (!missing) return line
-    const next = String(translatedTexts[translatedCursor] || '').trim()
-    translatedCursor += 1
-    if (!next || next.includes('[Translation Failed]')) return line
-    return { ...line, translated_text: next }
-  })
-}
-
 const quickTranslateTimelineToZh = async (timeline, stateRef) => {
   if (!Array.isArray(timeline) || !timeline.length || stateRef.value) return timeline
-  const missings = timeline
-    .filter((line) => {
-      const translated = String(line?.translated_text || line?.translation || '').trim()
-      const source = String(line?.text || '').trim()
-      return source && (!translated || translated === source)
+  const groups = buildSentenceGroupsFromTimeline(timeline)
+  const requestGroups = groups
+    .map((indices) => {
+      const items = indices.map((idx) => timeline[idx]).filter(Boolean)
+      const hasMissing = items.some((line) => {
+        const translated = String(line?.translated_text || line?.translation || '').trim()
+        const source = String(line?.text || '').trim()
+        return source && (!translated || translated === source)
+      })
+      if (!hasMissing) return null
+      const sourceText = items.map((line) => String(line?.text || '').trim()).filter(Boolean).join(' ')
+      const weights = items.map((line) => Math.max(1, String(line?.text || '').trim().length))
+      if (!sourceText) return null
+      return { indices, sourceText, weights }
     })
-    .map((line) => String(line?.text || '').trim())
     .filter(Boolean)
-  if (!missings.length) return timeline
+  if (!requestGroups.length) return timeline
   console.info('[LangLearning] quickTranslate:start', {
     timelineSize: timeline.length,
-    missingCount: missings.length,
+    missingCount: requestGroups.length,
   })
   try {
     stateRef.value = true
     const result = await invoke('translate_text_free', {
-      texts: missings,
+      texts: requestGroups.map((x) => x.sourceText),
       from: 'auto',
       to: 'zh',
     })
     const translated = Array.isArray(result?.translated_texts) ? result.translated_texts : []
-    const patched = patchTimelineByQuickTranslations(timeline, translated)
+    const patched = [...timeline]
+    requestGroups.forEach((group, gidx) => {
+      const translatedSentence = String(translated[gidx] || '').trim()
+      if (!translatedSentence || translatedSentence.includes('[Translation Failed]')) return
+      const parts = splitTranslationByWeights(translatedSentence, group.weights)
+      group.indices.forEach((idx, localIdx) => {
+        const line = patched[idx]
+        if (!line) return
+        const next = String(parts[localIdx] || translatedSentence).trim()
+        if (!next) return
+        patched[idx] = { ...line, translated_text: next }
+      })
+    })
     const stillMissing = patched.filter((line) => {
       const translatedText = String(line?.translated_text || line?.translation || '').trim()
       const sourceText = String(line?.text || '').trim()
       return sourceText && (!translatedText || translatedText === sourceText)
     }).length
     console.info('[LangLearning] quickTranslate:done', {
-      requested: missings.length,
+      requested: requestGroups.length,
       received: translated.length,
       stillMissing,
     })
@@ -2769,7 +3016,7 @@ const quickTranslateTimelineToZh = async (timeline, stateRef) => {
   } catch (error) {
     console.error('[LangLearning] quickTranslate:error', {
       message: String(error?.message || error || ''),
-      missingCount: missings.length,
+      missingCount: requestGroups.length,
     })
     return timeline
   } finally {
@@ -2777,11 +3024,48 @@ const quickTranslateTimelineToZh = async (timeline, stateRef) => {
   }
 }
 
+const extendActiveTranscriptWindow = (step = transcriptScreenPreloadSize) => {
+  const total = activeAudioTranscriptTimeline.value.length
+  if (activeTranscriptVisibleCount.value >= total) return
+  activeTranscriptVisibleCount.value = Math.min(total, activeTranscriptVisibleCount.value + Math.max(8, Number(step || 0)))
+}
+
+const extendReviewTranscriptWindow = (step = transcriptScreenPreloadSize) => {
+  const total = currentReviewListeningTranscriptTimeline.value.length
+  if (reviewTranscriptVisibleCount.value >= total) return
+  reviewTranscriptVisibleCount.value = Math.min(total, reviewTranscriptVisibleCount.value + Math.max(8, Number(step || 0)))
+}
+
+const handleActiveTranscriptScroll = (evt) => {
+  const el = evt?.target
+  if (!el) return
+  const nearBottom = Number(el.scrollHeight || 0) - (Number(el.scrollTop || 0) + Number(el.clientHeight || 0))
+  if (nearBottom > 260) return
+  extendActiveTranscriptWindow()
+}
+
+const handleReviewTranscriptScroll = (evt) => {
+  const el = evt?.target
+  if (!el) return
+  const nearBottom = Number(el.scrollHeight || 0) - (Number(el.scrollTop || 0) + Number(el.clientHeight || 0))
+  if (nearBottom > 260) return
+  extendReviewTranscriptWindow()
+}
+
+const shouldRunQuickTimelineTranslate = (audioId) => {
+  const id = String(audioId || '').trim()
+  if (!id) return false
+  const now = Date.now()
+  const last = Number(quickTimelineTranslateLastRun.get(id) || 0)
+  if (now - last < quickTimelineTranslateCooldownMs) return false
+  quickTimelineTranslateLastRun.set(id, now)
+  return true
+}
+
 const keepActiveTranscriptLineVisible = (containerRef, activeIndex) => {
   const container = containerRef?.value
   if (!container || activeIndex < 0) return
-  const lines = container.querySelectorAll('.transcript-line')
-  const activeLine = lines[Number(activeIndex)]
+  const activeLine = container.querySelector(`.transcript-line[data-transcript-idx="${Number(activeIndex)}"]`)
   if (!activeLine) return
   const lineTop = Number(activeLine.offsetTop || 0)
   const lineBottom = lineTop + Number(activeLine.offsetHeight || 0)
@@ -2797,6 +3081,20 @@ const currentReviewListeningTranscriptTimeline = computed(() => {
   if (!row || row.rowType !== 'listening' || row.sourceType !== 'audio') return []
   if (reviewAudioSyncTimeline.value.length) return reviewAudioSyncTimeline.value
   return buildTranscriptTimeline(row.payload?.transcript || '', reviewAudioDurationSec.value || row.payload?.duration_sec || 0)
+})
+const visibleReviewListeningTranscriptTimeline = computed(() => {
+  const timeline = currentReviewListeningTranscriptTimeline.value
+  const minCount = Math.max(reviewTranscriptVisibleCount.value, currentReviewTranscriptIndex.value + 8)
+  return timeline.slice(0, minCount).map((line, idx) => ({ line, idx }))
+})
+const reviewTranscriptTranslating = computed(() => {
+  const row = currentReviewItem.value
+  const id = String(row?.payload?.id || '').trim()
+  if (!id) return reviewTimelineQuickTranslating.value
+  if (!timelineHasMissingTranslation(currentReviewListeningTranscriptTimeline.value)) return false
+  if (currentSyncingAudioId.value === id) return true
+  if (isAudioSyncQueued(id)) return true
+  return reviewTimelineQuickTranslating.value
 })
 
 const seekActiveAudioToTranscript = (idx) => {
@@ -3063,6 +3361,7 @@ watch(syncQueueRunning, (running) => {
 
 watch(activeAudio, async () => {
   currentTranscriptLineIndex.value = 0
+  activeTranscriptVisibleCount.value = transcriptScreenPageSize
   activeAudioDurationSec.value = Number(activeAudio.value?.duration_sec || 0)
   activeAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(activeAudio.value?.sync_json_uri || '')
   if (!activeAudioSyncTimeline.value.length) {
@@ -3078,6 +3377,17 @@ watch(activeAudio, async () => {
         return source && (!translated || translated === source)
       }).length,
     })
+    activeAudioSyncGenerating.value = triggerSyncGenerationForAudioId(activeAudio.value.id, false, learningLang.value)
+    if (shouldRunQuickTimelineTranslate(activeAudio.value.id)) {
+      const patchedTimeline = await quickTranslateTimelineToZh(activeAudioSyncTimeline.value, activeTimelineQuickTranslating)
+      if (Array.isArray(patchedTimeline) && patchedTimeline.length) {
+        activeAudioSyncTimeline.value = patchedTimeline
+        audioTranslationCoverageMap.value = {
+          ...audioTranslationCoverageMap.value,
+          [String(activeAudio.value.id || '')]: resolveTranslationCoverageFromTimeline(patchedTimeline),
+        }
+      }
+    }
   }
   if (activeAudioSyncTimeline.value.length) {
     activeAudioSyncGenerating.value = false
@@ -3100,6 +3410,7 @@ watch(activeAudio, async () => {
 
 watch(currentReviewItem, async (row) => {
   currentReviewTranscriptIndex.value = 0
+  reviewTranscriptVisibleCount.value = transcriptScreenPageSize
   reviewAudioDurationSec.value = Number(row?.payload?.duration_sec || 0)
   reviewAudioSyncTimeline.value = await loadSyncTimelineByJsonPath(row?.payload?.sync_json_uri || '')
   if (!reviewAudioSyncTimeline.value.length) {
@@ -3115,18 +3426,44 @@ watch(currentReviewItem, async (row) => {
         return source && (!translated || translated === source)
       }).length,
     })
+    triggerSyncGenerationForAudioId(row.payload.id, false, learningLang.value)
+    if (shouldRunQuickTimelineTranslate(row.payload.id)) {
+      const patchedTimeline = await quickTranslateTimelineToZh(reviewAudioSyncTimeline.value, reviewTimelineQuickTranslating)
+      if (Array.isArray(patchedTimeline) && patchedTimeline.length) {
+        reviewAudioSyncTimeline.value = patchedTimeline
+        audioTranslationCoverageMap.value = {
+          ...audioTranslationCoverageMap.value,
+          [String(row.payload.id || '')]: resolveTranslationCoverageFromTimeline(patchedTimeline),
+        }
+      }
+    }
   }
   await refreshReviewAudioPlayableSrc()
 })
 
+watch([activeAudioSyncTimeline, () => activeAudio.value?.id], ([timeline, id]) => {
+  const audioId = String(id || '').trim()
+  if (!audioId) return
+  audioTranslationCoverageMap.value = {
+    ...audioTranslationCoverageMap.value,
+    [audioId]: resolveTranslationCoverageFromTimeline(timeline),
+  }
+}, { deep: true })
+
 watch([currentTranscriptLineIndex, activeAudioTranscriptTimeline], async ([idx, timeline]) => {
   if (!Array.isArray(timeline) || !timeline.length) return
+  if (Number(idx || 0) + 6 >= activeTranscriptVisibleCount.value) {
+    extendActiveTranscriptWindow(transcriptScreenPreloadSize)
+  }
   await nextTick()
   keepActiveTranscriptLineVisible(immersiveTranscriptListRef, Number(idx || 0))
 }, { flush: 'post' })
 
 watch([currentReviewTranscriptIndex, currentReviewListeningTranscriptTimeline], async ([idx, timeline]) => {
   if (!Array.isArray(timeline) || !timeline.length) return
+  if (Number(idx || 0) + 6 >= reviewTranscriptVisibleCount.value) {
+    extendReviewTranscriptWindow(transcriptScreenPreloadSize)
+  }
   await nextTick()
   keepActiveTranscriptLineVisible(reviewTranscriptListRef, Number(idx || 0))
 }, { flush: 'post' })
@@ -3725,6 +4062,20 @@ onBeforeUnmount(() => {
   width: 100%;
   margin-top: 8px;
   margin-bottom: 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 26%, var(--guaxi-border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg)), var(--guaxi-panel-bg));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--primary-color, #4acadb) 18%, transparent);
+  accent-color: var(--primary-color, #4acadb);
+}
+
+.listening-player::-webkit-media-controls-panel {
+  background: transparent;
+}
+
+.listening-player::-webkit-media-controls-play-button,
+.listening-player::-webkit-media-controls-mute-button {
+  filter: saturate(1.15) contrast(1.08);
 }
 
 .playback-row {
@@ -3755,8 +4106,8 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  line-height: 1.65;
-  padding: 6px 8px;
+  line-height: 1.72;
+  padding: 7px 10px;
   border-radius: 6px;
   border: 1px solid transparent;
   color: var(--guaxi-text-secondary);
@@ -3776,13 +4127,16 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--primary-color, #4acadb) 20%, var(--guaxi-panel-bg));
   border-color: color-mix(in srgb, var(--primary-color, #4acadb) 62%, var(--guaxi-border));
   color: var(--guaxi-text-primary);
-  transform: scaleY(1.02);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--primary-color, #4acadb) 26%, transparent);
+  transform: scale(1.018);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--primary-color, #4acadb) 32%, transparent);
+  border-left: 4px solid var(--primary-color, #4acadb);
+  padding-left: 12px;
 }
 
 .transcript-line.active .transcript-source {
   color: var(--guaxi-text-primary);
-  font-weight: 600;
+  font-weight: 700;
+  text-shadow: 0 0 12px color-mix(in srgb, var(--primary-color, #4acadb) 38%, transparent);
 }
 
 .transcript-line.active .transcript-target {
@@ -3790,6 +4144,7 @@ onBeforeUnmount(() => {
 }
 
 .transcript-source {
+  font-size: 15px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3799,8 +4154,8 @@ onBeforeUnmount(() => {
 .transcript-target {
   margin-top: 3px;
   color: color-mix(in srgb, var(--primary-color, #4acadb) 72%, var(--guaxi-text-primary));
-  font-size: 13px;
-  line-height: 1.56;
+  font-size: 14px;
+  line-height: 1.62;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
