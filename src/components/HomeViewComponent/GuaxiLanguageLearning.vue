@@ -7,10 +7,10 @@
           <n-button quaternary circle size="small" title="听力资源管理" @click="openAudioManager">
             <Icon :icon="settingsIcon" width="16" height="16" />
           </n-button>
-          <n-button quaternary circle size="small" title="导入并恢复" @click="importLearningData">
+          <n-button quaternary circle size="small" title="导入并恢复" :loading="importingLearningData" @click="importLearningData">
             <Icon :icon="importIcon" width="16" height="16" />
           </n-button>
-          <n-button quaternary circle size="small" title="导出学习数据" @click="exportLearningData">
+          <n-button quaternary circle size="small" title="导出学习数据" :loading="exportingLearningData" @click="exportLearningData">
             <Icon :icon="exportIcon" width="16" height="16" />
           </n-button>
           <n-button quaternary circle size="small" title="随机抽查卡牌" @click="openRandomCheckBoard">
@@ -377,7 +377,7 @@
                   <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="导入本地听力" @click="importLocalAudio">
                     <Icon :icon="importIcon" width="16" height="16" />
                   </n-button>
-                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="按主题采集听力" :loading="collectListeningLoading || syncQueueRunning" @click="collectListeningByTopic">
+                  <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="按主题采集听力" :loading="collectListeningLoading || syncQueueRunning" @click="openCollectSourceDialog">
                     <Icon v-if="!collectListeningLoading && !syncQueueRunning" :icon="sparkleIcon" width="16" height="16" />
                   </n-button>
                 </div>
@@ -724,8 +724,33 @@
         <template #action>
           <n-space justify="end">
             <n-button @click="importLocalAudio">导入本地音频</n-button>
-            <n-button @click="collectListeningByTopic">按主题采集</n-button>
+            <n-button @click="openCollectSourceDialog">按主题采集</n-button>
             <n-button type="primary" @click="saveAudio">保存资源</n-button>
+          </n-space>
+        </template>
+      </n-modal>
+
+      <n-modal v-model:show="collectSourceDialogVisible" preset="card" style="width: 720px" title="本次抓取来源">
+        <n-space vertical :size="12">
+          <n-radio-group v-model:value="collectSourceMode" size="small">
+            <n-radio-button value="default">默认策略（平均从每个源抓取）</n-radio-button>
+            <n-radio-button value="custom">自定义本次来源</n-radio-button>
+          </n-radio-group>
+          <n-tag size="small" type="info">可用来源 {{ collectAvailableSourceOptions.length }} 个</n-tag>
+          <n-select
+            v-if="collectSourceMode === 'custom'"
+            v-model:value="collectSourceIds"
+            multiple
+            clearable
+            filterable
+            :options="collectAvailableSourceOptions"
+            placeholder="选择本次抓取来源（可多选）"
+          />
+        </n-space>
+        <template #action>
+          <n-space justify="end">
+            <n-button @click="collectSourceDialogVisible = false">取消</n-button>
+            <n-button type="primary" :loading="collectListeningLoading" @click="confirmCollectListeningByTopic">开始抓取</n-button>
           </n-space>
         </template>
       </n-modal>
@@ -853,6 +878,8 @@ const collectTopicCategory = ref('')
 const collectTopic = ref('')
 const collectLimit = ref(15)
 const collectListeningLoading = ref(false)
+const exportingLearningData = ref(false)
+const importingLearningData = ref(false)
 const listeningImmersiveMode = ref(false)
 const playbackRate = ref(1)
 const recordPage = ref(1)
@@ -923,6 +950,9 @@ const newSourceProvider = ref('')
 const newSourceFeedUrl = ref('')
 const newSourceLanguage = ref('en')
 const newSourceMaxDurationMin = ref(30)
+const collectSourceDialogVisible = ref(false)
+const collectSourceMode = ref('default')
+const collectSourceIds = ref([])
 
 const reviewFilter = reactive({
   createdPeriod: 'all',
@@ -1024,6 +1054,15 @@ const defaultListeningSources = () => ([
   { id: 'src_npr_shortwave_default', name: 'NPR Short Wave', provider: 'npr_science', feed_url: 'https://feeds.npr.org/510351/podcast.xml', language_tag: 'en', max_duration_min: 30, enabled: true },
   { id: 'src_npr_planetmoney_default', name: 'NPR Planet Money', provider: 'npr_economy', feed_url: 'https://feeds.npr.org/510289/podcast.xml', language_tag: 'en', max_duration_min: 30, enabled: true },
   { id: 'src_abc_science_default', name: 'ABC Science Show', provider: 'abc_science', feed_url: 'https://www.abc.net.au/feeds/2889546/podcast.xml', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_bbc_global_news_default', name: 'BBC Global News', provider: 'bbc_news', feed_url: 'https://podcasts.files.bbci.co.uk/p02nq0gn.rss', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_in_our_time_default', name: 'BBC In Our Time', provider: 'bbc_culture', feed_url: 'https://podcasts.files.bbci.co.uk/b006qykl.rss', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_nasa_hwhap_default', name: 'NASA Podcast', provider: 'nasa', feed_url: 'https://www.nasa.gov/podcasts/houston-we-have-a-podcast/feed/', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_vergecast_default', name: 'The Vergecast', provider: 'tech_verge', feed_url: 'https://feeds.megaphone.fm/vergecast', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_science_vs_default', name: 'Science Vs', provider: 'science_vs', feed_url: 'https://feeds.megaphone.fm/sciencevs', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_this_american_life_default', name: 'This American Life', provider: 'culture_life', feed_url: 'https://feed.thisamericanlife.org/talpodcast', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_99pi_default', name: '99% Invisible', provider: 'design_history', feed_url: 'https://feeds.99percentinvisible.org/99percentinvisible', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_song_exploder_default', name: 'Song Exploder', provider: 'music_song', feed_url: 'https://feed.songexploder.net/SongExploder', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_amateur_traveler_default', name: 'Amateur Traveler', provider: 'travel', feed_url: 'https://amateurtraveler.com/feed/podcast/', language_tag: 'en', max_duration_min: 30, enabled: true },
 ])
 
 const normalizeListeningSource = (src, fallbackId = '') => ({
@@ -1035,6 +1074,46 @@ const normalizeListeningSource = (src, fallbackId = '') => ({
   max_duration_min: Math.min(30, Math.max(1, Number(src?.max_duration_min || 30))),
   enabled: Boolean(src?.enabled),
 })
+const collectAvailableSourceOptions = computed(() => {
+  const lang = String(learningLang.value || '').toLowerCase()
+  return listeningSources.value
+    .filter((x) => x.enabled && x.feed_url)
+    .filter((x) => !x.language_tag || x.language_tag === 'all' || x.language_tag === lang)
+    .map((x) => ({
+      label: `${x.name} (${x.provider || 'source'})`,
+      value: x.id,
+    }))
+})
+const collectAvailableSourcePayload = computed(() => {
+  const lang = String(learningLang.value || '').toLowerCase()
+  return listeningSources.value
+    .filter((x) => x.enabled && x.feed_url)
+    .filter((x) => !x.language_tag || x.language_tag === 'all' || x.language_tag === lang)
+    .map((x) => ({
+      id: x.id,
+      provider: x.provider,
+      name: x.name,
+      feed_url: x.feed_url,
+      language_tag: x.language_tag,
+      max_duration_sec: Math.round(Math.min(30, Math.max(1, Number(x.max_duration_min || 30))) * 60),
+    }))
+})
+const mergeListeningSourcesWithDefaults = (currentList) => {
+  const current = (Array.isArray(currentList) ? currentList : [])
+    .map((x, idx) => normalizeListeningSource(x, `src_${idx}`))
+    .filter((x) => x.name && x.feed_url)
+  const defaults = defaultListeningSources().map((x, idx) => normalizeListeningSource(x, `src_default_${idx}`))
+  const byKey = new Map()
+  current.forEach((x) => {
+    const key = `${x.provider}|${x.feed_url}`.toLowerCase()
+    if (!byKey.has(key)) byKey.set(key, x)
+  })
+  defaults.forEach((x) => {
+    const key = `${x.provider}|${x.feed_url}`.toLowerCase()
+    if (!byKey.has(key)) byKey.set(key, x)
+  })
+  return Array.from(byKey.values())
+}
 
 const loadListeningSources = () => {
   try {
@@ -1048,7 +1127,10 @@ const loadListeningSources = () => {
       listeningSources.value = defaultListeningSources()
       return
     }
-    listeningSources.value = parsed.map((x, idx) => normalizeListeningSource(x, `src_${idx}`)).filter((x) => x.name && x.feed_url)
+    listeningSources.value = mergeListeningSourcesWithDefaults(parsed)
+    try {
+      window.localStorage.setItem(listeningSourceStorageKey, JSON.stringify(listeningSources.value))
+    } catch {}
     if (!listeningSources.value.length) listeningSources.value = defaultListeningSources()
   } catch {
     listeningSources.value = defaultListeningSources()
@@ -2553,7 +2635,33 @@ const deleteSelectedRows = async () => {
   }
 }
 
-const collectListeningByTopic = async () => {
+const openCollectSourceDialog = () => {
+  const ids = collectAvailableSourcePayload.value.map((x) => x.id)
+  collectSourceIds.value = ids
+  collectSourceMode.value = 'default'
+  collectSourceDialogVisible.value = true
+}
+
+const confirmCollectListeningByTopic = async () => {
+  const available = collectAvailableSourcePayload.value
+  if (!available.length) {
+    message.warning('当前没有可用听力源，请先在听力源管理器启用来源')
+    return
+  }
+  let selected = available
+  if (collectSourceMode.value === 'custom') {
+    const selectedIdSet = new Set((Array.isArray(collectSourceIds.value) ? collectSourceIds.value : []).map((x) => String(x)))
+    selected = available.filter((x) => selectedIdSet.has(String(x.id)))
+    if (!selected.length) {
+      message.warning('请至少选择一个抓取来源')
+      return
+    }
+  }
+  collectSourceDialogVisible.value = false
+  await collectListeningByTopic(selected.map(({ id, ...rest }) => rest))
+}
+
+const collectListeningByTopic = async (selectedSourcesOverride = null) => {
   collectListeningLoading.value = true
   try {
     const baseTopic = String(collectTopic.value || audioForm.topic || '').trim()
@@ -2564,16 +2672,13 @@ const collectListeningByTopic = async () => {
       return
     }
     const limit = Number(collectLimit.value || 15)
-    const selectedSources = listeningSources.value
-      .filter((x) => x.enabled && x.feed_url)
-      .filter((x) => !x.language_tag || x.language_tag === 'all' || x.language_tag === String(learningLang.value || '').toLowerCase())
-      .map((x) => ({
-        provider: x.provider,
-        name: x.name,
-        feed_url: x.feed_url,
-        language_tag: x.language_tag,
-        max_duration_sec: Math.round(Math.min(30, Math.max(1, Number(x.max_duration_min || 30))) * 60),
-      }))
+    const selectedSources = Array.isArray(selectedSourcesOverride) && selectedSourcesOverride.length
+      ? selectedSourcesOverride
+      : collectAvailableSourcePayload.value.map(({ id, ...rest }) => rest)
+    if (!selectedSources.length) {
+      message.warning('当前没有可用听力源，请先在听力源管理器启用来源')
+      return
+    }
     const rows = await invoke('language_learning_collect_audio_by_topic', {
       input: {
         topic,
@@ -3381,6 +3486,8 @@ const cleanupDuplicateListeningTopics = async () => {
 }
 
 const exportLearningData = async () => {
+  if (exportingLearningData.value) return
+  exportingLearningData.value = true
   try {
     const scope = resolveLearningScope()
     const isAssetPackage = scopeNeedsAssetPackage(scope)
@@ -3401,10 +3508,14 @@ const exportLearningData = async () => {
     console.info('[LangLearning] export-scope-package', result)
   } catch (err) {
     message.error(`导出失败: ${String(err?.message || err || '')}`)
+  } finally {
+    exportingLearningData.value = false
   }
 }
 
 const importLearningData = async () => {
+  if (importingLearningData.value) return
+  importingLearningData.value = true
   try {
     const scope = resolveLearningScope()
     const path = await open({
@@ -3434,6 +3545,8 @@ const importLearningData = async () => {
     console.info('[LangLearning] import-scope-package', result)
   } catch (err) {
     message.error(`导入失败: ${String(err?.message || err || '')}`)
+  } finally {
+    importingLearningData.value = false
   }
 }
 

@@ -1482,188 +1482,198 @@ pub fn language_learning_cleanup_duplicate_topics(
 }
 
 #[tauri::command]
-pub fn language_learning_export_scope_package(
+pub async fn language_learning_export_scope_package(
     app: tauri::AppHandle,
     learning_lang: Option<String>,
     scope: Option<String>,
     output_path: String,
     mastery: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    let lang = normalize_learning_lang(learning_lang);
-    let scope = normalize_learning_scope(scope);
-    let output = output_path.trim();
-    if output.is_empty() {
-        return Err("导出路径不能为空".to_string());
-    }
-    let bundle = build_learning_bundle_for_scope(app.clone(), &lang, &scope)?;
-    let package = LearningExportPackage {
-        learning_lang: lang.clone(),
-        scope: scope.clone(),
-        exported_at: now_iso(),
-        bundle,
-        assets: Vec::new(),
-        mastery: mastery.unwrap_or_else(|| serde_json::json!({})),
-    };
-    if !scope_requires_assets(&scope) {
-        let text = serde_json::to_string_pretty(&package).map_err(|e| format!("序列化导出数据失败: {}", e))?;
-        fs::write(output, text).map_err(|e| format!("写入导出文件失败: {}", e))?;
-        return Ok(serde_json::json!({
+    let app_clone = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let lang = normalize_learning_lang(learning_lang);
+        let scope = normalize_learning_scope(scope);
+        let output = output_path.trim().to_string();
+        if output.is_empty() {
+            return Err("导出路径不能为空".to_string());
+        }
+        let bundle = build_learning_bundle_for_scope(app_clone.clone(), &lang, &scope)?;
+        let package = LearningExportPackage {
+            learning_lang: lang.clone(),
+            scope: scope.clone(),
+            exported_at: now_iso(),
+            bundle,
+            assets: Vec::new(),
+            mastery: mastery.unwrap_or_else(|| serde_json::json!({})),
+        };
+        if !scope_requires_assets(&scope) {
+            let text = serde_json::to_string_pretty(&package).map_err(|e| format!("序列化导出数据失败: {}", e))?;
+            fs::write(&output, text).map_err(|e| format!("写入导出文件失败: {}", e))?;
+            return Ok(serde_json::json!({
+                "learning_lang": lang,
+                "scope": scope,
+                "export_path": output,
+                "records": package.bundle.records.len(),
+                "audio_resources": package.bundle.audio_resources.len(),
+                "assets": 0
+            }));
+        }
+        let file = std::fs::File::create(&output).map_err(|e| format!("创建导出压缩包失败: {}", e))?;
+        let mut zip = ZipWriter::new(file);
+        let mut package = package;
+        let mut assets_count = 0usize;
+        for audio in &package.bundle.audio_resources {
+            let id_key = sanitize_asset_fragment(&audio.id);
+            let mut asset_ref = LearningAudioAssetRef {
+                audio_id: audio.id.clone(),
+                media_path: String::new(),
+                sync_json_path: String::new(),
+            };
+            if let Some(media_path) = maybe_collect_local_asset_path(audio) {
+                let ext = media_path
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("mp3")
+                    .to_lowercase();
+                let rel = format!("assets/{}/media.{}", id_key, ext);
+                let bytes = fs::read(&media_path).map_err(|e| format!("读取音频资源失败: {}", e))?;
+                write_file_to_zip(&mut zip, &rel, &bytes)?;
+                asset_ref.media_path = rel;
+                assets_count += 1;
+            }
+            if let Some(sync_path) = maybe_collect_sync_asset_path(audio) {
+                let rel = format!("assets/{}/media.json", id_key);
+                let bytes = fs::read(&sync_path).map_err(|e| format!("读取同步元数据失败: {}", e))?;
+                write_file_to_zip(&mut zip, &rel, &bytes)?;
+                asset_ref.sync_json_path = rel;
+                assets_count += 1;
+            }
+            if !asset_ref.media_path.is_empty() || !asset_ref.sync_json_path.is_empty() {
+                package.assets.push(asset_ref);
+            }
+        }
+        let manifest = serde_json::to_string_pretty(&package).map_err(|e| format!("序列化导出包失败: {}", e))?;
+        write_file_to_zip(&mut zip, "package.json", manifest.as_bytes())?;
+        zip.finish().map_err(|e| format!("完成导出压缩包失败: {}", e))?;
+        Ok(serde_json::json!({
             "learning_lang": lang,
             "scope": scope,
             "export_path": output,
             "records": package.bundle.records.len(),
             "audio_resources": package.bundle.audio_resources.len(),
-            "assets": 0
-        }));
-    }
-    let file = std::fs::File::create(output).map_err(|e| format!("创建导出压缩包失败: {}", e))?;
-    let mut zip = ZipWriter::new(file);
-    let mut package = package;
-    let mut assets_count = 0usize;
-    for audio in &package.bundle.audio_resources {
-        let id_key = sanitize_asset_fragment(&audio.id);
-        let mut asset_ref = LearningAudioAssetRef {
-            audio_id: audio.id.clone(),
-            media_path: String::new(),
-            sync_json_path: String::new(),
-        };
-        if let Some(media_path) = maybe_collect_local_asset_path(audio) {
-            let ext = media_path
-                .extension()
-                .and_then(|x| x.to_str())
-                .unwrap_or("mp3")
-                .to_lowercase();
-            let rel = format!("assets/{}/media.{}", id_key, ext);
-            let bytes = fs::read(&media_path).map_err(|e| format!("读取音频资源失败: {}", e))?;
-            write_file_to_zip(&mut zip, &rel, &bytes)?;
-            asset_ref.media_path = rel;
-            assets_count += 1;
-        }
-        if let Some(sync_path) = maybe_collect_sync_asset_path(audio) {
-            let rel = format!("assets/{}/media.json", id_key);
-            let bytes = fs::read(&sync_path).map_err(|e| format!("读取同步元数据失败: {}", e))?;
-            write_file_to_zip(&mut zip, &rel, &bytes)?;
-            asset_ref.sync_json_path = rel;
-            assets_count += 1;
-        }
-        if !asset_ref.media_path.is_empty() || !asset_ref.sync_json_path.is_empty() {
-            package.assets.push(asset_ref);
-        }
-    }
-    let manifest = serde_json::to_string_pretty(&package).map_err(|e| format!("序列化导出包失败: {}", e))?;
-    write_file_to_zip(&mut zip, "package.json", manifest.as_bytes())?;
-    zip.finish().map_err(|e| format!("完成导出压缩包失败: {}", e))?;
-    Ok(serde_json::json!({
-        "learning_lang": lang,
-        "scope": scope,
-        "export_path": output,
-        "records": package.bundle.records.len(),
-        "audio_resources": package.bundle.audio_resources.len(),
-        "assets": assets_count
-    }))
+            "assets": assets_count
+        }))
+    })
+    .await
+    .map_err(|e| format!("导出任务执行失败: {}", e))?
 }
 
 #[tauri::command]
-pub fn language_learning_import_scope_package(
+pub async fn language_learning_import_scope_package(
     app: tauri::AppHandle,
     learning_lang: Option<String>,
     scope: Option<String>,
     input_path: String,
 ) -> Result<serde_json::Value, String> {
-    let scope = normalize_learning_scope(scope);
-    let path = input_path.trim();
-    if path.is_empty() {
-        return Err("导入路径不能为空".to_string());
-    }
-    let mut bundle: LearningDataBundle;
-    let mut mastery = serde_json::json!({});
-    if path.to_lowercase().ends_with(".zip") {
-        let file = std::fs::File::open(path).map_err(|e| format!("打开导入压缩包失败: {}", e))?;
-        let mut archive = ZipArchive::new(file).map_err(|e| format!("读取导入压缩包失败: {}", e))?;
-        let mut manifest_text = String::new();
-        archive
-            .by_name("package.json")
-            .map_err(|e| format!("导入包缺少 package.json: {}", e))?
-            .read_to_string(&mut manifest_text)
-            .map_err(|e| format!("读取 package.json 失败: {}", e))?;
-        let package: LearningExportPackage =
-            serde_json::from_str(&manifest_text).map_err(|e| format!("解析导入包失败: {}", e))?;
-        bundle = package.bundle;
-        mastery = package.mastery;
-        let mut asset_map = HashMap::new();
-        for asset in package.assets {
-            asset_map.insert(asset.audio_id.clone(), asset);
+    let app_clone = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let scope = normalize_learning_scope(scope);
+        let path = input_path.trim().to_string();
+        if path.is_empty() {
+            return Err("导入路径不能为空".to_string());
         }
-        for audio in &mut bundle.audio_resources {
-            let Some(asset) = asset_map.get(&audio.id) else {
-                continue;
-            };
-            let entry_dir = resolve_listening_entry_dir(audio)?;
-            if !asset.media_path.trim().is_empty() {
-                if let Ok(mut zf) = archive.by_name(asset.media_path.as_str()) {
-                    let mut bytes = Vec::new();
-                    zf.read_to_end(&mut bytes)
-                        .map_err(|e| format!("读取导入音频失败: {}", e))?;
-                    let ext = Path::new(asset.media_path.as_str())
-                        .extension()
-                        .and_then(|x| x.to_str())
-                        .unwrap_or("mp3")
-                        .to_lowercase();
-                    let media_path = entry_dir.join(format!("media.{}", ext));
-                    fs::write(&media_path, bytes).map_err(|e| format!("写入导入音频失败: {}", e))?;
-                    audio.source_uri = media_path.to_string_lossy().to_string();
+        let mut bundle: LearningDataBundle;
+        let mut mastery = serde_json::json!({});
+        if path.to_lowercase().ends_with(".zip") {
+            let file = std::fs::File::open(&path).map_err(|e| format!("打开导入压缩包失败: {}", e))?;
+            let mut archive = ZipArchive::new(file).map_err(|e| format!("读取导入压缩包失败: {}", e))?;
+            let mut manifest_text = String::new();
+            archive
+                .by_name("package.json")
+                .map_err(|e| format!("导入包缺少 package.json: {}", e))?
+                .read_to_string(&mut manifest_text)
+                .map_err(|e| format!("读取 package.json 失败: {}", e))?;
+            let package: LearningExportPackage =
+                serde_json::from_str(&manifest_text).map_err(|e| format!("解析导入包失败: {}", e))?;
+            bundle = package.bundle;
+            mastery = package.mastery;
+            let mut asset_map = HashMap::new();
+            for asset in package.assets {
+                asset_map.insert(asset.audio_id.clone(), asset);
+            }
+            for audio in &mut bundle.audio_resources {
+                let Some(asset) = asset_map.get(&audio.id) else {
+                    continue;
+                };
+                let entry_dir = resolve_listening_entry_dir(audio)?;
+                if !asset.media_path.trim().is_empty() {
+                    if let Ok(mut zf) = archive.by_name(asset.media_path.as_str()) {
+                        let mut bytes = Vec::new();
+                        zf.read_to_end(&mut bytes)
+                            .map_err(|e| format!("读取导入音频失败: {}", e))?;
+                        let ext = Path::new(asset.media_path.as_str())
+                            .extension()
+                            .and_then(|x| x.to_str())
+                            .unwrap_or("mp3")
+                            .to_lowercase();
+                        let media_path = entry_dir.join(format!("media.{}", ext));
+                        fs::write(&media_path, bytes).map_err(|e| format!("写入导入音频失败: {}", e))?;
+                        audio.source_uri = media_path.to_string_lossy().to_string();
+                    }
+                }
+                if !asset.sync_json_path.trim().is_empty() {
+                    if let Ok(mut zf) = archive.by_name(asset.sync_json_path.as_str()) {
+                        let mut bytes = Vec::new();
+                        zf.read_to_end(&mut bytes)
+                            .map_err(|e| format!("读取导入元数据失败: {}", e))?;
+                        let sync_path = entry_dir.join("media.json");
+                        fs::write(&sync_path, bytes).map_err(|e| format!("写入导入元数据失败: {}", e))?;
+                        audio.sync_json_uri = sync_path.to_string_lossy().to_string();
+                    }
                 }
             }
-            if !asset.sync_json_path.trim().is_empty() {
-                if let Ok(mut zf) = archive.by_name(asset.sync_json_path.as_str()) {
-                    let mut bytes = Vec::new();
-                    zf.read_to_end(&mut bytes)
-                        .map_err(|e| format!("读取导入元数据失败: {}", e))?;
-                    let sync_path = entry_dir.join("media.json");
-                    fs::write(&sync_path, bytes).map_err(|e| format!("写入导入元数据失败: {}", e))?;
-                    audio.sync_json_uri = sync_path.to_string_lossy().to_string();
-                }
+        } else {
+            let raw = fs::read_to_string(&path).map_err(|e| format!("读取导入文件失败: {}", e))?;
+            let parsed = parse_bundle_and_mastery_from_json(&raw)?;
+            bundle = parsed.0;
+            mastery = parsed.1;
+        }
+        let target_lang = resolve_bundle_target_lang(&bundle, learning_lang);
+        let import_bundle = if scope == "all" {
+            bundle
+        } else if scope == "my_listening" {
+            LearningDataBundle {
+                learning_lang: bundle.learning_lang.clone(),
+                exported_at: bundle.exported_at.clone(),
+                records: Vec::new(),
+                audio_resources: bundle.audio_resources,
             }
-        }
-    } else {
-        let raw = fs::read_to_string(path).map_err(|e| format!("读取导入文件失败: {}", e))?;
-        let parsed = parse_bundle_and_mastery_from_json(&raw)?;
-        bundle = parsed.0;
-        mastery = parsed.1;
-    }
-    let target_lang = resolve_bundle_target_lang(&bundle, learning_lang);
-    let import_bundle = if scope == "all" {
-        bundle
-    } else if scope == "my_listening" {
-        LearningDataBundle {
-            learning_lang: bundle.learning_lang.clone(),
-            exported_at: bundle.exported_at.clone(),
-            records: Vec::new(),
-            audio_resources: bundle.audio_resources,
-        }
-    } else if let Some(kind) = record_type_for_scope(&scope) {
-        LearningDataBundle {
-            learning_lang: bundle.learning_lang.clone(),
-            exported_at: bundle.exported_at.clone(),
-            records: bundle
-                .records
-                .into_iter()
-                .filter(|x| x.record_type.trim().eq_ignore_ascii_case(kind))
-                .collect(),
-            audio_resources: Vec::new(),
-        }
-    } else {
-        bundle
-    };
-    let (imported_records, imported_audio_resources) =
-        import_learning_bundle_rows(app, import_bundle, &target_lang)?;
-    Ok(serde_json::json!({
-        "learning_lang": target_lang,
-        "scope": scope,
-        "imported_records": imported_records,
-        "imported_audio_resources": imported_audio_resources,
-        "mastery": mastery
-    }))
+        } else if let Some(kind) = record_type_for_scope(&scope) {
+            LearningDataBundle {
+                learning_lang: bundle.learning_lang.clone(),
+                exported_at: bundle.exported_at.clone(),
+                records: bundle
+                    .records
+                    .into_iter()
+                    .filter(|x| x.record_type.trim().eq_ignore_ascii_case(kind))
+                    .collect(),
+                audio_resources: Vec::new(),
+            }
+        } else {
+            bundle
+        };
+        let (imported_records, imported_audio_resources) =
+            import_learning_bundle_rows(app_clone, import_bundle, &target_lang)?;
+        Ok(serde_json::json!({
+            "learning_lang": target_lang,
+            "scope": scope,
+            "imported_records": imported_records,
+            "imported_audio_resources": imported_audio_resources,
+            "mastery": mastery
+        }))
+    })
+    .await
+    .map_err(|e| format!("导入任务执行失败: {}", e))?
 }
 
 #[tauri::command]
@@ -1912,67 +1922,75 @@ pub async fn language_learning_collect_audio_by_topic(
             },
         ];
     }
-    let total_sources = selected_sources.len().max(1);
-    let per_source_cap = ((limit as f64) / (total_sources as f64)).ceil() as usize + 1;
-    for src in selected_sources {
-        if out.len() >= limit {
-            break;
-        }
-        if !source_matches_language(src.language_tag.as_deref(), &learning_lang) {
-            continue;
-        }
-        let source_limit = (limit - out.len()).min(per_source_cap.max(2));
-        if source_limit == 0 {
-            continue;
-        }
-        let provider = src.provider.trim().to_lowercase();
-        if provider == "archive" {
-            collect_from_archive_org(
+    selected_sources = selected_sources
+        .into_iter()
+        .filter(|src| source_matches_language(src.language_tag.as_deref(), &learning_lang))
+        .collect::<Vec<_>>();
+    if selected_sources.is_empty() {
+        return Err("未找到与当前学习语言匹配的听力源".to_string());
+    }
+    let mut empty_rounds = 0usize;
+    while out.len() < limit && empty_rounds < 2 {
+        let before_round = out.len();
+        for src in selected_sources.clone() {
+            if out.len() >= limit {
+                break;
+            }
+            let source_limit = (limit - out.len()).min(2).max(1);
+            let provider = src.provider.trim().to_lowercase();
+            if provider == "archive" {
+                collect_from_archive_org(
+                    &client,
+                    &app,
+                    &topic,
+                    &learning_lang,
+                    source_limit,
+                    &mut seen,
+                    &mut out,
+                )
+                .await;
+                continue;
+            }
+            if provider == "wikimedia" {
+                collect_from_wikimedia_commons(
+                    &client,
+                    &app,
+                    &topic,
+                    &learning_lang,
+                    source_limit,
+                    &mut seen,
+                    &mut out,
+                )
+                .await;
+                continue;
+            }
+            let max_duration_sec = src.max_duration_sec.unwrap_or(1800).clamp(60, 1800) as f64;
+            let mut feed_url = src.feed_url.trim().to_string();
+            if feed_url.is_empty() {
+                continue;
+            }
+            if feed_url.contains("{topic}") {
+                feed_url = feed_url.replace("{topic}", &encode(&topic));
+            }
+            collect_from_rss_feed(
                 &client,
                 &app,
                 &topic,
                 &learning_lang,
+                &provider,
+                &feed_url,
+                max_duration_sec,
                 source_limit,
                 &mut seen,
                 &mut out,
             )
             .await;
-            continue;
         }
-        if provider == "wikimedia" {
-            collect_from_wikimedia_commons(
-                &client,
-                &app,
-                &topic,
-                &learning_lang,
-                source_limit,
-                &mut seen,
-                &mut out,
-            )
-            .await;
-            continue;
+        if out.len() == before_round {
+            empty_rounds += 1;
+        } else {
+            empty_rounds = 0;
         }
-        let max_duration_sec = src.max_duration_sec.unwrap_or(1800).clamp(60, 1800) as f64;
-        let mut feed_url = src.feed_url.trim().to_string();
-        if feed_url.is_empty() {
-            continue;
-        }
-        if feed_url.contains("{topic}") {
-            feed_url = feed_url.replace("{topic}", &encode(&topic));
-        }
-        collect_from_rss_feed(
-            &client,
-            &app,
-            &topic,
-            &learning_lang,
-            &provider,
-            &feed_url,
-            max_duration_sec,
-            source_limit,
-            &mut seen,
-            &mut out,
-        )
-        .await;
     }
     if out.is_empty() {
         return Err("未找到可用听力资源，请尝试更换主题或语言".to_string());
