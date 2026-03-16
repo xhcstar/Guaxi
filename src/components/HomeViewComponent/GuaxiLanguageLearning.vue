@@ -358,9 +358,17 @@
                     <n-radio-button value="all">全部听力</n-radio-button>
                     <n-radio-button value="remote">在线听力</n-radio-button>
                     <n-radio-button value="local">本地音频</n-radio-button>
-                    <n-radio-button value="dictation">听写素材</n-radio-button>
                   </n-radio-group>
                   <n-select v-model:value="listeningProviderFilter" size="small" :options="listeningProviderOptions" style="width: 150px" />
+                  <n-select
+                    v-model:value="collectTopicCategory"
+                    size="small"
+                    :options="listeningTopicCategoryOptions"
+                    clearable
+                    placeholder="选择分类（支持中文）"
+                    style="width: 190px"
+                    @update:value="onCollectTopicCategoryChange"
+                  />
                   <n-input v-model:value="collectTopic" size="small" clearable placeholder="输入主题后采集听力资源" style="width: 220px" />
                   <n-input-number v-model:value="collectLimit" size="small" :min="1" :max="50" style="width: 110px" />
                   <n-button class="listening-toolbar-circle-btn" quaternary circle size="small" title="听力源管理器" @click="sourceManagerVisible = true">
@@ -841,6 +849,7 @@ const rightCollapsed = ref(false)
 const checkedRowKeys = ref([])
 const listeningKindFilter = ref('all')
 const listeningProviderFilter = ref('all')
+const collectTopicCategory = ref('')
 const collectTopic = ref('')
 const collectLimit = ref(15)
 const collectListeningLoading = ref(false)
@@ -956,7 +965,6 @@ const learningLangOptions = [
 const audioKindOptions = [
   { label: '在线音频', value: 'remote' },
   { label: '本地文件', value: 'local' },
-  { label: '听写素材', value: 'dictation' },
 ]
 
 const listeningProviderOptions = [
@@ -965,6 +973,28 @@ const listeningProviderOptions = [
   { label: 'Wikimedia', value: 'wikimedia' },
   { label: '本地导入', value: 'local' },
 ]
+const listeningTopicCategoryOptions = [
+  { label: '新闻', value: 'news' },
+  { label: '科技', value: 'tech' },
+  { label: '科学', value: 'science' },
+  { label: '数学', value: 'math' },
+  { label: '物理', value: 'physics' },
+  { label: '历史', value: 'history' },
+  { label: '地理', value: 'geography' },
+  { label: '文化', value: 'culture' },
+  { label: '宗教', value: 'religion' },
+  { label: '生活', value: 'life' },
+  { label: '交通', value: 'transport' },
+  { label: '旅游', value: 'travel' },
+  { label: '音乐', value: 'music' },
+  { label: '电影', value: 'movie' },
+]
+const resolveTopicCategoryLabel = (value) => {
+  const key = String(value || '').trim()
+  if (!key) return ''
+  const hit = listeningTopicCategoryOptions.find((x) => x.value === key)
+  return String(hit?.label || '').trim()
+}
 
 const playbackRateOptions = [
   { label: '0.75x', value: 0.75 },
@@ -990,6 +1020,10 @@ const defaultListeningSources = () => ([
   { id: 'src_ted_default', name: 'TED Audio', provider: 'ted', feed_url: 'https://feeds.feedburner.com/TEDTalks_audio', language_tag: 'en', max_duration_min: 30, enabled: true },
   { id: 'src_bbc_default', name: 'BBC Learning', provider: 'bbc', feed_url: 'https://podcasts.files.bbci.co.uk/p02pc9tn.rss', language_tag: 'en', max_duration_min: 30, enabled: true },
   { id: 'src_cnn_default', name: 'CNN 5 Things', provider: 'cnn', feed_url: 'https://rss.art19.com/cnn-5-things', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_npr_upfirst_default', name: 'NPR Up First', provider: 'npr', feed_url: 'https://feeds.npr.org/510318/podcast.xml', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_npr_shortwave_default', name: 'NPR Short Wave', provider: 'npr_science', feed_url: 'https://feeds.npr.org/510351/podcast.xml', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_npr_planetmoney_default', name: 'NPR Planet Money', provider: 'npr_economy', feed_url: 'https://feeds.npr.org/510289/podcast.xml', language_tag: 'en', max_duration_min: 30, enabled: true },
+  { id: 'src_abc_science_default', name: 'ABC Science Show', provider: 'abc_science', feed_url: 'https://www.abc.net.au/feeds/2889546/podcast.xml', language_tag: 'en', max_duration_min: 30, enabled: true },
 ])
 
 const normalizeListeningSource = (src, fallbackId = '') => ({
@@ -1057,6 +1091,14 @@ const addListeningSource = () => {
 const removeListeningSource = (id) => {
   listeningSources.value = listeningSources.value.filter((x) => x.id !== id)
   persistListeningSources()
+}
+const onCollectTopicCategoryChange = (value) => {
+  const label = resolveTopicCategoryLabel(value)
+  if (!label) return
+  const current = String(collectTopic.value || '').trim()
+  if (!current) {
+    collectTopic.value = label
+  }
 }
 
 const createdPeriodOptions = [
@@ -1183,6 +1225,19 @@ const rowTypeLabel = (t) => {
 }
 
 const normalizeText = (v) => String(v || '').trim().toLowerCase()
+const normalizeTopicForDisplay = (v) => {
+  const raw = String(v || '').trim()
+  if (!raw) return '未标注'
+  const compact = raw.replace(/\s+/g, ' ').trim()
+  const tokens = compact.split(' ').filter(Boolean)
+  if (tokens.length >= 4 && tokens.length % 2 === 0) {
+    const half = tokens.length / 2
+    const a = tokens.slice(0, half).join(' ')
+    const b = tokens.slice(half).join(' ')
+    if (a === b) return a
+  }
+  return compact
+}
 const splitSimpleTranslations = (text) => {
   const src = String(text || '').trim()
   if (!src) return []
@@ -1589,7 +1644,10 @@ const listeningColumns = [
     title: '主题',
     key: 'topic',
     width: 140,
-    render: (row) => h(NTag, { size: 'small', type: 'info' }, { default: () => String(row.payload?.topic || '未标注') }),
+    render: (row) => {
+      const topic = normalizeTopicForDisplay(row.payload?.topic)
+      return h('div', { class: 'topic-cell', title: topic }, topic)
+    },
   },
   { title: '标题', key: 'title', minWidth: 240, ellipsis: { tooltip: true } },
   {
@@ -2498,9 +2556,11 @@ const deleteSelectedRows = async () => {
 const collectListeningByTopic = async () => {
   collectListeningLoading.value = true
   try {
-    const topic = String(collectTopic.value || audioForm.topic || '').trim()
+    const baseTopic = String(collectTopic.value || audioForm.topic || '').trim()
+    const categoryLabel = resolveTopicCategoryLabel(collectTopicCategory.value)
+    const topic = (baseTopic || categoryLabel).trim()
     if (!topic) {
-      message.warning('请先输入听力主题')
+      message.warning('请先输入听力主题或选择分类')
       return
     }
     const limit = Number(collectLimit.value || 15)
@@ -2532,8 +2592,8 @@ const collectListeningByTopic = async () => {
     }
     await refreshAudio()
     await refreshShelfCounts()
-    collectTopic.value = topic
-    audioForm.topic = topic
+    collectTopic.value = baseTopic || categoryLabel
+    audioForm.topic = collectTopic.value
   } catch (err) {
     message.error(`主题采集失败: ${String(err?.message || err || '')}`)
   } finally {
@@ -4129,6 +4189,18 @@ onBeforeUnmount(() => {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.topic-cell {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 34%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, var(--guaxi-panel-bg));
+  color: color-mix(in srgb, var(--primary-color, #4acadb) 78%, var(--guaxi-text-primary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mastery-stars {

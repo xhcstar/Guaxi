@@ -7,9 +7,10 @@ use reqwest::Client;
 use rss::Channel;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::env;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(target_os = "windows")]
@@ -1511,11 +1512,17 @@ pub async fn language_learning_collect_audio_by_topic(
             },
         ];
     }
+    let total_sources = selected_sources.len().max(1);
+    let per_source_cap = ((limit as f64) / (total_sources as f64)).ceil() as usize + 1;
     for src in selected_sources {
         if out.len() >= limit {
             break;
         }
         if !source_matches_language(src.language_tag.as_deref(), &learning_lang) {
+            continue;
+        }
+        let source_limit = (limit - out.len()).min(per_source_cap.max(2));
+        if source_limit == 0 {
             continue;
         }
         let provider = src.provider.trim().to_lowercase();
@@ -1525,7 +1532,7 @@ pub async fn language_learning_collect_audio_by_topic(
                 &app,
                 &topic,
                 &learning_lang,
-                limit - out.len(),
+                source_limit,
                 &mut seen,
                 &mut out,
             )
@@ -1538,7 +1545,7 @@ pub async fn language_learning_collect_audio_by_topic(
                 &app,
                 &topic,
                 &learning_lang,
-                limit - out.len(),
+                source_limit,
                 &mut seen,
                 &mut out,
             )
@@ -1561,7 +1568,7 @@ pub async fn language_learning_collect_audio_by_topic(
             &provider,
             &feed_url,
             max_duration_sec,
-            limit - out.len(),
+            source_limit,
             &mut seen,
             &mut out,
         )
@@ -1596,11 +1603,25 @@ async fn collect_from_archive_org(
         "ru" => " AND (language:(rus OR russian))",
         _ => "",
     };
-    let query = format!("({}) AND mediatype:(audio){lang_filter}", topic);
+    let variants = topic_keyword_variants(topic);
+    let topic_query = if variants.is_empty() {
+        topic.to_string()
+    } else {
+        variants
+            .iter()
+            .take(8)
+            .map(|kw| format!("({})", kw))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    };
+    let day_seed = chrono::Utc::now().format("%Y%m%d").to_string();
+    let archive_page = 1 + (stable_hash_u64(&format!("archive:{}:{}", topic, day_seed)) % 4) as usize;
+    let query = format!("({}) AND mediatype:(audio){lang_filter}", topic_query);
     let url = format!(
-        "https://archive.org/advancedsearch.php?q={}&fl[]=identifier&fl[]=title&fl[]=description&rows={}&page=1&output=json",
+        "https://archive.org/advancedsearch.php?q={}&fl[]=identifier&fl[]=title&fl[]=description&rows={}&page={}&sort[]=publicdate%20desc&output=json",
         encode(&query),
-        limit.saturating_mul(4).clamp(12, 120)
+        limit.saturating_mul(5).clamp(16, 140),
+        archive_page
     );
     let payload = match fetch_json(client, &url).await {
         Some(v) => v,
@@ -1718,10 +1739,24 @@ async fn collect_from_wikimedia_commons(
     if limit == 0 {
         return;
     }
-    let search = format!("filetype:audio {}", topic);
+    let variants = topic_keyword_variants(topic);
+    let query_terms = if variants.is_empty() {
+        topic.to_string()
+    } else {
+        variants
+            .iter()
+            .take(6)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let day_seed = chrono::Utc::now().format("%Y%m%d%H").to_string();
+    let sr_offset = (stable_hash_u64(&format!("wikimedia:{}:{}", topic, day_seed)) % 80) as usize;
+    let search = format!("filetype:audio {}", query_terms);
     let search_url = format!(
-        "https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch={}&srlimit={}&format=json&utf8=1",
+        "https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch={}&sroffset={}&srlimit={}&format=json&utf8=1",
         encode(&search),
+        sr_offset,
         limit.saturating_mul(4).clamp(12, 80)
     );
     let payload = match fetch_json(client, &search_url).await {
@@ -1836,11 +1871,19 @@ async fn collect_from_rss_feed(
         Ok(v) => v,
         Err(_) => return,
     };
-    let topic_lc = topic.to_lowercase();
+    struct RssCandidate {
+        source_uri: String,
+        title: String,
+        notes: String,
+        page_url: String,
+        content_text: String,
+        duration_sec: f64,
+        pub_ts: Option<i64>,
+        score: f64,
+    }
+    let bucket = chrono::Utc::now().format("%Y%m%d%H").to_string();
+    let mut candidates = Vec::new();
     for item in channel.items() {
-        if out.len() >= limit {
-            break;
-        }
         let enclosure = match item.enclosure() {
             Some(v) => v,
             None => continue,
@@ -1863,54 +1906,98 @@ async fn collect_from_rss_feed(
             format!("{}\n来源页: {}", base_notes, page_url)
         };
         let search_text = format!("{} {}", title.to_lowercase(), notes.to_lowercase());
-        if !topic_lc.is_empty() && !search_text.contains(&topic_lc) {
+        if !topic_matches_text(&search_text, topic) {
             continue;
         }
-        let mut duration_sec = parse_duration_text(item.itunes_ext().and_then(|x| x.duration()).unwrap_or_default()).unwrap_or(0.0);
+        let mut duration_sec =
+            parse_duration_text(item.itunes_ext().and_then(|x| x.duration()).unwrap_or_default())
+                .unwrap_or(0.0);
         if duration_sec <= 0.0 {
             duration_sec = 0.0;
         }
         if duration_sec > max_duration_sec {
             continue;
         }
-        let mut transcript = if content_text.chars().count() >= 220 {
-            split_long_text_to_lines(&content_text)
+        let pub_ts = parse_pub_datetime_to_ts(item.pub_date().unwrap_or_default());
+        let recency = recency_preference_weight(pub_ts);
+        let duration_pref = duration_preference_weight(duration_sec);
+        let jitter = (stable_hash_u64(&format!(
+            "{}|{}|{}|{}",
+            source_uri, topic, provider, bucket
+        )) % 1000) as f64
+            / 1000.0
+            * 0.24;
+        candidates.push(RssCandidate {
+            source_uri,
+            title,
+            notes,
+            page_url,
+            content_text,
+            duration_sec,
+            pub_ts,
+            score: recency * duration_pref + jitter,
+        });
+    }
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.pub_ts.unwrap_or(0).cmp(&a.pub_ts.unwrap_or(0)))
+    });
+    for candidate in candidates.into_iter().take(limit) {
+        if out.len() >= limit {
+            break;
+        }
+        let mut transcript = if candidate.content_text.chars().count() >= 220 {
+            split_long_text_to_lines(&candidate.content_text)
         } else {
             String::new()
         };
         if transcript.trim().is_empty() {
             transcript = fetch_transcript_from_source(
-            client,
-            Some(provider),
-            &source_uri,
-            if page_url.is_empty() { None } else { Some(page_url.as_str()) },
-            if notes.is_empty() { None } else { Some(notes.as_str()) },
+                client,
+                Some(provider),
+                &candidate.source_uri,
+                if candidate.page_url.is_empty() {
+                    None
+                } else {
+                    Some(candidate.page_url.as_str())
+                },
+                if candidate.notes.is_empty() {
+                    None
+                } else {
+                    Some(candidate.notes.as_str())
+                },
             )
             .await
             .unwrap_or_default();
         }
         if transcript.trim().is_empty() {
-            transcript = if notes.is_empty() { String::new() } else { notes.clone() };
+            transcript = if candidate.notes.is_empty() {
+                String::new()
+            } else {
+                candidate.notes.clone()
+            };
         }
-        seen.insert(source_uri.clone());
+        seen.insert(candidate.source_uri.clone());
         let saved = language_learning_upsert_audio_resource(
             app.clone(),
             AudioResourceInput {
                 id: None,
-                title: if title.is_empty() {
+                title: if candidate.title.is_empty() {
                     format!("{}（{}）", topic, provider)
                 } else {
-                    title
+                    candidate.title
                 },
                 source_kind: "remote".to_string(),
-                source_uri,
+                source_uri: candidate.source_uri,
                 provider: Some(provider.to_string()),
                 topic: Some(topic.to_string()),
                 language_tag: Some(learning_lang.to_string()),
                 transcript: Some(transcript),
                 sync_json_uri: Some(String::new()),
-                notes: Some(notes),
-                duration_sec: Some(duration_sec),
+                notes: Some(candidate.notes),
+                duration_sec: Some(candidate.duration_sec),
             },
             Some(learning_lang.to_string()),
         );
@@ -2300,6 +2387,120 @@ fn source_matches_language(source_lang: Option<&str>, learning_lang: &str) -> bo
         return true;
     }
     s == learning_lang
+}
+
+fn stable_hash_u64(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn topic_keyword_variants(topic: &str) -> Vec<String> {
+    let raw = topic.trim().to_lowercase();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let domain_aliases: [(&str, &[&str]); 14] = [
+        ("新闻", &["news", "current events", "world news"]),
+        ("科技", &["tech", "technology", "ai", "digital"]),
+        ("科学", &["science", "research", "discovery"]),
+        ("数学", &["math", "mathematics", "algebra", "geometry"]),
+        ("物理", &["physics", "quantum", "mechanics"]),
+        ("历史", &["history", "ancient history", "modern history"]),
+        ("地理", &["geography", "earth", "places"]),
+        ("文化", &["culture", "society", "humanities"]),
+        ("宗教", &["religion", "faith", "belief"]),
+        ("生活", &["life", "lifestyle", "daily life"]),
+        ("交通", &["transport", "traffic", "mobility"]),
+        ("旅游", &["travel", "tourism", "trip"]),
+        ("音乐", &["music", "song", "concert"]),
+        ("电影", &["movie", "film", "cinema"]),
+    ];
+    let mut out = Vec::new();
+    out.push(raw.clone());
+    for (zh, aliases) in domain_aliases {
+        if raw.contains(zh) || aliases.iter().any(|x| raw.contains(x)) {
+            out.push(zh.to_string());
+            for alias in aliases {
+                out.push(alias.to_string());
+            }
+        }
+    }
+    let chunks = raw
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '，' || c == ';' || c == '；' || c == '/' || c == '|')
+        .map(|x| x.trim())
+        .filter(|x| !x.is_empty());
+    for chunk in chunks {
+        out.push(chunk.to_string());
+    }
+    let mut uniq = Vec::new();
+    for item in out {
+        let key = item.trim().to_lowercase();
+        if key.len() < 2 {
+            continue;
+        }
+        if !uniq.iter().any(|x: &String| x == &key) {
+            uniq.push(key);
+        }
+    }
+    uniq
+}
+
+fn topic_matches_text(text_lc: &str, topic: &str) -> bool {
+    let variants = topic_keyword_variants(topic);
+    if variants.is_empty() {
+        return true;
+    }
+    variants.iter().any(|kw| text_lc.contains(kw))
+}
+
+fn duration_preference_weight(duration_sec: f64) -> f64 {
+    if duration_sec <= 0.0 {
+        return 1.0;
+    }
+    if (600.0..=1200.0).contains(&duration_sec) {
+        return 1.25;
+    }
+    if (1200.0..=1800.0).contains(&duration_sec) {
+        return 0.88;
+    }
+    if duration_sec < 600.0 {
+        return 0.82;
+    }
+    0.78
+}
+
+fn recency_preference_weight(pub_ts: Option<i64>) -> f64 {
+    let ts = match pub_ts {
+        Some(v) if v > 0 => v,
+        _ => return 1.0,
+    };
+    let now = chrono::Utc::now().timestamp();
+    let age_days = ((now - ts).max(0) as f64) / 86400.0;
+    if age_days <= 2.0 {
+        return 1.34;
+    }
+    if age_days <= 7.0 {
+        return 1.2;
+    }
+    if age_days <= 30.0 {
+        return 1.06;
+    }
+    0.9
+}
+
+fn parse_pub_datetime_to_ts(raw: &str) -> Option<i64> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(text) {
+        return Some(dt.timestamp());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(text) {
+        return Some(dt.timestamp());
+    }
+    None
 }
 
 fn strip_html_tags(text: &str) -> String {
