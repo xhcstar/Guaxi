@@ -3365,27 +3365,40 @@ const readTextFileByPath = async (path) => {
   return decoder.decode(bytes)
 }
 
-const writeTextFileByPath = async (path, text) => {
-  const { writeFile } = await import('@tauri-apps/plugin-fs')
-  const encoder = new TextEncoder()
-  await writeFile(path, encoder.encode(text))
+const cleanedTopicLangSet = new Set()
+const resolveLearningScope = () => {
+  const key = String(selectedShelf.value || 'all').trim()
+  return key || 'all'
+}
+const scopeNeedsAssetPackage = (scope) => scope === 'all' || scope === 'my_listening'
+const cleanupDuplicateListeningTopics = async () => {
+  const lang = String(learningLang.value || 'zh')
+  if (cleanedTopicLangSet.has(lang)) return
+  try {
+    await invoke('language_learning_cleanup_duplicate_topics', { learningLang: lang })
+    cleanedTopicLangSet.add(lang)
+  } catch {}
 }
 
 const exportLearningData = async () => {
   try {
-    const defaultName = `language-learning-export-${Date.now()}.json`
+    const scope = resolveLearningScope()
+    const isAssetPackage = scopeNeedsAssetPackage(scope)
+    const ext = isAssetPackage ? 'zip' : 'json'
+    const defaultName = `language-learning-export-${scope}-${Date.now()}.${ext}`
     const path = await save({
       defaultPath: defaultName,
-      filters: [{ name: 'JSON', extensions: ['json'] }],
+      filters: [{ name: isAssetPackage ? 'ZIP' : 'JSON', extensions: [ext] }],
     })
     if (!path) return
-    const bundle = await invoke('language_learning_export_bundle', { learningLang: learningLang.value })
-    const payload = {
-      ...bundle,
+    const result = await invoke('language_learning_export_scope_package', {
+      learningLang: learningLang.value,
+      scope,
+      outputPath: String(path),
       mastery: masteryStore.value,
-    }
-    await writeTextFileByPath(String(path), JSON.stringify(payload, null, 2))
-    message.success('学习数据已导出')
+    })
+    message.success(`学习数据已导出（${scope}）`)
+    console.info('[LangLearning] export-scope-package', result)
   } catch (err) {
     message.error(`导出失败: ${String(err?.message || err || '')}`)
   }
@@ -3393,33 +3406,32 @@ const exportLearningData = async () => {
 
 const importLearningData = async () => {
   try {
+    const scope = resolveLearningScope()
     const path = await open({
       multiple: false,
-      filters: [{ name: 'JSON', extensions: ['json'] }],
+      filters: [
+        { name: 'Package', extensions: ['zip', 'json'] },
+      ],
     })
     if (!path || Array.isArray(path)) return
-    const text = await readTextFileByPath(String(path))
-    const payload = JSON.parse(text || '{}')
     const rowsBefore = allRows.value.length
-    await invoke('language_learning_import_bundle', {
-      bundle: {
-        learning_lang: payload.learning_lang || learningLang.value,
-        exported_at: payload.exported_at || new Date().toISOString(),
-        records: Array.isArray(payload.records) ? payload.records : [],
-        audio_resources: Array.isArray(payload.audio_resources) ? payload.audio_resources : [],
-      },
+    const result = await invoke('language_learning_import_scope_package', {
       learningLang: learningLang.value,
+      scope,
+      inputPath: String(path),
     })
-    if (payload?.mastery && typeof payload.mastery === 'object') {
+    if (result?.mastery && typeof result.mastery === 'object') {
       masteryStore.value = {
-        record: payload.mastery.record && typeof payload.mastery.record === 'object' ? payload.mastery.record : masteryStore.value.record,
-        audio: payload.mastery.audio && typeof payload.mastery.audio === 'object' ? payload.mastery.audio : masteryStore.value.audio,
+        record: result.mastery.record && typeof result.mastery.record === 'object' ? result.mastery.record : masteryStore.value.record,
+        audio: result.mastery.audio && typeof result.mastery.audio === 'object' ? result.mastery.audio : masteryStore.value.audio,
       }
       saveMasteryStore()
     }
+    await cleanupDuplicateListeningTopics()
     await refreshAll()
     const rowsAfter = allRows.value.length
-    message.success(`导入完成，新增或更新 ${Math.max(0, rowsAfter - rowsBefore)} 项，可用于恢复并自动差异合并`)
+    message.success(`导入完成（${scope}），新增或更新 ${Math.max(0, rowsAfter - rowsBefore)} 项`)
+    console.info('[LangLearning] import-scope-package', result)
   } catch (err) {
     message.error(`导入失败: ${String(err?.message || err || '')}`)
   }
@@ -3483,6 +3495,7 @@ watch(learningLang, async (v) => {
     window.localStorage.setItem(learningLangStorageKey, String(v || 'zh'))
   } catch {}
   activeRow.value = null
+  await cleanupDuplicateListeningTopics()
   await refreshAll()
   await resumePendingSyncTasks()
   rebuildReviewRows()
@@ -3682,6 +3695,7 @@ onMounted(async () => {
   loadMasteryStore()
   loadListeningSources()
   persistListeningSources()
+  await cleanupDuplicateListeningTopics()
   await refreshAll()
   await resumePendingSyncTasks()
   if (filteredRows.value.length) {

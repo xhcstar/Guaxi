@@ -7,10 +7,11 @@ use reqwest::Client;
 use rss::Channel;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(target_os = "windows")]
@@ -20,6 +21,8 @@ use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
 use urlencoding::encode;
 use uuid::Uuid;
+use zip::write::FileOptions;
+use zip::{ZipArchive, ZipWriter};
 
 const LANG_LEARN_DIR_NAME: &str = "guaxi_language_learning";
 const LANG_LEARN_DB_NAME: &str = "language_learning.sqlite3";
@@ -197,6 +200,27 @@ pub struct LearningDataBundle {
     pub exported_at: String,
     pub records: Vec<TranslationRecord>,
     pub audio_resources: Vec<AudioResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct LearningAudioAssetRef {
+    pub audio_id: String,
+    #[serde(default)]
+    pub media_path: String,
+    #[serde(default)]
+    pub sync_json_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LearningExportPackage {
+    pub learning_lang: String,
+    pub scope: String,
+    pub exported_at: String,
+    pub bundle: LearningDataBundle,
+    #[serde(default)]
+    pub assets: Vec<LearningAudioAssetRef>,
+    #[serde(default)]
+    pub mastery: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -457,6 +481,62 @@ fn normalize_learning_lang(lang: Option<String>) -> String {
         return "zh".to_string();
     }
     out
+}
+
+fn normalize_learning_scope(scope: Option<String>) -> String {
+    let raw = scope.unwrap_or_else(|| "all".to_string());
+    let key = raw.trim().to_lowercase();
+    match key.as_str() {
+        "all" | "my_vocab" | "my_sentences" | "my_paragraphs" | "my_listening" => key,
+        _ => "all".to_string(),
+    }
+}
+
+fn record_type_for_scope(scope: &str) -> Option<&'static str> {
+    match scope {
+        "my_vocab" => Some("word"),
+        "my_sentences" => Some("sentence"),
+        "my_paragraphs" => Some("paragraph"),
+        _ => None,
+    }
+}
+
+fn scope_requires_assets(scope: &str) -> bool {
+    scope == "all" || scope == "my_listening"
+}
+
+fn normalize_topic_once(raw: &str) -> String {
+    let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return String::new();
+    }
+    let tokens = compact.split(' ').collect::<Vec<_>>();
+    if tokens.len() >= 4 && tokens.len() % 2 == 0 {
+        let half = tokens.len() / 2;
+        let a = tokens[..half].join(" ");
+        let b = tokens[half..].join(" ");
+        if a == b {
+            return a;
+        }
+    }
+    compact
+}
+
+fn sanitize_asset_fragment(raw: &str) -> String {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let cleaned = out.trim_matches('_').to_string();
+    if cleaned.is_empty() {
+        "item".to_string()
+    } else {
+        cleaned
+    }
 }
 
 fn resolve_listening_translate_target_lang() -> String {
@@ -1174,42 +1254,60 @@ pub fn language_learning_delete_records(
     })
 }
 
-#[tauri::command]
-pub fn language_learning_export_bundle(
+fn resolve_bundle_target_lang(bundle: &LearningDataBundle, learning_lang: Option<String>) -> String {
+    normalize_learning_lang(Some(if let Some(v) = learning_lang {
+        v
+    } else if bundle.learning_lang.trim().is_empty() {
+        "zh".to_string()
+    } else {
+        bundle.learning_lang.clone()
+    }))
+}
+
+fn build_learning_bundle_for_scope(
     app: tauri::AppHandle,
-    learning_lang: Option<String>,
+    learning_lang: &str,
+    scope: &str,
 ) -> Result<LearningDataBundle, String> {
-    let lang = normalize_learning_lang(learning_lang);
-    let records = language_learning_list_records(
-        app.clone(),
-        None,
-        Some("all".to_string()),
-        Some(lang.clone()),
-        Some(100000),
-        Some(0),
-    )?;
-    let audio_resources = language_learning_list_audio_resources(app, None, Some(lang.clone()))?;
+    let records = if scope == "my_listening" {
+        Vec::new()
+    } else if let Some(kind) = record_type_for_scope(scope) {
+        language_learning_list_records(
+            app.clone(),
+            None,
+            Some(kind.to_string()),
+            Some(learning_lang.to_string()),
+            Some(100000),
+            Some(0),
+        )?
+    } else {
+        language_learning_list_records(
+            app.clone(),
+            None,
+            Some("all".to_string()),
+            Some(learning_lang.to_string()),
+            Some(100000),
+            Some(0),
+        )?
+    };
+    let audio_resources = if scope == "my_vocab" || scope == "my_sentences" || scope == "my_paragraphs" {
+        Vec::new()
+    } else {
+        language_learning_list_audio_resources(app, None, Some(learning_lang.to_string()))?
+    };
     Ok(LearningDataBundle {
-        learning_lang: lang,
+        learning_lang: learning_lang.to_string(),
         exported_at: now_iso(),
         records,
         audio_resources,
     })
 }
 
-#[tauri::command]
-pub fn language_learning_import_bundle(
+fn import_learning_bundle_rows(
     app: tauri::AppHandle,
     bundle: LearningDataBundle,
-    learning_lang: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let target_lang = normalize_learning_lang(Some(if let Some(v) = learning_lang {
-        v
-    } else if bundle.learning_lang.trim().is_empty() {
-        "zh".to_string()
-    } else {
-        bundle.learning_lang
-    }));
+    target_lang: &str,
+) -> Result<(i64, i64), String> {
     let mut imported_records = 0i64;
     let mut imported_audio_resources = 0i64;
     for r in bundle.records {
@@ -1256,13 +1354,315 @@ pub fn language_learning_import_bundle(
             notes: Some(a.notes),
             duration_sec: Some(a.duration_sec),
         };
-        let _ = language_learning_upsert_audio_resource(app.clone(), input, Some(target_lang.clone()))?;
+        let _ = language_learning_upsert_audio_resource(app.clone(), input, Some(target_lang.to_string()))?;
         imported_audio_resources += 1;
     }
+    Ok((imported_records, imported_audio_resources))
+}
+
+fn write_file_to_zip(zip: &mut ZipWriter<std::fs::File>, entry_name: &str, bytes: &[u8]) -> Result<(), String> {
+    let options: FileOptions<'_, ()> = FileOptions::default();
+    zip.start_file(entry_name, options).map_err(|e| format!("写入压缩包文件失败: {}", e))?;
+    zip.write_all(bytes).map_err(|e| format!("写入压缩包内容失败: {}", e))?;
+    Ok(())
+}
+
+fn maybe_collect_local_asset_path(audio: &AudioResource) -> Option<PathBuf> {
+    let source = normalize_media_uri(&audio.source_uri);
+    if !source.is_empty() && !source.starts_with("http://") && !source.starts_with("https://") {
+        let p = PathBuf::from(source);
+        if p.exists() && p.is_file() {
+            return Some(p);
+        }
+    }
+    let entry = resolve_listening_entry_dir_by_id(&audio.id).ok().flatten()?;
+    let mut candidates = fs::read_dir(entry).ok()?;
+    while let Some(Ok(e)) = candidates.next() {
+        let p = e.path();
+        if p.is_file() {
+            let name = p.file_name().and_then(|x| x.to_str()).unwrap_or_default().to_lowercase();
+            if name.starts_with("media.") {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn maybe_collect_sync_asset_path(audio: &AudioResource) -> Option<PathBuf> {
+    let sync = normalize_media_uri(&audio.sync_json_uri);
+    if !sync.is_empty() {
+        let p = PathBuf::from(sync);
+        if p.exists() && p.is_file() {
+            return Some(p);
+        }
+    }
+    let entry = resolve_listening_entry_dir_by_id(&audio.id).ok().flatten()?;
+    let p = entry.join("media.json");
+    if p.exists() && p.is_file() {
+        return Some(p);
+    }
+    None
+}
+
+fn parse_bundle_and_mastery_from_json(raw: &str) -> Result<(LearningDataBundle, serde_json::Value), String> {
+    if let Ok(pkg) = serde_json::from_str::<LearningExportPackage>(raw) {
+        return Ok((pkg.bundle, pkg.mastery));
+    }
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| format!("解析导入文件失败: {}", e))?;
+    let bundle = LearningDataBundle {
+        learning_lang: v.get("learning_lang").and_then(|x| x.as_str()).unwrap_or("zh").to_string(),
+        exported_at: v
+            .get("exported_at")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        records: serde_json::from_value(v.get("records").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .unwrap_or_default(),
+        audio_resources: serde_json::from_value(v.get("audio_resources").cloned().unwrap_or_else(|| serde_json::json!([])))
+            .unwrap_or_default(),
+    };
+    let mastery = v.get("mastery").cloned().unwrap_or_else(|| serde_json::json!({}));
+    Ok((bundle, mastery))
+}
+
+#[tauri::command]
+pub fn language_learning_export_bundle(
+    app: tauri::AppHandle,
+    learning_lang: Option<String>,
+) -> Result<LearningDataBundle, String> {
+    let lang = normalize_learning_lang(learning_lang);
+    build_learning_bundle_for_scope(app, &lang, "all")
+}
+
+#[tauri::command]
+pub fn language_learning_import_bundle(
+    app: tauri::AppHandle,
+    bundle: LearningDataBundle,
+    learning_lang: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let target_lang = resolve_bundle_target_lang(&bundle, learning_lang);
+    let (imported_records, imported_audio_resources) =
+        import_learning_bundle_rows(app, bundle, &target_lang)?;
     Ok(serde_json::json!({
         "learning_lang": target_lang,
         "imported_records": imported_records,
         "imported_audio_resources": imported_audio_resources
+    }))
+}
+
+#[tauri::command]
+pub fn language_learning_cleanup_duplicate_topics(
+    app: tauri::AppHandle,
+    learning_lang: Option<String>,
+) -> Result<serde_json::Value, String> {
+    with_db(&app, |conn| {
+        let lang = normalize_learning_lang(learning_lang);
+        ensure_lang_tables(conn, &lang)?;
+        let table = audio_table_for(&lang);
+        let sql = format!("SELECT id, topic FROM {}", table);
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("准备查询主题失败: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("读取主题失败: {}", e))?;
+        let mut changed = 0i64;
+        for row in rows {
+            let (id, topic) = row.map_err(|e| format!("解析主题失败: {}", e))?;
+            let normalized = normalize_topic_once(&topic);
+            if normalized == topic {
+                continue;
+            }
+            let up_sql = format!("UPDATE {} SET topic = ?1, updated_at = ?2 WHERE id = ?3", table);
+            conn.execute(&up_sql, params![normalized, now_iso(), id])
+                .map_err(|e| format!("更新主题失败: {}", e))?;
+            changed += 1;
+        }
+        Ok(serde_json::json!({ "learning_lang": lang, "changed_topics": changed }))
+    })
+}
+
+#[tauri::command]
+pub fn language_learning_export_scope_package(
+    app: tauri::AppHandle,
+    learning_lang: Option<String>,
+    scope: Option<String>,
+    output_path: String,
+    mastery: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let lang = normalize_learning_lang(learning_lang);
+    let scope = normalize_learning_scope(scope);
+    let output = output_path.trim();
+    if output.is_empty() {
+        return Err("导出路径不能为空".to_string());
+    }
+    let bundle = build_learning_bundle_for_scope(app.clone(), &lang, &scope)?;
+    let package = LearningExportPackage {
+        learning_lang: lang.clone(),
+        scope: scope.clone(),
+        exported_at: now_iso(),
+        bundle,
+        assets: Vec::new(),
+        mastery: mastery.unwrap_or_else(|| serde_json::json!({})),
+    };
+    if !scope_requires_assets(&scope) {
+        let text = serde_json::to_string_pretty(&package).map_err(|e| format!("序列化导出数据失败: {}", e))?;
+        fs::write(output, text).map_err(|e| format!("写入导出文件失败: {}", e))?;
+        return Ok(serde_json::json!({
+            "learning_lang": lang,
+            "scope": scope,
+            "export_path": output,
+            "records": package.bundle.records.len(),
+            "audio_resources": package.bundle.audio_resources.len(),
+            "assets": 0
+        }));
+    }
+    let file = std::fs::File::create(output).map_err(|e| format!("创建导出压缩包失败: {}", e))?;
+    let mut zip = ZipWriter::new(file);
+    let mut package = package;
+    let mut assets_count = 0usize;
+    for audio in &package.bundle.audio_resources {
+        let id_key = sanitize_asset_fragment(&audio.id);
+        let mut asset_ref = LearningAudioAssetRef {
+            audio_id: audio.id.clone(),
+            media_path: String::new(),
+            sync_json_path: String::new(),
+        };
+        if let Some(media_path) = maybe_collect_local_asset_path(audio) {
+            let ext = media_path
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("mp3")
+                .to_lowercase();
+            let rel = format!("assets/{}/media.{}", id_key, ext);
+            let bytes = fs::read(&media_path).map_err(|e| format!("读取音频资源失败: {}", e))?;
+            write_file_to_zip(&mut zip, &rel, &bytes)?;
+            asset_ref.media_path = rel;
+            assets_count += 1;
+        }
+        if let Some(sync_path) = maybe_collect_sync_asset_path(audio) {
+            let rel = format!("assets/{}/media.json", id_key);
+            let bytes = fs::read(&sync_path).map_err(|e| format!("读取同步元数据失败: {}", e))?;
+            write_file_to_zip(&mut zip, &rel, &bytes)?;
+            asset_ref.sync_json_path = rel;
+            assets_count += 1;
+        }
+        if !asset_ref.media_path.is_empty() || !asset_ref.sync_json_path.is_empty() {
+            package.assets.push(asset_ref);
+        }
+    }
+    let manifest = serde_json::to_string_pretty(&package).map_err(|e| format!("序列化导出包失败: {}", e))?;
+    write_file_to_zip(&mut zip, "package.json", manifest.as_bytes())?;
+    zip.finish().map_err(|e| format!("完成导出压缩包失败: {}", e))?;
+    Ok(serde_json::json!({
+        "learning_lang": lang,
+        "scope": scope,
+        "export_path": output,
+        "records": package.bundle.records.len(),
+        "audio_resources": package.bundle.audio_resources.len(),
+        "assets": assets_count
+    }))
+}
+
+#[tauri::command]
+pub fn language_learning_import_scope_package(
+    app: tauri::AppHandle,
+    learning_lang: Option<String>,
+    scope: Option<String>,
+    input_path: String,
+) -> Result<serde_json::Value, String> {
+    let scope = normalize_learning_scope(scope);
+    let path = input_path.trim();
+    if path.is_empty() {
+        return Err("导入路径不能为空".to_string());
+    }
+    let mut bundle: LearningDataBundle;
+    let mut mastery = serde_json::json!({});
+    if path.to_lowercase().ends_with(".zip") {
+        let file = std::fs::File::open(path).map_err(|e| format!("打开导入压缩包失败: {}", e))?;
+        let mut archive = ZipArchive::new(file).map_err(|e| format!("读取导入压缩包失败: {}", e))?;
+        let mut manifest_text = String::new();
+        archive
+            .by_name("package.json")
+            .map_err(|e| format!("导入包缺少 package.json: {}", e))?
+            .read_to_string(&mut manifest_text)
+            .map_err(|e| format!("读取 package.json 失败: {}", e))?;
+        let package: LearningExportPackage =
+            serde_json::from_str(&manifest_text).map_err(|e| format!("解析导入包失败: {}", e))?;
+        bundle = package.bundle;
+        mastery = package.mastery;
+        let mut asset_map = HashMap::new();
+        for asset in package.assets {
+            asset_map.insert(asset.audio_id.clone(), asset);
+        }
+        for audio in &mut bundle.audio_resources {
+            let Some(asset) = asset_map.get(&audio.id) else {
+                continue;
+            };
+            let entry_dir = resolve_listening_entry_dir(audio)?;
+            if !asset.media_path.trim().is_empty() {
+                if let Ok(mut zf) = archive.by_name(asset.media_path.as_str()) {
+                    let mut bytes = Vec::new();
+                    zf.read_to_end(&mut bytes)
+                        .map_err(|e| format!("读取导入音频失败: {}", e))?;
+                    let ext = Path::new(asset.media_path.as_str())
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .unwrap_or("mp3")
+                        .to_lowercase();
+                    let media_path = entry_dir.join(format!("media.{}", ext));
+                    fs::write(&media_path, bytes).map_err(|e| format!("写入导入音频失败: {}", e))?;
+                    audio.source_uri = media_path.to_string_lossy().to_string();
+                }
+            }
+            if !asset.sync_json_path.trim().is_empty() {
+                if let Ok(mut zf) = archive.by_name(asset.sync_json_path.as_str()) {
+                    let mut bytes = Vec::new();
+                    zf.read_to_end(&mut bytes)
+                        .map_err(|e| format!("读取导入元数据失败: {}", e))?;
+                    let sync_path = entry_dir.join("media.json");
+                    fs::write(&sync_path, bytes).map_err(|e| format!("写入导入元数据失败: {}", e))?;
+                    audio.sync_json_uri = sync_path.to_string_lossy().to_string();
+                }
+            }
+        }
+    } else {
+        let raw = fs::read_to_string(path).map_err(|e| format!("读取导入文件失败: {}", e))?;
+        let parsed = parse_bundle_and_mastery_from_json(&raw)?;
+        bundle = parsed.0;
+        mastery = parsed.1;
+    }
+    let target_lang = resolve_bundle_target_lang(&bundle, learning_lang);
+    let import_bundle = if scope == "all" {
+        bundle
+    } else if scope == "my_listening" {
+        LearningDataBundle {
+            learning_lang: bundle.learning_lang.clone(),
+            exported_at: bundle.exported_at.clone(),
+            records: Vec::new(),
+            audio_resources: bundle.audio_resources,
+        }
+    } else if let Some(kind) = record_type_for_scope(&scope) {
+        LearningDataBundle {
+            learning_lang: bundle.learning_lang.clone(),
+            exported_at: bundle.exported_at.clone(),
+            records: bundle
+                .records
+                .into_iter()
+                .filter(|x| x.record_type.trim().eq_ignore_ascii_case(kind))
+                .collect(),
+            audio_resources: Vec::new(),
+        }
+    } else {
+        bundle
+    };
+    let (imported_records, imported_audio_resources) =
+        import_learning_bundle_rows(app, import_bundle, &target_lang)?;
+    Ok(serde_json::json!({
+        "learning_lang": target_lang,
+        "scope": scope,
+        "imported_records": imported_records,
+        "imported_audio_resources": imported_audio_resources,
+        "mastery": mastery
     }))
 }
 
