@@ -41,21 +41,43 @@
         <n-tab-pane name="manager" tab="学习管理">
           <div v-if="isListeningImmersiveReady" class="listening-immersive-page">
             <div class="immersive-global-back">
-              <n-button quaternary circle size="small" title="返回听力管理界面" @click="exitListeningImmersive">
+              <n-button quaternary circle size="small" class="immersive-back-btn" title="返回听力管理界面" @click="exitListeningImmersive">
                 <Icon :icon="chevronLeftIcon" width="16" height="16" />
               </n-button>
               <span class="immersive-title">{{ activeAudio?.title || '听力学习面板' }}</span>
             </div>
             <div class="listening-detail-layout immersive">
               <div class="listening-player-pane">
-                <audio
-                  ref="activeAudioPlayerRef"
-                  class="listening-player"
-                  controls
-                  :src="activeAudioPlayableSrc"
-                  @loadedmetadata="onAudioLoadedMetadata"
-                  @timeupdate="handleAudioTimeUpdate"
-                ></audio>
+                <div class="immersive-media-shell">
+                  <video
+                    v-if="activeMediaIsVideo"
+                    ref="activeAudioPlayerRef"
+                    class="listening-player listening-video-player"
+                    controls
+                    playsinline
+                    :src="activeAudioPlayableSrc"
+                    @loadedmetadata="onAudioLoadedMetadata"
+                    @timeupdate="handleAudioTimeUpdate"
+                  >
+                    <track
+                      v-if="activeMediaSubtitleVttSrc"
+                      kind="subtitles"
+                      srclang="zh"
+                      label="自动字幕"
+                      :src="activeMediaSubtitleVttSrc"
+                      default
+                    />
+                  </video>
+                  <audio
+                    v-else
+                    ref="activeAudioPlayerRef"
+                    class="listening-player"
+                    controls
+                    :src="activeAudioPlayableSrc"
+                    @loadedmetadata="onAudioLoadedMetadata"
+                    @timeupdate="handleAudioTimeUpdate"
+                  ></audio>
+                </div>
                 <div class="playback-row">
                   <span class="detail-label">播放速度</span>
                   <n-select v-model:value="playbackRate" size="small" style="width: 140px" :options="playbackRateOptions" @update:value="applyAudioPlaybackRate" />
@@ -74,12 +96,19 @@
               <div class="listening-transcript-pane">
                 <div class="transcript-head">
                   <div class="detail-label">音文对照</div>
-                  <n-tag v-if="activeTranscriptTranslating" size="small" type="warning">译文加载中...</n-tag>
-                  <n-button quaternary circle size="small" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
-                    <Icon :icon="languagesIcon" width="15" height="15" />
-                  </n-button>
+                  <div class="transcript-head-actions">
+                    <n-tag v-if="activeTranscriptTranslating" size="small" type="warning">译文加载中...</n-tag>
+                    <n-button quaternary circle size="small" class="transcript-mode-btn" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
+                      <Icon :icon="languagesIcon" width="13" height="13" />
+                    </n-button>
+                    <n-button quaternary circle size="small" class="transcript-mode-btn" :disabled="!activeMediaIsVideo" :title="`切换视频字幕（当前：${subtitleDisplayModeLabel}）`" @click="cycleSubtitleDisplayMode">
+                      <Icon :icon="badgeInfoIcon" width="13" height="13" />
+                    </n-button>
+                    <n-button quaternary circle size="small" class="transcript-font-btn" title="减小字号" @click="decreaseTranscriptFontScale">A-</n-button>
+                    <n-button quaternary circle size="small" class="transcript-font-btn" title="增大字号" @click="increaseTranscriptFontScale">A+</n-button>
+                  </div>
                 </div>
-                <div ref="immersiveTranscriptListRef" class="transcript-list" @scroll="handleActiveTranscriptScroll">
+                <div ref="immersiveTranscriptListRef" class="transcript-list" :style="transcriptListStyle" @scroll="handleActiveTranscriptScroll">
                   <div
                     v-for="item in visibleActiveAudioTranscriptTimeline"
                     :key="`immersive-tr-${item.idx}`"
@@ -135,6 +164,10 @@
                 <n-button quaternary circle size="small" title="开始复习" @click="startReviewFromSelection">
                   <Icon :icon="reviewIcon" width="16" height="16" />
                 </n-button>
+                <n-button quaternary circle size="small" title="刷新词汇拓展（仅单词：音标、释义、近义词、例句）" :disabled="!activeWordRecord" @click="refreshWordMeta(activeWordRecord)">
+                  <Icon :icon="sparkleIcon" width="16" height="16" />
+                </n-button>
+                <span class="table-toolbar-hint" v-if="activeWordRecord">词汇拓展：刷新音标/释义/例句</span>
               </div>
               <template v-if="managerMode === 'random'">
                 <div class="random-board">
@@ -187,76 +220,78 @@
                         </div>
                         <div class="random-card-face back" :class="{ 'random-card-face-listening-back': card.rowType === 'listening' }">
                           <template v-if="card.rowType === 'word'">
-                            <div class="random-card-head-row">
-                              <div class="random-card-word">{{ card.title }}</div>
-                              <div class="random-card-stars">{{ masteryStars(card.masteryLevel) }}</div>
-                            </div>
-                            <div class="random-card-meta-row">
-                              <div class="phonetic-group" v-if="card.phoneticUk || card.phonetic">
-                                <n-tag size="small" round :bordered="false" class="phonetic-tag">
-                                  <template #icon><Icon :icon="speechIcon" /></template>
-                                  英 {{ card.phoneticUk || card.phonetic }}
-                                </n-tag>
-                                <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'uk')">
-                                  <Icon :icon="volumeUkIcon" width="14" height="14" />
-                                </n-button>
+                            <div class="random-card-word-main random-card-listening-main-scroll">
+                              <div class="random-card-head-row">
+                                <div class="random-card-word">{{ card.title }}</div>
+                                <div class="random-card-stars">{{ masteryStars(card.masteryLevel) }}</div>
                               </div>
-                              <div class="phonetic-group" v-if="card.phoneticUs || card.phonetic">
-                                <n-tag size="small" round :bordered="false" class="phonetic-tag">
-                                  <template #icon><Icon :icon="speechIcon" /></template>
-                                  美 {{ card.phoneticUs || card.phonetic }}
-                                </n-tag>
-                                <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'us')">
-                                  <Icon :icon="volumeUsIcon" width="14" height="14" />
-                                </n-button>
+                              <div class="random-card-meta-row">
+                                <div class="phonetic-group" v-if="card.phoneticUk || card.phonetic">
+                                  <n-tag size="small" round :bordered="false" class="phonetic-tag">
+                                    <template #icon><Icon :icon="speechIcon" /></template>
+                                    英 {{ card.phoneticUk || card.phonetic }}
+                                  </n-tag>
+                                  <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'uk')">
+                                    <Icon :icon="volumeUkIcon" width="14" height="14" />
+                                  </n-button>
+                                </div>
+                                <div class="phonetic-group" v-if="card.phoneticUs || card.phonetic">
+                                  <n-tag size="small" round :bordered="false" class="phonetic-tag">
+                                    <template #icon><Icon :icon="speechIcon" /></template>
+                                    美 {{ card.phoneticUs || card.phonetic }}
+                                  </n-tag>
+                                  <n-button text size="tiny" class="phonetic-btn" @click.stop="playWordPronunciation(card.title, 'us')">
+                                    <Icon :icon="volumeUsIcon" width="14" height="14" />
+                                  </n-button>
+                                </div>
+                                <n-tag v-if="card.partOfSpeech" size="small" round type="info" :bordered="false">{{ card.partOfSpeech }}</n-tag>
                               </div>
-                              <n-tag v-if="card.partOfSpeech" size="small" round type="info" :bordered="false">{{ card.partOfSpeech }}</n-tag>
-                            </div>
-                            
-                            <div class="random-card-section">
-                              <div class="random-card-label">释义</div>
-                              <div class="random-card-content">{{ cardWordMeanings(card).join('；') || '—' }}</div>
-                            </div>
+                              
+                              <div class="random-card-section">
+                                <div class="random-card-label">释义</div>
+                                <div class="random-card-content">{{ cardWordMeanings(card).join('；') || '—' }}</div>
+                              </div>
 
-                            <div class="random-card-section" v-if="cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations).length">
-                              <div class="random-card-label">近义词</div>
-                              <div class="chip-wrap">
-                                <n-tag v-for="(x, i) in cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations)" :key="`rd-s-${card.id}-${i}`" size="small" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                              <div class="random-card-section" v-if="cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations).length">
+                                <div class="random-card-label">近义词</div>
+                                <div class="chip-wrap">
+                                  <n-tag v-for="(x, i) in cardWordPairs(card.payload?.synonyms, card.payload?.synonyms_translations)" :key="`rd-s-${card.id}-${i}`" size="small" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                                </div>
                               </div>
-                            </div>
 
-                            <div class="random-card-section" v-if="cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations).length">
-                              <div class="random-card-label">反义词</div>
-                              <div class="chip-wrap">
-                                <n-tag v-for="(x, i) in cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations)" :key="`rd-a-${card.id}-${i}`" size="small" type="warning" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                              <div class="random-card-section" v-if="cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations).length">
+                                <div class="random-card-label">反义词</div>
+                                <div class="chip-wrap">
+                                  <n-tag v-for="(x, i) in cardWordPairs(card.payload?.antonyms, card.payload?.antonyms_translations)" :key="`rd-a-${card.id}-${i}`" size="small" type="warning" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                                </div>
                               </div>
-                            </div>
 
-                            <div class="random-card-section" v-if="cardWordPairs(card.payload?.associates, card.payload?.associates_translations).length">
-                              <div class="random-card-label">联想词</div>
-                              <div class="chip-wrap">
-                                <n-tag v-for="(x, i) in cardWordPairs(card.payload?.associates, card.payload?.associates_translations)" :key="`rd-r-${card.id}-${i}`" size="small" type="info" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                              <div class="random-card-section" v-if="cardWordPairs(card.payload?.associates, card.payload?.associates_translations).length">
+                                <div class="random-card-label">联想词</div>
+                                <div class="chip-wrap">
+                                  <n-tag v-for="(x, i) in cardWordPairs(card.payload?.associates, card.payload?.associates_translations)" :key="`rd-r-${card.id}-${i}`" size="small" type="info" :bordered="false">{{ x.word }}<span v-if="x.translation" class="tag-trans"> · {{ x.translation }}</span></n-tag>
+                                </div>
                               </div>
-                            </div>
 
-                            <div class="random-card-section" v-if="card.phrasePairs?.length">
-                              <div class="random-card-label">常用短语</div>
-                              <div class="example-line" v-for="(x, i) in card.phrasePairs" :key="`rd-p-${card.id}-${i}`">
-                                <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
-                                <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                              <div class="random-card-section" v-if="card.phrasePairs?.length">
+                                <div class="random-card-label">常用短语</div>
+                                <div class="example-line" v-for="(x, i) in card.phrasePairs" :key="`rd-p-${card.id}-${i}`">
+                                  <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
+                                  <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                                </div>
                               </div>
-                            </div>
 
-                            <div class="random-card-section" v-if="card.examplePairs?.length">
-                              <div class="random-card-label">常用例句</div>
-                              <div class="example-line" v-for="(x, i) in card.examplePairs" :key="`rd-e-${card.id}-${i}`">
-                                <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
-                                <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                              <div class="random-card-section" v-if="card.examplePairs?.length">
+                                <div class="random-card-label">常用例句</div>
+                                <div class="example-line" v-for="(x, i) in card.examplePairs" :key="`rd-e-${card.id}-${i}`">
+                                  <div class="example-src">{{ i + 1 }}. {{ x.source }}</div>
+                                  <div class="example-target" v-if="x.target">{{ x.target }}</div>
+                                </div>
                               </div>
                             </div>
                           </template>
                           <template v-else-if="card.rowType === 'listening'">
-                            <div class="random-card-listening-main random-card-listening-main-scroll" tabindex="0" @click.stop @keydown.stop="handleListeningCardScrollKeydown">
+                            <div class="random-card-listening-main random-card-listening-main-scroll" tabindex="0" @keydown.stop="handleListeningCardScrollKeydown">
                               <div class="random-card-head-row">
                                 <div class="random-card-word">{{ card.title }}</div>
                               </div>
@@ -439,15 +474,18 @@
                     <div class="example-target" v-if="x.target">{{ x.target }}</div>
                   </div>
                 </div>
-                <div class="detail-actions">
-                  <n-button size="small" type="primary" @click="refreshWordMeta(activeWordRecord)">刷新词汇拓展</n-button>
-                  <n-button size="small" @click="applyReviewResult('known')">我已掌握</n-button>
-                  <n-button size="small" @click="applyReviewResult('fuzzy')">还需复习</n-button>
-                </div>
               </template>
 
               <template v-else-if="activeAudio">
                 <div class="listening-info-panel">
+                  <div class="detail-actions">
+                    <n-button type="primary" size="small" @click="enterListeningStudy">
+                      <template #icon>
+                        <Icon :icon="playIcon" width="14" height="14" />
+                      </template>
+                      进入听力学习
+                    </n-button>
+                  </div>
                   <div class="detail-block">
                     <div class="detail-label">标题</div>
                     <div class="detail-content">{{ activeAudio.title || '—' }}</div>
@@ -474,15 +512,6 @@
                   <div class="detail-label">译文可用率</div>
                   <div class="detail-content">{{ formatCoverageLabel(activeAudio?.translationCoverage || { translated: 0, total: 0, ratio: 0 }) }}</div>
                 </div>
-                  <div class="detail-actions">
-                    <n-button size="small" @click="editAudio(activeAudio)">编辑资源</n-button>
-                    <n-button type="primary" size="small" @click="enterListeningStudy">
-                      <template #icon>
-                        <Icon :icon="playIcon" width="14" height="14" />
-                      </template>
-                      进入听力学习
-                    </n-button>
-                  </div>
                 </div>
               </template>
 
@@ -501,11 +530,6 @@
                 <div class="detail-block">
                   <div class="detail-label">译文</div>
                   <div class="detail-content">{{ activeSentenceRecord.translated_text }}</div>
-                </div>
-                <div class="detail-actions">
-                  <n-button size="small" @click="applyReviewResult('known')">掌握</n-button>
-                  <n-button size="small" @click="applyReviewResult('fuzzy')">模糊</n-button>
-                  <n-button size="small" @click="applyReviewResult('unknown')">不会</n-button>
                 </div>
               </template>
 
@@ -598,11 +622,11 @@
                   <template v-else-if="currentReviewItem.rowType === 'listening'">
                     <div class="review-answer-title-row">
                       <div class="review-answer-title">原文与译文</div>
-                      <n-button quaternary circle size="small" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
-                        <Icon :icon="languagesIcon" width="15" height="15" />
+                      <n-button quaternary circle size="small" class="transcript-mode-btn" :title="`切换显示模式（当前：${transcriptDisplayModeLabel}）`" @click="cycleTranscriptDisplayMode">
+                        <Icon :icon="languagesIcon" width="13" height="13" />
                       </n-button>
                     </div>
-                    <div v-if="currentReviewListeningTranscriptTimeline.length" ref="reviewTranscriptListRef" class="transcript-list review-transcript-list" @scroll="handleReviewTranscriptScroll">
+                    <div v-if="currentReviewListeningTranscriptTimeline.length" ref="reviewTranscriptListRef" class="transcript-list review-transcript-list" :style="transcriptListStyle" @scroll="handleReviewTranscriptScroll">
                       <div
                         v-for="item in visibleReviewListeningTranscriptTimeline"
                         :key="`rv-tr-${item.idx}`"
@@ -868,6 +892,8 @@ const transcriptScreenPreloadSize = 28
 const activeTranscriptVisibleCount = ref(transcriptScreenPageSize)
 const reviewTranscriptVisibleCount = ref(transcriptScreenPageSize)
 const transcriptDisplayMode = ref('both')
+const subtitleDisplayMode = ref('bilingual')
+const transcriptFontScale = ref(1.16)
 const syncingAudioIdSet = new Set()
 const syncQueuedIdSet = new Set()
 const syncQueuedTasks = []
@@ -953,6 +979,11 @@ const transcriptDisplayModes = [
   { label: '原文+译文', value: 'both' },
   { label: '仅原文', value: 'source' },
   { label: '仅译文', value: 'target' },
+]
+const subtitleDisplayModes = [
+  { label: '原文字幕', value: 'source' },
+  { label: '译文字幕', value: 'target' },
+  { label: '双语字幕', value: 'bilingual' },
 ]
 
 const defaultListeningSources = () => ([
@@ -1330,6 +1361,12 @@ const inferMediaMimeByPath = (rawPath) => {
   if (path.endsWith('.flac')) return 'audio/flac'
   if (path.endsWith('.ogg')) return 'audio/ogg'
   return 'application/octet-stream'
+}
+
+const inferMediaKindByPath = (rawPath) => {
+  const path = String(rawPath || '').toLowerCase()
+  if (/\.(mp4|webm|mov|mkv|m4v)(\?|#|$)/.test(path)) return 'video'
+  return 'audio'
 }
 
 const readBinaryFileByPath = async (path) => {
@@ -1758,6 +1795,11 @@ const activeAudio = computed(() => {
     ...(r.payload || {}),
     translationCoverage: coverage,
   }
+})
+const activeMediaIsVideo = computed(() => {
+  const sourcePath = String(activeAudio.value?.source_uri || '').trim()
+  const playableSrc = String(activeAudioPlayableSrc.value || '').trim()
+  return inferMediaKindByPath(sourcePath) === 'video' || inferMediaKindByPath(playableSrc) === 'video'
 })
 
 const normalizeList = (arr) => {
@@ -2258,6 +2300,7 @@ const onListeningPageSizeChange = (size) => {
 }
 
 const refreshWordMeta = async (row) => {
+  if (!row) return
   try {
     const payload = await invoke('language_learning_enrich_word', {
       word: row.word || row.source_text,
@@ -2541,11 +2584,26 @@ const transcriptDisplayModeLabel = computed(() => {
   const hit = transcriptDisplayModes.find((x) => x.value === transcriptDisplayMode.value)
   return hit?.label || '原文+译文'
 })
+const subtitleDisplayModeLabel = computed(() => {
+  const hit = subtitleDisplayModes.find((x) => x.value === subtitleDisplayMode.value)
+  return hit ? hit.label : '双语字幕'
+})
 
 const cycleTranscriptDisplayMode = () => {
   const idx = transcriptDisplayModes.findIndex((x) => x.value === transcriptDisplayMode.value)
   const next = idx < 0 ? 0 : (idx + 1) % transcriptDisplayModes.length
   transcriptDisplayMode.value = transcriptDisplayModes[next].value
+}
+const cycleSubtitleDisplayMode = () => {
+  const idx = subtitleDisplayModes.findIndex((x) => x.value === subtitleDisplayMode.value)
+  const next = idx < 0 ? 0 : (idx + 1) % subtitleDisplayModes.length
+  subtitleDisplayMode.value = subtitleDisplayModes[next].value
+}
+const increaseTranscriptFontScale = () => {
+  transcriptFontScale.value = Math.min(1.42, Number((transcriptFontScale.value + 0.08).toFixed(2)))
+}
+const decreaseTranscriptFontScale = () => {
+  transcriptFontScale.value = Math.max(0.96, Number((transcriptFontScale.value - 0.08).toFixed(2)))
 }
 
 const currentRandomCards = computed(() => {
@@ -2876,6 +2934,43 @@ const buildTranscriptTimeline = (rawText, durationSec) => {
 const activeAudioTranscriptTimeline = computed(() => {
   if (activeAudioSyncTimeline.value.length) return activeAudioSyncTimeline.value
   return buildTranscriptTimeline(activeAudio.value?.transcript || '', activeAudioDurationSec.value || activeAudio.value?.duration_sec || 0)
+})
+const formatVttTimelineTime = (secRaw) => {
+  const sec = Math.max(0, Number(secRaw || 0))
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = Math.floor(sec % 60)
+  const ms = Math.round((sec - Math.floor(sec)) * 1000)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`
+}
+const escapeVttText = (text) => String(text || '').replace(/[\r\n]+/g, ' ').trim()
+const resolveSubtitleCueText = (line) => {
+  const source = escapeVttText(line?.text)
+  const target = escapeVttText(resolveTranscriptTargetText(line))
+  if (subtitleDisplayMode.value === 'source') return source
+  if (subtitleDisplayMode.value === 'target') return target || source
+  return target && target !== '（译文生成中）' ? `${source}\n${target}` : source
+}
+const transcriptListStyle = computed(() => ({
+  '--transcript-font-scale': String(transcriptFontScale.value),
+}))
+const activeMediaSubtitleVttSrc = computed(() => {
+  if (!activeMediaIsVideo.value) return ''
+  const timeline = activeAudioTranscriptTimeline.value
+  if (!Array.isArray(timeline) || !timeline.length) return ''
+  const lines = ['WEBVTT', '']
+  timeline.forEach((line, idx) => {
+    const cueText = resolveSubtitleCueText(line)
+    if (!cueText) return
+    const start = Number.isFinite(Number(line?.start)) ? Number(line.start) : idx * 2
+    const endRaw = Number.isFinite(Number(line?.end)) ? Number(line.end) : start + 2
+    const end = endRaw > start ? endRaw : start + 1.2
+    lines.push(`${formatVttTimelineTime(start)} --> ${formatVttTimelineTime(end)}`)
+    lines.push(cueText)
+    lines.push('')
+  })
+  if (lines.length <= 2) return ''
+  return `data:text/vtt;charset=utf-8,${encodeURIComponent(lines.join('\n'))}`
 })
 const visibleActiveAudioTranscriptTimeline = computed(() => {
   const timeline = activeAudioTranscriptTimeline.value
@@ -3718,6 +3813,16 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
+  align-items: center;
+}
+
+.table-toolbar-hint {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--primary-color, #4acadb) 34%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 8%, var(--guaxi-panel-bg));
 }
 
 .table-footer {
@@ -3834,6 +3939,14 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
+}
+
+.random-card-word-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .random-card-listening-main-scroll {
@@ -4031,14 +4144,40 @@ onBeforeUnmount(() => {
 .immersive-global-back {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   justify-content: flex-start;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.immersive-back-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 46%, var(--guaxi-border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary-color, #4acadb) 22%, var(--guaxi-panel-bg)), var(--guaxi-panel-bg));
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--primary-color, #4acadb) 24%, transparent);
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background-color .18s ease;
+}
+
+.immersive-back-btn:hover {
+  transform: translateY(-1px) scale(1.06);
+  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 78%, var(--guaxi-border));
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--primary-color, #4acadb) 34%, transparent);
+}
+
+.immersive-back-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary-color, #4acadb) 62%, transparent);
+  outline-offset: 2px;
 }
 
 .immersive-title {
-  font-size: 13px;
-  color: var(--guaxi-text-secondary);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 30%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-header-bg));
 }
 
 .listening-detail-layout {
@@ -4048,7 +4187,34 @@ onBeforeUnmount(() => {
 }
 
 .listening-detail-layout.immersive {
-  min-height: calc(100vh - 210px);
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.listening-player-pane,
+.listening-transcript-pane {
+  min-height: 0;
+  height: 100%;
+}
+
+.listening-player-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.immersive-media-shell {
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 24%, var(--guaxi-border));
+  border-radius: 16px;
+  padding: 8px;
+  background: linear-gradient(155deg, color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg)), var(--guaxi-panel-bg));
+}
+
+.listening-video-player {
+  min-height: 260px;
+  background: #0f1721;
+  object-fit: contain;
 }
 
 .listening-player-topbar {
@@ -4081,21 +4247,61 @@ onBeforeUnmount(() => {
 .playback-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--guaxi-border);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, var(--primary-color, #4acadb));
 }
 
 .transcript-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+}
+
+.transcript-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transcript-mode-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 46%, var(--guaxi-border));
+  color: var(--primary-color, #4acadb);
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 12%, var(--guaxi-panel-bg));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--primary-color, #4acadb) 24%, transparent);
+}
+
+.transcript-font-btn {
+  width: 32px;
+  height: 32px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 40%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 10%, var(--guaxi-panel-bg));
+  color: color-mix(in srgb, var(--primary-color, #4acadb) 86%, var(--guaxi-text-primary));
+}
+
+.listening-transcript-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .transcript-list {
   border: 1px solid var(--guaxi-border);
   border-radius: 10px;
   padding: 8px 10px;
-  max-height: calc(100vh - 320px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--guaxi-panel-bg);
@@ -4144,7 +4350,7 @@ onBeforeUnmount(() => {
 }
 
 .transcript-source {
-  font-size: 15px;
+  font-size: calc(16px * var(--transcript-font-scale, 1));
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -4154,7 +4360,7 @@ onBeforeUnmount(() => {
 .transcript-target {
   margin-top: 3px;
   color: color-mix(in srgb, var(--primary-color, #4acadb) 72%, var(--guaxi-text-primary));
-  font-size: 14px;
+  font-size: calc(15px * var(--transcript-font-scale, 1));
   line-height: 1.62;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -4268,6 +4474,10 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--guaxi-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 93%, var(--primary-color, #4acadb));
 }
 
 .review-layout {
