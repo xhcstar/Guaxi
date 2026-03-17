@@ -3930,7 +3930,7 @@ async fn translate_segments_with_sentence_groups(texts: &[String], target_lang: 
 }
 
 #[tauri::command]
-pub async fn language_learning_enrich_word(
+pub async fn language_learning_enrich_word_basic(
     word: String,
     source_lang: Option<String>,
     target_lang: Option<String>,
@@ -3950,28 +3950,9 @@ pub async fn language_learning_enrich_word(
         .build()
         .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
 
-    let dict_base = env_or_default(
-        "GUAXI_DICT_API_BASE",
-        "https://api.dictionaryapi.dev/api/v2/entries/en",
-    );
-    let datamuse_base = env_or_default("GUAXI_DATAMUSE_API_BASE", "https://api.datamuse.com/words");
-    let dict_url = format!(
-        "{}/{}",
-        dict_base,
-        encode(&clean)
-    );
-    let syn_url = format!("{}?ml={}&max=16", datamuse_base, encode(&clean));
-    let ant_url = format!("{}?rel_ant={}&max=16", datamuse_base, encode(&clean));
-    let bga_url = format!("{}?rel_bga={}&max=10", datamuse_base, encode(&clean));
-    let bgb_url = format!("{}?rel_bgb={}&max=10", datamuse_base, encode(&clean));
-
-    let (dict_json, syn_json, ant_json, bga_json, bgb_json) = tokio::join!(
-        fetch_json(&client, &dict_url),
-        fetch_json(&client, &syn_url),
-        fetch_json(&client, &ant_url),
-        fetch_json(&client, &bga_url),
-        fetch_json(&client, &bgb_url)
-    );
+    let dict_base = env_or_default("GUAXI_DICT_API_BASE", "https://api.dictionaryapi.dev/api/v2/entries/en");
+    let dict_url = format!("{}/{}", dict_base, encode(&clean));
+    let dict_json = fetch_json(&client, &dict_url).await;
 
     let mut phonetic = String::new();
     let mut phonetic_uk = String::new();
@@ -3980,7 +3961,7 @@ pub async fn language_learning_enrich_word(
     let mut meanings = Vec::new();
     let mut examples = Vec::new();
     let mut synonyms = Vec::new();
-    let mut antonyms = Vec::new();
+    let antonyms = Vec::new();
 
     if let Some(v) = dict_json {
         if let Some(arr) = v.as_array() {
@@ -4008,55 +3989,9 @@ pub async fn language_learning_enrich_word(
         warn!("[LanguageLearning] dictionary fetch failed for {}", clean);
     }
 
-    if let Some(v) = syn_json {
-        if let Some(arr) = v.as_array() {
-            for item in arr.iter().take(24) {
-                if let Some(w) = item.get("word").and_then(|x| x.as_str()) {
-                    let t = w.trim();
-                    if !t.is_empty() {
-                        synonyms.push(t.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(v) = ant_json {
-        if let Some(arr) = v.as_array() {
-            for item in arr.iter().take(24) {
-                if let Some(w) = item.get("word").and_then(|x| x.as_str()) {
-                    let t = w.trim();
-                    if !t.is_empty() {
-                        antonyms.push(t.to_string());
-                    }
-                }
-            }
-        }
-    }
-
     let from = source_lang.unwrap_or_else(|| "auto".into());
-    let target_lang_for_defs = if to.trim().is_empty() {
-        "zh".to_string()
-    } else {
-        to.clone()
-    };
     let meanings = dedup_limit(meanings, 12);
     let synonyms = dedup_limit(synonyms, 12);
-    let antonyms = dedup_limit(antonyms, 12);
-    let associates = {
-        let mut out = Vec::new();
-        for x in synonyms.iter().skip(10).take(12) {
-            out.push(x.clone());
-        }
-        dedup_limit(out, 12)
-    };
-    let mut phrases = collect_phrases_from_edges(bga_json, &clean, false);
-    phrases.extend(collect_phrases_from_edges(bgb_json, &clean, true));
-    phrases = dedup_limit(phrases, 12);
-    let mut examples = dedup_limit(examples, 12);
-    if examples.is_empty() {
-        examples = fallback_examples(&clean, &phrases);
-    }
 
     let translated = translator_free::translate_text_free(vec![clean.clone()], Some(from), Some(to))
         .await
@@ -4066,23 +4001,10 @@ pub async fn language_learning_enrich_word(
 
     let simple_translations = split_simple_translations(&translated);
     let meanings_translated = if simple_translations.is_empty() {
-        translate_aligned(&meanings, &target_lang_for_defs).await
+        dedup_limit(meanings.clone(), 5)
     } else {
         Vec::new()
     };
-    let (
-        example_translations,
-        synonyms_translations,
-        antonyms_translations,
-        associates_translations,
-        phrase_translations,
-    ) = tokio::join!(
-        translate_aligned(&examples, &target_lang_for_defs),
-        translate_aligned(&synonyms, &target_lang_for_defs),
-        translate_aligned(&antonyms, &target_lang_for_defs),
-        translate_aligned(&associates, &target_lang_for_defs),
-        translate_aligned(&phrases, &target_lang_for_defs)
-    );
     let meanings_simple = if simple_translations.is_empty() {
         if meanings_translated.is_empty() {
             meanings.into_iter().take(5).collect::<Vec<_>>()
@@ -4103,6 +4025,143 @@ pub async fn language_learning_enrich_word(
         translation: translated,
         synonyms: synonyms.clone(),
         antonyms,
+        associates: Vec::new(),
+        synonyms_translations: Vec::new(),
+        antonyms_translations: Vec::new(),
+        associates_translations: Vec::new(),
+        phrases: Vec::new(),
+        phrase_translations: Vec::new(),
+        examples,
+        example_translations: Vec::new(),
+    };
+    Ok(enrichment)
+}
+
+#[tauri::command]
+pub async fn language_learning_enrich_word_details(
+    word: String,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+) -> Result<WordEnrichment, String> {
+    let clean = clean_word(&word);
+    if clean.is_empty() {
+        return Err("单词为空".into());
+    }
+    let to = target_lang.clone().unwrap_or_else(|| "zh".into());
+    let cn_accel = cn_accel_enabled(&to);
+    let (connect_timeout_s, request_timeout_s) = if cn_accel { (4, 8) } else { (8, 12) };
+
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0")
+        .connect_timeout(std::time::Duration::from_secs(connect_timeout_s))
+        .timeout(std::time::Duration::from_secs(request_timeout_s))
+        .build()
+        .map_err(|e| format!("初始化网络客户端失败: {}", e))?;
+
+    let dict_base = env_or_default("GUAXI_DICT_API_BASE", "https://api.dictionaryapi.dev/api/v2/entries/en");
+    let datamuse_base = env_or_default("GUAXI_DATAMUSE_API_BASE", "https://api.datamuse.com/words");
+    let dict_url = format!("{}/{}", dict_base, encode(&clean));
+    let syn_url = format!("{}?ml={}&max=16", datamuse_base, encode(&clean));
+    let ant_url = format!("{}?rel_ant={}&max=16", datamuse_base, encode(&clean));
+    let bga_url = format!("{}?rel_bga={}&max=10", datamuse_base, encode(&clean));
+    let bgb_url = format!("{}?rel_bgb={}&max=10", datamuse_base, encode(&clean));
+
+    let (dict_json, syn_json, ant_json, bga_json, bgb_json) = tokio::join!(
+        fetch_json(&client, &dict_url),
+        fetch_json(&client, &syn_url),
+        fetch_json(&client, &ant_url),
+        fetch_json(&client, &bga_url),
+        fetch_json(&client, &bgb_url)
+    );
+
+    let mut examples = Vec::new();
+    let mut synonyms = Vec::new();
+    let mut antonyms = Vec::new();
+    if let Some(v) = dict_json {
+        if let Some(arr) = v.as_array() {
+            for item in arr.iter().take(3) {
+                let (_, _, _, syns) = collect_meanings(item);
+                let (_, _, exs, _) = collect_meanings(item);
+                examples.extend(exs);
+                synonyms.extend(syns);
+            }
+        }
+    }
+    if let Some(v) = syn_json {
+        if let Some(arr) = v.as_array() {
+            for item in arr.iter().take(24) {
+                if let Some(w) = item.get("word").and_then(|x| x.as_str()) {
+                    let t = w.trim();
+                    if !t.is_empty() {
+                        synonyms.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(v) = ant_json {
+        if let Some(arr) = v.as_array() {
+            for item in arr.iter().take(24) {
+                if let Some(w) = item.get("word").and_then(|x| x.as_str()) {
+                    let t = w.trim();
+                    if !t.is_empty() {
+                        antonyms.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let target_lang_for_defs = if to.trim().is_empty() { "zh".to_string() } else { to.clone() };
+    let synonyms = dedup_limit(synonyms, 12);
+    let antonyms = dedup_limit(antonyms, 12);
+    let associates = {
+        let mut out = Vec::new();
+        for x in synonyms.iter().skip(10).take(12) {
+            out.push(x.clone());
+        }
+        dedup_limit(out, 12)
+    };
+    let mut phrases = collect_phrases_from_edges(bga_json, &clean, false);
+    phrases.extend(collect_phrases_from_edges(bgb_json, &clean, true));
+    phrases = dedup_limit(phrases, 12);
+    let mut examples = dedup_limit(examples, 12);
+    if examples.is_empty() {
+        examples = fallback_examples(&clean, &phrases);
+    }
+
+    let examples_c = examples.clone();
+    let synonyms_c = synonyms.clone();
+    let antonyms_c = antonyms.clone();
+    let associates_c = associates.clone();
+    let phrases_c = phrases.clone();
+    let t1 = target_lang_for_defs.clone();
+    let t2 = target_lang_for_defs.clone();
+    let t3 = target_lang_for_defs.clone();
+    let t4 = target_lang_for_defs.clone();
+    let t5 = target_lang_for_defs.clone();
+    let ex_task = tokio::spawn(async move { translate_aligned(&examples_c, &t1).await });
+    let syn_task = tokio::spawn(async move { translate_aligned(&synonyms_c, &t2).await });
+    let ant_task = tokio::spawn(async move { translate_aligned(&antonyms_c, &t3).await });
+    let asc_task = tokio::spawn(async move { translate_aligned(&associates_c, &t4).await });
+    let phr_task = tokio::spawn(async move { translate_aligned(&phrases_c, &t5).await });
+
+    let example_translations = ex_task.await.unwrap_or_default();
+    let synonyms_translations = syn_task.await.unwrap_or_default();
+    let antonyms_translations = ant_task.await.unwrap_or_default();
+    let associates_translations = asc_task.await.unwrap_or_default();
+    let phrase_translations = phr_task.await.unwrap_or_default();
+
+    Ok(WordEnrichment {
+        word: clean,
+        phonetic: String::new(),
+        phonetic_uk: String::new(),
+        phonetic_us: String::new(),
+        part_of_speech: String::new(),
+        meanings: Vec::new(),
+        translation: String::new(),
+        synonyms,
+        antonyms,
         associates,
         synonyms_translations,
         antonyms_translations,
@@ -4111,6 +4170,27 @@ pub async fn language_learning_enrich_word(
         phrase_translations,
         examples,
         example_translations,
-    };
-    Ok(enrichment)
+    })
+}
+
+#[tauri::command]
+pub async fn language_learning_enrich_word(
+    word: String,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+) -> Result<WordEnrichment, String> {
+    let mut basic = language_learning_enrich_word_basic(word.clone(), source_lang.clone(), target_lang.clone()).await?;
+    if let Ok(details) = language_learning_enrich_word_details(word, source_lang, target_lang).await {
+        basic.synonyms = details.synonyms;
+        basic.antonyms = details.antonyms;
+        basic.associates = details.associates;
+        basic.synonyms_translations = details.synonyms_translations;
+        basic.antonyms_translations = details.antonyms_translations;
+        basic.associates_translations = details.associates_translations;
+        basic.phrases = details.phrases;
+        basic.phrase_translations = details.phrase_translations;
+        basic.examples = details.examples;
+        basic.example_translations = details.example_translations;
+    }
+    Ok(basic)
 }

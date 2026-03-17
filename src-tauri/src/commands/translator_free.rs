@@ -5,7 +5,7 @@ use std::env;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration as StdDuration, Instant};
 use tokio::time::{sleep, Duration};
@@ -42,6 +42,12 @@ struct BingTokenState {
 struct TranslationCacheState {
     translated_text: String,
     expires_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct EnginePerfState {
+    ema_rtt_ms: f64,
+    samples: u64,
 }
 
 fn shared_http_client() -> &'static Client {
@@ -106,8 +112,14 @@ fn write_cached_bing_token(token: &str, ttl: StdDuration) {
 
 fn selection_engine_timeout_ms() -> u64 {
     let raw = env::var("GUAXI_SELECTION_ENGINE_TIMEOUT_MS").unwrap_or_default();
-    let parsed = raw.trim().parse::<u64>().unwrap_or(3200);
-    parsed.clamp(1200, 8000)
+    let parsed = raw.trim().parse::<u64>().unwrap_or(1800);
+    parsed.clamp(1000, 6000)
+}
+
+fn selection_budget_ms() -> u64 {
+    let raw = env::var("GUAXI_SELECTION_BUDGET_MS").unwrap_or_default();
+    let parsed = raw.trim().parse::<u64>().unwrap_or(2000);
+    parsed.clamp(1200, 4000)
 }
 
 fn shared_request_timeout_s() -> u64 {
@@ -302,21 +314,31 @@ pub async fn translate_text_free(
                     to_norm,
                     error_str
                 );
+                let mut join_set = tokio::task::JoinSet::new();
                 for pos in unresolved_positions {
                     let source = texts[pos].clone();
-                    let single_result = process_batch(&[source.clone()], &from_norm, &to_norm).await;
-                    match single_result {
-                        Ok((results, _engine)) => {
-                            let translated = results.get(0).cloned().unwrap_or_default();
-                            if translated.trim().is_empty() {
-                                translated_texts[pos] = "[Translation Failed]".to_string();
-                            } else {
-                                translated_texts[pos] = translated.clone();
-                                write_cached_translation(&from_norm, &to_norm, &source, &translated);
+                    let from_c = from_norm.clone();
+                    let to_c = to_norm.clone();
+                    join_set.spawn(async move {
+                        let single_result = process_batch(&[source.clone()], &from_c, &to_c).await;
+                        (pos, source, single_result)
+                    });
+                }
+                while let Some(joined) = join_set.join_next().await {
+                    if let Ok((pos, source, single_result)) = joined {
+                        match single_result {
+                            Ok((results, _engine)) => {
+                                let translated = results.get(0).cloned().unwrap_or_default();
+                                if translated.trim().is_empty() {
+                                    translated_texts[pos] = "[Translation Failed]".to_string();
+                                } else {
+                                    translated_texts[pos] = translated.clone();
+                                    write_cached_translation(&from_norm, &to_norm, &source, &translated);
+                                }
                             }
-                        }
-                        Err(_) => {
-                            translated_texts[pos] = "[Translation Failed]".to_string();
+                            Err(_) => {
+                                translated_texts[pos] = "[Translation Failed]".to_string();
+                            }
                         }
                     }
                 }
@@ -372,35 +394,81 @@ pub async fn selection_translate_free_multi(
         to
     );
 
-    let services: [(&str, TranslateFn); 4] = [
+    let ranked_services = sort_services_by_rtt(vec![
         ("Bing", bing_translate_service),
         ("Google", google_translate_service),
         ("Lingva", lingva_translate_service),
         ("Yandex", yandex_translate_service),
-    ];
+    ]);
     let timeout_ms = selection_engine_timeout_ms();
-    let (i1, i2, i3, i4) = tokio::join!(
-        run_service_with_timeout(services[0].0, services[0].1, &texts, &from, &to, timeout_ms),
-        run_service_with_timeout(services[1].0, services[1].1, &texts, &from, &to, timeout_ms),
-        run_service_with_timeout(services[2].0, services[2].1, &texts, &from, &to, timeout_ms),
-        run_service_with_timeout(services[3].0, services[3].1, &texts, &from, &to, timeout_ms),
-    );
-    let items = vec![i1, i2, i3, i4];
-    if let Some(primary) = items.iter().find(|it| it.success) {
+    let budget_ms = selection_budget_ms();
+    let effective_timeout_ms = timeout_ms.min(budget_ms);
+    let mut join_set = tokio::task::JoinSet::new();
+    let mut pending_engines: HashSet<String> = HashSet::new();
+    for (idx, (engine_name, service)) in ranked_services.into_iter().enumerate() {
+        let texts_c = texts.clone();
+        let from_c = from.clone();
+        let to_c = to.clone();
+        let engine_c = engine_name.to_string();
+        pending_engines.insert(engine_c.clone());
+        let stagger_ms = if idx <= 1 { 0 } else { ((idx - 1) as u64).saturating_mul(120).min(360) };
+        join_set.spawn(async move {
+            if stagger_ms > 0 {
+                sleep(Duration::from_millis(stagger_ms)).await;
+            }
+            let started = Instant::now();
+            let item = run_service_with_timeout(&engine_c, service, &texts_c, &from_c, &to_c, effective_timeout_ms).await;
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            (
+                engine_c.clone(),
+                item,
+                elapsed_ms,
+            )
+        });
+    }
+    let mut items = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(budget_ms);
+    while !pending_engines.is_empty() {
+        let Some(remain) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+            break;
+        };
+        let joined = tokio::time::timeout(remain, join_set.join_next()).await;
+        let (engine_name, item, elapsed_ms) = match joined {
+            Ok(Some(Ok((engine, item, elapsed_ms)))) => (engine, item, elapsed_ms),
+            Ok(Some(Err(e))) => ("Unknown".to_string(), SelectionTranslateEngineItem {
+                engine: "Unknown".to_string(),
+                success: false,
+                text: String::new(),
+                error: Some(format!("Join task failed: {}", e)),
+            }, budget_ms as f64),
+            Ok(None) => break,
+            Err(_) => break,
+        };
+        pending_engines.remove(&engine_name);
+        if engine_name != "Unknown" {
+            update_engine_rtt(&engine_name, elapsed_ms, item.success);
+        }
+        items.push(item);
+    }
+    join_set.abort_all();
+    for engine in pending_engines {
+        update_engine_rtt(&engine, budget_ms as f64, false);
+        items.push(SelectionTranslateEngineItem {
+            engine,
+            success: false,
+            text: String::new(),
+            error: Some("Timeout".to_string()),
+        });
+    }
+    if let Some(primary) = items.iter().find(|it| it.success && !it.text.trim().is_empty()) {
         write_cached_translation(&from, &to, &texts[0], &primary.text);
     }
-
     let success = items.iter().any(|it| it.success);
-    let error = if success {
-        None
-    } else {
-        Some("All translation services failed".into())
-    };
 
     Ok(SelectionTranslateMultiResult {
         success,
         items,
-        error,
+        error: if success { None } else { Some("All translation services failed".into()) },
     })
 }
 
@@ -410,6 +478,71 @@ type TranslateFn = for<'a> fn(
     &'a str,
     &'a str,
 ) -> Pin<Box<dyn Future<Output = Result<(Vec<String>, String), TranslationError>> + Send + 'a>>;
+
+fn default_engine_rtt_ms(name: &str) -> f64 {
+    match name {
+        "Bing" => 900.0,
+        "Google" => 1000.0,
+        "Transmart" => 1150.0,
+        "Yandex" => 1300.0,
+        "Lingva" => 1450.0,
+        _ => 1600.0,
+    }
+}
+
+fn update_engine_rtt(name: &str, elapsed_ms: f64, success: bool) {
+    static PERF: OnceLock<Mutex<HashMap<String, EnginePerfState>>> = OnceLock::new();
+    let perf = PERF.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = perf.lock() {
+        let observed = if success {
+            elapsed_ms.max(1.0)
+        } else {
+            (elapsed_ms + 800.0).min(6000.0)
+        };
+        let entry = guard
+            .entry(name.to_string())
+            .or_insert(EnginePerfState {
+                ema_rtt_ms: default_engine_rtt_ms(name),
+                samples: 0,
+            });
+        entry.ema_rtt_ms = entry.ema_rtt_ms * 0.7 + observed * 0.3;
+        entry.samples = entry.samples.saturating_add(1);
+    }
+}
+
+fn read_engine_rtt_ms(name: &str) -> f64 {
+    static PERF: OnceLock<Mutex<HashMap<String, EnginePerfState>>> = OnceLock::new();
+    let perf = PERF.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = perf.lock() {
+        if let Some(state) = guard.get(name) {
+            return state.ema_rtt_ms;
+        }
+    }
+    default_engine_rtt_ms(name)
+}
+
+fn sort_services_by_rtt(mut services: Vec<(&'static str, TranslateFn)>) -> Vec<(&'static str, TranslateFn)> {
+    services.sort_by(|(a, _), (b, _)| {
+        let ar = read_engine_rtt_ms(a);
+        let br = read_engine_rtt_ms(b);
+        ar.partial_cmp(&br).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    services
+}
+
+async fn call_service_with_rtt(
+    name: &'static str,
+    service: TranslateFn,
+    texts: &[String],
+    from: &str,
+    to: &str,
+) -> Result<(Vec<String>, String), TranslationError> {
+    let started = Instant::now();
+    let result = service(texts, from, to).await;
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    update_engine_rtt(name, elapsed_ms, result.is_ok());
+    result
+}
 
 fn accel_cn_mode(to: &str) -> bool {
     let flag = env::var("GUAXI_CN_ACCEL").unwrap_or_default().to_ascii_lowercase();
@@ -443,54 +576,59 @@ async fn process_batch(
         }
     }
 
-    let primary_pair: (TranslateFn, TranslateFn) = if cn_mode {
-        (bing_translate_service, transmart_translate_service)
+    let ranked_services = if cn_mode {
+        sort_services_by_rtt(vec![
+            ("Bing", bing_translate_service),
+            ("Transmart", transmart_translate_service),
+            ("Google", google_translate_service),
+            ("Yandex", yandex_translate_service),
+            ("Lingva", lingva_translate_service),
+        ])
     } else {
-        (bing_translate_service, google_translate_service)
+        sort_services_by_rtt(vec![
+            ("Bing", bing_translate_service),
+            ("Google", google_translate_service),
+            ("Yandex", yandex_translate_service),
+            ("Lingva", lingva_translate_service),
+            ("Transmart", transmart_translate_service),
+        ])
     };
-    let mut p1 = primary_pair.0(&clean_texts, from, to);
-    let mut p2 = primary_pair.1(&clean_texts, from, to);
-    let first_from_p1 = tokio::select! {
-        r1 = &mut p1 => {
-            if let Ok((results, engine)) = r1 {
-                return Ok((results, engine));
-            }
-            false
-        }
-        r2 = &mut p2 => {
-            if let Ok((results, engine)) = r2 {
-                return Ok((results, engine));
-            }
-            true
-        }
-    };
-    let second = if first_from_p1 { p1.await } else { p2.await };
-    if let Ok((results, engine)) = second {
-        return Ok((results, engine));
-    }
 
-    let services: Vec<TranslateFn> = if cn_mode {
-        vec![
-            google_translate_service,
-            yandex_translate_service,
-            lingva_translate_service,
-        ]
-    } else {
-        vec![
-            yandex_translate_service,
-            lingva_translate_service,
-            transmart_translate_service,
-        ]
-    };
+    if ranked_services.len() >= 2 {
+        let (n1, s1) = ranked_services[0];
+        let (n2, s2) = ranked_services[1];
+        let p1 = call_service_with_rtt(n1, s1, &clean_texts, from, to);
+        let p2 = call_service_with_rtt(n2, s2, &clean_texts, from, to);
+        tokio::pin!(p1);
+        tokio::pin!(p2);
+        let first_from_p1 = tokio::select! {
+            r1 = &mut p1 => {
+                if let Ok((results, engine)) = r1 {
+                    return Ok((results, engine));
+                }
+                false
+            }
+            r2 = &mut p2 => {
+                if let Ok((results, engine)) = r2 {
+                    return Ok((results, engine));
+                }
+                true
+            }
+        };
+        let second = if first_from_p1 { p1.await } else { p2.await };
+        if let Ok((results, engine)) = second {
+            return Ok((results, engine));
+        }
+    }
 
     let mut last_error = None;
 
-    for service in services {
-        match service(&clean_texts, from, to).await {
+    for (name, service) in ranked_services.into_iter().skip(2) {
+        match call_service_with_rtt(name, service, &clean_texts, from, to).await {
             Ok((results, engine)) => return Ok((results, engine)),
             Err(e) => {
                 last_error = Some(e.clone());
-                warn!("Translation service failed: {}", e);
+                warn!("Translation service {} failed: {}", name, e);
             }
         }
     }

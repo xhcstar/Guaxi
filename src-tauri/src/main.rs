@@ -422,6 +422,8 @@ async fn main() {
             commands::language_learning::language_learning_cleanup_duplicate_topics,
             commands::language_learning::language_learning_export_scope_package,
             commands::language_learning::language_learning_import_scope_package,
+            commands::language_learning::language_learning_enrich_word_basic,
+            commands::language_learning::language_learning_enrich_word_details,
             commands::language_learning::language_learning_enrich_word,
             commands::language_learning::language_learning_list_audio_resources,
             commands::language_learning::language_learning_list_pending_sync_audio_ids,

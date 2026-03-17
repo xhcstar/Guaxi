@@ -1,6 +1,6 @@
 <template>
   <div ref="panelRef" class="pot-selection-translate-panel" :style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
-    @mousedown.stop @click.stop @wheel.stop>
+    @mousedown.stop="onPanelMouseDown" @click.stop @wheel.stop>
     <div class="panel-header" @mousedown.prevent="onHeaderMouseDown">
       <div class="panel-header-left">
         <n-button text size="tiny" :title="pinned ? '取消固定' : '固定'" @click.stop="emit('toggle-pin')">
@@ -31,7 +31,7 @@
         <n-select v-model:value="toLangProxy" size="tiny" :options="langOptions" :disabled="busy" style="width: 130px" />
       </div>
 
-      <div v-if="busy" class="section-state">
+      <div v-if="busy && !isWordPanel" class="section-state">
         <n-spin size="small" />
         <span>正在翻译...</span>
       </div>
@@ -133,6 +133,10 @@
                 <div v-if="it.target" class="word-line word-line-target">{{ it.target }}</div>
               </div>
             </div>
+          </div>
+          <div v-if="busy" class="section-state">
+            <n-spin size="small" />
+            <span>词条模块继续加载中...</span>
           </div>
       </div>
 
@@ -443,17 +447,31 @@ const onMouseUp = () => {
   window.removeEventListener('mouseup', onMouseUp, true)
 }
 
-const onHeaderMouseDown = (e) => {
-  if (e.button !== 0) return
-
+const startDrag = (e) => {
   dragging = true
   startX = e.clientX
   startY = e.clientY
   startLeft = Number(props.pos?.left ?? 0) || 0
   startTop = Number(props.pos?.top ?? 0) || 0
-
   window.addEventListener('mousemove', onMouseMove, true)
   window.addEventListener('mouseup', onMouseUp, true)
+}
+
+const isInteractiveTarget = (target) => {
+  const el = target instanceof Element ? target : null
+  if (!el) return false
+  return Boolean(el.closest('button,input,textarea,select,option,a,[role="button"],.n-button,.n-input,.n-select'))
+}
+
+const onPanelMouseDown = (e) => {
+  if (e.button !== 0) return
+  if (isInteractiveTarget(e.target)) return
+  startDrag(e)
+}
+
+const onHeaderMouseDown = (e) => {
+  if (e.button !== 0) return
+  startDrag(e)
 }
 
 const ensureClampedPos = () => {
@@ -507,11 +525,11 @@ onUnmounted(() => {
 .pot-selection-translate-panel {
   position: absolute;
   z-index: 20;
-  width: 460px;
-  min-width: 360px;
+  width: min(460px, calc(100% - 16px));
+  min-width: min(320px, calc(100% - 16px));
   min-height: 220px;
-  max-width: calc(100vw - 16px);
-  max-height: min(620px, calc(100vh - 16px));
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
@@ -545,11 +563,22 @@ onUnmounted(() => {
   gap: 6px;
 }
 
+.panel-header-left {
+  min-width: 0;
+}
+
+.panel-header-right {
+  flex-shrink: 0;
+}
+
 .panel-title {
   font-size: 14px;
   font-weight: 600;
   color: var(--guaxi-text-primary);
   opacity: 0.95;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .panel-body {
