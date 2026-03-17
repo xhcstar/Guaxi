@@ -42,6 +42,7 @@ import FileTransferAssistantApp from "./apps/FileTransferAssistantApp.vue"
 import PythonPlaygroundApp from "./apps/PythonPlaygroundApp.vue"
 import PlaceholderApp from "./apps/PlaceholderApp.vue"
 import TODOApp from "./apps/TODO.vue"
+import TTSBookApp from "./apps/TTSBookApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
 
@@ -113,6 +114,16 @@ const apps = [
     icon: '🐍',
     color: 'linear-gradient(135deg, #a1c4fd, #c2e9fb)',
     component: PythonPlaygroundApp
+  },
+  {
+    id: 'tools-tts-book',
+    name: '有声书 / 配音工坊',
+    category: 'tools',
+    categoryLabel: '工具类',
+    description: '导入 Word/PDF/Markdown/TXT/EPUB，自动清洗并合成完整语音',
+    icon: '🎙️',
+    color: 'linear-gradient(135deg, #f6d365, #fda085)',
+    component: TTSBookApp
   },
   {
     id: 'tools-table',

@@ -220,6 +220,7 @@ async fn main() {
             commands::chatview::get_chat_answer_stream,
             commands::chatview::audio_text_to_speech,
             commands::chatview::audio_speech_to_text,
+            commands::tts_book::tts_book_convert,
             commands::chatview::cancel_chat_stream,
             commands::chatview::ensure_local_deepseek_service,
             commands::chatview::search_web_duckduckgo,

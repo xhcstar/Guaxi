@@ -4040,7 +4040,7 @@ pub async fn language_learning_enrich_word_basic(
 #[tauri::command]
 pub async fn language_learning_enrich_word_details(
     word: String,
-    source_lang: Option<String>,
+    _source_lang: Option<String>,
     target_lang: Option<String>,
 ) -> Result<WordEnrichment, String> {
     let clean = clean_word(&word);

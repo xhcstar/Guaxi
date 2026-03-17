@@ -26,6 +26,7 @@ import FileTransferAssistantApp from '../components/ApplicationViewComponent/app
 import PythonPlaygroundApp from '../components/ApplicationViewComponent/apps/PythonPlaygroundApp.vue'
 import PlaceholderApp from '../components/ApplicationViewComponent/apps/PlaceholderApp.vue'
 import TODOApp from '../components/ApplicationViewComponent/apps/TODO.vue'
+import TTSBookApp from '../components/ApplicationViewComponent/apps/TTSBookApp.vue'
 
 const APP_COMPONENT_MAP = {
   'life-album': LifeAlbumApp,
@@ -34,6 +35,7 @@ const APP_COMPONENT_MAP = {
   'language-translator': LanguageTranslatorApp,
   'tools-file-transfer': FileTransferAssistantApp,
   'tools-python-playground': PythonPlaygroundApp,
+  'tools-tts-book': TTSBookApp,
 }
 
 const GuaxiAppWindow = {
