@@ -41,6 +41,9 @@ static FEED_HTTP_CACHE: Lazy<Mutex<HashMap<String, FeedHttpCacheState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static SCHEDULER_LOOP_STARTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 static SCHEDULER_ENABLED: AtomicBool = AtomicBool::new(true);
+static LAST_CACHE_CLEANUP_AT: Lazy<Mutex<i64>> = Lazy::new(|| Mutex::new(0));
+const CACHE_RETENTION_SECONDS: i64 = 60 * 60 * 24 * 7;
+const CACHE_CLEANUP_INTERVAL_SECONDS: i64 = 60 * 60 * 24 * 7;
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     let mut default_headers = HeaderMap::new();
     default_headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"));
@@ -102,11 +105,11 @@ fn article_cache_db_path() -> Result<PathBuf, String> {
     let base_dir = exe_path
         .parent()
         .ok_or_else(|| "无法获取可执行文件目录".to_string())?;
-    let config_dir = base_dir.join("config");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    let repos_dir = base_dir.join("repos");
+    if !repos_dir.exists() {
+        fs::create_dir_all(&repos_dir).map_err(|e| e.to_string())?;
     }
-    Ok(config_dir.join("flipboard_cache.sqlite3"))
+    Ok(repos_dir.join("flipboard_cache.sqlite3"))
 }
 
 fn open_article_cache_db() -> Result<Connection, String> {
@@ -192,6 +195,39 @@ fn save_articles_to_cache(feed_id: &str, items: &[Article]) -> Result<(), String
         .map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())
+}
+
+fn cleanup_old_cached_articles_if_due(now: i64) -> Result<(), String> {
+    {
+        let guard = LAST_CACHE_CLEANUP_AT
+            .lock()
+            .map_err(|e| format!("lock LAST_CACHE_CLEANUP_AT failed: {}", e))?;
+        if *guard > 0 && now - *guard < CACHE_CLEANUP_INTERVAL_SECONDS {
+            return Ok(());
+        }
+    }
+
+    let cutoff = now - CACHE_RETENTION_SECONDS;
+    let conn = open_article_cache_db()?;
+    let removed = conn
+        .execute(
+            "DELETE FROM article_cache WHERE updated_at > 0 AND updated_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut guard = LAST_CACHE_CLEANUP_AT
+            .lock()
+            .map_err(|e| format!("lock LAST_CACHE_CLEANUP_AT failed: {}", e))?;
+        *guard = now;
+    }
+
+    info!(
+        "flipboard cache cleanup finished: removed={}, cutoff={}",
+        removed, cutoff
+    );
+    Ok(())
 }
 
 fn row_to_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
@@ -3383,6 +3419,9 @@ pub async fn run_feed_scheduler_tick(
     ensure_feeds_initialized();
     let force = force.unwrap_or(false);
     let now = unix_now();
+    if let Err(e) = cleanup_old_cached_articles_if_due(now) {
+        warn!("flipboard cache cleanup failed: {}", e);
+    }
     let policy = default_scheduler_policy();
     let all_feeds: Vec<FeedSource> = {
         let lock = FEEDS.lock().unwrap();
