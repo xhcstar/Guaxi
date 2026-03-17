@@ -529,7 +529,7 @@ onUnmounted(() => {
   min-width: min(320px, calc(100% - 16px));
   min-height: 220px;
   max-width: calc(100% - 16px);
-  max-height: calc(100% - 16px);
+  max-height: calc(70% - 16px);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
