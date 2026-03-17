@@ -1041,6 +1041,121 @@ fn build_default_feeds_for_platform(platform: &str) -> Vec<PlatformFeedTemplate>
     }
 }
 
+fn default_platforms_for_category(category: &str) -> Vec<&'static str> {
+    match category {
+        "technology" => vec!["hackernews", "github_trending", "zhihu", "quora"],
+        "business" => vec!["zhihu", "quora", "wechat"],
+        "entertainment" => vec!["bilibili", "xiaohongshu"],
+        "lifestyle" => vec!["xiaohongshu", "wechat", "zhihu"],
+        "computer" => vec!["github_trending", "hackernews", "arxiv"],
+        "math" => vec!["arxiv", "wikipedia"],
+        "physics" => vec!["arxiv", "nature", "wikipedia"],
+        "ai" => vec!["arxiv", "github_trending", "zhihu"],
+        "finance" => vec!["zhihu", "quora", "wechat"],
+        "medicine" => vec!["nature", "who", "wechat"],
+        "law" => vec!["quora", "wikipedia", "zhihu"],
+        "education" => vec!["coursera", "zhihu", "bilibili"],
+        "all" => vec!["zhihu", "bilibili", "quora", "wechat"],
+        _ => vec!["zhihu", "quora", "wikipedia"],
+    }
+}
+
+#[command]
+pub async fn ensure_category_default_feeds(category: String, force: Option<bool>) -> Result<usize, String> {
+    ensure_feeds_initialized();
+    let force = force.unwrap_or(false);
+
+    let normalized_category = category.trim().to_string();
+    if normalized_category.is_empty() {
+        return Err("category 不能为空".to_string());
+    }
+
+    {
+        let categories_lock = CATEGORIES.lock().unwrap();
+        if !categories_lock
+            .iter()
+            .any(|cat| cat.id == normalized_category)
+            && normalized_category != "all"
+        {
+            return Err("Invalid category".to_string());
+        }
+    }
+
+    let mut feeds_lock = FEEDS.lock().unwrap();
+    let has_covering_feed = feeds_lock.iter().any(|f| {
+        f.enabled
+            && (f.category.trim() == normalized_category.as_str() || f.category.trim() == "all")
+    });
+    if has_covering_feed && !force {
+        return Ok(0);
+    }
+
+    let mut existing_keys: HashSet<String> = feeds_lock
+        .iter()
+        .map(|f| {
+            format!(
+                "{}|{}|{}",
+                f.url.trim().to_lowercase(),
+                f.category.trim().to_lowercase(),
+                f.source_type.trim().to_lowercase()
+            )
+        })
+        .collect();
+
+    let platforms = default_platforms_for_category(&normalized_category);
+    let mut created = 0usize;
+    for platform in platforms {
+        let templates = build_default_feeds_for_platform(platform);
+        for (idx, t) in templates.into_iter().enumerate() {
+            let key = format!(
+                "{}|{}|{}",
+                t.url.trim().to_lowercase(),
+                normalized_category.to_lowercase(),
+                t.source_type.trim().to_lowercase()
+            );
+            if !existing_keys.insert(key) {
+                continue;
+            }
+
+            feeds_lock.push(FeedSource {
+                id: format!(
+                    "auto-{}-{}-{}",
+                    normalized_category,
+                    platform,
+                    Utc::now().timestamp_millis() + idx as i64
+                ),
+                name: format!("{} ({})", t.name, normalized_category),
+                url: t.url,
+                category: normalized_category.clone(),
+                enabled: true,
+                source_type: t.source_type,
+                fetch_interval: Some(60),
+                include_keywords: t.include_keywords,
+                exclude_keywords: t.exclude_keywords,
+                remark: Some(format!(
+                    "auto_generated_for_category={}",
+                    normalized_category
+                )),
+            });
+            created += 1;
+        }
+    }
+
+    if created > 0 {
+        save_feeds_to_config(&feeds_lock)?;
+        info!(
+            "flipboard: ensure_category_default_feeds created {} feeds for category {}",
+            created, normalized_category
+        );
+    } else {
+        warn!(
+            "flipboard: ensure_category_default_feeds no templates created for category {}",
+            normalized_category
+        );
+    }
+    Ok(created)
+}
+
 // 生成模拟文章数据
 fn generate_mock_articles() -> Vec<Article> {
     let mut articles = Vec::new();
@@ -1594,8 +1709,11 @@ pub async fn import_feeds_from_website_markdown(path: Option<String>) -> Result<
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(|| website_markdown_candidates().into_iter().find(|p| p.exists()))
-        .ok_or_else(|| "未找到 website markdown 文件".to_string())?;
+        .or_else(|| website_markdown_candidates().into_iter().find(|p| p.exists()));
+    let Some(path) = path else {
+        info!("flipboard: website markdown not found, skip import");
+        return Ok(Vec::new());
+    };
 
     let records = load_feed_records_from_website_markdown(&path)?;
     if records.is_empty() {
@@ -1861,6 +1979,9 @@ fn classify_article_category(feed: &FeedSource, title: &str, description: &str, 
     } else {
         feed.category.trim().to_string()
     };
+    if base != "all" {
+        return base;
+    }
     classify_category_by_text_and_url(&base, title, description, article_url, &feed.name)
 }
 
@@ -2236,6 +2357,7 @@ async fn hydrate_article_readable_content(article: &Article) -> Result<Article, 
 pub async fn fetch_knowledge_from_feed_ids(
     feed_ids: Vec<String>,
     topic: Option<String>,
+    category: Option<String>,
     limit: Option<usize>,
     force: Option<bool>,
 ) -> Result<Vec<Article>, String> {
@@ -2263,6 +2385,11 @@ pub async fn fetch_knowledge_from_feed_ids(
     let topic_text = topic.unwrap_or_default().trim().to_string();
     let force = force.unwrap_or(false);
     let max_limit = limit.unwrap_or(80).max(1);
+    let normalized_category = category
+        .as_ref()
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty() && c != "all");
+    let category_ref = normalized_category.as_deref();
     let topic_tokens: Vec<String> = topic_text
         .split(|c: char| c == ',' || c.is_whitespace())
         .map(|x| x.trim().to_lowercase())
@@ -2270,14 +2397,21 @@ pub async fn fetch_knowledge_from_feed_ids(
         .collect();
 
     let feed_id_list: Vec<String> = feeds.iter().map(|f| f.id.clone()).collect();
-    let mut out = load_cached_articles_by_feed_ids(&feed_id_list, None, max_limit).unwrap_or_default();
+    let mut out = load_cached_articles_by_feed_ids(&feed_id_list, category_ref, max_limit).unwrap_or_default();
     let now = unix_now();
 
     for feed in &feeds {
         if !force {
             let has_cache = has_cached_articles_for_feed(&feed.id).unwrap_or(false);
+            let has_category_cache = if let Some(cat) = category_ref {
+                load_cached_articles_by_feed_ids(&vec![feed.id.clone()], Some(cat), 1)
+                    .map(|list| !list.is_empty())
+                    .unwrap_or(false)
+            } else {
+                has_cache
+            };
             let due = should_run_feed(read_scheduler_state(&feed.id).as_ref(), now, false);
-            if has_cache && !due {
+            if has_cache && has_category_cache && !due {
                 continue;
             }
         }
@@ -2306,6 +2440,9 @@ pub async fn fetch_knowledge_from_feed_ids(
     }
 
     out = dedup_articles_by_identity(out);
+    if let Some(cat) = category_ref {
+        out.retain(|a| a.category.trim() == cat || a.category.trim() == "all");
+    }
 
     if !topic_tokens.is_empty() {
         out.retain(|a| score_article_for_topic(a, &topic_tokens) > 0);

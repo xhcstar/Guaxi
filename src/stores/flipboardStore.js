@@ -103,6 +103,10 @@ export const useFlipboardStore = () => {
       await fetchFeeds()
       return Array.isArray(created) ? created : []
     } catch (error) {
+      if (String(error || '').includes('未找到 website markdown 文件')) {
+        console.warn('FlipboardStore: website markdown not found, skip importing feeds')
+        return []
+      }
       console.error('FlipboardStore: importFeedsFromWebsiteMarkdown failed:', error)
       throw error
     }
@@ -182,6 +186,25 @@ export const useFlipboardStore = () => {
     const requestToken = ++activeFetchToken
     const isStale = () => requestToken !== activeFetchToken
     const cacheKey = `${String(normalizedCategory || 'all')}|${normalizedTopic.toLowerCase()}`
+    let ensuredCategoryFallback = false
+    const ensureCategoryFallbackFeeds = async (force = false) => {
+      if (ensuredCategoryFallback) return 0
+      const categoryId = String(normalizedCategory || '').trim()
+      if (!categoryId || categoryId === 'all') return 0
+      ensuredCategoryFallback = true
+      try {
+        const created = await invoke('ensure_category_default_feeds', { category: categoryId, force })
+        const createdCount = Number(created || 0)
+        if (createdCount > 0) {
+          console.log('FlipboardStore: ensured fallback feeds for category', { category: categoryId, createdCount })
+          await fetchFeeds()
+        }
+        return createdCount
+      } catch (e) {
+        console.warn('FlipboardStore: ensure_category_default_feeds failed', e)
+        return 0
+      }
+    }
     if (forceRefresh) {
       isRefreshing.value = true
     } else {
@@ -216,7 +239,12 @@ export const useFlipboardStore = () => {
         await fetchFeeds()
       }
       if (isStale()) return
-      const feedIds = pickRelevantFeedIds(normalizedCategory)
+      let feedIds = pickRelevantFeedIds(normalizedCategory)
+      if (!feedIds.length) {
+        await ensureCategoryFallbackFeeds()
+        if (isStale()) return
+        feedIds = pickRelevantFeedIds(normalizedCategory)
+      }
 
       if (!feedIds.length) {
         const fallback = normalizedTopic
@@ -238,13 +266,26 @@ export const useFlipboardStore = () => {
         const chunk = await invoke('fetch_knowledge_from_feed_ids', {
           feedIds: batchIds,
           topic: normalizedTopic || null,
+          category: normalizedCategory,
           limit: perBatchLimit,
           force: forceRefresh
         })
         if (isStale()) return
         merged = mergeAndSortArticles(merged, Array.isArray(chunk) ? chunk : [], normalizedTopic)
       }
-      const next = merged.slice(0, 80)
+      let next = merged.slice(0, 80)
+      if (!next.length) {
+        ensuredCategoryFallback = false
+        const createdCount = await ensureCategoryFallbackFeeds(true)
+        if (isStale()) return
+        if (createdCount > 0) {
+          const recovered = normalizedTopic
+            ? await invoke('refresh_topic_knowledge_from_feeds', { topic: normalizedTopic, category: normalizedCategory, limit: 80 })
+            : await invoke('refresh_articles_from_feeds', { category: normalizedCategory, limit: 80 })
+          if (isStale()) return
+          next = Array.isArray(recovered) ? recovered : []
+        }
+      }
       articles.value = next
       inMemoryArticleCache.set(cacheKey, next.slice(0, 120))
     } catch (error) {
