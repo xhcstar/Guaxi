@@ -2343,9 +2343,14 @@ const runSyncQueueWorker = async () => {
         costMs: Date.now() - startedAt,
       })
     } catch (err) {
-      console.error('[LangLearning] 同步转写失败', { audioId: id, learningLang: taskLearningLang, error: err })
-      const title = String(audioResources.value.find((x) => String(x?.id || '') === id)?.title || id)
-      message.error(`听力转写失败: ${title}，请检查 whisper/翻译配置后重试`)
+      const errorText = String(err?.message || err || '')
+      if (errorText.includes('听力条目不存在')) {
+        console.info('[LangLearning] syncQueue:skip-missing-audio', { audioId: id, learningLang: taskLearningLang })
+      } else {
+        console.error('[LangLearning] 同步转写失败', { audioId: id, learningLang: taskLearningLang, error: err })
+        const title = String(audioResources.value.find((x) => String(x?.id || '') === id)?.title || id)
+        message.error(`听力转写失败: ${title}，请检查 whisper/翻译配置后重试`)
+      }
     }
     syncQueueDone.value += 1
     syncQueuedIdSet.delete(queueKey)
@@ -2397,6 +2402,30 @@ const triggerSyncGenerationForAudioId = (audioId, showHint = false, lang = '') =
   }
   runSyncQueueWorker()
   return true
+}
+
+const dropSyncTasksForAudioIds = (audioIds) => {
+  const idSet = new Set((Array.isArray(audioIds) ? audioIds : []).map((x) => String(x || '').trim()).filter(Boolean))
+  if (!idSet.size) return
+  for (let i = syncQueuedTasks.length - 1; i >= 0; i -= 1) {
+    const taskId = String(syncQueuedTasks[i]?.id || '').trim()
+    if (idSet.has(taskId)) {
+      syncQueuedTasks.splice(i, 1)
+    }
+  }
+  Array.from(syncQueuedIdSet).forEach((key) => {
+    const id = String(key).split(':').slice(-1)[0] || ''
+    if (idSet.has(id)) syncQueuedIdSet.delete(key)
+  })
+  Array.from(syncingAudioIdSet).forEach((key) => {
+    const id = String(key).split(':').slice(-1)[0] || ''
+    if (idSet.has(id)) syncingAudioIdSet.delete(key)
+  })
+  idSet.forEach((id) => {
+    if (currentSyncingAudioId.value === id) {
+      activeAudioSyncGenerating.value = false
+    }
+  })
 }
 
 const resumePendingSyncTasks = async () => {
@@ -2618,6 +2647,7 @@ const deleteSelectedRows = async () => {
   try {
     const recordIds = rows.filter((r) => r.sourceType === 'record').map((r) => r.rawId)
     const audioIds = rows.filter((r) => r.sourceType === 'audio').map((r) => r.rawId)
+    dropSyncTasksForAudioIds(audioIds)
     if (recordIds.length) {
       await invoke('language_learning_delete_records', {
         ids: recordIds,
@@ -2630,6 +2660,7 @@ const deleteSelectedRows = async () => {
     message.success(`已删除 ${rows.length} 项`)
     activeRow.value = null
     await refreshAll()
+    rebuildReviewRows()
   } catch (err) {
     message.error(`删除失败: ${String(err?.message || err || '')}`)
   }
@@ -3690,6 +3721,13 @@ watch(activeAudio, async () => {
 })
 
 watch(currentReviewItem, async (row) => {
+  if (row?.sourceType === 'audio') {
+    const id = String(row?.payload?.id || '').trim()
+    if (id && !audioResources.value.some((x) => String(x?.id || '').trim() === id)) {
+      reviewAudioSyncTimeline.value = []
+      return
+    }
+  }
   currentReviewTranscriptIndex.value = 0
   reviewTranscriptVisibleCount.value = transcriptScreenPageSize
   reviewAudioDurationSec.value = Number(row?.payload?.duration_sec || 0)

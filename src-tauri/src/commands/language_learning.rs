@@ -2051,8 +2051,9 @@ async fn collect_from_archive_org(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let mut collected = 0usize;
     for doc in docs {
-        if out.len() >= limit {
+        if collected >= limit {
             break;
         }
         let identifier = doc
@@ -2141,6 +2142,7 @@ async fn collect_from_archive_org(
         );
         if let Ok(row) = saved {
             out.push(row);
+            collected += 1;
         }
     }
 }
@@ -2187,8 +2189,9 @@ async fn collect_from_wikimedia_commons(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let mut collected = 0usize;
     for row in rows {
-        if out.len() >= limit {
+        if collected >= limit {
             break;
         }
         let page_id = row.get("pageid").and_then(|v| v.as_i64()).unwrap_or_default();
@@ -2259,6 +2262,7 @@ async fn collect_from_wikimedia_commons(
         );
         if let Ok(row) = saved {
             out.push(row);
+            collected += 1;
         }
     }
 }
@@ -2362,8 +2366,9 @@ async fn collect_from_rss_feed(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.pub_ts.unwrap_or(0).cmp(&a.pub_ts.unwrap_or(0)))
     });
+    let mut collected = 0usize;
     for candidate in candidates.into_iter().take(limit) {
-        if out.len() >= limit {
+        if collected >= limit {
             break;
         }
         let mut transcript = if candidate.content_text.chars().count() >= 220 {
@@ -2421,6 +2426,7 @@ async fn collect_from_rss_feed(
         );
         if let Ok(row) = saved {
             out.push(row);
+            collected += 1;
         }
     }
 }
