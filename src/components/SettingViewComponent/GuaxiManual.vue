@@ -9,6 +9,7 @@
             <li><button type="button" class="toc-link" @click="scrollToSection('features')">主要功能</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('quickstart')">快速开始</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('pages')">页面与功能详解</button></li>
+            <li><button type="button" class="toc-link" @click="scrollToSection('language-learning')">语言学习管理器</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('editor')">编辑器与右侧面板（重点）</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('setting')">设置：大模型与 Markdown 转换</button></li>
             <li><button type="button" class="toc-link" @click="scrollToSection('faq')">常见问题</button></li>
@@ -61,6 +62,10 @@
             <button type="button" class="feature-card" @click="scrollToSection('application')">
               <div class="feature-title">工具与应用</div>
               <div class="feature-desc">应用中心可打开不同工具型应用窗口（示例：翻译等）。</div>
+            </button>
+            <button type="button" class="feature-card" @click="scrollToSection('language-learning')">
+              <div class="feature-title">语言学习管理器</div>
+              <div class="feature-desc">集中管理词汇与听力学习记录，支持复习训练、主题采集与导入导出。</div>
             </button>
             <button type="button" class="feature-card" @click="scrollToSection('setting')">
               <div class="feature-title">全局设置</div>
@@ -443,6 +448,11 @@
                 <div class="icon-desc">打开模板管理器窗口。</div>
               </div>
               <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="LanguageOutline" /></div>
+                <div class="icon-name">语言学习</div>
+                <div class="icon-desc">打开语言学习管理器窗口，管理学习记录与听力资源。</div>
+              </div>
+              <div class="icon-row">
                 <div class="icon-inline"><n-icon :component="DocumentSearch20Filled" /></div>
                 <div class="icon-name">搜索类型：文件</div>
                 <div class="icon-desc">首页搜索下拉中选择“文件”。</div>
@@ -508,6 +518,11 @@
                 <div class="icon-inline"><n-icon :component="Folder20Regular" /></div>
                 <div class="icon-name">知识库资源管理</div>
                 <div class="icon-desc">打开资源库管理器，查看资源目录与同步状态。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="LanguageOutline" /></div>
+                <div class="icon-name">语言学习</div>
+                <div class="icon-desc">打开语言学习管理器，进入学习管理 / 听力学习 / 复习训练。</div>
               </div>
               <div class="icon-row">
                 <div class="icon-inline"><n-icon :component="Screenshot24Regular" /></div>
@@ -987,6 +1002,108 @@
               </div>
               <div class="figure-caption">图 8：应用中心</div>
             </div>
+          </div>
+
+          <div id="language-learning" class="page-section">
+            <div class="page-title">语言学习管理器（Language Learning Manager）</div>
+            <div class="page-desc">
+              语言学习管理器是独立窗口工具，用于统一管理词汇/例句/段落/听力学习数据。可从首页顶部“语言学习”图标打开，
+              支持学习语言切换、学习记录维护、听力资源采集与沉浸式学习、复习训练，以及学习数据导入导出。
+            </div>
+
+            <div class="manual-subtitle">入口与顶部操作</div>
+            <div class="icon-block">
+              <div class="icon-row">
+                <div class="icon-inline"><n-icon :component="LanguageOutline" /></div>
+                <div class="icon-name">语言学习入口</div>
+                <div class="icon-desc">从首页顶部栏打开语言学习管理器窗口。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                      <path fill="none" stroke="currentColor" stroke-width="2" d="M4 7h16M7 4v6m10-6v6M6 20l6-6 6 6" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">导入并恢复</div>
+                <div class="icon-desc">导入学习数据包并恢复到当前学习语言。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                      <path fill="none" stroke="currentColor" stroke-width="2" d="M4 17h16M7 20v-6m10 6v-6M6 10l6 6 6-6" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">导出学习数据</div>
+                <div class="icon-desc">按范围导出词汇与听力学习数据用于备份。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                      <path fill="none" stroke="currentColor" stroke-width="2" d="M4 7h10M4 17h10M14 4l6 3-6 3V4zm0 10l6 3-6 3v-6z" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">随机抽查卡牌</div>
+                <div class="icon-desc">按当前筛选结果生成抽查卡片用于快速复习。</div>
+              </div>
+              <div class="icon-row">
+                <div class="icon-inline">
+                  <n-icon>
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                      <path fill="none" stroke="currentColor" stroke-width="2" d="M4 12a8 8 0 0 1 13.66-5.66L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.66 5.66L4 16M4 20v-4h4" />
+                    </svg>
+                  </n-icon>
+                </div>
+                <div class="icon-name">刷新数据</div>
+                <div class="icon-desc">重新加载学习记录、计数与听力资源列表。</div>
+              </div>
+            </div>
+            <ul class="manual-ul">
+              <li>入口：首页顶部栏“语言学习”图标。</li>
+              <li>语言切换：窗口顶部可切换学习语言，切换后会刷新对应语言的数据视图。</li>
+              <li>听力资源管理：打开听力资源管理弹窗，维护来源、分类、主题与资源状态。</li>
+              <li>导入并恢复：导入学习数据包，将词汇与听力数据恢复到当前学习语言。</li>
+              <li>导出学习数据：按范围导出学习数据，便于备份与跨设备迁移。</li>
+              <li>随机抽查卡牌：基于当前筛选记录生成抽查卡片，快速进行复习巩固。</li>
+            </ul>
+
+            <div class="manual-subtitle">学习管理（Tab：学习管理）</div>
+            <ul class="manual-ul">
+              <li>记录类型：支持单词、例句、段落、听力等学习记录。</li>
+              <li>筛选与搜索：支持关键词检索、类型筛选、掌握度筛选、分页浏览。</li>
+              <li>记录维护：支持新增、编辑、删除、批量删除与详情查看。</li>
+              <li>词汇拓展：对词汇记录可刷新音标、释义、例句等扩展信息。</li>
+              <li>听力联动：可直接定位到对应听力资源并进入沉浸式学习视图。</li>
+            </ul>
+
+            <div class="manual-subtitle">听力学习与资源（Tab：学习管理-听力区域）</div>
+            <ul class="manual-ul">
+              <li>资源来源管理：可维护来源名称、语言标签与启用状态。</li>
+              <li>本地导入：支持导入本地音频/视频资源并建立学习条目。</li>
+              <li>按主题采集：输入主题后采集听力资源，未命中可更换主题重试。</li>
+              <li>转写与翻译：支持后台队列转写、同步时间轴补译与翻译覆盖率检查。</li>
+              <li>沉浸模式：支持原文/译文切换、进度同步与分段学习。</li>
+            </ul>
+
+            <div class="manual-subtitle">复习训练（Tab：复习训练）</div>
+            <ul class="manual-ul">
+              <li>复习队列：按筛选条件生成可复习列表，支持快速开始复习。</li>
+              <li>复习筛选：可按上次复习时间、掌握度、记录类型等条件过滤。</li>
+              <li>排序策略：支持按“最久未复习优先”等策略安排复习顺序。</li>
+            </ul>
+
+            <div class="manual-subtitle">导入导出与建议</div>
+            <ul class="manual-ul">
+              <li>建议定期导出：按学习语言或范围导出数据，作为备份快照。</li>
+              <li>导入前先确认学习语言：避免导入到非目标语言分组。</li>
+              <li>若主题采集为空：优先更换关键词，或补充来源后再次采集。</li>
+              <li>若转写失败：检查本地转写/翻译依赖配置后重试。</li>
+            </ul>
           </div>
 
           <div class="page-section">

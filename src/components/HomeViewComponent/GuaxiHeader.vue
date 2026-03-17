@@ -76,7 +76,9 @@
       <n-tooltip placement="bottom" trigger="hover">
         <template #trigger>
           <n-icon class="header-icon" size="20" @click="openLanguageLearningWindow">
-            <Icon :icon="languageLearningIcon" width="18" height="18" />
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="none" stroke="currentColor" stroke-width="1.8" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21V5.5zm16 0A2.5 2.5 0 0 0 17.5 3H13v16h4.5A2.5 2.5 0 0 1 20 21V5.5zM8 8h2m-2 3h2m6-3h-2m2 3h-2" />
+            </svg>
           </n-icon>
         </template>
         语言学习
@@ -276,7 +278,6 @@ import { useMessage } from 'naive-ui';
 import { debounce } from 'lodash-es'
 import { Icon } from '@iconify/vue'
 import assistantIcon from '@iconify-icons/mdi/robot-excited-outline'
-import languageLearningIcon from '@iconify-icons/mdi/book-education-outline'
 import {
   Screenshot24Regular,
   Search32Filled,
