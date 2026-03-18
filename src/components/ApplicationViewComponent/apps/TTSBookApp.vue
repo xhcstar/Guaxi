@@ -1,5 +1,5 @@
 <template>
-  <div class="tts-book-root">
+  <div class="tts-book-root" :class="{ 'tts-book-dark': isDarkTheme }">
     <section class="tts-hero">
       <div class="hero-copy">
         <p class="eyebrow">TTS Studio</p>
@@ -95,7 +95,16 @@
                   <span class="task-name">{{ task.fileName }}</span>
                 </div>
                 <div class="task-meta">{{ task.message }}</div>
+                <n-progress
+                  v-if="task.status === 'running' || task.progress > 0"
+                  type="line"
+                  :percentage="task.progress"
+                  :show-indicator="true"
+                  :height="8"
+                  :status="task.status === 'error' ? 'error' : task.status === 'success' ? 'success' : 'info'"
+                />
                 <div v-if="task.outputPath" class="task-meta">完整音频：{{ task.outputPath }}</div>
+                <div v-if="task.segmentJsonPath" class="task-meta">分段 JSON：{{ task.segmentJsonPath }}</div>
                 <div v-if="task.chapterCount > 0" class="task-meta">章节文件：{{ task.chapterCount }} 个</div>
                 <div v-if="task.stats" class="task-meta">
                   分段 {{ task.stats.total_chunks }}，中文 {{ task.stats.zh_chunks }}，英文 {{ task.stats.en_chunks }}
@@ -105,6 +114,9 @@
               <div class="queue-actions">
                 <n-button v-if="task.outputPath" size="tiny" tertiary @click="openOutput(task.outputPath)">
                   打开音频
+                </n-button>
+                <n-button v-if="task.segmentJsonPath" size="tiny" tertiary @click="openOutput(task.segmentJsonPath)">
+                  打开 JSON
                 </n-button>
                 <n-button
                   v-if="task.chapterOutputPaths?.length"
@@ -164,14 +176,17 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { createDiscreteApi } from 'naive-ui'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { createLogger } from '../../../utils/logger'
+import { useSettingsStore } from '../../../stores/settingsStore'
 
 const logger = createLogger('TTSBookApp')
 const { message } = createDiscreteApi(['message'])
+const settingsStore = useSettingsStore()
 
 const selectedFiles = ref([])
 const outputDir = ref('')
@@ -180,6 +195,9 @@ const maxChunkChars = ref(180)
 const splitByToc = ref(true)
 const running = ref(false)
 const tasks = ref([])
+let unlistenTtsBookProgress = null
+
+const isDarkTheme = computed(() => settingsStore.appearanceTheme === 'dark')
 
 const selectedSummary = computed(() => {
   if (!selectedFiles.value.length) return ''
@@ -190,16 +208,16 @@ const selectedSummary = computed(() => {
 const totalTasks = computed(() => tasks.value.length)
 const successTasks = computed(() => tasks.value.filter((t) => t.status === 'success').length)
 const failedTasks = computed(() => tasks.value.filter((t) => t.status === 'error').length)
-const doneTasks = computed(() => successTasks.value + failedTasks.value)
 const progressPercent = computed(() => {
   if (!totalTasks.value) return 0
-  return Math.round((doneTasks.value / totalTasks.value) * 100)
+  const totalProgress = tasks.value.reduce((sum, task) => sum + Number(task.progress || 0), 0)
+  return Math.round(totalProgress / totalTasks.value)
 })
 
 const latestOutputs = computed(() => {
   return tasks.value
-    .filter((t) => t.status === 'success' && t.outputPath)
-    .map((t) => t.outputPath)
+    .filter((t) => t.status === 'success')
+    .flatMap((t) => [t.outputPath, t.segmentJsonPath, ...(t.chapterOutputPaths || [])].filter(Boolean))
     .slice(0, 6)
 })
 
@@ -274,11 +292,44 @@ const createTask = (filePath) => {
     statusLabel: '排队中',
     message: '等待处理...',
     outputPath: '',
+    segmentJsonPath: '',
     chapterCount: 0,
     chapterOutputPaths: [],
+    progress: 0,
+    resumed: false,
+    taskId: id,
     stats: null,
   }
 }
+
+const applyTaskProgress = (payload) => {
+  const task = tasks.value.find((item) => item.id === payload?.task_id || item.taskId === payload?.task_id || item.filePath === payload?.file_path)
+  if (!task) return
+
+  task.taskId = String(payload?.task_id || task.taskId || task.id)
+  task.progress = Number(payload?.progress || 0)
+  task.message = String(payload?.message || task.message || '')
+  task.resumed = Boolean(payload?.resumed || task.resumed)
+  task.outputPath = String(payload?.output_path || task.outputPath || '')
+  task.segmentJsonPath = String(payload?.segment_json_path || task.segmentJsonPath || '')
+  if (task.status !== 'success' && task.status !== 'error') {
+    task.status = 'running'
+    task.statusLabel = task.resumed ? '继续处理中' : '处理中'
+  }
+}
+
+onMounted(async () => {
+  unlistenTtsBookProgress = await listen('tts_book_progress', (event) => {
+    applyTaskProgress(event.payload || {})
+  })
+})
+
+onBeforeUnmount(() => {
+  if (typeof unlistenTtsBookProgress === 'function') {
+    unlistenTtsBookProgress()
+    unlistenTtsBookProgress = null
+  }
+})
 
 const startConvertQueue = async () => {
   if (!canStart.value) return
@@ -320,6 +371,7 @@ const startConvertQueue = async () => {
     try {
       const response = await invoke('tts_book_convert', {
         request: {
+          task_id: task.id,
           file_path: task.filePath,
           output_dir: targetOutputDir,
           output_name: queue.length === 1 ? String(outputName.value || '').trim() : '',
@@ -342,7 +394,10 @@ const startConvertQueue = async () => {
 
       task.status = 'success'
       task.statusLabel = '已完成'
+      task.taskId = String(response?.task_id || task.id)
+      task.progress = 100
       task.outputPath = String(response?.output_path || '')
+      task.segmentJsonPath = String(response?.segment_json_path || '')
       task.chapterCount = Number(response?.chapter_count || 0)
       task.chapterOutputPaths = Array.isArray(response?.chapter_output_paths) ? response.chapter_output_paths : []
       task.stats = response || null
@@ -358,6 +413,7 @@ const startConvertQueue = async () => {
       })
       task.status = 'error'
       task.statusLabel = '失败'
+      task.progress = Math.max(Number(task.progress || 0), 0)
       task.message = String(e?.message || e || '转换失败')
       failedCount += 1
     }
@@ -629,9 +685,7 @@ const openOutput = async (path) => {
   }
 }
 
-:global(:root[data-guaxi-theme='dark']) .tts-book-root,
-:global(.dark-mode) .tts-book-root,
-:global(.dark) .tts-book-root {
+.tts-book-root.tts-book-dark {
   --tts-bg-1: #0f1823;
   --tts-bg-2: #121f1b;
   --tts-panel: rgba(15, 23, 34, 0.88);
@@ -645,15 +699,11 @@ const openOutput = async (path) => {
   --tts-error: #ff758c;
 }
 
-:global(:root[data-guaxi-theme='dark']) .tts-hero,
-:global(.dark-mode) .tts-hero,
-:global(.dark) .tts-hero {
+.tts-book-root.tts-book-dark .tts-hero {
   background: linear-gradient(145deg, rgba(18, 28, 42, 0.95), rgba(16, 40, 37, 0.84));
 }
 
-:global(:root[data-guaxi-theme='dark']) .tts-panel,
-:global(.dark-mode) .tts-panel,
-:global(.dark) .tts-panel {
+.tts-book-root.tts-book-dark .tts-panel {
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
 }
 </style>

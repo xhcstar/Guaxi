@@ -5,11 +5,14 @@ use encoding_rs::GBK;
 use regex::Regex;
 use scraper::Html;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::time::Instant;
+use tauri::{Emitter, Window};
 use tracing::{info, warn};
 use zip::ZipArchive;
 
@@ -32,11 +35,15 @@ pub struct TtsBookConvertRequest {
     #[serde(default)]
     pub split_by_toc: bool,
     pub max_chunk_chars: Option<usize>,
+    #[serde(default)]
+    pub task_id: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct TtsBookConvertResponse {
+    pub task_id: String,
     pub output_path: String,
+    pub segment_json_path: String,
     pub title: String,
     pub total_chars: usize,
     pub total_chunks: usize,
@@ -56,6 +63,7 @@ struct ExtractedDoc {
 
 #[derive(Debug, Clone)]
 struct TextChunk {
+    index: usize,
     text: String,
     lang: ChunkLang,
 }
@@ -66,15 +74,91 @@ enum ChunkLang {
     En,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+struct TtsBookProgress {
+    task_id: String,
+    file_path: String,
+    file_name: String,
+    stage: String,
+    current: usize,
+    total: usize,
+    progress: u8,
+    message: String,
+    resumed: bool,
+    failed: bool,
+    output_path: String,
+    segment_json_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct TtsBookResumeState {
+    version: u32,
+    source_file: String,
+    source_size: u64,
+    source_modified_ms: u64,
+    cleaned_text_hash: u64,
+    max_chunk_chars: usize,
+    split_by_toc: bool,
+    total_chunks: usize,
+    completed_chunks: Vec<usize>,
+    completed_chapters: Vec<usize>,
+    output_path: String,
+    segment_json_path: String,
+    chapter_output_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SegmentManifest {
+    title: String,
+    source_file: String,
+    total_chars: usize,
+    total_chunks: usize,
+    toc: Vec<String>,
+    chunks: Vec<SegmentEntry>,
+    chapters: Vec<ChapterSegmentEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct SegmentEntry {
+    index: usize,
+    lang: &'static str,
+    char_count: usize,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChapterSegmentEntry {
+    index: usize,
+    title: String,
+    char_count: usize,
+    chunk_count: usize,
+    text: String,
+}
+
 #[tauri::command]
-pub async fn tts_book_convert(request: TtsBookConvertRequest) -> Result<TtsBookConvertResponse, String> {
+pub async fn tts_book_convert(
+    request: TtsBookConvertRequest,
+    window: Window,
+) -> Result<TtsBookConvertResponse, String> {
     let total_start = Instant::now();
     let file_path = PathBuf::from(request.file_path.trim());
+    let file_name = file_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let task_id = if request.task_id.trim().is_empty() {
+        format!("{}-{}", file_name, unix_now_ms())
+    } else {
+        request.task_id.trim().to_string()
+    };
     info!(
         file_path = file_path.to_string_lossy().as_ref(),
         output_dir = request.output_dir.as_str(),
         split_by_toc = request.split_by_toc,
         max_chunk_chars = request.max_chunk_chars.unwrap_or(180),
+        task_id = task_id.as_str(),
         "tts_book_convert start"
     );
     if !file_path.exists() || !file_path.is_file() {
@@ -86,6 +170,24 @@ pub async fn tts_book_convert(request: TtsBookConvertRequest) -> Result<TtsBookC
         return Err("output_dir 不能为空".to_string());
     }
     fs::create_dir_all(&output_dir).map_err(|e| format!("创建输出目录失败: {}", e))?;
+
+    emit_tts_book_progress(
+        &window,
+        TtsBookProgress {
+            task_id: task_id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            file_name: file_name.clone(),
+            stage: "prepare".to_string(),
+            current: 0,
+            total: 1,
+            progress: 0,
+            message: "开始解析文档".to_string(),
+            resumed: false,
+            failed: false,
+            output_path: String::new(),
+            segment_json_path: String::new(),
+        },
+    )?;
 
     let extracted = extract_document(&file_path).await?;
     let cleaned = clean_text_for_tts(&extracted.text);
@@ -103,6 +205,61 @@ pub async fn tts_book_convert(request: TtsBookConvertRequest) -> Result<TtsBookC
     );
     if chunks.is_empty() {
         return Err("文本分段失败".to_string());
+    }
+
+    let stem = sanitize_file_stem(if request.output_name.trim().is_empty() {
+        extracted.title.as_str()
+    } else {
+        request.output_name.trim()
+    });
+    let output_path = output_dir.join(format!("{}_audiobook.wav", stem));
+    let segment_json_path = output_dir.join(format!("{}_segments.json", stem));
+    let cleaned_text_hash = hash_text(&cleaned);
+    let work_dir = output_dir.join(format!(
+        "{}_tts_work_{:016x}_{}_{}",
+        stem,
+        cleaned_text_hash,
+        max_chunk_chars,
+        if request.split_by_toc { "chap" } else { "full" }
+    ));
+    let chunk_dir = work_dir.join("chunks");
+    fs::create_dir_all(&chunk_dir).map_err(|e| format!("创建分段缓存目录失败: {}", e))?;
+    let resume_state_path = work_dir.join("resume_state.json");
+
+    let chapters = if request.split_by_toc {
+        split_text_into_chapters(&cleaned, &extracted.toc)
+    } else {
+        Vec::new()
+    };
+    info!(chapter_count = chapters.len(), "tts_book_convert chapter split done");
+
+    let (source_size, source_modified_ms) = file_signature(&file_path)?;
+    let mut resume_state = load_resume_state(&resume_state_path).unwrap_or_default();
+    let resume_matches = resume_state.version == 1
+        && resume_state.source_file == file_path.to_string_lossy()
+        && resume_state.source_size == source_size
+        && resume_state.source_modified_ms == source_modified_ms
+        && resume_state.cleaned_text_hash == cleaned_text_hash
+        && resume_state.max_chunk_chars == max_chunk_chars
+        && resume_state.split_by_toc == request.split_by_toc
+        && resume_state.total_chunks == chunks.len();
+    if !resume_matches {
+        resume_state = TtsBookResumeState {
+            version: 1,
+            source_file: file_path.to_string_lossy().to_string(),
+            source_size,
+            source_modified_ms,
+            cleaned_text_hash,
+            max_chunk_chars,
+            split_by_toc: request.split_by_toc,
+            total_chunks: chunks.len(),
+            completed_chunks: Vec::new(),
+            completed_chapters: Vec::new(),
+            output_path: output_path.to_string_lossy().to_string(),
+            segment_json_path: segment_json_path.to_string_lossy().to_string(),
+            chapter_output_paths: Vec::new(),
+        };
+        save_resume_state(&resume_state_path, &resume_state)?;
     }
 
     let tts_cfg = settingview::get_tts_config();
@@ -151,16 +308,116 @@ pub async fn tts_book_convert(request: TtsBookConvertRequest) -> Result<TtsBookC
         "tts_book_convert tts config resolved"
     );
 
+    let total_steps = chunks.len() + chapters.len() + 2;
+    let mut completed_steps = 0usize;
+    let mut resumed_any = false;
+
+    write_segment_manifest(
+        &segment_json_path,
+        &SegmentManifest {
+            title: extracted.title.clone(),
+            source_file: file_path.to_string_lossy().to_string(),
+            total_chars: cleaned.chars().count(),
+            total_chunks: chunks.len(),
+            toc: extracted.toc.clone(),
+            chunks: chunks
+                .iter()
+                .map(|chunk| SegmentEntry {
+                    index: chunk.index,
+                    lang: match chunk.lang {
+                        ChunkLang::Zh => "zh",
+                        ChunkLang::En => "en",
+                    },
+                    char_count: chunk.text.chars().count(),
+                    text: chunk.text.clone(),
+                })
+                .collect(),
+            chapters: chapters
+                .iter()
+                .enumerate()
+                .map(|(index, (chapter_title, chapter_text))| ChapterSegmentEntry {
+                    index: index + 1,
+                    title: chapter_title.clone(),
+                    char_count: chapter_text.chars().count(),
+                    chunk_count: split_text_chunks(chapter_text, max_chunk_chars).len(),
+                    text: chapter_text.clone(),
+                })
+                .collect(),
+        },
+    )?;
+    resume_state.segment_json_path = segment_json_path.to_string_lossy().to_string();
+    save_resume_state(&resume_state_path, &resume_state)?;
+    completed_steps += 1;
+    emit_tts_book_progress(
+        &window,
+        make_progress(
+            &task_id,
+            &file_path,
+            &file_name,
+            "segment_json",
+            completed_steps,
+            total_steps,
+            "已输出分段 JSON".to_string(),
+            false,
+            false,
+            &output_path,
+            &segment_json_path,
+        ),
+    )?;
+
     let synth_start = Instant::now();
-    let (merged_wav, zh_chunks, en_chunks) = synthesize_wav_from_chunks(
-        &chunks,
-        &tts_exe,
-        &english_model,
-        &english_tokens,
-        &voice_zh,
-        &voice_en,
-    )
-    .await?;
+    let mut zh_chunks = 0usize;
+    let mut en_chunks = 0usize;
+    let mut chunk_paths = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
+        match chunk.lang {
+            ChunkLang::Zh => zh_chunks += 1,
+            ChunkLang::En => en_chunks += 1,
+        }
+        let chunk_path = chunk_dir.join(format!("{:05}.wav", chunk.index));
+        let resumed = chunk_path.exists();
+        if !resumed {
+            let bytes = synthesize_chunk_audio(
+                chunk,
+                &tts_exe,
+                &english_model,
+                &english_tokens,
+                &voice_zh,
+                &voice_en,
+            )
+            .await?;
+            fs::write(&chunk_path, bytes).map_err(|e| format!("写入分段音频失败: {}", e))?;
+        } else {
+            resumed_any = true;
+        }
+        if !resume_state.completed_chunks.contains(&chunk.index) {
+            resume_state.completed_chunks.push(chunk.index);
+            resume_state.completed_chunks.sort_unstable();
+            save_resume_state(&resume_state_path, &resume_state)?;
+        }
+        chunk_paths.push(chunk_path);
+        completed_steps += 1;
+        emit_tts_book_progress(
+            &window,
+            make_progress(
+                &task_id,
+                &file_path,
+                &file_name,
+                "synth_chunk",
+                completed_steps,
+                total_steps,
+                if resumed {
+                    format!("复用已完成分段 {}/{}", chunk.index, chunks.len())
+                } else {
+                    format!("正在合成分段 {}/{}", chunk.index, chunks.len())
+                },
+                resumed,
+                false,
+                &output_path,
+                &segment_json_path,
+            ),
+        )?;
+    }
     info!(
         total_chunks = chunks.len(),
         zh_chunks,
@@ -169,55 +426,102 @@ pub async fn tts_book_convert(request: TtsBookConvertRequest) -> Result<TtsBookC
         "tts_book_convert full audio synthesized"
     );
 
-    let stem = sanitize_file_stem(if request.output_name.trim().is_empty() {
-        extracted.title.as_str()
-    } else {
-        request.output_name.trim()
-    });
-    let output_path = output_dir.join(format!("{}_audiobook.wav", stem));
+    let merged_wav = merge_wav_files(&chunk_paths)?;
     fs::write(&output_path, merged_wav).map_err(|e| format!("写入音频文件失败: {}", e))?;
+    resume_state.output_path = output_path.to_string_lossy().to_string();
+    save_resume_state(&resume_state_path, &resume_state)?;
+    completed_steps += 1;
+    emit_tts_book_progress(
+        &window,
+        make_progress(
+            &task_id,
+            &file_path,
+            &file_name,
+            "merge_audio",
+            completed_steps,
+            total_steps,
+            "已合并完整音频".to_string(),
+            resumed_any,
+            false,
+            &output_path,
+            &segment_json_path,
+        ),
+    )?;
 
     let mut chapter_output_paths = Vec::new();
     if request.split_by_toc {
         let chapter_dir = output_dir.join(format!("{}_chapters", stem));
         fs::create_dir_all(&chapter_dir).map_err(|e| format!("创建章节目录失败: {}", e))?;
 
-        let chapters = split_text_into_chapters(&cleaned, &extracted.toc);
-        info!(chapter_count = chapters.len(), "tts_book_convert chapter split done");
         for (index, (chapter_title, chapter_text)) in chapters.iter().enumerate() {
             let chapter_start = Instant::now();
-            info!(
-                chapter_index = index + 1,
-                chapter_title = chapter_title.as_str(),
-                chapter_chars = chapter_text.chars().count(),
-                "tts_book_convert chapter synth start"
-            );
-            let chapter_chunks = split_text_chunks(chapter_text, max_chunk_chars);
-            if chapter_chunks.is_empty() {
-                continue;
-            }
-            let (chapter_wav, _, _) = synthesize_wav_from_chunks(
-                &chapter_chunks,
-                &tts_exe,
-                &english_model,
-                &english_tokens,
-                &voice_zh,
-                &voice_en,
-            )
-            .await?;
-
             let chapter_stem = sanitize_file_stem(&truncate_title(chapter_title, 36));
             let chapter_name = format!("{:03}_{}.wav", index + 1, chapter_stem);
             let chapter_path = chapter_dir.join(chapter_name);
-            fs::write(&chapter_path, chapter_wav)
-                .map_err(|e| format!("写入章节音频失败: {}", e))?;
-            chapter_output_paths.push(chapter_path.to_string_lossy().to_string());
-            info!(
-                chapter_index = index + 1,
-                chapter_path = chapter_path.to_string_lossy().as_ref(),
-                cost_ms = chapter_start.elapsed().as_millis() as u64,
-                "tts_book_convert chapter synth done"
-            );
+            let resumed = chapter_path.exists();
+            if !resumed {
+                let chapter_chunks = split_text_chunks(chapter_text, max_chunk_chars);
+                if chapter_chunks.is_empty() {
+                    completed_steps += 1;
+                    continue;
+                }
+                info!(
+                    chapter_index = index + 1,
+                    chapter_title = chapter_title.as_str(),
+                    chapter_chars = chapter_text.chars().count(),
+                    "tts_book_convert chapter synth start"
+                );
+                let (chapter_wav, _, _) = synthesize_wav_from_chunks(
+                    &chapter_chunks,
+                    &tts_exe,
+                    &english_model,
+                    &english_tokens,
+                    &voice_zh,
+                    &voice_en,
+                )
+                .await?;
+                fs::write(&chapter_path, chapter_wav)
+                    .map_err(|e| format!("写入章节音频失败: {}", e))?;
+                info!(
+                    chapter_index = index + 1,
+                    chapter_path = chapter_path.to_string_lossy().as_ref(),
+                    cost_ms = chapter_start.elapsed().as_millis() as u64,
+                    "tts_book_convert chapter synth done"
+                );
+            } else {
+                resumed_any = true;
+            }
+            let chapter_path_str = chapter_path.to_string_lossy().to_string();
+            chapter_output_paths.push(chapter_path_str.clone());
+            if !resume_state.completed_chapters.contains(&(index + 1)) {
+                resume_state.completed_chapters.push(index + 1);
+                resume_state.completed_chapters.sort_unstable();
+            }
+            if !resume_state.chapter_output_paths.contains(&chapter_path_str) {
+                resume_state.chapter_output_paths.push(chapter_path_str);
+            }
+            save_resume_state(&resume_state_path, &resume_state)?;
+            completed_steps += 1;
+            emit_tts_book_progress(
+                &window,
+                make_progress(
+                    &task_id,
+                    &file_path,
+                    &file_name,
+                    "chapter_audio",
+                    completed_steps,
+                    total_steps,
+                    if resumed {
+                        format!("复用已完成章节 {}/{}", index + 1, chapters.len())
+                    } else {
+                        format!("正在生成章节 {}/{}", index + 1, chapters.len())
+                    },
+                    resumed,
+                    false,
+                    &output_path,
+                    &segment_json_path,
+                ),
+            )?;
         }
     }
 
@@ -226,11 +530,35 @@ pub async fn tts_book_convert(request: TtsBookConvertRequest) -> Result<TtsBookC
         output_path = output_path.to_string_lossy().as_ref(),
         chapter_count = chapter_output_paths.len(),
         total_cost_ms = total_start.elapsed().as_millis() as u64,
+        resumed_any,
         "tts_book_convert finished"
     );
 
+    emit_tts_book_progress(
+        &window,
+        make_progress(
+            &task_id,
+            &file_path,
+            &file_name,
+            "completed",
+            total_steps,
+            total_steps,
+            if resumed_any {
+                "转换完成，已从中断位置继续".to_string()
+            } else {
+                "转换完成".to_string()
+            },
+            resumed_any,
+            false,
+            &output_path,
+            &segment_json_path,
+        ),
+    )?;
+
     Ok(TtsBookConvertResponse {
+        task_id,
         output_path: output_path.to_string_lossy().to_string(),
+        segment_json_path: segment_json_path.to_string_lossy().to_string(),
         title: extracted.title,
         total_chars: cleaned.chars().count(),
         total_chunks: chunks.len(),
@@ -323,6 +651,156 @@ async fn synthesize_wav_from_chunks(
     Ok((merged_wav, zh_chunks, en_chunks))
 }
 
+async fn synthesize_chunk_audio(
+    chunk: &TextChunk,
+    tts_exe: &str,
+    english_model: &str,
+    english_tokens: &str,
+    voice_zh: &str,
+    voice_en: &str,
+) -> Result<Vec<u8>, String> {
+    let chunk_start = Instant::now();
+    let (model, tokens, voice, mode_hint) = match chunk.lang {
+        ChunkLang::Zh => (
+            ZH_MODEL.to_string(),
+            ZH_TOKENS.to_string(),
+            voice_zh.to_string(),
+            "vits".to_string(),
+        ),
+        ChunkLang::En => (
+            english_model.to_string(),
+            english_tokens.to_string(),
+            voice_en.to_string(),
+            "kokoro".to_string(),
+        ),
+    };
+    let prepared_text = prepare_chunk_text_for_tts(&chunk.text, chunk.lang);
+
+    info!(
+        index = chunk.index,
+        lang = match chunk.lang { ChunkLang::Zh => "zh", ChunkLang::En => "en" },
+        chars = prepared_text.chars().count(),
+        "tts_book_convert: synth one chunk"
+    );
+
+    let rsp = audio_text_to_speech(TextToSpeechRequest {
+        common: AudioCommonRequest {
+            provider: SHERPA_PROVIDER.to_string(),
+            model,
+            api_key: String::new(),
+            endpoint: tts_exe.to_string(),
+            tokens,
+            mode_hint,
+        },
+        input: prepared_text,
+        voice,
+        response_format: "wav".to_string(),
+        sample_rate: None,
+        stream: Some(false),
+        speed: None,
+        gain: None,
+        max_tokens: None,
+    })
+    .await?;
+
+    let bytes = general_purpose::STANDARD
+        .decode(rsp.audio_base64.as_bytes())
+        .map_err(|e| format!("Base64 音频解码失败: {}", e))?;
+    info!(
+        index = chunk.index,
+        audio_bytes = bytes.len(),
+        cost_ms = chunk_start.elapsed().as_millis() as u64,
+        "tts_book_convert: synth one chunk done"
+    );
+    Ok(bytes)
+}
+
+fn merge_wav_files(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
+    let mut parts = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(path).map_err(|e| format!("读取音频分片失败: {}", e))?;
+        parts.push(bytes);
+    }
+    merge_wav_parts(&parts)
+}
+
+fn emit_tts_book_progress(window: &Window, payload: TtsBookProgress) -> Result<(), String> {
+    window
+        .emit("tts_book_progress", payload)
+        .map_err(|e| e.to_string())
+}
+
+fn make_progress(
+    task_id: &str,
+    file_path: &Path,
+    file_name: &str,
+    stage: &str,
+    current: usize,
+    total: usize,
+    message: String,
+    resumed: bool,
+    failed: bool,
+    output_path: &Path,
+    segment_json_path: &Path,
+) -> TtsBookProgress {
+    let safe_total = total.max(1);
+    let safe_current = current.min(safe_total);
+    let progress = ((safe_current as f64 / safe_total as f64) * 100.0).round() as u8;
+    TtsBookProgress {
+        task_id: task_id.to_string(),
+        file_path: file_path.to_string_lossy().to_string(),
+        file_name: file_name.to_string(),
+        stage: stage.to_string(),
+        current: safe_current,
+        total: safe_total,
+        progress,
+        message,
+        resumed,
+        failed,
+        output_path: output_path.to_string_lossy().to_string(),
+        segment_json_path: segment_json_path.to_string_lossy().to_string(),
+    }
+}
+
+fn load_resume_state(path: &Path) -> Result<TtsBookResumeState, String> {
+    let raw = fs::read_to_string(path).map_err(|e| format!("读取续转状态失败: {}", e))?;
+    serde_json::from_str(&raw).map_err(|e| format!("解析续转状态失败: {}", e))
+}
+
+fn save_resume_state(path: &Path, state: &TtsBookResumeState) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(state).map_err(|e| format!("序列化续转状态失败: {}", e))?;
+    fs::write(path, raw).map_err(|e| format!("写入续转状态失败: {}", e))
+}
+
+fn write_segment_manifest(path: &Path, manifest: &SegmentManifest) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(manifest).map_err(|e| format!("序列化分段 JSON 失败: {}", e))?;
+    fs::write(path, raw).map_err(|e| format!("写入分段 JSON 失败: {}", e))
+}
+
+fn file_signature(path: &Path) -> Result<(u64, u64), String> {
+    let metadata = fs::metadata(path).map_err(|e| format!("读取文件元数据失败: {}", e))?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Ok((metadata.len(), modified))
+}
+
+fn hash_text(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn unix_now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
 fn prepare_chunk_text_for_tts(text: &str, lang: ChunkLang) -> String {
     match lang {
         ChunkLang::Zh => normalize_zh_tts_text(text),
@@ -408,18 +886,13 @@ fn split_text_into_chapters(text: &str, toc: &[String]) -> Vec<(String, String)>
 }
 
 fn find_heading_marks(lines: &[&str]) -> Vec<(usize, String)> {
-    let chapter_re = Regex::new(
-        r"(?i)^(第[一二三四五六七八九十百千万0-9]+[章节回卷篇].*|chapter\s+[0-9ivxlcdm]+.*|[0-9]+(?:\.[0-9]+){0,3}\s+.+)$",
-    )
-    .expect("valid regex");
-
     let mut marks = Vec::new();
     for (idx, line) in lines.iter().enumerate() {
         let t = line.trim();
         if t.is_empty() || t.chars().count() > 100 {
             continue;
         }
-        if chapter_re.is_match(t) {
+        if looks_like_heading(t) {
             marks.push((idx, t.to_string()));
         }
         if marks.len() >= 200 {
@@ -509,11 +982,11 @@ async fn extract_document(path: &Path) -> Result<ExtractedDoc, String> {
 
 fn read_text_with_fallback(path: &Path) -> Result<String, String> {
     match fs::read_to_string(path) {
-        Ok(s) => Ok(s),
+        Ok(s) => Ok(normalize_line_endings(&s)),
         Err(_) => {
             let bytes = fs::read(path).map_err(|e| format!("读取文件失败: {}", e))?;
             let (decoded, _, _) = GBK.decode(&bytes);
-            Ok(decoded.into_owned())
+            Ok(normalize_line_endings(&decoded))
         }
     }
 }
@@ -528,26 +1001,31 @@ async fn extract_pdf_text(path: &Path) -> Result<String, String> {
 }
 
 fn normalize_pdf_text(raw: &str) -> String {
+    let normalized = normalize_line_endings(raw);
+    let mut freq: HashMap<String, usize> = HashMap::new();
+    let lines = normalized.lines().map(|line| line.trim()).collect::<Vec<_>>();
+    for line in &lines {
+        if is_probable_running_header(line) {
+            *freq.entry((*line).to_string()).or_insert(0) += 1;
+        }
+    }
+
     let mut cleaned_lines = Vec::new();
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+    for line in lines {
+        if line.is_empty() {
             cleaned_lines.push(String::new());
             continue;
         }
-        if is_probable_page_noise(trimmed) {
+        if is_probable_page_noise(line) {
             continue;
         }
-        cleaned_lines.push(trimmed.to_string());
+        if freq.get(line).copied().unwrap_or(0) >= 3 && !looks_like_heading(line) {
+            continue;
+        }
+        cleaned_lines.push(line.to_string());
     }
 
-    cleaned_lines
-        .join("\n")
-        .split("\n\n\n")
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    join_wrapped_lines(&cleaned_lines)
 }
 
 fn is_probable_page_noise(line: &str) -> bool {
@@ -574,12 +1052,20 @@ fn extract_docx_text(path: &Path) -> Result<String, String> {
 fn docx_xml_to_text(xml: &str) -> String {
     let mut s = xml.to_string();
     s = s.replace("</w:p>", "\n");
+    s = s.replace("</w:tr>", "\n");
+    s = s.replace("</w:tc>", " ");
+    s = s.replace("<w:br/>", "\n");
     s = s.replace("<w:tab/>", " ");
 
     let tag_re = Regex::new(r"<[^>]+>").expect("valid regex");
     s = tag_re.replace_all(&s, "").to_string();
 
-    decode_xml_entities(&s)
+    join_wrapped_lines(
+        &normalize_line_endings(&decode_xml_entities(&s))
+            .lines()
+            .map(|line| line.trim().to_string())
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn extract_epub_text(path: &Path, title: String) -> Result<ExtractedDoc, String> {
@@ -735,12 +1221,20 @@ fn join_zip_path(base_dir: &str, rel: &str) -> String {
 }
 
 fn html_to_text(html: &str) -> String {
-    let no_script = Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>")
+    let no_script = Regex::new(r"(?is)<(script|style|svg|noscript)[^>]*>.*?</(script|style|svg|noscript)>")
         .expect("valid regex")
         .replace_all(html, " ");
-    let doc = Html::parse_document(&no_script);
+    let with_breaks = Regex::new(r"(?i)</?(p|div|section|article|li|ul|ol|blockquote|h[1-6]|tr|table|br)[^>]*>")
+        .expect("valid regex")
+        .replace_all(&no_script, "\n");
+    let doc = Html::parse_document(&with_breaks);
     let text = doc.root_element().text().collect::<Vec<_>>().join(" ");
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    join_wrapped_lines(
+        &normalize_line_endings(&decode_xml_entities(&text))
+            .lines()
+            .map(|line| line.trim().to_string())
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn extract_markdown_headings(md: &str) -> Vec<String> {
@@ -754,6 +1248,11 @@ fn extract_markdown_headings(md: &str) -> Vec<String> {
 
 fn markdown_to_plain_text(md: &str) -> String {
     let mut s = md.to_string();
+
+    s = Regex::new(r"(?ms)^---\s*\n.*?\n---\s*")
+        .expect("valid regex")
+        .replace(&s, " ")
+        .to_string();
 
     s = Regex::new(r"(?s)```.*?```")
         .expect("valid regex")
@@ -775,13 +1274,30 @@ fn markdown_to_plain_text(md: &str) -> String {
         .expect("valid regex")
         .replace_all(&s, " ")
         .to_string();
+    s = Regex::new(r"(?m)^\s{0,3}[-*+]\s+")
+        .expect("valid regex")
+        .replace_all(&s, "")
+        .to_string();
+    s = Regex::new(r"(?m)^\s{0,3}>\s?")
+        .expect("valid regex")
+        .replace_all(&s, "")
+        .to_string();
+    s = Regex::new(r"(?m)^\s*\|.*\|\s*$")
+        .expect("valid regex")
+        .replace_all(&s, " ")
+        .to_string();
     s = s.replace('#', " ");
 
-    s
+    join_wrapped_lines(
+        &normalize_line_endings(&s)
+            .lines()
+            .map(|line| line.trim().to_string())
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn clean_text_for_tts(raw: &str) -> String {
-    let mut s = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let mut s = normalize_line_endings(raw);
 
     s = Regex::new(r"https?://\S+")
         .expect("valid regex")
@@ -799,21 +1315,30 @@ fn clean_text_for_tts(raw: &str) -> String {
         .expect("valid regex")
         .replace_all(&s, " ")
         .to_string();
+    s = Regex::new(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
+        .expect("valid regex")
+        .replace_all(&s, " ")
+        .to_string();
+    s = Regex::new(r"\[(?:\d{1,3}|[ivxlcdmIVXLCDM]{1,12})\]")
+        .expect("valid regex")
+        .replace_all(&s, " ")
+        .to_string();
     s = decode_xml_entities(&s);
+    s = normalize_punctuation(&s);
 
     let mut lines: Vec<String> = Vec::new();
     for line in s.lines() {
-        let t = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        let t = normalize_inline_spaces(line);
         if t.is_empty() {
             continue;
         }
-        if t.starts_with("图 ") || t.starts_with("图") || t.starts_with("Figure ") {
+        if is_noise_line(&t) {
             continue;
         }
         lines.push(t);
     }
 
-    lines.join("\n")
+    join_wrapped_lines(&lines)
 }
 
 fn decode_xml_entities(s: &str) -> String {
@@ -827,19 +1352,227 @@ fn decode_xml_entities(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
-fn extract_outline_lines(text: &str) -> Vec<String> {
-    let chapter_re = Regex::new(
-        r"(?i)^(第[一二三四五六七八九十百千万0-9]+[章节回卷篇].*|chapter\s+[0-9ivxlcdm]+.*|[0-9]+(?:\.[0-9]+){0,3}\s+.+)$",
-    )
-    .expect("valid regex");
+fn normalize_line_endings(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
 
+fn normalize_inline_spaces(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_punctuation(text: &str) -> String {
+    text.replace(' ', " ")
+        .replace('•', " ")
+        .replace('·', " ")
+        .replace('—', "，")
+        .replace('–', "-")
+        .replace('…', "……")
+        .replace('“', "\"")
+        .replace('”', "\"")
+        .replace('‘', "'")
+        .replace('’', "'")
+}
+
+fn is_noise_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return true;
+    }
+    if is_probable_page_noise(t) {
+        return true;
+    }
+    if t.starts_with("图 ") || t.starts_with("图") || t.starts_with("Figure ") {
+        return true;
+    }
+    if t.starts_with("表 ") || t.starts_with("表") || t.starts_with("Table ") {
+        return true;
+    }
+    if t.chars().count() <= 2 && t.chars().all(|c| c.is_ascii_punctuation() || c.is_ascii_digit()) {
+        return true;
+    }
+    false
+}
+
+fn is_probable_running_header(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.chars().count() > 60 {
+        return false;
+    }
+    let digit_count = t.chars().filter(|c| c.is_ascii_digit()).count();
+    let alpha_count = t.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    let cjk_count = t.chars().filter(|c| ('\u{4E00}'..='\u{9FFF}').contains(c)).count();
+    (digit_count > 0 || alpha_count > 0 || cjk_count > 0) && !t.ends_with('。') && !t.ends_with('！') && !t.ends_with('？')
+}
+
+fn join_wrapped_lines(lines: &[String]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() {
+            if matches!(out.last(), Some(last) if !last.is_empty()) {
+                out.push(String::new());
+            }
+            continue;
+        }
+        if let Some(last) = out.last_mut() {
+            if !last.is_empty() && should_join_lines(last, t) {
+                if last.ends_with('-') && is_ascii_word_like(t) {
+                    last.pop();
+                    last.push_str(t);
+                } else {
+                    let glue = if needs_space_between(last, t) { " " } else { "" };
+                    last.push_str(glue);
+                    last.push_str(t);
+                }
+                continue;
+            }
+        }
+        out.push(t.to_string());
+    }
+    out.join("\n")
+        .split("\n\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn should_join_lines(prev: &str, next: &str) -> bool {
+    let prev = prev.trim_end();
+    let next = next.trim_start();
+    if prev.is_empty() || next.is_empty() {
+        return false;
+    }
+    if looks_like_heading(prev) || looks_like_heading(next) {
+        return false;
+    }
+    if prev.ends_with('。')
+        || prev.ends_with('！')
+        || prev.ends_with('？')
+        || prev.ends_with('；')
+        || prev.ends_with(';')
+        || prev.ends_with(':')
+        || prev.ends_with('：')
+    {
+        return false;
+    }
+    if next.starts_with('第') && looks_like_heading(next) {
+        return false;
+    }
+    true
+}
+
+fn needs_space_between(prev: &str, next: &str) -> bool {
+    let prev_last = prev.chars().last().unwrap_or(' ');
+    let next_first = next.chars().next().unwrap_or(' ');
+    prev_last.is_ascii_alphanumeric() && next_first.is_ascii_alphanumeric()
+}
+
+fn is_ascii_word_like(text: &str) -> bool {
+    text.chars().take(12).all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+fn looks_like_heading(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.chars().count() > 80 {
+        return false;
+    }
+    Regex::new(r"(?i)^(第[一二三四五六七八九十百千万0-9]+[章节回卷篇].*|chapter\s+[0-9ivxlcdm]+.*|[0-9]+(?:\.[0-9]+){0,3}\s+.+)$")
+        .expect("valid regex")
+        .is_match(t)
+}
+
+fn split_into_sentences(text: &str) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for (idx, ch) in chars.iter().enumerate() {
+        current.push(*ch);
+        let next = chars.get(idx + 1).copied().unwrap_or('\0');
+        let prev = if idx > 0 { chars[idx - 1] } else { '\0' };
+        let should_break = match *ch {
+            '。' | '！' | '？' | '；' | '…' => true,
+            '\n' => true,
+            '.' => !(prev.is_ascii_digit() && next.is_ascii_digit()),
+            '!' | '?' | ';' => true,
+            _ => false,
+        };
+        if should_break {
+            let t = current.trim();
+            if !t.is_empty() {
+                out.push(t.to_string());
+            }
+            current.clear();
+        }
+    }
+    let tail = current.trim();
+    if !tail.is_empty() {
+        out.push(tail.to_string());
+    }
+    out
+}
+
+fn split_oversized_sentence(sentence: &str, base_limit: usize) -> Vec<String> {
+    let lang = detect_chunk_lang(sentence);
+    let hard_limit = if lang == ChunkLang::Zh {
+        base_limit.saturating_mul(2).max(160)
+    } else {
+        base_limit.saturating_mul(3).max(240)
+    };
+    if sentence.chars().count() <= hard_limit {
+        return vec![sentence.trim().to_string()];
+    }
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for token in sentence.split_inclusive(['，', '、', '：', ',', ':']) {
+        if current.chars().count() + token.chars().count() > hard_limit && !current.trim().is_empty() {
+            parts.push(current.trim().to_string());
+            current.clear();
+        }
+        current.push_str(token);
+    }
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    if parts.len() <= 1 {
+        return split_by_word_boundary(sentence, hard_limit);
+    }
+    parts
+}
+
+fn split_by_word_boundary(text: &str, limit: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.chars().count() + word.chars().count() + 1 > limit && !current.trim().is_empty() {
+            parts.push(current.trim().to_string());
+            current.clear();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+    if parts.is_empty() {
+        vec![text.trim().to_string()]
+    } else {
+        parts
+    }
+}
+
+fn extract_outline_lines(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
         let t = line.trim();
         if t.is_empty() || t.chars().count() > 80 {
             continue;
         }
-        if chapter_re.is_match(t) {
+        if looks_like_heading(t) {
             out.push(t.to_string());
         }
         if out.len() >= 80 {
@@ -850,26 +1583,12 @@ fn extract_outline_lines(text: &str) -> Vec<String> {
 }
 
 fn split_text_chunks(text: &str, base_limit: usize) -> Vec<TextChunk> {
-    let mut sentences: Vec<String> = Vec::new();
-    let mut current = String::new();
-
-    let push_current = |buf: &mut String, out: &mut Vec<String>| {
-        let t = buf.trim();
-        if !t.is_empty() {
-            out.push(t.to_string());
-        }
-        buf.clear();
-    };
-
-    for ch in text.chars() {
-        current.push(ch);
-        if matches!(ch, '。' | '！' | '？' | '.' | '!' | '?' | ';' | '；' | '\n') {
-            push_current(&mut current, &mut sentences);
-        }
-    }
-    push_current(&mut current, &mut sentences);
-
-    if sentences.is_empty() {
+    let paragraphs = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if paragraphs.is_empty() {
         return vec![];
     }
 
@@ -880,35 +1599,44 @@ fn split_text_chunks(text: &str, base_limit: usize) -> Vec<TextChunk> {
     let mut chunk_buf = String::new();
     let mut chunk_lang: Option<ChunkLang> = None;
 
-    for sentence in &sentences {
-        let lang = detect_chunk_lang(sentence);
-        let limit = if lang == ChunkLang::Zh { zh_limit } else { en_limit };
+    for paragraph in &paragraphs {
+        let sentences = split_into_sentences(paragraph);
+        for sentence in &sentences {
+            let fragments = split_oversized_sentence(sentence, base_limit);
+            for fragment in fragments {
+                let lang = detect_chunk_lang(&fragment);
+                let limit = if lang == ChunkLang::Zh { zh_limit } else { en_limit };
 
-        let should_flush = match chunk_lang {
-            Some(l) if l != lang => true,
-            _ => chunk_buf.chars().count() + sentence.chars().count() > limit,
-        };
+                let should_flush = match chunk_lang {
+                    Some(l) if l != lang => true,
+                    _ => chunk_buf.chars().count() + fragment.chars().count() + 1 > limit,
+                };
 
-        if should_flush && !chunk_buf.trim().is_empty() {
+                if should_flush && !chunk_buf.trim().is_empty() {
+                    chunks.push(TextChunk {
+                        index: chunks.len() + 1,
+                        text: chunk_buf.trim().to_string(),
+                        lang: chunk_lang.unwrap_or(lang),
+                    });
+                    chunk_buf.clear();
+                }
+
+                if !chunk_buf.is_empty() {
+                    chunk_buf.push(' ');
+                }
+                chunk_buf.push_str(fragment.trim());
+                chunk_lang = Some(lang);
+            }
+        }
+        if !chunk_buf.trim().is_empty() {
             chunks.push(TextChunk {
+                index: chunks.len() + 1,
                 text: chunk_buf.trim().to_string(),
-                lang: chunk_lang.unwrap_or(lang),
+                lang: chunk_lang.unwrap_or(ChunkLang::Zh),
             });
             chunk_buf.clear();
+            chunk_lang = None;
         }
-
-        if !chunk_buf.is_empty() {
-            chunk_buf.push(' ');
-        }
-        chunk_buf.push_str(sentence.trim());
-        chunk_lang = Some(lang);
-    }
-
-    if !chunk_buf.trim().is_empty() {
-        chunks.push(TextChunk {
-            text: chunk_buf.trim().to_string(),
-            lang: chunk_lang.unwrap_or(ChunkLang::Zh),
-        });
     }
 
     if chunks.is_empty() {
