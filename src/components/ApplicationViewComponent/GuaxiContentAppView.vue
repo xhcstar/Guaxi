@@ -32,6 +32,7 @@ import { createLogger } from '../../utils/logger'
 import { ref, computed, onBeforeUnmount } from "vue"
 import { invoke } from '@tauri-apps/api/core'
 import { useSiderStore } from '../../stores/useSiderStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import GuaxiSidebarAppView from "./GuaxiSidebarAppView.vue"
 import GuaxiCenterAppView from "./GuaxiCenterAppView.vue"
 import GuaxiRightContentAppView from "./GuaxiRightContentAppView.vue"
@@ -45,6 +46,7 @@ import TODOApp from "./apps/TODO.vue"
 import TTSBookApp from "./apps/TTSBookApp.vue"
 
 const logger = createLogger('GuaxiContentAppView')
+const settingsStore = useSettingsStore()
 
 const categories = [
   { key: 'tools', label: '工具类' },
@@ -164,6 +166,7 @@ const handleOpenApp = async (app) => {
     await invoke('open_application_window', {
       appId: app.id,
       title: app.name,
+      theme: settingsStore.appearanceTheme,
     })
   } catch (err) {
     logger.error('打开应用窗口失败:', err)

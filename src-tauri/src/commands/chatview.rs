@@ -308,6 +308,8 @@ pub struct AudioCommonRequest {
     pub endpoint: String,
     #[serde(default)]
     pub tokens: String,
+    #[serde(default)]
+    pub mode_hint: String,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -1069,7 +1071,14 @@ enum SherpaOnnxTtsCliMode {
     Vits,
 }
 
-fn detect_sherpa_tts_modes(cfg: &SherpaOnnxTtsCliConfig) -> Vec<SherpaOnnxTtsCliMode> {
+fn detect_sherpa_tts_modes(cfg: &SherpaOnnxTtsCliConfig, mode_hint: &str) -> Vec<SherpaOnnxTtsCliMode> {
+    let hint = mode_hint.trim().to_lowercase();
+    if hint == "vits" {
+        return vec![SherpaOnnxTtsCliMode::Vits];
+    }
+    if hint == "kokoro" {
+        return vec![SherpaOnnxTtsCliMode::Kokoro];
+    }
     let model_name = cfg
         .model_path
         .file_name()
@@ -1241,6 +1250,42 @@ fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<S
         .unwrap_or((None, None, None));
 
     let defaults = resolve_sherpa_default_model_paths()?;
+    info!(
+        endpoint_raw = request.common.endpoint.trim(),
+        endpoint_resolved = endpoint_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        endpoint_is_exe,
+        endpoint_is_dir,
+        requested_model_raw = request.common.model.trim(),
+        requested_model_resolved = requested_model_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        inferred_model_dir = model_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        guessed_model = guessed
+            .0
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        guessed_tokens = guessed
+            .1
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        guessed_data_dir = guessed
+            .2
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        default_model = defaults.0.to_string_lossy().as_ref(),
+        default_tokens = defaults.1.to_string_lossy().as_ref(),
+        "resolving sherpa-onnx tts cli config"
+    );
     let model_path = if let Some(p) = requested_model_path {
         if p.is_file() { p } else if !request.common.model.trim().is_empty() { PathBuf::from(request.common.model.trim()) } else { defaults.0.clone() }
     } else if !model_env.trim().is_empty() {
@@ -1322,6 +1367,27 @@ fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<S
         Some(rule_fsts_env.trim().to_string())
     };
 
+    info!(
+        exe_path = exe_path.to_string_lossy().as_ref(),
+        model_path = model_path.to_string_lossy().as_ref(),
+        model_is_file = model_path.is_file(),
+        tokens_path = tokens_path.to_string_lossy().as_ref(),
+        tokens_exists = tokens_path.exists(),
+        voices_path = voices_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        data_dir = data_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        lexicon = lexicon
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        "sherpa-onnx tts cli config resolved"
+    );
+
     Ok(SherpaOnnxTtsCliConfig {
         exe_path,
         model_path,
@@ -1380,6 +1446,7 @@ fn run_sherpa_onnx_cli_once(
     cmd.arg(text);
     info!(
         mode = format!("{:?}", mode),
+        exe = cfg.exe_path.to_string_lossy().as_ref(),
         model = cfg.model_path.to_string_lossy().as_ref(),
         tokens = cfg.tokens_path.to_string_lossy().as_ref(),
         voices = cfg
@@ -1392,6 +1459,12 @@ fn run_sherpa_onnx_cli_once(
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),
+        lexicon = cfg
+            .lexicon
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        output_wav = output_wav.to_string_lossy().as_ref(),
         "sherpa-onnx cli args prepared"
     );
     #[cfg(windows)]
@@ -1400,7 +1473,14 @@ fn run_sherpa_onnx_cli_once(
     }
     let output = cmd.output().map_err(|e| format!("执行 sherpa-onnx tts 失败: {}", e))?;
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        warn!(
+            mode = format!("{:?}", mode),
+            stdout = stdout.as_str(),
+            stderr = stderr.as_str(),
+            "sherpa-onnx cli execution failed"
+        );
         return Err(format!("sherpa-onnx tts 失败({:?}): {}", mode, stderr));
     }
     Ok(())
@@ -1421,7 +1501,7 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
         text_len = text.len(),
         "audio_text_to_speech using sherpa-onnx"
     );
-    let modes = detect_sherpa_tts_modes(&cfg);
+    let modes = detect_sherpa_tts_modes(&cfg, &request.common.mode_hint);
     let output_wav = env::temp_dir().join(format!("guaxi_sherpa_tts_{}.wav", Utc::now().timestamp_millis()));
     let mut last_err = String::new();
     for mode in modes {

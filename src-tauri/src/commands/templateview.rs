@@ -127,6 +127,7 @@ pub async fn open_application_window(
     app: tauri::AppHandle,
     app_id: String,
     title: String,
+    theme: Option<String>,
 ) -> Result<(), String> {
     let app_id = app_id.trim().to_string();
     if app_id.is_empty() {
@@ -141,12 +142,23 @@ pub async fn open_application_window(
         return Ok(());
     }
 
-    let url = WebviewUrl::App(format!("/app/{}", app_id).into());
+    let theme = theme.unwrap_or_default().trim().to_lowercase();
+    let url = if theme == "dark" || theme == "light" {
+        WebviewUrl::App(format!("/app/{}?theme={}", app_id, encode(&theme)).into())
+    } else {
+        WebviewUrl::App(format!("/app/{}", app_id).into())
+    };
+
+    let (inner_w, inner_h, min_w, min_h) = if app_id == "tools-tts-book" {
+        (1480.0, 900.0, 1280.0, 760.0)
+    } else {
+        (1024.0, 720.0, 820.0, 560.0)
+    };
 
     let window = WebviewWindowBuilder::new(&app, &label, url)
         .title(&title)
-        .inner_size(1024.0, 720.0)
-        .min_inner_size(820.0, 560.0)
+        .inner_size(inner_w, inner_h)
+        .min_inner_size(min_w, min_h)
         .visible(false)
         .build()
         .map_err(|e| format!("创建窗口失败: {}", e))?;

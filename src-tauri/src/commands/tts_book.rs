@@ -2,7 +2,6 @@ use crate::commands::chatview::{audio_text_to_speech, AudioCommonRequest, TextTo
 use crate::commands::settingview;
 use base64::{engine::general_purpose, Engine as _};
 use encoding_rs::GBK;
-use pdfium_render::prelude::*;
 use regex::Regex;
 use scraper::Html;
 use serde::{Deserialize, Serialize};
@@ -10,24 +9,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Instant;
-use tokio::process::Command as TokioCommand;
-use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
-use walkdir::WalkDir;
 use zip::ZipArchive;
-
-const PDFIUM_LIB_PATH: &str = if cfg!(debug_assertions) {
-    "../../libs"
-} else {
-    "./libs"
-};
 
 const SHERPA_PROVIDER: &str = "sherpa-onnx";
 const EN_FALLBACK_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
 const EN_FALLBACK_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
-const ZH_MODEL_DIR: &str = "utils/Models/tts/vits-melo-tts-zh-en";
+const ZH_MODEL: &str = "utils/Models/tts/vits-melo-tts-zh-en/model.onnx";
 const ZH_TOKENS: &str = "utils/Models/tts/vits-melo-tts-zh-en/tokens.txt";
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +140,17 @@ pub async fn tts_book_convert(request: TtsBookConvertRequest) -> Result<TtsBookC
         request.voice_en.trim().to_string()
     };
 
+    info!(
+        tts_exe = tts_exe.as_str(),
+        zh_model = ZH_MODEL,
+        zh_tokens = ZH_TOKENS,
+        en_model = english_model.as_str(),
+        en_tokens = english_tokens.as_str(),
+        voice_zh = voice_zh.as_str(),
+        voice_en = voice_en.as_str(),
+        "tts_book_convert tts config resolved"
+    );
+
     let synth_start = Instant::now();
     let (merged_wav, zh_chunks, en_chunks) = synthesize_wav_from_chunks(
         &chunks,
@@ -256,10 +256,15 @@ async fn synthesize_wav_from_chunks(
 
     for (idx, chunk) in chunks.iter().enumerate() {
         let chunk_start = Instant::now();
-        let (model, tokens, voice) = match chunk.lang {
+        let (model, tokens, voice, mode_hint) = match chunk.lang {
             ChunkLang::Zh => {
                 zh_chunks += 1;
-                (ZH_MODEL_DIR.to_string(), ZH_TOKENS.to_string(), voice_zh.to_string())
+                (
+                    ZH_MODEL.to_string(),
+                    ZH_TOKENS.to_string(),
+                    voice_zh.to_string(),
+                    "vits".to_string(),
+                )
             }
             ChunkLang::En => {
                 en_chunks += 1;
@@ -267,15 +272,17 @@ async fn synthesize_wav_from_chunks(
                     english_model.to_string(),
                     english_tokens.to_string(),
                     voice_en.to_string(),
+                    "kokoro".to_string(),
                 )
             }
         };
+        let prepared_text = prepare_chunk_text_for_tts(&chunk.text, chunk.lang);
 
         info!(
             index = idx + 1,
             total = chunks.len(),
             lang = match chunk.lang { ChunkLang::Zh => "zh", ChunkLang::En => "en" },
-            chars = chunk.text.chars().count(),
+            chars = prepared_text.chars().count(),
             "tts_book_convert: synth chunk"
         );
 
@@ -286,8 +293,9 @@ async fn synthesize_wav_from_chunks(
                 api_key: String::new(),
                 endpoint: tts_exe.to_string(),
                 tokens,
+                mode_hint,
             },
-            input: chunk.text.clone(),
+            input: prepared_text,
             voice,
             response_format: "wav".to_string(),
             sample_rate: None,
@@ -313,6 +321,20 @@ async fn synthesize_wav_from_chunks(
 
     let merged_wav = merge_wav_parts(&wav_parts)?;
     Ok((merged_wav, zh_chunks, en_chunks))
+}
+
+fn prepare_chunk_text_for_tts(text: &str, lang: ChunkLang) -> String {
+    match lang {
+        ChunkLang::Zh => normalize_zh_tts_text(text),
+        ChunkLang::En => text.to_string(),
+    }
+}
+
+fn normalize_zh_tts_text(text: &str) -> String {
+    let fraction_re = Regex::new(r"(\d+)\s*/\s*(\d+)").expect("valid regex");
+    fraction_re
+        .replace_all(text, |caps: &regex::Captures| format!("{}分之{}", &caps[2], &caps[1]))
+        .to_string()
 }
 
 fn split_text_into_chapters(text: &str, toc: &[String]) -> Vec<(String, String)> {
@@ -496,287 +518,46 @@ fn read_text_with_fallback(path: &Path) -> Result<String, String> {
     }
 }
 
-fn init_pdfium() -> Result<Pdfium, String> {
-    let mut tried: Vec<String> = Vec::new();
-
-    match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(PDFIUM_LIB_PATH)) {
-        Ok(bindings) => return Ok(Pdfium::new(bindings)),
-        Err(e) => tried.push(format!("{} => {}", PDFIUM_LIB_PATH, e)),
-    }
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
-            let candidates = vec![
-                exe_dir.join("libs"),
-                exe_dir.join("resources").join("libs"),
-                exe_dir.join("..").join("libs"),
-                exe_dir.join("..").join("..").join("libs"),
-            ];
-
-            for candidate in candidates {
-                let path = candidate.to_string_lossy().to_string();
-                match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&candidate)) {
-                    Ok(bindings) => return Ok(Pdfium::new(bindings)),
-                    Err(e) => tried.push(format!("{} => {}", path, e)),
-                }
-            }
-        }
-    }
-
-    if cfg!(debug_assertions) {
-        let workspace_libs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("libs");
-        let path = workspace_libs.to_string_lossy().to_string();
-        match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&workspace_libs)) {
-            Ok(bindings) => return Ok(Pdfium::new(bindings)),
-            Err(e) => tried.push(format!("{} => {}", path, e)),
-        }
-    }
-
-    match Pdfium::bind_to_system_library() {
-        Ok(bindings) => Ok(Pdfium::new(bindings)),
-        Err(e) => {
-            tried.push(format!("system => {}", e));
-            Err(format!("PDFium 初始化失败，已尝试路径: {}", tried.join(" | ")))
-        }
-    }
-}
-
-fn resolve_marker_source_dir_for_tts(exe_dir: &Path) -> Result<PathBuf, String> {
-    let p = exe_dir
-        .join("utils")
-        .join("MarkdownConvertor")
-        .join("marker-1.10.1");
-    if p.exists() {
-        return Ok(p);
-    }
-
-    if cfg!(debug_assertions) {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("marker-1.10.1");
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-
-    Err("找不到 marker-1.10.1 源码目录".to_string())
-}
-
-fn resolve_marker_python_path_for_tts(marker_src_dir: &Path) -> Result<PathBuf, String> {
-    let venv_dir = marker_src_dir.join(".venv");
-    if cfg!(windows) {
-        let candidates = [
-            venv_dir.join("Scripts").join("python.exe"),
-            venv_dir.join("python.exe"),
-        ];
-        for p in candidates {
-            if p.exists() {
-                return Ok(p);
-            }
-        }
-    } else {
-        let p = venv_dir.join("bin").join("python");
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-    Err("找不到 Marker 虚拟环境 Python，请先准备 marker 运行环境".to_string())
-}
-
-async fn extract_pdf_text_via_marker(path: &Path) -> Result<String, String> {
-    let current_exe = std::env::current_exe().map_err(|e| format!("获取可执行路径失败: {}", e))?;
-    let exe_dir = current_exe
-        .parent()
-        .ok_or_else(|| "获取可执行目录失败".to_string())?;
-
-    let marker_src_dir = resolve_marker_source_dir_for_tts(exe_dir)?;
-    let python_path = resolve_marker_python_path_for_tts(&marker_src_dir)?;
-
-    let script_path = marker_src_dir.join("convert_single.py");
-    if !script_path.exists() {
-        return Err(format!("找不到 convert_single.py: {}", script_path.to_string_lossy()));
-    }
-
-    let model_dir = exe_dir.join("utils").join("Models").join("surya_models");
-    let _ = fs::create_dir_all(&model_dir);
-
-    let temp_dir = tempfile::tempdir().map_err(|e| format!("创建临时目录失败: {}", e))?;
-    let input_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("document");
-    let expected_output_dir = temp_dir.path().join(input_stem);
-    fs::create_dir_all(&expected_output_dir).map_err(|e| format!("创建临时输出目录失败: {}", e))?;
-
-    let existing_pythonpath = std::env::var("PYTHONPATH").unwrap_or_default();
-    let marker_pythonpath = marker_src_dir.to_string_lossy().to_string();
-    let path_sep = if cfg!(windows) { ";" } else { ":" };
-    let combined_pythonpath = if existing_pythonpath.trim().is_empty() {
-        marker_pythonpath
-    } else {
-        format!("{}{}{}", marker_pythonpath, path_sep, existing_pythonpath)
-    };
-
-    info!(
-        pdf_path = path.to_string_lossy().as_ref(),
-        python = python_path.to_string_lossy().as_ref(),
-        marker_src_dir = marker_src_dir.to_string_lossy().as_ref(),
-        output_dir = expected_output_dir.to_string_lossy().as_ref(),
-        "tts_book_convert marker fallback start"
-    );
-
-    let marker_start = Instant::now();
-    let mut cmd = TokioCommand::new(&python_path);
-    cmd.arg("-u")
-        .arg(script_path.to_string_lossy().to_string())
-        .arg(path.to_string_lossy().to_string())
-        .arg("--output_format")
-        .arg("markdown")
-        .arg("--paginate_output")
-        .arg("--output_dir")
-        .arg(expected_output_dir.to_string_lossy().to_string())
-        .arg("--progress_json")
-        .current_dir(&marker_src_dir)
-        .env("PYTHONPATH", combined_pythonpath)
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("HF_HOME", model_dir.to_string_lossy().to_string())
-        .env("HUGGINGFACE_HUB_CACHE", model_dir.to_string_lossy().to_string())
-        .env("TRANSFORMERS_CACHE", model_dir.to_string_lossy().to_string())
-        .env("TORCH_HOME", model_dir.to_string_lossy().to_string())
-        .env("XDG_CACHE_HOME", model_dir.to_string_lossy().to_string())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let output = timeout(Duration::from_secs(900), cmd.output())
-        .await
-        .map_err(|_| "Marker 转换超时（15分钟），请先在文档工具中单独转换 PDF 预热模型后再试".to_string())?
-        .map_err(|e| format!("启动 Marker 转换失败: {}", e))?;
-
-    info!(
-        status = output.status.code().unwrap_or(-1),
-        stdout_len = output.stdout.len(),
-        stderr_len = output.stderr.len(),
-        cost_ms = marker_start.elapsed().as_millis() as u64,
-        "tts_book_convert marker fallback done"
-    );
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("Marker 转换失败: {}", stderr));
-    }
-
-    let expected_md = expected_output_dir.join(format!("{}.md", input_stem));
-    let md_path = if expected_md.exists() {
-        expected_md
-    } else {
-        WalkDir::new(&expected_output_dir)
-            .into_iter()
-            .filter_map(Result::ok)
-            .find(|e| e.file_type().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("md"))
-            .map(|e| e.into_path())
-            .ok_or_else(|| "Marker 转换成功但未找到 Markdown 输出".to_string())?
-    };
-
-    let md = fs::read_to_string(&md_path).map_err(|e| format!("读取 Marker 输出失败: {}", e))?;
-    let text = markdown_to_plain_text(&md);
-    info!(
-        md_path = md_path.to_string_lossy().as_ref(),
-        markdown_chars = md.chars().count(),
-        text_chars = text.chars().count(),
-        "tts_book_convert marker text extracted"
-    );
+async fn extract_pdf_text(path: &Path) -> Result<String, String> {
+    let raw = pdf_extract::extract_text(path).map_err(|e| format!("PDF 解析失败: {}", e))?;
+    let text = normalize_pdf_text(&raw);
     if text.trim().is_empty() {
-        return Err("Marker 输出文本为空".to_string());
+        return Err("PDF 解析结果为空".to_string());
     }
     Ok(text)
 }
 
-fn extract_pdf_text_via_pdfium(path: &Path) -> Result<String, String> {
-    let pdfium = init_pdfium()?;
-    let document = pdfium
-        .load_pdf_from_file(path, None)
-        .map_err(|e| format!("PDF 打开失败: {}", e))?;
-
-    let mut pages: Vec<Vec<String>> = Vec::new();
-    for idx in 0..document.pages().len() {
-        let page = document
-            .pages()
-            .get(idx as u16)
-            .map_err(|e| format!("PDF 页面读取失败: {}", e))?;
-        let text = page
-            .text()
-            .map(|t| t.all())
-            .unwrap_or_default();
-        let lines = text
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect::<Vec<_>>();
-        pages.push(lines);
+fn normalize_pdf_text(raw: &str) -> String {
+    let mut cleaned_lines = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            cleaned_lines.push(String::new());
+            continue;
+        }
+        if is_probable_page_noise(trimmed) {
+            continue;
+        }
+        cleaned_lines.push(trimmed.to_string());
     }
 
-    let cleaned_pages = strip_pdf_page_margins(pages);
-    Ok(cleaned_pages.join("\n\n"))
+    cleaned_lines
+        .join("\n")
+        .split("\n\n\n")
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
-async fn extract_pdf_text(path: &Path) -> Result<String, String> {
-    match extract_pdf_text_via_pdfium(path) {
-        Ok(text) => Ok(text),
-        Err(pdfium_err) => {
-            warn!(err = pdfium_err.as_str(), "pdfium parse failed, fallback to marker converter");
-            extract_pdf_text_via_marker(path).await.map_err(|marker_err| {
-                format!(
-                    "PDFium 解析失败，且 Marker 回退也失败。PDFium: {} ; Marker: {}",
-                    pdfium_err, marker_err
-                )
-            })
-        }
+fn is_probable_page_noise(line: &str) -> bool {
+    let digits_only = line.chars().all(|c| c.is_ascii_digit());
+    if digits_only && line.len() <= 4 {
+        return true;
     }
+    let compact = line.to_ascii_lowercase().replace(' ', "");
+    compact.starts_with("page") && compact[4..].chars().all(|c| c.is_ascii_digit())
 }
-
-fn strip_pdf_page_margins(mut pages: Vec<Vec<String>>) -> Vec<String> {
-    if pages.is_empty() {
-        return vec![];
-    }
-
-    let mut first_line_count: HashMap<String, usize> = HashMap::new();
-    let mut last_line_count: HashMap<String, usize> = HashMap::new();
-
-    for lines in &pages {
-        if let Some(first) = lines.first() {
-            *first_line_count.entry(first.clone()).or_insert(0) += 1;
-        }
-        if let Some(last) = lines.last() {
-            *last_line_count.entry(last.clone()).or_insert(0) += 1;
-        }
-    }
-
-    let threshold = (pages.len() / 3).max(3);
-    let common_header = first_line_count
-        .into_iter()
-        .max_by_key(|(_, c)| *c)
-        .and_then(|(k, c)| if c >= threshold { Some(k) } else { None });
-    let common_footer = last_line_count
-        .into_iter()
-        .max_by_key(|(_, c)| *c)
-        .and_then(|(k, c)| if c >= threshold { Some(k) } else { None });
-
-    let mut out = Vec::with_capacity(pages.len());
-    for lines in &mut pages {
-        if let Some(h) = &common_header {
-            if lines.first() == Some(h) {
-                lines.remove(0);
-            }
-        }
-        if let Some(f) = &common_footer {
-            if lines.last() == Some(f) {
-                lines.pop();
-            }
-        }
-        out.push(lines.join("\n"));
-    }
-
-    out
-}
-
 fn extract_docx_text(path: &Path) -> Result<String, String> {
     let file = fs::File::open(path).map_err(|e| format!("打开 docx 失败: {}", e))?;
     let mut zip = ZipArchive::new(file).map_err(|e| format!("读取 docx 压缩包失败: {}", e))?;
