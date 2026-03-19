@@ -2,7 +2,9 @@ use crate::commands::chatview::{audio_text_to_speech, AudioCommonRequest, TextTo
 use crate::commands::settingview;
 use base64::{engine::general_purpose, Engine as _};
 use encoding_rs::GBK;
+use lopdf::Document as LoDocument;
 use once_cell::sync::Lazy;
+use pdfium_render::prelude::*;
 use regex::Regex;
 use scraper::Html;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,6 +42,7 @@ struct TtsBookTaskControl {
 
 static TTS_BOOK_TASK_CONTROLS: Lazy<Mutex<HashMap<String, TtsBookTaskControl>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static PDF_EXTRACT_PANIC_HOOK_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Debug, Deserialize)]
 pub struct TtsBookConvertRequest {
@@ -1532,12 +1536,286 @@ fn read_text_with_fallback(path: &Path) -> Result<String, String> {
 }
 
 async fn extract_pdf_text(path: &Path) -> Result<String, String> {
-    let raw = pdf_extract::extract_text(path).map_err(|e| format!("PDF 解析失败: {}", e))?;
+    let path_buf = path.to_path_buf();
+    let primary = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = PDF_EXTRACT_PANIC_HOOK_GUARD
+            .lock()
+            .map_err(|_| "PDF 解析 panic hook 锁获取失败".to_string())?;
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = catch_unwind(AssertUnwindSafe(|| pdf_extract::extract_text(&path_buf)));
+        std::panic::set_hook(previous_hook);
+        result
+            .map_err(|_| "PDF 解析器发生 panic，可能是该文件中的字体编码不被 pdf-extract 当前版本支持".to_string())?
+            .map_err(|e| format!("PDF 解析失败: {}", e))
+    })
+    .await
+    .map_err(|e| format!("PDF 解析任务失败: {}", e))?;
+    let raw = match primary {
+        Ok(text) => text,
+        Err(err) => {
+            warn!(
+                path = path.to_string_lossy().as_ref(),
+                error = err.as_str(),
+                "pdf-extract failed, fallback to lopdf"
+            );
+            match extract_pdf_text_with_lopdf(path) {
+                Ok(text) => text,
+                Err(lopdf_err) => {
+                    warn!(
+                        path = path.to_string_lossy().as_ref(),
+                        error = lopdf_err.as_str(),
+                        "lopdf failed, fallback to pdfium"
+                    );
+                    extract_pdf_text_with_pdfium(path)?
+                }
+            }
+        }
+    };
     let text = normalize_pdf_text(&raw);
     if text.trim().is_empty() {
         return Err("PDF 解析结果为空".to_string());
     }
     Ok(text)
+}
+
+fn extract_pdf_text_with_lopdf(path: &Path) -> Result<String, String> {
+    let document = LoDocument::load(path).map_err(|e| format!("lopdf 加载 PDF 失败: {}", e))?;
+    let pages = document.get_pages();
+    if pages.is_empty() {
+        return Err("lopdf 未发现任何 PDF 页面".to_string());
+    }
+
+    let mut page_numbers = pages.keys().copied().collect::<Vec<_>>();
+    page_numbers.sort_unstable();
+    let mut out = String::new();
+    let mut extracted_pages = 0usize;
+    let mut page_errors = Vec::new();
+
+    for page_number in page_numbers {
+        match document.extract_text(&[page_number]) {
+            Ok(text) if !text.trim().is_empty() => {
+                if !out.is_empty() {
+                    out.push_str("\n\n");
+                }
+                out.push_str(&text);
+                extracted_pages += 1;
+            }
+            Ok(_) => {
+                if let Some(&page_id) = pages.get(&page_number) {
+                    let fallback = extract_page_text_from_lopdf_stream(&document, page_id);
+                    if !fallback.trim().is_empty() {
+                        if !out.is_empty() {
+                            out.push_str("\n\n");
+                        }
+                        out.push_str(&fallback);
+                        extracted_pages += 1;
+                    }
+                }
+            }
+            Err(err) => {
+                if let Some(&page_id) = pages.get(&page_number) {
+                    let fallback = extract_page_text_from_lopdf_stream(&document, page_id);
+                    if !fallback.trim().is_empty() {
+                        if !out.is_empty() {
+                            out.push_str("\n\n");
+                        }
+                        out.push_str(&fallback);
+                        extracted_pages += 1;
+                        continue;
+                    }
+                }
+                page_errors.push(format!("page {}: {}", page_number, err));
+            }
+        }
+    }
+
+    if !out.trim().is_empty() {
+        info!(
+            extracted_pages,
+            total_pages = pages.len(),
+            "lopdf text extraction completed with per-page fallback"
+        );
+        return Ok(out);
+    }
+
+    let detail = if page_errors.is_empty() {
+        "无可用页面文本".to_string()
+    } else {
+        page_errors.join(" | ")
+    };
+    Err(format!("lopdf 提取文本失败: {}", detail))
+}
+
+fn extract_page_text_from_lopdf_stream(document: &LoDocument, page_id: (u32, u16)) -> String {
+    let Ok(content) = document.get_page_content(page_id) else {
+        return String::new();
+    };
+
+    let mut pieces = Vec::new();
+    let mut literal = String::new();
+    let mut hex = String::new();
+    let mut in_literal = false;
+    let mut in_hex = false;
+    let mut escape = false;
+    let mut literal_depth = 0usize;
+
+    for ch in String::from_utf8_lossy(&content).chars() {
+        if in_literal {
+            if escape {
+                let mapped = match ch {
+                    'n' => '\n',
+                    'r' => '\n',
+                    't' => '\t',
+                    'b' => ' ',
+                    'f' => ' ',
+                    other => other,
+                };
+                literal.push(mapped);
+                escape = false;
+                continue;
+            }
+            match ch {
+                '\\' => {
+                    escape = true;
+                }
+                '(' => {
+                    literal_depth += 1;
+                    literal.push(ch);
+                }
+                ')' => {
+                    if literal_depth == 0 {
+                        if !literal.trim().is_empty() {
+                            pieces.push(literal.trim().to_string());
+                        }
+                        literal.clear();
+                        in_literal = false;
+                    } else {
+                        literal_depth -= 1;
+                        literal.push(ch);
+                    }
+                }
+                _ => literal.push(ch),
+            }
+            continue;
+        }
+
+        if in_hex {
+            match ch {
+                '>' => {
+                    let decoded = decode_pdf_hex_text(&hex);
+                    if !decoded.trim().is_empty() {
+                        pieces.push(decoded);
+                    }
+                    hex.clear();
+                    in_hex = false;
+                }
+                c if c.is_ascii_hexdigit() => hex.push(c),
+                _ => {}
+            }
+            continue;
+        }
+
+        match ch {
+            '(' => {
+                in_literal = true;
+                literal.clear();
+                literal_depth = 0;
+            }
+            '<' => {
+                in_hex = true;
+                hex.clear();
+            }
+            _ => {}
+        }
+    }
+
+    pieces.join("\n")
+}
+
+fn decode_pdf_hex_text(hex: &str) -> String {
+    let compact = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>();
+    if compact.is_empty() {
+        return String::new();
+    }
+
+    let padded = if compact.len() % 2 == 0 {
+        compact
+    } else {
+        format!("{}0", compact)
+    };
+
+    let mut bytes = Vec::with_capacity(padded.len() / 2);
+    let mut chars = padded.chars();
+    while let (Some(high), Some(low)) = (chars.next(), chars.next()) {
+        let pair = [high, low].iter().collect::<String>();
+        if let Ok(byte) = u8::from_str_radix(&pair, 16) {
+            bytes.push(byte);
+        }
+    }
+
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let utf16 = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16_lossy(&utf16);
+    }
+
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+fn extract_pdf_text_with_pdfium(path: &Path) -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+    let exe_dir = exe
+        .parent()
+        .ok_or_else(|| "无法获取程序目录".to_string())?;
+    let pdfium = bind_pdfium_for_tts_book(&exe_dir)?;
+    let document = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(|e| format!("PDFium 加载 PDF 失败: {}", e))?;
+
+    let mut out = String::new();
+    let total_pages = document.pages().len();
+    for index in 0..total_pages {
+        let page = document
+            .pages()
+            .get(index)
+            .map_err(|_| format!("PDFium 获取第 {} 页失败", index + 1))?;
+        let page_text = match page.text() {
+            Ok(text_page) => text_page.all(),
+            Err(_) => String::new(),
+        };
+        if !page_text.trim().is_empty() {
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str(&page_text);
+        }
+    }
+
+    if out.trim().is_empty() {
+        return Err("PDFium 解析结果为空".to_string());
+    }
+    Ok(out)
+}
+
+fn bind_pdfium_for_tts_book(exe_dir: &Path) -> Result<Pdfium, String> {
+    let mut candidates = Vec::new();
+    candidates.push(Pdfium::pdfium_platform_library_name_at_path("./libs"));
+    candidates.push(Pdfium::pdfium_platform_library_name_at_path("../../libs"));
+    candidates.push(Pdfium::pdfium_platform_library_name_at_path(&exe_dir.join("libs")));
+    candidates.push(exe_dir.join("libs").join("pdfium.dll"));
+
+    let mut errors = Vec::new();
+    for candidate in candidates {
+        match Pdfium::bind_to_library(&candidate) {
+            Ok(bindings) => return Ok(Pdfium::new(bindings)),
+            Err(err) => errors.push(format!("{} -> {}", candidate.to_string_lossy(), err)),
+        }
+    }
+
+    Err(format!("PDFium 初始化失败: {}", errors.join(" | ")))
 }
 
 fn normalize_pdf_text(raw: &str) -> String {

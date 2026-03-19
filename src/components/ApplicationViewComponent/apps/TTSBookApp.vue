@@ -1335,14 +1335,23 @@ const openOutput = async (path) => {
   min-width: 0;
 }
 
-.file-name,
-.task-name {
+.file-name {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--tts-title);
   font-weight: 600;
+}
+
+.task-name {
+  min-width: 0;
+  color: var(--tts-title);
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
 }
 
 .files-header-actions {
@@ -1534,9 +1543,13 @@ const openOutput = async (path) => {
 
 .task-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   min-width: 0;
+}
+
+.task-head :deep(.n-tag) {
+  flex-shrink: 0;
 }
 
 .queue-actions {
