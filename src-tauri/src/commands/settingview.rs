@@ -1198,6 +1198,228 @@ fn exe_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "无法获取可执行文件所在目录".to_string())
 }
 
+/*
+fn build_tts_cuda_diagnostic() -> Result<TtsCudaDiagnostic, String> {
+    let config = get_tts_config();
+    let exe_root = exe_dir()?;
+    let sherpa_exe_raw = if config.exe.trim().is_empty() {
+        default_tts_exe()
+    } else {
+        config.exe.trim().to_string()
+    };
+    let sherpa_exe = resolve_path_from_exe_dir(&exe_root, sherpa_exe_raw.as_str());
+    let sherpa_dir = sherpa_exe
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| exe_root.join("utils").join("sherpa-onnx"));
+    let provider_dll = sherpa_dir.join("onnxruntime_providers_cuda.dll");
+
+    let dependency_names = detect_cuda_dependency_names(&provider_dll);
+
+    let search_roots = vec![sherpa_dir.clone(), exe_root.clone()];
+    let mut dependencies = Vec::new();
+    let mut missing_dependencies = Vec::new();
+    for name in &dependency_names {
+        let found = find_binary_in_search_paths(name.as_str(), &search_roots);
+        let status = BinaryDependencyStatus {
+            name: name.clone(),
+            found: found.is_some(),
+            path: found
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        };
+        if !status.found {
+            missing_dependencies.push(status.name.clone());
+        }
+        dependencies.push(status);
+    }
+
+    let provider_dll_exists = provider_dll.is_file();
+    let (provider_dll_loadable, provider_dll_load_error) = if provider_dll_exists {
+        try_load_dynamic_library(&provider_dll)
+    } else {
+        (false, "未找到 onnxruntime_providers_cuda.dll".to_string())
+    };
+
+    let can_use_cuda = provider_dll_exists && provider_dll_loadable && missing_dependencies.is_empty();
+    let summary = if can_use_cuda {
+        "CUDA 运行库自检通过，sherpa-onnx 应可尝试使用 GPU / CUDA。".to_string()
+    } else if !provider_dll_exists {
+        format!("未找到 CUDA provider DLL: {}", provider_dll.to_string_lossy())
+    } else if !missing_dependencies.is_empty() {
+        format!("CUDA 运行库缺失: {}", missing_dependencies.join(", "))
+    } else if !provider_dll_load_error.is_empty() {
+        format!("CUDA provider DLL 无法加载: {}", provider_dll_load_error)
+    } else {
+        "CUDA provider 当前不可用。".to_string()
+    };
+    let recommendation = if can_use_cuda {
+        "可以保留 CUDA；如果实际合成仍失败，建议查看日志中的 provider 初始化信息。".to_string()
+    } else if !missing_dependencies.is_empty() {
+        "当前 sherpa/onnxruntime CUDA 包需要匹配版本的 CUDA 11.x 与 cuDNN 8 DLL；补齐这些 DLL 或改用与本机 CUDA 12.x 匹配的包。".to_string()
+    } else {
+        "建议先切换到 CPU，或更换与当前系统 CUDA 运行库匹配的 sherpa/onnxruntime CUDA 包。".to_string()
+    };
+
+    Ok(TtsCudaDiagnostic {
+        checked: true,
+        provider: "cuda".to_string(),
+        can_use_cuda,
+        summary,
+        recommendation,
+        sherpa_exe: sherpa_exe.to_string_lossy().to_string(),
+        provider_dll: provider_dll.to_string_lossy().to_string(),
+        provider_dll_exists,
+        provider_dll_loadable,
+        provider_dll_load_error,
+        dependencies,
+        missing_dependencies,
+    })
+}
+
+fn resolve_path_from_exe_dir(exe_root: &Path, raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return exe_root.join(default_tts_exe());
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        path
+    } else {
+        exe_root.join(path)
+    }
+}
+
+fn detect_cuda_dependency_names(provider_dll: &Path) -> Vec<String> {
+    let detected = extract_cuda_dependency_names_from_binary(provider_dll);
+    if !detected.is_empty() {
+        return detected;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return vec![
+            "cublas64_11.dll".to_string(),
+            "cublasLt64_11.dll".to_string(),
+            "cudart64_110.dll".to_string(),
+            "cudnn64_8.dll".to_string(),
+            "cufft64_10.dll".to_string(),
+        ];
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}
+
+fn extract_cuda_dependency_names_from_binary(provider_dll: &Path) -> Vec<String> {
+    let Ok(bytes) = fs::read(provider_dll) else {
+        return Vec::new();
+    };
+
+    let mut current = Vec::new();
+    let mut out = Vec::new();
+    for byte in bytes {
+        if byte.is_ascii_graphic() || byte == b' ' {
+            current.push(byte);
+        } else {
+            maybe_push_cuda_dependency(&mut out, &current);
+            current.clear();
+        }
+    }
+    maybe_push_cuda_dependency(&mut out, &current);
+    out
+}
+
+fn maybe_push_cuda_dependency(out: &mut Vec<String>, raw: &[u8]) {
+    if raw.len() < 8 {
+        return;
+    }
+
+    let Ok(text) = std::str::from_utf8(raw) else {
+        return;
+    };
+    let trimmed = text.trim_matches(char::from(0)).trim();
+    if trimmed.is_empty() || !trimmed.to_ascii_lowercase().ends_with(".dll") {
+        return;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let is_cuda_dep = lower.starts_with("cublas64_")
+        || lower.starts_with("cublaslt64_")
+        || lower.starts_with("cudart64_")
+        || lower.starts_with("cudnn64_")
+        || lower.starts_with("cufft64_")
+        || lower.starts_with("curand64_");
+    if !is_cuda_dep {
+        return;
+    }
+
+    if !out.iter().any(|existing| existing.eq_ignore_ascii_case(trimmed)) {
+        out.push(trimmed.to_string());
+    }
+}
+
+fn find_binary_in_search_paths(name: &str, search_roots: &[PathBuf]) -> Option<PathBuf> {
+    for root in search_roots {
+        let candidate = root.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    if let Some(path_env) = env::var_os("PATH") {
+        for entry in env::split_paths(&path_env) {
+            let candidate = entry.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn try_load_dynamic_library(path: &Path) -> (bool, String) {
+    use std::ffi::OsStr;
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut std::ffi::c_void;
+        fn FreeLibrary(h_lib_module: *mut std::ffi::c_void) -> i32;
+        fn GetLastError() -> u32;
+    }
+
+    let wide = OsStr::new(path.as_os_str())
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<u16>>();
+    let handle = unsafe { LoadLibraryW(wide.as_ptr()) };
+    if handle.is_null() {
+        let err = unsafe { GetLastError() };
+        return (false, format!("Windows LoadLibrary 失败，错误码={}", err));
+    }
+    unsafe {
+        let _ = FreeLibrary(handle);
+    }
+    (true, String::new())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn try_load_dynamic_library(path: &Path) -> (bool, String) {
+    if path.is_file() {
+        (true, String::new())
+    } else {
+        (false, "动态库不存在".to_string())
+    }
+}
+
+*/
 fn remove_path_if_exists(p: &Path) -> Result<(), String> {
     if !p.exists() {
         return Ok(());

@@ -13,7 +13,7 @@ use std::convert::TryFrom;
 use std::env;
 use std::fs;
 use std::fs::OpenOptions;
-#[cfg(windows)]
+#[cfg(all(windows, not(debug_assertions)))]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -44,8 +44,17 @@ const SHERPA_ONNX_TTS_DEFAULT_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang
 const SHERPA_ONNX_ASR_DEFAULT_EXE_WIN: &str = "utils/sherpa-onnx/sherpa-onnx-offline.exe";
 const SHERPA_ONNX_ASR_DEFAULT_EXE_UNIX: &str = "utils/sherpa-onnx/sherpa-onnx-offline";
 
-#[cfg(windows)]
+#[cfg(all(windows, not(debug_assertions)))]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn apply_no_window_in_release(cmd: &mut Command) {
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(all(windows, not(debug_assertions))))]
+fn apply_no_window_in_release(_cmd: &mut Command) {
+}
 
 #[derive(Default)]
 struct StreamBlockTracker {
@@ -1055,6 +1064,7 @@ fn extract_trace_id(headers: &reqwest::header::HeaderMap) -> String {
         .to_string()
 }
 
+#[derive(Debug, Clone)]
 struct SherpaOnnxTtsCliConfig {
     exe_path: PathBuf,
     model_path: PathBuf,
@@ -1481,21 +1491,34 @@ fn run_sherpa_onnx_cli_once(
         output_wav = output_wav.to_string_lossy().as_ref(),
         "sherpa-onnx cli args prepared"
     );
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    apply_no_window_in_release(&mut cmd);
     let output = cmd.output().map_err(|e| format!("执行 sherpa-onnx tts 失败: {}", e))?;
     if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let code = output
+            .status
+            .code()
+            .map(|value| format!("{value} (0x{:08X})", value as u32))
+            .unwrap_or_else(|| "terminated by signal".to_string());
+        let detail = if !stderr.is_empty() {
+            stderr.clone()
+        } else if !stdout.is_empty() {
+            format!("stdout: {}", stdout)
+        } else {
+            format!(
+                "进程无输出，退出码={}. 这通常表示运行时 provider 或其依赖库初始化失败。",
+                code
+            )
+        };
         warn!(
             mode = format!("{:?}", mode),
+            exit_code = code.as_str(),
             stdout = stdout.as_str(),
             stderr = stderr.as_str(),
             "sherpa-onnx cli execution failed"
         );
-        return Err(format!("sherpa-onnx tts 失败({:?}): {}", mode, stderr));
+        return Err(format!("sherpa-onnx tts 失败({:?}): {}", mode, detail));
     }
     Ok(())
 }
@@ -1526,7 +1549,31 @@ async fn audio_text_to_speech_sherpa_onnx(request: TextToSpeechRequest) -> Resul
             }
             Err(e) => {
                 warn!(mode = format!("{:?}", mode), error = e.as_str(), "sherpa-onnx tts attempt failed");
-                last_err = e;
+                if cfg.runtime_provider == "cuda" {
+                    let mut cpu_cfg = cfg.clone();
+                    cpu_cfg.runtime_provider = "cpu".to_string();
+                    warn!(
+                        mode = format!("{:?}", mode),
+                        error = e.as_str(),
+                        "sherpa-onnx cuda provider failed, retrying with cpu"
+                    );
+                    match run_sherpa_onnx_cli_once(&cpu_cfg, &text, &output_wav, mode) {
+                        Ok(_) => {
+                            last_err.clear();
+                            break;
+                        }
+                        Err(cpu_err) => {
+                            warn!(
+                                mode = format!("{:?}", mode),
+                                error = cpu_err.as_str(),
+                                "sherpa-onnx cpu fallback failed"
+                            );
+                            last_err = format!("{}\nCPU fallback also failed: {}", e, cpu_err);
+                        }
+                    }
+                } else {
+                    last_err = e;
+                }
             }
         }
     }
@@ -1822,10 +1869,7 @@ async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Resul
         }
     }
     cmd.arg(input_path.to_string_lossy().to_string());
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    apply_no_window_in_release(&mut cmd);
     let output = cmd.output().map_err(|e| format!("执行 sherpa-onnx asr 失败: {}", e))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -2273,8 +2317,7 @@ async fn ensure_local_deepseek_server_started() -> Result<PathBuf, String> {
                 .stderr(Stdio::from(log_file_err))
                 .stdin(Stdio::null());
 
-            #[cfg(windows)]
-            command.creation_flags(CREATE_NO_WINDOW);
+            apply_no_window_in_release(&mut command);
 
             if let Some(parent) = server_path.parent() {
                 command.current_dir(parent);
