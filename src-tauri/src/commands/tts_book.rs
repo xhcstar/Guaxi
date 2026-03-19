@@ -17,10 +17,8 @@ use tracing::{info, warn};
 use zip::ZipArchive;
 
 const SHERPA_PROVIDER: &str = "sherpa-onnx";
-const EN_FALLBACK_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
-const EN_FALLBACK_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
-const ZH_MODEL: &str = "utils/Models/tts/vits-melo-tts-zh-en/model.onnx";
-const ZH_TOKENS: &str = "utils/Models/tts/vits-melo-tts-zh-en/tokens.txt";
+const DEFAULT_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
+const DEFAULT_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
 
 #[derive(Debug, Deserialize)]
 pub struct TtsBookConvertRequest {
@@ -28,6 +26,16 @@ pub struct TtsBookConvertRequest {
     pub output_dir: String,
     #[serde(default)]
     pub output_name: String,
+    #[serde(default)]
+    pub tts_model: String,
+    #[serde(default)]
+    pub tts_tokens: String,
+    #[serde(default)]
+    pub tts_mode_hint: String,
+    #[serde(default)]
+    pub speaker_id: String,
+    #[serde(default)]
+    pub speed: Option<f32>,
     #[serde(default)]
     pub voice_zh: String,
     #[serde(default)]
@@ -123,6 +131,9 @@ struct SegmentManifest {
 struct SegmentEntry {
     index: usize,
     lang: &'static str,
+    kind: &'static str,
+    speaker_hint: &'static str,
+    pause_after_ms: u32,
     char_count: usize,
     text: String,
 }
@@ -190,13 +201,13 @@ pub async fn tts_book_convert(
     )?;
 
     let extracted = extract_document(&file_path).await?;
-    let cleaned = clean_text_for_tts(&extracted.text);
+    let cleaned = clean_text_for_tts_pro(&extracted.text);
     if cleaned.trim().is_empty() {
         return Err("未提取到可朗读文本".to_string());
     }
 
     let max_chunk_chars = request.max_chunk_chars.unwrap_or(180).clamp(80, 420);
-    let chunks = split_text_chunks(&cleaned, max_chunk_chars);
+    let chunks = split_text_chunks_pro(&cleaned, max_chunk_chars);
     info!(
         cleaned_chars = cleaned.chars().count(),
         chunk_count = chunks.len(),
@@ -263,48 +274,52 @@ pub async fn tts_book_convert(
     }
 
     let tts_cfg = settingview::get_tts_config();
-    let tts_exe = if tts_cfg.exe.trim().is_empty() {
-        String::new()
-    } else {
-        tts_cfg.exe.trim().to_string()
-    };
-
-    let english_model = {
-        let m = tts_cfg.model.trim();
-        if m.is_empty() || m.contains("vits-melo-tts-zh-en") {
-            EN_FALLBACK_MODEL.to_string()
+    let tts_exe = tts_cfg.exe.trim().to_string();
+    let tts_model = if request.tts_model.trim().is_empty() {
+        let model = tts_cfg.model.trim();
+        if model.is_empty() {
+            DEFAULT_MODEL.to_string()
         } else {
-            m.to_string()
+            model.to_string()
         }
+    } else {
+        request.tts_model.trim().to_string()
     };
-    let english_tokens = {
-        let t = tts_cfg.tokens.trim();
-        if t.is_empty() || t.contains("vits-melo-tts-zh-en") {
-            EN_FALLBACK_TOKENS.to_string()
+    let tts_tokens = if request.tts_tokens.trim().is_empty() {
+        let tokens = tts_cfg.tokens.trim();
+        if tokens.is_empty() {
+            DEFAULT_TOKENS.to_string()
         } else {
-            t.to_string()
+            tokens.to_string()
         }
-    };
-
-    let voice_zh = if request.voice_zh.trim().is_empty() {
-        "0".to_string()
     } else {
-        request.voice_zh.trim().to_string()
+        request.tts_tokens.trim().to_string()
     };
-    let voice_en = if request.voice_en.trim().is_empty() {
-        "0".to_string()
+    let tts_mode_hint = if request.tts_mode_hint.trim().is_empty() {
+        infer_tts_mode_hint(&tts_model)
     } else {
-        request.voice_en.trim().to_string()
+        request.tts_mode_hint.trim().to_string()
     };
+    let speaker_id = if request.speaker_id.trim().is_empty() {
+        if !request.voice_zh.trim().is_empty() {
+            request.voice_zh.trim().to_string()
+        } else if !request.voice_en.trim().is_empty() {
+            request.voice_en.trim().to_string()
+        } else {
+            "0".to_string()
+        }
+    } else {
+        request.speaker_id.trim().to_string()
+    };
+    let speed = request.speed.map(|value| value.clamp(0.2, 3.0));
 
     info!(
         tts_exe = tts_exe.as_str(),
-        zh_model = ZH_MODEL,
-        zh_tokens = ZH_TOKENS,
-        en_model = english_model.as_str(),
-        en_tokens = english_tokens.as_str(),
-        voice_zh = voice_zh.as_str(),
-        voice_en = voice_en.as_str(),
+        tts_model = tts_model.as_str(),
+        tts_tokens = tts_tokens.as_str(),
+        tts_mode_hint = tts_mode_hint.as_str(),
+        speaker_id = speaker_id.as_str(),
+        speed = speed.unwrap_or(1.0),
         "tts_book_convert tts config resolved"
     );
 
@@ -328,6 +343,9 @@ pub async fn tts_book_convert(
                         ChunkLang::Zh => "zh",
                         ChunkLang::En => "en",
                     },
+                    kind: detect_segment_kind(&chunk.text),
+                    speaker_hint: detect_speaker_hint(&chunk.text),
+                    pause_after_ms: derive_pause_after_ms(&chunk.text),
                     char_count: chunk.text.chars().count(),
                     text: chunk.text.clone(),
                 })
@@ -339,7 +357,7 @@ pub async fn tts_book_convert(
                     index: index + 1,
                     title: chapter_title.clone(),
                     char_count: chapter_text.chars().count(),
-                    chunk_count: split_text_chunks(chapter_text, max_chunk_chars).len(),
+                    chunk_count: split_text_chunks_pro(chapter_text, max_chunk_chars).len(),
                     text: chapter_text.clone(),
                 })
                 .collect(),
@@ -380,10 +398,11 @@ pub async fn tts_book_convert(
             let bytes = synthesize_chunk_audio(
                 chunk,
                 &tts_exe,
-                &english_model,
-                &english_tokens,
-                &voice_zh,
-                &voice_en,
+                &tts_model,
+                &tts_tokens,
+                &tts_mode_hint,
+                &speaker_id,
+                speed,
             )
             .await?;
             fs::write(&chunk_path, bytes).map_err(|e| format!("写入分段音频失败: {}", e))?;
@@ -426,7 +445,7 @@ pub async fn tts_book_convert(
         "tts_book_convert full audio synthesized"
     );
 
-    let merged_wav = merge_wav_files(&chunk_paths)?;
+    let merged_wav = merge_wav_files_with_postprocess(&chunk_paths, &chunks)?;
     fs::write(&output_path, merged_wav).map_err(|e| format!("写入音频文件失败: {}", e))?;
     resume_state.output_path = output_path.to_string_lossy().to_string();
     save_resume_state(&resume_state_path, &resume_state)?;
@@ -460,7 +479,7 @@ pub async fn tts_book_convert(
             let chapter_path = chapter_dir.join(chapter_name);
             let resumed = chapter_path.exists();
             if !resumed {
-                let chapter_chunks = split_text_chunks(chapter_text, max_chunk_chars);
+                let chapter_chunks = split_text_chunks_pro(chapter_text, max_chunk_chars);
                 if chapter_chunks.is_empty() {
                     completed_steps += 1;
                     continue;
@@ -474,10 +493,11 @@ pub async fn tts_book_convert(
                 let (chapter_wav, _, _) = synthesize_wav_from_chunks(
                     &chapter_chunks,
                     &tts_exe,
-                    &english_model,
-                    &english_tokens,
-                    &voice_zh,
-                    &voice_en,
+                    &tts_model,
+                    &tts_tokens,
+                    &tts_mode_hint,
+                    &speaker_id,
+                    speed,
                 )
                 .await?;
                 fs::write(&chapter_path, chapter_wav)
@@ -570,13 +590,25 @@ pub async fn tts_book_convert(
     })
 }
 
+fn infer_tts_mode_hint(model: &str) -> String {
+    let model = model.trim().to_lowercase();
+    if model.contains("kokoro") {
+        "kokoro".to_string()
+    } else if model.contains("vits") {
+        "vits".to_string()
+    } else {
+        String::new()
+    }
+}
+
 async fn synthesize_wav_from_chunks(
     chunks: &[TextChunk],
     tts_exe: &str,
-    english_model: &str,
-    english_tokens: &str,
-    voice_zh: &str,
-    voice_en: &str,
+    tts_model: &str,
+    tts_tokens: &str,
+    tts_mode_hint: &str,
+    speaker_id: &str,
+    speed: Option<f32>,
 ) -> Result<(Vec<u8>, usize, usize), String> {
     let mut wav_parts: Vec<Vec<u8>> = Vec::with_capacity(chunks.len());
     let mut zh_chunks = 0usize;
@@ -584,26 +616,10 @@ async fn synthesize_wav_from_chunks(
 
     for (idx, chunk) in chunks.iter().enumerate() {
         let chunk_start = Instant::now();
-        let (model, tokens, voice, mode_hint) = match chunk.lang {
-            ChunkLang::Zh => {
-                zh_chunks += 1;
-                (
-                    ZH_MODEL.to_string(),
-                    ZH_TOKENS.to_string(),
-                    voice_zh.to_string(),
-                    "vits".to_string(),
-                )
-            }
-            ChunkLang::En => {
-                en_chunks += 1;
-                (
-                    english_model.to_string(),
-                    english_tokens.to_string(),
-                    voice_en.to_string(),
-                    "kokoro".to_string(),
-                )
-            }
-        };
+        match chunk.lang {
+            ChunkLang::Zh => zh_chunks += 1,
+            ChunkLang::En => en_chunks += 1,
+        }
         let prepared_text = prepare_chunk_text_for_tts(&chunk.text, chunk.lang);
 
         info!(
@@ -617,18 +633,18 @@ async fn synthesize_wav_from_chunks(
         let rsp = audio_text_to_speech(TextToSpeechRequest {
             common: AudioCommonRequest {
                 provider: SHERPA_PROVIDER.to_string(),
-                model,
+                model: tts_model.to_string(),
                 api_key: String::new(),
                 endpoint: tts_exe.to_string(),
-                tokens,
-                mode_hint,
+                tokens: tts_tokens.to_string(),
+                mode_hint: tts_mode_hint.to_string(),
             },
             input: prepared_text,
-            voice,
+            voice: speaker_id.to_string(),
             response_format: "wav".to_string(),
             sample_rate: None,
             stream: Some(false),
-            speed: None,
+            speed,
             gain: None,
             max_tokens: None,
         })
@@ -647,33 +663,20 @@ async fn synthesize_wav_from_chunks(
         wav_parts.push(bytes);
     }
 
-    let merged_wav = merge_wav_parts(&wav_parts)?;
+    let merged_wav = merge_wav_parts_with_postprocess(&wav_parts, chunks)?;
     Ok((merged_wav, zh_chunks, en_chunks))
 }
 
 async fn synthesize_chunk_audio(
     chunk: &TextChunk,
     tts_exe: &str,
-    english_model: &str,
-    english_tokens: &str,
-    voice_zh: &str,
-    voice_en: &str,
+    tts_model: &str,
+    tts_tokens: &str,
+    tts_mode_hint: &str,
+    speaker_id: &str,
+    speed: Option<f32>,
 ) -> Result<Vec<u8>, String> {
     let chunk_start = Instant::now();
-    let (model, tokens, voice, mode_hint) = match chunk.lang {
-        ChunkLang::Zh => (
-            ZH_MODEL.to_string(),
-            ZH_TOKENS.to_string(),
-            voice_zh.to_string(),
-            "vits".to_string(),
-        ),
-        ChunkLang::En => (
-            english_model.to_string(),
-            english_tokens.to_string(),
-            voice_en.to_string(),
-            "kokoro".to_string(),
-        ),
-    };
     let prepared_text = prepare_chunk_text_for_tts(&chunk.text, chunk.lang);
 
     info!(
@@ -686,18 +689,18 @@ async fn synthesize_chunk_audio(
     let rsp = audio_text_to_speech(TextToSpeechRequest {
         common: AudioCommonRequest {
             provider: SHERPA_PROVIDER.to_string(),
-            model,
+            model: tts_model.to_string(),
             api_key: String::new(),
             endpoint: tts_exe.to_string(),
-            tokens,
-            mode_hint,
+            tokens: tts_tokens.to_string(),
+            mode_hint: tts_mode_hint.to_string(),
         },
         input: prepared_text,
-        voice,
+        voice: speaker_id.to_string(),
         response_format: "wav".to_string(),
         sample_rate: None,
         stream: Some(false),
-        speed: None,
+        speed,
         gain: None,
         max_tokens: None,
     })
@@ -715,6 +718,7 @@ async fn synthesize_chunk_audio(
     Ok(bytes)
 }
 
+#[allow(dead_code)]
 fn merge_wav_files(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
     let mut parts = Vec::with_capacity(paths.len());
     for path in paths {
@@ -802,10 +806,11 @@ fn unix_now_ms() -> u128 {
 }
 
 fn prepare_chunk_text_for_tts(text: &str, lang: ChunkLang) -> String {
-    match lang {
+    let text = match lang {
         ChunkLang::Zh => normalize_zh_tts_text(text),
-        ChunkLang::En => text.to_string(),
-    }
+        ChunkLang::En => normalize_inline_spaces(text),
+    };
+    text.replace('\n', " ").trim().to_string()
 }
 
 fn normalize_zh_tts_text(text: &str) -> String {
@@ -813,6 +818,50 @@ fn normalize_zh_tts_text(text: &str) -> String {
     fraction_re
         .replace_all(text, |caps: &regex::Captures| format!("{}分之{}", &caps[2], &caps[1]))
         .to_string()
+}
+
+fn detect_segment_kind(text: &str) -> &'static str {
+    let trimmed = text.trim();
+    if trimmed.contains('“') || trimmed.contains('”') || trimmed.contains('"') {
+        "dialogue"
+    } else {
+        "narration"
+    }
+}
+
+fn detect_speaker_hint(text: &str) -> &'static str {
+    if text.contains("她说")
+        || text.contains("她问")
+        || text.contains("她回答")
+        || text.contains("姑娘")
+        || text.contains("女士")
+    {
+        "female"
+    } else if text.contains("他说")
+        || text.contains("他问")
+        || text.contains("他回答")
+        || text.contains("男人")
+        || text.contains("先生")
+    {
+        "male"
+    } else {
+        "narration"
+    }
+}
+
+fn derive_pause_after_ms(text: &str) -> u32 {
+    let trimmed = text.trim_end();
+    if trimmed.ends_with("……") || trimmed.ends_with('…') {
+        520
+    } else if trimmed.ends_with('。') || trimmed.ends_with('！') || trimmed.ends_with('？') {
+        380
+    } else if trimmed.ends_with('；') || trimmed.ends_with('：') {
+        280
+    } else if trimmed.ends_with('，') || trimmed.ends_with('、') || trimmed.ends_with(',') {
+        150
+    } else {
+        110
+    }
 }
 
 fn split_text_into_chapters(text: &str, toc: &[String]) -> Vec<(String, String)> {
@@ -1296,9 +1345,13 @@ fn markdown_to_plain_text(md: &str) -> String {
     )
 }
 
+#[allow(dead_code)]
 fn clean_text_for_tts(raw: &str) -> String {
     let mut s = normalize_line_endings(raw);
 
+    s = s.replace('\u{feff}', " ");
+    s = s.replace('\u{00a0}', " ");
+    s = s.replace('\t', " ");
     s = Regex::new(r"https?://\S+")
         .expect("valid regex")
         .replace_all(&s, " ")
@@ -1323,6 +1376,18 @@ fn clean_text_for_tts(raw: &str) -> String {
         .expect("valid regex")
         .replace_all(&s, " ")
         .to_string();
+    s = Regex::new(r"(?m)^\s*(第\s*\d+\s*页|page\s+\d+)\s*$")
+        .expect("valid regex")
+        .replace_all(&s, "\n")
+        .to_string();
+    s = Regex::new(r"(?m)^\s*[-=]{3,}\s*$")
+        .expect("valid regex")
+        .replace_all(&s, "\n")
+        .to_string();
+    s = Regex::new(r"[ \u{2000}-\u{200f}\u{2028}\u{2029}\u{2060}]+")
+        .expect("valid regex")
+        .replace_all(&s, " ")
+        .to_string();
     s = decode_xml_entities(&s);
     s = normalize_punctuation(&s);
 
@@ -1339,6 +1404,9 @@ fn clean_text_for_tts(raw: &str) -> String {
     }
 
     join_wrapped_lines(&lines)
+        .replace("\n \n", "\n\n")
+        .trim()
+        .to_string()
 }
 
 fn decode_xml_entities(s: &str) -> String {
@@ -1360,6 +1428,7 @@ fn normalize_inline_spaces(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+#[allow(dead_code)]
 fn normalize_punctuation(text: &str) -> String {
     text.replace(' ', " ")
         .replace('•', " ")
@@ -1482,6 +1551,7 @@ fn looks_like_heading(line: &str) -> bool {
         .is_match(t)
 }
 
+#[allow(dead_code)]
 fn split_into_sentences(text: &str) -> Vec<String> {
     let chars = text.chars().collect::<Vec<_>>();
     let mut out = Vec::new();
@@ -1512,6 +1582,7 @@ fn split_into_sentences(text: &str) -> Vec<String> {
     out
 }
 
+#[allow(dead_code)]
 fn split_oversized_sentence(sentence: &str, base_limit: usize) -> Vec<String> {
     let lang = detect_chunk_lang(sentence);
     let hard_limit = if lang == ChunkLang::Zh {
@@ -1582,6 +1653,7 @@ fn extract_outline_lines(text: &str) -> Vec<String> {
     out
 }
 
+#[allow(dead_code)]
 fn split_text_chunks(text: &str, base_limit: usize) -> Vec<TextChunk> {
     let paragraphs = text
         .split("\n\n")
@@ -1764,4 +1836,389 @@ fn build_wav(fmt_chunk_data: &[u8], data_chunk_data: &[u8]) -> Result<Vec<u8>, S
     }
 
     Ok(out)
+}
+
+fn clean_text_for_tts_pro(raw: &str) -> String {
+    let mut text = normalize_line_endings(raw)
+        .replace('\u{feff}', " ")
+        .replace('\u{00a0}', " ")
+        .replace('\t', " ");
+
+    for pattern in [
+        r"https?://\S+",
+        r"www\.\S+",
+        r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b",
+        r"\[(?:\d{1,3}|[ivxlcdmIVXLCDM]{1,12})\]",
+        r"\(\s*\d{1,3}\s*\)",
+        r"(?m)^\s*(page\s+\d+|\d+\s*/\s*\d+)\s*$",
+    ] {
+        text = Regex::new(pattern)
+            .expect("valid regex")
+            .replace_all(&text, " ")
+            .to_string();
+    }
+
+    text = decode_xml_entities(&text);
+    text = normalize_book_punctuation(&text);
+
+    let mut lines = Vec::new();
+    for raw_line in text.lines() {
+        let line = normalize_inline_spaces(raw_line);
+        if line.is_empty() || is_noise_line(&line) {
+            continue;
+        }
+        lines.push(line);
+    }
+
+    join_wrapped_lines(&lines)
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn normalize_book_punctuation(text: &str) -> String {
+    text.replace('“', "\"")
+        .replace('”', "\"")
+        .replace('‘', "'")
+        .replace('’', "'")
+        .replace('—', " - ")
+        .replace('–', "-")
+        .replace('•', " ")
+        .replace('·', " ")
+        .replace("……", "…")
+}
+
+fn split_into_sentences_pro(text: &str) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let closing_quotes = ['"', '\'', ')', '）', '】', '》'];
+
+    let mut idx = 0usize;
+    while idx < chars.len() {
+        let ch = chars[idx];
+        current.push(ch);
+
+        let prev = if idx > 0 { chars[idx - 1] } else { '\0' };
+        let next = chars.get(idx + 1).copied().unwrap_or('\0');
+        let mut should_break = matches!(ch, '。' | '！' | '？' | '；' | '!' | '?' | ';' | '…');
+        if ch == '.' {
+            should_break = !(prev.is_ascii_digit() && next.is_ascii_digit());
+        } else if ch == '\n' {
+            should_break = current.trim().chars().count() >= 8;
+        }
+
+        if should_break {
+            let mut lookahead = idx + 1;
+            while let Some(extra) = chars.get(lookahead) {
+                if closing_quotes.contains(extra) {
+                    current.push(*extra);
+                    lookahead += 1;
+                    idx += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let segment = current.trim();
+            if !segment.is_empty() {
+                out.push(segment.to_string());
+            }
+            current.clear();
+        }
+
+        idx += 1;
+    }
+
+    let tail = current.trim();
+    if !tail.is_empty() {
+        out.push(tail.to_string());
+    }
+    out
+}
+
+fn split_oversized_sentence_pro(sentence: &str, base_limit: usize) -> Vec<String> {
+    let trimmed = sentence.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let lang = detect_chunk_lang(trimmed);
+    let target_limit = if lang == ChunkLang::Zh {
+        base_limit.clamp(80, 260)
+    } else {
+        (base_limit.saturating_mul(2)).clamp(120, 420)
+    };
+    let hard_limit = target_limit.max(40);
+
+    if trimmed.chars().count() <= hard_limit {
+        return vec![trimmed.to_string()];
+    }
+
+    let mut pieces = Vec::new();
+    let mut buf = String::new();
+
+    for clause in trimmed.split_inclusive(['，', '、', '：', '；', ',', ':', ';']) {
+        let clause = clause.trim();
+        if clause.is_empty() {
+            continue;
+        }
+
+        let next_len = buf.chars().count() + clause.chars().count();
+        if next_len > hard_limit && buf.trim().chars().count() >= 6 {
+            pieces.push(buf.trim().to_string());
+            buf.clear();
+        }
+        if !buf.is_empty() && needs_space_between(&buf, clause) {
+            buf.push(' ');
+        }
+        buf.push_str(clause);
+    }
+
+    if !buf.trim().is_empty() {
+        pieces.push(buf.trim().to_string());
+    }
+
+    if pieces.len() <= 1 {
+        split_by_word_boundary(trimmed, hard_limit)
+    } else {
+        pieces
+    }
+}
+
+fn split_text_chunks_pro(text: &str, base_limit: usize) -> Vec<TextChunk> {
+    let paragraphs = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if paragraphs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+    let mut buffer = String::new();
+    let mut buffer_lang: Option<ChunkLang> = None;
+
+    for paragraph in paragraphs {
+        for sentence in split_into_sentences_pro(paragraph) {
+            for fragment in split_oversized_sentence_pro(&sentence, base_limit) {
+                let fragment = fragment.trim();
+                if fragment.is_empty() {
+                    continue;
+                }
+
+                let lang = detect_chunk_lang(fragment);
+                let limit = if lang == ChunkLang::Zh {
+                    base_limit.clamp(80, 260)
+                } else {
+                    (base_limit.saturating_mul(2)).clamp(120, 420)
+                };
+
+                let next_len = buffer.chars().count()
+                    + fragment.chars().count()
+                    + if buffer.is_empty() { 0 } else { 1 };
+                let should_flush = match buffer_lang {
+                    Some(existing) if existing != lang => true,
+                    _ => next_len > limit,
+                };
+
+                if should_flush && !buffer.trim().is_empty() {
+                    chunks.push(TextChunk {
+                        index: chunks.len() + 1,
+                        text: buffer.trim().to_string(),
+                        lang: buffer_lang.unwrap_or(lang),
+                    });
+                    buffer.clear();
+                }
+
+                if !buffer.is_empty() {
+                    if needs_space_between(&buffer, fragment) {
+                        buffer.push(' ');
+                    }
+                }
+                buffer.push_str(fragment);
+                buffer_lang = Some(lang);
+            }
+        }
+
+        if !buffer.trim().is_empty() {
+            chunks.push(TextChunk {
+                index: chunks.len() + 1,
+                text: buffer.trim().to_string(),
+                lang: buffer_lang.unwrap_or(ChunkLang::Zh),
+            });
+            buffer.clear();
+            buffer_lang = None;
+        }
+    }
+
+    chunks
+}
+
+fn merge_wav_files_with_postprocess(paths: &[PathBuf], chunks: &[TextChunk]) -> Result<Vec<u8>, String> {
+    let mut parts = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(path).map_err(|e| format!("读取音频分片失败: {}", e))?;
+        parts.push(bytes);
+    }
+    merge_wav_parts_with_postprocess(&parts, chunks)
+}
+
+fn merge_wav_parts_with_postprocess(parts: &[Vec<u8>], chunks: &[TextChunk]) -> Result<Vec<u8>, String> {
+    if parts.is_empty() {
+        return Err("没有可拼接的音频分片".to_string());
+    }
+    if parts.len() != chunks.len() {
+        return merge_wav_parts(parts);
+    }
+
+    let mut fmt_chunk: Option<Vec<u8>> = None;
+    let mut sample_rate = 16_000u32;
+    let mut channels = 1u16;
+    let mut all_pcm: Vec<f32> = Vec::new();
+
+    for (index, bytes) in parts.iter().enumerate() {
+        let (fmt, data) = parse_wav_fmt_data(bytes)?;
+        let Some((audio_format, pcm_channels, pcm_sample_rate, bits_per_sample)) = parse_wav_format_fields(&fmt) else {
+            return merge_wav_parts(parts);
+        };
+        if audio_format != 1 || bits_per_sample != 16 {
+            return merge_wav_parts(parts);
+        }
+
+        if fmt_chunk.is_none() {
+            fmt_chunk = Some(fmt.clone());
+            sample_rate = pcm_sample_rate;
+            channels = pcm_channels;
+        }
+
+        let mut samples = decode_pcm16_samples(&data);
+        postprocess_segment_samples(&mut samples, sample_rate, channels);
+
+        if !all_pcm.is_empty() {
+            let pause_ms = derive_pause_after_ms(&chunks[index - 1].text);
+            if pause_ms <= 90 {
+                append_with_crossfade(&mut all_pcm, &samples, sample_rate, channels, 36);
+            } else {
+                all_pcm.extend_from_slice(&samples);
+            }
+            let silence = build_silence_samples(sample_rate, channels, pause_ms);
+            all_pcm.extend_from_slice(&silence);
+        } else {
+            all_pcm.extend_from_slice(&samples);
+        }
+    }
+
+    let fmt = fmt_chunk.ok_or_else(|| "缺少 WAV fmt chunk".to_string())?;
+    let data = encode_pcm16_samples(&all_pcm);
+    build_wav(&fmt, &data)
+}
+
+fn parse_wav_format_fields(fmt: &[u8]) -> Option<(u16, u16, u32, u16)> {
+    if fmt.len() < 16 {
+        return None;
+    }
+    let audio_format = u16::from_le_bytes([fmt[0], fmt[1]]);
+    let channels = u16::from_le_bytes([fmt[2], fmt[3]]);
+    let sample_rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
+    let bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
+    Some((audio_format, channels, sample_rate, bits_per_sample))
+}
+
+fn decode_pcm16_samples(data: &[u8]) -> Vec<f32> {
+    data.chunks_exact(2)
+        .map(|chunk| {
+            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+            sample as f32 / i16::MAX as f32
+        })
+        .collect()
+}
+
+fn encode_pcm16_samples(samples: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        let scaled = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        out.extend_from_slice(&scaled.to_le_bytes());
+    }
+    out
+}
+
+fn postprocess_segment_samples(samples: &mut [f32], sample_rate: u32, channels: u16) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let peak = samples
+        .iter()
+        .fold(0.0_f32, |acc, value| acc.max(value.abs()))
+        .max(1e-6);
+    let gain = (0.92 / peak).min(1.8);
+    for sample in samples.iter_mut() {
+        *sample *= gain;
+        let abs = sample.abs();
+        if abs > 0.72 {
+            let compressed = 0.72 + (abs - 0.72) / 3.0;
+            *sample = sample.signum() * compressed;
+        }
+    }
+
+    apply_edge_fade(samples, sample_rate, channels, 8);
+}
+
+fn apply_edge_fade(samples: &mut [f32], sample_rate: u32, channels: u16, fade_ms: u32) {
+    let fade_frames = ((sample_rate as usize * fade_ms as usize) / 1000).max(1);
+    let fade_samples = fade_frames.saturating_mul(channels as usize).min(samples.len() / 2);
+    if fade_samples == 0 {
+        return;
+    }
+
+    for i in 0..fade_samples {
+        let gain = i as f32 / fade_samples as f32;
+        samples[i] *= gain;
+        let tail = samples.len() - 1 - i;
+        samples[tail] *= gain;
+    }
+}
+
+fn build_silence_samples(sample_rate: u32, channels: u16, duration_ms: u32) -> Vec<f32> {
+    let frames = ((sample_rate as u64 * duration_ms as u64) / 1000) as usize;
+    vec![0.0; frames.saturating_mul(channels as usize)]
+}
+
+fn append_with_crossfade(
+    base: &mut Vec<f32>,
+    next: &[f32],
+    sample_rate: u32,
+    channels: u16,
+    crossfade_ms: u32,
+) {
+    if base.is_empty() || next.is_empty() {
+        base.extend_from_slice(next);
+        return;
+    }
+
+    let overlap_frames = ((sample_rate as usize * crossfade_ms as usize) / 1000).max(1);
+    let overlap_samples = overlap_frames
+        .saturating_mul(channels as usize)
+        .min(base.len())
+        .min(next.len());
+
+    if overlap_samples == 0 {
+        base.extend_from_slice(next);
+        return;
+    }
+
+    let split_at = base.len() - overlap_samples;
+    let mut merged = base[..split_at].to_vec();
+
+    for i in 0..overlap_samples {
+        let fade_out = 1.0 - (i as f32 / overlap_samples as f32);
+        let fade_in = i as f32 / overlap_samples as f32;
+        merged.push(base[split_at + i] * fade_out + next[i] * fade_in);
+    }
+    merged.extend_from_slice(&next[overlap_samples..]);
+    *base = merged;
 }
