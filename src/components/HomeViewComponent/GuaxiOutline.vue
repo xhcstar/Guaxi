@@ -111,6 +111,7 @@ const handleExpandedKeysUpdate = (keys) => {
     height: 100%;
     padding: 0;
     font-size: 14px;
+    font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -147,6 +148,7 @@ const handleExpandedKeysUpdate = (keys) => {
     white-space: normal;
     word-break: break-word;
     line-height: 1.35;
+    font-family: inherit;
 }
 
 :deep(.outline-tree .n-tree-node-content) {

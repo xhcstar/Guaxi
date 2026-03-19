@@ -128,6 +128,19 @@ const closeForm = () => {
 .knowledge-base-modal {
   border-radius: 12px;
   overflow: hidden;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+}
+
+.knowledge-base-modal :deep(.n-card),
+.knowledge-base-modal :deep(.n-card-header),
+.knowledge-base-modal :deep(.n-card__content),
+.knowledge-base-modal :deep(.n-form),
+.knowledge-base-modal :deep(.n-form-item-label),
+.knowledge-base-modal :deep(.n-input__input-el),
+.knowledge-base-modal :deep(.n-input__textarea-el),
+.knowledge-base-modal :deep(.n-base-selection),
+.knowledge-base-modal :deep(.n-dynamic-tags) {
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 /* 模态框头部样式 */

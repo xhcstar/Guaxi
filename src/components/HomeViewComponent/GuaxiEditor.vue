@@ -303,8 +303,15 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" :loading="selectionReadAloudBusy" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
-                <Icon :icon="volume2Icon" width="16" height="16" />
+              <n-button
+                text
+                size="tiny"
+                class="floating-toolbar-icon-button"
+                :loading="selectionReadAloudBusy"
+                :disabled="selectionReadAloudBusy"
+                @click="readSelectionAloud"
+              >
+                <Icon v-if="!selectionReadAloudBusy" :icon="volume2Icon" width="16" height="16" />
               </n-button>
             </template>
             {{ selectionReadAloudBusy ? '朗读中...' : '朗读' }}
@@ -458,8 +465,15 @@
           </n-tooltip>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
-              <n-button text size="tiny" :loading="selectionReadAloudBusy" :disabled="selectionReadAloudBusy" @click="readSelectionAloud">
-                <Icon :icon="volume2Icon" width="16" height="16" />
+              <n-button
+                text
+                size="tiny"
+                class="floating-toolbar-icon-button"
+                :loading="selectionReadAloudBusy"
+                :disabled="selectionReadAloudBusy"
+                @click="readSelectionAloud"
+              >
+                <Icon v-if="!selectionReadAloudBusy" :icon="volume2Icon" width="16" height="16" />
               </n-button>
             </template>
             {{ selectionReadAloudBusy ? '朗读中...' : '朗读' }}
@@ -624,6 +638,7 @@ import GitService from './utils/GitService'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, emit } from '@tauri-apps/api/event'
 import { save, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
+import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
 const logger = createLogger('GuaxiEditor')
 const outlineStore = useOutlineStore()
@@ -3998,7 +4013,8 @@ const registerMarkdownLanguageFeatures = () => {
 
 
   monaco.languages.registerCompletionItemProvider('markdown', {
-    async provideCompletionItems(model, position) {
+    triggerCharacters: MARKDOWN_FENCE_TRIGGER_CHARACTERS,
+    async provideCompletionItems(model, position, context) {
       const lineContent = model.getLineContent(position.lineNumber);
       const beforeCursor = lineContent.slice(0, position.column - 1);
 
@@ -4014,7 +4030,7 @@ const registerMarkdownLanguageFeatures = () => {
             /^[a-zA-Z]:/.test(token)));
       if (inPathLike) return { suggestions: [] };
 
-      const fenceLspSuggestions = await provideMarkdownFenceLspSuggestions(model, position);
+      const fenceLspSuggestions = await provideMarkdownFenceLspSuggestions(model, position, context);
       if (fenceLspSuggestions.length) {
         return { suggestions: fenceLspSuggestions };
       }
@@ -4123,6 +4139,7 @@ const tabRegionRightRef = ref(null)
 const languagePairingConfigured = new Set()
 const lspEnabled = ref(false)
 const markdownFenceCompletionModels = new Map()
+const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '@', '#']
 
 // Markdown 围栏高亮与补全的共享逻辑
 const getMarkdownFenceContext = (model, position) => {
@@ -4288,11 +4305,6 @@ const updateMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
     return;
   }
 
-  if (lspEnabled.value) {
-    clearMarkdownFenceSyntaxHighlight(targetEditor);
-    return;
-  }
-
   const position = targetEditor.getPosition?.();
   const ctx = getMarkdownFenceContext(model, position);
   const visibleRanges = typeof targetEditor.getVisibleRanges === 'function'
@@ -4387,10 +4399,73 @@ const scheduleMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
 };
 
 const getOrCreateMarkdownFenceModel = (languageId) => {
+  return getOrCreateMarkdownFenceModelForSource(languageId, '')
+};
+
+const FENCE_LANGUAGE_EXTENSIONS = {
+  javascript: 'js',
+  typescript: 'ts',
+  python: 'py',
+  c: 'c',
+  cpp: 'cpp',
+  rust: 'rs',
+  shell: 'sh',
+  html: 'html',
+  css: 'css',
+  json: 'json',
+  yaml: 'yml',
+  lua: 'lua',
+  java: 'java',
+  latex: 'tex',
+}
+
+const buildMarkdownFenceVirtualUri = (languageId, sourceFilePath = '') => {
   const key = String(languageId || '').trim().toLowerCase();
-  if (!key) return null;
+  if (!key) return null
+
+  const ext = FENCE_LANGUAGE_EXTENSIONS[key] || key || 'txt'
+  const rawSourcePath = String(sourceFilePath || '').trim()
+
+  try {
+    if (rawSourcePath.startsWith('file://')) {
+      const uri = monaco.Uri.parse(rawSourcePath)
+      const nextPath = String(uri.path || '/guaxi-markdown-fence')
+        .replace(/\.[^./]+$/, '')
+        .concat(`.guaxi-fence.${ext}`)
+      return uri.with({ path: nextPath })
+    }
+
+    if (/^[a-zA-Z]:[\\/]/.test(rawSourcePath) || rawSourcePath.startsWith('/') || rawSourcePath.startsWith('\\')) {
+      const nextPath = rawSourcePath.replace(/\.[^./\\]+$/, '').concat(`.guaxi-fence.${ext}`)
+      return monaco.Uri.file(nextPath)
+    }
+  } catch (error) {
+    logger.warn('[MarkdownFence] build virtual uri failed, fallback to temp file uri', {
+      languageId: key,
+      sourceFilePath: rawSourcePath,
+      error,
+    })
+  }
+
+  return monaco.Uri.file(`__guaxi__/markdown-fence.${ext}`)
+}
+
+const getOrCreateMarkdownFenceModelForSource = (languageId, sourceFilePath = '') => {
+  const key = String(languageId || '').trim().toLowerCase()
+  if (!key) return null
+
+  const targetUri = buildMarkdownFenceVirtualUri(key, sourceFilePath)
+  if (!targetUri) return null
 
   let model = markdownFenceCompletionModels.get(key);
+  if (model && !model.isDisposed?.()) {
+    if (String(model.uri?.toString?.() || '') !== String(targetUri.toString())) {
+      markdownFenceCompletionModels.delete(key)
+      model.dispose()
+      model = null
+    }
+  }
+
   if (model && !model.isDisposed?.()) {
     if (model.getLanguageId?.() !== key) {
       monaco.editor.setModelLanguage(model, key);
@@ -4398,28 +4473,146 @@ const getOrCreateMarkdownFenceModel = (languageId) => {
     return model;
   }
 
-  const uri = monaco.Uri.parse(`inmemory://guaxi/markdown-fence-${key}.tmp`);
-  model = monaco.editor.getModel(uri) || monaco.editor.createModel('', key, uri);
+  model = monaco.editor.getModel(targetUri) || monaco.editor.createModel('', key, targetUri);
   markdownFenceCompletionModels.set(key, model);
   return model;
 };
 
-const provideMarkdownFenceLspSuggestions = async (model, position) => {
+const VSCODE_TO_MONACO_COMPLETION_KIND = {
+  0: monaco.languages.CompletionItemKind.Text,
+  1: monaco.languages.CompletionItemKind.Method,
+  2: monaco.languages.CompletionItemKind.Function,
+  3: monaco.languages.CompletionItemKind.Constructor,
+  4: monaco.languages.CompletionItemKind.Field,
+  5: monaco.languages.CompletionItemKind.Variable,
+  6: monaco.languages.CompletionItemKind.Class,
+  7: monaco.languages.CompletionItemKind.Interface,
+  8: monaco.languages.CompletionItemKind.Module,
+  9: monaco.languages.CompletionItemKind.Property,
+  10: monaco.languages.CompletionItemKind.Unit,
+  11: monaco.languages.CompletionItemKind.Value,
+  12: monaco.languages.CompletionItemKind.Enum,
+  13: monaco.languages.CompletionItemKind.Keyword,
+  14: monaco.languages.CompletionItemKind.Snippet,
+  15: monaco.languages.CompletionItemKind.Color,
+  16: monaco.languages.CompletionItemKind.File,
+  17: monaco.languages.CompletionItemKind.Reference,
+  18: monaco.languages.CompletionItemKind.Folder,
+  19: monaco.languages.CompletionItemKind.EnumMember,
+  20: monaco.languages.CompletionItemKind.Constant,
+  21: monaco.languages.CompletionItemKind.Struct,
+  22: monaco.languages.CompletionItemKind.Event,
+  23: monaco.languages.CompletionItemKind.Operator,
+  24: monaco.languages.CompletionItemKind.TypeParameter,
+  25: monaco.languages.CompletionItemKind.Issue,
+  26: monaco.languages.CompletionItemKind.User,
+}
+
+const normalizeCompletionLabel = (label) => {
+  if (typeof label === 'string') return label
+  if (label && typeof label === 'object') {
+    const text = String(label.label || '')
+    return text
+  }
+  return ''
+}
+
+const normalizeCompletionDocumentation = (documentation) => {
+  if (!documentation) return undefined
+  if (typeof documentation === 'string') return documentation
+  if (typeof documentation?.value === 'string') return documentation.value
+  return String(documentation || '')
+}
+
+const buildCompletionSortKey = (item, fallbackLabel, index) => {
+  const explicit = String(item?.sortText || '').trim()
+  if (explicit) return explicit
+  return `z_${String(index).padStart(4, '0')}_${fallbackLabel}`
+}
+
+const convertVscodeCompletionItemToMonaco = (item, replaceRange, index) => {
+  const label = normalizeCompletionLabel(item?.label)
+  if (!label) return null
+
+  const insertTextValue = item?.insertText
+  const insertText = typeof insertTextValue === 'string'
+    ? insertTextValue
+    : String(insertTextValue?.value || label)
+  const isSnippet = typeof insertTextValue === 'object' && insertTextValue !== null
+  const documentation = normalizeCompletionDocumentation(item?.documentation)
+  const kind = VSCODE_TO_MONACO_COMPLETION_KIND[item?.kind] || monaco.languages.CompletionItemKind.Text
+
+  return {
+    label,
+    kind,
+    detail: item?.detail,
+    documentation,
+    filterText: item?.filterText,
+    sortText: buildCompletionSortKey(item, label, index),
+    insertText,
+    insertTextRules: isSnippet
+      ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+      : undefined,
+    range: replaceRange,
+  }
+}
+
+const provideMarkdownFenceVscodeSuggestions = async (virtualModel, ctx, replaceRange, context) => {
+  try {
+    const triggerCharacter = context?.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter
+      ? String(context?.triggerCharacter || '')
+      : undefined
+
+    const result = await vscodeCommands.executeCommand(
+      'vscode.executeCompletionItemProvider',
+      VscodeUri.parse(virtualModel.uri.toString()),
+      new VscodePosition(ctx.positionInBlock.lineNumber - 1, ctx.positionInBlock.column - 1),
+      triggerCharacter || undefined,
+      0
+    )
+
+    const items = Array.isArray(result?.items) ? result.items : []
+    if (!items.length) return []
+
+    const suggestions = []
+    const seen = new Set()
+    for (let i = 0; i < items.length; i += 1) {
+      const mapped = convertVscodeCompletionItemToMonaco(items[i], replaceRange, i)
+      if (!mapped) continue
+      const dedupeKey = `${mapped.label}::${mapped.insertText}`
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+      suggestions.push(mapped)
+    }
+    return suggestions
+  } catch (error) {
+    logger.debug('[MarkdownFence] vscode completion command failed, fallback to Monaco providers', error)
+    return []
+  }
+}
+
+const provideMarkdownFenceLspSuggestions = async (model, position, context) => {
   const ctx = getMarkdownFenceContext(model, position);
   if (!ctx) return [];
   if (!LSP_SUPPORTED_LANGUAGES.has(ctx.languageId)) return [];
   if (!lspEnabled.value) return [];
-  if (!editor) return [];
 
   const lspState = getLspConnectionState(ctx.languageId);
   if (lspState?.state === 'disabled') return [];
 
-  const filePath = String(selectedFile.value?.path || '').trim();
-  initLspClient(editor, ctx.languageId, filePath);
-
-  const virtualModel = getOrCreateMarkdownFenceModel(ctx.languageId);
+  const sourceFilePath = String(selectedFile.value?.path || '').trim();
+  const virtualModel = getOrCreateMarkdownFenceModelForSource(ctx.languageId, sourceFilePath);
   if (!virtualModel) return [];
   virtualModel.setValue(ctx.blockText || '');
+
+  const hostEditor =
+    (editor?.hasTextFocus?.() ? editor : null) ||
+    (secondaryEditor?.hasTextFocus?.() ? secondaryEditor : null) ||
+    editor ||
+    secondaryEditor
+  if (!hostEditor) return []
+
+  initLspClient(hostEditor, ctx.languageId, virtualModel.uri.toString());
 
   const providers = (monaco.languages).CompletionProviderRegistry?.all?.(virtualModel) || [];
   if (!providers.length) return [];
@@ -4431,6 +4624,16 @@ const provideMarkdownFenceLspSuggestions = async (model, position) => {
     position.lineNumber,
     wordInfo?.endColumn || position.column
   );
+
+  const vscodeSuggestions = await provideMarkdownFenceVscodeSuggestions(
+    virtualModel,
+    ctx,
+    replaceRange,
+    context
+  )
+  if (vscodeSuggestions.length) {
+    return vscodeSuggestions
+  }
 
   const fallbackToken = {
     isCancellationRequested: false,
@@ -4445,7 +4648,7 @@ const provideMarkdownFenceLspSuggestions = async (model, position) => {
       const result = await provider.provideCompletionItems(
         virtualModel,
         ctx.positionInBlock,
-        { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
+        context || { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
         fallbackToken
       );
       const items = Array.isArray(result?.suggestions) ? result.suggestions : [];
@@ -10075,14 +10278,8 @@ const handleLspSettingChanged = (evt) => {
   const enabled = !!evt?.detail?.enabled
   lspEnabled.value = enabled
   applyMonacoThemeByLsp(enabled)
-
-  if (enabled) {
-    clearMarkdownFenceSyntaxHighlight(editor)
-    clearMarkdownFenceSyntaxHighlight(secondaryEditor)
-  } else {
-    scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
-    scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
-  }
+  scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
+  scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
 
   if (!enabled) {
     disposeAllLspClients()
@@ -10105,11 +10302,6 @@ const handleLspSettingChanged = (evt) => {
 
 watch(lspEnabled, (enabled) => {
   applyMonacoThemeByLsp(enabled)
-  if (enabled) {
-    clearMarkdownFenceSyntaxHighlight(editor)
-    clearMarkdownFenceSyntaxHighlight(secondaryEditor)
-    return
-  }
   scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
 })
@@ -10407,6 +10599,16 @@ onUnmounted(() => {
   padding: 0 4px;
   height: 22px;
   border-radius: 6px;
+}
+
+.floating-md-toolbar :deep(.floating-toolbar-icon-button) {
+  width: 24px;
+  min-width: 24px;
+  justify-content: center;
+}
+
+.floating-md-toolbar :deep(.floating-toolbar-icon-button .n-base-loading) {
+  margin: 0;
 }
 
 .assistant-translate-dialog-row {

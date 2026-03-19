@@ -406,6 +406,7 @@ onUnmounted(() => {
   padding: 16px;
   box-sizing: border-box;
   background: var(--guaxi-app-bg);
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .header {

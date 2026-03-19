@@ -414,7 +414,7 @@ onMounted(refresh)
   overflow: hidden;
   background: var(--guaxi-content-bg);
   color: var(--guaxi-text-primary);
-  font-family: inherit;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .header {

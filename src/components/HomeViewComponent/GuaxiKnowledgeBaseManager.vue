@@ -1474,7 +1474,7 @@ onMounted(async () => {
   gap: 10px;
   overflow: hidden;
   background: var(--guaxi-content-bg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
 }
 
 .header {
