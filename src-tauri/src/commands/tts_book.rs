@@ -2,6 +2,7 @@ use crate::commands::chatview::{audio_text_to_speech, AudioCommonRequest, TextTo
 use crate::commands::settingview;
 use base64::{engine::general_purpose, Engine as _};
 use encoding_rs::GBK;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use scraper::Html;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::time::Instant;
 use tauri::{Emitter, Window};
@@ -19,6 +21,24 @@ use zip::ZipArchive;
 const SHERPA_PROVIDER: &str = "sherpa-onnx";
 const DEFAULT_MODEL: &str = "utils/Models/tts/kokoro_multi_lang/model.onnx";
 const DEFAULT_TOKENS: &str = "utils/Models/tts/kokoro_multi_lang/tokens.txt";
+const DEFAULT_EXECUTION_PROVIDER: &str = "cpu";
+const TTS_BOOK_STATUS_QUEUED: &str = "queued";
+const TTS_BOOK_STATUS_RUNNING: &str = "running";
+const TTS_BOOK_STATUS_PAUSED: &str = "paused";
+const TTS_BOOK_STATUS_STOPPED: &str = "stopped";
+const TTS_BOOK_STATUS_SUCCESS: &str = "success";
+const TTS_BOOK_INDEX_FILE: &str = "tts_book_resume_index.json";
+const TTS_BOOK_PAUSE_SIGNAL: &str = "__TTS_BOOK_PAUSED__";
+const TTS_BOOK_STOP_SIGNAL: &str = "__TTS_BOOK_STOPPED__";
+
+#[derive(Debug, Clone, Default)]
+struct TtsBookTaskControl {
+    pause_requested: bool,
+    stop_requested: bool,
+}
+
+static TTS_BOOK_TASK_CONTROLS: Lazy<Mutex<HashMap<String, TtsBookTaskControl>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Deserialize)]
 pub struct TtsBookConvertRequest {
@@ -45,6 +65,8 @@ pub struct TtsBookConvertRequest {
     pub max_chunk_chars: Option<usize>,
     #[serde(default)]
     pub task_id: String,
+    #[serde(default)]
+    pub execution_provider: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,8 +122,24 @@ struct TtsBookProgress {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct TtsBookResumeState {
     version: u32,
+    task_id: String,
+    file_name: String,
+    title: String,
+    output_dir: String,
+    output_name: String,
+    tts_model: String,
+    tts_tokens: String,
+    tts_mode_hint: String,
+    speaker_id: String,
+    speed: Option<f32>,
+    execution_provider: String,
+    status: String,
+    last_stage: String,
+    last_message: String,
+    progress: u8,
     source_file: String,
     source_size: u64,
     source_modified_ms: u64,
@@ -114,6 +152,40 @@ struct TtsBookResumeState {
     output_path: String,
     segment_json_path: String,
     chapter_output_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct TtsBookResumeIndex {
+    tasks: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct TtsBookSavedTask {
+    pub task_id: String,
+    pub file_path: String,
+    pub file_name: String,
+    pub title: String,
+    pub output_dir: String,
+    pub output_name: String,
+    pub tts_model: String,
+    pub tts_tokens: String,
+    pub tts_mode_hint: String,
+    pub speaker_id: String,
+    pub speed: Option<f32>,
+    pub split_by_toc: bool,
+    pub max_chunk_chars: usize,
+    pub execution_provider: String,
+    pub status: String,
+    pub message: String,
+    pub progress: u8,
+    pub output_path: String,
+    pub segment_json_path: String,
+    pub total_chunks: usize,
+    pub completed_chunks: usize,
+    pub chapter_count: usize,
+    pub completed_chapters: usize,
+    pub chapter_output_paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,6 +206,9 @@ struct SegmentEntry {
     kind: &'static str,
     speaker_hint: &'static str,
     pause_after_ms: u32,
+    audio_duration_ms: u64,
+    start_ms: u64,
+    end_ms: u64,
     char_count: usize,
     text: String,
 }
@@ -164,6 +239,7 @@ pub async fn tts_book_convert(
     } else {
         request.task_id.trim().to_string()
     };
+    reset_task_control(&task_id);
     info!(
         file_path = file_path.to_string_lossy().as_ref(),
         output_dir = request.output_dir.as_str(),
@@ -257,6 +333,21 @@ pub async fn tts_book_convert(
     if !resume_matches {
         resume_state = TtsBookResumeState {
             version: 1,
+            task_id: task_id.clone(),
+            file_name: file_name.clone(),
+            title: extracted.title.clone(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+            output_name: request.output_name.trim().to_string(),
+            tts_model: String::new(),
+            tts_tokens: String::new(),
+            tts_mode_hint: String::new(),
+            speaker_id: String::new(),
+            speed: None,
+            execution_provider: DEFAULT_EXECUTION_PROVIDER.to_string(),
+            status: TTS_BOOK_STATUS_QUEUED.to_string(),
+            last_stage: "prepare".to_string(),
+            last_message: "等待处理".to_string(),
+            progress: 0,
             source_file: file_path.to_string_lossy().to_string(),
             source_size,
             source_modified_ms,
@@ -312,6 +403,24 @@ pub async fn tts_book_convert(
         request.speaker_id.trim().to_string()
     };
     let speed = request.speed.map(|value| value.clamp(0.2, 3.0));
+    let execution_provider = normalize_execution_provider(&request.execution_provider);
+    resume_state.task_id = task_id.clone();
+    resume_state.file_name = file_name.clone();
+    resume_state.title = extracted.title.clone();
+    resume_state.output_dir = output_dir.to_string_lossy().to_string();
+    resume_state.output_name = request.output_name.trim().to_string();
+    resume_state.tts_model = tts_model.clone();
+    resume_state.tts_tokens = tts_tokens.clone();
+    resume_state.tts_mode_hint = tts_mode_hint.clone();
+    resume_state.speaker_id = speaker_id.clone();
+    resume_state.speed = speed;
+    resume_state.execution_provider = execution_provider.clone();
+    resume_state.status = TTS_BOOK_STATUS_RUNNING.to_string();
+    resume_state.last_stage = "prepare".to_string();
+    resume_state.last_message = "开始解析文档".to_string();
+    resume_state.progress = 0;
+    register_resume_state(&resume_state_path)?;
+    save_resume_state(&resume_state_path, &resume_state)?;
 
     info!(
         tts_exe = tts_exe.as_str(),
@@ -320,6 +429,7 @@ pub async fn tts_book_convert(
         tts_mode_hint = tts_mode_hint.as_str(),
         speaker_id = speaker_id.as_str(),
         speed = speed.unwrap_or(1.0),
+        execution_provider = execution_provider.as_str(),
         "tts_book_convert tts config resolved"
     );
 
@@ -335,21 +445,7 @@ pub async fn tts_book_convert(
             total_chars: cleaned.chars().count(),
             total_chunks: chunks.len(),
             toc: extracted.toc.clone(),
-            chunks: chunks
-                .iter()
-                .map(|chunk| SegmentEntry {
-                    index: chunk.index,
-                    lang: match chunk.lang {
-                        ChunkLang::Zh => "zh",
-                        ChunkLang::En => "en",
-                    },
-                    kind: detect_segment_kind(&chunk.text),
-                    speaker_hint: detect_speaker_hint(&chunk.text),
-                    pause_after_ms: derive_pause_after_ms(&chunk.text),
-                    char_count: chunk.text.chars().count(),
-                    text: chunk.text.clone(),
-                })
-                .collect(),
+            chunks: build_segment_entries(&chunks, &vec![0; chunks.len()]),
             chapters: chapters
                 .iter()
                 .enumerate()
@@ -364,6 +460,14 @@ pub async fn tts_book_convert(
         },
     )?;
     resume_state.segment_json_path = segment_json_path.to_string_lossy().to_string();
+    update_resume_state_progress(
+        &mut resume_state,
+        "segment_json",
+        "已输出分段 JSON",
+        completed_steps,
+        total_steps,
+        TTS_BOOK_STATUS_RUNNING,
+    );
     save_resume_state(&resume_state_path, &resume_state)?;
     completed_steps += 1;
     emit_tts_book_progress(
@@ -387,7 +491,15 @@ pub async fn tts_book_convert(
     let mut zh_chunks = 0usize;
     let mut en_chunks = 0usize;
     let mut chunk_paths = Vec::with_capacity(chunks.len());
+    let mut chunk_durations_ms = vec![0u64; chunks.len()];
     for chunk in &chunks {
+        check_task_control(
+            &task_id,
+            &mut resume_state,
+            &resume_state_path,
+            completed_steps,
+            total_steps,
+        )?;
         match chunk.lang {
             ChunkLang::Zh => zh_chunks += 1,
             ChunkLang::En => en_chunks += 1,
@@ -403,6 +515,7 @@ pub async fn tts_book_convert(
                 &tts_mode_hint,
                 &speaker_id,
                 speed,
+                &execution_provider,
             )
             .await?;
             fs::write(&chunk_path, bytes).map_err(|e| format!("写入分段音频失败: {}", e))?;
@@ -414,8 +527,26 @@ pub async fn tts_book_convert(
             resume_state.completed_chunks.sort_unstable();
             save_resume_state(&resume_state_path, &resume_state)?;
         }
+        let chunk_bytes = fs::read(&chunk_path).map_err(|e| format!("读取分段音频失败: {}", e))?;
+        if let Some(duration) = chunk_durations_ms.get_mut(chunk.index.saturating_sub(1)) {
+            *duration = wav_duration_ms(&chunk_bytes)?;
+        }
         chunk_paths.push(chunk_path);
         completed_steps += 1;
+        let progress_message = if resumed {
+            format!("复用已完成分段 {}/{}", chunk.index, chunks.len())
+        } else {
+            format!("正在合成分段 {}/{}", chunk.index, chunks.len())
+        };
+        update_resume_state_progress(
+            &mut resume_state,
+            "synth_chunk",
+            progress_message.as_str(),
+            completed_steps,
+            total_steps,
+            TTS_BOOK_STATUS_RUNNING,
+        );
+        save_resume_state(&resume_state_path, &resume_state)?;
         emit_tts_book_progress(
             &window,
             make_progress(
@@ -445,9 +576,40 @@ pub async fn tts_book_convert(
         "tts_book_convert full audio synthesized"
     );
 
+    write_segment_manifest(
+        &segment_json_path,
+        &SegmentManifest {
+            title: extracted.title.clone(),
+            source_file: file_path.to_string_lossy().to_string(),
+            total_chars: cleaned.chars().count(),
+            total_chunks: chunks.len(),
+            toc: extracted.toc.clone(),
+            chunks: build_segment_entries(&chunks, &chunk_durations_ms),
+            chapters: chapters
+                .iter()
+                .enumerate()
+                .map(|(index, (chapter_title, chapter_text))| ChapterSegmentEntry {
+                    index: index + 1,
+                    title: chapter_title.clone(),
+                    char_count: chapter_text.chars().count(),
+                    chunk_count: split_text_chunks_pro(chapter_text, max_chunk_chars).len(),
+                    text: chapter_text.clone(),
+                })
+                .collect(),
+        },
+    )?;
+
     let merged_wav = merge_wav_files_with_postprocess(&chunk_paths, &chunks)?;
     fs::write(&output_path, merged_wav).map_err(|e| format!("写入音频文件失败: {}", e))?;
     resume_state.output_path = output_path.to_string_lossy().to_string();
+    update_resume_state_progress(
+        &mut resume_state,
+        "merge_audio",
+        "已合并完整音频",
+        completed_steps + 1,
+        total_steps,
+        TTS_BOOK_STATUS_RUNNING,
+    );
     save_resume_state(&resume_state_path, &resume_state)?;
     completed_steps += 1;
     emit_tts_book_progress(
@@ -473,6 +635,13 @@ pub async fn tts_book_convert(
         fs::create_dir_all(&chapter_dir).map_err(|e| format!("创建章节目录失败: {}", e))?;
 
         for (index, (chapter_title, chapter_text)) in chapters.iter().enumerate() {
+            check_task_control(
+                &task_id,
+                &mut resume_state,
+                &resume_state_path,
+                completed_steps,
+                total_steps,
+            )?;
             let chapter_start = Instant::now();
             let chapter_stem = sanitize_file_stem(&truncate_title(chapter_title, 36));
             let chapter_name = format!("{:03}_{}.wav", index + 1, chapter_stem);
@@ -498,6 +667,7 @@ pub async fn tts_book_convert(
                     &tts_mode_hint,
                     &speaker_id,
                     speed,
+                    &execution_provider,
                 )
                 .await?;
                 fs::write(&chapter_path, chapter_wav)
@@ -522,6 +692,20 @@ pub async fn tts_book_convert(
             }
             save_resume_state(&resume_state_path, &resume_state)?;
             completed_steps += 1;
+            let progress_message = if resumed {
+                format!("复用已完成章节 {}/{}", index + 1, chapters.len())
+            } else {
+                format!("正在生成章节 {}/{}", index + 1, chapters.len())
+            };
+            update_resume_state_progress(
+                &mut resume_state,
+                "chapter_audio",
+                progress_message.as_str(),
+                completed_steps,
+                total_steps,
+                TTS_BOOK_STATUS_RUNNING,
+            );
+            save_resume_state(&resume_state_path, &resume_state)?;
             emit_tts_book_progress(
                 &window,
                 make_progress(
@@ -574,6 +758,18 @@ pub async fn tts_book_convert(
             &segment_json_path,
         ),
     )?;
+    resume_state.status = TTS_BOOK_STATUS_SUCCESS.to_string();
+    resume_state.last_stage = "completed".to_string();
+    resume_state.last_message = if resumed_any {
+        "转换完成，已从中断位置继续".to_string()
+    } else {
+        "转换完成".to_string()
+    };
+    resume_state.progress = 100;
+    resume_state.chapter_output_paths = chapter_output_paths.clone();
+    save_resume_state(&resume_state_path, &resume_state)?;
+    unregister_resume_state(&resume_state_path)?;
+    clear_task_control(&task_id);
 
     Ok(TtsBookConvertResponse {
         task_id,
@@ -590,6 +786,74 @@ pub async fn tts_book_convert(
     })
 }
 
+#[tauri::command]
+pub fn tts_book_pause_task(task_id: String) -> Result<(), String> {
+    set_task_control(&task_id, true, false)
+}
+
+#[tauri::command]
+pub fn tts_book_stop_task(task_id: String) -> Result<(), String> {
+    set_task_control(&task_id, false, true)
+}
+
+#[tauri::command]
+pub fn tts_book_pause_all_tasks(task_ids: Vec<String>) -> Result<(), String> {
+    for task_id in task_ids {
+        set_task_control(&task_id, true, false)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn tts_book_stop_all_tasks(task_ids: Vec<String>) -> Result<(), String> {
+    for task_id in task_ids {
+        set_task_control(&task_id, false, true)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn tts_book_list_saved_tasks() -> Result<Vec<TtsBookSavedTask>, String> {
+    let mut out = Vec::new();
+    let index = load_resume_index()?;
+    let mut dirty = false;
+    let mut valid_paths = Vec::new();
+
+    for raw_path in index.tasks {
+        let path = PathBuf::from(raw_path);
+        if !path.exists() {
+            dirty = true;
+            continue;
+        }
+        let mut state = match load_resume_state(&path) {
+            Ok(state) => state,
+            Err(_) => {
+                dirty = true;
+                continue;
+            }
+        };
+        if matches!(state.status.as_str(), TTS_BOOK_STATUS_SUCCESS | TTS_BOOK_STATUS_STOPPED) {
+            dirty = true;
+            continue;
+        }
+        if state.status == TTS_BOOK_STATUS_RUNNING {
+            state.status = TTS_BOOK_STATUS_PAUSED.to_string();
+            if state.last_message.trim().is_empty() || state.last_message.contains("正在") {
+                state.last_message = "检测到上次退出时任务未完成，可继续转换".to_string();
+            }
+            save_resume_state(&path, &state)?;
+        }
+        valid_paths.push(path.to_string_lossy().to_string());
+        out.push(saved_task_from_state(&state));
+    }
+
+    if dirty {
+        save_resume_index(&TtsBookResumeIndex { tasks: valid_paths })?;
+    }
+
+    Ok(out)
+}
+
 fn infer_tts_mode_hint(model: &str) -> String {
     let model = model.trim().to_lowercase();
     if model.contains("kokoro") {
@@ -601,6 +865,181 @@ fn infer_tts_mode_hint(model: &str) -> String {
     }
 }
 
+fn saved_task_from_state(state: &TtsBookResumeState) -> TtsBookSavedTask {
+    TtsBookSavedTask {
+        task_id: state.task_id.clone(),
+        file_path: state.source_file.clone(),
+        file_name: state.file_name.clone(),
+        title: state.title.clone(),
+        output_dir: state.output_dir.clone(),
+        output_name: state.output_name.clone(),
+        tts_model: state.tts_model.clone(),
+        tts_tokens: state.tts_tokens.clone(),
+        tts_mode_hint: state.tts_mode_hint.clone(),
+        speaker_id: state.speaker_id.clone(),
+        speed: state.speed,
+        split_by_toc: state.split_by_toc,
+        max_chunk_chars: state.max_chunk_chars,
+        execution_provider: normalize_execution_provider(&state.execution_provider),
+        status: if state.status.trim().is_empty() {
+            TTS_BOOK_STATUS_PAUSED.to_string()
+        } else {
+            state.status.clone()
+        },
+        message: state.last_message.clone(),
+        progress: state.progress,
+        output_path: state.output_path.clone(),
+        segment_json_path: state.segment_json_path.clone(),
+        total_chunks: state.total_chunks,
+        completed_chunks: state.completed_chunks.len(),
+        chapter_count: state.chapter_output_paths.len().max(state.completed_chapters.len()),
+        completed_chapters: state.completed_chapters.len(),
+        chapter_output_paths: state.chapter_output_paths.clone(),
+    }
+}
+
+fn normalize_execution_provider(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "cuda" | "gpu" => "cuda".to_string(),
+        "coreml" => "coreml".to_string(),
+        _ => DEFAULT_EXECUTION_PROVIDER.to_string(),
+    }
+}
+
+fn resume_index_path() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("获取程序目录失败: {}", e))?;
+    let base = exe
+        .parent()
+        .ok_or_else(|| "无法获取程序目录".to_string())?
+        .join("data")
+        .join("tts_book");
+    fs::create_dir_all(&base).map_err(|e| format!("创建 TTSBook 状态目录失败: {}", e))?;
+    Ok(base.join(TTS_BOOK_INDEX_FILE))
+}
+
+fn load_resume_index() -> Result<TtsBookResumeIndex, String> {
+    let path = resume_index_path()?;
+    if !path.exists() {
+        return Ok(TtsBookResumeIndex::default());
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| format!("读取续转索引失败: {}", e))?;
+    serde_json::from_str(&raw).map_err(|e| format!("解析续转索引失败: {}", e))
+}
+
+fn save_resume_index(index: &TtsBookResumeIndex) -> Result<(), String> {
+    let path = resume_index_path()?;
+    let raw = serde_json::to_string_pretty(index).map_err(|e| format!("序列化续转索引失败: {}", e))?;
+    fs::write(path, raw).map_err(|e| format!("写入续转索引失败: {}", e))
+}
+
+fn register_resume_state(path: &Path) -> Result<(), String> {
+    let mut index = load_resume_index()?;
+    let path_str = path.to_string_lossy().to_string();
+    if !index.tasks.contains(&path_str) {
+        index.tasks.push(path_str);
+        index.tasks.sort();
+        index.tasks.dedup();
+        save_resume_index(&index)?;
+    }
+    Ok(())
+}
+
+fn unregister_resume_state(path: &Path) -> Result<(), String> {
+    let mut index = load_resume_index()?;
+    let path_str = path.to_string_lossy().to_string();
+    index.tasks.retain(|item| item != &path_str);
+    save_resume_index(&index)
+}
+
+fn set_task_control(task_id: &str, pause: bool, stop: bool) -> Result<(), String> {
+    let normalized = task_id.trim();
+    if normalized.is_empty() {
+        return Err("task_id 不能为空".to_string());
+    }
+    let mut guard = TTS_BOOK_TASK_CONTROLS
+        .lock()
+        .map_err(|_| "任务控制锁已损坏".to_string())?;
+    let entry = guard.entry(normalized.to_string()).or_default();
+    if stop {
+        entry.stop_requested = true;
+        entry.pause_requested = false;
+    } else if pause {
+        entry.pause_requested = true;
+    }
+    Ok(())
+}
+
+fn reset_task_control(task_id: &str) {
+    if let Ok(mut guard) = TTS_BOOK_TASK_CONTROLS.lock() {
+        guard.insert(task_id.to_string(), TtsBookTaskControl::default());
+    }
+}
+
+fn clear_task_control(task_id: &str) {
+    if let Ok(mut guard) = TTS_BOOK_TASK_CONTROLS.lock() {
+        guard.remove(task_id);
+    }
+}
+
+fn check_task_control(
+    task_id: &str,
+    state: &mut TtsBookResumeState,
+    state_path: &Path,
+    current: usize,
+    total: usize,
+) -> Result<(), String> {
+    let control = TTS_BOOK_TASK_CONTROLS
+        .lock()
+        .map_err(|_| "任务控制锁已损坏".to_string())?
+        .get(task_id)
+        .cloned()
+        .unwrap_or_default();
+    if control.stop_requested {
+        update_resume_state_progress(
+            state,
+            "stopped",
+            "任务已终止",
+            current,
+            total,
+            TTS_BOOK_STATUS_STOPPED,
+        );
+        save_resume_state(state_path, state)?;
+        let _ = unregister_resume_state(state_path);
+        clear_task_control(task_id);
+        return Err(TTS_BOOK_STOP_SIGNAL.to_string());
+    }
+    if control.pause_requested {
+        update_resume_state_progress(
+            state,
+            "paused",
+            "任务已暂停，可稍后继续",
+            current,
+            total,
+            TTS_BOOK_STATUS_PAUSED,
+        );
+        save_resume_state(state_path, state)?;
+        clear_task_control(task_id);
+        return Err(TTS_BOOK_PAUSE_SIGNAL.to_string());
+    }
+    Ok(())
+}
+
+fn update_resume_state_progress(
+    state: &mut TtsBookResumeState,
+    stage: &str,
+    message: &str,
+    current: usize,
+    total: usize,
+    status: &str,
+) {
+    let safe_total = total.max(1);
+    let safe_current = current.min(safe_total);
+    state.last_stage = stage.to_string();
+    state.last_message = message.to_string();
+    state.status = status.to_string();
+    state.progress = ((safe_current as f64 / safe_total as f64) * 100.0).round() as u8;
+}
+
 async fn synthesize_wav_from_chunks(
     chunks: &[TextChunk],
     tts_exe: &str,
@@ -609,6 +1048,7 @@ async fn synthesize_wav_from_chunks(
     tts_mode_hint: &str,
     speaker_id: &str,
     speed: Option<f32>,
+    execution_provider: &str,
 ) -> Result<(Vec<u8>, usize, usize), String> {
     let mut wav_parts: Vec<Vec<u8>> = Vec::with_capacity(chunks.len());
     let mut zh_chunks = 0usize;
@@ -633,6 +1073,7 @@ async fn synthesize_wav_from_chunks(
         let rsp = audio_text_to_speech(TextToSpeechRequest {
             common: AudioCommonRequest {
                 provider: SHERPA_PROVIDER.to_string(),
+                runtime_provider: execution_provider.to_string(),
                 model: tts_model.to_string(),
                 api_key: String::new(),
                 endpoint: tts_exe.to_string(),
@@ -675,6 +1116,7 @@ async fn synthesize_chunk_audio(
     tts_mode_hint: &str,
     speaker_id: &str,
     speed: Option<f32>,
+    execution_provider: &str,
 ) -> Result<Vec<u8>, String> {
     let chunk_start = Instant::now();
     let prepared_text = prepare_chunk_text_for_tts(&chunk.text, chunk.lang);
@@ -689,6 +1131,7 @@ async fn synthesize_chunk_audio(
     let rsp = audio_text_to_speech(TextToSpeechRequest {
         common: AudioCommonRequest {
             provider: SHERPA_PROVIDER.to_string(),
+            runtime_provider: execution_provider.to_string(),
             model: tts_model.to_string(),
             api_key: String::new(),
             endpoint: tts_exe.to_string(),
@@ -779,6 +1222,45 @@ fn save_resume_state(path: &Path, state: &TtsBookResumeState) -> Result<(), Stri
 fn write_segment_manifest(path: &Path, manifest: &SegmentManifest) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(manifest).map_err(|e| format!("序列化分段 JSON 失败: {}", e))?;
     fs::write(path, raw).map_err(|e| format!("写入分段 JSON 失败: {}", e))
+}
+
+fn build_segment_entries(chunks: &[TextChunk], durations_ms: &[u64]) -> Vec<SegmentEntry> {
+    let mut cursor_ms = 0u64;
+    let mut entries = Vec::with_capacity(chunks.len());
+
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let pause_after_ms = derive_pause_after_ms(&chunk.text);
+        let audio_duration_ms = durations_ms.get(idx).copied().unwrap_or(0);
+        let trailing_pause_ms = if idx + 1 < chunks.len() {
+            pause_after_ms as u64
+        } else {
+            0
+        };
+        let start_ms = cursor_ms;
+        let end_ms = start_ms
+            .saturating_add(audio_duration_ms)
+            .saturating_add(trailing_pause_ms);
+
+        entries.push(SegmentEntry {
+            index: chunk.index,
+            lang: match chunk.lang {
+                ChunkLang::Zh => "zh",
+                ChunkLang::En => "en",
+            },
+            kind: detect_segment_kind(&chunk.text),
+            speaker_hint: detect_speaker_hint(&chunk.text),
+            pause_after_ms,
+            audio_duration_ms,
+            start_ms,
+            end_ms,
+            char_count: chunk.text.chars().count(),
+            text: chunk.text.clone(),
+        });
+
+        cursor_ms = end_ms;
+    }
+
+    entries
 }
 
 fn file_signature(path: &Path) -> Result<(u64, u64), String> {
@@ -2126,6 +2608,21 @@ fn parse_wav_format_fields(fmt: &[u8]) -> Option<(u16, u16, u32, u16)> {
     let sample_rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
     let bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
     Some((audio_format, channels, sample_rate, bits_per_sample))
+}
+
+fn wav_duration_ms(bytes: &[u8]) -> Result<u64, String> {
+    let (fmt, data) = parse_wav_fmt_data(bytes)?;
+    let Some((audio_format, channels, sample_rate, bits_per_sample)) = parse_wav_format_fields(&fmt) else {
+        return Err("缺少 WAV 格式字段".to_string());
+    };
+    if audio_format != 1 || sample_rate == 0 || channels == 0 || bits_per_sample == 0 {
+        return Err("不支持的 WAV 参数".to_string());
+    }
+
+    let bytes_per_sample = (bits_per_sample as u64 / 8).max(1);
+    let frame_bytes = bytes_per_sample.saturating_mul(channels as u64).max(1);
+    let frames = data.len() as u64 / frame_bytes;
+    Ok(frames.saturating_mul(1000) / sample_rate as u64)
 }
 
 fn decode_pcm16_samples(data: &[u8]) -> Vec<f32> {

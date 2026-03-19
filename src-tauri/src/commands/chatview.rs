@@ -301,6 +301,8 @@ pub struct AudioCommonRequest {
     #[serde(default)]
     pub provider: String,
     #[serde(default)]
+    pub runtime_provider: String,
+    #[serde(default)]
     pub model: String,
     #[serde(default)]
     pub api_key: String,
@@ -1061,6 +1063,7 @@ struct SherpaOnnxTtsCliConfig {
     data_dir: Option<PathBuf>,
     lexicon: Option<PathBuf>,
     rule_fsts: Option<String>,
+    runtime_provider: String,
     sid: i32,
     speed: f32,
 }
@@ -1161,6 +1164,14 @@ fn parse_speaker_id(voice: &str) -> i32 {
         return 0;
     }
     s.parse::<i32>().unwrap_or(0)
+}
+
+fn normalize_sherpa_runtime_provider(provider: &str) -> String {
+    match provider.trim().to_lowercase().as_str() {
+        "cuda" | "gpu" => "cuda".to_string(),
+        "coreml" => "coreml".to_string(),
+        _ => "cpu".to_string(),
+    }
 }
 
 fn guess_model_files_from_dir(dir: &Path) -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>) {
@@ -1396,6 +1407,7 @@ fn resolve_sherpa_onnx_tts_cli_config(request: &TextToSpeechRequest) -> Result<S
         data_dir,
         lexicon,
         rule_fsts,
+        runtime_provider: normalize_sherpa_runtime_provider(&request.common.runtime_provider),
         sid: parse_speaker_id(&request.voice),
         speed: request.speed.unwrap_or(1.0).max(0.2).min(3.0),
     })
@@ -1439,6 +1451,7 @@ fn run_sherpa_onnx_cli_once(
     if let Some(r) = cfg.rule_fsts.as_ref() {
         push_opt("tts-rule-fsts", r);
     }
+    push_opt("provider", cfg.runtime_provider.as_str());
     push_opt("print-args", "false");
     push_opt("sid", cfg.sid.to_string().as_str());
     push_opt("speed", format!("{}", cfg.speed).as_str());
@@ -1464,6 +1477,7 @@ fn run_sherpa_onnx_cli_once(
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default(),
+        runtime_provider = cfg.runtime_provider.as_str(),
         output_wav = output_wav.to_string_lossy().as_ref(),
         "sherpa-onnx cli args prepared"
     );
