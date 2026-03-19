@@ -129,6 +129,7 @@ struct TtsBookResumeState {
     file_name: String,
     title: String,
     output_dir: String,
+    task_output_dir: String,
     output_name: String,
     tts_model: String,
     tts_tokens: String,
@@ -228,6 +229,7 @@ pub async fn tts_book_convert(
     window: Window,
 ) -> Result<TtsBookConvertResponse, String> {
     let total_start = Instant::now();
+    let tts_cfg = settingview::get_tts_config();
     let file_path = PathBuf::from(request.file_path.trim());
     let file_name = file_path
         .file_name()
@@ -252,7 +254,11 @@ pub async fn tts_book_convert(
         return Err("输入文件不存在或不是文件".to_string());
     }
 
-    let output_dir = PathBuf::from(request.output_dir.trim());
+    let output_dir = if request.output_dir.trim().is_empty() {
+        PathBuf::from(tts_cfg.output_dir.trim())
+    } else {
+        PathBuf::from(request.output_dir.trim())
+    };
     if output_dir.as_os_str().is_empty() {
         return Err("output_dir 不能为空".to_string());
     }
@@ -299,10 +305,12 @@ pub async fn tts_book_convert(
     } else {
         request.output_name.trim()
     });
-    let output_path = output_dir.join(format!("{}_audiobook.wav", stem));
-    let segment_json_path = output_dir.join(format!("{}_segments.json", stem));
+    let task_output_dir = output_dir.join(&stem);
+    fs::create_dir_all(&task_output_dir).map_err(|e| format!("创建任务输出目录失败: {}", e))?;
+    let output_path = task_output_dir.join(format!("{}_audiobook.wav", stem));
+    let segment_json_path = task_output_dir.join(format!("{}_segments.json", stem));
     let cleaned_text_hash = hash_text(&cleaned);
-    let work_dir = output_dir.join(format!(
+    let work_dir = task_output_dir.join(format!(
         "{}_tts_work_{:016x}_{}_{}",
         stem,
         cleaned_text_hash,
@@ -337,6 +345,7 @@ pub async fn tts_book_convert(
             file_name: file_name.clone(),
             title: extracted.title.clone(),
             output_dir: output_dir.to_string_lossy().to_string(),
+            task_output_dir: task_output_dir.to_string_lossy().to_string(),
             output_name: request.output_name.trim().to_string(),
             tts_model: String::new(),
             tts_tokens: String::new(),
@@ -364,7 +373,6 @@ pub async fn tts_book_convert(
         save_resume_state(&resume_state_path, &resume_state)?;
     }
 
-    let tts_cfg = settingview::get_tts_config();
     let tts_exe = tts_cfg.exe.trim().to_string();
     let tts_model = if request.tts_model.trim().is_empty() {
         let model = tts_cfg.model.trim();
@@ -408,6 +416,7 @@ pub async fn tts_book_convert(
     resume_state.file_name = file_name.clone();
     resume_state.title = extracted.title.clone();
     resume_state.output_dir = output_dir.to_string_lossy().to_string();
+    resume_state.task_output_dir = task_output_dir.to_string_lossy().to_string();
     resume_state.output_name = request.output_name.trim().to_string();
     resume_state.tts_model = tts_model.clone();
     resume_state.tts_tokens = tts_tokens.clone();
@@ -631,7 +640,7 @@ pub async fn tts_book_convert(
 
     let mut chapter_output_paths = Vec::new();
     if request.split_by_toc {
-        let chapter_dir = output_dir.join(format!("{}_chapters", stem));
+        let chapter_dir = task_output_dir.join(format!("{}_chapters", stem));
         fs::create_dir_all(&chapter_dir).map_err(|e| format!("创建章节目录失败: {}", e))?;
 
         for (index, (chapter_title, chapter_text)) in chapters.iter().enumerate() {

@@ -44,6 +44,7 @@ const GuaxiAppWindow = {
     const route = useRoute()
     const appId = computed(() => String(route.params?.appId || ''))
     const Comp = computed(() => APP_COMPONENT_MAP[appId.value] || PlaceholderApp)
+    const hostPadding = computed(() => (appId.value === 'tools-tts-book' ? '0px' : '16px'))
 
     return () =>
       h(
@@ -51,7 +52,7 @@ const GuaxiAppWindow = {
         {
           style: {
             height: '100vh',
-            padding: '16px',
+            padding: hostPadding.value,
             boxSizing: 'border-box',
             background: 'var(--guaxi-app-bg)',
           },

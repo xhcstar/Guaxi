@@ -557,12 +557,14 @@ const handleWebrtcSignalUrlSave = async () => {
 const handleTtsConfigSave = async () => {
   try {
     ttsSaving.value = true
+    const current = await invoke('get_tts_config')
     await invoke('set_tts_config', {
       ttsConfig: {
         provider: String(ttsProvider.value || '').trim(),
         model: String(ttsModel.value || '').trim(),
         tokens: String(ttsTokens.value || '').trim(),
         exe: String(ttsExe.value || '').trim(),
+        output_dir: String(current?.output_dir || '').trim(),
       }
     })
     const saved = await invoke('get_tts_config')

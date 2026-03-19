@@ -7,14 +7,78 @@
       </div>
     </header>
 
-    <section class="tts-layout">
+    <section ref="layoutRef" class="tts-layout" :style="layoutVars">
       <n-card title="转换参数" size="small" class="tts-panel control-panel">
         <div class="panel-scroll">
           <n-space vertical :size="16">
             <div class="panel-block">
+              <div class="block-head">
+                <div class="block-label">任务控制</div>
+                <div class="block-hint">队列操作快捷入口</div>
+              </div>
+              <div class="action-toolbar">
+                <n-tooltip>
+                  <template #trigger>
+                    <n-button
+                      circle
+                      type="primary"
+                      class="action-btn action-btn-primary"
+                      :loading="running"
+                      :disabled="!canStart"
+                      @click="startConvertQueue"
+                    >
+                      <template #icon>
+                        <n-icon>
+                          <PlayCircleOutline />
+                        </n-icon>
+                      </template>
+                    </n-button>
+                  </template>
+                  开始转换
+                </n-tooltip>
+                <n-tooltip>
+                  <template #trigger>
+                    <n-button circle secondary class="action-btn" :disabled="!canPauseAll" @click="pauseAllTasks">
+                      <template #icon>
+                        <n-icon>
+                          <PauseOutline />
+                        </n-icon>
+                      </template>
+                    </n-button>
+                  </template>
+                  暂停全部
+                </n-tooltip>
+                <n-tooltip>
+                  <template #trigger>
+                    <n-button circle secondary class="action-btn" :disabled="!canStopAll" @click="stopAllTasks">
+                      <template #icon>
+                        <n-icon>
+                          <StopOutline />
+                        </n-icon>
+                      </template>
+                    </n-button>
+                  </template>
+                  停止全部
+                </n-tooltip>
+                <n-tooltip>
+                  <template #trigger>
+                    <n-button circle secondary class="action-btn" :disabled="running" @click="clearFinished">
+                      <template #icon>
+                        <n-icon>
+                          <TrashOutline />
+                        </n-icon>
+                      </template>
+                    </n-button>
+                  </template>
+                  清理完成任务
+                </n-tooltip>
+              </div>
+            </div>
+
+            <div class="panel-block">
               <div class="block-label">输出设置</div>
               <div class="toolbar-row">
-                <n-input v-model:value="outputDir" placeholder="输出目录，默认使用首个文件所在目录" clearable />
+                <n-input v-model:value="outputDir" placeholder="输出目录，默认使用软件同级目录下的 tts_output" clearable />
                 <n-tooltip>
                   <template #trigger>
                     <n-button tertiary @click="pickOutputDir">
@@ -73,65 +137,15 @@
               </div>
             </div>
 
-            <n-space>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button type="primary" :loading="running" :disabled="!canStart" @click="startConvertQueue">
-                    <template #icon>
-                      <n-icon>
-                        <PlayCircleOutline />
-                      </n-icon>
-                    </template>
-                    开始转换
-                  </n-button>
-                </template>
-                开始执行当前任务队列
-              </n-tooltip>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button :disabled="!canPauseAll" @click="pauseAllTasks">
-                    <template #icon>
-                      <n-icon>
-                        <PauseOutline />
-                      </n-icon>
-                    </template>
-                    暂停全部
-                  </n-button>
-                </template>
-                暂停当前和等待中的任务，稍后可继续
-              </n-tooltip>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button :disabled="!canStopAll" @click="stopAllTasks">
-                    <template #icon>
-                      <n-icon>
-                        <StopOutline />
-                      </n-icon>
-                    </template>
-                    停止全部
-                  </n-button>
-                </template>
-                终止当前和等待中的任务
-              </n-tooltip>
-              <n-tooltip>
-                <template #trigger>
-                  <n-button :disabled="running" @click="clearFinished">
-                    <template #icon>
-                      <n-icon>
-                        <TrashOutline />
-                      </n-icon>
-                    </template>
-                    清理完成任务
-                  </n-button>
-                </template>
-                清理已完成和失败任务
-              </n-tooltip>
-            </n-space>
           </n-space>
         </div>
       </n-card>
 
-      <section class="middle-column">
+      <div class="col-resizer" title="拖动调整左侧栏宽度" @pointerdown="startColumnResize('left', $event)">
+        <div class="resizer-dot" />
+      </div>
+
+      <section ref="middleColumnRef" class="middle-column" :style="middleVars">
         <n-card title="已打开文件" size="small" class="tts-panel files-panel">
           <template #header-extra>
             <div class="files-header-actions">
@@ -181,6 +195,10 @@
           </div>
         </n-card>
 
+        <div class="row-resizer" title="拖动调整中间区域上下高度" @pointerdown="startMiddleResize($event)">
+          <div class="resizer-dot" />
+        </div>
+
         <n-card title="音频播放器" size="small" class="tts-panel player-panel">
           <template #header-extra>
             <div class="player-header-actions">
@@ -222,6 +240,10 @@
           </div>
         </n-card>
       </section>
+
+      <div class="col-resizer" title="拖动调整右侧栏宽度" @pointerdown="startColumnResize('right', $event)">
+        <div class="resizer-dot" />
+      </div>
 
       <aside class="sidebar">
         <n-card title="任务队列" size="small" class="tts-panel queue-panel">
@@ -307,7 +329,7 @@
                         </template>
                         终止任务
                       </n-tooltip>
-                      <n-tooltip v-if="task.outputPath">
+                      <n-tooltip v-if="task.status === 'success' && task.outputPath">
                         <template #trigger>
                           <n-button size="tiny" tertiary @click="playTaskAudio(task)">
                             <template #icon>
@@ -320,20 +342,7 @@
                         </template>
                         在中间播放器中播放
                       </n-tooltip>
-                      <n-tooltip v-if="task.outputPath">
-                        <template #trigger>
-                          <n-button size="tiny" tertiary @click="openOutput(task.outputPath)">
-                            <template #icon>
-                              <n-icon>
-                                <FolderOpenOutline />
-                              </n-icon>
-                            </template>
-                            目录
-                          </n-button>
-                        </template>
-                        打开音频所在位置
-                      </n-tooltip>
-                      <n-tooltip v-if="task.segmentJsonPath">
+                      <n-tooltip v-if="task.status === 'success' && task.segmentJsonPath">
                         <template #trigger>
                           <n-button size="tiny" tertiary @click="openOutput(task.segmentJsonPath)">
                             <template #icon>
@@ -346,7 +355,7 @@
                         </template>
                         打开分段 JSON
                       </n-tooltip>
-                      <n-tooltip v-if="task.chapterOutputPaths?.length">
+                      <n-tooltip v-if="task.status === 'success' && task.chapterOutputPaths?.length">
                         <template #trigger>
                           <n-button size="tiny" tertiary @click="openOutput(task.chapterOutputPaths[0])">
                             <template #icon>
@@ -390,7 +399,7 @@ const DEFAULT_MODEL = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
 const DEFAULT_TOKENS = 'utils/Models/tts/kokoro_multi_lang/tokens.txt'
 const KOKORO_SPEAKER_NAMES = ['af_maple', 'af_sol', 'bf_vale', 'zf_001', 'zf_002', 'zf_003', 'zf_004', 'zf_005', 'zf_006', 'zf_007', 'zf_008', 'zf_017', 'zf_018', 'zf_019', 'zf_021', 'zf_022', 'zf_023', 'zf_024', 'zf_026', 'zf_027', 'zf_028', 'zf_032', 'zf_036', 'zf_038', 'zf_039', 'zf_040', 'zf_042', 'zf_043', 'zf_044', 'zf_046', 'zf_047', 'zf_048', 'zf_049', 'zf_051', 'zf_059', 'zf_060', 'zf_067', 'zf_070', 'zf_071', 'zf_072', 'zf_073', 'zf_074', 'zf_075', 'zf_076', 'zf_077', 'zf_078', 'zf_079', 'zf_083', 'zf_084', 'zf_085', 'zf_086', 'zf_087', 'zf_088', 'zf_090', 'zf_092', 'zf_093', 'zf_094', 'zf_099', 'zm_009', 'zm_010', 'zm_011', 'zm_012', 'zm_013', 'zm_014', 'zm_015', 'zm_016', 'zm_020', 'zm_025', 'zm_029', 'zm_030', 'zm_031', 'zm_033', 'zm_034', 'zm_035', 'zm_037', 'zm_041', 'zm_045', 'zm_050', 'zm_052', 'zm_053', 'zm_054', 'zm_055', 'zm_056', 'zm_057', 'zm_058', 'zm_061', 'zm_062', 'zm_063', 'zm_064', 'zm_065', 'zm_066', 'zm_068', 'zm_069', 'zm_080', 'zm_081', 'zm_082', 'zm_089', 'zm_091', 'zm_095', 'zm_096', 'zm_097', 'zm_098', 'zm_100']
 
-const ttsConfig = ref({ provider: 'sherpa-onnx', model: DEFAULT_MODEL, tokens: DEFAULT_TOKENS, exe: DEFAULT_TTS_EXE })
+const ttsConfig = ref({ provider: 'sherpa-onnx', model: DEFAULT_MODEL, tokens: DEFAULT_TOKENS, exe: DEFAULT_TTS_EXE, outputDir: '' })
 const selectedFiles = ref([])
 const outputDir = ref('')
 const outputName = ref('')
@@ -410,6 +419,12 @@ const currentSubtitleJsonPath = ref('')
 const playerTitle = ref('')
 const currentSubtitleIndex = ref(-1)
 const subtitleTimeline = ref([])
+const layoutRef = ref(null)
+const middleColumnRef = ref(null)
+const leftColWidth = ref(340)
+const rightColWidth = ref(340)
+const middleTopHeight = ref(300)
+const dragState = ref(null)
 let unlistenTtsBookProgress = null
 
 const isDarkTheme = computed(() => settingsStore.appearanceTheme === 'dark')
@@ -422,6 +437,13 @@ const canStart = computed(() => !running.value && (selectedFiles.value.length > 
 const canPauseAll = computed(() => tasks.value.some((task) => task.status === 'running' || task.status === 'queued'))
 const canStopAll = computed(() => tasks.value.some((task) => ['running', 'queued', 'paused', 'error'].includes(task.status)))
 const currentSubtitleText = computed(() => currentSubtitleIndex.value >= 0 ? (subtitleTimeline.value[currentSubtitleIndex.value]?.text || '等待字幕...') : '等待字幕...')
+const layoutVars = computed(() => ({
+  '--left-col-width': `${Math.round(leftColWidth.value)}px`,
+  '--right-col-width': `${Math.round(rightColWidth.value)}px`,
+}))
+const middleVars = computed(() => ({
+  '--middle-top-height': `${Math.round(middleTopHeight.value)}px`,
+}))
 
 const modelOptions = computed(() => [
   { label: '跟随全局设置', value: 'settings' },
@@ -547,10 +569,36 @@ const createTask = (filePath, overrides = {}) => {
   }
 }
 
+const saveTtsOutputDirConfig = async (nextOutputDir) => {
+  try {
+    await invoke('set_tts_config', {
+      ttsConfig: {
+        provider: String(ttsConfig.value.provider || 'sherpa-onnx'),
+        model: String(ttsConfig.value.model || DEFAULT_MODEL),
+        tokens: String(ttsConfig.value.tokens || DEFAULT_TOKENS),
+        exe: String(ttsConfig.value.exe || DEFAULT_TTS_EXE),
+        output_dir: String(nextOutputDir || '').trim(),
+      },
+    })
+  } catch (e) {
+    logger.error('saveTtsOutputDirConfig failed:', e)
+  }
+}
+
 const loadTtsConfig = async () => {
   try {
     const saved = await invoke('get_tts_config')
-    ttsConfig.value = { provider: String(saved?.provider || 'sherpa-onnx'), model: String(saved?.model || DEFAULT_MODEL), tokens: String(saved?.tokens || DEFAULT_TOKENS), exe: String(saved?.exe || DEFAULT_TTS_EXE) }
+    const savedOutputDir = String(saved?.output_dir || '').trim()
+    ttsConfig.value = {
+      provider: String(saved?.provider || 'sherpa-onnx'),
+      model: String(saved?.model || DEFAULT_MODEL),
+      tokens: String(saved?.tokens || DEFAULT_TOKENS),
+      exe: String(saved?.exe || DEFAULT_TTS_EXE),
+      outputDir: savedOutputDir,
+    }
+    if (!String(outputDir.value || '').trim()) {
+      outputDir.value = savedOutputDir
+    }
   } catch (e) {
     logger.error('loadTtsConfig failed:', e)
   }
@@ -620,7 +668,11 @@ const removeSelected = (file) => {
 const pickOutputDir = async () => {
   try {
     const picked = await open({ multiple: false, directory: true })
-    if (typeof picked === 'string' && picked.trim()) outputDir.value = picked
+    if (typeof picked === 'string' && picked.trim()) {
+      outputDir.value = picked
+      ttsConfig.value.outputDir = picked
+      await saveTtsOutputDirConfig(picked)
+    }
   } catch (e) {
     logger.error('pickOutputDir failed:', e)
     message.error('选择输出目录失败')
@@ -803,6 +855,72 @@ const pickPlayerMedia = async () => {
   }
 }
 
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max)
+
+const stopDragging = () => {
+  window.removeEventListener('pointermove', handleGlobalPointerMove)
+  window.removeEventListener('pointerup', stopDragging)
+  dragState.value = null
+}
+
+const handleGlobalPointerMove = (event) => {
+  const state = dragState.value
+  if (!state) return
+
+  if (state.type === 'left' || state.type === 'right') {
+    const containerWidth = Number(layoutRef.value?.clientWidth || 0)
+    if (containerWidth <= 0) return
+    const splitterWidth = 20
+    const middleMin = 520
+    const sideMin = 260
+    const sideMax = 560
+    if (state.type === 'left') {
+      const rawLeft = state.startLeft + (event.clientX - state.startX)
+      const maxByMiddle = containerWidth - rightColWidth.value - middleMin - splitterWidth * 2
+      leftColWidth.value = clamp(rawLeft, sideMin, Math.max(sideMin, Math.min(sideMax, maxByMiddle)))
+      return
+    }
+    const rawRight = state.startRight - (event.clientX - state.startX)
+    const maxByMiddle = containerWidth - leftColWidth.value - middleMin - splitterWidth * 2
+    rightColWidth.value = clamp(rawRight, sideMin, Math.max(sideMin, Math.min(sideMax, maxByMiddle)))
+    return
+  }
+
+  if (state.type === 'middle') {
+    const middleHeight = Number(middleColumnRef.value?.clientHeight || 0)
+    if (middleHeight <= 0) return
+    const splitterHeight = 10
+    const minTop = 180
+    const minBottom = 220
+    const maxTop = middleHeight - minBottom - splitterHeight
+    const rawTop = state.startTop + (event.clientY - state.startY)
+    middleTopHeight.value = clamp(rawTop, minTop, Math.max(minTop, maxTop))
+  }
+}
+
+const startColumnResize = (type, event) => {
+  event.preventDefault()
+  dragState.value = {
+    type,
+    startX: event.clientX,
+    startLeft: leftColWidth.value,
+    startRight: rightColWidth.value,
+  }
+  window.addEventListener('pointermove', handleGlobalPointerMove)
+  window.addEventListener('pointerup', stopDragging)
+}
+
+const startMiddleResize = (event) => {
+  event.preventDefault()
+  dragState.value = {
+    type: 'middle',
+    startY: event.clientY,
+    startTop: middleTopHeight.value,
+  }
+  window.addEventListener('pointermove', handleGlobalPointerMove)
+  window.addEventListener('pointerup', stopDragging)
+}
+
 onMounted(async () => {
   await loadTtsConfig()
   await loadSavedTasks()
@@ -810,6 +928,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  stopDragging()
   if (typeof unlistenTtsBookProgress === 'function') {
     unlistenTtsBookProgress()
     unlistenTtsBookProgress = null
@@ -829,7 +948,7 @@ const enqueueSelectedFiles = () => {
 }
 
 const buildTaskRequest = (task, totalCount) => {
-  const targetOutputDir = String(task.outputDir || '').trim() || dirname(task.filePath)
+  const targetOutputDir = String(task.outputDir || '').trim() || String(ttsConfig.value.outputDir || '').trim() || dirname(task.filePath)
   if (!targetOutputDir) {
     throw new Error('无法确定输出目录，请手动选择输出目录')
   }
@@ -890,14 +1009,16 @@ const startConvertQueue = async () => {
       successCount += 1
     } catch (e) {
       const text = String(e?.message || e || '转换失败')
-      logger.error('startConvertQueue failed:', e)
       if (text.includes('__TTS_BOOK_PAUSED__')) {
+        logger.info('startConvertQueue paused by user')
         updateTask(task.id, { status: 'paused', message: '任务已暂停，可稍后继续' })
         pausedCount += 1
       } else if (text.includes('__TTS_BOOK_STOPPED__')) {
+        logger.info('startConvertQueue stopped by user')
         updateTask(task.id, { status: 'stopped', message: '任务已终止' })
         stoppedCount += 1
       } else {
+        logger.error('startConvertQueue failed:', e)
         updateTask(task.id, { status: 'error', progress: Math.max(Number(task.progress || 0), 0), message: text })
         failedCount += 1
       }
@@ -1010,9 +1131,11 @@ const openOutput = async (path) => {
   --tts-success: #198754;
   --tts-error: #c0384c;
   --tts-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', 'Noto Sans CJK SC', Consolas, 'Microsoft YaHei', 'Courier New', monospace;
+  --tts-resizer: rgba(76, 124, 168, 0.22);
+  --tts-resizer-hover: rgba(76, 124, 168, 0.45);
   height: 100%;
   min-height: 0;
-  padding: 14px;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
   font-family: var(--tts-font-family);
@@ -1023,12 +1146,12 @@ const openOutput = async (path) => {
 }
 
 .tts-header {
-  margin-bottom: 14px;
-  padding: 12px 4px 4px;
+  margin-bottom: 8px;
+  padding: 6px 10px 2px;
 }
 
 .eyebrow {
-  margin: 0 0 6px;
+  margin: 0 0 2px;
   font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -1037,26 +1160,27 @@ const openOutput = async (path) => {
 
 .page-title {
   margin: 0;
-  font-size: 28px;
-  line-height: 1.12;
+  font-size: 22px;
+  line-height: 1.1;
   color: var(--tts-title);
   font-weight: 700;
 }
 
 .tts-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 360px) minmax(520px, 1fr) minmax(320px, 360px);
-  gap: 14px;
+  grid-template-columns: minmax(260px, var(--left-col-width)) 10px minmax(520px, 1fr) 10px minmax(260px, var(--right-col-width));
+  gap: 0;
   align-items: stretch;
-  min-width: 1200px;
-  height: calc(100% - 70px);
+  min-width: 980px;
+  width: 100%;
+  height: calc(100% - 52px);
   min-height: 0;
 }
 
 .middle-column {
   display: grid;
-  grid-template-rows: minmax(260px, 1fr) minmax(280px, 0.95fr);
-  gap: 14px;
+  grid-template-rows: minmax(180px, var(--middle-top-height)) 10px minmax(220px, 1fr);
+  gap: 0;
   min-height: 0;
 }
 
@@ -1069,9 +1193,17 @@ const openOutput = async (path) => {
 .tts-panel {
   min-height: 0;
   height: 100%;
-  border: 1px solid var(--tts-border);
+  border: none;
   background: var(--tts-panel);
   backdrop-filter: blur(10px);
+}
+
+.control-panel {
+  border-right: 1px solid var(--tts-border);
+}
+
+.sidebar .queue-panel {
+  border-left: 1px solid var(--tts-border);
 }
 
 .panel-scroll,
@@ -1129,6 +1261,26 @@ const openOutput = async (path) => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.action-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--tts-border);
+  background: var(--tts-panel-strong);
+}
+
+.action-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.action-btn-primary {
+  width: 40px;
+  height: 40px;
 }
 
 .option-card {
@@ -1200,10 +1352,53 @@ const openOutput = async (path) => {
   gap: 10px;
 }
 
-.player-body {
+.col-resizer {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  background: linear-gradient(180deg, transparent, var(--tts-resizer), transparent);
+}
+
+.row-resizer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  user-select: none;
+  touch-action: none;
+  background: linear-gradient(90deg, transparent, var(--tts-resizer), transparent);
+}
+
+.col-resizer:hover,
+.row-resizer:hover {
+  background: linear-gradient(180deg, transparent, var(--tts-resizer-hover), transparent);
+}
+
+.row-resizer:hover {
+  background: linear-gradient(90deg, transparent, var(--tts-resizer-hover), transparent);
+}
+
+.resizer-dot {
+  width: 4px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.row-resizer .resizer-dot {
+  width: 34px;
+  height: 4px;
+}
+
+.player-body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
+  height: 100%;
+  min-height: 0;
 }
 
 .player-header-actions {
@@ -1214,13 +1409,16 @@ const openOutput = async (path) => {
 
 .audio-element {
   width: 100%;
+  min-height: 46px;
+  flex-shrink: 0;
 }
 
 .subtitle-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(120px, 1fr);
   gap: 12px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .subtitle-label {
@@ -1349,7 +1547,7 @@ const openOutput = async (path) => {
 }
 
 .tts-book-root :deep(.n-card) {
-  border-radius: 18px;
+  border-radius: 0;
   height: 100%;
   background: var(--tts-panel);
 }
@@ -1389,6 +1587,8 @@ const openOutput = async (path) => {
   --tts-text: #c7d5e5;
   --tts-muted: #8ea2b8;
   --tts-stat: rgba(14, 20, 29, 0.72);
+  --tts-resizer: rgba(142, 162, 184, 0.24);
+  --tts-resizer-hover: rgba(142, 162, 184, 0.48);
 }
 
 .tts-book-root.tts-book-dark .file-card,

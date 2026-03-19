@@ -115,6 +115,8 @@ pub struct TtsConfig {
     pub tokens: String,
     #[serde(default = "default_tts_exe")]
     pub exe: String,
+    #[serde(default = "default_tts_output_dir")]
+    pub output_dir: String,
 }
 
 impl Default for TtsConfig {
@@ -124,6 +126,7 @@ impl Default for TtsConfig {
             model: default_tts_model(),
             tokens: default_tts_tokens(),
             exe: default_tts_exe(),
+            output_dir: default_tts_output_dir(),
         }
     }
 }
@@ -251,6 +254,15 @@ fn default_tts_exe() -> String {
     } else {
         "utils/sherpa-onnx/sherpa-onnx-offline-tts".to_string()
     }
+}
+
+fn default_tts_output_dir() -> String {
+    let exe_path = env::current_exe().expect("无法获取当前可执行文件路径");
+    let exe_dir = exe_path
+        .parent()
+        .expect("无法获取可执行文件所在目录")
+        .to_path_buf();
+    exe_dir.join("tts_output").to_string_lossy().to_string()
 }
 
 fn default_asr_provider() -> String {
@@ -1102,6 +1114,7 @@ pub fn set_tts_config(tts_config: TtsConfig) {
         model: tts_config.model.trim().to_string(),
         tokens: tts_config.tokens.trim().to_string(),
         exe: tts_config.exe.trim().to_string(),
+        output_dir: tts_config.output_dir.trim().to_string(),
     };
     if config.tts_config.provider.is_empty() {
         config.tts_config.provider = default_tts_provider();
@@ -1114,6 +1127,13 @@ pub fn set_tts_config(tts_config: TtsConfig) {
     }
     if config.tts_config.exe.is_empty() {
         config.tts_config.exe = default_tts_exe();
+    }
+    if config.tts_config.output_dir.is_empty() {
+        config.tts_config.output_dir = default_tts_output_dir();
+    }
+    let output_dir = PathBuf::from(&config.tts_config.output_dir);
+    if !output_dir.exists() {
+        let _ = fs::create_dir_all(&output_dir);
     }
     save_config(&config);
 }
