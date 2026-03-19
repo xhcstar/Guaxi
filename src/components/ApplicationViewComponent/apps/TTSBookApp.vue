@@ -605,9 +605,8 @@ const loadTtsConfig = async () => {
 }
 
 const readJsonFile = async (path) => {
-  const { readFile } = await import('@tauri-apps/plugin-fs')
-  const bytes = await readFile(path)
-  return JSON.parse(new TextDecoder().decode(bytes))
+  const content = await invoke('read_file_content', { path: String(path || '').trim() })
+  return JSON.parse(String(content || ''))
 }
 
 const buildSubtitleTimeline = (chunks, durationSeconds) => {
