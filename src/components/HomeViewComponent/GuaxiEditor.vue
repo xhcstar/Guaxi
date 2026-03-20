@@ -594,6 +594,7 @@ import languagesIcon from '@iconify-icons/lucide/languages'
 import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
 import volume2Icon from '@iconify-icons/lucide/volume-2'
+import mermaid from 'mermaid'
 import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
 import hashIcon from '@iconify-icons/lucide/hash'
@@ -715,6 +716,36 @@ const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
 const previewContainer = ref(null);
+const renderPreviewMermaidDiagrams = async (container) => {
+  if (!container?.querySelectorAll) return
+
+  const nodes = Array.from(container.querySelectorAll('.mermaid'))
+  if (!nodes.length) return
+
+  nodes.forEach((node) => {
+    try {
+      const content = String(node.textContent || '')
+        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<')
+        .replace(/&amp;/g, '&')
+      node.innerHTML = content
+    } catch (error) {
+      logger.error('预览区 Mermaid 内容预处理失败', error)
+    }
+  })
+
+  await new Promise((resolve) => {
+    requestAnimationFrame(() => resolve())
+  })
+
+  await mermaid.run({ nodes })
+}
+const previewLineAnchorCache = {
+  container: null,
+  revision: 0,
+  elements: []
+}
+let previewLineAnchorRevision = 0
 
 const openMarkdownManual = async () => {
   const windowLabel = 'markdown-manual'
@@ -2403,6 +2434,18 @@ const applyVimOverlayInsets = () => {
 let markdownFeaturesRegistered = false;
 
 let filesystemPathCompletionRegistered = false;
+const markdownLanguageFeatureDisposables = []
+const filesystemPathCompletionDisposables = []
+const disposeFeatureDisposables = (items) => {
+  if (!Array.isArray(items) || !items.length) return
+  while (items.length) {
+    const disposable = items.pop()
+    try {
+      disposable?.dispose?.()
+    } catch {
+    }
+  }
+}
 const filesystemPathCompletionCache = new Map();
 const filesystemPathCompletionInflight = new Map();
 let filesystemPathCompletionDocPath = '';
@@ -3674,7 +3717,7 @@ const registerFilesystemPathCompletionFeatures = () => {
   ];
 
   languages.forEach((language) => {
-    monaco.languages.registerCompletionItemProvider(language, {
+    const disposable = monaco.languages.registerCompletionItemProvider(language, {
       triggerCharacters: ['/', '\\', '.', ':'],
       async provideCompletionItems(model, position) {
         const lineContent = model.getLineContent(position.lineNumber);
@@ -3727,7 +3770,7 @@ const registerFilesystemPathCompletionFeatures = () => {
               detail: '父目录'
             });
           }
-          return { suggestions };
+          return { suggestions: dedupeCompletionSuggestions(suggestions) };
         }
 
         const { dirPrefix, partial } = splitTokenDirAndPartial(token);
@@ -3818,9 +3861,10 @@ const registerFilesystemPathCompletionFeatures = () => {
           };
         });
 
-        return { suggestions };
+        return { suggestions: dedupeCompletionSuggestions(suggestions) };
       }
     });
+    filesystemPathCompletionDisposables.push(disposable)
   });
 };
 
@@ -4054,7 +4098,7 @@ const registerMarkdownLanguageFeatures = () => {
   };
 
 
-  monaco.languages.registerCompletionItemProvider('markdown', {
+  markdownLanguageFeatureDisposables.push(monaco.languages.registerCompletionItemProvider('markdown', {
     triggerCharacters: MARKDOWN_FENCE_TRIGGER_CHARACTERS,
     async provideCompletionItems(model, position, context) {
       const lineContent = model.getLineContent(position.lineNumber);
@@ -4139,11 +4183,11 @@ const registerMarkdownLanguageFeatures = () => {
           sortText: s.sortText || `1_${String(index).padStart(3, '0')}_${String(s.label || '')}`
         }));
 
-      return { suggestions };
+      return { suggestions: dedupeCompletionSuggestions(suggestions) };
     }
-  });
+  }));
 
-  monaco.languages.registerCompletionItemProvider('markdown', {
+  markdownLanguageFeatureDisposables.push(monaco.languages.registerCompletionItemProvider('markdown', {
     triggerCharacters: ['\\'],
     provideCompletionItems(model, position) {
       if (!isInMarkdownMath(model, position)) return { suggestions: [] };
@@ -4174,11 +4218,11 @@ const registerMarkdownLanguageFeatures = () => {
           sortText: `0_${String(index).padStart(3, '0')}_${String(s.key || '')}`
         }));
 
-      return { suggestions };
+      return { suggestions: dedupeCompletionSuggestions(suggestions) };
     }
-  });
+  }));
 
-  monaco.languages.registerSignatureHelpProvider('markdown', {
+  markdownLanguageFeatureDisposables.push(monaco.languages.registerSignatureHelpProvider('markdown', {
     signatureHelpTriggerCharacters: ['(', ',', '{', '['],
     signatureHelpRetriggerCharacters: [','],
     async provideSignatureHelp(model, position, token, context) {
@@ -4196,7 +4240,7 @@ const registerMarkdownLanguageFeatures = () => {
 
       return null;
     }
-  });
+  }));
 };
 
 const tabBarRef = ref(null)
@@ -4207,6 +4251,7 @@ const languagePairingConfigured = new Set()
 const lspEnabled = ref(false)
 const markdownFenceCompletionModels = new Map()
 const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '@', '#', '(', ',', '[', '{', '-']
+const EMBEDDED_LSP_READY_TIMEOUT_MS = 4000
 
 const getMarkdownMathContext = (model, position) => {
   if (!model || !position) return null;
@@ -4389,12 +4434,20 @@ const getMarkdownFenceContext = (model, position) => {
   if (!model || !position) return null;
   if (model.getLanguageId?.() !== 'markdown') return null;
 
+  const totalLines = Number(model.getLineCount?.() || 0);
+  if (!Number.isFinite(totalLines) || totalLines < 1) return null;
+
+  const safeLineNumber = Math.min(Math.max(1, Number(position.lineNumber) || 1), totalLines);
+  const safeLineMaxColumn = Math.max(1, Number(model.getLineMaxColumn?.(safeLineNumber) || 1));
+  const safeColumn = Math.min(Math.max(1, Number(position.column) || 1), safeLineMaxColumn);
+  const safePosition = new monaco.Position(safeLineNumber, safeColumn);
+
   let inFence = false;
   let fenceToken = '';
   let fenceLang = '';
   let fenceStartLine = 0;
 
-  for (let ln = 1; ln <= position.lineNumber; ln += 1) {
+  for (let ln = 1; ln <= safePosition.lineNumber; ln += 1) {
     const line = model.getLineContent(ln);
     const hit = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
     if (!hit) continue;
@@ -4413,12 +4466,12 @@ const getMarkdownFenceContext = (model, position) => {
     }
   }
 
-  if (!inFence || position.lineNumber <= fenceStartLine) return null;
+  if (!inFence || safePosition.lineNumber <= fenceStartLine) return null;
   const languageId = resolveFenceLanguageId(fenceLang);
   if (!languageId) return null;
 
   let fenceEndLine = model.getLineCount() + 1;
-  for (let ln = position.lineNumber + 1; ln <= model.getLineCount(); ln += 1) {
+  for (let ln = safePosition.lineNumber + 1; ln <= model.getLineCount(); ln += 1) {
     const line = model.getLineContent(ln);
     const hit = /^\s*(`{3,}|~{3,})/.exec(line);
     if (hit && hit[1][0] === fenceToken[0] && hit[1].length >= fenceToken.length) {
@@ -4438,8 +4491,8 @@ const getMarkdownFenceContext = (model, position) => {
     languageId,
     blockText: blockLines.join('\n'),
     positionInBlock: new monaco.Position(
-      Math.max(1, position.lineNumber - blockStartLine + 1),
-      Math.max(1, position.column)
+      Math.max(1, safePosition.lineNumber - blockStartLine + 1),
+      Math.max(1, safePosition.column)
     ),
     blockStartLine,
     blockEndLine
@@ -4499,12 +4552,18 @@ const markdownFenceHighlightStates = new WeakMap();
 const markdownFenceTokenizerWarmups = new Map();
 const embeddedSemanticLegendCache = new Map();
 const markdownSuggestModeStates = new WeakMap();
+const embeddedSuggestTriggerStates = new WeakMap();
 const markdownFenceBlocksCache = new WeakMap();
 const EMBEDDED_SEMANTIC_MAX_LINES = 240;
 const EMBEDDED_VISIBLE_BLOCK_LIMIT = 6;
 
 const EMBEDDED_WORD_SUGGEST_OPTIONS = {
   wordBasedSuggestions: 'off',
+  quickSuggestions: {
+    other: false,
+    comments: false,
+    strings: false
+  },
   suggest: {
     showWords: false,
     snippetsPreventQuickSuggestions: false
@@ -4513,6 +4572,11 @@ const EMBEDDED_WORD_SUGGEST_OPTIONS = {
 
 const DEFAULT_WORD_SUGGEST_OPTIONS = {
   wordBasedSuggestions: 'currentDocument',
+  quickSuggestions: {
+    other: true,
+    comments: false,
+    strings: true
+  },
   suggest: {
     showWords: true,
     snippetsPreventQuickSuggestions: true
@@ -4818,7 +4882,7 @@ const fetchEmbeddedSemanticTokens = async (embeddedCtx) => {
   if (!shouldFetchEmbeddedSemanticTokens(embeddedCtx)) return null;
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
   if (!virtualModel) return null;
-  const ready = await waitForLspConnection(embeddedCtx.languageId, 1200);
+  const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
   if (!ready) return null;
 
   try {
@@ -4862,8 +4926,32 @@ const refreshMarkdownSuggestMode = (targetEditor) => {
   targetEditor.updateOptions(inEmbeddedMarkdown ? EMBEDDED_WORD_SUGGEST_OPTIONS : DEFAULT_WORD_SUGGEST_OPTIONS);
 };
 
+const isSuggestWidgetVisibleForEditor = (targetEditor) => {
+  const dom = targetEditor?.getDomNode?.();
+  if (!dom) return false;
+  return !!dom.querySelector('.suggest-widget.visible');
+};
+
+const markEmbeddedSuggestTriggered = (targetEditor) => {
+  if (!targetEditor) return;
+  embeddedSuggestTriggerStates.set(targetEditor, Date.now());
+};
+
+const shouldThrottleEmbeddedSuggestTrigger = (targetEditor, minIntervalMs = 120) => {
+  if (!targetEditor) return true;
+  const lastAt = Number(embeddedSuggestTriggerStates.get(targetEditor) || 0);
+  const now = Date.now();
+  if (now - lastAt < minIntervalMs) {
+    return true;
+  }
+  embeddedSuggestTriggerStates.set(targetEditor, now);
+  return false;
+};
+
 const triggerEmbeddedSuggestIfActive = (targetEditor, languageId) => {
   if (!targetEditor || !targetEditor.hasTextFocus?.()) return;
+  if (isSuggestWidgetVisibleForEditor(targetEditor)) return;
+  if (shouldThrottleEmbeddedSuggestTrigger(targetEditor, 180)) return;
 
   const model = targetEditor.getModel?.();
   const position = targetEditor.getPosition?.();
@@ -4872,6 +4960,7 @@ const triggerEmbeddedSuggestIfActive = (targetEditor, languageId) => {
   const mathCtx = getMarkdownMathContext(model, position);
   if (mathCtx && mathCtx.languageId === languageId) {
     window.setTimeout(() => {
+      markEmbeddedSuggestTriggered(targetEditor);
       targetEditor.trigger('guaxi-embedded-lsp', 'editor.action.triggerSuggest', {});
     }, 40);
     return;
@@ -4880,6 +4969,7 @@ const triggerEmbeddedSuggestIfActive = (targetEditor, languageId) => {
   const fenceCtx = getMarkdownFenceContext(model, position);
   if (fenceCtx && fenceCtx.languageId === languageId) {
     window.setTimeout(() => {
+      markEmbeddedSuggestTriggered(targetEditor);
       targetEditor.trigger('guaxi-embedded-lsp', 'editor.action.triggerSuggest', {});
     }, 40);
   }
@@ -4905,9 +4995,12 @@ const maybeTriggerEmbeddedSuggestOnType = (targetEditor, text) => {
   if (!embeddedCtx) return;
   if (!LSP_SUPPORTED_LANGUAGES.has(String(embeddedCtx.languageId || '').trim().toLowerCase())) return;
   if (!lspEnabled.value) return;
+  if (isSuggestWidgetVisibleForEditor(targetEditor)) return;
+  if (shouldThrottleEmbeddedSuggestTrigger(targetEditor, 120)) return;
 
   window.setTimeout(() => {
     try {
+      markEmbeddedSuggestTriggered(targetEditor);
       targetEditor.trigger('guaxi-embedded-lsp-type', 'editor.action.triggerSuggest', {});
     } catch (error) {
       logger.debug('[EmbeddedLsp] trigger suggest on type failed', error);
@@ -5341,6 +5434,38 @@ const buildCompletionSortKey = (item, fallbackLabel, index) => {
   return `z_${String(index).padStart(4, '0')}_${fallbackLabel}`
 }
 
+const getCompletionItemLabelText = (label) => {
+  if (typeof label === 'string') return label
+  if (label && typeof label === 'object') {
+    return String(label.label || '')
+  }
+  return ''
+}
+
+const buildCompletionDedupKey = (item) => {
+  const label = getCompletionItemLabelText(item?.label).trim().toLowerCase()
+  const insertText = String(item?.insertText || item?.textEdit?.text || '').trim().toLowerCase()
+  const kind = String(item?.kind || '').trim()
+  const detail = String(item?.detail || '').trim().toLowerCase()
+  const filterText = String(item?.filterText || '').trim().toLowerCase()
+  return [label, insertText, kind, detail, filterText].join('::')
+}
+
+const dedupeCompletionSuggestions = (items) => {
+  const source = Array.isArray(items) ? items : []
+  if (!source.length) return []
+
+  const seen = new Set()
+  const suggestions = []
+  for (const item of source) {
+    const key = buildCompletionDedupKey(item)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    suggestions.push(item)
+  }
+  return suggestions
+}
+
 const convertVscodeCompletionItemToMonaco = (item, replaceRange, index) => {
   const label = normalizeCompletionLabel(item?.label)
   if (!label) return null
@@ -5393,16 +5518,12 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
     if (!items.length) return []
 
     const suggestions = []
-    const seen = new Set()
     for (let i = 0; i < items.length; i += 1) {
       const mapped = convertVscodeCompletionItemToMonaco(items[i], replaceRange, i)
       if (!mapped) continue
-      const dedupeKey = `${mapped.label}::${mapped.insertText}`
-      if (seen.has(dedupeKey)) continue
-      seen.add(dedupeKey)
       suggestions.push(mapped)
     }
-    return suggestions
+    return dedupeCompletionSuggestions(suggestions)
   } catch (error) {
     logger.debug('[EmbeddedLsp] vscode completion command failed, fallback to Monaco providers', error)
     return []
@@ -5423,7 +5544,8 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
   if (!embeddedCtx) return [];
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
   if (!virtualModel) return [];
-  await waitForLspConnection(embeddedCtx.languageId, 1200);
+  const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
+  if (!ready) return [];
 
   const replaceRange = buildEmbeddedReplaceRange(model, position);
 
@@ -5446,7 +5568,6 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
   };
 
   const suggestions = [];
-  const seen = new Set();
   for (const provider of providers) {
     if (!provider?.provideCompletionItems) continue;
     try {
@@ -5458,13 +5579,8 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
         );
       const items = Array.isArray(result?.suggestions) ? result.suggestions : [];
       for (const item of items) {
-        const label = typeof item?.label === 'string'
-          ? item.label
-          : String(item?.label?.label || '');
         const insertText = String(item?.insertText || item?.textEdit?.text || '');
-        const dedupeKey = `${label}::${insertText}`;
-        if (!label || seen.has(dedupeKey)) continue;
-        seen.add(dedupeKey);
+        if (!getCompletionItemLabelText(item?.label)) continue;
 
         suggestions.push({
           ...item,
@@ -5478,7 +5594,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     }
   }
 
-  return suggestions;
+  return dedupeCompletionSuggestions(suggestions);
 };
 
 const provideMarkdownFenceLspSuggestions = async (model, position, context) => {
@@ -5516,7 +5632,7 @@ const provideEmbeddedSignatureHelp = async (embeddedCtx, context) => {
   if (!embeddedCtx) return null
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx)
   if (!virtualModel) return null
-  const ready = await waitForLspConnection(embeddedCtx.languageId, 1200)
+  const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS)
   if (!ready) return null
 
   try {
@@ -6328,9 +6444,14 @@ const ensureSecondaryEditor = () => {
     if (fileTreeStore.layoutMode !== 'single' && fileTreeStore.activeTabRight) {
       fileTreeStore.setActiveTab(fileTreeStore.activeTabRight, 'right');
     }
+    const pos = secondaryEditor?.getPosition?.();
+    if (pos) {
+      editorStore.setCursorPosition(pos);
+    }
   });
 
-  secondaryEditor.onDidChangeCursorPosition(() => {
+  secondaryEditor.onDidChangeCursorPosition((e) => {
+    editorStore.setCursorPosition(e.position);
     editorEffectsRight?.updateCursorTarget();
     refreshMarkdownSuggestMode(secondaryEditor)
     scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'cursor');
@@ -9068,15 +9189,49 @@ const restoreScrollPosition = () => {
   }
 };
 
-const scrollPreviewToLine = (lineNumber) => {
-  if (!previewContainer.value || !lineNumber) return;
+const scrollPreviewElementIntoView = (container, target, { behavior = 'smooth' } = {}) => {
+  if (!container || !target) return false;
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const offset = targetRect.top - containerRect.top;
+  const nextTop = Math.max(0, container.scrollTop + offset - container.clientHeight * 0.2);
+  container.scrollTo({ top: nextTop, behavior });
+  return true;
+};
 
+const getPreviewLineAnchors = () => {
   const container = previewContainer.value;
+  if (!container) return [];
+
+  if (
+    previewLineAnchorCache.container === container &&
+    previewLineAnchorCache.revision === previewLineAnchorRevision
+  ) {
+    return previewLineAnchorCache.elements;
+  }
+
   const elements = Array.from(
     container.querySelectorAll('[data-md-start-line]')
-  );
+  ).filter((el) => !el.closest?.('.md-toc'));
 
-  if (!elements.length) return;
+  previewLineAnchorCache.container = container;
+  previewLineAnchorCache.revision = previewLineAnchorRevision;
+  previewLineAnchorCache.elements = elements;
+  return elements;
+};
+
+const scrollPreviewToLine = (lineNumber, { behavior = 'smooth' } = {}) => {
+  if (!previewContainer.value || !lineNumber) return false;
+
+  const container = previewContainer.value;
+  const elements = getPreviewLineAnchors();
+
+  if (!elements.length) return false;
+
+  const exact = elements.find((el) => Number(el?.dataset?.mdStartLine || 0) === Number(lineNumber));
+  if (exact) {
+    return scrollPreviewElementIntoView(container, exact, { behavior });
+  }
 
   let target = elements[0];
   let minDelta = Infinity;
@@ -9101,12 +9256,8 @@ const scrollPreviewToLine = (lineNumber) => {
     }
   });
 
-  if (!target) return;
-
-  const containerRect = container.getBoundingClientRect();
-  const targetRect = target.getBoundingClientRect();
-  const offset = targetRect.top - containerRect.top;
-  container.scrollTop += offset - container.clientHeight * 0.2;
+  if (!target) return false;
+  return scrollPreviewElementIntoView(container, target, { behavior });
 };
 
 const syncEditorToLine = (lineNumber, { focus = true } = {}) => {
@@ -9114,12 +9265,13 @@ const syncEditorToLine = (lineNumber, { focus = true } = {}) => {
   if (!editor) {
     initEditor();
   }
-  if (!editor) return;
+  const targetEditor = getActiveEditor();
+  if (!targetEditor) return;
 
-  editor.revealLineInCenter(lineNumber);
-  editor.setPosition({ lineNumber, column: 1 });
+  targetEditor.revealLineInCenter(lineNumber);
+  targetEditor.setPosition({ lineNumber, column: 1 });
   if (focus) {
-    editor.focus();
+    targetEditor.focus();
   }
 };
 
@@ -10091,10 +10243,15 @@ const handlePreviewClick = async (e) => {
         recordPreviewLocation('anchor');
 
         const id = decodeURIComponent(href.slice(1));
+        const targetLine = Number(a.getAttribute('data-md-start-line') || 0);
         const container = previewContainer.value;
         if (container) {
           const target = container.querySelector(`#${CSS.escape(id)}`);
-          target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+          if (target) {
+            scrollPreviewElementIntoView(container, target, { behavior: 'smooth' });
+          } else if (targetLine > 0) {
+            scrollPreviewToLine(targetLine, { behavior: 'smooth' });
+          }
         }
         return;
       }
@@ -10188,17 +10345,6 @@ const renderDebounced = debounce(async (content) => {
 
     lastPreviewRenderedSource.value = content;
 
-    // 确保DOM更新后添加按钮
-    nextTick(() => {
-      if (previewContainer.value) {
-        addCopyButtons(previewContainer.value, {
-          theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
-        });
-        addMediaViewerButtons(previewContainer.value, {
-          theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
-        });
-      }
-    });
   } catch (error) {
     logger.error('渲染错误:', error);
     renderedHtml.value = `
@@ -10333,12 +10479,24 @@ const showPreview = computed(() => {
   return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
 });
 
+watch(renderedHtml, () => {
+  previewLineAnchorRevision += 1
+  previewLineAnchorCache.container = null
+  previewLineAnchorCache.elements = []
+  previewLineAnchorCache.revision = previewLineAnchorRevision
+});
+
+const syncPreviewToCursorLine = debounce((line) => {
+  if (!line || !showPreview.value) return;
+  scrollPreviewToLine(line, { behavior: 'auto' });
+}, 40);
+
 watch(
   () => editorStore.cursorPosition?.lineNumber,
   (line) => {
     if (!line) return;
     if (showPreview.value) {
-      scrollPreviewToLine(line);
+      syncPreviewToCursorLine(line);
     }
   },
   { flush: 'post' }
@@ -10623,6 +10781,9 @@ watch(renderedHtml, () => {
       });
       addMediaViewerButtons(previewContainer.value, {
         theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+      });
+      void renderPreviewMermaidDiagrams(previewContainer.value).catch((error) => {
+        logger.error('预览区 Mermaid 渲染失败', error);
       });
       if (pendingPreviewScrollRestore.value) {
         const el = previewContainer.value;
@@ -11172,14 +11333,18 @@ const generateOutlineDebounced = debounce((content) => {
 function jumpToLine(line) {
   if (mode.value === 'preview') {
     recordPreviewLocation('outline');
-    scrollPreviewToLine(line)
+    if (scrollPreviewToLine(line, { behavior: 'smooth' })) {
+      return
+    }
+    nextTick(() => {
+      if (scrollPreviewToLine(line, { behavior: 'smooth' })) return
+      window.requestAnimationFrame(() => {
+        scrollPreviewToLine(line, { behavior: 'smooth' })
+      })
+    })
     return
   }
-  if (editor) {
-    editor.revealLineInCenter(line)
-    editor.setPosition({ lineNumber: line, column: 1 })
-    editor.focus()
-  }
+  syncEditorToLine(line, { focus: true })
 }
 
 // 监听 activeTab 和内容变化，生成大纲
@@ -11336,6 +11501,10 @@ onUnmounted(() => {
     }
   })
   markdownFenceCompletionModels.clear()
+  disposeFeatureDisposables(markdownLanguageFeatureDisposables)
+  disposeFeatureDisposables(filesystemPathCompletionDisposables)
+  markdownFeaturesRegistered = false
+  filesystemPathCompletionRegistered = false
   disposeAllLspClients()
 });
 

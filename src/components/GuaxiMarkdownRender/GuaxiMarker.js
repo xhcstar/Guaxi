@@ -1403,7 +1403,7 @@ export const renderMarkdown = async (content, options) => {
           nextTick().then(() => {
             requestAnimationFrame(() => {
               try {
-                const nodes = Array.from(document.querySelectorAll('.mermaid') || []);
+                const nodes = Array.from(container.querySelectorAll('.mermaid') || []);
                 if (!nodes.length) return;
 
                 Promise.resolve(mermaid.run({ nodes }))

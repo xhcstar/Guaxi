@@ -90,7 +90,13 @@ let textmateDisabled = false
 let textmateDisableLogged = false
 const missingGrammarLogged = new Set<string>()
 const invalidPatternLogged = new Set<string>()
-const textmateConfiguredDisabledLanguages = new Set<string>(['markdown', 'latex'])
+const textmateConfiguredDisabledLanguages = new Set<string>([
+  'markdown',
+  'latex',
+  'c',
+  'cpp',
+  'rust'
+])
 const textmateRuntimeDisabledLanguages = new Set<string>()
 const textmateLanguageSkipLogged = new Set<string>()
 const textmateRuntimeDisableLogged = new Set<string>()

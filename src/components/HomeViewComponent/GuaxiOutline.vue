@@ -45,6 +45,7 @@ function buildTree(flatOutline) {
 
 const outlineTree = computed(() => buildTree(outline.value || []))
 const expandedKeys = ref([])
+const expandedKeysInitialized = ref(false)
 
 function collectAllKeys(nodes, bucket = []) {
     nodes.forEach((node) => {
@@ -64,12 +65,13 @@ watch(
     outlineTree,
     (tree) => {
         const allKeys = new Set(collectAllKeys(tree))
-        const kept = expandedKeys.value.filter((key) => allKeys.has(key))
-        if (kept.length > 0) {
-            expandedKeys.value = kept
+        if (!expandedKeysInitialized.value) {
+            expandedKeys.value = getLevelOneExpandedKeys(tree)
+            expandedKeysInitialized.value = true
             return
         }
-        expandedKeys.value = getLevelOneExpandedKeys(tree)
+
+        expandedKeys.value = expandedKeys.value.filter((key) => allKeys.has(key))
     },
     { immediate: true }
 )

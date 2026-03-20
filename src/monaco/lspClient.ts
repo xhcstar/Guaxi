@@ -8,7 +8,11 @@ import {
   WebSocketMessageWriter,
 } from 'vscode-ws-jsonrpc'
 import { createLogger } from '../utils/logger'
-import { isLspSupportedLanguage } from './lspCapabilities'
+import {
+  getLspDocumentSelectorForLanguage,
+  getLspServerForLanguage,
+  isLspSupportedLanguage
+} from './lspCapabilities'
 type LspClientEntry = {
   client: MonacoLanguageClient | null
   webSocket: WebSocket
@@ -16,6 +20,8 @@ type LspClientEntry = {
   manualDisposing: boolean
   reader: WebSocketMessageReader | null
   writer: WebSocketMessageWriter | null
+  readyPromise: Promise<boolean>
+  resolveReady: (value: boolean) => void
 }
 const lspClients = new Map<string, LspClientEntry>()
 const lspRetryBlockedUntil = new Map<string, number>()
@@ -28,6 +34,19 @@ const LSP_FAILURE_WINDOW_MS = 60000
 const LSP_FAILURE_THRESHOLD = 3
 const LSP_STOP_TIMEOUT_MS = 350
 const lspFailureTracker = new Map<string, { count: number; firstAt: number }>()
+
+const normalizeLanguageId = (languageId: string) =>
+  String(languageId || '').trim().toLowerCase()
+
+const getLspClientKey = (languageId: string) =>
+  String(getLspServerForLanguage(languageId) || normalizeLanguageId(languageId)).trim().toLowerCase()
+
+const getRelatedLspLanguages = (languageId: string) => {
+  const selectors = getLspDocumentSelectorForLanguage(languageId)
+    .map((item) => normalizeLanguageId(item?.language || ''))
+    .filter(Boolean)
+  return selectors.length ? selectors : [normalizeLanguageId(languageId)].filter(Boolean)
+}
 
 type LspConnectionStateValue = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'disabled'
 type LspConnectionState = {
@@ -84,7 +103,7 @@ const setLspConnectionState = (languageId: string, state: LspConnectionStateValu
 }
 
 export function getLspConnectionState(languageId: string): LspConnectionState {
-  const key = String(languageId || '').trim().toLowerCase()
+  const key = normalizeLanguageId(languageId)
   if (!key) {
     return { state: 'idle', reason: 'empty-language', updatedAt: Date.now() }
   }
@@ -130,12 +149,31 @@ const safeDisposeTransport = (value: unknown) => {
 }
 
 export function waitForLspConnection(languageId: string, timeoutMs: number = 1500): Promise<boolean> {
-  const lang = String(languageId || '').trim().toLowerCase()
+  const lang = normalizeLanguageId(languageId)
   if (!lang) return Promise.resolve(false)
 
   const current = getLspConnectionState(lang)
   if (current.state === 'connected') return Promise.resolve(true)
   if (current.state === 'disabled') return Promise.resolve(false)
+
+  const existingEntry = lspClients.get(getLspClientKey(lang))
+  if (existingEntry?.readyPromise) {
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        resolve(getLspConnectionState(lang).state === 'connected')
+      }, Math.max(50, Number(timeoutMs) || 1500))
+
+      Promise.resolve(existingEntry.readyPromise)
+        .then((value) => {
+          window.clearTimeout(timer)
+          resolve(!!value)
+        })
+        .catch(() => {
+          window.clearTimeout(timer)
+          resolve(false)
+        })
+    })
+  }
 
   return new Promise((resolve) => {
     let settled = false
@@ -189,14 +227,17 @@ const closeSocketSafely = (webSocket: WebSocket) => {
 }
 
 const disableLsp = (languageId: string, reason: string, error?: unknown) => {
-  if (!lspDisabled.has(languageId)) {
-    lspDisabled.add(languageId)
-  }
-  if (!lspDisabledReason.has(languageId)) {
-    lspDisabledReason.set(languageId, reason)
-    logger.warn('[LSP] disabled', { languageId, reason, error })
-  }
-  setLspConnectionState(languageId, 'disabled', reason)
+  const relatedLanguages = getRelatedLspLanguages(languageId)
+  relatedLanguages.forEach((lang) => {
+    if (!lspDisabled.has(lang)) {
+      lspDisabled.add(lang)
+    }
+    if (!lspDisabledReason.has(lang)) {
+      lspDisabledReason.set(lang, reason)
+    }
+    setLspConnectionState(lang, 'disabled', reason)
+  })
+  logger.warn('[LSP] disabled', { languageId, relatedLanguages, reason, error })
 }
 
 const isLikelyFilePath = (filePath: string) => {
@@ -209,7 +250,7 @@ const isLikelyFilePath = (filePath: string) => {
 }
 
 const recordLspFailure = (languageId: string, reason: string, error?: unknown) => {
-  const lang = String(languageId || '').trim().toLowerCase()
+  const lang = getLspClientKey(languageId)
   if (!lang) return false
   const now = Date.now()
   const prev = lspFailureTracker.get(lang)
@@ -255,21 +296,28 @@ export function initLspClient(
     return
   }
 
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  const clientKey = getLspClientKey(normalizedLanguageId)
+  const documentSelector = getLspDocumentSelectorForLanguage(normalizedLanguageId)
+  const startupLanguageId = normalizeLanguageId(documentSelector[0]?.language || normalizedLanguageId)
+
   const normalizedFilePath = String(filePath || '').trim()
   if (!isLikelyFilePath(normalizedFilePath)) {
-    setLspConnectionState(languageId, 'disconnected', 'invalid-file-path')
-    logger.warn('[LSP] skipped invalid file path', { languageId, filePath: normalizedFilePath })
-    lspRetryBlockedUntil.set(languageId, Date.now() + LSP_RETRY_BACKOFF_MS)
+    getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+      setLspConnectionState(lang, 'disconnected', 'invalid-file-path')
+    })
+    logger.warn('[LSP] skipped invalid file path', { languageId: normalizedLanguageId, filePath: normalizedFilePath })
+    lspRetryBlockedUntil.set(clientKey, Date.now() + LSP_RETRY_BACKOFF_MS)
     return
   }
 
-  if (lspDisabled.has(languageId)) {
+  if (lspDisabled.has(normalizedLanguageId)) {
     return
   }
-  if (lspClients.has(languageId)) {
+  if (lspClients.has(clientKey)) {
     return
   }
-  const blockedUntil = lspRetryBlockedUntil.get(languageId) || 0
+  const blockedUntil = lspRetryBlockedUntil.get(clientKey) || 0
   if (Date.now() < blockedUntil) {
     return
   }
@@ -277,9 +325,13 @@ export function initLspClient(
   const protocol =
     window.location.protocol === 'https:' ? 'wss' : 'ws'
   const host = '127.0.0.1:8888'
-  const url = `${protocol}://${host}/lsp/${languageId}`
+  const url = `${protocol}://${host}/lsp/${startupLanguageId}`
 
   const webSocket = new WebSocket(url)
+  let resolveReady = (_value: boolean) => { }
+  const readyPromise = new Promise<boolean>((resolve) => {
+    resolveReady = resolve
+  })
   const entry: LspClientEntry = {
     client: null,
     webSocket,
@@ -287,12 +339,16 @@ export function initLspClient(
     manualDisposing: false,
     reader: null,
     writer: null,
+    readyPromise,
+    resolveReady,
   }
-  lspClients.set(languageId, entry)
-  setLspConnectionState(languageId, 'connecting')
+  lspClients.set(clientKey, entry)
+  getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+    setLspConnectionState(lang, 'connecting')
+  })
 
   const cleanup = (reason: string) => {
-    const cur = lspClients.get(languageId)
+    const cur = lspClients.get(clientKey)
     if (!cur || cur.disposed) return
     if (reason === 'manual-dispose') {
       cur.manualDisposing = true
@@ -314,16 +370,22 @@ export function initLspClient(
     void stopClientSafely(client).finally(() => {
       closeSocketSafely(cur.webSocket)
     })
+    cur.resolveReady(false)
 
-    lspClients.delete(languageId)
-    if (lspDisabled.has(languageId)) {
-      const disabledReason = lspDisabledReason.get(languageId) || reason
-      setLspConnectionState(languageId, 'disabled', disabledReason)
+    lspClients.delete(clientKey)
+    const relatedLanguages = getRelatedLspLanguages(normalizedLanguageId)
+    if (relatedLanguages.some((lang) => lspDisabled.has(lang))) {
+      relatedLanguages.forEach((lang) => {
+        const disabledReason = lspDisabledReason.get(lang) || reason
+        setLspConnectionState(lang, 'disabled', disabledReason)
+      })
     } else {
-      setLspConnectionState(languageId, 'disconnected', reason)
+      relatedLanguages.forEach((lang) => {
+        setLspConnectionState(lang, 'disconnected', reason)
+      })
     }
     if (reason !== 'manual-dispose') {
-      lspRetryBlockedUntil.set(languageId, Date.now() + LSP_RETRY_BACKOFF_MS)
+      lspRetryBlockedUntil.set(clientKey, Date.now() + LSP_RETRY_BACKOFF_MS)
     }
   }
 
@@ -339,9 +401,9 @@ export function initLspClient(
     let client: MonacoLanguageClient
     try {
         client = new MonacoLanguageClient({
-          name: `${languageId} Language Client`,
+          name: `${clientKey} Language Client`,
           clientOptions: {
-            documentSelector: [{ language: languageId }],
+            documentSelector,
             outputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
             traceOutputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
             initializationOptions: {
@@ -358,18 +420,18 @@ export function initLspClient(
       })
     } catch (error) {
       if (shouldDisableLsp(error)) {
-        disableLsp(languageId, 'vscode-api-not-ready', error)
+        disableLsp(normalizedLanguageId, 'vscode-api-not-ready', error)
       } else if (isFatalLspError(error)) {
-        disableLsp(languageId, 'fatal-client-init-error', error)
+        disableLsp(normalizedLanguageId, 'fatal-client-init-error', error)
       } else {
-        recordLspFailure(languageId, 'client-init-failed', error)
-        logger.warn('[LSP] client init failed', { languageId, error })
+        recordLspFailure(normalizedLanguageId, 'client-init-failed', error)
+        logger.warn('[LSP] client init failed', { languageId: normalizedLanguageId, clientKey, error })
       }
       cleanup('client-init-failed')
       return
     }
 
-    const cur = lspClients.get(languageId)
+    const cur = lspClients.get(clientKey)
     if (!cur || cur.disposed) {
       try {
         webSocket.close()
@@ -378,24 +440,29 @@ export function initLspClient(
       return
     }
     cur.client = client
-    setLspConnectionState(languageId, 'connected')
-    lspFailureTracker.delete(languageId)
-    lspRetryBlockedUntil.delete(languageId)
+    lspFailureTracker.delete(clientKey)
+    lspRetryBlockedUntil.delete(clientKey)
 
-    const startPromise = client.start()
-    if (startPromise && typeof (startPromise as Promise<void>).catch === 'function') {
-      ; (startPromise as Promise<void>).catch((error) => {
+    Promise.resolve(client.start())
+      .then(() => {
+        const active = lspClients.get(clientKey)
+        if (!active || active.disposed) return
+        getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+          setLspConnectionState(lang, 'connected')
+        })
+        active.resolveReady(true)
+      })
+      .catch((error) => {
         if (shouldDisableLsp(error)) {
-          disableLsp(languageId, 'vscode-api-not-ready', error)
+          disableLsp(normalizedLanguageId, 'vscode-api-not-ready', error)
         } else if (isFatalLspError(error)) {
-          disableLsp(languageId, 'fatal-start-error', error)
+          disableLsp(normalizedLanguageId, 'fatal-start-error', error)
         } else {
-          recordLspFailure(languageId, 'start-failed', error)
-          logger.warn('[LSP] client start failed', { languageId, error })
+          recordLspFailure(normalizedLanguageId, 'start-failed', error)
+          logger.warn('[LSP] client start failed', { languageId: normalizedLanguageId, clientKey, error })
         }
         cleanup('start-failed')
       })
-    }
   }
 
   webSocket.onclose = () => {
@@ -409,7 +476,7 @@ export function initLspClient(
 }
 
 export function disposeAllLspClients() {
-  lspClients.forEach((entry, languageId) => {
+  lspClients.forEach((entry, clientKey) => {
     if (entry.disposed) return
     entry.manualDisposing = true
     // Reuse the same shutdown path to keep ordering consistent.
@@ -428,7 +495,10 @@ export function disposeAllLspClients() {
     void stopClientSafely(client).finally(() => {
       closeSocketSafely(entry.webSocket)
     })
-    lspClients.delete(languageId)
+    entry.resolveReady(false)
+    lspClients.delete(clientKey)
+  })
+  lspConnectionState.forEach((_value, languageId) => {
     setLspConnectionState(languageId, 'disconnected', 'manual-dispose')
   })
 }
