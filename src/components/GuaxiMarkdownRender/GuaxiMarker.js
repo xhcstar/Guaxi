@@ -4,10 +4,10 @@ import mermaid from "mermaid";
 import hljs from "highlight.js";
 import "highlight.js/styles/atom-one-light.css";
 import { initMathJax, renderMath } from "./mathjaxConfig";
-import { nextTick } from "vue";
 import { createLogger } from '../../utils/logger'
 
 const logger = createLogger('GuaxiMarker')
+let mermaidRenderCounter = 0
 
 const RenderOptions = {
   mermaid: undefined,
@@ -1377,51 +1377,44 @@ export const renderMarkdown = async (content, options) => {
     const container = document.createElement("div");
     container.innerHTML = md.render(finalContent);
 
-    // 处理Mermaid图表
+    // 处理 Mermaid 图表。这里直接在离屏容器里生成最终 SVG，
+    // 避免对尚未挂载到真实 DOM 的节点调用 mermaid.run() 导致所有调用方一起失败。
     if (enableMermaid) {
-      const mermaidElements = container.querySelectorAll(".mermaid");
-      if (mermaidElements.length > 0) {
+      const mermaidElements = Array.from(container.querySelectorAll(".mermaid"));
+      for (const el of mermaidElements) {
         try {
-          // 处理每个图表
-          mermaidElements.forEach((el) => {
+          const source = String(el.textContent || '')
+            .replace(/&gt;/g, ">")
+            .replace(/&lt;/g, "<")
+            .replace(/&amp;/g, "&");
+
+          if (!source.trim()) continue;
+
+          const originalSource = el.getAttribute("data-md-original");
+          const renderId = `guaxi-mermaid-${Date.now()}-${mermaidRenderCounter++}`;
+          const rendered = await Promise.resolve(mermaid.render(renderId, source));
+          const svg = typeof rendered === 'string' ? rendered : String(rendered?.svg || '');
+          if (!svg.trim()) continue;
+
+          const wrapper = document.createElement("div");
+          wrapper.className = "mermaid";
+          wrapper.setAttribute("data-processed", "true");
+          wrapper.setAttribute("data-mermaid-source", source);
+          if (originalSource) {
+            wrapper.setAttribute("data-md-original", originalSource);
+          }
+          wrapper.innerHTML = svg;
+          el.replaceWith(wrapper);
+
+          if (typeof rendered?.bindFunctions === 'function') {
             try {
-              const content = el.textContent
-                .replace(/&gt;/g, ">")
-                .replace(/&lt;/g, "<")
-                .replace(/&amp;/g, "&");
-              el.innerHTML = content;
-            } catch (err) {
-              logger.error("Mermaid内容处理错误:", err);
+              rendered.bindFunctions(wrapper);
+            } catch (bindError) {
+              logger.debug("Mermaid bindFunctions 执行失败", bindError);
             }
-          });
-
-          // Vue 的 nextTick() 只是 等 Vue 自己的 DOM 变更完成,
-          // 但并不等浏览器真正渲染并解析DOM nextTick()确保Vue更新了Virtual DOM, 并把它提交到浏览器.
-          // 但浏览器可能尚未完成布局和样式计算, Mermaid可能无法正确解析 .mermaid 元素.
-          // Mermaid可能依赖某些浏览器渲染完成的属性但nextTick()时这些属性可能尚未计算完成,导致Mermaid找不到.mermaid或渲染失败。
-          // 尝试requestAnimationFrame()因为它会等到浏览器完成一次帧渲染后再执行.
-          nextTick().then(() => {
-            requestAnimationFrame(() => {
-              try {
-                const nodes = Array.from(container.querySelectorAll('.mermaid') || []);
-                if (!nodes.length) return;
-
-                Promise.resolve(mermaid.run({ nodes }))
-                  .then(() => {
-                    logger.debug('Mermaid渲染完成', { count: nodes.length });
-                  })
-                  .catch((err) => {
-                    logger.error('Mermaid渲染失败', err);
-                  });
-              } catch (err) {
-                logger.error('Mermaid渲染失败（同步异常）', err);
-              }
-            });
-          });
-
-          // logger.info("Mermaid渲染完成: ", container.innerHTML);
+          }
         } catch (err) {
-          logger.error("Mermaid渲染错误:", err);
+          logger.error("Mermaid渲染失败", err);
         }
       }
     }

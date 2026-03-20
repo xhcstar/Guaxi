@@ -720,6 +720,7 @@ const renderPreviewMermaidDiagrams = async (container) => {
   if (!container?.querySelectorAll) return
 
   const nodes = Array.from(container.querySelectorAll('.mermaid'))
+    .filter((node) => !node.querySelector('svg') && node.getAttribute('data-processed') !== 'true')
   if (!nodes.length) return
 
   nodes.forEach((node) => {
