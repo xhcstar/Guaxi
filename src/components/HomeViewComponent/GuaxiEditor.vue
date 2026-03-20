@@ -612,7 +612,15 @@ import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
 import { initTextmate } from '../../monaco/textmateLoader'
-import { initLspClient, disposeAllLspClients, getLspConnectionState, resetLspDisabled } from '../../monaco/lspClient'
+import {
+  initLspClient,
+  disposeAllLspClients,
+  getLspConnectionState,
+  onLspConnectionStateChange,
+  waitForLspConnection,
+  resetLspDisabled
+} from '../../monaco/lspClient'
+import { LSP_SUPPORTED_LANGUAGES } from '../../monaco/lspCapabilities'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -620,6 +628,7 @@ import 'monaco-editor/esm/vs/basic-languages/rust/rust.contribution'
 import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution'
 import 'monaco-editor/esm/vs/basic-languages/html/html.contribution'
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
+import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution'
 import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
 import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution'
@@ -655,7 +664,40 @@ const ensureLatexLanguage = () => {
   logger.info('[Editor] language registered', { languageId: 'latex' })
 }
 
+const ensureMermaidLanguage = () => {
+  const exists = monaco.languages.getLanguages().some((lang) => lang.id === 'mermaid')
+  if (!exists) {
+    monaco.languages.register({
+      id: 'mermaid',
+      extensions: ['.mmd', '.mermaid'],
+      aliases: ['Mermaid', 'mermaid'],
+      mimetypes: ['text/x-mermaid']
+    })
+  }
+  monaco.languages.setMonarchTokensProvider('mermaid', {
+    tokenizer: {
+      root: [
+        [/%%.*$/, 'comment'],
+        [/\b(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|erDiagram|journey|gantt|pie|mindmap|timeline|gitGraph|quadrantChart|requirementDiagram|zenuml|block-beta|packet-beta|xychart-beta)\b/, 'keyword'],
+        [/\b(?:subgraph|end|direction|title|section|participant|actor|class|style|linkStyle|click|accTitle|accDescr|accDescrMultiline)\b/, 'keyword'],
+        [/\b(?:LR|RL|TB|BT|TD)\b/, 'type'],
+        [/\b(?:true|false)\b/, 'constant'],
+        [/"[^"]*"/, 'string'],
+        [/'[^']*'/, 'string'],
+        [/\[\[.*?\]\]|\[\(.*?\)\]|\[\[|\]\]|\[\(|\)\]|\[.*?\]|\(.*?\)|\{.*?\}|\(\(.*?\)\)/, 'string'],
+        [/\b\d+(?:\.\d+)?\b/, 'number'],
+        [/\-\->|\-\.\->|==>|==|---|--|-.->|-.|-x|x-|o-|-\)|\|.*?\|/, 'operator'],
+        [/[{}[\]()]/, 'delimiter'],
+        [/[,:;]/, 'delimiter'],
+        [/[A-Za-z_][\w-]*/, 'identifier']
+      ]
+    }
+  })
+  logger.info('[Editor] language registered', { languageId: 'mermaid' })
+}
+
 ensureLatexLanguage()
+ensureMermaidLanguage()
 // 添加 GitPanel 组件引用
 const gitPanel = ref(null)
 
@@ -4030,6 +4072,11 @@ const registerMarkdownLanguageFeatures = () => {
             /^[a-zA-Z]:/.test(token)));
       if (inPathLike) return { suggestions: [] };
 
+      const mathLspSuggestions = await provideMarkdownMathLspSuggestions(model, position, context);
+      if (mathLspSuggestions.length) {
+        return { suggestions: mathLspSuggestions };
+      }
+
       const fenceLspSuggestions = await provideMarkdownFenceLspSuggestions(model, position, context);
       if (fenceLspSuggestions.length) {
         return { suggestions: fenceLspSuggestions };
@@ -4130,6 +4177,26 @@ const registerMarkdownLanguageFeatures = () => {
       return { suggestions };
     }
   });
+
+  monaco.languages.registerSignatureHelpProvider('markdown', {
+    signatureHelpTriggerCharacters: ['(', ',', '{', '['],
+    signatureHelpRetriggerCharacters: [','],
+    async provideSignatureHelp(model, position, token, context) {
+      const mathCtx = getMarkdownMathContext(model, position);
+      if (mathCtx) {
+        const signature = await provideEmbeddedSignatureHelp(mathCtx, context);
+        if (signature) return signature;
+      }
+
+      const fenceCtx = getMarkdownFenceContext(model, position);
+      if (fenceCtx) {
+        const signature = await provideEmbeddedSignatureHelp(fenceCtx, context);
+        if (signature) return signature;
+      }
+
+      return null;
+    }
+  });
 };
 
 const tabBarRef = ref(null)
@@ -4139,7 +4206,183 @@ const tabRegionRightRef = ref(null)
 const languagePairingConfigured = new Set()
 const lspEnabled = ref(false)
 const markdownFenceCompletionModels = new Map()
-const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '@', '#']
+const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '@', '#', '(', ',', '[', '{', '-']
+
+const getMarkdownMathContext = (model, position) => {
+  if (!model || !position) return null;
+  if (model.getLanguageId?.() !== 'markdown') return null;
+
+  const totalLines = Number(model.getLineCount?.() || 0);
+  if (!Number.isFinite(totalLines) || totalLines < 1) return null;
+
+  const safeLineNumber = Math.min(Math.max(1, Number(position.lineNumber) || 1), totalLines);
+  const safeLineMaxColumn = Math.max(1, Number(model.getLineMaxColumn?.(safeLineNumber) || 1));
+  const safeColumn = Math.min(Math.max(1, Number(position.column) || 1), safeLineMaxColumn);
+  const safePosition = new monaco.Position(safeLineNumber, safeColumn);
+
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  let openMath = null;
+
+  const openRegion = (kind, lineNumber, column, tokenLength) => {
+    openMath = { kind, lineNumber, column, tokenLength };
+  };
+
+  const closeRegion = () => {
+    openMath = null;
+  };
+
+  for (let lineNumber = 1; lineNumber <= safePosition.lineNumber; lineNumber += 1) {
+    let text = model.getLineContent(lineNumber);
+    if (lineNumber === safePosition.lineNumber) {
+      text = text.slice(0, safePosition.column - 1);
+    }
+
+    const fence = /^\s*(`{3,}|~{3,})/.exec(text);
+    if (fence) {
+      const mark = fence[1];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = mark[0];
+        fenceLen = mark.length;
+      } else if (mark[0] === fenceChar && mark.length >= fenceLen) {
+        inFence = false;
+        fenceChar = '';
+        fenceLen = 0;
+      }
+      continue;
+    }
+    if (inFence) continue;
+
+    for (let i = 0; i < text.length;) {
+      const ch = text[i];
+      const next = text[i + 1];
+      const prev = i > 0 ? text[i - 1] : '';
+
+      if (ch === '\\') {
+        if (next === '(') {
+          if (openMath?.kind === 'paren') {
+            closeRegion();
+          } else if (!openMath) {
+            openRegion('paren', lineNumber, i + 1, 2);
+          }
+          i += 2;
+          continue;
+        }
+        if (next === ')') {
+          if (openMath?.kind === 'paren') closeRegion();
+          i += 2;
+          continue;
+        }
+        if (next === '[') {
+          if (openMath?.kind === 'bracket') {
+            closeRegion();
+          } else if (!openMath) {
+            openRegion('bracket', lineNumber, i + 1, 2);
+          }
+          i += 2;
+          continue;
+        }
+        if (next === ']') {
+          if (openMath?.kind === 'bracket') closeRegion();
+          i += 2;
+          continue;
+        }
+        i += 2;
+        continue;
+      }
+
+      if (ch === '$' && prev !== '\\') {
+        if (next === '$') {
+          if (openMath?.kind === 'display') {
+            closeRegion();
+          } else if (!openMath) {
+            openRegion('display', lineNumber, i + 1, 2);
+          }
+          i += 2;
+          continue;
+        }
+
+        if (openMath?.kind === 'inline') {
+          closeRegion();
+        } else if (!openMath) {
+          openRegion('inline', lineNumber, i + 1, 1);
+        }
+        i += 1;
+        continue;
+      }
+
+      i += 1;
+    }
+  }
+
+  if (!openMath) return null;
+
+  const findClose = () => {
+    for (let lineNumber = openMath.lineNumber; lineNumber <= model.getLineCount(); lineNumber += 1) {
+      const line = model.getLineContent(lineNumber);
+      let i = lineNumber === openMath.lineNumber
+        ? Math.max(0, openMath.column - 1 + openMath.tokenLength)
+        : 0;
+      while (i < line.length) {
+        const ch = line[i];
+        const next = line[i + 1];
+        const prev = i > 0 ? line[i - 1] : '';
+
+        if (openMath.kind === 'paren' && ch === '\\' && next === ')') {
+          return { lineNumber, column: i + 1, tokenLength: 2 };
+        }
+        if (openMath.kind === 'bracket' && ch === '\\' && next === ']') {
+          return { lineNumber, column: i + 1, tokenLength: 2 };
+        }
+        if ((openMath.kind === 'inline' || openMath.kind === 'display') && ch === '$' && prev !== '\\') {
+          if (openMath.kind === 'display') {
+            if (next === '$') return { lineNumber, column: i + 1, tokenLength: 2 };
+          } else if (next !== '$') {
+            return { lineNumber, column: i + 1, tokenLength: 1 };
+          }
+        }
+        i += 1;
+      }
+    }
+    return null;
+  };
+
+  const close = findClose();
+  const contentStartColumn = openMath.column + openMath.tokenLength;
+  const contentEndColumn = close ? close.column : model.getLineMaxColumn(model.getLineCount());
+  const blockEndLine = close ? close.lineNumber : model.getLineCount();
+
+  const blockLines = [];
+  const lineRanges = [];
+  for (let lineNumber = openMath.lineNumber; lineNumber <= blockEndLine; lineNumber += 1) {
+    const line = model.getLineContent(lineNumber);
+    const startColumn = lineNumber === openMath.lineNumber ? contentStartColumn : 1;
+    const endColumn = lineNumber === blockEndLine
+      ? contentEndColumn
+      : model.getLineMaxColumn(lineNumber);
+    const safeStart = Math.max(1, Math.min(startColumn, line.length + 1));
+    const safeEnd = Math.max(safeStart, Math.min(endColumn, line.length + 1));
+    blockLines.push(line.slice(safeStart - 1, safeEnd - 1));
+    lineRanges.push({ lineNumber, startColumn: safeStart, endColumn: safeEnd });
+  }
+
+  const relativeLine = Math.max(1, safePosition.lineNumber - openMath.lineNumber + 1);
+  const relativeColumn = safePosition.lineNumber === openMath.lineNumber
+    ? Math.max(1, safePosition.column - contentStartColumn + 1)
+    : safePosition.column;
+
+  return {
+    languageId: 'latex',
+    kind: openMath.kind,
+    blockText: blockLines.join('\n'),
+    blockStartLine: openMath.lineNumber,
+    blockEndLine,
+    lineRanges,
+    positionInBlock: new monaco.Position(relativeLine, Math.max(1, relativeColumn)),
+  };
+};
 
 // Markdown 围栏高亮与补全的共享逻辑
 const getMarkdownFenceContext = (model, position) => {
@@ -4253,11 +4496,33 @@ const buildMarkdownFenceBlockText = (model, startLine, endLine) => {
 };
 
 const markdownFenceHighlightStates = new WeakMap();
+const markdownFenceTokenizerWarmups = new Map();
+const embeddedSemanticLegendCache = new Map();
+const markdownSuggestModeStates = new WeakMap();
+const markdownFenceBlocksCache = new WeakMap();
+const EMBEDDED_SEMANTIC_MAX_LINES = 240;
+const EMBEDDED_VISIBLE_BLOCK_LIMIT = 6;
+
+const EMBEDDED_WORD_SUGGEST_OPTIONS = {
+  wordBasedSuggestions: 'off',
+  suggest: {
+    showWords: false,
+    snippetsPreventQuickSuggestions: false
+  }
+};
+
+const DEFAULT_WORD_SUGGEST_OPTIONS = {
+  wordBasedSuggestions: 'currentDocument',
+  suggest: {
+    showWords: true,
+    snippetsPreventQuickSuggestions: true
+  }
+};
 
 const getMarkdownFenceHighlightState = (targetEditor) => {
   let state = markdownFenceHighlightStates.get(targetEditor);
   if (!state) {
-    state = { decorations: [], timer: 0, lastKey: '' };
+    state = { decorations: [], timer: 0, lastKey: '', requestSeq: 0 };
     markdownFenceHighlightStates.set(targetEditor, state);
   }
   return state;
@@ -4268,6 +4533,25 @@ const clearMarkdownFenceSyntaxHighlight = (targetEditor) => {
   const state = getMarkdownFenceHighlightState(targetEditor);
   if (!state.decorations?.length) return;
   state.decorations = targetEditor.deltaDecorations(state.decorations, []);
+};
+
+const ensureMarkdownFenceTokenizerReady = async (targetEditor, languageId) => {
+  const lang = String(languageId || '').trim().toLowerCase();
+  if (!targetEditor || !lang) return;
+
+  let warmup = markdownFenceTokenizerWarmups.get(lang);
+  if (!warmup) {
+    warmup = initTextmate(targetEditor, lang)
+      .catch((error) => {
+        logger.warn('[MarkdownFence] tokenizer warmup failed', { languageId: lang }, error);
+      })
+      .finally(() => {
+        markdownFenceTokenizerWarmups.delete(lang);
+      });
+    markdownFenceTokenizerWarmups.set(lang, warmup);
+  }
+
+  await warmup;
 };
 
 const resolveFenceTokenClass = (tokenType) => {
@@ -4297,7 +4581,357 @@ const resolveFenceTokenClass = (tokenType) => {
   return '';
 };
 
-const updateMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
+const getEmbeddedBlockLineRanges = (embeddedCtx, model) => {
+  if (Array.isArray(embeddedCtx?.lineRanges) && embeddedCtx.lineRanges.length) {
+    return embeddedCtx.lineRanges;
+  }
+
+  if (!embeddedCtx || !model) return [];
+
+  const blockText = String(embeddedCtx.blockText || '');
+  const lineCount = blockText ? blockText.split('\n').length : 1;
+  const ranges = [];
+  for (let i = 0; i < lineCount; i += 1) {
+    const lineNumber = Math.max(1, Number(embeddedCtx.blockStartLine || 1) + i);
+    const lineContent = model.getLineContent(lineNumber);
+    ranges.push({
+      lineNumber,
+      startColumn: 1,
+      endColumn: Math.max(1, lineContent.length + 1)
+    });
+  }
+  return ranges;
+};
+
+const normalizeSemanticTokenBytes = (value) => {
+  if (!value) return null;
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+
+  if (value?.buffer instanceof Uint8Array) return value.buffer;
+  if (value?.buffer instanceof ArrayBuffer) {
+    return new Uint8Array(
+      value.buffer,
+      Number(value.byteOffset || 0),
+      Number(value.byteLength || value.buffer.byteLength || 0)
+    );
+  }
+
+  return null;
+};
+
+const decodeSemanticTokensDto = (value) => {
+  const bytes = normalizeSemanticTokenBytes(value);
+  if (!bytes || !bytes.byteLength || bytes.byteLength % 4 !== 0) return null;
+
+  const wordCount = Math.floor(bytes.byteLength / 4);
+  if (wordCount < 3) return null;
+
+  const words = new Uint32Array(wordCount);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < wordCount; i += 1) {
+    words[i] = view.getUint32(i * 4, true);
+  }
+
+  const type = words[1];
+  if (type !== 1) return null;
+
+  const dataLen = words[2];
+  const start = 3;
+  const end = start + dataLen;
+  if (end > words.length) return null;
+
+  return {
+    id: words[0],
+    type: 'full',
+    data: words.slice(start, end)
+  };
+};
+
+const listSemanticTokenModifiers = (legend, mask) => {
+  const names = Array.isArray(legend?.tokenModifiers) ? legend.tokenModifiers : [];
+  const result = [];
+  for (let i = 0; i < names.length; i += 1) {
+    if (mask & (1 << i)) result.push(String(names[i] || ''));
+  }
+  return result;
+};
+
+const resolveEmbeddedSemanticTokenClass = (tokenType, tokenModifiers = []) => {
+  const type = String(tokenType || '').toLowerCase();
+  const modifiers = Array.isArray(tokenModifiers)
+    ? tokenModifiers.map((item) => String(item || '').toLowerCase())
+    : [];
+
+  if (!type) return '';
+  if (modifiers.includes('defaultlibrary')) return 'md-fence-token-builtin';
+  if (modifiers.includes('readonly') && (type === 'variable' || type === 'property')) {
+    return 'md-fence-token-constant';
+  }
+
+  if (type === 'macro') return 'md-fence-token-macro';
+  if (type === 'namespace' || type === 'module') return 'md-fence-token-namespace';
+  if (type === 'type' || type === 'interface' || type === 'enum' || type === 'struct' || type === 'typeparameter') {
+    return 'md-fence-token-type';
+  }
+  if (type === 'class') return 'md-fence-token-class';
+  if (type === 'parameter') return 'md-fence-token-parameter';
+  if (type === 'property' || type === 'field') return 'md-fence-token-property';
+  if (type === 'variable') return 'md-fence-token-variable';
+  if (type === 'enummember' || type === 'event') return 'md-fence-token-constant';
+  if (type === 'function') return 'md-fence-token-function';
+  if (type === 'method') return 'md-fence-token-method';
+  if (type === 'decorator') return 'md-fence-token-decorator';
+  if (type === 'keyword' || type === 'modifier') return 'md-fence-token-keyword';
+  if (type === 'comment') return 'md-fence-token-comment';
+  if (type === 'string') return 'md-fence-token-string';
+  if (type === 'number') return 'md-fence-token-number';
+  if (type === 'regexp') return 'md-fence-token-regexp';
+  if (type === 'operator') return 'md-fence-token-operator';
+
+  return '';
+};
+
+const appendEmbeddedSemanticDecorations = (decorations, embeddedCtx, model, semanticTokens, legend) => {
+  if (!embeddedCtx || !model || !semanticTokens?.data?.length) return;
+
+  const lineRanges = getEmbeddedBlockLineRanges(embeddedCtx, model);
+  const tokenTypes = Array.isArray(legend?.tokenTypes) ? legend.tokenTypes : [];
+  if (!lineRanges.length || !tokenTypes.length) return;
+
+  let lineIndex = 0;
+  let charIndex = 0;
+  const data = semanticTokens.data;
+
+  for (let i = 0; i + 4 < data.length; i += 5) {
+    const deltaLine = data[i];
+    const deltaStart = data[i + 1];
+    const length = data[i + 2];
+    const tokenTypeIndex = data[i + 3];
+    const tokenModifierBits = data[i + 4];
+
+    if (deltaLine === 0) {
+      charIndex += deltaStart;
+    } else {
+      lineIndex += deltaLine;
+      charIndex = deltaStart;
+    }
+
+    const lineRange = lineRanges[lineIndex];
+    if (!lineRange || !length) continue;
+
+    const tokenType = String(tokenTypes[tokenTypeIndex] || '');
+    const tokenModifiers = listSemanticTokenModifiers(legend, tokenModifierBits);
+    const className = resolveEmbeddedSemanticTokenClass(tokenType, tokenModifiers);
+    if (!className) continue;
+
+    const lineWidth = Math.max(0, lineRange.endColumn - lineRange.startColumn);
+    const startColumn = Math.min(
+      Math.max(lineRange.startColumn, lineRange.startColumn + charIndex),
+      lineRange.endColumn
+    );
+    const endColumn = Math.min(
+      Math.max(startColumn, lineRange.startColumn + Math.min(charIndex + length, lineWidth)),
+      lineRange.endColumn
+    );
+    if (startColumn === endColumn) continue;
+
+    decorations.push({
+      range: new monaco.Range(lineRange.lineNumber, startColumn, lineRange.lineNumber, endColumn),
+      options: { inlineClassName: className }
+    });
+  }
+};
+
+const getEmbeddedSemanticTokenLegend = async (virtualModel) => {
+  if (!virtualModel) return null;
+
+  const languageId = String(virtualModel.getLanguageId?.() || '').trim().toLowerCase();
+  if (!languageId) return null;
+  if (embeddedSemanticLegendCache.has(languageId)) {
+    return embeddedSemanticLegendCache.get(languageId) || null;
+  }
+
+  try {
+    const legend = await vscodeCommands.executeCommand(
+      '_provideDocumentSemanticTokensLegend',
+      VscodeUri.parse(virtualModel.uri.toString())
+    );
+    if (legend?.tokenTypes?.length) {
+      embeddedSemanticLegendCache.set(languageId, legend);
+      return legend;
+    }
+  } catch (error) {
+    logger.debug('[EmbeddedSemantic] legend fetch failed', { languageId }, error);
+  }
+
+  return null;
+};
+
+const shouldFetchEmbeddedSemanticTokens = (embeddedCtx) => {
+  if (!embeddedCtx || !lspEnabled.value) return false;
+
+  const languageId = String(embeddedCtx.languageId || '').trim().toLowerCase();
+  if (!languageId || !LSP_SUPPORTED_LANGUAGES.has(languageId)) return false;
+
+  const lspState = getLspConnectionState(languageId);
+  if (lspState?.state === 'disabled') return false;
+
+  const blockText = String(embeddedCtx.blockText || '');
+  const lineCount = blockText ? blockText.split('\n').length : 1;
+  return lineCount <= EMBEDDED_SEMANTIC_MAX_LINES;
+};
+
+const prepareEmbeddedVirtualModel = (embeddedCtx) => {
+  if (!embeddedCtx) return null;
+  if (!LSP_SUPPORTED_LANGUAGES.has(embeddedCtx.languageId)) return null;
+  if (!lspEnabled.value) return null;
+
+  const lspState = getLspConnectionState(embeddedCtx.languageId);
+  if (lspState?.state === 'disabled') return null;
+
+  const sourceFilePath = String(selectedFile.value?.path || '').trim();
+  const virtualModel = getOrCreateMarkdownFenceModelForSource(embeddedCtx.languageId, sourceFilePath);
+  if (!virtualModel) return null;
+
+  virtualModel.setValue(embeddedCtx.blockText || '');
+
+  const hostEditor = getEmbeddedHostEditor();
+  if (!hostEditor) return null;
+
+  initLspClient(hostEditor, embeddedCtx.languageId, virtualModel.uri.toString());
+  return virtualModel;
+};
+
+const warmupEmbeddedLspForContext = (embeddedCtx) => {
+  if (!embeddedCtx || !lspEnabled.value) return;
+  const languageId = String(embeddedCtx.languageId || '').trim().toLowerCase();
+  if (!languageId || !LSP_SUPPORTED_LANGUAGES.has(languageId)) return;
+  prepareEmbeddedVirtualModel(embeddedCtx);
+};
+
+const fetchEmbeddedSemanticTokens = async (embeddedCtx) => {
+  if (!shouldFetchEmbeddedSemanticTokens(embeddedCtx)) return null;
+  const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
+  if (!virtualModel) return null;
+  const ready = await waitForLspConnection(embeddedCtx.languageId, 1200);
+  if (!ready) return null;
+
+  try {
+    const [legend, encoded] = await Promise.all([
+      getEmbeddedSemanticTokenLegend(virtualModel),
+      vscodeCommands.executeCommand(
+        '_provideDocumentSemanticTokens',
+        VscodeUri.parse(virtualModel.uri.toString())
+      )
+    ]);
+
+    const semanticTokens = decodeSemanticTokensDto(encoded);
+    if (!legend || !semanticTokens?.data?.length) return null;
+    return { legend, semanticTokens };
+  } catch (error) {
+    logger.debug('[EmbeddedSemantic] semantic token fetch failed', {
+      languageId: embeddedCtx?.languageId
+    }, error);
+    return null;
+  }
+};
+
+const refreshMarkdownSuggestMode = (targetEditor) => {
+  if (!targetEditor || typeof targetEditor.updateOptions !== 'function') return;
+
+  const model = targetEditor.getModel?.();
+  const position = targetEditor.getPosition?.();
+  const inEmbeddedMarkdown =
+    model?.getLanguageId?.() === 'markdown' &&
+    position &&
+    (!!getMarkdownMathContext(model, position) || !!getMarkdownFenceContext(model, position));
+
+  let state = markdownSuggestModeStates.get(targetEditor);
+  if (!state) {
+    state = { embedded: null };
+    markdownSuggestModeStates.set(targetEditor, state);
+  }
+  if (state.embedded === inEmbeddedMarkdown) return;
+
+  state.embedded = inEmbeddedMarkdown;
+  targetEditor.updateOptions(inEmbeddedMarkdown ? EMBEDDED_WORD_SUGGEST_OPTIONS : DEFAULT_WORD_SUGGEST_OPTIONS);
+};
+
+const triggerEmbeddedSuggestIfActive = (targetEditor, languageId) => {
+  if (!targetEditor || !targetEditor.hasTextFocus?.()) return;
+
+  const model = targetEditor.getModel?.();
+  const position = targetEditor.getPosition?.();
+  if (!model || model.getLanguageId?.() !== 'markdown' || !position) return;
+
+  const mathCtx = getMarkdownMathContext(model, position);
+  if (mathCtx && mathCtx.languageId === languageId) {
+    window.setTimeout(() => {
+      targetEditor.trigger('guaxi-embedded-lsp', 'editor.action.triggerSuggest', {});
+    }, 40);
+    return;
+  }
+
+  const fenceCtx = getMarkdownFenceContext(model, position);
+  if (fenceCtx && fenceCtx.languageId === languageId) {
+    window.setTimeout(() => {
+      targetEditor.trigger('guaxi-embedded-lsp', 'editor.action.triggerSuggest', {});
+    }, 40);
+  }
+};
+
+const shouldTriggerEmbeddedSuggestOnType = (text) => {
+  const value = String(text || '');
+  if (!value || value.length !== 1) return false;
+  if (/\s/.test(value)) return false;
+  return /[A-Za-z0-9_.:>\/\\'"@#()[\]{},-]/.test(value);
+};
+
+const maybeTriggerEmbeddedSuggestOnType = (targetEditor, text) => {
+  if (!targetEditor || !shouldTriggerEmbeddedSuggestOnType(text)) return;
+
+  const model = targetEditor.getModel?.();
+  const position = targetEditor.getPosition?.();
+  if (!model || model.getLanguageId?.() !== 'markdown' || !position) return;
+
+  const mathCtx = getMarkdownMathContext(model, position);
+  const fenceCtx = getMarkdownFenceContext(model, position);
+  const embeddedCtx = mathCtx || fenceCtx;
+  if (!embeddedCtx) return;
+  if (!LSP_SUPPORTED_LANGUAGES.has(String(embeddedCtx.languageId || '').trim().toLowerCase())) return;
+  if (!lspEnabled.value) return;
+
+  window.setTimeout(() => {
+    try {
+      targetEditor.trigger('guaxi-embedded-lsp-type', 'editor.action.triggerSuggest', {});
+    } catch (error) {
+      logger.debug('[EmbeddedLsp] trigger suggest on type failed', error);
+    }
+  }, 0);
+};
+
+const getCachedMarkdownFenceBlocks = (model) => {
+  if (!model) return [];
+
+  const versionId = typeof model.getVersionId === 'function'
+    ? model.getVersionId()
+    : model.getAlternativeVersionId?.() || 0;
+  const cached = markdownFenceBlocksCache.get(model);
+  if (cached?.versionId === versionId) {
+    return cached.blocks;
+  }
+
+  const blocks = getMarkdownFenceBlocks(model);
+  markdownFenceBlocksCache.set(model, { versionId, blocks });
+  return blocks;
+};
+
+const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
   if (!targetEditor) return;
   const model = targetEditor.getModel?.();
   if (!model || model.getLanguageId?.() !== 'markdown') {
@@ -4314,7 +4948,7 @@ const updateMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
   if (ctx) {
     blocks = [ctx];
   } else {
-    const allBlocks = getMarkdownFenceBlocks(model);
+    const allBlocks = getCachedMarkdownFenceBlocks(model);
     if (visibleRanges.length) {
       blocks = allBlocks.filter((item) => visibleRanges.some((range) => (
         item.blockEndLine >= range.startLineNumber && item.blockStartLine <= range.endLineNumber
@@ -4323,12 +4957,26 @@ const updateMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
       blocks = allBlocks;
     }
   }
+  if (!ctx && blocks.length > EMBEDDED_VISIBLE_BLOCK_LIMIT) {
+    blocks = blocks.slice(0, EMBEDDED_VISIBLE_BLOCK_LIMIT);
+  }
   if (!blocks.length) {
     clearMarkdownFenceSyntaxHighlight(targetEditor);
     return;
   }
 
+  const languagesToWarm = [...new Set(
+    blocks
+      .map((item) => String(item?.languageId || '').trim().toLowerCase())
+      .filter(Boolean)
+  )];
+  for (const languageId of languagesToWarm) {
+    await ensureMarkdownFenceTokenizerReady(targetEditor, languageId);
+  }
+
   const state = getMarkdownFenceHighlightState(targetEditor);
+  const requestSeq = (state.requestSeq || 0) + 1;
+  state.requestSeq = requestSeq;
   const versionId = typeof model.getVersionId === 'function'
     ? model.getVersionId()
     : model.getAlternativeVersionId?.() || 0;
@@ -4343,6 +4991,7 @@ const updateMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
 
   const decorations = [];
   for (const block of blocks) {
+    warmupEmbeddedLspForContext(block);
     const blockText = block.blockText ?? buildMarkdownFenceBlockText(model, block.blockStartLine, block.blockEndLine);
     let tokenLines = [];
     try {
@@ -4381,8 +5030,24 @@ const updateMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
         });
       }
     }
+
+    if (state.requestSeq !== requestSeq) return;
+
+    const shouldApplySemantic = reason !== 'cursor' && reason !== 'scroll';
+    const semanticBundle = shouldApplySemantic ? await fetchEmbeddedSemanticTokens(block) : null;
+    if (state.requestSeq !== requestSeq) return;
+    if (semanticBundle) {
+      appendEmbeddedSemanticDecorations(
+        decorations,
+        block,
+        model,
+        semanticBundle.semanticTokens,
+        semanticBundle.legend
+      );
+    }
   }
 
+  if (state.requestSeq !== requestSeq) return;
   state.decorations = targetEditor.deltaDecorations(state.decorations || [], decorations);
 };
 
@@ -4392,10 +5057,155 @@ const scheduleMarkdownFenceSyntaxHighlight = (targetEditor, reason) => {
   if (state.timer) {
     window.clearTimeout(state.timer);
   }
+  const delay = reason === 'cursor'
+    ? 90
+    : reason === 'scroll'
+      ? 140
+      : reason === 'lsp-state'
+        ? 120
+        : 60;
   state.timer = window.setTimeout(() => {
     state.timer = 0;
-    updateMarkdownFenceSyntaxHighlight(targetEditor, reason);
-  }, 60);
+    updateMarkdownFenceSyntaxHighlight(targetEditor, reason).catch((error) => {
+      logger.warn('[MarkdownFence] syntax highlight update failed', { reason }, error);
+    });
+  }, delay);
+};
+
+const markdownMathHighlightStates = new WeakMap();
+
+const getMarkdownMathHighlightState = (targetEditor) => {
+  let state = markdownMathHighlightStates.get(targetEditor);
+  if (!state) {
+    state = { decorations: [], timer: 0, lastKey: '', requestSeq: 0 };
+    markdownMathHighlightStates.set(targetEditor, state);
+  }
+  return state;
+};
+
+const clearMarkdownMathSyntaxHighlight = (targetEditor) => {
+  if (!targetEditor) return;
+  const state = getMarkdownMathHighlightState(targetEditor);
+  if (!state.decorations?.length) return;
+  state.decorations = targetEditor.deltaDecorations(state.decorations, []);
+};
+
+const updateMarkdownMathSyntaxHighlight = async (targetEditor, reason) => {
+  if (!targetEditor) return;
+  const model = targetEditor.getModel?.();
+  if (!model || model.getLanguageId?.() !== 'markdown') {
+    clearMarkdownMathSyntaxHighlight(targetEditor);
+    return;
+  }
+
+  const position = targetEditor.getPosition?.();
+  const ctx = getMarkdownMathContext(model, position);
+  if (!ctx) {
+    clearMarkdownMathSyntaxHighlight(targetEditor);
+    return;
+  }
+
+  await ensureMarkdownFenceTokenizerReady(targetEditor, ctx.languageId);
+  warmupEmbeddedLspForContext(ctx);
+
+  const state = getMarkdownMathHighlightState(targetEditor);
+  const requestSeq = (state.requestSeq || 0) + 1;
+  state.requestSeq = requestSeq;
+  const versionId = typeof model.getVersionId === 'function'
+    ? model.getVersionId()
+    : model.getAlternativeVersionId?.() || 0;
+  const key = `${ctx.kind}:${ctx.blockStartLine}:${ctx.blockEndLine}:${versionId}`;
+  if (state.lastKey === key && reason === 'cursor') return;
+  state.lastKey = key;
+
+  let tokenLines = [];
+  try {
+    tokenLines = monaco.editor.tokenize(ctx.blockText || '', ctx.languageId) || [];
+  } catch (error) {
+    logger.warn('[MarkdownMath] tokenize failed', { language: ctx.languageId }, error);
+    clearMarkdownMathSyntaxHighlight(targetEditor);
+    return;
+  }
+
+  const decorations = [];
+  for (let i = 0; i < tokenLines.length; i += 1) {
+    const tokens = tokenLines[i] || [];
+    const lineRange = ctx.lineRanges[i];
+    if (!tokens.length || !lineRange) continue;
+
+    const lineLen = Math.max(0, lineRange.endColumn - lineRange.startColumn);
+    decorations.push({
+      range: new monaco.Range(
+        lineRange.lineNumber,
+        lineRange.startColumn,
+        lineRange.lineNumber,
+        lineRange.endColumn
+      ),
+      options: { inlineClassName: 'md-fence-token-base' }
+    });
+
+    for (let j = 0; j < tokens.length; j += 1) {
+      const token = tokens[j];
+      const className = resolveFenceTokenClass(token?.type || '');
+      if (!className) continue;
+
+      const startOffset = token?.offset || 0;
+      const nextOffset = tokens[j + 1] ? tokens[j + 1].offset : lineLen;
+      const startColumn = Math.min(
+        Math.max(lineRange.startColumn, lineRange.startColumn + startOffset),
+        lineRange.endColumn
+      );
+      const endColumn = Math.min(
+        Math.max(startColumn, lineRange.startColumn + nextOffset),
+        lineRange.endColumn
+      );
+      if (startColumn === endColumn) continue;
+
+      decorations.push({
+        range: new monaco.Range(lineRange.lineNumber, startColumn, lineRange.lineNumber, endColumn),
+        options: { inlineClassName: className }
+      });
+    }
+  }
+
+  if (state.requestSeq !== requestSeq) return;
+
+  const shouldApplySemantic = reason !== 'cursor' && reason !== 'scroll';
+  const semanticBundle = shouldApplySemantic ? await fetchEmbeddedSemanticTokens(ctx) : null;
+  if (state.requestSeq !== requestSeq) return;
+  if (semanticBundle) {
+    appendEmbeddedSemanticDecorations(
+      decorations,
+      ctx,
+      model,
+      semanticBundle.semanticTokens,
+      semanticBundle.legend
+    );
+  }
+
+  if (state.requestSeq !== requestSeq) return;
+  state.decorations = targetEditor.deltaDecorations(state.decorations || [], decorations);
+};
+
+const scheduleMarkdownMathSyntaxHighlight = (targetEditor, reason) => {
+  if (!targetEditor) return;
+  const state = getMarkdownMathHighlightState(targetEditor);
+  if (state.timer) {
+    window.clearTimeout(state.timer);
+  }
+  const delay = reason === 'cursor'
+    ? 90
+    : reason === 'scroll'
+      ? 140
+      : reason === 'lsp-state'
+        ? 120
+        : 60;
+  state.timer = window.setTimeout(() => {
+    state.timer = 0;
+    updateMarkdownMathSyntaxHighlight(targetEditor, reason).catch((error) => {
+      logger.warn('[MarkdownMath] syntax highlight update failed', { reason }, error);
+    });
+  }, delay);
 };
 
 const getOrCreateMarkdownFenceModel = (languageId) => {
@@ -4417,6 +5227,7 @@ const FENCE_LANGUAGE_EXTENSIONS = {
   lua: 'lua',
   java: 'java',
   latex: 'tex',
+  mermaid: 'mmd',
 }
 
 const buildMarkdownFenceVirtualUri = (languageId, sourceFilePath = '') => {
@@ -4557,7 +5368,14 @@ const convertVscodeCompletionItemToMonaco = (item, replaceRange, index) => {
   }
 }
 
-const provideMarkdownFenceVscodeSuggestions = async (virtualModel, ctx, replaceRange, context) => {
+const getEmbeddedHostEditor = () => (
+  (editor?.hasTextFocus?.() ? editor : null) ||
+  (secondaryEditor?.hasTextFocus?.() ? secondaryEditor : null) ||
+  editor ||
+  secondaryEditor
+)
+
+const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, positionInBlock, replaceRange, context) => {
   try {
     const triggerCharacter = context?.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter
       ? String(context?.triggerCharacter || '')
@@ -4566,7 +5384,7 @@ const provideMarkdownFenceVscodeSuggestions = async (virtualModel, ctx, replaceR
     const result = await vscodeCommands.executeCommand(
       'vscode.executeCompletionItemProvider',
       VscodeUri.parse(virtualModel.uri.toString()),
-      new VscodePosition(ctx.positionInBlock.lineNumber - 1, ctx.positionInBlock.column - 1),
+      new VscodePosition(positionInBlock.lineNumber - 1, positionInBlock.column - 1),
       triggerCharacter || undefined,
       0
     )
@@ -4586,54 +5404,41 @@ const provideMarkdownFenceVscodeSuggestions = async (virtualModel, ctx, replaceR
     }
     return suggestions
   } catch (error) {
-    logger.debug('[MarkdownFence] vscode completion command failed, fallback to Monaco providers', error)
+    logger.debug('[EmbeddedLsp] vscode completion command failed, fallback to Monaco providers', error)
     return []
   }
 }
 
-const provideMarkdownFenceLspSuggestions = async (model, position, context) => {
-  const ctx = getMarkdownFenceContext(model, position);
-  if (!ctx) return [];
-  if (!LSP_SUPPORTED_LANGUAGES.has(ctx.languageId)) return [];
-  if (!lspEnabled.value) return [];
-
-  const lspState = getLspConnectionState(ctx.languageId);
-  if (lspState?.state === 'disabled') return [];
-
-  const sourceFilePath = String(selectedFile.value?.path || '').trim();
-  const virtualModel = getOrCreateMarkdownFenceModelForSource(ctx.languageId, sourceFilePath);
-  if (!virtualModel) return [];
-  virtualModel.setValue(ctx.blockText || '');
-
-  const hostEditor =
-    (editor?.hasTextFocus?.() ? editor : null) ||
-    (secondaryEditor?.hasTextFocus?.() ? secondaryEditor : null) ||
-    editor ||
-    secondaryEditor
-  if (!hostEditor) return []
-
-  initLspClient(hostEditor, ctx.languageId, virtualModel.uri.toString());
-
-  const providers = (monaco.languages).CompletionProviderRegistry?.all?.(virtualModel) || [];
-  if (!providers.length) return [];
-
+const buildEmbeddedReplaceRange = (model, position) => {
   const wordInfo = model.getWordUntilPosition(position);
-  const replaceRange = new monaco.Range(
+  return new monaco.Range(
     position.lineNumber,
     wordInfo?.startColumn || position.column,
     position.lineNumber,
     wordInfo?.endColumn || position.column
   );
+}
 
-  const vscodeSuggestions = await provideMarkdownFenceVscodeSuggestions(
+const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, context) => {
+  if (!embeddedCtx) return [];
+  const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
+  if (!virtualModel) return [];
+  await waitForLspConnection(embeddedCtx.languageId, 1200);
+
+  const replaceRange = buildEmbeddedReplaceRange(model, position);
+
+  const vscodeSuggestions = await provideEmbeddedVscodeCompletionSuggestions(
     virtualModel,
-    ctx,
+    embeddedCtx.positionInBlock,
     replaceRange,
     context
   )
   if (vscodeSuggestions.length) {
     return vscodeSuggestions
   }
+
+  const providers = (monaco.languages).CompletionProviderRegistry?.all?.(virtualModel) || [];
+  if (!providers.length) return [];
 
   const fallbackToken = {
     isCancellationRequested: false,
@@ -4645,12 +5450,12 @@ const provideMarkdownFenceLspSuggestions = async (model, position, context) => {
   for (const provider of providers) {
     if (!provider?.provideCompletionItems) continue;
     try {
-      const result = await provider.provideCompletionItems(
-        virtualModel,
-        ctx.positionInBlock,
-        context || { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
-        fallbackToken
-      );
+        const result = await provider.provideCompletionItems(
+          virtualModel,
+          embeddedCtx.positionInBlock,
+          context || { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
+          fallbackToken
+        );
       const items = Array.isArray(result?.suggestions) ? result.suggestions : [];
       for (const item of items) {
         const label = typeof item?.label === 'string'
@@ -4676,22 +5481,79 @@ const provideMarkdownFenceLspSuggestions = async (model, position, context) => {
   return suggestions;
 };
 
+const provideMarkdownFenceLspSuggestions = async (model, position, context) => {
+  const ctx = getMarkdownFenceContext(model, position);
+  return provideEmbeddedLspSuggestions(ctx, model, position, context);
+};
+
+const provideMarkdownMathLspSuggestions = async (model, position, context) => {
+  const ctx = getMarkdownMathContext(model, position);
+  return provideEmbeddedLspSuggestions(ctx, model, position, context);
+};
+
+const convertVscodeSignatureHelpToMonaco = (value) => {
+  if (!value || !Array.isArray(value.signatures) || !value.signatures.length) return null
+  return {
+    value: {
+      activeSignature: Number.isFinite(value.activeSignature) ? value.activeSignature : 0,
+      activeParameter: Number.isFinite(value.activeParameter) ? value.activeParameter : 0,
+      signatures: value.signatures.map((signature) => ({
+        label: String(signature?.label || ''),
+        documentation: normalizeCompletionDocumentation(signature?.documentation),
+        parameters: Array.isArray(signature?.parameters)
+          ? signature.parameters.map((parameter) => ({
+            label: parameter?.label ?? '',
+            documentation: normalizeCompletionDocumentation(parameter?.documentation),
+          }))
+          : [],
+      })),
+    },
+    dispose() { }
+  }
+}
+
+const provideEmbeddedSignatureHelp = async (embeddedCtx, context) => {
+  if (!embeddedCtx) return null
+  const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx)
+  if (!virtualModel) return null
+  const ready = await waitForLspConnection(embeddedCtx.languageId, 1200)
+  if (!ready) return null
+
+  try {
+    const triggerCharacter = String(context?.triggerCharacter || '')
+    const result = await vscodeCommands.executeCommand(
+      'vscode.executeSignatureHelpProvider',
+      VscodeUri.parse(virtualModel.uri.toString()),
+      new VscodePosition(embeddedCtx.positionInBlock.lineNumber - 1, embeddedCtx.positionInBlock.column - 1),
+      triggerCharacter || undefined
+    )
+    return convertVscodeSignatureHelpToMonaco(result)
+  } catch (error) {
+    logger.debug('[EmbeddedLsp] vscode signature help command failed', error)
+    return null
+  }
+}
+
 const EXT_TO_LANGUAGE = {
   js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
   ts: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
   css: 'css',
   html: 'html',
   htm: 'html',
   md: 'markdown',
   py: 'python',
   cpp: 'cpp',
-  c: 'cpp',
+  c: 'c',
   h: 'cpp',
   hpp: 'cpp',
   rs: 'rust',
   sh: 'shell',
   jsx: 'javascript',
-  tsx: 'javascript',
+  tsx: 'typescript',
   json: 'json',
   yaml: 'yaml',
   yml: 'yaml',
@@ -4702,14 +5564,20 @@ const EXT_TO_LANGUAGE = {
   latex: 'latex',
   cls: 'latex',
   sty: 'latex',
+  mmd: 'mermaid',
+  mermaid: 'mermaid',
   toml: 'ini',
 }
 
 const MARKDOWN_FENCE_LANG_MAP = {
   js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
   javascript: 'javascript',
   jsx: 'javascript',
   ts: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
   tsx: 'typescript',
   py: 'python',
   python: 'python',
@@ -4728,28 +5596,16 @@ const MARKDOWN_FENCE_LANG_MAP = {
   html: 'html',
   css: 'css',
   json: 'json',
+  jsonc: 'json',
   yaml: 'yaml',
   yml: 'yaml',
   lua: 'lua',
   java: 'java',
   tex: 'latex',
   latex: 'latex',
+  mmd: 'mermaid',
+  mermaid: 'mermaid',
 }
-
-const LSP_SUPPORTED_LANGUAGES = new Set([
-  'cpp',
-  'c',
-  'rust',
-  'python',
-  'shell',
-  'lua',
-  'java',
-  'typescript',
-  'javascript',
-  'html',
-  'markdown',
-  'latex',
-])
 
 const resolveMonacoLanguageByPath = (path) => {
   const ext = String(path || '').split('.').pop()?.toLowerCase() || 'markdown'
@@ -4782,7 +5638,7 @@ const refreshLspEnabledSetting = async () => {
 // LSP 开关驱动 Monaco 主题，确保高亮使用 One Dark
 const applyMonacoThemeByLsp = (enabled) => {
   const isDark = settingsStore.appearanceTheme === 'dark'
-  const themeName = enabled ? 'guaxi-dark' : (isDark ? 'guaxi-dark' : 'guaxi-light')
+  const themeName = isDark ? 'guaxi-dark' : 'guaxi-light'
   try {
     monaco.editor.setTheme(themeName)
     logger.info('[theme] apply by lsp', { enabled, themeName })
@@ -4898,6 +5754,38 @@ const initEditor = () => {
       { token: 'attribute.name', foreground: 'c18401' },           // Attribute name → Type color
       { token: 'meta.embedded', foreground: 'a0a1a7' }            // Meta embedded → Comment color
     ],
+    semanticHighlighting: true,
+    semanticTokenColors: {
+      comment: '#a0a1a7',
+      string: '#50a14f',
+      keyword: '#a626a4',
+      number: '#986801',
+      regexp: '#0184bc',
+      operator: '#383a42',
+      punctuation: '#383a42',
+      'punctuation.definition': '#383a42',
+      'punctuation.bracket': '#383a42',
+      class: '#c18401',
+      enum: '#c18401',
+      interface: '#c18401',
+      type: '#c18401',
+      typeParameter: '#c18401',
+      namespace: '#c18401',
+      struct: '#c18401',
+      function: '#4078f2',
+      method: '#4078f2',
+      property: '#4078f2',
+      parameter: '#986801',
+      variable: '#e45649',
+      'variable.readonly': '#986801',
+      'variable.defaultLibrary': '#e45649',
+      enumMember: '#986801',
+      boolean: '#986801',
+      macro: '#a626a4',
+      decorator: '#a626a4',
+      label: '#a626a4',
+      'string.escape': '#0184bc'
+    },
     colors: {
       'editor.background': '#fafafa',
       'editor.foreground': '#383a42',
@@ -5176,6 +6064,8 @@ const initEditor = () => {
   void refreshLspEnabledSetting().then(() => {
     enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '')
   })
+  refreshMarkdownSuggestMode(editor)
+  refreshMarkdownSuggestMode(editor)
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
@@ -5424,6 +6314,8 @@ const ensureSecondaryEditor = () => {
 
   enableLspForEditorLanguage(secondaryEditor, language, rightPath || '');
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'init');
+  scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'init');
+  refreshMarkdownSuggestMode(secondaryEditor)
 
   if (editorEffectsRight) {
     editorEffectsRight.destroy();
@@ -5440,23 +6332,30 @@ const ensureSecondaryEditor = () => {
 
   secondaryEditor.onDidChangeCursorPosition(() => {
     editorEffectsRight?.updateCursorTarget();
+    refreshMarkdownSuggestMode(secondaryEditor)
     scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'cursor');
+    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'cursor');
   });
 
   secondaryEditor.onDidScrollChange(() => {
     editorEffectsRight?.updateCursorTarget();
+    refreshMarkdownSuggestMode(secondaryEditor)
     scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'scroll');
+    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'scroll');
   });
 
   secondaryEditor.onDidType((text) => {
     editorEffectsRight?.spawnExplosionAtCursor(text);
     editorEffectsRight?.updateCursorTarget();
+    maybeTriggerEmbeddedSuggestOnType(secondaryEditor, text)
   });
 
   secondaryEditor.onDidChangeModelLanguage(() => {
     const languageId = secondaryEditor?.getModel?.()?.getLanguageId?.() || 'plaintext';
     enableLspForEditorLanguage(secondaryEditor, languageId, rightPath || '');
+    refreshMarkdownSuggestMode(secondaryEditor)
     scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'model');
+    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'model');
   });
 
   if (secondaryMonacoCtrlClickDisposable) {
@@ -5483,7 +6382,9 @@ const ensureSecondaryEditor = () => {
         fileTreeStore.updateTabContent(path, content);
         updateGitDecorations();
         if (model.getLanguageId() === 'markdown') {
+          refreshMarkdownSuggestMode(secondaryEditor)
           scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'debounced');
+          scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'debounced');
         }
       }, 120)
     );
@@ -5535,6 +6436,7 @@ let gitDiffContainerEl = null
 let gitDiffOriginalModel = null
 let gitDiffModifiedModel = null
 let gitDecorationsSeq = 0
+let disposeLspConnectionStateListener = null
 
 const ensureGitDiffEditor = (languageId) => {
   const lang = languageId || 'plaintext'
@@ -5812,11 +6714,15 @@ const setupEditorListeners = () => {
   monacoLinkLikeDecorDisposable = installMonacoLinkLikeDecorations(editor, { tag: 'left' });
 
   scheduleMarkdownFenceSyntaxHighlight(editor, 'init');
+  scheduleMarkdownMathSyntaxHighlight(editor, 'init');
+  refreshMarkdownSuggestMode(editor)
 
   editor.onDidChangeCursorPosition((e) => {
     editorStore.setCursorPosition(e.position);
     updateTableToolbar();
+    refreshMarkdownSuggestMode(editor)
     scheduleMarkdownFenceSyntaxHighlight(editor, 'cursor');
+    scheduleMarkdownMathSyntaxHighlight(editor, 'cursor');
     editorEffectsLeft?.updateCursorTarget();
   });
 
@@ -5880,7 +6786,9 @@ const setupEditorListeners = () => {
         recordEditLocationFromEditor();
         updateTableToolbar();
         scheduleAutoFormatActiveTable();
+        refreshMarkdownSuggestMode(editor)
         scheduleMarkdownFenceSyntaxHighlight(editor, 'debounced');
+        scheduleMarkdownMathSyntaxHighlight(editor, 'debounced');
         updateGitDecorations();
       }, 300)
     );
@@ -5901,7 +6809,9 @@ const setupEditorListeners = () => {
       updateTableToolbar();
     }
     editorEffectsLeft?.updateCursorTarget();
+    refreshMarkdownSuggestMode(editor)
     scheduleMarkdownFenceSyntaxHighlight(editor, 'scroll');
+    scheduleMarkdownMathSyntaxHighlight(editor, 'scroll');
     syncRealtimePreviewScroll();
   });
 
@@ -5910,7 +6820,9 @@ const setupEditorListeners = () => {
     editorStore.setLanguage(language);
     enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '');
     updateTableToolbar();
+    refreshMarkdownSuggestMode(editor)
     scheduleMarkdownFenceSyntaxHighlight(editor, 'model');
+    scheduleMarkdownMathSyntaxHighlight(editor, 'model');
   });
 
   const isSuggestWidgetVisible = () => {
@@ -5964,6 +6876,7 @@ const setupEditorListeners = () => {
 
     editorEffectsLeft?.spawnExplosionAtCursor(text);
     editorEffectsLeft?.updateCursorTarget();
+    maybeTriggerEmbeddedSuggestOnType(editor, text)
 
     const model = editor.getModel();
     const pos = editor.getPosition();
@@ -10280,6 +11193,8 @@ const handleLspSettingChanged = (evt) => {
   applyMonacoThemeByLsp(enabled)
   scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
+  scheduleMarkdownMathSyntaxHighlight(editor, 'setting')
+  scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'setting')
 
   if (!enabled) {
     disposeAllLspClients()
@@ -10304,6 +11219,8 @@ watch(lspEnabled, (enabled) => {
   applyMonacoThemeByLsp(enabled)
   scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
+  scheduleMarkdownMathSyntaxHighlight(editor, 'setting')
+  scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'setting')
 })
 
 // 生命周期
@@ -10322,6 +11239,18 @@ onMounted(() => {
   if (editorStore.autoSaveEnabled !== false && intervalMs > 0) {
     autoSaveTimerId = window.setInterval(autoSaveDirtyTabs, intervalMs)
   }
+
+  disposeLspConnectionStateListener = onLspConnectionStateChange(({ languageId, state }) => {
+    const normalizedLanguageId = String(languageId || '').trim().toLowerCase()
+    if (!LSP_SUPPORTED_LANGUAGES.has(normalizedLanguageId)) return
+    scheduleMarkdownFenceSyntaxHighlight(editor, 'lsp-state')
+    scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'lsp-state')
+    scheduleMarkdownMathSyntaxHighlight(editor, 'lsp-state')
+    scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'lsp-state')
+    if (state !== 'connected') return
+    triggerEmbeddedSuggestIfActive(editor, normalizedLanguageId)
+    triggerEmbeddedSuggestIfActive(secondaryEditor, normalizedLanguageId)
+  })
 });
 
 onActivated(() => {
@@ -10335,6 +11264,8 @@ onUnmounted(() => {
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.removeEventListener('selectionchange', handleGlobalSelectionChange, true)
   document.removeEventListener('mousedown', handleGlobalMouseDownForPreviewToolbar, true)
+  disposeLspConnectionStateListener?.()
+  disposeLspConnectionStateListener = null
   clearPreviewSelectionState()
   destroyRealtimeVditor();
 
@@ -10961,6 +11892,7 @@ onUnmounted(() => {
 .guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
 .guaxi-editor :deep(.md-fence-token-property) { color: #98c379; }
 .guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
+.guaxi-editor :deep(.md-fence-token-macro) { color: #61afef; }
 .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
 .guaxi-editor :deep(.md-fence-token-attribute) { color: #d19a66; }
 .guaxi-editor :deep(.md-fence-token-builtin) { color: #56b6c2; }
@@ -10984,6 +11916,7 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-regexp) { color: #56b6c2; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-property) { color: #98c379; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-namespace) { color: #e5c07b; }
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-macro) { color: #61afef; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-tag) { color: #e06c75; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-attribute) { color: #d19a66; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-builtin) { color: #56b6c2; }

@@ -1,0 +1,109 @@
+[
+  {
+    "language": "cpp",
+    "server": "clangd",
+    "bin_name": "clangd",
+    "args": [
+      "--enable-config"
+    ],
+    "auto_download": true
+  },
+  {
+    "language": "c",
+    "server": "clangd",
+    "bin_name": "clangd",
+    "args": [
+      "--enable-config"
+    ],
+    "auto_download": true
+  },
+  {
+    "language": "rust",
+    "server": "rust-analyzer",
+    "bin_name": "rust-analyzer",
+    "args": [],
+    "auto_download": true
+  },
+  {
+    "language": "lua",
+    "server": "lua-language-server",
+    "bin_name": "lua-language-server",
+    "args": [],
+    "auto_download": true
+  },
+  {
+    "language": "latex",
+    "server": "texlab",
+    "bin_name": "texlab",
+    "args": [],
+    "auto_download": true
+  },
+  {
+    "language": "python",
+    "server": "basedpyright",
+    "bin_name": "basedpyright-langserver",
+    "args": [
+      "--stdio"
+    ],
+    "auto_download": false
+  },
+  {
+    "language": "shell",
+    "server": "bash-language-server",
+    "bin_name": "bash-language-server",
+    "args": [
+      "start"
+    ],
+    "auto_download": false
+  },
+  {
+    "language": "javascript",
+    "server": "typescript-language-server",
+    "bin_name": "typescript-language-server",
+    "args": [
+      "--stdio"
+    ],
+    "auto_download": false
+  },
+  {
+    "language": "typescript",
+    "server": "typescript-language-server",
+    "bin_name": "typescript-language-server",
+    "args": [
+      "--stdio"
+    ],
+    "auto_download": false
+  },
+  {
+    "language": "html",
+    "server": "html-ls",
+    "bin_name": "html-ls",
+    "args": [
+      "--stdio"
+    ],
+    "auto_download": false
+  },
+  {
+    "language": "markdown",
+    "server": "marksman",
+    "bin_name": "marksman",
+    "args": [
+      "server"
+    ],
+    "auto_download": true
+  },
+  {
+    "language": "mermaid",
+    "server": "mermaid-lsp",
+    "bin_name": "mermaid-lsp",
+    "args": [],
+    "auto_download": true
+  },
+  {
+    "language": "java",
+    "server": "jdtls",
+    "bin_name": "jdtls",
+    "args": [],
+    "auto_download": false
+  }
+]

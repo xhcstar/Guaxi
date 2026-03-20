@@ -8,6 +8,7 @@ import {
   WebSocketMessageWriter,
 } from 'vscode-ws-jsonrpc'
 import { createLogger } from '../utils/logger'
+import { isLspSupportedLanguage } from './lspCapabilities'
 type LspClientEntry = {
   client: MonacoLanguageClient | null
   webSocket: WebSocket
@@ -25,6 +26,7 @@ const lspDisabledReason = new Map<string, string>()
 const LSP_VSCODE_API_NOT_READY = 'Default api is not ready yet'
 const LSP_FAILURE_WINDOW_MS = 60000
 const LSP_FAILURE_THRESHOLD = 3
+const LSP_STOP_TIMEOUT_MS = 350
 const lspFailureTracker = new Map<string, { count: number; firstAt: number }>()
 
 type LspConnectionStateValue = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'disabled'
@@ -40,8 +42,27 @@ type LspConnectionStatePayload = {
   updatedAt: number
 }
 
+type OutputChannelLike = {
+  append(value: string): void
+  appendLine(value: string): void
+  clear(): void
+  replace(value: string): void
+  show(preserveFocus?: boolean): void
+  hide(): void
+  dispose(): void
+}
+
 const lspConnectionState = new Map<string, LspConnectionState>()
 const lspConnectionListeners = new Set<(payload: LspConnectionStatePayload) => void>()
+const LSP_NOOP_OUTPUT_CHANNEL: OutputChannelLike = {
+  append() { },
+  appendLine() { },
+  clear() { },
+  replace() { },
+  show() { },
+  hide() { },
+  dispose() { },
+}
 
 const notifyLspConnectionState = (payload: LspConnectionStatePayload) => {
   lspConnectionListeners.forEach((listener) => {
@@ -89,6 +110,17 @@ const shouldDisableLsp = (error: unknown) => {
   return message.includes(LSP_VSCODE_API_NOT_READY)
 }
 
+const isFatalLspError = (error: unknown) => {
+  const message = resolveErrorMessage(error).toLowerCase()
+  if (!message) return false
+  return (
+    message.includes('already exists') ||
+    message.includes('server initialization failed') ||
+    message.includes('couldn\'t create connection to server') ||
+    message.includes('stopping the server timed out')
+  )
+}
+
 const safeDisposeTransport = (value: unknown) => {
   try {
     const candidate = value as { dispose?: () => void } | null | undefined
@@ -97,16 +129,54 @@ const safeDisposeTransport = (value: unknown) => {
   }
 }
 
-const stopClientSafely = (client: MonacoLanguageClient | null) => {
-  if (!client) return Promise.resolve()
+export function waitForLspConnection(languageId: string, timeoutMs: number = 1500): Promise<boolean> {
+  const lang = String(languageId || '').trim().toLowerCase()
+  if (!lang) return Promise.resolve(false)
+
+  const current = getLspConnectionState(lang)
+  if (current.state === 'connected') return Promise.resolve(true)
+  if (current.state === 'disabled') return Promise.resolve(false)
+
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof window.setTimeout> | null = null
+
+    const done = (value: boolean) => {
+      if (settled) return
+      settled = true
+      if (timer) window.clearTimeout(timer)
+      off()
+      resolve(value)
+    }
+
+    const off = onLspConnectionStateChange((payload) => {
+      if (String(payload.languageId || '').trim().toLowerCase() !== lang) return
+      if (payload.state === 'connected') {
+        done(true)
+      } else if (payload.state === 'disabled') {
+        done(false)
+      }
+    })
+
+    timer = window.setTimeout(() => {
+      done(getLspConnectionState(lang).state === 'connected')
+    }, Math.max(50, Number(timeoutMs) || 1500))
+  })
+}
+
+const stopClientSafely = async (client: MonacoLanguageClient | null) => {
+  if (!client) return
+
   try {
-    const result = client.stop()
-    if (result && typeof (result as Promise<void>).then === 'function') {
-      return (result as Promise<void>).catch(() => { })
+    const disposableClient = client as MonacoLanguageClient & {
+      stop?: (timeout?: number) => Promise<void> | void
+    }
+
+    if (typeof disposableClient.stop === 'function') {
+      await Promise.resolve(disposableClient.stop(LSP_STOP_TIMEOUT_MS)).catch(() => { })
     }
   } catch {
   }
-  return Promise.resolve()
 }
 
 const closeSocketSafely = (webSocket: WebSocket) => {
@@ -181,22 +251,7 @@ export function initLspClient(
 ) {
   if (!editor || !languageId) return
 
-  const supported = [
-    'cpp',
-    'c',
-    'rust',
-    'python',
-    'shell',
-    'lua',
-    'java',
-    'javascript',
-    'typescript',
-    'html',
-    'markdown',
-    'latex',
-  ]
-
-  if (!supported.includes(languageId)) {
+  if (!isLspSupportedLanguage(languageId)) {
     return
   }
 
@@ -253,8 +308,10 @@ export function initLspClient(
     cur.reader = null
     safeDisposeTransport(cur.writer)
     cur.writer = null
+    const client = cur.client
+    cur.client = null
 
-    void stopClientSafely(cur.client).finally(() => {
+    void stopClientSafely(client).finally(() => {
       closeSocketSafely(cur.webSocket)
     })
 
@@ -281,13 +338,15 @@ export function initLspClient(
 
     let client: MonacoLanguageClient
     try {
-      client = new MonacoLanguageClient({
-        name: `${languageId} Language Client`,
-        clientOptions: {
-          documentSelector: [{ language: languageId }],
-          initializationOptions: {
-            workspaceFolders: [],
-            filePath,
+        client = new MonacoLanguageClient({
+          name: `${languageId} Language Client`,
+          clientOptions: {
+            documentSelector: [{ language: languageId }],
+            outputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
+            traceOutputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
+            initializationOptions: {
+              workspaceFolders: [],
+              filePath,
           },
           // Avoid restart loop/noisy reconnect logs when socket is intentionally closed.
           errorHandler: {
@@ -300,6 +359,8 @@ export function initLspClient(
     } catch (error) {
       if (shouldDisableLsp(error)) {
         disableLsp(languageId, 'vscode-api-not-ready', error)
+      } else if (isFatalLspError(error)) {
+        disableLsp(languageId, 'fatal-client-init-error', error)
       } else {
         recordLspFailure(languageId, 'client-init-failed', error)
         logger.warn('[LSP] client init failed', { languageId, error })
@@ -326,6 +387,8 @@ export function initLspClient(
       ; (startPromise as Promise<void>).catch((error) => {
         if (shouldDisableLsp(error)) {
           disableLsp(languageId, 'vscode-api-not-ready', error)
+        } else if (isFatalLspError(error)) {
+          disableLsp(languageId, 'fatal-start-error', error)
         } else {
           recordLspFailure(languageId, 'start-failed', error)
           logger.warn('[LSP] client start failed', { languageId, error })
@@ -360,7 +423,9 @@ export function disposeAllLspClients() {
     entry.webSocket.onerror = null
 
     entry.disposed = true
-    void stopClientSafely(entry.client).finally(() => {
+    const client = entry.client
+    entry.client = null
+    void stopClientSafely(client).finally(() => {
       closeSocketSafely(entry.webSocket)
     })
     lspClients.delete(languageId)

@@ -17,7 +17,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex as ParkingMutex;
 use regex::Regex;
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs as tokio_fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -60,12 +60,12 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 struct LspLanguageEntry {
-    language: &'static str,
-    server: &'static str,
-    bin_name: &'static str,
-    args: &'static [&'static str],
+    language: String,
+    server: String,
+    bin_name: String,
+    args: Vec<String>,
     auto_download: bool,
 }
 
@@ -81,92 +81,10 @@ pub struct LspServerStatus {
     pub message: Option<String>,
 }
 
-const LSP_LANGUAGES: &[LspLanguageEntry] = &[
-    LspLanguageEntry {
-        language: "cpp",
-        server: "clangd",
-        bin_name: "clangd",
-        args: &["--enable-config"],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "c",
-        server: "clangd",
-        bin_name: "clangd",
-        args: &["--enable-config"],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "rust",
-        server: "rust-analyzer",
-        bin_name: "rust-analyzer",
-        args: &[],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "lua",
-        server: "lua-language-server",
-        bin_name: "lua-language-server",
-        args: &[],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "latex",
-        server: "texlab",
-        bin_name: "texlab",
-        args: &[],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "python",
-        server: "ruff",
-        bin_name: "ruff",
-        args: &["server"],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "shell",
-        server: "shellcheck",
-        bin_name: "shellcheck",
-        args: &[],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "javascript",
-        server: "biome",
-        bin_name: "biome",
-        args: &["lsp-proxy"],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "typescript",
-        server: "biome",
-        bin_name: "biome",
-        args: &["lsp-proxy"],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "html",
-        server: "html-ls",
-        bin_name: "html-ls",
-        args: &["--stdio"],
-        auto_download: false,
-    },
-    LspLanguageEntry {
-        language: "markdown",
-        server: "marksman",
-        bin_name: "marksman",
-        args: &["server"],
-        auto_download: true,
-    },
-    LspLanguageEntry {
-        language: "java",
-        server: "jdtls",
-        bin_name: "jdtls",
-        args: &[],
-        auto_download: false,
-    },
-];
+static LSP_LANGUAGES: Lazy<Vec<LspLanguageEntry>> = Lazy::new(|| {
+    serde_json::from_str(include_str!("../../../shared/lsp_languages.json"))
+        .expect("invalid shared LSP language table")
+});
 
 static LSP_INSTALLING: Lazy<ParkingMutex<HashSet<String>>> =
     Lazy::new(|| ParkingMutex::new(HashSet::new()));
@@ -188,6 +106,10 @@ fn lsp_root_dir() -> Result<PathBuf, String> {
 
 fn lsp_server_dir(server: &str) -> Result<PathBuf, String> {
     Ok(lsp_root_dir()?.join(server))
+}
+
+fn slidev_env_root() -> Result<PathBuf, String> {
+    Ok(exe_dir()?.join("utils").join("SlidevEnv"))
 }
 
 fn lsp_download_dir() -> Result<PathBuf, String> {
@@ -245,20 +167,111 @@ fn find_lsp_binary_in_server(server: &str, bin_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn is_bundled_node_lsp(server: &str) -> bool {
+    matches!(
+        server,
+        "basedpyright" | "bash-language-server" | "typescript-language-server"
+    )
+}
+
+fn find_bundled_node_lsp_bin(bin_name: &str) -> Option<PathBuf> {
+    if bin_name.trim().is_empty() {
+        return None;
+    }
+
+    let root = slidev_env_root().ok()?;
+    let bin_dir = root.join("node_modules").join(".bin");
+
+    #[cfg(target_os = "windows")]
+    {
+        let cmd_path = bin_dir.join(format!("{bin_name}.cmd"));
+        if cmd_path.is_file() {
+            return Some(cmd_path);
+        }
+
+        let exe_path = bin_dir.join(format!("{bin_name}.exe"));
+        if exe_path.is_file() {
+            return Some(exe_path);
+        }
+    }
+
+    let direct_path = bin_dir.join(bin_name);
+    if direct_path.is_file() {
+        return Some(direct_path);
+    }
+
+    None
+}
+
+fn find_existing_lsp_program(entry: &LspLanguageEntry) -> Option<PathBuf> {
+    if is_bundled_node_lsp(&entry.server) {
+        if let Some(path) = find_bundled_node_lsp_bin(&entry.bin_name) {
+            return Some(path);
+        }
+    }
+
+    let bin_file = lsp_file_name(&entry.bin_name);
+    if let Some(path) = find_lsp_binary_in_server(&entry.server, &bin_file) {
+        return Some(path);
+    }
+
+    let base_dir = exe_dir().ok()?;
+    let mut candidates = vec![
+        base_dir.join("lsp").join(&bin_file),
+        base_dir.join("utils").join("lsp").join(&bin_file),
+    ];
+
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(
+            PathBuf::from(manifest_dir)
+                .join("utils")
+                .join("lsp")
+                .join(&bin_file),
+        );
+    }
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
 fn lsp_language_entry(language: &str) -> Option<&'static LspLanguageEntry> {
     LSP_LANGUAGES.iter().find(|entry| entry.language == language)
 }
 
 fn build_lsp_command(entry: &LspLanguageEntry, program: String) -> LspCommandConfig {
+    let mut envs = vec![];
+    let mut cwd = None;
+
+    if is_bundled_node_lsp(&entry.server) {
+        if let Ok(root) = slidev_env_root() {
+            let mut paths = vec![root.clone(), root.join("node_modules").join(".bin")];
+            if let Some(old) = std::env::var_os("PATH") {
+                paths.extend(std::env::split_paths(&old));
+            }
+            if let Ok(joined) = std::env::join_paths(paths) {
+                envs.push(("PATH".to_string(), joined.to_string_lossy().to_string()));
+            }
+            cwd = Some(root.to_string_lossy().to_string());
+        }
+    }
+
     LspCommandConfig {
         program,
-        args: entry.args.iter().map(|v| v.to_string()).collect(),
-        envs: vec![],
-        cwd: None,
+        args: entry.args.clone(),
+        envs,
+        cwd,
     }
 }
 
 fn resolve_lsp_binary(name: &str) -> String {
+    if let Some(entry) = lsp_language_entry(name) {
+        if let Some(path) = find_existing_lsp_program(entry) {
+            return path.to_string_lossy().into_owned();
+        }
+        if !entry.bin_name.trim().is_empty() {
+            return entry.bin_name.clone();
+        }
+    }
+
     let file_name = lsp_file_name(name);
 
     if let Some(path) = find_lsp_binary_in_server(name, &file_name) {
@@ -326,6 +339,13 @@ fn lsp_binary_spec(name: &str) -> Option<LspBinarySpec> {
             bin_name: "marksman.exe",
             asset_kind: LspAssetKind::Raw,
             direct_url: Some("https://github.com/artempyanykh/marksman/releases/download/2026-02-08/marksman.exe"),
+        }),
+        "mermaid-lsp" => Some(LspBinarySpec {
+            repo: "dawsh2/zed-mermaid-preview",
+            asset_regex: r"mermaid-lsp-x86_64-pc-windows-msvc\.zip$",
+            bin_name: "mermaid-lsp.exe",
+            asset_kind: LspAssetKind::Zip,
+            direct_url: Some("https://github.com/dawsh2/zed-mermaid-preview/releases/download/v0.1.24/mermaid-lsp-x86_64-pc-windows-msvc.zip"),
         }),
         "ruff" => Some(LspBinarySpec {
             repo: "astral-sh/ruff",
@@ -649,19 +669,23 @@ async fn ensure_lsp_binary(
 }
 
 fn build_lsp_status(entry: &LspLanguageEntry) -> LspServerStatus {
-    let server_dir = lsp_server_dir(entry.server).ok();
-    let bin_file = lsp_file_name(entry.bin_name);
-    let bin_path = server_dir
-        .as_ref()
-        .and_then(|dir| find_file_by_name(dir, &bin_file));
+    let install_dir = if is_bundled_node_lsp(&entry.server) {
+        slidev_env_root().ok()
+    } else {
+        lsp_server_dir(&entry.server).ok()
+    };
+    let bin_path = find_existing_lsp_program(entry);
     let installed = bin_path.is_some();
-    let supported = entry.auto_download && lsp_binary_spec(entry.server).is_some();
-    let installing = LSP_INSTALLING.lock().contains(entry.server);
+    let supported = is_bundled_node_lsp(&entry.server)
+        || (entry.auto_download && lsp_binary_spec(&entry.server).is_some());
+    let installing = LSP_INSTALLING.lock().contains(&entry.server);
     let mut message = None;
 
     if !supported {
         message = Some("需要手动配置运行环境".to_string());
-    } else if LSP_INSTALL_FAILED.lock().contains(entry.server) {
+    } else if is_bundled_node_lsp(&entry.server) && !installed {
+        message = Some("缺少内置 SlidevEnv 的 Node LSP 依赖".to_string());
+    } else if LSP_INSTALL_FAILED.lock().contains(&entry.server) {
         message = Some("上次安装失败".to_string());
     }
 
@@ -671,7 +695,7 @@ fn build_lsp_status(entry: &LspLanguageEntry) -> LspServerStatus {
         supported,
         installed,
         installing,
-        install_dir: server_dir
+        install_dir: install_dir
             .map(|dir| dir.to_string_lossy().to_string())
             .unwrap_or_default(),
         bin_path: bin_path.map(|p| p.to_string_lossy().to_string()),
@@ -690,11 +714,18 @@ pub async fn install_lsp_server(
     let entry = lsp_language_entry(language)
         .ok_or_else(|| format!("不支持的语言: {}", language))?;
 
-    if lsp_binary_spec(entry.server).is_none() {
+    if is_bundled_node_lsp(&entry.server) {
+        if find_existing_lsp_program(entry).is_some() {
+            return Ok(build_lsp_status(entry));
+        }
+        return Err("当前 LSP 依赖内置的 SlidevEnv 包，请重新构建或恢复 SlidevEnv/node_modules".to_string());
+    }
+
+    if lsp_binary_spec(&entry.server).is_none() {
         return Err(format!("当前语言暂不支持自动下载: {}", language));
     }
 
-    let _ = ensure_lsp_binary(entry.server, entry.bin_name, token.as_deref()).await?;
+    let _ = ensure_lsp_binary(&entry.server, &entry.bin_name, token.as_deref()).await?;
     Ok(build_lsp_status(entry))
 }
 
@@ -702,12 +733,14 @@ async fn prepare_lsp_command(language: &str) -> Result<LspCommandConfig, String>
     let entry = lsp_language_entry(language)
         .ok_or_else(|| format!("Unsupported language for LSP: {}", language))?;
 
-    let program = if entry.auto_download && lsp_binary_spec(entry.server).is_some() {
-        ensure_lsp_binary(entry.server, entry.bin_name, None)
+    let program = if let Some(path) = find_existing_lsp_program(entry) {
+        path.to_string_lossy().to_string()
+    } else if entry.auto_download && lsp_binary_spec(&entry.server).is_some() {
+        ensure_lsp_binary(&entry.server, &entry.bin_name, None)
             .await
             .map(|p| p.to_string_lossy().to_string())?
     } else {
-        resolve_lsp_binary(entry.server)
+        resolve_lsp_binary(&entry.bin_name)
     };
 
     Ok(build_lsp_command(entry, program))
