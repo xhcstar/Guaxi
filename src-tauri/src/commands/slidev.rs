@@ -35,9 +35,14 @@ struct SlidevDevRuntime {
 }
 
 static SLIDEV_DEV: OnceLock<Mutex<Option<SlidevDevRuntime>>> = OnceLock::new();
+static SLIDEV_ENV_PREPARE: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn dev_lock() -> &'static Mutex<Option<SlidevDevRuntime>> {
     SLIDEV_DEV.get_or_init(|| Mutex::new(None))
+}
+
+fn slidev_env_prepare_lock() -> &'static Mutex<()> {
+    SLIDEV_ENV_PREPARE.get_or_init(|| Mutex::new(()))
 }
 
 fn normalize_path_for_fs(input: &str) -> PathBuf {
@@ -66,8 +71,165 @@ fn expected_slidev_env_root() -> Result<PathBuf, String> {
     Ok(exe_dir()?.join("utils").join("SlidevEnv"))
 }
 
-fn resolve_slidev_runtime() -> Result<(PathBuf, PathBuf, SlidevEnvStatus), String> {
+fn expected_slidev_env_bundle() -> Result<PathBuf, String> {
+    Ok(exe_dir()?.join("utils").join("SlidevEnv.zip"))
+}
+
+fn extract_slidev_env_bundle(bundle: &Path, root: &Path) -> Result<(), String> {
+    let parent = root
+        .parent()
+        .ok_or_else(|| format!("无法解析 SlidevEnv 目标目录的父目录: {}", root.to_string_lossy()))?;
+    let temp_root = parent.join(format!("SlidevEnv.__extracting_{}", std::process::id()));
+
+    if temp_root.exists() {
+        std::fs::remove_dir_all(&temp_root).map_err(|e| {
+            format!(
+                "清理旧的 SlidevEnv 临时目录失败: {} ({e})",
+                temp_root.to_string_lossy()
+            )
+        })?;
+    }
+    std::fs::create_dir_all(&temp_root).map_err(|e| {
+        format!(
+            "创建 SlidevEnv 临时目录失败: {} ({e})",
+            temp_root.to_string_lossy()
+        )
+    })?;
+
+    let file = std::fs::File::open(bundle)
+        .map_err(|e| format!("打开 SlidevEnv 压缩包失败: {} ({e})", bundle.to_string_lossy()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("读取 SlidevEnv 压缩包失败: {} ({e})", bundle.to_string_lossy()))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取 SlidevEnv 压缩条目失败: {e}"))?;
+        let enclosed = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("SlidevEnv 压缩包包含非法路径: {}", entry.name()))?
+            .to_path_buf();
+        let out_path = temp_root.join(enclosed);
+
+        if entry.name().ends_with('/') {
+            std::fs::create_dir_all(&out_path).map_err(|e| {
+                format!(
+                    "创建 SlidevEnv 目录失败: {} ({e})",
+                    out_path.to_string_lossy()
+                )
+            })?;
+            continue;
+        }
+
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "创建 SlidevEnv 文件父目录失败: {} ({e})",
+                    parent.to_string_lossy()
+                )
+            })?;
+        }
+
+        let mut out_file = std::fs::File::create(&out_path).map_err(|e| {
+            format!(
+                "创建 SlidevEnv 目标文件失败: {} ({e})",
+                out_path.to_string_lossy()
+            )
+        })?;
+        std::io::copy(&mut entry, &mut out_file).map_err(|e| {
+            format!(
+                "写入 SlidevEnv 目标文件失败: {} ({e})",
+                out_path.to_string_lossy()
+            )
+        })?;
+    }
+
+    let direct_ready = temp_root.join("node_modules").is_dir()
+        || temp_root.join("node.exe").is_file()
+        || temp_root.join("node").is_file();
+    let nested_root = temp_root.join("SlidevEnv");
+    let extracted_root = if direct_ready {
+        temp_root.clone()
+    } else if nested_root.is_dir() {
+        nested_root
+    } else {
+        temp_root.clone()
+    };
+
+    if root.exists() {
+        if root.is_dir() {
+            std::fs::remove_dir_all(root).map_err(|e| {
+                format!(
+                    "清理旧的 SlidevEnv 目录失败: {} ({e})",
+                    root.to_string_lossy()
+                )
+            })?;
+        } else {
+            return Err(format!(
+                "SlidevEnv 目标路径已存在且不是目录: {}",
+                root.to_string_lossy()
+            ));
+        }
+    }
+
+    if extracted_root == temp_root {
+        std::fs::rename(&temp_root, root).map_err(|e| {
+            format!(
+                "落地 SlidevEnv 目录失败: {} -> {} ({e})",
+                temp_root.to_string_lossy(),
+                root.to_string_lossy()
+            )
+        })?;
+    } else {
+        std::fs::rename(&extracted_root, root).map_err(|e| {
+            format!(
+                "落地 SlidevEnv 目录失败: {} -> {} ({e})",
+                extracted_root.to_string_lossy(),
+                root.to_string_lossy()
+            )
+        })?;
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    Ok(())
+}
+
+fn ensure_slidev_env_root() -> Result<PathBuf, String> {
     let root = expected_slidev_env_root()?;
+    if root.is_dir() {
+        return Ok(root);
+    }
+    if root.exists() {
+        return Err(format!(
+            "SlidevEnv 目标路径已存在但不是目录: {}",
+            root.to_string_lossy()
+        ));
+    }
+
+    let bundle = expected_slidev_env_bundle()?;
+    if !bundle.is_file() {
+        return Ok(root);
+    }
+
+    let _guard = slidev_env_prepare_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if root.is_dir() {
+        return Ok(root);
+    }
+
+    info!(
+        "[Slidev] extracting bundled env: zip={} dst={}",
+        bundle.to_string_lossy(),
+        root.to_string_lossy()
+    );
+    extract_slidev_env_bundle(&bundle, &root)?;
+    Ok(root)
+}
+
+fn resolve_slidev_runtime() -> Result<(PathBuf, PathBuf, SlidevEnvStatus), String> {
+    let root = ensure_slidev_env_root()?;
 
     #[cfg(windows)]
     let node = root.join("node.exe");
@@ -420,7 +582,7 @@ fn wait_slidev_ready(port: u16, child: &mut Child, timeout: Duration) -> Result<
 
 #[tauri::command]
 pub fn slidev_get_env_status() -> Result<SlidevEnvStatus, String> {
-    let root = expected_slidev_env_root()?;
+    let root = ensure_slidev_env_root()?;
 
     #[cfg(windows)]
     let node = root.join("node.exe");

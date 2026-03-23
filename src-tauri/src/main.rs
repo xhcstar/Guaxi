@@ -147,6 +147,17 @@ fn start_log_cleanup() {
     });
 }
 
+fn start_bundled_resource_prewarm() {
+    tokio::spawn(async {
+        match tokio::task::spawn_blocking(guaxiservices::bundled_resources::prewarm_startup_bundles)
+            .await
+        {
+            Ok(_) => info!("Bundled resource prewarm finished"),
+            Err(e) => error!("Bundled resource prewarm task failed: {}", e),
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     let has_debug_flag = std::env::args().any(|arg| arg == "--debug");
@@ -199,6 +210,7 @@ async fn main() {
     tokio::spawn(app_init());
     start_background_gc();
     start_log_cleanup();
+    start_bundled_resource_prewarm();
     commands::flipboard::start_feed_scheduler_loop();
     let file_watcher = FileWatcher::new();
 

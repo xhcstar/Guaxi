@@ -10,13 +10,13 @@
       "utils/pandoc*",
       "utils/tectonic.exe",
       "utils/horizontalrule.lua",
-      "utils/SlidevEnv/**/*",
-      "utils/llama/**/*",
-      "utils/python_libs/**/*",
-      "utils/whisper/**/*",
-      "utils/Models/whisper_models/**/*",
-      "utils/Models/tts/**/*",
-      "utils/sherpa-onnx/**/*"
+      "utils/SlidevEnv.zip",
+      "utils/llama.zip",
+      "utils/python_libs.zip",
+      "utils/whisper.zip",
+      "utils/Models/whisper_models.zip",
+      "utils/Models/tts.zip",
+      "utils/sherpa-onnx.zip"
     ]
   }
 }

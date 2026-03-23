@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::guaxiservices::bundled_resources;
 use crate::guaxiservices::lsp;
 
 use aes_gcm::aead::{Aead, KeyInit};
@@ -512,6 +513,7 @@ fn cleanup_modelscope_download_dir(local_dir: &Path) {
 }
 
 fn run_modelscope_download(exe_dir: &Path, local_dir: &Path) -> Result<(), String> {
+    let _ = bundled_resources::ensure_relative_dir("utils/python_libs")?;
     let marker_src_dir = exe_dir
         .join("utils")
         .join("MarkdownConvertor")
@@ -1557,6 +1559,7 @@ fn local_deepseek_model_path(exe: &Path) -> PathBuf {
 }
 
 fn resolve_llama_server_path(exe: &Path) -> Option<PathBuf> {
+    let _ = bundled_resources::ensure_relative_dir("utils/llama");
     let llama_dir = exe.join("utils").join("llama");
     if !llama_dir.exists() {
         return None;

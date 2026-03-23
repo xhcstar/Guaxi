@@ -27,6 +27,8 @@ use url::Url;
 // use std::error::Error;
 use once_cell::sync::Lazy;
 
+use crate::guaxiservices::bundled_resources;
+
 const LOCAL_DEEPSEEK_MODEL_FILENAME: &str = "DeepSeek-R1-0528-Qwen3-8B-IQ4_XS.gguf";
 const LOCAL_DEEPSEEK_SERVER_URL: &str = "http://127.0.0.1:18080";
 const LOCAL_DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "http://127.0.0.1:18080/v1/chat/completions";
@@ -1124,6 +1126,7 @@ fn resolve_exe_dir() -> Result<PathBuf, String> {
 }
 
 fn resolve_sherpa_default_exe() -> Result<PathBuf, String> {
+    let _ = bundled_resources::ensure_relative_dir("utils/sherpa-onnx")?;
     let exe_dir = resolve_exe_dir()?;
     let rel = if cfg!(target_os = "windows") {
         SHERPA_ONNX_TTS_DEFAULT_EXE_WIN
@@ -1134,6 +1137,7 @@ fn resolve_sherpa_default_exe() -> Result<PathBuf, String> {
 }
 
 fn resolve_sherpa_default_asr_exe() -> Result<PathBuf, String> {
+    let _ = bundled_resources::ensure_relative_dir("utils/sherpa-onnx")?;
     let exe_dir = resolve_exe_dir()?;
     let rel = if cfg!(target_os = "windows") {
         SHERPA_ONNX_ASR_DEFAULT_EXE_WIN
@@ -1144,6 +1148,7 @@ fn resolve_sherpa_default_asr_exe() -> Result<PathBuf, String> {
 }
 
 fn resolve_sherpa_default_model_paths() -> Result<(PathBuf, PathBuf), String> {
+    let _ = bundled_resources::ensure_relative_dir("utils/Models/tts")?;
     let exe_dir = resolve_exe_dir()?;
     Ok((
         exe_dir.join(SHERPA_ONNX_TTS_DEFAULT_MODEL),
@@ -1804,6 +1809,7 @@ fn parse_sherpa_asr_text(stdout: &str, stderr: &str) -> String {
 }
 
 async fn audio_speech_to_text_sherpa_onnx(request: SpeechToTextRequest) -> Result<SpeechToTextResponse, String> {
+    let _ = bundled_resources::ensure_relative_dir("utils/sherpa-onnx")?;
     let configured = settingview::get_asr_config();
     let endpoint = request.common.endpoint.trim();
     let exe_path = if !endpoint.is_empty() {
@@ -2195,6 +2201,7 @@ fn find_file_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBu
 }
 
 fn resolve_llama_server_path(exe: &Path) -> Result<PathBuf, String> {
+    let _ = bundled_resources::ensure_relative_dir("utils/llama")?;
     let llama_dir = exe.join("utils").join("llama");
     if !llama_dir.exists() {
         return Err(format!(

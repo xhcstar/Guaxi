@@ -1,4 +1,5 @@
 use crate::commands::translator_free;
+use crate::guaxiservices::bundled_resources;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use once_cell::sync::Lazy;
@@ -3393,6 +3394,8 @@ fn extract_whisper_segments(v: &serde_json::Value) -> Vec<(f64, f64, String)> {
 }
 
 fn resolve_whisper_cli_and_model() -> Result<(PathBuf, PathBuf), String> {
+    let _ = bundled_resources::ensure_relative_dir("utils/whisper")?;
+    let _ = bundled_resources::ensure_relative_dir("utils/Models/whisper_models")?;
     let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
     let exe_dir = exe_path
         .parent()
