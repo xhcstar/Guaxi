@@ -45,3 +45,12 @@ src-tauri/utils/Models/tts/*
 
 # Generated python libs (do not commit)
 src-tauri/utils/python_libs/*
+
+# Generated bundled resource archives (do not commit)
+src-tauri/utils/SlidevEnv.zip
+src-tauri/utils/sherpa-onnx.zip
+src-tauri/utils/whisper.zip
+src-tauri/utils/llama.zip
+src-tauri/utils/python_libs.zip
+src-tauri/utils/Models/tts.zip
+src-tauri/utils/Models/whisper_models.zip
