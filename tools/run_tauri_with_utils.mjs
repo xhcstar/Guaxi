@@ -36,6 +36,11 @@ function run(command, commandArgs, extraEnv = {}) {
 }
 
 async function main() {
+  const prepareAssetsExitCode = await run('node', ['./tools/copy_excalidraw_assets.mjs']);
+  if (prepareAssetsExitCode !== 0) {
+    process.exit(prepareAssetsExitCode);
+  }
+
   const prepareArgs = [
     'run',
     '--quiet',

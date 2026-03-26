@@ -21,6 +21,8 @@ const SRC_ASSETS_DIR = path.join(
 
 // 复制到 public/excalidraw，与 EXCALIDRAW_ASSET_PATH 对齐
 const DEST_ROOT = path.join(PROJECT_ROOT, 'public', 'excalidraw')
+const SRC_VDITOR_DIST_DIR = path.join(PROJECT_ROOT, 'node_modules', 'vditor', 'dist')
+const DEST_VDITOR_ROOT = path.join(PROJECT_ROOT, 'public', 'vditor')
 
 async function pathExists(p) {
   try {
@@ -32,19 +34,27 @@ async function pathExists(p) {
 }
 
 async function main() {
-  log('start', { SRC_ASSETS_DIR, DEST_ROOT })
+  log('start', { SRC_ASSETS_DIR, DEST_ROOT, SRC_VDITOR_DIST_DIR, DEST_VDITOR_ROOT })
 
   if (!(await pathExists(SRC_ASSETS_DIR))) {
     warn('source assets dir not found, skip copy', { SRC_ASSETS_DIR })
-    return
+  } else {
+    await fs.mkdir(DEST_ROOT, { recursive: true })
+    await fs.cp(SRC_ASSETS_DIR, DEST_ROOT, {
+      recursive: true,
+      force: true,
+    })
   }
 
-  await fs.mkdir(DEST_ROOT, { recursive: true })
-
-  await fs.cp(SRC_ASSETS_DIR, DEST_ROOT, {
-    recursive: true,
-    force: true,
-  })
+  if (!(await pathExists(SRC_VDITOR_DIST_DIR))) {
+    warn('vditor dist dir not found, skip copy', { SRC_VDITOR_DIST_DIR })
+  } else {
+    await fs.mkdir(DEST_VDITOR_ROOT, { recursive: true })
+    await fs.cp(SRC_VDITOR_DIST_DIR, DEST_VDITOR_ROOT, {
+      recursive: true,
+      force: true,
+    })
+  }
 
   log('done')
 }

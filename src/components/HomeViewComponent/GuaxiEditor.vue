@@ -609,6 +609,7 @@ import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiM
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
 import 'vditor/dist/method'
+import 'vditor/dist/js/i18n/zh_CN.js'
 import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
@@ -1148,6 +1149,17 @@ const pendingRealtimeVditorValue = ref(null);
 let realtimeVditor = null;
 let settingRealtimeVditorValue = false;
 let realtimeVditorLinkInterceptorCleanup = null;
+const REALTIME_VDITOR_INIT_TIMEOUT_MS = 12000
+
+const getLocalVditorCdn = () => {
+  if (typeof window === 'undefined') return '/vditor'
+  return new URL('/vditor', window.location.origin).toString().replace(/\/$/, '')
+}
+
+const getBundledVditorI18n = () => {
+  if (typeof window === 'undefined' || !window.VditorI18n) return undefined
+  return { ...window.VditorI18n }
+}
 
 const syncRealtimeValueToRawContent = debounce((value) => {
   rawContent.value = value;
@@ -10519,65 +10531,99 @@ const initRealtimeVditor = async () => {
   await nextTick();
 
   const desiredValue = rawContent.value || '';
+  const vditorCdn = getLocalVditorCdn();
+  const vditorI18n = getBundledVditorI18n();
 
   if (!realtimeVditor) {
     realtimeVditorReady.value = false;
     pendingRealtimeVditorValue.value = null;
+    await new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        reject(new Error(`Vditor init timeout after ${REALTIME_VDITOR_INIT_TIMEOUT_MS}ms`));
+      }, REALTIME_VDITOR_INIT_TIMEOUT_MS);
 
-    realtimeVditor = new Vditor(realtimeVditorId, {
-      mode: 'ir',
-      cache: { enable: false },
-      preview: {
-        delay: 200,
-        hljs: { enable: false }
-      },
-      toolbarConfig: { hide: false },
-      toolbar: [
-        'headings',
-        'bold',
-        'italic',
-        'strike',
-        'link',
-        '|',
-        'list',
-        'ordered-list',
-        'check',
-        '|',
-        'quote',
-        'line',
-        'code',
-        'inline-code',
-        '|',
-        'table',
-        '|',
-        'undo',
-        'redo'
-      ],
-      value: desiredValue,
-      input: (value) => {
-        if (settingRealtimeVditorValue) return;
-        syncRealtimeValueToRawContent(value);
-      },
-      after: () => {
-        realtimeVditorReady.value = true;
+      const finishResolve = () => {
+        window.clearTimeout(timeoutId);
+        resolve();
+      };
 
-        installRealtimeVditorLinkInterceptor();
+      const finishReject = (error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      };
 
-        if (pendingRealtimeVditorValue.value != null && realtimeVditor) {
-          const v = pendingRealtimeVditorValue.value;
-          pendingRealtimeVditorValue.value = null;
-          settingRealtimeVditorValue = true;
-          try {
-            realtimeVditor.setValue(v);
-          } finally {
-            settingRealtimeVditorValue = false;
+      try {
+        realtimeVditor = new Vditor(realtimeVditorId, {
+          mode: 'ir',
+          cache: { enable: false },
+          cdn: vditorCdn,
+          lang: 'zh_CN',
+          i18n: vditorI18n,
+          preview: {
+            delay: 200,
+            hljs: { enable: false }
+          },
+          toolbarConfig: { hide: false },
+          toolbar: [
+            'headings',
+            'bold',
+            'italic',
+            'strike',
+            'link',
+            '|',
+            'list',
+            'ordered-list',
+            'check',
+            '|',
+            'quote',
+            'line',
+            'code',
+            'inline-code',
+            '|',
+            'table',
+            '|',
+            'undo',
+            'redo'
+          ],
+          value: desiredValue,
+          input: (value) => {
+            if (settingRealtimeVditorValue) return;
+            syncRealtimeValueToRawContent(value);
+          },
+          after: () => {
+            realtimeVditorReady.value = true;
+
+            installRealtimeVditorLinkInterceptor();
+
+            if (pendingRealtimeVditorValue.value != null && realtimeVditor) {
+              const v = pendingRealtimeVditorValue.value;
+              pendingRealtimeVditorValue.value = null;
+              settingRealtimeVditorValue = true;
+              try {
+                realtimeVditor.setValue(v);
+              } finally {
+                settingRealtimeVditorValue = false;
+              }
+            }
+
+            if (pendingRealtimeScrollRestore.value) {
+              restoreScrollPosition();
+            }
+
+            finishResolve();
           }
-        }
-
-        if (pendingRealtimeScrollRestore.value) {
-          restoreScrollPosition();
-        }
+        });
+      } catch (error) {
+        finishReject(error);
       }
+    }).catch((error) => {
+      logger.error('[Editor] initRealtimeVditor failed', {
+        error,
+        cdn: vditorCdn,
+        hasBundledI18n: Boolean(vditorI18n),
+      });
+      destroyRealtimeVditor();
+      throw error;
     });
 
     return;
@@ -10752,7 +10798,18 @@ watch(previewMode, async (nextMode, prevMode) => {
 
   if (nextMode === 'realtime') {
     pendingRealtimeScrollRestore.value = true;
-    await initRealtimeVditor();
+    try {
+      await initRealtimeVditor();
+    } catch (error) {
+      logger.error('[Editor] realtime preview init failed, fallback to split', error);
+      pendingRealtimeScrollRestore.value = false;
+      setHomePreviewModeKeySafe('split');
+      previewMode.value = 'split';
+      await setMainMode('edit');
+      await nextTick();
+      refreshPreview();
+      message.error('实时预览初始化失败，已自动切换到分屏预览');
+    }
     return;
   }
 
