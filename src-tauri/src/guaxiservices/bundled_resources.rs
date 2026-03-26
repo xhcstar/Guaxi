@@ -111,6 +111,30 @@ fn utils_root() -> Result<PathBuf, String> {
     Ok(exe_dir()?.join("utils"))
 }
 
+fn dir_has_entries(path: &Path) -> bool {
+    std::fs::read_dir(path)
+        .ok()
+        .and_then(|mut entries| entries.next())
+        .is_some()
+}
+
+fn dev_source_utils_root() -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+
+    let exe_dir = exe_dir().ok()?;
+    for ancestor in exe_dir.ancestors() {
+        let cargo_toml = ancestor.join("Cargo.toml");
+        let utils_dir = ancestor.join("utils");
+        if cargo_toml.is_file() && utils_dir.is_dir() {
+            return Some(utils_dir);
+        }
+    }
+
+    None
+}
+
 fn utils_zip_path(target_root: &Path) -> PathBuf {
     target_root.join("utils.zip")
 }
@@ -323,6 +347,14 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
 
     let bundle = utils_zip_path(&target_root);
     if !bundle.is_file() {
+        if dir_has_entries(&target_root) {
+            outcome.skipped = true;
+            return Ok((target_root, outcome));
+        }
+        if let Some(dev_utils_root) = dev_source_utils_root() {
+            outcome.skipped = true;
+            return Ok((dev_utils_root, outcome));
+        }
         outcome.skipped = true;
         return Ok((target_root, outcome));
     }
