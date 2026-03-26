@@ -4,6 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use crate::guaxiservices::bundled_resources;
 use crate::guaxiservices::lsp;
 
@@ -18,6 +21,16 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 use git2::{Repository, Signature};
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn apply_hidden_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Library {
@@ -572,7 +585,9 @@ fn run_modelscope_download(exe_dir: &Path, local_dir: &Path) -> Result<(), Strin
         "modelscope download start"
     );
 
-    let output = Command::new(&python_path)
+    let mut command = Command::new(&python_path);
+    apply_hidden_window(&mut command);
+    let output = command
         .arg(script_path)
         .arg("--model-id")
         .arg("unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF")
