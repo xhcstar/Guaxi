@@ -198,9 +198,12 @@ fn extract_dir_from_zip(bundle: &Path, target_dir: &Path) -> Result<(), String> 
                 .enclosed_name()
                 .ok_or_else(|| format!("资源压缩包包含非法路径: {}", entry.name()))?
                 .to_path_buf();
-            let out_path = payload_dir.join(enclosed);
+            let out_path = payload_dir.join(&enclosed);
 
-            if entry.name().ends_with('/') {
+            let entry_name = entry.name().replace('\\', "/");
+            let is_dir_entry =
+                entry.is_dir() || entry_name.ends_with('/') || enclosed.file_name().is_none();
+            if is_dir_entry {
                 std::fs::create_dir_all(&out_path).map_err(|e| {
                     format!("创建资源目录失败: {} ({e})", out_path.to_string_lossy())
                 })?;
