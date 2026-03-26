@@ -610,6 +610,7 @@ import Vditor from 'vditor'
 import 'vditor/dist/index.css'
 import 'vditor/dist/method'
 import 'vditor/dist/js/i18n/zh_CN.js'
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs'
 import { debounce } from 'lodash-es'
 import * as monaco from 'monaco-editor'
 import { initVimMode } from 'monaco-vim';
@@ -652,6 +653,7 @@ import { save, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
 const logger = createLogger('GuaxiEditor')
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
 const outlineStore = useOutlineStore()
 
 const ensureLatexLanguage = () => {
@@ -9450,6 +9452,128 @@ const handlePreviewClick = async (e) => {
     return media
   }
 
+  const renderPdfArtifactWithPdfJs = async (media, pdf, bytes, blobUrl) => {
+    const renderToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    media.setAttribute('data-render-token', renderToken)
+
+    const calcPdfHeightPx = () => {
+      const vh = Number(window?.innerHeight || 0)
+      const ideal = Math.floor(vh > 0 ? vh * 0.78 : 820)
+      return Math.max(780, Math.min(1200, ideal || 820))
+    }
+
+    const wrap = document.createElement('div')
+    wrap.style.width = '100%'
+    wrap.style.flex = '1 1 auto'
+    wrap.style.minHeight = `${calcPdfHeightPx()}px`
+    wrap.style.padding = '12px'
+    wrap.style.boxSizing = 'border-box'
+    wrap.style.overflow = 'auto'
+    wrap.style.display = 'flex'
+    wrap.style.flexDirection = 'column'
+    wrap.style.alignItems = 'center'
+    wrap.style.gap = '12px'
+
+    const toolbar = document.createElement('div')
+    toolbar.style.position = 'sticky'
+    toolbar.style.top = '0'
+    toolbar.style.zIndex = '1'
+    toolbar.style.alignSelf = 'stretch'
+    toolbar.style.display = 'flex'
+    toolbar.style.justifyContent = 'flex-end'
+    toolbar.style.padding = '8px 8px 0'
+    toolbar.style.background = 'linear-gradient(to bottom, rgba(255,255,255,0.96), rgba(255,255,255,0))'
+
+    const downloadLink = document.createElement('a')
+    downloadLink.href = blobUrl
+    downloadLink.download = pdf.name || 'output.pdf'
+    downloadLink.textContent = '下载 PDF'
+    downloadLink.style.display = 'inline-flex'
+    downloadLink.style.alignItems = 'center'
+    downloadLink.style.justifyContent = 'center'
+    downloadLink.style.padding = '6px 10px'
+    downloadLink.style.borderRadius = '8px'
+    downloadLink.style.border = '1px solid var(--guaxi-border)'
+    downloadLink.style.background = 'var(--guaxi-panel-bg)'
+    downloadLink.style.color = 'var(--guaxi-text-primary)'
+    downloadLink.style.textDecoration = 'none'
+    downloadLink.style.cursor = 'pointer'
+    toolbar.appendChild(downloadLink)
+
+    const pagesHost = document.createElement('div')
+    pagesHost.style.width = '100%'
+    pagesHost.style.display = 'flex'
+    pagesHost.style.flexDirection = 'column'
+    pagesHost.style.alignItems = 'center'
+    pagesHost.style.gap = '16px'
+
+    wrap.appendChild(toolbar)
+    wrap.appendChild(pagesHost)
+
+    media.innerHTML = ''
+    media.appendChild(wrap)
+    media.style.display = 'flex'
+
+    try {
+      const loadingTask = pdfjsLib.getDocument({ data: bytes })
+      const pdfDoc = await loadingTask.promise
+      const availableWidth = Math.max(640, Math.floor((media.clientWidth || media.getBoundingClientRect().width || 900) - 40))
+
+      for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber += 1) {
+        if (media.getAttribute('data-render-token') !== renderToken) {
+          try { await loadingTask.destroy() } catch { }
+          return
+        }
+
+        const page = await pdfDoc.getPage(pageNumber)
+        const baseViewport = page.getViewport({ scale: 1 })
+        const scale = Math.max(0.5, availableWidth / Math.max(1, baseViewport.width))
+        const viewport = page.getViewport({ scale })
+
+        const pageWrap = document.createElement('div')
+        pageWrap.style.width = `${Math.ceil(viewport.width)}px`
+        pageWrap.style.maxWidth = '100%'
+        pageWrap.style.background = '#fff'
+        pageWrap.style.borderRadius = '8px'
+        pageWrap.style.boxShadow = '0 4px 14px rgba(0,0,0,0.08)'
+        pageWrap.style.overflow = 'hidden'
+
+        const pageLabel = document.createElement('div')
+        pageLabel.textContent = `第 ${pageNumber} / ${pdfDoc.numPages} 页`
+        pageLabel.style.padding = '6px 10px'
+        pageLabel.style.fontSize = '12px'
+        pageLabel.style.opacity = '0.75'
+        pageLabel.style.borderBottom = '1px solid rgba(0,0,0,0.06)'
+
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d', { alpha: false })
+        if (!context) throw new Error('无法创建 PDF 渲染画布')
+        canvas.width = Math.ceil(viewport.width)
+        canvas.height = Math.ceil(viewport.height)
+        canvas.style.display = 'block'
+        canvas.style.width = '100%'
+        canvas.style.height = 'auto'
+        canvas.style.background = '#fff'
+
+        pageWrap.appendChild(pageLabel)
+        pageWrap.appendChild(canvas)
+        pagesHost.appendChild(pageWrap)
+
+        await page.render({ canvasContext: context, viewport }).promise
+      }
+    } catch (error) {
+      logger.error('[CodeCell] pdfjs render failed', error)
+      pagesHost.innerHTML = ''
+      const fallback = document.createElement('div')
+      fallback.style.padding = '16px'
+      fallback.style.width = '100%'
+      fallback.style.boxSizing = 'border-box'
+      fallback.style.color = 'var(--guaxi-text-primary)'
+      fallback.textContent = `PDF 预览渲染失败：${String(error?.message || error)}`
+      pagesHost.appendChild(fallback)
+    }
+  }
+
   const renderCodeCellArtifacts = async (cell, outputPre, res, outputText, kind) => {
     const pdf = getPdfArtifactFromCodeCell(res)
     const shouldHideText = String(outputText || '').trim().length === 0
@@ -9463,6 +9587,7 @@ const handlePreviewClick = async (e) => {
           media.removeAttribute('data-blob-url')
         }
 
+        media.removeAttribute('data-render-token')
         media.innerHTML = ''
         media.style.display = 'none'
       }
@@ -9489,34 +9614,10 @@ const handlePreviewClick = async (e) => {
     media.style.justifyContent = 'stretch'
     media.style.overflow = 'hidden'
 
-    const calcPdfHeightPx = () => {
-      const vh = Number(window?.innerHeight || 0)
-      const ideal = Math.floor(vh > 0 ? vh * 0.78 : 820)
-      return Math.max(780, Math.min(1200, ideal || 820))
-    }
-
-    const wrap = document.createElement('div')
-    wrap.style.width = '100%'
-    wrap.style.flex = '1 1 auto'
-
-    const iframe = document.createElement('iframe')
-    // 让 PDF 默认尽量“适应页面/容器”，减少空白浪费
-    // 注意：不同内置 PDF 阅读器对 hash 参数支持不完全一致，但大多支持 zoom=page-fit/page-width 等。
-    iframe.src = `${blobUrl}#zoom=page-fit`
-    iframe.style.display = 'block'
-    iframe.style.width = '100%'
-    iframe.style.height = `${calcPdfHeightPx()}px`
-    iframe.style.border = '0'
-    iframe.style.borderRadius = '8px'
-
-    wrap.appendChild(iframe)
-
-    media.innerHTML = ''
-    media.appendChild(wrap)
-    media.style.display = 'flex'
+    await renderPdfArtifactWithPdfJs(media, pdf, bytes, blobUrl)
 
     try {
-      message.info('PDF 已渲染，可使用预览区工具栏下载/保存')
+      message.info('PDF 已在下方渲染，可滚动预览或下载保存')
     } catch {
     }
 

@@ -11,6 +11,12 @@ use std::sync::{Arc, Mutex};
 use tauri::command;
 use tracing::{error, info, warn};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[derive(Debug, Deserialize)]
 pub struct CodeCellExecRequest {
     pub kind: String,
@@ -51,6 +57,13 @@ fn output_to_text(out: Output) -> (bool, String, String) {
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     (ok, stdout, stderr)
+}
+
+fn apply_hidden_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 }
 
 fn exec_javascript(code: &str) -> Result<CodeCellExecResponse, String> {
@@ -189,6 +202,7 @@ fn exec_latex(code: &str) -> Result<CodeCellExecResponse, String> {
     );
 
     let mut cmd = Command::new(&tectonic_path);
+    apply_hidden_window(&mut cmd);
     cmd.current_dir(base)
         .arg("-X")
         .arg("compile")
@@ -337,6 +351,7 @@ fn compile_and_run_native(kind: &str, code: &str) -> Result<CodeCellExecResponse
 
     for cc in candidates {
         let mut cmd = Command::new(cc);
+        apply_hidden_window(&mut cmd);
         cmd.args(build_args(cc, &src_path, &out_path));
         match cmd.output() {
             Ok(out) => {
@@ -372,9 +387,9 @@ fn compile_and_run_native(kind: &str, code: &str) -> Result<CodeCellExecResponse
         });
     }
 
-    let run_out = Command::new(&out_path)
-        .output()
-        .map_err(|e| format!("run failed: {e}"))?;
+    let mut run_cmd = Command::new(&out_path);
+    apply_hidden_window(&mut run_cmd);
+    let run_out = run_cmd.output().map_err(|e| format!("run failed: {e}"))?;
     let (run_ok, stdout, stderr) = output_to_text(run_out);
 
     Ok(CodeCellExecResponse {
