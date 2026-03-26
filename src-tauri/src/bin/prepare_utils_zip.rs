@@ -6,6 +6,9 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
+const REUSE_EXISTING_FLAG: &str = "--reuse-existing";
+const KEEP_EXISTING_FLAG: &str = "--keep-existing";
+
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -78,12 +81,24 @@ fn add_dir_to_zip(
     }
 }
 
+fn should_reuse_existing_bundle() -> bool {
+    std::env::args().skip(1).any(|arg| {
+        arg == REUSE_EXISTING_FLAG || arg == KEEP_EXISTING_FLAG
+    })
+}
+
 fn main() {
     let utils_dir = utils_dir();
     let bundle = utils_dir.join("utils.zip");
+    let reuse_existing = should_reuse_existing_bundle();
 
     if !utils_dir.is_dir() {
         panic!("utils dir not found: {}", utils_dir.display());
+    }
+
+    if reuse_existing && bundle.exists() {
+        println!("reusing {}", bundle.display());
+        return;
     }
 
     if bundle.exists() {

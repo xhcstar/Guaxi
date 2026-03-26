@@ -1,32 +1,9 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
-
-fn latest_modified_in_dir(dir: &Path) -> Option<SystemTime> {
-    let mut latest = None;
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(ts) = latest_modified_in_dir(&path) {
-                    latest = Some(latest.map_or(ts, |cur: SystemTime| cur.max(ts)));
-                }
-                continue;
-            }
-            if let Ok(meta) = entry.metadata() {
-                if let Ok(ts) = meta.modified() {
-                    latest = Some(latest.map_or(ts, |cur: SystemTime| cur.max(ts)));
-                }
-            }
-        }
-    }
-    latest
-}
 
 fn should_skip(relative: &str) -> bool {
     let normalized = relative.replace('\\', "/");
@@ -95,24 +72,27 @@ fn add_dir_to_zip(
 fn prepare_utils_bundle(manifest_dir: &Path) {
     let utils_dir = manifest_dir.join("utils");
     let bundle = utils_dir.join("utils.zip");
+    let reuse_existing = matches!(
+        std::env::var("GUAXI_REUSE_UTILS_ZIP").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    );
 
     println!("cargo:rerun-if-changed={}", utils_dir.display());
     println!("cargo:rerun-if-changed={}", bundle.display());
+    println!("cargo:rerun-if-env-changed=GUAXI_REUSE_UTILS_ZIP");
 
     if !utils_dir.is_dir() {
         return;
     }
 
-    let src_latest = latest_modified_in_dir(&utils_dir);
-    let zip_latest = fs::metadata(&bundle).ok().and_then(|m| m.modified().ok());
-    if let (Some(src_ts), Some(zip_ts)) = (src_latest, zip_latest) {
-        if zip_ts >= src_ts {
-            return;
-        }
+    if reuse_existing && bundle.exists() {
+        println!("cargo:warning=reusing {}", bundle.display());
+        return;
     }
 
     if bundle.exists() {
-        let _ = fs::remove_file(&bundle);
+        fs::remove_file(&bundle)
+            .unwrap_or_else(|e| panic!("failed to remove old {}: {e}", bundle.display()));
     }
 
     let file = File::create(&bundle)
