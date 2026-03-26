@@ -4,6 +4,9 @@ const args = process.argv.slice(2);
 const reuseFlag = '--reuse-utils-zip';
 const reuseExisting = args.includes(reuseFlag);
 const tauriArgs = args.filter((arg) => arg !== reuseFlag);
+const tauriSubcommand = tauriArgs[0] ?? '';
+const shouldPrepareForTauriCommand =
+  tauriSubcommand === 'build' || tauriSubcommand === 'bundle';
 
 function tauriCommand() {
   return process.platform === 'win32'
@@ -36,27 +39,29 @@ function run(command, commandArgs, extraEnv = {}) {
 }
 
 async function main() {
-  const prepareAssetsExitCode = await run('node', ['./tools/copy_excalidraw_assets.mjs']);
-  if (prepareAssetsExitCode !== 0) {
-    process.exit(prepareAssetsExitCode);
-  }
+  if (shouldPrepareForTauriCommand) {
+    const prepareAssetsExitCode = await run('node', ['./tools/copy_excalidraw_assets.mjs']);
+    if (prepareAssetsExitCode !== 0) {
+      process.exit(prepareAssetsExitCode);
+    }
 
-  const prepareArgs = [
-    'run',
-    '--quiet',
-    '--manifest-path',
-    'src-tauri/Cargo.toml',
-    '--bin',
-    'prepare_utils_zip',
-  ];
+    const prepareArgs = [
+      'run',
+      '--quiet',
+      '--manifest-path',
+      'src-tauri/Cargo.toml',
+      '--bin',
+      'prepare_utils_zip',
+    ];
 
-  if (reuseExisting) {
-    prepareArgs.push('--', '--reuse-existing');
-  }
+    if (reuseExisting) {
+      prepareArgs.push('--', '--reuse-existing');
+    }
 
-  const prepareExitCode = await run('cargo', prepareArgs);
-  if (prepareExitCode !== 0) {
-    process.exit(prepareExitCode);
+    const prepareExitCode = await run('cargo', prepareArgs);
+    if (prepareExitCode !== 0) {
+      process.exit(prepareExitCode);
+    }
   }
 
   const tauriExitCode = await run(
