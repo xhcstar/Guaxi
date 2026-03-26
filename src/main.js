@@ -1,6 +1,5 @@
 import { createApp } from "vue";
 import naive from "naive-ui";
-import { createDiscreteApi } from 'naive-ui'
 import { addIcon } from '@iconify/vue'
 import mdiFolderOutline from '@iconify-icons/mdi/folder-outline'
 import mdiFileOutline from '@iconify-icons/mdi/file-outline'
@@ -103,8 +102,6 @@ for (const [name, data] of Object.entries(iconRegistry)) {
 
 const bootstrap = async () => {
 const app = createApp(App);
-const { message } = createDiscreteApi(['message'])
-
 initFrontendLogging({
   scope: 'Main',
   forwardConsole: true,
@@ -134,11 +131,8 @@ const siderStore = useSiderStore(pinia)
 
 const OPEN_FILE_IN_HOME_EVENT = 'open_file_in_home'
 const OPEN_ASSISTANT_EVENT = 'assistant_global_shortcut'
-const BUNDLED_RESOURCE_PREWARM_EVENT = 'bundled_resource_prewarm_status'
 let unlistenOpenFileInHome = null
 let unlistenOpenAssistant = null
-let unlistenBundledResourcePrewarm = null
-let bundledResourceStartShown = false
 
 const openAssistantPanel = async (source = 'unknown') => {
   try {
@@ -218,47 +212,6 @@ if (windowLabel === 'main') {
   }).catch((e) => {
     logger.error('[Main] assistant_global_shortcut listener register failed:', e)
   })
-
-  listen(BUNDLED_RESOURCE_PREWARM_EVENT, (event) => {
-    const payload = event?.payload || {}
-    const phase = String(payload?.phase || '')
-    const tip = String(payload?.message || '').trim()
-    const report = payload?.report || {}
-
-    logger.info('[Main] bundled_resource_prewarm_status received', { phase, payload })
-
-    if (phase === 'start') {
-      if (!bundledResourceStartShown && tip) {
-        bundledResourceStartShown = true
-        message.info(tip, { duration: 3500 })
-      }
-      return
-    }
-
-    const failedCount = Array.isArray(report?.failed) ? report.failed.length : 0
-    const recoveredCount = Array.isArray(report?.recovered) ? report.recovered.length : 0
-    const extractedCount = Array.isArray(report?.extracted) ? report.extracted.length : 0
-
-    if (phase === 'finish') {
-      if (failedCount > 0) {
-        message.warning(tip || `运行资源准备完成，但仍有 ${failedCount} 项失败`, { duration: 6000 })
-      } else if (recoveredCount > 0) {
-        message.success(tip || `已恢复上次未完成的资源解压（${recoveredCount} 项）`, { duration: 5000 })
-      } else if (extractedCount > 0) {
-        message.success(tip || `首次启动已完成运行资源准备（${extractedCount} 项）`, { duration: 4000 })
-      }
-      return
-    }
-
-    if (phase === 'partial') {
-      message.warning(tip || '运行资源准备部分完成，请稍后重试相关功能', { duration: 6000 })
-    }
-  }).then((unlisten) => {
-    unlistenBundledResourcePrewarm = unlisten
-    logger.info('[Main] bundled_resource_prewarm_status listener registered')
-  }).catch((e) => {
-    logger.error('[Main] bundled_resource_prewarm_status listener register failed:', e)
-  })
 } else {
   logger.info('[Main] skip open_file_in_home listener (not main window)', { windowLabel })
 }
@@ -302,9 +255,6 @@ app.mount("#app");
 // 应用卸载时清理
 window.addEventListener('beforeunload', async () => {
   try {
-    if (typeof unlistenBundledResourcePrewarm === 'function') {
-      await unlistenBundledResourcePrewarm()
-    }
     if (typeof unlistenOpenFileInHome === 'function') {
       await unlistenOpenFileInHome()
     }

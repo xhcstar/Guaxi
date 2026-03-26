@@ -28,6 +28,25 @@ fn latest_modified_in_dir(dir: &Path) -> Option<SystemTime> {
     latest
 }
 
+fn should_skip(relative: &str) -> bool {
+    let normalized = relative.replace('\\', "/");
+    matches!(
+        normalized.as_str(),
+        "utils.zip"
+            | "SlidevEnv.zip"
+            | "sherpa-onnx.zip"
+            | "whisper.zip"
+            | "llama.zip"
+            | "python_libs.zip"
+            | "Models/tts.zip"
+            | "Models/whisper_models.zip"
+    ) || normalized.contains(".__extracting_")
+        || normalized.ends_with("/.guaxi_extract_complete")
+        || normalized.ends_with("/.guaxi_utils_extract_complete")
+        || normalized == ".guaxi_extract_complete"
+        || normalized == ".guaxi_utils_extract_complete"
+}
+
 fn add_dir_to_zip(
     writer: &mut ZipWriter<File>,
     root_dir: &Path,
@@ -38,7 +57,6 @@ fn add_dir_to_zip(
         .unwrap_or_else(|e| panic!("failed to read dir {}: {e}", current_dir.display()))
         .flatten()
         .collect::<Vec<_>>();
-
     entries.sort_by_key(|entry| entry.path());
 
     for entry in entries {
@@ -46,19 +64,22 @@ fn add_dir_to_zip(
         let relative = path
             .strip_prefix(root_dir)
             .unwrap_or_else(|e| panic!("failed to strip prefix {} from {}: {e}", root_dir.display(), path.display()));
-        let zip_name = relative.to_string_lossy().replace('\\', "/");
+        let relative_text = relative.to_string_lossy().replace('\\', "/");
+        if should_skip(&relative_text) {
+            continue;
+        }
 
         if path.is_dir() {
             writer
-                .add_directory(format!("{zip_name}/"), options)
-                .unwrap_or_else(|e| panic!("failed to add dir {zip_name} to zip: {e}"));
+                .add_directory(format!("{relative_text}/"), options)
+                .unwrap_or_else(|e| panic!("failed to add dir {relative_text} to zip: {e}"));
             add_dir_to_zip(writer, root_dir, &path, options);
             continue;
         }
 
         writer
-            .start_file(zip_name.clone(), options)
-            .unwrap_or_else(|e| panic!("failed to start file {zip_name} in zip: {e}"));
+            .start_file(relative_text.clone(), options)
+            .unwrap_or_else(|e| panic!("failed to start file {relative_text} in zip: {e}"));
 
         let mut file = File::open(&path)
             .unwrap_or_else(|e| panic!("failed to open {}: {e}", path.display()));
@@ -67,23 +88,23 @@ fn add_dir_to_zip(
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
         writer
             .write_all(&buffer)
-            .unwrap_or_else(|e| panic!("failed to write {zip_name} to zip: {e}"));
+            .unwrap_or_else(|e| panic!("failed to write {relative_text} to zip: {e}"));
     }
 }
 
-fn prepare_dir_bundle(dir: &Path) {
-    let bundle = dir.with_extension("zip");
+fn prepare_utils_bundle(manifest_dir: &Path) {
+    let utils_dir = manifest_dir.join("utils");
+    let bundle = utils_dir.join("utils.zip");
 
-    println!("cargo:rerun-if-changed={}", dir.display());
+    println!("cargo:rerun-if-changed={}", utils_dir.display());
     println!("cargo:rerun-if-changed={}", bundle.display());
 
-    if !dir.is_dir() {
+    if !utils_dir.is_dir() {
         return;
     }
 
-    let src_latest = latest_modified_in_dir(dir);
+    let src_latest = latest_modified_in_dir(&utils_dir);
     let zip_latest = fs::metadata(&bundle).ok().and_then(|m| m.modified().ok());
-
     if let (Some(src_ts), Some(zip_ts)) = (src_latest, zip_latest) {
         if zip_ts >= src_ts {
             return;
@@ -99,7 +120,7 @@ fn prepare_dir_bundle(dir: &Path) {
     let mut writer = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
-    add_dir_to_zip(&mut writer, dir, dir, options);
+    add_dir_to_zip(&mut writer, &utils_dir, &utils_dir, options);
     writer
         .finish()
         .unwrap_or_else(|e| panic!("failed to finish {}: {e}", bundle.display()));
@@ -108,18 +129,6 @@ fn prepare_dir_bundle(dir: &Path) {
 fn main() {
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
-
-    for rel in [
-        "utils/SlidevEnv",
-        "utils/sherpa-onnx",
-        "utils/whisper",
-        "utils/llama",
-        "utils/python_libs",
-        "utils/Models/tts",
-        "utils/Models/whisper_models",
-    ] {
-        prepare_dir_bundle(&manifest_dir.join(rel));
-    }
-
+    prepare_utils_bundle(&manifest_dir);
     tauri_build::build()
 }

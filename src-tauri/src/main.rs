@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration as StdDuration, SystemTime};
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 #[cfg(desktop)]
@@ -143,35 +143,6 @@ fn start_log_cleanup() {
         loop {
             cleanup_old_logs();
             sleep(Duration::from_secs(60 * 60 * 24 * 7)).await;
-        }
-    });
-}
-
-fn start_bundled_resource_prewarm(app_handle: tauri::AppHandle) {
-    tokio::spawn(async move {
-        let _ = app_handle.emit(
-            "bundled_resource_prewarm_status",
-            serde_json::json!({
-                "phase": "start",
-                "message": "正在后台准备运行资源，首次启动可能需要一点时间。",
-            }),
-        );
-
-        match tokio::task::spawn_blocking(guaxiservices::bundled_resources::prewarm_startup_bundles).await {
-            Ok(report) => {
-                info!("Bundled resource prewarm finished");
-                if let Err(e) = app_handle.emit(
-                    "bundled_resource_prewarm_status",
-                    serde_json::json!({
-                        "phase": if report.finished { "finish" } else { "partial" },
-                        "message": report.summary,
-                        "report": report,
-                    }),
-                ) {
-                    warn!("Failed to emit bundled resource prewarm status: {}", e);
-                }
-            }
-            Err(e) => error!("Bundled resource prewarm task failed: {}", e),
         }
     });
 }
@@ -554,7 +525,6 @@ async fn main() {
         ])
         .setup(move |app| {
             shared_state.set_app_handle(app.handle().clone());
-            start_bundled_resource_prewarm(app.handle().clone());
 
             let state_for_server = shared_state.clone();
             tauri::async_runtime::spawn(async move {

@@ -1,22 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
     "resources": [
       "scripts/**/*",
       "libs/**/*",
-      "utils/platforms/*",
-      "utils/Qt*",
-      "utils/ScreenShotTool*",
-      "utils/pandoc*",
-      "utils/tectonic.exe",
-      "utils/horizontalrule.lua",
-      "utils/SlidevEnv.zip",
-      "utils/llama.zip",
-      "utils/python_libs.zip",
-      "utils/whisper.zip",
-      "utils/Models/whisper_models.zip",
-      "utils/Models/tts.zip",
-      "utils/sherpa-onnx.zip"
+      "utils/utils.zip"
     ]
   }
 }

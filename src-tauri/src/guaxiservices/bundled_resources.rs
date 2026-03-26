@@ -1,28 +1,16 @@
-use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use std::time::{Duration, SystemTime};
+use tracing::info;
 
 static EXTRACT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-const EXTRACT_MARKER: &str = ".guaxi_extract_complete";
+const EXTRACT_MARKER: &str = ".guaxi_utils_extract_complete";
+const TEMP_EXTRACT_MARKER: &str = ".guaxi_extract_complete";
 const PAYLOAD_DIR: &str = "__payload";
 const FILE_OP_RETRY_TIMES: usize = 40;
 const FILE_OP_RETRY_DELAY_MS: u64 = 250;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StartupPrewarmReport {
-    pub total: usize,
-    pub ready: usize,
-    pub recovered: Vec<String>,
-    pub extracted: Vec<String>,
-    pub failed: Vec<String>,
-    pub skipped: Vec<String>,
-    pub finished: bool,
-    pub summary: String,
-}
 
 #[derive(Debug, Default)]
 struct EnsureDirOutcome {
@@ -41,20 +29,6 @@ fn exe_dir() -> Result<PathBuf, String> {
         .parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "无法获取 exe 所在目录".to_string())
-}
-
-fn zip_path_for_dir(dir: &Path) -> PathBuf {
-    dir.with_extension("zip")
-}
-
-fn temp_dir_prefix(target_dir: &Path) -> Result<String, String> {
-    Ok(format!(
-        "{}.__extracting_",
-        target_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| format!("无法解析目录名: {}", target_dir.to_string_lossy()))?
-    ))
 }
 
 fn sleep_retry() {
@@ -86,6 +60,31 @@ fn remove_dir_all_with_retry(path: &Path) -> Result<(), String> {
     ))
 }
 
+fn remove_file_with_retry(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut last_err = None;
+    for _ in 0..FILE_OP_RETRY_TIMES {
+        match std::fs::remove_file(path) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                sleep_retry();
+            }
+        }
+    }
+
+    Err(format!(
+        "删除文件失败: {} ({})",
+        path.to_string_lossy(),
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    ))
+}
+
 fn rename_with_retry(src: &Path, dst: &Path) -> Result<(), String> {
     let mut last_err = None;
     for _ in 0..FILE_OP_RETRY_TIMES {
@@ -108,14 +107,78 @@ fn rename_with_retry(src: &Path, dst: &Path) -> Result<(), String> {
     ))
 }
 
-fn cleanup_or_recover_stale_temp_dirs(target_dir: &Path) -> Result<bool, String> {
-    let parent = target_dir.parent().ok_or_else(|| {
+fn utils_root() -> Result<PathBuf, String> {
+    Ok(exe_dir()?.join("utils"))
+}
+
+fn utils_zip_path(target_root: &Path) -> PathBuf {
+    target_root.join("utils.zip")
+}
+
+fn marker_path(target_root: &Path) -> PathBuf {
+    target_root.join(EXTRACT_MARKER)
+}
+
+fn temp_extract_prefix() -> &'static str {
+    "utils.__extracting_"
+}
+
+fn zip_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+fn dir_ready(target_root: &Path, bundle: &Path) -> bool {
+    let marker = marker_path(target_root);
+    if !marker.is_file() {
+        return false;
+    }
+    match (zip_mtime(bundle), zip_mtime(&marker)) {
+        (Some(bundle_ts), Some(marker_ts)) => marker_ts >= bundle_ts,
+        _ => true,
+    }
+}
+
+fn move_dir_contents_with_retry(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("创建目标目录失败: {} ({e})", dst.to_string_lossy()))?;
+
+    let mut entries = std::fs::read_dir(src)
+        .map_err(|e| format!("读取目录失败: {} ({e})", src.to_string_lossy()))?
+        .flatten()
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let src_path = entry.path();
+        let name = entry.file_name();
+        let dst_path = dst.join(name);
+
+        if src_path.is_dir() {
+            move_dir_contents_with_retry(&src_path, &dst_path)?;
+            remove_dir_all_with_retry(&src_path)?;
+            continue;
+        }
+
+        if dst_path.exists() {
+            if dst_path.is_dir() {
+                remove_dir_all_with_retry(&dst_path)?;
+            } else {
+                remove_file_with_retry(&dst_path)?;
+            }
+        }
+        rename_with_retry(&src_path, &dst_path)?;
+    }
+
+    Ok(())
+}
+
+fn cleanup_or_recover_stale_temp_dirs(target_root: &Path) -> Result<bool, String> {
+    let parent = target_root.parent().ok_or_else(|| {
         format!(
-            "无法解析资源目标目录的父目录: {}",
-            target_dir.to_string_lossy()
+            "无法解析 utils 目标目录的父目录: {}",
+            target_root.to_string_lossy()
         )
     })?;
-    let prefix = temp_dir_prefix(target_dir)?;
     let mut recovered = false;
 
     let entries = std::fs::read_dir(parent).map_err(|e| {
@@ -133,19 +196,19 @@ fn cleanup_or_recover_stale_temp_dirs(target_dir: &Path) -> Result<bool, String>
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !name.starts_with(&prefix) {
+        if !name.starts_with(temp_extract_prefix()) {
             continue;
         }
 
         let payload = path.join(PAYLOAD_DIR);
-        let marker = path.join(EXTRACT_MARKER);
-        if !target_dir.exists() && payload.is_dir() && marker.is_file() {
+        let marker = path.join(TEMP_EXTRACT_MARKER);
+        if payload.is_dir() && marker.is_file() {
             info!(
                 "[BundledResource] recovering stale temp dir: src={} dst={}",
                 payload.to_string_lossy(),
-                target_dir.to_string_lossy()
+                target_root.to_string_lossy()
             );
-            rename_with_retry(&payload, target_dir)?;
+            move_dir_contents_with_retry(&payload, target_root)?;
             recovered = true;
         }
 
@@ -157,25 +220,18 @@ fn cleanup_or_recover_stale_temp_dirs(target_dir: &Path) -> Result<bool, String>
     Ok(recovered)
 }
 
-fn extract_dir_from_zip(bundle: &Path, target_dir: &Path) -> Result<(), String> {
-    let parent = target_dir.parent().ok_or_else(|| {
+fn extract_utils_zip(bundle: &Path, target_root: &Path) -> Result<(), String> {
+    let parent = target_root.parent().ok_or_else(|| {
         format!(
-            "无法解析资源目标目录的父目录: {}",
-            target_dir.to_string_lossy()
+            "无法解析 utils 目标目录的父目录: {}",
+            target_root.to_string_lossy()
         )
     })?;
-    let temp_dir = parent.join(format!(
-        "{}.__extracting_{}",
-        target_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("resource"),
-        std::process::id()
-    ));
-    let payload_dir = temp_dir.join(PAYLOAD_DIR);
+    let temp_root = parent.join(format!("{}{}", temp_extract_prefix(), std::process::id()));
+    let payload_dir = temp_root.join(PAYLOAD_DIR);
 
-    if temp_dir.exists() {
-        remove_dir_all_with_retry(&temp_dir)?;
+    if temp_root.exists() {
+        remove_dir_all_with_retry(&temp_root)?;
     }
     std::fs::create_dir_all(&payload_dir).map_err(|e| {
         format!(
@@ -186,23 +242,23 @@ fn extract_dir_from_zip(bundle: &Path, target_dir: &Path) -> Result<(), String> 
 
     {
         let file = std::fs::File::open(bundle)
-            .map_err(|e| format!("打开资源压缩包失败: {} ({e})", bundle.to_string_lossy()))?;
+            .map_err(|e| format!("打开 utils.zip 失败: {} ({e})", bundle.to_string_lossy()))?;
         let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| format!("读取资源压缩包失败: {} ({e})", bundle.to_string_lossy()))?;
+            .map_err(|e| format!("读取 utils.zip 失败: {} ({e})", bundle.to_string_lossy()))?;
 
         for i in 0..archive.len() {
             let mut entry = archive
                 .by_index(i)
-                .map_err(|e| format!("读取资源压缩条目失败: {e}"))?;
+                .map_err(|e| format!("读取 utils.zip 条目失败: {e}"))?;
             let enclosed = entry
                 .enclosed_name()
-                .ok_or_else(|| format!("资源压缩包包含非法路径: {}", entry.name()))?
+                .ok_or_else(|| format!("utils.zip 包含非法路径: {}", entry.name()))?
                 .to_path_buf();
+            let normalized = entry.name().replace('\\', "/");
             let out_path = payload_dir.join(&enclosed);
-
-            let entry_name = entry.name().replace('\\', "/");
             let is_dir_entry =
-                entry.is_dir() || entry_name.ends_with('/') || enclosed.file_name().is_none();
+                entry.is_dir() || normalized.ends_with('/') || enclosed.file_name().is_none();
+
             if is_dir_entry {
                 std::fs::create_dir_all(&out_path).map_err(|e| {
                     format!("创建资源目录失败: {} ({e})", out_path.to_string_lossy())
@@ -234,157 +290,78 @@ fn extract_dir_from_zip(bundle: &Path, target_dir: &Path) -> Result<(), String> 
         }
     }
 
-    std::fs::write(temp_dir.join(EXTRACT_MARKER), b"ok").map_err(|e| {
+    std::fs::write(temp_root.join(TEMP_EXTRACT_MARKER), b"ok").map_err(|e| {
         format!(
             "写入解压完成标记失败: {} ({e})",
-            temp_dir.join(EXTRACT_MARKER).to_string_lossy()
+            temp_root.join(TEMP_EXTRACT_MARKER).to_string_lossy()
         )
     })?;
 
-    if target_dir.exists() {
-        if target_dir.is_dir() {
-            remove_dir_all_with_retry(target_dir)?;
-        } else {
-            return Err(format!(
-                "资源目标路径已存在且不是目录: {}",
-                target_dir.to_string_lossy()
-            ));
-        }
-    }
-
-    rename_with_retry(&payload_dir, target_dir)?;
-    let _ = remove_dir_all_with_retry(&temp_dir);
+    std::fs::create_dir_all(target_root)
+        .map_err(|e| format!("创建 utils 目录失败: {} ({e})", target_root.to_string_lossy()))?;
+    move_dir_contents_with_retry(&payload_dir, target_root)?;
+    std::fs::write(marker_path(target_root), b"ok").map_err(|e| {
+        format!(
+            "写入 utils 完成标记失败: {} ({e})",
+            marker_path(target_root).to_string_lossy()
+        )
+    })?;
+    let _ = remove_dir_all_with_retry(&temp_root);
     Ok(())
 }
 
-fn ensure_relative_dir_internal(relative_dir: &str) -> Result<(PathBuf, EnsureDirOutcome), String> {
-    let target_dir = exe_dir()?.join(relative_dir);
+fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> {
+    let target_root = utils_root()?;
     let mut outcome = EnsureDirOutcome::default();
 
-    if cleanup_or_recover_stale_temp_dirs(&target_dir)? {
+    std::fs::create_dir_all(&target_root)
+        .map_err(|e| format!("创建 utils 目录失败: {} ({e})", target_root.to_string_lossy()))?;
+
+    if cleanup_or_recover_stale_temp_dirs(&target_root)? {
         outcome.recovered = true;
     }
 
-    if target_dir.is_dir() {
-        return Ok((target_dir, outcome));
-    }
-    if target_dir.exists() {
-        return Err(format!(
-            "资源目标路径已存在但不是目录: {}",
-            target_dir.to_string_lossy()
-        ));
-    }
-
-    let bundle = zip_path_for_dir(&target_dir);
+    let bundle = utils_zip_path(&target_root);
     if !bundle.is_file() {
         outcome.skipped = true;
-        return Ok((target_dir, outcome));
+        return Ok((target_root, outcome));
+    }
+
+    if dir_ready(&target_root, &bundle) {
+        return Ok((target_root, outcome));
     }
 
     let _guard = extract_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    if cleanup_or_recover_stale_temp_dirs(&target_dir)? {
+    if cleanup_or_recover_stale_temp_dirs(&target_root)? {
         outcome.recovered = true;
     }
-    if target_dir.is_dir() {
-        return Ok((target_dir, outcome));
+    if dir_ready(&target_root, &bundle) {
+        return Ok((target_root, outcome));
     }
 
     info!(
         "[BundledResource] extracting zip={} dst={}",
         bundle.to_string_lossy(),
-        target_dir.to_string_lossy()
+        target_root.to_string_lossy()
     );
-    extract_dir_from_zip(&bundle, &target_dir)?;
+    extract_utils_zip(&bundle, &target_root)?;
     outcome.extracted = true;
-    Ok((target_dir, outcome))
+    Ok((target_root, outcome))
 }
 
 pub fn ensure_relative_dir(relative_dir: &str) -> Result<PathBuf, String> {
-    ensure_relative_dir_internal(relative_dir).map(|(path, _)| path)
-}
-
-pub fn prewarm_startup_bundles() -> StartupPrewarmReport {
-    let targets = [
-        "utils/sherpa-onnx",
-        "utils/Models/tts",
-        "utils/whisper",
-        "utils/Models/whisper_models",
-        "utils/llama",
-        "utils/python_libs",
-        "utils/SlidevEnv",
-    ];
-
-    let mut ready = 0usize;
-    let mut recovered = Vec::new();
-    let mut extracted = Vec::new();
-    let mut failed = Vec::new();
-    let mut skipped = Vec::new();
-
-    for relative_dir in targets {
-        let start = Instant::now();
-        match ensure_relative_dir_internal(relative_dir) {
-            Ok((path, outcome)) => {
-                ready += 1;
-                if outcome.recovered {
-                    recovered.push(relative_dir.to_string());
-                }
-                if outcome.extracted {
-                    extracted.push(relative_dir.to_string());
-                }
-                if outcome.skipped {
-                    skipped.push(relative_dir.to_string());
-                }
-                info!(
-                    "[BundledResource] startup prewarm ready: dir={} path={} elapsedMs={} recovered={} extracted={} skipped={}",
-                    relative_dir,
-                    path.to_string_lossy(),
-                    start.elapsed().as_millis(),
-                    outcome.recovered,
-                    outcome.extracted,
-                    outcome.skipped
-                );
-            }
-            Err(e) => {
-                failed.push(format!("{relative_dir}: {e}"));
-                warn!(
-                    "[BundledResource] startup prewarm failed: dir={} elapsedMs={} error={}",
-                    relative_dir,
-                    start.elapsed().as_millis(),
-                    e
-                );
-            }
+    let normalized = relative_dir.replace('\\', "/");
+    if normalized == "utils" || normalized.starts_with("utils/") {
+        let (root, _) = ensure_utils_ready_internal()?;
+        if normalized == "utils" {
+            return Ok(root);
         }
+        let suffix = normalized.trim_start_matches("utils/").replace('/', std::path::MAIN_SEPARATOR_STR);
+        return Ok(root.join(suffix));
     }
 
-    let summary = if !failed.is_empty() {
-        format!(
-            "启动时已尝试继续准备运行资源，成功 {ready}/{}，失败 {} 项。",
-            targets.len(),
-            failed.len()
-        )
-    } else if !recovered.is_empty() {
-        format!(
-            "已恢复上次未完成的资源解压，并完成运行环境准备（{} 项恢复）。",
-            recovered.len()
-        )
-    } else if !extracted.is_empty() {
-        format!("首次启动已在后台完成运行环境准备（{} 项）。", extracted.len())
-    } else {
-        "运行环境已就绪。".to_string()
-    };
-
-    let finished = failed.is_empty();
-    StartupPrewarmReport {
-        total: targets.len(),
-        ready,
-        recovered,
-        extracted,
-        failed,
-        skipped,
-        finished,
-        summary,
-    }
+    Ok(exe_dir()?.join(relative_dir))
 }

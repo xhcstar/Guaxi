@@ -50,17 +50,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "resources": [
-      "scripts/**/*",
-      "libs/**/*",
-      "utils/platforms/*",
-      "utils/Qt*",
-      "utils/ScreenShotTool*",
-      "utils/pandoc*",
-      "utils/horizontalrule.lua",
-      "utils/Models/tts/**/*",
-      "utils/sherpa-onnx/**/*"
     ]
   }
 }
