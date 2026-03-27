@@ -48,3 +48,5 @@ src-tauri/utils/python_libs/*
 
 # Generated bundled resource archives (do not commit)
 src-tauri/utils/utils.zip
+src-tauri/utils/__bundles/*
+!src-tauri/utils/__bundles/.gitkeep

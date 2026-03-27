@@ -5,7 +5,7 @@
     "resources": [
       "scripts/**/*",
       "libs/**/*",
-      "utils/utils.zip"
+      "utils/__bundles/**/*"
     ]
   }
 }

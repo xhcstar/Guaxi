@@ -9,6 +9,7 @@ static EXTRACT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const EXTRACT_MARKER: &str = ".guaxi_utils_extract_complete";
 const TEMP_EXTRACT_MARKER: &str = ".guaxi_extract_complete";
 const PAYLOAD_DIR: &str = "__payload";
+const GENERATED_BUNDLES_DIR: &str = "__bundles";
 const FILE_OP_RETRY_TIMES: usize = 40;
 const FILE_OP_RETRY_DELAY_MS: u64 = 250;
 
@@ -135,8 +136,8 @@ fn dev_source_utils_root() -> Option<PathBuf> {
     None
 }
 
-fn utils_zip_path(target_root: &Path) -> PathBuf {
-    target_root.join("utils.zip")
+fn bundles_root(target_root: &Path) -> PathBuf {
+    target_root.join(GENERATED_BUNDLES_DIR)
 }
 
 fn marker_path(target_root: &Path) -> PathBuf {
@@ -147,18 +148,47 @@ fn temp_extract_prefix() -> &'static str {
     "utils.__extracting_"
 }
 
-fn zip_mtime(path: &Path) -> Option<SystemTime> {
+fn path_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
 
-fn dir_ready(target_root: &Path, bundle: &Path) -> bool {
+fn bundle_files(bundle_root: &Path) -> Result<Vec<PathBuf>, String> {
+    if !bundle_root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut bundles = std::fs::read_dir(bundle_root)
+        .map_err(|e| format!("读取资源包目录失败: {} ({e})", bundle_root.to_string_lossy()))?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("zip"))
+                    .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    bundles.sort();
+    Ok(bundles)
+}
+
+fn latest_bundle_mtime(bundle_root: &Path) -> Option<SystemTime> {
+    bundle_files(bundle_root)
+        .ok()
+        .and_then(|bundles| bundles.into_iter().filter_map(|path| path_mtime(&path)).max())
+}
+
+fn dir_ready(target_root: &Path, bundle_root: &Path) -> bool {
     let marker = marker_path(target_root);
     if !marker.is_file() {
         return false;
     }
-    match (zip_mtime(bundle), zip_mtime(&marker)) {
+    match (latest_bundle_mtime(bundle_root), path_mtime(&marker)) {
         (Some(bundle_ts), Some(marker_ts)) => marker_ts >= bundle_ts,
-        _ => true,
+        (None, _) => true,
+        _ => false,
     }
 }
 
@@ -244,7 +274,7 @@ fn cleanup_or_recover_stale_temp_dirs(target_root: &Path) -> Result<bool, String
     Ok(recovered)
 }
 
-fn extract_utils_zip(bundle: &Path, target_root: &Path) -> Result<(), String> {
+fn extract_bundle_archives(bundle_root: &Path, target_root: &Path) -> Result<(), String> {
     let parent = target_root.parent().ok_or_else(|| {
         format!(
             "无法解析 utils 目标目录的父目录: {}",
@@ -264,19 +294,27 @@ fn extract_utils_zip(bundle: &Path, target_root: &Path) -> Result<(), String> {
         )
     })?;
 
-    {
-        let file = std::fs::File::open(bundle)
-            .map_err(|e| format!("打开 utils.zip 失败: {} ({e})", bundle.to_string_lossy()))?;
+    let bundles = bundle_files(bundle_root)?;
+    if bundles.is_empty() {
+        return Err(format!(
+            "未找到 utils 资源分包: {}",
+            bundle_root.to_string_lossy()
+        ));
+    }
+
+    for bundle in bundles {
+        let file = std::fs::File::open(&bundle)
+            .map_err(|e| format!("打开资源分包失败: {} ({e})", bundle.to_string_lossy()))?;
         let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| format!("读取 utils.zip 失败: {} ({e})", bundle.to_string_lossy()))?;
+            .map_err(|e| format!("读取资源分包失败: {} ({e})", bundle.to_string_lossy()))?;
 
         for i in 0..archive.len() {
             let mut entry = archive
                 .by_index(i)
-                .map_err(|e| format!("读取 utils.zip 条目失败: {e}"))?;
+                .map_err(|e| format!("读取资源分包条目失败: {e}"))?;
             let enclosed = entry
                 .enclosed_name()
-                .ok_or_else(|| format!("utils.zip 包含非法路径: {}", entry.name()))?
+                .ok_or_else(|| format!("资源分包包含非法路径: {}", entry.name()))?
                 .to_path_buf();
             let normalized = entry.name().replace('\\', "/");
             let out_path = payload_dir.join(&enclosed);
@@ -345,8 +383,9 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
         outcome.recovered = true;
     }
 
-    let bundle = utils_zip_path(&target_root);
-    if !bundle.is_file() {
+    let bundle_root = bundles_root(&target_root);
+    let bundles = bundle_files(&bundle_root)?;
+    if bundles.is_empty() {
         if dir_has_entries(&target_root) {
             outcome.skipped = true;
             return Ok((target_root, outcome));
@@ -359,7 +398,7 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
         return Ok((target_root, outcome));
     }
 
-    if dir_ready(&target_root, &bundle) {
+    if dir_ready(&target_root, &bundle_root) {
         return Ok((target_root, outcome));
     }
 
@@ -370,16 +409,16 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
     if cleanup_or_recover_stale_temp_dirs(&target_root)? {
         outcome.recovered = true;
     }
-    if dir_ready(&target_root, &bundle) {
+    if dir_ready(&target_root, &bundle_root) {
         return Ok((target_root, outcome));
     }
 
     info!(
-        "[BundledResource] extracting zip={} dst={}",
-        bundle.to_string_lossy(),
+        "[BundledResource] extracting bundleRoot={} dst={}",
+        bundle_root.to_string_lossy(),
         target_root.to_string_lossy()
     );
-    extract_utils_zip(&bundle, &target_root)?;
+    extract_bundle_archives(&bundle_root, &target_root)?;
     outcome.extracted = true;
     Ok((target_root, outcome))
 }

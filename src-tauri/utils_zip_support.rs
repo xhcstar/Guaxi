@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use zip::{CompressionMethod, ZipWriter};
 const ZIP_READ_BUFFER_SIZE: usize = 1024 * 1024;
 const ZIP_WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 const LARGE_FILE_STORE_THRESHOLD: u64 = 8 * 1024 * 1024;
+const GENERATED_BUNDLES_DIR: &str = "__bundles";
 
 const LEGACY_BUNDLES: &[&str] = &[
     "utils.zip",
@@ -25,6 +27,7 @@ const LEGACY_BUNDLES: &[&str] = &[
 const SKIPPED_DIRECTORIES: &[&str] = &[
     "MarkdownConvertor",
     "Models/surya_models",
+    GENERATED_BUNDLES_DIR,
 ];
 
 const STORED_EXTENSIONS: &[&str] = &[
@@ -77,11 +80,20 @@ struct EntryStats {
 }
 
 #[derive(Debug, Clone)]
+struct BundleSpec {
+    bundle_path: PathBuf,
+    top_level_relative: PathBuf,
+    entries: Vec<ZipEntrySpec>,
+    stats: EntryStats,
+}
+
+#[derive(Debug, Clone)]
 pub struct PrepareResult {
-    pub bundle_path: PathBuf,
+    pub bundle_dir: PathBuf,
     pub strategy: ZipStrategy,
     pub reused_existing: bool,
     pub elapsed_ms: u128,
+    pub bundle_count: usize,
     pub file_count: usize,
     pub empty_dir_count: usize,
     pub total_bytes: u64,
@@ -100,128 +112,177 @@ pub fn should_skip(relative: &str) -> bool {
         || normalized == ".guaxi_utils_extract_complete"
 }
 
-pub fn prepare_utils_bundle(manifest_dir: &Path, reuse_existing: bool) -> Result<PrepareResult, String> {
+pub fn prepare_utils_bundles(
+    manifest_dir: &Path,
+    reuse_existing: bool,
+) -> Result<PrepareResult, String> {
     let started_at = Instant::now();
     let utils_dir = manifest_dir.join("utils");
-    let bundle = utils_dir.join("utils.zip");
+    let bundle_dir = utils_dir.join(GENERATED_BUNDLES_DIR);
 
     if !utils_dir.is_dir() {
         return Err(format!("utils dir not found: {}", utils_dir.display()));
     }
 
-    if reuse_existing && bundle.exists() {
+    if reuse_existing && has_existing_bundles(&bundle_dir) {
+        let bundle_count = count_existing_bundles(&bundle_dir);
         return Ok(PrepareResult {
-            bundle_path: bundle,
+            bundle_dir,
             strategy: ZipStrategy::RustFallback,
             reused_existing: true,
             elapsed_ms: started_at.elapsed().as_millis(),
+            bundle_count,
             file_count: 0,
             empty_dir_count: 0,
             total_bytes: 0,
         });
     }
 
-    if bundle.exists() {
-        fs::remove_file(&bundle)
-            .map_err(|e| format!("failed to remove old {}: {e}", bundle.display()))?;
+    reset_bundle_dir(&bundle_dir)?;
+
+    let bundles = collect_bundle_specs(&utils_dir, &bundle_dir)?;
+    let aggregate_stats = summarize_bundle_specs(&bundles);
+    let strategy = detect_strategy(&utils_dir);
+
+    for bundle in &bundles {
+        prepare_single_bundle(&utils_dir, bundle, strategy)?;
     }
 
-    let entries = collect_entries(&utils_dir, &utils_dir)?;
-    let stats = summarize_entries(&entries);
-    if let Some(strategy) = try_prepare_with_external_tools(&utils_dir, &bundle, &entries)? {
-        return Ok(PrepareResult {
-            bundle_path: bundle,
-            strategy,
-            reused_existing: false,
-            elapsed_ms: started_at.elapsed().as_millis(),
-            file_count: stats.file_count,
-            empty_dir_count: stats.empty_dir_count,
-            total_bytes: stats.total_bytes,
-        });
-    }
-
-    prepare_with_rust(&utils_dir, &bundle, &entries)?;
     Ok(PrepareResult {
-        bundle_path: bundle,
-        strategy: ZipStrategy::RustFallback,
+        bundle_dir,
+        strategy,
         reused_existing: false,
         elapsed_ms: started_at.elapsed().as_millis(),
-        file_count: stats.file_count,
-        empty_dir_count: stats.empty_dir_count,
-        total_bytes: stats.total_bytes,
+        bundle_count: bundles.len(),
+        file_count: aggregate_stats.file_count,
+        empty_dir_count: aggregate_stats.empty_dir_count,
+        total_bytes: aggregate_stats.total_bytes,
     })
 }
 
-fn try_prepare_with_external_tools(
-    utils_dir: &Path,
-    bundle: &Path,
-    entries: &[ZipEntrySpec],
-) -> Result<Option<ZipStrategy>, String> {
-    if entries.is_empty() {
-        File::create(bundle)
-            .map_err(|e| format!("failed to create empty {}: {e}", bundle.display()))?;
-        return Ok(Some(ZipStrategy::RustFallback));
-    }
-
-    if try_prepare_with_7z(utils_dir, bundle, entries)? {
-        return Ok(Some(ZipStrategy::SevenZip));
-    }
-
-    if cfg!(not(windows)) && try_prepare_with_zip(utils_dir, bundle)? {
-        return Ok(Some(ZipStrategy::ZipCli));
-    }
-
-    Ok(None)
+fn has_existing_bundles(bundle_dir: &Path) -> bool {
+    std::fs::read_dir(bundle_dir)
+        .ok()
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                entry.path().is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .and_then(OsStr::to_str)
+                        .map(|ext| ext.eq_ignore_ascii_case("zip"))
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
-fn try_prepare_with_7z(utils_dir: &Path, bundle: &Path, entries: &[ZipEntrySpec]) -> Result<bool, String> {
-    let Some(program) = ["7z", "7zz", "7za"]
+fn count_existing_bundles(bundle_dir: &Path) -> usize {
+    std::fs::read_dir(bundle_dir)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry.path().is_file()
+                        && entry
+                            .path()
+                            .extension()
+                            .and_then(OsStr::to_str)
+                            .map(|ext| ext.eq_ignore_ascii_case("zip"))
+                            .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn reset_bundle_dir(bundle_dir: &Path) -> Result<(), String> {
+    if bundle_dir.exists() {
+        fs::remove_dir_all(bundle_dir)
+            .map_err(|e| format!("failed to remove old {}: {e}", bundle_dir.display()))?;
+    }
+    fs::create_dir_all(bundle_dir)
+        .map_err(|e| format!("failed to create {}: {e}", bundle_dir.display()))
+}
+
+fn detect_strategy(utils_dir: &Path) -> ZipStrategy {
+    if ["7z", "7zz", "7za"]
+        .into_iter()
+        .any(|candidate| has_command(candidate, utils_dir))
+    {
+        return ZipStrategy::SevenZip;
+    }
+
+    if cfg!(not(windows)) && has_command("zip", utils_dir) {
+        return ZipStrategy::ZipCli;
+    }
+
+    ZipStrategy::RustFallback
+}
+
+fn prepare_single_bundle(
+    utils_dir: &Path,
+    bundle: &BundleSpec,
+    strategy: ZipStrategy,
+) -> Result<(), String> {
+    match strategy {
+        ZipStrategy::SevenZip => prepare_single_bundle_with_7z(utils_dir, bundle),
+        ZipStrategy::ZipCli => prepare_single_bundle_with_zip(utils_dir, bundle),
+        ZipStrategy::RustFallback => prepare_single_bundle_with_rust(utils_dir, bundle),
+    }
+}
+
+fn prepare_single_bundle_with_7z(utils_dir: &Path, bundle: &BundleSpec) -> Result<(), String> {
+    let program = ["7z", "7zz", "7za"]
         .into_iter()
         .find(|candidate| has_command(candidate, utils_dir))
-    else {
-        return Ok(false);
-    };
+        .ok_or_else(|| "7z not found".to_string())?;
 
-    let listfile = write_listfile(utils_dir, entries)?;
+    let listfile = write_listfile(utils_dir, &bundle.entries)?;
     let status = Command::new(program)
         .current_dir(utils_dir)
         .arg("a")
         .arg("-tzip")
         .arg("-mx=1")
         .arg("-mmt=on")
-        .arg(bundle.file_name().unwrap_or_else(|| std::ffi::OsStr::new("utils.zip")))
+        .arg(&bundle.bundle_path)
         .arg(format!("@{}", listfile.file_name().unwrap().to_string_lossy()))
         .status();
 
     let _ = fs::remove_file(&listfile);
 
     match status {
-        Ok(status) if status.success() => Ok(true),
+        Ok(status) if status.success() => Ok(()),
         Ok(_) => {
-            let _ = fs::remove_file(bundle);
-            Ok(false)
+            let _ = fs::remove_file(&bundle.bundle_path);
+            Err(format!("7z failed for {}", bundle.bundle_path.display()))
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(format!("failed to run {program}: {e}")),
     }
 }
 
-fn try_prepare_with_zip(utils_dir: &Path, bundle: &Path) -> Result<bool, String> {
-    if !has_command("zip", utils_dir) {
-        return Ok(false);
+fn prepare_single_bundle_with_zip(utils_dir: &Path, bundle: &BundleSpec) -> Result<(), String> {
+    let target_name = bundle
+        .bundle_path
+        .strip_prefix(utils_dir)
+        .unwrap_or(&bundle.bundle_path)
+        .to_path_buf();
+    let top_level_name = normalize_path(&bundle.top_level_relative);
+    let is_dir = utils_dir.join(&bundle.top_level_relative).is_dir();
+    let mut command = Command::new("zip");
+    command.current_dir(utils_dir).arg("-q").arg("-1");
+
+    if is_dir {
+        command.arg("-r");
     }
 
-    let output_name = bundle
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("utils.zip"));
-    let status = Command::new("zip")
-        .current_dir(utils_dir)
-        .arg("-q")
-        .arg("-1")
-        .arg("-r")
-        .arg(output_name)
-        .arg(".")
+    command
+        .arg(target_name)
+        .arg(&top_level_name)
         .arg("-x")
+        .arg(format!("{GENERATED_BUNDLES_DIR}/*"))
+        .arg(format!("{GENERATED_BUNDLES_DIR}/**"))
         .arg("utils.zip")
         .arg("SlidevEnv.zip")
         .arg("sherpa-onnx.zip")
@@ -236,35 +297,32 @@ fn try_prepare_with_zip(utils_dir: &Path, bundle: &Path) -> Result<bool, String>
         .arg("Models/surya_models/**")
         .arg("*.guaxi_extract_complete")
         .arg("*.guaxi_utils_extract_complete")
-        .arg("*.__extracting_*")
-        .status();
+        .arg("*.__extracting_*");
 
-    match status {
-        Ok(status) if status.success() => Ok(true),
+    match command.status() {
+        Ok(status) if status.success() => Ok(()),
         Ok(_) => {
-            let _ = fs::remove_file(bundle);
-            Ok(false)
+            let _ = fs::remove_file(&bundle.bundle_path);
+            Err(format!("zip failed for {}", bundle.bundle_path.display()))
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(format!("failed to run zip: {e}")),
     }
 }
 
-fn prepare_with_rust(utils_dir: &Path, bundle: &Path, entries: &[ZipEntrySpec]) -> Result<(), String> {
-    let file = File::create(bundle)
-        .map_err(|e| format!("failed to create {}: {e}", bundle.display()))?;
+fn prepare_single_bundle_with_rust(utils_dir: &Path, bundle: &BundleSpec) -> Result<(), String> {
+    let file = File::create(&bundle.bundle_path)
+        .map_err(|e| format!("failed to create {}: {e}", bundle.bundle_path.display()))?;
     let writer = BufWriter::with_capacity(ZIP_WRITE_BUFFER_SIZE, file);
     let mut zip = ZipWriter::new(writer);
 
-    for entry in entries {
+    for entry in &bundle.entries {
         let relative_text = normalize_path(&entry.relative);
         match entry.kind {
             ZipEntryKind::EmptyDir => {
-                zip.add_directory(
-                    format!("{relative_text}/"),
-                    directory_file_options(),
-                )
-                .map_err(|e| format!("failed to add dir {relative_text} to zip: {e}"))?;
+                zip.add_directory(format!("{relative_text}/"), directory_file_options())
+                    .map_err(|e| {
+                        format!("failed to add dir {relative_text} to zip: {e}")
+                    })?;
             }
             ZipEntryKind::File { size } => {
                 let full_path = utils_dir.join(&entry.relative);
@@ -274,7 +332,9 @@ fn prepare_with_rust(utils_dir: &Path, bundle: &Path, entries: &[ZipEntrySpec]) 
                         .map_err(|e| format!("failed to open {}: {e}", full_path.display()))?,
                 );
                 zip.start_file(relative_text.clone(), file_options_for_path(&entry.relative, size))
-                    .map_err(|e| format!("failed to start file {relative_text} in zip: {e}"))?;
+                    .map_err(|e| {
+                        format!("failed to start file {relative_text} in zip: {e}")
+                    })?;
                 io::copy(&mut reader, &mut zip)
                     .map_err(|e| format!("failed to write {relative_text} to zip: {e}"))?;
             }
@@ -282,8 +342,66 @@ fn prepare_with_rust(utils_dir: &Path, bundle: &Path, entries: &[ZipEntrySpec]) 
     }
 
     zip.finish()
-        .map_err(|e| format!("failed to finish {}: {e}", bundle.display()))?;
+        .map_err(|e| format!("failed to finish {}: {e}", bundle.bundle_path.display()))?;
     Ok(())
+}
+
+fn collect_bundle_specs(utils_dir: &Path, bundle_dir: &Path) -> Result<Vec<BundleSpec>, String> {
+    let mut entries = fs::read_dir(utils_dir)
+        .map_err(|e| format!("failed to read dir {}: {e}", utils_dir.display()))?
+        .flatten()
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.path());
+
+    let mut bundles = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(utils_dir)
+            .map_err(|e| {
+                format!(
+                    "failed to strip prefix {} from {}: {e}",
+                    utils_dir.display(),
+                    path.display()
+                )
+            })?
+            .to_path_buf();
+
+        if should_skip(&normalize_path(&relative)) {
+            continue;
+        }
+
+        let entries = if path.is_dir() {
+            let nested = collect_entries(utils_dir, &path)?;
+            if nested.is_empty() {
+                vec![ZipEntrySpec {
+                    relative: relative.clone(),
+                    kind: ZipEntryKind::EmptyDir,
+                }]
+            } else {
+                nested
+            }
+        } else {
+            let size = entry
+                .metadata()
+                .map_err(|e| format!("failed to read metadata {}: {e}", path.display()))?
+                .len();
+            vec![ZipEntrySpec {
+                relative: relative.clone(),
+                kind: ZipEntryKind::File { size },
+            }]
+        };
+
+        let bundle_name = format!("{}.zip", relative.file_name().unwrap().to_string_lossy());
+        bundles.push(BundleSpec {
+            bundle_path: bundle_dir.join(bundle_name),
+            top_level_relative: relative,
+            stats: summarize_entries(&entries),
+            entries,
+        });
+    }
+
+    Ok(bundles)
 }
 
 fn collect_entries(root_dir: &Path, current_dir: &Path) -> Result<Vec<ZipEntrySpec>, String> {
@@ -379,6 +497,16 @@ fn summarize_entries(entries: &[ZipEntrySpec]) -> EntryStats {
     stats
 }
 
+fn summarize_bundle_specs(bundles: &[BundleSpec]) -> EntryStats {
+    let mut stats = EntryStats::default();
+    for bundle in bundles {
+        stats.file_count += bundle.stats.file_count;
+        stats.empty_dir_count += bundle.stats.empty_dir_count;
+        stats.total_bytes += bundle.stats.total_bytes;
+    }
+    stats
+}
+
 fn has_command(program: &str, workdir: &Path) -> bool {
     let status = if cfg!(windows) {
         Command::new("where")
@@ -421,7 +549,8 @@ fn file_options_for_path(relative: &Path, size: u64) -> SimpleFileOptions {
         .as_deref()
         .map(|ext| COMPRESSIBLE_EXTENSIONS.contains(&ext))
         .unwrap_or(false);
-    let stored = known_stored_extension || (size >= LARGE_FILE_STORE_THRESHOLD && !known_compressible_extension);
+    let stored =
+        known_stored_extension || (size >= LARGE_FILE_STORE_THRESHOLD && !known_compressible_extension);
 
     if stored {
         SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
