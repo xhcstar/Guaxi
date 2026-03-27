@@ -1154,13 +1154,78 @@ let realtimeVditorLinkInterceptorCleanup = null;
 const REALTIME_VDITOR_INIT_TIMEOUT_MS = 12000
 
 const getLocalVditorCdn = () => {
-  if (typeof window === 'undefined') return '/vditor'
-  return new URL('/vditor', window.location.origin).toString().replace(/\/$/, '')
+  // Vditor appends `/dist/...` internally, so the CDN value here must point to
+  // the parent folder that contains the `dist` directory copied into `public`.
+  return '/vditor'
 }
 
 const getBundledVditorI18n = () => {
   if (typeof window === 'undefined' || !window.VditorI18n) return undefined
   return { ...window.VditorI18n }
+}
+
+const createRealtimeVditorInitDiagnostics = () => {
+  const resourceFailures = []
+  const promiseFailures = []
+
+  const recordResourceFailure = (target) => {
+    if (!(target instanceof Element)) return
+    const tag = String(target.tagName || '').toLowerCase()
+    if (!['script', 'link', 'img'].includes(tag)) return
+    const url =
+      target.getAttribute?.('src') ||
+      target.getAttribute?.('href') ||
+      target.getAttribute?.('currentSrc') ||
+      ''
+    if (!url) return
+    resourceFailures.push({
+      tag,
+      url,
+      id: target.getAttribute?.('id') || '',
+      rel: target.getAttribute?.('rel') || '',
+    })
+  }
+
+  const onWindowError = (event) => {
+    if (event?.target && event.target !== window) {
+      recordResourceFailure(event.target)
+      return
+    }
+    if (event?.message) {
+      promiseFailures.push({
+        type: 'window-error',
+        message: String(event.message),
+        filename: String(event.filename || ''),
+      })
+    }
+  }
+
+  const onUnhandledRejection = (event) => {
+    const reason = event?.reason
+    promiseFailures.push({
+      type: 'unhandledrejection',
+      message:
+        reason instanceof Error
+          ? `${reason.name}: ${reason.message}`
+          : String(reason ?? 'unknown'),
+    })
+  }
+
+  window.addEventListener('error', onWindowError, true)
+  window.addEventListener('unhandledrejection', onUnhandledRejection)
+
+  return {
+    snapshot() {
+      return {
+        resourceFailures: resourceFailures.slice(-10),
+        promiseFailures: promiseFailures.slice(-10),
+      }
+    },
+    dispose() {
+      window.removeEventListener('error', onWindowError, true)
+      window.removeEventListener('unhandledrejection', onUnhandledRejection)
+    }
+  }
 }
 
 const syncRealtimeValueToRawContent = debounce((value) => {
@@ -10638,6 +10703,7 @@ const initRealtimeVditor = async () => {
   if (!realtimeVditor) {
     realtimeVditorReady.value = false;
     pendingRealtimeVditorValue.value = null;
+    const initDiagnostics = createRealtimeVditorInitDiagnostics()
     await new Promise((resolve, reject) => {
       const timeoutId = window.setTimeout(() => {
         reject(new Error(`Vditor init timeout after ${REALTIME_VDITOR_INIT_TIMEOUT_MS}ms`));
@@ -10718,13 +10784,18 @@ const initRealtimeVditor = async () => {
         finishReject(error);
       }
     }).catch((error) => {
+      const diagnostics = initDiagnostics.snapshot()
       logger.error('[Editor] initRealtimeVditor failed', {
         error,
         cdn: vditorCdn,
         hasBundledI18n: Boolean(vditorI18n),
+        resourceFailures: diagnostics.resourceFailures,
+        promiseFailures: diagnostics.promiseFailures,
       });
       destroyRealtimeVditor();
       throw error;
+    }).finally(() => {
+      initDiagnostics.dispose()
     });
 
     return;
