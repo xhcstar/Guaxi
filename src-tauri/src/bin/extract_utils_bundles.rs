@@ -4,6 +4,8 @@ use std::path::PathBuf;
 #[path = "../../utils_zip_support.rs"]
 mod utils_zip_support;
 
+// The installer passes arguments explicitly so the helper can stay shell-agnostic
+// and avoid fragile inline PowerShell extraction logic.
 fn parse_arg(flag: &str) -> Result<PathBuf, String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -36,6 +38,8 @@ fn main() {
         std::process::exit(1);
     });
 
+    // The marker lets the runtime side quickly detect whether an installed
+    // utils directory is already complete or still needs recovery.
     let marker = destination.join(".guaxi_utils_extract_complete");
     fs::write(&marker, b"ok").unwrap_or_else(|error| {
         eprintln!("failed to write marker {}: {error}", marker.display());

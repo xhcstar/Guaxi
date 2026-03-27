@@ -2,6 +2,9 @@ import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+// This wrapper is the single user-facing entry for `npm run tauri ...`.
+// It keeps dev lightweight, while build/bundle runs the heavier asset and
+// external utils bundle preparation steps required by release packaging.
 const args = process.argv.slice(2);
 const reuseFlag = '--reuse-utils-zip';
 const reuseExisting = args.includes(reuseFlag);
@@ -34,6 +37,8 @@ const windowsExtractHelperOutput = path.join(
 );
 
 function tauriInvocation() {
+  // On Windows we invoke the generated `tauri.cmd` through cmd.exe.
+  // Spawning the cmd shim directly is less reliable across shells.
   if (process.platform === 'win32') {
     return {
       command: 'cmd.exe',
@@ -49,6 +54,8 @@ function tauriInvocation() {
 
 function run(command, commandArgs, extraEnv = {}) {
   return new Promise((resolve, reject) => {
+    // Disable npm's own update notifier so build logs stay focused on the
+    // project pipeline instead of tool-upgrade suggestions.
     const child = spawn(command, commandArgs, {
       cwd: projectRoot,
       stdio: 'inherit',
@@ -78,6 +85,9 @@ async function publishExternalWindowsBundles() {
     return;
   }
 
+  // Windows installers do not embed the large utils runtime payload anymore.
+  // Instead, release builds publish external bundle files next to the setup EXE,
+  // and the NSIS post-install hook expands them into `$INSTDIR\\utils`.
   let sourceEntries = [];
   try {
     sourceEntries = await readdir(utilsBundlesSourceDir, { withFileTypes: true });
@@ -131,11 +141,15 @@ async function publishExternalWindowsBundles() {
 
 async function main() {
   if (shouldPrepareForTauriCommand) {
+    // Release packaging depends on pre-copied frontend assets because the final
+    // bundle cannot fetch editor/viewer assets from the network at runtime.
     const prepareAssetsExitCode = await run('node', ['./tools/copy_excalidraw_assets.mjs']);
     if (prepareAssetsExitCode !== 0) {
       process.exit(prepareAssetsExitCode);
     }
 
+    // Bundle the heavy `src-tauri/utils` runtime tree into external tar.zst
+    // parts before Tauri starts the actual release build.
     const prepareArgs = [
       'run',
       '--quiet',
@@ -155,6 +169,8 @@ async function main() {
     }
 
     if (process.platform === 'win32') {
+      // The installer invokes this helper during installation to expand the
+      // external utils bundles into the final install directory.
       const helperBuildExitCode = await run('cargo', [
         'build',
         '--quiet',
@@ -174,6 +190,9 @@ async function main() {
   const tauriExitCode = await run(
     tauri.command,
     tauri.args,
+    // `build.rs` also knows how to reuse existing bundles. We forward the flag
+    // through an env var so Cargo-triggered bundle preparation stays consistent
+    // with the outer JS wrapper.
     reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {},
   );
   if (tauriExitCode !== 0) {

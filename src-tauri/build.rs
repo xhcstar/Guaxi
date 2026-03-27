@@ -4,6 +4,9 @@ use std::path::PathBuf;
 mod utils_zip_support;
 
 fn main() {
+    // Cargo runs this script before compiling the main Tauri crate.
+    // We use it as a release-mode safety net: even if the outer npm wrapper
+    // was skipped, a release build still gets the external utils bundles.
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
     let utils_dir = manifest_dir.join("utils");
@@ -20,6 +23,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PROFILE");
 
     if profile != "debug" {
+        // Debug/dev reads utils directly from the source tree, so preparing
+        // tar.zst bundles here would only waste time.
         match utils_zip_support::prepare_utils_bundles(&manifest_dir, reuse_existing) {
             Ok(result) if result.reused_existing => {
                 println!(
@@ -45,6 +50,7 @@ fn main() {
             Err(error) => panic!("{error}"),
         }
     } else {
+        // Keep the debug log explicit so developers know the skip is intentional.
         println!("cargo:warning=[utils.bundle] skipped in debug profile");
     }
     tauri_build::build()

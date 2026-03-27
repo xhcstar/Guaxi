@@ -3,6 +3,8 @@ use std::path::PathBuf;
 #[path = "../../utils_zip_support.rs"]
 mod utils_zip_support;
 
+// Historical flag name is kept for compatibility with existing local scripts.
+// Internally the implementation now produces tar.zst bundle parts, not zip files.
 const REUSE_EXISTING_FLAG: &str = "--reuse-existing";
 const KEEP_EXISTING_FLAG: &str = "--keep-existing";
 
@@ -20,6 +22,8 @@ fn main() {
     let reuse_existing = should_reuse_existing_bundle();
     let manifest_dir = manifest_dir();
 
+    // This binary is the explicit, developer-facing way to prepare release
+    // runtime bundles ahead of `tauri build`.
     match utils_zip_support::prepare_utils_bundles(&manifest_dir, reuse_existing) {
         Ok(result) if result.reused_existing => {
             println!(

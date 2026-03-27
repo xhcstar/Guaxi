@@ -1,5 +1,15 @@
 #![allow(dead_code)]
 
+// Shared build/install bundle support for the large `src-tauri/utils` runtime.
+//
+// Design goals:
+// - Debug/dev mode must be able to run directly from the source-tree utils dir.
+// - Release builds must avoid embedding multi-GB resources directly in NSIS.
+// - Bundle creation and extraction must be deterministic, recoverable and fast.
+// - The on-disk structure after extraction must exactly match the original
+//   `utils/...` layout so existing runtime commands can keep using
+//   `ensure_relative_dir("utils/...")` without special cases.
+
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -84,6 +94,8 @@ pub struct PrepareResult {
     pub total_bytes: u64,
 }
 
+// Skip legacy generated artifacts, temporary extraction directories and resource
+// trees that are intentionally excluded from release payloads.
 pub fn should_skip(relative: &str) -> bool {
     let normalized = relative.replace('\\', "/");
     LEGACY_BUNDLES.contains(&normalized.as_str())
@@ -109,6 +121,8 @@ pub fn prepare_utils_bundles(
         return Err(format!("utils dir not found: {}", utils_dir.display()));
     }
 
+    // Reusing previously generated bundles is important for large release
+    // payloads: repacking multi-GB resources can take many minutes.
     if reuse_existing && has_existing_bundles(&bundle_dir) {
         let bundle_count = count_existing_bundles(&bundle_dir);
         return Ok(PrepareResult {
@@ -127,6 +141,8 @@ pub fn prepare_utils_bundles(
     let bundles = collect_bundle_specs(&utils_dir, &bundle_dir)?;
     let aggregate_stats = summarize_bundle_specs(&bundles);
 
+    // Each top-level utils entry becomes one bundle file. Compressing those
+    // bundles in parallel is the main coarse-grained speedup in this pipeline.
     bundles.par_iter().try_for_each(prepare_single_bundle)?;
 
     Ok(PrepareResult {
@@ -156,6 +172,8 @@ pub fn extract_bundle_archives_to_destination(
     fs::create_dir_all(destination)
         .map_err(|e| format!("创建目标目录失败: {} ({e})", destination.to_string_lossy()))?;
 
+    // Bundles target disjoint top-level paths, so they can be expanded in
+    // parallel without changing the final directory structure.
     bundles
         .par_iter()
         .try_for_each(|bundle| extract_single_bundle(bundle, destination))?;
@@ -205,6 +223,8 @@ fn reset_bundle_dir(bundle_dir: &Path) -> Result<(), String> {
 }
 
 fn prepare_single_bundle(bundle: &BundleSpec) -> Result<(), String> {
+    // Write to a temporary file first so aborted builds never leave a partially
+    // valid bundle behind that might later be mistaken for a complete artifact.
     let temp_bundle_path = bundle.bundle_path.with_file_name(format!(
         "{}.tmp",
         bundle
@@ -227,6 +247,8 @@ fn prepare_single_bundle(bundle: &BundleSpec) -> Result<(), String> {
             .map_err(|e| format!("failed to enable zstd multithreading: {e}"))?;
     }
 
+    // tar keeps the original relative paths intact, while zstd gives us much
+    // faster compression/decompression than the previous zip-based flow.
     let mut archive = Builder::new(encoder);
     archive.mode(tar::HeaderMode::Deterministic);
 
@@ -268,6 +290,8 @@ fn prepare_single_bundle(bundle: &BundleSpec) -> Result<(), String> {
         .map_err(|e| format!("failed to flush {}: {e}", temp_bundle_path.display()))?;
     drop(writer);
 
+    // Atomic replace makes the final bundle appear only after it has been fully
+    // written and flushed.
     fs::rename(&temp_bundle_path, &bundle.bundle_path).map_err(|e| {
         format!(
             "failed to replace bundle {} with {}: {e}",
@@ -294,6 +318,8 @@ fn extract_single_bundle(bundle: &Path, destination: &Path) -> Result<(), String
         let entry_path = entry
             .path()
             .map_err(|e| format!("读取资源分包路径失败: {} ({e})", bundle.to_string_lossy()))?;
+        // Never trust archive paths directly. Reject absolute paths and parent
+        // traversals so a malformed bundle cannot escape the destination root.
         let relative = sanitize_relative_path(entry_path.as_ref()).ok_or_else(|| {
             format!(
                 "资源分包包含非法路径: {} ({})",
@@ -380,6 +406,8 @@ fn collect_bundle_specs(utils_dir: &Path, bundle_dir: &Path) -> Result<Vec<Bundl
             continue;
         }
 
+        // We bundle by top-level utils entry so installation can publish,
+        // replace and troubleshoot large runtime chunks independently.
         let bundle_entries = if path.is_dir() {
             let nested = collect_entries(utils_dir, &path)?;
             if nested.is_empty() {

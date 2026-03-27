@@ -7,6 +7,16 @@ use tracing::info;
 #[path = "../../utils_zip_support.rs"]
 mod utils_zip_support;
 
+// Runtime side of the external utils bundle strategy.
+//
+// Debug/dev:
+// - do not copy multi-GB runtime assets into target/debug
+// - resolve `utils/...` back to the source tree when possible
+//
+// Release:
+// - prefer an installed sibling `utils` directory
+// - recover interrupted extractions
+// - rebuild `utils` from external bundle parts when necessary
 static EXTRACT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 const EXTRACT_MARKER: &str = ".guaxi_utils_extract_complete";
@@ -126,6 +136,9 @@ fn dev_source_utils_root() -> Option<PathBuf> {
         return None;
     }
 
+    // During `tauri dev`, the executable lives under Cargo target directories.
+    // Walking upward lets us find the crate root and reuse `src-tauri/utils`
+    // directly instead of syncing a second full copy for every debug run.
     let exe_dir = exe_dir().ok()?;
     for ancestor in exe_dir.ancestors() {
         let cargo_toml = ancestor.join("Cargo.toml");
@@ -258,6 +271,8 @@ fn cleanup_or_recover_stale_temp_dirs(target_root: &Path) -> Result<bool, String
 
         let payload = path.join(PAYLOAD_DIR);
         let marker = path.join(TEMP_EXTRACT_MARKER);
+        // If the temporary payload is complete, extraction itself already
+        // succeeded and only the final move into `utils` was interrupted.
         if payload.is_dir() && marker.is_file() {
             info!(
                 "[BundledResource] recovering stale temp dir: src={} dst={}",
@@ -296,6 +311,8 @@ fn extract_bundle_archives(bundle_root: &Path, target_root: &Path) -> Result<(),
         )
     })?;
 
+    // Expand bundles into a private temp location first so the public `utils`
+    // directory never becomes half-written during install or recovery.
     utils_zip_support::extract_bundle_archives_to_destination(bundle_root, &payload_dir)?;
 
     std::fs::write(temp_root.join(TEMP_EXTRACT_MARKER), b"ok").map_err(|e| {
@@ -332,6 +349,7 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
     let bundle_root = bundles_root(&target_root);
     let bundles = bundle_files(&bundle_root)?;
     if bundles.is_empty() {
+        // Debug/dev usually lands here because no external bundles are shipped.
         if dir_has_entries(&target_root) {
             outcome.skipped = true;
             return Ok((target_root, outcome));
@@ -344,6 +362,7 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
         return Ok((target_root, outcome));
     }
 
+    // Fast path for a healthy release installation.
     if dir_ready(&target_root, &bundle_root) {
         return Ok((target_root, outcome));
     }
@@ -359,6 +378,7 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
         return Ok((target_root, outcome));
     }
 
+    // Release fallback: rebuild `utils` from shipped external bundle parts.
     info!(
         "[BundledResource] extracting bundleRoot={} dst={}",
         bundle_root.to_string_lossy(),
@@ -371,6 +391,8 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
 
 pub fn ensure_relative_dir(relative_dir: &str) -> Result<PathBuf, String> {
     let normalized = relative_dir.replace('\\', "/");
+    // Centralize all `utils/...` path resolution here so runtime commands do
+    // not need separate debug/release path logic.
     if normalized == "utils" || normalized.starts_with("utils/") {
         let (root, _) = ensure_utils_ready_internal()?;
         if normalized == "utils" {
