@@ -1126,33 +1126,27 @@ fn resolve_exe_dir() -> Result<PathBuf, String> {
 }
 
 fn resolve_sherpa_default_exe() -> Result<PathBuf, String> {
-    let _ = bundled_resources::ensure_relative_dir("utils/sherpa-onnx")?;
-    let exe_dir = resolve_exe_dir()?;
     let rel = if cfg!(target_os = "windows") {
         SHERPA_ONNX_TTS_DEFAULT_EXE_WIN
     } else {
         SHERPA_ONNX_TTS_DEFAULT_EXE_UNIX
     };
-    Ok(exe_dir.join(rel))
+    bundled_resources::ensure_relative_dir(rel)
 }
 
 fn resolve_sherpa_default_asr_exe() -> Result<PathBuf, String> {
-    let _ = bundled_resources::ensure_relative_dir("utils/sherpa-onnx")?;
-    let exe_dir = resolve_exe_dir()?;
     let rel = if cfg!(target_os = "windows") {
         SHERPA_ONNX_ASR_DEFAULT_EXE_WIN
     } else {
         SHERPA_ONNX_ASR_DEFAULT_EXE_UNIX
     };
-    Ok(exe_dir.join(rel))
+    bundled_resources::ensure_relative_dir(rel)
 }
 
 fn resolve_sherpa_default_model_paths() -> Result<(PathBuf, PathBuf), String> {
-    let _ = bundled_resources::ensure_relative_dir("utils/Models/tts")?;
-    let exe_dir = resolve_exe_dir()?;
     Ok((
-        exe_dir.join(SHERPA_ONNX_TTS_DEFAULT_MODEL),
-        exe_dir.join(SHERPA_ONNX_TTS_DEFAULT_TOKENS),
+        bundled_resources::ensure_relative_dir(SHERPA_ONNX_TTS_DEFAULT_MODEL)?,
+        bundled_resources::ensure_relative_dir(SHERPA_ONNX_TTS_DEFAULT_TOKENS)?,
     ))
 }
 
@@ -2166,11 +2160,11 @@ fn exe_dir() -> Result<PathBuf, String> {
         .ok_or("failed to locate executable directory".to_string())
 }
 
-fn local_deepseek_model_path(exe: &Path) -> PathBuf {
-    exe.join("utils")
-        .join("Models")
-        .join("chat")
-        .join(LOCAL_DEEPSEEK_MODEL_FILENAME)
+fn local_deepseek_model_path() -> Result<PathBuf, String> {
+    bundled_resources::ensure_relative_dir(&format!(
+        "utils/Models/chat/{}",
+        LOCAL_DEEPSEEK_MODEL_FILENAME
+    ))
 }
 
 fn find_file_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf> {
@@ -2200,9 +2194,8 @@ fn find_file_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
-fn resolve_llama_server_path(exe: &Path) -> Result<PathBuf, String> {
-    let _ = bundled_resources::ensure_relative_dir("utils/llama")?;
-    let llama_dir = exe.join("utils").join("llama");
+fn resolve_llama_server_path() -> Result<PathBuf, String> {
+    let llama_dir = bundled_resources::ensure_relative_dir("utils/llama")?;
     if !llama_dir.exists() {
         return Err(format!(
             "llama directory not found: {}",
@@ -2275,7 +2268,7 @@ fn refresh_local_deepseek_process_state() {
 
 async fn ensure_local_deepseek_server_started() -> Result<PathBuf, String> {
     let exe = exe_dir()?;
-    let model_path = local_deepseek_model_path(&exe);
+    let model_path = local_deepseek_model_path()?;
     let log_dir = exe.join("logs");
     fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
     let log_path = log_dir.join("local_deepseek_server.log");
@@ -2297,7 +2290,7 @@ async fn ensure_local_deepseek_server_started() -> Result<PathBuf, String> {
             .lock()
             .map_err(|_| "local deepseek process lock poisoned".to_string())?;
         if guard.child.is_none() {
-            let server_path = resolve_llama_server_path(&exe)?;
+            let server_path = resolve_llama_server_path()?;
             let log_file = OpenOptions::new()
                 .create(true)
                 .append(true)

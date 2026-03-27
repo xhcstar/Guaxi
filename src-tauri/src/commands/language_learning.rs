@@ -3394,17 +3394,10 @@ fn extract_whisper_segments(v: &serde_json::Value) -> Vec<(f64, f64, String)> {
 }
 
 fn resolve_whisper_cli_and_model() -> Result<(PathBuf, PathBuf), String> {
-    let _ = bundled_resources::ensure_relative_dir("utils/whisper")?;
-    let _ = bundled_resources::ensure_relative_dir("utils/Models/whisper_models")?;
-    let exe_path = env::current_exe().map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
-    let exe_dir = exe_path
-        .parent()
-        .ok_or_else(|| "无法获取可执行文件目录".to_string())?
-        .to_path_buf();
     let whisper_cli = if cfg!(target_os = "windows") {
-        exe_dir.join("utils/whisper/whisper-cli.exe")
+        bundled_resources::ensure_relative_dir("utils/whisper/whisper-cli.exe")?
     } else {
-        exe_dir.join("utils/whisper/whisper-cli")
+        bundled_resources::ensure_relative_dir("utils/whisper/whisper-cli")?
     };
     if !whisper_cli.exists() {
         return Err(format!(
@@ -3412,8 +3405,8 @@ fn resolve_whisper_cli_and_model() -> Result<(PathBuf, PathBuf), String> {
             whisper_cli.to_string_lossy()
         ));
     }
-    let model_en = exe_dir.join("utils/Models/whisper_models/ggml-base.en.bin");
-    let model_base = exe_dir.join("utils/Models/whisper_models/ggml-base.bin");
+    let model_en = bundled_resources::ensure_relative_dir("utils/Models/whisper_models/ggml-base.en.bin")?;
+    let model_base = bundled_resources::ensure_relative_dir("utils/Models/whisper_models/ggml-base.bin")?;
     let model = if model_en.exists() { model_en } else { model_base };
     if !model.exists() {
         return Err(format!(

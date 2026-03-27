@@ -527,10 +527,7 @@ fn cleanup_modelscope_download_dir(local_dir: &Path) {
 
 fn run_modelscope_download(exe_dir: &Path, local_dir: &Path) -> Result<(), String> {
     let _ = bundled_resources::ensure_relative_dir("utils/python_libs")?;
-    let marker_src_dir = exe_dir
-        .join("utils")
-        .join("MarkdownConvertor")
-        .join("marker-1.10.1");
+    let marker_src_dir = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
     if !marker_src_dir.exists() {
         return Err(
             "找不到 marker-1.10.1 源码目录，请检查是否存在：<软件目录>\\utils\\MarkdownConvertor\\marker-1.10.1"
@@ -1566,16 +1563,15 @@ fn find_file_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
-fn local_deepseek_model_path(exe: &Path) -> PathBuf {
-    exe.join("utils")
-        .join("Models")
-        .join("chat")
-        .join(LOCAL_DEEPSEEK_MODEL_FILENAME)
+fn local_deepseek_model_path() -> Result<PathBuf, String> {
+    bundled_resources::ensure_relative_dir(&format!(
+        "utils/Models/chat/{}",
+        LOCAL_DEEPSEEK_MODEL_FILENAME
+    ))
 }
 
-fn resolve_llama_server_path(exe: &Path) -> Option<PathBuf> {
-    let _ = bundled_resources::ensure_relative_dir("utils/llama");
-    let llama_dir = exe.join("utils").join("llama");
+fn resolve_llama_server_path() -> Option<PathBuf> {
+    let llama_dir = bundled_resources::ensure_relative_dir("utils/llama").ok()?;
     if !llama_dir.exists() {
         return None;
     }
@@ -1603,11 +1599,7 @@ fn resolve_llama_server_path(exe: &Path) -> Option<PathBuf> {
 #[tauri::command]
 pub async fn get_markdown_models_status() -> Result<MarkdownInstallStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let exe = exe_dir()?;
-        let expected = exe
-            .join("utils")
-            .join("Models")
-            .join("surya_models");
+        let expected = bundled_resources::ensure_relative_dir("utils/Models/surya_models")?;
 
         Ok(MarkdownInstallStatus {
             installed: expected.is_dir(),
@@ -1621,9 +1613,8 @@ pub async fn get_markdown_models_status() -> Result<MarkdownInstallStatus, Strin
 #[tauri::command]
 pub async fn get_local_deepseek_status() -> Result<LocalDeepseekStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let exe = exe_dir()?;
-        let expected = local_deepseek_model_path(&exe);
-        let llama_server_path = resolve_llama_server_path(&exe);
+        let expected = local_deepseek_model_path()?;
+        let llama_server_path = resolve_llama_server_path();
 
         Ok(LocalDeepseekStatus {
             installed: expected.is_file(),
@@ -1643,8 +1634,7 @@ pub async fn get_local_deepseek_status() -> Result<LocalDeepseekStatus, String> 
 
 #[tauri::command]
 pub async fn download_local_deepseek_model() -> Result<String, String> {
-    let exe = exe_dir()?;
-    let model_path = local_deepseek_model_path(&exe);
+    let model_path = local_deepseek_model_path()?;
 
     if model_path.is_file() {
         if let Some(parent) = model_path.parent() {
@@ -1699,8 +1689,7 @@ pub async fn install_local_deepseek_model_from_file(source_path: String) -> Resu
         return Err("source file must be a .gguf model file".to_string());
     }
 
-    let exe = exe_dir()?;
-    let model_path = local_deepseek_model_path(&exe);
+    let model_path = local_deepseek_model_path()?;
     let parent = model_path
         .parent()
         .ok_or("invalid model path".to_string())?
@@ -1721,11 +1710,7 @@ pub async fn install_local_deepseek_model_from_file(source_path: String) -> Resu
 #[tauri::command]
 pub async fn get_markdown_convertor_env_status() -> Result<MarkdownInstallStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let exe = exe_dir()?;
-        let expected = exe
-            .join("utils")
-            .join("MarkdownConvertor")
-            .join("marker-1.10.1");
+        let expected = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
 
         Ok(MarkdownInstallStatus {
             installed: expected.is_dir(),
@@ -1759,7 +1744,7 @@ pub async fn install_markdown_models_archive(archive_path: String) -> Result<Str
         }
 
         let exe = exe_dir()?;
-        let utils_dir = exe.join("utils");
+        let utils_dir = bundled_resources::ensure_relative_dir("utils")?;
         let models_dir = utils_dir.join("Models");
         fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
 
@@ -1825,7 +1810,7 @@ pub async fn install_markdown_convertor_env_archive(archive_path: String) -> Res
         }
 
         let exe = exe_dir()?;
-        let utils_dir = exe.join("utils");
+        let utils_dir = bundled_resources::ensure_relative_dir("utils")?;
         fs::create_dir_all(&utils_dir).map_err(|e| e.to_string())?;
 
         let temp_dir = exe

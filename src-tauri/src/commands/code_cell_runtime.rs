@@ -10,6 +10,7 @@ use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use tauri::command;
 use tracing::{error, info, warn};
+use crate::guaxiservices::bundled_resources;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -164,7 +165,7 @@ fn find_tectonic_exe() -> Result<(PathBuf, bool, PathBuf), String> {
 
     #[cfg(windows)]
     {
-        let bundled = exe_dir.join("utils").join("tectonic.exe");
+        let bundled = bundled_resources::ensure_relative_dir("utils/tectonic.exe")?;
         if bundled.is_file() {
             return Ok((bundled, true, exe_dir));
         }
@@ -173,7 +174,7 @@ fn find_tectonic_exe() -> Result<(PathBuf, bool, PathBuf), String> {
 
     #[cfg(not(windows))]
     {
-        let bundled = exe_dir.join("utils").join("tectonic");
+        let bundled = bundled_resources::ensure_relative_dir("utils/tectonic")?;
         if bundled.is_file() {
             return Ok((bundled, true, exe_dir));
         }
@@ -239,14 +240,18 @@ fn exec_latex(code: &str) -> Result<CodeCellExecResponse, String> {
                     {
                         format!(
                             "{stderr}\n\nHint: 未找到内置 tectonic.exe（期望位置：{}）。你可以把 Windows 版 tectonic.exe 放到 src-tauri\\utils\\tectonic.exe 后重新运行。",
-                            exe_dir.join("utils").join("tectonic.exe").to_string_lossy()
+                            bundled_resources::ensure_relative_dir("utils/tectonic.exe")
+                                .unwrap_or_else(|_| exe_dir.join("utils").join("tectonic.exe"))
+                                .to_string_lossy()
                         )
                     }
                     #[cfg(not(windows))]
                     {
                         format!(
                             "{stderr}\n\nHint: 未找到内置 tectonic（期望位置：{}）。你可以把 Linux 版 tectonic 放到 src-tauri/utils/tectonic，并确保它有可执行权限（chmod +x）。",
-                            exe_dir.join("utils").join("tectonic").to_string_lossy()
+                            bundled_resources::ensure_relative_dir("utils/tectonic")
+                                .unwrap_or_else(|_| exe_dir.join("utils").join("tectonic"))
+                                .to_string_lossy()
                         )
                     }
                 }

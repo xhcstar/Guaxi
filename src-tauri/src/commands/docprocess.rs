@@ -23,6 +23,7 @@ use reqwest::Client;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
+use crate::guaxiservices::bundled_resources;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -93,10 +94,7 @@ fn pick_free_port() -> Result<u16, String> {
 }
 
 fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
-    let p = exe_dir
-        .join("utils")
-        .join("MarkdownConvertor")
-        .join("marker-1.10.1");
+    let p = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
     if p.exists() {
         info!(
             marker_source_dir = p.to_string_lossy().as_ref(),
@@ -198,10 +196,7 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         "marker server resolved paths"
     );
 
-    let model_dir = exe_dir
-        .join("utils")
-        .join("Models")
-        .join("surya_models");
+    let model_dir = bundled_resources::ensure_relative_dir("utils/Models/surya_models")?;
     let _ = fs::create_dir_all(&model_dir);
 
     info!(
@@ -876,10 +871,7 @@ pub async fn convert_to_markdown(
         .to_string_lossy()
         .to_string();
 
-    let model_dir = exe_dir
-        .join("utils")
-        .join("Models")
-        .join("surya_models");
+    let model_dir = bundled_resources::ensure_relative_dir("utils/Models/surya_models")?;
     let _ = fs::create_dir_all(&model_dir);
 
     let existing_pythonpath = std::env::var("PYTHONPATH").unwrap_or_default();
@@ -1214,7 +1206,7 @@ fn find_tectonic_exe_for_export() -> Result<(PathBuf, bool), String> {
 
     #[cfg(windows)]
     {
-        let bundled = exe_dir.join("utils").join("tectonic.exe");
+        let bundled = bundled_resources::ensure_relative_dir("utils/tectonic.exe")?;
         if bundled.is_file() {
             return Ok((bundled, true));
         }
@@ -1223,7 +1215,7 @@ fn find_tectonic_exe_for_export() -> Result<(PathBuf, bool), String> {
 
     #[cfg(not(windows))]
     {
-        let bundled = exe_dir.join("utils").join("tectonic");
+        let bundled = bundled_resources::ensure_relative_dir("utils/tectonic")?;
         if bundled.is_file() {
             return Ok((bundled, true));
         }
@@ -1357,7 +1349,7 @@ pub async fn export_markdown_pandoc(
         .parent()
         .ok_or("Failed to get parent directory of exe")?;
 
-    let pandoc_path = exe_dir.join("utils").join("pandoc.exe");
+    let pandoc_path = bundled_resources::ensure_relative_dir("utils/pandoc.exe")?;
     let pandoc_path_str = pandoc_path
         .to_str()
         .ok_or("Failed to convert pandoc path to string")?;
@@ -1378,9 +1370,7 @@ pub async fn export_markdown_pandoc(
         .to_str()
         .ok_or("Failed to convert input dir to string")?;
 
-    let lua_filter_path = exe_dir
-        .join("utils")
-        .join("horizontalrule.lua");
+    let lua_filter_path = bundled_resources::ensure_relative_dir("utils/horizontalrule.lua")?;
     let use_lua_filter = lua_filter_path.exists();
     let lua_filter_str = if use_lua_filter {
         Some(

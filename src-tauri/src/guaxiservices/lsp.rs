@@ -28,6 +28,7 @@ use tracing::{error, info, warn};
 use walkdir::WalkDir;
 use zip::ZipArchive;
 use flate2::read::GzDecoder;
+use crate::guaxiservices::bundled_resources;
 use tar::Archive;
 
 #[derive(Debug, Clone)]
@@ -109,7 +110,7 @@ fn lsp_server_dir(server: &str) -> Result<PathBuf, String> {
 }
 
 fn slidev_env_root() -> Result<PathBuf, String> {
-    Ok(exe_dir()?.join("utils").join("SlidevEnv"))
+    bundled_resources::ensure_relative_dir("utils/SlidevEnv")
 }
 
 fn lsp_download_dir() -> Result<PathBuf, String> {
@@ -216,10 +217,12 @@ fn find_existing_lsp_program(entry: &LspLanguageEntry) -> Option<PathBuf> {
     }
 
     let base_dir = exe_dir().ok()?;
-    let mut candidates = vec![
-        base_dir.join("lsp").join(&bin_file),
-        base_dir.join("utils").join("lsp").join(&bin_file),
-    ];
+    let mut candidates = vec![base_dir.join("lsp").join(&bin_file)];
+    if let Ok(utils_lsp_bin) =
+        bundled_resources::ensure_relative_dir(&format!("utils/lsp/{bin_file}"))
+    {
+        candidates.push(utils_lsp_bin);
+    }
 
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         candidates.push(
@@ -281,7 +284,8 @@ fn resolve_lsp_binary(name: &str) -> String {
     let base_dir = exe_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut candidates = vec![
         base_dir.join("lsp").join(&file_name),
-        base_dir.join("utils").join("lsp").join(&file_name),
+        bundled_resources::ensure_relative_dir(&format!("utils/lsp/{file_name}"))
+            .unwrap_or_else(|_| base_dir.join("utils").join("lsp").join(&file_name)),
     ];
 
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {

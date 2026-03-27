@@ -14,6 +14,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use serde::Serialize;
 use tracing::{error, info, warn};
+use crate::guaxiservices::bundled_resources;
 
 // Slidev 首次启动可能较慢，放宽就绪等待与探测超时，提升成功率
 const SLIDEV_READY_TIMEOUT_SECS: u64 = 25;
@@ -68,7 +69,7 @@ fn exe_dir() -> Result<PathBuf, String> {
 }
 
 fn expected_slidev_env_root() -> Result<PathBuf, String> {
-    Ok(exe_dir()?.join("utils").join("SlidevEnv"))
+    bundled_resources::ensure_relative_dir("utils/SlidevEnv")
 }
 
 fn expected_slidev_env_bundle() -> Result<PathBuf, String> {
