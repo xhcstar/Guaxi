@@ -4,12 +4,14 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use tracing::info;
 
+#[path = "../../utils_zip_support.rs"]
+mod utils_zip_support;
+
 static EXTRACT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 const EXTRACT_MARKER: &str = ".guaxi_utils_extract_complete";
 const TEMP_EXTRACT_MARKER: &str = ".guaxi_extract_complete";
 const PAYLOAD_DIR: &str = "__payload";
-const GENERATED_BUNDLES_DIR: &str = "__bundles";
 const FILE_OP_RETRY_TIMES: usize = 40;
 const FILE_OP_RETRY_DELAY_MS: u64 = 250;
 
@@ -137,7 +139,7 @@ fn dev_source_utils_root() -> Option<PathBuf> {
 }
 
 fn bundles_root(target_root: &Path) -> PathBuf {
-    target_root.join(GENERATED_BUNDLES_DIR)
+    target_root.join(utils_zip_support::bundle_dir_name())
 }
 
 fn marker_path(target_root: &Path) -> PathBuf {
@@ -164,9 +166,9 @@ fn bundle_files(bundle_root: &Path) -> Result<Vec<PathBuf>, String> {
         .filter(|path| {
             path.is_file()
                 && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext.eq_ignore_ascii_case("zip"))
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.ends_with(utils_zip_support::bundle_extension()))
                     .unwrap_or(false)
         })
         .collect::<Vec<_>>();
@@ -294,63 +296,7 @@ fn extract_bundle_archives(bundle_root: &Path, target_root: &Path) -> Result<(),
         )
     })?;
 
-    let bundles = bundle_files(bundle_root)?;
-    if bundles.is_empty() {
-        return Err(format!(
-            "未找到 utils 资源分包: {}",
-            bundle_root.to_string_lossy()
-        ));
-    }
-
-    for bundle in bundles {
-        let file = std::fs::File::open(&bundle)
-            .map_err(|e| format!("打开资源分包失败: {} ({e})", bundle.to_string_lossy()))?;
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| format!("读取资源分包失败: {} ({e})", bundle.to_string_lossy()))?;
-
-        for i in 0..archive.len() {
-            let mut entry = archive
-                .by_index(i)
-                .map_err(|e| format!("读取资源分包条目失败: {e}"))?;
-            let enclosed = entry
-                .enclosed_name()
-                .ok_or_else(|| format!("资源分包包含非法路径: {}", entry.name()))?
-                .to_path_buf();
-            let normalized = entry.name().replace('\\', "/");
-            let out_path = payload_dir.join(&enclosed);
-            let is_dir_entry =
-                entry.is_dir() || normalized.ends_with('/') || enclosed.file_name().is_none();
-
-            if is_dir_entry {
-                std::fs::create_dir_all(&out_path).map_err(|e| {
-                    format!("创建资源目录失败: {} ({e})", out_path.to_string_lossy())
-                })?;
-                continue;
-            }
-
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    format!(
-                        "创建资源文件父目录失败: {} ({e})",
-                        parent.to_string_lossy()
-                    )
-                })?;
-            }
-
-            let mut out_file = std::fs::File::create(&out_path).map_err(|e| {
-                format!(
-                    "创建资源目标文件失败: {} ({e})",
-                    out_path.to_string_lossy()
-                )
-            })?;
-            std::io::copy(&mut entry, &mut out_file).map_err(|e| {
-                format!(
-                    "写入资源目标文件失败: {} ({e})",
-                    out_path.to_string_lossy()
-                )
-            })?;
-        }
-    }
+    utils_zip_support::extract_bundle_archives_to_destination(bundle_root, &payload_dir)?;
 
     std::fs::write(temp_root.join(TEMP_EXTRACT_MARKER), b"ok").map_err(|e| {
         format!(

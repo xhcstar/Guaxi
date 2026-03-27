@@ -18,6 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2.5.3", features = [] }
 zip = "6.0.0"
+tar = "0.4.44"
+rayon = "1.10.0"
+zstd = { version = "0.13.2", features = ["zstdmt"] }
 
 [profile.release]
 debug = true
@@ -77,6 +80,7 @@ encoding_rs = "0.8.35"
 zip = "6.0.0"
 flate2 = "1.0.30"
 tar = "0.4.44"
+zstd = { version = "0.13.2", features = ["zstdmt"] }
 comrak = "0.49.0"
 fuzzy-matcher = "0.3.7"
 once_cell = "1.21.3"

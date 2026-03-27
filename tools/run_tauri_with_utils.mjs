@@ -21,6 +21,17 @@ const windowsNsisOutputDir = path.join(
 );
 const windowsExternalBundlesDir = path.join(windowsNsisOutputDir, 'utils_bundles');
 const windowsExternalReadme = path.join(windowsNsisOutputDir, 'README_utils_bundles.txt');
+const windowsExtractHelperSource = path.join(
+  projectRoot,
+  'src-tauri',
+  'target',
+  'release',
+  'extract_utils_bundles.exe',
+);
+const windowsExtractHelperOutput = path.join(
+  windowsNsisOutputDir,
+  'extract_utils_bundles.exe',
+);
 
 function tauriInvocation() {
   if (process.platform === 'win32') {
@@ -76,7 +87,10 @@ async function publishExternalWindowsBundles() {
 
   const zipEntries = [];
   for (const entry of sourceEntries) {
-    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.zip') {
+    if (
+      !entry.isFile() ||
+      !entry.name.toLowerCase().endsWith('.tar.zst')
+    ) {
       continue;
     }
     const fullPath = path.join(utilsBundlesSourceDir, entry.name);
@@ -95,11 +109,12 @@ async function publishExternalWindowsBundles() {
   for (const entry of zipEntries) {
     await cp(entry.fullPath, path.join(windowsExternalBundlesDir, entry.name));
   }
+  await cp(windowsExtractHelperSource, windowsExtractHelperOutput);
 
   const totalBytes = zipEntries.reduce((sum, entry) => sum + entry.size, 0);
   const readme = [
-    'Keep this "utils_bundles" folder next to the Guaxi setup executable.',
-    'The installer reads these external bundle files during installation and expands them into the installed utils directory.',
+    'Keep "utils_bundles" and "extract_utils_bundles.exe" next to the Guaxi setup executable.',
+    'The installer reads these external tar.zst bundle files during installation and expands them into the installed utils directory.',
     '',
     `Bundle count: ${zipEntries.length}`,
     `Total bytes: ${totalBytes}`,
@@ -137,6 +152,21 @@ async function main() {
     const prepareExitCode = await run('cargo', prepareArgs);
     if (prepareExitCode !== 0) {
       process.exit(prepareExitCode);
+    }
+
+    if (process.platform === 'win32') {
+      const helperBuildExitCode = await run('cargo', [
+        'build',
+        '--quiet',
+        '--manifest-path',
+        'src-tauri/Cargo.toml',
+        '--release',
+        '--bin',
+        'extract_utils_bundles',
+      ]);
+      if (helperBuildExitCode !== 0) {
+        process.exit(helperBuildExitCode);
+      }
     }
   }
 
