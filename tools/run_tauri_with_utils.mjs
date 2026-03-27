@@ -1,3 +1,5 @@
+import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const args = process.argv.slice(2);
@@ -7,21 +9,43 @@ const tauriArgs = args.filter((arg) => arg !== reuseFlag);
 const tauriSubcommand = tauriArgs[0] ?? '';
 const shouldPrepareForTauriCommand =
   tauriSubcommand === 'build' || tauriSubcommand === 'bundle';
+const projectRoot = process.cwd();
+const utilsBundlesSourceDir = path.join(projectRoot, 'src-tauri', 'utils', '__bundles');
+const windowsNsisOutputDir = path.join(
+  projectRoot,
+  'src-tauri',
+  'target',
+  'release',
+  'bundle',
+  'nsis',
+);
+const windowsExternalBundlesDir = path.join(windowsNsisOutputDir, 'utils_bundles');
+const windowsExternalReadme = path.join(windowsNsisOutputDir, 'README_utils_bundles.txt');
 
-function tauriCommand() {
-  return process.platform === 'win32'
-    ? '.\\node_modules\\.bin\\tauri.cmd'
-    : './node_modules/.bin/tauri';
+function tauriInvocation() {
+  if (process.platform === 'win32') {
+    return {
+      command: 'cmd.exe',
+      args: ['/d', '/s', '/c', '.\\node_modules\\.bin\\tauri.cmd', ...tauriArgs],
+    };
+  }
+
+  return {
+    command: './node_modules/.bin/tauri',
+    args: tauriArgs,
+  };
 }
 
 function run(command, commandArgs, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, commandArgs, {
-      cwd: process.cwd(),
+      cwd: projectRoot,
       stdio: 'inherit',
       shell: false,
       env: {
         ...process.env,
+        NO_UPDATE_NOTIFIER: '1',
+        npm_config_update_notifier: 'false',
         ...extraEnv,
       },
     });
@@ -36,6 +60,58 @@ function run(command, commandArgs, extraEnv = {}) {
 
     child.on('error', reject);
   });
+}
+
+async function publishExternalWindowsBundles() {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  let sourceEntries = [];
+  try {
+    sourceEntries = await readdir(utilsBundlesSourceDir, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(`读取 utils 分包目录失败: ${utilsBundlesSourceDir} (${error.message})`);
+  }
+
+  const zipEntries = [];
+  for (const entry of sourceEntries) {
+    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.zip') {
+      continue;
+    }
+    const fullPath = path.join(utilsBundlesSourceDir, entry.name);
+    const fileStat = await stat(fullPath);
+    zipEntries.push({ name: entry.name, fullPath, size: fileStat.size });
+  }
+
+  if (zipEntries.length === 0) {
+    throw new Error(`未找到可发布的 utils 分包: ${utilsBundlesSourceDir}`);
+  }
+
+  await mkdir(windowsNsisOutputDir, { recursive: true });
+  await rm(windowsExternalBundlesDir, { recursive: true, force: true });
+  await mkdir(windowsExternalBundlesDir, { recursive: true });
+
+  for (const entry of zipEntries) {
+    await cp(entry.fullPath, path.join(windowsExternalBundlesDir, entry.name));
+  }
+
+  const totalBytes = zipEntries.reduce((sum, entry) => sum + entry.size, 0);
+  const readme = [
+    'Keep this "utils_bundles" folder next to the Guaxi setup executable.',
+    'The installer reads these external bundle files during installation and expands them into the installed utils directory.',
+    '',
+    `Bundle count: ${zipEntries.length}`,
+    `Total bytes: ${totalBytes}`,
+    '',
+    ...zipEntries.map((entry) => `${entry.name}\t${entry.size}`),
+    '',
+  ].join('\n');
+  await writeFile(windowsExternalReadme, readme, 'utf8');
+
+  console.log(
+    `[utils.bundle] published external windows bundles dir=${windowsExternalBundlesDir} bundleCount=${zipEntries.length} totalBytes=${totalBytes}`,
+  );
 }
 
 async function main() {
@@ -64,11 +140,20 @@ async function main() {
     }
   }
 
+  const tauri = tauriInvocation();
   const tauriExitCode = await run(
-    tauriCommand(),
-    tauriArgs,
+    tauri.command,
+    tauri.args,
     reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {},
   );
+  if (tauriExitCode !== 0) {
+    process.exit(tauriExitCode);
+  }
+
+  if (shouldPrepareForTauriCommand && (tauriSubcommand === 'build' || tauriSubcommand === 'bundle')) {
+    await publishExternalWindowsBundles();
+  }
+
   process.exit(tauriExitCode);
 }
 

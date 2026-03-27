@@ -8,8 +8,7 @@
     },
     "resources": [
       "scripts/**/*",
-      "libs/**/*",
-      "utils/__bundles/**/*"
+      "libs/**/*"
     ]
   }
 }

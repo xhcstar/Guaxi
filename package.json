@@ -9,7 +9,7 @@
     "prepare:tauri-assets": "node ./tools/copy_excalidraw_assets.mjs",
     "prepare:tauri-utils": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin prepare_utils_zip",
     "preview": "vite preview",
-    "tauri": ".\\node_modules\\.bin\\tauri.cmd",
+    "tauri": "node ./tools/run_tauri_with_utils.mjs",
     "tauri:build": "node ./tools/run_tauri_with_utils.mjs build",
     "tauri:bundle": "node ./tools/run_tauri_with_utils.mjs bundle",
     "postinstall": "node tools/copy_excalidraw_assets.mjs"

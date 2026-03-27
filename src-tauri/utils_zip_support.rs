@@ -3,6 +3,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::process::Stdio;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use zip::write::SimpleFileOptions;
@@ -512,12 +513,16 @@ fn has_command(program: &str, workdir: &Path) -> bool {
         Command::new("where")
             .current_dir(workdir)
             .arg(program)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
     } else {
         Command::new("sh")
             .current_dir(workdir)
             .arg("-lc")
             .arg(format!("command -v {} >/dev/null 2>&1", shell_escape(program)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
     };
 
