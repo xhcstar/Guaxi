@@ -6100,7 +6100,7 @@ const initEditor = () => {
       'string.escape': '#0184bc'
     },
     colors: {
-      'editor.background': '#fafafa',
+      'editor.background': '#ffffff',
       'editor.foreground': '#383a42',
       'editorLineNumber.foreground': '#a0a1a7',
       'editorLineNumber.activeForeground': '#383a42',
@@ -9960,7 +9960,9 @@ const handlePreviewClick = async (e) => {
     }
   }
 
-  const cleanupPreviewPdfBlobUrls = () => {
+  // 统一释放预览区里为 PDF 预览创建的 blob URL，避免组件卸载后继续占用内存。
+  // 这里使用函数声明而不是 const，确保在 script setup 的 onUnmounted 提前注册时也能安全调用。
+  function cleanupPreviewPdfBlobUrls() {
     const container = previewContainer.value
     if (!(container instanceof HTMLElement)) return
 
@@ -12549,7 +12551,7 @@ onUnmounted(() => {
 }
 
 .editor-content.split > .editor-wrapper {
-  border-left: 1px solid var(--divider-color, #e0e0e0);
+  border-left: 1px solid var(--guaxi-border, #e0e0e0);
 }
 
 .editor-content.realtime {
@@ -12703,6 +12705,16 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: #ffffff;
+}
+
+.editor-container {
+  background: #ffffff;
+}
+
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper,
+:global(:root[data-guaxi-theme='dark']) .editor-container {
+  background: transparent;
 }
 
 .editor-wrapper :deep(.monaco-scrollable-element) {
@@ -12884,6 +12896,9 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* 预览区需要直接绑定主题背景，否则从亮色切到暗色时容器可能残留浅色底。 */
+  background: var(--guaxi-content-bg, #ffffff);
+  color: var(--guaxi-text-primary, #1f2328);
 }
 
 .preview-search-panel {
@@ -12963,6 +12978,9 @@ onUnmounted(() => {
   word-wrap: break-word;
   box-sizing: border-box;
   position: relative;
+  /* 主预览内容区和分栏预览共用这一层，显式继承主题底色以保证切主题立即生效。 */
+  background: var(--guaxi-content-bg, #ffffff);
+  color: var(--guaxi-text-primary, #1f2328);
 }
 
 .preview :deep(a),
