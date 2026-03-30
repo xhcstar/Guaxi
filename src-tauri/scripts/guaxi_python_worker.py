@@ -569,6 +569,19 @@ def _dispatch(payload):
 
 
 def main():
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:

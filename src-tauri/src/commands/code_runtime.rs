@@ -502,6 +502,8 @@ fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, Str
         .args(&spec.base_args)
         .arg("-u")
         .arg(&worker_script_path)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
