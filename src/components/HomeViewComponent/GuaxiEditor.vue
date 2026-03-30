@@ -12826,6 +12826,46 @@ function cleanupPreviewPdfBlobUrls() {
   logger.info('[CodeCell] preview pdf blob urls cleaned', { count: medias.length })
 }
 
+function ensurePyCellToolbarEnhancements(cell) {
+  if (!(cell instanceof Element)) return
+  const toolbar = cell.querySelector?.('.guaxi-pycell-toolbar')
+  if (!toolbar) return
+
+  const ensureButton = (action, label, className, beforeAction = 'toggle-output') => {
+    let btn = toolbar.querySelector(`[data-guaxi-py-action="${action}"]`)
+    if (btn) {
+      btn.textContent = label
+      return btn
+    }
+    btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = `guaxi-pycell-btn ${className}`.trim()
+    btn.setAttribute('data-guaxi-py-action', action)
+    btn.textContent = label
+
+    const anchor = beforeAction ? toolbar.querySelector(`[data-guaxi-py-action="${beforeAction}"]`) : null
+    if (anchor?.parentNode === toolbar) toolbar.insertBefore(btn, anchor)
+    else toolbar.appendChild(btn)
+    return btn
+  }
+
+  ensureButton('run', '运行', 'guaxi-pycell-run')
+  ensureButton('run-save', '运行并写回', 'guaxi-pycell-run-save')
+  ensureButton('import-table', '导入表格', 'guaxi-pycell-import')
+  ensureButton('inject-note', '注入笔记', 'guaxi-pycell-note')
+  ensureButton('toggle-session', '会话变量', 'guaxi-pycell-session-btn')
+  ensureButton('restart-session', '重启会话', 'guaxi-pycell-reset')
+  ensureButton('toggle-output', '显示结果', 'guaxi-pycell-output-toggle', null)
+
+  let hint = toolbar.querySelector('.guaxi-pycell-hint')
+  if (!hint) {
+    hint = document.createElement('span')
+    hint.className = 'guaxi-pycell-hint'
+    toolbar.appendChild(hint)
+  }
+  hint.textContent = '共享当前笔记的 Python 会话，支持导入表格、注入笔记和查看变量'
+}
+
 // 监听内容变化
 watch(renderedHtml, () => {
   nextTick(() => {

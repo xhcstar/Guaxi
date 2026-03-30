@@ -48,9 +48,9 @@ def _normalize_exec_code(value):
 
     # Some upstream text paths can carry lone surrogate code points.
     # Python's parser rejects those during ast.parse/compile, so we
-    # normalize them into replacement characters before execution.
+    # strip them before execution.
     if any(0xD800 <= ord(ch) <= 0xDFFF for ch in text):
-        text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+        text = "".join(ch for ch in text if not (0xD800 <= ord(ch) <= 0xDFFF))
 
     return text
 
@@ -577,7 +577,16 @@ def main():
             payload = json.loads(line)
             response = _dispatch(payload)
         except Exception as exc:
-            response = {"ok": False, "error": _format_traceback(exc)}
+            response = {
+                "ok": False,
+                "stdout": "",
+                "stderr": _format_traceback(exc),
+                "error": _format_traceback(exc),
+                "result_repr": None,
+                "result_json": None,
+                "session_id": "__guaxi_global__",
+                "session_vars": [],
+            }
 
         sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
         sys.stdout.flush()
