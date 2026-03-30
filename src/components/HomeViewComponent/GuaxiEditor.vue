@@ -259,6 +259,12 @@
               </div>
 
               <div class="python-runtime-actions">
+                <button type="button" class="python-runtime-chip-btn" @click="initializePythonRuntime">
+                  初始化环境
+                </button>
+                <button type="button" class="python-runtime-chip-btn" @click="installPythonRuntimeArchive">
+                  导入运行时压缩包
+                </button>
                 <button type="button" class="python-runtime-chip-btn" @click="insertPythonTableImportSnippet">
                   导入表格代码
                 </button>
@@ -2422,7 +2428,7 @@ const pythonRuntimeStatusClass = computed(() => {
 })
 const pythonRuntimeSummary = computed(() => {
   if (pythonRuntimeBusy.value) return '正在同步 Python 环境状态'
-  if (!pythonRuntimeStatus.value?.ready) return '当前尚未检测到独立 Python 环境'
+  if (!pythonRuntimeStatus.value?.ready) return '当前尚未检测到独立 Python 环境，可导入压缩包或初始化系统解释器'
   const sourceLabel = pythonRuntimeStatus.value?.source === 'bundled' ? '独立运行时' : '系统解释器'
   const workerLabel = pythonRuntimeStatus.value?.worker_alive ? 'Worker 已连接' : 'Worker 待启动'
   return `${sourceLabel} · ${workerLabel}`
@@ -9674,6 +9680,46 @@ const handlePreviewClick = async (e) => {
     pythonRuntimePopoverVisible.value = !!show
     if (show) {
       void refreshPythonRuntimeStatus('popover-open')
+    }
+  }
+
+  const initializePythonRuntime = async () => {
+    pythonRuntimeBusy.value = true
+    try {
+      logger.info('[PythonRuntime] initialize requested')
+      const res = await invoke('python_runtime_initialize')
+      logger.info('[PythonRuntime] initialize completed', {
+        runtimeDir: res?.runtime_dir || '',
+        pythonPath: res?.python_path || '',
+      })
+      message.success('Python 运行时已初始化')
+      await refreshPythonRuntimeStatus('initialized')
+    } catch (error) {
+      logger.error('[PythonRuntime] initialize failed', error)
+      message.error(`初始化失败：${String(error?.message || error)}`)
+    } finally {
+      pythonRuntimeBusy.value = false
+    }
+  }
+
+  const installPythonRuntimeArchive = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'ZIP', extensions: ['zip'] }],
+      })
+      if (!selected || Array.isArray(selected)) return
+
+      pythonRuntimeBusy.value = true
+      logger.info('[PythonRuntime] install archive start', { archivePath: String(selected) })
+      await invoke('python_runtime_install_archive', { archivePath: String(selected) })
+      message.success('Python 运行时压缩包已导入')
+      await initializePythonRuntime()
+    } catch (error) {
+      logger.error('[PythonRuntime] install archive failed', error)
+      message.error(`导入运行时失败：${String(error?.message || error)}`)
+    } finally {
+      pythonRuntimeBusy.value = false
     }
   }
 

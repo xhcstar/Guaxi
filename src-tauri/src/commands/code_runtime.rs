@@ -2,6 +2,7 @@ use crate::guaxiservices::bundled_resources;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +10,8 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::command;
 use tracing::{info, warn};
+use uuid::Uuid;
+use zip::ZipArchive;
 
 static PY_WORKER_STATE: OnceLock<Mutex<Option<PythonWorkerState>>> = OnceLock::new();
 
@@ -56,6 +59,13 @@ pub struct PythonInstallPackagesResponse {
     pub stderr: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PythonRuntimeInitResponse {
+    pub runtime_dir: String,
+    pub python_path: String,
+    pub pip_version: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PythonImportTableRequest {
     pub path: String,
@@ -90,6 +100,91 @@ fn python_runtime_dir() -> Result<PathBuf, String> {
     let dir = bundled_resources::ensure_relative_dir("utils/python_runtime")?;
     fs::create_dir_all(&dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
     Ok(dir)
+}
+
+fn exe_dir() -> Result<PathBuf, String> {
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?;
+    exe_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+    } else {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn extract_zip_to_dir(zip_path: &Path, target_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        let out_path = target_dir.join(entry.mangled_name());
+        if entry.name().ends_with('/') {
+            fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut out = fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = dst_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            if dst_path.exists() {
+                let _ = fs::remove_file(&dst_path);
+            }
+            fs::copy(&src_path, &dst_path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn find_dir_by_name(root: &Path, name: &str, max_depth: usize) -> Option<PathBuf> {
+    if max_depth == 0 || !root.is_dir() {
+        return None;
+    }
+    if root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case(name))
+        .unwrap_or(false)
+    {
+        return Some(root.to_path_buf());
+    }
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_dir_by_name(&path, name, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 fn bundled_python_candidates(runtime_dir: &Path) -> Vec<PathBuf> {
@@ -345,6 +440,17 @@ fn list_python_packages(spec: &PythonLaunchSpec) -> Vec<String> {
     }
 }
 
+fn clear_python_worker() -> Result<(), String> {
+    let mut guard = python_worker_state_cell()
+        .lock()
+        .map_err(|_| "lock python worker state failed".to_string())?;
+    if let Some(state) = guard.as_mut() {
+        let _ = state.child.kill();
+    }
+    *guard = None;
+    Ok(())
+}
+
 #[command]
 pub async fn python_reset_repl() -> Result<(), String> {
     let payload = json!({ "cmd": "reset" });
@@ -434,6 +540,105 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
     })
     .await
     .map_err(|e| format!("python_runtime_get_status join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_initialize() -> Result<PythonRuntimeInitResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let spec = resolve_python_launch_spec()?;
+        let pip_version = ensure_pip_available(&spec)?;
+        let _ = ensure_worker_script(&spec.runtime_dir)?;
+        clear_python_worker()?;
+        let _ = with_python_worker(|_| Ok(()))?;
+
+        let marker_path = spec.runtime_dir.join("runtime.json");
+        let marker = json!({
+            "python_path": spec.program,
+            "source": spec.source,
+            "pip_version": pip_version,
+        });
+        fs::write(&marker_path, serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("write python runtime marker failed: {e}"))?;
+
+        info!(
+            runtime_dir = %spec.runtime_dir.to_string_lossy(),
+            source = spec.source.as_str(),
+            "[PythonRuntime] runtime initialized"
+        );
+
+        Ok(PythonRuntimeInitResponse {
+            runtime_dir: spec.runtime_dir.to_string_lossy().to_string(),
+            python_path: spec.program,
+            pip_version,
+        })
+    })
+    .await
+    .map_err(|e| format!("python_runtime_initialize join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_install_archive(archive_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let trimmed = archive_path.trim();
+        if trimmed.is_empty() {
+            return Err("archive_path is empty".to_string());
+        }
+
+        let zip_path = PathBuf::from(trimmed);
+        if !zip_path.is_file() {
+            return Err(format!("找不到 Python 运行时压缩包: {}", zip_path.to_string_lossy()));
+        }
+        if !zip_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
+            return Err("Python 运行时压缩包仅支持 .zip".to_string());
+        }
+
+        let runtime_dir = python_runtime_dir()?;
+        let exe_root = exe_dir()?;
+        let temp_dir = exe_root
+            .join("tmp")
+            .join(format!("python_runtime_install_{}", Uuid::new_v4()));
+
+        remove_path_if_exists(&temp_dir)?;
+        fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+        let result: Result<String, String> = (|| {
+            info!(
+                archive_path = zip_path.to_string_lossy().as_ref(),
+                temp_dir = temp_dir.to_string_lossy().as_ref(),
+                "[PythonRuntime] extracting runtime archive"
+            );
+
+            extract_zip_to_dir(&zip_path, &temp_dir)?;
+            let packaged_runtime_dir = find_dir_by_name(&temp_dir, "python_runtime", 5)
+                .unwrap_or_else(|| temp_dir.clone());
+
+            clear_python_worker()?;
+            remove_path_if_exists(&runtime_dir)?;
+            copy_dir_recursive(&packaged_runtime_dir, &runtime_dir)?;
+
+            if !bundled_python_candidates(&runtime_dir)
+                .into_iter()
+                .any(|candidate| candidate.is_file())
+            {
+                return Err(format!(
+                    "安装后的 Python 运行时校验失败: {}",
+                    runtime_dir.to_string_lossy()
+                ));
+            }
+
+            Ok(runtime_dir.to_string_lossy().to_string())
+        })();
+
+        let _ = remove_path_if_exists(&temp_dir);
+        result
+    })
+    .await
+    .map_err(|e| format!("python_runtime_install_archive join failed: {e}"))?
 }
 
 #[command]

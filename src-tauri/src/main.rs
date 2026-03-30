@@ -520,6 +520,8 @@ async fn main() {
              commands::code_runtime::python_exec,
              commands::code_runtime::python_reset_repl,
              commands::code_runtime::python_runtime_get_status,
+             commands::code_runtime::python_runtime_initialize,
+             commands::code_runtime::python_runtime_install_archive,
              commands::code_runtime::python_runtime_install_packages,
              commands::code_runtime::python_runtime_import_table_file,
              commands::code_cell_runtime::code_cell_exec,
