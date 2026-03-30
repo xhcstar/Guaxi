@@ -218,6 +218,73 @@
             保存 (Ctrl+S)
           </n-tooltip>
 
+          <n-popover trigger="click" placement="bottom" :show="pythonRuntimePopoverVisible"
+            @update:show="handlePythonRuntimePopoverUpdateShow">
+            <template #trigger>
+              <button type="button" class="python-runtime-entry" :class="{ busy: pythonRuntimeBusy }">
+                <Icon :icon="squareTerminalIcon" width="14" height="14" />
+                <span class="python-runtime-entry__label">Py</span>
+                <span class="python-runtime-entry__dot" :class="pythonRuntimeStatusClass"></span>
+              </button>
+            </template>
+
+            <div class="python-runtime-popover" @mousedown.stop>
+              <div class="python-runtime-popover__header">
+                <div>
+                  <div class="python-runtime-popover__title">Python 工作台</div>
+                  <div class="python-runtime-popover__subtitle">{{ pythonRuntimeSummary }}</div>
+                </div>
+                <button type="button" class="python-runtime-ghost-btn" @click="refreshPythonRuntimeStatus('popover-refresh')">
+                  刷新
+                </button>
+              </div>
+
+              <div class="python-runtime-meta">
+                <div class="python-runtime-meta__item">
+                  <span class="python-runtime-meta__label">解释器</span>
+                  <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.version || '未就绪' }}</span>
+                </div>
+                <div class="python-runtime-meta__item">
+                  <span class="python-runtime-meta__label">来源</span>
+                  <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.source || '未知' }}</span>
+                </div>
+                <div class="python-runtime-meta__item">
+                  <span class="python-runtime-meta__label">Pip</span>
+                  <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.pip_version || '未检测' }}</span>
+                </div>
+                <div class="python-runtime-meta__item">
+                  <span class="python-runtime-meta__label">Worker</span>
+                  <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.worker_alive ? '在线' : '待启动' }}</span>
+                </div>
+              </div>
+
+              <div class="python-runtime-actions">
+                <button type="button" class="python-runtime-chip-btn" @click="insertPythonTableImportSnippet">
+                  导入表格代码
+                </button>
+                <button type="button" class="python-runtime-chip-btn" @click="resetPythonKernelSession">
+                  重启会话
+                </button>
+              </div>
+
+              <div class="python-runtime-install">
+                <input v-model="pythonRuntimePackageInput" class="python-runtime-install__input"
+                  placeholder="输入包名，例如 pandas matplotlib openpyxl" />
+                <button type="button" class="python-runtime-install__btn"
+                  :disabled="pythonRuntimeBusy || !pythonRuntimePackageInput.trim()" @click="installPythonRuntimePackages">
+                  安装
+                </button>
+              </div>
+
+              <div v-if="pythonRuntimeStatus?.packages?.length" class="python-runtime-packages">
+                <div class="python-runtime-packages__title">已检测到的包</div>
+                <div class="python-runtime-packages__list">
+                  <span v-for="pkg in pythonRuntimeStatus.packages" :key="pkg" class="python-runtime-package-pill">{{ pkg }}</span>
+                </div>
+              </div>
+            </div>
+          </n-popover>
+
           <n-dropdown trigger="click" :options="previewModeOptions" @select="handlePreviewModeSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -649,7 +716,7 @@ import GitPanel from './GitPanel.vue'
 import GitService from './utils/GitService'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, emit } from '@tauri-apps/api/event'
-import { save, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
+import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
 const logger = createLogger('GuaxiEditor')
@@ -719,6 +786,10 @@ const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
 const previewContainer = ref(null);
+const pythonRuntimePopoverVisible = ref(false)
+const pythonRuntimeBusy = ref(false)
+const pythonRuntimeStatus = ref(null)
+const pythonRuntimePackageInput = ref('')
 const getMonacoThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'guaxi-dark' : 'guaxi-light')
 const getMarkdownPreviewThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default')
 let previewMermaidRenderSeq = 0
@@ -2343,6 +2414,19 @@ const rightTabs = computed(() => {
 
 
 const message = useMessage()
+const pythonRuntimeStatusClass = computed(() => {
+  const source = String(pythonRuntimeStatus.value?.source || '').trim()
+  if (!pythonRuntimeStatus.value?.ready) return 'is-missing'
+  if (source === 'bundled') return 'is-bundled'
+  return 'is-system'
+})
+const pythonRuntimeSummary = computed(() => {
+  if (pythonRuntimeBusy.value) return '正在同步 Python 环境状态'
+  if (!pythonRuntimeStatus.value?.ready) return '当前尚未检测到独立 Python 环境'
+  const sourceLabel = pythonRuntimeStatus.value?.source === 'bundled' ? '独立运行时' : '系统解释器'
+  const workerLabel = pythonRuntimeStatus.value?.worker_alive ? 'Worker 已连接' : 'Worker 待启动'
+  return `${sourceLabel} · ${workerLabel}`
+})
 
 let unlistenTemplateInsert = null
 let templateInsertListenerUnmounted = false
@@ -9523,6 +9607,151 @@ const handlePreviewClick = async (e) => {
     }
   }
 
+  const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+  const splitPackageNames = (value) => Array.from(new Set(
+    String(value || '')
+      .split(/[\s,，;；]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  ))
+
+  const insertSnippetAtCursor = (snippet) => {
+    const targetEditor = mode.value === 'preview' ? secondaryEditor || editor : editor || secondaryEditor
+    const model = targetEditor?.getModel?.()
+    if (!targetEditor || !model) {
+      updateEditorContent(`${String(rawContent.value || '')}\n${snippet}`)
+      return
+    }
+
+    const selection = targetEditor.getSelection()
+    const range = selection || new monaco.Range(
+      model.getLineCount(),
+      model.getLineMaxColumn(model.getLineCount()),
+      model.getLineCount(),
+      model.getLineMaxColumn(model.getLineCount())
+    )
+
+    targetEditor.executeEdits('python-runtime-snippet', [{ range, text: snippet, forceMoveMarkers: true }])
+    targetEditor.focus?.()
+  }
+
+  const refreshPythonRuntimeStatus = async (reason = 'manual') => {
+    pythonRuntimeBusy.value = true
+    try {
+      logger.info('[PythonRuntime] refresh status', { reason })
+      const status = await invoke('python_runtime_get_status')
+      pythonRuntimeStatus.value = status || null
+      logger.info('[PythonRuntime] status loaded', {
+        reason,
+        source: status?.source || '',
+        workerAlive: !!status?.worker_alive,
+        packageCount: Array.isArray(status?.packages) ? status.packages.length : 0,
+      })
+    } catch (error) {
+      pythonRuntimeStatus.value = {
+        ready: false,
+        source: '',
+        python_path: '',
+        runtime_dir: '',
+        version: '',
+        pip_version: '',
+        worker_alive: false,
+        packages: [],
+      }
+      logger.warn('[PythonRuntime] load status failed', { reason, error })
+    } finally {
+      pythonRuntimeBusy.value = false
+    }
+  }
+
+  const handlePythonRuntimePopoverUpdateShow = (show) => {
+    pythonRuntimePopoverVisible.value = !!show
+    if (show) {
+      void refreshPythonRuntimeStatus('popover-open')
+    }
+  }
+
+  const installPythonRuntimePackages = async () => {
+    const packages = splitPackageNames(pythonRuntimePackageInput.value)
+    if (!packages.length) {
+      message.warning('请输入要安装的 Python 包')
+      return
+    }
+
+    pythonRuntimeBusy.value = true
+    try {
+      logger.info('[PythonRuntime] install packages start', { packages })
+      const res = await invoke('python_runtime_install_packages', { request: { packages } })
+      if (res?.ok) {
+        message.success(`已安装 ${packages.join(', ')}`)
+        pythonRuntimePackageInput.value = ''
+        await refreshPythonRuntimeStatus('packages-installed')
+      } else {
+        const errorText = String(res?.stderr || res?.stdout || '安装失败')
+        message.error(errorText)
+      }
+    } catch (error) {
+      logger.error('[PythonRuntime] install packages failed', error)
+      message.error(`安装失败：${String(error?.message || error)}`)
+    } finally {
+      pythonRuntimeBusy.value = false
+    }
+  }
+
+  const resetPythonKernelSession = async () => {
+    pythonRuntimeBusy.value = true
+    try {
+      await invoke('python_reset_repl')
+      message.success('Python 会话已重启')
+      await refreshPythonRuntimeStatus('reset-session')
+    } catch (error) {
+      logger.error('[PythonRuntime] reset session failed', error)
+      message.error(`重启会话失败：${String(error?.message || error)}`)
+    } finally {
+      pythonRuntimeBusy.value = false
+    }
+  }
+
+  const insertPythonTableImportSnippet = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{
+          name: 'Table',
+          extensions: ['csv', 'tsv', 'json', 'xlsx', 'xls', 'parquet'],
+        }],
+      })
+      if (!selected || Array.isArray(selected)) return
+
+      const normalized = String(selected).replace(/\\/g, '\\\\')
+      const lower = normalized.toLowerCase()
+      let reader = "pd.read_csv"
+      let readerArgs = ""
+      if (lower.endsWith('.tsv')) {
+        readerArgs = ", sep='\\t'"
+      } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+        reader = 'pd.read_excel'
+      } else if (lower.endsWith('.json')) {
+        reader = 'pd.read_json'
+      } else if (lower.endsWith('.parquet')) {
+        reader = 'pd.read_parquet'
+      }
+
+      const snippet = `import pandas as pd\n\ndf = ${reader}(r"${normalized}"${readerArgs})\ndf\n`
+      insertSnippetAtCursor(snippet)
+      message.success('已插入表格导入代码')
+    } catch (error) {
+      logger.warn('[PythonRuntime] insert table import snippet failed', error)
+      message.error(`插入导入代码失败：${String(error?.message || error)}`)
+    }
+  }
+
   const formatPythonExecOutput = (res) => {
     const ok = res?.ok
     const stdout = String(res?.stdout || '')
@@ -10059,6 +10288,145 @@ const handlePreviewClick = async (e) => {
     }
   }
 
+  const getGuaxiDataFrameFromResult = (res) => {
+    const payload = res?.result_json?.__guaxi_dataframe__
+    if (!payload || typeof payload !== 'object') return null
+    const columns = Array.isArray(payload.columns) ? payload.columns.map((item) => String(item ?? '')) : []
+    const rows = Array.isArray(payload.rows) ? payload.rows.map((row) => Array.isArray(row) ? row : []) : []
+    return {
+      columns,
+      rows,
+      rowCount: Number(payload.row_count || rows.length || 0),
+      truncated: !!payload.truncated,
+      dtypes: payload.dtypes && typeof payload.dtypes === 'object' ? payload.dtypes : {},
+      sourcePath: String(payload.source_path || '').trim(),
+    }
+  }
+
+  const dataframeToDelimitedText = (table, delimiter = ',') => {
+    const escapeField = (value) => {
+      const text = value == null ? '' : String(value)
+      if (text.includes('"') || text.includes('\n') || text.includes('\r') || text.includes(delimiter)) {
+        return `"${text.replace(/"/g, '""')}"`
+      }
+      return text
+    }
+    const lines = []
+    lines.push((table.columns || []).map(escapeField).join(delimiter))
+    for (const row of table.rows || []) {
+      lines.push((Array.isArray(row) ? row : []).map(escapeField).join(delimiter))
+    }
+    return lines.join('\n')
+  }
+
+  const saveDataFrameToFile = async (table, format = 'csv') => {
+    const normalized = String(format || 'csv').trim().toLowerCase()
+    const defaultName = `table-output.${normalized === 'tsv' ? 'tsv' : normalized === 'json' ? 'json' : 'csv'}`
+    try {
+      const outputPath = await save({
+        defaultPath: defaultName,
+        filters: [{
+          name: 'Table',
+          extensions: [normalized === 'tsv' ? 'tsv' : normalized === 'json' ? 'json' : 'csv'],
+        }],
+      })
+      if (!outputPath) return false
+
+      let text = ''
+      if (normalized === 'json') {
+        text = JSON.stringify((table.rows || []).map((row) => {
+          const item = {}
+          ;(table.columns || []).forEach((column, index) => {
+            item[column] = Array.isArray(row) ? row[index] ?? null : null
+          })
+          return item
+        }), null, 2)
+      } else {
+        text = dataframeToDelimitedText(table, normalized === 'tsv' ? '\t' : ',')
+      }
+
+      const { writeFile } = await import('@tauri-apps/plugin-fs')
+      await writeFile(outputPath, new TextEncoder().encode(text))
+      logger.info('[PyCell] dataframe exported', { outputPath, format: normalized, rows: table.rows?.length || 0 })
+      message.success('表格已导出')
+      return true
+    } catch (error) {
+      logger.error('[PyCell] dataframe export failed', error)
+      message.error(`表格导出失败：${String(error?.message || error)}`)
+      return false
+    }
+  }
+
+  const createDataFramePreviewCard = (table, { onImport, onExport } = {}) => {
+    const wrap = document.createElement('div')
+    wrap.className = 'guaxi-dataframe-card'
+
+    const toolbar = document.createElement('div')
+    toolbar.className = 'guaxi-dataframe-toolbar'
+
+    const meta = document.createElement('div')
+    meta.className = 'guaxi-dataframe-meta'
+    const truncatedText = table.truncated ? ' · 已截断预览' : ''
+    const sourceText = table.sourcePath ? ` · ${table.sourcePath.split(/[\\/]/).pop()}` : ''
+    meta.textContent = `${table.rowCount} 行 × ${(table.columns || []).length} 列${truncatedText}${sourceText}`
+
+    const actions = document.createElement('div')
+    actions.className = 'guaxi-dataframe-actions'
+
+    const createButton = (label, handler) => {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'guaxi-dataframe-btn'
+      btn.textContent = label
+      btn.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        void handler?.()
+      })
+      return btn
+    }
+
+    actions.appendChild(createButton('导入文件', onImport))
+    actions.appendChild(createButton('导出 CSV', () => onExport?.('csv')))
+    actions.appendChild(createButton('导出 JSON', () => onExport?.('json')))
+    toolbar.appendChild(meta)
+    toolbar.appendChild(actions)
+
+    const viewport = document.createElement('div')
+    viewport.className = 'guaxi-dataframe-table-wrap'
+
+    const tableEl = document.createElement('table')
+    tableEl.className = 'guaxi-dataframe-table'
+
+    const thead = document.createElement('thead')
+    const headerRow = document.createElement('tr')
+    ;(table.columns || []).forEach((column) => {
+      const th = document.createElement('th')
+      th.innerHTML = escapeHtml(column)
+      headerRow.appendChild(th)
+    })
+    thead.appendChild(headerRow)
+
+    const tbody = document.createElement('tbody')
+    ;(table.rows || []).forEach((row) => {
+      const tr = document.createElement('tr')
+      ;(table.columns || []).forEach((_, index) => {
+        const td = document.createElement('td')
+        const value = Array.isArray(row) ? row[index] : ''
+        td.innerHTML = escapeHtml(value == null ? '' : value)
+        tr.appendChild(td)
+      })
+      tbody.appendChild(tr)
+    })
+
+    tableEl.appendChild(thead)
+    tableEl.appendChild(tbody)
+    viewport.appendChild(tableEl)
+    wrap.appendChild(toolbar)
+    wrap.appendChild(viewport)
+    return wrap
+  }
+
   const ensurePyCellMediaContainer = (cell, afterEl) => {
     if (!(cell instanceof Element)) return null
 
@@ -10092,9 +10460,10 @@ const handlePreviewClick = async (e) => {
 
   const renderPyCellDisplay = (cell, outputPre, res, outputText) => {
     const display = getGuaxiDisplayFromResult(res)
+    const dataframe = getGuaxiDataFrameFromResult(res)
     const shouldHideText = String(outputText || '').trim().length === 0
 
-    if (!display) {
+    if (!display && !dataframe) {
       const media = cell?.querySelector?.('.guaxi-pycell-media')
       if (media) {
         media.innerHTML = ''
@@ -10106,6 +10475,53 @@ const handlePreviewClick = async (e) => {
 
     const media = ensurePyCellMediaContainer(cell, outputPre)
     if (!media) return
+
+    if (dataframe) {
+      const renderDataFrame = (table) => {
+        media.innerHTML = ''
+        media.appendChild(createDataFramePreviewCard(table, {
+          onImport: async () => {
+            try {
+              const selected = await open({
+                multiple: false,
+                filters: [{
+                  name: 'Table',
+                  extensions: ['csv', 'tsv', 'json', 'xlsx', 'xls', 'parquet'],
+                }],
+              })
+              if (!selected || Array.isArray(selected)) return
+              const imported = await invoke('python_runtime_import_table_file', { request: { path: String(selected) } })
+              if (!imported?.ok || !imported?.table) {
+                throw new Error(String(imported?.error || '导入失败'))
+              }
+              const nextTable = {
+                columns: Array.isArray(imported.table.columns) ? imported.table.columns.map((item) => String(item ?? '')) : [],
+                rows: Array.isArray(imported.table.rows) ? imported.table.rows : [],
+                rowCount: Number(imported.table.row_count || 0),
+                truncated: !!imported.table.truncated,
+                dtypes: imported.table.dtypes || {},
+                sourcePath: String(imported.table.source_path || '').trim(),
+              }
+              renderDataFrame(nextTable)
+              message.success('表格已导入到预览区')
+            } catch (error) {
+              logger.error('[PyCell] dataframe import failed', error)
+              message.error(`导入表格失败：${String(error?.message || error)}`)
+            }
+          },
+          onExport: async (format) => {
+            await saveDataFrameToFile(table, format)
+          },
+        }))
+        media.style.display = 'flex'
+      }
+
+      renderDataFrame(dataframe)
+      if (outputPre && shouldHideText) {
+        outputPre.style.display = 'none'
+      }
+      return
+    }
 
     const img = document.createElement('img')
     img.style.maxWidth = '100%'
@@ -12009,6 +12425,7 @@ onMounted(() => {
   void refreshLspEnabledSetting()
 
   restoreHomePreviewMode('mounted')
+  void refreshPythonRuntimeStatus('mounted')
 
   const intervalMs = Number(editorStore.autoSaveIntervalMs) || AUTO_SAVE_FALLBACK_INTERVAL_MS
   if (editorStore.autoSaveEnabled !== false && intervalMs > 0) {
@@ -12461,6 +12878,208 @@ onUnmounted(() => {
 
 .toolbar-actions :deep(.n-button) {
   flex-shrink: 0;
+}
+
+.python-runtime-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 82%, transparent);
+  background: linear-gradient(135deg,
+      color-mix(in srgb, var(--guaxi-panel-bg) 92%, #82d8ff 8%),
+      color-mix(in srgb, var(--guaxi-panel-bg) 94%, #9af0ce 6%));
+  color: var(--guaxi-text-primary);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.python-runtime-entry:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 40%, var(--guaxi-border));
+}
+
+.python-runtime-entry.busy {
+  opacity: 0.72;
+}
+
+.python-runtime-entry__label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.python-runtime-entry__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #f59f00;
+  box-shadow: 0 0 0 3px rgba(245, 159, 0, 0.16);
+}
+
+.python-runtime-entry__dot.is-bundled {
+  background: #18a058;
+  box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.16);
+}
+
+.python-runtime-entry__dot.is-system {
+  background: #2080f0;
+  box-shadow: 0 0 0 3px rgba(32, 128, 240, 0.16);
+}
+
+.python-runtime-entry__dot.is-missing {
+  background: #d03050;
+  box-shadow: 0 0 0 3px rgba(208, 48, 80, 0.16);
+}
+
+.python-runtime-popover {
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.python-runtime-popover__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.python-runtime-popover__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-popover__subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-ghost-btn,
+.python-runtime-chip-btn,
+.python-runtime-install__btn {
+  border: 1px solid var(--guaxi-border);
+  background: var(--guaxi-panel-bg);
+  color: var(--guaxi-text-primary);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.python-runtime-ghost-btn:hover,
+.python-runtime-chip-btn:hover,
+.python-runtime-install__btn:hover {
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 84%, var(--primary-color, #4acadb));
+  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 45%, var(--guaxi-border));
+}
+
+.python-runtime-ghost-btn {
+  min-width: 56px;
+  height: 28px;
+  padding: 0 10px;
+}
+
+.python-runtime-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.python-runtime-meta__item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 88%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+}
+
+.python-runtime-meta__label {
+  display: block;
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-meta__value {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--guaxi-text-primary);
+  word-break: break-word;
+}
+
+.python-runtime-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.python-runtime-chip-btn {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.python-runtime-install {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.python-runtime-install__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--guaxi-border);
+  outline: none;
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-install__btn {
+  height: 34px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.python-runtime-install__btn[disabled] {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.python-runtime-packages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.python-runtime-packages__title {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-packages__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.python-runtime-package-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 88%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+  color: var(--guaxi-text-primary);
+  font-size: 12px;
 }
 
 .mode-toggle {
@@ -13496,6 +14115,87 @@ onUnmounted(() => {
   flex: 0 1 auto;
 }
 
+.guaxi-dataframe-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.guaxi-dataframe-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.guaxi-dataframe-meta {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #64748b);
+}
+
+.guaxi-dataframe-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.guaxi-dataframe-btn {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--guaxi-text-primary, #1f2937);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.guaxi-dataframe-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(37, 99, 235, 0.32);
+  background: rgba(239, 246, 255, 0.96);
+}
+
+.guaxi-dataframe-table-wrap {
+  width: 100%;
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.guaxi-dataframe-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.guaxi-dataframe-table th,
+.guaxi-dataframe-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.guaxi-dataframe-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(248, 250, 252, 0.98);
+  color: var(--guaxi-text-primary, #1f2937);
+  font-weight: 700;
+}
+
+.guaxi-dataframe-table td {
+  color: var(--guaxi-text-primary, #334155);
+}
+
 .guaxi-pdf-preview-shell {
   display: flex;
   flex-direction: column;
@@ -13638,6 +14338,48 @@ onUnmounted(() => {
   box-shadow:
     0 18px 34px rgba(2, 6, 23, 0.42),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-runtime-entry {
+  background: linear-gradient(135deg,
+      color-mix(in srgb, var(--guaxi-panel-bg) 88%, #274c77 12%),
+      color-mix(in srgb, var(--guaxi-panel-bg) 90%, #1f6f5c 10%));
+  border-color: rgba(71, 85, 105, 0.72);
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-runtime-meta__item,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill {
+  border-color: rgba(71, 85, 105, 0.72);
+  background: rgba(15, 23, 42, 0.68);
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-runtime-ghost-btn,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-chip-btn,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-install__btn,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-install__input,
+:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn {
+  border-color: rgba(71, 85, 105, 0.72);
+  background: rgba(15, 23, 42, 0.72);
+  color: #e6edf3;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn:hover {
+  background: rgba(30, 41, 59, 0.96);
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table-wrap {
+  border-color: rgba(71, 85, 105, 0.72);
+  background: rgba(15, 23, 42, 0.64);
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table th {
+  background: rgba(30, 41, 59, 0.98);
+  color: #f8fafc;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table td {
+  color: #e6edf3;
+  border-bottom-color: rgba(71, 85, 105, 0.4);
 }
 
 .dark-mode .preview .guaxi-codecell-btn,

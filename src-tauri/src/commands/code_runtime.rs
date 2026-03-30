@@ -1,24 +1,19 @@
-use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyList, PyModule};
-use pyo3::IntoPyObject;
-use std::ffi::CString;
+use crate::guaxiservices::bundled_resources;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::command;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-static PY_READY: OnceLock<()> = OnceLock::new();
-static PY_REPL_GLOBALS: OnceLock<Mutex<Option<Py<PyDict>>>> = OnceLock::new();
-static PY_SESSION_GLOBALS: OnceLock<Mutex<HashMap<String, Py<PyDict>>>> = OnceLock::new();
+static PY_WORKER_STATE: OnceLock<Mutex<Option<PythonWorkerState>>> = OnceLock::new();
 
-fn ensure_python_ready() {
-    PY_READY.get_or_init(|| {
-        pyo3::prepare_freethreaded_python();
-        info!("[PythonRuntime] prepare_freethreaded_python done");
-    });
-}
+const PY_WORKER_FILE_NAME: &str = "guaxi_python_worker.py";
+const PY_WORKER_SOURCE: &str = include_str!("../../scripts/guaxi_python_worker.py");
 
 #[derive(Debug, Deserialize)]
 pub struct PyExecRequest {
@@ -28,7 +23,7 @@ pub struct PyExecRequest {
     pub vars: Option<HashMap<String, Value>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PyExecResponse {
     pub ok: bool,
     pub stdout: String,
@@ -37,488 +32,470 @@ pub struct PyExecResponse {
     pub result_json: Option<Value>,
 }
 
-fn build_fresh_globals(py: Python<'_>) -> PyResult<Py<PyDict>> {
-    let g = PyDict::new(py);
-    let builtins = PyModule::import(py, "builtins")?;
-    g.set_item("__builtins__", builtins)?;
-    Ok(g.unbind())
+#[derive(Debug, Serialize)]
+pub struct PythonRuntimeStatus {
+    pub ready: bool,
+    pub source: String,
+    pub python_path: String,
+    pub runtime_dir: String,
+    pub version: String,
+    pub pip_version: String,
+    pub worker_alive: bool,
+    pub packages: Vec<String>,
 }
 
-fn get_or_create_repl_globals(py: Python<'_>) -> PyResult<Py<PyDict>> {
-    let cell = PY_REPL_GLOBALS.get_or_init(|| Mutex::new(None));
-    let mut guard = cell.lock().map_err(|_| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Failed to lock repl globals")
-    })?;
-
-    if let Some(existing) = guard.as_ref() {
-        return Ok(existing.clone_ref(py));
-    }
-
-    let created = build_fresh_globals(py)?;
-    *guard = Some(created.clone_ref(py));
-    Ok(created)
+#[derive(Debug, Deserialize)]
+pub struct PythonInstallPackagesRequest {
+    pub packages: Vec<String>,
 }
 
-fn get_or_create_session_globals(py: Python<'_>, session_id: &str) -> PyResult<Py<PyDict>> {
-    let sid = session_id.trim();
-    if sid.is_empty() {
-        return get_or_create_repl_globals(py);
-    }
-
-    let cell = PY_SESSION_GLOBALS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cell.lock().map_err(|_| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Failed to lock session globals")
-    })?;
-
-    if let Some(existing) = guard.get(sid) {
-        return Ok(existing.clone_ref(py));
-    }
-
-    let created = build_fresh_globals(py)?;
-    guard.insert(sid.to_string(), created.clone_ref(py));
-    Ok(created)
+#[derive(Debug, Serialize)]
+pub struct PythonInstallPackagesResponse {
+    pub ok: bool,
+    pub stdout: String,
+    pub stderr: String,
 }
 
-fn format_pyerr_traceback(py: Python<'_>, err: &PyErr) -> String {
-    let tb_mod = PyModule::import(py, "traceback");
-    let tb_mod = match tb_mod {
-        Ok(v) => v,
-        Err(_) => return format!("{err}"),
+#[derive(Debug, Deserialize)]
+pub struct PythonImportTableRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PythonImportTableResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub table: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct PythonLaunchSpec {
+    program: String,
+    base_args: Vec<String>,
+    source: String,
+    runtime_dir: PathBuf,
+}
+
+struct PythonWorkerState {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+fn python_worker_state_cell() -> &'static Mutex<Option<PythonWorkerState>> {
+    PY_WORKER_STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn python_runtime_dir() -> Result<PathBuf, String> {
+    let dir = bundled_resources::ensure_relative_dir("utils/python_runtime")?;
+    fs::create_dir_all(&dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
+    Ok(dir)
+}
+
+fn bundled_python_candidates(runtime_dir: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![
+            runtime_dir.join("python.exe"),
+            runtime_dir.join("Python").join("python.exe"),
+            runtime_dir.join("embedded").join("python.exe"),
+        ]
+    } else {
+        vec![
+            runtime_dir.join("bin").join("python3"),
+            runtime_dir.join("bin").join("python"),
+            runtime_dir.join("python"),
+        ]
+    }
+}
+
+fn command_output_trimmed(mut command: Command) -> Result<String, String> {
+    let output = command
+        .output()
+        .map_err(|e| format!("spawn process failed: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("process exited with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn resolve_python_launch_spec() -> Result<PythonLaunchSpec, String> {
+    let runtime_dir = python_runtime_dir()?;
+
+    for candidate in bundled_python_candidates(&runtime_dir) {
+        if candidate.is_file() {
+            return Ok(PythonLaunchSpec {
+                program: candidate.to_string_lossy().to_string(),
+                base_args: Vec::new(),
+                source: "bundled".to_string(),
+                runtime_dir,
+            });
+        }
+    }
+
+    if let Ok(custom) = std::env::var("GUAXI_PYTHON") {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return Ok(PythonLaunchSpec {
+                program: trimmed.to_string(),
+                base_args: Vec::new(),
+                source: "env".to_string(),
+                runtime_dir,
+            });
+        }
+    }
+
+    let fallbacks: Vec<(String, Vec<String>, &str)> = if cfg!(windows) {
+        vec![
+            ("py".to_string(), vec!["-3".to_string()], "system-py-launcher"),
+            ("python".to_string(), Vec::new(), "system-python"),
+            ("python3".to_string(), Vec::new(), "system-python3"),
+        ]
+    } else {
+        vec![
+            ("python3".to_string(), Vec::new(), "system-python3"),
+            ("python".to_string(), Vec::new(), "system-python"),
+        ]
     };
 
-    let f = tb_mod.getattr("format_exception");
-    let f = match f {
-        Ok(v) => v,
-        Err(_) => return format!("{err}"),
+    for (program, base_args, source) in fallbacks {
+        let mut command = Command::new(&program);
+        command.args(&base_args).arg("--version");
+        if command.output().is_ok() {
+            return Ok(PythonLaunchSpec {
+                program,
+                base_args,
+                source: source.to_string(),
+                runtime_dir,
+            });
+        }
+    }
+
+    Err("未找到可用的 Python 解释器；请先提供 utils/python_runtime 或安装系统 Python。".to_string())
+}
+
+fn ensure_worker_script(runtime_dir: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(runtime_dir).map_err(|e| format!("create runtime dir failed: {e}"))?;
+    let script_path = runtime_dir.join(PY_WORKER_FILE_NAME);
+    let needs_write = match fs::read_to_string(&script_path) {
+        Ok(existing) => existing != PY_WORKER_SOURCE,
+        Err(_) => true,
+    };
+    if needs_write {
+        fs::write(&script_path, PY_WORKER_SOURCE)
+            .map_err(|e| format!("write python worker script failed: {e}"))?;
+        info!(worker_script = %script_path.to_string_lossy(), "[PythonRuntime] worker script refreshed");
+    }
+    Ok(script_path)
+}
+
+fn ensure_pip_available(spec: &PythonLaunchSpec) -> Result<String, String> {
+    let mut version_cmd = Command::new(&spec.program);
+    version_cmd.args(&spec.base_args).args(["-m", "pip", "--version"]);
+    match command_output_trimmed(version_cmd) {
+        Ok(version) => Ok(version),
+        Err(first_error) => {
+            warn!(source = spec.source.as_str(), error = first_error.as_str(), "[PythonRuntime] pip missing, try ensurepip");
+            let mut ensure_cmd = Command::new(&spec.program);
+            ensure_cmd.args(&spec.base_args).args(["-m", "ensurepip", "--upgrade"]);
+            let _ = command_output_trimmed(ensure_cmd)?;
+
+            let mut retry_cmd = Command::new(&spec.program);
+            retry_cmd.args(&spec.base_args).args(["-m", "pip", "--version"]);
+            command_output_trimmed(retry_cmd)
+        }
+    }
+}
+
+fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, String> {
+    let worker_script_path = ensure_worker_script(&spec.runtime_dir)?;
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.base_args)
+        .arg("-u")
+        .arg(&worker_script_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .current_dir(&spec.runtime_dir);
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("spawn python worker failed: {e}"))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "python worker stdin unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "python worker stdout unavailable".to_string())?;
+
+    info!(
+        python = spec.program.as_str(),
+        source = spec.source.as_str(),
+        worker_script = %worker_script_path.to_string_lossy(),
+        "[PythonRuntime] worker spawned"
+    );
+
+    Ok(PythonWorkerState {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+    })
+}
+
+fn worker_is_alive(state: &mut PythonWorkerState) -> bool {
+    match state.child.try_wait() {
+        Ok(Some(status)) => {
+            warn!(status = %status, "[PythonRuntime] worker exited");
+            false
+        }
+        Ok(None) => true,
+        Err(error) => {
+            warn!(error = %error, "[PythonRuntime] worker try_wait failed");
+            false
+        }
+    }
+}
+
+fn with_python_worker<R>(f: impl FnOnce(&mut PythonWorkerState) -> Result<R, String>) -> Result<R, String> {
+    let mut guard = python_worker_state_cell()
+        .lock()
+        .map_err(|_| "lock python worker state failed".to_string())?;
+
+    let need_spawn = match guard.as_mut() {
+        Some(state) => !worker_is_alive(state),
+        None => true,
     };
 
-    // Python 3.11+: traceback.format_exception(exc) 允许只传入异常实例
-    if let Ok(lines) = f
-        .call1((err.value(py),))
-        .and_then(|o| o.extract::<Vec<String>>())
-    {
-        let joined = lines.join("");
-        if !joined.trim().is_empty() {
-            return joined;
-        }
+    if need_spawn {
+        *guard = None;
+        let spec = resolve_python_launch_spec()?;
+        *guard = Some(spawn_python_worker(&spec)?);
     }
 
-    // 兼容旧签名：traceback.format_exception(type, value, tb)
-    let typ = err.get_type(py);
-    let val = err.value(py);
-    let tb: PyObject = err
-        .traceback(py)
-        .map(|t| t.into_any().unbind())
-        .unwrap_or_else(|| py.None());
-
-    if let Ok(lines) = f
-        .call1((typ, val, tb))
-        .and_then(|o| o.extract::<Vec<String>>())
-    {
-        let joined = lines.join("");
-        if !joined.trim().is_empty() {
-            return joined;
-        }
-    }
-
-    format!("{err}")
+    let state = guard
+        .as_mut()
+        .ok_or_else(|| "python worker not available".to_string())?;
+    f(state)
 }
 
-fn json_to_py(py: Python<'_>, v: &Value) -> PyObject {
-    match v {
-        Value::Null => py.None(),
-        Value::Bool(b) => PyBool::new(py, *b).to_owned().into_any().unbind(),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                match i.into_pyobject(py) {
-                    Ok(obj) => obj.into_any().unbind(),
-                    Err(e) => {
-                        warn!(err = %e, "[PythonRuntime] convert i64 to PyObject failed");
-                        py.None()
-                    }
+fn send_worker_request(payload: &Value) -> Result<Value, String> {
+    with_python_worker(|state| {
+        let line = serde_json::to_string(payload)
+            .map_err(|e| format!("serialize worker request failed: {e}"))?;
+        state
+            .stdin
+            .write_all(line.as_bytes())
+            .map_err(|e| format!("write worker stdin failed: {e}"))?;
+        state
+            .stdin
+            .write_all(b"\n")
+            .map_err(|e| format!("write worker newline failed: {e}"))?;
+        state
+            .stdin
+            .flush()
+            .map_err(|e| format!("flush worker stdin failed: {e}"))?;
+
+        let mut response_line = String::new();
+        let bytes_read = state
+            .stdout
+            .read_line(&mut response_line)
+            .map_err(|e| format!("read worker stdout failed: {e}"))?;
+        if bytes_read == 0 {
+            return Err("python worker closed stdout unexpectedly".to_string());
+        }
+
+        serde_json::from_str::<Value>(response_line.trim())
+            .map_err(|e| format!("parse worker response failed: {e}"))
+    })
+}
+
+fn list_python_packages(spec: &PythonLaunchSpec) -> Vec<String> {
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.base_args)
+        .args(["-m", "pip", "list", "--format=json"]);
+    match command_output_trimmed(command) {
+        Ok(output) => serde_json::from_str::<Vec<Value>>(&output)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| {
+                let name = item.get("name").and_then(Value::as_str)?.trim();
+                let version = item.get("version").and_then(Value::as_str).unwrap_or("").trim();
+                if version.is_empty() {
+                    Some(name.to_string())
+                } else {
+                    Some(format!("{name} {version}"))
                 }
-            } else if let Some(u) = n.as_u64() {
-                match u.into_pyobject(py) {
-                    Ok(obj) => obj.into_any().unbind(),
-                    Err(e) => {
-                        warn!(err = %e, "[PythonRuntime] convert u64 to PyObject failed");
-                        py.None()
-                    }
-                }
-            } else if let Some(f) = n.as_f64() {
-                match f.into_pyobject(py) {
-                    Ok(obj) => obj.into_any().unbind(),
-                    Err(e) => {
-                        warn!(err = %e, "[PythonRuntime] convert f64 to PyObject failed");
-                        py.None()
-                    }
-                }
-            } else {
-                py.None()
-            }
-        }
-        Value::String(s) => match s.as_str().into_pyobject(py) {
-            Ok(obj) => obj.into_any().unbind(),
-            Err(e) => {
-                warn!(err = %e, "[PythonRuntime] convert string to PyObject failed");
-                py.None()
-            }
-        },
-        Value::Array(arr) => {
-            let items: Vec<PyObject> = arr.iter().map(|x| json_to_py(py, x)).collect();
-            match PyList::new(py, items) {
-                Ok(list) => list.unbind().into_any(),
-                Err(e) => {
-                    warn!(err = %e, "[PythonRuntime] build PyList failed");
-                    py.None()
-                }
-            }
-        }
-        Value::Object(map) => {
-            let d = PyDict::new(py);
-            for (k, vv) in map {
-                let _ = d.set_item(k, json_to_py(py, vv));
-            }
-            d.unbind().into_any()
+            })
+            .take(18)
+            .collect(),
+        Err(error) => {
+            warn!(error = error.as_str(), "[PythonRuntime] list pip packages failed");
+            Vec::new()
         }
     }
-}
-
-fn py_to_json_basic(py: Python<'_>, obj: &Bound<'_, pyo3::types::PyAny>) -> Option<Value> {
-    if obj.is_none() {
-        return Some(Value::Null);
-    }
-    if let Ok(v) = obj.extract::<bool>() {
-        return Some(Value::Bool(v));
-    }
-    if let Ok(v) = obj.extract::<i64>() {
-        return Some(Value::Number(v.into()));
-    }
-    if let Ok(v) = obj.extract::<u64>() {
-        return Some(Value::Number(v.into()));
-    }
-    if let Ok(v) = obj.extract::<f64>() {
-        return serde_json::Number::from_f64(v).map(Value::Number);
-    }
-    if let Ok(v) = obj.extract::<String>() {
-        return Some(Value::String(v));
-    }
-
-    if let Ok(list) = obj.downcast::<PyList>() {
-        let mut out = Vec::with_capacity(list.len());
-        for it in list.iter() {
-            out.push(py_to_json_basic(py, &it).unwrap_or(Value::Null));
-        }
-        return Some(Value::Array(out));
-    }
-
-    if let Ok(dict) = obj.downcast::<PyDict>() {
-        let mut out = serde_json::Map::new();
-        for (k, v) in dict.iter() {
-            let ks = k.extract::<String>().ok()?;
-            out.insert(ks, py_to_json_basic(py, &v).unwrap_or(Value::Null));
-        }
-        return Some(Value::Object(out));
-    }
-
-    None
-}
-
-fn capture_stdio(py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject, PyObject)> {
-    let sys = PyModule::import(py, "sys")?;
-    let io = PyModule::import(py, "io")?;
-    let string_io = io.getattr("StringIO")?;
-
-    let old_stdout = sys.getattr("stdout")?.unbind();
-    let old_stderr = sys.getattr("stderr")?.unbind();
-
-    let new_stdout = string_io.call0()?.unbind();
-    let new_stderr = string_io.call0()?.unbind();
-
-    sys.setattr("stdout", new_stdout.bind(py))?;
-    sys.setattr("stderr", new_stderr.bind(py))?;
-
-    Ok((old_stdout, old_stderr, new_stdout, new_stderr))
-}
-
-fn restore_stdio(py: Python<'_>, old_stdout: PyObject, old_stderr: PyObject) -> PyResult<()> {
-    let sys = PyModule::import(py, "sys")?;
-    sys.setattr("stdout", old_stdout.bind(py))?;
-    sys.setattr("stderr", old_stderr.bind(py))?;
-    Ok(())
-}
-
-fn read_stringio(py: Python<'_>, sio: &PyObject) -> PyResult<String> {
-    let v: String = sio
-        .bind(py)
-        .getattr("getvalue")?
-        .call0()?
-        .extract()?;
-    Ok(v)
-}
-
-fn should_inline_matplotlib(vars: Option<&HashMap<String, Value>>) -> bool {
-    if let Some(v) = vars.and_then(|m| m.get("_guaxi_inline_matplotlib")) {
-        if let Some(b) = v.as_bool() {
-            return b;
-        }
-    }
-
-    if let Some(m) = vars {
-        return m.contains_key("_py_cell_id") || m.contains_key("_guaxi_session");
-    }
-
-    false
-}
-
-fn try_prepare_inline_matplotlib(py: Python<'_>, globals: &Bound<'_, PyDict>) {
-    let pre = r#"
-try:
-    import sys
-    if 'matplotlib' not in sys.modules:
-        import matplotlib
-        matplotlib.use('Agg')
-except Exception:
-    pass
-"#;
-
-    let Ok(c) = CString::new(pre) else {
-        return;
-    };
-
-    if let Err(e) = py.run(c.as_c_str(), Some(globals), Some(globals)) {
-        warn!(err = %e, "[PythonRuntime] prepare inline matplotlib failed");
-    }
-}
-
-fn try_capture_matplotlib_png_base64(py: Python<'_>, globals: &Bound<'_, PyDict>) -> Option<String> {
-    let cap = r#"
-__guaxi_mpl_png_base64 = None
-try:
-    import sys
-    if 'matplotlib' in sys.modules:
-        import base64
-        from io import BytesIO
-        from matplotlib._pylab_helpers import Gcf
-
-        mgrs = Gcf.get_all_fig_managers()
-        if mgrs:
-            fig = mgrs[-1].canvas.figure
-            buf = BytesIO()
-            fig.savefig(buf, format='png', bbox_inches='tight')
-            __guaxi_mpl_png_base64 = base64.b64encode(buf.getvalue()).decode('ascii')
-
-            try:
-                import matplotlib.pyplot as plt
-                for m in mgrs:
-                    try:
-                        plt.close(m.canvas.figure)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-except Exception:
-    __guaxi_mpl_png_base64 = None
-"#;
-
-    let c = CString::new(cap).ok()?;
-    if let Err(e) = py.run(c.as_c_str(), Some(globals), Some(globals)) {
-        warn!(err = %e, "[PythonRuntime] capture matplotlib figure failed");
-        let _ = globals.del_item("__guaxi_mpl_png_base64");
-        return None;
-    }
-
-    let out = globals
-        .get_item("__guaxi_mpl_png_base64")
-        .ok()
-        .flatten()
-        .and_then(|v| v.extract::<Option<String>>().ok())
-        .flatten();
-
-    let _ = globals.del_item("__guaxi_mpl_png_base64");
-    out
 }
 
 #[command]
 pub async fn python_reset_repl() -> Result<(), String> {
-    ensure_python_ready();
-    let cell = PY_REPL_GLOBALS.get_or_init(|| Mutex::new(None));
-    let mut guard = cell.lock().map_err(|_| "Failed to lock repl globals".to_string())?;
-    *guard = None;
-    info!("[PythonRuntime] repl globals reset");
-    Ok(())
+    let payload = json!({ "cmd": "reset" });
+    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
+        .await
+        .map_err(|e| format!("python_reset_repl join failed: {e}"))??;
+
+    if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        info!("[PythonRuntime] worker sessions reset");
+        Ok(())
+    } else {
+        Err(response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("reset python worker failed")
+            .to_string())
+    }
 }
 
 #[command]
 pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, String> {
-    ensure_python_ready();
-
-    let code_len = request.code.len();
-    let persist = request.persist;
-    let expect_json = request.expect_json;
     info!(
-        persist = persist,
-        expect_json = expect_json,
-        code_len = code_len,
+        persist = request.persist,
+        expect_json = request.expect_json,
+        code_len = request.code.len(),
         "[PythonRuntime] python_exec called"
     );
 
-    let task = tokio::task::spawn_blocking(move || {
-        Python::with_gil(|py| -> Result<PyExecResponse, String> {
-            let (old_stdout, old_stderr, new_stdout, new_stderr) = capture_stdio(py)
-                .map_err(|e| format!("capture stdio failed: {e}"))?;
-
-            let session_id = request
-                .vars
-                .as_ref()
-                .and_then(|m| m.get("_guaxi_session"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            let globals_py = if request.persist {
-                if let Some(sid) = session_id.as_deref() {
-                    get_or_create_session_globals(py, sid)
-                        .map_err(|e| format!("get session globals failed: {e}"))?
-                } else {
-                    get_or_create_repl_globals(py).map_err(|e| format!("get repl globals failed: {e}"))?
-                }
-            } else {
-                build_fresh_globals(py).map_err(|e| format!("build globals failed: {e}"))?
-            };
-
-            let globals = globals_py.bind(py);
-
-            let inline_matplotlib = should_inline_matplotlib(request.vars.as_ref());
-            if inline_matplotlib {
-                try_prepare_inline_matplotlib(py, globals);
-            }
-
-            if let Some(vars) = request.vars.as_ref() {
-                for (k, v) in vars {
-                    if let Err(e) = globals.set_item(k, json_to_py(py, v)) {
-                        warn!(key = k.as_str(), err = %e, "[PythonRuntime] set var failed");
-                    }
-                }
-            }
-
-            let mut ok = true;
-            let mut result_repr: Option<String> = None;
-            let mut result_json: Option<Value> = None;
-
-            if request.code.contains('\0') {
-                return Err("Python code contains NUL byte (\\0), cannot execute".to_string());
-            }
-
-            if let Err(e) = globals.set_item("__guaxi_code", request.code.as_str()) {
-                warn!(err = %e, "[PythonRuntime] set __guaxi_code failed");
-            }
-
-            let wrapper = r#"
-import ast
-
-__guaxi_pre_has_result = '_result' in globals()
-__guaxi_code = globals().get('__guaxi_code', '')
-__guaxi_m = ast.parse(__guaxi_code, mode='exec')
-__guaxi_has_last_expr = bool(__guaxi_m.body) and isinstance(__guaxi_m.body[-1], ast.Expr)
-
-if __guaxi_has_last_expr:
-    __guaxi_last_expr = __guaxi_m.body.pop().value
-    __guaxi_m.body.append(ast.Assign(
-        targets=[ast.Name(id='__guaxi_last_value', ctx=ast.Store())],
-        value=__guaxi_last_expr,
-    ))
-    ast.fix_missing_locations(__guaxi_m)
-
-exec(compile(__guaxi_m, '<guaxi>', 'exec'), globals(), globals())
-
-if __guaxi_has_last_expr and (not __guaxi_pre_has_result) and ('__guaxi_last_value' in globals()):
-    globals()['_result'] = globals().get('__guaxi_last_value')
-
-try:
-    del globals()['__guaxi_last_value']
-except Exception:
-    pass
-"#;
-
-            let wrapper_c = CString::new(wrapper)
-                .map_err(|_| "Internal error: wrapper contains NUL byte".to_string())?;
-
-            let run_res = py.run(wrapper_c.as_c_str(), Some(globals), Some(globals));
-            let mut err_trace = String::new();
-            if let Err(e) = run_res {
-                ok = false;
-                err_trace = format_pyerr_traceback(py, &e);
-                warn!("[PythonRuntime] python exec error: {:?}", e);
-            }
-
-            if ok {
-                match globals.get_item("_result") {
-                    Ok(Some(obj)) => {
-                        if let Ok(r) = obj.repr() {
-                            result_repr = Some(r.to_string());
-                        }
-                        if request.expect_json {
-                            result_json = py_to_json_basic(py, &obj);
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        warn!("[PythonRuntime] read _result failed: {:?}", e);
-                    }
-                }
-
-                if inline_matplotlib {
-                    if let Some(png_b64) = try_capture_matplotlib_png_base64(py, globals) {
-                        info!(len = png_b64.len(), "[PythonRuntime] captured matplotlib figure");
-                        let display = json!({
-                            "type": "image",
-                            "mime": "image/png",
-                            "data_base64": png_b64,
-                        });
-
-                        match result_json {
-                            Some(Value::Object(ref mut map)) => {
-                                if !map.contains_key("__guaxi_display__") {
-                                    map.insert("__guaxi_display__".to_string(), display);
-                                }
-                            }
-                            Some(other) => {
-                                result_json = Some(json!({
-                                    "__guaxi_display__": display,
-                                    "__guaxi_result__": other,
-                                }));
-                            }
-                            None => {
-                                result_json = Some(json!({ "__guaxi_display__": display }));
-                            }
-                        }
-                    }
-                }
-            }
-
-            let stdout = read_stringio(py, &new_stdout).unwrap_or_default();
-            let mut stderr = read_stringio(py, &new_stderr).unwrap_or_default();
-            if !err_trace.trim().is_empty() {
-                if !stderr.trim().is_empty() {
-                    stderr.push_str("\n");
-                }
-                stderr.push_str(&err_trace);
-            }
-
-            if let Err(e) = restore_stdio(py, old_stdout, old_stderr) {
-                error!("[PythonRuntime] restore stdio failed: {:?}", e);
-            }
-
-            Ok(PyExecResponse {
-                ok,
-                stdout,
-                stderr,
-                result_repr,
-                result_json,
-            })
-        })
+    let payload = json!({
+        "cmd": "exec",
+        "code": request.code,
+        "persist": request.persist,
+        "expect_json": request.expect_json,
+        "vars": request.vars.unwrap_or_default(),
     });
 
-    task.await
-        .map_err(|e| format!("python_exec task join failed: {e}"))?
+    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
+        .await
+        .map_err(|e| format!("python_exec task join failed: {e}"))??;
+
+    let parsed: PyExecResponse = serde_json::from_value(response)
+        .map_err(|e| format!("decode python worker response failed: {e}"))?;
+
+    info!(
+        ok = parsed.ok,
+        stdout_len = parsed.stdout.len(),
+        stderr_len = parsed.stderr.len(),
+        has_result_repr = parsed.result_repr.is_some(),
+        has_result_json = parsed.result_json.is_some(),
+        "[PythonRuntime] python_exec completed"
+    );
+
+    Ok(parsed)
+}
+
+#[command]
+pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let spec = resolve_python_launch_spec()?;
+
+        let mut version_cmd = Command::new(&spec.program);
+        version_cmd.args(&spec.base_args).arg("--version");
+        let version = command_output_trimmed(version_cmd)?;
+
+        let pip_version = ensure_pip_available(&spec).unwrap_or_default();
+        let packages = list_python_packages(&spec);
+        let worker_alive = {
+            let mut guard = python_worker_state_cell()
+                .lock()
+                .map_err(|_| "lock python worker state failed".to_string())?;
+            match guard.as_mut() {
+                Some(state) => worker_is_alive(state),
+                None => false,
+            }
+        };
+
+        Ok(PythonRuntimeStatus {
+            ready: true,
+            source: spec.source,
+            python_path: spec.program,
+            runtime_dir: spec.runtime_dir.to_string_lossy().to_string(),
+            version,
+            pip_version,
+            worker_alive,
+            packages,
+        })
+    })
+    .await
+    .map_err(|e| format!("python_runtime_get_status join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_install_packages(
+    request: PythonInstallPackagesRequest,
+) -> Result<PythonInstallPackagesResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let packages: Vec<String> = request
+            .packages
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect();
+        if packages.is_empty() {
+            return Err("未提供需要安装的 Python 包。".to_string());
+        }
+
+        let spec = resolve_python_launch_spec()?;
+        let _ = ensure_pip_available(&spec)?;
+
+        info!(packages = packages.join(", ").as_str(), source = spec.source.as_str(), "[PythonRuntime] installing packages");
+
+        let mut command = Command::new(&spec.program);
+        command
+            .args(&spec.base_args)
+            .args(["-m", "pip", "install"])
+            .args(&packages)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = command
+            .output()
+            .map_err(|e| format!("install python packages failed: {e}"))?;
+
+        Ok(PythonInstallPackagesResponse {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("python_runtime_install_packages join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_import_table_file(
+    request: PythonImportTableRequest,
+) -> Result<PythonImportTableResponse, String> {
+    let payload = json!({
+        "cmd": "import_table",
+        "path": request.path,
+    });
+
+    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
+        .await
+        .map_err(|e| format!("python_runtime_import_table_file join failed: {e}"))??;
+
+    Ok(PythonImportTableResponse {
+        ok: response.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        error: response
+            .get("error")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string()),
+        table: response.get("table").cloned(),
+    })
 }
