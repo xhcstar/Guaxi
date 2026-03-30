@@ -719,14 +719,78 @@ const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
 const previewContainer = ref(null);
+const getMonacoThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'guaxi-dark' : 'guaxi-light')
+const getMarkdownPreviewThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default')
+let previewMermaidRenderSeq = 0
 const renderPreviewMermaidDiagrams = async (container) => {
+  const renderSeq = ++previewMermaidRenderSeq
+  const mermaidTheme = 'default'
+  logger.info('[Preview] mermaid render start', {
+    renderSeq,
+    mermaidTheme,
+    appearanceTheme: settingsStore.appearanceTheme,
+  })
+
+  try {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: mermaidTheme,
+      securityLevel: 'loose',
+    })
+  } catch (error) {
+    logger.warn('[Preview] mermaid initialize failed, continue with previous config', {
+      renderSeq,
+      mermaidTheme,
+      error,
+    })
+  }
+
   if (!container?.querySelectorAll) return
 
   const nodes = Array.from(container.querySelectorAll('.mermaid'))
-    .filter((node) => !node.querySelector('svg') && node.getAttribute('data-processed') !== 'true')
+    .filter((node) => {
+      const cachedSource = String(node.getAttribute?.('data-guaxi-mermaid-source') || '')
+      const renderedSource = String(node.getAttribute?.('data-mermaid-source') || '')
+      const alreadyProcessed =
+        node.getAttribute?.('data-processed') === 'true' ||
+        !!renderedSource ||
+        !!node.querySelector?.('svg')
+      if (alreadyProcessed) {
+        logger.debug('[Preview] mermaid node already processed by markdown renderer, skip rerender', {
+          renderSeq,
+          hasRenderedSource: !!renderedSource,
+          hasSvg: !!node.querySelector?.('svg'),
+        })
+        return false
+      }
+
+      const extractedSource = String(node.textContent || '')
+        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<')
+        .replace(/&amp;/g, '&')
+        .trim()
+      const source = cachedSource || extractedSource
+      if (!source) {
+        logger.warn('[Preview] mermaid node skipped because source is empty', {
+          renderSeq,
+          className: node.className || '',
+        })
+        return false
+      }
+      // 这里只兜底处理尚未经过 GuaxiMarker 预渲染的原始 Mermaid 节点。
+      // 对已经生成过 SVG 的节点，预览区会直接跳过，避免把 SVG/CSS 文本误当成 Mermaid 源码。
+      node.setAttribute?.('data-guaxi-mermaid-source', source)
+      // 这里只兜底处理尚未经过 GuaxiMarker 预渲染的原始 Mermaid 节点。
+      // 已经带有 data-mermaid-source / svg 的节点说明主渲染器已经产出了 SVG，
+      // 再次读取 textContent 会把 SVG/CSS 文本误当成 Mermaid 源码。
+      node.setAttribute?.('data-guaxi-mermaid-source', source)
+      node.innerHTML = source
+      node.innerHTML = source
+      return true
+    })
   if (!nodes.length) return
 
-  nodes.forEach((node) => {
+  if (false) nodes.forEach((node) => {
     try {
       const content = String(node.textContent || '')
         .replace(/&gt;/g, '>')
@@ -742,7 +806,42 @@ const renderPreviewMermaidDiagrams = async (container) => {
     requestAnimationFrame(() => resolve())
   })
 
-  await mermaid.run({ nodes })
+  if (renderSeq !== previewMermaidRenderSeq) {
+    logger.info('[Preview] mermaid render skipped because a newer render exists', {
+      renderSeq,
+      latestRenderSeq: previewMermaidRenderSeq,
+    })
+    return
+  }
+
+  let successCount = 0
+  for (const node of nodes) {
+    if (renderSeq !== previewMermaidRenderSeq) {
+      logger.info('[Preview] mermaid render aborted by newer task', {
+        renderSeq,
+        latestRenderSeq: previewMermaidRenderSeq,
+      })
+      return
+    }
+
+    try {
+      await mermaid.run({ nodes: [node] })
+      successCount += 1
+    } catch (error) {
+      logger.warn('[Preview] mermaid single node render failed', {
+        renderSeq,
+        source: String(node.getAttribute?.('data-guaxi-mermaid-source') || '').slice(0, 160),
+        error,
+      })
+    }
+  }
+
+  logger.info('[Preview] mermaid render complete', {
+    renderSeq,
+    nodeCount: nodes.length,
+    successCount,
+    mermaidTheme,
+  })
 }
 const previewLineAnchorCache = {
   container: null,
@@ -5832,15 +5931,33 @@ const refreshLspEnabledSetting = async () => {
 }
 
 // LSP 开关驱动 Monaco 主题，确保高亮使用 One Dark
-const applyMonacoThemeByLsp = (enabled) => {
-  const isDark = settingsStore.appearanceTheme === 'dark'
-  const themeName = isDark ? 'guaxi-dark' : 'guaxi-light'
+const applyMonacoTheme = (source = 'manual') => {
+  const themeName = getMonacoThemeName()
   try {
     monaco.editor.setTheme(themeName)
-    logger.info('[theme] apply by lsp', { enabled, themeName })
+    editor?.layout?.()
+    editor?.render?.()
+    secondaryEditor?.layout?.()
+    secondaryEditor?.render?.()
+    logger.info('[theme] monaco theme applied', {
+      source,
+      themeName,
+      hasEditor: !!editor,
+      hasSecondaryEditor: !!secondaryEditor,
+    })
   } catch (error) {
-    logger.warn('[theme] apply by lsp failed', { enabled, themeName, error })
+    logger.warn('[theme] monaco theme apply failed', {
+      source,
+      themeName,
+      error,
+    })
   }
+}
+
+const applyMonacoThemeByLsp = (enabled) => {
+  const themeName = getMonacoThemeName()
+  logger.info('[theme] apply by lsp start', { enabled, themeName })
+  applyMonacoTheme('lsp')
 }
 
 const enableLspForEditorLanguage = (targetEditor, languageId, filePath = '') => {
@@ -10511,6 +10628,12 @@ const renderDebounced = debounce(async (content) => {
 
   try {
     const basePath = selectedFile.value.path ? await dirname(selectedFile.value.path) : '';
+    const previewTheme = getMarkdownPreviewThemeName()
+    logger.info('[Preview] render markdown', {
+      previewTheme,
+      appearanceTheme: settingsStore.appearanceTheme,
+      path: selectedFile.value?.path || '',
+    })
     const processed = preprocessObsidianWikilinks(content);
     renderedHtml.value = await renderMarkdown(processed, {
       basePath: basePath,
@@ -10519,7 +10642,7 @@ const renderDebounced = debounce(async (content) => {
       codeHighlight: true,
       pythonCells: true,
       codeCells: true,
-      theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+      theme: previewTheme
     });
 
     lastPreviewRenderedSource.value = content;
@@ -11007,10 +11130,10 @@ watch(renderedHtml, () => {
   nextTick(() => {
     if (previewContainer.value) {
       addCopyButtons(previewContainer.value, {
-        theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+        theme: getMarkdownPreviewThemeName()
       });
       addMediaViewerButtons(previewContainer.value, {
-        theme: settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default'
+        theme: getMarkdownPreviewThemeName()
       });
       void renderPreviewMermaidDiagrams(previewContainer.value).catch((error) => {
         logger.error('预览区 Mermaid 渲染失败', error);
@@ -11619,6 +11742,38 @@ watch(lspEnabled, (enabled) => {
 })
 
 // 生命周期
+watch(
+  () => settingsStore.appearanceTheme,
+  async (theme, prevTheme) => {
+    if (!theme || theme === prevTheme) return
+
+    const previewVisible = !!(showPreview.value && previewContainer.value)
+    logger.info('[theme] appearance theme changed', {
+      previousTheme: prevTheme || '',
+      theme,
+      previewMode: previewMode.value,
+      canPreview: canPreview.value,
+      previewVisible,
+    })
+
+    applyMonacoTheme('appearanceTheme')
+
+    if (previewVisible && previewMode.value !== 'realtime' && canPreview.value && rawContent.value) {
+      logger.info('[theme] refresh markdown preview for appearance theme change', {
+        theme,
+        previewMode: previewMode.value,
+        previewVisible,
+      })
+      renderDebounced(rawContent.value)
+    }
+
+    await nextTick()
+    editor?.layout?.()
+    secondaryEditor?.layout?.()
+  },
+  { flush: 'post' }
+)
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
@@ -12213,6 +12368,94 @@ onUnmounted(() => {
 .realtime-vditor :deep(.vditor-reset) {
   background-color: var(--guaxi-content-bg) !important;
   color: var(--guaxi-text-primary) !important;
+}
+
+.realtime-vditor :deep(.vditor-reset table) {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--guaxi-border, #d0d7de);
+  background: var(--guaxi-content-bg, #ffffff);
+  color: var(--guaxi-text-primary, #1f2328);
+}
+
+.realtime-vditor :deep(.vditor-reset th),
+.realtime-vditor :deep(.vditor-reset td) {
+  border: 1px solid var(--guaxi-border, #d0d7de);
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--guaxi-content-bg, #ffffff);
+  color: var(--guaxi-text-primary, #1f2328);
+}
+
+.realtime-vditor :deep(.vditor-reset th) {
+  background: rgba(175, 184, 193, 0.18);
+  font-weight: 700;
+}
+
+.realtime-vditor :deep(.vditor-reset tr:nth-child(even) td) {
+  background: rgba(175, 184, 193, 0.08);
+}
+
+.realtime-vditor :deep(.vditor-ir pre),
+.realtime-vditor :deep(.vditor-wysiwyg pre),
+.realtime-vditor :deep(.vditor-reset pre) {
+  background: var(--guaxi-code-bg, #f6f8fa) !important;
+  border: 1px solid var(--guaxi-border, #d0d7de) !important;
+  color: var(--guaxi-text-primary, #1f2328) !important;
+}
+
+.realtime-vditor :deep(.vditor-ir code),
+.realtime-vditor :deep(.vditor-wysiwyg code),
+.realtime-vditor :deep(.vditor-reset code) {
+  background: rgba(175, 184, 193, 0.2) !important;
+  color: var(--guaxi-text-primary, #1f2328) !important;
+}
+
+.realtime-vditor :deep(.vditor-ir__marker),
+.realtime-vditor :deep(.vditor-ir__node),
+.realtime-vditor :deep(.vditor-wysiwyg__block),
+.realtime-vditor :deep(.vditor-reset [contenteditable='true']) {
+  color: var(--guaxi-text-primary, #1f2328) !important;
+}
+
+.realtime-vditor :deep(.vditor-reset .mermaid),
+.realtime-vditor :deep(.vditor-reset .language-mermaid) {
+  background: #ffffff !important;
+  color: #1f2328 !important;
+}
+
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset table) {
+  border-color: #30363d;
+}
+
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset th),
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset td) {
+  border-color: #30363d;
+  background: #0f1720;
+  color: #e6edf3;
+}
+
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset th) {
+  background: #18222d;
+}
+
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset tr:nth-child(even) td) {
+  background: #131d27;
+}
+
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-ir pre),
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-wysiwyg pre),
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset pre) {
+  background: #1f242d !important;
+  border-color: #30363d !important;
+  color: #e6edf3 !important;
+}
+
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-ir code),
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-wysiwyg code),
+:global(:root[data-guaxi-theme='dark']) .realtime-vditor :deep(.vditor-reset code) {
+  background: rgba(110, 118, 129, 0.24) !important;
+  color: #e6edf3 !important;
 }
 
 .realtime-vditor :deep(.vditor-toolbar > *) {
@@ -12946,6 +13189,7 @@ onUnmounted(() => {
 
 
 /* 代码块样式 */
+.preview :deep(.hljs),
 .hljs {
   position: relative;
   border-radius: 6px;
@@ -12958,6 +13202,7 @@ onUnmounted(() => {
   color: #24292f;
 }
 
+.preview :deep(.hljs code),
 .hljs code {
   font-family: inherit !important;
   background: transparent !important;
@@ -12975,7 +13220,8 @@ onUnmounted(() => {
   overflow-x: auto;
 }
 
-.dark-mode .preview pre:not(.hljs)>code {
+.dark-mode .preview pre:not(.hljs)>code,
+:global(:root[data-guaxi-theme='dark']) .preview pre:not(.hljs)>code {
   border-color: #30363d;
   background: #1f242d;
   color: #c9d1d9;
@@ -12990,24 +13236,31 @@ onUnmounted(() => {
 }
 
 /* 暗色模式代码块 */
-.dark-mode .hljs {
+.dark-mode .hljs,
+:global(:root[data-guaxi-theme='dark']) .hljs,
+:global(:root[data-guaxi-theme='dark']) .preview :deep(.hljs) {
   background: #1f242d !important;
   border-color: #30363d;
   color: #c9d1d9;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace !important;
 }
 
-.dark-mode .hljs code {
+.dark-mode .hljs code,
+:global(:root[data-guaxi-theme='dark']) .hljs code,
+:global(:root[data-guaxi-theme='dark']) .preview :deep(.hljs code) {
   font-family: inherit !important;
 }
 
-.dark-mode .preview :not(pre)>code:not(.hljs) {
+.dark-mode .preview :not(pre)>code:not(.hljs),
+:global(:root[data-guaxi-theme='dark']) .preview :not(pre)>code:not(.hljs) {
   background: rgba(110, 118, 129, 0.25);
   color: #c9d1d9;
 }
 
 .dark-mode .hljs-comment,
-.dark-mode .hljs-quote {
+.dark-mode .hljs-quote,
+:global(:root[data-guaxi-theme='dark']) .hljs-comment,
+:global(:root[data-guaxi-theme='dark']) .hljs-quote {
   color: #8b949e;
 }
 
@@ -13015,25 +13268,39 @@ onUnmounted(() => {
 .dark-mode .hljs-selector-tag,
 .dark-mode .hljs-literal,
 .dark-mode .hljs-built_in,
-.dark-mode .hljs-type {
+.dark-mode .hljs-type,
+:global(:root[data-guaxi-theme='dark']) .hljs-keyword,
+:global(:root[data-guaxi-theme='dark']) .hljs-selector-tag,
+:global(:root[data-guaxi-theme='dark']) .hljs-literal,
+:global(:root[data-guaxi-theme='dark']) .hljs-built_in,
+:global(:root[data-guaxi-theme='dark']) .hljs-type {
   color: #ff7b72;
 }
 
 .dark-mode .hljs-string,
 .dark-mode .hljs-doctag,
-.dark-mode .hljs-regexp {
+.dark-mode .hljs-regexp,
+:global(:root[data-guaxi-theme='dark']) .hljs-string,
+:global(:root[data-guaxi-theme='dark']) .hljs-doctag,
+:global(:root[data-guaxi-theme='dark']) .hljs-regexp {
   color: #a5d6ff;
 }
 
 .dark-mode .hljs-number,
 .dark-mode .hljs-symbol,
-.dark-mode .hljs-bullet {
+.dark-mode .hljs-bullet,
+:global(:root[data-guaxi-theme='dark']) .hljs-number,
+:global(:root[data-guaxi-theme='dark']) .hljs-symbol,
+:global(:root[data-guaxi-theme='dark']) .hljs-bullet {
   color: #79c0ff;
 }
 
 .dark-mode .hljs-title,
 .dark-mode .hljs-section,
-.dark-mode .hljs-function .hljs-title {
+.dark-mode .hljs-function .hljs-title,
+:global(:root[data-guaxi-theme='dark']) .hljs-title,
+:global(:root[data-guaxi-theme='dark']) .hljs-section,
+:global(:root[data-guaxi-theme='dark']) .hljs-function .hljs-title {
   color: #d2a8ff;
 }
 
@@ -13042,19 +13309,31 @@ onUnmounted(() => {
 .dark-mode .hljs-variable,
 .dark-mode .hljs-template-variable,
 .dark-mode .hljs-property,
-.dark-mode .hljs-params {
+.dark-mode .hljs-params,
+:global(:root[data-guaxi-theme='dark']) .hljs-attr,
+:global(:root[data-guaxi-theme='dark']) .hljs-attribute,
+:global(:root[data-guaxi-theme='dark']) .hljs-variable,
+:global(:root[data-guaxi-theme='dark']) .hljs-template-variable,
+:global(:root[data-guaxi-theme='dark']) .hljs-property,
+:global(:root[data-guaxi-theme='dark']) .hljs-params {
   color: #ffa657 !important;
 }
 
 .dark-mode .hljs-subst,
 .dark-mode .hljs-operator,
-.dark-mode .hljs-punctuation {
+.dark-mode .hljs-punctuation,
+:global(:root[data-guaxi-theme='dark']) .hljs-subst,
+:global(:root[data-guaxi-theme='dark']) .hljs-operator,
+:global(:root[data-guaxi-theme='dark']) .hljs-punctuation {
   color: #c9d1d9 !important;
 }
 
 .dark-mode .hljs-meta,
 .dark-mode .hljs-tag,
-.dark-mode .hljs-name {
+.dark-mode .hljs-name,
+:global(:root[data-guaxi-theme='dark']) .hljs-meta,
+:global(:root[data-guaxi-theme='dark']) .hljs-tag,
+:global(:root[data-guaxi-theme='dark']) .hljs-name {
   color: #7ee787;
 }
 
@@ -13070,28 +13349,72 @@ onUnmounted(() => {
   border-color: rgba(255, 255, 255, 0.1) !important;
 }
 
-table {
+.preview :deep(table) {
   width: 100%;
   border-collapse: collapse;
   border: 1px solid #ddd;
+  background: #ffffff;
+  color: #24292f;
 }
 
-th,
-td {
+.preview :deep(th),
+.preview :deep(td) {
   border: 1px solid #ddd;
   padding: 8px;
   text-align: center;
+  background: #ffffff;
+  color: #24292f;
 }
 
-th {
+.preview :deep(th) {
   background-color: #f4f4f4;
   font-weight: bold;
 }
 
-tr:nth-child(even) {
+.preview :deep(tr:nth-child(even) td) {
   background-color: #f9f9f9;
 }
 
+.preview :deep(input),
+.preview :deep(textarea),
+.preview :deep(select),
+.preview :deep([contenteditable='true']) {
+  background: var(--guaxi-content-bg, #ffffff);
+  color: var(--guaxi-text-primary, #1f2328);
+  border-color: var(--guaxi-border, #d0d7de);
+}
+
+:global(:root[data-guaxi-theme='dark']) .preview :deep(table) {
+  border-color: #30363d;
+  background: #0f1720;
+  color: #e6edf3;
+}
+
+:global(:root[data-guaxi-theme='dark']) .preview :deep(th),
+:global(:root[data-guaxi-theme='dark']) .preview :deep(td) {
+  border-color: #30363d;
+  background: #0f1720;
+  color: #e6edf3;
+}
+
+:global(:root[data-guaxi-theme='dark']) .preview :deep(th) {
+  background: #18222d;
+}
+
+:global(:root[data-guaxi-theme='dark']) .preview :deep(tr:nth-child(even) td) {
+  background: #131d27;
+}
+
+:global(:root[data-guaxi-theme='dark']) .preview :deep(input),
+:global(:root[data-guaxi-theme='dark']) .preview :deep(textarea),
+:global(:root[data-guaxi-theme='dark']) .preview :deep(select),
+:global(:root[data-guaxi-theme='dark']) .preview :deep([contenteditable='true']) {
+  background: #11161c;
+  color: #e6edf3;
+  border-color: #30363d;
+}
+
+.preview :deep(img),
 img {
   max-width: 100%;
   height: auto;
