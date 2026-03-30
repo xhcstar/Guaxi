@@ -24,6 +24,12 @@ const state = {
   originalConsole: null
 }
 
+const MERMAID_ARCHITECTURE_WARNING_PREFIX =
+  'Do not assign mappings to elements without corresponding data'
+const MERMAID_ARCHITECTURE_WARNING_HINT =
+  'property `label` with data field `label`'
+let mermaidArchitectureWarningSuppressCount = 0
+
 function normalizeLevel(level) {
   const v = String(level || '').toLowerCase()
   if (v === 'log') return 'info'
@@ -75,6 +81,16 @@ function stringifyArg(arg) {
 function formatMessage(args) {
   if (!Array.isArray(args) || args.length === 0) return ''
   return args.map(stringifyArg).join(' ')
+}
+
+function shouldSuppressKnownWarn(args) {
+  const message = formatMessage(args)
+  if (!message) return false
+
+  return (
+    message.includes(MERMAID_ARCHITECTURE_WARNING_PREFIX) &&
+    message.includes(MERMAID_ARCHITECTURE_WARNING_HINT)
+  )
 }
 
 function enqueue(entry) {
@@ -156,6 +172,24 @@ function patchConsole() {
   }
 
   console.warn = (...args) => {
+    if (shouldSuppressKnownWarn(args)) {
+      mermaidArchitectureWarningSuppressCount += 1
+
+      // 只过滤 Mermaid architecture 图内部由 cytoscape 打出的这条已知上游告警，
+      // 其它 warn 仍然原样透传，避免误伤真正的业务问题。
+      if (mermaidArchitectureWarningSuppressCount === 1 || mermaidArchitectureWarningSuppressCount % 20 === 0) {
+        enqueue({
+          level: 'debug',
+          scope: state.scope,
+          message: '[FrontendLogger] suppressed known Mermaid architecture warning',
+          fields: {
+            suppressCount: mermaidArchitectureWarningSuppressCount
+          }
+        })
+      }
+      return
+    }
+
     orig.warn?.(...args)
     enqueue({ level: 'warn', scope: state.scope, message: formatMessage(args) })
   }
