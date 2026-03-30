@@ -54,15 +54,6 @@ pub struct SlidevEnvStatus {
     pub cli_path: Option<String>,
 }
 
-fn exe_dir() -> Result<PathBuf, String> {
-    let current_exe = std::env::current_exe().map_err(|e| format!("无法获取 exe 路径: {e}"))?;
-    let dir = current_exe
-        .parent()
-        .ok_or_else(|| "无法获取 exe 所在目录".to_string())?
-        .to_path_buf();
-    Ok(dir)
-}
-
 fn expected_slidev_env_root() -> Result<PathBuf, String> {
     bundled_resources::ensure_relative_dir("utils/SlidevEnv")
 }

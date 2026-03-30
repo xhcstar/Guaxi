@@ -93,7 +93,7 @@ fn pick_free_port() -> Result<u16, String> {
     Ok(port)
 }
 
-fn resolve_marker_source_dir(exe_dir: &Path) -> Result<PathBuf, String> {
+fn resolve_marker_source_dir() -> Result<PathBuf, String> {
     let p = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
     if p.exists() {
         info!(
@@ -179,12 +179,7 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         }
     }
 
-    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = current_exe
-        .parent()
-        .ok_or_else(|| "Failed to get parent directory of exe".to_string())?;
-
-    let marker_src_dir = resolve_marker_source_dir(exe_dir)?;
+    let marker_src_dir = resolve_marker_source_dir()?;
     let python_path = resolve_marker_python_path(&marker_src_dir)?
         .to_string_lossy()
         .to_string();
@@ -866,7 +861,7 @@ pub async fn convert_to_markdown(
         .parent()
         .ok_or_else(|| "Failed to get parent directory of exe".to_string())?;
 
-    let marker_src_dir = resolve_marker_source_dir(exe_dir)?;
+    let marker_src_dir = resolve_marker_source_dir()?;
     let python_path = resolve_marker_python_path(&marker_src_dir)?
         .to_string_lossy()
         .to_string();
@@ -1198,12 +1193,6 @@ pub async fn export_markdown_pdf_pandoc(
 }
 
 fn find_tectonic_exe_for_export() -> Result<(PathBuf, bool), String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("Failed to get current exe path: {e}"))?;
-    let exe_dir = current_exe
-        .parent()
-        .ok_or_else(|| "Failed to get parent directory of exe".to_string())?;
-
     #[cfg(windows)]
     {
         let bundled = bundled_resources::ensure_relative_dir("utils/tectonic.exe")?;

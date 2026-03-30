@@ -525,7 +525,7 @@ fn cleanup_modelscope_download_dir(local_dir: &Path) {
     }
 }
 
-fn run_modelscope_download(exe_dir: &Path, local_dir: &Path) -> Result<(), String> {
+fn run_modelscope_download(local_dir: &Path) -> Result<(), String> {
     let _ = bundled_resources::ensure_relative_dir("utils/python_libs")?;
     let marker_src_dir = bundled_resources::ensure_relative_dir("utils/MarkdownConvertor/marker-1.10.1")?;
     if !marker_src_dir.exists() {
@@ -565,7 +565,7 @@ fn run_modelscope_download(exe_dir: &Path, local_dir: &Path) -> Result<(), Strin
         p
     };
 
-    let script_path = exe_dir.join("scripts").join("modelscope_download.py");
+    let script_path = bundled_resources::ensure_relative_dir("scripts/modelscope_download.py")?;
     if !script_path.is_file() {
         return Err(format!(
             "modelscope 下载脚本不存在: {}",
@@ -1650,11 +1650,9 @@ pub async fn download_local_deepseek_model() -> Result<String, String> {
         .to_path_buf();
     fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
 
-    let exe_for_modelscope = exe.clone();
     let parent_for_modelscope = parent.clone();
-    let modelscope_result = tauri::async_runtime::spawn_blocking(move || {
-        run_modelscope_download(&exe_for_modelscope, &parent_for_modelscope)
-    })
+    let modelscope_result =
+        tauri::async_runtime::spawn_blocking(move || run_modelscope_download(&parent_for_modelscope))
     .await
     .map_err(|e| e.to_string())?;
 
