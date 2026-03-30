@@ -241,15 +241,15 @@
 
               <div class="python-runtime-meta">
                 <div class="python-runtime-meta__item">
-                  <span class="python-runtime-meta__label">解释器</span>
+                  <span class="python-runtime-meta__label">Guaxi Python</span>
                   <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.version || '未就绪' }}</span>
                 </div>
                 <div class="python-runtime-meta__item">
-                  <span class="python-runtime-meta__label">来源</span>
-                  <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.source || '未知' }}</span>
+                  <span class="python-runtime-meta__label">运行时状态</span>
+                  <span class="python-runtime-meta__value">{{ pythonRuntimeRuntimeLabel }}</span>
                 </div>
                 <div class="python-runtime-meta__item">
-                  <span class="python-runtime-meta__label">Pip</span>
+                  <span class="python-runtime-meta__label">包管理</span>
                   <span class="python-runtime-meta__value">{{ pythonRuntimeStatus?.pip_version || '未检测' }}</span>
                 </div>
                 <div class="python-runtime-meta__item">
@@ -258,17 +258,59 @@
                 </div>
               </div>
 
+              <div class="python-runtime-guide" :class="{ 'needs-setup': pythonRuntimeNeedsSetup }">
+                <div class="python-runtime-guide__title">
+                  {{ pythonRuntimeNeedsSetup ? '首次使用引导' : '运行时状态' }}
+                </div>
+                <div class="python-runtime-guide__text">
+                  <template v-if="pythonRuntimeNeedsSetup">
+                    推荐先导入 Guaxi 专属 Python 运行时压缩包，再执行初始化。初始化完成后，这套环境会作为软件内统一 Python 基础设施供各模块复用。
+                  </template>
+                  <template v-else>
+                    当前显示的是 Guaxi 自己管理的 Python 配置，可直接用于 Python Cell、数据表格导入导出与后续模块复用。
+                  </template>
+                </div>
+                <div class="python-runtime-guide__paths">
+                  <div class="python-runtime-guide__path">
+                    <span class="python-runtime-guide__path-label">运行时目录</span>
+                    <code class="python-runtime-guide__path-value">{{ pythonRuntimeStatus?.runtime_dir || 'utils/python_runtime' }}</code>
+                  </div>
+                  <div class="python-runtime-guide__path">
+                    <span class="python-runtime-guide__path-label">初始化标记</span>
+                    <code class="python-runtime-guide__path-value">{{ pythonRuntimeStatus?.runtime_marker_path || 'runtime.json' }}</code>
+                  </div>
+                </div>
+                <div class="python-runtime-guide__steps">
+                  <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.bundled_runtime_present }">1. 导入压缩包</span>
+                  <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.initialized }">2. 初始化环境</span>
+                  <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.pip_version }">3. Pip 就绪</span>
+                  <span class="python-runtime-guide__step" :class="{ done: pythonRuntimeStatus?.worker_alive }">4. Worker 在线</span>
+                </div>
+              </div>
+
+              <div v-if="pythonRuntimeArchiveInspection" class="python-runtime-archive-card">
+                <div class="python-runtime-archive-card__title">待导入压缩包</div>
+                <div class="python-runtime-archive-card__path">{{ pythonRuntimeArchivePath }}</div>
+                <div class="python-runtime-archive-card__meta">
+                  <span>入口：{{ pythonRuntimeArchiveInspection?.python_entry_found ? '已检测到' : '未检测到' }}</span>
+                  <span>候选数：{{ pythonRuntimeArchiveInspection?.candidate_count || 0 }}</span>
+                </div>
+                <div v-if="pythonRuntimeArchiveInspection?.warnings?.length" class="python-runtime-archive-card__warnings">
+                  <span v-for="warning in pythonRuntimeArchiveInspection.warnings" :key="warning">{{ warning }}</span>
+                </div>
+              </div>
+
               <div class="python-runtime-actions">
-                <button type="button" class="python-runtime-chip-btn" @click="initializePythonRuntime">
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="initializePythonRuntime">
                   初始化环境
                 </button>
-                <button type="button" class="python-runtime-chip-btn" @click="installPythonRuntimeArchive">
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="installPythonRuntimeArchive">
                   导入运行时压缩包
                 </button>
-                <button type="button" class="python-runtime-chip-btn" @click="insertPythonTableImportSnippet">
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="insertPythonTableImportSnippet">
                   导入表格代码
                 </button>
-                <button type="button" class="python-runtime-chip-btn" @click="resetPythonKernelSession">
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="resetPythonKernelSession">
                   重启会话
                 </button>
               </div>
@@ -280,6 +322,23 @@
                   :disabled="pythonRuntimeBusy || !pythonRuntimePackageInput.trim()" @click="installPythonRuntimePackages">
                   安装
                 </button>
+              </div>
+
+              <div class="python-runtime-packages">
+                <div class="python-runtime-packages__title">推荐扩展包</div>
+                <div class="python-runtime-packages__list">
+                  <button
+                    v-for="pkg in PYTHON_RUNTIME_RECOMMENDED_PACKAGES"
+                    :key="pkg.value"
+                    type="button"
+                    class="python-runtime-package-pill python-runtime-package-pill--button"
+                    :disabled="pythonRuntimeBusy"
+                    :title="pkg.description"
+                    @click="installRecommendedPythonPackage(pkg.value)"
+                  >
+                    {{ pkg.label }}
+                  </button>
+                </div>
               </div>
 
               <div v-if="pythonRuntimeStatus?.packages?.length" class="python-runtime-packages">
@@ -796,6 +855,14 @@ const pythonRuntimePopoverVisible = ref(false)
 const pythonRuntimeBusy = ref(false)
 const pythonRuntimeStatus = ref(null)
 const pythonRuntimePackageInput = ref('')
+const pythonRuntimeArchivePath = ref('')
+const pythonRuntimeArchiveInspection = ref(null)
+const PYTHON_RUNTIME_RECOMMENDED_PACKAGES = [
+  { label: 'pandas', value: 'pandas', description: '数据表格与文件导入导出' },
+  { label: 'matplotlib', value: 'matplotlib', description: '图像与绘图输出' },
+  { label: 'openpyxl', value: 'openpyxl', description: 'Excel 读写支持' },
+  { label: 'ipython', value: 'ipython', description: '增强交互体验与调试' },
+]
 const getMonacoThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'guaxi-dark' : 'guaxi-light')
 const getMarkdownPreviewThemeName = () => (settingsStore.appearanceTheme === 'dark' ? 'dark' : 'default')
 let previewMermaidRenderSeq = 0
@@ -2420,16 +2487,53 @@ const rightTabs = computed(() => {
 
 
 const message = useMessage()
+// 统一的空状态对象，避免工作台在首次打开或安装失败后出现字段缺失。
+const createEmptyPythonRuntimeStatus = () => ({
+  ready: false,
+  source: '',
+  python_path: '',
+  runtime_dir: '',
+  version: '',
+  pip_version: '',
+  worker_alive: false,
+  packages: [],
+  bundled_runtime_present: false,
+  initialized: false,
+  worker_script_ready: false,
+  runtime_marker_path: '',
+})
 const pythonRuntimeStatusClass = computed(() => {
   const source = String(pythonRuntimeStatus.value?.source || '').trim()
   if (!pythonRuntimeStatus.value?.ready) return 'is-missing'
   if (source === 'bundled') return 'is-bundled'
   return 'is-system'
 })
+const pythonRuntimeSourceLabel = computed(() => {
+  const source = String(pythonRuntimeStatus.value?.source || '').trim()
+  if (source === 'bundled') return 'Guaxi 专属运行时'
+  if (pythonRuntimeStatus.value?.initialized) return 'Guaxi 已接管运行时'
+  if (source) return '等待导入 Guaxi 运行时'
+  return '未检测'
+})
+const pythonRuntimeRuntimeLabel = computed(() => {
+  if (pythonRuntimeStatus.value?.bundled_runtime_present) {
+    return pythonRuntimeStatus.value?.initialized ? 'Guaxi 专属环境已就绪' : 'Guaxi 专属环境待初始化'
+  }
+  if (pythonRuntimeStatus.value?.ready) {
+    return pythonRuntimeStatus.value?.initialized ? 'Guaxi 托管环境已就绪' : 'Guaxi 托管环境待初始化'
+  }
+  return '尚未接入'
+})
+const pythonRuntimeNeedsSetup = computed(() => {
+  const status = pythonRuntimeStatus.value
+  if (!status?.ready) return true
+  if (status.source === 'bundled') return !status.initialized || !status.worker_script_ready
+  return !status.initialized
+})
 const pythonRuntimeSummary = computed(() => {
   if (pythonRuntimeBusy.value) return '正在同步 Python 环境状态'
   if (!pythonRuntimeStatus.value?.ready) return '当前尚未检测到独立 Python 环境，可导入压缩包或初始化系统解释器'
-  const sourceLabel = pythonRuntimeStatus.value?.source === 'bundled' ? '独立运行时' : '系统解释器'
+  const sourceLabel = pythonRuntimeSourceLabel.value
   const workerLabel = pythonRuntimeStatus.value?.worker_alive ? 'Worker 已连接' : 'Worker 待启动'
   return `${sourceLabel} · ${workerLabel}`
 })
@@ -9562,6 +9666,218 @@ const syncEditorToLine = (lineNumber, { focus = true } = {}) => {
   }
 };
 
+const splitPackageNames = (value) => Array.from(new Set(
+  String(value || '')
+    .split(/[\s,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+))
+
+const insertSnippetAtCursor = (snippet) => {
+  const targetEditor = mode.value === 'preview' ? secondaryEditor || editor : editor || secondaryEditor
+  const model = targetEditor?.getModel?.()
+  if (!targetEditor || !model) {
+    updateEditorContent(`${String(rawContent.value || '')}\n${snippet}`)
+    return
+  }
+
+  const selection = targetEditor.getSelection()
+  const range = selection || new monaco.Range(
+    model.getLineCount(),
+    model.getLineMaxColumn(model.getLineCount()),
+    model.getLineCount(),
+    model.getLineMaxColumn(model.getLineCount())
+  )
+
+  targetEditor.executeEdits('python-runtime-snippet', [{ range, text: snippet, forceMoveMarkers: true }])
+  targetEditor.focus?.()
+}
+
+const refreshPythonRuntimeStatus = async (reason = 'manual') => {
+  pythonRuntimeBusy.value = true
+  try {
+    logger.info('[PythonRuntime] refresh status', { reason })
+    const status = await invoke('python_runtime_get_status')
+    pythonRuntimeStatus.value = status || createEmptyPythonRuntimeStatus()
+    logger.info('[PythonRuntime] status loaded', {
+      reason,
+      source: status?.source || '',
+      workerAlive: !!status?.worker_alive,
+      packageCount: Array.isArray(status?.packages) ? status.packages.length : 0,
+      initialized: !!status?.initialized,
+      bundledRuntimePresent: !!status?.bundled_runtime_present,
+    })
+  } catch (error) {
+    pythonRuntimeStatus.value = createEmptyPythonRuntimeStatus()
+    logger.warn('[PythonRuntime] load status failed', { reason, error })
+  } finally {
+    pythonRuntimeBusy.value = false
+  }
+}
+
+const handlePythonRuntimePopoverUpdateShow = (show) => {
+  pythonRuntimePopoverVisible.value = !!show
+  if (show) {
+    void refreshPythonRuntimeStatus('popover-open')
+  }
+}
+
+const initializePythonRuntime = async () => {
+  pythonRuntimeBusy.value = true
+  try {
+    logger.info('[PythonRuntime] initialize requested')
+    const res = await invoke('python_runtime_initialize')
+    logger.info('[PythonRuntime] initialize completed', {
+      runtimeDir: res?.runtime_dir || '',
+      pythonPath: res?.python_path || '',
+    })
+    message.success('Python 运行时已初始化')
+    await refreshPythonRuntimeStatus('initialized')
+  } catch (error) {
+    logger.error('[PythonRuntime] initialize failed', error)
+    message.error(`初始化失败：${String(error?.message || error)}`)
+  } finally {
+    pythonRuntimeBusy.value = false
+  }
+}
+
+const installPythonPackages = async (packages, reason = 'manual') => {
+  const normalizedPackages = splitPackageNames(Array.isArray(packages) ? packages.join(' ') : packages)
+  if (!normalizedPackages.length) {
+    message.warning('请输入要安装的 Python 包')
+    return
+  }
+
+  pythonRuntimeBusy.value = true
+  try {
+    logger.info('[PythonRuntime] install packages start', { packages: normalizedPackages, reason })
+    const res = await invoke('python_runtime_install_packages', { request: { packages: normalizedPackages } })
+    if (res?.ok) {
+      message.success(`已安装 ${normalizedPackages.join(', ')}`)
+      pythonRuntimePackageInput.value = ''
+      await refreshPythonRuntimeStatus(`packages-installed:${reason}`)
+    } else {
+      const errorText = String(res?.stderr || res?.stdout || '安装失败')
+      message.error(errorText)
+    }
+  } catch (error) {
+    logger.error('[PythonRuntime] install packages failed', { reason, error })
+    message.error(`安装失败：${String(error?.message || error)}`)
+  } finally {
+    pythonRuntimeBusy.value = false
+  }
+}
+
+const installRecommendedPythonPackage = async (pkg) => {
+  await installPythonPackages([pkg], `recommended:${pkg}`)
+}
+
+const installPythonRuntimeArchive = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'ZIP', extensions: ['zip'] }],
+    })
+    if (!selected || Array.isArray(selected)) return
+
+    pythonRuntimeBusy.value = true
+    pythonRuntimeArchivePath.value = String(selected)
+    // 先检查压缩包内容，再决定是否覆盖现有运行时，尽量把误操作风险挡在前面。
+    logger.info('[PythonRuntime] inspect archive start', { archivePath: String(selected) })
+    const inspection = await invoke('python_runtime_inspect_archive', { archivePath: String(selected) })
+    pythonRuntimeArchiveInspection.value = inspection || null
+    logger.info('[PythonRuntime] inspect archive completed', {
+      archivePath: String(selected),
+      pythonEntryFound: !!inspection?.python_entry_found,
+      candidateCount: Number(inspection?.candidate_count || 0),
+      warningCount: Array.isArray(inspection?.warnings) ? inspection.warnings.length : 0,
+    })
+
+    if (!inspection?.python_entry_found) {
+      message.error('所选压缩包中没有检测到可用的 Python 解释器，请重新选择。')
+      return
+    }
+
+    if (pythonRuntimeStatus.value?.bundled_runtime_present) {
+      const shouldReplace = await confirmDialog(
+        '当前已存在独立 Python 运行时，继续导入会覆盖 utils/python_runtime 中的现有内容，是否继续？',
+        {
+          title: '覆盖 Python 运行时',
+          kind: 'warning',
+          okLabel: '继续覆盖',
+          cancelLabel: '取消',
+        }
+      )
+      if (!shouldReplace) {
+        logger.info('[PythonRuntime] archive install cancelled by user', { archivePath: String(selected) })
+        return
+      }
+    }
+
+    logger.info('[PythonRuntime] install archive start', { archivePath: String(selected) })
+    await invoke('python_runtime_install_archive', { archivePath: String(selected) })
+    message.success('Python 运行时压缩包已导入')
+    await initializePythonRuntime()
+  } catch (error) {
+    logger.error('[PythonRuntime] install archive failed', error)
+    message.error(`导入运行时失败：${String(error?.message || error)}`)
+  } finally {
+    pythonRuntimeBusy.value = false
+  }
+}
+
+const installPythonRuntimePackages = async () => {
+  await installPythonPackages(pythonRuntimePackageInput.value, 'manual-input')
+}
+
+const resetPythonKernelSession = async () => {
+  pythonRuntimeBusy.value = true
+  try {
+    await invoke('python_reset_repl')
+    message.success('Python 会话已重启')
+    await refreshPythonRuntimeStatus('reset-session')
+  } catch (error) {
+    logger.error('[PythonRuntime] reset session failed', error)
+    message.error(`重启会话失败：${String(error?.message || error)}`)
+  } finally {
+    pythonRuntimeBusy.value = false
+  }
+}
+
+const insertPythonTableImportSnippet = async () => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{
+        name: 'Table',
+        extensions: ['csv', 'tsv', 'json', 'xlsx', 'xls', 'parquet'],
+      }],
+    })
+    if (!selected || Array.isArray(selected)) return
+
+    const normalized = String(selected).replace(/\\/g, '\\\\')
+    const lower = normalized.toLowerCase()
+    let reader = 'pd.read_csv'
+    let readerArgs = ''
+    if (lower.endsWith('.tsv')) {
+      readerArgs = ", sep='\\t'"
+    } else if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+      reader = 'pd.read_excel'
+    } else if (lower.endsWith('.json')) {
+      reader = 'pd.read_json'
+    } else if (lower.endsWith('.parquet')) {
+      reader = 'pd.read_parquet'
+    }
+
+    const snippet = `import pandas as pd\n\ndf = ${reader}(r"${normalized}"${readerArgs})\ndf\n`
+    insertSnippetAtCursor(snippet)
+    message.success('已插入表格导入代码')
+  } catch (error) {
+    logger.warn('[PythonRuntime] insert table import snippet failed', error)
+    message.error(`插入导入代码失败：${String(error?.message || error)}`)
+  }
+}
+
 const handlePreviewClick = async (e) => {
   const base = e?.target instanceof Element ? e.target : e?.target?.parentElement;
   if (!base) return;
@@ -9652,24 +9968,17 @@ const handlePreviewClick = async (e) => {
     try {
       logger.info('[PythonRuntime] refresh status', { reason })
       const status = await invoke('python_runtime_get_status')
-      pythonRuntimeStatus.value = status || null
+      pythonRuntimeStatus.value = status || createEmptyPythonRuntimeStatus()
       logger.info('[PythonRuntime] status loaded', {
         reason,
         source: status?.source || '',
         workerAlive: !!status?.worker_alive,
         packageCount: Array.isArray(status?.packages) ? status.packages.length : 0,
+        initialized: !!status?.initialized,
+        bundledRuntimePresent: !!status?.bundled_runtime_present,
       })
     } catch (error) {
-      pythonRuntimeStatus.value = {
-        ready: false,
-        source: '',
-        python_path: '',
-        runtime_dir: '',
-        version: '',
-        pip_version: '',
-        worker_alive: false,
-        packages: [],
-      }
+      pythonRuntimeStatus.value = createEmptyPythonRuntimeStatus()
       logger.warn('[PythonRuntime] load status failed', { reason, error })
     } finally {
       pythonRuntimeBusy.value = false
@@ -9702,6 +10011,37 @@ const handlePreviewClick = async (e) => {
     }
   }
 
+  const installPythonPackages = async (packages, reason = 'manual') => {
+    const normalizedPackages = splitPackageNames(Array.isArray(packages) ? packages.join(' ') : packages)
+    if (!normalizedPackages.length) {
+      message.warning('请输入要安装的 Python 包')
+      return
+    }
+
+    pythonRuntimeBusy.value = true
+    try {
+      logger.info('[PythonRuntime] install packages start', { packages: normalizedPackages, reason })
+      const res = await invoke('python_runtime_install_packages', { request: { packages: normalizedPackages } })
+      if (res?.ok) {
+        message.success(`已安装 ${normalizedPackages.join(', ')}`)
+        pythonRuntimePackageInput.value = ''
+        await refreshPythonRuntimeStatus(`packages-installed:${reason}`)
+      } else {
+        const errorText = String(res?.stderr || res?.stdout || '安装失败')
+        message.error(errorText)
+      }
+    } catch (error) {
+      logger.error('[PythonRuntime] install packages failed', { reason, error })
+      message.error(`安装失败：${String(error?.message || error)}`)
+    } finally {
+      pythonRuntimeBusy.value = false
+    }
+  }
+
+  const installRecommendedPythonPackage = async (pkg) => {
+    await installPythonPackages([pkg], `recommended:${pkg}`)
+  }
+
   const installPythonRuntimeArchive = async () => {
     try {
       const selected = await open({
@@ -9711,6 +10051,39 @@ const handlePreviewClick = async (e) => {
       if (!selected || Array.isArray(selected)) return
 
       pythonRuntimeBusy.value = true
+      pythonRuntimeArchivePath.value = String(selected)
+      // 先检查压缩包内容，再决定是否覆盖现有运行时，尽量把误操作风险挡在前面。
+      logger.info('[PythonRuntime] inspect archive start', { archivePath: String(selected) })
+      const inspection = await invoke('python_runtime_inspect_archive', { archivePath: String(selected) })
+      pythonRuntimeArchiveInspection.value = inspection || null
+      logger.info('[PythonRuntime] inspect archive completed', {
+        archivePath: String(selected),
+        pythonEntryFound: !!inspection?.python_entry_found,
+        candidateCount: Number(inspection?.candidate_count || 0),
+        warningCount: Array.isArray(inspection?.warnings) ? inspection.warnings.length : 0,
+      })
+
+      if (!inspection?.python_entry_found) {
+        message.error('所选压缩包中没有检测到可用的 Python 解释器，请重新选择。')
+        return
+      }
+
+      if (pythonRuntimeStatus.value?.bundled_runtime_present) {
+        const shouldReplace = await confirmDialog(
+          '当前已存在独立 Python 运行时，继续导入会覆盖 utils/python_runtime 中的现有内容，是否继续？',
+          {
+            title: '覆盖 Python 运行时',
+            kind: 'warning',
+            okLabel: '继续覆盖',
+            cancelLabel: '取消',
+          }
+        )
+        if (!shouldReplace) {
+          logger.info('[PythonRuntime] archive install cancelled by user', { archivePath: String(selected) })
+          return
+        }
+      }
+
       logger.info('[PythonRuntime] install archive start', { archivePath: String(selected) })
       await invoke('python_runtime_install_archive', { archivePath: String(selected) })
       message.success('Python 运行时压缩包已导入')
@@ -9724,30 +10097,7 @@ const handlePreviewClick = async (e) => {
   }
 
   const installPythonRuntimePackages = async () => {
-    const packages = splitPackageNames(pythonRuntimePackageInput.value)
-    if (!packages.length) {
-      message.warning('请输入要安装的 Python 包')
-      return
-    }
-
-    pythonRuntimeBusy.value = true
-    try {
-      logger.info('[PythonRuntime] install packages start', { packages })
-      const res = await invoke('python_runtime_install_packages', { request: { packages } })
-      if (res?.ok) {
-        message.success(`已安装 ${packages.join(', ')}`)
-        pythonRuntimePackageInput.value = ''
-        await refreshPythonRuntimeStatus('packages-installed')
-      } else {
-        const errorText = String(res?.stderr || res?.stdout || '安装失败')
-        message.error(errorText)
-      }
-    } catch (error) {
-      logger.error('[PythonRuntime] install packages failed', error)
-      message.error(`安装失败：${String(error?.message || error)}`)
-    } finally {
-      pythonRuntimeBusy.value = false
-    }
+    await installPythonPackages(pythonRuntimePackageInput.value, 'manual-input')
   }
 
   const resetPythonKernelSession = async () => {
@@ -12987,6 +13337,29 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: min(50vh, calc(100dvh - 140px));
+  overflow-y: auto;
+  padding-right: 4px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.38) transparent;
+}
+
+.python-runtime-popover::-webkit-scrollbar {
+  width: 7px;
+}
+
+.python-runtime-popover::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.python-runtime-popover::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 120, 0.35);
+  border-radius: 999px;
+}
+
+.python-runtime-popover::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 120, 0.52);
 }
 
 .python-runtime-popover__header {
@@ -13059,6 +13432,97 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
+.python-runtime-guide,
+.python-runtime-archive-card {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 88%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--guaxi-panel-bg) 96%, #8fd8ff 4%), var(--guaxi-panel-bg));
+}
+
+.python-runtime-guide.needs-setup {
+  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 45%, var(--guaxi-border));
+  box-shadow: 0 10px 24px rgba(74, 202, 219, 0.08);
+}
+
+.python-runtime-guide__title,
+.python-runtime-archive-card__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-guide__text,
+.python-runtime-archive-card__meta,
+.python-runtime-archive-card__warnings {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-guide__paths {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.python-runtime-guide__path {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.python-runtime-guide__path-label {
+  font-size: 11px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-guide__path-value,
+.python-runtime-archive-card__path {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--guaxi-content-bg) 88%, white 12%);
+  color: var(--guaxi-text-primary);
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.python-runtime-guide__steps {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.python-runtime-guide__step {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 88%, transparent);
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 88%, transparent);
+}
+
+.python-runtime-guide__step.done {
+  color: #12743b;
+  border-color: rgba(24, 160, 88, 0.32);
+  background: rgba(24, 160, 88, 0.1);
+}
+
+.python-runtime-archive-card__meta,
+.python-runtime-archive-card__warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .python-runtime-actions {
   display: flex;
   gap: 8px;
@@ -13068,6 +13532,15 @@ onUnmounted(() => {
 .python-runtime-chip-btn {
   min-height: 32px;
   padding: 0 12px;
+  white-space: nowrap;
+}
+
+.python-runtime-chip-btn[disabled],
+.python-runtime-ghost-btn[disabled],
+.python-runtime-package-pill--button[disabled] {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .python-runtime-install {
@@ -13126,6 +13599,17 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
   color: var(--guaxi-text-primary);
   font-size: 12px;
+}
+
+.python-runtime-package-pill--button {
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.python-runtime-package-pill--button:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 80%, var(--primary-color, #4acadb));
+  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 45%, var(--guaxi-border));
 }
 
 .mode-toggle {
@@ -13370,16 +13854,14 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #ffffff;
+  /* 直接使用主题变量，避免首次启动暗色模式时先渲染出白色编辑器底。 */
+  background: var(--guaxi-content-bg, #ffffff);
+  color: var(--guaxi-text-primary, #1f2328);
 }
 
 .editor-container {
-  background: #ffffff;
-}
-
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper,
-:global(:root[data-guaxi-theme='dark']) .editor-container {
-  background: transparent;
+  background: var(--guaxi-content-bg, #ffffff);
+  color: var(--guaxi-text-primary, #1f2328);
 }
 
 .editor-wrapper :deep(.monaco-scrollable-element) {
@@ -14394,7 +14876,9 @@ onUnmounted(() => {
 }
 
 :global(:root[data-guaxi-theme='dark']) .python-runtime-meta__item,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill {
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-guide,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card {
   border-color: rgba(71, 85, 105, 0.72);
   background: rgba(15, 23, 42, 0.68);
 }
@@ -14407,6 +14891,22 @@ onUnmounted(() => {
   border-color: rgba(71, 85, 105, 0.72);
   background: rgba(15, 23, 42, 0.72);
   color: #e6edf3;
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-runtime-guide__path-value,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card__path {
+  background: rgba(2, 6, 23, 0.42);
+  color: #e6edf3;
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-runtime-guide__step.done {
+  color: #8af0b4;
+  border-color: rgba(74, 222, 128, 0.26);
+  background: rgba(22, 101, 52, 0.28);
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill--button:hover {
+  background: rgba(30, 41, 59, 0.96);
 }
 
 :global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn:hover {

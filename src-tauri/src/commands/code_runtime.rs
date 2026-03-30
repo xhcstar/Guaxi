@@ -45,6 +45,10 @@ pub struct PythonRuntimeStatus {
     pub pip_version: String,
     pub worker_alive: bool,
     pub packages: Vec<String>,
+    pub bundled_runtime_present: bool,
+    pub initialized: bool,
+    pub worker_script_ready: bool,
+    pub runtime_marker_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +68,15 @@ pub struct PythonRuntimeInitResponse {
     pub runtime_dir: String,
     pub python_path: String,
     pub pip_version: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PythonRuntimeArchiveInspection {
+    pub archive_path: String,
+    pub packaged_runtime_dir: String,
+    pub python_entry_found: bool,
+    pub candidate_count: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +214,65 @@ fn bundled_python_candidates(runtime_dir: &Path) -> Vec<PathBuf> {
             runtime_dir.join("python"),
         ]
     }
+}
+
+fn runtime_marker_path(runtime_dir: &Path) -> PathBuf {
+    // runtime.json 作为桌面端“已完成初始化”的稳定标记，方便前端和后续模块复用。
+    runtime_dir.join("runtime.json")
+}
+
+fn runtime_is_initialized(runtime_dir: &Path) -> bool {
+    runtime_marker_path(runtime_dir).is_file()
+}
+
+fn worker_script_ready(runtime_dir: &Path) -> bool {
+    runtime_dir.join(PY_WORKER_FILE_NAME).is_file()
+}
+
+fn inspect_runtime_archive_path(zip_path: &Path) -> Result<PythonRuntimeArchiveInspection, String> {
+    // 安装前先做一次轻量检查，避免把不完整压缩包直接覆盖到 utils/python_runtime。
+    let exe_root = exe_dir()?;
+    let temp_dir = exe_root
+        .join("tmp")
+        .join(format!("python_runtime_inspect_{}", Uuid::new_v4()));
+
+    remove_path_if_exists(&temp_dir)?;
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    let result: Result<PythonRuntimeArchiveInspection, String> = (|| {
+        info!(
+            archive_path = zip_path.to_string_lossy().as_ref(),
+            temp_dir = temp_dir.to_string_lossy().as_ref(),
+            "[PythonRuntime] inspecting runtime archive"
+        );
+
+        extract_zip_to_dir(zip_path, &temp_dir)?;
+        let packaged_runtime_dir = find_dir_by_name(&temp_dir, "python_runtime", 5)
+            .unwrap_or_else(|| temp_dir.clone());
+        let candidate_count = bundled_python_candidates(&packaged_runtime_dir)
+            .into_iter()
+            .filter(|candidate| candidate.is_file())
+            .count();
+
+        let mut warnings = Vec::new();
+        if candidate_count == 0 {
+            warnings.push("压缩包内未检测到可用的 Python 解释器入口。".to_string());
+        }
+        if packaged_runtime_dir == temp_dir {
+            warnings.push("未在压缩包内找到 python_runtime 目录，将直接使用压缩包根目录。".to_string());
+        }
+
+        Ok(PythonRuntimeArchiveInspection {
+            archive_path: zip_path.to_string_lossy().to_string(),
+            packaged_runtime_dir: packaged_runtime_dir.to_string_lossy().to_string(),
+            python_entry_found: candidate_count > 0,
+            candidate_count,
+            warnings,
+        })
+    })();
+
+    let _ = remove_path_if_exists(&temp_dir);
+    result
 }
 
 fn command_output_trimmed(mut command: Command) -> Result<String, String> {
@@ -510,6 +582,11 @@ pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, Strin
 pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let spec = resolve_python_launch_spec()?;
+        let runtime_dir = spec.runtime_dir.clone();
+        let runtime_marker = runtime_marker_path(&runtime_dir);
+        let bundled_runtime_present = bundled_python_candidates(&runtime_dir)
+            .into_iter()
+            .any(|candidate| candidate.is_file());
 
         let mut version_cmd = Command::new(&spec.program);
         version_cmd.args(&spec.base_args).arg("--version");
@@ -531,11 +608,15 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
             ready: true,
             source: spec.source,
             python_path: spec.program,
-            runtime_dir: spec.runtime_dir.to_string_lossy().to_string(),
+            runtime_dir: runtime_dir.to_string_lossy().to_string(),
             version,
             pip_version,
             worker_alive,
             packages,
+            bundled_runtime_present,
+            initialized: runtime_is_initialized(&runtime_dir),
+            worker_script_ready: worker_script_ready(&runtime_dir),
+            runtime_marker_path: runtime_marker.to_string_lossy().to_string(),
         })
     })
     .await
@@ -551,7 +632,7 @@ pub async fn python_runtime_initialize() -> Result<PythonRuntimeInitResponse, St
         clear_python_worker()?;
         let _ = with_python_worker(|_| Ok(()))?;
 
-        let marker_path = spec.runtime_dir.join("runtime.json");
+        let marker_path = runtime_marker_path(&spec.runtime_dir);
         let marker = json!({
             "python_path": spec.program,
             "source": spec.source,
@@ -574,6 +655,35 @@ pub async fn python_runtime_initialize() -> Result<PythonRuntimeInitResponse, St
     })
     .await
     .map_err(|e| format!("python_runtime_initialize join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_inspect_archive(
+    archive_path: String,
+) -> Result<PythonRuntimeArchiveInspection, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let trimmed = archive_path.trim();
+        if trimmed.is_empty() {
+            return Err("archive_path is empty".to_string());
+        }
+
+        let zip_path = PathBuf::from(trimmed);
+        if !zip_path.is_file() {
+            return Err(format!("找不到 Python 运行时压缩包: {}", zip_path.to_string_lossy()));
+        }
+        if !zip_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
+            return Err("Python 运行时压缩包仅支持 .zip".to_string());
+        }
+
+        inspect_runtime_archive_path(&zip_path)
+    })
+    .await
+    .map_err(|e| format!("python_runtime_inspect_archive join failed: {e}"))?
 }
 
 #[command]
