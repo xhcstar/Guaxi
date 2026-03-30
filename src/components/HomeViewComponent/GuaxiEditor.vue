@@ -9617,14 +9617,6 @@ const handlePreviewClick = async (e) => {
     media.style.justifyContent = 'center'
     media.style.position = 'relative'
 
-    const border = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-border') || '#e1e4e8'
-    const panelBg = getComputedStyle(document.documentElement).getPropertyValue('--guaxi-panel-bg') || '#fff'
-
-    media.style.border = `1px solid ${String(border).trim() || '#e1e4e8'}`
-    media.style.borderRadius = '8px'
-    media.style.padding = '10px'
-    media.style.background = String(panelBg).trim() || '#fff'
-
     if (afterEl && afterEl.parentNode) {
       afterEl.parentNode.insertBefore(media, afterEl.nextSibling)
     } else {
@@ -9634,9 +9626,108 @@ const handlePreviewClick = async (e) => {
     return media
   }
 
+  const createPdfToolbarIcon = (pathD, { viewBox = '0 0 24 24' } = {}) => {
+    return `
+      <svg viewBox="${viewBox}" aria-hidden="true" focusable="false">
+        <path d="${pathD}" fill="currentColor"></path>
+      </svg>
+    `
+  }
+
+  const PDF_TOOLBAR_ICONS = {
+    prev: createPdfToolbarIcon('M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z'),
+    next: createPdfToolbarIcon('m8.59 16.59 1.41 1.41 6-6-6-6-1.41 1.41L13.17 12z'),
+    zoomOut: createPdfToolbarIcon('M19 13H5v-2h14z'),
+    zoomIn: createPdfToolbarIcon('M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z'),
+    fitWidth: createPdfToolbarIcon('M3 5h6v2H5v4H3zm16 0h2v6h-2V7h-4V5zm0 14h-6v-2h4v-4h2zm-16 0v-6h2v4h4v2z'),
+    download: createPdfToolbarIcon('M5 20h14v-2H5zm7-18v10.17l3.59-3.58L17 10l-5 5-5-5 1.41-1.41L11 12.17V2z'),
+  }
+
+  const savePdfArtifactToFile = async (pdf, bytes) => {
+    const defaultName = String(pdf?.name || '').trim() || 'output.pdf'
+    try {
+      const outputPath = await save({
+        defaultPath: defaultName,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      })
+      if (!outputPath) {
+        logger.info('[CodeCell] pdf save cancelled', { defaultName })
+        return false
+      }
+
+      const { writeFile } = await import('@tauri-apps/plugin-fs')
+      await writeFile(outputPath, bytes)
+      logger.info('[CodeCell] pdf saved', { outputPath, bytes: bytes.length })
+      message.success('PDF 已保存')
+      return true
+    } catch (error) {
+      logger.error('[CodeCell] pdf save failed', error)
+      message.error(`PDF 保存失败：${String(error?.message || error)}`)
+      return false
+    }
+  }
+
+  const savePdfArtifactToFileVerified = async (pdf, bytes) => {
+    const defaultName = String(pdf?.name || '').trim() || 'output.pdf'
+    try {
+      const outputPath = await save({
+        defaultPath: defaultName,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      })
+      if (!outputPath) {
+        logger.info('[CodeCell] pdf save cancelled (verified)', { defaultName })
+        return false
+      }
+
+      // Use a detached Uint8Array and verify persisted bytes after writing.
+      const fileBytes = bytes instanceof Uint8Array
+        ? new Uint8Array(bytes)
+        : new Uint8Array(Array.from(bytes || []))
+      const { writeFile, readFile } = await import('@tauri-apps/plugin-fs')
+
+      logger.info('[CodeCell] pdf save start (verified)', {
+        outputPath,
+        defaultName,
+        bytes: fileBytes.byteLength,
+        header: Array.from(fileBytes.slice(0, 8)),
+      })
+
+      await writeFile(outputPath, fileBytes)
+
+      const savedBytes = await readFile(outputPath)
+      const savedSize = Number(savedBytes?.byteLength || savedBytes?.length || 0)
+      const savedHeader = Array.from((savedBytes || []).slice(0, 8))
+
+      logger.info('[CodeCell] pdf save verify', {
+        outputPath,
+        savedSize,
+        savedHeader,
+      })
+
+      if (savedSize <= 0) {
+        throw new Error('\u4fdd\u5b58\u540e\u7684 PDF \u6587\u4ef6\u5927\u5c0f\u4e3a 0')
+      }
+
+      logger.info('[CodeCell] pdf saved (verified)', {
+        outputPath,
+        bytes: fileBytes.byteLength,
+        verifiedBytes: savedSize,
+      })
+      message.success('PDF \u5df2\u4fdd\u5b58')
+      return true
+    } catch (error) {
+      logger.error('[CodeCell] pdf save failed (verified)', error)
+      message.error(`PDF \u4fdd\u5b58\u5931\u8d25\uff1a${String(error?.message || error)}`)
+      return false
+    }
+  }
+
   const renderPdfArtifactWithPdfJs = async (media, pdf, bytes, blobUrl) => {
     const renderToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`
     media.setAttribute('data-render-token', renderToken)
+    const downloadBytes = bytes instanceof Uint8Array
+      ? bytes.slice(0)
+      : new Uint8Array(Array.from(bytes || []))
 
     const calcPdfHeightPx = () => {
       const vh = Number(window?.innerHeight || 0)
@@ -9645,52 +9736,134 @@ const handlePreviewClick = async (e) => {
     }
 
     const wrap = document.createElement('div')
-    wrap.style.width = '100%'
-    wrap.style.flex = '1 1 auto'
+    wrap.className = 'guaxi-pdf-preview-shell'
     wrap.style.minHeight = `${calcPdfHeightPx()}px`
-    wrap.style.padding = '12px'
-    wrap.style.boxSizing = 'border-box'
-    wrap.style.overflow = 'auto'
-    wrap.style.display = 'flex'
-    wrap.style.flexDirection = 'column'
-    wrap.style.alignItems = 'center'
-    wrap.style.gap = '12px'
 
     const toolbar = document.createElement('div')
-    toolbar.style.position = 'sticky'
-    toolbar.style.top = '0'
-    toolbar.style.zIndex = '1'
-    toolbar.style.alignSelf = 'stretch'
-    toolbar.style.display = 'flex'
-    toolbar.style.justifyContent = 'flex-end'
-    toolbar.style.padding = '8px 8px 0'
-    toolbar.style.background = 'linear-gradient(to bottom, rgba(255,255,255,0.96), rgba(255,255,255,0))'
+    toolbar.className = 'guaxi-pdf-preview-toolbar'
 
-    const downloadLink = document.createElement('a')
-    downloadLink.href = blobUrl
-    downloadLink.download = pdf.name || 'output.pdf'
-    downloadLink.textContent = '下载 PDF'
-    downloadLink.style.display = 'inline-flex'
-    downloadLink.style.alignItems = 'center'
-    downloadLink.style.justifyContent = 'center'
-    downloadLink.style.padding = '6px 10px'
-    downloadLink.style.borderRadius = '8px'
-    downloadLink.style.border = '1px solid var(--guaxi-border)'
-    downloadLink.style.background = 'var(--guaxi-panel-bg)'
-    downloadLink.style.color = 'var(--guaxi-text-primary)'
-    downloadLink.style.textDecoration = 'none'
-    downloadLink.style.cursor = 'pointer'
-    toolbar.appendChild(downloadLink)
+    const toolbarLeft = document.createElement('div')
+    toolbarLeft.className = 'guaxi-pdf-toolbar-group'
+
+    const fileBadge = document.createElement('div')
+    fileBadge.className = 'guaxi-pdf-file-badge'
+    fileBadge.textContent = pdf.name || 'output.pdf'
+    toolbarLeft.appendChild(fileBadge)
+
+    const toolbarCenter = document.createElement('div')
+    toolbarCenter.className = 'guaxi-pdf-toolbar-group'
+
+    const toolbarRight = document.createElement('div')
+    toolbarRight.className = 'guaxi-pdf-toolbar-group'
+
+    const viewportHost = document.createElement('div')
+    viewportHost.className = 'guaxi-pdf-preview-viewport'
 
     const pagesHost = document.createElement('div')
-    pagesHost.style.width = '100%'
-    pagesHost.style.display = 'flex'
-    pagesHost.style.flexDirection = 'column'
-    pagesHost.style.alignItems = 'center'
-    pagesHost.style.gap = '16px'
+    pagesHost.className = 'guaxi-pdf-preview-pages'
+
+    const createToolbarButton = (iconKey, title, onClick, { text = '', accent = false } = {}) => {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = `guaxi-pdf-toolbar-btn${accent ? ' accent' : ''}`
+      btn.title = title
+      btn.setAttribute('aria-label', title)
+      btn.innerHTML = `${PDF_TOOLBAR_ICONS[iconKey] || ''}${text ? `<span>${text}</span>` : ''}`
+      btn.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        void onClick?.(event)
+      })
+      return btn
+    }
+
+    const applyPdfScale = (nextScale) => {
+      const clampedScale = Math.max(0.65, Math.min(1.8, Number(nextScale || 1)))
+      viewportHost.setAttribute('data-scale', String(clampedScale))
+      zoomIndicator.textContent = `${Math.round(clampedScale * 100)}%`
+
+      Array.from(pagesHost.querySelectorAll('.guaxi-pdf-page-card')).forEach((pageEl) => {
+        const baseWidth = Number(pageEl.getAttribute('data-base-width') || '0')
+        if (baseWidth > 0) {
+          pageEl.style.width = `${Math.ceil(baseWidth * clampedScale)}px`
+        }
+      })
+
+      Array.from(pagesHost.querySelectorAll('.guaxi-pdf-page-canvas')).forEach((canvas) => {
+        const baseWidth = Number(canvas.getAttribute('data-base-width') || '0')
+        const baseHeight = Number(canvas.getAttribute('data-base-height') || '0')
+        if (baseWidth > 0) canvas.style.width = `${Math.ceil(baseWidth * clampedScale)}px`
+        if (baseHeight > 0) canvas.style.height = `${Math.ceil(baseHeight * clampedScale)}px`
+      })
+    }
+
+    const pageIndicator = document.createElement('div')
+    pageIndicator.className = 'guaxi-pdf-toolbar-indicator'
+    pageIndicator.textContent = '页 0 / 0'
+
+    const zoomIndicator = document.createElement('div')
+    zoomIndicator.className = 'guaxi-pdf-toolbar-indicator'
+    zoomIndicator.textContent = '100%'
+
+    const prevPageBtn = createToolbarButton('prev', '上一页', () => {
+      const current = Number(viewportHost.getAttribute('data-current-page') || '1')
+      const target = pagesHost.querySelector(`[data-page-number="${Math.max(1, current - 1)}"]`)
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    })
+    const nextPageBtn = createToolbarButton('next', '下一页', () => {
+      const current = Number(viewportHost.getAttribute('data-current-page') || '1')
+      const total = Number(viewportHost.getAttribute('data-total-pages') || '1')
+      const target = pagesHost.querySelector(`[data-page-number="${Math.min(total, current + 1)}"]`)
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    })
+    const zoomOutBtn = createToolbarButton('zoomOut', '缩小', () => {
+      const currentScale = Number(viewportHost.getAttribute('data-scale') || '1')
+      const nextScale = Math.max(0.65, Number((currentScale - 0.1).toFixed(2)))
+      applyPdfScale(nextScale)
+    })
+    const zoomInBtn = createToolbarButton('zoomIn', '放大', () => {
+      const currentScale = Number(viewportHost.getAttribute('data-scale') || '1')
+      const nextScale = Math.min(1.8, Number((currentScale + 0.1).toFixed(2)))
+      applyPdfScale(nextScale)
+    })
+    const fitWidthBtn = createToolbarButton('fitWidth', '适配宽度', () => {
+      applyPdfScale(1)
+      viewportHost.scrollTo?.({ top: 0, behavior: 'smooth' })
+    })
+    const downloadBtn = createToolbarButton('download', '保存 PDF', async () => {
+      await savePdfArtifactToFileVerified(pdf, downloadBytes)
+    }, { accent: true })
+
+    // Re-apply safe labels here so UI text is stable even if terminal output displays mojibake.
+    pageIndicator.textContent = '\u9875 0 / 0'
+    prevPageBtn.title = '\u4e0a\u4e00\u9875'
+    prevPageBtn.setAttribute('aria-label', '\u4e0a\u4e00\u9875')
+    nextPageBtn.title = '\u4e0b\u4e00\u9875'
+    nextPageBtn.setAttribute('aria-label', '\u4e0b\u4e00\u9875')
+    zoomOutBtn.title = '\u7f29\u5c0f'
+    zoomOutBtn.setAttribute('aria-label', '\u7f29\u5c0f')
+    zoomInBtn.title = '\u653e\u5927'
+    zoomInBtn.setAttribute('aria-label', '\u653e\u5927')
+    fitWidthBtn.title = '\u9002\u914d\u5bbd\u5ea6'
+    fitWidthBtn.setAttribute('aria-label', '\u9002\u914d\u5bbd\u5ea6')
+    downloadBtn.title = '\u4fdd\u5b58 PDF'
+    downloadBtn.setAttribute('aria-label', '\u4fdd\u5b58 PDF')
+
+    toolbarCenter.appendChild(prevPageBtn)
+    toolbarCenter.appendChild(pageIndicator)
+    toolbarCenter.appendChild(nextPageBtn)
+    toolbarRight.appendChild(zoomOutBtn)
+    toolbarRight.appendChild(zoomIndicator)
+    toolbarRight.appendChild(zoomInBtn)
+    toolbarRight.appendChild(fitWidthBtn)
+    toolbarRight.appendChild(downloadBtn)
 
     wrap.appendChild(toolbar)
-    wrap.appendChild(pagesHost)
+    toolbar.appendChild(toolbarLeft)
+    toolbar.appendChild(toolbarCenter)
+    toolbar.appendChild(toolbarRight)
+    viewportHost.appendChild(pagesHost)
+    wrap.appendChild(viewportHost)
 
     media.innerHTML = ''
     media.appendChild(wrap)
@@ -9700,6 +9873,14 @@ const handlePreviewClick = async (e) => {
       const loadingTask = pdfjsLib.getDocument({ data: bytes })
       const pdfDoc = await loadingTask.promise
       const availableWidth = Math.max(640, Math.floor((media.clientWidth || media.getBoundingClientRect().width || 900) - 40))
+      viewportHost.setAttribute('data-total-pages', String(pdfDoc.numPages))
+      viewportHost.setAttribute('data-current-page', '1')
+      viewportHost.setAttribute('data-scale', '1')
+      queueMicrotask(() => {
+        pageIndicator.textContent = `\u9875 1 / ${pdfDoc.numPages}`
+      })
+      pageIndicator.textContent = `\u9875 1 / ${pdfDoc.numPages}`
+      pageIndicator.textContent = `页 1 / ${pdfDoc.numPages}`
 
       for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber += 1) {
         if (media.getAttribute('data-render-token') !== renderToken) {
@@ -9713,47 +9894,89 @@ const handlePreviewClick = async (e) => {
         const viewport = page.getViewport({ scale })
 
         const pageWrap = document.createElement('div')
+        pageWrap.className = 'guaxi-pdf-page-card'
+        pageWrap.setAttribute('data-page-number', String(pageNumber))
+        pageWrap.setAttribute('data-base-width', String(Math.ceil(viewport.width)))
         pageWrap.style.width = `${Math.ceil(viewport.width)}px`
         pageWrap.style.maxWidth = '100%'
-        pageWrap.style.background = '#fff'
-        pageWrap.style.borderRadius = '8px'
-        pageWrap.style.boxShadow = '0 4px 14px rgba(0,0,0,0.08)'
-        pageWrap.style.overflow = 'hidden'
 
         const pageLabel = document.createElement('div')
+        pageLabel.className = 'guaxi-pdf-page-label'
         pageLabel.textContent = `第 ${pageNumber} / ${pdfDoc.numPages} 页`
-        pageLabel.style.padding = '6px 10px'
-        pageLabel.style.fontSize = '12px'
-        pageLabel.style.opacity = '0.75'
-        pageLabel.style.borderBottom = '1px solid rgba(0,0,0,0.06)'
 
         const canvas = document.createElement('canvas')
+        canvas.className = 'guaxi-pdf-page-canvas'
         const context = canvas.getContext('2d', { alpha: false })
         if (!context) throw new Error('无法创建 PDF 渲染画布')
         canvas.width = Math.ceil(viewport.width)
         canvas.height = Math.ceil(viewport.height)
-        canvas.style.display = 'block'
-        canvas.style.width = '100%'
-        canvas.style.height = 'auto'
-        canvas.style.background = '#fff'
+        canvas.setAttribute('data-base-width', String(Math.ceil(viewport.width)))
+        canvas.setAttribute('data-base-height', String(Math.ceil(viewport.height)))
+        canvas.style.width = `${Math.ceil(viewport.width)}px`
+        canvas.style.height = `${Math.ceil(viewport.height)}px`
 
-        pageWrap.appendChild(pageLabel)
         pageWrap.appendChild(canvas)
         pagesHost.appendChild(pageWrap)
 
         await page.render({ canvasContext: context, viewport }).promise
       }
+
+      pageIndicator.textContent = `\u9875 1 / ${pdfDoc.numPages}`
+
+      try {
+        const observer = new IntersectionObserver((entries) => {
+          let bestEntry = null
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue
+            if (!bestEntry || entry.intersectionRatio > bestEntry.intersectionRatio) {
+              bestEntry = entry
+            }
+          }
+          if (!bestEntry) return
+
+          const pageNumber = Number(bestEntry.target?.getAttribute?.('data-page-number') || '1')
+          viewportHost.setAttribute('data-current-page', String(pageNumber))
+          pageIndicator.textContent = `\u9875 ${pageNumber} / ${pdfDoc.numPages}`
+          queueMicrotask(() => {
+            pageIndicator.textContent = `\u9875 ${pageNumber} / ${pdfDoc.numPages}`
+          })
+          pageIndicator.textContent = `页 ${pageNumber} / ${pdfDoc.numPages}`
+        }, {
+          root: viewportHost,
+          threshold: [0.35, 0.55, 0.8],
+        })
+
+        Array.from(pagesHost.querySelectorAll('[data-page-number]')).forEach((el) => observer.observe(el))
+      } catch (observerError) {
+        logger.warn('[CodeCell] pdf page observer failed', observerError)
+      }
     } catch (error) {
       logger.error('[CodeCell] pdfjs render failed', error)
       pagesHost.innerHTML = ''
       const fallback = document.createElement('div')
-      fallback.style.padding = '16px'
-      fallback.style.width = '100%'
-      fallback.style.boxSizing = 'border-box'
-      fallback.style.color = 'var(--guaxi-text-primary)'
+      fallback.className = 'guaxi-pdf-preview-fallback'
       fallback.textContent = `PDF 预览渲染失败：${String(error?.message || error)}`
       pagesHost.appendChild(fallback)
     }
+  }
+
+  const cleanupPreviewPdfBlobUrls = () => {
+    const container = previewContainer.value
+    if (!(container instanceof HTMLElement)) return
+
+    const medias = Array.from(container.querySelectorAll('.guaxi-codecell-media[data-blob-url]'))
+    medias.forEach((media) => {
+      const oldUrl = String(media.getAttribute('data-blob-url') || '').trim()
+      if (!oldUrl) return
+      try {
+        URL.revokeObjectURL(oldUrl)
+      } catch (error) {
+        logger.warn('[CodeCell] revoke preview pdf blob failed', error)
+      }
+      media.removeAttribute('data-blob-url')
+    })
+
+    logger.info('[CodeCell] preview pdf blob urls cleaned', { count: medias.length })
   }
 
   const renderCodeCellArtifacts = async (cell, outputPre, res, outputText, kind) => {
@@ -11810,6 +12033,7 @@ onActivated(() => {
 onUnmounted(() => {
   stopSelectionAudioPlayback()
   closePreviewSearch()
+  cleanupPreviewPdfBlobUrls()
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.removeEventListener('selectionchange', handleGlobalSelectionChange, true)
@@ -13189,6 +13413,288 @@ onUnmounted(() => {
 
 
 /* 代码块样式 */
+.guaxi-codecell-media {
+  border: 1px solid var(--guaxi-border, #d9dee7);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.84)),
+    linear-gradient(180deg, rgba(244, 247, 252, 0.98), rgba(236, 241, 247, 0.96));
+  box-shadow:
+    0 16px 32px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.preview .guaxi-codecell-toolbar,
+.preview .guaxi-pycell-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-wrap: wrap;
+}
+
+.preview .guaxi-codecell-btn,
+.preview .guaxi-pycell-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 6px 12px !important;
+  border-radius: 10px !important;
+  border: 1px solid rgba(148, 163, 184, 0.3) !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  color: var(--guaxi-text-primary, #1f2937) !important;
+  cursor: pointer !important;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  line-height: 1;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.preview .guaxi-codecell-btn:hover,
+.preview .guaxi-pycell-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(37, 99, 235, 0.35) !important;
+  background: rgba(239, 246, 255, 0.98) !important;
+  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.12);
+}
+
+.preview .guaxi-codecell-btn:active,
+.preview .guaxi-pycell-btn:active {
+  transform: translateY(0);
+}
+
+.preview .guaxi-codecell-btn[disabled],
+.preview .guaxi-pycell-btn[disabled] {
+  cursor: not-allowed !important;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: none;
+}
+
+.preview .guaxi-codecell-hint,
+.preview .guaxi-pycell-hint {
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+.guaxi-pdf-preview-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.guaxi-pdf-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 248, 252, 0.94));
+  backdrop-filter: blur(12px);
+}
+
+.guaxi-pdf-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.guaxi-pdf-file-badge {
+  max-width: 280px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: var(--guaxi-text-primary, #1f2937);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guaxi-pdf-toolbar-indicator {
+  min-width: 78px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: var(--guaxi-text-primary, #1f2937);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.guaxi-pdf-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--guaxi-text-primary, #1f2937);
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.07);
+}
+
+.guaxi-pdf-toolbar-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(59, 130, 246, 0.3);
+  box-shadow: 0 10px 24px rgba(59, 130, 246, 0.12);
+}
+
+.guaxi-pdf-toolbar-btn:active {
+  transform: translateY(0);
+}
+
+.guaxi-pdf-toolbar-btn.accent {
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+  border-color: rgba(37, 99, 235, 0.45);
+  color: #ffffff;
+}
+
+.guaxi-pdf-toolbar-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.guaxi-pdf-preview-viewport {
+  flex: 1 1 auto;
+  min-height: 640px;
+  overflow: auto;
+  padding: 20px 16px 22px;
+  background:
+    linear-gradient(180deg, rgba(233, 238, 246, 0.92), rgba(225, 231, 241, 0.9)),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.18) 0 12px, rgba(255, 255, 255, 0.1) 12px 24px);
+}
+
+.guaxi-pdf-preview-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.guaxi-pdf-page-card {
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(252, 252, 253, 0.98));
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow:
+    0 18px 34px rgba(15, 23, 42, 0.12),
+    0 4px 12px rgba(15, 23, 42, 0.05);
+}
+
+.guaxi-pdf-page-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #ffffff;
+  transform-origin: top center;
+  transition: transform 0.16s ease;
+}
+
+.guaxi-pdf-preview-fallback {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 18px 20px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--guaxi-text-primary, #1f2937);
+}
+
+.dark-mode .guaxi-codecell-media,
+:global(:root[data-guaxi-theme='dark']) .guaxi-codecell-media {
+  border-color: rgba(71, 85, 105, 0.65);
+  background:
+    radial-gradient(circle at top left, rgba(31, 41, 55, 0.96), rgba(17, 24, 39, 0.94)),
+    linear-gradient(180deg, rgba(18, 24, 34, 0.98), rgba(11, 18, 28, 0.98));
+  box-shadow:
+    0 18px 34px rgba(2, 6, 23, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.dark-mode .preview .guaxi-codecell-btn,
+.dark-mode .preview .guaxi-pycell-btn,
+:root[data-guaxi-theme='dark'] .preview .guaxi-codecell-btn,
+:root[data-guaxi-theme='dark'] .preview .guaxi-pycell-btn {
+  border-color: rgba(71, 85, 105, 0.55) !important;
+  background: rgba(15, 23, 42, 0.9) !important;
+  color: #e5edf7 !important;
+  box-shadow: 0 8px 18px rgba(2, 6, 23, 0.28);
+}
+
+.dark-mode .preview .guaxi-codecell-btn:hover,
+.dark-mode .preview .guaxi-pycell-btn:hover,
+:root[data-guaxi-theme='dark'] .preview .guaxi-codecell-btn:hover,
+:root[data-guaxi-theme='dark'] .preview .guaxi-pycell-btn:hover {
+  border-color: rgba(96, 165, 250, 0.55) !important;
+  background: rgba(30, 41, 59, 0.98) !important;
+  box-shadow: 0 12px 24px rgba(2, 6, 23, 0.36);
+}
+
+.dark-mode .guaxi-pdf-preview-toolbar,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-preview-toolbar {
+  border-bottom-color: rgba(71, 85, 105, 0.45);
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(20, 28, 42, 0.96));
+}
+
+.dark-mode .guaxi-pdf-file-badge,
+.dark-mode .guaxi-pdf-toolbar-indicator,
+.dark-mode .guaxi-pdf-toolbar-btn,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-file-badge,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-toolbar-indicator,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-toolbar-btn {
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(71, 85, 105, 0.5);
+  color: #e5edf7;
+}
+
+.dark-mode .guaxi-pdf-toolbar-btn.accent,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-toolbar-btn.accent {
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  color: #ffffff;
+}
+
+.dark-mode .guaxi-pdf-preview-viewport,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-preview-viewport {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(17, 24, 39, 0.98)),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.04) 0 12px, rgba(255, 255, 255, 0.02) 12px 24px);
+}
+
+.dark-mode .guaxi-pdf-page-card,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pdf-page-card {
+  border-color: rgba(100, 116, 139, 0.34);
+  box-shadow:
+    0 18px 34px rgba(2, 6, 23, 0.4),
+    0 4px 12px rgba(2, 6, 23, 0.22);
+}
+
+@media (max-width: 920px) {
+  .guaxi-pdf-preview-toolbar {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .guaxi-pdf-file-badge {
+    max-width: min(100%, 360px);
+  }
+
+  .guaxi-pdf-preview-viewport {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
+
 .preview :deep(.hljs),
 .hljs {
   position: relative;

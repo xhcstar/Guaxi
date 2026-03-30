@@ -38,6 +38,16 @@ export const addCopyButtons = (container, options = {}) => {
     }
   };
 
+  const shouldSkipForInteractiveCells = (el) => {
+    try {
+      return !!el?.closest?.(
+        '.guaxi-codecell, .guaxi-pycell, .guaxi-codecell-media, .guaxi-pycell-media, .guaxi-pdf-preview-shell'
+      );
+    } catch {
+      return false;
+    }
+  };
+
   // 查找所有可能的代码块容器（包括 hljs 和 pre code）
   const codeContainers = Array.from(
     container.querySelectorAll(".hljs, pre code")
@@ -58,6 +68,7 @@ export const addCopyButtons = (container, options = {}) => {
     processedBlocks.add(codeBlock);
 
     if (shouldSkipForNotes(codeBlock)) return;
+    if (shouldSkipForInteractiveCells(codeBlock)) return;
 
     let anchor = codeBlock.parentElement;
     if (!anchor || !anchor.classList?.contains("guaxi-code-block-anchor")) {
