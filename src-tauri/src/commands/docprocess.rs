@@ -185,7 +185,6 @@ async fn ensure_marker_server(window: &Window) -> Result<u16, String> {
         .to_string();
 
     info!(
-        exe_dir = exe_dir.to_string_lossy().as_ref(),
         marker_src_dir = marker_src_dir.to_string_lossy().as_ref(),
         python_path = python_path.as_str(),
         "marker server resolved paths"
@@ -855,11 +854,6 @@ pub async fn convert_to_markdown(
             },
         )
         .map_err(|e| format!("Failed to emit start progress: {}", e))?;
-
-    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = current_exe
-        .parent()
-        .ok_or_else(|| "Failed to get parent directory of exe".to_string())?;
 
     let marker_src_dir = resolve_marker_source_dir()?;
     let python_path = resolve_marker_python_path(&marker_src_dir)?
