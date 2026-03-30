@@ -41,6 +41,92 @@ def _json_basic(value):
     return None
 
 
+def _normalize_exec_code(value):
+    text = str(value or "")
+    if not text:
+        return text
+
+    # Some upstream text paths can carry lone surrogate code points.
+    # Python's parser rejects those during ast.parse/compile, so we
+    # normalize them into replacement characters before execution.
+    if any(0xD800 <= ord(ch) <= 0xDFFF for ch in text):
+        text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+
+    return text
+
+
+def _safe_repr(value, limit=160):
+    try:
+        text = repr(value)
+    except Exception:
+        text = f"<{type(value).__name__}>"
+    text = str(text)
+    if len(text) > limit:
+        return text[: limit - 1] + "..."
+    return text
+
+
+def _summarize_value(value):
+    summary = {
+        "type": type(value).__name__,
+        "preview": _safe_repr(value),
+    }
+
+    try:
+        if hasattr(value, "shape"):
+            shape = getattr(value, "shape")
+            if isinstance(shape, tuple):
+                summary["shape"] = [_normalize_basic(item) for item in shape]
+    except Exception:
+        pass
+
+    try:
+        if hasattr(value, "__len__") and not isinstance(value, (str, bytes, bytearray)):
+            summary["length"] = int(len(value))
+    except Exception:
+        pass
+
+    try:
+        import pandas as pd
+
+        if isinstance(value, pd.DataFrame):
+            summary["rows"] = int(len(value.index))
+            summary["columns"] = int(len(value.columns))
+    except Exception:
+        pass
+
+    return summary
+
+
+def _snapshot_session_vars(globals_dict):
+    items = []
+    hidden_names = {
+        "__builtins__",
+        "__guaxi_last_value",
+        "_",
+        "__",
+        "___",
+        "_result",
+        "_guaxi_session",
+        "_guaxi_inline_matplotlib",
+        "_doc_path",
+        "_py_cell_id",
+    }
+
+    for name in sorted(globals_dict.keys()):
+        if name in hidden_names or str(name).startswith("__"):
+            continue
+        try:
+            items.append({"name": str(name), **_summarize_value(globals_dict.get(name))})
+        except Exception:
+            items.append({
+                "name": str(name),
+                "type": "unknown",
+                "preview": "<unavailable>",
+            })
+    return items
+
+
 def _capture_matplotlib_png_base64():
     try:
         if "matplotlib" not in sys.modules:
@@ -109,6 +195,34 @@ def _build_dataframe_payload(df, source_path=None):
     }
 
 
+def _capture_rich_display(result):
+    if result is None:
+        return None
+
+    display_methods = (
+        ("_repr_html_", "html", "text/html", "html"),
+        ("_repr_markdown_", "markdown", "text/markdown", "markdown"),
+        ("_repr_svg_", "svg", "image/svg+xml", "svg"),
+    )
+
+    for method_name, display_type, mime, field in display_methods:
+        method = getattr(result, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            rendered = method()
+        except Exception:
+            continue
+        if isinstance(rendered, str) and rendered.strip():
+            return {
+                "type": display_type,
+                "mime": mime,
+                field: rendered,
+            }
+
+    return None
+
+
 def _fresh_globals():
     return {"__builtins__": __builtins__}
 
@@ -173,7 +287,15 @@ def _handle_magic(code, globals_dict, session_id):
         sid = session_id or "__guaxi_global__"
         SESSIONS[sid] = _fresh_globals()
         RESULT_HISTORY.pop(sid, None)
-        return {"ok": True, "stdout": "Session reset.", "stderr": "", "result_repr": None, "result_json": None}
+        return {
+            "ok": True,
+            "stdout": "Session reset.",
+            "stderr": "",
+            "result_repr": None,
+            "result_json": None,
+            "session_id": sid,
+            "session_vars": [],
+        }
 
     if stripped in ("%who", "%whos"):
         names = sorted(
@@ -189,6 +311,8 @@ def _handle_magic(code, globals_dict, session_id):
             "stderr": "",
             "result_repr": None,
             "result_json": None,
+            "session_id": session_id or "__guaxi_global__",
+            "session_vars": _snapshot_session_vars(globals_dict),
         }
 
     if stripped.startswith("%pip "):
@@ -200,11 +324,13 @@ def _handle_magic(code, globals_dict, session_id):
         "stderr": f"Unsupported magic command: {stripped}",
         "result_repr": None,
         "result_json": None,
+        "session_id": session_id or "__guaxi_global__",
+        "session_vars": _snapshot_session_vars(globals_dict),
     }
 
 
 def _handle_exec(payload):
-    code = str(payload.get("code") or "")
+    code = _normalize_exec_code(payload.get("code"))
     persist = bool(payload.get("persist"))
     expect_json = bool(payload.get("expect_json"))
     vars_map = payload.get("vars") or {}
@@ -275,6 +401,18 @@ def _handle_exec(payload):
                         "__guaxi_result__": result_json,
                     }
 
+            rich_display = _capture_rich_display(result)
+            if rich_display:
+                if isinstance(result_json, dict):
+                    result_json.setdefault("__guaxi_display__", rich_display)
+                elif result_json is None:
+                    result_json = {"__guaxi_display__": rich_display}
+                else:
+                    result_json = {
+                        "__guaxi_display__": rich_display,
+                        "__guaxi_result__": result_json,
+                    }
+
         png_b64 = _capture_matplotlib_png_base64()
         if png_b64:
             display = {
@@ -314,13 +452,23 @@ def _handle_exec(payload):
         "stderr": stderr,
         "result_repr": result_repr,
         "result_json": result_json,
+        "session_id": resolved_session_id,
+        "session_vars": _snapshot_session_vars(globals_dict),
     }
 
 
 def _handle_reset(_payload):
     SESSIONS.clear()
     RESULT_HISTORY.clear()
-    return {"ok": True, "stdout": "", "stderr": "", "result_repr": None, "result_json": None}
+    return {
+        "ok": True,
+        "stdout": "",
+        "stderr": "",
+        "result_repr": None,
+        "result_json": None,
+        "session_id": "__guaxi_global__",
+        "session_vars": [],
+    }
 
 
 def _handle_import_table(payload):

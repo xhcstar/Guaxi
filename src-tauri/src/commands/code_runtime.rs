@@ -33,6 +33,20 @@ pub struct PyExecResponse {
     pub stderr: String,
     pub result_repr: Option<String>,
     pub result_json: Option<Value>,
+    pub session_id: Option<String>,
+    pub session_vars: Option<Vec<PythonSessionVar>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PythonSessionVar {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub value_type: String,
+    pub preview: Option<String>,
+    pub shape: Option<Vec<Value>>,
+    pub length: Option<i64>,
+    pub rows: Option<i64>,
+    pub columns: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

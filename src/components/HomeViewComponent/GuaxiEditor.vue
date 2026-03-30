@@ -7798,7 +7798,7 @@ function analyzeMarkdown(content, model) {
     }
 
     // 2.5) 目录标记：[TOC] / [toc] / [目录] / [[toc]]
-    if (/^\s*(?:\[\[\s*(?:toc|\u76ee\u5f55)\s*\]\]|\[\s*(?:toc|\u76ee\u5f55)\s*\])\s*$/i.test(trimmed)) {
+    if (/^\s*(?:\[\[\s*(?:toc|目录)\s*\]\]|\[\s*(?:toc|目录)\s*\])\s*$/i.test(trimmed)) {
       return;
     }
 
@@ -10333,9 +10333,11 @@ const handlePreviewClick = async (e) => {
     const ok = res?.ok
     const stdout = String(res?.stdout || '')
     const stderr = String(res?.stderr || '')
+    const resultRepr = String(res?.result_repr || '')
 
     const hasStdout = stdout.trim().length > 0
     const hasStderr = stderr.trim().length > 0
+    const hasResultRepr = resultRepr.trim().length > 0
 
     if (ok === false) {
       if (hasStderr) return stderr.trimEnd()
@@ -10346,8 +10348,132 @@ const handlePreviewClick = async (e) => {
     const parts = []
     if (hasStdout) parts.push(stdout.trimEnd())
     if (hasStderr) parts.push(stderr.trimEnd())
+    if (!hasStdout && !hasStderr && hasResultRepr) parts.push(resultRepr.trimEnd())
 
     return parts.join('\n\n')
+  }
+
+  const buildPyCellSessionId = (docPath) => {
+    const normalized = String(docPath || '').trim()
+    return normalized || 'guaxi:pycell:global'
+  }
+
+  const sanitizePythonIdentifier = (value, fallback = 'df') => {
+    const normalized = String(value || '')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^A-Za-z0-9_]+/g, '_')
+      .replace(/^_+/, '')
+
+    const safe = normalized.length > 0 ? normalized : fallback
+    return /^[A-Za-z_]/.test(safe) ? safe : `${fallback}_${safe}`
+  }
+
+  const ensurePyCellToolbarEnhancements = (cell) => {
+    if (!(cell instanceof Element)) return
+    const toolbar = cell.querySelector?.('.guaxi-pycell-toolbar')
+    if (!toolbar) return
+
+    const ensureButton = (action, label, className, beforeAction = 'toggle-output') => {
+      let btn = toolbar.querySelector(`[data-guaxi-py-action="${action}"]`)
+      if (btn) {
+        btn.textContent = label
+        return btn
+      }
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = `guaxi-pycell-btn ${className}`.trim()
+      btn.setAttribute('data-guaxi-py-action', action)
+      btn.textContent = label
+
+      const anchor = beforeAction ? toolbar.querySelector(`[data-guaxi-py-action="${beforeAction}"]`) : null
+      if (anchor?.parentNode === toolbar) toolbar.insertBefore(btn, anchor)
+      else toolbar.appendChild(btn)
+      return btn
+    }
+
+    ensureButton('run', '运行', 'guaxi-pycell-run')
+    ensureButton('run-save', '运行并写回', 'guaxi-pycell-run-save')
+    ensureButton('import-table', '导入表格', 'guaxi-pycell-import')
+    ensureButton('inject-note', '注入笔记', 'guaxi-pycell-note')
+    ensureButton('toggle-session', '会话变量', 'guaxi-pycell-session-btn')
+    ensureButton('restart-session', '重启会话', 'guaxi-pycell-reset')
+    ensureButton('toggle-output', '显示结果', 'guaxi-pycell-output-toggle', null)
+
+    let hint = toolbar.querySelector('.guaxi-pycell-hint')
+    if (!hint) {
+      hint = document.createElement('span')
+      hint.className = 'guaxi-pycell-hint'
+      toolbar.appendChild(hint)
+    }
+    hint.textContent = '共享当前笔记的 Python 会话，支持导入表格、注入笔记和查看变量'
+  }
+
+  const ensurePyCellSessionContainer = (cell, afterEl) => {
+    if (!(cell instanceof Element)) return null
+
+    let panel = cell.querySelector('.guaxi-pycell-session')
+    if (panel) return panel
+
+    panel = document.createElement('div')
+    panel.className = 'guaxi-pycell-session'
+    panel.style.display = 'none'
+
+    if (afterEl && afterEl.parentNode) afterEl.parentNode.insertBefore(panel, afterEl.nextSibling)
+    else cell.appendChild(panel)
+
+    return panel
+  }
+
+  const clearPyCellSessionPanel = (cell) => {
+    const panel = cell?.querySelector?.('.guaxi-pycell-session')
+    if (!panel) return
+    panel.innerHTML = ''
+    panel.style.display = 'none'
+    panel.removeAttribute('data-force-visible')
+  }
+
+  const renderPyCellSessionState = (cell, res, { forceVisible = false } = {}) => {
+    const anchor = cell?.querySelector?.('.guaxi-pycell-media') || cell?.querySelector?.('.guaxi-pycell-output')
+    const panel = ensurePyCellSessionContainer(cell, anchor)
+    if (!panel) return
+
+    const vars = Array.isArray(res?.session_vars) ? res.session_vars : []
+    const sessionId = String(res?.session_id || '').trim()
+    const visible = forceVisible || panel.getAttribute('data-force-visible') === 'true'
+    if (visible) panel.setAttribute('data-force-visible', 'true')
+
+    const rowsHtml = vars.length > 0
+      ? vars.map((item) => {
+        const meta = [
+          item?.value_type ? String(item.value_type) : '',
+          Number.isFinite(Number(item?.rows)) && Number.isFinite(Number(item?.columns))
+            ? `${Number(item.rows)}x${Number(item.columns)}`
+            : '',
+          Number.isFinite(Number(item?.length)) ? `len=${Number(item.length)}` : '',
+        ].filter(Boolean).join(' · ')
+
+        return `
+          <div class="guaxi-pycell-var-row">
+            <div class="guaxi-pycell-var-main">
+              <span class="guaxi-pycell-var-name">${escapeHtml(item?.name || '')}</span>
+              <span class="guaxi-pycell-var-type">${escapeHtml(meta || String(item?.value_type || 'value'))}</span>
+            </div>
+            <div class="guaxi-pycell-var-preview">${escapeHtml(item?.preview || '')}</div>
+          </div>
+        `
+      }).join('')
+      : '<div class="guaxi-pycell-session-empty">当前会话里还没有可见变量</div>'
+
+    panel.innerHTML = `
+      <div class="guaxi-pycell-session-header">
+        <div>
+          <div class="guaxi-pycell-session-title">Python 会话</div>
+          <div class="guaxi-pycell-session-meta">${escapeHtml(sessionId ? `共享会话 · ${vars.length} 个变量` : `${vars.length} 个变量`)}</div>
+        </div>
+      </div>
+      <div class="guaxi-pycell-session-list">${rowsHtml}</div>
+    `
+    panel.style.display = visible ? 'block' : 'none'
   }
 
   const getPdfArtifactFromCodeCell = (res) => {
@@ -10511,7 +10637,7 @@ const handlePreviewClick = async (e) => {
       })
 
       if (savedSize <= 0) {
-        throw new Error('\u4fdd\u5b58\u540e\u7684 PDF \u6587\u4ef6\u5927\u5c0f\u4e3a 0')
+        throw new Error('保存后的 PDF 文件大小为 0')
       }
 
       logger.info('[CodeCell] pdf saved (verified)', {
@@ -10519,11 +10645,11 @@ const handlePreviewClick = async (e) => {
         bytes: fileBytes.byteLength,
         verifiedBytes: savedSize,
       })
-      message.success('PDF \u5df2\u4fdd\u5b58')
+      message.success('PDF 已保存')
       return true
     } catch (error) {
       logger.error('[CodeCell] pdf save failed (verified)', error)
-      message.error(`PDF \u4fdd\u5b58\u5931\u8d25\uff1a${String(error?.message || error)}`)
+      message.error(`PDF 保存失败：${String(error?.message || error)}`)
       return false
     }
   }
@@ -10641,19 +10767,19 @@ const handlePreviewClick = async (e) => {
     }, { accent: true })
 
     // Re-apply safe labels here so UI text is stable even if terminal output displays mojibake.
-    pageIndicator.textContent = '\u9875 0 / 0'
-    prevPageBtn.title = '\u4e0a\u4e00\u9875'
-    prevPageBtn.setAttribute('aria-label', '\u4e0a\u4e00\u9875')
-    nextPageBtn.title = '\u4e0b\u4e00\u9875'
-    nextPageBtn.setAttribute('aria-label', '\u4e0b\u4e00\u9875')
-    zoomOutBtn.title = '\u7f29\u5c0f'
-    zoomOutBtn.setAttribute('aria-label', '\u7f29\u5c0f')
-    zoomInBtn.title = '\u653e\u5927'
-    zoomInBtn.setAttribute('aria-label', '\u653e\u5927')
-    fitWidthBtn.title = '\u9002\u914d\u5bbd\u5ea6'
-    fitWidthBtn.setAttribute('aria-label', '\u9002\u914d\u5bbd\u5ea6')
-    downloadBtn.title = '\u4fdd\u5b58 PDF'
-    downloadBtn.setAttribute('aria-label', '\u4fdd\u5b58 PDF')
+    pageIndicator.textContent = '页 0 / 0'
+    prevPageBtn.title = '上一页'
+    prevPageBtn.setAttribute('aria-label', '上一页')
+    nextPageBtn.title = '下一页'
+    nextPageBtn.setAttribute('aria-label', '下一页')
+    zoomOutBtn.title = '缩小'
+    zoomOutBtn.setAttribute('aria-label', '缩小')
+    zoomInBtn.title = '放大'
+    zoomInBtn.setAttribute('aria-label', '放大')
+    fitWidthBtn.title = '适配宽度'
+    fitWidthBtn.setAttribute('aria-label', '适配宽度')
+    downloadBtn.title = '保存 PDF'
+    downloadBtn.setAttribute('aria-label', '保存 PDF')
 
     toolbarCenter.appendChild(prevPageBtn)
     toolbarCenter.appendChild(pageIndicator)
@@ -10683,9 +10809,9 @@ const handlePreviewClick = async (e) => {
       viewportHost.setAttribute('data-current-page', '1')
       viewportHost.setAttribute('data-scale', '1')
       queueMicrotask(() => {
-        pageIndicator.textContent = `\u9875 1 / ${pdfDoc.numPages}`
+        pageIndicator.textContent = `页 1 / ${pdfDoc.numPages}`
       })
-      pageIndicator.textContent = `\u9875 1 / ${pdfDoc.numPages}`
+      pageIndicator.textContent = `页 1 / ${pdfDoc.numPages}`
       pageIndicator.textContent = `页 1 / ${pdfDoc.numPages}`
 
       for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber += 1) {
@@ -10727,7 +10853,7 @@ const handlePreviewClick = async (e) => {
         await page.render({ canvasContext: context, viewport }).promise
       }
 
-      pageIndicator.textContent = `\u9875 1 / ${pdfDoc.numPages}`
+      pageIndicator.textContent = `页 1 / ${pdfDoc.numPages}`
 
       try {
         const observer = new IntersectionObserver((entries) => {
@@ -10742,9 +10868,9 @@ const handlePreviewClick = async (e) => {
 
           const pageNumber = Number(bestEntry.target?.getAttribute?.('data-page-number') || '1')
           viewportHost.setAttribute('data-current-page', String(pageNumber))
-          pageIndicator.textContent = `\u9875 ${pageNumber} / ${pdfDoc.numPages}`
+          pageIndicator.textContent = `页 ${pageNumber} / ${pdfDoc.numPages}`
           queueMicrotask(() => {
-            pageIndicator.textContent = `\u9875 ${pageNumber} / ${pdfDoc.numPages}`
+            pageIndicator.textContent = `页 ${pageNumber} / ${pdfDoc.numPages}`
           })
           pageIndicator.textContent = `页 ${pageNumber} / ${pdfDoc.numPages}`
         }, {
@@ -10849,19 +10975,22 @@ const handlePreviewClick = async (e) => {
     if (!display || typeof display !== 'object') return null
 
     const t = String(display?.type || '').trim().toLowerCase()
-    if (t !== 'image') return null
+    if (!['image', 'html', 'svg', 'markdown'].includes(t)) return null
 
-    const mime = String(display?.mime || '').trim() || 'image/png'
+    const mime = String(display?.mime || '').trim() || (t === 'svg' ? 'image/svg+xml' : t === 'html' ? 'text/html' : t === 'markdown' ? 'text/markdown' : 'image/png')
     const dataUrl = String(display?.data_url || '').trim()
     const dataBase64 = String(display?.data_base64 || '').trim()
     const data = display?.data
 
     return {
-      type: 'image',
+      type: t,
       mime,
       dataUrl,
       dataBase64,
       data: typeof data === 'string' ? data : null,
+      html: typeof display?.html === 'string' ? display.html : '',
+      svg: typeof display?.svg === 'string' ? display.svg : '',
+      markdown: typeof display?.markdown === 'string' ? display.markdown : '',
     }
   }
 
@@ -11100,6 +11229,38 @@ const handlePreviewClick = async (e) => {
       return
     }
 
+    media.innerHTML = ''
+
+    if (display?.type === 'html' && display.html) {
+      const box = document.createElement('div')
+      box.className = 'guaxi-pycell-rich-display guaxi-pycell-html-display'
+      box.innerHTML = display.html
+      media.appendChild(box)
+      media.style.display = 'flex'
+      if (outputPre && shouldHideText) outputPre.style.display = 'none'
+      return
+    }
+
+    if (display?.type === 'svg' && display.svg) {
+      const box = document.createElement('div')
+      box.className = 'guaxi-pycell-rich-display guaxi-pycell-svg-display'
+      box.innerHTML = display.svg
+      media.appendChild(box)
+      media.style.display = 'flex'
+      if (outputPre && shouldHideText) outputPre.style.display = 'none'
+      return
+    }
+
+    if (display?.type === 'markdown' && display.markdown) {
+      const box = document.createElement('pre')
+      box.className = 'guaxi-pycell-rich-display guaxi-pycell-markdown-display'
+      box.textContent = display.markdown
+      media.appendChild(box)
+      media.style.display = 'flex'
+      if (outputPre && shouldHideText) outputPre.style.display = 'none'
+      return
+    }
+
     const img = document.createElement('img')
     img.style.maxWidth = '100%'
     img.style.height = 'auto'
@@ -11295,6 +11456,309 @@ const handlePreviewClick = async (e) => {
 
     updateEditorContent(String(nextMarkdown || ''))
     return true
+  }
+
+  const pyCellBtn = base.closest?.('[data-guaxi-py-action]')
+  if (pyCellBtn && previewContainer.value && previewContainer.value.contains(pyCellBtn)) {
+    const action = String(pyCellBtn.getAttribute('data-guaxi-py-action') || '').trim()
+    const cell = pyCellBtn.closest?.('.guaxi-pycell')
+    if (!cell) return
+
+    ensurePyCellToolbarEnhancements(cell)
+
+    const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
+    const outputPre = outputEl ? outputEl.closest?.('pre') : null
+    const toggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-output"]')
+    const sessionBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-session"]')
+    const docPath = selectedFile.value?.path || ''
+    const sessionId = buildPyCellSessionId(docPath)
+    const cellId = guaxiSafeDecode(cell.getAttribute('data-guaxi-py-cell'))
+
+    const syncPyCellButtons = () => {
+      const media = cell.querySelector?.('.guaxi-pycell-media')
+      const panel = cell.querySelector?.('.guaxi-pycell-session')
+      const textVisible = outputPre ? String(outputPre.style.display || '').trim() !== 'none' : false
+      const mediaVisible = media ? String(media.style.display || '').trim() !== 'none' : false
+      const panelVisible = panel ? String(panel.style.display || '').trim() !== 'none' : false
+      if (toggleBtn) toggleBtn.textContent = textVisible || mediaVisible ? '隐藏结果' : '显示结果'
+      if (sessionBtn) sessionBtn.textContent = panelVisible ? '隐藏变量' : '会话变量'
+    }
+
+    if (action === 'toggle-output') {
+      const media = cell.querySelector?.('.guaxi-pycell-media')
+      if (!outputPre && !media) {
+        message.warning('未找到运行结果区域')
+        e.stopPropagation()
+        return
+      }
+
+      const hasText = String(outputEl?.textContent || '').trim().length > 0
+      const hasMedia = !!media && media.childNodes && media.childNodes.length > 0
+      const currentlyVisible = (outputPre && String(outputPre.style.display || '').trim() !== 'none')
+        || (media && String(media.style.display || '').trim() !== 'none')
+      const nextShow = !currentlyVisible
+      if (outputPre) outputPre.style.display = nextShow && hasText ? '' : 'none'
+      if (media) media.style.display = nextShow && hasMedia ? 'flex' : 'none'
+      syncPyCellButtons()
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (action === 'toggle-session') {
+      const anchor = cell.querySelector?.('.guaxi-pycell-media') || outputPre
+      const panel = ensurePyCellSessionContainer(cell, anchor)
+      if (!panel) return
+      const nextVisible = String(panel.style.display || '').trim() === 'none'
+      panel.style.display = nextVisible ? 'block' : 'none'
+      if (nextVisible) panel.setAttribute('data-force-visible', 'true')
+      else panel.removeAttribute('data-force-visible')
+      if (!panel.innerHTML.trim()) {
+        renderPyCellSessionState(cell, { session_id: sessionId, session_vars: [] }, { forceVisible: nextVisible })
+      }
+      syncPyCellButtons()
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (action === 'restart-session') {
+      try {
+        await invoke('python_reset_repl')
+        if (outputEl) outputEl.textContent = ''
+        if (outputPre) outputPre.style.display = 'none'
+        const media = cell.querySelector?.('.guaxi-pycell-media')
+        if (media) {
+          media.innerHTML = ''
+          media.style.display = 'none'
+        }
+        clearPyCellSessionPanel(cell)
+        renderPyCellSessionState(cell, { session_id: sessionId, session_vars: [] }, { forceVisible: true })
+        message.success('Python 会话已重启')
+        syncPyCellButtons()
+      } catch (err) {
+        logger.error('[PyCell] reset failed', err)
+        message.error(`重启 Python 会话失败：${String(err?.message || err)}`)
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (action === 'inject-note') {
+      const noteText = String(editor?.getModel?.()?.getValue?.() || rawContent.value || '')
+      const code = [
+        `_note_path = ${JSON.stringify(String(docPath))}`,
+        `_note_text = ${JSON.stringify(noteText)}`,
+        '_note_lines = _note_text.splitlines()',
+        '_result = {"note_path": _note_path, "line_count": len(_note_lines), "char_count": len(_note_text)}',
+      ].join('\n')
+
+      try {
+        const res = await invoke('python_exec', {
+          request: {
+            code,
+            persist: true,
+            expect_json: true,
+            vars: {
+              _guaxi_session: sessionId,
+              _doc_path: String(docPath),
+              _py_cell_id: String(cellId || ''),
+            },
+          },
+        })
+        renderPyCellSessionState(cell, res, { forceVisible: true })
+        syncPyCellButtons()
+        message.success('当前笔记已注入到 Python 会话')
+      } catch (err) {
+        logger.error('[PyCell] inject note failed', err)
+        message.error(`注入笔记失败：${String(err?.message || err)}`)
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (action === 'import-table') {
+      try {
+        const selected = await open({
+          multiple: false,
+          filters: [{
+            name: 'Table',
+            extensions: ['csv', 'tsv', 'json', 'xlsx', 'xls', 'parquet'],
+          }],
+        })
+        if (!selected || Array.isArray(selected)) {
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
+
+        const selectedPath = String(selected)
+        const fileName = selectedPath.split(/[\\/]/).pop() || 'df'
+        const variableName = sanitizePythonIdentifier(fileName, 'df')
+        const code = [
+          'from pathlib import Path',
+          `__guaxi_table_path = ${JSON.stringify(selectedPath)}`,
+          `__guaxi_var_name = ${JSON.stringify(variableName)}`,
+          '__guaxi_ext = Path(__guaxi_table_path).suffix.lower()',
+          'try:',
+          '    import pandas as pd',
+          'except Exception:',
+          '    pd = None',
+          'if pd is not None:',
+          "    if __guaxi_ext in ('.csv', '.txt'):",
+          '        __guaxi_value = pd.read_csv(__guaxi_table_path)',
+          "    elif __guaxi_ext == '.tsv':",
+          "        __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
+          "    elif __guaxi_ext in ('.xlsx', '.xls'):",
+          '        __guaxi_value = pd.read_excel(__guaxi_table_path)',
+          "    elif __guaxi_ext == '.json':",
+          '        __guaxi_value = pd.read_json(__guaxi_table_path)',
+          "    elif __guaxi_ext == '.parquet':",
+          '        __guaxi_value = pd.read_parquet(__guaxi_table_path)',
+          '    else:',
+          "        raise ValueError(f'Unsupported table format: {__guaxi_ext or __guaxi_table_path}')",
+          'else:',
+          "    if __guaxi_ext in ('.csv', '.txt', '.tsv'):",
+          '        import csv',
+          "        with open(__guaxi_table_path, 'r', encoding='utf-8-sig', newline='') as __guaxi_f:",
+          "            __guaxi_value = list(csv.DictReader(__guaxi_f, delimiter='\\t' if __guaxi_ext == '.tsv' else ','))",
+          "    elif __guaxi_ext == '.json':",
+          '        import json',
+          "        with open(__guaxi_table_path, 'r', encoding='utf-8') as __guaxi_f:",
+          '            __guaxi_value = json.load(__guaxi_f)',
+          '    else:',
+          "        raise ValueError('当前运行环境需要 pandas 才能导入这种文件类型')",
+          'globals()[__guaxi_var_name] = __guaxi_value',
+          '_result = __guaxi_value',
+        ].join('\n')
+
+        const res = await invoke('python_exec', {
+          request: {
+            code,
+            persist: true,
+            expect_json: true,
+            vars: {
+              _guaxi_session: sessionId,
+              _doc_path: String(docPath),
+              _py_cell_id: String(cellId || ''),
+            },
+          },
+        })
+        const outputText = formatPythonExecOutput(res)
+        if (outputEl) outputEl.textContent = outputText
+        if (outputPre) outputPre.style.display = String(outputText || '').trim().length > 0 ? '' : 'none'
+        renderPyCellDisplay(cell, outputPre, res, outputText)
+        renderPyCellSessionState(cell, res, { forceVisible: true })
+        syncPyCellButtons()
+        if (res?.ok === false) throw new Error(String(res?.stderr || res?.stdout || '导入失败'))
+        message.success(`表格已导入到会话变量 ${variableName}`)
+      } catch (err) {
+        logger.error('[PyCell] import table failed', err)
+        message.error(`导入表格失败：${String(err?.message || err)}`)
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (action === 'run' || action === 'run-save') {
+      const code = guaxiSafeDecode(cell.getAttribute('data-guaxi-py-code'))
+      const startLine = Number(cell.getAttribute('data-guaxi-md-start-line'))
+      if (!code) {
+        message.warning('代码为空')
+        e.stopPropagation()
+        return
+      }
+
+      const media = cell.querySelector?.('.guaxi-pycell-media')
+      if (media) {
+        media.innerHTML = ''
+        media.style.display = 'none'
+      }
+
+      if (outputPre) outputPre.style.display = ''
+      if (outputEl) outputEl.textContent = '运行中...'
+      syncPyCellButtons()
+
+      const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
+      relatedBtns.forEach((b) => {
+        try {
+          b.setAttribute('disabled', 'true')
+          b.style.opacity = '0.6'
+          b.style.cursor = 'not-allowed'
+        } catch {
+        }
+      })
+
+      try {
+        const res = await invoke('python_exec', {
+          request: {
+            code,
+            persist: true,
+            expect_json: true,
+            vars: {
+              _guaxi_session: sessionId,
+              _doc_path: String(docPath),
+              _py_cell_id: String(cellId || ''),
+            },
+          },
+        })
+
+        const outputText = formatPythonExecOutput(res)
+        const hideText = String(outputText || '').trim().length === 0
+        if (outputPre) outputPre.style.display = hideText ? 'none' : ''
+        if (outputEl) outputEl.textContent = hideText ? '' : outputText
+
+        renderPyCellDisplay(cell, outputPre, res, outputText)
+        renderPyCellSessionState(cell, res)
+        syncPyCellButtons()
+
+        if (res?.ok === false) {
+          message.error('Python 执行失败')
+        }
+
+        if (action === 'run-save') {
+          const hasTextOutput = String(outputText || '').trim().length > 0
+          if (!hasTextOutput) {
+            message.success('运行完成（无文字输出，未写回）')
+          } else {
+            suppressPreviewAutoRenderOnce(`pycell:${action}`, 1500)
+            const current = String(editor?.getModel?.()?.getValue?.() || rawContent.value || '')
+            const nextMarkdown = upsertPythonOutputBlock(
+              current,
+              Number.isFinite(startLine) ? startLine : null,
+              cellId || 'pycell',
+              outputText
+            )
+            applyMarkdownReplaceFromPreview(nextMarkdown, { action: 'pycell-run-save' })
+            message.success('已写回到文档（未自动保存）')
+          }
+        } else {
+          message.success('运行完成')
+        }
+      } catch (err) {
+        logger.error('[PyCell] run failed', err)
+        if (outputPre) outputPre.style.display = ''
+        if (outputEl) outputEl.textContent = `运行失败：${String(err?.message || err)}`
+        syncPyCellButtons()
+        message.error('运行失败')
+      } finally {
+        relatedBtns.forEach((b) => {
+          try {
+            b.removeAttribute('disabled')
+            b.style.opacity = ''
+            b.style.cursor = ''
+          } catch {
+          }
+        })
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
   }
 
   // 可执行 Python 代码块：预览点击“运行/运行并写回/显示结果”
@@ -12343,6 +12807,25 @@ watch([rawContent, shouldAutoRenderPreview], () => {
   renderDebounced(rawContent.value);
 });
 
+function cleanupPreviewPdfBlobUrls() {
+  const container = previewContainer.value
+  if (!(container instanceof HTMLElement)) return
+
+  const medias = Array.from(container.querySelectorAll('.guaxi-codecell-media[data-blob-url]'))
+  medias.forEach((media) => {
+    const oldUrl = String(media.getAttribute('data-blob-url') || '').trim()
+    if (!oldUrl) return
+    try {
+      URL.revokeObjectURL(oldUrl)
+    } catch (error) {
+      logger.warn('[CodeCell] revoke preview pdf blob failed', error)
+    }
+    media.removeAttribute('data-blob-url')
+  })
+
+  logger.info('[CodeCell] preview pdf blob urls cleaned', { count: medias.length })
+}
+
 // 监听内容变化
 watch(renderedHtml, () => {
   nextTick(() => {
@@ -12353,6 +12836,9 @@ watch(renderedHtml, () => {
       addMediaViewerButtons(previewContainer.value, {
         theme: getMarkdownPreviewThemeName()
       });
+      previewContainer.value.querySelectorAll('.guaxi-pycell').forEach((cell) => {
+        ensurePyCellToolbarEnhancements(cell)
+      })
       void renderPreviewMermaidDiagrams(previewContainer.value).catch((error) => {
         logger.error('预览区 Mermaid 渲染失败', error);
       });
@@ -15054,6 +15540,108 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
+.guaxi-pycell-session {
+  margin-top: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.92);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+
+.guaxi-pycell-session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 8px;
+}
+
+.guaxi-pycell-session-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary, #0f172a);
+}
+
+.guaxi-pycell-session-meta {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #64748b);
+}
+
+.guaxi-pycell-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 0 14px 14px;
+}
+
+.guaxi-pycell-var-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.guaxi-pycell-var-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.guaxi-pycell-var-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary, #0f172a);
+}
+
+.guaxi-pycell-var-type {
+  font-size: 11px;
+  color: var(--guaxi-text-secondary, #64748b);
+}
+
+.guaxi-pycell-var-preview {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary, #475569);
+  word-break: break-word;
+}
+
+.guaxi-pycell-session-empty {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--guaxi-text-secondary, #64748b);
+  font-size: 12px;
+}
+
+.guaxi-pycell-rich-display {
+  width: 100%;
+  overflow: auto;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 14px;
+}
+
+.guaxi-pycell-svg-display svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.guaxi-pycell-markdown-display {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .preview .guaxi-codecell-btn,
 .preview .guaxi-pycell-btn {
   display: inline-flex;
@@ -15482,6 +16070,40 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-table td {
   color: #e6edf3;
   border-bottom-color: rgba(71, 85, 105, 0.4);
+}
+
+.dark-mode .guaxi-pycell-session,
+.dark-mode .guaxi-pycell-rich-display,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-session,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-rich-display {
+  background: rgba(15, 23, 42, 0.84);
+  border-color: rgba(71, 85, 105, 0.42);
+}
+
+.dark-mode .guaxi-pycell-var-row,
+.dark-mode .guaxi-pycell-session-empty,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-var-row,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-session-empty {
+  background: rgba(15, 23, 42, 0.68);
+  border-color: rgba(71, 85, 105, 0.35);
+}
+
+.dark-mode .guaxi-pycell-session-title,
+.dark-mode .guaxi-pycell-var-name,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-session-title,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-var-name {
+  color: rgba(226, 232, 240, 0.96);
+}
+
+.dark-mode .guaxi-pycell-session-meta,
+.dark-mode .guaxi-pycell-var-type,
+.dark-mode .guaxi-pycell-var-preview,
+.dark-mode .guaxi-pycell-session-empty,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-session-meta,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-var-type,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-var-preview,
+:root[data-guaxi-theme='dark'] .guaxi-pycell-session-empty {
+  color: rgba(148, 163, 184, 0.94);
 }
 
 .dark-mode .preview .guaxi-codecell-btn,
