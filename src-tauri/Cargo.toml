@@ -23,7 +23,13 @@ rayon = "1.10.0"
 zstd = { version = "0.13.2", features = ["zstdmt"] }
 
 [profile.release]
-debug = true
+# The release binary is very large and pulls in many native dependencies.
+# Keeping full debug info in release was causing rustc/LLVM to run out of
+# memory on Windows build machines, so release packaging uses a leaner profile.
+debug = 0
+codegen-units = 16
+panic = "abort"
+strip = "debuginfo"
 
 [dependencies]
 tauri = { version = "2.9.5", features = ["protocol-asset"] }
