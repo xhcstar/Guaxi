@@ -218,7 +218,7 @@
             保存 (Ctrl+S)
           </n-tooltip>
 
-          <n-popover trigger="click" placement="bottom" :show="pythonRuntimePopoverVisible"
+          <n-popover v-if="false" class="toolbar-action-python" trigger="click" placement="bottom" :show="pythonRuntimePopoverVisible"
             @update:show="handlePythonRuntimePopoverUpdateShow">
             <template #trigger>
               <button type="button" class="python-runtime-entry" :class="{ busy: pythonRuntimeBusy }">
@@ -380,6 +380,116 @@
             </template>
             Markdown语法查询手册
           </n-tooltip>
+          <div ref="pythonRuntimeAnchorRef" class="python-runtime-anchor">
+            <button
+              type="button"
+              class="python-runtime-entry"
+              :class="{ busy: pythonRuntimeBusy, active: pythonRuntimePopoverVisible }"
+              @click="togglePythonRuntimeWorkbench"
+            >
+              <Icon :icon="squareTerminalIcon" width="14" height="14" />
+              <span class="python-runtime-entry__label">Py</span>
+              <span class="python-runtime-entry__dot" :class="pythonRuntimeStatusClass"></span>
+            </button>
+
+            <transition name="python-runtime-panel-fade">
+              <div
+                v-if="pythonRuntimePopoverVisible"
+                ref="pythonRuntimePanelRef"
+                class="python-runtime-workbench python-runtime-popover python-runtime-panel"
+                :class="{ 'is-dark': settingsStore.appearanceTheme === 'dark' }"
+                @mousedown.stop
+              >
+              <div class="python-runtime-panel__header">
+                <div>
+                  <div class="python-runtime-panel__title">Python 工作台</div>
+                  <div class="python-runtime-panel__subtitle">{{ pythonRuntimeDisplaySummary }}</div>
+                </div>
+                <button type="button" class="python-runtime-ghost-btn" @click="refreshPythonRuntimeStatus('popover-refresh')">
+                  刷新
+                </button>
+              </div>
+
+              <div class="python-runtime-status-card" :class="pythonRuntimeStatusTone">
+                <div class="python-runtime-status-card__row">
+                  <span class="python-runtime-status-card__label">状态</span>
+                  <span class="python-runtime-status-card__value">{{ pythonRuntimeDisplayStatus }}</span>
+                </div>
+                <div class="python-runtime-status-card__row">
+                  <span class="python-runtime-status-card__label">版本</span>
+                  <span class="python-runtime-status-card__value">{{ pythonRuntimeStatus?.version || '未就绪' }}</span>
+                </div>
+                <div class="python-runtime-status-card__row">
+                  <span class="python-runtime-status-card__label">会话</span>
+                  <span class="python-runtime-status-card__value">{{ pythonRuntimeStatus?.worker_alive ? '已连接' : '未启动' }}</span>
+                </div>
+              </div>
+
+              <div class="python-runtime-panel__actions">
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="resetPythonKernelSession">
+                  重启会话
+                </button>
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="installPythonRuntimeArchive">
+                  导入运行时包
+                </button>
+              </div>
+
+              <div v-if="pythonRuntimeArchiveInspection" class="python-runtime-archive-card">
+                <div class="python-runtime-archive-card__title">运行时包检查结果</div>
+                <div class="python-runtime-archive-card__meta">
+                  <span>解释器：{{ pythonRuntimeArchiveInspection?.python_entry_found ? '已检测到' : '未检测到' }}</span>
+                  <span>候选数：{{ pythonRuntimeArchiveInspection?.candidate_count || 0 }}</span>
+                </div>
+                <div v-if="pythonRuntimeArchiveInspection?.warnings?.length" class="python-runtime-archive-card__warnings">
+                  <span v-for="warning in pythonRuntimeArchiveInspection.warnings" :key="warning">{{ warning }}</span>
+                </div>
+              </div>
+
+              <div class="python-runtime-install-card">
+                <div class="python-runtime-section__title">安装 Python 包</div>
+                <div class="python-runtime-install">
+                  <input v-model="pythonRuntimePackageInput" class="python-runtime-install__input"
+                    placeholder="输入包名，例如 pandas matplotlib openpyxl" />
+                  <button type="button" class="python-runtime-install__btn"
+                    :disabled="pythonRuntimeBusy || !pythonRuntimePackageInput.trim()" @click="installPythonRuntimePackages">
+                    安装
+                  </button>
+                </div>
+                <div class="python-runtime-packages__list python-runtime-packages__list--compact">
+                  <button
+                    v-for="pkg in PYTHON_RUNTIME_RECOMMENDED_PACKAGES"
+                    :key="pkg.value"
+                    type="button"
+                    class="python-runtime-package-pill python-runtime-package-pill--button"
+                    :disabled="pythonRuntimeBusy"
+                    :title="pkg.description"
+                    @click="installRecommendedPythonPackage(pkg.value)"
+                  >
+                    {{ pkg.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="python-runtime-package-browser">
+                <div class="python-runtime-package-browser__header">
+                  <div class="python-runtime-section__title">已安装的包</div>
+                  <input v-model="pythonRuntimePackageSearch" class="python-runtime-package-browser__search"
+                    placeholder="搜索已安装包" />
+                </div>
+                <div class="python-runtime-package-browser__list">
+                  <div v-if="pythonRuntimePackagesFiltered.length" class="python-runtime-package-browser__items">
+                    <div v-for="pkg in pythonRuntimePackagesFiltered" :key="pkg" class="python-runtime-package-row">
+                      {{ pkg }}
+                    </div>
+                  </div>
+                  <div v-else class="python-runtime-package-browser__empty">
+                    {{ pythonRuntimeStatus?.packages?.length ? '没有匹配的包' : '暂无已安装包信息' }}
+                  </div>
+                </div>
+              </div>
+              </div>
+            </transition>
+          </div>
         </div>
       </div>
     </div>
@@ -851,10 +961,13 @@ const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
 const previewContainer = ref(null);
+const pythonRuntimeAnchorRef = ref(null)
+const pythonRuntimePanelRef = ref(null)
 const pythonRuntimePopoverVisible = ref(false)
 const pythonRuntimeBusy = ref(false)
 const pythonRuntimeStatus = ref(null)
 const pythonRuntimePackageInput = ref('')
+const pythonRuntimePackageSearch = ref('')
 const pythonRuntimeArchivePath = ref('')
 const pythonRuntimeArchiveInspection = ref(null)
 const PYTHON_RUNTIME_RECOMMENDED_PACKAGES = [
@@ -2536,6 +2649,31 @@ const pythonRuntimeSummary = computed(() => {
   const sourceLabel = pythonRuntimeSourceLabel.value
   const workerLabel = pythonRuntimeStatus.value?.worker_alive ? 'Worker 已连接' : 'Worker 待启动'
   return `${sourceLabel} · ${workerLabel}`
+})
+
+const pythonRuntimeDisplayStatus = computed(() => {
+  if (pythonRuntimeBusy.value) return '准备中'
+  if (!pythonRuntimeStatus.value?.ready) return '不可用'
+  if (!pythonRuntimeStatus.value?.initialized) return '待初始化'
+  if (pythonRuntimeStatus.value?.worker_alive) return '运行中'
+  return '已就绪'
+})
+const pythonRuntimeDisplaySummary = computed(() => {
+  if (pythonRuntimeBusy.value) return '正在同步 Python 环境'
+  if (!pythonRuntimeStatus.value?.ready) return '未检测到可用 Python'
+  return `Guaxi Python · ${pythonRuntimeDisplayStatus.value}`
+})
+const pythonRuntimeStatusTone = computed(() => {
+  if (!pythonRuntimeStatus.value?.ready) return 'is-danger'
+  if (pythonRuntimeBusy.value || pythonRuntimeNeedsSetup.value) return 'is-warning'
+  if (pythonRuntimeStatus.value?.worker_alive) return 'is-success'
+  return 'is-neutral'
+})
+const pythonRuntimePackagesFiltered = computed(() => {
+  const keyword = String(pythonRuntimePackageSearch.value || '').trim().toLowerCase()
+  const packages = Array.isArray(pythonRuntimeStatus.value?.packages) ? pythonRuntimeStatus.value.packages : []
+  if (!keyword) return packages
+  return packages.filter((pkg) => String(pkg || '').toLowerCase().includes(keyword))
 })
 
 let unlistenTemplateInsert = null
@@ -9693,6 +9831,8 @@ const insertSnippetAtCursor = (snippet) => {
   targetEditor.focus?.()
 }
 
+const shouldAutoPreparePythonRuntime = (status) => !!status?.ready && !status?.initialized
+
 const refreshPythonRuntimeStatus = async (reason = 'manual') => {
   pythonRuntimeBusy.value = true
   try {
@@ -9715,30 +9855,71 @@ const refreshPythonRuntimeStatus = async (reason = 'manual') => {
   }
 }
 
-const handlePythonRuntimePopoverUpdateShow = (show) => {
-  pythonRuntimePopoverVisible.value = !!show
-  if (show) {
-    void refreshPythonRuntimeStatus('popover-open')
+const ensurePythonRuntimeInitialized = async (reason = 'auto', options = {}) => {
+  const { silent = false, notify = !silent } = options
+  if (!shouldAutoPreparePythonRuntime(pythonRuntimeStatus.value)) return false
+
+  pythonRuntimeBusy.value = true
+  try {
+    logger.info('[PythonRuntime] auto initialize requested', { reason })
+    const res = await invoke('python_runtime_initialize')
+    logger.info('[PythonRuntime] auto initialize completed', {
+      reason,
+      runtimeDir: res?.runtime_dir || '',
+      pythonPath: res?.python_path || '',
+    })
+    if (notify) {
+      message.success('Python 运行时已初始化')
+    }
+    await refreshPythonRuntimeStatus(`initialized:${reason}`)
+    return true
+  } catch (error) {
+    logger.error('[PythonRuntime] auto initialize failed', { reason, error })
+    if (!silent) {
+      message.error(`初始化失败：${String(error?.message || error)}`)
+    }
+    return false
+  } finally {
+    pythonRuntimeBusy.value = false
+  }
+}
+
+const openPythonRuntimeWorkbench = async () => {
+  pythonRuntimePopoverVisible.value = true
+  await refreshPythonRuntimeStatus('popover-open')
+  await ensurePythonRuntimeInitialized('popover-open', { silent: true, notify: false })
+}
+
+const closePythonRuntimeWorkbench = () => {
+  pythonRuntimePopoverVisible.value = false
+}
+
+const togglePythonRuntimeWorkbench = () => {
+  if (pythonRuntimePopoverVisible.value) {
+    closePythonRuntimeWorkbench()
+    return
+  }
+  void openPythonRuntimeWorkbench()
+}
+
+const handlePythonRuntimeWorkbenchPointerDown = (event) => {
+  if (!pythonRuntimePopoverVisible.value) return
+  const target = event?.target
+  if (!(target instanceof Node)) return
+  if (pythonRuntimeAnchorRef.value?.contains?.(target)) return
+  if (pythonRuntimePanelRef.value?.contains?.(target)) return
+  closePythonRuntimeWorkbench()
+}
+
+const handlePythonRuntimeWorkbenchKeydown = (event) => {
+  if (!pythonRuntimePopoverVisible.value) return
+  if (event?.key === 'Escape') {
+    closePythonRuntimeWorkbench()
   }
 }
 
 const initializePythonRuntime = async () => {
-  pythonRuntimeBusy.value = true
-  try {
-    logger.info('[PythonRuntime] initialize requested')
-    const res = await invoke('python_runtime_initialize')
-    logger.info('[PythonRuntime] initialize completed', {
-      runtimeDir: res?.runtime_dir || '',
-      pythonPath: res?.python_path || '',
-    })
-    message.success('Python 运行时已初始化')
-    await refreshPythonRuntimeStatus('initialized')
-  } catch (error) {
-    logger.error('[PythonRuntime] initialize failed', error)
-    message.error(`初始化失败：${String(error?.message || error)}`)
-  } finally {
-    pythonRuntimeBusy.value = false
-  }
+  await ensurePythonRuntimeInitialized('manual', { silent: false, notify: true })
 }
 
 const installPythonPackages = async (packages, reason = 'manual') => {
@@ -12816,12 +12997,17 @@ onMounted(() => {
   window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.addEventListener('selectionchange', handleGlobalSelectionChange, true)
   document.addEventListener('mousedown', handleGlobalMouseDownForPreviewToolbar, true)
+  document.addEventListener('mousedown', handlePythonRuntimeWorkbenchPointerDown, true)
+  window.addEventListener('keydown', handlePythonRuntimeWorkbenchKeydown, true)
   outlineStore.setJumpToLine(jumpToLine)
   initGitService()
   void refreshLspEnabledSetting()
 
   restoreHomePreviewMode('mounted')
-  void refreshPythonRuntimeStatus('mounted')
+  void (async () => {
+    await refreshPythonRuntimeStatus('mounted')
+    await ensurePythonRuntimeInitialized('mounted', { silent: true, notify: false })
+  })()
 
   const intervalMs = Number(editorStore.autoSaveIntervalMs) || AUTO_SAVE_FALLBACK_INTERVAL_MS
   if (editorStore.autoSaveEnabled !== false && intervalMs > 0) {
@@ -12853,6 +13039,8 @@ onUnmounted(() => {
   window.removeEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.removeEventListener('selectionchange', handleGlobalSelectionChange, true)
   document.removeEventListener('mousedown', handleGlobalMouseDownForPreviewToolbar, true)
+  document.removeEventListener('mousedown', handlePythonRuntimeWorkbenchPointerDown, true)
+  window.removeEventListener('keydown', handlePythonRuntimeWorkbenchKeydown, true)
   disposeLspConnectionStateListener?.()
   disposeLspConnectionStateListener = null
   clearPreviewSelectionState()
@@ -13087,7 +13275,7 @@ onUnmounted(() => {
   box-sizing: border-box;
   min-width: 0;
   flex-wrap: nowrap;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .toolbar-editing-actions {
@@ -13276,6 +13464,10 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+.toolbar-action-python {
+  order: 999;
+}
+
 .python-runtime-entry {
   display: inline-flex;
   align-items: center;
@@ -13301,6 +13493,35 @@ onUnmounted(() => {
 
 .python-runtime-entry.busy {
   opacity: 0.72;
+}
+
+.python-runtime-entry.active {
+  border-color: color-mix(in srgb, var(--primary-color, #4acadb) 46%, var(--guaxi-border));
+  box-shadow: 0 12px 26px rgba(74, 202, 219, 0.16);
+}
+
+.python-runtime-anchor {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.python-runtime-workbench {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 80;
+}
+
+.python-runtime-panel-fade-enter-active,
+.python-runtime-panel-fade-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.python-runtime-panel-fade-enter-from,
+.python-runtime-panel-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
 }
 
 .python-runtime-entry__label {
@@ -13612,6 +13833,243 @@ onUnmounted(() => {
   border-color: color-mix(in srgb, var(--primary-color, #4acadb) 45%, var(--guaxi-border));
 }
 
+.python-runtime-panel {
+  width: min(440px, calc(100vw - 28px));
+  gap: 14px;
+  padding: 14px;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.98), rgba(247, 250, 253, 0.96)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 247, 251, 0.98));
+  box-shadow:
+    0 22px 48px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.python-runtime-panel.is-dark {
+  border-color: rgba(71, 85, 105, 0.72);
+  background:
+    radial-gradient(circle at top left, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.96)),
+    linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.98));
+  box-shadow:
+    0 22px 48px rgba(2, 6, 23, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.python-runtime-panel.is-dark .python-runtime-meta__item,
+.python-runtime-panel.is-dark .python-runtime-package-pill,
+.python-runtime-panel.is-dark .python-runtime-guide,
+.python-runtime-panel.is-dark .python-runtime-archive-card,
+.python-runtime-panel.is-dark .python-runtime-status-card,
+.python-runtime-panel.is-dark .python-runtime-install-card,
+.python-runtime-panel.is-dark .python-runtime-package-browser,
+.python-runtime-panel.is-dark .python-runtime-package-row {
+  border-color: rgba(71, 85, 105, 0.72);
+  background: rgba(15, 23, 42, 0.68);
+}
+
+.python-runtime-panel.is-dark .python-runtime-ghost-btn,
+.python-runtime-panel.is-dark .python-runtime-chip-btn,
+.python-runtime-panel.is-dark .python-runtime-install__btn,
+.python-runtime-panel.is-dark .python-runtime-install__input,
+.python-runtime-panel.is-dark .python-runtime-package-browser__search {
+  border-color: rgba(71, 85, 105, 0.72);
+  background: rgba(15, 23, 42, 0.72);
+  color: #e6edf3;
+}
+
+.python-runtime-panel.is-dark .python-runtime-panel__title,
+.python-runtime-panel.is-dark .python-runtime-status-card__value,
+.python-runtime-panel.is-dark .python-runtime-section__title,
+.python-runtime-panel.is-dark .python-runtime-package-row {
+  color: #e6edf3;
+}
+
+.python-runtime-panel.is-dark .python-runtime-panel__subtitle,
+.python-runtime-panel.is-dark .python-runtime-status-card__label,
+.python-runtime-panel.is-dark .python-runtime-package-browser__empty {
+  color: #94a3b8;
+}
+
+.python-runtime-panel.is-dark .python-runtime-status-card.is-success {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: linear-gradient(180deg, rgba(20, 83, 45, 0.48), rgba(20, 83, 45, 0.28));
+}
+
+.python-runtime-panel.is-dark .python-runtime-status-card.is-warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: linear-gradient(180deg, rgba(120, 53, 15, 0.48), rgba(120, 53, 15, 0.28));
+}
+
+.python-runtime-panel.is-dark .python-runtime-status-card.is-danger {
+  border-color: rgba(244, 63, 94, 0.3);
+  background: linear-gradient(180deg, rgba(127, 29, 29, 0.5), rgba(127, 29, 29, 0.28));
+}
+
+.python-runtime-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.python-runtime-panel__title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-panel__subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-panel__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.python-runtime-status-card,
+.python-runtime-install-card,
+.python-runtime-package-browser,
+.python-runtime-archive-card {
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 82%, transparent);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.python-runtime-status-card {
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.python-runtime-status-card.is-success {
+  border-color: rgba(24, 160, 88, 0.28);
+  background: linear-gradient(180deg, rgba(240, 253, 244, 0.98), rgba(236, 252, 242, 0.88));
+}
+
+.python-runtime-status-card.is-warning {
+  border-color: rgba(245, 159, 0, 0.28);
+  background: linear-gradient(180deg, rgba(255, 249, 219, 0.98), rgba(255, 244, 199, 0.88));
+}
+
+.python-runtime-status-card.is-danger {
+  border-color: rgba(208, 48, 80, 0.22);
+  background: linear-gradient(180deg, rgba(255, 241, 242, 0.98), rgba(255, 228, 230, 0.88));
+}
+
+.python-runtime-status-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.python-runtime-status-card__label {
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-status-card__value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-install-card,
+.python-runtime-package-browser {
+  padding: 14px;
+}
+
+.python-runtime-section__title {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-packages__list--compact {
+  margin-top: 10px;
+}
+
+.python-runtime-package-browser__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.python-runtime-package-browser__header .python-runtime-section__title {
+  margin-bottom: 0;
+}
+
+.python-runtime-package-browser__search {
+  width: min(180px, 48%);
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--guaxi-border);
+  outline: none;
+  background: var(--guaxi-content-bg);
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-package-browser__list {
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.python-runtime-package-browser__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.python-runtime-package-row {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 84%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+  color: var(--guaxi-text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.python-runtime-package-browser__empty {
+  padding: 18px 10px;
+  text-align: center;
+  color: var(--guaxi-text-secondary);
+  font-size: 12px;
+}
+
+:global(.python-runtime-popover-overlay) {
+  background: transparent !important;
+}
+
+:global(.python-runtime-popover-overlay .n-popover__content) {
+  padding: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+:global(.python-runtime-popover-overlay .n-popover-shared) {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+:global(.python-runtime-popover-overlay .n-popover-arrow-wrapper) {
+  display: none !important;
+}
+
 .mode-toggle {
   cursor: pointer;
   padding: 2px 6px;
@@ -13633,8 +14091,7 @@ onUnmounted(() => {
     height: 30px;
     flex-wrap: nowrap;
     justify-content: space-between;
-    overflow: hidden;
-    contain: paint;
+    overflow: visible;
   }
 
   .toolbar-spacer {
@@ -14875,38 +15332,137 @@ onUnmounted(() => {
   border-color: rgba(71, 85, 105, 0.72);
 }
 
+.dark-mode .python-runtime-meta__item,
+.dark .python-runtime-meta__item,
+.dark-mode .python-runtime-package-pill,
+.dark .python-runtime-package-pill,
+.dark-mode .python-runtime-guide,
+.dark .python-runtime-guide,
+.dark-mode .python-runtime-archive-card,
+.dark .python-runtime-archive-card,
+.dark-mode .python-runtime-status-card,
+.dark .python-runtime-status-card,
+.dark-mode .python-runtime-install-card,
+.dark .python-runtime-install-card,
+.dark-mode .python-runtime-package-browser,
+.dark .python-runtime-package-browser,
+.dark-mode .python-runtime-package-row,
+.dark .python-runtime-package-row,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-meta__item,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-guide,
-:global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card {
+:global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-install-card,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row {
   border-color: rgba(71, 85, 105, 0.72);
   background: rgba(15, 23, 42, 0.68);
 }
 
+.dark-mode .python-runtime-ghost-btn,
+.dark .python-runtime-ghost-btn,
+.dark-mode .python-runtime-chip-btn,
+.dark .python-runtime-chip-btn,
+.dark-mode .python-runtime-install__btn,
+.dark .python-runtime-install__btn,
+.dark-mode .python-runtime-install__input,
+.dark .python-runtime-install__input,
+.dark-mode .python-runtime-package-browser__search,
+.dark .python-runtime-package-browser__search,
+.dark-mode .guaxi-dataframe-btn,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-ghost-btn,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-chip-btn,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-install__btn,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-install__input,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser__search,
 :global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn {
   border-color: rgba(71, 85, 105, 0.72);
   background: rgba(15, 23, 42, 0.72);
   color: #e6edf3;
 }
 
+.dark-mode .python-runtime-guide__path-value,
+.dark .python-runtime-guide__path-value,
+.dark-mode .python-runtime-archive-card__path,
+.dark .python-runtime-archive-card__path,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-guide__path-value,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-archive-card__path {
   background: rgba(2, 6, 23, 0.42);
   color: #e6edf3;
 }
 
+.dark-mode .python-runtime-guide__step.done,
+.dark .python-runtime-guide__step.done,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-guide__step.done {
   color: #8af0b4;
   border-color: rgba(74, 222, 128, 0.26);
   background: rgba(22, 101, 52, 0.28);
 }
 
+.dark-mode .python-runtime-package-pill--button:hover,
+.dark .python-runtime-package-pill--button:hover,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-pill--button:hover {
   background: rgba(30, 41, 59, 0.96);
+}
+
+.dark-mode .python-runtime-panel,
+.dark .python-runtime-panel,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-panel {
+  background:
+    radial-gradient(circle at top left, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.96)),
+    linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.98));
+  box-shadow:
+    0 22px 48px rgba(2, 6, 23, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.dark-mode .python-runtime-status-card.is-success,
+.dark .python-runtime-status-card.is-success,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-success {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: linear-gradient(180deg, rgba(20, 83, 45, 0.48), rgba(20, 83, 45, 0.28));
+}
+
+.dark-mode .python-runtime-status-card.is-warning,
+.dark .python-runtime-status-card.is-warning,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: linear-gradient(180deg, rgba(120, 53, 15, 0.48), rgba(120, 53, 15, 0.28));
+}
+
+.dark-mode .python-runtime-status-card.is-danger,
+.dark .python-runtime-status-card.is-danger,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card.is-danger {
+  border-color: rgba(244, 63, 94, 0.3);
+  background: linear-gradient(180deg, rgba(127, 29, 29, 0.5), rgba(127, 29, 29, 0.28));
+}
+
+.dark-mode .python-runtime-panel__title,
+.dark .python-runtime-panel__title,
+.dark-mode .python-runtime-status-card__value,
+.dark .python-runtime-status-card__value,
+.dark-mode .python-runtime-section__title,
+.dark .python-runtime-section__title,
+.dark-mode .python-runtime-package-row,
+.dark .python-runtime-package-row,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-panel__title,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card__value,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-section__title,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-row {
+  color: #e6edf3;
+}
+
+.dark-mode .python-runtime-panel__subtitle,
+.dark .python-runtime-panel__subtitle,
+.dark-mode .python-runtime-status-card__label,
+.dark .python-runtime-status-card__label,
+.dark-mode .python-runtime-package-browser__empty,
+.dark .python-runtime-package-browser__empty,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-panel__subtitle,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-status-card__label,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser__empty {
+  color: #94a3b8;
 }
 
 :global(:root[data-guaxi-theme='dark']) .guaxi-dataframe-btn:hover {

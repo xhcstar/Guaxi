@@ -216,6 +216,60 @@ fn bundled_python_candidates(runtime_dir: &Path) -> Vec<PathBuf> {
     }
 }
 
+fn managed_venv_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join(".venv")
+}
+
+fn managed_python_candidates(runtime_dir: &Path) -> Vec<PathBuf> {
+    let venv_dir = managed_venv_dir(runtime_dir);
+    if cfg!(windows) {
+        vec![
+            venv_dir.join("Scripts").join("python.exe"),
+            venv_dir.join("python.exe"),
+        ]
+    } else {
+        vec![
+            venv_dir.join("bin").join("python"),
+            venv_dir.join("bin").join("python3"),
+        ]
+    }
+}
+
+fn managed_pip_config_path(runtime_dir: &Path) -> PathBuf {
+    let venv_dir = managed_venv_dir(runtime_dir);
+    if cfg!(windows) {
+        venv_dir.join("pip.ini")
+    } else {
+        venv_dir.join("pip.conf")
+    }
+}
+
+fn ensure_managed_pip_mirror(runtime_dir: &Path) -> Result<(), String> {
+    let venv_dir = managed_venv_dir(runtime_dir);
+    fs::create_dir_all(&venv_dir).map_err(|e| format!("create managed venv dir failed: {e}"))?;
+
+    let config_path = managed_pip_config_path(runtime_dir);
+    let desired = concat!(
+        "[global]\n",
+        "index-url = https://pypi.tuna.tsinghua.edu.cn/simple\n",
+        "\n",
+        "[install]\n",
+        "trusted-host = pypi.tuna.tsinghua.edu.cn\n",
+    );
+
+    let needs_write = match fs::read_to_string(&config_path) {
+        Ok(existing) => existing != desired,
+        Err(_) => true,
+    };
+
+    if needs_write {
+        fs::write(&config_path, desired)
+            .map_err(|e| format!("write managed pip mirror config failed: {e}"))?;
+    }
+
+    Ok(())
+}
+
 fn runtime_marker_path(runtime_dir: &Path) -> PathBuf {
     // runtime.json 作为桌面端“已完成初始化”的稳定标记，方便前端和后续模块复用。
     runtime_dir.join("runtime.json")
@@ -290,7 +344,7 @@ fn command_output_trimmed(mut command: Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn resolve_python_launch_spec() -> Result<PythonLaunchSpec, String> {
+fn resolve_python_base_launch_spec() -> Result<PythonLaunchSpec, String> {
     let runtime_dir = python_runtime_dir()?;
 
     for candidate in bundled_python_candidates(&runtime_dir) {
@@ -343,6 +397,55 @@ fn resolve_python_launch_spec() -> Result<PythonLaunchSpec, String> {
     }
 
     Err("未找到可用的 Python 解释器；请先提供 utils/python_runtime 或安装系统 Python。".to_string())
+}
+
+fn managed_python_launch_spec(runtime_dir: &Path, source: String) -> Result<PythonLaunchSpec, String> {
+    for candidate in managed_python_candidates(runtime_dir) {
+        if candidate.is_file() {
+            return Ok(PythonLaunchSpec {
+                program: candidate.to_string_lossy().to_string(),
+                base_args: Vec::new(),
+                source,
+                runtime_dir: runtime_dir.to_path_buf(),
+            });
+        }
+    }
+
+    Err(format!(
+        "未找到 Guaxi 管理的 Python 虚拟环境：{}",
+        managed_venv_dir(runtime_dir).to_string_lossy()
+    ))
+}
+
+fn ensure_managed_python_launch_spec() -> Result<PythonLaunchSpec, String> {
+    let base_spec = resolve_python_base_launch_spec()?;
+    let runtime_dir = base_spec.runtime_dir.clone();
+    let venv_dir = managed_venv_dir(&runtime_dir);
+    let has_managed_python = managed_python_candidates(&runtime_dir)
+        .into_iter()
+        .any(|candidate| candidate.is_file());
+
+    if !has_managed_python {
+        fs::create_dir_all(&runtime_dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
+
+        let mut command = Command::new(&base_spec.program);
+        command
+            .args(&base_spec.base_args)
+            .args(["-m", "venv"])
+            .arg(&venv_dir)
+            .current_dir(&runtime_dir);
+        let _ = command_output_trimmed(command)
+            .map_err(|e| format!("create Guaxi python virtualenv failed: {e}"))?;
+    }
+
+    ensure_managed_pip_mirror(&runtime_dir)?;
+    let managed_spec = managed_python_launch_spec(&runtime_dir, base_spec.source.clone())?;
+    let _ = ensure_pip_available(&managed_spec)?;
+    Ok(managed_spec)
+}
+
+fn resolve_python_launch_spec() -> Result<PythonLaunchSpec, String> {
+    ensure_managed_python_launch_spec()
 }
 
 fn ensure_worker_script(runtime_dir: &Path) -> Result<PathBuf, String> {
@@ -581,40 +684,62 @@ pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, Strin
 #[command]
 pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let spec = resolve_python_launch_spec()?;
-        let runtime_dir = spec.runtime_dir.clone();
+        let base_spec = resolve_python_base_launch_spec()?;
+        let runtime_dir = base_spec.runtime_dir.clone();
         let runtime_marker = runtime_marker_path(&runtime_dir);
         let bundled_runtime_present = bundled_python_candidates(&runtime_dir)
             .into_iter()
             .any(|candidate| candidate.is_file());
+        let initialized = runtime_is_initialized(&runtime_dir)
+            && managed_python_candidates(&runtime_dir)
+                .into_iter()
+                .any(|candidate| candidate.is_file());
+        let managed_spec = if initialized {
+            managed_python_launch_spec(&runtime_dir, base_spec.source.clone()).ok()
+        } else {
+            None
+        };
 
-        let mut version_cmd = Command::new(&spec.program);
-        version_cmd.args(&spec.base_args).arg("--version");
-        let version = command_output_trimmed(version_cmd)?;
+        let (python_path, version, pip_version, packages) = if let Some(spec) = managed_spec.as_ref() {
+            let mut version_cmd = Command::new(&spec.program);
+            version_cmd.args(&spec.base_args).arg("--version");
+            let version = command_output_trimmed(version_cmd)?;
+            let pip_version = ensure_pip_available(spec).unwrap_or_default();
+            let packages = list_python_packages(spec);
+            (spec.program.clone(), version, pip_version, packages)
+        } else {
+            let mut version_cmd = Command::new(&base_spec.program);
+            version_cmd.args(&base_spec.base_args).arg("--version");
+            let version = command_output_trimmed(version_cmd)?;
+            (
+                managed_venv_dir(&runtime_dir).to_string_lossy().to_string(),
+                version,
+                String::new(),
+                Vec::new(),
+            )
+        };
 
-        let pip_version = ensure_pip_available(&spec).unwrap_or_default();
-        let packages = list_python_packages(&spec);
         let worker_alive = {
             let mut guard = python_worker_state_cell()
                 .lock()
                 .map_err(|_| "lock python worker state failed".to_string())?;
-            match guard.as_mut() {
-                Some(state) => worker_is_alive(state),
-                None => false,
+            match (initialized, guard.as_mut()) {
+                (true, Some(state)) => worker_is_alive(state),
+                _ => false,
             }
         };
 
         Ok(PythonRuntimeStatus {
             ready: true,
-            source: spec.source,
-            python_path: spec.program,
+            source: base_spec.source,
+            python_path,
             runtime_dir: runtime_dir.to_string_lossy().to_string(),
             version,
             pip_version,
             worker_alive,
             packages,
             bundled_runtime_present,
-            initialized: runtime_is_initialized(&runtime_dir),
+            initialized,
             worker_script_ready: worker_script_ready(&runtime_dir),
             runtime_marker_path: runtime_marker.to_string_lossy().to_string(),
         })
@@ -626,7 +751,7 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
 #[command]
 pub async fn python_runtime_initialize() -> Result<PythonRuntimeInitResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let spec = resolve_python_launch_spec()?;
+        let spec = ensure_managed_python_launch_spec()?;
         let pip_version = ensure_pip_available(&spec)?;
         let _ = ensure_worker_script(&spec.runtime_dir)?;
         clear_python_worker()?;
@@ -637,6 +762,9 @@ pub async fn python_runtime_initialize() -> Result<PythonRuntimeInitResponse, St
             "python_path": spec.program,
             "source": spec.source,
             "pip_version": pip_version,
+            "venv_dir": managed_venv_dir(&spec.runtime_dir).to_string_lossy().to_string(),
+            "pip_config_path": managed_pip_config_path(&spec.runtime_dir).to_string_lossy().to_string(),
+            "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
         });
         fs::write(&marker_path, serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?)
             .map_err(|e| format!("write python runtime marker failed: {e}"))?;
@@ -781,6 +909,7 @@ pub async fn python_runtime_install_packages(
         let output = command
             .output()
             .map_err(|e| format!("install python packages failed: {e}"))?;
+        clear_python_worker()?;
 
         Ok(PythonInstallPackagesResponse {
             ok: output.status.success(),
