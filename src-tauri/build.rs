@@ -10,17 +10,26 @@ fn main() {
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
     let utils_dir = manifest_dir.join("utils");
-    let bundle_dir = utils_dir.join("__bundles");
     let profile = std::env::var("PROFILE").unwrap_or_default();
     let reuse_existing = matches!(
         std::env::var("GUAXI_REUSE_UTILS_ZIP").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
     );
+    let skip_bundle_prepare = matches!(
+        std::env::var("GUAXI_SKIP_BUNDLE_PREPARE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    );
 
     println!("cargo:rerun-if-changed={}", utils_dir.display());
-    println!("cargo:rerun-if-changed={}", bundle_dir.display());
     println!("cargo:rerun-if-env-changed=GUAXI_REUSE_UTILS_ZIP");
+    println!("cargo:rerun-if-env-changed=GUAXI_SKIP_BUNDLE_PREPARE");
     println!("cargo:rerun-if-env-changed=PROFILE");
+
+    if skip_bundle_prepare {
+        println!("cargo:warning=[utils.bundle] skipped by GUAXI_SKIP_BUNDLE_PREPARE");
+        tauri_build::build();
+        return;
+    }
 
     if profile != "debug" {
         // Debug/dev reads utils directly from the source tree, so preparing

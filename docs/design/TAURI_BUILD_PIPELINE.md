@@ -74,6 +74,10 @@
   执行完整 release 构建流程。
 - `npm run tauri -- build --reuse-utils-zip`
   复用已存在的 `utils` 分包，不重新打包资源。
+- `npm run tauri:build:reuse`
+  与上一条等价，但更适合日常直接使用，避免 npm 参数转发写错。
+- `npm run tauri:bundle:reuse`
+  复用已存在的 `utils` 分包执行 bundle。
 
 说明：
 
@@ -165,12 +169,15 @@ npm run tauri -- build --reuse-utils-zip
    - [`src-tauri/utils/__bundles`](/e:/Record/source/Vue/guaxi/src-tauri/utils/__bundles)
 8. 如果当前是 Windows，包装脚本还会构建：
    - `extract_utils_bundles.exe`
+   - 这一步会显式设置 `GUAXI_SKIP_BUNDLE_PREPARE=1`，避免 helper 的单独 release 编译再次触发 `build.rs` 重新打包 `utils` 分包。
 9. 之后脚本正式调用 `tauri build`。
 10. Tauri 先执行 [`src-tauri/tauri.conf.json`](/e:/Record/source/Vue/guaxi/src-tauri/tauri.conf.json) 中的：
     - `beforeBuildCommand = npm run build`
 11. 前端 `dist` 产物生成后，Cargo 开始 release 编译。
 12. Cargo 在编译前执行 [`build.rs`](/e:/Record/source/Vue/guaxi/src-tauri/build.rs)。
 13. `build.rs` 在 release 模式下再次调用 `prepare_utils_bundles()` 作为兜底。
+    - 如果设置了 `GUAXI_REUSE_UTILS_ZIP=1`，则尽量复用已有分包。
+    - 如果设置了 `GUAXI_SKIP_BUNDLE_PREPARE=1`，则完全跳过分包准备，只执行正常的 Cargo/Tauri 构建流程。
 14. Tauri 继续生成 NSIS 安装器。
 15. 打包成功后，包装脚本把外部资源和 helper 复制到安装器同级目录：
     - `utils_bundles/*.tar.zst`
@@ -205,6 +212,22 @@ Windows 打包成功后，发布目录中应至少包含：
 - `utils_bundles` 存放 `*.tar.zst`
 - `extract_utils_bundles.exe` 负责安装时解包
 - `README_utils_bundles.txt` 说明如何一起分发
+
+### 5.5 Windows release 构建的额外优化
+
+由于当前 `guaxi` 的 release 构建体量很大，Windows 下的 `rustc/LLVM` 容易在链接或代码生成阶段出现内存不足。
+
+为降低这类失败概率，包装脚本在 Windows 的 release 构建中会额外设置：
+
+- `CARGO_BUILD_JOBS=1`
+- `CARGO_INCREMENTAL=0`
+
+目的如下：
+
+- 将 release 构建串行化，减少并发 codegen 占用的峰值内存
+- 禁用 incremental，避免额外缓存状态继续拉高内存和磁盘占用
+
+对应实现位于 [`tools/run_tauri_with_utils.mjs`](/e:/Record/source/Vue/guaxi/tools/run_tauri_with_utils.mjs) 中的 `releaseCargoEnv()`。
 
 ---
 
@@ -338,11 +361,36 @@ extract_utils_bundles.exe --bundle-root "$EXEDIR\utils_bundles" --destination "$
 npm run tauri -- build --reuse-utils-zip
 ```
 
+或直接使用固定脚本：
+
+```bash
+npm run tauri:build:reuse
+```
+
 行为：
 
 - 外层 JS 包装脚本把复用意图传给 `prepare_utils_zip`
 - 同时设置 `GUAXI_REUSE_UTILS_ZIP=1`
-- `build.rs` 也会复用已存在的分包，避免 Cargo 编译阶段又重新打包一遍
+- `build.rs` 会优先复用已存在的分包，避免 Cargo 编译阶段又重新打包一遍
+- Windows 下单独编译 `extract_utils_bundles.exe` 时，也会继承复用环境变量
+
+如果使用 `reuse` 仍然看到日志里出现：
+
+```text
+[utils.bundle] prepared ...
+```
+
+而不是：
+
+```text
+[utils.bundle] reusing existing ...
+```
+
+则通常意味着以下情况之一：
+
+1. `src-tauri/utils/__bundles` 目录下没有可复用的 `*.tar.zst`
+2. 参与构建的某个子流程没有正确继承 `GUAXI_REUSE_UTILS_ZIP`
+3. 你运行的命令没有把参数真正转发给包装脚本
 
 ---
 
@@ -360,7 +408,52 @@ npm run tauri -- build --reuse-utils-zip
 
 这是为了兼容之前已经使用过的脚本或命令习惯。虽然现在底层已经是 `tar.zst` 分包，参数名暂时没有改掉。
 
-### 10.4 JSON 配置里为什么没有直接写详细注释
+### 10.4 为什么 `prepare_utils_zip` 这个名字还保留
+
+当前底层实现已经不再生成单个 `utils.zip`，而是生成：
+
+- `src-tauri/utils/__bundles/*.tar.zst`
+
+但以下名字仍然保留了历史命名：
+
+- `prepare_utils_zip` 二进制
+- `prepare:tauri-utils` npm 脚本
+- `--reuse-utils-zip` 参数
+- `GUAXI_REUSE_UTILS_ZIP` 环境变量
+
+保留这些历史命名的原因主要是兼容性：
+
+1. 避免打断你已经在用的本地命令、构建脚本和 CI 调用方式
+2. 避免一次性重命名过多入口，导致排查问题时“名字变了但逻辑没变”
+3. 让旧的使用习惯仍然有效，再逐步把文档语义迁移到新的 `tar.zst` 方案上
+
+可以把它理解成：
+
+- 名字还是 “zip”
+- 实际行为已经是 “prepare external tar.zst bundles”
+
+也就是说，当前这些名称都属于“历史兼容入口”，不代表真实产物格式。
+
+### 10.5 为什么 helper 编译也会影响分包复用
+
+Windows 发布流程中，安装阶段需要单独的 `extract_utils_bundles.exe`。
+
+因此构建时除了主应用 `tauri build` 外，还会额外执行一次：
+
+```text
+cargo build --release --bin extract_utils_bundles
+```
+
+这个命令同样会触发 `build.rs`。如果不额外传入：
+
+- `GUAXI_REUSE_UTILS_ZIP=1`
+- 或 `GUAXI_SKIP_BUNDLE_PREPARE=1`
+
+那么即使主流程已经准备好分包，helper 编译也可能再次触发分包生成。
+
+当前包装脚本已经显式处理了这一点。
+
+### 10.6 JSON 配置里为什么没有直接写详细注释
 
 因为：
 
@@ -399,6 +492,12 @@ npm run tauri -- build
 
 ```bash
 npm run tauri -- build --reuse-utils-zip
+```
+
+更推荐的等价命令：
+
+```bash
+npm run tauri:build:reuse
 ```
 
 发布时请确保以下内容放在同一目录：

@@ -38,13 +38,21 @@ fn main() {
         std::process::exit(1);
     });
 
-    // The marker lets the runtime side quickly detect whether an installed
-    // utils directory is already complete or still needs recovery.
-    let marker = destination.join(".guaxi_utils_extract_complete");
+    // Keep the completion marker next to `utils`, not inside it, so the user's
+    // runtime resource directory stays clean and only contains actual resources.
+    let marker = destination
+        .parent()
+        .unwrap_or(&destination)
+        .join(".guaxi_utils_extract_complete");
     fs::write(&marker, b"ok").unwrap_or_else(|error| {
         eprintln!("failed to write marker {}: {error}", marker.display());
         std::process::exit(1);
     });
+
+    let legacy_marker = destination.join(".guaxi_utils_extract_complete");
+    if legacy_marker.is_file() {
+      let _ = fs::remove_file(&legacy_marker);
+    }
 
     println!(
         "[utils.bundle] extracted bundleRoot={} destination={} bundleCount={}",

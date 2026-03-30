@@ -156,6 +156,13 @@ fn bundles_root(target_root: &Path) -> PathBuf {
 }
 
 fn marker_path(target_root: &Path) -> PathBuf {
+    target_root
+        .parent()
+        .unwrap_or(target_root)
+        .join(EXTRACT_MARKER)
+}
+
+fn legacy_marker_path(target_root: &Path) -> PathBuf {
     target_root.join(EXTRACT_MARKER)
 }
 
@@ -341,6 +348,10 @@ fn ensure_utils_ready_internal() -> Result<(PathBuf, EnsureDirOutcome), String> 
 
     std::fs::create_dir_all(&target_root)
         .map_err(|e| format!("创建 utils 目录失败: {} ({e})", target_root.to_string_lossy()))?;
+    let legacy_marker = legacy_marker_path(&target_root);
+    if legacy_marker.is_file() {
+        let _ = remove_file_with_retry(&legacy_marker);
+    }
 
     if cleanup_or_recover_stale_temp_dirs(&target_root)? {
         outcome.recovered = true;

@@ -80,6 +80,20 @@ function run(command, commandArgs, extraEnv = {}) {
   });
 }
 
+function releaseCargoEnv() {
+  if (process.platform !== 'win32') {
+    return {};
+  }
+
+  return {
+    // Windows release builds for this crate are memory-heavy. Serializing the
+    // build and disabling incremental state makes rustc/LLVM noticeably less
+    // likely to run out of memory on packaging machines.
+    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || '1',
+    CARGO_INCREMENTAL: '0',
+  };
+}
+
 async function publishExternalWindowsBundles() {
   if (process.platform !== 'win32') {
     return;
@@ -171,15 +185,23 @@ async function main() {
     if (process.platform === 'win32') {
       // The installer invokes this helper during installation to expand the
       // external utils bundles into the final install directory.
-      const helperBuildExitCode = await run('cargo', [
-        'build',
-        '--quiet',
-        '--manifest-path',
-        'src-tauri/Cargo.toml',
-        '--release',
-        '--bin',
-        'extract_utils_bundles',
-      ]);
+      const helperBuildExitCode = await run(
+        'cargo',
+        [
+          'build',
+          '--quiet',
+          '--manifest-path',
+          'src-tauri/Cargo.toml',
+          '--release',
+          '--bin',
+          'extract_utils_bundles',
+        ],
+        {
+          ...releaseCargoEnv(),
+          GUAXI_SKIP_BUNDLE_PREPARE: '1',
+          ...(reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
+        },
+      );
       if (helperBuildExitCode !== 0) {
         process.exit(helperBuildExitCode);
       }
@@ -193,7 +215,10 @@ async function main() {
     // `build.rs` also knows how to reuse existing bundles. We forward the flag
     // through an env var so Cargo-triggered bundle preparation stays consistent
     // with the outer JS wrapper.
-    reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {},
+    {
+      ...releaseCargoEnv(),
+      ...(reuseExisting ? { GUAXI_REUSE_UTILS_ZIP: '1' } : {}),
+    },
   );
   if (tauriExitCode !== 0) {
     process.exit(tauriExitCode);

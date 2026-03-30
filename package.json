@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "tauri": "node ./tools/run_tauri_with_utils.mjs",
     "tauri:build": "node ./tools/run_tauri_with_utils.mjs build",
+    "tauri:build:reuse": "node ./tools/run_tauri_with_utils.mjs build --reuse-utils-zip",
     "tauri:bundle": "node ./tools/run_tauri_with_utils.mjs bundle",
+    "tauri:bundle:reuse": "node ./tools/run_tauri_with_utils.mjs bundle --reuse-utils-zip",
     "postinstall": "node tools/copy_excalidraw_assets.mjs"
   },
   "dependencies": {
