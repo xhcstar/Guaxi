@@ -2,12 +2,14 @@ import ast
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import traceback
 
 SESSIONS = {}
 RESULT_HISTORY = {}
+SESSION_DIRS = {}
 TABLE_PREVIEW_LIMIT = 200
 
 
@@ -238,6 +240,22 @@ def _get_session_globals(session_id, persist):
     return SESSIONS[sid], sid
 
 
+def _prepare_session_dir(session_id, globals_dict):
+    sandbox_dir = str(globals_dict.get("_guaxi_sandbox_dir") or "").strip()
+    if not session_id or not sandbox_dir:
+        return ""
+
+    try:
+        os.makedirs(sandbox_dir, exist_ok=True)
+    except Exception:
+        return ""
+
+    SESSION_DIRS[session_id] = sandbox_dir
+    globals_dict["_guaxi_sandbox_dir"] = sandbox_dir
+    globals_dict["_guaxi_cwd"] = sandbox_dir
+    return sandbox_dir
+
+
 def _shift_last_results(globals_dict, session_id):
     history = RESULT_HISTORY.setdefault(session_id or "__guaxi_global__", [])
     value = globals_dict.get("_result")
@@ -338,6 +356,7 @@ def _handle_exec(payload):
 
     globals_dict, resolved_session_id = _get_session_globals(session_id, persist)
     globals_dict.update(vars_map)
+    sandbox_dir = _prepare_session_dir(resolved_session_id, globals_dict)
 
     magic_res = _handle_magic(code, globals_dict, resolved_session_id)
     if magic_res is not None:
@@ -355,8 +374,13 @@ def _handle_exec(payload):
     err_trace = ""
     result_repr = None
     result_json = None
+    old_cwd = None
 
     try:
+        if sandbox_dir:
+            old_cwd = os.getcwd()
+            os.chdir(sandbox_dir)
+
         if "\0" in code:
             raise ValueError("Python code contains NUL byte (\\0), cannot execute")
 
@@ -437,6 +461,11 @@ def _handle_exec(payload):
         ok = False
         err_trace = _format_traceback(exc)
     finally:
+        if old_cwd is not None:
+            try:
+                os.chdir(old_cwd)
+            except Exception:
+                pass
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
     stdout = stdout_buffer.getvalue()
@@ -460,6 +489,12 @@ def _handle_exec(payload):
 def _handle_reset(_payload):
     SESSIONS.clear()
     RESULT_HISTORY.clear()
+    for _, sandbox_dir in list(SESSION_DIRS.items()):
+        try:
+            shutil.rmtree(sandbox_dir, ignore_errors=True)
+        except Exception:
+            pass
+    SESSION_DIRS.clear()
     return {
         "ok": True,
         "stdout": "",
@@ -467,6 +502,32 @@ def _handle_reset(_payload):
         "result_repr": None,
         "result_json": None,
         "session_id": "__guaxi_global__",
+        "session_vars": [],
+    }
+
+
+def _handle_drop_session(payload):
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        return {"ok": False, "error": "Missing session_id"}
+
+    SESSIONS.pop(session_id, None)
+    RESULT_HISTORY.pop(session_id, None)
+    sandbox_dir = SESSION_DIRS.pop(session_id, "")
+
+    if sandbox_dir:
+        try:
+            shutil.rmtree(sandbox_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "stdout": "",
+        "stderr": "",
+        "result_repr": None,
+        "result_json": {"sandbox_dir": sandbox_dir},
+        "session_id": session_id,
         "session_vars": [],
     }
 
@@ -563,6 +624,8 @@ def _dispatch(payload):
         return _handle_exec(payload)
     if cmd == "reset":
         return _handle_reset(payload)
+    if cmd == "drop_session":
+        return _handle_drop_session(payload)
     if cmd == "import_table":
         return _handle_import_table(payload)
     return {"ok": False, "error": f"Unknown worker command: {cmd}"}

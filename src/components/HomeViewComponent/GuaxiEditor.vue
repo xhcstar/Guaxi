@@ -102,6 +102,14 @@
               代码块
             </n-tooltip>
           </n-dropdown>
+          <n-tooltip placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text size="tiny" @click="insertPythonCellBlock">
+                <Icon :icon="fileCode2Icon" width="16" height="16" />
+              </n-button>
+            </template>
+            插入 Python Cell
+          </n-tooltip>
 
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -389,7 +397,18 @@
             >
               <Icon :icon="squareTerminalIcon" width="14" height="14" />
               <span class="python-runtime-entry__label">Py</span>
-              <span class="python-runtime-entry__dot" :class="pythonRuntimeStatusClass"></span>
+                <span class="python-runtime-entry__dot" :class="pythonRuntimeStatusClass"></span>
+              </button>
+
+            <button
+              type="button"
+              class="python-runtime-entry python-runtime-entry--console"
+              :class="{ active: pythonConsoleVisible }"
+              @click="togglePythonConsolePanel('toolbar-toggle-console')"
+              title="Python 控制台 (Ctrl+`)"
+            >
+              <Icon :icon="squareTerminalIcon" width="14" height="14" />
+              <span class="python-runtime-entry__label">Term</span>
             </button>
 
             <transition name="python-runtime-panel-fade">
@@ -756,7 +775,11 @@
           </div>
         </n-modal>
 
-        <div class="editor-split-wrapper" :class="[layoutMode, { 'vim-enabled': vimMode }]">
+        <div
+          class="editor-split-wrapper"
+          :class="[layoutMode, { 'vim-enabled': vimMode, 'with-python-console': pythonConsoleVisible }]"
+          :style="pythonConsoleVisible ? { paddingBottom: `${pythonConsoleHeight + 12}px` } : undefined"
+        >
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
           </div>
@@ -768,6 +791,62 @@
         <n-dropdown v-model:show="editorContextMenuVisible" :options="editorContextMenuOptions" placement="bottom-start"
           :x="editorContextMenuPosition.x" :y="editorContextMenuPosition.y" @select="handleEditorContextMenuSelect"
           @clickoutside="handleEditorContextMenuClickoutside" />
+
+        <transition name="python-console-slide">
+          <div
+            v-show="pythonConsoleVisible"
+            class="python-console-dock"
+            :class="{ busy: pythonConsoleBusy, dragging: pythonConsoleResizing }"
+            :style="{ height: `${pythonConsoleHeight}px` }"
+          >
+            <div
+              class="python-console-dock__resize-handle"
+              title="拖拽调整控制台高度"
+              @mousedown.prevent="startResizePythonConsole"
+            >
+              <span class="python-console-dock__resize-grip"></span>
+            </div>
+            <div class="python-console-panel" :class="{ busy: pythonConsoleBusy }">
+              <div class="python-console-panel__header">
+                <div>
+                  <div class="python-console-panel__title">Python 控制台</div>
+                  <div class="python-console-panel__meta">
+                    {{ pythonSessionInfo?.sandbox_dir ? `沙箱目录：${pythonSessionInfo.sandbox_dir}` : '当前文件共享一个独立 Python 会话与沙箱目录' }}
+                  </div>
+                </div>
+                <div class="python-console-panel__actions">
+                  <button type="button" class="python-console-panel__btn" @click="runPythonConsoleInput">执行</button>
+                  <button type="button" class="python-console-panel__btn" @click="resetCurrentPythonSession">重置会话</button>
+                  <button type="button" class="python-console-panel__btn" @click="toggleMaximizePythonConsole">
+                    {{ pythonConsoleMaximized ? '还原' : '最大化' }}
+                  </button>
+                  <button type="button" class="python-console-panel__btn" @click="togglePythonConsolePanel('panel-collapse')">收起</button>
+                </div>
+              </div>
+
+              <div ref="pythonConsoleOutputRef" class="python-console-panel__output">
+                <div v-if="!pythonConsoleHistory.length && !pythonConsolePinnedOutput" class="python-console-panel__empty">
+                  使用 `Ctrl+\`` 打开或关闭控制台，支持逐条执行 Python / IPython 风格命令。
+                </div>
+                <div v-for="item in pythonConsoleHistory" :key="item.id" class="python-console-panel__entry">
+                  <div class="python-console-panel__prompt">In [ ]:</div>
+                  <pre class="python-console-panel__code">{{ item.input }}</pre>
+                  <div class="python-console-panel__prompt python-console-panel__prompt--out">Out:</div>
+                  <pre class="python-console-panel__result">{{ item.output }}</pre>
+                </div>
+                <pre v-if="pythonConsolePinnedOutput" class="python-console-panel__result python-console-panel__result--pinned">{{ pythonConsolePinnedOutput }}</pre>
+              </div>
+
+              <textarea
+                v-model="pythonConsoleInput"
+                class="python-console-panel__input"
+                spellcheck="false"
+                placeholder="输入 Python / IPython 风格命令，按 Ctrl+Enter 执行"
+                @keydown.ctrl.enter.prevent="runPythonConsoleInput"
+              />
+            </div>
+          </div>
+        </transition>
 
         <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
         <GuaxiEditorStatusBar class="editor-status-bar" />
@@ -815,6 +894,7 @@ import strikethroughIcon from '@iconify-icons/lucide/strikethrough'
 import linkIcon from '@iconify-icons/lucide/link'
 import quoteIcon from '@iconify-icons/lucide/quote'
 import codeIcon from '@iconify-icons/lucide/code'
+import fileCode2Icon from '@iconify-icons/lucide/file-code-2'
 import squareTerminalIcon from '@iconify-icons/lucide/terminal-square'
 import listIcon from '@iconify-icons/lucide/list'
 import listOrderedIcon from '@iconify-icons/lucide/list-ordered'
@@ -848,6 +928,8 @@ import tableColumnRemove from '@iconify-icons/mdi/table-column-remove'
 import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { createGuaxiPythonCellEditorManager } from './utils/guaxiPythonCellEditor'
+import { buildPythonCellBlock, createPythonSessionId, dataframeToMarkdownTable, stripPythonCellBlocksFromMarkdown } from './utils/guaxiPythonCellSyntax'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
 import 'vditor/dist/method'
@@ -970,6 +1052,25 @@ const pythonRuntimePackageInput = ref('')
 const pythonRuntimePackageSearch = ref('')
 const pythonRuntimeArchivePath = ref('')
 const pythonRuntimeArchiveInspection = ref(null)
+const pythonSessionInfo = ref(null)
+const pythonConsoleVisible = ref(false)
+const pythonConsoleBusy = ref(false)
+const pythonConsoleInput = ref('')
+const pythonConsoleHistory = ref([])
+const pythonConsolePinnedOutput = ref('')
+const pythonConsoleOutputRef = ref(null)
+const pythonConsoleHeight = ref(240)
+const pythonConsoleMinHeight = 140
+const pythonConsoleMaxHeight = 560
+const pythonConsoleResizing = ref(false)
+const pythonConsoleMaximized = ref(false)
+let pythonConsoleResizeStartY = 0
+let pythonConsoleResizeStartHeight = 240
+let pythonConsoleRestoreHeight = 240
+let leftPythonCellManager = null
+let rightPythonCellManager = null
+const PYTHON_CONSOLE_HEIGHT_STORAGE_KEY = 'guaxi_python_console_height'
+const PYTHON_CONSOLE_MAXIMIZED_STORAGE_KEY = 'guaxi_python_console_maximized'
 const PYTHON_RUNTIME_RECOMMENDED_PACKAGES = [
   { label: 'pandas', value: 'pandas', description: '数据表格与文件导入导出' },
   { label: 'matplotlib', value: 'matplotlib', description: '图像与绘图输出' },
@@ -2782,6 +2883,7 @@ const headingOptions = [
 
 const codeBlockOptions = [
   { label: '纯代码块', key: 'plain' },
+  { label: 'Python Cell', key: 'pycell' },
   { label: 'C', key: 'c' },
   { label: 'C++', key: 'cpp' },
   { label: 'Python', key: 'python' },
@@ -4438,6 +4540,7 @@ const registerMarkdownLanguageFeatures = () => {
     createSnippet('taskl', '- [ ] ${1:任务}\n- [ ] ${2:任务}\n', '插入任务列表'),
     createSnippet('table', '| ${1:表头1} | ${2:表头2} |\n| --- | --- |\n| ${3:内容1} | ${4:内容2} |\n', '插入表格'),
     createSnippet('code', '```${1:language}\n${2:代码}\n```\n', '插入代码块'),
+    createSnippet('pycell', '<!--py-->\n${1:# Python Cell\\nprint("Hello from Guaxi Python Cell")}\n<!--/py-->\n', '插入隐藏 Python Cell'),
     createSnippet('toc', '${1:目录}\n\n${2:目录内容}\n', '插入目录'),
     createSnippet('bold', '**${1:文本}**', '加粗文本'),
     createSnippet('italic', '*${1:文本}*', '斜体文本'),
@@ -5065,6 +5168,7 @@ const embeddedSemanticLegendCache = new Map();
 const markdownSuggestModeStates = new WeakMap();
 const embeddedSuggestTriggerStates = new WeakMap();
 const markdownFenceBlocksCache = new WeakMap();
+const markdownFenceTokenizeSkippedLanguages = new Set(['python']);
 const EMBEDDED_SEMANTIC_MAX_LINES = 240;
 const EMBEDDED_VISIBLE_BLOCK_LIMIT = 6;
 
@@ -5113,6 +5217,7 @@ const clearMarkdownFenceSyntaxHighlight = (targetEditor) => {
 const ensureMarkdownFenceTokenizerReady = async (targetEditor, languageId) => {
   const lang = String(languageId || '').trim().toLowerCase();
   if (!targetEditor || !lang) return;
+  if (markdownFenceTokenizeSkippedLanguages.has(lang)) return;
 
   let warmup = markdownFenceTokenizerWarmups.get(lang);
   if (!warmup) {
@@ -5127,6 +5232,16 @@ const ensureMarkdownFenceTokenizerReady = async (targetEditor, languageId) => {
   }
 
   await warmup;
+};
+
+const shouldSkipMarkdownFenceTokenize = (languageId) => {
+  const lang = String(languageId || '').trim().toLowerCase();
+  if (!lang) return true;
+  if (!markdownFenceTokenizeSkippedLanguages.has(lang)) return false;
+  // 兼容说明：
+  // 当前 Python TextMate grammar 在 Markdown fence 二次 tokenization 时会触发 endless loop 报错，
+  // 这里先跳过这类语言的附加高亮，保证编辑器主体与 Python Cell UI 稳定可用。
+  return true;
 };
 
 const resolveFenceTokenClass = (tokenType) => {
@@ -5598,6 +5713,13 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
     warmupEmbeddedLspForContext(block);
     const blockText = block.blockText ?? buildMarkdownFenceBlockText(model, block.blockStartLine, block.blockEndLine);
     let tokenLines = [];
+    if (shouldSkipMarkdownFenceTokenize(block.languageId)) {
+      logger.debug('[MarkdownFence] skip extra tokenize for compatibility', {
+        languageId: block.languageId,
+        reason,
+      });
+      continue;
+    }
     try {
       tokenLines = monaco.editor.tokenize(blockText || '', block.languageId) || [];
     } catch (error) {
@@ -6961,6 +7083,7 @@ const ensureSecondaryEditor = () => {
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'init');
   scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'init');
   refreshMarkdownSuggestMode(secondaryEditor)
+  scheduleRefreshPythonCellManagers()
 
   if (editorEffectsRight) {
     editorEffectsRight.destroy();
@@ -7006,6 +7129,7 @@ const ensureSecondaryEditor = () => {
     refreshMarkdownSuggestMode(secondaryEditor)
     scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'model');
     scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'model');
+    scheduleRefreshPythonCellManagers()
   });
 
   if (secondaryMonacoCtrlClickDisposable) {
@@ -7022,6 +7146,12 @@ const ensureSecondaryEditor = () => {
 
   const model = secondaryEditor.getModel();
   if (model) {
+    model.onDidChangeContent(() => {
+      if (!secondaryEditor) return;
+      if (model.getLanguageId() !== 'markdown') return;
+      scheduleRefreshPythonCellManagers()
+    });
+
     model.onDidChangeContent(
       debounce(() => {
         if (fileTreeStore.activeRegion !== 'right') return;
@@ -7036,6 +7166,7 @@ const ensureSecondaryEditor = () => {
           scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'debounced');
           scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'debounced');
         }
+        scheduleRefreshPythonCellManagers()
       }, 120)
     );
   }
@@ -7366,6 +7497,7 @@ const setupEditorListeners = () => {
   scheduleMarkdownFenceSyntaxHighlight(editor, 'init');
   scheduleMarkdownMathSyntaxHighlight(editor, 'init');
   refreshMarkdownSuggestMode(editor)
+  scheduleRefreshPythonCellManagers()
 
   editor.onDidChangeCursorPosition((e) => {
     editorStore.setCursorPosition(e.position);
@@ -7378,6 +7510,12 @@ const setupEditorListeners = () => {
 
   const model = editor.getModel();
   if (model) {
+    model.onDidChangeContent(() => {
+      if (!editor) return;
+      if (model.getLanguageId() !== 'markdown') return;
+      scheduleRefreshPythonCellManagers()
+    });
+
     model.onDidChangeContent((ev) => {
       if (!editor) return;
       if (tableInsertAutoFormatBusy) return;
@@ -7440,6 +7578,7 @@ const setupEditorListeners = () => {
         scheduleMarkdownFenceSyntaxHighlight(editor, 'debounced');
         scheduleMarkdownMathSyntaxHighlight(editor, 'debounced');
         updateGitDecorations();
+        scheduleRefreshPythonCellManagers()
       }, 300)
     );
   }
@@ -7473,6 +7612,7 @@ const setupEditorListeners = () => {
     refreshMarkdownSuggestMode(editor)
     scheduleMarkdownFenceSyntaxHighlight(editor, 'model');
     scheduleMarkdownMathSyntaxHighlight(editor, 'model');
+    scheduleRefreshPythonCellManagers()
   });
 
   const isSuggestWidgetVisible = () => {
@@ -9414,8 +9554,24 @@ const insertCodeBlock = (lang) => {
   wrapSelection(prefix, '\n```\n', '代码');
 };
 
+const insertPythonCellBlock = () => {
+  const snippet = `${buildPythonCellBlock({
+    code: '# Python Cell\nprint("Hello from Guaxi Python Cell")',
+  })}\n`
+  insertBlockSnippet(snippet)
+  // 设计说明：
+  // executeEdits 先改模型，再在下一帧刷新 view zone，避免源码先被隐藏而卡片还未来得及挂载。
+  window.requestAnimationFrame(() => {
+    refreshPythonCellManagers()
+  })
+}
+
 const handleCodeBlockSelect = (key) => {
   const k = String(key || '').trim();
+  if (k === 'pycell') {
+    insertPythonCellBlock();
+    return;
+  }
   const lang = k === 'plain' ? '' : k;
   insertCodeBlock(lang);
 };
@@ -9501,6 +9657,7 @@ const autoSaveDirtyTabs = async () => {
 
   autoSaving.value = true
   try {
+    flushPythonCellDrafts()
     const activePath = fileTreeStore.activeTab
     if (activePath) {
       const targetEditor = getActiveEditor()
@@ -9540,6 +9697,7 @@ const saveContent = async () => {
     return;
   }
 
+  flushPythonCellDrafts()
   const targetEditor = getActiveEditor();
   const content =
     previewMode.value === 'realtime' && realtimeVditor
@@ -9565,6 +9723,17 @@ const saveContent = async () => {
 
 // 快捷键处理
 const handleKeyDown = (e) => {
+  const isConsoleShortcut =
+    (e.ctrlKey || e.metaKey) &&
+    !e.shiftKey &&
+    String(e.code || '') === 'Backquote'
+
+  if (isConsoleShortcut) {
+    e.preventDefault()
+    void togglePythonConsolePanel('keyboard-toggle-console')
+    return
+  }
+
   const isFindShortcut =
     !e.altKey &&
     !e.shiftKey &&
@@ -9900,6 +10069,370 @@ const togglePythonRuntimeWorkbench = () => {
     return
   }
   void openPythonRuntimeWorkbench()
+}
+
+const getPythonSessionTargetPath = (region = 'left') => {
+  if (region === 'right') {
+    return String(fileTreeStore.activeTabRight || '').trim()
+  }
+  return String(fileTreeStore.activeTab || selectedFile.value?.path || '').trim()
+}
+
+const getPythonSessionIdForPath = (filePath) => createPythonSessionId(String(filePath || '').trim())
+
+const ensurePythonSessionInfo = async (filePath, reason = 'manual') => {
+  const targetPath = String(filePath || '').trim()
+  if (!targetPath) {
+    pythonSessionInfo.value = null
+    return null
+  }
+
+  try {
+    const sessionId = getPythonSessionIdForPath(targetPath)
+    const info = await invoke('python_runtime_get_session_info', {
+      request: {
+        session_id: sessionId,
+      },
+    })
+    pythonSessionInfo.value = info || null
+    logger.info('[PythonRuntime] session info loaded', { reason, sessionId, sandboxDir: info?.sandbox_dir || '' })
+    return info
+  } catch (error) {
+    logger.warn('[PythonRuntime] session info load failed', { reason, targetPath, error })
+    return null
+  }
+}
+
+const dropPythonSessionForPath = async (filePath, { silent = false, reason = 'close-tab' } = {}) => {
+  const targetPath = String(filePath || '').trim()
+  if (!targetPath) return false
+
+  try {
+    const sessionId = getPythonSessionIdForPath(targetPath)
+    await invoke('python_runtime_drop_session', {
+      request: {
+        session_id: sessionId,
+      },
+    })
+    logger.info('[PythonRuntime] session dropped', { reason, sessionId, targetPath })
+    if (pythonSessionInfo.value?.session_id === sessionId) {
+      pythonSessionInfo.value = null
+    }
+    return true
+  } catch (error) {
+    logger.warn('[PythonRuntime] session drop failed', { reason, targetPath, error })
+    if (!silent) {
+      message.error(`销毁 Python 会话失败：${String(error?.message || error)}`)
+    }
+    return false
+  }
+}
+
+const disposePythonCellManagers = () => {
+  leftPythonCellManager?.dispose?.()
+  rightPythonCellManager?.dispose?.()
+  leftPythonCellManager = null
+  rightPythonCellManager = null
+}
+
+const getPythonManagerApplyMarkdown = (targetEditor) => (nextMarkdown, { action = 'pycell-apply' } = {}) => {
+  const model = targetEditor?.getModel?.()
+  if (!model) return
+  const current = String(model.getValue() || '')
+  if (current === String(nextMarkdown || '')) return
+  model.setValue(String(nextMarkdown || ''))
+  rawContent.value = String(nextMarkdown || '')
+  const targetPath = targetEditor === secondaryEditor
+    ? String(fileTreeStore.activeTabRight || '').trim()
+    : String(fileTreeStore.activeTab || '').trim()
+  if (targetPath) {
+    fileTreeStore.updateTabContent(targetPath, String(nextMarkdown || ''))
+  }
+  logger.info('[PyCellEditor] markdown applied', { action, targetPath, length: String(nextMarkdown || '').length })
+}
+
+const createPythonCellManagerForEditor = (targetEditor) => {
+  if (!targetEditor) return null
+  return createGuaxiPythonCellEditorManager({
+    editor: targetEditor,
+    monaco,
+    logger,
+    message,
+    invoke,
+    getMarkdown: () => String(targetEditor?.getModel?.()?.getValue?.() || ''),
+    applyMarkdown: getPythonManagerApplyMarkdown(targetEditor),
+    getFilePath: () => {
+      if (targetEditor === secondaryEditor) return String(fileTreeStore.activeTabRight || '').trim()
+      return String(fileTreeStore.activeTab || selectedFile.value?.path || '').trim()
+    },
+    onRequestConsole: () => {
+      pythonConsoleVisible.value = true
+      void ensurePythonSessionInfo(getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left'), 'pycell-open-console')
+    },
+  })
+}
+
+const refreshPythonCellManagers = () => {
+  if (editor?.getModel?.()?.getLanguageId?.() === 'markdown') {
+    if (!leftPythonCellManager) {
+      leftPythonCellManager = createPythonCellManagerForEditor(editor)
+    }
+    leftPythonCellManager?.refresh?.()
+  } else {
+    leftPythonCellManager?.dispose?.()
+    leftPythonCellManager = null
+  }
+
+  if (secondaryEditor?.getModel?.()?.getLanguageId?.() === 'markdown') {
+    if (!rightPythonCellManager) {
+      rightPythonCellManager = createPythonCellManagerForEditor(secondaryEditor)
+    }
+    rightPythonCellManager?.refresh?.()
+  } else {
+    rightPythonCellManager?.dispose?.()
+    rightPythonCellManager = null
+  }
+}
+
+const scheduleRefreshPythonCellManagers = debounce(() => {
+  refreshPythonCellManagers()
+}, 120)
+
+const flushPythonCellDrafts = () => {
+  const nextLeft = leftPythonCellManager?.flushDrafts?.()
+  if (typeof nextLeft === 'string' && editor?.getModel?.() && nextLeft !== editor.getModel().getValue()) {
+    getPythonManagerApplyMarkdown(editor)(nextLeft, { action: 'pycell-flush-left' })
+  }
+
+  const nextRight = rightPythonCellManager?.flushDrafts?.()
+  if (typeof nextRight === 'string' && secondaryEditor?.getModel?.() && nextRight !== secondaryEditor.getModel().getValue()) {
+    getPythonManagerApplyMarkdown(secondaryEditor)(nextRight, { action: 'pycell-flush-right' })
+  }
+}
+
+const normalizeConsoleOutput = (res) => {
+  const display = res?.result_json?.__guaxi_display__
+  const dataframe = res?.result_json?.__guaxi_dataframe__
+  const textParts = []
+  if (res?.stdout) textParts.push(String(res.stdout).trim())
+  if (res?.stderr) textParts.push(String(res.stderr).trim())
+  if (res?.result_repr) textParts.push(String(res.result_repr).trim())
+  let nextText = textParts.filter(Boolean).join('\n\n').trim()
+  if (!nextText && dataframe) {
+    nextText = dataframeToMarkdownTable({
+      columns: Array.isArray(dataframe.columns) ? dataframe.columns : [],
+      rows: Array.isArray(dataframe.rows) ? dataframe.rows : [],
+    })
+  }
+  if (!nextText && display?.type === 'markdown') {
+    nextText = String(display.markdown || '')
+  }
+  if (!nextText && display?.type === 'html') {
+    nextText = String(display.html || '')
+  }
+  return nextText || '(无输出)'
+}
+
+const scrollPythonConsoleToBottom = () => {
+  nextTick(() => {
+    const el = pythonConsoleOutputRef.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  })
+}
+
+const readPythonConsoleStoredNumber = (key, fallback) => {
+  try {
+    const raw = String(window?.localStorage?.getItem(key) || '').trim()
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
+const writePythonConsoleStoredValue = (key, value) => {
+  try {
+    window?.localStorage?.setItem(key, String(value))
+  } catch {
+  }
+}
+
+const getPythonConsoleAvailableHeight = () => {
+  const wrapperHeight = Number(editorWrapperRef.value?.clientHeight || 0)
+  if (!wrapperHeight) return pythonConsoleMaxHeight
+  return Math.max(pythonConsoleMinHeight, Math.min(pythonConsoleMaxHeight, wrapperHeight - 96))
+}
+
+const clampPythonConsoleHeight = (height) => {
+  const maxHeight = getPythonConsoleAvailableHeight()
+  return Math.max(
+    pythonConsoleMinHeight,
+    Math.min(maxHeight, Number(height || pythonConsoleMinHeight)),
+  )
+}
+
+const persistPythonConsoleState = () => {
+  writePythonConsoleStoredValue(PYTHON_CONSOLE_HEIGHT_STORAGE_KEY, pythonConsoleHeight.value)
+  writePythonConsoleStoredValue(PYTHON_CONSOLE_MAXIMIZED_STORAGE_KEY, pythonConsoleMaximized.value ? '1' : '0')
+}
+
+const restorePythonConsoleState = () => {
+  pythonConsoleRestoreHeight = clampPythonConsoleHeight(
+    readPythonConsoleStoredNumber(PYTHON_CONSOLE_HEIGHT_STORAGE_KEY, pythonConsoleHeight.value),
+  )
+  pythonConsoleHeight.value = pythonConsoleRestoreHeight
+  pythonConsoleMaximized.value = String(window?.localStorage?.getItem(PYTHON_CONSOLE_MAXIMIZED_STORAGE_KEY) || '') === '1'
+  if (pythonConsoleMaximized.value) {
+    pythonConsoleHeight.value = getPythonConsoleAvailableHeight()
+  }
+}
+
+const layoutVisibleEditors = () => {
+  nextTick(() => {
+    if (pythonConsoleVisible.value && pythonConsoleMaximized.value) {
+      pythonConsoleHeight.value = getPythonConsoleAvailableHeight()
+    }
+    try {
+      editor?.layout?.()
+    } catch {
+    }
+    try {
+      secondaryEditor?.layout?.()
+    } catch {
+    }
+    logger.debug('[PythonConsole] layout refreshed', {
+      visible: pythonConsoleVisible.value,
+      height: pythonConsoleHeight.value,
+      maximized: pythonConsoleMaximized.value,
+    })
+  })
+}
+
+const handleResizePythonConsoleMove = (event) => {
+  if (!pythonConsoleResizing.value) return
+  const delta = pythonConsoleResizeStartY - Number(event?.clientY || 0)
+  const nextHeight = clampPythonConsoleHeight(pythonConsoleResizeStartHeight + delta)
+  if (nextHeight === pythonConsoleHeight.value) return
+  pythonConsoleMaximized.value = false
+  pythonConsoleHeight.value = nextHeight
+  pythonConsoleRestoreHeight = nextHeight
+  logger.debug('[PythonConsole] resizing', {
+    nextHeight,
+    startHeight: pythonConsoleResizeStartHeight,
+    clientY: Number(event?.clientY || 0),
+  })
+  persistPythonConsoleState()
+  layoutVisibleEditors()
+}
+
+const stopResizePythonConsole = () => {
+  if (!pythonConsoleResizing.value) return
+  pythonConsoleResizing.value = false
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  window.removeEventListener('mousemove', handleResizePythonConsoleMove, true)
+  window.removeEventListener('mouseup', stopResizePythonConsole, true)
+  persistPythonConsoleState()
+  layoutVisibleEditors()
+}
+
+const startResizePythonConsole = (event) => {
+  pythonConsoleResizing.value = true
+  pythonConsoleResizeStartY = Number(event?.clientY || 0)
+  pythonConsoleResizeStartHeight = Number(pythonConsoleHeight.value || 240)
+  logger.info('[PythonConsole] resize start', {
+    startY: pythonConsoleResizeStartY,
+    startHeight: pythonConsoleResizeStartHeight,
+  })
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'ns-resize'
+  window.addEventListener('mousemove', handleResizePythonConsoleMove, true)
+  window.addEventListener('mouseup', stopResizePythonConsole, true)
+}
+
+const toggleMaximizePythonConsole = () => {
+  if (pythonConsoleMaximized.value) {
+    pythonConsoleMaximized.value = false
+    pythonConsoleHeight.value = clampPythonConsoleHeight(pythonConsoleRestoreHeight || 240)
+  } else {
+    pythonConsoleRestoreHeight = clampPythonConsoleHeight(pythonConsoleHeight.value || 240)
+    pythonConsoleMaximized.value = true
+    pythonConsoleHeight.value = getPythonConsoleAvailableHeight()
+  }
+  persistPythonConsoleState()
+  layoutVisibleEditors()
+}
+
+const runPythonConsoleInput = async () => {
+  const code = String(pythonConsoleInput.value || '').trim()
+  if (!code || pythonConsoleBusy.value) return
+
+  const targetPath = getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left')
+  await ensurePythonSessionInfo(targetPath, 'console-run')
+
+  pythonConsoleBusy.value = true
+  try {
+    const sessionId = getPythonSessionIdForPath(targetPath)
+    const res = await invoke('python_exec', {
+      request: {
+        code,
+        persist: true,
+        expect_json: true,
+        vars: {
+          _guaxi_session: sessionId,
+          _doc_path: targetPath,
+          _py_cell_id: '__python_console__',
+        },
+      },
+    })
+
+    pythonConsoleHistory.value.push({
+      id: `${Date.now()}-${pythonConsoleHistory.value.length}`,
+      input: code,
+      output: normalizeConsoleOutput(res),
+    })
+    pythonConsolePinnedOutput.value = ''
+    pythonConsoleInput.value = ''
+    scrollPythonConsoleToBottom()
+    scheduleRefreshPythonCellManagers()
+  } catch (error) {
+    pythonConsolePinnedOutput.value = `执行失败：${String(error?.message || error)}`
+    scrollPythonConsoleToBottom()
+    message.error(`Python 控制台执行失败：${String(error?.message || error)}`)
+  } finally {
+    pythonConsoleBusy.value = false
+  }
+}
+
+const resetCurrentPythonSession = async () => {
+  const targetPath = getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left')
+  const ok = await dropPythonSessionForPath(targetPath, { silent: false, reason: 'console-reset' })
+  if (!ok) return
+  pythonConsoleHistory.value = []
+  pythonConsolePinnedOutput.value = '当前文件的 Python 会话与沙箱已重置'
+  await ensurePythonSessionInfo(targetPath, 'console-reset')
+  scheduleRefreshPythonCellManagers()
+}
+
+const togglePythonConsolePanel = async (reason = 'manual-toggle') => {
+  pythonConsoleVisible.value = !pythonConsoleVisible.value
+  if (pythonConsoleVisible.value) {
+    pythonConsoleHeight.value = pythonConsoleMaximized.value
+      ? getPythonConsoleAvailableHeight()
+      : clampPythonConsoleHeight(pythonConsoleRestoreHeight || pythonConsoleHeight.value || 240)
+  }
+  logger.info('[PythonConsole] visibility changed', {
+    reason,
+    visible: pythonConsoleVisible.value,
+    height: pythonConsoleHeight.value,
+    maximized: pythonConsoleMaximized.value,
+  })
+  persistPythonConsoleState()
+  layoutVisibleEditors()
+  if (!pythonConsoleVisible.value) return
+  await ensurePythonSessionInfo(getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left'), reason)
+  scrollPythonConsoleToBottom()
 }
 
 const handlePythonRuntimeWorkbenchPointerDown = (event) => {
@@ -12316,7 +12849,8 @@ const renderDebounced = debounce(async (content) => {
       appearanceTheme: settingsStore.appearanceTheme,
       path: selectedFile.value?.path || '',
     })
-    const processed = preprocessObsidianWikilinks(content);
+    const stripped = stripPythonCellBlocksFromMarkdown(content)
+    const processed = preprocessObsidianWikilinks(stripped);
     renderedHtml.value = await renderMarkdown(processed, {
       basePath: basePath,
       mermaid: true,
@@ -12351,6 +12885,7 @@ const lastSelectedFilePath = ref(null)
 
 // 监听文件选择
 watch(selectedFile, async (newFile) => {
+  flushPythonCellDrafts()
   if (newFile) {
     const nextPath = newFile.path || '';
     const prevPath = lastSelectedFilePath.value || '';
@@ -12377,6 +12912,7 @@ watch(selectedFile, async (newFile) => {
     lastSelectedFilePath.value = nextPath;
 
     const language = resolveMonacoLanguageByPath(newFile.path || '');
+    void ensurePythonSessionInfo(newFile.path || '', 'selected-file-changed')
 
     // 更新内容
     rawContent.value = newFile.content || '';
@@ -13210,6 +13746,7 @@ const handleExportSelect = async (format) => {
 };
 
 const switchTab = (path, region) => {
+  flushPythonCellDrafts()
   const targetRegion = region || 'left';
 
   logger.debug('[Editor] switchTab', {
@@ -13250,6 +13787,7 @@ const switchTab = (path, region) => {
 };
 
 const closeTab = async (path, region) => {
+  flushPythonCellDrafts()
   const targetRegion = region || 'left';
   const regionActivePath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
   const regionEditor = targetRegion === 'right' ? secondaryEditor : editor;
@@ -13282,6 +13820,7 @@ const closeTab = async (path, region) => {
   }
 
   fileTreeStore.closeTab(path, targetRegion);
+  void dropPythonSessionForPath(path, { silent: true, reason: 'close-tab' })
   if (fileTreeStore.openTabs.length > 0) {
     const tab = fileTreeStore.openTabs.find(t => t.path === fileTreeStore.activeTab);
     if (tab) {
@@ -13519,6 +14058,7 @@ watch(
 )
 
 onMounted(() => {
+  restorePythonConsoleState()
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('guaxi:lsp-setting-changed', handleLspSettingChanged);
   document.addEventListener('selectionchange', handleGlobalSelectionChange, true)
@@ -13558,6 +14098,10 @@ onActivated(() => {
 })
 
 onUnmounted(() => {
+  stopResizePythonConsole()
+  persistPythonConsoleState()
+  flushPythonCellDrafts()
+  disposePythonCellManagers()
   stopSelectionAudioPlayback()
   closePreviewSearch()
   cleanupPreviewPdfBlobUrls()
@@ -14937,6 +15481,8 @@ onUnmounted(() => {
   display: flex;
   width: 100%;
   height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 .editor-split-wrapper.vim-enabled {
@@ -16462,5 +17008,436 @@ img {
 .dark .search-highlight {
   background-color: rgb(255, 208, 0) !important;
   color: #000 !important;
+}
+
+.python-console-slide-enter-active,
+.python-console-slide-leave-active {
+  transition: all 0.2s ease;
+}
+
+.python-console-slide-enter-from,
+.python-console-slide-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.python-console-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border-top: 1px solid rgba(15, 23, 42, 0.12);
+  background: transparent;
+}
+
+.python-console-dock.dragging {
+  transition: none;
+}
+
+.python-console-dock__resize-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  cursor: ns-resize;
+  user-select: none;
+}
+
+.python-console-dock__resize-grip {
+  width: 68px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.36);
+}
+
+.python-console-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  margin-top: 0;
+  padding: 14px 16px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 247, 250, 0.98));
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+}
+
+.python-console-panel__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.python-console-panel__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #10233f;
+}
+
+.python-console-panel__meta {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #5b6b81;
+  word-break: break-all;
+}
+
+.python-console-panel__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.python-console-panel__btn {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #17355f;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.python-console-panel__output {
+  flex: 1 1 auto;
+  min-height: 72px;
+  overflow: auto;
+  padding: 12px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #dbe6ff;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.python-console-panel__entry + .python-console-panel__entry {
+  margin-top: 16px;
+}
+
+.python-console-panel__prompt {
+  font-size: 12px;
+  font-weight: 700;
+  color: #93c5fd;
+}
+
+.python-console-panel__prompt--out {
+  margin-top: 8px;
+  color: #86efac;
+}
+
+.python-console-panel__code,
+.python-console-panel__result {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.python-console-panel__empty {
+  color: rgba(219, 230, 255, 0.72);
+  font-size: 12px;
+}
+
+.python-console-panel__input {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 84px;
+  max-height: 180px;
+  resize: vertical;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #10233f;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.editor-split-wrapper.with-python-console {
+  transition: padding-bottom 0.2s ease;
+}
+
+.guaxi-pycell-card {
+  margin: 10px 0;
+  padding: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.22), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 249, 252, 0.98));
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
+}
+
+.guaxi-pycell-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.guaxi-pycell-card__eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.guaxi-pycell-card__title {
+  margin-top: 4px;
+  font-size: 18px;
+  line-height: 1.3;
+  font-weight: 700;
+  color: #10233f;
+}
+
+.guaxi-pycell-card__meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #5b6b81;
+}
+
+.guaxi-pycell-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.guaxi-pycell-card__btn {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #17355f;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.guaxi-pycell-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.guaxi-pycell-card__code-shell,
+.guaxi-pycell-card__panel,
+.guaxi-pycell-card__rich,
+.guaxi-inline-dataframe {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.guaxi-pycell-card__code-shell.is-collapsed,
+.guaxi-pycell-card__panel.is-collapsed {
+  display: none;
+}
+
+.guaxi-pycell-card__editor {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  border: none;
+  outline: none;
+  padding: 14px 16px;
+  background: transparent;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.7;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.guaxi-pycell-card__panel {
+  padding: 14px 16px;
+}
+
+.guaxi-pycell-card__stdout,
+.guaxi-pycell-card__rich--markdown {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.guaxi-pycell-card__image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+
+.guaxi-pycell-card__rich--svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.guaxi-pycell-card__empty {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.guaxi-pycell-card__var + .guaxi-pycell-card__var {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.guaxi-pycell-card__var-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guaxi-pycell-card__var-name {
+  font-weight: 700;
+  color: #10233f;
+}
+
+.guaxi-pycell-card__var-type {
+  color: #0f766e;
+  font-size: 12px;
+}
+
+.guaxi-pycell-card__var-preview {
+  margin-top: 4px;
+  color: #5b6b81;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.guaxi-inline-dataframe {
+  overflow: hidden;
+}
+
+.guaxi-inline-dataframe__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.guaxi-inline-dataframe__meta {
+  color: #41536b;
+  font-size: 12px;
+}
+
+.guaxi-inline-dataframe__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.guaxi-inline-dataframe__btn {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #17355f;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.guaxi-inline-dataframe__viewport {
+  overflow: auto;
+}
+
+.guaxi-inline-dataframe__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.guaxi-inline-dataframe__table th,
+.guaxi-inline-dataframe__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.guaxi-inline-dataframe__table th {
+  background: rgba(226, 232, 240, 0.48);
+  font-weight: 700;
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-console-panel,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card {
+  border-color: rgba(148, 163, 184, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.96));
+  box-shadow: 0 18px 36px rgba(2, 6, 23, 0.35);
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-console-dock {
+  border-top-color: rgba(148, 163, 184, 0.16);
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-console-dock__resize-grip {
+  background: rgba(148, 163, 184, 0.42);
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-console-panel__title,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__title,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__var-name {
+  color: #e5eefc;
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-console-panel__meta,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__meta,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__var-preview,
+:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__meta,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__empty {
+  color: #94a3b8;
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-console-panel__btn,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__btn,
+:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__btn {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(30, 41, 59, 0.84);
+  color: #dbeafe;
+}
+
+:global(:root[data-guaxi-theme='dark']) .python-console-panel__input,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__code-shell,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__panel,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__rich,
+:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe {
+  border-color: rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+  color: #e5eefc;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__editor {
+  color: #e2e8f0;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__table th {
+  background: rgba(51, 65, 85, 0.72);
 }
 </style>

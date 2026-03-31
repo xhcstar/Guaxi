@@ -519,6 +519,8 @@ async fn main() {
             commands::filetransfer::filetransfer_webrtc_recv_complete,
              commands::code_runtime::python_exec,
              commands::code_runtime::python_reset_repl,
+             commands::code_runtime::python_runtime_get_session_info,
+             commands::code_runtime::python_runtime_drop_session,
              commands::code_runtime::python_runtime_get_status,
              commands::code_runtime::python_runtime_initialize,
              commands::code_runtime::python_runtime_inspect_archive,

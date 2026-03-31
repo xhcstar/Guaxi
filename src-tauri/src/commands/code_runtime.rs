@@ -2,8 +2,10 @@ use crate::guaxiservices::bundled_resources;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -96,6 +98,17 @@ pub struct PythonRuntimeArchiveInspection {
 #[derive(Debug, Deserialize)]
 pub struct PythonImportTableRequest {
     pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PythonSessionRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PythonSessionInfo {
+    pub session_id: String,
+    pub sandbox_dir: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -256,6 +269,56 @@ fn managed_pip_config_path(runtime_dir: &Path) -> PathBuf {
     } else {
         venv_dir.join("pip.conf")
     }
+}
+
+fn python_session_sandbox_root(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("sessions")
+}
+
+fn sanitize_session_label(session_id: &str) -> String {
+    let stem = Path::new(session_id)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("session");
+    let mut sanitized = String::with_capacity(stem.len());
+    for ch in stem.chars() {
+        if ch.is_ascii_alphanumeric() {
+            sanitized.push(ch.to_ascii_lowercase());
+        } else if ch == '-' || ch == '_' {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "session".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn python_session_hash(session_id: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    session_id.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn python_session_sandbox_dir(runtime_dir: &Path, session_id: &str) -> PathBuf {
+    let label = sanitize_session_label(session_id);
+    let hash = python_session_hash(session_id);
+    python_session_sandbox_root(runtime_dir).join(format!("{label}-{hash}"))
+}
+
+fn ensure_python_session_sandbox_dir(session_id: &str) -> Result<PathBuf, String> {
+    let runtime_dir = python_runtime_dir()?;
+    let sandbox_root = python_session_sandbox_root(&runtime_dir);
+    fs::create_dir_all(&sandbox_root)
+        .map_err(|e| format!("create python session sandbox root failed: {e}"))?;
+    let sandbox_dir = python_session_sandbox_dir(&runtime_dir, session_id);
+    fs::create_dir_all(&sandbox_dir)
+        .map_err(|e| format!("create python session sandbox dir failed: {e}"))?;
+    Ok(sandbox_dir)
 }
 
 fn ensure_managed_pip_mirror(runtime_dir: &Path) -> Result<(), String> {
@@ -670,12 +733,31 @@ pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, Strin
         "[PythonRuntime] python_exec called"
     );
 
+    let mut vars = request.vars.unwrap_or_default();
+    let session_id = vars
+        .get("_guaxi_session")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    if !session_id.is_empty() {
+        let sandbox_dir = ensure_python_session_sandbox_dir(&session_id)?;
+        vars.insert(
+            "_guaxi_sandbox_dir".to_string(),
+            Value::String(sandbox_dir.to_string_lossy().to_string()),
+        );
+        info!(
+            session_id = session_id.as_str(),
+            sandbox_dir = sandbox_dir.to_string_lossy().as_ref(),
+            "[PythonRuntime] session sandbox prepared"
+        );
+    }
+
     let payload = json!({
         "cmd": "exec",
         "code": request.code,
         "persist": request.persist,
         "expect_json": request.expect_json,
-        "vars": request.vars.unwrap_or_default(),
+        "vars": vars,
     });
 
     let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
@@ -695,6 +777,72 @@ pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, Strin
     );
 
     Ok(parsed)
+}
+
+#[command]
+pub async fn python_runtime_get_session_info(
+    request: PythonSessionRequest,
+) -> Result<PythonSessionInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session_id = request.session_id.trim().to_string();
+        if session_id.is_empty() {
+            return Err("session_id 不能为空".to_string());
+        }
+
+        let sandbox_dir = ensure_python_session_sandbox_dir(&session_id)?;
+        info!(
+            session_id = session_id.as_str(),
+            sandbox_dir = sandbox_dir.to_string_lossy().as_ref(),
+            "[PythonRuntime] session info prepared"
+        );
+
+        Ok(PythonSessionInfo {
+            session_id,
+            sandbox_dir: sandbox_dir.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("python_runtime_get_session_info join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_drop_session(request: PythonSessionRequest) -> Result<(), String> {
+    let session_id = request.session_id.trim().to_string();
+    if session_id.is_empty() {
+        return Err("session_id 不能为空".to_string());
+    }
+
+    let runtime_dir = python_runtime_dir()?;
+    let sandbox_dir = python_session_sandbox_dir(&runtime_dir, &session_id);
+    let payload = json!({
+        "cmd": "drop_session",
+        "session_id": session_id,
+    });
+
+    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
+        .await
+        .map_err(|e| format!("python_runtime_drop_session join failed: {e}"))??;
+
+    let ok = response.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    if !ok {
+        return Err(
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("drop python session failed")
+                .to_string(),
+        );
+    }
+
+    if sandbox_dir.exists() {
+        remove_path_if_exists(&sandbox_dir)?;
+    }
+
+    info!(
+        sandbox_dir = sandbox_dir.to_string_lossy().as_ref(),
+        "[PythonRuntime] session dropped"
+    );
+    Ok(())
 }
 
 #[command]
