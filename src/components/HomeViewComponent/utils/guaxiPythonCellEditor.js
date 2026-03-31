@@ -1,6 +1,7 @@
 import { save, open } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import {
+  buildPythonCellBlock,
   createPythonCellId,
   createPythonSessionId,
   dataframeToMarkdownTable,
@@ -8,6 +9,11 @@ import {
   parsePythonCellBlocks,
   replacePythonCellBlock,
 } from './guaxiPythonCellSyntax'
+import {
+  deletePythonCellSnapshot,
+  getPythonCellSnapshot,
+  patchPythonCellSnapshot,
+} from './guaxiPythonCellState'
 
 // 设计说明：
 // 1. 编辑模式下，Python Cell 以“嵌入式单元格”替代 Markdown 源码区域，整体体验尽量贴近 Jupyter Notebook。
@@ -128,6 +134,71 @@ const buildMarkdownOutputFromState = (state) => {
   return `\`\`\`text\n${text}\n\`\`\``
 }
 
+const attachPressHandler = (element, handler) => {
+  if (!element || typeof handler !== 'function') return
+  let keyboardTrigger = false
+
+  element.addEventListener('pointerdown', (event) => {
+    if (event.__guaxiPressHandled) return
+    if (event.button !== 0) return
+    event.__guaxiPressHandled = true
+    event.preventDefault()
+    event.stopPropagation()
+    void handler(event)
+  })
+
+  element.addEventListener('keydown', (event) => {
+    if (event.__guaxiPressHandled) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    keyboardTrigger = true
+    event.__guaxiPressHandled = true
+    event.preventDefault()
+    event.stopPropagation()
+    void handler(event)
+  })
+
+  element.addEventListener('click', (event) => {
+    if (event.__guaxiPressHandled) return
+    event.__guaxiPressHandled = true
+    event.preventDefault()
+    event.stopPropagation()
+    if (keyboardTrigger) {
+      keyboardTrigger = false
+    }
+  })
+}
+
+const stopEditorEvent = (event) => {
+  if (!event) return
+  event.stopPropagation?.()
+  if (typeof event.stopImmediatePropagation === 'function') {
+    event.stopImmediatePropagation()
+  }
+}
+
+const consumeContextMenuEvent = (event) => {
+  if (!event) return
+  event.preventDefault?.()
+  stopEditorEvent(event)
+}
+
+const promoteZoneInteractivity = (card) => {
+  if (!card) return
+  requestAnimationFrame(() => {
+    let node = card
+    let depth = 0
+    while (node && depth < 5) {
+      if (node.style) {
+        node.style.pointerEvents = 'auto'
+        if (depth > 0 && !node.style.zIndex) node.style.zIndex = '5'
+      }
+      if (node.classList?.contains('view-zones')) break
+      node = node.parentElement
+      depth += 1
+    }
+  })
+}
+
 const createDataFrameCard = (table, { onImport, onExport, onInsertMarkdown } = {}) => {
   const wrap = document.createElement('div')
   wrap.className = 'guaxi-inline-dataframe'
@@ -146,11 +217,7 @@ const createDataFrameCard = (table, { onImport, onExport, onInsertMarkdown } = {
     btn.type = 'button'
     btn.className = 'guaxi-inline-dataframe__btn'
     btn.textContent = label
-    btn.addEventListener('click', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      void handler?.()
-    })
+    attachPressHandler(btn, () => handler?.())
     actions.appendChild(btn)
   }
 
@@ -203,13 +270,24 @@ export const createGuaxiPythonCellEditorManager = ({
   applyMarkdown,
   getFilePath,
   onRequestConsole,
+  onStateChange,
 }) => {
   let disposed = false
   let zoneIds = []
+  let contentWidgets = []
+  let overlayRoot = null
   const cellStates = new Map()
+  const managerDisposables = []
   let refreshScheduled = false
   let refreshInFlight = false
   let lastRefreshSignature = ''
+  let pendingFocusCellId = ''
+
+  try {
+    managerDisposables.push(editor?.onDidScrollChange?.(() => scheduleRefresh()))
+    managerDisposables.push(editor?.onDidLayoutChange?.(() => scheduleRefresh()))
+  } catch {
+  }
 
   const clearZones = () => {
     if (!editor) return
@@ -227,6 +305,43 @@ export const createGuaxiPythonCellEditorManager = ({
     zoneIds = []
   }
 
+  const clearContentWidgets = () => {
+    if (!editor || !contentWidgets.length) return
+    contentWidgets.forEach((widget) => {
+      try {
+        editor.removeContentWidget(widget)
+      } catch {
+      }
+    })
+    contentWidgets = []
+  }
+
+  const ensureOverlayRoot = () => {
+    if (overlayRoot?.isConnected) return overlayRoot
+    const editorDomNode = editor?.getDomNode?.()
+    const host = editorDomNode?.closest?.('.editor-container') || editorDomNode?.parentElement
+    if (!host) return null
+    let root = host.querySelector(':scope > .guaxi-pycell-overlay-root')
+    if (!(root instanceof HTMLElement)) {
+      root = document.createElement('div')
+      root.className = 'guaxi-pycell-overlay-root'
+      host.appendChild(root)
+    }
+    root.style.position = 'absolute'
+    root.style.inset = '0'
+    root.style.pointerEvents = 'none'
+    root.style.zIndex = '40'
+    root.style.overflow = 'visible'
+    overlayRoot = root
+    return overlayRoot
+  }
+
+  const clearOverlayCards = () => {
+    if (overlayRoot) {
+      overlayRoot.innerHTML = ''
+    }
+  }
+
   const clearHiddenAreas = () => {
     try {
       editor.setHiddenAreas([], 'guaxi-python-cells')
@@ -241,6 +356,31 @@ export const createGuaxiPythonCellEditorManager = ({
       refreshScheduled = false
       refresh()
     })
+  }
+
+  const syncSnapshot = (cellId, state, extra = {}) => {
+    const snapshot = patchPythonCellSnapshot(getFilePath?.() || '', cellId, {
+      draftCode: state?.draftCode ?? '',
+      outputText: state?.outputText || '',
+      display: state?.display || null,
+      dataframe: state?.dataframe || null,
+      sessionVars: Array.isArray(state?.sessionVars) ? state.sessionVars : [],
+      result: state?.result || null,
+      meta: normalizePythonCellMeta(state?.meta || {}),
+      ...extra,
+    })
+    onStateChange?.(cellId, snapshot)
+    return snapshot
+  }
+
+  const withCurrentBlock = (block, action, handler) => {
+    const currentMarkdown = applyDrafts(`${action}-sync`)
+    const filePath = getFilePath?.() || ''
+    const blocks = parsePythonCellBlocks(currentMarkdown)
+    const currentCellId = createPythonCellId(filePath, block)
+    const currentBlock = blocks.find((item) => createPythonCellId(filePath, item) === currentCellId)
+    if (!currentBlock) return null
+    return handler({ currentMarkdown, filePath, blocks, currentBlock, currentCellId })
   }
 
   const saveTableToFile = async (table, format = 'csv') => {
@@ -303,6 +443,165 @@ export const createGuaxiPythonCellEditorManager = ({
     state.display = getDisplayFromResult(result)
     state.dataframe = getDataframeFromResult(result)
     state.sessionVars = Array.isArray(result?.session_vars) ? result.session_vars : []
+  }
+
+  const estimateCardHeight = (state) => {
+    const codeLineCount = Math.max(
+      4,
+      String(state?.draftCode || '')
+        .replace(/\r\n?/g, '\n')
+        .split('\n')
+        .length,
+    )
+
+    let nextHeight = 126 + Math.min(codeLineCount, 18) * 24
+
+    if (!state?.meta?.outputCollapsed) {
+      if (state?.dataframe) {
+        nextHeight += Math.min(260, 108 + Math.max(0, Number(state.dataframe.rowCount || 0)) * 26)
+      } else if (state?.display?.type === 'image') {
+        nextHeight += 236
+      } else {
+        const outputLineCount = Math.max(
+          2,
+          String(state?.outputText || state?.display?.markdown || '')
+            .replace(/\r\n?/g, '\n')
+            .split('\n')
+            .length,
+        )
+        nextHeight += Math.min(220, 44 + outputLineCount * 20)
+      }
+    }
+
+    if (!state?.meta?.sessionCollapsed) {
+      nextHeight += Math.min(220, 72 + (Array.isArray(state?.sessionVars) ? state.sessionVars.length : 0) * 36)
+    }
+
+    return Math.max(280, nextHeight)
+  }
+
+  const createSpacerDom = (heightInPx) => {
+    const spacer = document.createElement('div')
+    spacer.className = 'guaxi-pycell-spacer'
+    spacer.style.height = `${Math.max(1, Math.ceil(heightInPx || 1))}px`
+    spacer.style.pointerEvents = 'none'
+    return spacer
+  }
+
+  const mountOverlayCard = (block, card, state) => {
+    const root = ensureOverlayRoot()
+    if (!root) return
+
+    const wrapper = document.createElement('div')
+    wrapper.className = 'guaxi-pycell-overlay-card'
+
+    const layout = editor?.getLayoutInfo?.()
+    const contentLeft = Math.max(0, Number(layout?.contentLeft || 0))
+    const contentWidth = Math.max(320, Number(layout?.contentWidth || 640) - 24)
+    const scrollTop = Number(editor?.getScrollTop?.() || 0)
+    const lineHeight = Number(layout?.lineHeight || editor?.getOption?.(67) || 22)
+    const model = editor?.getModel?.()
+    const lineCount = Math.max(1, Number(model?.getLineCount?.() || 1))
+    const startLine = Math.max(1, Math.min(lineCount, Number(block?.startLine || 1)))
+    const top = startLine > 1
+      ? Number(editor?.getTopForLineNumber?.(startLine - 1) || 0) - scrollTop + lineHeight
+      : 0 - scrollTop
+
+    wrapper.style.left = `${contentLeft + 8}px`
+    wrapper.style.top = `${Math.max(0, top)}px`
+    wrapper.style.width = `${contentWidth}px`
+    wrapper.style.position = 'absolute'
+    wrapper.style.pointerEvents = 'auto'
+    wrapper.style.zIndex = '30'
+
+    card.style.width = '100%'
+    card.style.maxWidth = '100%'
+    card.style.pointerEvents = 'auto'
+    ;['pointerdown', 'mousedown', 'mouseup', 'click', 'dblclick'].forEach((eventName) => {
+      wrapper.addEventListener(eventName, (event) => {
+        const target = event?.target
+        if (!(target instanceof HTMLElement)) return
+        if (!target.closest('.guaxi-pycell-card')) return
+        stopEditorEvent(event)
+      })
+    })
+    wrapper.addEventListener('contextmenu', (event) => {
+      const target = event?.target
+      if (!(target instanceof HTMLElement)) return
+      if (!target.closest('.guaxi-pycell-card')) return
+      consumeContextMenuEvent(event)
+    })
+    wrapper.appendChild(card)
+    root.appendChild(wrapper)
+  }
+
+  const createContentWidget = (block, card, state) => {
+    const filePath = getFilePath?.() || ''
+    const cellId = createPythonCellId(filePath, block)
+    const model = editor?.getModel?.()
+
+    const applyLayout = () => {
+      const layout = editor?.getLayoutInfo?.()
+      const width = Math.max(320, Number(layout?.contentWidth || 640) - 24)
+      card.style.width = `${width}px`
+      card.style.maxWidth = `${width}px`
+    }
+
+    const resolveAnchor = () => {
+      const lineCount = Math.max(1, Number(model?.getLineCount?.() || 1))
+      const startLine = Math.max(1, Math.min(lineCount, Number(block?.startLine || 1)))
+      const endLine = Math.max(startLine, Math.min(lineCount, Number(block?.endLine || startLine)))
+
+      if (startLine > 1) {
+        const anchorLine = startLine - 1
+        return {
+          position: {
+            lineNumber: anchorLine,
+            column: Number(model?.getLineMaxColumn?.(anchorLine) || 1),
+          },
+          preference: [monaco.editor.ContentWidgetPositionPreference.BELOW],
+        }
+      }
+
+      if (endLine < lineCount) {
+        return {
+          position: { lineNumber: endLine + 1, column: 1 },
+          preference: [monaco.editor.ContentWidgetPositionPreference.ABOVE],
+        }
+      }
+
+      return {
+        position: { lineNumber: 1, column: 1 },
+        preference: [monaco.editor.ContentWidgetPositionPreference.EXACT],
+      }
+    }
+
+    applyLayout()
+
+    return {
+      allowEditorOverflow: true,
+      suppressMouseDown: true,
+      getId() {
+        return `guaxi.pycell.widget.${cellId}`
+      },
+      getDomNode() {
+        applyLayout()
+        return card
+      },
+      getPosition() {
+        return resolveAnchor()
+      },
+      beforeRender() {
+        applyLayout()
+        return {
+          width: Math.max(320, Number(editor?.getLayoutInfo?.()?.contentWidth || 640) - 24),
+          height: estimateCardHeight(state),
+        }
+      },
+      afterRender() {
+        applyLayout()
+      },
+    }
   }
 
   const renderCellOutput = (state, outputContainer, block) => {
@@ -380,7 +679,6 @@ export const createGuaxiPythonCellEditorManager = ({
           message?.success?.('Markdown 表格已插入到文档')
         },
       }))
-      return
     }
 
     if (state.display?.type === 'html' && state.display.html) {
@@ -455,17 +753,18 @@ export const createGuaxiPythonCellEditorManager = ({
   const runCell = async (block, state, outputContainer, sessionContainer, { writeBack = false } = {}) => {
     if (state.busy) return
     const code = String(state.draftCode ?? block.code ?? '')
+    const filePath = getFilePath?.() || ''
+    const cellId = createPythonCellId(filePath, block)
     if (!code.trim()) {
       message?.warning?.('Python Cell 代码为空')
       return
     }
 
     state.busy = true
+    syncSnapshot(cellId, state)
     renderCellOutput({ ...state, outputText: '运行中...' }, outputContainer, block)
 
     try {
-      const filePath = getFilePath?.() || ''
-      const cellId = createPythonCellId(filePath, block)
       const sessionId = createPythonSessionId(filePath)
       logger?.info?.('[PyCellEditor] executing cell', { cellId, sessionId, codeLen: code.length })
 
@@ -483,6 +782,7 @@ export const createGuaxiPythonCellEditorManager = ({
       })
 
       setStateOutput(state, result)
+      syncSnapshot(cellId, state)
       renderCellOutput(state, outputContainer, block)
       renderSessionVars(state, sessionContainer)
 
@@ -506,11 +806,15 @@ export const createGuaxiPythonCellEditorManager = ({
       state.outputText = `运行失败：${String(error?.message || error)}`
       state.display = null
       state.dataframe = null
+      state.sessionVars = []
+      state.result = null
+      syncSnapshot(cellId, state)
       renderCellOutput(state, outputContainer, block)
       logger?.error?.('[PyCellEditor] cell execution failed', error)
       message?.error?.(`运行失败：${String(error?.message || error)}`)
     } finally {
       state.busy = false
+      syncSnapshot(cellId, state)
     }
   }
 
@@ -518,24 +822,34 @@ export const createGuaxiPythonCellEditorManager = ({
     const filePath = getFilePath?.() || ''
     const cellId = createPythonCellId(filePath, block)
     const existing = cellStates.get(cellId) || {}
+    const persisted = getPythonCellSnapshot(filePath, cellId) || {}
     const state = {
-      draftCode: typeof existing.draftCode === 'string' ? existing.draftCode : block.code,
+      draftCode: typeof existing.draftCode === 'string'
+        ? existing.draftCode
+        : typeof persisted.draftCode === 'string'
+          ? persisted.draftCode
+          : block.code,
       busy: false,
       meta: normalizePythonCellMeta({
         ...(block.meta || {}),
         ...(existing.meta || {}),
+        ...(persisted.meta || {}),
       }),
-      outputText: existing.outputText || '',
-      display: existing.display || null,
-      dataframe: existing.dataframe || null,
-      sessionVars: existing.sessionVars || [],
-      result: existing.result || null,
+      outputText: persisted.outputText || existing.outputText || '',
+      display: persisted.display || existing.display || null,
+      dataframe: persisted.dataframe || existing.dataframe || null,
+      sessionVars: persisted.sessionVars || existing.sessionVars || [],
+      result: persisted.result || existing.result || null,
     }
     cellStates.set(cellId, state)
+    syncSnapshot(cellId, state)
 
     const card = document.createElement('section')
     card.className = 'guaxi-pycell-card'
     card.dataset.pyCellId = cellId
+    card.style.pointerEvents = 'auto'
+    card.style.position = 'relative'
+    card.style.zIndex = '6'
 
     const title = state.meta.title || `Python Cell`
     card.innerHTML = `
@@ -546,11 +860,14 @@ export const createGuaxiPythonCellEditorManager = ({
           <div class="guaxi-pycell-card__meta">文件级会话 · 关闭文件后销毁沙箱</div>
         </div>
         <div class="guaxi-pycell-card__actions">
+          <button type="button" class="guaxi-pycell-card__btn" data-action="insert-above">上方插入</button>
+          <button type="button" class="guaxi-pycell-card__btn" data-action="insert-below">下方插入</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="run">运行</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="run-writeback">运行并写回</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="toggle-output">${state.meta.outputCollapsed ? '显示输出' : '隐藏输出'}</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="toggle-session">${state.meta.sessionCollapsed ? '显示变量' : '隐藏变量'}</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="open-console">控制台</button>
+          <button type="button" class="guaxi-pycell-card__btn" data-action="delete-cell">删除</button>
         </div>
       </div>
       <div class="guaxi-pycell-card__body">
@@ -565,7 +882,24 @@ export const createGuaxiPythonCellEditorManager = ({
     const textarea = card.querySelector('.guaxi-pycell-card__editor')
     const outputContainer = card.querySelector('[data-panel="output"]')
     const sessionContainer = card.querySelector('[data-panel="session"]')
+    const metaEl = card.querySelector('.guaxi-pycell-card__meta')
     textarea.value = state.draftCode
+    textarea.style.pointerEvents = 'auto'
+
+    const isInteractiveTarget = (target) => {
+      if (!(target instanceof HTMLElement)) return false
+      return !!target.closest('button, textarea, input, select, option, a, [data-action]')
+    }
+
+    ;['pointerdown', 'mousedown', 'mouseup', 'click', 'dblclick'].forEach((eventName) => {
+      card.addEventListener(eventName, (event) => {
+        if (!isInteractiveTarget(event.target)) return
+        event.stopPropagation()
+      }, true)
+    })
+    card.addEventListener('contextmenu', (event) => {
+      consumeContextMenuEvent(event)
+    }, true)
 
     const resizeTextarea = () => {
       textarea.style.height = 'auto'
@@ -575,6 +909,7 @@ export const createGuaxiPythonCellEditorManager = ({
 
     textarea.addEventListener('input', () => {
       state.draftCode = textarea.value
+      syncSnapshot(cellId, state)
       resizeTextarea()
     })
 
@@ -588,40 +923,124 @@ export const createGuaxiPythonCellEditorManager = ({
     const togglePanel = (panel, key) => {
       state.meta[key] = !state.meta[key]
       panel.classList.toggle('is-collapsed', !!state.meta[key])
+      syncSnapshot(cellId, state)
       scheduleRefresh()
     }
 
+    const focusEditorSoon = () => {
+      requestAnimationFrame(() => {
+        try {
+          textarea.focus()
+          const length = textarea.value.length
+          textarea.setSelectionRange(length, length)
+        } catch {
+        }
+      })
+    }
+
+    const insertRelativeCell = (direction = 'below') => {
+      const result = withCurrentBlock(block, `pycell-insert-${direction}`, ({ currentMarkdown, currentBlock, blocks, filePath }) => {
+        const nextLines = String(currentMarkdown || '').replace(/\r\n?/g, '\n').split('\n')
+        const newBlockText = buildPythonCellBlock({
+          code: '',
+          meta: { title: '', sessionCollapsed: true },
+        })
+        const insertionLines = [...newBlockText.split('\n'), '']
+        const insertAt = direction === 'above' ? currentBlock.startLine - 1 : currentBlock.endLine
+        nextLines.splice(insertAt, 0, ...insertionLines)
+        const nextMarkdown = nextLines.join('\n')
+        const nextBlocks = parsePythonCellBlocks(nextMarkdown)
+        const currentIndex = blocks.findIndex((item) => createPythonCellId(filePath, item) === createPythonCellId(filePath, currentBlock))
+        const insertedBlock = nextBlocks[direction === 'above' ? currentIndex : currentIndex + 1]
+        const focusCellId = insertedBlock ? createPythonCellId(filePath, insertedBlock) : ''
+        if (focusCellId) pendingFocusCellId = focusCellId
+        applyMarkdown?.(nextMarkdown, { action: `pycell-insert-${direction}` })
+        return focusCellId
+      })
+      if (result) {
+        requestAnimationFrame(() => refresh())
+      }
+    }
+
+    const deleteCurrentCell = () => {
+      withCurrentBlock(block, 'pycell-delete', ({ currentMarkdown, currentBlock, blocks, currentCellId, filePath }) => {
+        const nextLines = String(currentMarkdown || '').replace(/\r\n?/g, '\n').split('\n')
+        let deleteStart = currentBlock.startLine - 1
+        let deleteEnd = currentBlock.endLine - 1
+        while (deleteEnd + 1 < nextLines.length && String(nextLines[deleteEnd + 1] || '').trim() === '') {
+          deleteEnd += 1
+          break
+        }
+        nextLines.splice(deleteStart, deleteEnd - deleteStart + 1)
+        const nextMarkdown = nextLines.join('\n')
+        const nextBlocks = parsePythonCellBlocks(nextMarkdown)
+        const currentIndex = blocks.findIndex((item) => createPythonCellId(filePath, item) === currentCellId)
+        const fallbackBlock = nextBlocks[currentIndex] || nextBlocks[currentIndex - 1] || null
+        pendingFocusCellId = fallbackBlock ? createPythonCellId(filePath, fallbackBlock) : ''
+        cellStates.delete(currentCellId)
+        deletePythonCellSnapshot(filePath, currentCellId)
+        applyMarkdown?.(nextMarkdown, { action: 'pycell-delete' })
+        onStateChange?.(currentCellId, null)
+        requestAnimationFrame(() => refresh())
+      })
+    }
+
+    const handleActionFromButton = async (button) => {
+      if (!(button instanceof HTMLElement)) return
+      const action = button.getAttribute('data-action')
+      if (action === 'insert-above') {
+        insertRelativeCell('above')
+        return
+      }
+      if (action === 'insert-below') {
+        insertRelativeCell('below')
+        return
+      }
+      if (action === 'run') {
+        await runCell(block, state, outputContainer, sessionContainer, { writeBack: false })
+        return
+      }
+      if (action === 'run-writeback') {
+        await runCell(block, state, outputContainer, sessionContainer, { writeBack: true })
+        return
+      }
+      if (action === 'toggle-output') {
+        togglePanel(outputContainer, 'outputCollapsed')
+        return
+      }
+      if (action === 'toggle-session') {
+        togglePanel(sessionContainer, 'sessionCollapsed')
+        button.textContent = state.meta.sessionCollapsed ? '鏄剧ず鍙橀噺' : '闅愯棌鍙橀噺'
+        return
+      }
+      if (action === 'open-console') {
+        onRequestConsole?.()
+        return
+      }
+      if (action === 'delete-cell') {
+        deleteCurrentCell()
+      }
+    }
+
     card.querySelectorAll('[data-action]').forEach((button) => {
+      button.addEventListener('mousedown', (event) => {
+        stopEditorEvent(event)
+      })
       button.addEventListener('click', async (event) => {
-        event.preventDefault()
-        const action = button.getAttribute('data-action')
-        if (action === 'run') {
-          await runCell(block, state, outputContainer, sessionContainer, { writeBack: false })
-          return
-        }
-        if (action === 'run-writeback') {
-          await runCell(block, state, outputContainer, sessionContainer, { writeBack: true })
-          return
-        }
-        if (action === 'toggle-output') {
-          togglePanel(outputContainer, 'outputCollapsed')
-          button.textContent = state.meta.outputCollapsed ? '显示输出' : '隐藏输出'
-          return
-        }
-        if (action === 'toggle-session') {
-          togglePanel(sessionContainer, 'sessionCollapsed')
-          button.textContent = state.meta.sessionCollapsed ? '显示变量' : '隐藏变量'
-          return
-        }
-        if (action === 'open-console') {
-          onRequestConsole?.()
-        }
+        event.preventDefault?.()
+        stopEditorEvent(event)
+        if (metaEl) metaEl.textContent = `click:${button.getAttribute('data-action') || ''}`
+        await handleActionFromButton(button)
       })
     })
 
     renderCellOutput(state, outputContainer, block)
     renderSessionVars(state, sessionContainer)
     resizeTextarea()
+    if (pendingFocusCellId && pendingFocusCellId === cellId) {
+      pendingFocusCellId = ''
+      focusEditorSoon()
+    }
     return card
   }
 
@@ -632,6 +1051,8 @@ export const createGuaxiPythonCellEditorManager = ({
       const markdown = getMarkdown?.()
       const blocks = parsePythonCellBlocks(markdown)
 
+      clearOverlayCards()
+      clearContentWidgets()
       clearZones()
       clearHiddenAreas()
 
@@ -648,12 +1069,20 @@ export const createGuaxiPythonCellEditorManager = ({
         const model = editor.getModel()
         blocks.forEach((block) => {
           const card = createCardDom(block)
+          const cellId = createPythonCellId(getFilePath?.() || '', block)
+          const state = cellStates.get(cellId)
+          mountOverlayCard(block, card, state)
           const zoneId = accessor.addZone({
             // 关键设计：
             // view zone 插在 Cell 起始行之前，同时隐藏源码区间，实现“单元格接管原区域”的嵌入式效果。
             afterLineNumber: Math.max(0, block.startLine - 1),
-            heightInPx: Math.max(280, Math.ceil(card.scrollHeight || card.getBoundingClientRect().height || 280)),
-            domNode: card,
+            // 根因说明：
+            // Monaco 会检查 zone 后面的 model position 是否可见；而我们紧接着隐藏了整个 Cell 源码区间，
+            // 导致这个 zone 被判定为“位于 hidden area 内”，最终高度变成 0、界面看起来像“没有 UI”。
+            // 显式开启 showInHiddenAreas 后，zone 才能真正接管这段被隐藏的源码区域。
+            showInHiddenAreas: true,
+            heightInPx: estimateCardHeight(state),
+            domNode: createSpacerDom(estimateCardHeight(state)),
             suppressMouseDown: false,
           })
           zoneIds.push(zoneId)
@@ -693,8 +1122,21 @@ export const createGuaxiPythonCellEditorManager = ({
     refresh,
     flushDrafts,
     applyDrafts,
+    requestFocusCell(cellId) {
+      pendingFocusCellId = String(cellId || '').trim()
+      if (pendingFocusCellId) scheduleRefresh()
+    },
     dispose() {
       disposed = true
+      managerDisposables.forEach((item) => {
+        try {
+          item?.dispose?.()
+        } catch {
+        }
+      })
+      managerDisposables.length = 0
+      clearOverlayCards()
+      clearContentWidgets()
       clearZones()
       clearHiddenAreas()
       cellStates.clear()

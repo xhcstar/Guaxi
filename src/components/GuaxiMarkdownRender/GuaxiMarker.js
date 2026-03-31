@@ -1244,7 +1244,10 @@ export const renderMarkdown = async (content, options) => {
         if (enablePythonCells && /^(python|py)(\s|$)/i.test(info)) {
           const startLine = Array.isArray(token.map) ? token.map[0] + 1 : null;
           const endLine = Array.isArray(token.map) ? token.map[1] + 1 : null;
-          const cellId = `py-${startLine || 'na'}-${endLine || 'na'}`;
+          const customCellIdMatch = String(info || '').match(/\bguaxi-cell=([^\s`]+)/i);
+          const cellId = customCellIdMatch?.[1]
+            ? String(customCellIdMatch[1]).trim()
+            : `py-${startLine || 'na'}-${endLine || 'na'}`;
 
           const original = preserveOriginal
             ? `\`\`\`${info || 'python'}\n${String(token.content || '')}\n\`\`\``

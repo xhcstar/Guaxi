@@ -32,7 +32,7 @@
 
 
       <div class="toolbar">
-        <div v-if="previewMode !== 'realtime'" class="toolbar-editing-actions">
+        <div v-if="previewMode !== 'realtime' && editorSurfaceMode !== 'notebook'" class="toolbar-editing-actions">
           <n-dropdown trigger="click" :options="headingOptions" @select="handleHeadingSelect">
             <n-tooltip placement="top" trigger="hover">
               <template #trigger>
@@ -223,7 +223,16 @@
                 <n-icon :component="SaveOutline" size="18" />
               </n-button>
             </template>
-            保存 (Ctrl+S)
+            Save (Ctrl+S)
+          </n-tooltip>
+
+          <n-tooltip v-if="canUseNotebookSurface" placement="top" trigger="hover">
+            <template #trigger>
+              <n-button text @click="toggleEditorSurfaceMode">
+                <Icon :icon="editorSurfaceMode === 'notebook' ? filePenLineIcon : bookOpenIcon" width="16" height="16" />
+              </n-button>
+            </template>
+            {{ editorSurfaceMode === 'notebook' ? 'Source View' : 'Notebook View' }}
           </n-tooltip>
 
           <n-popover v-if="false" class="toolbar-action-python" trigger="click" placement="bottom" :show="pythonRuntimePopoverVisible"
@@ -580,6 +589,19 @@
         </div>
       </div>
       <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
+        <div v-if="editorSurfaceMode === 'notebook' && canUseNotebookSurface" class="notebook-surface">
+          <GuaxiNotebookView
+            ref="notebookViewRef"
+            :markdown="rawContent"
+            :file-path="selectedFile?.path || ''"
+            :theme="settingsStore.appearanceTheme"
+            @update:markdown="applyNotebookMarkdown"
+            @state-change="syncAllPreviewPythonCells"
+            @open-source="openSourceEditorSurface"
+            @open-console="togglePythonConsolePanel('notebook-open-console')"
+          />
+        </div>
+        <template v-if="editorSurfaceMode !== 'notebook' || !canUseNotebookSurface">
         <div v-show="tableToolbarVisible" class="floating-table-toolbar" :style="tableToolbarStyle" @mousedown.prevent>
           <n-tooltip placement="top" trigger="hover">
             <template #trigger>
@@ -792,6 +814,8 @@
           :x="editorContextMenuPosition.x" :y="editorContextMenuPosition.y" @select="handleEditorContextMenuSelect"
           @clickoutside="handleEditorContextMenuClickoutside" />
 
+        </template>
+
         <transition name="python-console-slide">
           <div
             v-show="pythonConsoleVisible"
@@ -882,6 +906,7 @@ import { useRightSiderStore } from '../../stores/rightSiderStore'
 import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
+import GuaxiNotebookView from './GuaxiNotebookView.vue'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
@@ -929,7 +954,8 @@ import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { createGuaxiPythonCellEditorManager } from './utils/guaxiPythonCellEditor'
-import { buildPythonCellBlock, createPythonSessionId, dataframeToMarkdownTable, stripPythonCellBlocksFromMarkdown } from './utils/guaxiPythonCellSyntax'
+import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, createPythonSessionId, dataframeToMarkdownTable, parsePythonCellBlocks, transformPythonCellBlocksForPreview } from './utils/guaxiPythonCellSyntax'
+import { getPythonCellSnapshot, patchPythonCellSnapshot } from './utils/guaxiPythonCellState'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
 import 'vditor/dist/method'
@@ -1039,6 +1065,7 @@ const rightSiderStore = useRightSiderStore()
 const siderStore = useSiderStore()
 const mode = ref('edit');
 const previewMode = ref('toggle');
+const editorSurfaceMode = ref('source')
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
@@ -1059,6 +1086,7 @@ const pythonConsoleInput = ref('')
 const pythonConsoleHistory = ref([])
 const pythonConsolePinnedOutput = ref('')
 const pythonConsoleOutputRef = ref(null)
+const notebookViewRef = ref(null)
 const pythonConsoleHeight = ref(240)
 const pythonConsoleMinHeight = 140
 const pythonConsoleMaxHeight = 560
@@ -1069,6 +1097,9 @@ let pythonConsoleResizeStartHeight = 240
 let pythonConsoleRestoreHeight = 240
 let leftPythonCellManager = null
 let rightPythonCellManager = null
+let handlePythonCellSharedStateChange = () => {}
+let syncAllPreviewPythonCells = () => {}
+const EMBEDDED_PYTHON_CELL_EDITOR_ENABLED = false
 const PYTHON_CONSOLE_HEIGHT_STORAGE_KEY = 'guaxi_python_console_height'
 const PYTHON_CONSOLE_MAXIMIZED_STORAGE_KEY = 'guaxi_python_console_maximized'
 const PYTHON_RUNTIME_RECOMMENDED_PACKAGES = [
@@ -2286,6 +2317,24 @@ const rawContent = ref(selectedFile.value?.content || '')
 // 1. 获取当前激活tab对象和内容
 const activeTab = computed(() => fileTreeStore.openTabs.find(tab => tab.path === fileTreeStore.activeTab));
 const activeTabContent = computed(() => activeTab.value?.content || '');
+const canUseNotebookSurface = computed(() => {
+  const path = String(selectedFile.value?.path || '').trim().toLowerCase()
+  if (!path.endsWith('.md') && !path.endsWith('.markdown')) return false
+  if (layoutMode.value !== 'single') return false
+  if (activeTab.value?.unsupported) return false
+  return true
+})
+
+watch(canUseNotebookSurface, (enabled) => {
+  if (!enabled && editorSurfaceMode.value !== 'source') {
+    editorSurfaceMode.value = 'source'
+  }
+  if (enabled && editorSurfaceMode.value === 'source') {
+    nextTick(() => {
+      syncSourceEditorContent('can-use-notebook-changed')
+    })
+  }
+})
 
 // 面包屑导航：点击后联动文件树定位/展开
 const EVENT_REVEAL_IN_FILE_TREE = 'guaxi_editor_reveal_in_file_tree'
@@ -7973,12 +8022,12 @@ function countLines(text) {
   return text.split(/\r\n|\n|\r/).length;
 }
 
-const ensureMarkdownEditor = () => {
-  if (!editor) {
+const ensureMarkdownEditor = (targetEditor = getActiveEditor()) => {
+  if (!targetEditor) {
     message.warning('没有可编辑的文档');
     return false;
   }
-  const model = editor.getModel();
+  const model = targetEditor.getModel();
   if (!model) return false;
   const languageId = model.getLanguageId();
   if (languageId !== 'markdown') {
@@ -8126,8 +8175,9 @@ const wrapSelection = (prefix, suffix, placeholder = '') => {
 };
 
 const insertBlockSnippet = (snippet) => {
-  if (!ensureMarkdownEditor()) return;
-  const position = editor.getPosition();
+  const targetEditor = getActiveEditor();
+  if (!ensureMarkdownEditor(targetEditor)) return;
+  const position = targetEditor?.getPosition?.() || new monaco.Position(1, 1);
   const range = new monaco.Range(
     position.lineNumber,
     1,
@@ -8135,7 +8185,7 @@ const insertBlockSnippet = (snippet) => {
     1
   );
 
-  editor.executeEdits('markdown-toolbar', [
+  targetEditor.executeEdits('markdown-toolbar', [
     {
       range,
       text: snippet,
@@ -8143,7 +8193,7 @@ const insertBlockSnippet = (snippet) => {
     }
   ]);
 
-  editor.focus();
+  targetEditor.focus();
 };
 
 const toggleHeading = (level) => {
@@ -9555,15 +9605,22 @@ const insertCodeBlock = (lang) => {
 };
 
 const insertPythonCellBlock = () => {
+  if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value) {
+    notebookViewRef.value?.insertCell?.('python')
+    return
+  }
+
   const snippet = `${buildPythonCellBlock({
-    code: '# Python Cell\nprint("Hello from Guaxi Python Cell")',
+    code: ['# Python Cell', 'print("Hello from Guaxi Python Cell")'].join('\n'),
+    meta: {
+      id: createPythonCellStableId(),
+    },
   })}\n`
+  const previewOnly = previewMode.value === 'toggle' && mode.value === 'preview'
   insertBlockSnippet(snippet)
-  // 设计说明：
-  // executeEdits 先改模型，再在下一帧刷新 view zone，避免源码先被隐藏而卡片还未来得及挂载。
-  window.requestAnimationFrame(() => {
-    refreshPythonCellManagers()
-  })
+  if (previewOnly) {
+    void setMainMode('edit')
+  }
 }
 
 const handleCodeBlockSelect = (key) => {
@@ -9616,6 +9673,77 @@ const activateRegion = (region) => {
 };
 
 // 更新编辑器内容
+const toggleEditorSurfaceMode = () => {
+  if (!canUseNotebookSurface.value) {
+    editorSurfaceMode.value = 'source'
+    return
+  }
+  editorSurfaceMode.value = editorSurfaceMode.value === 'notebook' ? 'source' : 'notebook'
+  if (editorSurfaceMode.value === 'notebook') {
+    disposePythonCellManagers()
+    if (previewMode.value === 'toggle' && mode.value === 'preview') {
+      void setMainMode('edit')
+    }
+  } else {
+    nextTick(() => {
+      syncSourceEditorContent('toggle-source-surface')
+    })
+  }
+}
+
+const openSourceEditorSurface = () => {
+  editorSurfaceMode.value = 'source'
+  nextTick(() => {
+    syncSourceEditorContent('open-source-surface')
+  })
+}
+
+const applyNotebookMarkdown = (nextMarkdown) => {
+  const nextText = String(nextMarkdown || '')
+  rawContent.value = nextText
+
+  const targetEditor = editor || secondaryEditor
+  const model = targetEditor?.getModel?.()
+  if (model && model.getValue() !== nextText) {
+    model.setValue(nextText)
+  }
+
+  const targetPath = String(selectedFile.value?.path || '').trim()
+  if (targetPath) {
+    fileTreeStore.updateTabContent(targetPath, nextText)
+  }
+
+  if (canPreview.value && previewMode.value !== 'realtime') {
+    renderDebounced(nextText)
+  }
+}
+
+const syncSourceEditorContent = (reason = 'manual-sync') => {
+  if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value) return
+
+  const nextText = String(rawContent.value ?? selectedFile.value?.content ?? '')
+  const targetEditor = getActiveEditor() || editor || secondaryEditor
+  if (!targetEditor) return
+
+  try {
+    const model = targetEditor.getModel?.()
+    if (model && model.getValue() !== nextText) {
+      model.setValue(nextText)
+    } else if (!model && typeof targetEditor.setValue === 'function') {
+      targetEditor.setValue(nextText)
+    }
+    targetEditor.layout?.()
+    logger.debug('[Editor] syncSourceEditorContent', {
+      reason,
+      length: nextText.length,
+      hasModel: !!model,
+      editorSurfaceMode: editorSurfaceMode.value,
+    })
+  } catch (error) {
+    logger.warn('[Editor] syncSourceEditorContent failed', { reason, error })
+  }
+}
+
 const updateEditorContent = (content) => {
   const nextContent = content ?? '';
   rawContent.value = nextContent;
@@ -10165,6 +10293,7 @@ const createPythonCellManagerForEditor = (targetEditor) => {
       if (targetEditor === secondaryEditor) return String(fileTreeStore.activeTabRight || '').trim()
       return String(fileTreeStore.activeTab || selectedFile.value?.path || '').trim()
     },
+    onStateChange: handlePythonCellSharedStateChange,
     onRequestConsole: () => {
       pythonConsoleVisible.value = true
       void ensurePythonSessionInfo(getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left'), 'pycell-open-console')
@@ -10173,6 +10302,10 @@ const createPythonCellManagerForEditor = (targetEditor) => {
 }
 
 const refreshPythonCellManagers = () => {
+  if (!EMBEDDED_PYTHON_CELL_EDITOR_ENABLED || editorSurfaceMode.value === 'notebook') {
+    disposePythonCellManagers()
+    return
+  }
   if (editor?.getModel?.()?.getLanguageId?.() === 'markdown') {
     if (!leftPythonCellManager) {
       leftPythonCellManager = createPythonCellManagerForEditor(editor)
@@ -10199,6 +10332,7 @@ const scheduleRefreshPythonCellManagers = debounce(() => {
 }, 120)
 
 const flushPythonCellDrafts = () => {
+  if (!EMBEDDED_PYTHON_CELL_EDITOR_ENABLED || editorSurfaceMode.value === 'notebook') return
   const nextLeft = leftPythonCellManager?.flushDrafts?.()
   if (typeof nextLeft === 'string' && editor?.getModel?.() && nextLeft !== editor.getModel().getValue()) {
     getPythonManagerApplyMarkdown(editor)(nextLeft, { action: 'pycell-flush-left' })
@@ -10939,6 +11073,69 @@ const handlePreviewClick = async (e) => {
       toolbar.appendChild(hint)
     }
     hint.textContent = '共享当前笔记的 Python 会话，支持导入表格、注入笔记和查看变量'
+  }
+
+  function getActivePythonCellFilePath() {
+    return String(selectedFile.value?.path || '').trim()
+  }
+
+  function patchSharedPythonCellState(cellId, patch = {}) {
+    if (!cellId) return null
+    return patchPythonCellSnapshot(getActivePythonCellFilePath(), cellId, patch)
+  }
+
+  function applySharedPythonCellStateToPreviewCell(cell) {
+    const cellId = guaxiSafeDecode(cell?.getAttribute?.('data-guaxi-py-cell'))
+    if (!cellId) return
+    const snapshot = getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)
+    if (!snapshot) return
+
+    const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
+    const outputPre = outputEl ? outputEl.closest?.('pre') : null
+    if (outputEl) {
+      outputEl.textContent = String(snapshot.outputText || '')
+    }
+    if (outputPre) {
+      outputPre.style.display = String(snapshot.outputText || '').trim() ? '' : 'none'
+    }
+
+    if (snapshot.result) {
+      renderPyCellDisplay(cell, outputPre, snapshot.result, String(snapshot.outputText || ''))
+      renderPyCellSessionState(cell, snapshot.result, {
+        forceVisible: snapshot.meta?.sessionCollapsed === false,
+      })
+    }
+
+    const media = cell.querySelector?.('.guaxi-pycell-media')
+    if (snapshot.meta?.outputCollapsed) {
+      if (outputPre) outputPre.style.display = 'none'
+      if (media) media.style.display = 'none'
+    }
+
+    const outputToggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-output"]')
+    if (outputToggleBtn) {
+      const visible = (outputPre && String(outputPre.style.display || '').trim() !== 'none')
+        || (media && String(media.style.display || '').trim() !== 'none')
+      outputToggleBtn.textContent = visible ? '隐藏结果' : '显示结果'
+    }
+
+    const sessionToggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-session"]')
+    if (sessionToggleBtn) {
+      const panel = cell.querySelector?.('.guaxi-pycell-session')
+      const visible = panel && String(panel.style.display || '').trim() !== 'none'
+      sessionToggleBtn.textContent = visible ? '隐藏变量' : '会话变量'
+    }
+  }
+
+  function syncAllPreviewPythonCells() {
+    previewContainer.value?.querySelectorAll?.('.guaxi-pycell')?.forEach?.((cell) => {
+      ensurePyCellToolbarEnhancements(cell)
+      applySharedPythonCellStateToPreviewCell(cell)
+    })
+  }
+
+  function handlePythonCellSharedStateChange() {
+    syncAllPreviewPythonCells()
   }
 
   const ensurePyCellSessionContainer = (cell, afterEl) => {
@@ -12033,6 +12230,13 @@ const handlePreviewClick = async (e) => {
       if (outputPre) outputPre.style.display = nextShow && hasText ? '' : 'none'
       if (media) media.style.display = nextShow && hasMedia ? 'flex' : 'none'
       syncPyCellButtons()
+      patchSharedPythonCellState(cellId, {
+        meta: {
+          ...(getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)?.meta || {}),
+          outputCollapsed: !nextShow,
+        },
+      })
+      scheduleRefreshPythonCellManagers()
       e.preventDefault()
       e.stopPropagation()
       return
@@ -12050,6 +12254,13 @@ const handlePreviewClick = async (e) => {
         renderPyCellSessionState(cell, { session_id: sessionId, session_vars: [] }, { forceVisible: nextVisible })
       }
       syncPyCellButtons()
+      patchSharedPythonCellState(cellId, {
+        meta: {
+          ...(getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)?.meta || {}),
+          sessionCollapsed: !nextVisible,
+        },
+      })
+      scheduleRefreshPythonCellManagers()
       e.preventDefault()
       e.stopPropagation()
       return
@@ -12069,6 +12280,14 @@ const handlePreviewClick = async (e) => {
         renderPyCellSessionState(cell, { session_id: sessionId, session_vars: [] }, { forceVisible: true })
         message.success('Python 会话已重启')
         syncPyCellButtons()
+        patchSharedPythonCellState(cellId, {
+          outputText: '',
+          display: null,
+          dataframe: null,
+          result: { session_id: sessionId, session_vars: [] },
+          sessionVars: [],
+        })
+        scheduleRefreshPythonCellManagers()
       } catch (err) {
         logger.error('[PyCell] reset failed', err)
         message.error(`重启 Python 会话失败：${String(err?.message || err)}`)
@@ -12185,6 +12404,19 @@ const handlePreviewClick = async (e) => {
         renderPyCellDisplay(cell, outputPre, res, outputText)
         renderPyCellSessionState(cell, res, { forceVisible: true })
         syncPyCellButtons()
+        patchSharedPythonCellState(cellId, {
+          outputText,
+          display: getGuaxiDisplayFromResult(res),
+          dataframe: getGuaxiDataFrameFromResult(res),
+          result: res,
+          sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
+          meta: {
+            ...(getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)?.meta || {}),
+            outputCollapsed: String(outputText || '').trim().length === 0,
+            sessionCollapsed: false,
+          },
+        })
+        scheduleRefreshPythonCellManagers()
         if (res?.ok === false) throw new Error(String(res?.stderr || res?.stdout || '导入失败'))
         message.success(`表格已导入到会话变量 ${variableName}`)
       } catch (err) {
@@ -12247,6 +12479,18 @@ const handlePreviewClick = async (e) => {
         renderPyCellDisplay(cell, outputPre, res, outputText)
         renderPyCellSessionState(cell, res)
         syncPyCellButtons()
+        patchSharedPythonCellState(cellId, {
+          outputText: hideText ? '' : outputText,
+          display: getGuaxiDisplayFromResult(res),
+          dataframe: getGuaxiDataFrameFromResult(res),
+          result: res,
+          sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
+          meta: {
+            ...(getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)?.meta || {}),
+            outputCollapsed: hideText,
+          },
+        })
+        scheduleRefreshPythonCellManagers()
 
         if (res?.ok === false) {
           message.error('Python 执行失败')
@@ -12276,6 +12520,14 @@ const handlePreviewClick = async (e) => {
         if (outputPre) outputPre.style.display = ''
         if (outputEl) outputEl.textContent = `运行失败：${String(err?.message || err)}`
         syncPyCellButtons()
+        patchSharedPythonCellState(cellId, {
+          outputText: `运行失败：${String(err?.message || err)}`,
+          display: null,
+          dataframe: null,
+          result: null,
+          sessionVars: [],
+        })
+        scheduleRefreshPythonCellManagers()
         message.error('运行失败')
       } finally {
         relatedBtns.forEach((b) => {
@@ -12849,8 +13101,10 @@ const renderDebounced = debounce(async (content) => {
       appearanceTheme: settingsStore.appearanceTheme,
       path: selectedFile.value?.path || '',
     })
-    const stripped = stripPythonCellBlocksFromMarkdown(content)
-    const processed = preprocessObsidianWikilinks(stripped);
+    const previewSource = transformPythonCellBlocksForPreview(content, {
+      filePath: selectedFile.value?.path || '',
+    })
+    const processed = preprocessObsidianWikilinks(previewSource);
     renderedHtml.value = await renderMarkdown(processed, {
       basePath: basePath,
       mermaid: true,
@@ -12932,6 +13186,9 @@ watch(selectedFile, async (newFile) => {
     }
 
     updateEditorContent(rawContent.value);
+    nextTick(() => {
+      syncSourceEditorContent('selected-file-changed')
+    })
 
     const targetEditor = getActiveEditor();
     if (targetEditor) {
@@ -13021,6 +13278,14 @@ watch(
   },
   { flush: 'post' }
 );
+
+watch([showEditor, editorSurfaceMode], ([editorVisible, surfaceMode]) => {
+  if (!editorVisible) return
+  if (surfaceMode === 'notebook' && canUseNotebookSurface.value) return
+  nextTick(() => {
+    syncSourceEditorContent('editor-visible-or-surface-changed')
+  })
+}, { flush: 'post' })
 
 const shouldAutoRenderPreview = computed(() => {
   if (!selectedFile.value || !canPreview.value) return false;
@@ -13412,9 +13677,7 @@ watch(renderedHtml, () => {
       addMediaViewerButtons(previewContainer.value, {
         theme: getMarkdownPreviewThemeName()
       });
-      previewContainer.value.querySelectorAll('.guaxi-pycell').forEach((cell) => {
-        ensurePyCellToolbarEnhancements(cell)
-      })
+      syncAllPreviewPythonCells()
       void renderPreviewMermaidDiagrams(previewContainer.value).catch((error) => {
         logger.error('预览区 Mermaid 渲染失败', error);
       });
@@ -13578,6 +13841,286 @@ const buildPrintHtml = (bodyHtml, title) => {
       print-color-adjust: exact;
     }
   }
+</style>
+<style>
+.guaxi-editor .guaxi-pycell-overlay-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 18;
+}
+
+.guaxi-editor .guaxi-pycell-overlay-card {
+  position: absolute;
+  pointer-events: none;
+}
+
+.guaxi-editor .guaxi-pycell-overlay-card > .guaxi-pycell-card {
+  pointer-events: auto;
+}
+
+.guaxi-editor .guaxi-pycell-spacer {
+  pointer-events: none;
+}
+
+.guaxi-editor .guaxi-pycell-card {
+  margin: 4px 0 8px;
+  padding: 0;
+  border: 1px solid var(--pycell-card-border);
+  border-radius: 16px;
+  background: var(--pycell-card-bg);
+  box-shadow: var(--pycell-card-shadow);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.guaxi-editor .guaxi-pycell-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px 9px;
+  border-bottom: 1px solid var(--pycell-header-border);
+  background: var(--pycell-header-bg);
+}
+
+.guaxi-editor .guaxi-pycell-card__prompt {
+  flex: 0 0 auto;
+  min-width: 56px;
+  font-size: 12px;
+  color: var(--pycell-prompt);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.guaxi-editor .guaxi-pycell-card__title {
+  font-size: 14px;
+  line-height: 1.3;
+  font-weight: 700;
+  color: var(--pycell-title);
+}
+
+.guaxi-editor .guaxi-pycell-card__meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--pycell-meta);
+}
+
+.guaxi-editor .guaxi-pycell-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.guaxi-editor .guaxi-pycell-card__btn,
+.guaxi-editor .guaxi-inline-dataframe__btn {
+  border: 1px solid var(--pycell-btn-border);
+  border-radius: 999px;
+  background: var(--pycell-btn-bg);
+  color: var(--pycell-btn-text);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.guaxi-editor .guaxi-inline-dataframe__btn {
+  font-size: 12px;
+}
+
+.guaxi-editor .guaxi-pycell-card__btn:hover,
+.guaxi-editor .guaxi-inline-dataframe__btn:hover {
+  border-color: var(--pycell-btn-hover-border);
+  background: var(--pycell-btn-hover-bg);
+  box-shadow: var(--pycell-btn-hover-shadow);
+  transform: translateY(-1px);
+}
+
+.guaxi-editor .guaxi-pycell-card__btn:focus-visible,
+.guaxi-editor .guaxi-inline-dataframe__btn:focus-visible {
+  outline: none;
+  border-color: var(--pycell-btn-hover-border);
+  box-shadow: var(--pycell-btn-focus-ring);
+}
+
+.guaxi-editor .guaxi-pycell-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.guaxi-editor .guaxi-pycell-card__code-shell,
+.guaxi-editor .guaxi-pycell-card__panel,
+.guaxi-editor .guaxi-pycell-card__rich,
+.guaxi-editor .guaxi-inline-dataframe {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.guaxi-editor .guaxi-pycell-card__panel.is-collapsed {
+  display: none;
+}
+
+.guaxi-editor .guaxi-pycell-card__editor {
+  width: 100%;
+  min-height: 96px;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 12px 14px 14px;
+  background: var(--pycell-editor-bg);
+  color: var(--pycell-editor-text);
+  font-size: 13px;
+  line-height: 1.65;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  box-sizing: border-box;
+  pointer-events: auto;
+  caret-color: #2563eb;
+}
+
+.guaxi-editor .guaxi-pycell-card__editor:focus {
+  background: var(--pycell-editor-focus-bg);
+}
+
+.guaxi-editor .guaxi-pycell-card__panel {
+  padding: 10px 14px 14px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  color: var(--pycell-panel-text);
+  background: var(--pycell-panel-bg);
+}
+
+.guaxi-editor .guaxi-pycell-card__panel--output::before,
+.guaxi-editor .guaxi-pycell-card__panel--session::before {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.guaxi-editor .guaxi-pycell-card__panel--output::before {
+  content: 'Out [ ]';
+  color: var(--pycell-output-label);
+}
+
+.guaxi-editor .guaxi-pycell-card__panel--session::before {
+  content: 'Session';
+  color: var(--pycell-session-label);
+}
+
+.guaxi-editor .guaxi-pycell-card__stdout,
+.guaxi-editor .guaxi-pycell-card__rich--markdown {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  color: var(--pycell-output-text);
+  background: var(--pycell-output-bg);
+  border: 1px solid var(--pycell-output-border);
+  border-radius: 12px;
+  padding: 12px 13px;
+}
+
+.guaxi-editor .guaxi-pycell-card__image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+
+.guaxi-editor .guaxi-pycell-card__rich--svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.guaxi-editor .guaxi-pycell-card__empty {
+  font-size: 12px;
+  color: var(--pycell-empty);
+}
+
+.guaxi-editor .guaxi-pycell-card__var + .guaxi-pycell-card__var {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.guaxi-editor .guaxi-pycell-card__var-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guaxi-editor .guaxi-pycell-card__var-name {
+  font-weight: 700;
+  color: var(--pycell-var-name);
+}
+
+.guaxi-editor .guaxi-pycell-card__var-type {
+  color: var(--pycell-var-type);
+  font-size: 12px;
+}
+
+.guaxi-editor .guaxi-pycell-card__var-preview,
+.guaxi-editor .guaxi-inline-dataframe__meta {
+  margin-top: 4px;
+  color: var(--pycell-var-preview);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.guaxi-editor .guaxi-inline-dataframe {
+  overflow: hidden;
+}
+
+.guaxi-editor .guaxi-inline-dataframe__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.guaxi-editor .guaxi-inline-dataframe__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.guaxi-editor .guaxi-inline-dataframe__viewport {
+  overflow: auto;
+}
+
+.guaxi-editor .guaxi-inline-dataframe__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.guaxi-editor .guaxi-inline-dataframe__table th,
+.guaxi-editor .guaxi-inline-dataframe__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.guaxi-editor .guaxi-inline-dataframe__table th {
+  background: rgba(226, 232, 240, 0.48);
+  font-weight: 700;
+}
+
+:root[data-guaxi-theme='dark'] .guaxi-editor .guaxi-inline-dataframe__table th {
+  background: rgba(51, 65, 85, 0.72);
+}
 </style>
 </head>
 <body>
@@ -13784,6 +14327,9 @@ const switchTab = (path, region) => {
   }
 
   updateEditorContent(tab.content);
+  nextTick(() => {
+    syncSourceEditorContent('switch-tab')
+  })
 };
 
 const closeTab = async (path, region) => {
@@ -14196,6 +14742,80 @@ onUnmounted(() => {
 <style scoped>
 .guaxi-editor {
   --editor-font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New';
+  --pycell-card-border: rgba(15, 23, 42, 0.1);
+  --pycell-card-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+  --pycell-card-shadow:
+    0 10px 28px rgba(15, 23, 42, 0.07),
+    0 1px 0 rgba(255, 255, 255, 0.82) inset;
+  --pycell-header-bg:
+    linear-gradient(180deg, rgba(244, 248, 255, 0.96), rgba(240, 246, 252, 0.86));
+  --pycell-header-border: rgba(15, 23, 42, 0.08);
+  --pycell-title: #10233f;
+  --pycell-meta: #4f6077;
+  --pycell-prompt: #0f766e;
+  --pycell-btn-border: rgba(15, 23, 42, 0.12);
+  --pycell-btn-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.96));
+  --pycell-btn-text: #17355f;
+  --pycell-btn-hover-border: rgba(59, 130, 246, 0.35);
+  --pycell-btn-hover-bg: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(235, 244, 255, 0.98));
+  --pycell-btn-hover-shadow: 0 6px 16px rgba(59, 130, 246, 0.16);
+  --pycell-btn-focus-ring: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  --pycell-editor-bg:
+    linear-gradient(180deg, rgba(250, 252, 255, 0.98), rgba(246, 249, 252, 0.98));
+  --pycell-editor-focus-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(247, 250, 255, 0.99));
+  --pycell-editor-text: #0f172a;
+  --pycell-panel-bg: rgba(248, 250, 252, 0.72);
+  --pycell-panel-text: #1f2937;
+  --pycell-output-label: #2563eb;
+  --pycell-session-label: #0f766e;
+  --pycell-output-bg: rgba(255, 255, 255, 0.52);
+  --pycell-output-border: rgba(15, 23, 42, 0.08);
+  --pycell-output-text: #1f2937;
+  --pycell-empty: #5f6f86;
+  --pycell-var-name: #10233f;
+  --pycell-var-type: #0f766e;
+  --pycell-var-preview: #506177;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-editor {
+  --pycell-card-border: rgba(148, 163, 184, 0.22);
+  --pycell-card-bg:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(12, 18, 32, 0.99), rgba(15, 23, 42, 0.97));
+  --pycell-card-shadow:
+    0 20px 38px rgba(2, 6, 23, 0.42),
+    0 1px 0 rgba(148, 163, 184, 0.08) inset;
+  --pycell-header-bg:
+    linear-gradient(180deg, rgba(18, 27, 46, 0.95), rgba(15, 23, 42, 0.78));
+  --pycell-header-border: rgba(148, 163, 184, 0.18);
+  --pycell-title: #e5eefc;
+  --pycell-meta: #c7d4e5;
+  --pycell-prompt: #5eead4;
+  --pycell-btn-border: rgba(148, 163, 184, 0.34);
+  --pycell-btn-bg: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(22, 30, 47, 0.98));
+  --pycell-btn-text: #eff6ff;
+  --pycell-btn-hover-border: rgba(125, 211, 252, 0.58);
+  --pycell-btn-hover-bg: linear-gradient(180deg, rgba(37, 50, 72, 0.99), rgba(29, 41, 61, 0.99));
+  --pycell-btn-hover-shadow: 0 8px 20px rgba(14, 165, 233, 0.16);
+  --pycell-btn-focus-ring: 0 0 0 3px rgba(56, 189, 248, 0.22);
+  --pycell-editor-bg:
+    linear-gradient(180deg, rgba(10, 16, 28, 0.99), rgba(14, 22, 37, 0.99));
+  --pycell-editor-focus-bg:
+    linear-gradient(180deg, rgba(14, 22, 37, 1), rgba(18, 28, 46, 1));
+  --pycell-editor-text: #f8fbff;
+  --pycell-panel-bg: rgba(13, 20, 34, 0.9);
+  --pycell-panel-text: #f6f9ff;
+  --pycell-output-label: #60a5fa;
+  --pycell-session-label: #5eead4;
+  --pycell-output-bg: rgba(15, 23, 42, 0.82);
+  --pycell-output-border: rgba(148, 163, 184, 0.16);
+  --pycell-output-text: #f8fbff;
+  --pycell-empty: #c7d4e5;
+  --pycell-var-name: #e5eefc;
+  --pycell-var-type: #5eead4;
+  --pycell-var-preview: #c7d4e5;
 }
 
 .editor-header {
@@ -15384,6 +16004,12 @@ onUnmounted(() => {
   /* 直接使用主题变量，避免首次启动暗色模式时先渲染出白色编辑器底。 */
   background: var(--guaxi-content-bg, #ffffff);
   color: var(--guaxi-text-primary, #1f2328);
+}
+
+.notebook-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .editor-container {
@@ -17176,11 +17802,12 @@ img {
 .guaxi-pycell-card {
   margin: 4px 0 8px;
   padding: 0;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 14px;
-  background: rgba(248, 250, 252, 0.98);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--pycell-card-border);
+  border-radius: 16px;
+  background: var(--pycell-card-bg);
+  box-shadow: var(--pycell-card-shadow);
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .guaxi-pycell-card__header {
@@ -17188,29 +17815,31 @@ img {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px 8px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 11px 14px 9px;
+  border-bottom: 1px solid var(--pycell-header-border);
+  background: var(--pycell-header-bg);
 }
 
 .guaxi-pycell-card__prompt {
   flex: 0 0 auto;
   min-width: 56px;
   font-size: 12px;
-  color: #0f766e;
+  color: var(--pycell-prompt);
   font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .guaxi-pycell-card__title {
   font-size: 14px;
   line-height: 1.3;
   font-weight: 700;
-  color: #10233f;
+  color: var(--pycell-title);
 }
 
 .guaxi-pycell-card__meta {
-  margin-top: 2px;
+  margin-top: 4px;
   font-size: 11px;
-  color: #5b6b81;
+  color: var(--pycell-meta);
 }
 
 .guaxi-pycell-card__actions {
@@ -17222,14 +17851,29 @@ img {
 }
 
 .guaxi-pycell-card__btn {
-  border: 1px solid rgba(15, 23, 42, 0.12);
+  border: 1px solid var(--pycell-btn-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.85);
-  color: #17355f;
+  background: var(--pycell-btn-bg);
+  color: var(--pycell-btn-text);
   font-size: 11px;
   font-weight: 600;
-  padding: 4px 10px;
+  padding: 5px 10px;
   cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.guaxi-pycell-card__btn:hover {
+  border-color: var(--pycell-btn-hover-border);
+  background: var(--pycell-btn-hover-bg);
+  box-shadow: var(--pycell-btn-hover-shadow);
+  transform: translateY(-1px);
+}
+
+.guaxi-pycell-card__btn:focus-visible {
+  outline: none;
+  border-color: var(--pycell-btn-hover-border);
+  box-shadow: var(--pycell-btn-focus-ring);
 }
 
 .guaxi-pycell-card__body {
@@ -17258,17 +17902,25 @@ img {
   border: none;
   outline: none;
   padding: 12px 14px 14px;
-  background: #f8fafc;
-  color: #0f172a;
+  background: var(--pycell-editor-bg);
+  color: var(--pycell-editor-text);
   font-size: 13px;
   line-height: 1.65;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
   box-sizing: border-box;
+  pointer-events: auto;
+  caret-color: #2563eb;
+}
+
+.guaxi-pycell-card__editor:focus {
+  background: var(--pycell-editor-focus-bg);
 }
 
 .guaxi-pycell-card__panel {
   padding: 10px 14px 14px;
   border-top: 1px solid rgba(15, 23, 42, 0.08);
+  color: var(--pycell-panel-text);
+  background: var(--pycell-panel-bg);
 }
 
 .guaxi-pycell-card__panel--output::before,
@@ -17283,12 +17935,12 @@ img {
 
 .guaxi-pycell-card__panel--output::before {
   content: 'Out [ ]';
-  color: #2563eb;
+  color: var(--pycell-output-label);
 }
 
 .guaxi-pycell-card__panel--session::before {
   content: 'Session';
-  color: #0f766e;
+  color: var(--pycell-session-label);
 }
 
 .guaxi-pycell-card__stdout,
@@ -17298,6 +17950,11 @@ img {
   word-break: break-word;
   line-height: 1.65;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  color: var(--pycell-output-text);
+  background: var(--pycell-output-bg);
+  border: 1px solid var(--pycell-output-border);
+  border-radius: 12px;
+  padding: 12px 13px;
 }
 
 .guaxi-pycell-card__image {
@@ -17314,7 +17971,7 @@ img {
 
 .guaxi-pycell-card__empty {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--pycell-empty);
 }
 
 .guaxi-pycell-card__var + .guaxi-pycell-card__var {
@@ -17331,17 +17988,17 @@ img {
 
 .guaxi-pycell-card__var-name {
   font-weight: 700;
-  color: #10233f;
+  color: var(--pycell-var-name);
 }
 
 .guaxi-pycell-card__var-type {
-  color: #0f766e;
+  color: var(--pycell-var-type);
   font-size: 12px;
 }
 
 .guaxi-pycell-card__var-preview {
   margin-top: 4px;
-  color: #5b6b81;
+  color: var(--pycell-var-preview);
   font-size: 12px;
   line-height: 1.5;
   word-break: break-word;
@@ -17375,11 +18032,19 @@ img {
 .guaxi-inline-dataframe__btn {
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.96));
   color: #17355f;
   font-size: 12px;
   padding: 5px 10px;
   cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.guaxi-inline-dataframe__btn:hover {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(235, 244, 255, 0.98));
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.14);
+  transform: translateY(-1px);
 }
 
 .guaxi-inline-dataframe__viewport {
@@ -17406,11 +18071,10 @@ img {
 
 :global(:root[data-guaxi-theme='dark']) .python-console-panel,
 :global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card {
-  border-color: rgba(148, 163, 184, 0.16);
-  background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 28%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.96));
-  box-shadow: 0 18px 36px rgba(2, 6, 23, 0.35);
+  border-color: rgba(148, 163, 184, 0.22);
+  box-shadow:
+    0 20px 38px rgba(2, 6, 23, 0.42),
+    0 1px 0 rgba(148, 163, 184, 0.08) inset;
 }
 
 :global(:root[data-guaxi-theme='dark']) .python-console-dock {
@@ -17428,33 +18092,36 @@ img {
 }
 
 :global(:root[data-guaxi-theme='dark']) .python-console-panel__meta,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__meta,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__var-preview,
-:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__meta,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__empty {
-  color: #94a3b8;
+:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__meta {
+  color: #c7d4e5;
 }
 
 :global(:root[data-guaxi-theme='dark']) .python-console-panel__btn,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__btn,
 :global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__btn {
-  border-color: rgba(148, 163, 184, 0.18);
-  background: rgba(30, 41, 59, 0.84);
-  color: #dbeafe;
+  border-color: rgba(148, 163, 184, 0.34);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(22, 30, 47, 0.98));
+  color: #eff6ff;
+  box-shadow: 0 6px 16px rgba(2, 6, 23, 0.18);
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__btn:hover {
+  border-color: rgba(125, 211, 252, 0.58);
+  background: linear-gradient(180deg, rgba(37, 50, 72, 0.99), rgba(29, 41, 61, 0.99));
+  color: #ffffff;
+  box-shadow: 0 8px 20px rgba(14, 165, 233, 0.16);
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__btn:focus-visible {
+  outline: none;
+  border-color: rgba(125, 211, 252, 0.68);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
 }
 
 :global(:root[data-guaxi-theme='dark']) .python-console-panel__input,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__code-shell,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__panel,
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__rich,
 :global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe {
-  border-color: rgba(148, 163, 184, 0.14);
-  background: rgba(15, 23, 42, 0.72);
-  color: #e5eefc;
-}
-
-:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__editor {
-  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(13, 20, 34, 0.9);
+  color: #f6f9ff;
 }
 
 :global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__table th {

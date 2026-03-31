@@ -63,6 +63,8 @@ export const buildPythonCellBlock = ({
   return `${serializePythonCellMeta(normalizedMeta)}\n${codeText}\n<!--/py-->`;
 };
 
+export const createPythonCellStableId = () => `py-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
 export const parsePythonCellBlocks = (markdown = '') => {
   const text = String(markdown || '').replace(/\r\n?/g, '\n');
   const lines = text.split('\n');
@@ -130,6 +132,52 @@ export const stripPythonCellBlocksFromMarkdown = (markdown = '') => {
   return kept.join('\n');
 };
 
+export const transformPythonCellBlocksForPreview = (markdown = '', { filePath = '' } = {}) => {
+  const text = String(markdown || '').replace(/\r\n?/g, '\n');
+  const lines = text.split('\n');
+  const output = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const startMatch = String(lines[i] || '').match(PY_CELL_START_RE);
+    if (!startMatch) {
+      output.push(lines[i]);
+      continue;
+    }
+
+    let endIndex = -1;
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (PY_CELL_END_RE.test(String(lines[j] || ''))) {
+        endIndex = j;
+        break;
+      }
+    }
+
+    if (endIndex < 0) {
+      output.push(lines[i]);
+      continue;
+    }
+
+    const meta = tryParsePythonCellMeta(startMatch[1] || '');
+    const block = {
+      startLine: i + 1,
+      endLine: endIndex + 1,
+    };
+    const code = lines.slice(i + 1, endIndex).join('\n');
+    const cellId = createPythonCellId(filePath, block);
+
+    if (meta.title) {
+      output.push(`> Python Cell: ${meta.title}`);
+    }
+    output.push(`\`\`\`python guaxi-cell=${cellId}`);
+    output.push(code);
+    output.push('```');
+
+    i = endIndex;
+  }
+
+  return output.join('\n');
+};
+
 export const replacePythonCellBlock = (markdown = '', block, nextCode, nextMeta) => {
   const text = String(markdown || '').replace(/\r\n?/g, '\n');
   if (!block?.startLine || !block?.endLine) return text;
@@ -147,6 +195,10 @@ export const replacePythonCellBlock = (markdown = '', block, nextCode, nextMeta)
 
 export const createPythonCellId = (filePath, block) => {
   const fileKey = String(filePath || 'untitled').replace(/[^\w.-]+/g, '_');
+  const stableId = String(block?.meta?.id || '').trim();
+  if (stableId) {
+    return `pycell-${fileKey}-${stableId}`;
+  }
   return `pycell-${fileKey}-${block?.startLine || 0}-${block?.endLine || 0}`;
 };
 
