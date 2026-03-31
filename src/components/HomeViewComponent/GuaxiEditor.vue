@@ -17174,42 +17174,42 @@ img {
 }
 
 .guaxi-pycell-card {
-  margin: 10px 0;
-  padding: 16px;
-  border: 1px solid rgba(15, 23, 42, 0.1);
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at top right, rgba(125, 211, 252, 0.22), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 249, 252, 0.98));
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
+  margin: 4px 0 8px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.98);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
 }
 
 .guaxi-pycell-card__header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
 }
 
-.guaxi-pycell-card__eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.guaxi-pycell-card__prompt {
+  flex: 0 0 auto;
+  min-width: 56px;
+  font-size: 12px;
   color: #0f766e;
   font-weight: 700;
 }
 
 .guaxi-pycell-card__title {
-  margin-top: 4px;
-  font-size: 18px;
+  font-size: 14px;
   line-height: 1.3;
   font-weight: 700;
   color: #10233f;
 }
 
 .guaxi-pycell-card__meta {
-  margin-top: 6px;
-  font-size: 12px;
+  margin-top: 2px;
+  font-size: 11px;
   color: #5b6b81;
 }
 
@@ -17218,57 +17218,77 @@ img {
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .guaxi-pycell-card__btn {
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.85);
   color: #17355f;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 6px 12px;
+  padding: 4px 10px;
   cursor: pointer;
 }
 
 .guaxi-pycell-card__body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 14px;
+  gap: 0;
 }
 
 .guaxi-pycell-card__code-shell,
 .guaxi-pycell-card__panel,
 .guaxi-pycell-card__rich,
 .guaxi-inline-dataframe {
-  border: 1px solid rgba(15, 23, 42, 0.1);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.9);
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
-.guaxi-pycell-card__code-shell.is-collapsed,
 .guaxi-pycell-card__panel.is-collapsed {
   display: none;
 }
 
 .guaxi-pycell-card__editor {
   width: 100%;
-  min-height: 180px;
-  resize: vertical;
+  min-height: 96px;
+  resize: none;
   border: none;
   outline: none;
-  padding: 14px 16px;
-  background: transparent;
+  padding: 12px 14px 14px;
+  background: #f8fafc;
   color: #0f172a;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.65;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  box-sizing: border-box;
 }
 
 .guaxi-pycell-card__panel {
-  padding: 14px 16px;
+  padding: 10px 14px 14px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.guaxi-pycell-card__panel--output::before,
+.guaxi-pycell-card__panel--session::before {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.guaxi-pycell-card__panel--output::before {
+  content: 'Out [ ]';
+  color: #2563eb;
+}
+
+.guaxi-pycell-card__panel--session::before {
+  content: 'Session';
+  color: #0f766e;
 }
 
 .guaxi-pycell-card__stdout,

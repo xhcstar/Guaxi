@@ -10,8 +10,8 @@ import {
 } from './guaxiPythonCellSyntax'
 
 // 设计说明：
-// 1. 编辑模式下保留 Markdown 源码可见，Python Cell 卡片作为附加 view zone 渲染在源码块下方。
-// 2. 这样用户既能直接编辑 Markdown 原文，也能立刻获得接近 Notebook 的执行 UI，避免“插入后源码消失”的割裂体验。
+// 1. 编辑模式下，Python Cell 以“嵌入式单元格”替代 Markdown 源码区域，整体体验尽量贴近 Jupyter Notebook。
+// 2. Markdown 中的 <!--py-->...<!--/py--> 仍然作为真实存储格式存在，但在编辑视图里会被隐藏，由 Cell UI 接管对应区域。
 // 3. 卡片中的草稿代码先保存在内存态，保存文件/切换文件前统一 flush 回 Markdown 源文本。
 // 4. 输出、变量、表格和“写回 Markdown”都围绕同一个文件级 Python session 运行，确保体验接近 Notebook。
 
@@ -225,6 +225,13 @@ export const createGuaxiPythonCellEditorManager = ({
     } catch {
     }
     zoneIds = []
+  }
+
+  const clearHiddenAreas = () => {
+    try {
+      editor.setHiddenAreas([], 'guaxi-python-cells')
+    } catch {
+    }
   }
 
   const scheduleRefresh = () => {
@@ -530,41 +537,40 @@ export const createGuaxiPythonCellEditorManager = ({
     card.className = 'guaxi-pycell-card'
     card.dataset.pyCellId = cellId
 
-    const title = state.meta.title || `Python Cell · 第 ${block.startLine} 行`
+    const title = state.meta.title || `Python Cell`
     card.innerHTML = `
       <div class="guaxi-pycell-card__header">
+        <div class="guaxi-pycell-card__prompt">In [ ]</div>
         <div class="guaxi-pycell-card__title-wrap">
-          <div class="guaxi-pycell-card__eyebrow">Python Cell</div>
           <div class="guaxi-pycell-card__title">${escapeHtml(title)}</div>
-          <div class="guaxi-pycell-card__meta">文件级会话 · 隐藏源码块 · 关闭文件后销毁沙箱</div>
+          <div class="guaxi-pycell-card__meta">文件级会话 · 关闭文件后销毁沙箱</div>
         </div>
         <div class="guaxi-pycell-card__actions">
           <button type="button" class="guaxi-pycell-card__btn" data-action="run">运行</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="run-writeback">运行并写回</button>
-          <button type="button" class="guaxi-pycell-card__btn" data-action="toggle-code">${state.meta.codeCollapsed ? '显示代码' : '隐藏代码'}</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="toggle-output">${state.meta.outputCollapsed ? '显示输出' : '隐藏输出'}</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="toggle-session">${state.meta.sessionCollapsed ? '显示变量' : '隐藏变量'}</button>
           <button type="button" class="guaxi-pycell-card__btn" data-action="open-console">控制台</button>
         </div>
       </div>
       <div class="guaxi-pycell-card__body">
-        <div class="guaxi-pycell-card__code-shell ${state.meta.codeCollapsed ? 'is-collapsed' : ''}">
+        <div class="guaxi-pycell-card__code-shell">
           <textarea class="guaxi-pycell-card__editor" spellcheck="false"></textarea>
         </div>
-        <div class="guaxi-pycell-card__panel ${state.meta.outputCollapsed ? 'is-collapsed' : ''}" data-panel="output"></div>
-        <div class="guaxi-pycell-card__panel ${state.meta.sessionCollapsed ? 'is-collapsed' : ''}" data-panel="session"></div>
+        <div class="guaxi-pycell-card__panel guaxi-pycell-card__panel--output ${state.meta.outputCollapsed ? 'is-collapsed' : ''}" data-panel="output"></div>
+        <div class="guaxi-pycell-card__panel guaxi-pycell-card__panel--session ${state.meta.sessionCollapsed ? 'is-collapsed' : ''}" data-panel="session"></div>
       </div>
     `
 
     const textarea = card.querySelector('.guaxi-pycell-card__editor')
     const outputContainer = card.querySelector('[data-panel="output"]')
     const sessionContainer = card.querySelector('[data-panel="session"]')
-    const codeShell = card.querySelector('.guaxi-pycell-card__code-shell')
     textarea.value = state.draftCode
 
     const resizeTextarea = () => {
       textarea.style.height = 'auto'
-      textarea.style.height = `${Math.max(180, textarea.scrollHeight + 4)}px`
+      textarea.style.height = `${Math.max(96, textarea.scrollHeight + 4)}px`
+      scheduleRefresh()
     }
 
     textarea.addEventListener('input', () => {
@@ -582,9 +588,6 @@ export const createGuaxiPythonCellEditorManager = ({
     const togglePanel = (panel, key) => {
       state.meta[key] = !state.meta[key]
       panel.classList.toggle('is-collapsed', !!state.meta[key])
-      if (key === 'codeCollapsed') {
-        codeShell.classList.toggle('is-collapsed', !!state.meta[key])
-      }
       scheduleRefresh()
     }
 
@@ -598,11 +601,6 @@ export const createGuaxiPythonCellEditorManager = ({
         }
         if (action === 'run-writeback') {
           await runCell(block, state, outputContainer, sessionContainer, { writeBack: true })
-          return
-        }
-        if (action === 'toggle-code') {
-          togglePanel(codeShell, 'codeCollapsed')
-          button.textContent = state.meta.codeCollapsed ? '显示代码' : '隐藏代码'
           return
         }
         if (action === 'toggle-output') {
@@ -635,6 +633,7 @@ export const createGuaxiPythonCellEditorManager = ({
       const blocks = parsePythonCellBlocks(markdown)
 
       clearZones()
+      clearHiddenAreas()
 
       if (!blocks.length) {
         lastRefreshSignature = ''
@@ -644,20 +643,32 @@ export const createGuaxiPythonCellEditorManager = ({
         return
       }
 
+      const hiddenRanges = []
       editor.changeViewZones((accessor) => {
+        const model = editor.getModel()
         blocks.forEach((block) => {
           const card = createCardDom(block)
           const zoneId = accessor.addZone({
             // 关键设计：
-            // 卡片挂在 Python Cell 源码块之后，这样源码继续可见，卡片也会立即出现在当前编辑位置。
-            afterLineNumber: Math.max(0, block.endLine),
+            // view zone 插在 Cell 起始行之前，同时隐藏源码区间，实现“单元格接管原区域”的嵌入式效果。
+            afterLineNumber: Math.max(0, block.startLine - 1),
             heightInPx: Math.max(280, Math.ceil(card.scrollHeight || card.getBoundingClientRect().height || 280)),
             domNode: card,
             suppressMouseDown: false,
           })
           zoneIds.push(zoneId)
+          if (model) {
+            hiddenRanges.push(new monaco.Range(
+              block.startLine,
+              1,
+              block.endLine,
+              model.getLineMaxColumn(block.endLine),
+            ))
+          }
         })
       })
+
+      editor.setHiddenAreas(hiddenRanges, 'guaxi-python-cells')
 
       const nextSignature = `${blocks.length}:${getFilePath?.() || ''}:${blocks.map((item) => `${item.startLine}-${item.endLine}`).join('|')}`
       if (lastRefreshSignature !== nextSignature) {
@@ -665,12 +676,13 @@ export const createGuaxiPythonCellEditorManager = ({
         logger?.info?.('[PyCellEditor] view zones refreshed', {
           count: blocks.length,
           path: getFilePath?.() || '',
-          mode: 'source-visible',
+          mode: 'embedded-cell',
         })
       }
       editor?.layout?.()
     } catch (error) {
       clearZones()
+      clearHiddenAreas()
       logger?.warn?.('[PyCellEditor] view zone render failed', error)
     } finally {
       refreshInFlight = false
@@ -684,6 +696,7 @@ export const createGuaxiPythonCellEditorManager = ({
     dispose() {
       disposed = true
       clearZones()
+      clearHiddenAreas()
       cellStates.clear()
     },
   }
