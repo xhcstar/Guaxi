@@ -85,7 +85,7 @@ export const useEditorStore = defineStore("editor", {
 
     setHomePreviewModeKey(key) {
       const k = String(key || "").trim().toLowerCase();
-      const next = ["edit", "preview", "split", "realtime"].includes(k) ? k : "edit";
+      const next = ["edit", "preview", "split", "realtime", "explorer"].includes(k) ? k : "edit";
       if (this.homePreviewModeKey === next) return;
 
       this.homePreviewModeKey = next;

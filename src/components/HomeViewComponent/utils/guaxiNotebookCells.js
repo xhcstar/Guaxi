@@ -1,4 +1,4 @@
-import {
+﻿import {
   buildPythonCellBlock,
   createPythonCellId,
   createPythonCellStableId,
@@ -43,13 +43,7 @@ export const normalizeNotebookCells = (cells = []) => {
       continue
     }
 
-    const markdownCell = createNotebookMarkdownCell(rawCell.content || '', { key: rawCell.key })
-    const prev = normalized[normalized.length - 1]
-    if (prev?.type === 'markdown') {
-      prev.content = `${prev.content}${markdownCell.content}`
-    } else {
-      normalized.push(markdownCell)
-    }
+    normalized.push(createNotebookMarkdownCell(rawCell.content || '', { key: rawCell.key }))
   }
 
   if (!normalized.length) {
@@ -57,6 +51,126 @@ export const normalizeNotebookCells = (cells = []) => {
   }
 
   return normalized
+}
+
+const NOTEBOOK_FENCE_RE = /^\s*(`{3,}|~{3,})/
+const NOTEBOOK_ATX_HEADING_RE = /^\s{0,3}#{1,6}(?:\s+|$)/
+const NOTEBOOK_FRONTMATTER_RE = /^\s*---\s*$/
+const NOTEBOOK_FRONTMATTER_END_RE = /^\s*(---|\.\.\.)\s*$/
+
+const normalizeNotebookMarkdownText = (markdown = '') => String(markdown || '').replace(/\r\n?/g, '\n')
+
+const detectFenceState = (line, state) => {
+  const match = String(line || '').match(NOTEBOOK_FENCE_RE)
+  if (!match) return state
+
+  const fenceText = String(match[1] || '')
+  const nextState = { ...state }
+  const fenceChar = fenceText[0] || ''
+  const fenceLength = fenceText.length
+
+  if (!nextState.active) {
+    nextState.active = true
+    nextState.char = fenceChar
+    nextState.length = fenceLength
+    return nextState
+  }
+
+  if (nextState.char === fenceChar && fenceLength >= nextState.length) {
+    nextState.active = false
+    nextState.char = ''
+    nextState.length = 0
+  }
+  return nextState
+}
+
+const detectFrontmatterEnd = (lines = []) => {
+  if (!Array.isArray(lines) || lines.length < 3) return -1
+  if (!NOTEBOOK_FRONTMATTER_RE.test(String(lines[0] || ''))) return -1
+
+  for (let index = 1; index < lines.length; index += 1) {
+    if (!NOTEBOOK_FRONTMATTER_END_RE.test(String(lines[index] || ''))) continue
+    let endExclusive = index + 1
+    while (endExclusive < lines.length && String(lines[endExclusive] || '').trim() === '') {
+      endExclusive += 1
+    }
+    return endExclusive
+  }
+
+  return -1
+}
+
+// 设计说明：
+// 1. 探索者模式需要把 Markdown 拆成更接近“文档大纲”的多个 cell，而不是把整段文本塞进一个超大 cell。
+// 2. 这里优先按标题切分；如果某一段本身没有标题，则退化成按空行块切分，这样普通笔记也不会退化成单大块。
+// 3. 切分时会避开 fenced code block 和 frontmatter，避免把代码块、YAML 头错误拆散。
+const splitMarkdownIntoNotebookCellSources = (markdown = '') => {
+  const text = normalizeNotebookMarkdownText(markdown)
+  if (!text) return []
+
+  const lines = text.split('\n')
+  const segments = []
+  const frontmatterEnd = detectFrontmatterEnd(lines)
+  let startLine = 0
+
+  if (frontmatterEnd > 0) {
+    segments.push(lines.slice(0, frontmatterEnd).join('\n'))
+    startLine = frontmatterEnd
+  }
+
+  const headingStartIndexes = []
+  let fenceState = { active: false, char: '', length: 0 }
+  for (let index = startLine; index < lines.length; index += 1) {
+    const line = String(lines[index] || '')
+    if (!fenceState.active && NOTEBOOK_ATX_HEADING_RE.test(line)) {
+      headingStartIndexes.push(index)
+    }
+    fenceState = detectFenceState(line, fenceState)
+  }
+
+  const pushSegment = (segmentLines = []) => {
+    const segmentText = segmentLines.join('\n')
+    if (!segmentText) return
+    segments.push(segmentText)
+  }
+
+  if (headingStartIndexes.length) {
+    if (headingStartIndexes[0] > startLine) {
+      pushSegment(lines.slice(startLine, headingStartIndexes[0]))
+    }
+
+    headingStartIndexes.forEach((headingStart, index) => {
+      const nextHeadingStart = headingStartIndexes[index + 1] ?? lines.length
+      pushSegment(lines.slice(headingStart, nextHeadingStart))
+    })
+  } else {
+    let chunkStart = startLine
+    fenceState = { active: false, char: '', length: 0 }
+
+    for (let index = startLine; index < lines.length; index += 1) {
+      const line = String(lines[index] || '')
+      fenceState = detectFenceState(line, fenceState)
+      if (fenceState.active || line.trim() !== '') continue
+
+      let blankEnd = index
+      while (blankEnd + 1 < lines.length && String(lines[blankEnd + 1] || '').trim() === '') {
+        blankEnd += 1
+      }
+
+      const hasDoubleBlankBoundary = blankEnd > index
+      if (!hasDoubleBlankBoundary) continue
+
+      pushSegment(lines.slice(chunkStart, blankEnd + 1))
+      chunkStart = blankEnd + 1
+      index = blankEnd
+    }
+
+    if (chunkStart < lines.length) {
+      pushSegment(lines.slice(chunkStart))
+    }
+  }
+
+  return segments
 }
 
 const joinCellSource = (parts) => {
@@ -110,9 +224,16 @@ export const createNotebookCellsFromMarkdown = (markdown = '', { filePath = '' }
     const endExclusive = Math.max(startIndex, Number(block.endLine || startIndex + 1))
     const leading = lines.slice(cursor, startIndex).join('\n')
 
-    if (leading || !cells.length) {
-      cells.push(createNotebookMarkdownCell(leading, {
-        key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${index}-${cursor}`,
+    const leadingCells = splitMarkdownIntoNotebookCellSources(leading)
+    if (leadingCells.length) {
+      leadingCells.forEach((content, leadingIndex) => {
+        cells.push(createNotebookMarkdownCell(content, {
+          key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${index}-${cursor}-${leadingIndex}`,
+        }))
+      })
+    } else if (!cells.length) {
+      cells.push(createNotebookMarkdownCell('', {
+        key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-${index}-${cursor}-empty`,
       }))
     }
 
@@ -134,9 +255,16 @@ export const createNotebookCellsFromMarkdown = (markdown = '', { filePath = '' }
   })
 
   const trailing = lines.slice(cursor).join('\n')
-  if (trailing || !cells.length || cells[cells.length - 1]?.type === 'python') {
-    cells.push(createNotebookMarkdownCell(trailing, {
-      key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-tail-${cursor}`,
+  const trailingCells = splitMarkdownIntoNotebookCellSources(trailing)
+  if (trailingCells.length) {
+    trailingCells.forEach((content, trailingIndex) => {
+      cells.push(createNotebookMarkdownCell(content, {
+        key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-tail-${cursor}-${trailingIndex}`,
+      }))
+    })
+  } else if (!cells.length || cells[cells.length - 1]?.type === 'python') {
+    cells.push(createNotebookMarkdownCell('', {
+      key: `${NOTEBOOK_MARKDOWN_CELL_PREFIX}-tail-${cursor}-empty`,
     }))
   }
 
@@ -198,3 +326,4 @@ export const deleteNotebookCell = (cells = [], key) => {
   const filtered = normalizeNotebookCells(cells).filter((cell) => String(cell.key) !== String(key))
   return normalizeNotebookCells(filtered)
 }
+

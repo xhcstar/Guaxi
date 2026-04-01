@@ -226,15 +226,6 @@
             Save (Ctrl+S)
           </n-tooltip>
 
-          <n-tooltip v-if="canUseNotebookSurface" placement="top" trigger="hover">
-            <template #trigger>
-              <n-button text @click="toggleEditorSurfaceMode">
-                <Icon :icon="editorSurfaceMode === 'notebook' ? filePenLineIcon : bookOpenIcon" width="16" height="16" />
-              </n-button>
-            </template>
-            {{ editorSurfaceMode === 'notebook' ? 'Source View' : 'Notebook View' }}
-          </n-tooltip>
-
           <n-popover v-if="false" class="toolbar-action-python" trigger="click" placement="bottom" :show="pythonRuntimePopoverVisible"
             @update:show="handlePythonRuntimePopoverUpdateShow">
             <template #trigger>
@@ -374,7 +365,7 @@
                   <Icon :icon="previewModeIcon" width="16" height="16" />
                 </n-button>
               </template>
-              {{ previewModeLabel }} (Ctrl+1/2/3/4)
+              {{ previewModeLabel }} (Ctrl+1/2/3/4/5)
             </n-tooltip>
           </n-dropdown>
 
@@ -597,7 +588,6 @@
             :theme="settingsStore.appearanceTheme"
             @update:markdown="applyNotebookMarkdown"
             @state-change="syncAllPreviewPythonCells"
-            @open-source="openSourceEditorSurface"
             @open-console="togglePythonConsolePanel('notebook-open-console')"
           />
         </div>
@@ -937,6 +927,7 @@ import filePenLineIcon from '@iconify-icons/lucide/file-edit'
 import eyeIcon from '@iconify-icons/lucide/eye'
 import columns2Icon from '@iconify-icons/lucide/columns'
 import bookOpenIcon from '@iconify-icons/lucide/book-open'
+import scanSearchIcon from '@iconify-icons/lucide/scan-search'
 import languagesIcon from '@iconify-icons/lucide/languages'
 import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
@@ -2325,9 +2316,20 @@ const canUseNotebookSurface = computed(() => {
   return true
 })
 
+const isExplorerSurfaceActive = computed(() => {
+  return editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value
+})
+
 watch(canUseNotebookSurface, (enabled) => {
   if (!enabled && editorSurfaceMode.value !== 'source') {
+    logger.info('[Editor] notebook surface disabled, fallback to source editor', {
+      filePath: String(selectedFile.value?.path || ''),
+      storedMode: String(editorStore.homePreviewModeKey || ''),
+    })
     editorSurfaceMode.value = 'source'
+    if (String(editorStore.homePreviewModeKey || '') === 'explorer') {
+      setHomePreviewModeKeySafe('edit')
+    }
   }
   if (enabled && editorSurfaceMode.value === 'source') {
     nextTick(() => {
@@ -9686,7 +9688,7 @@ const toggleEditorSurfaceMode = () => {
     }
   } else {
     nextTick(() => {
-      syncSourceEditorContent('toggle-source-surface')
+      ensurePrimarySourceEditorReady('toggle-source-surface')
     })
   }
 }
@@ -9694,7 +9696,7 @@ const toggleEditorSurfaceMode = () => {
 const openSourceEditorSurface = () => {
   editorSurfaceMode.value = 'source'
   nextTick(() => {
-    syncSourceEditorContent('open-source-surface')
+    ensurePrimarySourceEditorReady('open-source-surface')
   })
 }
 
@@ -9716,6 +9718,52 @@ const applyNotebookMarkdown = (nextMarkdown) => {
   if (canPreview.value && previewMode.value !== 'realtime') {
     renderDebounced(nextText)
   }
+}
+
+const shouldRecreatePrimaryEditor = () => {
+  if (!editorContainer.value) return false
+  if (!editor) return true
+
+  try {
+    const currentContainer = editor.getContainerDomNode?.()
+    return !(currentContainer instanceof HTMLElement) || !currentContainer.isConnected || currentContainer !== editorContainer.value
+  } catch (error) {
+    logger.warn('[Editor] detect primary editor container failed', { error })
+    return true
+  }
+}
+
+// Explorer/source 之间切换时，源码 Monaco 容器会被卸载并重新挂载。
+// 这里在切回 source surface 时主动校验容器，必要时重建编辑器，避免主编辑区域出现空白。
+const ensurePrimarySourceEditorReady = (reason = 'manual-ensure-source') => {
+  if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value) return
+  if (!editorContainer.value) return
+
+  if (!shouldRecreatePrimaryEditor()) {
+    syncSourceEditorContent(reason)
+    return
+  }
+
+  logger.info('[Editor] recreate primary source editor after surface switch', {
+    reason,
+    filePath: String(selectedFile.value?.path || ''),
+    hadEditorInstance: !!editor,
+  })
+
+  try {
+    if (editorEffectsLeft) {
+      editorEffectsLeft.destroy()
+      editorEffectsLeft = null
+    }
+    editor?.dispose?.()
+    editor = null
+    editorStore.setEditorInstance(null)
+  } catch (error) {
+    logger.warn('[Editor] dispose primary editor before recreate failed', { reason, error })
+  }
+
+  initEditor()
+  syncSourceEditorContent(`${reason}:after-recreate`)
 }
 
 const syncSourceEditorContent = (reason = 'manual-sync') => {
@@ -9913,6 +9961,12 @@ const handleKeyDown = (e) => {
     if (e.key === '4') {
       e.preventDefault();
       handlePreviewModeSelect('realtime');
+      return;
+    }
+
+    if (e.key === '5') {
+      e.preventDefault();
+      handlePreviewModeSelect('explorer');
       return;
     }
   }
@@ -13228,9 +13282,13 @@ const previewModeOptions = [
   { label: '预览模式 (Ctrl+2)', key: 'preview', icon: () => h(Icon, { icon: eyeIcon, width: 16, height: 16 }) },
   { label: '分屏预览 (Ctrl+3)', key: 'split', icon: () => h(Icon, { icon: columns2Icon, width: 16, height: 16 }) },
   { label: '实时预览 (Ctrl+4)', key: 'realtime', icon: () => h(Icon, { icon: sparklesIcon, width: 16, height: 16 }) }
+  , { label: 'Explorer Mode (Ctrl+5)', key: 'explorer', icon: () => h(Icon, { icon: scanSearchIcon, width: 16, height: 16 }) }
 ];
 
 const previewModeLabel = computed(() => {
+  if (isExplorerSurfaceActive.value) {
+    return 'Explorer Mode';
+  }
   if (previewMode.value === 'toggle') {
     return mode.value === 'edit' ? '编辑模式' : '预览模式';
   }
@@ -13238,6 +13296,9 @@ const previewModeLabel = computed(() => {
 });
 
 const previewModeIcon = computed(() => {
+  if (isExplorerSurfaceActive.value) {
+    return scanSearchIcon;
+  }
   if (previewMode.value === 'toggle') {
     return mode.value === 'edit' ? filePenLineIcon : eyeIcon;
   }
@@ -13283,7 +13344,7 @@ watch([showEditor, editorSurfaceMode], ([editorVisible, surfaceMode]) => {
   if (!editorVisible) return
   if (surfaceMode === 'notebook' && canUseNotebookSurface.value) return
   nextTick(() => {
-    syncSourceEditorContent('editor-visible-or-surface-changed')
+    ensurePrimarySourceEditorReady('editor-visible-or-surface-changed')
   })
 }, { flush: 'post' })
 
@@ -13444,10 +13505,13 @@ const destroyRealtimeVditor = () => {
 
 const normalizeHomePreviewModeKey = (key) => {
   const k = String(key || '').trim().toLowerCase();
-  return ['edit', 'preview', 'split', 'realtime'].includes(k) ? k : 'edit';
+  return ['edit', 'preview', 'split', 'realtime', 'explorer'].includes(k) ? k : 'edit';
 };
 
 const getHomePreviewModeKeyFromState = () => {
+  if (isExplorerSurfaceActive.value) {
+    return 'explorer';
+  }
   if (previewMode.value === 'toggle') {
     return mode.value === 'preview' ? 'preview' : 'edit';
   }
@@ -13481,6 +13545,15 @@ const setHomePreviewModeKeySafe = (key) => {
 
 const handlePreviewModeSelect = async (key) => {
   const desiredKey = normalizeHomePreviewModeKey(key);
+  logger.info('[Editor] handlePreviewModeSelect', {
+    desiredKey,
+    filePath: String(selectedFile.value?.path || ''),
+    canPreview: canPreview.value,
+    canUseNotebookSurface: canUseNotebookSurface.value,
+    currentPreviewMode: previewMode.value,
+    currentMainMode: mode.value,
+    currentSurfaceMode: editorSurfaceMode.value,
+  });
 
   if (previewMode.value === 'realtime') {
     captureScrollPosition();
@@ -13493,8 +13566,30 @@ const handlePreviewModeSelect = async (key) => {
     }
   }
 
+  if (desiredKey === 'explorer') {
+    if (!canUseNotebookSurface.value) {
+      message.warning('Explorer mode currently requires a single Markdown editor surface.');
+      setHomePreviewModeKeySafe('edit');
+      editorSurfaceMode.value = 'source';
+      previewMode.value = 'toggle';
+      await setMainMode('edit');
+      return;
+    }
+
+    logger.info('[Editor] switch to explorer surface', {
+      filePath: String(selectedFile.value?.path || ''),
+    });
+    setHomePreviewModeKeySafe('explorer');
+    previewMode.value = 'toggle';
+    editorSurfaceMode.value = 'notebook';
+    disposePythonCellManagers();
+    await setMainMode('edit');
+    return;
+  }
+
   if (desiredKey === 'edit') {
     setHomePreviewModeKeySafe('edit');
+    editorSurfaceMode.value = 'source';
     previewMode.value = 'toggle';
     await setMainMode('edit');
     return;
@@ -13509,6 +13604,7 @@ const handlePreviewModeSelect = async (key) => {
       return;
     }
     setHomePreviewModeKeySafe('preview');
+    editorSurfaceMode.value = 'source';
     previewMode.value = 'toggle';
     await setMainMode('preview');
     return;
@@ -13525,6 +13621,7 @@ const handlePreviewModeSelect = async (key) => {
     }
 
     setHomePreviewModeKeySafe('split');
+    editorSurfaceMode.value = 'source';
     previewMode.value = 'split';
     await setMainMode('edit');
     await nextTick();
@@ -13543,6 +13640,7 @@ const handlePreviewModeSelect = async (key) => {
     }
 
     setHomePreviewModeKeySafe('realtime');
+    editorSurfaceMode.value = 'source';
     captureScrollPosition();
     pendingRealtimeScrollRestore.value = true;
     previewMode.value = 'realtime';
