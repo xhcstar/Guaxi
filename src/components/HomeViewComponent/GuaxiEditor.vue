@@ -14655,7 +14655,36 @@ const generateOutlineDebounced = debounce((content) => {
   generateOutline(content)
 }, 200)
 
+const syncNotebookOutlineState = async (reason = 'unknown') => {
+  if (!(editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value)) {
+    return false
+  }
+
+  await nextTick()
+  const outline = notebookViewRef.value?.getOutline?.() || []
+  outlineStore.setOutline(Array.isArray(outline) ? outline : [])
+  outlineStore.setJumpToLine(jumpToLine)
+
+  logger.info('[Outline] synced notebook outline state', {
+    reason,
+    count: Array.isArray(outline) ? outline.length : 0,
+    hasNotebookView: !!notebookViewRef.value,
+  })
+  return true
+}
+
 function jumpToLine(line) {
+  if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value) {
+    const handledByNotebook = !!notebookViewRef.value?.jumpToOutlineLine?.(line)
+    logger.info('[Outline] jump routed to notebook surface', {
+      line: Number(line || 0),
+      handledByNotebook,
+    })
+    if (handledByNotebook) {
+      return
+    }
+  }
+
   if (mode.value === 'preview') {
     recordPreviewLocation('outline');
     if (scrollPreviewToLine(line, { behavior: 'smooth' })) {
@@ -14672,8 +14701,23 @@ function jumpToLine(line) {
   syncEditorToLine(line, { focus: true })
 }
 
-// 监听 activeTab 和内容变化，生成大纲
-watch([() => fileTreeStore.activeTab, activeTabContent], ([tabPath, content]) => {
+// 设计说明：
+// 1. 源码编辑模式沿用现有 markdown-it 解析，保证大纲结果和普通编辑/预览模式一致。
+// 2. 探索者模式改为优先从 notebook 视图读取大纲与跳转目标，避免点击大纲后把用户带回隐藏的源码编辑器。
+// 3. 这里保留日志，后续如果再出现“大纲为空/跳转无效”，可以直接从模式分支上定位问题。
+watch([() => fileTreeStore.activeTab, rawContent, editorSurfaceMode, canUseNotebookSurface, notebookViewRef], async ([tabPath, content, surfaceMode, notebookEnabled]) => {
+  if (surfaceMode === 'notebook' && notebookEnabled) {
+    generateOutlineDebounced.cancel?.()
+    await syncNotebookOutlineState('watch-outline-state')
+    return
+  }
+
+  outlineStore.setJumpToLine(jumpToLine)
+  logger.info('[Outline] synced source outline state', {
+    tabPath: String(tabPath || ''),
+    contentLength: String(content || '').length,
+    surfaceMode: String(surfaceMode || ''),
+  })
   generateOutlineDebounced(content)
 }, { immediate: true })
 

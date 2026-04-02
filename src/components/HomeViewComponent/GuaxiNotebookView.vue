@@ -1,21 +1,6 @@
 ﻿<template>
   <div ref="notebookRootRef" class="guaxi-notebook" :class="themeClass">
     <div class="guaxi-notebook__toolbar">
-      <div v-show="notebookSearchVisible" class="guaxi-notebook__search-panel" @mousedown.stop>
-        <input
-          ref="notebookSearchInputRef"
-          v-model="notebookSearchKeyword"
-          class="guaxi-notebook__search-input"
-          type="text"
-          placeholder="搜索探索模式内容..."
-          @keydown.enter.prevent="focusNextNotebookSearchMatch"
-          @keydown.shift.enter.prevent="focusPrevNotebookSearchMatch"
-        />
-        <span class="guaxi-notebook__search-count">{{ notebookSearchMatchCountText }}</span>
-        <button class="guaxi-notebook__search-btn" type="button" @click="focusPrevNotebookSearchMatch">上一个</button>
-        <button class="guaxi-notebook__search-btn" type="button" @click="focusNextNotebookSearchMatch">下一个</button>
-        <button class="guaxi-notebook__search-btn guaxi-notebook__search-btn--danger" type="button" @click="closeNotebookSearch">关闭</button>
-      </div>
       <div class="guaxi-notebook__toolbar-main">
         <button
           type="button"
@@ -73,6 +58,24 @@
         >
           <Icon :icon="filePlusIcon" width="16" height="16" />
         </button>
+      </div>
+    </div>
+
+    <div v-show="notebookSearchVisible" class="guaxi-notebook__search-panel-shell">
+      <div class="guaxi-notebook__search-panel" @mousedown.stop>
+        <input
+          ref="notebookSearchInputRef"
+          v-model="notebookSearchKeyword"
+          class="guaxi-notebook__search-input"
+          type="text"
+          placeholder="搜索探索模式内容..."
+          @keydown.enter.prevent="focusNextNotebookSearchMatch"
+          @keydown.shift.enter.prevent="focusPrevNotebookSearchMatch"
+        />
+        <span class="guaxi-notebook__search-count">{{ notebookSearchMatchCountText }}</span>
+        <button class="guaxi-notebook__search-btn" type="button" @click="focusPrevNotebookSearchMatch">上一个</button>
+        <button class="guaxi-notebook__search-btn" type="button" @click="focusNextNotebookSearchMatch">下一个</button>
+        <button class="guaxi-notebook__search-btn guaxi-notebook__search-btn--danger" type="button" @click="closeNotebookSearch">关闭</button>
       </div>
     </div>
 
@@ -366,6 +369,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
 import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import mermaid from 'mermaid'
+import MarkdownIt from 'markdown-it'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
 import playIcon from '@iconify-icons/lucide/play'
@@ -424,6 +428,7 @@ const emit = defineEmits(['update:markdown', 'state-change', 'open-console', 're
 
 const message = useMessage()
 const logger = createLogger('GuaxiNotebookView')
+const notebookOutlineMarkdownParser = new MarkdownIt()
 
 const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
@@ -438,7 +443,8 @@ const markdownRenderVersion = ref(0)
 const notebookCells = ref([])
 const notebookSearchVisible = ref(false)
 const notebookSearchKeyword = ref('')
-const notebookSearchMatches = ref([])
+const notebookSearchCellMatches = ref([])
+const notebookSearchDomMatches = ref([])
 const notebookSearchActiveIndex = ref(-1)
 const notebookSearchIndexReady = ref(false)
 const notebookMarkdownWorkerRef = ref(null)
@@ -1120,6 +1126,112 @@ const buildMarkdownRenderOptions = () => ({
   basePath: getNotebookBasePath(),
 })
 
+const getNotebookSerializedLineCount = (content) => String(content || '').replace(/\r\n?/g, '\n').split('\n').length
+
+const buildNotebookCellStartLineMap = (cells = []) => {
+  const normalizedCells = Array.isArray(cells) ? cells : []
+  const lineMap = new Map()
+  let currentLine = 1
+  let previousChunk = ''
+
+  normalizedCells.forEach((cell) => {
+    const cellKey = String(cell?.key || '')
+    if (!cellKey) return
+
+    const cellContent = cell?.type === 'python'
+      ? serializeNotebookCells([cell])
+      : String(cell?.content || '')
+
+    // 设计说明：
+    // 1. 探索者模式的大纲跳转仍然要对应“序列化后的 markdown 行号”，这样右侧大纲、顶部面包屑与原始文档保持同一套定位语义。
+    // 2. 这里复用 notebook 序列化时的拼接规则：当相邻两个 chunk 之间没有显式换行时，补一个空行分隔。
+    const needsSeparator =
+      previousChunk &&
+      !previousChunk.endsWith('\n') &&
+      !cellContent.startsWith('\n')
+
+    if (needsSeparator) {
+      currentLine += 2
+    }
+
+    lineMap.set(cellKey, currentLine)
+    currentLine += getNotebookSerializedLineCount(cellContent) - 1
+    previousChunk = cellContent
+  })
+
+  return lineMap
+}
+
+const notebookOutlineEntries = computed(() => {
+  const result = []
+  const cellStartLineMap = buildNotebookCellStartLineMap(notebookCells.value)
+
+  for (const cell of Array.isArray(notebookCells.value) ? notebookCells.value : []) {
+    if (cell?.type !== 'markdown') continue
+
+    const cellKey = String(cell.key || '')
+    const content = String(cell.content || '')
+    const baseLine = Number(cellStartLineMap.get(cellKey) || 1)
+    const tokens = notebookOutlineMarkdownParser.parse(content, {})
+    let cellHeadingIndex = 0
+
+    tokens.forEach((token, tokenIndex) => {
+      if (token.type !== 'heading_open') return
+
+      const level = Number(String(token.tag || '').slice(1))
+      const nextToken = tokens[tokenIndex + 1]
+      const text = String(nextToken?.content || '').trim()
+      if (!Number.isFinite(level) || level <= 0 || !text) return
+
+      const line = token.map ? baseLine + Number(token.map[0] || 0) : baseLine
+      result.push({
+        level,
+        text,
+        line,
+        cellKey,
+        outlineId: `nb-outline-${cellKey}-${cellHeadingIndex}`,
+      })
+      cellHeadingIndex += 1
+    })
+  }
+
+  return result
+})
+
+const notebookOutlineEntriesByCellKey = computed(() => {
+  const bucket = new Map()
+  for (const entry of notebookOutlineEntries.value) {
+    const cellKey = String(entry?.cellKey || '')
+    if (!cellKey) continue
+    const current = bucket.get(cellKey) || []
+    current.push(entry)
+    bucket.set(cellKey, current)
+  }
+  return bucket
+})
+
+const decorateNotebookHeadingAnchors = (html, cellKey) => {
+  const rawHtml = String(html || '')
+  if (!rawHtml.trim()) return ''
+
+  const outlineEntries = notebookOutlineEntriesByCellKey.value.get(String(cellKey || '')) || []
+  if (!outlineEntries.length) return rawHtml
+
+  const container = document.createElement('div')
+  container.innerHTML = rawHtml
+
+  const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6'))
+  headings.forEach((headingNode, index) => {
+    if (!(headingNode instanceof HTMLElement)) return
+    const entry = outlineEntries[index]
+    if (!entry) return
+    headingNode.setAttribute('data-guaxi-outline-id', String(entry.outlineId || ''))
+    headingNode.setAttribute('data-guaxi-outline-line', String(entry.line || ''))
+  })
+
+  return container.innerHTML
+}
+
 // 设计说明：
 // 1. Worker 负责 markdown-it、代码高亮和目录/任务列表这类纯字符串计算，先把最耗时的一段移出 UI 线程。
 // 2. Mermaid SVG 和数学公式节点整理还依赖 DOM，因此保留在主线程做轻量收尾。
@@ -1215,6 +1327,7 @@ const finalizeNotebookRenderedMath = (container) => {
 
 const finalizeNotebookRenderedMermaid = async (container, options = {}, reason = 'unknown') => {
   if (!options?.mermaid) return
+  const mermaidFontFamily = '"Trebuchet MS", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif'
   mermaid.initialize({
     startOnLoad: false,
     // 设计说明：
@@ -1224,6 +1337,7 @@ const finalizeNotebookRenderedMermaid = async (container, options = {}, reason =
     securityLevel: 'loose',
     themeVariables: {
       background: '#ffffff',
+      fontFamily: mermaidFontFamily,
     },
   })
 
@@ -1250,6 +1364,16 @@ const finalizeNotebookRenderedMermaid = async (container, options = {}, reason =
         wrapper.setAttribute('data-md-original', originalSource)
       }
       wrapper.innerHTML = svg
+      const svgElement = wrapper.querySelector('svg')
+      if (svgElement instanceof SVGElement) {
+        svgElement.style.fontFamily = mermaidFontFamily
+        svgElement.setAttribute('font-family', mermaidFontFamily)
+        svgElement.querySelectorAll('text, tspan, foreignObject, foreignObject *').forEach((node) => {
+          if (!(node instanceof Element)) return
+          node.setAttribute('font-family', mermaidFontFamily)
+          node.setAttribute('style', `${String(node.getAttribute('style') || '').trim()};font-family:${mermaidFontFamily};`)
+        })
+      }
       element.replaceWith(wrapper)
 
       if (typeof rendered?.bindFunctions === 'function') {
@@ -1285,23 +1409,42 @@ const finalizeNotebookRenderedHtml = async (html, reason = 'unknown') => {
 }
 
 const notebookSearchMatchCountText = computed(() => {
-  const total = Array.isArray(notebookSearchMatches.value) ? notebookSearchMatches.value.length : 0
+  const total = Array.isArray(notebookSearchDomMatches.value) && notebookSearchDomMatches.value.length
+    ? notebookSearchDomMatches.value.length
+    : Array.isArray(notebookSearchCellMatches.value)
+      ? notebookSearchCellMatches.value.length
+      : 0
   if (!total) return '0 / 0'
   const index = Math.max(0, Number(notebookSearchActiveIndex.value || 0))
   return `${Math.min(index + 1, total)} / ${total}`
 })
 
 const notebookSearchMatchKeySet = computed(() => {
-  return new Set(
-    (Array.isArray(notebookSearchMatches.value) ? notebookSearchMatches.value : [])
-      .map((item) => String(item?.cell_key || ''))
-      .filter(Boolean),
-  )
+  const keySet = new Set()
+  ;(Array.isArray(notebookSearchCellMatches.value) ? notebookSearchCellMatches.value : [])
+    .map((item) => String(item?.cell_key || ''))
+    .filter(Boolean)
+    .forEach((key) => keySet.add(key))
+
+  ;(Array.isArray(notebookSearchDomMatches.value) ? notebookSearchDomMatches.value : [])
+    .map((node) => String(node?.closest?.('.guaxi-notebook__cell')?.getAttribute?.('data-cell-key') || ''))
+    .filter(Boolean)
+    .forEach((key) => keySet.add(key))
+
+  return keySet
 })
 
 const activeNotebookSearchMatch = computed(() => {
-  return Array.isArray(notebookSearchMatches.value)
-    ? notebookSearchMatches.value[Number(notebookSearchActiveIndex.value || 0)] || null
+  const domMatches = Array.isArray(notebookSearchDomMatches.value) ? notebookSearchDomMatches.value : []
+  const domActive = domMatches[Number(notebookSearchActiveIndex.value || 0)] || null
+  if (domActive instanceof HTMLElement) {
+    return {
+      cell_key: String(domActive.closest('.guaxi-notebook__cell')?.getAttribute('data-cell-key') || ''),
+    }
+  }
+
+  return Array.isArray(notebookSearchCellMatches.value)
+    ? notebookSearchCellMatches.value[Number(notebookSearchActiveIndex.value || 0)] || null
     : null
 })
 
@@ -1330,8 +1473,123 @@ const syncNotebookTextareaHeights = (reason = 'unknown') => {
   })
 }
 
+const clearNotebookSearchDomHighlights = ({ resetIndex = true } = {}) => {
+  const root = notebookRootRef.value
+  if (root instanceof HTMLElement) {
+    root.querySelectorAll('span.guaxi-notebook__search-hit').forEach((mark) => {
+      const parent = mark.parentNode
+      if (!parent) return
+      parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+      parent.normalize()
+    })
+  }
+
+  notebookSearchDomMatches.value = []
+  if (resetIndex) {
+    notebookSearchActiveIndex.value = -1
+  }
+}
+
 const clearNotebookSearchHighlights = () => {
-  notebookSearchMatches.value = []
+  clearNotebookSearchDomHighlights()
+  notebookSearchCellMatches.value = []
+}
+
+// 设计说明：
+// 1. Explorer 模式的后端索引继续负责 Cell 级命中定位，避免 Python 输出、变量等非纯 DOM 内容失去可搜索性。
+// 2. 前端额外补一层 DOM 文本高亮，让用户在可见内容里能直接看到关键词，而不是只看到 Cell 外轮廓。
+// 3. 两层结果共用一套 active index，优先在 DOM 命中间跳转，没有 DOM 命中时再回退到 Cell 级跳转。
+const applyNotebookSearchDomHighlights = (reason = 'unknown') => {
+  clearNotebookSearchDomHighlights({ resetIndex: false })
+
+  const root = notebookRootRef.value
+  const keyword = String(notebookSearchKeyword.value || '').trim()
+  if (!(root instanceof HTMLElement) || !keyword) {
+    if (!Array.isArray(notebookSearchCellMatches.value) || !notebookSearchCellMatches.value.length) {
+      notebookSearchActiveIndex.value = -1
+    }
+    return
+  }
+
+  const regex = new RegExp(escapeRegExp(keyword), 'gi')
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const text = String(node?.nodeValue || '')
+      if (!text) return NodeFilter.FILTER_REJECT
+      const parent = node.parentElement
+      if (!parent) return NodeFilter.FILTER_REJECT
+      if (parent.closest('.guaxi-notebook__search-panel, script, style, textarea, input, button, .monaco-editor')) {
+        return NodeFilter.FILTER_REJECT
+      }
+      if (parent.closest('.guaxi-notebook__search-hit')) return NodeFilter.FILTER_REJECT
+      regex.lastIndex = 0
+      return regex.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    },
+  })
+
+  const textNodes = []
+  let currentNode = walker.nextNode()
+  while (currentNode) {
+    textNodes.push(currentNode)
+    currentNode = walker.nextNode()
+  }
+
+  const matches = []
+  textNodes.forEach((node) => {
+    const text = String(node.nodeValue || '')
+    const parent = node.parentNode
+    if (!parent) return
+
+    regex.lastIndex = 0
+    let lastIndex = 0
+    let matched = regex.exec(text)
+    if (!matched) return
+
+    const fragment = document.createDocumentFragment()
+    while (matched) {
+      const index = Number(matched.index || 0)
+      const matchedText = String(matched[0] || '')
+      if (index > lastIndex) {
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)))
+      }
+      const span = document.createElement('span')
+      span.className = 'guaxi-notebook__search-hit'
+      span.textContent = matchedText
+      fragment.appendChild(span)
+      matches.push(span)
+      lastIndex = index + matchedText.length
+      matched = regex.exec(text)
+    }
+    if (lastIndex < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex)))
+    }
+    parent.replaceChild(fragment, node)
+  })
+
+  notebookSearchDomMatches.value = matches
+  logger.info('[Notebook] apply DOM search highlights', {
+    reason,
+    keywordLength: keyword.length,
+    domMatchCount: matches.length,
+    cellMatchCount: Array.isArray(notebookSearchCellMatches.value) ? notebookSearchCellMatches.value.length : 0,
+  })
+
+  if (matches.length) {
+    const nextIndex = notebookSearchActiveIndex.value >= 0
+      ? Math.min(notebookSearchActiveIndex.value, matches.length - 1)
+      : 0
+    focusNotebookSearchMatchAt(nextIndex, { scroll: false })
+    return
+  }
+
+  if (Array.isArray(notebookSearchCellMatches.value) && notebookSearchCellMatches.value.length) {
+    notebookSearchActiveIndex.value = Math.min(
+      Math.max(0, Number(notebookSearchActiveIndex.value || 0)),
+      notebookSearchCellMatches.value.length - 1,
+    )
+    return
+  }
+
   notebookSearchActiveIndex.value = -1
 }
 
@@ -1451,13 +1709,13 @@ const searchNotebookViaBackend = async (keyword, reason = 'unknown') => {
       query: normalizedKeyword,
       limit: 200,
     })
-    notebookSearchMatches.value = Array.isArray(response?.results) ? response.results : []
-    notebookSearchActiveIndex.value = notebookSearchMatches.value.length ? 0 : -1
+    notebookSearchCellMatches.value = Array.isArray(response?.results) ? response.results : []
+    notebookSearchActiveIndex.value = notebookSearchCellMatches.value.length ? 0 : -1
     logger.info('[Notebook] backend search finished', {
       reason,
       filePath: indexKey,
       keywordLength: normalizedKeyword.length,
-      matchCount: notebookSearchMatches.value.length,
+      matchCount: notebookSearchCellMatches.value.length,
       totalMatches: Number(response?.total_matches || 0),
     })
   } catch (error) {
@@ -1479,8 +1737,31 @@ const searchNotebookViaBackend = async (keyword, reason = 'unknown') => {
         }
       })
       .filter(Boolean)
-    notebookSearchMatches.value = fallbackResults
-    notebookSearchActiveIndex.value = notebookSearchMatches.value.length ? 0 : -1
+    notebookSearchCellMatches.value = fallbackResults
+    notebookSearchActiveIndex.value = notebookSearchCellMatches.value.length ? 0 : -1
+  }
+
+  await nextTick()
+  applyNotebookSearchDomHighlights(`${reason}:dom-highlight`)
+}
+
+const getNotebookSearchNavigationTargets = () => {
+  const domMatches = (Array.isArray(notebookSearchDomMatches.value) ? notebookSearchDomMatches.value : [])
+    .filter((node) => node instanceof HTMLElement && node.isConnected)
+
+  if (domMatches.length) {
+    if (domMatches.length !== notebookSearchDomMatches.value.length) {
+      notebookSearchDomMatches.value = domMatches
+    }
+    return {
+      mode: 'dom',
+      matches: domMatches,
+    }
+  }
+
+  return {
+    mode: 'cell',
+    matches: Array.isArray(notebookSearchCellMatches.value) ? notebookSearchCellMatches.value : [],
   }
 }
 
@@ -1495,7 +1776,8 @@ const scheduleNotebookSearchQuery = (reason = 'unknown', delay = 90) => {
 }
 
 const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
-  const matches = Array.isArray(notebookSearchMatches.value) ? notebookSearchMatches.value : []
+  const navigation = getNotebookSearchNavigationTargets()
+  const matches = navigation.matches
   const total = matches.length
   if (!total) {
     notebookSearchActiveIndex.value = -1
@@ -1508,6 +1790,20 @@ const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
   if (nextIndex >= total) nextIndex = 0
 
   notebookSearchActiveIndex.value = nextIndex
+  if (navigation.mode === 'dom') {
+    matches.forEach((node) => node.classList.remove('guaxi-notebook__search-hit--active'))
+    const activeNode = matches[nextIndex]
+    activeNode.classList.add('guaxi-notebook__search-hit--active')
+    if (!scroll) return
+    activeNode.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    logger.debug('[Notebook] focus DOM search match', {
+      index: nextIndex,
+      total,
+      cellKey: String(activeNode.closest('.guaxi-notebook__cell')?.getAttribute('data-cell-key') || ''),
+    })
+    return
+  }
+
   if (!scroll) return
 
   nextTick(() => {
@@ -1517,6 +1813,11 @@ const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
     const target = notebookRootRef.value?.querySelector?.(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(activeCellKey)}"]`)
     if (target instanceof HTMLElement) {
       target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+      logger.debug('[Notebook] focus cell search match', {
+        index: nextIndex,
+        total,
+        cellKey: activeCellKey,
+      })
     }
   })
 }
@@ -1546,14 +1847,84 @@ const focusPrevNotebookSearchMatch = () => {
   focusNotebookSearchMatchAt(notebookSearchActiveIndex.value - 1)
 }
 
+const jumpToNotebookOutlineLine = (line, options = {}) => {
+  const targetLine = Number(line)
+  if (!Number.isFinite(targetLine) || targetLine <= 0) {
+    logger.warn('[Notebook] outline jump ignored because line is invalid', {
+      line,
+    })
+    return false
+  }
+
+  const outlineEntry = notebookOutlineEntries.value.find((item) => Number(item?.line || 0) === targetLine)
+  if (!outlineEntry) {
+    logger.warn('[Notebook] outline jump skipped because heading was not found', {
+      line: targetLine,
+    })
+    return false
+  }
+
+  const behavior = options?.behavior || 'smooth'
+  const outlineId = String(outlineEntry.outlineId || '')
+  const cellKey = String(outlineEntry.cellKey || '')
+
+  nextTick(() => {
+    const headingTarget = outlineId
+      ? notebookRootRef.value?.querySelector?.(`[data-guaxi-outline-id="${CSS.escape(outlineId)}"]`)
+      : null
+    const fallbackCell = cellKey
+      ? notebookRootRef.value?.querySelector?.(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(cellKey)}"]`)
+      : null
+    const target = headingTarget instanceof HTMLElement
+      ? headingTarget
+      : fallbackCell instanceof HTMLElement
+        ? fallbackCell
+        : null
+
+    if (!target) {
+      logger.warn('[Notebook] outline jump target missing in DOM', {
+        line: targetLine,
+        outlineId,
+        cellKey,
+      })
+      return
+    }
+
+    target.scrollIntoView({
+      block: headingTarget instanceof HTMLElement ? 'start' : 'center',
+      inline: 'nearest',
+      behavior,
+    })
+
+    logger.info('[Notebook] outline jump applied', {
+      line: targetLine,
+      outlineId,
+      cellKey,
+    })
+  })
+
+  return true
+}
+
 const focusMarkdownEditor = (key, reason = 'focus-editor') => {
   nextTick(() => {
-    const target = notebookRootRef.value?.querySelector?.(`[data-cell-key="${CSS.escape(String(key || ''))}"]`)
+    // 设计说明：
+    // 1. Markdown Cell 外层容器和内部 textarea 都带有 `data-cell-key`。
+    // 2. 这里必须精确命中 textarea，否则初次进入编辑态时不会触发自动撑高，代码块源码会被压成很小一块。
+    // 3. 继续保留日志，便于后续排查“进入编辑态但未聚焦/未自动扩高”的问题。
+    const target = notebookRootRef.value?.querySelector?.(
+      `textarea.guaxi-notebook__markdown-editor[data-cell-key="${CSS.escape(String(key || ''))}"]`,
+    )
     if (target instanceof HTMLTextAreaElement) {
       resizeTextareaToContent(target)
       target.focus()
       target.setSelectionRange(target.value.length, target.value.length)
       logger.info('[Notebook] focus markdown editor', {
+        key: String(key || ''),
+        reason,
+      })
+    } else {
+      logger.warn('[Notebook] focus markdown editor skipped because textarea was not found', {
         key: String(key || ''),
         reason,
       })
@@ -2004,15 +2375,16 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
       const markdownText = String(cell.content || '')
       const cacheKey = computeNotebookDigest(markdownText)
       if (previousMarkdownMap[cellKey] && notebookMarkdownRenderCache.has(cacheKey)) {
-        nextMarkdownMap[cellKey] = previousMarkdownMap[cellKey]
+        nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(previousMarkdownMap[cellKey], cellKey)
         markdownCacheHitCount += 1
         continue
       }
       renderTasks.push((async () => {
-        nextMarkdownMap[cellKey] = await renderMarkdownHtml(
+        const renderedHtml = await renderMarkdownHtml(
           markdownText,
           `markdown-cell:${cellKey}`,
         )
+        nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(renderedHtml, cellKey)
         markdownRenderCount += 1
       })())
       continue
@@ -2721,8 +3093,23 @@ watch(editingMarkdownCellKey, (nextKey) => {
 })
 
 watch(notebookSearchKeyword, () => {
+  if (!String(notebookSearchKeyword.value || '').trim()) {
+    clearNotebookSearchHighlights()
+    return
+  }
   scheduleNotebookSearchQuery('keyword-change')
 })
+
+watch(
+  [renderedMarkdownHtmlMap, renderedOutputMarkdownHtmlMap],
+  () => {
+    if (!notebookSearchVisible.value || !String(notebookSearchKeyword.value || '').trim()) return
+    nextTick(() => {
+      applyNotebookSearchDomHighlights('rendered-html-watch')
+    })
+  },
+  { deep: false },
+)
 
 onMounted(() => {
   initNotebookMarkdownWorker()
@@ -2768,6 +3155,20 @@ defineExpose({
   isSearchOpen() {
     return notebookSearchVisible.value
   },
+  getOutline() {
+    const outline = notebookOutlineEntries.value.map((item) => ({
+      level: Number(item.level || 0),
+      text: String(item.text || ''),
+      line: Number(item.line || 0),
+    }))
+    logger.info('[Notebook] expose outline snapshot', {
+      count: outline.length,
+    })
+    return outline
+  },
+  jumpToOutlineLine(line) {
+    return jumpToNotebookOutlineLine(line)
+  },
 })
 </script>
 
@@ -2794,9 +3195,10 @@ defineExpose({
    */
   --guaxi-notebook-font: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   --guaxi-notebook-mono: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   min-height: 100%;
   padding: 18px;
   background: var(--guaxi-notebook-bg, #f6f8fc);
@@ -2846,11 +3248,32 @@ defineExpose({
   padding: 10px 12px;
 }
 
+.guaxi-notebook__search-panel-shell {
+  position: sticky;
+  top: 12px;
+  z-index: 24;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
 .guaxi-notebook__search-panel {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  width: fit-content;
+  margin-top: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 96%, transparent);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
 }
 
 .guaxi-notebook__search-input {
@@ -2939,8 +3362,8 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 20px;
-  margin: -4px 0;
+  min-height: 12px;
+  margin: -2px 0;
 }
 
 .guaxi-notebook__insert-line {
@@ -3012,24 +3435,26 @@ defineExpose({
 
 .guaxi-notebook__python-layout {
   display: grid;
-  gap: 8px;
-  padding: 8px 10px 10px;
+  gap: 6px;
+  padding: 6px 10px 8px;
 }
 
 .guaxi-notebook__markdown-surface {
   position: relative;
+  display: grid;
+  gap: 6px;
   padding: 0;
+  overflow: visible;
 }
 
 .guaxi-notebook__markdown-actions {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 2;
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
-  padding: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 6px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 70%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--guaxi-notebook-panel) 94%, transparent);
@@ -3072,8 +3497,8 @@ defineExpose({
 
 .guaxi-notebook__markdown-editor {
   font-family: var(--guaxi-notebook-font);
-  padding-top: 20px;
-  padding-right: 64px;
+  padding-top: 16px;
+  padding-right: 18px;
 }
 
 .guaxi-notebook__python-editor,
@@ -3092,7 +3517,7 @@ defineExpose({
   border: none;
   border-radius: 0;
   background: transparent;
-  padding: 6px 64px 6px 6px;
+  padding: 6px;
   font-family: var(--guaxi-notebook-font);
   font-size: 17px;
   line-height: 1.5;
@@ -3415,13 +3840,13 @@ defineExpose({
   color: var(--guaxi-text-link-dark, #4acadb);
 }
 
-.guaxi-notebook__search-hit {
+:deep(.guaxi-notebook__search-hit) {
   background: rgba(255, 208, 0, 0.38);
   border-radius: 2px;
   padding: 0 1px;
 }
 
-.guaxi-notebook__search-hit--active {
+:deep(.guaxi-notebook__search-hit--active) {
   background: rgba(255, 145, 0, 0.65);
 }
 
@@ -3440,6 +3865,8 @@ defineExpose({
 .guaxi-notebook__markdown-preview :deep(.hljs),
 .guaxi-notebook__rich :deep(.hljs) {
   border-radius: 10px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .guaxi-notebook__markdown-preview :deep(mjx-container),
@@ -3458,6 +3885,21 @@ defineExpose({
   .guaxi-notebook__python-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .guaxi-notebook__search-panel-shell {
+    position: static;
+    top: auto;
+    height: auto;
+    display: block;
+    pointer-events: auto;
+  }
+
+  .guaxi-notebook__search-panel {
+    position: static;
+    width: 100%;
+    margin-top: -2px;
+    box-sizing: border-box;
   }
 
   .guaxi-notebook__insert-actions {
