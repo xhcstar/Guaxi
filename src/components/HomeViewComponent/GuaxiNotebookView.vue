@@ -250,12 +250,11 @@
             </div>
           </div>
 
-          <textarea
-            :data-cell-key="cell.key"
-            class="guaxi-notebook__python-editor"
-            spellcheck="false"
-            :value="cell.code"
-            @input="updatePythonCell(cell.key, $event)"
+          <GuaxiNotebookPythonEditor
+            :cell-key="cell.key"
+            :model-value="cell.code"
+            :theme="theme"
+            @update:model-value="updatePythonCell(cell.key, $event)"
           />
 
           <div v-if="hasVisibleOutput(cell) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
@@ -384,6 +383,7 @@ import trash2Icon from '@iconify-icons/lucide/trash-2'
 import undoIcon from '@iconify-icons/lucide/undo'
 import redoIcon from '@iconify-icons/lucide/redo'
 import { createLogger } from '../../utils/logger'
+import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
@@ -1215,14 +1215,16 @@ const finalizeNotebookRenderedMath = (container) => {
 
 const finalizeNotebookRenderedMermaid = async (container, options = {}, reason = 'unknown') => {
   if (!options?.mermaid) return
-  const fromDom =
-    !!document?.documentElement?.classList?.contains?.('dark') ||
-    !!document?.documentElement?.classList?.contains?.('dark-mode')
-  const isDark = String(options?.theme || '').trim().toLowerCase() === 'dark' || fromDom
   mermaid.initialize({
     startOnLoad: false,
-    theme: isDark ? 'dark' : 'default',
+    // 设计说明：
+    // Mermaid 图表延续项目里既有的“始终亮色渲染”策略，
+    // 避免在探索者模式里因为外层深浅主题切换而得到不同配色的图。
+    theme: 'default',
     securityLevel: 'loose',
+    themeVariables: {
+      background: '#ffffff',
+    },
   })
 
   const mermaidElements = Array.from(container.querySelectorAll('.mermaid'))
@@ -1720,9 +1722,13 @@ const updateMarkdownCell = (key, event) => {
   )
 }
 
-const updatePythonCell = (key, event) => {
-  resizeTextareaToContent(event?.target)
-  const value = String(event?.target?.value || '')
+const updatePythonCell = (key, payload) => {
+  if (payload?.target) {
+    resizeTextareaToContent(payload.target)
+  }
+  const value = typeof payload === 'string'
+    ? payload
+    : String(payload?.target?.value || '')
   emitCells(
     notebookCells.value.map((cell) => {
       if (cell.type !== 'python' || String(cell.key) !== String(key)) return cell
