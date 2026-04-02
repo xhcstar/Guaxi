@@ -587,6 +587,7 @@
             :file-path="selectedFile?.path || ''"
             :theme="settingsStore.appearanceTheme"
             @update:markdown="applyNotebookMarkdown"
+            @outline-change="handleNotebookOutlineChange"
             @state-change="syncAllPreviewPythonCells"
             @open-console="togglePythonConsolePanel('notebook-open-console')"
             @request-save="saveContent"
@@ -1079,6 +1080,8 @@ const pythonConsoleHistory = ref([])
 const pythonConsolePinnedOutput = ref('')
 const pythonConsoleOutputRef = ref(null)
 const notebookViewRef = ref(null)
+let notebookDiskPersistTimer = null
+let notebookDiskPersistInFlight = false
 const pythonConsoleHeight = ref(240)
 const pythonConsoleMinHeight = 140
 const pythonConsoleMaxHeight = 560
@@ -9719,6 +9722,88 @@ const applyNotebookMarkdown = (nextMarkdown) => {
   if (canPreview.value && previewMode.value !== 'realtime') {
     renderDebounced(nextText)
   }
+
+  scheduleNotebookDiskPersist('apply-notebook-markdown', nextText)
+}
+
+const persistNotebookToDisk = async (reason = 'unknown', nextText = null) => {
+  const targetPath = String(selectedFile.value?.path || '').trim()
+  if (!targetPath) {
+    logger.warn('[NotebookAutosave] skip persist because target path is empty', { reason })
+    return false
+  }
+  if (activeTab.value?.unsupported) {
+    logger.warn('[NotebookAutosave] skip persist because file is unsupported', {
+      reason,
+      targetPath,
+    })
+    return false
+  }
+  if (notebookDiskPersistInFlight) {
+    logger.debug('[NotebookAutosave] skip overlapping persist request', {
+      reason,
+      targetPath,
+    })
+    return false
+  }
+
+  const content = String(nextText ?? rawContent.value ?? '')
+  const tab = fileTreeStore.openTabs.find((item) => item?.path === targetPath)
+  const savedContent = String(tab?.savedContent ?? '')
+  if (savedContent === content) {
+    logger.debug('[NotebookAutosave] skip persist because file content is already saved', {
+      reason,
+      targetPath,
+      length: content.length,
+    })
+    return true
+  }
+
+  notebookDiskPersistInFlight = true
+  try {
+    await fileTreeStore.updateFileContent(targetPath, content)
+    editorStore.setLastAutoSaveAt(Date.now())
+    logger.info('[NotebookAutosave] persisted notebook content to file', {
+      reason,
+      targetPath,
+      length: content.length,
+    })
+    return true
+  } catch (error) {
+    logger.error('[NotebookAutosave] failed to persist notebook content to file', {
+      reason,
+      targetPath,
+      error,
+    })
+    return false
+  } finally {
+    notebookDiskPersistInFlight = false
+  }
+}
+
+const scheduleNotebookDiskPersist = (reason = 'unknown', nextText = null, delay = 420) => {
+  if (notebookDiskPersistTimer) {
+    window.clearTimeout(notebookDiskPersistTimer)
+    notebookDiskPersistTimer = null
+  }
+  const scheduledContent = String(nextText ?? rawContent.value ?? '')
+  notebookDiskPersistTimer = window.setTimeout(() => {
+    notebookDiskPersistTimer = null
+    void persistNotebookToDisk(reason, scheduledContent)
+  }, delay)
+  logger.debug('[NotebookAutosave] scheduled notebook disk persist', {
+    reason,
+    delay,
+    length: scheduledContent.length,
+  })
+}
+
+const flushNotebookDiskPersist = (reason = 'unknown', nextText = null) => {
+  if (notebookDiskPersistTimer) {
+    window.clearTimeout(notebookDiskPersistTimer)
+    notebookDiskPersistTimer = null
+  }
+  return persistNotebookToDisk(reason, nextText)
 }
 
 const shouldRecreatePrimaryEditor = () => {
@@ -14673,6 +14758,17 @@ const syncNotebookOutlineState = async (reason = 'unknown') => {
   return true
 }
 
+const handleNotebookOutlineChange = (outline) => {
+  if (!(editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value)) return
+  const normalizedOutline = Array.isArray(outline) ? outline : []
+  outlineStore.setOutline(normalizedOutline)
+  outlineStore.setJumpToLine(jumpToLine)
+  logger.info('[Outline] received notebook outline change event', {
+    count: normalizedOutline.length,
+    surfaceMode: editorSurfaceMode.value,
+  })
+}
+
 function jumpToLine(line) {
   if (editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value) {
     const handledByNotebook = !!notebookViewRef.value?.jumpToOutlineLine?.(line)
@@ -14831,6 +14927,12 @@ onActivated(() => {
 })
 
 onUnmounted(() => {
+  if (notebookDiskPersistTimer) {
+    const pendingNotebookContent = String(rawContent.value ?? '')
+    window.clearTimeout(notebookDiskPersistTimer)
+    notebookDiskPersistTimer = null
+    void persistNotebookToDisk('editor-unmount', pendingNotebookContent)
+  }
   stopResizePythonConsole()
   persistPythonConsoleState()
   flushPythonCellDrafts()

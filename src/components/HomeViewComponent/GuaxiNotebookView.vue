@@ -146,14 +146,13 @@
           </div>
 
           <div v-if="isMarkdownCellEditing(cell)" class="guaxi-notebook__markdown-edit-shell">
-            <textarea
-              :data-cell-key="cell.key"
-              class="guaxi-notebook__markdown-editor"
-              spellcheck="false"
-              :value="cell.content"
-              @input="updateMarkdownCell(cell.key, $event)"
-              @keydown.esc.prevent="exitMarkdownEditMode(cell.key, 'escape')"
-              @keydown.ctrl.enter.prevent="exitMarkdownEditMode(cell.key, 'ctrl-enter')"
+            <GuaxiNotebookMarkdownEditor
+              :ref="(instance) => setMarkdownEditorRef(cell.key, instance)"
+              :cell-key="cell.key"
+              :model-value="cell.content"
+              :theme="theme"
+              @update:model-value="updateMarkdownCell(cell.key, $event)"
+              @request-exit="exitMarkdownEditMode(cell.key, $event)"
             />
           </div>
           <div
@@ -161,6 +160,7 @@
             class="guaxi-notebook__markdown-preview-shell is-clickable"
             role="button"
             tabindex="0"
+            @pointerdown.capture="handleMarkdownPreviewPointerDown(cell.key, $event)"
             @click="enterMarkdownEditMode(cell.key, 'preview-click')"
             @keydown.enter.prevent="enterMarkdownEditMode(cell.key, 'preview-enter')"
             @keydown.space.prevent="enterMarkdownEditMode(cell.key, 'preview-space')"
@@ -388,6 +388,7 @@ import undoIcon from '@iconify-icons/lucide/undo'
 import redoIcon from '@iconify-icons/lucide/redo'
 import { createLogger } from '../../utils/logger'
 import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
+import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
@@ -424,7 +425,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:markdown', 'state-change', 'open-console', 'request-save'])
+const emit = defineEmits(['update:markdown', 'state-change', 'open-console', 'request-save', 'outline-change'])
 
 const message = useMessage()
 const logger = createLogger('GuaxiNotebookView')
@@ -455,6 +456,7 @@ const notebookSidecarLoadVersion = ref(0)
 const notebookHistoryEntries = ref([])
 const notebookHistoryIndex = ref(-1)
 const notebookHistoryApplying = ref(false)
+const markdownEditorRefMap = new Map()
 const notebookMarkdownRenderCache = new Map()
 const notebookDisplayUrlCache = new Map()
 const notebookMarkdownWorkerPendingTasks = new Map()
@@ -1210,6 +1212,14 @@ const notebookOutlineEntriesByCellKey = computed(() => {
   return bucket
 })
 
+const createNotebookOutlinePayload = () => {
+  return notebookOutlineEntries.value.map((item) => ({
+    level: Number(item.level || 0),
+    text: String(item.text || ''),
+    line: Number(item.line || 0),
+  }))
+}
+
 const decorateNotebookHeadingAnchors = (html, cellKey) => {
   const rawHtml = String(html || '')
   if (!rawHtml.trim()) return ''
@@ -1847,6 +1857,48 @@ const focusPrevNotebookSearchMatch = () => {
   focusNotebookSearchMatchAt(notebookSearchActiveIndex.value - 1)
 }
 
+const setMarkdownEditorRef = (key, instance) => {
+  const normalizedKey = String(key || '')
+  if (!normalizedKey) return
+  if (instance) {
+    markdownEditorRefMap.set(normalizedKey, instance)
+    return
+  }
+  markdownEditorRefMap.delete(normalizedKey)
+}
+
+const syncMarkdownEditorValueToCell = (key, reason = 'sync-markdown-editor-value') => {
+  const normalizedKey = String(key || '')
+  if (!normalizedKey) return false
+
+  const editorRef = markdownEditorRefMap.get(normalizedKey)
+  const nextValue = String(editorRef?.getEditorValue?.() || '')
+  const currentCell = notebookCells.value.find((cell) => cell?.type === 'markdown' && String(cell.key) === normalizedKey)
+  const currentValue = String(currentCell?.content || '')
+
+  if (nextValue === currentValue) {
+    logger.debug('[Notebook] skip markdown editor value sync because content is unchanged', {
+      key: normalizedKey,
+      reason,
+      length: nextValue.length,
+    })
+    return false
+  }
+
+  notebookCells.value = notebookCells.value.map((cell) => {
+    if (cell?.type !== 'markdown' || String(cell.key) !== normalizedKey) return cell
+    return createNotebookMarkdownCell(nextValue, { key: cell.key })
+  })
+
+  logger.info('[Notebook] synchronized live Markdown editor value into notebook cell', {
+    key: normalizedKey,
+    reason,
+    previousLength: currentValue.length,
+    nextLength: nextValue.length,
+  })
+  return true
+}
+
 const jumpToNotebookOutlineLine = (line, options = {}) => {
   const targetLine = Number(line)
   if (!Number.isFinite(targetLine) || targetLine <= 0) {
@@ -1908,23 +1960,16 @@ const jumpToNotebookOutlineLine = (line, options = {}) => {
 
 const focusMarkdownEditor = (key, reason = 'focus-editor') => {
   nextTick(() => {
-    // 设计说明：
-    // 1. Markdown Cell 外层容器和内部 textarea 都带有 `data-cell-key`。
-    // 2. 这里必须精确命中 textarea，否则初次进入编辑态时不会触发自动撑高，代码块源码会被压成很小一块。
-    // 3. 继续保留日志，便于后续排查“进入编辑态但未聚焦/未自动扩高”的问题。
-    const target = notebookRootRef.value?.querySelector?.(
-      `textarea.guaxi-notebook__markdown-editor[data-cell-key="${CSS.escape(String(key || ''))}"]`,
-    )
-    if (target instanceof HTMLTextAreaElement) {
-      resizeTextareaToContent(target)
-      target.focus()
-      target.setSelectionRange(target.value.length, target.value.length)
+    const editorRef = markdownEditorRefMap.get(String(key || ''))
+    if (editorRef?.focusEditor) {
+      void editorRef.focusEditor({ cursor: 'end' })
       logger.info('[Notebook] focus markdown editor', {
         key: String(key || ''),
         reason,
+        mode: 'monaco',
       })
     } else {
-      logger.warn('[Notebook] focus markdown editor skipped because textarea was not found', {
+      logger.warn('[Notebook] focus markdown editor skipped because editor ref was not found', {
         key: String(key || ''),
         reason,
       })
@@ -1939,6 +1984,11 @@ const isMarkdownCellEditing = (cell) => {
 const enterMarkdownEditMode = (key, reason = 'manual-enter') => {
   const nextKey = String(key || '')
   if (!nextKey) return
+  const currentEditingKey = String(editingMarkdownCellKey.value || '')
+  if (currentEditingKey && currentEditingKey !== nextKey) {
+    syncMarkdownEditorValueToCell(currentEditingKey, 'before-switch-markdown-edit-target')
+    flushPendingNotebookMarkdown('switch-markdown-edit-target')
+  }
   editingMarkdownCellKey.value = nextKey
   logger.info('[Notebook] enter markdown edit mode', {
     key: nextKey,
@@ -1950,10 +2000,17 @@ const enterMarkdownEditMode = (key, reason = 'manual-enter') => {
 const exitMarkdownEditMode = (key, reason = 'manual-exit') => {
   const targetKey = String(key || '')
   if (String(editingMarkdownCellKey.value || '') !== targetKey) return
+  const syncedFromEditor = syncMarkdownEditorValueToCell(targetKey, `before-exit:${reason}`)
+  if (syncedFromEditor) {
+    flushNotebookMarkdown(`exit-markdown-edit:${reason}:force-sync`)
+  } else {
+  flushPendingNotebookMarkdown(`exit-markdown-edit:${reason}`)
+  }
   editingMarkdownCellKey.value = ''
   logger.info('[Notebook] exit markdown edit mode', {
     key: targetKey,
     reason,
+    syncedFromEditor,
   })
 }
 
@@ -2081,8 +2138,9 @@ const emitCells = (cells, focusKey = '', { deferMarkdownSync = false, recordHist
 }
 
 const updateMarkdownCell = (key, event) => {
-  resizeTextareaToContent(event?.target)
-  const value = String(event?.target?.value || '')
+  const value = typeof event === 'string'
+    ? event
+    : String(event?.target?.value || '')
   emitCells(
     notebookCells.value.map((cell) => {
       if (cell.type !== 'markdown' || String(cell.key) !== String(key)) return cell
@@ -2091,6 +2149,100 @@ const updateMarkdownCell = (key, event) => {
     '',
     { deferMarkdownSync: true },
   )
+}
+
+// 设计说明：
+// 1. Markdown 预览里会嵌套 code block、MathJax、Mermaid SVG 和媒体按钮，这些节点可能自己截获 click，
+//    导致外层 preview-shell 的 click 根本到不了，于是用户点了“看起来属于 cell 的区域”却进不了编辑态。
+// 2. 这里改成在 pointerdown capture 阶段提前识别“非交互性内容点击”，尽量在预览 DOM 还没被切成 Monaco 之前就切换编辑态，
+//    让代码块、公式、图表区域都具备一致的进入编辑体验。
+// 3. 对真正的交互控件（链接、按钮、媒体查看/保存按钮等）仍然放行，避免用户本来是想点按钮却被强制拉进编辑态。
+const isInteractiveMarkdownPreviewTarget = (event) => {
+  const eventPath = typeof event?.composedPath === 'function' ? event.composedPath() : []
+  return eventPath.some((node) => {
+    if (!(node instanceof Element)) return false
+    if (
+      node.matches?.(
+        'button, a[href], input, textarea, select, option, summary, details, [role="button"], [contenteditable="true"]',
+      )
+    ) {
+      return true
+    }
+    return node.classList?.contains('media-viewer-button')
+      || node.classList?.contains('media-save-button')
+      || node.classList?.contains('guaxi-notebook__search-btn')
+  })
+}
+
+const handleMarkdownPreviewPointerDown = (key, event) => {
+  const targetKey = String(key || '')
+  if (!targetKey) return
+
+  if (event?.button != null && Number(event.button) !== 0) {
+    logger.debug('[Notebook] ignore Markdown preview pointerdown because pointer button is not primary', {
+      key: targetKey,
+      button: Number(event.button),
+    })
+    return
+  }
+
+  if (isInteractiveMarkdownPreviewTarget(event)) {
+    logger.debug('[Notebook] keep Markdown preview pointerdown in preview mode because target is interactive', {
+      key: targetKey,
+    })
+    return
+  }
+
+  if (String(editingMarkdownCellKey.value || '') === targetKey) {
+    return
+  }
+
+  logger.info('[Notebook] enter markdown edit mode from preview pointerdown', {
+    key: targetKey,
+  })
+  enterMarkdownEditMode(targetKey, 'preview-pointerdown')
+}
+
+const handleDocumentPointerDownForMarkdownEdit = (event) => {
+  const activeKey = String(editingMarkdownCellKey.value || '')
+  if (!activeKey) return
+
+  const target = event?.target
+  if (!(target instanceof Element)) return
+
+  const eventPath = typeof event?.composedPath === 'function' ? event.composedPath() : []
+  const isInsideMonacoOverlay = eventPath.some((node) => {
+    return node instanceof Element
+      && node.matches?.('.suggest-widget, .monaco-editor-hover, .monaco-hover, .context-view, .monaco-menu-container')
+  })
+
+  if (isInsideMonacoOverlay || target.closest('.suggest-widget, .monaco-editor-hover, .monaco-hover, .context-view, .monaco-menu-container')) {
+    logger.debug('[Notebook] keep markdown edit mode because pointer is inside Monaco overlay', {
+      key: activeKey,
+    })
+    return
+  }
+
+  const currentCell = notebookRootRef.value?.querySelector?.(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(activeKey)}"]`)
+  const clickedInsideActiveCell = eventPath.some((node) => {
+    if (!(node instanceof Element)) return false
+    if (currentCell instanceof Element && currentCell.contains(node)) return true
+    return String(node.getAttribute?.('data-cell-key') || '') === activeKey
+  })
+
+  if (clickedInsideActiveCell || (currentCell instanceof Element && currentCell.contains(target))) {
+    logger.debug('[Notebook] keep markdown edit mode because pointer is still inside active cell', {
+      key: activeKey,
+      targetTag: String(target.tagName || '').toLowerCase(),
+    })
+    return
+  }
+
+  logger.info('[Notebook] exit markdown edit mode because user clicked outside active cell', {
+    key: activeKey,
+    targetTag: String(target.tagName || '').toLowerCase(),
+  })
+  exitMarkdownEditMode(activeKey, 'outside-pointerdown')
 }
 
 const updatePythonCell = (key, payload) => {
@@ -3092,6 +3244,18 @@ watch(editingMarkdownCellKey, (nextKey) => {
   focusMarkdownEditor(nextKey, 'editing-markdown-cell-key')
 })
 
+watch(
+  notebookOutlineEntries,
+  (entries) => {
+    const payload = createNotebookOutlinePayload()
+    emit('outline-change', payload)
+    logger.info('[Notebook] emit outline change', {
+      count: Array.isArray(entries) ? entries.length : 0,
+    })
+  },
+  { immediate: true, deep: true },
+)
+
 watch(notebookSearchKeyword, () => {
   if (!String(notebookSearchKeyword.value || '').trim()) {
     clearNotebookSearchHighlights()
@@ -3113,6 +3277,7 @@ watch(
 
 onMounted(() => {
   initNotebookMarkdownWorker()
+  document.addEventListener('pointerdown', handleDocumentPointerDownForMarkdownEdit, true)
 })
 
 onBeforeUnmount(() => {
@@ -3124,6 +3289,7 @@ onBeforeUnmount(() => {
     window.clearTimeout(notebookSearchQueryTimer)
     notebookSearchQueryTimer = 0
   }
+  document.removeEventListener('pointerdown', handleDocumentPointerDownForMarkdownEdit, true)
   disposeNotebookMarkdownWorker('component-unmount')
 })
 
@@ -3156,11 +3322,7 @@ defineExpose({
     return notebookSearchVisible.value
   },
   getOutline() {
-    const outline = notebookOutlineEntries.value.map((item) => ({
-      level: Number(item.level || 0),
-      text: String(item.text || ''),
-      line: Number(item.line || 0),
-    }))
+    const outline = createNotebookOutlinePayload()
     logger.info('[Notebook] expose outline snapshot', {
       count: outline.length,
     })
@@ -3478,7 +3640,6 @@ defineExpose({
   gap: 8px;
 }
 
-.guaxi-notebook__markdown-editor,
 .guaxi-notebook__python-editor {
   width: 100%;
   min-height: 88px;
@@ -3495,18 +3656,11 @@ defineExpose({
   overflow-y: hidden;
 }
 
-.guaxi-notebook__markdown-editor {
-  font-family: var(--guaxi-notebook-font);
-  padding-top: 16px;
-  padding-right: 18px;
-}
-
 .guaxi-notebook__python-editor,
 .guaxi-notebook__output-text {
   font-family: var(--guaxi-notebook-mono);
 }
 
-.guaxi-notebook__markdown-editor:focus,
 .guaxi-notebook__python-editor:focus,
 .guaxi-notebook__markdown-preview-shell.is-clickable:focus-visible {
   border-color: color-mix(in srgb, var(--guaxi-notebook-primary) 62%, var(--guaxi-notebook-border) 38%);
