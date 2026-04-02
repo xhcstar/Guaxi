@@ -589,6 +589,7 @@
             @update:markdown="applyNotebookMarkdown"
             @state-change="syncAllPreviewPythonCells"
             @open-console="togglePythonConsolePanel('notebook-open-console')"
+            @request-save="saveContent"
           />
         </div>
         <template v-if="editorSurfaceMode !== 'notebook' || !canUseNotebookSurface">
@@ -9899,6 +9900,7 @@ const saveContent = async () => {
 
 // 快捷键处理
 const handleKeyDown = (e) => {
+  const explorerNotebook = editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value
   const isConsoleShortcut =
     (e.ctrlKey || e.metaKey) &&
     !e.shiftKey &&
@@ -9918,7 +9920,6 @@ const handleKeyDown = (e) => {
 
   if (isFindShortcut) {
     const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value && previewMode.value !== 'realtime'
-    const explorerNotebook = editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value
     if (previewOnly) {
       e.preventDefault()
       e.stopPropagation()
@@ -9931,6 +9932,36 @@ const handleKeyDown = (e) => {
       notebookViewRef.value?.openSearch?.()
       return
     }
+  }
+
+  const lowerKey = String(e.key || '').toLowerCase()
+  const isNotebookUndoShortcut =
+    explorerNotebook &&
+    !e.altKey &&
+    (e.ctrlKey || e.metaKey) &&
+    !e.shiftKey &&
+    lowerKey === 'z'
+  const isNotebookRedoShortcut =
+    explorerNotebook &&
+    !e.altKey &&
+    (e.ctrlKey || e.metaKey) &&
+    (
+      lowerKey === 'y' ||
+      (e.shiftKey && lowerKey === 'z')
+    )
+
+  if (isNotebookUndoShortcut) {
+    e.preventDefault()
+    e.stopPropagation()
+    notebookViewRef.value?.undo?.()
+    return
+  }
+
+  if (isNotebookRedoShortcut) {
+    e.preventDefault()
+    e.stopPropagation()
+    notebookViewRef.value?.redo?.()
+    return
   }
 
   if (e.key === 'Escape' && previewSearchVisible.value) {

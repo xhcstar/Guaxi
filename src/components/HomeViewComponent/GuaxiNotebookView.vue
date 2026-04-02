@@ -16,7 +16,36 @@
         <button class="guaxi-notebook__search-btn" type="button" @click="focusNextNotebookSearchMatch">下一个</button>
         <button class="guaxi-notebook__search-btn guaxi-notebook__search-btn--danger" type="button" @click="closeNotebookSearch">关闭</button>
       </div>
-      <div class="guaxi-notebook__toolbar-main guaxi-notebook__toolbar-main--solo">
+      <div class="guaxi-notebook__toolbar-main">
+        <button
+          type="button"
+          class="guaxi-notebook__icon-btn"
+          :disabled="!canUndoNotebookHistory"
+          title="撤销"
+          aria-label="撤销"
+          @click="undoNotebookHistory"
+        >
+          <Icon :icon="undoIcon" width="16" height="16" />
+        </button>
+        <button
+          type="button"
+          class="guaxi-notebook__icon-btn"
+          :disabled="!canRedoNotebookHistory"
+          title="重做"
+          aria-label="重做"
+          @click="redoNotebookHistory"
+        >
+          <Icon :icon="redoIcon" width="16" height="16" />
+        </button>
+        <button
+          type="button"
+          class="guaxi-notebook__icon-btn"
+          title="保存当前文档"
+          aria-label="保存当前文档"
+          @click="requestNotebookSave"
+        >
+          <Icon :icon="saveIcon" width="16" height="16" />
+        </button>
         <button
           type="button"
           class="guaxi-notebook__icon-btn"
@@ -97,7 +126,7 @@
               class="guaxi-notebook__icon-btn danger"
               title="删除当前 Cell"
               aria-label="删除当前 Cell"
-              @click="removeCell(cell.key)"
+                @click="confirmRemoveCell(cell)"
             >
               <Icon :icon="trash2Icon" width="16" height="16" />
             </button>
@@ -128,7 +157,7 @@
               class="guaxi-notebook__markdown-preview markdown-body"
               v-html="getRenderedMarkdownCellHtml(cell)"
             ></div>
-            <div v-else class="guaxi-notebook__empty guaxi-notebook__empty--dashed">点击这里开始编辑 Markdown 内容</div>
+            <div v-else class="guaxi-notebook__empty"></div>
           </div>
         </div>
       </template>
@@ -204,7 +233,7 @@
                 class="guaxi-notebook__icon-btn danger"
                 title="删除当前 Cell"
                 aria-label="删除当前 Cell"
-                @click="removeCell(cell.key)"
+                @click="confirmRemoveCell(cell)"
               >
                 <Icon :icon="trash2Icon" width="16" height="16" />
               </button>
@@ -325,7 +354,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useMessage } from 'naive-ui'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
-import { open, save } from '@tauri-apps/plugin-dialog'
+import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
 import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
@@ -334,12 +363,15 @@ import checkIcon from '@iconify-icons/lucide/check'
 import checkCircleIcon from '@iconify-icons/lucide/check-circle-2'
 import plusIcon from '@iconify-icons/lucide/plus'
 import searchIcon from '@iconify-icons/lucide/search'
+import saveIcon from '@iconify-icons/lucide/save'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import eyeIcon from '@iconify-icons/lucide/eye'
 import eyeOffIcon from '@iconify-icons/lucide/eye-off'
 import variableIcon from '@iconify-icons/lucide/variable'
 import terminalIcon from '@iconify-icons/lucide/terminal'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
+import undoIcon from '@iconify-icons/lucide/undo'
+import redoIcon from '@iconify-icons/lucide/redo'
 import { createLogger } from '../../utils/logger'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
@@ -377,7 +409,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:markdown', 'state-change', 'open-console'])
+const emit = defineEmits(['update:markdown', 'state-change', 'open-console', 'request-save'])
 
 const message = useMessage()
 const logger = createLogger('GuaxiNotebookView')
@@ -400,6 +432,9 @@ const notebookSearchActiveIndex = ref(-1)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
 const imageBedRootCache = ref('')
 const notebookSidecarLoadVersion = ref(0)
+const notebookHistoryEntries = ref([])
+const notebookHistoryIndex = ref(-1)
+const notebookHistoryApplying = ref(false)
 const notebookMarkdownRenderCache = new Map()
 const notebookDisplayUrlCache = new Map()
 let notebookSidecarPersistTimer = 0
@@ -566,6 +601,24 @@ const buildNotebookCellRelation = (cells = [], index = 0) => {
     nextDigest: next ? getNotebookCellContentDigest(next) : '',
   }
 }
+const cloneNotebookCellsForHistory = (cells = []) => {
+  return normalizeNotebookCells(cells).map((cell) => {
+    if (cell?.type === 'python') {
+      return createNotebookPythonCell({
+        key: cell.key,
+        code: String(cell.code || ''),
+        meta: {
+          ...(cell.meta || {}),
+        },
+      })
+    }
+    return createNotebookMarkdownCell(String(cell?.content || ''), { key: cell?.key })
+  })
+}
+const canUndoNotebookHistory = computed(() => notebookHistoryIndex.value > 0)
+const canRedoNotebookHistory = computed(
+  () => notebookHistoryIndex.value >= 0 && notebookHistoryIndex.value < notebookHistoryEntries.value.length - 1,
+)
 const serializeNotebookCellsForSidecar = (cells = []) => {
   const normalizedCells = normalizeNotebookCells(cells)
   return normalizedCells.map((cell, index) => {
@@ -978,12 +1031,41 @@ const syncNotebookCellsFromMarkdown = async (markdown, reason = 'external-sync',
     })
     return
   }
-  const scannedCells = createNotebookCellsFromMarkdown(normalizedMarkdown, {
-    filePath: props.filePath,
-  })
-  const nextCells = decorateNotebookCells(reconcileNotebookCellsWithSidecar(scannedCells, sidecar))
+  let nextCells = []
+  let sidecarDigestMatch = !!sidecar?.digestMatch
+  let restoredFromSidecar = !!sidecar?.cells?.length
+  try {
+    const backendResult = await invoke('notebook_sync_from_markdown', {
+      markdown: normalizedMarkdown,
+      sidecarJson: sidecar ? JSON.stringify(sidecar) : null,
+    })
+    nextCells = decorateNotebookCells(Array.isArray(backendResult?.cells) ? backendResult.cells : [])
+    sidecarDigestMatch = !!backendResult?.sidecar_digest_match
+    restoredFromSidecar = !!backendResult?.restored_from_sidecar
+    logger.info('[Notebook] synced notebook cells via backend command', {
+      reason,
+      cellCount: nextCells.length,
+      sidecarDigestMatch,
+      restoredFromSidecar,
+    })
+  } catch (error) {
+    logger.warn('[Notebook] backend notebook sync failed, fallback to frontend parser', {
+      reason,
+      error: String(error?.message || error),
+    })
+    const scannedCells = createNotebookCellsFromMarkdown(normalizedMarkdown, {
+      filePath: props.filePath,
+    })
+    nextCells = decorateNotebookCells(reconcileNotebookCellsWithSidecar(scannedCells, sidecar))
+  }
 
   notebookCells.value = nextCells
+  notebookHistoryEntries.value = [{
+    signature: serializeNotebookCells(cloneNotebookCellsForHistory(nextCells)),
+    cells: cloneNotebookCellsForHistory(nextCells),
+  }]
+  notebookHistoryIndex.value = 0
+  notebookHistoryApplying.value = false
   applyNotebookSidecarSnapshots(nextCells, sidecar?.pythonSnapshots || {})
   lastEmittedMarkdown.value = normalizedMarkdown
 
@@ -991,10 +1073,10 @@ const syncNotebookCellsFromMarkdown = async (markdown, reason = 'external-sync',
     reason,
     markdownLength: normalizedMarkdown.length,
     cellCount: nextCells.length,
-    restoredFromSidecar: !!sidecar?.cells?.length,
-    sidecarDigestMatch: !!sidecar?.digestMatch,
+    restoredFromSidecar,
+    sidecarDigestMatch,
   })
-  if (sidecar && !sidecar.digestMatch) {
+  if (sidecar && !sidecarDigestMatch) {
     schedulePersistNotebookSidecar('rescan-source-markdown', 40)
   }
 }
@@ -1249,7 +1331,67 @@ const flushPendingNotebookMarkdown = (reason = 'unknown') => {
   flushNotebookMarkdown(reason)
 }
 
-const emitCells = (cells, focusKey = '', { deferMarkdownSync = false } = {}) => {
+const recordNotebookHistory = (cells, reason = 'unknown') => {
+  if (notebookHistoryApplying.value) return
+  const snapshot = cloneNotebookCellsForHistory(cells)
+  const signature = serializeNotebookCells(snapshot)
+  const currentEntry = notebookHistoryEntries.value[notebookHistoryIndex.value] || null
+  if (currentEntry?.signature === signature) {
+    return
+  }
+  const nextEntries = notebookHistoryEntries.value.slice(0, notebookHistoryIndex.value + 1)
+  nextEntries.push({
+    signature,
+    cells: snapshot,
+  })
+  notebookHistoryEntries.value = nextEntries.slice(-80)
+  notebookHistoryIndex.value = notebookHistoryEntries.value.length - 1
+  logger.info('[Notebook] recorded history snapshot', {
+    reason,
+    historyLength: notebookHistoryEntries.value.length,
+    historyIndex: notebookHistoryIndex.value,
+    cellCount: snapshot.length,
+  })
+}
+
+const applyNotebookHistoryAt = (index, reason = 'unknown') => {
+  const target = notebookHistoryEntries.value[index] || null
+  if (!target) return
+  notebookHistoryApplying.value = true
+  try {
+    emitCells(target.cells, '', {
+      deferMarkdownSync: false,
+      recordHistory: false,
+    })
+    notebookHistoryIndex.value = index
+    editingMarkdownCellKey.value = ''
+    logger.info('[Notebook] applied history snapshot', {
+      reason,
+      historyIndex: index,
+      cellCount: Array.isArray(target.cells) ? target.cells.length : 0,
+    })
+  } finally {
+    notebookHistoryApplying.value = false
+  }
+}
+
+const undoNotebookHistory = () => {
+  if (!canUndoNotebookHistory.value) return
+  applyNotebookHistoryAt(notebookHistoryIndex.value - 1, 'undo')
+}
+
+const redoNotebookHistory = () => {
+  if (!canRedoNotebookHistory.value) return
+  applyNotebookHistoryAt(notebookHistoryIndex.value + 1, 'redo')
+}
+
+const requestNotebookSave = () => {
+  flushPendingNotebookMarkdown('before-request-save')
+  emit('request-save')
+  logger.info('[Notebook] requested parent save')
+}
+
+const emitCells = (cells, focusKey = '', { deferMarkdownSync = false, recordHistory = true } = {}) => {
   pendingFocusCellKey.value = String(focusKey || '')
   const normalizedCells = decorateNotebookCells(cells)
   notebookCells.value = normalizedCells
@@ -1259,7 +1401,11 @@ const emitCells = (cells, focusKey = '', { deferMarkdownSync = false } = {}) => 
     markdownCellCount: normalizedCells.filter((cell) => cell.type === 'markdown').length,
     pythonCellCount: normalizedCells.filter((cell) => cell.type === 'python').length,
     deferMarkdownSync,
+    recordHistory,
   })
+  if (recordHistory) {
+    recordNotebookHistory(normalizedCells, 'emit-cells')
+  }
   if (deferMarkdownSync) {
     scheduleFlushNotebookMarkdown('deferred-cell-edit')
   } else {
@@ -1339,6 +1485,22 @@ const removeCell = (key) => {
   }
   const filtered = notebookCells.value.filter((cell) => String(cell.key) !== String(key))
   emitCells(filtered)
+}
+
+const confirmRemoveCell = async (cell) => {
+  const targetKey = String(cell?.key || '')
+  if (!targetKey) return
+  const confirmed = await confirmDialog(`确定删除这个${cell?.type === 'python' ? ' Python' : ' Markdown'} Cell 吗？`, {
+    title: '确认删除',
+    kind: 'warning',
+  })
+  logger.info('[Notebook] confirm remove cell result', {
+    key: targetKey,
+    cellType: String(cell?.type || ''),
+    confirmed: !!confirmed,
+  })
+  if (!confirmed) return
+  removeCell(targetKey)
 }
 
 const formatPythonExecOutput = (res) => {
@@ -2243,6 +2405,21 @@ watch(notebookSearchKeyword, () => {
 defineExpose({
   insertCell(type = 'python') {
     appendCell(type)
+  },
+  undo() {
+    undoNotebookHistory()
+  },
+  redo() {
+    redoNotebookHistory()
+  },
+  save() {
+    requestNotebookSave()
+  },
+  canUndo() {
+    return canUndoNotebookHistory.value
+  },
+  canRedo() {
+    return canRedoNotebookHistory.value
   },
   openSearch() {
     return openNotebookSearch()

@@ -28,6 +28,7 @@ pub mod backup;
 pub mod markdowncheck;
 pub mod flipboard;
 pub mod markdown_manual;
+pub mod notebook;
 pub mod todo;
 pub mod filetransfer;
 pub mod code_runtime;

@@ -393,6 +393,7 @@ async fn main() {
             commands::slidev::slidev_stop_dev,
             commands::slidev::slidev_split_markdown_paragraphs,
             commands::slidev::slidev_export_pptx,
+            commands::notebook::notebook_sync_from_markdown,
             commands::excerptsearch::search_excerpt_notes,
             commands::excerptsearch::read_excerpt_file,
             commands::git::get_git_root,
