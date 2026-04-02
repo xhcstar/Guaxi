@@ -315,7 +315,7 @@ export const insertNotebookCell = (cells = [], index, type = 'markdown') => {
   const insertAt = Math.max(0, Math.min(normalized.length, Number(index || 0)))
   const cell = type === 'python'
     ? createNotebookPythonCell({
-      code: '# Python Cell\nprint("Hello from Guaxi Python Cell")',
+      code: '',
     })
     : createNotebookMarkdownCell('')
   next.splice(insertAt, 0, cell)

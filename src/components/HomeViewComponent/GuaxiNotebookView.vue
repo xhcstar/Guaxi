@@ -1,38 +1,109 @@
-<template>
+﻿<template>
   <div ref="notebookRootRef" class="guaxi-notebook" :class="themeClass">
     <div class="guaxi-notebook__toolbar">
-      <div class="guaxi-notebook__toolbar-copy">
-        <div class="guaxi-notebook__toolbar-title">探索者模式</div>
-        <div class="guaxi-notebook__toolbar-subtitle">按文档结构拆分 Markdown Cell，保持单栏 Notebook 编辑体验</div>
+      <div v-show="notebookSearchVisible" class="guaxi-notebook__search-panel" @mousedown.stop>
+        <input
+          ref="notebookSearchInputRef"
+          v-model="notebookSearchKeyword"
+          class="guaxi-notebook__search-input"
+          type="text"
+          placeholder="搜索探索模式内容..."
+          @keydown.enter.prevent="focusNextNotebookSearchMatch"
+          @keydown.shift.enter.prevent="focusPrevNotebookSearchMatch"
+        />
+        <span class="guaxi-notebook__search-count">{{ notebookSearchMatchCountText }}</span>
+        <button class="guaxi-notebook__search-btn" type="button" @click="focusPrevNotebookSearchMatch">上一个</button>
+        <button class="guaxi-notebook__search-btn" type="button" @click="focusNextNotebookSearchMatch">下一个</button>
+        <button class="guaxi-notebook__search-btn guaxi-notebook__search-btn--danger" type="button" @click="closeNotebookSearch">关闭</button>
       </div>
-      <div class="guaxi-notebook__toolbar-main">
-        <button type="button" class="guaxi-notebook__toolbar-btn primary" @click="appendCell('python')">新增 Python Cell</button>
-        <button type="button" class="guaxi-notebook__toolbar-btn" @click="appendCell('markdown')">新增 Markdown Cell</button>
+      <div class="guaxi-notebook__toolbar-main guaxi-notebook__toolbar-main--solo">
+        <button
+          type="button"
+          class="guaxi-notebook__icon-btn"
+          title="搜索探索模式内容"
+          aria-label="搜索探索模式内容"
+          @click="openNotebookSearch"
+        >
+          <Icon :icon="searchIcon" width="16" height="16" />
+        </button>
+        <button
+          type="button"
+          class="guaxi-notebook__icon-btn primary"
+          title="新增 Python Cell"
+          aria-label="新增 Python Cell"
+          @click="appendCell('python')"
+        >
+          <Icon :icon="terminalSquareIcon" width="16" height="16" />
+        </button>
+        <button
+          type="button"
+          class="guaxi-notebook__icon-btn"
+          title="新增 Markdown Cell"
+          aria-label="新增 Markdown Cell"
+          @click="appendCell('markdown')"
+        >
+          <Icon :icon="filePlusIcon" width="16" height="16" />
+        </button>
       </div>
     </div>
 
-    <div v-for="(cell, index) in notebookCells" :key="cell.key" class="guaxi-notebook__cell" :class="`is-${cell.type}`">
-      <div class="guaxi-notebook__cell-header">
-        <div class="guaxi-notebook__cell-label">
-          <span class="guaxi-notebook__cell-kind">{{ cell.type === 'python' ? `In [${index + 1}]` : `Markdown ${index + 1}` }}</span>
-          <span class="guaxi-notebook__cell-meta">{{ cell.type === 'python' ? (cell.meta?.title || 'Python Cell') : getMarkdownCellTitle(cell) }}</span>
+    <template v-for="(cell, index) in notebookCells" :key="cell.key">
+      <div v-if="index === 0" class="guaxi-notebook__insert-strip">
+        <div class="guaxi-notebook__insert-line"></div>
+        <div class="guaxi-notebook__insert-trigger" aria-hidden="true">
+          <Icon :icon="plusIcon" width="12" height="12" />
         </div>
-        <div class="guaxi-notebook__cell-actions">
-          <button type="button" class="guaxi-notebook__cell-btn" @click="insertCell(index, 'above', 'markdown')">上方 Markdown</button>
-          <button type="button" class="guaxi-notebook__cell-btn" @click="insertCell(index, 'above', 'python')">上方 Python</button>
-          <button type="button" class="guaxi-notebook__cell-btn" @click="insertCell(index, 'below', 'markdown')">下方 Markdown</button>
-          <button type="button" class="guaxi-notebook__cell-btn" @click="insertCell(index, 'below', 'python')">下方 Python</button>
-          <button type="button" class="guaxi-notebook__cell-btn danger" @click="removeCell(cell.key)">删除</button>
+        <div class="guaxi-notebook__insert-actions">
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="在这里插入 Markdown Cell"
+            aria-label="在这里插入 Markdown Cell"
+            @click="insertCell(index, 'above', 'markdown')"
+          >
+            <Icon :icon="filePlusIcon" width="16" height="16" />
+          </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="在这里插入 Python Cell"
+            aria-label="在这里插入 Python Cell"
+            @click="insertCell(index, 'above', 'python')"
+          >
+            <Icon :icon="terminalSquareIcon" width="16" height="16" />
+          </button>
         </div>
       </div>
 
+      <div class="guaxi-notebook__cell" :class="`is-${cell.type}`">
       <template v-if="cell.type === 'markdown'">
-        <div class="guaxi-notebook__markdown-layout">
+        <div
+          class="guaxi-notebook__markdown-surface"
+          :class="{ 'is-editing': isMarkdownCellEditing(cell) }"
+        >
+          <div class="guaxi-notebook__markdown-actions">
+            <button
+              v-if="isMarkdownCellEditing(cell)"
+              type="button"
+              class="guaxi-notebook__icon-btn"
+              title="完成 Markdown 编辑"
+              aria-label="完成 Markdown 编辑"
+              @click="exitMarkdownEditMode(cell.key, 'toolbar-finish')"
+            >
+              <Icon :icon="checkIcon" width="16" height="16" />
+            </button>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn danger"
+              title="删除当前 Cell"
+              aria-label="删除当前 Cell"
+              @click="removeCell(cell.key)"
+            >
+              <Icon :icon="trash2Icon" width="16" height="16" />
+            </button>
+          </div>
+
           <div v-if="isMarkdownCellEditing(cell)" class="guaxi-notebook__markdown-edit-shell">
-            <div class="guaxi-notebook__markdown-edit-bar">
-              <span class="guaxi-notebook__markdown-edit-meta">Markdown 原文编辑中</span>
-              <button type="button" class="guaxi-notebook__cell-btn" @click="exitMarkdownEditMode(cell.key, 'toolbar-finish')">完成</button>
-            </div>
             <textarea
               :data-cell-key="cell.key"
               class="guaxi-notebook__markdown-editor"
@@ -52,102 +123,231 @@
             @keydown.enter.prevent="enterMarkdownEditMode(cell.key, 'preview-enter')"
             @keydown.space.prevent="enterMarkdownEditMode(cell.key, 'preview-space')"
           >
-            <div class="guaxi-notebook__markdown-preview-bar">
-              <span class="guaxi-notebook__panel-title">预览</span>
-              <span class="guaxi-notebook__markdown-preview-hint">点击进入编辑</span>
-            </div>
             <div
               v-if="String(cell.content || '').trim()"
               class="guaxi-notebook__markdown-preview markdown-body"
               v-html="getRenderedMarkdownCellHtml(cell)"
             ></div>
-            <div v-else class="guaxi-notebook__empty guaxi-notebook__empty--dashed">点击这里开始编写 Markdown 内容</div>
+            <div v-else class="guaxi-notebook__empty guaxi-notebook__empty--dashed">点击这里开始编辑 Markdown 内容</div>
           </div>
         </div>
       </template>
 
       <template v-else>
-        <div class="guaxi-notebook__python-actions">
-          <button type="button" class="guaxi-notebook__cell-btn primary" :disabled="isCellBusy(cell)" @click="runPythonCell(cell, { writeBack: false })">运行</button>
-          <button type="button" class="guaxi-notebook__cell-btn" :disabled="isCellBusy(cell)" @click="runPythonCell(cell, { writeBack: true })">运行并写回</button>
-          <button v-if="hasVisibleOutput(cell)" type="button" class="guaxi-notebook__cell-btn" @click="toggleCellOutput(cell)">{{ getCellSnapshot(cell).meta.outputCollapsed ? '显示输出' : '隐藏输出' }}</button>
-          <button type="button" class="guaxi-notebook__cell-btn" @click="toggleCellSession(cell)">{{ getCellSnapshot(cell).meta.sessionCollapsed ? '显示变量' : '隐藏变量' }}</button>
-          <button type="button" class="guaxi-notebook__cell-btn" @click="$emit('open-console')">控制台</button>
-        </div>
-
-        <textarea
-          :data-cell-key="cell.key"
-          class="guaxi-notebook__python-editor"
-          spellcheck="false"
-          :value="cell.code"
-          @input="updatePythonCell(cell.key, $event)"
-        />
-
-        <div class="guaxi-notebook__status-line">
-          <span>{{ isCellBusy(cell) ? '运行中...' : '共享当前文档的 Python 会话' }}</span>
-          <span>{{ getCellSnapshot(cell).outputText ? '已有输出' : '尚未运行' }}</span>
-        </div>
-
-        <div v-if="hasVisibleOutput(cell) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
-          <div class="guaxi-notebook__panel-title">输出</div>
-          <div v-if="getCellSnapshot(cell).display?.type === 'html'" class="guaxi-notebook__rich" v-html="String(getCellSnapshot(cell).display.html || '')"></div>
-          <div v-else-if="getCellSnapshot(cell).display?.type === 'svg'" class="guaxi-notebook__rich" v-html="String(getCellSnapshot(cell).display.svg || '')"></div>
-          <div
-            v-else-if="getCellSnapshot(cell).display?.type === 'markdown'"
-            class="guaxi-notebook__rich markdown-body"
-            v-html="getRenderedOutputMarkdownHtml(cell)"
-          ></div>
-          <img
-            v-else-if="getCellImageUrl(cell)"
-            class="guaxi-notebook__image"
-            :src="getCellImageUrl(cell)"
-            alt="Python Cell Output"
-          />
-          <div v-else-if="getCellSnapshot(cell).dataframe" class="guaxi-notebook__dataframe">
-            <table>
-              <thead>
-                <tr>
-                  <th v-for="column in getCellSnapshot(cell).dataframe.columns || []" :key="column">{{ column }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(row, rowIndex) in getCellSnapshot(cell).dataframe.rows || []" :key="`${cell.key}-row-${rowIndex}`">
-                  <td v-for="(value, colIndex) in row" :key="`${cell.key}-${rowIndex}-${colIndex}`">{{ value }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <pre v-if="getCellSnapshot(cell).outputText" class="guaxi-notebook__output-text">{{ getCellSnapshot(cell).outputText }}</pre>
-        </div>
-
-        <div v-if="!getCellSnapshot(cell).meta.sessionCollapsed" class="guaxi-notebook__panel">
-          <div class="guaxi-notebook__panel-title">会话变量</div>
-          <div v-if="getCellSessionVars(cell).length" class="guaxi-notebook__vars">
-            <div v-for="item in getCellSessionVars(cell)" :key="`${cell.key}-${item.name}`" class="guaxi-notebook__var">
-              <div class="guaxi-notebook__var-main">
-                <span class="guaxi-notebook__var-name">{{ item.name }}</span>
-                <span class="guaxi-notebook__var-type">{{ item.value_type || item.type || 'value' }}</span>
-              </div>
-              <div class="guaxi-notebook__var-preview">{{ item.preview || '' }}</div>
+        <div class="guaxi-notebook__python-layout">
+          <div class="guaxi-notebook__python-toolbar">
+            <div class="guaxi-notebook__python-toolbar-copy">
+              <span class="guaxi-notebook__python-badge">Python</span>
+              <span v-if="String(cell.meta?.title || '').trim()" class="guaxi-notebook__python-title">{{ cell.meta?.title }}</span>
+            </div>
+            <div class="guaxi-notebook__python-toolbar-actions">
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                :disabled="isCellBusy(cell)"
+                title="从外部导入表格到当前 Python 会话"
+                aria-label="从外部导入表格到当前 Python 会话"
+                @click="importTableToPythonSession(cell)"
+              >
+                <Icon :icon="uploadIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn primary"
+                :disabled="isCellBusy(cell)"
+                title="运行当前 Python Cell"
+                aria-label="运行当前 Python Cell"
+                @click="runPythonCell(cell, { writeBack: false })"
+              >
+                <Icon :icon="playIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                :disabled="isCellBusy(cell)"
+                title="运行并将输出写回文档"
+                aria-label="运行并将输出写回文档"
+                @click="runPythonCell(cell, { writeBack: true })"
+              >
+                <Icon :icon="checkCircleIcon" width="16" height="16" />
+              </button>
+              <button
+                v-if="hasVisibleOutput(cell)"
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                :title="getCellSnapshot(cell).meta.outputCollapsed ? '显示输出' : '隐藏输出'"
+                :aria-label="getCellSnapshot(cell).meta.outputCollapsed ? '显示输出' : '隐藏输出'"
+                @click="toggleCellOutput(cell)"
+              >
+                <Icon :icon="getCellSnapshot(cell).meta.outputCollapsed ? eyeIcon : eyeOffIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                :title="getCellSnapshot(cell).meta.sessionCollapsed ? '显示变量' : '隐藏变量'"
+                :aria-label="getCellSnapshot(cell).meta.sessionCollapsed ? '显示变量' : '隐藏变量'"
+                @click="toggleCellSession(cell)"
+              >
+                <Icon :icon="variableIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn"
+                title="打开 Python 控制台"
+                aria-label="打开 Python 控制台"
+                @click="$emit('open-console')"
+              >
+                <Icon :icon="terminalIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn danger"
+                title="删除当前 Cell"
+                aria-label="删除当前 Cell"
+                @click="removeCell(cell.key)"
+              >
+                <Icon :icon="trash2Icon" width="16" height="16" />
+              </button>
             </div>
           </div>
-          <div v-else class="guaxi-notebook__empty">当前会话里还没有可见变量</div>
+
+          <textarea
+            :data-cell-key="cell.key"
+            class="guaxi-notebook__python-editor"
+            spellcheck="false"
+            :value="cell.code"
+            @input="updatePythonCell(cell.key, $event)"
+          />
+
+          <div v-if="hasVisibleOutput(cell) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
+            <div class="guaxi-notebook__panel-head">
+              <div class="guaxi-notebook__panel-title">输出</div>
+              <div class="guaxi-notebook__panel-actions">
+                <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell)">写回 Markdown</button>
+                <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell)">导出文件</button>
+              </div>
+            </div>
+            <div class="guaxi-notebook__panel-content">
+              <div v-if="getCellSnapshot(cell).display?.type === 'html'" class="guaxi-notebook__rich" v-html="String(getCellSnapshot(cell).display.html || '')"></div>
+              <div v-else-if="getCellSnapshot(cell).display?.type === 'svg'" class="guaxi-notebook__rich" v-html="String(getCellSnapshot(cell).display.svg || '')"></div>
+              <div
+                v-else-if="getCellSnapshot(cell).display?.type === 'markdown'"
+                class="guaxi-notebook__rich markdown-body"
+                v-html="getRenderedOutputMarkdownHtml(cell)"
+              ></div>
+              <img
+                v-else-if="getCellDisplayKind(cell) === 'image' && getCellDisplayUrl(cell)"
+                class="guaxi-notebook__image"
+                :src="getCellDisplayUrl(cell)"
+                alt="Python Cell Output"
+              />
+              <audio
+                v-else-if="getCellDisplayKind(cell) === 'audio' && getCellDisplayUrl(cell)"
+                class="guaxi-notebook__media"
+                :src="getCellDisplayUrl(cell)"
+                controls
+                preload="metadata"
+              ></audio>
+              <video
+                v-else-if="getCellDisplayKind(cell) === 'video' && getCellDisplayUrl(cell)"
+                class="guaxi-notebook__media guaxi-notebook__media--video"
+                :src="getCellDisplayUrl(cell)"
+                controls
+                preload="metadata"
+              ></video>
+              <div v-else-if="getCellSnapshot(cell).dataframe" class="guaxi-notebook__dataframe">
+                <table>
+                  <thead>
+                    <tr>
+                      <th v-for="column in getCellSnapshot(cell).dataframe.columns || []" :key="column">{{ column }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, rowIndex) in getCellSnapshot(cell).dataframe.rows || []" :key="`${cell.key}-row-${rowIndex}`">
+                      <td v-for="(value, colIndex) in row" :key="`${cell.key}-${rowIndex}-${colIndex}`">{{ value }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <pre v-if="getCellSnapshot(cell).outputText" class="guaxi-notebook__output-text">{{ getCellSnapshot(cell).outputText }}</pre>
+            </div>
+          </div>
+
+          <div v-if="!getCellSnapshot(cell).meta.sessionCollapsed" class="guaxi-notebook__panel">
+            <div class="guaxi-notebook__panel-title">会话变量</div>
+            <div v-if="getCellSessionVars(cell).length" class="guaxi-notebook__vars">
+              <div v-for="item in getCellSessionVars(cell)" :key="`${cell.key}-${item.name}`" class="guaxi-notebook__var">
+                <div class="guaxi-notebook__var-main">
+                  <span class="guaxi-notebook__var-name">{{ item.name }}</span>
+                  <span class="guaxi-notebook__var-type">{{ item.value_type || item.type || 'value' }}</span>
+                </div>
+                <div class="guaxi-notebook__var-preview">{{ item.preview || '' }}</div>
+              </div>
+            </div>
+            <div v-else class="guaxi-notebook__empty">当前会话里还没有可见变量</div>
+          </div>
         </div>
       </template>
-    </div>
+      </div>
+
+      <div class="guaxi-notebook__insert-strip">
+        <div class="guaxi-notebook__insert-line"></div>
+        <div class="guaxi-notebook__insert-trigger" aria-hidden="true">
+          <Icon :icon="plusIcon" width="12" height="12" />
+        </div>
+        <div class="guaxi-notebook__insert-actions">
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="在这里插入 Markdown Cell"
+            aria-label="在这里插入 Markdown Cell"
+            @click="insertCell(index, 'below', 'markdown')"
+          >
+            <Icon :icon="filePlusIcon" width="16" height="16" />
+          </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="在这里插入 Python Cell"
+            aria-label="在这里插入 Python Cell"
+            @click="insertCell(index, 'below', 'python')"
+          >
+            <Icon :icon="terminalSquareIcon" width="16" height="16" />
+          </button>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import { useMessage } from 'naive-ui'
-import { invoke } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { readFile, writeFile } from '@tauri-apps/plugin-fs'
+import filePlusIcon from '@iconify-icons/lucide/file-plus'
+import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
+import playIcon from '@iconify-icons/lucide/play'
+import checkIcon from '@iconify-icons/lucide/check'
+import checkCircleIcon from '@iconify-icons/lucide/check-circle-2'
+import plusIcon from '@iconify-icons/lucide/plus'
+import searchIcon from '@iconify-icons/lucide/search'
+import uploadIcon from '@iconify-icons/lucide/upload'
+import eyeIcon from '@iconify-icons/lucide/eye'
+import eyeOffIcon from '@iconify-icons/lucide/eye-off'
+import variableIcon from '@iconify-icons/lucide/variable'
+import terminalIcon from '@iconify-icons/lucide/terminal'
+import trash2Icon from '@iconify-icons/lucide/trash-2'
 import { createLogger } from '../../utils/logger'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
   createPythonSessionId,
+  dataframeToMarkdownTable,
   parsePythonCellBlocks,
+  replacePythonCellBlock,
 } from './utils/guaxiPythonCellSyntax'
 import {
   createNotebookCellsFromMarkdown,
@@ -182,20 +382,167 @@ const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
 const busyMap = ref({})
 const notebookRootRef = ref(null)
+const notebookSearchInputRef = ref(null)
 const editingMarkdownCellKey = ref('')
 const renderedMarkdownHtmlMap = ref({})
 const renderedOutputMarkdownHtmlMap = ref({})
+const resolvedDisplayUrlMap = ref({})
 const markdownRenderVersion = ref(0)
-
-const notebookCells = computed(() => createNotebookCellsFromMarkdown(props.markdown, {
-  filePath: props.filePath,
-}))
+const notebookCells = ref([])
+const notebookSearchVisible = ref(false)
+const notebookSearchKeyword = ref('')
+const notebookSearchMatches = ref([])
+const notebookSearchActiveIndex = ref(-1)
+const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
 
 const bumpRefresh = () => {
   refreshTick.value += 1
   emit('state-change')
+}
+
+const normalizeNotebookMarkdownText = (markdown = '') => String(markdown || '').replace(/\r\n?/g, '\n')
+const escapeRegExp = (raw) => String(raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const escapeHtmlAttribute = (raw) => String(raw || '')
+  .replace(/&/g, '&amp;')
+  .replace(/"/g, '&quot;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+const base64ToUint8Array = (b64) => {
+  const binary = atob(String(b64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+const sanitizeFileSegment = (raw, fallback = 'output') => {
+  const normalized = String(raw || '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return normalized || fallback
+}
+const joinNotebookPath = (...parts) => parts
+  .map((part, index) => {
+    const normalized = String(part || '').replace(/\\/g, '/')
+    return index === 0 ? normalized.replace(/\/+$/g, '') : normalized.replace(/^\/+|\/+$/g, '')
+  })
+  .filter(Boolean)
+  .join('/')
+const getNotebookDocDir = () => {
+  const filePath = String(props.filePath || '').trim().replace(/\\/g, '/')
+  if (!filePath) return ''
+  const lastSlash = filePath.lastIndexOf('/')
+  return lastSlash >= 0 ? filePath.slice(0, lastSlash) : ''
+}
+const getNotebookDocStem = () => {
+  const filePath = String(props.filePath || '').trim().replace(/\\/g, '/')
+  const baseName = filePath.split('/').pop() || 'notebook'
+  return sanitizeFileSegment(baseName.replace(/\.[^.]+$/, ''), 'notebook')
+}
+const getRelativeNotebookPath = (targetPath) => {
+  const docDir = getNotebookDocDir()
+  const normalizedTarget = String(targetPath || '').replace(/\\/g, '/')
+  if (docDir && normalizedTarget.startsWith(`${docDir}/`)) {
+    return normalizedTarget.slice(docDir.length + 1)
+  }
+  return normalizedTarget
+}
+const guessExtensionFromMime = (mime, fallback = 'bin') => {
+  const normalized = String(mime || '').trim().toLowerCase()
+  if (normalized.includes('markdown')) return 'md'
+  if (normalized.includes('svg')) return 'svg'
+  if (normalized.includes('html')) return 'html'
+  if (normalized.includes('json')) return 'json'
+  if (normalized.includes('plain')) return 'txt'
+  if (normalized.includes('png')) return 'png'
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return 'jpg'
+  if (normalized.includes('gif')) return 'gif'
+  if (normalized.includes('webp')) return 'webp'
+  if (normalized.includes('mp3') || normalized.includes('mpeg')) return 'mp3'
+  if (normalized.includes('wav')) return 'wav'
+  if (normalized.includes('ogg')) return 'ogg'
+  if (normalized.includes('mp4')) return 'mp4'
+  if (normalized.includes('webm')) return 'webm'
+  return fallback
+}
+const normalizeDisplayType = (display) => {
+  const explicitType = String(display?.type || '').trim().toLowerCase()
+  const mime = String(display?.mime || '').trim().toLowerCase()
+  if (explicitType) return explicitType
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('audio/')) return 'audio'
+  if (mime.startsWith('video/')) return 'video'
+  if (mime.includes('markdown')) return 'markdown'
+  if (mime.includes('html')) return 'html'
+  return ''
+}
+const getDisplaySourcePath = (display) => String(
+  display?.path ||
+  display?.file_path ||
+  display?.src ||
+  display?.source_path ||
+  display?.url ||
+  '',
+).trim()
+const getDisplayDataUrl = (display) => {
+  const directDataUrl = String(display?.dataUrl || display?.data_url || '').trim()
+  if (directDataUrl.startsWith('data:')) return directDataUrl
+  const base64 = String(display?.data_base64 || display?.base64 || '').trim()
+  if (!base64) return ''
+  return `data:${String(display?.mime || 'application/octet-stream')};base64,${base64}`
+}
+
+const decorateNotebookCells = (cells = []) => {
+  return normalizeNotebookCells(cells).map((cell, index) => {
+    if (cell.type !== 'python') {
+      return {
+        ...cell,
+        index,
+      }
+    }
+
+    const block = parsePythonCellBlocks(serializeNotebookCells([cell]))[0] || null
+    return {
+      ...cell,
+      index,
+      block,
+      cellId: createPythonCellId(props.filePath, {
+        ...(block || {}),
+        meta: cell.meta,
+      }),
+    }
+  })
+}
+
+// 设计说明：
+// 1. 探索模式需要允许“空 cell”暂时存在，等待用户填写，因此不能在每次 props.markdown 更新时都重新解析覆盖本地 cell 状态。
+// 2. 这里把 notebookCells 作为本地状态维护，只在外部文档真正发生变化时再重新同步，既保留空 cell，也能明显减少重复切分带来的卡顿。
+const syncNotebookCellsFromMarkdown = (markdown, reason = 'external-sync', { force = false } = {}) => {
+  const normalizedMarkdown = normalizeNotebookMarkdownText(markdown)
+  if (!force && normalizedMarkdown === lastEmittedMarkdown.value) {
+    logger.debug('[Notebook] skip notebook cells sync', {
+      reason,
+      markdownLength: normalizedMarkdown.length,
+    })
+    return
+  }
+
+  const nextCells = decorateNotebookCells(createNotebookCellsFromMarkdown(normalizedMarkdown, {
+    filePath: props.filePath,
+  }))
+
+  notebookCells.value = nextCells
+  lastEmittedMarkdown.value = normalizedMarkdown
+
+  logger.info('[Notebook] sync notebook cells from markdown', {
+    reason,
+    markdownLength: normalizedMarkdown.length,
+    cellCount: nextCells.length,
+  })
 }
 
 const getNotebookBasePath = () => {
@@ -218,20 +565,13 @@ const buildMarkdownRenderOptions = () => ({
   basePath: getNotebookBasePath(),
 })
 
-const getMarkdownCellTitle = (cell) => {
-  const lines = String(cell?.content || '').split('\n')
-  const firstMeaningfulLine = lines.find((line) => String(line || '').trim())
-  if (!firstMeaningfulLine) return '空白 Markdown Cell'
+const notebookSearchMatchCountText = computed(() => {
+  const total = Array.isArray(notebookSearchMatches.value) ? notebookSearchMatches.value.length : 0
+  if (!total) return '0 / 0'
+  const index = Math.max(0, Number(notebookSearchActiveIndex.value || 0))
+  return `${Math.min(index + 1, total)} / ${total}`
+})
 
-  const normalized = String(firstMeaningfulLine)
-    .replace(/^\s{0,3}#{1,6}\s*/, '')
-    .replace(/^\s*[-*+]\s+/, '')
-    .replace(/^\s*\d+\.\s+/, '')
-    .trim()
-
-  if (!normalized) return 'Markdown Cell'
-  return normalized.length > 42 ? `${normalized.slice(0, 42)}...` : normalized
-}
 
 const resizeTextareaToContent = (target) => {
   if (!(target instanceof HTMLTextAreaElement)) return
@@ -247,6 +587,140 @@ const syncNotebookTextareaHeights = (reason = 'unknown') => {
   root.querySelectorAll('textarea').forEach((node) => {
     resizeTextareaToContent(node)
   })
+}
+
+const clearNotebookSearchHighlights = () => {
+  const root = notebookRootRef.value
+  if (!root) {
+    notebookSearchMatches.value = []
+    notebookSearchActiveIndex.value = -1
+    return
+  }
+  const marks = root.querySelectorAll('span.guaxi-notebook__search-hit')
+  marks.forEach((mark) => {
+    const parent = mark.parentNode
+    if (!parent) return
+    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+    parent.normalize?.()
+  })
+  notebookSearchMatches.value = []
+  notebookSearchActiveIndex.value = -1
+}
+
+const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
+  const matches = Array.isArray(notebookSearchMatches.value) ? notebookSearchMatches.value : []
+  const total = matches.length
+  if (!total) {
+    notebookSearchActiveIndex.value = -1
+    return
+  }
+
+  let nextIndex = Number(index)
+  if (!Number.isFinite(nextIndex)) nextIndex = 0
+  if (nextIndex < 0) nextIndex = total - 1
+  if (nextIndex >= total) nextIndex = 0
+
+  matches.forEach((element) => element?.classList?.remove('guaxi-notebook__search-hit--active'))
+  const active = matches[nextIndex]
+  if (active) {
+    active.classList.add('guaxi-notebook__search-hit--active')
+    if (scroll) {
+      active.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    }
+  }
+  notebookSearchActiveIndex.value = nextIndex
+}
+
+const applyNotebookSearchHighlights = () => {
+  clearNotebookSearchHighlights()
+
+  const root = notebookRootRef.value
+  const keyword = String(notebookSearchKeyword.value || '').trim()
+  if (!root || !keyword) return
+
+  const regex = new RegExp(escapeRegExp(keyword), 'gi')
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const text = String(node?.nodeValue || '')
+      if (!text) return NodeFilter.FILTER_REJECT
+      const parent = node.parentElement
+      if (!parent) return NodeFilter.FILTER_REJECT
+      if (parent.closest('.guaxi-notebook__search-panel')) return NodeFilter.FILTER_REJECT
+      if (parent.closest('.guaxi-notebook__search-hit')) return NodeFilter.FILTER_REJECT
+      if (parent.closest('textarea, input, button, code, pre, script, style')) return NodeFilter.FILTER_REJECT
+      regex.lastIndex = 0
+      return regex.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    },
+  })
+
+  const textNodes = []
+  let currentNode = walker.nextNode()
+  while (currentNode) {
+    textNodes.push(currentNode)
+    currentNode = walker.nextNode()
+  }
+
+  const matches = []
+  textNodes.forEach((node) => {
+    const text = String(node.nodeValue || '')
+    const parent = node.parentNode
+    if (!parent) return
+
+    regex.lastIndex = 0
+    let lastIndex = 0
+    let match = regex.exec(text)
+    if (!match) return
+
+    const fragment = document.createDocumentFragment()
+    while (match) {
+      const matchIndex = Number(match.index || 0)
+      const matchedText = String(match[0] || '')
+      if (matchIndex > lastIndex) {
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchIndex)))
+      }
+      const span = document.createElement('span')
+      span.className = 'guaxi-notebook__search-hit'
+      span.textContent = matchedText
+      fragment.appendChild(span)
+      matches.push(span)
+      lastIndex = matchIndex + matchedText.length
+      match = regex.exec(text)
+    }
+    if (lastIndex < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex)))
+    }
+    parent.replaceChild(fragment, node)
+  })
+
+  notebookSearchMatches.value = matches
+  if (matches.length) {
+    focusNotebookSearchMatchAt(0, { scroll: false })
+  }
+}
+
+const openNotebookSearch = async () => {
+  notebookSearchVisible.value = true
+  logger.info('[Notebook] open search panel')
+  await nextTick()
+  const input = notebookSearchInputRef.value
+  if (input?.focus) input.focus()
+  if (input?.select) input.select()
+  applyNotebookSearchHighlights()
+}
+
+const closeNotebookSearch = () => {
+  notebookSearchVisible.value = false
+  notebookSearchKeyword.value = ''
+  logger.info('[Notebook] close search panel')
+  clearNotebookSearchHighlights()
+}
+
+const focusNextNotebookSearchMatch = () => {
+  focusNotebookSearchMatchAt(notebookSearchActiveIndex.value + 1)
+}
+
+const focusPrevNotebookSearchMatch = () => {
+  focusNotebookSearchMatchAt(notebookSearchActiveIndex.value - 1)
 }
 
 const focusMarkdownEditor = (key, reason = 'focus-editor') => {
@@ -291,14 +765,17 @@ const exitMarkdownEditMode = (key, reason = 'manual-exit') => {
 
 const emitCells = (cells, focusKey = '') => {
   pendingFocusCellKey.value = String(focusKey || '')
-  const normalizedCells = normalizeNotebookCells(cells)
+  const normalizedCells = decorateNotebookCells(cells)
+  notebookCells.value = normalizedCells
   logger.info('[Notebook] emit cells', {
     focusKey: pendingFocusCellKey.value,
     cellCount: normalizedCells.length,
     markdownCellCount: normalizedCells.filter((cell) => cell.type === 'markdown').length,
     pythonCellCount: normalizedCells.filter((cell) => cell.type === 'python').length,
   })
-  emit('update:markdown', serializeNotebookCells(normalizedCells))
+  const nextMarkdown = serializeNotebookCells(normalizedCells)
+  lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
+  emit('update:markdown', nextMarkdown)
   nextTick(() => {
     if (!pendingFocusCellKey.value) return
     const target = document.querySelector(`[data-cell-key="${CSS.escape(pendingFocusCellKey.value)}"]`)
@@ -338,7 +815,7 @@ const insertCell = (index, position = 'below', type = 'markdown') => {
   const next = notebookCells.value.slice()
   const newCell = type === 'python'
     ? createNotebookPythonCell({
-      code: '# Python Cell\nprint("Hello from Guaxi Python Cell")',
+      code: '',
     })
     : createNotebookMarkdownCell('')
   const offset = position === 'below' ? 1 : 0
@@ -417,14 +894,50 @@ const getCellSnapshot = (cell) => {
 
 const getCellSessionVars = (cell) => Array.isArray(getCellSnapshot(cell).sessionVars) ? getCellSnapshot(cell).sessionVars : []
 
-const getCellImageUrl = (cell) => {
-  const display = getCellSnapshot(cell).display
-  if (!display || display.type !== 'image') return ''
-  if (display.dataUrl && String(display.dataUrl).startsWith('data:')) return String(display.dataUrl)
-  if (display.data_base64) {
-    return `data:${String(display.mime || 'image/png')};base64,${String(display.data_base64)}`
+const getCellDisplayKind = (cell) => normalizeDisplayType(getCellSnapshot(cell).display)
+
+const getCellDisplayUrl = (cell) => String(resolvedDisplayUrlMap.value[String(cell?.key || '')] || '')
+
+const resolveDisplayUrl = async (display) => {
+  const dataUrl = getDisplayDataUrl(display)
+  if (dataUrl) return dataUrl
+
+  const source = getDisplaySourcePath(display)
+  if (!source) return ''
+  if (/^(https?:|data:|blob:)/i.test(source)) return source
+
+  try {
+    const converted = convertFileSrc(source)
+    return typeof converted?.then === 'function' ? await converted : String(converted || '')
+  } catch (error) {
+    logger.warn('[Notebook] convert display source path failed', {
+      source,
+      error: String(error?.message || error),
+    })
+    return source
   }
-  return ''
+}
+
+const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
+  const nextMap = {}
+  const tasks = []
+
+  for (const cell of Array.isArray(cells) ? cells : []) {
+    if (cell?.type !== 'python') continue
+    const display = getCellSnapshot(cell).display
+    const kind = normalizeDisplayType(display)
+    if (!['image', 'audio', 'video'].includes(kind)) continue
+    tasks.push((async () => {
+      nextMap[String(cell.key || '')] = await resolveDisplayUrl(display)
+    })())
+  }
+
+  await Promise.all(tasks)
+  resolvedDisplayUrlMap.value = nextMap
+  logger.info('[Notebook] sync display urls', {
+    reason,
+    mediaCount: Object.keys(nextMap).length,
+  })
 }
 
 const hasVisibleOutput = (cell) => {
@@ -450,7 +963,8 @@ const renderMarkdownHtml = async (content, reason = 'unknown') => {
   }
 }
 
-// Explorer 模式中的 Markdown 预览需要复用主编辑器渲染链，
+// 设计说明：
+// Explorer 模式中的 Markdown 预览需要复用主编辑器的渲染链，
 // 这样代码高亮、数学公式与其他增强能力才能和主界面保持一致。
 const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
   const renderVersion = markdownRenderVersion.value + 1
@@ -556,43 +1070,469 @@ const toggleCellSession = (cell) => {
 
 const isCellBusy = (cell) => !!busyMap.value[String(cell.key)]
 
-const upsertPythonOutputBlock = (markdown, targetCellId, outputText) => {
-  const current = String(markdown || '').replace(/\r\n?/g, '\n')
-  const blocks = parsePythonCellBlocks(current)
-  const targetBlock = blocks.find((block) => createPythonCellId(props.filePath, block) === targetCellId)
-  if (!targetBlock) return current
+const getPythonCellOrderIndex = (cell) => {
+  const targetKey = String(cell?.key || '')
+  if (!targetKey) return -1
+  return notebookCells.value
+    .filter((item) => item?.type === 'python')
+    .findIndex((item) => String(item?.key || '') === targetKey)
+}
 
-  const marker = `<!-- guaxi:pyout:${targetCellId} -->`
-  const lines = current.split('\n')
-  const existingMarkerIndex = lines.findIndex((line) => String(line || '').trim() === marker)
-  const replacement = [marker, '```text', String(outputText || ''), '```']
-
-  if (existingMarkerIndex >= 0) {
-    let fenceStart = -1
-    let fenceEnd = -1
-    for (let i = existingMarkerIndex + 1; i < lines.length; i += 1) {
-      if (String(lines[i] || '').trim().startsWith('```')) {
-        fenceStart = i
-        break
+// 设计说明：
+// 1. Explorer 模式会先在前端内存里生成稳定 meta.id，随后再把它写回隐藏 Python Cell 源码。
+// 2. 老文档第一次进入探索模式时，源码块里可能还没有 meta.id，这时如果只按 cellId 回找很容易失败。
+// 3. 因此这里优先用稳定 id，找不到时再兼容旧 cellId，最后按当前 Python Cell 的顺序兜底。
+const resolveSourcePythonBlock = (cell, markdown) => {
+  const blocks = parsePythonCellBlocks(markdown)
+  const stableId = String(cell?.meta?.id || '').trim()
+  if (stableId) {
+    const stableBlock = blocks.find((block) => String(block?.meta?.id || '').trim() === stableId)
+    if (stableBlock) {
+      return {
+        block: stableBlock,
+        blocks,
+        matchStrategy: 'meta-id',
       }
-    }
-    if (fenceStart >= 0) {
-      for (let i = fenceStart + 1; i < lines.length; i += 1) {
-        if (String(lines[i] || '').trim() === '```') {
-          fenceEnd = i
-          break
-        }
-      }
-    }
-    if (fenceStart >= 0 && fenceEnd >= 0) {
-      lines.splice(existingMarkerIndex, fenceEnd - existingMarkerIndex + 1, ...replacement)
-      return `${lines.join('\n')}\n`
     }
   }
 
-  const insertIndex = Math.max(0, Number(targetBlock.endLine || 1))
-  lines.splice(insertIndex, 0, '', ...replacement)
-  return `${lines.join('\n')}\n`
+  const cellId = String(cell?.cellId || '').trim()
+  if (cellId) {
+    const directBlock = blocks.find((block) => createPythonCellId(props.filePath, block) === cellId)
+    if (directBlock) {
+      return {
+        block: directBlock,
+        blocks,
+        matchStrategy: 'cell-id',
+      }
+    }
+  }
+
+  const orderIndex = getPythonCellOrderIndex(cell)
+  if (orderIndex >= 0 && blocks[orderIndex]) {
+    return {
+      block: blocks[orderIndex],
+      blocks,
+      matchStrategy: 'python-order',
+    }
+  }
+
+  return {
+    block: null,
+    blocks,
+    matchStrategy: 'missing',
+  }
+}
+
+const ensureSourcePythonBlockHasStableId = (markdown, cell, resolved) => {
+  const stableId = String(cell?.meta?.id || '').trim()
+  const targetBlock = resolved?.block || null
+  if (!stableId || !targetBlock) {
+    return {
+      markdown,
+      block: targetBlock,
+      blocks: resolved?.blocks || [],
+      persisted: false,
+    }
+  }
+
+  if (String(targetBlock?.meta?.id || '').trim() === stableId) {
+    return {
+      markdown,
+      block: targetBlock,
+      blocks: resolved?.blocks || [],
+      persisted: false,
+    }
+  }
+
+  const nextMarkdown = replacePythonCellBlock(
+    markdown,
+    targetBlock,
+    String(targetBlock.code || ''),
+    {
+      ...(targetBlock.meta || {}),
+      id: stableId,
+    },
+  )
+  const reparsed = resolveSourcePythonBlock(cell, nextMarkdown)
+  logger.info('[Notebook] persist stable python cell id into markdown', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    stableId,
+    previousMatchStrategy: String(resolved?.matchStrategy || 'unknown'),
+    nextMatchStrategy: String(reparsed?.matchStrategy || 'unknown'),
+  })
+  return {
+    markdown: nextMarkdown,
+    block: reparsed.block,
+    blocks: reparsed.blocks,
+    persisted: true,
+  }
+}
+
+const writeMarkdownOutputBlock = (markdown, block, cellId, markdownOutput) => {
+  const startMarker = `<!-- guaxi:pyout:${cellId}:start -->`
+  const endMarker = `<!-- guaxi:pyout:${cellId}:end -->`
+  const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n')
+  const blockEndIndex = Math.max(0, Number(block?.endLine || 1) - 1)
+  const existingStart = lines.findIndex((line) => String(line || '').trim() === startMarker)
+  const nextChunk = ['', startMarker, ...String(markdownOutput || '').replace(/\r\n?/g, '\n').split('\n'), endMarker]
+
+  if (existingStart >= 0) {
+    const existingEnd = lines.findIndex((line, index) => index > existingStart && String(line || '').trim() === endMarker)
+    if (existingEnd >= 0) {
+      lines.splice(existingStart, existingEnd - existingStart + 1, ...nextChunk)
+      return lines.join('\n')
+    }
+  }
+
+  lines.splice(blockEndIndex + 1, 0, ...nextChunk)
+  return lines.join('\n')
+}
+
+const buildNotebookAssetTarget = (cellId, extension) => {
+  const safeStem = getNotebookDocStem()
+  const safeCellId = sanitizeFileSegment(cellId, 'cell')
+  const safeExt = String(extension || 'bin').replace(/^\.+/, '') || 'bin'
+  const fileName = `${safeStem}-${safeCellId}-output.${safeExt}`
+  const absolutePath = getNotebookDocDir()
+    ? joinNotebookPath(getNotebookDocDir(), fileName)
+    : fileName
+  return {
+    absolutePath,
+    relativePath: encodeURI(getRelativeNotebookPath(absolutePath)),
+    fileName,
+  }
+}
+
+const serializeDisplayAssetForMarkdown = async (display, cellId) => {
+  const kind = normalizeDisplayType(display)
+  const sourcePath = getDisplaySourcePath(display)
+  const mime = String(display?.mime || '').trim()
+  const dataUrl = getDisplayDataUrl(display)
+
+  if (sourcePath && !dataUrl) {
+    return {
+      kind,
+      reference: encodeURI(getRelativeNotebookPath(sourcePath)),
+      assetPath: sourcePath,
+    }
+  }
+
+  if (!dataUrl) return null
+
+  const matched = dataUrl.match(/^data:([^;]+);base64,(.+)$/i)
+  if (!matched) {
+    return {
+      kind,
+      reference: dataUrl,
+      assetPath: '',
+    }
+  }
+
+  const assetMime = matched[1] || mime || 'application/octet-stream'
+  const assetBase64 = matched[2] || ''
+  const extension = guessExtensionFromMime(
+    assetMime,
+    kind === 'image' ? 'png' : kind === 'audio' ? 'mp3' : kind === 'video' ? 'mp4' : 'bin',
+  )
+  const target = buildNotebookAssetTarget(cellId, extension)
+  await writeFile(target.absolutePath, base64ToUint8Array(assetBase64))
+  logger.info('[Notebook] persisted display asset for markdown writeback', {
+    cellId,
+    kind,
+    assetPath: target.absolutePath,
+  })
+  return {
+    kind,
+    reference: target.relativePath,
+    assetPath: target.absolutePath,
+  }
+}
+
+const buildMarkdownOutputFromSnapshot = async (cell, snapshot) => {
+  if (snapshot?.dataframe) {
+    return dataframeToMarkdownTable(snapshot.dataframe)
+  }
+
+  const display = snapshot?.display
+  const displayType = normalizeDisplayType(display)
+  if (displayType === 'markdown' && display?.markdown) return String(display.markdown)
+  if (displayType === 'html' && display?.html) return String(display.html)
+  if (displayType === 'svg' && display?.svg) return String(display.svg)
+
+  if (['image', 'audio', 'video'].includes(displayType)) {
+    const asset = await serializeDisplayAssetForMarkdown(display, String(cell?.cellId || cell?.key || ''))
+    if (asset?.reference) {
+      if (displayType === 'image') {
+        return `![Python Cell 输出](${asset.reference})`
+      }
+      if (displayType === 'audio') {
+        return `<audio controls src="${escapeHtmlAttribute(asset.reference)}"></audio>`
+      }
+      if (displayType === 'video') {
+        return `<video controls src="${escapeHtmlAttribute(asset.reference)}"></video>`
+      }
+    }
+  }
+
+  const text = String(snapshot?.outputText || '').trim()
+  if (!text) return ''
+  return `\`\`\`text\n${text}\n\`\`\``
+}
+
+const buildExportPayloadFromSnapshot = async (cell, snapshot) => {
+  if (snapshot?.dataframe) {
+    const csvLines = [
+      (snapshot.dataframe.columns || []).join(','),
+      ...(snapshot.dataframe.rows || []).map((row) => (Array.isArray(row) ? row : []).map((value) => JSON.stringify(value ?? '')).join(',')),
+    ].join('\n')
+    return {
+      defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'csv').fileName,
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+      bytes: new TextEncoder().encode(csvLines),
+      summary: 'dataframe',
+    }
+  }
+
+  const display = snapshot?.display
+  const displayType = normalizeDisplayType(display)
+  if (displayType === 'markdown' && display?.markdown) {
+    return {
+      defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'md').fileName,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+      bytes: new TextEncoder().encode(String(display.markdown || '')),
+      summary: 'markdown',
+    }
+  }
+  if (displayType === 'html' && display?.html) {
+    return {
+      defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'html').fileName,
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+      bytes: new TextEncoder().encode(String(display.html || '')),
+      summary: 'html',
+    }
+  }
+  if (displayType === 'svg' && display?.svg) {
+    return {
+      defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'svg').fileName,
+      filters: [{ name: 'SVG', extensions: ['svg'] }],
+      bytes: new TextEncoder().encode(String(display.svg || '')),
+      summary: 'svg',
+    }
+  }
+  if (['image', 'audio', 'video'].includes(displayType)) {
+    const dataUrl = getDisplayDataUrl(display)
+    if (dataUrl) {
+      const matched = dataUrl.match(/^data:([^;]+);base64,(.+)$/i)
+      if (matched) {
+        const extension = guessExtensionFromMime(
+          matched[1] || display?.mime,
+          displayType === 'image' ? 'png' : displayType === 'audio' ? 'mp3' : 'mp4',
+        )
+        return {
+          defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), extension).fileName,
+          filters: [{ name: String(matched[1] || display?.mime || 'Binary'), extensions: [extension] }],
+          bytes: base64ToUint8Array(matched[2] || ''),
+          summary: displayType,
+        }
+      }
+    }
+
+    const sourcePath = getDisplaySourcePath(display)
+    if (sourcePath) {
+      return {
+        defaultName: sourcePath.split(/[\\/]/).pop() || buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'bin').fileName,
+        filters: undefined,
+        bytes: null,
+        summary: sourcePath,
+      }
+    }
+  }
+
+  const text = String(snapshot?.outputText || '').trim()
+  if (!text) return null
+  return {
+    defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'txt').fileName,
+    filters: [{ name: 'Text', extensions: ['txt'] }],
+    bytes: new TextEncoder().encode(text),
+    summary: 'text',
+  }
+}
+
+const writeCellOutputToMarkdown = async (cell) => {
+  const snapshot = getCellSnapshot(cell)
+  const markdownOutput = await buildMarkdownOutputFromSnapshot(cell, snapshot)
+  if (!markdownOutput) {
+    message.warning('当前输出暂时无法写回到 Markdown')
+    return
+  }
+
+  const initialMarkdown = normalizeNotebookMarkdownText(lastEmittedMarkdown.value || props.markdown)
+  const resolvedBlock = resolveSourcePythonBlock(cell, initialMarkdown)
+  const normalized = ensureSourcePythonBlockHasStableId(initialMarkdown, cell, resolvedBlock)
+  const currentMarkdown = normalized.markdown
+  const targetBlock = normalized.block
+  if (!targetBlock) {
+    logger.error('[Notebook] failed to resolve source python block for markdown writeback', {
+      key: String(cell?.key || ''),
+      cellId: String(cell?.cellId || ''),
+      stableId: String(cell?.meta?.id || ''),
+      matchStrategy: String(resolvedBlock?.matchStrategy || 'missing'),
+    })
+    message.error('没有找到对应的 Python Cell 源区块')
+    return
+  }
+
+  const nextMarkdown = writeMarkdownOutputBlock(currentMarkdown, targetBlock, String(cell.cellId), markdownOutput)
+  logger.info('[Notebook] write cell output back to markdown', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    stableId: String(cell?.meta?.id || ''),
+    matchStrategy: String(resolvedBlock?.matchStrategy || 'unknown'),
+    persistedStableId: !!normalized.persisted,
+    outputKind: normalizeDisplayType(snapshot?.display) || (snapshot?.dataframe ? 'dataframe' : 'text'),
+  })
+  emit('update:markdown', nextMarkdown)
+  lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
+  message.success('Python Cell 输出已写回到源 Markdown')
+}
+
+const exportCellOutputToFile = async (cell) => {
+  const snapshot = getCellSnapshot(cell)
+  const payload = await buildExportPayloadFromSnapshot(cell, snapshot)
+  if (!payload) {
+    message.warning('当前没有可导出的输出内容')
+    return
+  }
+
+  if (!payload.bytes) {
+    const outputPath = await save({
+      defaultPath: payload.defaultName,
+      filters: payload.filters,
+    })
+    if (!outputPath) return
+
+    const sourceBytes = await readFile(String(payload.summary || ''))
+    await writeFile(outputPath, sourceBytes)
+    logger.info('[Notebook] export existing output file to new path', {
+      cellId: String(cell?.cellId || ''),
+      sourcePath: payload.summary,
+      outputPath,
+    })
+    message.success('当前输出文件已另存为新文件')
+    return
+  }
+
+  const outputPath = await save({
+    defaultPath: payload.defaultName,
+    filters: payload.filters,
+  })
+  if (!outputPath) return
+
+  await writeFile(outputPath, payload.bytes)
+  logger.info('[Notebook] export cell output to file', {
+    cellId: String(cell?.cellId || ''),
+    outputPath,
+    summary: payload.summary,
+  })
+  message.success('当前输出已导出到文件')
+}
+
+const importTableToPythonSession = async (cell) => {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Tabular Data', extensions: ['csv', 'tsv', 'txt', 'xlsx', 'xls', 'json', 'parquet'] }],
+    })
+    if (!selected) return
+
+    logger.info('[Notebook] import table file selected', {
+      cellId: String(cell?.cellId || ''),
+      selected: String(selected),
+    })
+
+    const imported = await invoke('python_runtime_import_table_file', { request: { path: String(selected) } })
+    if (!imported?.ok) {
+      throw new Error(String(imported?.error || '导入失败'))
+    }
+
+    const fileName = String(selected).split(/[\\/]/).pop() || 'df'
+    const variableName = sanitizeFileSegment(fileName.replace(/\.[^.]+$/, ''), 'df').replace(/-/g, '_')
+    const code = [
+      'from pathlib import Path',
+      `__guaxi_table_path = ${JSON.stringify(String(selected))}`,
+      `__guaxi_var_name = ${JSON.stringify(variableName)}`,
+      '__guaxi_ext = Path(__guaxi_table_path).suffix.lower()',
+      'import pandas as pd',
+      "if __guaxi_ext in ('.csv', '.txt'):",
+      '    __guaxi_value = pd.read_csv(__guaxi_table_path)',
+      "elif __guaxi_ext == '.tsv':",
+      "    __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
+      "elif __guaxi_ext in ('.xlsx', '.xls'):",
+      '    __guaxi_value = pd.read_excel(__guaxi_table_path)',
+      "elif __guaxi_ext == '.json':",
+      '    __guaxi_value = pd.read_json(__guaxi_table_path)',
+      "elif __guaxi_ext == '.parquet':",
+      '    __guaxi_value = pd.read_parquet(__guaxi_table_path)',
+      'else:',
+      "    raise ValueError(f'Unsupported table format: {__guaxi_ext or __guaxi_table_path}')",
+      'globals()[__guaxi_var_name] = __guaxi_value',
+    ].join('\n')
+
+    const sessionId = createPythonSessionId(props.filePath)
+    const result = await invoke('python_exec', {
+      request: {
+        code,
+        persist: true,
+        expect_json: true,
+        vars: {
+          _guaxi_session: sessionId,
+          _doc_path: String(props.filePath || ''),
+          _py_cell_id: String(cell.cellId || ''),
+        },
+      },
+    })
+
+    const importedTable = imported?.table && typeof imported.table === 'object'
+      ? {
+        columns: Array.isArray(imported.table.columns) ? imported.table.columns : [],
+        rows: Array.isArray(imported.table.rows) ? imported.table.rows : [],
+        rowCount: Number(imported.table.row_count || 0),
+        truncated: !!imported.table.truncated,
+      }
+      : null
+
+    patchPythonCellSnapshot(props.filePath, cell.cellId, {
+      // 设计说明：
+      // 导入外部表格属于“向共享 Python 会话注入变量”的准备动作，
+      // 不应该把导入脚本本身伪装成当前 Cell 的一次运行结果。
+      outputText: `已导入表格到会话变量 ${variableName}`,
+      display: null,
+      dataframe: importedTable,
+      result,
+      sessionVars: Array.isArray(result?.session_vars) ? result.session_vars : [],
+      meta: {
+        ...(getCellSnapshot(cell).meta || {}),
+        outputCollapsed: !importedTable,
+      },
+    })
+    logger.info('[Notebook] import table injected into python session', {
+      cellId: String(cell?.cellId || ''),
+      stableId: String(cell?.meta?.id || ''),
+      variableName,
+      rowCount: Number(importedTable?.rowCount || 0),
+      hasPreview: !!importedTable,
+    })
+    bumpRefresh()
+    message.success(`表格已导入到会话变量 ${variableName}`)
+  } catch (error) {
+    logger.error('[Notebook] import table to python session failed', {
+      cellId: String(cell?.cellId || ''),
+      error: String(error?.message || error),
+    })
+    message.error(`导入表格失败：${String(error?.message || error)}`)
+  }
 }
 
 const runPythonCell = async (cell, { writeBack = false } = {}) => {
@@ -650,7 +1590,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     bumpRefresh()
 
     if (writeBack && !hideOutput) {
-      emit('update:markdown', upsertPythonOutputBlock(props.markdown, cell.cellId, outputText))
+      await writeCellOutputToMarkdown(cell)
     }
 
     if (res?.ok === false) {
@@ -682,6 +1622,18 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
 }
 
 watch(
+  [() => props.markdown, () => props.filePath],
+  ([nextMarkdown], oldPair = []) => {
+    const prevFilePath = Array.isArray(oldPair) ? oldPair[1] : ''
+    const filePathChanged = String(prevFilePath || '') !== String(props.filePath || '')
+    syncNotebookCellsFromMarkdown(nextMarkdown, 'props-markdown-or-file-watch', {
+      force: filePathChanged,
+    })
+  },
+  { immediate: true },
+)
+
+watch(
   notebookCells,
   (cells) => {
     const keys = new Set(cells.map((cell) => String(cell.key || '')))
@@ -689,8 +1641,12 @@ watch(
       editingMarkdownCellKey.value = ''
     }
     syncRenderedMarkdownHtml(cells, 'notebook-cells-watch')
+    syncResolvedDisplayUrls(cells, 'notebook-cells-watch')
     nextTick(() => {
       syncNotebookTextareaHeights('notebook-cells-changed')
+      if (notebookSearchVisible.value) {
+        applyNotebookSearchHighlights()
+      }
     })
   },
   { deep: true, immediate: true },
@@ -700,6 +1656,7 @@ watch(
   [() => props.theme, () => props.filePath, refreshTick],
   () => {
     syncRenderedMarkdownHtml(notebookCells.value, 'theme-file-refresh-watch')
+    syncResolvedDisplayUrls(notebookCells.value, 'theme-file-refresh-watch')
   },
 )
 
@@ -708,9 +1665,24 @@ watch(editingMarkdownCellKey, (nextKey) => {
   focusMarkdownEditor(nextKey, 'editing-markdown-cell-key')
 })
 
+watch(notebookSearchKeyword, () => {
+  nextTick(() => {
+    applyNotebookSearchHighlights()
+  })
+})
+
 defineExpose({
   insertCell(type = 'python') {
     appendCell(type)
+  },
+  openSearch() {
+    return openNotebookSearch()
+  },
+  closeSearch() {
+    closeNotebookSearch()
+  },
+  isSearchOpen() {
+    return notebookSearchVisible.value
   },
 })
 </script>
@@ -732,11 +1704,15 @@ defineExpose({
   --guaxi-notebook-danger: color-mix(in srgb, #ef4444 14%, var(--guaxi-panel-bg, #ffffff) 86%);
   --guaxi-notebook-focus-ring: rgba(59, 130, 246, 0.2);
   --guaxi-notebook-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
-  --guaxi-notebook-font: var(--guaxi-font-family, 'Microsoft YaHei UI', 'PingFang SC', sans-serif);
-  --guaxi-notebook-mono: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+  /* 设计说明：
+   * 1. 探索模式整体字体统一追随主编辑器，避免 Markdown/Python/变量面板各自使用不同字族。
+   * 2. `--editor-font-family` 定义在父级编辑器容器上，这里直接继承；若外层变量缺失，再回退到既有等宽字体。
+   */
+  --guaxi-notebook-font: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
+  --guaxi-notebook-mono: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New');
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
   min-height: 100%;
   padding: 18px;
   background: var(--guaxi-notebook-bg, #f6f8fc);
@@ -745,17 +1721,18 @@ defineExpose({
 }
 
 .guaxi-notebook.theme-dark {
-  --guaxi-notebook-panel: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 96%, white 4%);
-  --guaxi-notebook-panel-muted: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 90%, white 10%);
-  --guaxi-notebook-panel-soft: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 84%, white 16%);
-  --guaxi-notebook-border: color-mix(in srgb, var(--guaxi-border, rgba(100, 116, 139, 0.35)) 90%, transparent);
-  --guaxi-notebook-strong-border: color-mix(in srgb, var(--guaxi-border, rgba(100, 116, 139, 0.35)) 100%, rgba(255, 255, 255, 0.05));
-  --guaxi-notebook-muted: var(--guaxi-text-secondary, rgba(230, 236, 243, 0.72));
-  --guaxi-notebook-btn: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 82%, white 18%);
-  --guaxi-notebook-btn-hover: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 72%, white 28%);
-  --guaxi-notebook-primary: #60a5fa;
-  --guaxi-notebook-primary-hover: #3b82f6;
-  --guaxi-notebook-danger: color-mix(in srgb, #ef4444 20%, var(--guaxi-panel-bg, #21252b) 80%);
+  --guaxi-notebook-panel: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 97%, #0b1220 3%);
+  --guaxi-notebook-panel-muted: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 86%, #334155 14%);
+  --guaxi-notebook-panel-soft: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 74%, #334155 26%);
+  --guaxi-notebook-border: rgba(148, 163, 184, 0.28);
+  --guaxi-notebook-strong-border: rgba(148, 163, 184, 0.38);
+  --guaxi-notebook-text: #edf3fb;
+  --guaxi-notebook-muted: rgba(221, 230, 241, 0.82);
+  --guaxi-notebook-btn: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 68%, #475569 32%);
+  --guaxi-notebook-btn-hover: color-mix(in srgb, var(--guaxi-panel-bg, #21252b) 56%, #64748b 44%);
+  --guaxi-notebook-primary: #7cc2ff;
+  --guaxi-notebook-primary-hover: #4f9dff;
+  --guaxi-notebook-danger: color-mix(in srgb, #ef4444 28%, #334155 72%);
   --guaxi-notebook-focus-ring: rgba(96, 165, 250, 0.24);
   --guaxi-notebook-shadow: 0 14px 34px rgba(2, 6, 23, 0.24);
 }
@@ -771,110 +1748,211 @@ defineExpose({
 .guaxi-notebook__cell,
 .guaxi-notebook__panel {
   border: 1px solid var(--guaxi-notebook-strong-border);
-  border-radius: 18px;
+  border-radius: 14px;
   background: var(--guaxi-notebook-panel);
-  box-shadow: var(--guaxi-notebook-shadow);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
 }
 
 .guaxi-notebook__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 14px 16px;
+  padding: 10px 12px;
 }
 
-.guaxi-notebook__toolbar-copy {
-  display: grid;
-  gap: 4px;
+.guaxi-notebook__search-panel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.guaxi-notebook__toolbar-title {
+.guaxi-notebook__search-input {
+  width: 220px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  outline: none;
+  background: var(--guaxi-notebook-panel-soft);
+  color: var(--guaxi-notebook-text);
   font-family: var(--guaxi-notebook-font);
-  font-size: 15px;
-  line-height: 1.25;
-  font-weight: 700;
 }
 
-.guaxi-notebook__toolbar-subtitle {
-  color: var(--guaxi-notebook-muted);
+.guaxi-notebook__search-input:focus {
+  border-color: var(--guaxi-notebook-primary);
+}
+
+.guaxi-notebook__search-count {
+  min-width: 52px;
+  text-align: center;
   font-size: 12px;
+  color: var(--guaxi-notebook-muted);
+}
+
+.guaxi-notebook__search-btn,
+.guaxi-notebook__panel-btn {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  background: var(--guaxi-notebook-panel-soft);
+  color: var(--guaxi-notebook-text);
+  cursor: pointer;
   font-family: var(--guaxi-notebook-font);
 }
 
-.guaxi-notebook__toolbar-main,
-.guaxi-notebook__cell-actions,
-.guaxi-notebook__python-actions {
+.guaxi-notebook__search-btn:hover,
+.guaxi-notebook__panel-btn:hover {
+  background: var(--guaxi-notebook-btn-hover);
+}
+
+.guaxi-notebook__search-btn--danger {
+  color: #ef4444;
+}
+
+.guaxi-notebook__toolbar-main {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.guaxi-notebook__toolbar-main--solo {
+  width: 100%;
+  justify-content: flex-end;
 }
 
 .guaxi-notebook__cell {
   overflow: hidden;
 }
 
-.guaxi-notebook__cell-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--guaxi-notebook-border);
-  background: linear-gradient(180deg, var(--guaxi-notebook-panel-muted), var(--guaxi-notebook-panel));
+.guaxi-notebook__cell.is-markdown {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 
-.guaxi-notebook__cell-label {
+.guaxi-notebook__insert-strip {
+  position: relative;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
+  justify-content: center;
+  min-height: 20px;
+  margin: -4px 0;
 }
 
-.guaxi-notebook__cell-kind {
-  font-family: var(--guaxi-notebook-font);
-  font-size: 12px;
-  line-height: 1;
-  font-weight: 700;
-  color: var(--guaxi-notebook-primary);
-  background: color-mix(in srgb, var(--guaxi-notebook-primary) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-primary) 24%, transparent);
-  padding: 6px 10px;
+.guaxi-notebook__insert-line {
+  width: 100%;
+  height: 1px;
+  background: color-mix(in srgb, var(--guaxi-notebook-border) 82%, transparent);
+  opacity: 0.34;
+  transition: opacity 0.2s ease;
+}
+
+.guaxi-notebook__insert-trigger {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 72%, transparent);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 94%, var(--guaxi-notebook-bg) 6%);
+  color: var(--guaxi-notebook-muted);
+  opacity: 0.48;
+  transform: scale(0.96);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+  transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  pointer-events: none;
+}
+
+.guaxi-notebook__insert-actions {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 74%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 96%, var(--guaxi-notebook-bg) 4%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  opacity: 0;
+  transform: translateY(2px) scale(0.96);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+
+.guaxi-notebook__insert-strip:hover .guaxi-notebook__insert-line,
+.guaxi-notebook__insert-strip:focus-within .guaxi-notebook__insert-line {
+  opacity: 0.7;
+}
+
+.guaxi-notebook__insert-strip:hover .guaxi-notebook__insert-trigger,
+.guaxi-notebook__insert-strip:focus-within .guaxi-notebook__insert-trigger {
+  opacity: 0;
+  transform: scale(0.82);
+}
+
+.guaxi-notebook__insert-strip:hover .guaxi-notebook__insert-actions,
+.guaxi-notebook__insert-strip:focus-within .guaxi-notebook__insert-actions {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
 }
 
 .guaxi-notebook__cell-meta,
-.guaxi-notebook__status-line,
 .guaxi-notebook__empty,
 .guaxi-notebook__var-preview {
   color: var(--guaxi-notebook-muted);
   font-family: var(--guaxi-notebook-font);
 }
 
-.guaxi-notebook__markdown-layout {
+.guaxi-notebook__python-layout {
   display: grid;
-  gap: 12px;
-  padding: 14px 16px 16px;
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+
+.guaxi-notebook__markdown-surface {
+  position: relative;
+  padding: 0;
+}
+
+.guaxi-notebook__markdown-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 94%, transparent);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.guaxi-notebook__markdown-surface:hover .guaxi-notebook__markdown-actions,
+.guaxi-notebook__markdown-surface:focus-within .guaxi-notebook__markdown-actions,
+.guaxi-notebook__markdown-surface.is-editing .guaxi-notebook__markdown-actions {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .guaxi-notebook__markdown-edit-shell {
   display: grid;
-  gap: 10px;
-}
-
-.guaxi-notebook__markdown-edit-bar,
-.guaxi-notebook__markdown-preview-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.guaxi-notebook__markdown-edit-meta,
-.guaxi-notebook__markdown-preview-hint {
-  color: var(--guaxi-notebook-muted);
-  font-size: 12px;
+  gap: 8px;
 }
 
 .guaxi-notebook__markdown-editor,
@@ -896,6 +1974,8 @@ defineExpose({
 
 .guaxi-notebook__markdown-editor {
   font-family: var(--guaxi-notebook-font);
+  padding-top: 20px;
+  padding-right: 64px;
 }
 
 .guaxi-notebook__python-editor,
@@ -911,10 +1991,13 @@ defineExpose({
 }
 
 .guaxi-notebook__markdown-preview-shell {
-  border: 1px solid var(--guaxi-notebook-strong-border);
-  border-radius: 14px;
-  background: var(--guaxi-notebook-panel);
-  padding: 12px 14px 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 64px 6px 6px;
+  font-family: var(--guaxi-notebook-font);
+  font-size: 17px;
+  line-height: 1.5;
 }
 
 .guaxi-notebook__markdown-preview-shell.is-clickable {
@@ -925,23 +2008,14 @@ defineExpose({
   min-height: 0;
   padding: 0;
   overflow: visible;
-}
-
-.guaxi-notebook__python-actions,
-.guaxi-notebook__status-line {
-  padding: 12px 16px 0;
-}
-
-.guaxi-notebook__status-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
+  font-family: var(--guaxi-notebook-font);
+  font-size: 17px;
+  line-height: 1.5;
 }
 
 .guaxi-notebook__cell-btn,
-.guaxi-notebook__toolbar-btn {
+.guaxi-notebook__toolbar-btn,
+.guaxi-notebook__icon-btn {
   border: 1px solid var(--guaxi-notebook-strong-border);
   border-radius: 10px;
   background: var(--guaxi-notebook-btn);
@@ -953,52 +2027,165 @@ defineExpose({
 }
 
 .guaxi-notebook__cell-btn:hover,
-.guaxi-notebook__toolbar-btn:hover {
+.guaxi-notebook__toolbar-btn:hover,
+.guaxi-notebook__icon-btn:hover {
   background: var(--guaxi-notebook-btn-hover);
   transform: translateY(-1px);
 }
 
 .guaxi-notebook__cell-btn.primary,
-.guaxi-notebook__toolbar-btn.primary {
+.guaxi-notebook__toolbar-btn.primary,
+.guaxi-notebook__icon-btn.primary {
   color: #ffffff;
   border-color: transparent;
   background: linear-gradient(135deg, var(--guaxi-notebook-primary), var(--guaxi-notebook-primary-hover));
 }
 
 .guaxi-notebook__cell-btn.ghost,
-.guaxi-notebook__toolbar-btn.ghost {
+.guaxi-notebook__toolbar-btn.ghost,
+.guaxi-notebook__icon-btn.ghost {
   background: transparent;
 }
 
-.guaxi-notebook__cell-btn.danger {
+.guaxi-notebook__cell-btn.danger,
+.guaxi-notebook__icon-btn.danger {
   background: var(--guaxi-notebook-danger);
 }
 
+.guaxi-notebook__icon-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+}
+
+.guaxi-notebook__icon-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.guaxi-notebook__python-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 34px;
+  padding: 4px 2px 2px;
+}
+
+.guaxi-notebook__python-toolbar-copy {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guaxi-notebook__python-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 82%, var(--guaxi-notebook-panel) 18%);
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  color: var(--guaxi-notebook-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.guaxi-notebook__python-title {
+  min-width: 0;
+  color: var(--guaxi-notebook-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.guaxi-notebook__python-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.guaxi-notebook__python-toolbar .guaxi-notebook__icon-btn,
+.guaxi-notebook__markdown-actions .guaxi-notebook__icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.guaxi-notebook__python-toolbar .guaxi-notebook__icon-btn:not(.primary) {
+  background: color-mix(in srgb, var(--guaxi-notebook-btn) 82%, transparent);
+}
+
 .guaxi-notebook__panel {
-  margin: 0 16px 16px;
-  padding: 14px 16px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+}
+
+.guaxi-notebook__insert-actions .guaxi-notebook__icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+}
+
+.guaxi-notebook__panel-content {
+  display: grid;
+  gap: 10px;
+}
+
+.guaxi-notebook__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 
 .guaxi-notebook__panel-title {
-  margin-bottom: 10px;
   font-weight: 700;
   font-family: var(--guaxi-notebook-font);
+  font-size: 12px;
+  color: var(--guaxi-notebook-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.guaxi-notebook__markdown-preview-bar .guaxi-notebook__panel-title {
-  margin-bottom: 0;
+.guaxi-notebook__panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .guaxi-notebook__output-text,
 .guaxi-notebook__rich,
 .guaxi-notebook__dataframe {
   margin: 0;
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid var(--guaxi-notebook-strong-border);
   background: var(--guaxi-notebook-panel-soft);
   padding: 12px 14px;
   overflow-x: auto;
   overflow-y: visible;
+}
+
+.guaxi-notebook__rich {
+  font-size: 17px;
+  line-height: 1.5;
 }
 
 .guaxi-notebook__output-text {
@@ -1017,10 +2204,30 @@ defineExpose({
   text-align: left;
 }
 
+.guaxi-notebook__dataframe th {
+  color: var(--guaxi-notebook-text);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 72%, var(--guaxi-notebook-panel) 28%);
+}
+
 .guaxi-notebook__image {
   display: block;
   max-width: 100%;
   border-radius: 12px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  background: var(--guaxi-notebook-panel-soft);
+}
+
+.guaxi-notebook__media {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  background: var(--guaxi-notebook-panel-soft);
+}
+
+.guaxi-notebook__media--video {
+  max-height: 520px;
 }
 
 .guaxi-notebook__empty--dashed {
@@ -1040,7 +2247,7 @@ defineExpose({
 
 .guaxi-notebook__var {
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--guaxi-notebook-panel-soft);
   border: 1px solid var(--guaxi-notebook-strong-border);
 }
@@ -1063,9 +2270,68 @@ defineExpose({
   font-family: var(--guaxi-notebook-font);
 }
 
+.guaxi-notebook.theme-dark .guaxi-notebook__cell-btn,
+.guaxi-notebook.theme-dark .guaxi-notebook__toolbar-btn,
+.guaxi-notebook.theme-dark .guaxi-notebook__icon-btn {
+  color: #edf3fb;
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__cell-btn.primary,
+.guaxi-notebook.theme-dark .guaxi-notebook__toolbar-btn.primary,
+.guaxi-notebook.theme-dark .guaxi-notebook__icon-btn.primary {
+  color: #08111f;
+  font-weight: 700;
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__rich,
+.guaxi-notebook.theme-dark .guaxi-notebook__output-text,
+.guaxi-notebook.theme-dark .guaxi-notebook__dataframe,
+.guaxi-notebook.theme-dark .guaxi-notebook__var,
+.guaxi-notebook.theme-dark .guaxi-notebook__python-editor {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 88%, #0f172a 12%);
+}
+
 .guaxi-notebook__markdown-preview :deep(.md-paragraph),
 .guaxi-notebook__rich :deep(.md-paragraph) {
   color: var(--guaxi-notebook-text);
+}
+
+.guaxi-notebook__markdown-preview :deep(*),
+.guaxi-notebook__rich.markdown-body :deep(*) {
+  font-family: var(--guaxi-notebook-font);
+}
+
+.guaxi-notebook__markdown-preview :deep(a),
+.guaxi-notebook__markdown-preview :deep(a:visited),
+.guaxi-notebook__rich.markdown-body :deep(a),
+.guaxi-notebook__rich.markdown-body :deep(a:visited) {
+  color: var(--guaxi-text-link, var(--primary-color, #0969da));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(a),
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(a:visited),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(a),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(a:visited) {
+  color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.guaxi-notebook__search-hit {
+  background: rgba(255, 208, 0, 0.38);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.guaxi-notebook__search-hit--active {
+  background: rgba(255, 145, 0, 0.65);
+}
+
+.guaxi-notebook__markdown-preview :deep(code),
+.guaxi-notebook__markdown-preview :deep(pre),
+.guaxi-notebook__rich :deep(code),
+.guaxi-notebook__rich :deep(pre) {
+  font-family: var(--guaxi-notebook-mono);
 }
 
 .guaxi-notebook__markdown-preview :deep(pre),
@@ -1091,10 +2357,13 @@ defineExpose({
 
 @media (max-width: 1100px) {
   .guaxi-notebook__toolbar,
-  .guaxi-notebook__cell-header,
-  .guaxi-notebook__status-line {
+  .guaxi-notebook__python-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .guaxi-notebook__insert-actions {
+    padding: 0 6px;
   }
 }
 </style>

@@ -9918,10 +9918,17 @@ const handleKeyDown = (e) => {
 
   if (isFindShortcut) {
     const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value && previewMode.value !== 'realtime'
+    const explorerNotebook = editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value
     if (previewOnly) {
       e.preventDefault()
       e.stopPropagation()
       openPreviewSearch()
+      return
+    }
+    if (explorerNotebook) {
+      e.preventDefault()
+      e.stopPropagation()
+      notebookViewRef.value?.openSearch?.()
       return
     }
   }
@@ -9930,6 +9937,13 @@ const handleKeyDown = (e) => {
     e.preventDefault()
     e.stopPropagation()
     closePreviewSearch()
+    return
+  }
+
+  if (e.key === 'Escape' && notebookViewRef.value?.isSearchOpen?.()) {
+    e.preventDefault()
+    e.stopPropagation()
+    notebookViewRef.value?.closeSearch?.()
     return
   }
 
