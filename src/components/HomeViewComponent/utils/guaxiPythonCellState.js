@@ -44,3 +44,29 @@ export const deletePythonCellSnapshot = (filePath, cellId) => {
     fileStateStore.delete(fileKey)
   }
 }
+
+export const listPythonCellSnapshots = (filePath) => {
+  const state = fileStateStore.get(normalizeFileKey(filePath))
+  if (!state) return {}
+  const output = {}
+  state.forEach((value, key) => {
+    if (!key || !value || typeof value !== 'object') return
+    output[key] = { ...value }
+  })
+  return output
+}
+
+export const replacePythonCellSnapshots = (filePath, snapshots = {}) => {
+  const fileKey = normalizeFileKey(filePath)
+  const nextMap = new Map()
+  Object.entries(snapshots && typeof snapshots === 'object' ? snapshots : {}).forEach(([cellId, value]) => {
+    const key = normalizeCellKey(cellId)
+    if (!key || !value || typeof value !== 'object') return
+    nextMap.set(key, { ...value })
+  })
+  if (nextMap.size) {
+    fileStateStore.set(fileKey, nextMap)
+    return
+  }
+  fileStateStore.delete(fileKey)
+}

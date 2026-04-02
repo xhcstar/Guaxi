@@ -120,7 +120,24 @@ pub fn write_file_bytes_base64(path: String, base64: String) -> Result<(), Strin
     let bytes = general_purpose::STANDARD
         .decode(base64.as_bytes())
         .map_err(|e| e.to_string())?;
+    // 设计说明：
+    // 1. 前端会把二进制内容直接写到资源库中的分层日期目录，这些父目录不一定已经存在。
+    // 2. 这里统一在后端兜底创建父目录，避免不同前端调用方各自重复处理并遗漏。
+    // 3. 同时补充日志，便于排查资源写回、导出文件等链路中的路径问题。
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            info!(
+                parent = %parent.display(),
+                "[fileprocess] ensured parent directory for binary write"
+            );
+        }
+    }
     fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    info!(
+        path = %path.display(),
+        "[fileprocess] wrote binary file from base64 payload"
+    );
     Ok(())
 }
 

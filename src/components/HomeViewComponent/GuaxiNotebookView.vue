@@ -356,7 +356,11 @@ import {
   normalizeNotebookCells,
   serializeNotebookCells,
 } from './utils/guaxiNotebookCells'
-import { getPythonCellSnapshot, patchPythonCellSnapshot } from './utils/guaxiPythonCellState'
+import {
+  getPythonCellSnapshot,
+  patchPythonCellSnapshot,
+  replacePythonCellSnapshots,
+} from './utils/guaxiPythonCellState'
 
 const props = defineProps({
   markdown: {
@@ -394,6 +398,12 @@ const notebookSearchKeyword = ref('')
 const notebookSearchMatches = ref([])
 const notebookSearchActiveIndex = ref(-1)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
+const imageBedRootCache = ref('')
+const notebookSidecarLoadVersion = ref(0)
+const notebookMarkdownRenderCache = new Map()
+const notebookDisplayUrlCache = new Map()
+let notebookSidecarPersistTimer = 0
+let notebookMarkdownEmitTimer = 0
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
 
@@ -415,6 +425,52 @@ const base64ToUint8Array = (b64) => {
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index)
   }
+  return bytes
+}
+
+const uint8ArrayToBase64 = (bytes) => {
+  const buffer = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || [])
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < buffer.length; offset += chunkSize) {
+    const chunk = buffer.subarray(offset, Math.min(buffer.length, offset + chunkSize))
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
+}
+
+// 设计说明：
+// 1. Notebook 写回输出时需要把二进制资源交给后端统一落盘，避免前端 capability scope 限制。
+// 2. 这里保留一个通用二进制写入助手，供“导出文件”和“资源库入库”两条链路复用。
+const writeBytesToPath = async (path, bytes, reason = 'unknown') => {
+  const normalizedPath = String(path || '').trim()
+  if (!normalizedPath) {
+    throw new Error('缺少目标文件路径')
+  }
+  const base64 = uint8ArrayToBase64(bytes)
+  await invoke('write_file_bytes_base64', {
+    path: normalizedPath,
+    base64,
+  })
+  logger.info('[Notebook] wrote binary file via backend command', {
+    path: normalizedPath,
+    byteLength: Number(bytes?.byteLength || bytes?.length || 0),
+    reason,
+  })
+}
+
+const readBytesFromPath = async (path, reason = 'unknown') => {
+  const normalizedPath = String(path || '').trim()
+  if (!normalizedPath) {
+    throw new Error('缺少源文件路径')
+  }
+  const base64 = await invoke('read_file_bytes_base64', { path: normalizedPath })
+  const bytes = base64ToUint8Array(base64)
+  logger.info('[Notebook] read binary file via backend command', {
+    path: normalizedPath,
+    byteLength: Number(bytes?.byteLength || bytes?.length || 0),
+    reason,
+  })
   return bytes
 }
 const sanitizeFileSegment = (raw, fallback = 'output') => {
@@ -451,6 +507,208 @@ const getRelativeNotebookPath = (targetPath) => {
   }
   return normalizedTarget
 }
+const getNotebookSidecarPath = () => {
+  const filePath = String(props.filePath || '').trim()
+  if (!filePath) return ''
+  return `${filePath}.cellmeta`
+}
+const stripNotebookOutputBlocks = (markdown = '') => {
+  const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n')
+  const kept = []
+  let insideOutput = false
+  for (const line of lines) {
+    const text = String(line || '').trim()
+    if (/^<!--\s+guaxi:pyout:.*:start\s+-->$/i.test(text)) {
+      insideOutput = true
+      continue
+    }
+    if (insideOutput && /^<!--\s+guaxi:pyout:.*:end\s+-->$/i.test(text)) {
+      insideOutput = false
+      continue
+    }
+    if (!insideOutput) {
+      kept.push(line)
+    }
+  }
+  return kept.join('\n')
+}
+const computeNotebookDigest = (text = '') => {
+  const normalized = String(text || '')
+  let hash = 2166136261
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `nb-${(hash >>> 0).toString(16)}-${normalized.length}`
+}
+const normalizeNotebookSourceForSidecar = (markdown = '') => {
+  return stripNotebookOutputBlocks(normalizeNotebookMarkdownText(markdown))
+}
+const getNotebookCellStableId = (cell) => String(cell?.meta?.id || '').trim()
+const getNotebookCellContentDigest = (cell) => {
+  if (cell?.type === 'python') {
+    return computeNotebookDigest(String(cell?.code || ''))
+  }
+  return computeNotebookDigest(String(cell?.content || ''))
+}
+const buildNotebookCellRelation = (cells = [], index = 0) => {
+  const current = cells[index] || null
+  const previous = index > 0 ? cells[index - 1] : null
+  const next = index + 1 < cells.length ? cells[index + 1] : null
+  return {
+    index,
+    currentDigest: current ? getNotebookCellContentDigest(current) : '',
+    previousType: String(previous?.type || ''),
+    previousStableId: previous?.type === 'python' ? getNotebookCellStableId(previous) : '',
+    previousDigest: previous ? getNotebookCellContentDigest(previous) : '',
+    nextType: String(next?.type || ''),
+    nextStableId: next?.type === 'python' ? getNotebookCellStableId(next) : '',
+    nextDigest: next ? getNotebookCellContentDigest(next) : '',
+  }
+}
+const serializeNotebookCellsForSidecar = (cells = []) => {
+  const normalizedCells = normalizeNotebookCells(cells)
+  return normalizedCells.map((cell, index) => {
+    const relation = buildNotebookCellRelation(normalizedCells, index)
+    if (cell?.type === 'python') {
+      return {
+        type: 'python',
+        key: String(cell.key || ''),
+        code: String(cell.code || ''),
+        meta: {
+          ...(cell.meta || {}),
+        },
+        relation,
+      }
+    }
+    return {
+      type: 'markdown',
+      key: String(cell?.key || ''),
+      content: String(cell?.content || ''),
+      relation,
+    }
+  })
+}
+const serializeNotebookSnapshotsForSidecar = (cells = []) => {
+  const snapshots = {}
+  normalizeNotebookCells(cells).forEach((cell) => {
+    if (cell?.type !== 'python') return
+    const cellId = String(cell?.cellId || '')
+    const stableId = getNotebookCellStableId(cell)
+    const snapshotKey = stableId || cellId
+    if (!snapshotKey) return
+    const snapshot = getCellSnapshot(cell)
+    snapshots[snapshotKey] = {
+      stableId,
+      cellId,
+      codeDigest: getNotebookCellContentDigest(cell),
+      outputText: String(snapshot?.outputText || ''),
+      display: snapshot?.display || null,
+      dataframe: snapshot?.dataframe || null,
+      sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+      meta: snapshot?.meta || {},
+    }
+  })
+  return snapshots
+}
+const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
+  const nextSnapshots = {}
+  let restoredCount = 0
+  normalizeNotebookCells(cells).forEach((cell) => {
+    if (cell?.type !== 'python') return
+    const cellId = String(cell?.cellId || '')
+    const stableId = getNotebookCellStableId(cell)
+    if (!cellId && !stableId) return
+    const persisted = snapshots && typeof snapshots === 'object'
+      ? snapshots[stableId] || snapshots[cellId] || null
+      : null
+    if (!persisted || typeof persisted !== 'object') return
+    nextSnapshots[cellId] = {
+      outputText: String(persisted.outputText || ''),
+      display: persisted.display || null,
+      dataframe: persisted.dataframe || null,
+      sessionVars: Array.isArray(persisted.sessionVars) ? persisted.sessionVars : [],
+      meta: persisted.meta && typeof persisted.meta === 'object' ? persisted.meta : {},
+    }
+    restoredCount += 1
+  })
+  replacePythonCellSnapshots(props.filePath, nextSnapshots)
+  logger.info('[Notebook] applied sidecar python snapshots', {
+    cellCount: normalizeNotebookCells(cells).filter((cell) => cell?.type === 'python').length,
+    restoredCount,
+    snapshotCount: Object.keys(snapshots && typeof snapshots === 'object' ? snapshots : {}).length,
+  })
+}
+
+// 设计说明：
+// 1. sidecar 不再直接替代当前 Markdown 扫描结果，而是作为“探索模式状态层”叠加回最新扫描结果。
+// 2. 这样即使用户在源 Markdown 中新增/删除/重排内容，我们也能先重建当前 cell 结构，再把已知状态映射回来。
+// 3. Python Cell 优先通过稳定 meta.id 对齐；若外部编辑导致稳定 id 丢失，再退化到代码摘要匹配。
+// 4. Markdown Cell 始终以源文件最新内容为准，避免旧 sidecar 覆盖正文变更。
+const reconcileNotebookCellsWithSidecar = (markdownCells = [], sidecar = null) => {
+  const normalizedMarkdownCells = normalizeNotebookCells(markdownCells)
+  const sidecarCells = Array.isArray(sidecar?.cells) ? normalizeNotebookCells(sidecar.cells) : []
+  if (!sidecarCells.length) return normalizedMarkdownCells
+
+  const sidecarPythonByStableId = new Map()
+  const sidecarPythonByCodeDigest = new Map()
+  sidecarCells.forEach((cell) => {
+    if (cell?.type !== 'python') return
+    const stableId = getNotebookCellStableId(cell)
+    const codeDigest = getNotebookCellContentDigest(cell)
+    if (stableId) {
+      sidecarPythonByStableId.set(stableId, cell)
+    }
+    if (codeDigest) {
+      const bucket = sidecarPythonByCodeDigest.get(codeDigest) || []
+      bucket.push(cell)
+      sidecarPythonByCodeDigest.set(codeDigest, bucket)
+    }
+  })
+
+  let stableIdMatchedCount = 0
+  let codeDigestMatchedCount = 0
+  const reconciledCells = normalizedMarkdownCells.map((cell) => {
+    if (cell?.type !== 'python') {
+      return cell
+    }
+    const stableId = getNotebookCellStableId(cell)
+    let persistedCell = stableId ? sidecarPythonByStableId.get(stableId) : null
+    let matchStrategy = persistedCell ? 'stable-id' : 'none'
+    if (!persistedCell) {
+      const codeDigest = getNotebookCellContentDigest(cell)
+      const digestCandidates = codeDigest ? sidecarPythonByCodeDigest.get(codeDigest) || [] : []
+      if (digestCandidates.length === 1) {
+        persistedCell = digestCandidates[0]
+        matchStrategy = 'code-digest'
+      }
+    }
+    if (!persistedCell) {
+      return cell
+    }
+    if (matchStrategy === 'stable-id') {
+      stableIdMatchedCount += 1
+    } else if (matchStrategy === 'code-digest') {
+      codeDigestMatchedCount += 1
+    }
+    return createNotebookPythonCell({
+      ...cell,
+      code: String(cell.code || ''),
+      meta: {
+        ...(persistedCell.meta || {}),
+        ...(cell.meta || {}),
+        id: getNotebookCellStableId(persistedCell) || stableId,
+      },
+    })
+  })
+  logger.info('[Notebook] reconciled notebook cells with sidecar', {
+    markdownCellCount: normalizedMarkdownCells.filter((cell) => cell?.type === 'markdown').length,
+    pythonCellCount: normalizedMarkdownCells.filter((cell) => cell?.type === 'python').length,
+    stableIdMatchedCount,
+    codeDigestMatchedCount,
+  })
+  return reconciledCells
+}
 const guessExtensionFromMime = (mime, fallback = 'bin') => {
   const normalized = String(mime || '').trim().toLowerCase()
   if (normalized.includes('markdown')) return 'md'
@@ -468,6 +726,86 @@ const guessExtensionFromMime = (mime, fallback = 'bin') => {
   if (normalized.includes('mp4')) return 'mp4'
   if (normalized.includes('webm')) return 'webm'
   return fallback
+}
+
+const getImageBedRoot = async () => {
+  if (String(imageBedRootCache.value || '').trim()) {
+    return String(imageBedRootCache.value || '').trim()
+  }
+  const root = String(await invoke('get_image_bed_root') || '').trim()
+  imageBedRootCache.value = root
+  return root
+}
+
+const buildResourceRepoTarget = (cellId, extension) => {
+  const now = new Date()
+  const year = String(now.getFullYear())
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  const stamp = [
+    year,
+    month,
+    day,
+    '_',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+    '_',
+    String(now.getMilliseconds()).padStart(3, '0'),
+  ].join('')
+  const safeStem = getNotebookDocStem()
+  const safeCellId = sanitizeFileSegment(cellId, 'cell')
+  const safeExt = String(extension || 'bin').replace(/^\.+/, '') || 'bin'
+  const fileName = `${safeStem}-${safeCellId}-${stamp}.${safeExt}`
+  const relativePath = joinNotebookPath('images', year, month, day, fileName)
+  return {
+    fileName,
+    relativePath,
+  }
+}
+
+const registerResourceFile = async ({
+  bytes,
+  resourceType,
+  extension,
+  ownerFilePath,
+  cellId,
+  source,
+}) => {
+  const root = await getImageBedRoot()
+  if (!root) {
+    throw new Error('资源库根目录不可用')
+  }
+  const target = buildResourceRepoTarget(cellId, extension)
+  const absolutePath = joinNotebookPath(root, target.relativePath)
+  await writeBytesToPath(absolutePath, bytes, 'resource-repo-register')
+  await invoke('add_resource', {
+    resource: {
+      resource_type: String(resourceType || 'file'),
+      file_name: target.fileName,
+      relative_path: target.relativePath,
+      absolute_path: absolutePath,
+      owner_file_path: String(ownerFilePath || ''),
+      created_at: '',
+      extra: JSON.stringify({
+        source: source || 'python-cell-output',
+        cell_id: String(cellId || ''),
+      }),
+    },
+  })
+  const url = `http://localhost:8888/markdown/api/bed/${encodeURIComponent(target.relativePath)}`
+  logger.info('[Notebook] registered resource file for markdown writeback', {
+    cellId: String(cellId || ''),
+    resourceType: String(resourceType || 'file'),
+    absolutePath,
+    relativePath: target.relativePath,
+    url,
+  })
+  return {
+    url,
+    relativePath: target.relativePath,
+    absolutePath,
+  }
 }
 const normalizeDisplayType = (display) => {
   const explicitType = String(display?.type || '').trim().toLowerCase()
@@ -518,10 +856,108 @@ const decorateNotebookCells = (cells = []) => {
   })
 }
 
+const buildNotebookSidecarPayload = (cells = [], markdown = '') => {
+  const normalizedCells = decorateNotebookCells(cells)
+  const sourceCore = normalizeNotebookSourceForSidecar(markdown)
+  return {
+    version: 2,
+    filePath: String(props.filePath || ''),
+    updatedAt: new Date().toISOString(),
+    sourceDigest: computeNotebookDigest(sourceCore),
+    cells: serializeNotebookCellsForSidecar(normalizedCells),
+    pythonSnapshots: serializeNotebookSnapshotsForSidecar(normalizedCells),
+  }
+}
+
+const persistNotebookSidecar = async (reason = 'unknown') => {
+  const sidecarPath = getNotebookSidecarPath()
+  if (!sidecarPath) return
+  const payload = buildNotebookSidecarPayload(
+    notebookCells.value,
+    lastEmittedMarkdown.value || props.markdown,
+  )
+  await invoke('write_file_content', {
+    path: sidecarPath,
+    content: JSON.stringify(payload, null, 2),
+  })
+  logger.info('[Notebook] persisted sidecar file', {
+    reason,
+    sidecarPath,
+    cellCount: Array.isArray(payload.cells) ? payload.cells.length : 0,
+    snapshotCount: Object.keys(payload.pythonSnapshots || {}).length,
+  })
+}
+
+const schedulePersistNotebookSidecar = (reason = 'unknown', delay = 220) => {
+  if (notebookSidecarPersistTimer) {
+    window.clearTimeout(notebookSidecarPersistTimer)
+  }
+  notebookSidecarPersistTimer = window.setTimeout(() => {
+    notebookSidecarPersistTimer = 0
+    persistNotebookSidecar(reason).catch((error) => {
+      logger.warn('[Notebook] persist sidecar failed', {
+        reason,
+        sidecarPath: getNotebookSidecarPath(),
+        error: String(error?.message || error),
+      })
+    })
+  }, delay)
+}
+
+const loadNotebookSidecar = async (markdown, reason = 'unknown') => {
+  const sidecarPath = getNotebookSidecarPath()
+  if (!sidecarPath) return null
+  try {
+    const raw = await invoke('read_file_content', { path: sidecarPath })
+    const parsed = JSON.parse(String(raw || '{}'))
+    const cells = Array.isArray(parsed?.cells) ? parsed.cells : []
+    const sourceDigest = String(parsed?.sourceDigest || '').trim()
+    const currentDigest = computeNotebookDigest(normalizeNotebookSourceForSidecar(markdown))
+    if (!cells.length) {
+      logger.info('[Notebook] ignore empty sidecar payload', {
+        reason,
+        sidecarPath,
+      })
+      return null
+    }
+    const digestMatch = !!sourceDigest && sourceDigest === currentDigest
+    logger.info('[Notebook] loaded sidecar file', {
+      reason,
+      sidecarPath,
+      cellCount: cells.length,
+      digestMatch,
+      sourceDigest,
+      currentDigest,
+      snapshotCount: Object.keys(parsed?.pythonSnapshots || {}).length,
+    })
+    return {
+      ...parsed,
+      digestMatch,
+      currentDigest,
+    }
+  } catch (error) {
+    const messageText = String(error?.message || error || '')
+    if (/not found|系统找不到指定的文件|cannot find the file/i.test(messageText)) {
+      logger.debug('[Notebook] sidecar file does not exist yet', {
+        reason,
+        sidecarPath,
+      })
+      return null
+    }
+    logger.warn('[Notebook] failed to load sidecar file', {
+      reason,
+      sidecarPath,
+      error: messageText,
+    })
+    return null
+  }
+}
+
 // 设计说明：
 // 1. 探索模式需要允许“空 cell”暂时存在，等待用户填写，因此不能在每次 props.markdown 更新时都重新解析覆盖本地 cell 状态。
 // 2. 这里把 notebookCells 作为本地状态维护，只在外部文档真正发生变化时再重新同步，既保留空 cell，也能明显减少重复切分带来的卡顿。
-const syncNotebookCellsFromMarkdown = (markdown, reason = 'external-sync', { force = false } = {}) => {
+const syncNotebookCellsFromMarkdown = async (markdown, reason = 'external-sync', { force = false } = {}) => {
+  flushPendingNotebookMarkdown(`before-sync:${reason}`)
   const normalizedMarkdown = normalizeNotebookMarkdownText(markdown)
   if (!force && normalizedMarkdown === lastEmittedMarkdown.value) {
     logger.debug('[Notebook] skip notebook cells sync', {
@@ -531,18 +967,36 @@ const syncNotebookCellsFromMarkdown = (markdown, reason = 'external-sync', { for
     return
   }
 
-  const nextCells = decorateNotebookCells(createNotebookCellsFromMarkdown(normalizedMarkdown, {
+  const loadVersion = notebookSidecarLoadVersion.value + 1
+  notebookSidecarLoadVersion.value = loadVersion
+  const sidecar = await loadNotebookSidecar(normalizedMarkdown, reason)
+  if (loadVersion !== notebookSidecarLoadVersion.value) {
+    logger.debug('[Notebook] skip stale sidecar hydration result', {
+      reason,
+      loadVersion,
+      latestVersion: notebookSidecarLoadVersion.value,
+    })
+    return
+  }
+  const scannedCells = createNotebookCellsFromMarkdown(normalizedMarkdown, {
     filePath: props.filePath,
-  }))
+  })
+  const nextCells = decorateNotebookCells(reconcileNotebookCellsWithSidecar(scannedCells, sidecar))
 
   notebookCells.value = nextCells
+  applyNotebookSidecarSnapshots(nextCells, sidecar?.pythonSnapshots || {})
   lastEmittedMarkdown.value = normalizedMarkdown
 
   logger.info('[Notebook] sync notebook cells from markdown', {
     reason,
     markdownLength: normalizedMarkdown.length,
     cellCount: nextCells.length,
+    restoredFromSidecar: !!sidecar?.cells?.length,
+    sidecarDigestMatch: !!sidecar?.digestMatch,
   })
+  if (sidecar && !sidecar.digestMatch) {
+    schedulePersistNotebookSidecar('rescan-source-markdown', 40)
+  }
 }
 
 const getNotebookBasePath = () => {
@@ -763,7 +1217,39 @@ const exitMarkdownEditMode = (key, reason = 'manual-exit') => {
   })
 }
 
-const emitCells = (cells, focusKey = '') => {
+// 设计说明：
+// 1. 直接在每次按键时序列化整个 notebook 并回推父组件，会把探索模式拖得很卡。
+// 2. 这里把“本地 cell 状态更新”和“整篇 Markdown 回写”拆开：输入时先只更新本地，再稍后批量 flush。
+// 3. 插入、删除、运行写回这类结构性操作仍保持立即同步，避免用户感知到延迟。
+const flushNotebookMarkdown = (reason = 'unknown') => {
+  const nextMarkdown = serializeNotebookCells(notebookCells.value)
+  lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
+  emit('update:markdown', nextMarkdown)
+  logger.info('[Notebook] flush notebook markdown', {
+    reason,
+    markdownLength: nextMarkdown.length,
+    cellCount: notebookCells.value.length,
+  })
+}
+
+const scheduleFlushNotebookMarkdown = (reason = 'unknown', delay = 140) => {
+  if (notebookMarkdownEmitTimer) {
+    window.clearTimeout(notebookMarkdownEmitTimer)
+  }
+  notebookMarkdownEmitTimer = window.setTimeout(() => {
+    notebookMarkdownEmitTimer = 0
+    flushNotebookMarkdown(reason)
+  }, delay)
+}
+
+const flushPendingNotebookMarkdown = (reason = 'unknown') => {
+  if (!notebookMarkdownEmitTimer) return
+  window.clearTimeout(notebookMarkdownEmitTimer)
+  notebookMarkdownEmitTimer = 0
+  flushNotebookMarkdown(reason)
+}
+
+const emitCells = (cells, focusKey = '', { deferMarkdownSync = false } = {}) => {
   pendingFocusCellKey.value = String(focusKey || '')
   const normalizedCells = decorateNotebookCells(cells)
   notebookCells.value = normalizedCells
@@ -772,10 +1258,14 @@ const emitCells = (cells, focusKey = '') => {
     cellCount: normalizedCells.length,
     markdownCellCount: normalizedCells.filter((cell) => cell.type === 'markdown').length,
     pythonCellCount: normalizedCells.filter((cell) => cell.type === 'python').length,
+    deferMarkdownSync,
   })
-  const nextMarkdown = serializeNotebookCells(normalizedCells)
-  lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
-  emit('update:markdown', nextMarkdown)
+  if (deferMarkdownSync) {
+    scheduleFlushNotebookMarkdown('deferred-cell-edit')
+  } else {
+    flushNotebookMarkdown('emit-cells')
+  }
+  schedulePersistNotebookSidecar('emit-cells')
   nextTick(() => {
     if (!pendingFocusCellKey.value) return
     const target = document.querySelector(`[data-cell-key="${CSS.escape(pendingFocusCellKey.value)}"]`)
@@ -794,6 +1284,8 @@ const updateMarkdownCell = (key, event) => {
       if (cell.type !== 'markdown' || String(cell.key) !== String(key)) return cell
       return createNotebookMarkdownCell(value, { key: cell.key })
     }),
+    '',
+    { deferMarkdownSync: true },
   )
 }
 
@@ -808,6 +1300,8 @@ const updatePythonCell = (key, event) => {
         code: value,
       })
     }),
+    '',
+    { deferMarkdownSync: true },
   )
 }
 
@@ -898,6 +1392,19 @@ const getCellDisplayKind = (cell) => normalizeDisplayType(getCellSnapshot(cell).
 
 const getCellDisplayUrl = (cell) => String(resolvedDisplayUrlMap.value[String(cell?.key || '')] || '')
 
+const buildDisplayCacheKey = (display) => {
+  const kind = normalizeDisplayType(display)
+  const source = getDisplaySourcePath(display)
+  const dataUrl = getDisplayDataUrl(display)
+  const mime = String(display?.mime || '')
+  return [
+    kind,
+    mime,
+    source,
+    dataUrl ? computeNotebookDigest(dataUrl) : '',
+  ].join('|')
+}
+
 const resolveDisplayUrl = async (display) => {
   const dataUrl = getDisplayDataUrl(display)
   if (dataUrl) return dataUrl
@@ -919,16 +1426,36 @@ const resolveDisplayUrl = async (display) => {
 }
 
 const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
+  const previousMap = resolvedDisplayUrlMap.value || {}
   const nextMap = {}
   const tasks = []
+  let cacheHitCount = 0
+  let resolvedCount = 0
 
   for (const cell of Array.isArray(cells) ? cells : []) {
     if (cell?.type !== 'python') continue
     const display = getCellSnapshot(cell).display
     const kind = normalizeDisplayType(display)
     if (!['image', 'audio', 'video'].includes(kind)) continue
+    const cacheKey = buildDisplayCacheKey(display)
+    if (cacheKey && notebookDisplayUrlCache.has(cacheKey)) {
+      nextMap[String(cell.key || '')] = notebookDisplayUrlCache.get(cacheKey)
+      cacheHitCount += 1
+      continue
+    }
+    if (cacheKey && previousMap[String(cell.key || '')]) {
+      nextMap[String(cell.key || '')] = previousMap[String(cell.key || '')]
+      notebookDisplayUrlCache.set(cacheKey, previousMap[String(cell.key || '')])
+      cacheHitCount += 1
+      continue
+    }
     tasks.push((async () => {
-      nextMap[String(cell.key || '')] = await resolveDisplayUrl(display)
+      const resolvedUrl = await resolveDisplayUrl(display)
+      nextMap[String(cell.key || '')] = resolvedUrl
+      if (cacheKey) {
+        notebookDisplayUrlCache.set(cacheKey, resolvedUrl)
+      }
+      resolvedCount += 1
     })())
   }
 
@@ -937,6 +1464,8 @@ const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
   logger.info('[Notebook] sync display urls', {
     reason,
     mediaCount: Object.keys(nextMap).length,
+    cacheHitCount,
+    resolvedCount,
   })
 }
 
@@ -952,8 +1481,14 @@ const hasVisibleOutput = (cell) => {
 const renderMarkdownHtml = async (content, reason = 'unknown') => {
   const markdownText = String(content || '')
   if (!markdownText.trim()) return ''
+  const cacheKey = computeNotebookDigest(markdownText)
+  if (notebookMarkdownRenderCache.has(cacheKey)) {
+    return notebookMarkdownRenderCache.get(cacheKey)
+  }
   try {
-    return await renderMarkdown(markdownText, buildMarkdownRenderOptions())
+    const html = await renderMarkdown(markdownText, buildMarkdownRenderOptions())
+    notebookMarkdownRenderCache.set(cacheKey, html)
+    return html
   } catch (error) {
     logger.error('[Notebook] render markdown html failed', {
       reason,
@@ -976,17 +1511,32 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     cellCount: Array.isArray(cells) ? cells.length : 0,
   })
 
+  const previousMarkdownMap = renderedMarkdownHtmlMap.value || {}
+  const previousOutputMap = renderedOutputMarkdownHtmlMap.value || {}
   const nextMarkdownMap = {}
   const nextOutputMap = {}
   const renderTasks = []
+  let markdownCacheHitCount = 0
+  let outputCacheHitCount = 0
+  let markdownRenderCount = 0
+  let outputRenderCount = 0
 
   for (const cell of Array.isArray(cells) ? cells : []) {
     if (cell?.type === 'markdown') {
+      const cellKey = String(cell.key || '')
+      const markdownText = String(cell.content || '')
+      const cacheKey = computeNotebookDigest(markdownText)
+      if (previousMarkdownMap[cellKey] && notebookMarkdownRenderCache.has(cacheKey)) {
+        nextMarkdownMap[cellKey] = previousMarkdownMap[cellKey]
+        markdownCacheHitCount += 1
+        continue
+      }
       renderTasks.push((async () => {
-        nextMarkdownMap[String(cell.key || '')] = await renderMarkdownHtml(
-          cell.content,
-          `markdown-cell:${String(cell.key || '')}`,
+        nextMarkdownMap[cellKey] = await renderMarkdownHtml(
+          markdownText,
+          `markdown-cell:${cellKey}`,
         )
+        markdownRenderCount += 1
       })())
       continue
     }
@@ -997,12 +1547,20 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
         ? String(snapshot.display.markdown || '')
         : ''
       if (!outputMarkdown.trim()) continue
+      const cellKey = String(cell.key || '')
+      const cacheKey = computeNotebookDigest(outputMarkdown)
+      if (previousOutputMap[cellKey] && notebookMarkdownRenderCache.has(cacheKey)) {
+        nextOutputMap[cellKey] = previousOutputMap[cellKey]
+        outputCacheHitCount += 1
+        continue
+      }
 
       renderTasks.push((async () => {
-        nextOutputMap[String(cell.key || '')] = await renderMarkdownHtml(
+        nextOutputMap[cellKey] = await renderMarkdownHtml(
           outputMarkdown,
-          `python-output:${String(cell.key || '')}`,
+          `python-output:${cellKey}`,
         )
+        outputRenderCount += 1
       })())
     }
   }
@@ -1026,6 +1584,10 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     renderVersion,
     markdownCellCount: Object.keys(nextMarkdownMap).length,
     outputMarkdownCount: Object.keys(nextOutputMap).length,
+    markdownCacheHitCount,
+    outputCacheHitCount,
+    markdownRenderCount,
+    outputRenderCount,
   })
 }
 
@@ -1042,6 +1604,7 @@ const patchCellMeta = (cell, patch) => {
     },
   })
   bumpRefresh()
+  schedulePersistNotebookSidecar('patch-cell-meta')
 }
 
 const toggleCellOutput = (cell) => {
@@ -1210,43 +1773,43 @@ const serializeDisplayAssetForMarkdown = async (display, cellId) => {
   const sourcePath = getDisplaySourcePath(display)
   const mime = String(display?.mime || '').trim()
   const dataUrl = getDisplayDataUrl(display)
+  let bytes = null
+  let assetMime = mime || 'application/octet-stream'
 
-  if (sourcePath && !dataUrl) {
-    return {
-      kind,
-      reference: encodeURI(getRelativeNotebookPath(sourcePath)),
-      assetPath: sourcePath,
+  if (dataUrl) {
+    const matched = dataUrl.match(/^data:([^;]+);base64,(.+)$/i)
+    if (!matched) {
+      return {
+        kind,
+        reference: dataUrl,
+        assetPath: '',
+      }
     }
+    assetMime = matched[1] || assetMime
+    bytes = base64ToUint8Array(matched[2] || '')
+  } else if (sourcePath) {
+    bytes = await readBytesFromPath(sourcePath, 'markdown-writeback-source-asset')
+  } else {
+    return null
   }
 
-  if (!dataUrl) return null
-
-  const matched = dataUrl.match(/^data:([^;]+);base64,(.+)$/i)
-  if (!matched) {
-    return {
-      kind,
-      reference: dataUrl,
-      assetPath: '',
-    }
-  }
-
-  const assetMime = matched[1] || mime || 'application/octet-stream'
-  const assetBase64 = matched[2] || ''
   const extension = guessExtensionFromMime(
     assetMime,
     kind === 'image' ? 'png' : kind === 'audio' ? 'mp3' : kind === 'video' ? 'mp4' : 'bin',
   )
-  const target = buildNotebookAssetTarget(cellId, extension)
-  await writeFile(target.absolutePath, base64ToUint8Array(assetBase64))
-  logger.info('[Notebook] persisted display asset for markdown writeback', {
+  const resourceType = kind || 'file'
+  const stored = await registerResourceFile({
+    bytes,
+    resourceType,
+    extension,
+    ownerFilePath: props.filePath,
     cellId,
-    kind,
-    assetPath: target.absolutePath,
+    source: 'python-cell-output',
   })
   return {
     kind,
-    reference: target.relativePath,
-    assetPath: target.absolutePath,
+    reference: stored.url,
+    assetPath: stored.absolutePath,
   }
 }
 
@@ -1361,6 +1924,7 @@ const buildExportPayloadFromSnapshot = async (cell, snapshot) => {
 }
 
 const writeCellOutputToMarkdown = async (cell) => {
+  flushPendingNotebookMarkdown('before-writeback')
   const snapshot = getCellSnapshot(cell)
   const markdownOutput = await buildMarkdownOutputFromSnapshot(cell, snapshot)
   if (!markdownOutput) {
@@ -1395,6 +1959,7 @@ const writeCellOutputToMarkdown = async (cell) => {
   })
   emit('update:markdown', nextMarkdown)
   lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
+  schedulePersistNotebookSidecar('write-cell-output-to-markdown')
   message.success('Python Cell 输出已写回到源 Markdown')
 }
 
@@ -1414,7 +1979,7 @@ const exportCellOutputToFile = async (cell) => {
     if (!outputPath) return
 
     const sourceBytes = await readFile(String(payload.summary || ''))
-    await writeFile(outputPath, sourceBytes)
+    await writeBytesToPath(outputPath, sourceBytes, 'export-existing-file')
     logger.info('[Notebook] export existing output file to new path', {
       cellId: String(cell?.cellId || ''),
       sourcePath: payload.summary,
@@ -1430,7 +1995,7 @@ const exportCellOutputToFile = async (cell) => {
   })
   if (!outputPath) return
 
-  await writeFile(outputPath, payload.bytes)
+  await writeBytesToPath(outputPath, payload.bytes, 'export-payload')
   logger.info('[Notebook] export cell output to file', {
     cellId: String(cell?.cellId || ''),
     outputPath,
@@ -1525,6 +2090,7 @@ const importTableToPythonSession = async (cell) => {
       hasPreview: !!importedTable,
     })
     bumpRefresh()
+    schedulePersistNotebookSidecar('import-table-to-python-session')
     message.success(`表格已导入到会话变量 ${variableName}`)
   } catch (error) {
     logger.error('[Notebook] import table to python session failed', {
@@ -1536,6 +2102,7 @@ const importTableToPythonSession = async (cell) => {
 }
 
 const runPythonCell = async (cell, { writeBack = false } = {}) => {
+  flushPendingNotebookMarkdown('before-run-python-cell')
   if (!cell?.code) {
     message.warning('Python 代码为空')
     return
@@ -1588,6 +2155,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       },
     })
     bumpRefresh()
+    schedulePersistNotebookSidecar('run-python-cell-success')
 
     if (writeBack && !hideOutput) {
       await writeCellOutputToMarkdown(cell)
@@ -1612,6 +2180,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       },
     })
     bumpRefresh()
+    schedulePersistNotebookSidecar('run-python-cell-failed')
     message.error(`运行失败：${String(error?.message || error)}`)
   } finally {
     busyMap.value = {
