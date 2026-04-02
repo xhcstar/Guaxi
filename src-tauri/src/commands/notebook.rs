@@ -1,5 +1,13 @@
+use std::{collections::HashMap, num::NonZeroUsize};
+
+use lru::LruCache;
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+static NOTEBOOK_SEARCH_INDEX_CACHE: Lazy<Mutex<LruCache<String, NotebookSearchIndex>>> =
+    Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(24).expect("non zero cache size"))));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotebookCell {
@@ -22,6 +30,40 @@ pub struct NotebookSyncResult {
     pub restored_from_sidecar: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotebookSearchDocument {
+    pub cell_key: String,
+    pub cell_type: String,
+    pub digest: String,
+    #[serde(default)]
+    pub search_text: String,
+    #[serde(default)]
+    pub summary_text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NotebookSearchIndexUpdateResult {
+    pub indexed_file: String,
+    pub document_count: usize,
+    pub changed_count: usize,
+    pub reused_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NotebookSearchMatch {
+    pub cell_key: String,
+    pub cell_type: String,
+    pub match_count: usize,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NotebookSearchResponse {
+    pub query: String,
+    pub total_matches: usize,
+    pub results: Vec<NotebookSearchMatch>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct NotebookSidecarPayload {
     #[serde(default)]
@@ -37,6 +79,22 @@ struct PyBlock {
     end_line: usize,
     code: String,
     meta: Map<String, Value>,
+}
+
+#[derive(Debug, Clone)]
+struct NotebookSearchIndexedDocument {
+    cell_key: String,
+    cell_type: String,
+    digest: String,
+    search_text: String,
+    search_text_lower: String,
+    summary_text: String,
+}
+
+#[derive(Debug, Clone)]
+struct NotebookSearchIndex {
+    documents: HashMap<String, NotebookSearchIndexedDocument>,
+    order: Vec<String>,
 }
 
 fn normalize_markdown_text(markdown: &str) -> String {
@@ -447,6 +505,190 @@ fn reconcile_cells_with_sidecar(scanned_cells: Vec<NotebookCell>, sidecar: Optio
             }
         })
         .collect()
+}
+
+fn build_search_index(documents: &[NotebookSearchDocument]) -> (NotebookSearchIndex, usize, usize) {
+    let mut changed_count = 0usize;
+    let mut reused_count = 0usize;
+    let mut existing_cache = HashMap::new();
+
+    let cache = NOTEBOOK_SEARCH_INDEX_CACHE.lock();
+    for index in cache.iter() {
+        for (cell_key, entry) in &index.1.documents {
+            existing_cache.insert(cell_key.clone(), entry.clone());
+        }
+    }
+    drop(cache);
+
+    let mut indexed_documents = HashMap::new();
+    let mut order = Vec::with_capacity(documents.len());
+
+    for document in documents {
+        let prev = existing_cache.get(&document.cell_key);
+        let search_text = document.search_text.clone();
+        let summary_text = if document.summary_text.trim().is_empty() {
+            search_text.clone()
+        } else {
+            document.summary_text.clone()
+        };
+        let entry = if let Some(previous) = prev {
+            if previous.digest == document.digest {
+                reused_count += 1;
+                previous.clone()
+            } else {
+                changed_count += 1;
+                NotebookSearchIndexedDocument {
+                    cell_key: document.cell_key.clone(),
+                    cell_type: document.cell_type.clone(),
+                    digest: document.digest.clone(),
+                    search_text_lower: search_text.to_lowercase(),
+                    search_text,
+                    summary_text,
+                }
+            }
+        } else {
+            changed_count += 1;
+            NotebookSearchIndexedDocument {
+                cell_key: document.cell_key.clone(),
+                cell_type: document.cell_type.clone(),
+                digest: document.digest.clone(),
+                search_text_lower: search_text.to_lowercase(),
+                search_text,
+                summary_text,
+            }
+        };
+
+        order.push(document.cell_key.clone());
+        indexed_documents.insert(document.cell_key.clone(), entry);
+    }
+
+    (
+        NotebookSearchIndex {
+            documents: indexed_documents,
+            order,
+        },
+        changed_count,
+        reused_count,
+    )
+}
+
+fn build_match_snippet(text: &str, query: &str) -> String {
+    if text.trim().is_empty() {
+        return String::new();
+    }
+    let lower_text = text.to_lowercase();
+    let lower_query = query.to_lowercase();
+    if lower_query.trim().is_empty() {
+        return text.chars().take(120).collect();
+    }
+    if let Some(byte_index) = lower_text.find(&lower_query) {
+        let char_index = text[..byte_index].chars().count();
+        let total_chars = text.chars().count();
+        let start = char_index.saturating_sub(28);
+        let end = (char_index + lower_query.chars().count() + 52).min(total_chars);
+        let snippet: String = text
+            .chars()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .collect();
+        let prefix = if start > 0 { "..." } else { "" };
+        let suffix = if end < total_chars { "..." } else { "" };
+        return format!("{}{}{}", prefix, snippet, suffix);
+    }
+    text.chars().take(120).collect()
+}
+
+#[tauri::command]
+pub fn notebook_update_search_index(
+    file_path: String,
+    documents: Vec<NotebookSearchDocument>,
+) -> Result<NotebookSearchIndexUpdateResult, String> {
+    let normalized_file = file_path.trim().to_string();
+    if normalized_file.is_empty() {
+        return Err("file_path is required".to_string());
+    }
+
+    let (index, changed_count, reused_count) = build_search_index(&documents);
+    let document_count = index.documents.len();
+
+    let mut cache = NOTEBOOK_SEARCH_INDEX_CACHE.lock();
+    cache.put(normalized_file.clone(), index);
+
+    Ok(NotebookSearchIndexUpdateResult {
+        indexed_file: normalized_file,
+        document_count,
+        changed_count,
+        reused_count,
+    })
+}
+
+#[tauri::command]
+pub fn notebook_search(file_path: String, query: String, limit: Option<usize>) -> Result<NotebookSearchResponse, String> {
+    let normalized_file = file_path.trim().to_string();
+    if normalized_file.is_empty() {
+        return Err("file_path is required".to_string());
+    }
+
+    let normalized_query = query.trim().to_string();
+    if normalized_query.is_empty() {
+        return Ok(NotebookSearchResponse {
+            query: normalized_query,
+            total_matches: 0,
+            results: Vec::new(),
+        });
+    }
+
+    let max_results = limit.unwrap_or(200).max(1);
+    let lower_query = normalized_query.to_lowercase();
+    let cache = NOTEBOOK_SEARCH_INDEX_CACHE.lock();
+    let Some(index) = cache.peek(&normalized_file) else {
+        return Ok(NotebookSearchResponse {
+            query: normalized_query,
+            total_matches: 0,
+            results: Vec::new(),
+        });
+    };
+
+    let mut results = Vec::new();
+    let mut total_matches = 0usize;
+
+    for cell_key in &index.order {
+      let Some(document) = index.documents.get(cell_key) else {
+          continue;
+      };
+      let count = document.search_text_lower.matches(&lower_query).count();
+      if count == 0 {
+          continue;
+      }
+      total_matches += count;
+      let snippet_source = if document.summary_text.trim().is_empty() {
+          &document.search_text
+      } else {
+          &document.summary_text
+      };
+      results.push(NotebookSearchMatch {
+          cell_key: document.cell_key.clone(),
+          cell_type: document.cell_type.clone(),
+          match_count: count,
+          snippet: build_match_snippet(snippet_source, &normalized_query),
+      });
+    }
+
+    results.sort_by(|left, right| {
+        right
+            .match_count
+            .cmp(&left.match_count)
+            .then_with(|| left.cell_key.cmp(&right.cell_key))
+    });
+    if results.len() > max_results {
+        results.truncate(max_results);
+    }
+
+    Ok(NotebookSearchResponse {
+        query: normalized_query,
+        total_matches,
+        results,
+    })
 }
 
 #[tauri::command]

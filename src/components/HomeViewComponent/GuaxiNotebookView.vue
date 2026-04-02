@@ -104,7 +104,17 @@
         </div>
       </div>
 
-      <div class="guaxi-notebook__cell" :class="`is-${cell.type}`">
+      <div
+        class="guaxi-notebook__cell"
+        :class="[
+          `is-${cell.type}`,
+          {
+            'is-search-match': isNotebookSearchMatchedCell(cell),
+            'is-search-active': isNotebookSearchActiveCell(cell),
+          },
+        ]"
+        :data-cell-key="cell.key"
+      >
       <template v-if="cell.type === 'markdown'">
         <div
           class="guaxi-notebook__markdown-surface"
@@ -350,12 +360,13 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useMessage } from 'naive-ui'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
 import { readFile, writeFile } from '@tauri-apps/plugin-fs'
+import mermaid from 'mermaid'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
 import playIcon from '@iconify-icons/lucide/play'
@@ -429,6 +440,9 @@ const notebookSearchVisible = ref(false)
 const notebookSearchKeyword = ref('')
 const notebookSearchMatches = ref([])
 const notebookSearchActiveIndex = ref(-1)
+const notebookSearchIndexReady = ref(false)
+const notebookMarkdownWorkerRef = ref(null)
+const notebookMarkdownWorkerReady = ref(false)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
 const imageBedRootCache = ref('')
 const notebookSidecarLoadVersion = ref(0)
@@ -437,8 +451,13 @@ const notebookHistoryIndex = ref(-1)
 const notebookHistoryApplying = ref(false)
 const notebookMarkdownRenderCache = new Map()
 const notebookDisplayUrlCache = new Map()
+const notebookMarkdownWorkerPendingTasks = new Map()
 let notebookSidecarPersistTimer = 0
 let notebookMarkdownEmitTimer = 0
+let notebookSearchIndexSyncTimer = 0
+let notebookSearchQueryTimer = 0
+let notebookMarkdownWorkerTaskId = 0
+let notebookMermaidRenderCounter = 0
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
 
@@ -1101,12 +1120,196 @@ const buildMarkdownRenderOptions = () => ({
   basePath: getNotebookBasePath(),
 })
 
+// 设计说明：
+// 1. Worker 负责 markdown-it、代码高亮和目录/任务列表这类纯字符串计算，先把最耗时的一段移出 UI 线程。
+// 2. Mermaid SVG 和数学公式节点整理还依赖 DOM，因此保留在主线程做轻量收尾。
+// 3. 如果 Worker 初始化或运行失败，会自动回退到原先的主线程渲染，避免探索模式不可用。
+const initNotebookMarkdownWorker = () => {
+  if (notebookMarkdownWorkerRef.value) return notebookMarkdownWorkerRef.value
+  try {
+    const worker = new Worker(new URL('../../workers/notebookMarkdownRenderWorker.js', import.meta.url), {
+      type: 'module',
+    })
+    worker.onmessage = (event) => {
+      const payload = event?.data || {}
+      const taskId = Number(payload?.id || 0)
+      const task = notebookMarkdownWorkerPendingTasks.get(taskId)
+      if (!task) return
+      notebookMarkdownWorkerPendingTasks.delete(taskId)
+      if (payload?.ok) {
+        task.resolve(String(payload?.html || ''))
+        return
+      }
+      task.reject(new Error(String(payload?.error || 'Notebook markdown worker failed')))
+    }
+    worker.onerror = (error) => {
+      notebookMarkdownWorkerReady.value = false
+      logger.error('[Notebook] markdown worker runtime error', {
+        error: String(error?.message || error),
+      })
+    }
+    notebookMarkdownWorkerRef.value = worker
+    notebookMarkdownWorkerReady.value = true
+    logger.info('[Notebook] markdown worker initialized')
+    return worker
+  } catch (error) {
+    notebookMarkdownWorkerReady.value = false
+    logger.warn('[Notebook] failed to initialize markdown worker, fallback to main thread', {
+      error: String(error?.message || error),
+    })
+    return null
+  }
+}
+
+const disposeNotebookMarkdownWorker = (reason = 'dispose') => {
+  if (notebookMarkdownWorkerRef.value) {
+    notebookMarkdownWorkerRef.value.terminate()
+  }
+  notebookMarkdownWorkerRef.value = null
+  notebookMarkdownWorkerReady.value = false
+  if (notebookMarkdownWorkerPendingTasks.size) {
+    for (const [, task] of notebookMarkdownWorkerPendingTasks) {
+      task.reject(new Error(`Notebook markdown worker disposed: ${reason}`))
+    }
+    notebookMarkdownWorkerPendingTasks.clear()
+  }
+  logger.info('[Notebook] markdown worker disposed', {
+    reason,
+  })
+}
+
+const renderMarkdownHtmlWithWorker = (content, reason = 'unknown') => {
+  const markdownText = String(content || '')
+  if (!markdownText.trim()) return Promise.resolve('')
+  const worker = notebookMarkdownWorkerRef.value || initNotebookMarkdownWorker()
+  if (!worker) {
+    return Promise.reject(new Error('Notebook markdown worker unavailable'))
+  }
+  const taskId = ++notebookMarkdownWorkerTaskId
+  return new Promise((resolve, reject) => {
+    notebookMarkdownWorkerPendingTasks.set(taskId, { resolve, reject })
+    worker.postMessage({
+      id: taskId,
+      content: markdownText,
+      options: buildMarkdownRenderOptions(),
+      reason,
+    })
+  })
+}
+
+const finalizeNotebookRenderedMath = (container) => {
+  container
+    .querySelectorAll('.math-inline-container, .math-block-container')
+    .forEach((element) => {
+      const mathNode = element.querySelector('mjx-container')
+      if (!(mathNode instanceof HTMLElement)) return
+      mathNode.setAttribute('data-md-original', element.getAttribute('data-md-original') || '')
+      mathNode.classList.add(
+        element.classList.contains('math-inline-container')
+          ? 'math-inline'
+          : 'math-block',
+      )
+      element.replaceWith(mathNode)
+    })
+}
+
+const finalizeNotebookRenderedMermaid = async (container, options = {}, reason = 'unknown') => {
+  if (!options?.mermaid) return
+  const fromDom =
+    !!document?.documentElement?.classList?.contains?.('dark') ||
+    !!document?.documentElement?.classList?.contains?.('dark-mode')
+  const isDark = String(options?.theme || '').trim().toLowerCase() === 'dark' || fromDom
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: isDark ? 'dark' : 'default',
+    securityLevel: 'loose',
+  })
+
+  const mermaidElements = Array.from(container.querySelectorAll('.mermaid'))
+  for (const element of mermaidElements) {
+    try {
+      const source = String(element.textContent || '')
+        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<')
+        .replace(/&amp;/g, '&')
+      if (!source.trim()) continue
+
+      const renderId = `guaxi-notebook-mermaid-${Date.now()}-${notebookMermaidRenderCounter++}`
+      const rendered = await Promise.resolve(mermaid.render(renderId, source))
+      const svg = typeof rendered === 'string' ? rendered : String(rendered?.svg || '')
+      if (!svg.trim()) continue
+
+      const wrapper = document.createElement('div')
+      wrapper.className = 'mermaid'
+      wrapper.setAttribute('data-processed', 'true')
+      wrapper.setAttribute('data-mermaid-source', source)
+      const originalSource = element.getAttribute('data-md-original')
+      if (originalSource) {
+        wrapper.setAttribute('data-md-original', originalSource)
+      }
+      wrapper.innerHTML = svg
+      element.replaceWith(wrapper)
+
+      if (typeof rendered?.bindFunctions === 'function') {
+        try {
+          rendered.bindFunctions(wrapper)
+        } catch (bindError) {
+          logger.debug('[Notebook] mermaid bindFunctions failed', {
+            reason,
+            error: String(bindError?.message || bindError),
+          })
+        }
+      }
+    } catch (error) {
+      logger.error('[Notebook] finalize mermaid failed', {
+        reason,
+        error: String(error?.message || error),
+      })
+    }
+  }
+}
+
+const finalizeNotebookRenderedHtml = async (html, reason = 'unknown') => {
+  const rawHtml = String(html || '')
+  if (!rawHtml.trim()) return ''
+  const container = document.createElement('div')
+  container.innerHTML = rawHtml
+  const options = buildMarkdownRenderOptions()
+  await finalizeNotebookRenderedMermaid(container, options, reason)
+  if (options.math) {
+    finalizeNotebookRenderedMath(container)
+  }
+  return container.innerHTML
+}
+
 const notebookSearchMatchCountText = computed(() => {
   const total = Array.isArray(notebookSearchMatches.value) ? notebookSearchMatches.value.length : 0
   if (!total) return '0 / 0'
   const index = Math.max(0, Number(notebookSearchActiveIndex.value || 0))
   return `${Math.min(index + 1, total)} / ${total}`
 })
+
+const notebookSearchMatchKeySet = computed(() => {
+  return new Set(
+    (Array.isArray(notebookSearchMatches.value) ? notebookSearchMatches.value : [])
+      .map((item) => String(item?.cell_key || ''))
+      .filter(Boolean),
+  )
+})
+
+const activeNotebookSearchMatch = computed(() => {
+  return Array.isArray(notebookSearchMatches.value)
+    ? notebookSearchMatches.value[Number(notebookSearchActiveIndex.value || 0)] || null
+    : null
+})
+
+const isNotebookSearchMatchedCell = (cell) => {
+  return notebookSearchMatchKeySet.value.has(String(cell?.key || ''))
+}
+
+const isNotebookSearchActiveCell = (cell) => {
+  return String(activeNotebookSearchMatch.value?.cell_key || '') === String(cell?.key || '')
+}
 
 
 const resizeTextareaToContent = (target) => {
@@ -1126,21 +1329,167 @@ const syncNotebookTextareaHeights = (reason = 'unknown') => {
 }
 
 const clearNotebookSearchHighlights = () => {
-  const root = notebookRootRef.value
-  if (!root) {
-    notebookSearchMatches.value = []
-    notebookSearchActiveIndex.value = -1
-    return
-  }
-  const marks = root.querySelectorAll('span.guaxi-notebook__search-hit')
-  marks.forEach((mark) => {
-    const parent = mark.parentNode
-    if (!parent) return
-    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
-    parent.normalize?.()
-  })
   notebookSearchMatches.value = []
   notebookSearchActiveIndex.value = -1
+}
+
+const getNotebookSearchIndexKey = () => {
+  const filePath = String(props.filePath || '').trim()
+  return filePath || '__guaxi_notebook_memory__'
+}
+
+const stripHtmlTags = (html = '') => {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const buildNotebookSearchDocuments = (cells = []) => {
+  return (Array.isArray(cells) ? cells : []).map((cell) => {
+    if (cell?.type === 'python') {
+      const snapshot = getCellSnapshot(cell)
+      const dataframeMarkdown = snapshot?.dataframe ? dataframeToMarkdownTable(snapshot.dataframe) : ''
+      const displayMarkdown = snapshot?.display?.type === 'markdown'
+        ? String(snapshot.display.markdown || '')
+        : snapshot?.display?.type === 'html'
+          ? stripHtmlTags(String(snapshot.display.html || ''))
+          : snapshot?.display?.type === 'svg'
+            ? stripHtmlTags(String(snapshot.display.svg || ''))
+            : ''
+      const sessionText = Array.isArray(snapshot?.sessionVars)
+        ? snapshot.sessionVars
+          .map((item) => `${item?.name || ''} ${item?.value_type || item?.type || ''} ${item?.preview || ''}`.trim())
+          .join('\n')
+        : ''
+      const parts = [
+        String(cell?.meta?.title || ''),
+        String(cell?.code || ''),
+        String(snapshot?.outputText || ''),
+        dataframeMarkdown,
+        displayMarkdown,
+        sessionText,
+      ].filter(Boolean)
+      const searchText = parts.join('\n\n')
+      return {
+        cell_key: String(cell?.key || ''),
+        cell_type: 'python',
+        digest: computeNotebookDigest(searchText),
+        search_text: searchText,
+        summary_text: [String(cell?.meta?.title || ''), String(snapshot?.outputText || ''), displayMarkdown]
+          .filter(Boolean)
+          .join(' ')
+          .trim(),
+      }
+    }
+
+    const content = String(cell?.content || '')
+    return {
+      cell_key: String(cell?.key || ''),
+      cell_type: 'markdown',
+      digest: computeNotebookDigest(content),
+      search_text: content,
+      summary_text: content,
+    }
+  }).filter((item) => item.cell_key)
+}
+
+const updateNotebookSearchIndex = async (reason = 'unknown') => {
+  const indexKey = getNotebookSearchIndexKey()
+  const documents = buildNotebookSearchDocuments(notebookCells.value)
+  try {
+    const result = await invoke('notebook_update_search_index', {
+      filePath: indexKey,
+      documents,
+    })
+    notebookSearchIndexReady.value = true
+    logger.info('[Notebook] updated backend search index', {
+      reason,
+      filePath: indexKey,
+      documentCount: Number(result?.document_count || documents.length),
+      changedCount: Number(result?.changed_count || 0),
+      reusedCount: Number(result?.reused_count || 0),
+    })
+  } catch (error) {
+    notebookSearchIndexReady.value = false
+    logger.warn('[Notebook] update backend search index failed', {
+      reason,
+      error: String(error?.message || error),
+    })
+  }
+}
+
+const scheduleNotebookSearchIndexUpdate = (reason = 'unknown', delay = 120) => {
+  if (notebookSearchIndexSyncTimer) {
+    window.clearTimeout(notebookSearchIndexSyncTimer)
+  }
+  notebookSearchIndexSyncTimer = window.setTimeout(() => {
+    notebookSearchIndexSyncTimer = 0
+    updateNotebookSearchIndex(reason)
+  }, delay)
+}
+
+const searchNotebookViaBackend = async (keyword, reason = 'unknown') => {
+  const normalizedKeyword = String(keyword || '').trim()
+  if (!normalizedKeyword) {
+    clearNotebookSearchHighlights()
+    return
+  }
+
+  if (!notebookSearchIndexReady.value) {
+    await updateNotebookSearchIndex(`${reason}:warmup`)
+  }
+
+  const indexKey = getNotebookSearchIndexKey()
+  try {
+    const response = await invoke('notebook_search', {
+      filePath: indexKey,
+      query: normalizedKeyword,
+      limit: 200,
+    })
+    notebookSearchMatches.value = Array.isArray(response?.results) ? response.results : []
+    notebookSearchActiveIndex.value = notebookSearchMatches.value.length ? 0 : -1
+    logger.info('[Notebook] backend search finished', {
+      reason,
+      filePath: indexKey,
+      keywordLength: normalizedKeyword.length,
+      matchCount: notebookSearchMatches.value.length,
+      totalMatches: Number(response?.total_matches || 0),
+    })
+  } catch (error) {
+    logger.warn('[Notebook] backend search failed', {
+      reason,
+      error: String(error?.message || error),
+    })
+    const lowerKeyword = normalizedKeyword.toLowerCase()
+    const fallbackResults = buildNotebookSearchDocuments(notebookCells.value)
+      .map((document) => {
+        const lowerText = String(document.search_text || '').toLowerCase()
+        const matchCount = lowerText ? lowerText.split(lowerKeyword).length - 1 : 0
+        if (matchCount <= 0) return null
+        return {
+          cell_key: document.cell_key,
+          cell_type: document.cell_type,
+          match_count: matchCount,
+          snippet: String(document.summary_text || document.search_text || '').slice(0, 120),
+        }
+      })
+      .filter(Boolean)
+    notebookSearchMatches.value = fallbackResults
+    notebookSearchActiveIndex.value = notebookSearchMatches.value.length ? 0 : -1
+  }
+}
+
+const scheduleNotebookSearchQuery = (reason = 'unknown', delay = 90) => {
+  if (notebookSearchQueryTimer) {
+    window.clearTimeout(notebookSearchQueryTimer)
+  }
+  notebookSearchQueryTimer = window.setTimeout(() => {
+    notebookSearchQueryTimer = 0
+    searchNotebookViaBackend(notebookSearchKeyword.value, reason)
+  }, delay)
 }
 
 const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
@@ -1156,82 +1505,18 @@ const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
   if (nextIndex < 0) nextIndex = total - 1
   if (nextIndex >= total) nextIndex = 0
 
-  matches.forEach((element) => element?.classList?.remove('guaxi-notebook__search-hit--active'))
-  const active = matches[nextIndex]
-  if (active) {
-    active.classList.add('guaxi-notebook__search-hit--active')
-    if (scroll) {
-      active.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
-    }
-  }
   notebookSearchActiveIndex.value = nextIndex
-}
+  if (!scroll) return
 
-const applyNotebookSearchHighlights = () => {
-  clearNotebookSearchHighlights()
-
-  const root = notebookRootRef.value
-  const keyword = String(notebookSearchKeyword.value || '').trim()
-  if (!root || !keyword) return
-
-  const regex = new RegExp(escapeRegExp(keyword), 'gi')
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const text = String(node?.nodeValue || '')
-      if (!text) return NodeFilter.FILTER_REJECT
-      const parent = node.parentElement
-      if (!parent) return NodeFilter.FILTER_REJECT
-      if (parent.closest('.guaxi-notebook__search-panel')) return NodeFilter.FILTER_REJECT
-      if (parent.closest('.guaxi-notebook__search-hit')) return NodeFilter.FILTER_REJECT
-      if (parent.closest('textarea, input, button, code, pre, script, style')) return NodeFilter.FILTER_REJECT
-      regex.lastIndex = 0
-      return regex.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-    },
-  })
-
-  const textNodes = []
-  let currentNode = walker.nextNode()
-  while (currentNode) {
-    textNodes.push(currentNode)
-    currentNode = walker.nextNode()
-  }
-
-  const matches = []
-  textNodes.forEach((node) => {
-    const text = String(node.nodeValue || '')
-    const parent = node.parentNode
-    if (!parent) return
-
-    regex.lastIndex = 0
-    let lastIndex = 0
-    let match = regex.exec(text)
-    if (!match) return
-
-    const fragment = document.createDocumentFragment()
-    while (match) {
-      const matchIndex = Number(match.index || 0)
-      const matchedText = String(match[0] || '')
-      if (matchIndex > lastIndex) {
-        fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchIndex)))
-      }
-      const span = document.createElement('span')
-      span.className = 'guaxi-notebook__search-hit'
-      span.textContent = matchedText
-      fragment.appendChild(span)
-      matches.push(span)
-      lastIndex = matchIndex + matchedText.length
-      match = regex.exec(text)
+  nextTick(() => {
+    const active = matches[nextIndex]
+    const activeCellKey = String(active?.cell_key || '')
+    if (!activeCellKey) return
+    const target = notebookRootRef.value?.querySelector?.(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(activeCellKey)}"]`)
+    if (target instanceof HTMLElement) {
+      target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
     }
-    if (lastIndex < text.length) {
-      fragment.appendChild(document.createTextNode(text.slice(lastIndex)))
-    }
-    parent.replaceChild(fragment, node)
   })
-
-  notebookSearchMatches.value = matches
-  if (matches.length) {
-    focusNotebookSearchMatchAt(0, { scroll: false })
-  }
 }
 
 const openNotebookSearch = async () => {
@@ -1241,7 +1526,7 @@ const openNotebookSearch = async () => {
   const input = notebookSearchInputRef.value
   if (input?.focus) input.focus()
   if (input?.select) input.select()
-  applyNotebookSearchHighlights()
+  scheduleNotebookSearchQuery('open-search', 0)
 }
 
 const closeNotebookSearch = () => {
@@ -1648,15 +1933,39 @@ const renderMarkdownHtml = async (content, reason = 'unknown') => {
     return notebookMarkdownRenderCache.get(cacheKey)
   }
   try {
-    const html = await renderMarkdown(markdownText, buildMarkdownRenderOptions())
+    let html = ''
+    if (notebookMarkdownWorkerReady.value || notebookMarkdownWorkerRef.value) {
+      const workerHtml = await renderMarkdownHtmlWithWorker(markdownText, reason)
+      html = await finalizeNotebookRenderedHtml(workerHtml, reason)
+      logger.info('[Notebook] rendered markdown via worker', {
+        reason,
+        markdownLength: markdownText.length,
+      })
+    } else {
+      html = await renderMarkdown(markdownText, buildMarkdownRenderOptions())
+      logger.info('[Notebook] rendered markdown via main thread fallback', {
+        reason,
+        markdownLength: markdownText.length,
+      })
+    }
     notebookMarkdownRenderCache.set(cacheKey, html)
     return html
   } catch (error) {
-    logger.error('[Notebook] render markdown html failed', {
+    logger.warn('[Notebook] worker markdown render failed, fallback to main thread renderer', {
       reason,
       error: String(error?.message || error),
     })
-    return markdownText
+    try {
+      const html = await renderMarkdown(markdownText, buildMarkdownRenderOptions())
+      notebookMarkdownRenderCache.set(cacheKey, html)
+      return html
+    } catch (fallbackError) {
+      logger.error('[Notebook] render markdown html failed', {
+        reason,
+        error: String(fallbackError?.message || fallbackError),
+      })
+      return markdownText
+    }
   }
 }
 
@@ -2357,6 +2666,10 @@ watch(
   ([nextMarkdown], oldPair = []) => {
     const prevFilePath = Array.isArray(oldPair) ? oldPair[1] : ''
     const filePathChanged = String(prevFilePath || '') !== String(props.filePath || '')
+    if (filePathChanged) {
+      notebookSearchIndexReady.value = false
+      clearNotebookSearchHighlights()
+    }
     syncNotebookCellsFromMarkdown(nextMarkdown, 'props-markdown-or-file-watch', {
       force: filePathChanged,
     })
@@ -2373,10 +2686,11 @@ watch(
     }
     syncRenderedMarkdownHtml(cells, 'notebook-cells-watch')
     syncResolvedDisplayUrls(cells, 'notebook-cells-watch')
+    scheduleNotebookSearchIndexUpdate('notebook-cells-watch')
     nextTick(() => {
       syncNotebookTextareaHeights('notebook-cells-changed')
       if (notebookSearchVisible.value) {
-        applyNotebookSearchHighlights()
+        scheduleNotebookSearchQuery('notebook-cells-watch-visible', 0)
       }
     })
   },
@@ -2388,6 +2702,10 @@ watch(
   () => {
     syncRenderedMarkdownHtml(notebookCells.value, 'theme-file-refresh-watch')
     syncResolvedDisplayUrls(notebookCells.value, 'theme-file-refresh-watch')
+    scheduleNotebookSearchIndexUpdate('theme-file-refresh-watch')
+    if (notebookSearchVisible.value) {
+      scheduleNotebookSearchQuery('theme-file-refresh-watch', 0)
+    }
   },
 )
 
@@ -2397,9 +2715,23 @@ watch(editingMarkdownCellKey, (nextKey) => {
 })
 
 watch(notebookSearchKeyword, () => {
-  nextTick(() => {
-    applyNotebookSearchHighlights()
-  })
+  scheduleNotebookSearchQuery('keyword-change')
+})
+
+onMounted(() => {
+  initNotebookMarkdownWorker()
+})
+
+onBeforeUnmount(() => {
+  if (notebookSearchIndexSyncTimer) {
+    window.clearTimeout(notebookSearchIndexSyncTimer)
+    notebookSearchIndexSyncTimer = 0
+  }
+  if (notebookSearchQueryTimer) {
+    window.clearTimeout(notebookSearchQueryTimer)
+    notebookSearchQueryTimer = 0
+  }
+  disposeNotebookMarkdownWorker('component-unmount')
 })
 
 defineExpose({
@@ -2572,6 +2904,20 @@ defineExpose({
 
 .guaxi-notebook__cell {
   overflow: hidden;
+  transition: box-shadow 0.18s ease, outline-color 0.18s ease, background-color 0.18s ease;
+}
+
+.guaxi-notebook__cell.is-search-match {
+  outline: 1px solid color-mix(in srgb, var(--guaxi-notebook-primary) 24%, transparent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.guaxi-notebook__cell.is-search-active {
+  outline: 2px solid color-mix(in srgb, var(--guaxi-notebook-primary) 62%, transparent);
+  outline-offset: 2px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--guaxi-notebook-primary) 16%, transparent);
 }
 
 .guaxi-notebook__cell.is-markdown {
