@@ -28,7 +28,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <button type="button" class="guaxi-terminal-panel__icon-btn" title="新建终端" @click="createSession()">
-              <span class="codicon codicon-plus"></span>
+              <Icon :icon="plusIcon" width="14" height="14" />
             </button>
           </template>
           新建终端
@@ -37,7 +37,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <button type="button" class="guaxi-terminal-panel__icon-btn" title="刷新终端配置" @click="reloadProfiles">
-              <span class="codicon codicon-refresh"></span>
+              <Icon :icon="refreshIcon" width="14" height="14" />
             </button>
           </template>
           刷新终端配置
@@ -51,7 +51,7 @@
               title="清空当前终端输出"
               @click="clearActiveSessionBuffer"
             >
-              <span class="codicon codicon-clear-all"></span>
+              <Icon :icon="clearIcon" width="14" height="14" />
             </button>
           </template>
           清空当前终端输出
@@ -60,7 +60,7 @@
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
             <button type="button" class="guaxi-terminal-panel__icon-btn" title="收起终端" @click="$emit('close')">
-              <span class="codicon codicon-chevron-down"></span>
+              <Icon :icon="chevronDownIcon" width="14" height="14" />
             </button>
           </template>
           收起终端
@@ -99,7 +99,7 @@
                   title="关闭终端"
                   @click.stop="closeSession(session.session_id)"
                 >
-                  <span class="codicon codicon-close"></span>
+                  <Icon :icon="closeIcon" width="14" height="14" />
                 </span>
               </template>
               关闭终端
@@ -118,10 +118,16 @@
 import 'xterm/css/xterm.css'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Icon } from '@iconify/vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import plusIcon from '@iconify-icons/lucide/plus'
+import refreshIcon from '@iconify-icons/lucide/refresh-cw'
+import clearIcon from '@iconify-icons/lucide/eraser'
+import chevronDownIcon from '@iconify-icons/lucide/chevron-down'
+import closeIcon from '@iconify-icons/lucide/x'
 
 import { createLogger } from '../../utils/logger'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -693,10 +699,10 @@ defineExpose({
   grid-template-columns: minmax(0, 1fr);
 }
 
-.guaxi-terminal-panel__icon-btn .codicon,
-.guaxi-terminal-panel__session-close .codicon {
-  font-size: 14px;
-  line-height: 1;
+.guaxi-terminal-panel__icon-btn svg,
+.guaxi-terminal-panel__session-close svg {
+  display: block;
+  flex: 0 0 auto;
 }
 
 .guaxi-terminal-panel__main,

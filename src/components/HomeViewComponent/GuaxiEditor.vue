@@ -230,8 +230,7 @@
             @update:show="handlePythonRuntimePopoverUpdateShow">
             <template #trigger>
               <button type="button" class="python-runtime-entry" :class="{ busy: pythonRuntimeBusy }">
-                <Icon :icon="squareTerminalIcon" width="14" height="14" />
-                <span class="python-runtime-entry__label">Py</span>
+                <Icon :icon="pythonIcon" width="16" height="16" />
                 <span class="python-runtime-entry__dot" :class="pythonRuntimeStatusClass"></span>
               </button>
             </template>
@@ -394,9 +393,9 @@
               class="python-runtime-entry"
               :class="{ busy: pythonRuntimeBusy, active: pythonRuntimePopoverVisible }"
               @click="togglePythonRuntimeWorkbench"
+              title="Python 工作台"
             >
-              <Icon :icon="squareTerminalIcon" width="14" height="14" />
-              <span class="python-runtime-entry__label">Py</span>
+              <Icon :icon="pythonIcon" width="16" height="16" />
                 <span class="python-runtime-entry__dot" :class="pythonRuntimeStatusClass"></span>
               </button>
 
@@ -495,16 +494,108 @@
                   <input v-model="pythonRuntimePackageSearch" class="python-runtime-package-browser__search"
                     placeholder="搜索已安装包" />
                 </div>
+                <div v-if="pythonRuntimeSelectedPackageCount" class="python-runtime-package-browser__bulkbar">
+                  <span class="python-runtime-package-browser__bulktext">
+                    已选择 {{ pythonRuntimeSelectedPackageCount }} 个包
+                  </span>
+                  <div class="python-runtime-package-browser__bulkactions">
+                    <button
+                      type="button"
+                      class="python-runtime-package-row__action"
+                      :disabled="pythonRuntimeBusy"
+                      @click="manageSelectedPythonPackages('upgrade')"
+                    >
+                      批量升级
+                    </button>
+                    <button
+                      type="button"
+                      class="python-runtime-package-row__action is-danger"
+                      :disabled="pythonRuntimeBusy"
+                      @click="manageSelectedPythonPackages('uninstall')"
+                    >
+                      批量卸载
+                    </button>
+                    <button
+                      type="button"
+                      class="python-runtime-package-row__action"
+                      :disabled="pythonRuntimeBusy"
+                      @click="clearPythonRuntimePackageSelection"
+                    >
+                      取消选择
+                    </button>
+                  </div>
+                </div>
                 <div class="python-runtime-package-browser__list">
                   <div v-if="pythonRuntimePackagesFiltered.length" class="python-runtime-package-browser__items">
                     <div v-for="pkg in pythonRuntimePackagesFiltered" :key="pkg" class="python-runtime-package-row">
-                      {{ pkg }}
+                      <label class="python-runtime-package-row__selector">
+                        <input
+                          type="checkbox"
+                          :checked="pythonRuntimeSelectedPackages.includes(pkg)"
+                          :disabled="pythonRuntimeBusy"
+                          @change="togglePythonRuntimePackageSelection(pkg)"
+                        />
+                      </label>
+                      <span class="python-runtime-package-row__name">{{ pkg }}</span>
+                      <div class="python-runtime-package-row__actions">
+                        <button
+                          type="button"
+                          class="python-runtime-package-row__action"
+                          :disabled="pythonRuntimeBusy"
+                          @click="managePythonPackage(pkg, 'upgrade')"
+                        >
+                          升级
+                        </button>
+                        <button
+                          type="button"
+                          class="python-runtime-package-row__action"
+                          :disabled="pythonRuntimeBusy"
+                          @click="managePythonPackage(pkg, 'reinstall')"
+                        >
+                          重装
+                        </button>
+                        <button
+                          type="button"
+                          class="python-runtime-package-row__action is-danger"
+                          :disabled="pythonRuntimeBusy"
+                          @click="managePythonPackage(pkg, 'uninstall')"
+                        >
+                          卸载
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div v-else class="python-runtime-package-browser__empty">
                     {{ pythonRuntimeStatus?.packages?.length ? '没有匹配的包' : '暂无已安装包信息' }}
                   </div>
                 </div>
+                <details
+                  v-if="pythonRuntimePackageActionLog.visible"
+                  class="python-runtime-package-log"
+                  open
+                >
+                  <summary class="python-runtime-package-log__summary">
+                    <span>{{ pythonRuntimePackageActionLog.title }}</span>
+                    <button
+                      type="button"
+                      class="python-runtime-package-row__action"
+                      :disabled="pythonRuntimeBusy"
+                      @click.prevent="closePythonRuntimePackageActionLog"
+                    >
+                      关闭日志
+                    </button>
+                  </summary>
+                  <div class="python-runtime-package-log__body">
+                    <div class="python-runtime-package-log__section">
+                      <div class="python-runtime-package-log__label">stdout</div>
+                      <pre class="python-runtime-package-log__output">{{ pythonRuntimePackageActionLog.stdout || '(无输出)' }}</pre>
+                    </div>
+                    <div class="python-runtime-package-log__section">
+                      <div class="python-runtime-package-log__label">stderr</div>
+                      <pre class="python-runtime-package-log__output is-error">{{ pythonRuntimePackageActionLog.stderr || '(无输出)' }}</pre>
+                    </div>
+                  </div>
+                </details>
               </div>
               </div>
             </transition>
@@ -920,6 +1011,7 @@ import quoteIcon from '@iconify-icons/lucide/quote'
 import codeIcon from '@iconify-icons/lucide/code'
 import fileCode2Icon from '@iconify-icons/lucide/file-code-2'
 import squareTerminalIcon from '@iconify-icons/lucide/terminal-square'
+import pythonIcon from '@iconify-icons/vscode-icons/file-type-python'
 import listIcon from '@iconify-icons/lucide/list'
 import listOrderedIcon from '@iconify-icons/lucide/list-ordered'
 import listChecksIcon from '@iconify-icons/lucide/list-checks'
@@ -1077,6 +1169,13 @@ const pythonRuntimeBusy = ref(false)
 const pythonRuntimeStatus = ref(null)
 const pythonRuntimePackageInput = ref('')
 const pythonRuntimePackageSearch = ref('')
+const pythonRuntimeSelectedPackages = ref([])
+const pythonRuntimePackageActionLog = ref({
+  visible: false,
+  title: '',
+  stdout: '',
+  stderr: '',
+})
 const pythonRuntimeArchivePath = ref('')
 const pythonRuntimeArchiveInspection = ref(null)
 const pythonSessionInfo = ref(null)
@@ -2844,6 +2943,7 @@ const pythonRuntimePackagesFiltered = computed(() => {
   if (!keyword) return packages
   return packages.filter((pkg) => String(pkg || '').toLowerCase().includes(keyword))
 })
+const pythonRuntimeSelectedPackageCount = computed(() => pythonRuntimeSelectedPackages.value.length)
 
 let unlistenTemplateInsert = null
 let templateInsertListenerUnmounted = false
@@ -10333,6 +10433,10 @@ const refreshPythonRuntimeStatus = async (reason = 'manual') => {
     logger.info('[PythonRuntime] refresh status', { reason })
     const status = await invoke('python_runtime_get_status')
     pythonRuntimeStatus.value = status || createEmptyPythonRuntimeStatus()
+    const installedPackages = Array.isArray(pythonRuntimeStatus.value?.packages)
+      ? pythonRuntimeStatus.value.packages
+      : []
+    pythonRuntimeSelectedPackages.value = pythonRuntimeSelectedPackages.value.filter((pkg) => installedPackages.includes(pkg))
     logger.info('[PythonRuntime] status loaded', {
       reason,
       source: status?.source || '',
@@ -10883,6 +10987,130 @@ const installPythonRuntimeArchive = async () => {
 
 const installPythonRuntimePackages = async () => {
   await installPythonPackages(pythonRuntimePackageInput.value, 'manual-input')
+}
+
+const openPythonRuntimePackageActionLog = (title, res) => {
+  pythonRuntimePackageActionLog.value = {
+    visible: true,
+    title: String(title || 'Python 包管理输出'),
+    stdout: String(res?.stdout || ''),
+    stderr: String(res?.stderr || ''),
+  }
+}
+
+const closePythonRuntimePackageActionLog = () => {
+  pythonRuntimePackageActionLog.value = {
+    visible: false,
+    title: '',
+    stdout: '',
+    stderr: '',
+  }
+}
+
+const togglePythonRuntimePackageSelection = (pkg) => {
+  const normalizedPackage = String(pkg || '').trim()
+  if (!normalizedPackage) return
+  const next = new Set(pythonRuntimeSelectedPackages.value)
+  if (next.has(normalizedPackage)) {
+    next.delete(normalizedPackage)
+  } else {
+    next.add(normalizedPackage)
+  }
+  pythonRuntimeSelectedPackages.value = Array.from(next)
+}
+
+const clearPythonRuntimePackageSelection = () => {
+  pythonRuntimeSelectedPackages.value = []
+}
+
+const executePythonPackageAction = async (packages, action = 'upgrade') => {
+  const normalizedPackages = Array.from(new Set(
+    (Array.isArray(packages) ? packages : [packages])
+      .map((pkg) => String(pkg || '').trim())
+      .filter(Boolean)
+  ))
+  const normalizedAction = String(action || '').trim().toLowerCase()
+  if (!normalizedPackages.length) {
+    message.warning('请选择要处理的 Python 包')
+    return
+  }
+
+  const actionLabelMap = {
+    upgrade: '升级',
+    uninstall: '卸载',
+    reinstall: '重装',
+  }
+  const actionLabel = actionLabelMap[normalizedAction] || normalizedAction
+
+  if (normalizedAction === 'uninstall') {
+    const shouldContinue = await confirmDialog(
+      `确定要卸载 ${normalizedPackages.length} 个 Python 包吗？`,
+      {
+        title: '卸载 Python 包',
+        kind: 'warning',
+        okLabel: '确认卸载',
+        cancelLabel: '取消',
+      }
+    )
+    if (!shouldContinue) return
+  }
+
+  pythonRuntimeBusy.value = true
+  try {
+    logger.info('[PythonRuntime] manage package start', {
+      action: normalizedAction,
+      packages: normalizedPackages,
+    })
+
+    const res = await invoke('python_runtime_manage_packages', {
+      request: {
+        action: normalizedAction,
+        packages: normalizedPackages,
+      },
+    })
+
+    openPythonRuntimePackageActionLog(
+      `${actionLabel}输出 · ${normalizedPackages.join(', ')}`,
+      res
+    )
+
+    if (res?.ok) {
+      message.success(`${actionLabel}成功：${normalizedPackages.join(', ')}`)
+      await refreshPythonRuntimeStatus(`package-${normalizedAction}:${normalizedPackages.join(',')}`)
+      if (normalizedAction === 'uninstall') {
+        pythonRuntimeSelectedPackages.value = pythonRuntimeSelectedPackages.value.filter(
+          (pkg) => !normalizedPackages.includes(pkg)
+        )
+      }
+      return
+    }
+
+    const errorText = String(res?.stderr || res?.stdout || `${actionLabel}失败`)
+    message.error(errorText)
+  } catch (error) {
+    logger.error('[PythonRuntime] manage package failed', {
+      action: normalizedAction,
+      packages: normalizedPackages,
+      error,
+    })
+    message.error(`${actionLabel}失败：${String(error?.message || error)}`)
+  } finally {
+    pythonRuntimeBusy.value = false
+  }
+}
+
+const managePythonPackage = async (pkg, action = 'upgrade') => {
+  const normalizedPackage = String(pkg || '').trim()
+  const normalizedAction = String(action || '').trim().toLowerCase()
+  if (!normalizedPackage) {
+    message.warning('请选择要处理的 Python 包')
+    return
+  }
+  await executePythonPackageAction([normalizedPackage], normalizedAction)
+}
+
+const manageSelectedPythonPackages = async (action = 'upgrade') => {
+  await executePythonPackageAction(pythonRuntimeSelectedPackages.value, action)
 }
 
 const resetPythonKernelSession = async () => {
@@ -15453,8 +15681,8 @@ onUnmounted(() => {
 
 .toolbar-actions {
   display: flex;
-  gap: 12px;
-  /* 新增按钮间距 */
+  gap: 14px;
+  /* 右侧工具按钮整体稍微拉开，避免新增入口挤在一起 */
   align-items: center;
   min-width: 0;
   /* 关键修复5: 允许操作区域缩小 */
@@ -15506,6 +15734,11 @@ onUnmounted(() => {
   position: relative;
   display: flex;
   align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  padding-left: 12px;
+  /* 把 Python 相关入口单独分组，视觉上更接近 VS Code 的工具栏节奏 */
+  border-left: 1px solid color-mix(in srgb, var(--guaxi-border) 78%, transparent);
 }
 
 .python-runtime-workbench {
@@ -16006,6 +16239,31 @@ onUnmounted(() => {
   margin-bottom: 10px;
 }
 
+.python-runtime-package-browser__bulkbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 84%, transparent);
+}
+
+.python-runtime-package-browser__bulktext {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-package-browser__bulkactions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .python-runtime-package-browser__header .python-runtime-section__title {
   margin-bottom: 0;
 }
@@ -16034,6 +16292,10 @@ onUnmounted(() => {
 }
 
 .python-runtime-package-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--guaxi-border) 84%, transparent);
@@ -16042,6 +16304,124 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.45;
   word-break: break-word;
+  flex-wrap: wrap;
+}
+
+.python-runtime-package-row__selector {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.python-runtime-package-row__selector input {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.python-runtime-package-row__name {
+  min-width: 0;
+  flex: 1 1 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.python-runtime-package-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.python-runtime-package-row__action {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #17355f;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.python-runtime-package-row__action:hover {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(239, 246, 255, 0.95);
+}
+
+.python-runtime-package-row__action[disabled] {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.python-runtime-package-row__action.is-danger {
+  color: #b42318;
+  border-color: rgba(180, 35, 24, 0.22);
+}
+
+.python-runtime-package-log {
+  margin-top: 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 84%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+  overflow: hidden;
+}
+
+.python-runtime-package-log__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-package-log__summary::-webkit-details-marker {
+  display: none;
+}
+
+.python-runtime-package-log__body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.python-runtime-package-log__section {
+  display: grid;
+  gap: 6px;
+}
+
+.python-runtime-package-log__label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-package-log__output {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.python-runtime-package-log__output.is-error {
+  color: #fecaca;
 }
 
 .python-runtime-package-browser__empty {

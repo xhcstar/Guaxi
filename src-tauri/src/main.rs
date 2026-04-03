@@ -531,6 +531,7 @@ async fn main() {
              commands::code_runtime::python_runtime_inspect_archive,
              commands::code_runtime::python_runtime_install_archive,
              commands::code_runtime::python_runtime_install_packages,
+             commands::code_runtime::python_runtime_manage_packages,
              commands::code_runtime::python_runtime_import_table_file,
              commands::code_cell_runtime::code_cell_exec,
              commands::terminal::terminal_detect_profiles,

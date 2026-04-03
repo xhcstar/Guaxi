@@ -72,6 +72,12 @@ pub struct PythonInstallPackagesRequest {
     pub packages: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PythonManagePackagesRequest {
+    pub action: String,
+    pub packages: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PythonInstallPackagesResponse {
     pub ok: bool,
@@ -1083,6 +1089,86 @@ pub async fn python_runtime_install_packages(
     })
     .await
     .map_err(|e| format!("python_runtime_install_packages join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_manage_packages(
+    request: PythonManagePackagesRequest,
+) -> Result<PythonInstallPackagesResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let action = request.action.trim().to_lowercase();
+        let packages: Vec<String> = request
+            .packages
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect();
+
+        if packages.is_empty() {
+            return Err("未提供需要处理的 Python 包。".to_string());
+        }
+
+        let pip_args: Vec<String> = match action.as_str() {
+            "install" => {
+                let mut args = vec!["install".to_string()];
+                args.extend(packages.iter().cloned());
+                args
+            }
+            "upgrade" => {
+                let mut args = vec!["install".to_string(), "--upgrade".to_string()];
+                args.extend(packages.iter().cloned());
+                args
+            }
+            "reinstall" => {
+                let mut args = vec![
+                    "install".to_string(),
+                    "--upgrade".to_string(),
+                    "--force-reinstall".to_string(),
+                ];
+                args.extend(packages.iter().cloned());
+                args
+            }
+            "uninstall" => {
+                let mut args = vec!["uninstall".to_string(), "-y".to_string()];
+                args.extend(packages.iter().cloned());
+                args
+            }
+            _ => {
+                return Err(format!("不支持的 Python 包管理动作：{action}"));
+            }
+        };
+
+        let spec = resolve_python_launch_spec()?;
+        let _ = ensure_pip_available(&spec)?;
+
+        info!(
+            action = action.as_str(),
+            packages = packages.join(", ").as_str(),
+            source = spec.source.as_str(),
+            "[PythonRuntime] manage packages"
+        );
+
+        // 统一走 pip 子命令，前端再根据 action 给出更贴近用户语义的反馈。
+        let mut command = Command::new(&spec.program);
+        command
+            .args(&spec.base_args)
+            .args(["-m", "pip"])
+            .args(&pip_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = command
+            .output()
+            .map_err(|e| format!("manage python packages failed: {e}"))?;
+        clear_python_worker()?;
+
+        Ok(PythonInstallPackagesResponse {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("python_runtime_manage_packages join failed: {e}"))?
 }
 
 #[command]
