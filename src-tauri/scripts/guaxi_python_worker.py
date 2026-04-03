@@ -105,6 +105,7 @@ def _snapshot_session_vars(globals_dict):
     hidden_names = {
         "__builtins__",
         "__guaxi_last_value",
+        "__guaxi_plotly_display__",
         "_",
         "__",
         "___",
@@ -223,6 +224,75 @@ def _capture_rich_display(result):
             }
 
     return None
+
+
+def _build_plotly_display_payload(fig):
+    try:
+        import plotly.io as pio
+    except Exception:
+        return None
+
+    try:
+        html = pio.to_html(
+            fig,
+            include_plotlyjs="cdn",
+            full_html=False,
+            config={"responsive": True},
+        )
+    except Exception:
+        return None
+
+    if not isinstance(html, str) or not html.strip():
+        return None
+
+    return {
+        "type": "html",
+        "mime": "text/html",
+        "html": html,
+    }
+
+
+def _install_plotly_notebook_hook(globals_dict):
+    try:
+        import plotly.io as pio
+        from plotly.basedatatypes import BaseFigure
+    except Exception:
+        return
+
+    if globals_dict.get("__guaxi_plotly_hook_installed__"):
+        return
+
+    original_show = getattr(pio, "show", None)
+    original_base_figure_show = getattr(BaseFigure, "show", None)
+
+    def _capture_and_store(fig):
+        payload = _build_plotly_display_payload(fig)
+        if payload:
+            globals_dict["__guaxi_plotly_display__"] = payload
+        return payload
+
+    def _guaxi_plotly_show(fig, *args, **kwargs):
+        payload = _capture_and_store(fig)
+        if payload is not None:
+            return None
+        if callable(original_show):
+            return original_show(fig, *args, **kwargs)
+        return None
+
+    def _guaxi_base_figure_show(self, *args, **kwargs):
+        payload = _capture_and_store(self)
+        if payload is not None:
+            return None
+        if callable(original_base_figure_show):
+            return original_base_figure_show(self, *args, **kwargs)
+        return None
+
+    # 设计说明：
+    # 探索模式里的 Plotly 应该像 notebook 一样把交互图渲染回当前 cell，
+    # 而不是走默认浏览器 renderer 弹到外部页面。
+    pio.show = _guaxi_plotly_show
+    BaseFigure.show = _guaxi_base_figure_show
+    globals_dict["__guaxi_plotly_hook_installed__"] = True
 
 
 def _fresh_globals():
@@ -364,6 +434,7 @@ def _handle_exec(payload):
 
     if vars_map.get("_guaxi_inline_matplotlib", None) is True or "_py_cell_id" in vars_map or "_guaxi_session" in vars_map:
         _maybe_prepare_inline_matplotlib()
+        _install_plotly_notebook_hook(globals_dict)
 
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -405,37 +476,50 @@ def _handle_exec(payload):
 
         if "_result" in globals_dict:
             result = globals_dict.get("_result")
-            try:
-                result_repr = repr(result)
-            except Exception:
-                result_repr = None
+            if result is not None:
+                try:
+                    result_repr = repr(result)
+                except Exception:
+                    result_repr = None
 
-            if expect_json:
-                result_json = _json_basic(result)
+                if expect_json:
+                    result_json = _json_basic(result)
 
-            dataframe_payload = _build_dataframe_payload(result)
-            if dataframe_payload:
-                if isinstance(result_json, dict):
-                    result_json.setdefault("__guaxi_dataframe__", dataframe_payload)
-                elif result_json is None:
-                    result_json = {"__guaxi_dataframe__": dataframe_payload}
-                else:
-                    result_json = {
-                        "__guaxi_dataframe__": dataframe_payload,
-                        "__guaxi_result__": result_json,
-                    }
+                dataframe_payload = _build_dataframe_payload(result)
+                if dataframe_payload:
+                    if isinstance(result_json, dict):
+                        result_json.setdefault("__guaxi_dataframe__", dataframe_payload)
+                    elif result_json is None:
+                        result_json = {"__guaxi_dataframe__": dataframe_payload}
+                    else:
+                        result_json = {
+                            "__guaxi_dataframe__": dataframe_payload,
+                            "__guaxi_result__": result_json,
+                        }
 
-            rich_display = _capture_rich_display(result)
-            if rich_display:
-                if isinstance(result_json, dict):
-                    result_json.setdefault("__guaxi_display__", rich_display)
-                elif result_json is None:
-                    result_json = {"__guaxi_display__": rich_display}
-                else:
-                    result_json = {
-                        "__guaxi_display__": rich_display,
-                        "__guaxi_result__": result_json,
-                    }
+                rich_display = _capture_rich_display(result)
+                if rich_display:
+                    if isinstance(result_json, dict):
+                        result_json.setdefault("__guaxi_display__", rich_display)
+                    elif result_json is None:
+                        result_json = {"__guaxi_display__": rich_display}
+                    else:
+                        result_json = {
+                            "__guaxi_display__": rich_display,
+                            "__guaxi_result__": result_json,
+                        }
+
+        plotly_display = globals_dict.pop("__guaxi_plotly_display__", None)
+        if plotly_display:
+            if isinstance(result_json, dict):
+                result_json.setdefault("__guaxi_display__", plotly_display)
+            elif result_json is None:
+                result_json = {"__guaxi_display__": plotly_display}
+            else:
+                result_json = {
+                    "__guaxi_display__": plotly_display,
+                    "__guaxi_result__": result_json,
+                }
 
         png_b64 = _capture_matplotlib_png_base64()
         if png_b64:

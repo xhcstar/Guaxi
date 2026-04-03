@@ -2218,7 +2218,10 @@ const formatPythonExecOutput = (res) => {
   const resultRepr = String(res?.result_repr || '').trim()
   if (stdout) chunks.push(stdout)
   if (stderr) chunks.push(stderr)
-  if (resultRepr && !stdout.includes(resultRepr)) chunks.push(resultRepr)
+  // 设计说明：
+  // Python 代码块“正常执行但没有显式输出”时，最后一个表达式可能只是 `None`。
+  // 这种值对探索模式用户来说属于噪音，不应该伪装成一次可见输出。
+  if (resultRepr && resultRepr !== 'None' && !stdout.includes(resultRepr)) chunks.push(resultRepr)
   return chunks.join('\n\n').trim()
 }
 
@@ -3324,9 +3327,9 @@ defineExpose({
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 86%, transparent);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--guaxi-notebook-panel) 96%, transparent);
+  /* 保持搜索面板是一个完整的实体卡片，避免透明混色让中间看起来像“空了一块”。 */
+  background: var(--guaxi-notebook-panel);
   box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
-  backdrop-filter: blur(10px);
   pointer-events: auto;
 }
 
