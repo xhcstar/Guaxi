@@ -258,7 +258,13 @@
               </div>
             </div>
             <div class="guaxi-notebook__panel-content">
-              <div v-if="getCellSnapshot(cell).display?.type === 'html'" class="guaxi-notebook__rich" v-html="String(getCellSnapshot(cell).display.html || '')"></div>
+              <div v-if="getCellSnapshot(cell).display?.type === 'html'" class="guaxi-notebook__rich guaxi-notebook__rich--html">
+                <GuaxiNotebookHtmlOutput
+                  :html="String(getCellSnapshot(cell).display.html || '')"
+                  :theme="theme"
+                  :title="`Python Cell HTML Output ${cell.cellId || cell.key || ''}`"
+                />
+              </div>
               <div v-else-if="getCellSnapshot(cell).display?.type === 'svg'" class="guaxi-notebook__rich" v-html="String(getCellSnapshot(cell).display.svg || '')"></div>
               <div
                 v-else-if="getCellSnapshot(cell).display?.type === 'markdown'"
@@ -377,6 +383,7 @@ import redoIcon from '@iconify-icons/lucide/redo'
 import { createLogger } from '../../utils/logger'
 import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
 import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
+import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,

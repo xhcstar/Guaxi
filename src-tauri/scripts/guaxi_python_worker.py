@@ -235,7 +235,11 @@ def _build_plotly_display_payload(fig):
     try:
         html = pio.to_html(
             fig,
-            include_plotlyjs="cdn",
+            # 设计说明：
+            # 探索模式里的 Plotly 输出需要在 notebook 内独立可渲染，
+            # 不能依赖外部浏览器或在线 CDN，否则很容易只剩一个空白容器。
+            # 这里改成把 plotly.js 内联进输出 HTML，配合前端 iframe/srcdoc 稳定渲染。
+            include_plotlyjs=True,
             full_html=False,
             config={"responsive": True},
         )
