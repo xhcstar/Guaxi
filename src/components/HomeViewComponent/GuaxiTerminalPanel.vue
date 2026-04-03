@@ -213,6 +213,7 @@ const searchInputRef = ref(null)
 const searchMatches = ref([])
 const searchActiveIndex = ref(-1)
 const terminalCommandDrafts = ref({})
+const terminalExitProbeTimers = ref({})
 
 let terminal = null
 let fitAddon = null
@@ -387,6 +388,18 @@ const TERMINAL_EXIT_COMMANDS = new Set([
   'quit()',
 ])
 
+const clearExitProbeTimer = (sessionId) => {
+  const normalizedSessionId = String(sessionId || '').trim()
+  const timerId = terminalExitProbeTimers.value[normalizedSessionId]
+  if (timerId) {
+    window.clearTimeout(timerId)
+  }
+  if (!(normalizedSessionId in terminalExitProbeTimers.value)) return
+  const nextTimers = { ...terminalExitProbeTimers.value }
+  delete nextTimers[normalizedSessionId]
+  terminalExitProbeTimers.value = nextTimers
+}
+
 const scheduleExitProbe = (sessionId, commandText) => {
   const normalizedSessionId = String(sessionId || '').trim()
   const normalizedCommand = String(commandText || '').trim().toLowerCase()
@@ -397,22 +410,49 @@ const scheduleExitProbe = (sessionId, commandText) => {
     command: normalizedCommand,
   })
 
-  window.setTimeout(() => {
+  clearExitProbeTimer(normalizedSessionId)
+
+  const maxAttempts = 12
+  const probeDelayMs = 280
+  let attempt = 0
+
+  const runProbe = () => {
+    attempt += 1
     void invoke('terminal_probe_session_exit', {
       request: {
         session_id: normalizedSessionId,
       },
     }).then((response) => {
-      if (!response?.exited) return
-      syncExitedSession(normalizedSessionId, Number(response?.exit_code))
+      if (response?.exited) {
+        clearExitProbeTimer(normalizedSessionId)
+        syncExitedSession(normalizedSessionId, Number(response?.exit_code))
+        return
+      }
+      if (attempt >= maxAttempts || getSessionIndex(normalizedSessionId) < 0) {
+        clearExitProbeTimer(normalizedSessionId)
+        return
+      }
+      const timerId = window.setTimeout(runProbe, probeDelayMs)
+      terminalExitProbeTimers.value = {
+        ...terminalExitProbeTimers.value,
+        [normalizedSessionId]: timerId,
+      }
     }).catch((error) => {
+      clearExitProbeTimer(normalizedSessionId)
       logger.warn('[TerminalPanel] probe session exit failed', {
         sessionId: normalizedSessionId,
         command: normalizedCommand,
+        attempt,
         error,
       })
     })
-  }, 220)
+  }
+
+  const timerId = window.setTimeout(runProbe, 180)
+  terminalExitProbeTimers.value = {
+    ...terminalExitProbeTimers.value,
+    [normalizedSessionId]: timerId,
+  }
 }
 
 const trackTerminalInput = (sessionId, data) => {
@@ -647,6 +687,7 @@ const syncExitedSession = (sessionId, exitCode) => {
   // Keep terminal tabs synchronized with the PTY lifecycle so an exited process
   // never leaves behind a dead session entry that the user has to close manually.
   delete terminalCommandDrafts.value[sessionId]
+  clearExitProbeTimer(sessionId)
   sessions.value = nextSessions
 
   logger.info('[TerminalPanel] session exited and auto closed', {
@@ -813,6 +854,7 @@ const closeSession = async (sessionId, options = {}) => {
   const normalizedSessionId = String(sessionId || '').trim()
   if (!normalizedSessionId) return
   try {
+    clearExitProbeTimer(normalizedSessionId)
     delete terminalCommandDrafts.value[normalizedSessionId]
     await invoke('terminal_close_session', {
       request: {
@@ -1063,6 +1105,9 @@ onBeforeUnmount(async () => {
   if (typeof unlistenExit === 'function') {
     await unlistenExit()
   }
+  Object.keys(terminalExitProbeTimers.value).forEach((sessionId) => {
+    clearExitProbeTimer(sessionId)
+  })
   if (pendingFitFrame && typeof window !== 'undefined') {
     window.cancelAnimationFrame(pendingFitFrame)
     pendingFitFrame = 0

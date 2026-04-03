@@ -16214,9 +16214,20 @@ onUnmounted(() => {
 .python-runtime-panel.is-dark .python-runtime-operation-card,
 .python-runtime-panel.is-dark .python-runtime-install-card,
 .python-runtime-panel.is-dark .python-runtime-package-browser,
+.python-runtime-panel.is-dark .python-runtime-package-log,
 .python-runtime-panel.is-dark .python-runtime-package-row {
   border-color: rgba(71, 85, 105, 0.72);
   background: rgba(15, 23, 42, 0.68);
+}
+
+.python-runtime-panel.is-dark .python-runtime-package-log__output {
+  background: rgba(15, 23, 42, 0.68);
+  border-color: rgba(71, 85, 105, 0.72);
+}
+
+.python-runtime-panel.is-dark .python-runtime-package-log__output.is-error {
+  background: rgba(15, 23, 42, 0.68);
+  border-color: color-mix(in srgb, #ef4444 32%, rgba(71, 85, 105, 0.72));
 }
 
 .python-runtime-panel.is-dark .python-runtime-ghost-btn,
