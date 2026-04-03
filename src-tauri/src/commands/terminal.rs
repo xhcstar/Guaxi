@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
@@ -12,6 +13,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::commands::settingview::{get_terminal_config, TerminalConfig};
+use crate::guaxiservices::bundled_resources;
 
 const TERMINAL_OUTPUT_EVENT: &str = "terminal-session-output";
 const TERMINAL_EXIT_EVENT: &str = "terminal-session-exit";
@@ -107,6 +109,12 @@ fn exe_dir() -> Result<PathBuf, String> {
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "无法获取当前程序目录".to_string())
+}
+
+fn python_runtime_dir() -> Result<PathBuf, String> {
+    let dir = bundled_resources::ensure_relative_dir("utils/python_runtime")?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
+    Ok(dir)
 }
 
 fn split_env_paths(raw: &str) -> Vec<PathBuf> {
@@ -237,6 +245,10 @@ fn dev_source_utils_root() -> Option<PathBuf> {
 fn candidate_runtime_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
+    if let Ok(runtime_dir) = python_runtime_dir() {
+        roots.push(runtime_dir);
+    }
+
     if let Ok(dir) = exe_dir() {
         roots.push(dir.join("utils").join("python_runtime"));
         roots.push(dir.join("python_runtime"));
@@ -302,8 +314,42 @@ fn quick_runtime_ipython() -> Option<PathBuf> {
     find_executable(&["ipython", "ipython.exe"])
 }
 
+fn python_supports_ipython(program: &Path) -> bool {
+    Command::new(program)
+        .args(["-c", "import IPython"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 fn resolve_ipython_launch() -> Result<LaunchTarget, String> {
+    for root in candidate_runtime_roots() {
+        for candidate in managed_python_candidates(&root) {
+            if candidate.is_file() && python_supports_ipython(&candidate) {
+                info!(
+                    program = %candidate.to_string_lossy(),
+                    runtime_dir = %root.to_string_lossy(),
+                    "[Terminal] resolved IPython from managed python runtime"
+                );
+                return Ok(LaunchTarget {
+                    program: candidate.to_string_lossy().to_string(),
+                    args: vec![
+                        "-m".to_string(),
+                        "IPython".to_string(),
+                    ],
+                    source: "guaxi-runtime".to_string(),
+                });
+            }
+        }
+    }
+
     if let Some(ipython) = quick_runtime_ipython() {
+        info!(
+            program = %ipython.to_string_lossy(),
+            "[Terminal] resolved IPython from executable candidate"
+        );
         return Ok(LaunchTarget {
             program: ipython.to_string_lossy().to_string(),
             args: Vec::new(),
@@ -311,14 +357,17 @@ fn resolve_ipython_launch() -> Result<LaunchTarget, String> {
         });
     }
 
-    if let Some(python) = quick_runtime_python() {
+    if let Some(python) = quick_runtime_python().filter(|candidate| python_supports_ipython(candidate))
+    {
+        info!(
+            program = %python.to_string_lossy(),
+            "[Terminal] resolved IPython from fallback python"
+        );
         return Ok(LaunchTarget {
             program: python.to_string_lossy().to_string(),
             args: vec![
                 "-m".to_string(),
                 "IPython".to_string(),
-                "--simple-prompt".to_string(),
-                "--no-color-info".to_string(),
             ],
             source: "guaxi-runtime".to_string(),
         });
@@ -340,8 +389,6 @@ fn detect_profiles(config: &TerminalConfig) -> Vec<TerminalProfile> {
         vec![
             "-m".to_string(),
             "IPython".to_string(),
-            "--simple-prompt".to_string(),
-            "--no-color-info".to_string(),
         ]
     };
 
@@ -681,6 +728,9 @@ pub fn terminal_create_session(
     for arg in &launch.args {
         builder.arg(arg);
     }
+    // 终端统一显式声明 ANSI 颜色能力，避免 IPython 在 PTY 中退回到无高亮模式。
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
     builder.cwd(working_dir.clone());
 
     info!(

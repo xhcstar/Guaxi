@@ -2,7 +2,7 @@
   <div class="guaxi-terminal-panel">
     <div class="guaxi-terminal-panel__toolbar">
       <div class="guaxi-terminal-panel__tabs">
-        <button type="button" class="guaxi-terminal-panel__tool-tab active">TERMINAL</button>
+        <button type="button" class="guaxi-terminal-panel__tool-tab active">终端</button>
       </div>
 
       <div class="guaxi-terminal-panel__toolbar-right">
@@ -59,6 +59,35 @@
 
         <n-tooltip placement="top" trigger="hover">
           <template #trigger>
+            <button
+              type="button"
+              class="guaxi-terminal-panel__icon-btn"
+              title="结束当前终端会话"
+              :disabled="!activeSession"
+              @click="killActiveSession"
+            >
+              <Icon :icon="stopIcon" width="14" height="14" />
+            </button>
+          </template>
+          结束当前终端会话
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
+            <button
+              type="button"
+              class="guaxi-terminal-panel__icon-btn"
+              title="搜索终端输出"
+              @click="openSearchPanel"
+            >
+              <Icon :icon="searchIcon" width="14" height="14" />
+            </button>
+          </template>
+          搜索终端输出
+        </n-tooltip>
+
+        <n-tooltip placement="top" trigger="hover">
+          <template #trigger>
             <button type="button" class="guaxi-terminal-panel__icon-btn" title="收起终端" @click="$emit('close')">
               <Icon :icon="chevronDownIcon" width="14" height="14" />
             </button>
@@ -71,6 +100,25 @@
     <div class="guaxi-terminal-panel__content" :class="{ 'without-sidebar': !showSidebar }">
       <div class="guaxi-terminal-panel__main">
         <div class="guaxi-terminal-panel__body">
+          <div v-if="searchVisible" class="guaxi-terminal-panel__search" @mousedown.stop @keydown.stop>
+            <input
+              ref="searchInputRef"
+              v-model="searchKeyword"
+              class="guaxi-terminal-panel__search-input"
+              type="text"
+              placeholder="搜索终端输出"
+              @keydown.stop
+              @keydown.enter.prevent="focusNextSearchMatch"
+              @keydown.shift.enter.prevent="focusPrevSearchMatch"
+              @keydown.esc.prevent="closeSearchPanel"
+            />
+            <span class="guaxi-terminal-panel__search-count">{{ searchMatchCountText }}</span>
+            <button type="button" class="guaxi-terminal-panel__search-btn" @click="focusPrevSearchMatch">上一个</button>
+            <button type="button" class="guaxi-terminal-panel__search-btn" @click="focusNextSearchMatch">下一个</button>
+            <button type="button" class="guaxi-terminal-panel__search-btn" @click="copySelectionToClipboard">复制</button>
+            <button type="button" class="guaxi-terminal-panel__search-btn" @click="pasteClipboardToTerminal">粘贴</button>
+            <button type="button" class="guaxi-terminal-panel__search-btn guaxi-terminal-panel__search-btn--close" @click="closeSearchPanel">关闭</button>
+          </div>
           <div ref="terminalHostRef" class="guaxi-terminal-panel__terminal"></div>
           <div v-if="panelBusy && !sessions.length" class="guaxi-terminal-panel__status-overlay">
             <div class="guaxi-terminal-panel__status-title">正在准备终端面板</div>
@@ -126,6 +174,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import plusIcon from '@iconify-icons/lucide/plus'
 import refreshIcon from '@iconify-icons/lucide/refresh-cw'
 import clearIcon from '@iconify-icons/lucide/eraser'
+import stopIcon from '@iconify-icons/lucide/square'
+import searchIcon from '@iconify-icons/lucide/search'
 import chevronDownIcon from '@iconify-icons/lucide/chevron-down'
 import closeIcon from '@iconify-icons/lucide/x'
 
@@ -146,7 +196,7 @@ const props = defineProps({
   },
 })
 
-defineEmits(['close'])
+const emit = defineEmits(['close'])
 
 const terminalHostRef = ref(null)
 const sessions = ref([])
@@ -157,11 +207,18 @@ const selectedProfileId = ref('')
 const panelBusy = ref(false)
 const panelActivated = ref(false)
 const loadingStateText = ref('等待创建终端会话')
+const searchVisible = ref(false)
+const searchKeyword = ref('')
+const searchInputRef = ref(null)
+const searchMatches = ref([])
+const searchActiveIndex = ref(-1)
 
 let terminal = null
 let fitAddon = null
 let unlistenOutput = null
 let unlistenExit = null
+let terminalResizeObserver = null
+let pendingFitFrame = 0
 
 const isWindows = typeof navigator !== 'undefined'
   ? /Windows/i.test(navigator.userAgent)
@@ -171,6 +228,13 @@ const availableProfiles = computed(() => profiles.value.filter((profile) => prof
 const activeSession = computed(() => sessions.value.find((session) => session.session_id === activeSessionId.value) || null)
 const showSidebar = computed(() => sessions.value.length > 1)
 const isSwitchingProfile = ref(false)
+const sessionCreateToken = ref(0)
+const searchMatchCountText = computed(() => {
+  if (!searchKeyword.value.trim()) return '0 / 0'
+  const total = searchMatches.value.length
+  if (!total) return '0 / 0'
+  return `${Math.max(0, searchActiveIndex.value) + 1} / ${total}`
+})
 
 const buildFallbackProfiles = () => {
   if (isWindows) {
@@ -198,19 +262,26 @@ const ensureSelectedProfile = () => {
     || ''
 }
 
+const getThemeCssVar = (name, fallback) => {
+  if (typeof window === 'undefined') return fallback
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
+
 const getTerminalTheme = () => {
   const dark = settingsStore.appearanceTheme === 'dark'
   return dark
     ? {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#aeafad',
-        selectionBackground: 'rgba(38, 79, 120, 0.45)',
+        // 终端内部颜色跟随 Guaxi 的暗色主题变量，避免看起来像另一套独立皮肤。
+        background: getThemeCssVar('--guaxi-panel-bg', '#1e1e1e'),
+        foreground: getThemeCssVar('--guaxi-text-primary', '#d4d4d4'),
+        cursor: getThemeCssVar('--primary-color', '#aeafad'),
+        selectionBackground: 'rgba(74, 202, 219, 0.22)',
       }
     : {
-        background: '#ffffff',
-        foreground: '#1f2328',
-        cursor: '#0969da',
+        background: getThemeCssVar('--guaxi-panel-bg', '#ffffff'),
+        foreground: getThemeCssVar('--guaxi-text-primary', '#1f2328'),
+        cursor: getThemeCssVar('--primary-color', '#0969da'),
         selectionBackground: 'rgba(9, 105, 218, 0.18)',
       }
 }
@@ -229,6 +300,131 @@ const renderActiveSession = () => {
   if (activeSession.value?.buffer) {
     terminal.write(activeSession.value.buffer)
   }
+  updateSearchMatches('render-active-session')
+}
+
+const writeClipboardText = async (value) => {
+  const text = String(value || '')
+  if (!text) return
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const mod = await import('@tauri-apps/plugin-clipboard-manager')
+  await mod.writeText(text)
+}
+
+const readClipboardText = async () => {
+  if (navigator?.clipboard?.readText) {
+    return String(await navigator.clipboard.readText() || '')
+  }
+  const mod = await import('@tauri-apps/plugin-clipboard-manager')
+  return String(await mod.readText() || '')
+}
+
+const scrollToSearchMatch = (index) => {
+  if (!terminal) return
+  const match = searchMatches.value[index]
+  if (!match) return
+  searchActiveIndex.value = index
+  terminal.select(match.col, match.row, match.length)
+  terminal.scrollToLine(Math.max(match.row - 3, 0))
+  terminal.focus()
+}
+
+const updateSearchMatches = (reason = 'manual-search-update') => {
+  const keyword = String(searchKeyword.value || '').trim()
+  const buffer = String(activeSession.value?.buffer || '')
+  if (!keyword || !buffer) {
+    searchMatches.value = []
+    searchActiveIndex.value = -1
+    return
+  }
+
+  const rows = buffer.split(/\r?\n/)
+  const matches = []
+  rows.forEach((line, row) => {
+    let startIndex = 0
+    while (startIndex <= line.length) {
+      const col = line.toLowerCase().indexOf(keyword.toLowerCase(), startIndex)
+      if (col < 0) break
+      matches.push({ row, col, length: keyword.length })
+      startIndex = col + Math.max(keyword.length, 1)
+    }
+  })
+  searchMatches.value = matches
+  searchActiveIndex.value = matches.length ? 0 : -1
+  logger.debug('[TerminalPanel] search matches updated', {
+    reason,
+    keyword,
+    matchCount: matches.length,
+  })
+}
+
+const openSearchPanel = async () => {
+  searchVisible.value = true
+  await nextTick()
+  searchInputRef.value?.focus?.()
+  searchInputRef.value?.select?.()
+  updateSearchMatches('open-search')
+}
+
+const closeSearchPanel = () => {
+  searchVisible.value = false
+  searchKeyword.value = ''
+  searchMatches.value = []
+  searchActiveIndex.value = -1
+  terminal?.clearSelection?.()
+  terminal?.focus?.()
+}
+
+const focusNextSearchMatch = () => {
+  if (!searchMatches.value.length) return
+  const nextIndex = searchActiveIndex.value < 0
+    ? 0
+    : (searchActiveIndex.value + 1) % searchMatches.value.length
+  scrollToSearchMatch(nextIndex)
+}
+
+const focusPrevSearchMatch = () => {
+  if (!searchMatches.value.length) return
+  const prevIndex = searchActiveIndex.value < 0
+    ? searchMatches.value.length - 1
+    : (searchActiveIndex.value - 1 + searchMatches.value.length) % searchMatches.value.length
+  scrollToSearchMatch(prevIndex)
+}
+
+const copySelectionToClipboard = async () => {
+  const selected = String(terminal?.getSelection?.() || '').trim()
+  if (!selected) return
+  await writeClipboardText(selected)
+}
+
+const pasteClipboardToTerminal = async () => {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
+  const text = await readClipboardText()
+  if (!text) return
+  await invoke('terminal_write_session', {
+    request: {
+      session_id: sessionId,
+      data: text,
+    },
+  })
+}
+
+const scheduleFitTerminal = (reason = 'scheduled-fit') => {
+  if (typeof window === 'undefined') {
+    void fitTerminal(reason)
+    return
+  }
+  if (pendingFitFrame) {
+    window.cancelAnimationFrame(pendingFitFrame)
+  }
+  pendingFitFrame = window.requestAnimationFrame(() => {
+    pendingFitFrame = 0
+    void fitTerminal(reason)
+  })
 }
 
 const fitTerminal = async (reason = 'manual-fit') => {
@@ -244,6 +440,13 @@ const fitTerminal = async (reason = 'manual-fit') => {
       viewport.style.maxHeight = '100%'
       viewport.style.overflowY = 'auto'
     }
+
+    const xtermElement = terminalHostRef.value?.querySelector?.('.xterm')
+    if (xtermElement) {
+      xtermElement.style.height = '100%'
+    }
+
+    terminal.refresh?.(0, Math.max(terminal.rows - 1, 0))
 
     const sessionId = activeSessionId.value
     if (sessionId) {
@@ -290,6 +493,9 @@ const appendSessionOutput = (sessionId, data) => {
   if (activeSessionId.value === sessionId && terminal) {
     terminal.write(String(data || ''))
   }
+  if (activeSessionId.value === sessionId && searchVisible.value && searchKeyword.value.trim()) {
+    updateSearchMatches('append-session-output')
+  }
 }
 
 const markSessionExited = (sessionId, exitCode) => {
@@ -304,6 +510,49 @@ const markSessionExited = (sessionId, exitCode) => {
   }
   if (activeSessionId.value === sessionId && terminal) {
     terminal.write(footer)
+  }
+}
+
+const handleSessionExit = (sessionId, exitCode) => {
+  const index = getSessionIndex(sessionId)
+  if (index < 0) return
+  const session = sessions.value[index]
+  const normalizedExitCode = Number.isFinite(exitCode) ? Number(exitCode) : null
+  const footer = `\r\n[Guaxi] 终端已退出${normalizedExitCode !== null ? `，退出码 ${normalizedExitCode}` : ''}\r\n`
+  const nextSessions = sessions.value
+    .map((item, itemIndex) => (itemIndex === index
+      ? {
+          ...item,
+          exited: true,
+          buffer: `${item.buffer || ''}${footer}`,
+        }
+      : item))
+    .filter((item) => item.session_id !== sessionId)
+
+  // 终端进程已经自行退出时，前端同步移除会话，避免留下一个无法继续交互的空标签。
+  sessions.value = nextSessions
+
+  logger.info('[TerminalPanel] session exited and auto closed', {
+    sessionId,
+    profileId: session?.profile_id || '',
+    exitCode: normalizedExitCode,
+    remainingSessionCount: nextSessions.length,
+  })
+
+  if (activeSessionId.value === sessionId) {
+    const nextActiveSession = nextSessions[0] || null
+    activeSessionId.value = nextActiveSession?.session_id || ''
+    selectedProfileId.value = nextActiveSession?.profile_id || selectedProfileId.value
+    renderActiveSession()
+    if (!nextActiveSession) {
+      closeSearchPanel()
+    }
+    void fitTerminal('session-exited-auto-close')
+    return
+  }
+
+  if (!nextSessions.length) {
+    closeSearchPanel()
   }
 }
 
@@ -356,9 +605,16 @@ const reloadProfiles = async () => {
 const createSession = async (options = {}) => {
   const requestedProfileId = String(options?.profileId || selectedProfileId.value || defaultProfileId.value || '').trim()
   if (!requestedProfileId) return null
+  const createToken = sessionCreateToken.value + 1
+  sessionCreateToken.value = createToken
   try {
     panelBusy.value = true
     loadingStateText.value = `正在启动 ${requestedProfileId} 终端`
+    if (terminal) {
+      terminal.reset()
+      terminal.clear()
+      terminal.writeln(`[Guaxi] 正在启动 ${requestedProfileId} 终端...`)
+    }
     const snapshot = await invoke('terminal_create_session', {
       request: {
         profile_id: requestedProfileId,
@@ -375,7 +631,9 @@ const createSession = async (options = {}) => {
     sessions.value = [...sessions.value, session]
     activeSessionId.value = session.session_id
     renderActiveSession()
-    await fitTerminal('create-session')
+    if (createToken === sessionCreateToken.value) {
+      void fitTerminal('create-session')
+    }
 
     logger.info('[TerminalPanel] session created', {
       sessionId: session.session_id,
@@ -417,6 +675,11 @@ const switchProfileSession = async (profileId) => {
 
   isSwitchingProfile.value = true
   try {
+    if (terminal) {
+      terminal.reset()
+      terminal.clear()
+      terminal.writeln(`[Guaxi] 正在切换到 ${normalizedProfileId}...`)
+    }
     await createSession({
       profileId: normalizedProfileId,
       cwd: props.contextPath,
@@ -426,7 +689,7 @@ const switchProfileSession = async (profileId) => {
   }
 }
 
-const closeSession = async (sessionId) => {
+const closeSession = async (sessionId, options = {}) => {
   const normalizedSessionId = String(sessionId || '').trim()
   if (!normalizedSessionId) return
   try {
@@ -444,11 +707,31 @@ const closeSession = async (sessionId) => {
 
   const nextSessions = sessions.value.filter((session) => session.session_id !== normalizedSessionId)
   sessions.value = nextSessions
+  logger.info('[TerminalPanel] session closed', {
+    sessionId: normalizedSessionId,
+    reason: String(options?.reason || 'manual-close'),
+    remainingSessionCount: nextSessions.length,
+  })
   if (activeSessionId.value === normalizedSessionId) {
     activeSessionId.value = nextSessions[0]?.session_id || ''
     renderActiveSession()
     await fitTerminal('close-session')
   }
+  if (!nextSessions.length && options?.closePanelWhenEmpty) {
+    emit('close')
+  }
+}
+
+const killActiveSession = async () => {
+  const session = activeSession.value
+  if (!session) return
+
+  // 这里显式区分“结束当前终端进程”和“仅关闭一个标签”。
+  // 当最后一个会话被 kill 后，同步收起整个 terminal 面板，符合 VS Code 风格的终端体验。
+  await closeSession(session.session_id, {
+    reason: 'kill-active-session',
+    closePanelWhenEmpty: sessions.value.length <= 1,
+  })
 }
 
 const clearActiveSessionBuffer = () => {
@@ -460,6 +743,7 @@ const clearActiveSessionBuffer = () => {
     buffer: '',
   }
   renderActiveSession()
+  updateSearchMatches('clear-active-buffer')
 }
 
 const ensureSession = async (options = {}) => {
@@ -517,13 +801,60 @@ const initTerminal = async () => {
     fontFamily: getComputedStyle(document.documentElement)
       .getPropertyValue('--editor-font-family')
       .trim() || "'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace",
-    fontSize: 14,
-    lineHeight: 1.3,
+    // 适当放大终端字号，提升控制台输出的可读性。
+    fontSize: 15,
+    lineHeight: 1.35,
     scrollback: 10000,
     theme: getTerminalTheme(),
   })
   terminal.loadAddon(fitAddon)
   terminal.open(terminalHostRef.value)
+  terminal.attachCustomKeyEventHandler((event) => {
+    const isMod = event.ctrlKey || event.metaKey
+    if (!isMod) {
+      if (event.key === 'Escape' && searchVisible.value) {
+        closeSearchPanel()
+        return false
+      }
+      if (event.key === 'F3') {
+        if (event.shiftKey) focusPrevSearchMatch()
+        else focusNextSearchMatch()
+        return false
+      }
+      return true
+    }
+
+    const normalizedKey = String(event.key || '').toLowerCase()
+    if (event.shiftKey && normalizedKey === 'c') {
+      void copySelectionToClipboard()
+      return false
+    }
+    if (event.shiftKey && normalizedKey === 'v') {
+      void pasteClipboardToTerminal()
+      return false
+    }
+    if (normalizedKey === 'f') {
+      void openSearchPanel()
+      return false
+    }
+    if (normalizedKey === 'a') {
+      terminal.selectAll()
+      return false
+    }
+    return true
+  })
+  if (typeof ResizeObserver !== 'undefined') {
+    terminalResizeObserver = new ResizeObserver(() => {
+      scheduleFitTerminal('host-resize-observer')
+    })
+    if (terminalHostRef.value) {
+      terminalResizeObserver.observe(terminalHostRef.value)
+    }
+    const hostParent = terminalHostRef.value?.parentElement
+    if (hostParent && hostParent !== terminalHostRef.value) {
+      terminalResizeObserver.observe(hostParent)
+    }
+  }
 
   // 这里把输入严格转发到当前活动会话，避免终端视图和后端 PTY 脱节。
   terminal.onData((data) => {
@@ -563,7 +894,7 @@ onMounted(async () => {
   unlistenExit = await listen('terminal-session-exit', (event) => {
     const sessionId = String(event?.payload?.session_id || '').trim()
     if (!sessionId) return
-    markSessionExited(sessionId, Number(event?.payload?.exit_code))
+    handleSessionExit(sessionId, Number(event?.payload?.exit_code))
   })
 })
 
@@ -598,6 +929,10 @@ watch(
   }
 )
 
+watch(searchKeyword, () => {
+  updateSearchMatches('search-keyword-change')
+})
+
 onBeforeUnmount(async () => {
   window.removeEventListener('resize', handleResize)
   if (typeof unlistenOutput === 'function') {
@@ -606,6 +941,12 @@ onBeforeUnmount(async () => {
   if (typeof unlistenExit === 'function') {
     await unlistenExit()
   }
+  if (pendingFitFrame && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(pendingFitFrame)
+    pendingFitFrame = 0
+  }
+  terminalResizeObserver?.disconnect?.()
+  terminalResizeObserver = null
   terminal?.dispose?.()
   terminal = null
   fitAddon = null
@@ -615,6 +956,7 @@ defineExpose({
   ensureSession,
   createSession,
   fitTerminal,
+  openSearch: openSearchPanel,
   focusTerminal: () => terminal?.focus?.(),
 })
 </script>
@@ -625,7 +967,7 @@ defineExpose({
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #1e1e1e;
+  background: var(--guaxi-panel-bg, #1e1e1e);
 }
 
 .guaxi-terminal-panel__toolbar {
@@ -635,8 +977,10 @@ defineExpose({
   gap: 10px;
   min-height: 35px;
   padding: 0 8px;
-  border-bottom: 1px solid #2b2b2b;
-  background: #252526;
+  border-top: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 82%, transparent);
+  background: var(--toolbar-bg, var(--guaxi-panel-bg, #252526));
+  box-shadow: none;
 }
 
 .guaxi-terminal-panel__tabs {
@@ -650,11 +994,12 @@ defineExpose({
   height: 35px;
   padding: 0 8px;
   border: 0;
-  border-bottom: 1px solid #ffffff;
+  border-bottom: 1px solid color-mix(in srgb, var(--guaxi-text-primary, #ffffff) 92%, transparent);
   background: transparent;
-  color: #ffffff;
+  color: var(--guaxi-text-primary, #ffffff);
   font-size: 12px;
   cursor: default;
+  box-shadow: none;
 }
 
 .guaxi-terminal-panel__toolbar-right {
@@ -667,10 +1012,10 @@ defineExpose({
 .guaxi-terminal-panel__profile-select,
 .guaxi-terminal-panel__icon-btn {
   height: 24px;
-  border: 1px solid #3a3d41;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 88%, transparent);
   border-radius: 3px;
-  background: #2d2d30;
-  color: #d4d4d4;
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #2d2d30) 92%, transparent);
+  color: var(--guaxi-text-primary, #d4d4d4);
   font-family: var(--editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
 }
 
@@ -716,10 +1061,61 @@ defineExpose({
   position: relative;
 }
 
+.guaxi-terminal-panel__search {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 84%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--toolbar-bg, var(--guaxi-panel-bg, #252526)) 96%, transparent);
+  box-shadow: none;
+}
+
+.guaxi-terminal-panel__search-input {
+  width: 180px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 88%, transparent);
+  border-radius: 4px;
+  background: var(--guaxi-panel-bg, #1e1e1e);
+  color: var(--guaxi-text-primary, #d4d4d4);
+  font-family: var(--editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
+  font-size: 12px;
+}
+
+.guaxi-terminal-panel__search-count {
+  min-width: 40px;
+  color: var(--guaxi-text-secondary, #9da5b4);
+  font-size: 12px;
+  text-align: center;
+}
+
+.guaxi-terminal-panel__search-btn {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #3a3d41) 88%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #2d2d30) 92%, transparent);
+  color: var(--guaxi-text-primary, #d4d4d4);
+  font-family: var(--editor-font-family, 'Maple Mono NF CN', Consolas, monospace);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.guaxi-terminal-panel__search-btn--close {
+  color: color-mix(in srgb, #b91c1c 78%, var(--guaxi-text-primary));
+}
+
 .guaxi-terminal-panel__terminal {
   height: 100%;
   min-height: 0;
-  background: #1e1e1e;
+  background: var(--guaxi-panel-bg, #1e1e1e);
 }
 
 .guaxi-terminal-panel__terminal :deep(.xterm) {
@@ -749,8 +1145,8 @@ defineExpose({
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: rgba(30, 30, 30, 0.92);
-  color: #d4d4d4;
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #1e1e1e) 92%, transparent);
+  color: var(--guaxi-text-primary, #d4d4d4);
   pointer-events: none;
 }
 
@@ -760,7 +1156,7 @@ defineExpose({
 }
 
 .guaxi-terminal-panel__status-subtitle {
-  color: #9da5b4;
+  color: var(--guaxi-text-secondary, #9da5b4);
   font-size: 12px;
 }
 
@@ -768,13 +1164,13 @@ defineExpose({
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: 1px solid #2b2b2b;
-  background: #252526;
+  border-left: 1px solid color-mix(in srgb, var(--guaxi-border, #2b2b2b) 82%, transparent);
+  background: var(--toolbar-bg, var(--guaxi-panel-bg, #252526));
 }
 
 .guaxi-terminal-panel__sidebar-title {
   padding: 8px 10px 6px;
-  color: #9da5b4;
+  color: var(--guaxi-text-secondary, #9da5b4);
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -796,13 +1192,13 @@ defineExpose({
   padding: 0 8px;
   border: 0;
   background: transparent;
-  color: #c8c8c8;
+  color: var(--guaxi-text-primary, #c8c8c8);
   cursor: pointer;
 }
 
 .guaxi-terminal-panel__session-item.active {
-  background: #37373d;
-  color: #ffffff;
+  background: color-mix(in srgb, var(--primary-color, #4acadb) 18%, var(--guaxi-panel-bg, #37373d));
+  color: var(--guaxi-text-primary, #ffffff);
 }
 
 .guaxi-terminal-panel__session-label,
@@ -821,7 +1217,7 @@ defineExpose({
 }
 
 .guaxi-terminal-panel__session-state {
-  color: #d7ba7d;
+  color: color-mix(in srgb, #d7ba7d 72%, var(--guaxi-text-primary, #d4d4d4));
 }
 
 .guaxi-terminal-panel__session-close {
@@ -833,50 +1229,10 @@ defineExpose({
 
 .guaxi-terminal-panel__session-empty {
   padding: 8px 10px;
-  color: #9da5b4;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel {
-  background: #ffffff;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__toolbar,
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__sidebar {
-  background: #f3f3f3;
-  border-color: #dddddd;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__tool-tab {
-  color: #1f2328;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__sidebar-title,
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__session-empty,
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__status-subtitle {
-  color: #6b7280;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__profile-select,
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__icon-btn {
-  background: #ffffff;
-  color: #1f2328;
-  border-color: #d0d7de;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__terminal {
-  background: #ffffff;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__session-item {
-  color: #1f2328;
-}
-
-:global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__session-item.active {
-  background: #e7eefb;
+  color: var(--guaxi-text-secondary, #9da5b4);
 }
 
 :global(:root[data-guaxi-theme='light']) .guaxi-terminal-panel__status-overlay {
-  background: rgba(255, 255, 255, 0.92);
   color: #1f2328;
 }
 </style>

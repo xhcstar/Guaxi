@@ -404,7 +404,7 @@
               class="python-runtime-entry python-runtime-entry--console"
               :class="{ active: pythonConsoleVisible }"
               @click="togglePythonConsolePanel('toolbar-toggle-console')"
-              title="Python 控制台 (Ctrl+`)"
+              title="终端 (Ctrl+`)"
             >
               <Icon :icon="squareTerminalIcon" width="14" height="14" />
               <span class="python-runtime-entry__label">Term</span>
@@ -443,12 +443,28 @@
                 </div>
               </div>
 
+              <div v-if="pythonRuntimeOperation.active" class="python-runtime-operation-card">
+                <div class="python-runtime-operation-card__title">包管理任务进行中</div>
+                <div class="python-runtime-operation-card__subtitle">
+                  {{ pythonRuntimeOperation.stage || '正在执行后台任务' }}
+                </div>
+                <div class="python-runtime-operation-card__packages">
+                  {{ pythonRuntimeOperationSummary }}
+                </div>
+                <div class="python-runtime-operation-card__progress" aria-hidden="true">
+                  <span class="python-runtime-operation-card__progress-bar"></span>
+                </div>
+              </div>
+
               <div class="python-runtime-panel__actions">
                 <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="resetPythonKernelSession">
                   重启会话
                 </button>
                 <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="installPythonRuntimeArchive">
                   导入运行时包
+                </button>
+                <button type="button" class="python-runtime-chip-btn" :disabled="pythonRuntimeBusy" @click="upgradeManagedPip">
+                  升级 Pip
                 </button>
               </div>
 
@@ -538,30 +554,45 @@
                       </label>
                       <span class="python-runtime-package-row__name">{{ pkg }}</span>
                       <div class="python-runtime-package-row__actions">
-                        <button
-                          type="button"
-                          class="python-runtime-package-row__action"
-                          :disabled="pythonRuntimeBusy"
-                          @click="managePythonPackage(pkg, 'upgrade')"
-                        >
-                          升级
-                        </button>
-                        <button
-                          type="button"
-                          class="python-runtime-package-row__action"
-                          :disabled="pythonRuntimeBusy"
-                          @click="managePythonPackage(pkg, 'reinstall')"
-                        >
-                          重装
-                        </button>
-                        <button
-                          type="button"
-                          class="python-runtime-package-row__action is-danger"
-                          :disabled="pythonRuntimeBusy"
-                          @click="managePythonPackage(pkg, 'uninstall')"
-                        >
-                          卸载
-                        </button>
+                        <n-tooltip placement="top" trigger="hover">
+                          <template #trigger>
+                            <button
+                              type="button"
+                              class="python-runtime-package-row__action python-runtime-package-row__action--icon"
+                              :disabled="pythonRuntimeBusy"
+                              @click="managePythonPackage(pkg, 'upgrade')"
+                            >
+                              <Icon :icon="arrowUpCircleIcon" width="14" height="14" />
+                            </button>
+                          </template>
+                          升级包
+                        </n-tooltip>
+                        <n-tooltip placement="top" trigger="hover">
+                          <template #trigger>
+                            <button
+                              type="button"
+                              class="python-runtime-package-row__action python-runtime-package-row__action--icon"
+                              :disabled="pythonRuntimeBusy"
+                              @click="managePythonPackage(pkg, 'reinstall')"
+                            >
+                              <Icon :icon="refreshCwIcon" width="14" height="14" />
+                            </button>
+                          </template>
+                          重装包
+                        </n-tooltip>
+                        <n-tooltip placement="top" trigger="hover">
+                          <template #trigger>
+                            <button
+                              type="button"
+                              class="python-runtime-package-row__action python-runtime-package-row__action--icon is-danger"
+                              :disabled="pythonRuntimeBusy"
+                              @click="managePythonPackage(pkg, 'uninstall')"
+                            >
+                              <Icon :icon="trash2Icon" width="14" height="14" />
+                            </button>
+                          </template>
+                          卸载包
+                        </n-tooltip>
                       </div>
                     </div>
                   </div>
@@ -1033,6 +1064,9 @@ import languagesIcon from '@iconify-icons/lucide/languages'
 import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
 import volume2Icon from '@iconify-icons/lucide/volume-2'
+import arrowUpCircleIcon from '@iconify-icons/lucide/arrow-up-circle'
+import refreshCwIcon from '@iconify-icons/lucide/refresh-cw'
+import trash2Icon from '@iconify-icons/lucide/trash-2'
 import mermaid from 'mermaid'
 import folderIcon from '@iconify-icons/lucide/folder'
 import fileTextIcon from '@iconify-icons/lucide/file-text'
@@ -1175,6 +1209,13 @@ const pythonRuntimePackageActionLog = ref({
   title: '',
   stdout: '',
   stderr: '',
+})
+const pythonRuntimeOperation = ref({
+  active: false,
+  action: '',
+  packages: [],
+  startedAt: 0,
+  stage: '',
 })
 const pythonRuntimeArchivePath = ref('')
 const pythonRuntimeArchiveInspection = ref(null)
@@ -2944,6 +2985,12 @@ const pythonRuntimePackagesFiltered = computed(() => {
   return packages.filter((pkg) => String(pkg || '').toLowerCase().includes(keyword))
 })
 const pythonRuntimeSelectedPackageCount = computed(() => pythonRuntimeSelectedPackages.value.length)
+const pythonRuntimeOperationSummary = computed(() => {
+  if (!pythonRuntimeOperation.value?.active) return ''
+  const packages = Array.isArray(pythonRuntimeOperation.value?.packages) ? pythonRuntimeOperation.value.packages : []
+  const preview = packages.slice(0, 3).join(', ')
+  return packages.length > 3 ? `${preview} 等 ${packages.length} 个包` : preview
+})
 
 let unlistenTemplateInsert = null
 let templateInsertListenerUnmounted = false
@@ -10117,6 +10164,15 @@ const handleKeyDown = (e) => {
     String(e.key || '').toLowerCase() === 'f'
 
   if (isFindShortcut) {
+    const eventTarget = e.target
+    const terminalSearchScope = pythonConsoleVisible.value
+      && eventTarget?.closest?.('.guaxi-terminal-panel')
+    if (terminalSearchScope) {
+      e.preventDefault()
+      e.stopPropagation()
+      terminalPanelRef.value?.openSearch?.()
+      return
+    }
     const previewOnly = mode.value === 'preview' && showPreview.value && !showEditor.value && previewMode.value !== 'realtime'
     if (previewOnly) {
       e.preventDefault()
@@ -10736,6 +10792,12 @@ const layoutVisibleEditors = () => {
       secondaryEditor?.layout?.()
     } catch {
     }
+    if (pythonConsoleVisible.value) {
+      // 终端高度变化后同步触发一次 fit，避免 xterm 继续沿用旧行数，底部出现空白区域。
+      requestAnimationFrame(() => {
+        void terminalPanelRef.value?.fitTerminal?.('python-console-layout')
+      })
+    }
     logger.debug('[PythonConsole] layout refreshed', {
       visible: pythonConsoleVisible.value,
       height: pythonConsoleHeight.value,
@@ -10909,8 +10971,11 @@ const installPythonPackages = async (packages, reason = 'manual') => {
 
   pythonRuntimeBusy.value = true
   try {
+    beginPythonRuntimeOperation('install', normalizedPackages, '正在解析依赖并安装包')
     logger.info('[PythonRuntime] install packages start', { packages: normalizedPackages, reason })
     const res = await invoke('python_runtime_install_packages', { request: { packages: normalizedPackages } })
+    openPythonRuntimePackageActionLog(`安装输出 · ${normalizedPackages.join(', ')}`, res)
+    updatePythonRuntimeOperationStage('正在刷新已安装包列表')
     if (res?.ok) {
       message.success(`已安装 ${normalizedPackages.join(', ')}`)
       pythonRuntimePackageInput.value = ''
@@ -10923,6 +10988,7 @@ const installPythonPackages = async (packages, reason = 'manual') => {
     logger.error('[PythonRuntime] install packages failed', { reason, error })
     message.error(`安装失败：${String(error?.message || error)}`)
   } finally {
+    endPythonRuntimeOperation('安装流程已结束')
     pythonRuntimeBusy.value = false
   }
 }
@@ -10998,6 +11064,46 @@ const openPythonRuntimePackageActionLog = (title, res) => {
   }
 }
 
+const beginPythonRuntimeOperation = (action, packages, stage) => {
+  pythonRuntimeOperation.value = {
+    active: true,
+    action: String(action || '').trim(),
+    packages: Array.isArray(packages) ? packages.slice() : [],
+    startedAt: Date.now(),
+    stage: String(stage || '').trim(),
+  }
+  logger.info('[PythonRuntime] operation start', {
+    action: pythonRuntimeOperation.value.action,
+    packages: pythonRuntimeOperation.value.packages,
+    stage: pythonRuntimeOperation.value.stage,
+  })
+}
+
+const updatePythonRuntimeOperationStage = (stage) => {
+  if (!pythonRuntimeOperation.value?.active) return
+  pythonRuntimeOperation.value = {
+    ...pythonRuntimeOperation.value,
+    stage: String(stage || '').trim(),
+  }
+}
+
+const endPythonRuntimeOperation = (stage = '') => {
+  if (!pythonRuntimeOperation.value?.active) return
+  logger.info('[PythonRuntime] operation finish', {
+    action: pythonRuntimeOperation.value.action,
+    packages: pythonRuntimeOperation.value.packages,
+    stage: String(stage || pythonRuntimeOperation.value.stage || '').trim(),
+    elapsedMs: Date.now() - Number(pythonRuntimeOperation.value.startedAt || 0),
+  })
+  pythonRuntimeOperation.value = {
+    active: false,
+    action: '',
+    packages: [],
+    startedAt: 0,
+    stage: '',
+  }
+}
+
 const closePythonRuntimePackageActionLog = () => {
   pythonRuntimePackageActionLog.value = {
     visible: false,
@@ -11057,6 +11163,7 @@ const executePythonPackageAction = async (packages, action = 'upgrade') => {
 
   pythonRuntimeBusy.value = true
   try {
+    beginPythonRuntimeOperation(normalizedAction, normalizedPackages, `${actionLabel}任务已提交`)
     logger.info('[PythonRuntime] manage package start', {
       action: normalizedAction,
       packages: normalizedPackages,
@@ -11073,6 +11180,7 @@ const executePythonPackageAction = async (packages, action = 'upgrade') => {
       `${actionLabel}输出 · ${normalizedPackages.join(', ')}`,
       res
     )
+    updatePythonRuntimeOperationStage('正在刷新已安装包列表')
 
     if (res?.ok) {
       message.success(`${actionLabel}成功：${normalizedPackages.join(', ')}`)
@@ -11095,6 +11203,7 @@ const executePythonPackageAction = async (packages, action = 'upgrade') => {
     })
     message.error(`${actionLabel}失败：${String(error?.message || error)}`)
   } finally {
+    endPythonRuntimeOperation(`${actionLabel}流程已结束`)
     pythonRuntimeBusy.value = false
   }
 }
@@ -11111,6 +11220,12 @@ const managePythonPackage = async (pkg, action = 'upgrade') => {
 
 const manageSelectedPythonPackages = async (action = 'upgrade') => {
   await executePythonPackageAction(pythonRuntimeSelectedPackages.value, action)
+}
+
+const upgradeManagedPip = async () => {
+  // 这里单独暴露一个 pip 升级入口，避免用户必须手输命令，也让输出继续复用现有日志面板。
+  logger.info('[PythonRuntime] upgrade pip requested from workbench')
+  await executePythonPackageAction(['pip'], 'upgrade')
 }
 
 const resetPythonKernelSession = async () => {
@@ -13663,12 +13778,12 @@ const previewModeOptions = [
   { label: '预览模式 (Ctrl+2)', key: 'preview', icon: () => h(Icon, { icon: eyeIcon, width: 16, height: 16 }) },
   { label: '分屏预览 (Ctrl+3)', key: 'split', icon: () => h(Icon, { icon: columns2Icon, width: 16, height: 16 }) },
   { label: '实时预览 (Ctrl+4)', key: 'realtime', icon: () => h(Icon, { icon: sparklesIcon, width: 16, height: 16 }) }
-  , { label: 'Explorer Mode (Ctrl+5)', key: 'explorer', icon: () => h(Icon, { icon: scanSearchIcon, width: 16, height: 16 }) }
+  , { label: '探索模式 (Ctrl+5)', key: 'explorer', icon: () => h(Icon, { icon: scanSearchIcon, width: 16, height: 16 }) }
 ];
 
 const previewModeLabel = computed(() => {
   if (isExplorerSurfaceActive.value) {
-    return 'Explorer Mode';
+    return '探索模式';
   }
   if (previewMode.value === 'toggle') {
     return mode.value === 'edit' ? '编辑模式' : '预览模式';
@@ -16096,6 +16211,7 @@ onUnmounted(() => {
 .python-runtime-panel.is-dark .python-runtime-guide,
 .python-runtime-panel.is-dark .python-runtime-archive-card,
 .python-runtime-panel.is-dark .python-runtime-status-card,
+.python-runtime-panel.is-dark .python-runtime-operation-card,
 .python-runtime-panel.is-dark .python-runtime-install-card,
 .python-runtime-panel.is-dark .python-runtime-package-browser,
 .python-runtime-panel.is-dark .python-runtime-package-row {
@@ -16215,6 +16331,53 @@ onUnmounted(() => {
   color: var(--guaxi-text-primary);
 }
 
+.python-runtime-operation-card {
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #4acadb) 28%, var(--guaxi-border));
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 88%, rgba(74, 202, 219, 0.14));
+}
+
+.python-runtime-operation-card__title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--guaxi-text-primary);
+}
+
+.python-runtime-operation-card__subtitle,
+.python-runtime-operation-card__packages {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--guaxi-text-secondary);
+}
+
+.python-runtime-operation-card__progress {
+  margin-top: 10px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--guaxi-border) 72%, transparent);
+}
+
+.python-runtime-operation-card__progress-bar {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary-color, #4acadb), color-mix(in srgb, var(--primary-color, #4acadb) 68%, #ffffff));
+  animation: python-runtime-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes python-runtime-progress-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 .python-runtime-install-card,
 .python-runtime-package-browser {
   padding: 14px;
@@ -16296,15 +16459,15 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 7px 10px;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--guaxi-border) 84%, transparent);
   background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
   color: var(--guaxi-text-primary);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.3;
   word-break: break-word;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .python-runtime-package-row__selector {
@@ -16331,8 +16494,8 @@ onUnmounted(() => {
 .python-runtime-package-row__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
 .python-runtime-package-row__action {
@@ -16345,6 +16508,20 @@ onUnmounted(() => {
   padding: 4px 10px;
   cursor: pointer;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.python-runtime-package-row__action--icon {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.python-runtime-package-row__action--icon svg {
+  display: block;
 }
 
 .python-runtime-package-row__action:hover {
@@ -16411,8 +16588,9 @@ onUnmounted(() => {
   overflow: auto;
   padding: 10px 12px;
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.92);
-  color: #e2e8f0;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border) 84%, transparent);
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+  color: var(--guaxi-text-primary);
   font-size: 12px;
   line-height: 1.5;
   font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace);
@@ -16421,7 +16599,9 @@ onUnmounted(() => {
 }
 
 .python-runtime-package-log__output.is-error {
-  color: #fecaca;
+  background: color-mix(in srgb, var(--guaxi-panel-bg) 92%, transparent);
+  color: color-mix(in srgb, #b91c1c 78%, var(--guaxi-text-primary));
+  border-color: color-mix(in srgb, #b91c1c 24%, var(--guaxi-border));
 }
 
 .python-runtime-package-browser__empty {
@@ -18352,6 +18532,12 @@ img {
   overflow: hidden;
   border-top: none;
   background: var(--toolbar-bg, #252526);
+  box-shadow: none;
+}
+
+.python-console-dock::before,
+.python-console-dock::after {
+  content: none !important;
 }
 
 .python-console-dock.dragging {
@@ -18362,10 +18548,17 @@ img {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 14px;
+  height: 16px;
   cursor: ns-resize;
   user-select: none;
-  background: var(--toolbar-bg, #252526);
+  background: var(--toolbar-bg, var(--guaxi-panel-bg, #252526));
+  box-shadow: none;
+  border-top: none;
+}
+
+.python-console-dock__resize-handle::before,
+.python-console-dock__resize-handle::after {
+  content: none !important;
 }
 
 .python-console-dock__resize-grip {
@@ -18389,12 +18582,26 @@ img {
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 247, 250, 0.98));
-  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
 }
 
 .python-console-dock :deep(.guaxi-terminal-panel) {
   width: 100%;
   height: 100%;
+  border-top: none !important;
+  box-shadow: none !important;
+}
+
+.python-console-dock :deep(.guaxi-terminal-panel__toolbar) {
+  border-top: none !important;
+  box-shadow: none !important;
+}
+
+.python-console-dock :deep(.guaxi-terminal-panel__toolbar::before),
+.python-console-dock :deep(.guaxi-terminal-panel__toolbar::after),
+.python-console-dock :deep(.guaxi-terminal-panel::before),
+.python-console-dock :deep(.guaxi-terminal-panel::after) {
+  content: none !important;
 }
 
 .python-console-panel__header {
