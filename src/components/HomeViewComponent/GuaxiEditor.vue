@@ -18018,6 +18018,8 @@ onUnmounted(() => {
 .dark .python-runtime-install-card,
 .dark-mode .python-runtime-package-browser,
 .dark .python-runtime-package-browser,
+.dark-mode .python-runtime-package-log,
+.dark .python-runtime-package-log,
 .dark-mode .python-runtime-package-row,
 .dark .python-runtime-package-row,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-meta__item,
@@ -18027,9 +18029,25 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .python-runtime-status-card,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-install-card,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-browser,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-log,
 :global(:root[data-guaxi-theme='dark']) .python-runtime-package-row {
   border-color: rgba(71, 85, 105, 0.72);
   background: rgba(15, 23, 42, 0.68);
+}
+
+.dark-mode .python-runtime-package-log__output,
+.dark .python-runtime-package-log__output,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-log__output {
+  /* Keep stdout/stderr panels on the same dark-blue card layer as the package rows above. */
+  background: rgba(15, 23, 42, 0.68);
+  border-color: rgba(71, 85, 105, 0.72);
+}
+
+.dark-mode .python-runtime-package-log__output.is-error,
+.dark .python-runtime-package-log__output.is-error,
+:global(:root[data-guaxi-theme='dark']) .python-runtime-package-log__output.is-error {
+  background: rgba(15, 23, 42, 0.68);
+  border-color: color-mix(in srgb, #ef4444 32%, rgba(71, 85, 105, 0.72));
 }
 
 .dark-mode .python-runtime-ghost-btn,

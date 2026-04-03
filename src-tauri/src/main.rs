@@ -539,6 +539,7 @@ async fn main() {
              commands::terminal::terminal_write_session,
              commands::terminal::terminal_resize_session,
              commands::terminal::terminal_close_session,
+             commands::terminal::terminal_probe_session_exit,
              commands::terminal::terminal_list_sessions,
             commands::frontend_logging::frontend_log,
             commands::frontend_logging::frontend_log_batch,

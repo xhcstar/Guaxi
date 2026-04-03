@@ -70,6 +70,12 @@ pub struct TerminalCloseRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct TerminalProbeExitResponse {
+    pub exited: bool,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TerminalSessionSnapshot {
     pub session_id: String,
     pub profile_id: String,
@@ -616,21 +622,28 @@ fn spawn_terminal_reader(
             }
         }
 
+        if let Ok(mut sessions) = session_store().lock() {
+            sessions.remove(&session_id);
+        }
+
+        // In some Windows PTY / interactive shell cases, the process has already torn down
+        // the PTY stream but waiting synchronously for `child.wait()` can hang for a long time.
+        // Treating EOF as terminal exit keeps the UI responsive and prevents dead terminal tabs.
         let exit_code = match child_handle.child.lock() {
-            Ok(mut child) => child.wait().ok().map(|status| status.exit_code() as i32),
+            Ok(mut child) => child
+                .try_wait()
+                .ok()
+                .flatten()
+                .map(|status| status.exit_code() as i32),
             Err(error) => {
                 warn!(
                     session_id = session_id.as_str(),
                     error = %error,
-                    "[Terminal] lock child failed while waiting exit"
+                    "[Terminal] lock child failed while probing exit"
                 );
                 None
             }
         };
-
-        if let Ok(mut sessions) = session_store().lock() {
-            sessions.remove(&session_id);
-        }
 
         let payload = TerminalExitEvent {
             session_id: session_id.clone(),
@@ -855,4 +868,76 @@ pub fn terminal_close_session(request: TerminalCloseRequest) -> Result<(), Strin
         "[Terminal] session closed by command"
     );
     Ok(())
+}
+
+#[command]
+pub fn terminal_probe_session_exit(
+    app: AppHandle,
+    request: TerminalCloseRequest,
+) -> Result<TerminalProbeExitResponse, String> {
+    let session_id = request.session_id.trim().to_string();
+    if session_id.is_empty() {
+        return Ok(TerminalProbeExitResponse {
+            exited: true,
+            exit_code: None,
+        });
+    }
+
+    let session = {
+        let sessions = session_store()
+            .lock()
+            .map_err(|e| format!("lock terminal sessions failed: {e}"))?;
+        sessions.get(session_id.as_str()).cloned()
+    };
+
+    let Some(session) = session else {
+        return Ok(TerminalProbeExitResponse {
+            exited: true,
+            exit_code: None,
+        });
+    };
+
+    let exit_code = match session.child.lock() {
+        Ok(mut child) => child
+            .try_wait()
+            .map_err(|e| format!("probe terminal exit failed: {e}"))?
+            .map(|status| status.exit_code() as i32),
+        Err(error) => {
+            return Err(format!("lock terminal child failed: {error}"));
+        }
+    };
+
+    if exit_code.is_none() {
+        return Ok(TerminalProbeExitResponse {
+            exited: false,
+            exit_code: None,
+        });
+    }
+
+    if let Ok(mut sessions) = session_store().lock() {
+        sessions.remove(session_id.as_str());
+    }
+
+    let payload = TerminalExitEvent {
+        session_id: session_id.clone(),
+        exit_code,
+    };
+    if let Err(error) = app.emit(TERMINAL_EXIT_EVENT, payload) {
+        warn!(
+            session_id = session_id.as_str(),
+            error = %error,
+            "[Terminal] emit probed exit failed"
+        );
+    }
+
+    info!(
+        session_id = session_id.as_str(),
+        exit_code = exit_code.unwrap_or_default(),
+        "[Terminal] session exit detected by probe"
+    );
+
+    Ok(TerminalProbeExitResponse {
+        exited: true,
+        exit_code,
+    })
 }

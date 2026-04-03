@@ -212,6 +212,7 @@ const searchKeyword = ref('')
 const searchInputRef = ref(null)
 const searchMatches = ref([])
 const searchActiveIndex = ref(-1)
+const terminalCommandDrafts = ref({})
 
 let terminal = null
 let fitAddon = null
@@ -376,6 +377,77 @@ const closeSearchPanel = () => {
   searchActiveIndex.value = -1
   terminal?.clearSelection?.()
   terminal?.focus?.()
+}
+
+const TERMINAL_EXIT_COMMANDS = new Set([
+  'exit',
+  'quit',
+  'logout',
+  'exit()',
+  'quit()',
+])
+
+const scheduleExitProbe = (sessionId, commandText) => {
+  const normalizedSessionId = String(sessionId || '').trim()
+  const normalizedCommand = String(commandText || '').trim().toLowerCase()
+  if (!normalizedSessionId || !TERMINAL_EXIT_COMMANDS.has(normalizedCommand)) return
+
+  logger.info('[TerminalPanel] schedule exit probe', {
+    sessionId: normalizedSessionId,
+    command: normalizedCommand,
+  })
+
+  window.setTimeout(() => {
+    void invoke('terminal_probe_session_exit', {
+      request: {
+        session_id: normalizedSessionId,
+      },
+    }).then((response) => {
+      if (!response?.exited) return
+      syncExitedSession(normalizedSessionId, Number(response?.exit_code))
+    }).catch((error) => {
+      logger.warn('[TerminalPanel] probe session exit failed', {
+        sessionId: normalizedSessionId,
+        command: normalizedCommand,
+        error,
+      })
+    })
+  }, 220)
+}
+
+const trackTerminalInput = (sessionId, data) => {
+  const normalizedSessionId = String(sessionId || '').trim()
+  if (!normalizedSessionId) return
+
+  const chunks = Array.from(String(data || ''))
+  let draft = String(terminalCommandDrafts.value[normalizedSessionId] || '')
+
+  chunks.forEach((char) => {
+    if (char === '\r' || char === '\n') {
+      const completedCommand = draft.trim()
+      terminalCommandDrafts.value = {
+        ...terminalCommandDrafts.value,
+        [normalizedSessionId]: '',
+      }
+      scheduleExitProbe(normalizedSessionId, completedCommand)
+      draft = ''
+      return
+    }
+
+    if (char === '\u0008' || char === '\u007f') {
+      draft = draft.slice(0, -1)
+      return
+    }
+
+    if (char >= ' ') {
+      draft += char
+    }
+  })
+
+  terminalCommandDrafts.value = {
+    ...terminalCommandDrafts.value,
+    [normalizedSessionId]: draft,
+  }
 }
 
 const focusNextSearchMatch = () => {
@@ -556,6 +628,54 @@ const handleSessionExit = (sessionId, exitCode) => {
   }
 }
 
+const syncExitedSession = (sessionId, exitCode) => {
+  const index = getSessionIndex(sessionId)
+  if (index < 0) return
+  const session = sessions.value[index]
+  const normalizedExitCode = Number.isFinite(exitCode) ? Number(exitCode) : null
+  const footer = `\r\n[Guaxi] terminal exited${normalizedExitCode !== null ? `, code ${normalizedExitCode}` : ''}\r\n`
+  const nextSessions = sessions.value
+    .map((item, itemIndex) => (itemIndex === index
+      ? {
+          ...item,
+          exited: true,
+          buffer: `${item.buffer || ''}${footer}`,
+        }
+      : item))
+    .filter((item) => item.session_id !== sessionId)
+
+  // Keep terminal tabs synchronized with the PTY lifecycle so an exited process
+  // never leaves behind a dead session entry that the user has to close manually.
+  delete terminalCommandDrafts.value[sessionId]
+  sessions.value = nextSessions
+
+  logger.info('[TerminalPanel] session exited and auto closed', {
+    sessionId,
+    profileId: session?.profile_id || '',
+    exitCode: normalizedExitCode,
+    remainingSessionCount: nextSessions.length,
+  })
+
+  if (activeSessionId.value === sessionId) {
+    const nextActiveSession = nextSessions[0] || null
+    activeSessionId.value = nextActiveSession?.session_id || ''
+    selectedProfileId.value = nextActiveSession?.profile_id || selectedProfileId.value
+    renderActiveSession()
+    if (!nextActiveSession) {
+      closeSearchPanel()
+      emit('close')
+    } else {
+      void fitTerminal('session-exited-auto-close')
+    }
+    return
+  }
+
+  if (!nextSessions.length) {
+    closeSearchPanel()
+    emit('close')
+  }
+}
+
 const loadProfilesWithTimeout = async () => {
   const fallbackProfiles = buildFallbackProfiles()
   const timeoutMs = 1200
@@ -693,6 +813,7 @@ const closeSession = async (sessionId, options = {}) => {
   const normalizedSessionId = String(sessionId || '').trim()
   if (!normalizedSessionId) return
   try {
+    delete terminalCommandDrafts.value[normalizedSessionId]
     await invoke('terminal_close_session', {
       request: {
         session_id: normalizedSessionId,
@@ -860,6 +981,7 @@ const initTerminal = async () => {
   terminal.onData((data) => {
     const sessionId = activeSessionId.value
     if (!sessionId) return
+    trackTerminalInput(sessionId, data)
     void invoke('terminal_write_session', {
       request: {
         session_id: sessionId,
@@ -894,7 +1016,7 @@ onMounted(async () => {
   unlistenExit = await listen('terminal-session-exit', (event) => {
     const sessionId = String(event?.payload?.session_id || '').trim()
     if (!sessionId) return
-    handleSessionExit(sessionId, Number(event?.payload?.exit_code))
+    syncExitedSession(sessionId, Number(event?.payload?.exit_code))
   })
 })
 
