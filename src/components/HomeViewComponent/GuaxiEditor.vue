@@ -792,7 +792,7 @@
         <div
           class="editor-split-wrapper"
           :class="[layoutMode, { 'vim-enabled': vimMode, 'with-python-console': pythonConsoleVisible }]"
-          :style="pythonConsoleVisible ? { paddingBottom: `${pythonConsoleHeight + 12}px` } : undefined"
+          :style="pythonConsoleVisible ? { paddingBottom: `${pythonConsoleHeight + pythonConsoleBottomOffset}px` } : undefined"
         >
           <div ref="editorContainer" class="editor-container" @mousedown="activateRegion('left')">
             <!-- 编辑器内容将在这里渲染 -->
@@ -810,10 +810,10 @@
 
         <transition name="python-console-slide">
           <div
-            v-show="pythonConsoleVisible"
+            v-if="pythonConsoleVisible"
             class="python-console-dock"
             :class="{ busy: pythonConsoleBusy, dragging: pythonConsoleResizing }"
-            :style="{ height: `${pythonConsoleHeight}px` }"
+            :style="{ height: `${pythonConsoleHeight}px`, bottom: `${pythonConsoleBottomOffset}px` }"
           >
             <div
               class="python-console-dock__resize-handle"
@@ -822,7 +822,13 @@
             >
               <span class="python-console-dock__resize-grip"></span>
             </div>
-            <div class="python-console-panel" :class="{ busy: pythonConsoleBusy }">
+            <GuaxiTerminalPanel
+              ref="terminalPanelRef"
+              :visible="pythonConsoleVisible"
+              :context-path="getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left')"
+              @close="togglePythonConsolePanel('panel-collapse')"
+            />
+            <div v-if="false" class="python-console-panel" :class="{ busy: pythonConsoleBusy }">
               <div class="python-console-panel__header">
                 <div>
                   <div class="python-console-panel__title">Python 控制台</div>
@@ -899,6 +905,7 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiEditorStatusBar from './GuaxiEditorStatusBar.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import GuaxiNotebookView from './GuaxiNotebookView.vue'
+import GuaxiTerminalPanel from './GuaxiTerminalPanel.vue'
 import { NTooltip, NIcon, useMessage, NDropdown, NPopover, NInputNumber, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import { EyeOutline, LogoVimeo, CloseOutline, ExitOutline, SaveOutline, ArrowBackOutline, ArrowForwardOutline } from '@vicons/ionicons5'
@@ -1080,9 +1087,15 @@ const pythonConsoleHistory = ref([])
 const pythonConsolePinnedOutput = ref('')
 const pythonConsoleOutputRef = ref(null)
 const notebookViewRef = ref(null)
+const terminalPanelRef = ref(null)
 let notebookDiskPersistTimer = null
 let notebookDiskPersistInFlight = false
 const pythonConsoleHeight = ref(240)
+const EDITOR_STATUS_BAR_HEIGHT = 22
+const VIM_STATUS_BAR_HEIGHT = 20
+const pythonConsoleBottomOffset = computed(
+  () => EDITOR_STATUS_BAR_HEIGHT + (vimMode.value ? VIM_STATUS_BAR_HEIGHT : 0)
+)
 const pythonConsoleMinHeight = 140
 const pythonConsoleMaxHeight = 560
 const pythonConsoleResizing = ref(false)
@@ -10733,7 +10746,7 @@ const resetCurrentPythonSession = async () => {
   scheduleRefreshPythonCellManagers()
 }
 
-const togglePythonConsolePanel = async (reason = 'manual-toggle') => {
+const togglePythonConsolePanel = async (reason = 'manual-toggle', options = {}) => {
   pythonConsoleVisible.value = !pythonConsoleVisible.value
   if (pythonConsoleVisible.value) {
     pythonConsoleHeight.value = pythonConsoleMaximized.value
@@ -10749,8 +10762,18 @@ const togglePythonConsolePanel = async (reason = 'manual-toggle') => {
   persistPythonConsoleState()
   layoutVisibleEditors()
   if (!pythonConsoleVisible.value) return
-  await ensurePythonSessionInfo(getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left'), reason)
-  scrollPythonConsoleToBottom()
+  void ensurePythonSessionInfo(getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left'), reason)
+  const requestedProfileId = String(
+    options?.profileId
+    || (String(reason || '').includes('notebook-open-console') ? 'ipython' : '')
+  ).trim()
+  await nextTick()
+  // 这里故意不 await 终端创建，避免点击工具栏后把主界面卡在后端 profile/会话初始化上。
+  void terminalPanelRef.value?.ensureSession?.({
+    profileId: requestedProfileId || undefined,
+    cwd: getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left'),
+  })
+  terminalPanelRef.value?.focusTerminal?.()
 }
 
 const handlePythonRuntimeWorkbenchPointerDown = (event) => {
@@ -17940,15 +17963,15 @@ img {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: 22px;
   z-index: 8;
   display: flex;
   flex-direction: column;
-  padding: 0 12px 12px;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
-  border-top: 1px solid rgba(15, 23, 42, 0.12);
-  background: transparent;
+  border-top: none;
+  background: var(--toolbar-bg, #252526);
 }
 
 .python-console-dock.dragging {
@@ -17962,6 +17985,7 @@ img {
   height: 14px;
   cursor: ns-resize;
   user-select: none;
+  background: var(--toolbar-bg, #252526);
 }
 
 .python-console-dock__resize-grip {
@@ -17986,6 +18010,11 @@ img {
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 247, 250, 0.98));
   box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+}
+
+.python-console-dock :deep(.guaxi-terminal-panel) {
+  width: 100%;
+  height: 100%;
 }
 
 .python-console-panel__header {

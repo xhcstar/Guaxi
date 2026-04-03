@@ -267,6 +267,42 @@
         <n-divider />
 
         <div>
+          <h3>终端配置</h3>
+          <p class="description">
+            配置全局终端面板的默认终端类型，以及 Windows 下 Git Bash 的可执行文件路径。
+          </p>
+          <n-form label-placement="left" label-width="auto" :show-require-mark="false">
+            <n-form-item label="默认终端">
+              <n-select
+                v-model:value="terminalDefaultProfile"
+                :options="terminalProfileOptions"
+                :disabled="loading || terminalSaving"
+                style="width: 240px"
+              />
+            </n-form-item>
+            <n-form-item label="Git Bash 路径">
+              <n-input
+                v-model:value="terminalGitBashPath"
+                placeholder="例如：D:\\Git\\bin\\bash.exe -i -l"
+                :disabled="loading || terminalSaving"
+              />
+            </n-form-item>
+            <n-form-item>
+              <n-button
+                type="primary"
+                size="small"
+                :disabled="loading || terminalSaving"
+                @click="handleTerminalConfigSave"
+              >
+                保存终端配置
+              </n-button>
+            </n-form-item>
+          </n-form>
+        </div>
+
+        <n-divider />
+
+        <div>
           <h3>WebRTC 文件传输</h3>
           <p class="description">
             房间码模式需要一个“信令服务”（只中转 WebRTC 协商信息，不传文件内容）。此处配置后，文件传输助手将不再需要手动填写信令地址。
@@ -318,6 +354,8 @@ const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
 const lspGithubToken = ref('')
 const webrtcSignalUrl = ref('')
+const terminalDefaultProfile = ref('powershell')
+const terminalGitBashPath = ref('')
 const lspServerStatuses = ref([])
 const ttsProvider = ref('sherpa-onnx')
 const ttsModel = ref('')
@@ -338,6 +376,7 @@ const ttsSaving = ref(false)
 const ttsTesting = ref(false)
 const asrSaving = ref(false)
 const asrTesting = ref(false)
+const terminalSaving = ref(false)
 const ttsProviderOptions = [
   { label: 'sherpa-onnx', value: 'sherpa-onnx' },
   { label: 'siliconflow', value: 'siliconflow' },
@@ -345,6 +384,18 @@ const ttsProviderOptions = [
 const asrProviderOptions = [
   { label: 'sherpa-onnx', value: 'sherpa-onnx' },
   { label: 'siliconflow', value: 'siliconflow' },
+]
+const terminalProfileOptions = [
+  { label: 'IPython', value: 'ipython' },
+  { label: 'PowerShell', value: 'powershell' },
+  { label: 'Git Bash', value: 'git-bash' },
+  { label: 'CMD', value: 'cmd' },
+  ...(typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
+    ? []
+    : [
+        { label: 'Bash', value: 'bash' },
+        { label: 'Zsh', value: 'zsh' },
+      ]),
 ]
 let ttsTestAudioObjectUrl = ''
 let ttsTestAudioElement = null
@@ -363,13 +414,14 @@ onMounted(async () => {
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
       (async () => {
-        const [seconds, enabled, signalUrl, githubToken, ttsConfig, asrConfig] = await Promise.all([
+        const [seconds, enabled, signalUrl, githubToken, ttsConfig, asrConfig, terminalConfig] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
           invoke('get_lsp_syntax_highlight_enabled'),
           invoke('get_webrtc_signal_url'),
           invoke('get_lsp_github_token'),
           invoke('get_tts_config'),
           invoke('get_asr_config'),
+          invoke('get_terminal_config'),
         ])
 
         if (typeof seconds === 'number' && seconds > 0) {
@@ -388,6 +440,8 @@ onMounted(async () => {
         asrProvider.value = String(asrConfig?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
         asrModel.value = String(asrConfig?.model || '').trim()
         asrExe.value = String(asrConfig?.exe || '').trim()
+        terminalDefaultProfile.value = String(terminalConfig?.default_profile || 'powershell').trim() || 'powershell'
+        terminalGitBashPath.value = String(terminalConfig?.git_bash_path || '').trim()
       })(),
     ])
 
@@ -405,6 +459,8 @@ onMounted(async () => {
     asrProvider.value = 'sherpa-onnx'
     asrModel.value = ''
     asrExe.value = 'utils/sherpa-onnx/sherpa-onnx-offline.exe'
+    terminalDefaultProfile.value = 'powershell'
+    terminalGitBashPath.value = ''
   } finally {
     loading.value = false
   }
@@ -551,6 +607,32 @@ const handleWebrtcSignalUrlSave = async () => {
     logger.error('保存 WebRTC 信令服务地址失败:', error)
   } finally {
     webrtcSignalSaving.value = false
+  }
+}
+
+const handleTerminalConfigSave = async () => {
+  try {
+    terminalSaving.value = true
+    const payload = {
+      default_profile: String(terminalDefaultProfile.value || '').trim() || 'powershell',
+      git_bash_path: String(terminalGitBashPath.value || '').trim(),
+    }
+    logger.info('[Preference] 保存终端配置', payload)
+    await invoke('set_terminal_config', {
+      terminalConfig: payload,
+    })
+    const saved = await invoke('get_terminal_config')
+    terminalDefaultProfile.value = String(saved?.default_profile || payload.default_profile).trim()
+      || payload.default_profile
+    terminalGitBashPath.value = String(saved?.git_bash_path || payload.git_bash_path).trim()
+    logger.info('[Preference] 终端配置已保存', {
+      defaultProfile: terminalDefaultProfile.value,
+      gitBashPath: terminalGitBashPath.value,
+    })
+  } catch (error) {
+    logger.error('[Preference] 保存终端配置失败:', error)
+  } finally {
+    terminalSaving.value = false
   }
 }
 

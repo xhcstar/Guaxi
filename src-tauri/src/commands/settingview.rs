@@ -95,6 +95,8 @@ pub struct AppConfig {
     tts_config: TtsConfig,
     #[serde(default)]
     asr_config: AsrConfig,
+    #[serde(default)]
+    terminal_config: TerminalConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -161,6 +163,31 @@ impl Default for AsrConfig {
             provider: default_asr_provider(),
             model: default_asr_model(),
             exe: default_asr_exe(),
+        }
+    }
+}
+
+fn default_terminal_default_profile() -> String {
+    if cfg!(windows) {
+        "powershell".to_string()
+    } else {
+        "bash".to_string()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TerminalConfig {
+    #[serde(default = "default_terminal_default_profile")]
+    pub default_profile: String,
+    #[serde(default)]
+    pub git_bash_path: String,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            default_profile: default_terminal_default_profile(),
+            git_bash_path: String::new(),
         }
     }
 }
@@ -660,6 +687,7 @@ impl Default for AppConfig {
             llm_config: LlmConfig::default(),
             tts_config: TtsConfig::default(),
             asr_config: AsrConfig::default(),
+            terminal_config: TerminalConfig::default(),
         }
     }
 }
@@ -1175,6 +1203,31 @@ pub fn set_asr_config(asr_config: AsrConfig) {
     if config.asr_config.exe.is_empty() {
         config.asr_config.exe = default_asr_exe();
     }
+    save_config(&config);
+}
+
+#[tauri::command]
+pub fn get_terminal_config() -> TerminalConfig {
+    let config = load_config();
+    config.terminal_config
+}
+
+#[tauri::command]
+pub fn set_terminal_config(terminal_config: TerminalConfig) {
+    let mut config = load_config();
+    let mut next = TerminalConfig {
+        default_profile: terminal_config.default_profile.trim().to_string(),
+        git_bash_path: terminal_config.git_bash_path.trim().to_string(),
+    };
+    if next.default_profile.is_empty() {
+        next.default_profile = default_terminal_default_profile();
+    }
+    config.terminal_config = next.clone();
+    info!(
+        default_profile = next.default_profile.as_str(),
+        git_bash_path = next.git_bash_path.as_str(),
+        "set_terminal_config"
+    );
     save_config(&config);
 }
 
