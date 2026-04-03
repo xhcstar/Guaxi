@@ -51,6 +51,15 @@ let contentChangeDisposable = null
 let contentSizeDisposable = null
 let currentAppliedTheme = ''
 
+// 设计说明：
+// 1. Python Cell 在未运行且代码很短时，不应该默认占出大块留白。
+// 2. 这里将编辑器最小高度收敛到“单行代码 + 上下内边距 + 少量边框余量”，
+//    让新插入的 Cell 默认更贴近内容高度，再随着代码增长自动扩展。
+const PYTHON_EDITOR_LINE_HEIGHT = 22
+const PYTHON_EDITOR_PADDING_VERTICAL = 24
+const PYTHON_EDITOR_MIN_CONTENT_HEIGHT = PYTHON_EDITOR_LINE_HEIGHT + PYTHON_EDITOR_PADDING_VERTICAL
+const PYTHON_EDITOR_MIN_HOST_HEIGHT = PYTHON_EDITOR_MIN_CONTENT_HEIGHT + 2
+
 const getMonacoThemeName = () => {
   return String(props.theme || '').toLowerCase() === 'dark' ? 'guaxi-dark' : 'guaxi-light'
 }
@@ -59,12 +68,17 @@ const ensureHostHeight = () => {
   const host = hostRef.value
   if (!(host instanceof HTMLElement)) return
   if (!editor) {
-    host.style.height = '168px'
+    host.style.height = `${PYTHON_EDITOR_MIN_HOST_HEIGHT}px`
     return
   }
-  const contentHeight = Math.max(Number(editor.getContentHeight?.() || 0), 168)
+  const contentHeight = Math.max(Number(editor.getContentHeight?.() || 0), PYTHON_EDITOR_MIN_CONTENT_HEIGHT)
   host.style.height = `${contentHeight + 2}px`
   editor.layout()
+  logger.debug('[NotebookPythonEditor] synced editor height', {
+    cellKey: String(props.cellKey || ''),
+    contentHeight,
+    hostHeight: contentHeight + 2,
+  })
 }
 
 const applyTheme = () => {
@@ -110,7 +124,7 @@ const mountMonacoEditor = async () => {
       insertSpaces: true,
       fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
       fontSize: 13,
-      lineHeight: 22,
+      lineHeight: PYTHON_EDITOR_LINE_HEIGHT,
       padding: { top: 12, bottom: 12 },
       scrollbar: {
         verticalScrollbarSize: 8,
@@ -207,7 +221,7 @@ watch(() => props.modelValue, (nextValue) => {
 .guaxi-notebook-python-editor {
   position: relative;
   width: 100%;
-  min-height: 168px;
+  min-height: 48px;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-border, rgba(15, 23, 42, 0.1)) 100%, transparent);
   background: color-mix(in srgb, var(--guaxi-notebook-panel-soft, #f8fafc) 92%, transparent);
@@ -218,7 +232,7 @@ watch(() => props.modelValue, (nextValue) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 168px;
+  min-height: 48px;
   color: var(--guaxi-notebook-muted, rgba(23, 32, 51, 0.72));
   font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace);
   font-size: 12px;
@@ -228,7 +242,7 @@ watch(() => props.modelValue, (nextValue) => {
 
 .guaxi-notebook-python-editor__fallback {
   width: 100%;
-  min-height: 168px;
+  min-height: 48px;
   resize: vertical;
   border: none;
   outline: none;

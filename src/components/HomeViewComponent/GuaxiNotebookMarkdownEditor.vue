@@ -15,6 +15,7 @@
       :value="modelValue"
       @input="handleFallbackInput"
       @focus="handleFallbackFocus"
+      @blur="handleFallbackBlur"
       @keydown="handleFallbackKeydown"
     />
   </div>
@@ -56,8 +57,17 @@ let model = null
 let contentChangeDisposable = null
 let contentSizeDisposable = null
 let focusDisposable = null
+let blurDisposable = null
 let currentAppliedTheme = ''
 let mountMonacoEditorPromise = null
+
+// 设计说明：
+// 1. Markdown Cell 进入编辑态后，也应该像正文编辑一样尽量贴合当前内容。
+// 2. 默认最小高度只保证一行内容可见，避免新建空 Markdown Cell 时出现大面积空白。
+const MARKDOWN_EDITOR_LINE_HEIGHT = 24
+const MARKDOWN_EDITOR_PADDING_VERTICAL = 28
+const MARKDOWN_EDITOR_MIN_CONTENT_HEIGHT = MARKDOWN_EDITOR_LINE_HEIGHT + MARKDOWN_EDITOR_PADDING_VERTICAL
+const MARKDOWN_EDITOR_MIN_HOST_HEIGHT = MARKDOWN_EDITOR_MIN_CONTENT_HEIGHT + 2
 
 const getMonacoThemeName = () => {
   return String(props.theme || '').toLowerCase() === 'dark' ? 'guaxi-dark' : 'guaxi-light'
@@ -67,12 +77,17 @@ const ensureHostHeight = () => {
   const host = hostRef.value
   if (!(host instanceof HTMLElement)) return
   if (!editor) {
-    host.style.height = '148px'
+    host.style.height = `${MARKDOWN_EDITOR_MIN_HOST_HEIGHT}px`
     return
   }
-  const contentHeight = Math.max(Number(editor.getContentHeight?.() || 0), 148)
+  const contentHeight = Math.max(Number(editor.getContentHeight?.() || 0), MARKDOWN_EDITOR_MIN_CONTENT_HEIGHT)
   host.style.height = `${contentHeight + 2}px`
   editor.layout()
+  logger.debug('[NotebookMarkdownEditor] synced editor height', {
+    cellKey: String(props.cellKey || ''),
+    contentHeight,
+    hostHeight: contentHeight + 2,
+  })
 }
 
 const applyTheme = () => {
@@ -163,6 +178,32 @@ const getEditorValue = () => {
   return String(props.modelValue || '')
 }
 
+const shouldKeepEditingForActiveElement = (element) => {
+  if (!(element instanceof Element)) return false
+  if (hostRef.value instanceof HTMLElement && hostRef.value.contains(element)) return true
+  return !!element.closest?.('.suggest-widget, .monaco-editor-hover, .monaco-hover, .context-view, .monaco-menu-container')
+}
+
+const requestBlurExit = (reason = 'blur') => {
+  window.setTimeout(() => {
+    const activeElement = document.activeElement
+    if (shouldKeepEditingForActiveElement(activeElement)) {
+      logger.debug('[NotebookMarkdownEditor] keep edit mode after blur because focus moved inside editor ecosystem', {
+        cellKey: String(props.cellKey || ''),
+        reason,
+        activeTag: String(activeElement?.tagName || '').toLowerCase(),
+      })
+      return
+    }
+    logger.info('[NotebookMarkdownEditor] request exit because editor lost focus', {
+      cellKey: String(props.cellKey || ''),
+      reason,
+      activeTag: String(activeElement?.tagName || '').toLowerCase(),
+    })
+    emit('request-exit', reason)
+  }, 0)
+}
+
 const mountMonacoEditor = async () => {
   if (editor || loadFailed.value) return editor
   if (mountMonacoEditorPromise) {
@@ -214,7 +255,7 @@ const mountMonacoEditor = async () => {
         selectionHighlight: false,
         fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
         fontSize: 14,
-        lineHeight: 24,
+        lineHeight: MARKDOWN_EDITOR_LINE_HEIGHT,
         padding: { top: 14, bottom: 14 },
         scrollbar: {
           verticalScrollbarSize: 8,
@@ -233,6 +274,9 @@ const mountMonacoEditor = async () => {
 
       focusDisposable = editor.onDidFocusEditorText(() => {
         emit('focus')
+      })
+      blurDisposable = editor.onDidBlurEditorText(() => {
+        requestBlurExit('blur')
       })
 
       editor.addCommand(monacoRef.KeyCode.Escape, () => {
@@ -272,6 +316,8 @@ const disposeMonacoEditor = () => {
   contentSizeDisposable = null
   focusDisposable?.dispose?.()
   focusDisposable = null
+  blurDisposable?.dispose?.()
+  blurDisposable = null
   editor?.dispose?.()
   editor = null
   model?.dispose?.()
@@ -287,6 +333,10 @@ const handleFallbackInput = (event) => {
 
 const handleFallbackFocus = () => {
   emit('focus')
+}
+
+const handleFallbackBlur = () => {
+  requestBlurExit('blur')
 }
 
 const handleFallbackKeydown = (event) => {
@@ -354,7 +404,7 @@ defineExpose({
 .guaxi-notebook-markdown-editor {
   position: relative;
   width: 100%;
-  min-height: 148px;
+  min-height: 54px;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border, rgba(15, 23, 42, 0.1)) 100%, transparent);
   background: var(--guaxi-notebook-panel-soft, #f8fafc);
@@ -365,7 +415,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 148px;
+  min-height: 54px;
   color: var(--guaxi-notebook-muted, rgba(23, 32, 51, 0.72));
   font-family: var(--editor-font-family, 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace);
   font-size: 12px;
@@ -375,7 +425,7 @@ defineExpose({
 
 .guaxi-notebook-markdown-editor__fallback {
   width: 100%;
-  min-height: 148px;
+  min-height: 54px;
   resize: vertical;
   border: none;
   outline: none;

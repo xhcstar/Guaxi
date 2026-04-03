@@ -125,16 +125,6 @@
         >
           <div class="guaxi-notebook__markdown-actions">
             <button
-              v-if="isMarkdownCellEditing(cell)"
-              type="button"
-              class="guaxi-notebook__icon-btn"
-              title="完成 Markdown 编辑"
-              aria-label="完成 Markdown 编辑"
-              @click="exitMarkdownEditMode(cell.key, 'toolbar-finish')"
-            >
-              <Icon :icon="checkIcon" width="16" height="16" />
-            </button>
-            <button
               type="button"
               class="guaxi-notebook__icon-btn danger"
               title="删除当前 Cell"
@@ -160,8 +150,7 @@
             class="guaxi-notebook__markdown-preview-shell is-clickable"
             role="button"
             tabindex="0"
-            @pointerdown.capture="handleMarkdownPreviewPointerDown(cell.key, $event)"
-            @click="enterMarkdownEditMode(cell.key, 'preview-click')"
+            @dblclick="enterMarkdownEditMode(cell.key, 'preview-dblclick')"
             @keydown.enter.prevent="enterMarkdownEditMode(cell.key, 'preview-enter')"
             @keydown.space.prevent="enterMarkdownEditMode(cell.key, 'preview-space')"
           >
@@ -373,7 +362,6 @@ import MarkdownIt from 'markdown-it'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
 import playIcon from '@iconify-icons/lucide/play'
-import checkIcon from '@iconify-icons/lucide/check'
 import checkCircleIcon from '@iconify-icons/lucide/check-circle-2'
 import plusIcon from '@iconify-icons/lucide/plus'
 import searchIcon from '@iconify-icons/lucide/search'
@@ -2151,100 +2139,6 @@ const updateMarkdownCell = (key, event) => {
   )
 }
 
-// 设计说明：
-// 1. Markdown 预览里会嵌套 code block、MathJax、Mermaid SVG 和媒体按钮，这些节点可能自己截获 click，
-//    导致外层 preview-shell 的 click 根本到不了，于是用户点了“看起来属于 cell 的区域”却进不了编辑态。
-// 2. 这里改成在 pointerdown capture 阶段提前识别“非交互性内容点击”，尽量在预览 DOM 还没被切成 Monaco 之前就切换编辑态，
-//    让代码块、公式、图表区域都具备一致的进入编辑体验。
-// 3. 对真正的交互控件（链接、按钮、媒体查看/保存按钮等）仍然放行，避免用户本来是想点按钮却被强制拉进编辑态。
-const isInteractiveMarkdownPreviewTarget = (event) => {
-  const eventPath = typeof event?.composedPath === 'function' ? event.composedPath() : []
-  return eventPath.some((node) => {
-    if (!(node instanceof Element)) return false
-    if (
-      node.matches?.(
-        'button, a[href], input, textarea, select, option, summary, details, [role="button"], [contenteditable="true"]',
-      )
-    ) {
-      return true
-    }
-    return node.classList?.contains('media-viewer-button')
-      || node.classList?.contains('media-save-button')
-      || node.classList?.contains('guaxi-notebook__search-btn')
-  })
-}
-
-const handleMarkdownPreviewPointerDown = (key, event) => {
-  const targetKey = String(key || '')
-  if (!targetKey) return
-
-  if (event?.button != null && Number(event.button) !== 0) {
-    logger.debug('[Notebook] ignore Markdown preview pointerdown because pointer button is not primary', {
-      key: targetKey,
-      button: Number(event.button),
-    })
-    return
-  }
-
-  if (isInteractiveMarkdownPreviewTarget(event)) {
-    logger.debug('[Notebook] keep Markdown preview pointerdown in preview mode because target is interactive', {
-      key: targetKey,
-    })
-    return
-  }
-
-  if (String(editingMarkdownCellKey.value || '') === targetKey) {
-    return
-  }
-
-  logger.info('[Notebook] enter markdown edit mode from preview pointerdown', {
-    key: targetKey,
-  })
-  enterMarkdownEditMode(targetKey, 'preview-pointerdown')
-}
-
-const handleDocumentPointerDownForMarkdownEdit = (event) => {
-  const activeKey = String(editingMarkdownCellKey.value || '')
-  if (!activeKey) return
-
-  const target = event?.target
-  if (!(target instanceof Element)) return
-
-  const eventPath = typeof event?.composedPath === 'function' ? event.composedPath() : []
-  const isInsideMonacoOverlay = eventPath.some((node) => {
-    return node instanceof Element
-      && node.matches?.('.suggest-widget, .monaco-editor-hover, .monaco-hover, .context-view, .monaco-menu-container')
-  })
-
-  if (isInsideMonacoOverlay || target.closest('.suggest-widget, .monaco-editor-hover, .monaco-hover, .context-view, .monaco-menu-container')) {
-    logger.debug('[Notebook] keep markdown edit mode because pointer is inside Monaco overlay', {
-      key: activeKey,
-    })
-    return
-  }
-
-  const currentCell = notebookRootRef.value?.querySelector?.(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(activeKey)}"]`)
-  const clickedInsideActiveCell = eventPath.some((node) => {
-    if (!(node instanceof Element)) return false
-    if (currentCell instanceof Element && currentCell.contains(node)) return true
-    return String(node.getAttribute?.('data-cell-key') || '') === activeKey
-  })
-
-  if (clickedInsideActiveCell || (currentCell instanceof Element && currentCell.contains(target))) {
-    logger.debug('[Notebook] keep markdown edit mode because pointer is still inside active cell', {
-      key: activeKey,
-      targetTag: String(target.tagName || '').toLowerCase(),
-    })
-    return
-  }
-
-  logger.info('[Notebook] exit markdown edit mode because user clicked outside active cell', {
-    key: activeKey,
-    targetTag: String(target.tagName || '').toLowerCase(),
-  })
-  exitMarkdownEditMode(activeKey, 'outside-pointerdown')
-}
-
 const updatePythonCell = (key, payload) => {
   if (payload?.target) {
     resizeTextareaToContent(payload.target)
@@ -3277,7 +3171,6 @@ watch(
 
 onMounted(() => {
   initNotebookMarkdownWorker()
-  document.addEventListener('pointerdown', handleDocumentPointerDownForMarkdownEdit, true)
 })
 
 onBeforeUnmount(() => {
@@ -3289,7 +3182,6 @@ onBeforeUnmount(() => {
     window.clearTimeout(notebookSearchQueryTimer)
     notebookSearchQueryTimer = 0
   }
-  document.removeEventListener('pointerdown', handleDocumentPointerDownForMarkdownEdit, true)
   disposeNotebookMarkdownWorker('component-unmount')
 })
 
