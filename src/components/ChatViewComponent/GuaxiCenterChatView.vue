@@ -461,6 +461,8 @@ const rerenderActiveTopic = async () => {
         math: true,
         codeHighlight: true,
         chatPreprocess: true,
+        // 让参数说明中的 `\Phi_E` / `I_{enc}` 等反引号数学符号也能按行内公式渲染。
+        smartInlineMathFromCode: true,
       });
       if (token !== rerenderSeq) return;
       msg.content = String(html ?? '');

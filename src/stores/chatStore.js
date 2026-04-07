@@ -503,7 +503,12 @@ export const useChatStore = defineStore("chatStore", {
 
           let rendered = '';
           try {
-            console.log('toRender', toRender);
+            // 设计思路：
+            // 流式阶段优先保证数学公式渲染稳定，避免复杂公式尚未闭合时被提前交给 MathJax，
+            // 从而出现“一部分已渲染、一部分仍是 LaTeX 源码”的混合状态。
+            logger.info("[chatStore] streaming render tick", {
+              textLength: toRender.length,
+            });
             rendered = await renderMarkdown(toRender, {
               basePath: "",
               mermaid: true,
@@ -511,6 +516,9 @@ export const useChatStore = defineStore("chatStore", {
               codeHighlight: true,
               chatPreprocess: true,
               theme: "default",
+              deferMathUntilComplete: true,
+              // 把参数说明里的 `\Phi_E` / `I_{enc}` 之类反引号数学符号恢复为行内公式。
+              smartInlineMathFromCode: true,
             });
           } catch (error) {
             console.error("渲染错误:", error);

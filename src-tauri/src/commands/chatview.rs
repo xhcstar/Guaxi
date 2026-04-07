@@ -217,7 +217,7 @@ pub async fn get_answer_from_siliconflow_stream(
 
     let request_body = json!({
         "model": SILICONFLOW_DEEPSEEK_QWEN_MODEL,
-        "messages": [{"role": "user", "content": question}],
+        "messages": math_prompt_messages(question),
         "stream": true,
     });
 
@@ -2877,7 +2877,7 @@ pub async fn get_answer_from_deepseek(
 
     let request_body = json!({
         "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": question}],
+        "messages": math_prompt_messages(question),
         // "session_id": session_id
     });
 
@@ -2996,6 +2996,32 @@ fn local_math_system_prompt() -> &'static str {
     "输出数学公式时请严格遵循：行内公式用 $...$；块级公式用 $$...$$ 且 $$ 必须独占一行。块级公式格式必须为：\n$$\n公式内容\n$$\n并且闭合 $$ 后下一行开始正文，严禁在同一行继续文字。若处于列表项中，公式块前后都要留空行。不要用反引号包裹任何数学公式。若提供代码，必须带注释。"
 }
 
+fn stable_math_system_prompt() -> &'static str {
+    // 设计思路：
+    // 1. 从模型输出源头约束数学格式，减少前端/后端后处理的不确定性。
+    // 2. 同时规范主公式和参数说明中的数学符号，避免模型把数学量写进反引号。
+    // 3. 统一禁止不稳定的 LaTeX 环境写法，强制收敛到 $...$ / $$...$$。
+    "你必须使用稳定、可渲染的 Markdown 数学语法输出内容，并严格遵守以下规则：\n\
+1. 行内数学公式只能使用 $...$。\n\
+2. 块级数学公式只能使用 $$...$$，并且必须严格写成以下形式：\n\
+$$\n\
+公式内容\n\
+$$\n\
+其中前后的 $$ 必须各自单独占一行。\n\
+3. 严禁使用 \\[...\\]、\\(...\\)、\\begin{equation}...\\end{equation}、\\begin{align}...\\end{align}、\\begin{gather}...\\end{gather} 等 LaTeX 环境。\n\
+4. 严禁用反引号包裹任何数学内容。不要输出 `\\Phi_E`、`I_{enc}`、`\\mu_0`、`d\\vec{l}` 这样的写法；参数说明中的数学符号也必须写成 $\\Phi_E$、$I_{enc}$、$\\mu_0$、$d\\vec{l}$。\n\
+5. 严禁在数学公式内部混用 Markdown 强调语法，不要输出 **\\vec{E}**、*\\Phi_E*、__\\mu_0__ 这类形式。\n\
+6. 如果在列表项中插入块级公式，公式前后必须保留空行；参数解释优先使用普通列表文本，数学量用 $...$ 包裹。\n\
+7. 若给出代码，代码块正常使用 Markdown fenced code block，并添加必要注释；但数学内容绝不能放进代码块或反引号中。"
+}
+
+fn math_prompt_messages(question: &str) -> Value {
+    json!([
+        {"role": "system", "content": stable_math_system_prompt()},
+        {"role": "user", "content": question}
+    ])
+}
+
 fn normalize_math_symbols(content: String) -> String {
     if content.is_empty() {
         return content;
@@ -3009,6 +3035,7 @@ fn normalize_math_symbols(content: String) -> String {
         .replace("\\)", "$");
     let tightened = tighten_math_spacing(&out);
     let layout = soften_block_math_boundaries(&tightened);
+    let dedented = normalize_block_math_indentation(&layout);
 
     if raw.contains("\\[")
         || raw.contains("\\]")
@@ -3017,17 +3044,19 @@ fn normalize_math_symbols(content: String) -> String {
         || raw.contains("```")
         || out != tightened
         || tightened != layout
+        || layout != dedented
     {
         info!(
-            "normalize_math_symbols: raw={} out={} tightened={} layout={}",
+            "normalize_math_symbols: raw={} out={} tightened={} layout={} dedented={}",
             excerpt_for_log(&raw),
             excerpt_for_log(&out),
             excerpt_for_log(&tightened),
-            excerpt_for_log(&layout)
+            excerpt_for_log(&layout),
+            excerpt_for_log(&dedented)
         );
     }
 
-    layout
+    dedented
 }
 
 fn trim_output_whitespace(out: &mut String) {
@@ -3198,6 +3227,72 @@ fn soften_block_math_boundaries(input: &str) -> String {
     out
 }
 
+fn normalize_block_math_indentation(input: &str) -> String {
+    if input.is_empty() || !input.contains("$$") {
+        return input.to_string();
+    }
+
+    // 设计思路：
+    // 规范化后的块级数学公式如果仍然保留列表缩进，例如：
+    // 1.
+    //     $$
+    //     \oint ...
+    //     $$
+    // markdown-it 很容易把它识别为代码块，从而导致前端看到 LaTeX 源码。
+    // 这里在非代码围栏上下文中，把 $$ 块内部统一去掉前导缩进，使其稳定落入数学块解析。
+    let mut out = String::with_capacity(input.len());
+    let mut in_code_fence = false;
+    let mut in_math_block = false;
+
+    for line in input.split_inclusive('\n') {
+        let has_newline = line.ends_with('\n');
+        let core = if has_newline {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+
+        let trimmed = core.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            out.push_str(core);
+            if has_newline {
+                out.push('\n');
+            }
+            continue;
+        }
+
+        if in_code_fence {
+            out.push_str(core);
+            if has_newline {
+                out.push('\n');
+            }
+            continue;
+        }
+
+        if trimmed == "$$" {
+            out.push_str(trimmed);
+            if has_newline {
+                out.push('\n');
+            }
+            in_math_block = !in_math_block;
+            continue;
+        }
+
+        if in_math_block {
+            out.push_str(core.trim_start());
+        } else {
+            out.push_str(core);
+        }
+
+        if has_newline {
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
 async fn openai_compat_sse_stream(
     app: &AppHandle,
     url: &str,
@@ -3346,7 +3441,7 @@ async fn openai_compat_chat(
 ) -> Result<String, String> {
     let request_body = json!({
         "model": model,
-        "messages": [{"role": "user", "content": question}],
+        "messages": math_prompt_messages(question),
     });
 
     let client = Client::new();
@@ -3526,7 +3621,7 @@ pub async fn get_answer_from_local_deepseek(
     let request_body = json!({
         "model": "local-deepseek-r1",
         "messages": [
-            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "system", "content": stable_math_system_prompt()},
             {"role": "user", "content": question}
         ],
         "stream": false
@@ -3602,7 +3697,7 @@ pub async fn get_answer_from_chatgpt_stream(
 
     let request_body = json!({
         "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": question}],
+        "messages": math_prompt_messages(question),
         "stream": true,
     });
 
@@ -3631,7 +3726,7 @@ pub async fn get_answer_from_deepseek_stream(
 
     let request_body = json!({
         "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": question}],
+        "messages": math_prompt_messages(question),
         "stream": true,
     });
 
@@ -3661,7 +3756,7 @@ pub async fn get_answer_from_kimi_stream(
 
     let request_body = json!({
         "model": "moonshot-v1-8k",
-        "messages": [{"role": "user", "content": question}],
+        "messages": math_prompt_messages(question),
         "temperature": 0.3,
         "stream": true,
     });
@@ -3721,7 +3816,7 @@ pub async fn get_answer_from_local_qwen_stream(
     let request_body = json!({
         "model": "qwen3:8b",
         "messages": [
-            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "system", "content": stable_math_system_prompt()},
             {"role": "user", "content": question}
         ],
         "stream": true,  // 启用流式传输
@@ -3876,7 +3971,7 @@ pub async fn get_answer_from_local_deepseek_stream(
     let request_body = json!({
         "model": "local-deepseek-r1",
         "messages": [
-            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "system", "content": stable_math_system_prompt()},
             {"role": "user", "content": question}
         ],
         "stream": true,
@@ -4043,7 +4138,7 @@ pub async fn get_answer_from_local_qwen(
     let request_body = json!({
         "model": "qwen3:8b",
         "messages": [
-            {"role": "system", "content": local_math_system_prompt()},
+            {"role": "system", "content": stable_math_system_prompt()},
             {"role": "user", "content": question}
         ],
         "stream": false,

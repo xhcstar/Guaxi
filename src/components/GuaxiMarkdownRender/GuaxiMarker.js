@@ -843,6 +843,189 @@ function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// 流式输出场景下，数学公式经常会被拆成多个 token 分段返回。
+// 如果在公式还没闭合时立刻执行数学渲染，
+// 就可能出现“前半段被渲染、后半段仍显示源码”的混合状态。
+// 这里做一个轻量级检测：只要发现当前文本里存在明显未闭合的数学定界符，
+// 本轮先跳过数学渲染，等后续 token 补齐后再恢复正常渲染，
+// 这样视觉上会稳定很多。
+const stripCodeSegmentsForMathCheck = (content) => {
+  const text = String(content || "");
+  return text
+    .replace(/```[\s\S]*?```/g, "\n")
+    .replace(/`[^`\n]*`/g, " ");
+};
+
+const countRegexMatches = (content, regex) => {
+  const matches = String(content || "").match(regex);
+  return Array.isArray(matches) ? matches.length : 0;
+};
+
+// 某些模型会把数学公式写成 "**\\vec{E}**"、"`\\oint`" 这种
+// “Markdown 装饰 + LaTeX” 混合形式。对普通文本无害，但会让 MathJax 把公式视为非法输入。
+// 这里仅在数学定界符内部做最小清洗，不动正文中的 Markdown 标记。
+const sanitizeMathBody = (mathBody) => {
+  let normalized = String(mathBody || "");
+  normalized = normalized.replace(/`+/g, "");
+  normalized = normalized.replace(/\*\*([\s\S]*?)\*\*/g, "$1");
+  normalized = normalized.replace(/__([\s\S]*?)__/g, "$1");
+  normalized = normalized.replace(/\*([\s\S]*?)\*/g, "$1");
+  normalized = normalized.replace(/_([\s\S]*?)_/g, "$1");
+  normalized = normalized.replace(/~~([\s\S]*?)~~/g, "$1");
+  return normalized;
+};
+
+const normalizeMathSegmentsForRender = (content) => {
+  let normalizedContent = String(content || "");
+
+  normalizedContent = normalizedContent.replace(/\$\$([\s\S]*?)\$\$/g, (match, body) => {
+    const cleanedBody = sanitizeMathBody(body);
+    return `$$${cleanedBody}$$`;
+  });
+
+  normalizedContent = normalizedContent.replace(/(^|[^\\$])\$(?!\$)([\s\S]*?)(^|[^\\$])\$(?!\$)/gm, (match, prefix, body, suffix) => {
+    const cleanedBody = sanitizeMathBody(body);
+    return `${prefix}$${cleanedBody}${suffix}$`;
+  });
+
+  normalizedContent = normalizedContent.replace(/\\\(([\s\S]*?)\\\)/g, (match, body) => {
+    const cleanedBody = sanitizeMathBody(body);
+    return `\\(${cleanedBody}\\)`;
+  });
+
+  normalizedContent = normalizedContent.replace(/\\\[([\s\S]*?)\\\]/g, (match, body) => {
+    const cleanedBody = sanitizeMathBody(body);
+    return `\\[${cleanedBody}\\]`;
+  });
+
+  return normalizedContent;
+};
+
+const normalizeLatexMathEnvironments = (content) => {
+  let normalizedContent = String(content || "");
+
+  const blockEnvNames = [
+    "equation",
+    "equation*",
+    "align",
+    "align*",
+    "aligned",
+    "gather",
+    "gather*",
+    "multline",
+    "multline*",
+  ];
+
+  blockEnvNames.forEach((envName) => {
+    const escapedEnvName = escapeRegExp(envName);
+    const envRegex = new RegExp(
+      `\\\\begin\\{${escapedEnvName}\\}([\\s\\S]*?)\\\\end\\{${escapedEnvName}\\}`,
+      "g"
+    );
+
+    normalizedContent = normalizedContent.replace(envRegex, (match, body) => {
+      const cleanedBody = sanitizeMathBody(body).trim();
+      return `$$\n${cleanedBody}\n$$`;
+    });
+  });
+
+  return normalizedContent;
+};
+
+// 设计思路：
+// 一些模型会把参数说明写成 Markdown 行内代码，例如 `\Phi_E`、`I_{enc}`、`\mu_0`。
+// 这类内容会被 markdown-it 当作 code span，数学渲染器不会接管，所以最终只显示 LaTeX 源码。
+// 这里在进入 Markdown 渲染前，把“明显是数学符号”的 code span 轻量转换为行内数学，
+// 但尽量不碰真正的代码片段。
+const looksLikeInlineMathCode = (codeContent) => {
+  const text = String(codeContent || "").trim();
+  if (!text) return false;
+  if (/\r|\n/.test(text)) return false;
+  if (text.length > 48) return false;
+  if (/[*[\]{}<>]/.test(text.replace(/\\[{}]/g, ""))) return false;
+  if (/[=;]/.test(text)) return false;
+  if (/\s{2,}/.test(text)) return false;
+
+  const hasLatexCommand = /\\[A-Za-z]+/.test(text);
+  const hasSubOrSup = /(^|[A-Za-z0-9\\])[ _]?\{?[^}]*\}?/.test(text) && (/_|\^/.test(text));
+  const isSimpleMathIdentifier = /^[A-Za-z](?:_[A-Za-z0-9]+|\^\{?[A-Za-z0-9+\-]+\}?|_[{][^}]+[}]|\^\{[^}]+\})*$/.test(text);
+  const isParenWrappedMathIdentifier = /^\([A-Za-z]\)$/.test(text);
+  const isUnitLikeMath = /^[A-Za-z](?:_[A-Za-z0-9]+|\^\{?[A-Za-z0-9+\-]+\}?)?$/.test(text);
+
+  return hasLatexCommand || hasSubOrSup || isSimpleMathIdentifier || isParenWrappedMathIdentifier || isUnitLikeMath;
+};
+
+const normalizeInlineMathCodeSpans = (content) => {
+  return String(content || "").replace(/`([^`\r\n]+)`/g, (match, codeContent) => {
+    const trimmed = String(codeContent || "").trim();
+    if (!looksLikeInlineMathCode(trimmed)) {
+      return match;
+    }
+
+    const cleaned = sanitizeMathBody(trimmed);
+    return `\\(${cleaned}\\)`;
+  });
+};
+
+export const detectIncompleteMathSyntax = (content) => {
+  const sanitized = stripCodeSegmentsForMathCheck(content);
+  const reasons = [];
+
+  if (!sanitized.trim()) {
+    return {
+      hasIncompleteMath: false,
+      reasons,
+    };
+  }
+
+  const blockDollarCount = countRegexMatches(sanitized, /(^|[^\\])\$\$(?!\$)/gm);
+  if (blockDollarCount % 2 !== 0) {
+    reasons.push("odd-double-dollar");
+  }
+
+  const inlineDollarCount = countRegexMatches(sanitized, /(^|[^\\$])\$(?!\$)/gm);
+  if (inlineDollarCount % 2 !== 0) {
+    reasons.push("odd-inline-dollar");
+  }
+
+  const squareOpenCount = countRegexMatches(sanitized, /\\\[/g);
+  const squareCloseCount = countRegexMatches(sanitized, /\\\]/g);
+  if (squareOpenCount !== squareCloseCount) {
+    reasons.push("unbalanced-square-bracket-math");
+  }
+
+  const roundOpenCount = countRegexMatches(sanitized, /\\\(/g);
+  const roundCloseCount = countRegexMatches(sanitized, /\\\)/g);
+  if (roundOpenCount !== roundCloseCount) {
+    reasons.push("unbalanced-round-bracket-math");
+  }
+
+  const beginEnvCounter = new Map();
+  const endEnvCounter = new Map();
+  Array.from(sanitized.matchAll(/\\begin\{([^}]+)\}/g)).forEach((match) => {
+    const envName = String(match?.[1] || "").trim();
+    if (!envName) return;
+    beginEnvCounter.set(envName, (beginEnvCounter.get(envName) || 0) + 1);
+  });
+  Array.from(sanitized.matchAll(/\\end\{([^}]+)\}/g)).forEach((match) => {
+    const envName = String(match?.[1] || "").trim();
+    if (!envName) return;
+    endEnvCounter.set(envName, (endEnvCounter.get(envName) || 0) + 1);
+  });
+
+  const allEnvNames = new Set([...beginEnvCounter.keys(), ...endEnvCounter.keys()]);
+  for (const envName of allEnvNames) {
+    if ((beginEnvCounter.get(envName) || 0) !== (endEnvCounter.get(envName) || 0)) {
+      reasons.push(`unbalanced-environment:${envName}`);
+    }
+  }
+
+  return {
+    hasIncompleteMath: reasons.length > 0,
+    reasons,
+  };
+};
+
 // interface ImageMapping {
 //   original_path: string;
 //   served_path: string;
@@ -860,11 +1043,56 @@ export const renderMarkdown = async (content, options) => {
     codeCells: enableCodeCells = false,
     chatPreprocess = false,
     theme = "default",
+    deferMathUntilComplete = false,
+    smartInlineMathFromCode = false,
   } = options;
 
   try {
     let finalContent = content;
     let mappings = [];
+    let shouldEnableMath = enableMath;
+
+    if (enableMath && deferMathUntilComplete) {
+      const mathState = detectIncompleteMathSyntax(content);
+      if (mathState.hasIncompleteMath) {
+        shouldEnableMath = false;
+        logger.info("[MarkdownRender] defer math render for streaming chunk", {
+          reasons: mathState.reasons,
+          preview: String(content || "").slice(-160),
+        });
+      }
+    }
+
+    if (shouldEnableMath) {
+      const normalizedMathEnvironmentContent = normalizeLatexMathEnvironments(finalContent);
+      if (normalizedMathEnvironmentContent !== finalContent) {
+        logger.info("[MarkdownRender] normalize latex math environments", {
+          beforeLength: String(finalContent || "").length,
+          afterLength: normalizedMathEnvironmentContent.length,
+        });
+        finalContent = normalizedMathEnvironmentContent;
+      }
+
+      const normalizedMathContent = normalizeMathSegmentsForRender(finalContent);
+      if (normalizedMathContent !== finalContent) {
+        logger.info("[MarkdownRender] sanitize markdown markers inside math", {
+          beforeLength: String(finalContent || "").length,
+          afterLength: normalizedMathContent.length,
+        });
+        finalContent = normalizedMathContent;
+      }
+    }
+
+    if (shouldEnableMath && smartInlineMathFromCode) {
+      const normalizedInlineMathCodeContent = normalizeInlineMathCodeSpans(finalContent);
+      if (normalizedInlineMathCodeContent !== finalContent) {
+        logger.info("[MarkdownRender] normalize inline math-like code spans", {
+          beforeLength: String(finalContent || "").length,
+          afterLength: normalizedInlineMathCodeContent.length,
+        });
+        finalContent = normalizedInlineMathCodeContent;
+      }
+    }
 
     // 调用后端处理图片路径（接口不可用时，不影响后续 Markdown 本地渲染）
     try {
@@ -927,7 +1155,7 @@ export const renderMarkdown = async (content, options) => {
       });
     }
 
-    if (enableMath) {
+    if (shouldEnableMath) {
       // logger.info("初始化MathJax");
       initMathJax();
     }
@@ -1341,7 +1569,7 @@ export const renderMarkdown = async (content, options) => {
     }
 
     // 添加数学公式支持（完整修改部分）
-    if (enableMath) {
+    if (shouldEnableMath) {
       md.use(markdownItMathjax);
 
       // 保存原始渲染函数
@@ -1433,7 +1661,7 @@ export const renderMarkdown = async (content, options) => {
       }
     }
 
-    if (enableMath) {
+    if (shouldEnableMath) {
       // 处理已渲染的数学公式
       container
         .querySelectorAll(".math-inline-container, .math-block-container")

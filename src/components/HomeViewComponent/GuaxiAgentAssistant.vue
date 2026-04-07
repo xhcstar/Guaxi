@@ -826,6 +826,10 @@ const renderAssistantMarkdown = async (content) => {
     return await renderMarkdown(content, {
       mermaid: false,
       includeNotes: false,
+      // 流式阶段启用数学公式稳定模式，避免复杂公式只渲染一半。
+      deferMathUntilComplete: true,
+      // 把 `\Phi_E`、`I_{enc}` 这类“写在反引号里的数学符号”恢复成行内数学。
+      smartInlineMathFromCode: true,
     })
   } catch (err) {
     logger.warn('[assistant] render markdown failed', err)
@@ -879,6 +883,10 @@ const scheduleStreamingRender = () => {
     const messageId = ensureStreamingAssistantMessage()
     if (!messageId) return
     const raw = String(currentStreamText.value || '')
+    logger.info('[assistant] streaming render tick', {
+      messageId,
+      textLength: raw.length,
+    })
     const html = await renderAssistantMarkdown(raw)
     rightSiderStore.updateAssistantMessage(messageId, {
       content: raw,
@@ -931,7 +939,16 @@ const finishAssistantStreaming = async ({ fallbackText = '', keepPending = false
   const text = String(currentStreamText.value || '').trim() || String(fallbackText || '').trim()
   if (messageId) {
     const finalText = text || '模型未返回内容。'
-    const html = await renderAssistantMarkdown(finalText)
+    const html = await renderMarkdown(finalText, {
+      mermaid: false,
+      includeNotes: false,
+      smartInlineMathFromCode: true,
+    })
+    logger.info('[assistant] finish streaming render', {
+      messageId,
+      textLength: finalText.length,
+      keepPending,
+    })
     rightSiderStore.updateAssistantMessage(messageId, {
       content: finalText,
       html,
