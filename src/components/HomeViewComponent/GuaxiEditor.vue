@@ -1197,9 +1197,22 @@ const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
 const previewSegmentRenderCache = new Map()
+const previewFullRenderCache = new Map()
 const previewFileCardMetaCache = new Map()
 const PREVIEW_SEGMENT_CACHE_LIMIT = 160
+const PREVIEW_FULL_RENDER_CACHE_LIMIT = 48
 const PREVIEW_FILE_CARD_CACHE_LIMIT = 80
+const PREVIEW_RENDER_DELAY_DEFAULT_MS = 300
+const PREVIEW_RENDER_DELAY_PREVIEW_ONLY_MS = 160
+const PREVIEW_RENDER_DELAY_SPLIT_MS = 80
+let previewMarkdownWorker = null
+let previewMarkdownWorkerReady = false
+let previewMarkdownWorkerTaskId = 0
+const previewMarkdownWorkerPendingTasks = new Map()
+let previewRenderTimer = null
+let previewRenderRequestId = 0
+const EDITOR_CONTENT_SYNC_DELAY_MS = 0
+const EDITOR_POSTPROCESS_DELAY_MS = 220
 const previewContainer = ref(null);
 const pythonRuntimeAnchorRef = ref(null)
 const pythonRuntimePanelRef = ref(null)
@@ -7372,6 +7385,22 @@ const ensureSecondaryEditor = () => {
       scheduleRefreshPythonCellManagers()
     });
 
+    // 设计说明：
+    // 1. 分栏模式下右侧源编辑器的内容需要尽快同步到 rawContent / tab store，预览区才能及时拿到最新文本。
+    // 2. 这里把“轻量同步”与“重分析/高亮”拆开：前者即时执行，后者仍保留防抖，避免每个按键都做重活。
+    model.onDidChangeContent(() => {
+      if (fileTreeStore.activeRegion !== 'right') return
+      const path = fileTreeStore.activeTab
+      if (!path) return
+      const content = model.getValue()
+      rawContent.value = content
+      fileTreeStore.updateTabContent(path, content)
+      logger.debug('[Editor] synced right source content immediately', {
+        path,
+        length: content.length,
+      })
+    })
+
     model.onDidChangeContent(
       debounce(() => {
         if (fileTreeStore.activeRegion !== 'right') return;
@@ -7387,7 +7416,7 @@ const ensureSecondaryEditor = () => {
           scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'debounced');
         }
         scheduleRefreshPythonCellManagers()
-      }, 120)
+      }, EDITOR_POSTPROCESS_DELAY_MS)
     );
   }
 };
@@ -7782,6 +7811,20 @@ const setupEditorListeners = () => {
       }, 0);
     });
 
+    // 设计说明：
+    // 1. 预览区依赖 rawContent 变化触发刷新，如果这里也等重分析 debounce 完成，分栏模式就会出现“输入后明显滞后”的问题。
+    // 2. 因此源文本与 tab 脏数据先即时同步，问题分析、语法高亮和 Git 装饰继续防抖，兼顾响应速度与整体开销。
+    model.onDidChangeContent(() => {
+      const content = model.getValue();
+      const path = fileTreeStore.activeTab;
+      rawContent.value = content;
+      if (path) fileTreeStore.updateTabContent(path, content);
+      logger.debug('[Editor] synced source content immediately', {
+        path: String(path || ''),
+        length: content.length,
+      });
+    });
+
     model.onDidChangeContent(
       debounce(() => {
         const content = model.getValue();
@@ -7799,7 +7842,7 @@ const setupEditorListeners = () => {
         scheduleMarkdownMathSyntaxHighlight(editor, 'debounced');
         updateGitDecorations();
         scheduleRefreshPythonCellManagers()
-      }, 300)
+      }, EDITOR_POSTPROCESS_DELAY_MS)
     );
   }
 
@@ -13680,11 +13723,227 @@ const buildPreviewSegmentCacheKey = (segment, options = {}) => {
   return `${theme}::${basePath}::${filePath}::${content}`
 }
 
+const buildPreviewDocumentCacheKey = (content, options = {}) => {
+  const theme = String(options.theme || '')
+  const basePath = String(options.basePath || '')
+  const filePath = String(options.filePath || '')
+  return `${theme}::${basePath}::${filePath}::${String(content || '')}`
+}
+
 // 设计说明：
 // 1. [toc] / [[toc]] 这类目录标记依赖“整篇文档”的标题信息生成目录。
 // 2. 一旦把文档切片后分别 renderMarkdown，目录插件就只能看到局部标题，最终会导致 TOC 缺失或不完整。
 // 3. 因此预览阶段只要检测到目录标记，就回退到整篇渲染，优先保证正确性。
 const hasPreviewTocMarker = (markdown = '') => /^\s*(?:\[\[\s*(?:toc|目录)\s*\]\]|\[\s*(?:toc|目录)\s*\])\s*$/im.test(String(markdown || ''))
+
+// 设计说明：
+// 1. 编辑器预览与探索者模式一样，Markdown 主体渲染是最耗时的一段，适合搬到 Worker 里做。
+// 2. 主线程只保留 Mermaid 与数学节点的轻量收尾，这样输入时卡顿会明显下降。
+// 3. Worker 不可用时自动回退到主线程，保证功能不退化。
+const buildPreviewMarkdownRenderOptions = (options = {}) => ({
+  basePath: options.basePath || '',
+  mermaid: true,
+  math: true,
+  codeHighlight: true,
+  pythonCells: true,
+  codeCells: true,
+  theme: options.theme || getMarkdownPreviewThemeName(),
+})
+
+const initPreviewMarkdownWorker = () => {
+  if (previewMarkdownWorker) return previewMarkdownWorker
+  try {
+    const worker = new Worker(new URL('../../workers/notebookMarkdownRenderWorker.js', import.meta.url), {
+      type: 'module',
+    })
+    worker.onmessage = (event) => {
+      const payload = event?.data || {}
+      const taskId = Number(payload?.id || 0)
+      const task = previewMarkdownWorkerPendingTasks.get(taskId)
+      if (!task) return
+      previewMarkdownWorkerPendingTasks.delete(taskId)
+      if (payload?.ok) {
+        task.resolve(String(payload?.html || ''))
+        return
+      }
+      task.reject(new Error(String(payload?.error || 'Preview markdown worker failed')))
+    }
+    worker.onerror = (error) => {
+      previewMarkdownWorkerReady = false
+      logger.error('[Preview] markdown worker runtime error', {
+        error: String(error?.message || error),
+      })
+    }
+    previewMarkdownWorker = worker
+    previewMarkdownWorkerReady = true
+    logger.info('[Preview] markdown worker initialized')
+    return worker
+  } catch (error) {
+    previewMarkdownWorkerReady = false
+    logger.warn('[Preview] failed to initialize markdown worker, fallback to main thread', {
+      error: String(error?.message || error),
+    })
+    return null
+  }
+}
+
+const disposePreviewMarkdownWorker = (reason = 'dispose') => {
+  if (previewMarkdownWorker) {
+    previewMarkdownWorker.terminate()
+  }
+  previewMarkdownWorker = null
+  previewMarkdownWorkerReady = false
+  if (previewMarkdownWorkerPendingTasks.size) {
+    for (const [, task] of previewMarkdownWorkerPendingTasks) {
+      task.reject(new Error(`Preview markdown worker disposed: ${reason}`))
+    }
+    previewMarkdownWorkerPendingTasks.clear()
+  }
+  logger.info('[Preview] markdown worker disposed', { reason })
+}
+
+const renderPreviewMarkdownHtmlWithWorker = (content, options = {}, reason = 'unknown') => {
+  const markdownText = String(content || '')
+  if (!markdownText.trim()) return Promise.resolve('')
+  const worker = previewMarkdownWorker || initPreviewMarkdownWorker()
+  if (!worker) {
+    return Promise.reject(new Error('Preview markdown worker unavailable'))
+  }
+  const taskId = ++previewMarkdownWorkerTaskId
+  return new Promise((resolve, reject) => {
+    previewMarkdownWorkerPendingTasks.set(taskId, { resolve, reject })
+    worker.postMessage({
+      id: taskId,
+      content: markdownText,
+      options: buildPreviewMarkdownRenderOptions(options),
+      reason,
+    })
+  })
+}
+
+const finalizePreviewRenderedMath = (container) => {
+  container
+    .querySelectorAll('.math-inline-container, .math-block-container')
+    .forEach((element) => {
+      const mathNode = element.querySelector('mjx-container')
+      if (!(mathNode instanceof HTMLElement)) return
+      mathNode.setAttribute('data-md-original', element.getAttribute('data-md-original') || '')
+      mathNode.classList.add(
+        element.classList.contains('math-inline-container')
+          ? 'math-inline'
+          : 'math-block',
+      )
+      element.replaceWith(mathNode)
+    })
+}
+
+const finalizePreviewRenderedMermaid = async (container, options = {}, reason = 'unknown') => {
+  if (!options?.mermaid) return
+  const mermaidFontFamily = '"Trebuchet MS", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif'
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'default',
+    securityLevel: 'loose',
+    themeVariables: {
+      background: '#ffffff',
+      fontFamily: mermaidFontFamily,
+    },
+  })
+
+  const mermaidElements = Array.from(container.querySelectorAll('.mermaid'))
+  for (const element of mermaidElements) {
+    try {
+      const source = String(element.textContent || '')
+        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<')
+        .replace(/&amp;/g, '&')
+      if (!source.trim()) continue
+
+      const renderId = `guaxi-preview-mermaid-${Date.now()}-${previewMarkdownWorkerTaskId}`
+      const rendered = await Promise.resolve(mermaid.render(renderId, source))
+      const svg = typeof rendered === 'string' ? rendered : String(rendered?.svg || '')
+      if (!svg.trim()) continue
+
+      const wrapper = document.createElement('div')
+      wrapper.className = 'mermaid'
+      wrapper.setAttribute('data-processed', 'true')
+      wrapper.setAttribute('data-mermaid-source', source)
+      const originalSource = element.getAttribute('data-md-original')
+      if (originalSource) {
+        wrapper.setAttribute('data-md-original', originalSource)
+      }
+      wrapper.innerHTML = svg
+      const svgElement = wrapper.querySelector('svg')
+      if (svgElement instanceof SVGElement) {
+        svgElement.style.fontFamily = mermaidFontFamily
+        svgElement.setAttribute('font-family', mermaidFontFamily)
+        svgElement.querySelectorAll('text, tspan, foreignObject, foreignObject *').forEach((node) => {
+          if (!(node instanceof Element)) return
+          node.setAttribute('font-family', mermaidFontFamily)
+          node.setAttribute('style', `${String(node.getAttribute('style') || '').trim()};font-family:${mermaidFontFamily};`)
+        })
+      }
+      element.replaceWith(wrapper)
+
+      if (typeof rendered?.bindFunctions === 'function') {
+        try {
+          rendered.bindFunctions(wrapper)
+        } catch (bindError) {
+          logger.debug('[Preview] mermaid bindFunctions failed', {
+            reason,
+            error: String(bindError?.message || bindError),
+          })
+        }
+      }
+    } catch (error) {
+      logger.error('[Preview] finalize mermaid failed', {
+        reason,
+        error: String(error?.message || error),
+      })
+    }
+  }
+}
+
+const finalizePreviewRenderedHtml = async (html, options = {}, reason = 'unknown') => {
+  const rawHtml = String(html || '')
+  if (!rawHtml.trim()) return ''
+  const container = document.createElement('div')
+  container.innerHTML = rawHtml
+  const renderOptions = buildPreviewMarkdownRenderOptions(options)
+  await finalizePreviewRenderedMermaid(container, renderOptions, reason)
+  if (renderOptions.math) {
+    finalizePreviewRenderedMath(container)
+  }
+  return container.innerHTML
+}
+
+const renderPreviewMarkdown = async (content, options = {}, reason = 'unknown') => {
+  const markdownText = String(content || '')
+  if (!markdownText.trim()) return ''
+  try {
+    if (previewMarkdownWorkerReady || previewMarkdownWorker) {
+      const workerHtml = await renderPreviewMarkdownHtmlWithWorker(markdownText, options, reason)
+      const html = await finalizePreviewRenderedHtml(workerHtml, options, reason)
+      logger.debug('[Preview] rendered markdown via worker', {
+        reason,
+        markdownLength: markdownText.length,
+      })
+      return html
+    }
+  } catch (error) {
+    logger.warn('[Preview] worker markdown render failed, fallback to main thread renderer', {
+      reason,
+      error: String(error?.message || error),
+    })
+  }
+
+  const html = await renderMarkdown(markdownText, buildPreviewMarkdownRenderOptions(options))
+  logger.debug('[Preview] rendered markdown via main thread fallback', {
+    reason,
+    markdownLength: markdownText.length,
+  })
+  return html
+}
 
 const renderPreviewSegmentsWithCache = async (markdown, options = {}) => {
   const text = String(markdown || '')
@@ -13707,15 +13966,14 @@ const renderPreviewSegmentsWithCache = async (markdown, options = {}) => {
         endLine: Number(segment?.endLine || 1),
         length: String(segment?.content || '').length,
       })
-      segmentHtml = await renderMarkdown(String(segment?.content || ''), {
-        basePath: options.basePath,
-        mermaid: true,
-        math: true,
-        codeHighlight: true,
-        pythonCells: true,
-        codeCells: true,
-        theme: options.theme,
-      })
+      segmentHtml = await renderPreviewMarkdown(
+        String(segment?.content || ''),
+        {
+          basePath: options.basePath,
+          theme: options.theme,
+        },
+        `segment:${Number(segment?.startLine || 1)}-${Number(segment?.endLine || 1)}`,
+      )
       rememberPreviewCacheEntry(previewSegmentRenderCache, cacheKey, segmentHtml, PREVIEW_SEGMENT_CACHE_LIMIT)
     } else {
       logger.debug('[Preview] render segment cache hit', {
@@ -13861,10 +14119,15 @@ const canPromotePreviewLinkToCard = (anchor) => {
 }
 
 const enhancePreviewHtmlWithFileCards = async (html, { baseDocPath } = {}) => {
+  const rawHtml = String(html || '')
+  if (!rawHtml.includes('<a')) return rawHtml
+
   const root = document.createElement('div')
-  root.innerHTML = String(html || '')
+  root.innerHTML = rawHtml
 
   const anchors = Array.from(root.querySelectorAll('a[href]'))
+  if (!anchors.length) return rawHtml
+
   for (const anchor of anchors) {
     try {
       if (!canPromotePreviewLinkToCard(anchor)) continue
@@ -13917,7 +14180,13 @@ const enhancePreviewHtmlWithFileCards = async (html, { baseDocPath } = {}) => {
   return root.innerHTML
 }
 
-const renderDebounced = debounce(async (content) => {
+const getPreviewRenderDelayMs = () => {
+  if (previewMode.value === 'split') return PREVIEW_RENDER_DELAY_SPLIT_MS
+  if (previewMode.value === 'toggle' && mode.value === 'preview') return PREVIEW_RENDER_DELAY_PREVIEW_ONLY_MS
+  return PREVIEW_RENDER_DELAY_DEFAULT_MS
+}
+
+const performPreviewRender = async (content, requestId = 0, reason = 'scheduled') => {
   if (!selectedFile.value || !mode.value || !content || !canPreview.value) {
     renderedHtml.value = '';
     lastPreviewRenderedSource.value = '';
@@ -13928,6 +14197,8 @@ const renderDebounced = debounce(async (content) => {
     const basePath = selectedFile.value.path ? await dirname(selectedFile.value.path) : '';
     const previewTheme = getMarkdownPreviewThemeName()
     logger.info('[Preview] render markdown', {
+      reason,
+      requestId,
       previewTheme,
       appearanceTheme: settingsStore.appearanceTheme,
       path: selectedFile.value?.path || '',
@@ -13950,25 +14221,51 @@ const renderDebounced = debounce(async (content) => {
         theme: previewTheme,
       })
     } else {
+      const fullCacheKey = buildPreviewDocumentCacheKey(processed, {
+        basePath,
+        filePath: selectedFile.value?.path || '',
+        theme: previewTheme,
+      })
+      const cachedHtml = previewFullRenderCache.get(fullCacheKey)
+      if (cachedHtml) {
+        logger.info('[Preview] use full render cache hit', {
+          path: selectedFile.value?.path || '',
+          reason: containsTocMarker ? 'toc-marker' : 'single-segment',
+        })
+        previewHtml = cachedHtml
+      } else {
       if (containsTocMarker) {
         logger.info('[Preview] fallback to full render because toc marker was detected', {
           path: selectedFile.value?.path || '',
         })
       }
-      previewHtml = await renderMarkdown(processed, {
-        basePath: basePath,
-        mermaid: true,
-        math: true,
-        codeHighlight: true,
-        pythonCells: true,
-        codeCells: true,
-        theme: previewTheme
-      });
+        previewHtml = await renderPreviewMarkdown(
+          processed,
+          {
+            basePath,
+            filePath: selectedFile.value?.path || '',
+            theme: previewTheme,
+          },
+          containsTocMarker ? 'full-document-toc' : 'full-document',
+        )
+        rememberPreviewCacheEntry(previewFullRenderCache, fullCacheKey, previewHtml, PREVIEW_FULL_RENDER_CACHE_LIMIT)
+      }
     }
 
-    renderedHtml.value = await enhancePreviewHtmlWithFileCards(previewHtml, {
+    const enhancedHtml = await enhancePreviewHtmlWithFileCards(previewHtml, {
       baseDocPath: selectedFile.value?.path || '',
     })
+    if (requestId && requestId !== previewRenderRequestId) {
+      logger.info('[Preview] drop stale render result', {
+        requestId,
+        latestRequestId: previewRenderRequestId,
+        reason,
+        path: selectedFile.value?.path || '',
+      })
+      return
+    }
+
+    renderedHtml.value = enhancedHtml
 
     lastPreviewRenderedSource.value = content;
 
@@ -13981,7 +14278,32 @@ const renderDebounced = debounce(async (content) => {
       </div>
     `;
   }
-}, 300);
+}
+
+// 设计说明：
+// 1. 分栏预览需要比纯预览更快的反馈，因此这里按模式动态缩短防抖时间。
+// 2. 异步渲染可能晚于用户的下一次输入完成，用 requestId 丢弃过期结果，避免“旧结果压住新结果”。
+const renderDebounced = (content, reason = 'scheduled') => {
+  if (previewRenderTimer) {
+    window.clearTimeout(previewRenderTimer)
+    previewRenderTimer = null
+  }
+
+  const requestId = ++previewRenderRequestId
+  const delayMs = getPreviewRenderDelayMs()
+  logger.debug('[Preview] schedule render', {
+    requestId,
+    reason,
+    delayMs,
+    path: selectedFile.value?.path || '',
+    previewMode: previewMode.value,
+  })
+
+  previewRenderTimer = window.setTimeout(() => {
+    previewRenderTimer = null
+    void performPreviewRender(String(content || ''), requestId, reason)
+  }, delayMs)
+}
 
 const canPreview = computed(() => {
   const path = selectedFile.value?.path || '';
@@ -15598,6 +15920,11 @@ onActivated(() => {
 })
 
 onUnmounted(() => {
+  if (previewRenderTimer) {
+    window.clearTimeout(previewRenderTimer)
+    previewRenderTimer = null
+  }
+  disposePreviewMarkdownWorker('editor-unmount')
   if (notebookDiskPersistTimer) {
     const pendingNotebookContent = String(rawContent.value ?? '')
     window.clearTimeout(notebookDiskPersistTimer)
