@@ -4,6 +4,7 @@
     class="guaxi-notebook-markdown-editor"
     :class="{ 'is-pending': !editorReady && !loadFailed, 'is-fallback': loadFailed }"
     :data-cell-key="cellKey"
+    tabindex="-1"
   >
     <div v-if="!editorReady && !loadFailed" class="guaxi-notebook-markdown-editor__placeholder">
       <span>正在按需加载 Markdown 编辑器...</span>
@@ -204,6 +205,18 @@ const requestBlurExit = (reason = 'blur') => {
   }, 0)
 }
 
+const releaseEditorFocusToPage = (reason = 'manual-release') => {
+  if (editor?.hasTextFocus?.()) {
+    editor.setPosition(editor.getPosition())
+    editor.getDomNode()?.blur?.()
+  }
+  hostRef.value?.focus?.()
+  logger.info('[NotebookMarkdownEditor] release editor focus back to notebook page', {
+    cellKey: String(props.cellKey || ''),
+    reason,
+  })
+}
+
 const mountMonacoEditor = async () => {
   if (editor || loadFailed.value) return editor
   if (mountMonacoEditorPromise) {
@@ -257,7 +270,14 @@ const mountMonacoEditor = async () => {
         fontSize: 14,
         lineHeight: MARKDOWN_EDITOR_LINE_HEIGHT,
         padding: { top: 14, bottom: 14 },
+        fixedOverflowWidgets: true,
+        alwaysConsumeMouseWheel: false,
         scrollbar: {
+          alwaysConsumeMouseWheel: false,
+          vertical: 'auto',
+          horizontal: 'auto',
+          handleMouseWheel: true,
+          useShadows: false,
           verticalScrollbarSize: 8,
           horizontalScrollbarSize: 8,
         },
@@ -280,6 +300,7 @@ const mountMonacoEditor = async () => {
       })
 
       editor.addCommand(monacoRef.KeyCode.Escape, () => {
+        releaseEditorFocusToPage('escape')
         emit('request-exit', 'escape')
       })
       editor.addCommand(monacoRef.KeyMod.CtrlCmd | monacoRef.KeyCode.Enter, () => {
@@ -405,6 +426,7 @@ defineExpose({
   position: relative;
   width: 100%;
   min-height: 54px;
+  outline: none;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border, rgba(15, 23, 42, 0.1)) 100%, transparent);
   background: var(--guaxi-notebook-panel-soft, #f8fafc);

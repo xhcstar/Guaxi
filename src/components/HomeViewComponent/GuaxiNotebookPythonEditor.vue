@@ -3,6 +3,7 @@
     ref="hostRef"
     class="guaxi-notebook-python-editor"
     :class="{ 'is-pending': !editorReady && !loadFailed, 'is-fallback': loadFailed }"
+    tabindex="-1"
   >
     <div v-if="!editorReady && !loadFailed" class="guaxi-notebook-python-editor__placeholder">
       <span>正在按需加载 Python 编辑器...</span>
@@ -13,6 +14,9 @@
       spellcheck="false"
       :value="modelValue"
       @input="handleFallbackInput"
+      @focus="emit('focus')"
+      @blur="emit('blur')"
+      @keydown="handleFallbackKeydown"
     />
   </div>
 </template>
@@ -36,7 +40,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'focus', 'blur'])
 
 const logger = createLogger('GuaxiNotebookPythonEditor')
 const hostRef = ref(null)
@@ -49,6 +53,8 @@ let editor = null
 let model = null
 let contentChangeDisposable = null
 let contentSizeDisposable = null
+let focusDisposable = null
+let blurDisposable = null
 let currentAppliedTheme = ''
 
 // 设计说明：
@@ -78,6 +84,23 @@ const ensureHostHeight = () => {
     cellKey: String(props.cellKey || ''),
     contentHeight,
     hostHeight: contentHeight + 2,
+  })
+}
+
+// 设计说明：
+// 1. Monaco 默认会“强吃”滚轮事件，鼠标一停在编辑器上，整页滚动体验就会变得很差。
+// 2. 探索模式里 cell 编辑器应该更像嵌入式输入区，因此把滚轮让渡给外层页面，只在编辑器确实需要时再处理。
+// 3. 对键盘交互，保留正常编辑能力，但提供 Escape 快速失焦，让方向键能立即回到页面级滚动。
+const blurEditorToPage = (reason = 'manual-blur') => {
+  if (editor?.hasTextFocus?.()) {
+    editor.setPosition(editor.getPosition())
+    editor.getDomNode()?.blur?.()
+  }
+  hostRef.value?.focus?.()
+  emit('blur')
+  logger.info('[NotebookPythonEditor] release editor focus back to notebook page', {
+    cellKey: String(props.cellKey || ''),
+    reason,
   })
 }
 
@@ -126,7 +149,14 @@ const mountMonacoEditor = async () => {
       fontSize: 13,
       lineHeight: PYTHON_EDITOR_LINE_HEIGHT,
       padding: { top: 12, bottom: 12 },
+      fixedOverflowWidgets: true,
+      alwaysConsumeMouseWheel: false,
       scrollbar: {
+        alwaysConsumeMouseWheel: false,
+        vertical: 'auto',
+        horizontal: 'auto',
+        handleMouseWheel: true,
+        useShadows: false,
         verticalScrollbarSize: 8,
         horizontalScrollbarSize: 8,
       },
@@ -139,6 +169,24 @@ const mountMonacoEditor = async () => {
 
     contentSizeDisposable = editor.onDidContentSizeChange(() => {
       ensureHostHeight()
+    })
+
+    focusDisposable = editor.onDidFocusEditorText(() => {
+      emit('focus')
+      logger.debug('[NotebookPythonEditor] editor focused', {
+        cellKey: String(props.cellKey || ''),
+      })
+    })
+
+    blurDisposable = editor.onDidBlurEditorText(() => {
+      emit('blur')
+      logger.debug('[NotebookPythonEditor] editor blurred', {
+        cellKey: String(props.cellKey || ''),
+      })
+    })
+
+    editor.addCommand(monacoRef.KeyCode.Escape, () => {
+      blurEditorToPage('escape')
     })
 
     editorReady.value = true
@@ -162,6 +210,10 @@ const disposeMonacoEditor = () => {
   contentChangeDisposable = null
   contentSizeDisposable?.dispose?.()
   contentSizeDisposable = null
+  focusDisposable?.dispose?.()
+  focusDisposable = null
+  blurDisposable?.dispose?.()
+  blurDisposable = null
   editor?.dispose?.()
   editor = null
   model?.dispose?.()
@@ -172,6 +224,18 @@ const disposeMonacoEditor = () => {
 
 const handleFallbackInput = (event) => {
   emit('update:modelValue', String(event?.target?.value || ''))
+}
+
+const handleFallbackKeydown = (event) => {
+  if (event?.key !== 'Escape') return
+  event.preventDefault()
+  event?.target?.blur?.()
+  hostRef.value?.focus?.()
+  emit('blur')
+  logger.info('[NotebookPythonEditor] release fallback editor focus back to notebook page', {
+    cellKey: String(props.cellKey || ''),
+    reason: 'fallback-escape',
+  })
 }
 
 onMounted(() => {
@@ -222,6 +286,7 @@ watch(() => props.modelValue, (nextValue) => {
   position: relative;
   width: 100%;
   min-height: 48px;
+  outline: none;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-border, rgba(15, 23, 42, 0.1)) 100%, transparent);
   background: color-mix(in srgb, var(--guaxi-notebook-panel-soft, #f8fafc) 92%, transparent);
