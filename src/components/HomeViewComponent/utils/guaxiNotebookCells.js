@@ -104,7 +104,7 @@ const detectFrontmatterEnd = (lines = []) => {
 // 1. 探索者模式需要把 Markdown 拆成更接近“文档大纲”的多个 cell，而不是把整段文本塞进一个超大 cell。
 // 2. 这里优先按标题切分；如果某一段本身没有标题，则退化成按空行块切分，这样普通笔记也不会退化成单大块。
 // 3. 切分时会避开 fenced code block 和 frontmatter，避免把代码块、YAML 头错误拆散。
-const splitMarkdownIntoNotebookCellSources = (markdown = '') => {
+export const createMarkdownPreviewSegments = (markdown = '') => {
   const text = normalizeNotebookMarkdownText(markdown)
   if (!text) return []
 
@@ -113,8 +113,20 @@ const splitMarkdownIntoNotebookCellSources = (markdown = '') => {
   const frontmatterEnd = detectFrontmatterEnd(lines)
   let startLine = 0
 
+  const pushSegmentRange = (startIndex, endExclusive) => {
+    const safeStart = Math.max(0, Number(startIndex || 0))
+    const safeEnd = Math.max(safeStart, Number(endExclusive || safeStart))
+    const segmentText = lines.slice(safeStart, safeEnd).join('\n')
+    if (!segmentText) return
+    segments.push({
+      content: segmentText,
+      startLine: safeStart + 1,
+      endLine: Math.max(safeStart + 1, safeEnd),
+    })
+  }
+
   if (frontmatterEnd > 0) {
-    segments.push(lines.slice(0, frontmatterEnd).join('\n'))
+    pushSegmentRange(0, frontmatterEnd)
     startLine = frontmatterEnd
   }
 
@@ -128,20 +140,14 @@ const splitMarkdownIntoNotebookCellSources = (markdown = '') => {
     fenceState = detectFenceState(line, fenceState)
   }
 
-  const pushSegment = (segmentLines = []) => {
-    const segmentText = segmentLines.join('\n')
-    if (!segmentText) return
-    segments.push(segmentText)
-  }
-
   if (headingStartIndexes.length) {
     if (headingStartIndexes[0] > startLine) {
-      pushSegment(lines.slice(startLine, headingStartIndexes[0]))
+      pushSegmentRange(startLine, headingStartIndexes[0])
     }
 
     headingStartIndexes.forEach((headingStart, index) => {
       const nextHeadingStart = headingStartIndexes[index + 1] ?? lines.length
-      pushSegment(lines.slice(headingStart, nextHeadingStart))
+      pushSegmentRange(headingStart, nextHeadingStart)
     })
   } else {
     let chunkStart = startLine
@@ -160,17 +166,21 @@ const splitMarkdownIntoNotebookCellSources = (markdown = '') => {
       const hasDoubleBlankBoundary = blankEnd > index
       if (!hasDoubleBlankBoundary) continue
 
-      pushSegment(lines.slice(chunkStart, blankEnd + 1))
+      pushSegmentRange(chunkStart, blankEnd + 1)
       chunkStart = blankEnd + 1
       index = blankEnd
     }
 
     if (chunkStart < lines.length) {
-      pushSegment(lines.slice(chunkStart))
+      pushSegmentRange(chunkStart, lines.length)
     }
   }
 
   return segments
+}
+
+const splitMarkdownIntoNotebookCellSources = (markdown = '') => {
+  return createMarkdownPreviewSegments(markdown).map((segment) => String(segment?.content || ''))
 }
 
 const joinCellSource = (parts) => {

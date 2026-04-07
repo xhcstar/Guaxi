@@ -1082,6 +1082,7 @@ import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiM
 import { createGuaxiPythonCellEditorManager } from './utils/guaxiPythonCellEditor'
 import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, createPythonSessionId, dataframeToMarkdownTable, parsePythonCellBlocks, transformPythonCellBlocksForPreview } from './utils/guaxiPythonCellSyntax'
 import { getPythonCellSnapshot, patchPythonCellSnapshot } from './utils/guaxiPythonCellState'
+import { createMarkdownPreviewSegments } from './utils/guaxiNotebookCells'
 import Vditor from 'vditor'
 import 'vditor/dist/index.css'
 import 'vditor/dist/method'
@@ -1195,6 +1196,10 @@ const editorSurfaceMode = ref('source')
 const layoutMode = computed(() => fileTreeStore.layoutMode || 'single');
 const renderedHtml = ref('');
 const lastPreviewRenderedSource = ref('');
+const previewSegmentRenderCache = new Map()
+const previewFileCardMetaCache = new Map()
+const PREVIEW_SEGMENT_CACHE_LIMIT = 160
+const PREVIEW_FILE_CARD_CACHE_LIMIT = 80
 const previewContainer = ref(null);
 const pythonRuntimeAnchorRef = ref(null)
 const pythonRuntimePanelRef = ref(null)
@@ -13636,6 +13641,282 @@ const setMainMode = async (nextMode) => {
 };
 
 // 防抖渲染
+const rememberPreviewCacheEntry = (cache, key, value, limit = 100) => {
+  if (!cache || !key) return
+  if (cache.has(key)) cache.delete(key)
+  cache.set(key, value)
+  while (cache.size > Math.max(16, Number(limit || 0) || 0)) {
+    const oldestKey = cache.keys().next().value
+    if (!oldestKey) break
+    cache.delete(oldestKey)
+  }
+}
+
+const remapPreviewLineNumbers = (html, lineOffset = 0) => {
+  const offset = Number(lineOffset || 0)
+  if (!offset) return String(html || '')
+
+  return String(html || '')
+    .replace(/data-md-start-line="(\d+)"/g, (_m, line) => `data-md-start-line="${Math.max(1, Number(line || 0) + offset)}"`)
+    .replace(/data-md-end-line="(\d+)"/g, (_m, line) => `data-md-end-line="${Math.max(1, Number(line || 0) + offset)}"`)
+    .replace(/data-md-task-line="(\d+)"/g, (_m, line) => `data-md-task-line="${Math.max(1, Number(line || 0) + offset)}"`)
+}
+
+// 设计说明：
+// 1. 文件卡片通过 innerHTML 注入标题、摘要和路径信息，因此这里必须做统一转义，避免预览增强引入 HTML 污染。
+// 2. 单独定义在预览增强作用域，避免误引用 handlePreviewClick 内部的局部 escapeHtml。
+const escapePreviewHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const buildPreviewSegmentCacheKey = (segment, options = {}) => {
+  const theme = String(options.theme || '')
+  const basePath = String(options.basePath || '')
+  const filePath = String(options.filePath || '')
+  const content = String(segment?.content || '')
+  return `${theme}::${basePath}::${filePath}::${content}`
+}
+
+// 设计说明：
+// 1. [toc] / [[toc]] 这类目录标记依赖“整篇文档”的标题信息生成目录。
+// 2. 一旦把文档切片后分别 renderMarkdown，目录插件就只能看到局部标题，最终会导致 TOC 缺失或不完整。
+// 3. 因此预览阶段只要检测到目录标记，就回退到整篇渲染，优先保证正确性。
+const hasPreviewTocMarker = (markdown = '') => /^\s*(?:\[\[\s*(?:toc|目录)\s*\]\]|\[\s*(?:toc|目录)\s*\])\s*$/im.test(String(markdown || ''))
+
+const renderPreviewSegmentsWithCache = async (markdown, options = {}) => {
+  const text = String(markdown || '')
+  const previewSegments = createMarkdownPreviewSegments(text)
+  if (!previewSegments.length) return ''
+
+  // 设计思路：
+  // 1. 预览模式尽量复用探索者模式的“按标题/段落切分”思路，把整篇 Markdown 拆成多个稳定片段。
+  // 2. 每个片段单独 renderMarkdown，并放入缓存，减少局部编辑时的重复全量渲染。
+  // 3. 片段渲染后把局部行号回写成全局行号，保证预览点击联动、任务列表回写等功能不受影响。
+  const htmlParts = []
+
+  for (const segment of previewSegments) {
+    const cacheKey = buildPreviewSegmentCacheKey(segment, options)
+    let segmentHtml = previewSegmentRenderCache.get(cacheKey)
+
+    if (!segmentHtml) {
+      logger.info('[Preview] render segment cache miss', {
+        startLine: Number(segment?.startLine || 1),
+        endLine: Number(segment?.endLine || 1),
+        length: String(segment?.content || '').length,
+      })
+      segmentHtml = await renderMarkdown(String(segment?.content || ''), {
+        basePath: options.basePath,
+        mermaid: true,
+        math: true,
+        codeHighlight: true,
+        pythonCells: true,
+        codeCells: true,
+        theme: options.theme,
+      })
+      rememberPreviewCacheEntry(previewSegmentRenderCache, cacheKey, segmentHtml, PREVIEW_SEGMENT_CACHE_LIMIT)
+    } else {
+      logger.debug('[Preview] render segment cache hit', {
+        startLine: Number(segment?.startLine || 1),
+        endLine: Number(segment?.endLine || 1),
+      })
+    }
+
+    htmlParts.push(remapPreviewLineNumbers(segmentHtml, Math.max(0, Number(segment?.startLine || 1) - 1)))
+  }
+
+  return htmlParts.join('\n')
+}
+
+const extractPreviewFileCardExcerpt = (content) => {
+  const lines = String(content || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+
+  for (const line of lines) {
+    if (/^\s{0,3}#{1,6}\s+/.test(line)) continue
+    if (/^\s*>/.test(line)) continue
+    if (/^\s*[-*+]\s+/.test(line)) continue
+    if (/^\s*```/.test(line)) continue
+    const cleaned = line
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\[\[([^\]]+)\]\]/g, '$1')
+      .replace(/[`*_>#-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (cleaned) return cleaned.slice(0, 140)
+  }
+
+  return '打开该笔记，查看其中的标题、正文与关联内容。'
+}
+
+const buildPreviewFileCardTitle = (content, absPath) => {
+  const heading = String(content || '').match(/^\s{0,3}#{1,6}\s+(.+)$/m)
+  if (heading?.[1]) {
+    return String(heading[1] || '').replace(/\s+#+\s*$/, '').trim()
+  }
+  const normalizedPath = normalizeFsPath(absPath)
+  const fileName = normalizedPath.split('/').pop() || normalizedPath
+  return fileName.replace(/\.(md|markdown)$/i, '') || '未命名笔记'
+}
+
+const buildPreviewFileCardPathLabel = (absPath) => {
+  const normalizedPath = normalizeFsPath(absPath)
+  const repoRoot = normalizeFsPath(fileTreeStore.activeRepoPath || '')
+  if (repoRoot && normalizedPath.startsWith(`${repoRoot}/`)) {
+    return normalizedPath.slice(repoRoot.length + 1)
+  }
+  return normalizedPath
+}
+
+const loadPreviewFileCardMeta = async (absPath) => {
+  const normalizedPath = normalizeFsPath(absPath)
+  if (!normalizedPath) return null
+
+  const cached = previewFileCardMetaCache.get(normalizedPath)
+  if (cached) return cached
+
+  try {
+    const res = await fileTreeStore.fetchFileContent(normalizedPath)
+    if (!res?.ok) {
+      logger.warn('[PreviewCard] fetch file content failed', { path: normalizedPath, code: res?.code, error: res?.error })
+      return null
+    }
+
+    const content = String(res.content || '')
+    const meta = {
+      path: normalizedPath,
+      title: buildPreviewFileCardTitle(content, normalizedPath),
+      excerpt: extractPreviewFileCardExcerpt(content),
+      pathLabel: buildPreviewFileCardPathLabel(normalizedPath),
+    }
+    rememberPreviewCacheEntry(previewFileCardMetaCache, normalizedPath, meta, PREVIEW_FILE_CARD_CACHE_LIMIT)
+    logger.info('[PreviewCard] meta loaded', { path: normalizedPath, title: meta.title })
+    return meta
+  } catch (error) {
+    logger.warn('[PreviewCard] load meta failed', { path: normalizedPath }, error)
+    return null
+  }
+}
+
+const resolvePreviewCardTargetPath = async (href, { baseDocPath } = {}) => {
+  const rawHref = String(href || '').trim()
+  if (!rawHref) return ''
+
+  if (rawHref.toLowerCase().startsWith('guaxi://wikilink')) {
+    try {
+      const u = new URL(rawHref)
+      const file = stripLinkBoundaryPunct(u.searchParams.get('file') || '')
+      if (!file) return ''
+
+      const primaryAbs = await resolveFsLinkToAbsolute(ensureMarkdownExt(file), { baseDocPath })
+      if (isMarkdownFilePath(primaryAbs)) return primaryAbs
+
+      if (isBareWikilinkFileName(file)) {
+        let repoRoot = normalizeFsPath(fileTreeStore.activeRepoPath || '')
+        if (!repoRoot && baseDocPath) {
+          const list = await ensureKnowledgeBasesLoaded()
+          for (const kb of Array.isArray(list) ? list : []) {
+            const root = normalizeFsPath(kb?.location)
+            if (root && (baseDocPath === root || String(baseDocPath).startsWith(`${root}/`))) {
+              repoRoot = root
+              break
+            }
+          }
+        }
+        const hit = await findMarkdownByBasenameInRepo(file, { repoRoot })
+        if (isMarkdownFilePath(hit)) return hit
+      }
+    } catch (error) {
+      logger.warn('[PreviewCard] resolve wikilink target failed', { href: rawHref, baseDocPath }, error)
+    }
+    return ''
+  }
+
+  if (!isPathLikeToken(rawHref)) return ''
+  const { link } = splitFsLinkAndAnchor(rawHref)
+  if (!link) return ''
+  const abs = await resolveFsLinkToAbsolute(link, { baseDocPath })
+  return isMarkdownFilePath(abs) ? abs : ''
+}
+
+const canPromotePreviewLinkToCard = (anchor) => {
+  if (!(anchor instanceof HTMLAnchorElement)) return false
+  const href = String(anchor.getAttribute('href') || '').trim()
+  if (!href || href.startsWith('#') || isHttpUrl(href)) return false
+
+  const container = anchor.closest('p, li')
+  if (!container) return false
+  const allAnchors = container.querySelectorAll('a')
+  if (allAnchors.length !== 1 || allAnchors[0] !== anchor) return false
+
+  const blockText = String(container.textContent || '').replace(/\s+/g, ' ').trim()
+  const anchorText = String(anchor.textContent || '').replace(/\s+/g, ' ').trim()
+  return !!anchorText && blockText === anchorText
+}
+
+const enhancePreviewHtmlWithFileCards = async (html, { baseDocPath } = {}) => {
+  const root = document.createElement('div')
+  root.innerHTML = String(html || '')
+
+  const anchors = Array.from(root.querySelectorAll('a[href]'))
+  for (const anchor of anchors) {
+    try {
+      if (!canPromotePreviewLinkToCard(anchor)) continue
+      const href = String(anchor.getAttribute('href') || '').trim()
+      const targetPath = await resolvePreviewCardTargetPath(href, { baseDocPath })
+      if (!targetPath) continue
+
+      const meta = await loadPreviewFileCardMeta(targetPath)
+      if (!meta) continue
+
+      const sourceBlock = anchor.closest('p, li')
+      if (!sourceBlock) continue
+
+      const card = document.createElement('div')
+      card.className = 'guaxi-preview-file-card'
+      ;['data-md-start-line', 'data-md-end-line', 'data-md-original'].forEach((attr) => {
+        const value = sourceBlock.getAttribute(attr)
+        if (value) card.setAttribute(attr, value)
+      })
+      card.setAttribute('data-guaxi-preview-card', 'file-link')
+      card.setAttribute('data-guaxi-preview-card-path', meta.path)
+
+      const cardLink = document.createElement('a')
+      cardLink.className = 'guaxi-preview-file-card__link'
+      cardLink.setAttribute('href', href)
+      cardLink.setAttribute('title', meta.path)
+      const startLine = sourceBlock.getAttribute('data-md-start-line')
+      if (startLine) cardLink.setAttribute('data-md-start-line', startLine)
+
+      cardLink.innerHTML = `
+        <span class="guaxi-preview-file-card__eyebrow">关联笔记</span>
+        <span class="guaxi-preview-file-card__title">${escapePreviewHtml(meta.title)}</span>
+        <span class="guaxi-preview-file-card__excerpt">${escapePreviewHtml(meta.excerpt)}</span>
+        <span class="guaxi-preview-file-card__meta">${escapePreviewHtml(meta.pathLabel)}</span>
+      `
+
+      card.appendChild(cardLink)
+      sourceBlock.replaceWith(card)
+
+      logger.info('[PreviewCard] promoted markdown link to card', {
+        href,
+        targetPath: meta.path,
+        title: meta.title,
+      })
+    } catch (error) {
+      logger.warn('[PreviewCard] promote link to card failed', error)
+    }
+  }
+
+  return root.innerHTML
+}
+
 const renderDebounced = debounce(async (content) => {
   if (!selectedFile.value || !mode.value || !content || !canPreview.value) {
     renderedHtml.value = '';
@@ -13655,15 +13936,39 @@ const renderDebounced = debounce(async (content) => {
       filePath: selectedFile.value?.path || '',
     })
     const processed = preprocessObsidianWikilinks(previewSource);
-    renderedHtml.value = await renderMarkdown(processed, {
-      basePath: basePath,
-      mermaid: true,
-      math: true,
-      codeHighlight: true,
-      pythonCells: true,
-      codeCells: true,
-      theme: previewTheme
-    });
+    const containsTocMarker = hasPreviewTocMarker(processed)
+    let previewHtml = ''
+    const previewSegments = createMarkdownPreviewSegments(processed)
+    if (!containsTocMarker && previewSegments.length > 1) {
+      logger.info('[Preview] use segmented cached renderer', {
+        path: selectedFile.value?.path || '',
+        segmentCount: previewSegments.length,
+      })
+      previewHtml = await renderPreviewSegmentsWithCache(processed, {
+        basePath,
+        filePath: selectedFile.value?.path || '',
+        theme: previewTheme,
+      })
+    } else {
+      if (containsTocMarker) {
+        logger.info('[Preview] fallback to full render because toc marker was detected', {
+          path: selectedFile.value?.path || '',
+        })
+      }
+      previewHtml = await renderMarkdown(processed, {
+        basePath: basePath,
+        mermaid: true,
+        math: true,
+        codeHighlight: true,
+        pythonCells: true,
+        codeCells: true,
+        theme: previewTheme
+      });
+    }
+
+    renderedHtml.value = await enhancePreviewHtmlWithFileCards(previewHtml, {
+      baseDocPath: selectedFile.value?.path || '',
+    })
 
     lastPreviewRenderedSource.value = content;
 
@@ -17187,6 +17492,70 @@ onUnmounted(() => {
 }
 
 /* ==================== Markdown 任务列表（Task List）样式 ==================== */
+.preview :deep(.guaxi-preview-file-card) {
+  display: inline-flex;
+  vertical-align: top;
+  max-width: min(420px, 100%);
+  margin: 8px 0;
+  border-radius: 14px;
+  border: 1px solid var(--guaxi-border, rgba(14, 116, 144, 0.16));
+  background: color-mix(in srgb, var(--guaxi-content-bg, #ffffff) 92%, rgba(34, 211, 238, 0.08));
+  overflow: hidden;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+
+.preview :deep(.guaxi-preview-file-card__link) {
+  display: inline-grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.preview :deep(.guaxi-preview-file-card__link:hover) {
+  opacity: 1;
+  text-decoration: none;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.preview :deep(.guaxi-preview-file-card__eyebrow) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(8, 145, 178, 0.1);
+  color: var(--guaxi-text-link, #0f766e);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.preview :deep(.guaxi-preview-file-card__title) {
+  color: var(--guaxi-text-primary, #0f172a);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.preview :deep(.guaxi-preview-file-card__excerpt) {
+  color: var(--guaxi-text-secondary, rgba(51, 65, 85, 0.9));
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.preview :deep(.guaxi-preview-file-card__meta) {
+  color: var(--guaxi-text-secondary, rgba(71, 85, 105, 0.88));
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
 .preview :deep(li.task-list-item) {
   list-style: none;
 }
@@ -18217,6 +18586,45 @@ onUnmounted(() => {
 :root[data-guaxi-theme='dark'] .guaxi-pycell-var-preview,
 :root[data-guaxi-theme='dark'] .guaxi-pycell-session-empty {
   color: rgba(148, 163, 184, 0.94);
+}
+
+.dark-mode .preview :deep(.guaxi-preview-file-card),
+:root.dark .preview :deep(.guaxi-preview-file-card),
+:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card) {
+  border-color: rgba(71, 85, 105, 0.42);
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
+}
+
+.dark-mode .preview :deep(.guaxi-preview-file-card__link:hover),
+:root.dark .preview :deep(.guaxi-preview-file-card__link:hover),
+:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__link:hover) {
+  background: rgba(30, 41, 59, 0.28);
+}
+
+.dark-mode .preview :deep(.guaxi-preview-file-card__eyebrow),
+:root.dark .preview :deep(.guaxi-preview-file-card__eyebrow),
+:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__eyebrow) {
+  background: rgba(34, 211, 238, 0.14);
+  color: #67e8f9;
+}
+
+.dark-mode .preview :deep(.guaxi-preview-file-card__title),
+:root.dark .preview :deep(.guaxi-preview-file-card__title),
+:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__title) {
+  color: #e5edf7;
+}
+
+.dark-mode .preview :deep(.guaxi-preview-file-card__excerpt),
+:root.dark .preview :deep(.guaxi-preview-file-card__excerpt),
+:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__excerpt) {
+  color: rgba(203, 213, 225, 0.9);
+}
+
+.dark-mode .preview :deep(.guaxi-preview-file-card__meta),
+:root.dark .preview :deep(.guaxi-preview-file-card__meta),
+:root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__meta) {
+  color: rgba(148, 163, 184, 0.9);
 }
 
 .dark-mode .preview .guaxi-codecell-btn,
