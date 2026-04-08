@@ -14186,25 +14186,42 @@ const getPreviewRenderDelayMs = () => {
   return PREVIEW_RENDER_DELAY_DEFAULT_MS
 }
 
-const performPreviewRender = async (content, requestId = 0, reason = 'scheduled') => {
+const performPreviewRender = async (content, requestId = 0, reason = 'scheduled', context = {}) => {
+  const renderFilePath = String(context?.filePath || selectedFile.value?.path || '').trim()
+  const currentSelectedPath = String(selectedFile.value?.path || '').trim()
+
+  // 设计说明：
+  // 1. 预览渲染是异步链路，文件切换时旧任务可能在新文件打开后才返回。
+  // 2. 如果执行阶段直接读取 selectedFile，会把“旧内容”按“新文件路径”参与缓存与回填，最终出现串屏。
+  // 3. 因此这里固定使用调度时捕获的文件快照，并在真正写回 HTML 前再次校验当前文件是否仍然一致。
   if (!selectedFile.value || !mode.value || !content || !canPreview.value) {
     renderedHtml.value = '';
     lastPreviewRenderedSource.value = '';
     return;
   }
 
+  if (renderFilePath && currentSelectedPath && renderFilePath !== currentSelectedPath) {
+    logger.info('[Preview] skip render because file changed before execution', {
+      reason,
+      requestId,
+      renderFilePath,
+      currentSelectedPath,
+    })
+    return
+  }
+
   try {
-    const basePath = selectedFile.value.path ? await dirname(selectedFile.value.path) : '';
-    const previewTheme = getMarkdownPreviewThemeName()
+    const basePath = renderFilePath ? await dirname(renderFilePath) : '';
+    const previewTheme = String(context?.theme || getMarkdownPreviewThemeName())
     logger.info('[Preview] render markdown', {
       reason,
       requestId,
       previewTheme,
       appearanceTheme: settingsStore.appearanceTheme,
-      path: selectedFile.value?.path || '',
+      path: renderFilePath,
     })
     const previewSource = transformPythonCellBlocksForPreview(content, {
-      filePath: selectedFile.value?.path || '',
+      filePath: renderFilePath,
     })
     const processed = preprocessObsidianWikilinks(previewSource);
     const containsTocMarker = hasPreviewTocMarker(processed)
@@ -14212,38 +14229,38 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
     const previewSegments = createMarkdownPreviewSegments(processed)
     if (!containsTocMarker && previewSegments.length > 1) {
       logger.info('[Preview] use segmented cached renderer', {
-        path: selectedFile.value?.path || '',
+        path: renderFilePath,
         segmentCount: previewSegments.length,
       })
       previewHtml = await renderPreviewSegmentsWithCache(processed, {
         basePath,
-        filePath: selectedFile.value?.path || '',
+        filePath: renderFilePath,
         theme: previewTheme,
       })
     } else {
       const fullCacheKey = buildPreviewDocumentCacheKey(processed, {
         basePath,
-        filePath: selectedFile.value?.path || '',
+        filePath: renderFilePath,
         theme: previewTheme,
       })
       const cachedHtml = previewFullRenderCache.get(fullCacheKey)
       if (cachedHtml) {
         logger.info('[Preview] use full render cache hit', {
-          path: selectedFile.value?.path || '',
+          path: renderFilePath,
           reason: containsTocMarker ? 'toc-marker' : 'single-segment',
         })
         previewHtml = cachedHtml
       } else {
       if (containsTocMarker) {
         logger.info('[Preview] fallback to full render because toc marker was detected', {
-          path: selectedFile.value?.path || '',
+          path: renderFilePath,
         })
       }
         previewHtml = await renderPreviewMarkdown(
           processed,
           {
             basePath,
-            filePath: selectedFile.value?.path || '',
+            filePath: renderFilePath,
             theme: previewTheme,
           },
           containsTocMarker ? 'full-document-toc' : 'full-document',
@@ -14253,14 +14270,16 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
     }
 
     const enhancedHtml = await enhancePreviewHtmlWithFileCards(previewHtml, {
-      baseDocPath: selectedFile.value?.path || '',
+      baseDocPath: renderFilePath,
     })
-    if (requestId && requestId !== previewRenderRequestId) {
+    const latestSelectedPath = String(selectedFile.value?.path || '').trim()
+    if ((requestId && requestId !== previewRenderRequestId) || (renderFilePath && latestSelectedPath && renderFilePath !== latestSelectedPath)) {
       logger.info('[Preview] drop stale render result', {
         requestId,
         latestRequestId: previewRenderRequestId,
         reason,
-        path: selectedFile.value?.path || '',
+        renderFilePath,
+        latestSelectedPath,
       })
       return
     }
@@ -14283,7 +14302,7 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
 // 设计说明：
 // 1. 分栏预览需要比纯预览更快的反馈，因此这里按模式动态缩短防抖时间。
 // 2. 异步渲染可能晚于用户的下一次输入完成，用 requestId 丢弃过期结果，避免“旧结果压住新结果”。
-const renderDebounced = (content, reason = 'scheduled') => {
+const renderDebounced = (content, reason = 'scheduled', context = {}) => {
   if (previewRenderTimer) {
     window.clearTimeout(previewRenderTimer)
     previewRenderTimer = null
@@ -14291,17 +14310,22 @@ const renderDebounced = (content, reason = 'scheduled') => {
 
   const requestId = ++previewRenderRequestId
   const delayMs = getPreviewRenderDelayMs()
+  const filePathSnapshot = String(context?.filePath || selectedFile.value?.path || '').trim()
+  const themeSnapshot = String(context?.theme || getMarkdownPreviewThemeName())
   logger.debug('[Preview] schedule render', {
     requestId,
     reason,
     delayMs,
-    path: selectedFile.value?.path || '',
+    path: filePathSnapshot,
     previewMode: previewMode.value,
   })
 
   previewRenderTimer = window.setTimeout(() => {
     previewRenderTimer = null
-    void performPreviewRender(String(content || ''), requestId, reason)
+    void performPreviewRender(String(content || ''), requestId, reason, {
+      filePath: filePathSnapshot,
+      theme: themeSnapshot,
+    })
   }, delayMs)
 }
 
@@ -14320,6 +14344,21 @@ watch(selectedFile, async (newFile) => {
   if (newFile) {
     const nextPath = newFile.path || '';
     const prevPath = lastSelectedFilePath.value || '';
+    const switchedToDifferentFile = !!nextPath && !!prevPath && nextPath !== prevPath;
+
+    if (switchedToDifferentFile) {
+      if (previewRenderTimer) {
+        window.clearTimeout(previewRenderTimer)
+        previewRenderTimer = null
+      }
+      previewRenderRequestId += 1
+      renderedHtml.value = ''
+      lastPreviewRenderedSource.value = ''
+      logger.info('[Preview] cleared stale preview state after file switch', {
+        from: prevPath,
+        to: nextPath,
+      })
+    }
 
     const isSameFile = !!nextPath && !!prevPath && nextPath === prevPath;
     if (isSameFile) {
@@ -14382,7 +14421,9 @@ watch(selectedFile, async (newFile) => {
     }
 
     if (canPreview.value && (mode.value === 'preview' || previewMode.value !== 'toggle')) {
-      renderDebounced(newFile.content)
+      renderDebounced(newFile.content, 'selected-file-changed', {
+        filePath: nextPath,
+      })
     }
 
     await initGitService()
