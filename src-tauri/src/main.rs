@@ -249,6 +249,7 @@ async fn main() {
             commands::docprocess::copy_image_file,
             commands::fileprocess::get_file_tree,
             commands::fileprocess::read_file_content,
+            commands::fileprocess::get_file_meta,
             commands::fileprocess::read_file_bytes_base64,
             commands::fileprocess::write_file_bytes_base64,
             commands::fileprocess::write_file_content,

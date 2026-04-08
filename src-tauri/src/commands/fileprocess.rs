@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use tracing::{info, warn};
 
 use base64::engine::general_purpose;
@@ -15,6 +16,14 @@ pub struct FileNode {
     name: String,
     is_directory: bool,
     children: Option<Vec<FileNode>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileMeta {
+    path: String,
+    mtime_ms: Option<u64>,
+    file_size: u64,
+    is_directory: bool,
 }
 
 // 辅助函数：规范化路径分隔符
@@ -105,6 +114,34 @@ pub fn get_file_tree(path: String) -> Result<Vec<FileNode>, String> {
 pub fn read_file_content(path: String) -> Result<String, String> {
     let path = normalize_path(&path);
     fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_file_meta(path: String) -> Result<FileMeta, String> {
+    let normalized = normalize_path(&path);
+    let metadata = fs::metadata(&normalized).map_err(|e| e.to_string())?;
+    let mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64);
+
+    let meta = FileMeta {
+        path: normalized.to_string_lossy().to_string(),
+        mtime_ms,
+        file_size: metadata.len(),
+        is_directory: metadata.is_dir(),
+    };
+
+    info!(
+        path = %meta.path,
+        mtime_ms = ?meta.mtime_ms,
+        file_size = meta.file_size,
+        is_directory = meta.is_directory,
+        "[fileprocess] get_file_meta"
+    );
+
+    Ok(meta)
 }
 
 #[tauri::command]

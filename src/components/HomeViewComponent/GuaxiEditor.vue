@@ -14023,38 +14023,81 @@ const buildPreviewFileCardTitle = (content, absPath) => {
   return fileName.replace(/\.(md|markdown)$/i, '') || '未命名笔记'
 }
 
-const buildPreviewFileCardPathLabel = (absPath) => {
+const buildPreviewFileCardPathLabel = (absPath, { repoRoot } = {}) => {
   const normalizedPath = normalizeFsPath(absPath)
-  const repoRoot = normalizeFsPath(fileTreeStore.activeRepoPath || '')
-  if (repoRoot && normalizedPath.startsWith(`${repoRoot}/`)) {
-    return normalizedPath.slice(repoRoot.length + 1)
+  const normalizedRepoRoot = normalizeFsPath(repoRoot || fileTreeStore.activeRepoPath || '')
+  if (normalizedRepoRoot && normalizedPath.startsWith(`${normalizedRepoRoot}/`)) {
+    return normalizedPath.slice(normalizedRepoRoot.length + 1)
   }
   return normalizedPath
 }
 
-const loadPreviewFileCardMeta = async (absPath) => {
+const resolvePreviewFileCardRepoRoot = (absPath, { repoRoot } = {}) => {
+  const explicitRepoRoot = normalizeFsPath(repoRoot || '')
+  if (explicitRepoRoot) return explicitRepoRoot
+
+  const byPath = normalizeFsPath(findRepoRootForPath(absPath) || '')
+  if (byPath) return byPath
+
+  return normalizeFsPath(fileTreeStore.activeRepoPath || '')
+}
+
+const buildPreviewFileCardMetaCacheKey = (absPath, { repoRoot = '', mtimeMs = null } = {}) => {
+  const normalizedPath = normalizeFsPath(absPath)
+  const normalizedRepoRoot = normalizeFsPath(repoRoot || '')
+  const normalizedMtime = Number.isFinite(Number(mtimeMs)) ? String(Number(mtimeMs)) : 'unknown'
+  return `${normalizedRepoRoot}::${normalizedPath}::${normalizedMtime}`
+}
+
+const removePreviewFileCardMetaCacheEntriesForPath = (absPath) => {
+  const normalizedPath = normalizeFsPath(absPath)
+  if (!normalizedPath || !previewFileCardMetaCache.size) return
+
+  for (const key of Array.from(previewFileCardMetaCache.keys())) {
+    if (String(key).includes(`::${normalizedPath}::`)) {
+      previewFileCardMetaCache.delete(key)
+    }
+  }
+}
+
+const loadPreviewFileCardMeta = async (absPath, { repoRoot } = {}) => {
   const normalizedPath = normalizeFsPath(absPath)
   if (!normalizedPath) return null
 
-  const cached = previewFileCardMetaCache.get(normalizedPath)
-  if (cached) return cached
-
   try {
-    const res = await fileTreeStore.fetchFileContent(normalizedPath)
-    if (!res?.ok) {
-      logger.warn('[PreviewCard] fetch file content failed', { path: normalizedPath, code: res?.code, error: res?.error })
-      return null
+    const resolvedRepoRoot = resolvePreviewFileCardRepoRoot(normalizedPath, { repoRoot })
+    const metaInfo = await fileTreeStore.fetchFileMeta(normalizedPath)
+    const cacheKey = buildPreviewFileCardMetaCacheKey(normalizedPath, {
+      repoRoot: resolvedRepoRoot,
+      mtimeMs: metaInfo?.mtimeMs,
+    })
+    const cached = previewFileCardMetaCache.get(cacheKey)
+    if (cached) {
+      logger.info('[PreviewCard] meta cache hit', {
+        path: normalizedPath,
+        repoRoot: resolvedRepoRoot,
+        mtimeMs: metaInfo?.mtimeMs ?? null,
+      })
+      return cached
     }
 
-    const content = String(res.content || '')
+    removePreviewFileCardMetaCacheEntriesForPath(normalizedPath)
+    const content = String(await invoke('read_file_content', { path: normalizedPath }) || '')
     const meta = {
       path: normalizedPath,
+      repoRoot: resolvedRepoRoot,
+      mtimeMs: metaInfo?.mtimeMs ?? null,
       title: buildPreviewFileCardTitle(content, normalizedPath),
       excerpt: extractPreviewFileCardExcerpt(content),
-      pathLabel: buildPreviewFileCardPathLabel(normalizedPath),
+      pathLabel: buildPreviewFileCardPathLabel(normalizedPath, { repoRoot: resolvedRepoRoot }),
     }
-    rememberPreviewCacheEntry(previewFileCardMetaCache, normalizedPath, meta, PREVIEW_FILE_CARD_CACHE_LIMIT)
-    logger.info('[PreviewCard] meta loaded', { path: normalizedPath, title: meta.title })
+    rememberPreviewCacheEntry(previewFileCardMetaCache, cacheKey, meta, PREVIEW_FILE_CARD_CACHE_LIMIT)
+    logger.info('[PreviewCard] meta loaded', {
+      path: normalizedPath,
+      title: meta.title,
+      repoRoot: resolvedRepoRoot,
+      mtimeMs: metaInfo?.mtimeMs ?? null,
+    })
     return meta
   } catch (error) {
     logger.warn('[PreviewCard] load meta failed', { path: normalizedPath }, error)
@@ -14135,7 +14178,9 @@ const enhancePreviewHtmlWithFileCards = async (html, { baseDocPath } = {}) => {
       const targetPath = await resolvePreviewCardTargetPath(href, { baseDocPath })
       if (!targetPath) continue
 
-      const meta = await loadPreviewFileCardMeta(targetPath)
+      const meta = await loadPreviewFileCardMeta(targetPath, {
+        repoRoot: findRepoRootForPath(baseDocPath || targetPath) || fileTreeStore.activeRepoPath || '',
+      })
       if (!meta) continue
 
       const sourceBlock = anchor.closest('p, li')

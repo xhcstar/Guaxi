@@ -305,6 +305,32 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     },
 
     // 更新文件内容
+    // 设计说明：
+    // 1. 预览卡片缓存需要感知文件是否已经变化，单纯使用路径作为 key 会在跨文件切换或文件更新后复用旧元数据。
+    // 2. 这里统一向后端获取 mtime / size，供预览层拼装更稳定的缓存版本戳。
+    // 3. 补充日志后，后续若仍有卡片串用问题，可以直接从 store 层确认 meta 是否过期。
+    async fetchFileMeta(path) {
+      try {
+        const meta = await invoke("get_file_meta", { path });
+        console.debug("[fileTreeStore] fetchFileMeta success", {
+          path,
+          mtimeMs: meta?.mtime_ms ?? null,
+          fileSize: meta?.file_size ?? null,
+        });
+        return {
+          ok: true,
+          path: String(meta?.path || path || ""),
+          mtimeMs: meta?.mtime_ms ?? null,
+          fileSize: Number(meta?.file_size || 0),
+          isDirectory: !!meta?.is_directory,
+        };
+      } catch (error) {
+        const errorMessage = String(error?.message || error || "");
+        console.warn("[fileTreeStore] fetchFileMeta failed", { path, error: errorMessage });
+        return { ok: false, path: String(path || ""), error: errorMessage };
+      }
+    },
+
     async updateFileContent(path, content) {
       try {
         await invoke("write_file_content", { path, content });
