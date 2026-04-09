@@ -3,8 +3,10 @@ use std::env;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
@@ -100,6 +102,7 @@ struct TerminalSessionHandle {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn portable_pty::Child + Send>>,
+    exit_emitted: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -622,46 +625,102 @@ fn spawn_terminal_reader(
             }
         }
 
-        if let Ok(mut sessions) = session_store().lock() {
-            sessions.remove(&session_id);
+        let _ = emit_terminal_exit_once(&app, &session_id, &child_handle, "reader-eof");
+    });
+}
+
+fn emit_terminal_exit_once(
+    app: &AppHandle,
+    session_id: &str,
+    session: &Arc<TerminalSessionHandle>,
+    reason: &str,
+) -> Option<Option<i32>> {
+    if session.exit_emitted.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+
+    if let Ok(mut sessions) = session_store().lock() {
+        sessions.remove(session_id);
+    }
+
+    let exit_code = match session.child.lock() {
+        Ok(mut child) => child
+            .try_wait()
+            .ok()
+            .flatten()
+            .map(|status| status.exit_code() as i32),
+        Err(error) => {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "[Terminal] lock child failed while finalizing exit"
+            );
+            None
+        }
+    };
+
+    let payload = TerminalExitEvent {
+        session_id: session_id.to_string(),
+        exit_code,
+    };
+    if let Err(error) = app.emit(TERMINAL_EXIT_EVENT, payload) {
+        warn!(
+            session_id = session_id,
+            error = %error,
+            reason = reason,
+            "[Terminal] emit exit failed"
+        );
+    }
+
+    info!(
+        session_id = session_id,
+        exit_code = exit_code.unwrap_or_default(),
+        reason = reason,
+        "[Terminal] session exited"
+    );
+
+    Some(exit_code)
+}
+
+fn spawn_terminal_exit_watcher(
+    app: AppHandle,
+    session_id: String,
+    session: Arc<TerminalSessionHandle>,
+) {
+    thread::spawn(move || loop {
+        if session.exit_emitted.load(Ordering::SeqCst) {
+            return;
         }
 
-        // In some Windows PTY / interactive shell cases, the process has already torn down
-        // the PTY stream but waiting synchronously for `child.wait()` can hang for a long time.
-        // Treating EOF as terminal exit keeps the UI responsive and prevents dead terminal tabs.
-        let exit_code = match child_handle.child.lock() {
-            Ok(mut child) => child
-                .try_wait()
-                .ok()
-                .flatten()
-                .map(|status| status.exit_code() as i32),
+        let exit_code = match session.child.lock() {
+            Ok(mut child) => match child.try_wait() {
+                Ok(Some(status)) => Some(status.exit_code() as i32),
+                Ok(None) => None,
+                Err(error) => {
+                    warn!(
+                        session_id = session_id.as_str(),
+                        error = %error,
+                        "[Terminal] try_wait failed in exit watcher"
+                    );
+                    None
+                }
+            },
             Err(error) => {
                 warn!(
                     session_id = session_id.as_str(),
                     error = %error,
-                    "[Terminal] lock child failed while probing exit"
+                    "[Terminal] lock child failed in exit watcher"
                 );
-                None
+                return;
             }
         };
 
-        let payload = TerminalExitEvent {
-            session_id: session_id.clone(),
-            exit_code,
-        };
-        if let Err(error) = app.emit(TERMINAL_EXIT_EVENT, payload) {
-            warn!(
-                session_id = session_id.as_str(),
-                error = %error,
-                "[Terminal] emit exit failed"
-            );
+        if exit_code.is_some() {
+            let _ = emit_terminal_exit_once(&app, &session_id, &session, "child-exit-watcher");
+            return;
         }
 
-        info!(
-            session_id = session_id.as_str(),
-            exit_code = exit_code.unwrap_or_default(),
-            "[Terminal] session exited"
-        );
+        thread::sleep(Duration::from_millis(220));
     });
 }
 
@@ -674,33 +733,37 @@ fn default_terminal_profile_fallback() -> String {
 }
 
 #[command]
-pub fn terminal_detect_profiles() -> Result<TerminalProfilesResponse, String> {
-    let config = get_terminal_config();
-    let profiles = detect_profiles(&config);
-    let has_default = profiles
-        .iter()
-        .any(|profile| profile.id == config.default_profile && profile.available);
-
-    let default_profile = if has_default {
-        config.default_profile
-    } else {
-        profiles
+pub async fn terminal_detect_profiles() -> Result<TerminalProfilesResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = get_terminal_config();
+        let profiles = detect_profiles(&config);
+        let has_default = profiles
             .iter()
-            .find(|profile| profile.available)
-            .map(|profile| profile.id.clone())
-            .unwrap_or_else(default_terminal_profile_fallback)
-    };
+            .any(|profile| profile.id == config.default_profile && profile.available);
 
-    info!(
-        default_profile = default_profile.as_str(),
-        profile_count = profiles.len(),
-        "[Terminal] detected profiles"
-    );
+        let default_profile = if has_default {
+            config.default_profile
+        } else {
+            profiles
+                .iter()
+                .find(|profile| profile.available)
+                .map(|profile| profile.id.clone())
+                .unwrap_or_else(default_terminal_profile_fallback)
+        };
 
-    Ok(TerminalProfilesResponse {
-        default_profile,
-        profiles,
+        info!(
+            default_profile = default_profile.as_str(),
+            profile_count = profiles.len(),
+            "[Terminal] detected profiles"
+        );
+
+        Ok(TerminalProfilesResponse {
+            default_profile,
+            profiles,
+        })
     })
+    .await
+    .map_err(|e| format!("join detect terminal profiles failed: {e}"))?
 }
 
 #[command]
@@ -712,10 +775,15 @@ pub fn terminal_list_sessions() -> Result<Vec<TerminalSessionSnapshot>, String> 
 }
 
 #[command]
-pub fn terminal_create_session(
+pub async fn terminal_create_session(
     app: AppHandle,
     request: TerminalCreateRequest,
 ) -> Result<TerminalSessionSnapshot, String> {
+    let app_for_spawn = app.clone();
+    let created = tauri::async_runtime::spawn_blocking(move || -> Result<
+        (TerminalSessionSnapshot, Box<dyn Read + Send>, Arc<TerminalSessionHandle>),
+        String,
+    > {
     let config = get_terminal_config();
     let requested_profile_id = if request.profile_id.trim().is_empty() {
         config.default_profile.clone()
@@ -780,6 +848,7 @@ pub fn terminal_create_session(
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
         child: Mutex::new(child),
+        exit_emitted: AtomicBool::new(false),
     });
 
     session_store()
@@ -794,12 +863,20 @@ pub fn terminal_create_session(
         "[Terminal] session created"
     );
 
-    spawn_terminal_reader(app, snapshot.session_id.clone(), reader, handle);
+    Ok((snapshot, reader, handle))
+    })
+    .await
+    .map_err(|e| format!("join create terminal session failed: {e}"))??;
+
+    let (snapshot, reader, handle) = created;
+    spawn_terminal_reader(app_for_spawn.clone(), snapshot.session_id.clone(), reader, handle.clone());
+    spawn_terminal_exit_watcher(app_for_spawn, snapshot.session_id.clone(), handle);
     Ok(snapshot)
 }
 
 #[command]
-pub fn terminal_write_session(request: TerminalWriteRequest) -> Result<(), String> {
+pub async fn terminal_write_session(request: TerminalWriteRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
     let session = {
         let sessions = session_store()
             .lock()
@@ -817,14 +894,15 @@ pub fn terminal_write_session(request: TerminalWriteRequest) -> Result<(), Strin
     writer
         .write_all(request.data.as_bytes())
         .map_err(|e| format!("write terminal input failed: {e}"))?;
-    writer
-        .flush()
-        .map_err(|e| format!("flush terminal input failed: {e}"))?;
     Ok(())
+    })
+    .await
+    .map_err(|e| format!("join write terminal session failed: {e}"))?
 }
 
 #[command]
-pub fn terminal_resize_session(request: TerminalResizeRequest) -> Result<(), String> {
+pub async fn terminal_resize_session(request: TerminalResizeRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
     let session = {
         let sessions = session_store()
             .lock()
@@ -848,19 +926,29 @@ pub fn terminal_resize_session(request: TerminalResizeRequest) -> Result<(), Str
         })
         .map_err(|e| format!("resize terminal failed: {e}"))?;
     Ok(())
+    })
+    .await
+    .map_err(|e| format!("join resize terminal session failed: {e}"))?
 }
 
 #[command]
-pub fn terminal_close_session(request: TerminalCloseRequest) -> Result<(), String> {
+pub async fn terminal_close_session(
+    app: AppHandle,
+    request: TerminalCloseRequest,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
     let session = session_store()
         .lock()
         .map_err(|e| format!("lock terminal sessions failed: {e}"))?
-        .remove(request.session_id.trim())
+        .get(request.session_id.trim())
+        .cloned()
         .ok_or_else(|| "终端会话不存在".to_string())?;
 
     if let Ok(mut child) = session.child.lock() {
         let _ = child.kill();
     }
+
+    let _ = emit_terminal_exit_once(&app, request.session_id.trim(), &session, "command-close");
 
     info!(
         session_id = session.snapshot.session_id.as_str(),
@@ -868,13 +956,17 @@ pub fn terminal_close_session(request: TerminalCloseRequest) -> Result<(), Strin
         "[Terminal] session closed by command"
     );
     Ok(())
+    })
+    .await
+    .map_err(|e| format!("join close terminal session failed: {e}"))?
 }
 
 #[command]
-pub fn terminal_probe_session_exit(
+pub async fn terminal_probe_session_exit(
     app: AppHandle,
     request: TerminalCloseRequest,
 ) -> Result<TerminalProbeExitResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<TerminalProbeExitResponse, String> {
     let session_id = request.session_id.trim().to_string();
     if session_id.is_empty() {
         return Ok(TerminalProbeExitResponse {
@@ -914,30 +1006,13 @@ pub fn terminal_probe_session_exit(
         });
     }
 
-    if let Ok(mut sessions) = session_store().lock() {
-        sessions.remove(session_id.as_str());
-    }
-
-    let payload = TerminalExitEvent {
-        session_id: session_id.clone(),
-        exit_code,
-    };
-    if let Err(error) = app.emit(TERMINAL_EXIT_EVENT, payload) {
-        warn!(
-            session_id = session_id.as_str(),
-            error = %error,
-            "[Terminal] emit probed exit failed"
-        );
-    }
-
-    info!(
-        session_id = session_id.as_str(),
-        exit_code = exit_code.unwrap_or_default(),
-        "[Terminal] session exit detected by probe"
-    );
+    let _ = emit_terminal_exit_once(&app, session_id.as_str(), &session, "frontend-probe");
 
     Ok(TerminalProbeExitResponse {
         exited: true,
         exit_code,
     })
+    })
+    .await
+    .map_err(|e| format!("join probe terminal session exit failed: {e}"))?
 }

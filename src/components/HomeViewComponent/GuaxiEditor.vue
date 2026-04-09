@@ -701,7 +701,11 @@
           </n-tooltip>
         </div>
       </div>
-      <div v-show="previewMode !== 'realtime' && showEditor" class="editor-wrapper" ref="editorWrapperRef">
+      <div
+        v-show="(previewMode !== 'realtime' && showEditor) || pythonConsoleVisible"
+        class="editor-wrapper"
+        ref="editorWrapperRef"
+      >
         <div v-if="editorSurfaceMode === 'notebook' && canUseNotebookSurface" class="notebook-surface">
           <GuaxiNotebookView
             ref="notebookViewRef"
@@ -947,7 +951,7 @@
             <GuaxiTerminalPanel
               ref="terminalPanelRef"
               :visible="pythonConsoleVisible"
-              :context-path="getPythonSessionTargetPath(fileTreeStore.activeRegion || 'left')"
+              :context-path="getTerminalContextPath(fileTreeStore.activeRegion || 'left')"
               @close="togglePythonConsolePanel('panel-collapse')"
             />
             <div v-if="false" class="python-console-panel" :class="{ busy: pythonConsoleBusy }">
@@ -10658,6 +10662,33 @@ const getPythonSessionTargetPath = (region = 'left') => {
     return String(fileTreeStore.activeTabRight || '').trim()
   }
   return String(fileTreeStore.activeTab || selectedFile.value?.path || '').trim()
+}
+
+const getTerminalContextPath = (region = 'left') => {
+  const regionPath = getPythonSessionTargetPath(region)
+  if (regionPath) {
+    return regionPath
+  }
+
+  const fallbackPath = String(
+    fileTreeStore.activeRepoPath
+    || knowledgeBaseStore.selectedKnowledgeBase?.location
+    || settingsStore.knowledgeBasesRoot
+    || settingsStore.librariesRoot
+    || ''
+  ).trim()
+
+  // 设计说明：
+  // 1. terminal 现在允许在“没有打开文件”的情况下独立显示，所以不能再把 cwd 绑定死在当前文档上。
+  // 2. 这里按“当前分栏文件 -> 当前 repo -> 当前知识库根 -> 全局根目录”的优先级回退，
+  //    保证任何模式下都能拿到一个稳定可用的工作目录。
+  logger.debug('[TerminalPanel] resolved context path', {
+    region,
+    regionPath,
+    fallbackPath,
+  })
+
+  return fallbackPath
 }
 
 const getPythonSessionIdForPath = (filePath) => createPythonSessionId(String(filePath || '').trim())
