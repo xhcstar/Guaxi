@@ -2771,8 +2771,22 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
     block.classList.add('guaxi-media-group')
     block.classList.toggle('is-single', mediaItems.length === 1)
     block.classList.toggle('is-gallery', mediaItems.length > 1)
+    block.setAttribute('data-guaxi-media-count', String(mediaItems.length))
+    block.style.setProperty('--guaxi-media-count', String(mediaItems.length))
 
     for (const item of mediaItems) {
+      // 设计说明：
+      // 1. 裸 `<img>` 本身不适合作为画廊单元，无法稳定承载留白、阴影和响应式宽度。
+      // 2. 这里在渲染后补一个轻量容器，让 Explorer 模式与主预览都能复用同一套媒体项布局策略。
+      if (item.host === item.image) {
+        const wrapper = document.createElement('span')
+        wrapper.setAttribute('data-guaxi-media-item', 'image')
+        item.image.replaceWith(wrapper)
+        wrapper.appendChild(item.image)
+        item.host = wrapper
+      } else {
+        item.host.setAttribute('data-guaxi-media-item', 'linked-image')
+      }
       item.host.classList.add('guaxi-media-group__item')
       item.image.classList.add('guaxi-media-group__image')
     }
@@ -4587,36 +4601,113 @@ defineExpose({
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group) {
-  display: flex;
+  --guaxi-media-gap: clamp(14px, 2vw, 24px);
+  display: flex !important;
   flex-wrap: wrap;
-  justify-content: center;
-  align-items: flex-start;
-  gap: 18px;
-  margin: 18px auto;
+  justify-content: center !important;
+  align-items: stretch;
+  align-content: flex-start;
+  gap: var(--guaxi-media-gap);
+  width: min(100%, 1000px) !important;
+  margin: 22px auto !important;
+  padding: 6px 0;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single) {
+  width: min(100%, 760px) !important;
   gap: 0;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery) {
+  width: min(100%, calc(var(--guaxi-media-count, 2) * 280px + (var(--guaxi-media-count, 2) - 1) * var(--guaxi-media-gap))) !important;
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item) {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 260px;
+  min-width: min(100%, 180px);
+  max-width: min(100%, 360px);
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 72%, transparent 28%);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 92%, var(--guaxi-notebook-panel) 8%);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  overflow: hidden;
+  text-decoration: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item:hover),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.14);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single > .guaxi-media-group__item),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single > .guaxi-media-group__item) {
   flex: 0 1 auto;
-  max-width: 100%;
+  min-width: 0;
+  max-width: min(100%, 760px);
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__image),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__image) {
   display: block;
-  max-width: min(100%, 520px);
+  width: 100%;
+  max-width: 100%;
+  max-height: min(56vh, 420px);
   height: auto;
-  margin: 0 auto;
+  margin: 0;
   border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 72%, transparent 28%);
-  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 90%, var(--guaxi-notebook-panel) 10%);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+  object-fit: contain;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single .guaxi-media-group__image),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single .guaxi-media-group__image) {
+  width: auto;
+  max-width: min(100%, 760px);
+  max-height: min(72vh, 640px);
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item) {
+  border-color: rgba(100, 116, 139, 0.4);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 58%, #0f172a 42%);
+  box-shadow: 0 18px 38px rgba(2, 6, 23, 0.28);
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item:hover),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item:hover) {
+  box-shadow: 0 22px 42px rgba(2, 6, 23, 0.34);
+}
+
+@media (max-width: 760px) {
+  .guaxi-notebook__markdown-preview :deep(.guaxi-media-group),
+  .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery),
+  .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group),
+  .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery) {
+    width: 100% !important;
+  }
+
+  .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
+  .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item) {
+    flex-basis: min(100%, 220px);
+    max-width: 100%;
+    padding: 8px;
+    border-radius: 18px;
+  }
 }
 
 .guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(a),

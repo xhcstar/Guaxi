@@ -14364,8 +14364,22 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
     block.classList.add('guaxi-media-group')
     block.classList.toggle('is-single', mediaItems.length === 1)
     block.classList.toggle('is-gallery', mediaItems.length > 1)
+    block.setAttribute('data-guaxi-media-count', String(mediaItems.length))
+    block.style.setProperty('--guaxi-media-count', String(mediaItems.length))
 
     for (const item of mediaItems) {
+      // 设计说明：
+      // 1. 纯图片节点原本没有外层包裹容器，导致样式层很难同时控制卡片留白、边框和响应式宽度。
+      // 2. 这里在渲染后为“裸图片”补一个轻量 span 容器，多图时就能统一按媒体项布局，不影响原始 Markdown 语义。
+      if (item.host === item.image) {
+        const wrapper = document.createElement('span')
+        wrapper.setAttribute('data-guaxi-media-item', item.kind)
+        item.image.replaceWith(wrapper)
+        wrapper.appendChild(item.image)
+        item.host = wrapper
+      } else {
+        item.host.setAttribute('data-guaxi-media-item', item.kind)
+      }
       item.host.classList.add('guaxi-media-group__item')
       item.image.classList.add('guaxi-media-group__image')
     }
@@ -19662,30 +19676,111 @@ img {
 }
 
 .preview .guaxi-media-group {
-  display: flex;
+  --guaxi-media-gap: clamp(14px, 2vw, 24px);
+  display: flex !important;
   flex-wrap: wrap;
-  justify-content: center;
-  align-items: flex-start;
-  gap: 18px;
-  margin: 18px auto;
+  justify-content: center !important;
+  align-items: stretch;
+  align-content: flex-start;
+  gap: var(--guaxi-media-gap);
+  width: min(100%, 1000px);
+  margin: 22px auto;
+  padding: 6px 0;
 }
 
 .preview .guaxi-media-group.is-single {
+  width: min(100%, 760px);
   gap: 0;
 }
 
+.preview .guaxi-media-group.is-gallery {
+  width: min(100%, calc(var(--guaxi-media-count, 2) * 280px + (var(--guaxi-media-count, 2) - 1) * var(--guaxi-media-gap)));
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
 .preview .guaxi-media-group__item {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 260px;
+  min-width: min(100%, 180px);
+  max-width: min(100%, 360px);
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #d0d7de) 78%, transparent 22%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 94%, transparent 6%), color-mix(in srgb, var(--guaxi-content-bg, #ffffff) 96%, transparent 4%));
+  box-shadow:
+    0 14px 30px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  overflow: hidden;
+  text-decoration: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.preview .guaxi-media-group__item:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 18px 34px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.preview .guaxi-media-group.is-single > .guaxi-media-group__item {
   flex: 0 1 auto;
-  max-width: 100%;
+  min-width: 0;
+  max-width: min(100%, 760px);
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .preview .guaxi-media-group__image {
   display: block;
-  max-width: min(100%, 520px);
+  width: 100%;
+  max-width: 100%;
+  max-height: min(56vh, 420px);
   height: auto;
-  margin: 0 auto;
-  border-radius: 10px;
+  margin: 0;
+  border-radius: 16px;
+  object-fit: contain;
+}
+
+.preview .guaxi-media-group.is-single .guaxi-media-group__image {
+  width: auto;
+  max-width: min(100%, 760px);
+  max-height: min(72vh, 640px);
+}
+
+:global(:root[data-guaxi-theme='dark']) .preview .guaxi-media-group__item {
+  border-color: rgba(71, 85, 105, 0.46);
+  background:
+    linear-gradient(180deg, rgba(19, 28, 42, 0.92), rgba(14, 21, 33, 0.94));
+  box-shadow:
+    0 18px 36px rgba(2, 6, 23, 0.28),
+    inset 0 1px 0 rgba(148, 163, 184, 0.08);
+}
+
+:global(:root[data-guaxi-theme='dark']) .preview .guaxi-media-group__item:hover {
+  box-shadow:
+    0 22px 40px rgba(2, 6, 23, 0.34),
+    inset 0 1px 0 rgba(148, 163, 184, 0.12);
+}
+
+@media (max-width: 760px) {
+  .preview .guaxi-media-group,
+  .preview .guaxi-media-group.is-gallery {
+    width: 100%;
+  }
+
+  .preview .guaxi-media-group__item {
+    flex-basis: min(100%, 220px);
+    max-width: 100%;
+    padding: 8px;
+    border-radius: 18px;
+  }
 }
 
 .search-highlight {
