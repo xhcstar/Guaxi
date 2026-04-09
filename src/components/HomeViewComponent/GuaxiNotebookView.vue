@@ -1436,6 +1436,35 @@ const decorateNotebookHeadingAnchors = (html, cellKey) => {
 }
 
 // 设计说明：
+// 1. 目录 HTML 里的 `<a data-guaxi-outline-id="...">` 和真正的标题节点共享同一个 outlineId。
+// 2. 如果直接用 `[data-guaxi-outline-id="..."]` 查询，命中的往往是目录链接本身，
+//    结果滚动会落到目录区域，而不是对应 markdown Cell 内的标题。
+// 3. 这里统一优先查找带同名 id / data 属性的 heading，必要时再回退到非目录容器中的任意元素。
+const findNotebookHeadingTargetByOutlineId = (outlineId) => {
+  const root = notebookRootRef.value
+  const normalizedOutlineId = String(outlineId || '').trim()
+  if (!(root instanceof HTMLElement) || !normalizedOutlineId) return null
+
+  const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(normalizedOutlineId)
+    : normalizedOutlineId.replace(/["\\]/g, '\\$&')
+  const escapedAttrValue = normalizedOutlineId.replace(/"/g, '&quot;')
+
+  const headingById = root.querySelector(`h1#${escapedId}, h2#${escapedId}, h3#${escapedId}, h4#${escapedId}, h5#${escapedId}, h6#${escapedId}`)
+  if (headingById instanceof HTMLElement) return headingById
+
+  const headingByData = root.querySelector(
+    `h1[data-guaxi-outline-id="${escapedAttrValue}"], h2[data-guaxi-outline-id="${escapedAttrValue}"], h3[data-guaxi-outline-id="${escapedAttrValue}"], h4[data-guaxi-outline-id="${escapedAttrValue}"], h5[data-guaxi-outline-id="${escapedAttrValue}"], h6[data-guaxi-outline-id="${escapedAttrValue}"]`,
+  )
+  if (headingByData instanceof HTMLElement) return headingByData
+
+  const nonTocTarget = Array.from(root.querySelectorAll(`[data-guaxi-outline-id="${escapedAttrValue}"]`)).find((node) => {
+    return node instanceof HTMLElement && !node.closest('[data-guaxi-notebook-toc="true"]')
+  })
+  return nonTocTarget instanceof HTMLElement ? nonTocTarget : null
+}
+
+// 设计说明：
 // 1. Worker 负责 markdown-it、代码高亮和目录/任务列表这类纯字符串计算，先把最耗时的一段移出 UI 线程。
 // 2. Mermaid SVG 和数学公式节点整理还依赖 DOM，因此保留在主线程做轻量收尾。
 // 3. 如果 Worker 初始化或运行失败，会自动回退到原先的主线程渲染，避免探索模式不可用。
@@ -2115,7 +2144,7 @@ const jumpToNotebookOutlineLine = (line, options = {}) => {
 
   nextTick(() => {
     const headingTarget = outlineId
-      ? notebookRootRef.value?.querySelector?.(`[data-guaxi-outline-id="${CSS.escape(outlineId)}"]`)
+      ? findNotebookHeadingTargetByOutlineId(outlineId)
       : null
     const fallbackCell = cellKey
       ? notebookRootRef.value?.querySelector?.(`.guaxi-notebook__cell[data-cell-key="${CSS.escape(cellKey)}"]`)
@@ -3087,7 +3116,7 @@ const handleNotebookRenderedClick = async (event) => {
     const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
       ? CSS.escape(outlineId)
       : outlineId.replace(/["\\]/g, '\\$&')
-    const heading = root.querySelector(`#${escapedId}`) || root.querySelector(`[data-guaxi-outline-id="${outlineId.replace(/"/g, '&quot;')}"]`)
+    const heading = findNotebookHeadingTargetByOutlineId(outlineId) || root.querySelector(`#${escapedId}`)
     if (heading instanceof HTMLElement) {
       heading.scrollIntoView({ behavior: 'smooth', block: 'center' })
       logger.info('[Notebook] toc anchor navigated', {
