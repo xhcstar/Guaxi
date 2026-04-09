@@ -1804,6 +1804,7 @@ const realtimeVditorReady = ref(false);
 const pendingRealtimeVditorValue = ref(null);
 let realtimeVditor = null;
 let settingRealtimeVditorValue = false;
+let sourceEditorProgrammaticSyncDepth = 0;
 let realtimeVditorLinkInterceptorCleanup = null;
 const REALTIME_VDITOR_INIT_TIMEOUT_MS = 12000
 
@@ -7389,8 +7390,14 @@ const ensureSecondaryEditor = () => {
     // 1. 分栏模式下右侧源编辑器的内容需要尽快同步到 rawContent / tab store，预览区才能及时拿到最新文本。
     // 2. 这里把“轻量同步”与“重分析/高亮”拆开：前者即时执行，后者仍保留防抖，避免每个按键都做重活。
     model.onDidChangeContent(() => {
+      if (sourceEditorProgrammaticSyncDepth > 0) {
+        logger.debug('[Editor] skip right source immediate sync during programmatic update', {
+          suppressedDepth: sourceEditorProgrammaticSyncDepth,
+        })
+        return
+      }
       if (fileTreeStore.activeRegion !== 'right') return
-      const path = fileTreeStore.activeTab
+      const path = getEditorBoundTabPath(secondaryEditor)
       if (!path) return
       const content = model.getValue()
       rawContent.value = content
@@ -7403,8 +7410,14 @@ const ensureSecondaryEditor = () => {
 
     model.onDidChangeContent(
       debounce(() => {
+        if (sourceEditorProgrammaticSyncDepth > 0) {
+          logger.debug('[Editor] skip right source debounced sync during programmatic update', {
+            suppressedDepth: sourceEditorProgrammaticSyncDepth,
+          })
+          return
+        }
         if (fileTreeStore.activeRegion !== 'right') return;
-        const path = fileTreeStore.activeTab;
+        const path = getEditorBoundTabPath(secondaryEditor);
         if (!path) return;
         const content = model.getValue();
         rawContent.value = content;
@@ -7815,8 +7828,14 @@ const setupEditorListeners = () => {
     // 1. 预览区依赖 rawContent 变化触发刷新，如果这里也等重分析 debounce 完成，分栏模式就会出现“输入后明显滞后”的问题。
     // 2. 因此源文本与 tab 脏数据先即时同步，问题分析、语法高亮和 Git 装饰继续防抖，兼顾响应速度与整体开销。
     model.onDidChangeContent(() => {
+      if (sourceEditorProgrammaticSyncDepth > 0) {
+        logger.debug('[Editor] skip source immediate sync during programmatic update', {
+          suppressedDepth: sourceEditorProgrammaticSyncDepth,
+        });
+        return;
+      }
       const content = model.getValue();
-      const path = fileTreeStore.activeTab;
+      const path = getEditorBoundTabPath(editor);
       rawContent.value = content;
       if (path) fileTreeStore.updateTabContent(path, content);
       logger.debug('[Editor] synced source content immediately', {
@@ -7827,12 +7846,18 @@ const setupEditorListeners = () => {
 
     model.onDidChangeContent(
       debounce(() => {
+        if (sourceEditorProgrammaticSyncDepth > 0) {
+          logger.debug('[Editor] skip source debounced sync during programmatic update', {
+            suppressedDepth: sourceEditorProgrammaticSyncDepth,
+          });
+          return;
+        }
         const content = model.getValue();
         const languageId = model.getLanguageId() || 'plaintext';
         const problems = analyzeContentForProblems(content, model, languageId);
         editorStore.setProblems(problems);
         rawContent.value = content;
-        const path = fileTreeStore.activeTab;
+        const path = getEditorBoundTabPath(editor);
         if (path) fileTreeStore.updateTabContent(path, content);
         recordEditLocationFromEditor();
         updateTableToolbar();
@@ -10069,6 +10094,7 @@ const syncSourceEditorContent = (reason = 'manual-sync') => {
 
   try {
     const model = targetEditor.getModel?.()
+    sourceEditorProgrammaticSyncDepth += 1
     if (model && model.getValue() !== nextText) {
       model.setValue(nextText)
     } else if (!model && typeof targetEditor.setValue === 'function') {
@@ -10080,10 +10106,23 @@ const syncSourceEditorContent = (reason = 'manual-sync') => {
       length: nextText.length,
       hasModel: !!model,
       editorSurfaceMode: editorSurfaceMode.value,
+      suppressedDepth: sourceEditorProgrammaticSyncDepth,
     })
   } catch (error) {
     logger.warn('[Editor] syncSourceEditorContent failed', { reason, error })
+  } finally {
+    sourceEditorProgrammaticSyncDepth = Math.max(0, sourceEditorProgrammaticSyncDepth - 1)
   }
+}
+
+const getEditorBoundTabPath = (targetEditor) => {
+  if (targetEditor === secondaryEditor) {
+    return String(fileTreeStore.activeTabRight || '').trim()
+  }
+  if (fileTreeStore.layoutMode !== 'single') {
+    return String(fileTreeStore.activeTabLeft || fileTreeStore.activeTab || '').trim()
+  }
+  return String(fileTreeStore.activeTab || fileTreeStore.activeTabLeft || '').trim()
 }
 
 const updateEditorContent = (content) => {
@@ -10109,10 +10148,20 @@ const updateEditorContent = (content) => {
   const currentValue = model ? model.getValue() : targetEditor.getValue();
   if (currentValue === nextContent) return;
 
-  if (model) {
-    model.setValue(nextContent);
-  } else {
-    targetEditor.setValue(nextContent);
+  sourceEditorProgrammaticSyncDepth += 1
+  try {
+    if (model) {
+      model.setValue(nextContent);
+    } else {
+      targetEditor.setValue(nextContent);
+    }
+    logger.debug('[Editor] updateEditorContent applied programmatic sync', {
+      path: getEditorBoundTabPath(targetEditor),
+      length: String(nextContent).length,
+      suppressedDepth: sourceEditorProgrammaticSyncDepth,
+    })
+  } finally {
+    sourceEditorProgrammaticSyncDepth = Math.max(0, sourceEditorProgrammaticSyncDepth - 1)
   }
 };
 
@@ -15776,7 +15825,12 @@ const applyHighlights = () => {
 watch(() => editorStore.currentFile, (file) => {
   if (file && editor) {
     logger.info("WWW>>> editorStore.currentFile", file)
-    editor.setValue(file.content);
+    sourceEditorProgrammaticSyncDepth += 1
+    try {
+      editor.setValue(file.content);
+    } finally {
+      sourceEditorProgrammaticSyncDepth = Math.max(0, sourceEditorProgrammaticSyncDepth - 1)
+    }
     nextTick(applyHighlights);
   }
 });
