@@ -636,7 +636,7 @@
     </div>
 
     <div class="editor-content" :class="previewMode">
-      <div v-if="!selectedFile" class="editor-empty">请选择一个文件以开始编辑</div>
+      <div v-if="showEditorEmptyState" class="editor-empty">请选择一个文件以开始编辑</div>
       <div v-show="selectedFile && previewMode === 'realtime' && canPreview" id="realtime-vditor"
         class="realtime-vditor">
       </div>
@@ -702,7 +702,7 @@
         </div>
       </div>
       <div
-        v-show="(previewMode !== 'realtime' && showEditor) || pythonConsoleVisible"
+        v-show="showEditorShell"
         class="editor-wrapper"
         ref="editorWrapperRef"
       >
@@ -934,71 +934,71 @@
 
         </template>
 
-        <transition name="python-console-slide">
-          <div
-            v-if="pythonConsoleVisible"
-            class="python-console-dock"
-            :class="{ busy: pythonConsoleBusy, dragging: pythonConsoleResizing }"
-            :style="{ height: `${pythonConsoleHeight}px`, bottom: `${pythonConsoleBottomOffset}px` }"
-          >
-            <div
-              class="python-console-dock__resize-handle"
-              title="拖拽调整控制台高度"
-              @mousedown.prevent="startResizePythonConsole"
-            >
-              <span class="python-console-dock__resize-grip"></span>
-            </div>
-            <GuaxiTerminalPanel
-              ref="terminalPanelRef"
-              :visible="pythonConsoleVisible"
-              :context-path="getTerminalContextPath(fileTreeStore.activeRegion || 'left')"
-              @close="togglePythonConsolePanel('panel-collapse')"
-            />
-            <div v-if="false" class="python-console-panel" :class="{ busy: pythonConsoleBusy }">
-              <div class="python-console-panel__header">
-                <div>
-                  <div class="python-console-panel__title">Python 控制台</div>
-                  <div class="python-console-panel__meta">
-                    {{ pythonSessionInfo?.sandbox_dir ? `沙箱目录：${pythonSessionInfo.sandbox_dir}` : '当前文件共享一个独立 Python 会话与沙箱目录' }}
-                  </div>
-                </div>
-                <div class="python-console-panel__actions">
-                  <button type="button" class="python-console-panel__btn" @click="runPythonConsoleInput">执行</button>
-                  <button type="button" class="python-console-panel__btn" @click="resetCurrentPythonSession">重置会话</button>
-                  <button type="button" class="python-console-panel__btn" @click="toggleMaximizePythonConsole">
-                    {{ pythonConsoleMaximized ? '还原' : '最大化' }}
-                  </button>
-                  <button type="button" class="python-console-panel__btn" @click="togglePythonConsolePanel('panel-collapse')">收起</button>
-                </div>
-              </div>
-
-              <div ref="pythonConsoleOutputRef" class="python-console-panel__output">
-                <div v-if="!pythonConsoleHistory.length && !pythonConsolePinnedOutput" class="python-console-panel__empty">
-                  使用 `Ctrl+\`` 打开或关闭控制台，支持逐条执行 Python / IPython 风格命令。
-                </div>
-                <div v-for="item in pythonConsoleHistory" :key="item.id" class="python-console-panel__entry">
-                  <div class="python-console-panel__prompt">In [ ]:</div>
-                  <pre class="python-console-panel__code">{{ item.input }}</pre>
-                  <div class="python-console-panel__prompt python-console-panel__prompt--out">Out:</div>
-                  <pre class="python-console-panel__result">{{ item.output }}</pre>
-                </div>
-                <pre v-if="pythonConsolePinnedOutput" class="python-console-panel__result python-console-panel__result--pinned">{{ pythonConsolePinnedOutput }}</pre>
-              </div>
-
-              <textarea
-                v-model="pythonConsoleInput"
-                class="python-console-panel__input"
-                spellcheck="false"
-                placeholder="输入 Python / IPython 风格命令，按 Ctrl+Enter 执行"
-                @keydown.ctrl.enter.prevent="runPythonConsoleInput"
-              />
-            </div>
-          </div>
-        </transition>
-
         <div v-if="vimMode" class="vim-status-bar" ref="vimStatusBar"></div>
         <GuaxiEditorStatusBar class="editor-status-bar" />
       </div>
+
+      <transition name="python-console-slide">
+        <div
+          v-if="pythonConsoleVisible"
+          class="python-console-dock"
+          :class="{ busy: pythonConsoleBusy, dragging: pythonConsoleResizing, 'terminal-only': !selectedFile }"
+          :style="{ height: `${pythonConsoleHeight}px`, bottom: `${pythonConsoleBottomOffset}px` }"
+        >
+          <div
+            class="python-console-dock__resize-handle"
+            title="拖拽调整控制台高度"
+            @mousedown.prevent="startResizePythonConsole"
+          >
+            <span class="python-console-dock__resize-grip"></span>
+          </div>
+          <GuaxiTerminalPanel
+            ref="terminalPanelRef"
+            :visible="pythonConsoleVisible"
+            :context-path="getTerminalContextPath(fileTreeStore.activeRegion || 'left')"
+            @close="togglePythonConsolePanel('panel-collapse')"
+          />
+          <div v-if="false" class="python-console-panel" :class="{ busy: pythonConsoleBusy }">
+            <div class="python-console-panel__header">
+              <div>
+                <div class="python-console-panel__title">Python 控制台</div>
+                <div class="python-console-panel__meta">
+                  {{ pythonSessionInfo?.sandbox_dir ? `沙箱目录：${pythonSessionInfo.sandbox_dir}` : '当前文件共享一个独立 Python 会话与沙箱目录' }}
+                </div>
+              </div>
+              <div class="python-console-panel__actions">
+                <button type="button" class="python-console-panel__btn" @click="runPythonConsoleInput">执行</button>
+                <button type="button" class="python-console-panel__btn" @click="resetCurrentPythonSession">重置会话</button>
+                <button type="button" class="python-console-panel__btn" @click="toggleMaximizePythonConsole">
+                  {{ pythonConsoleMaximized ? '还原' : '最大化' }}
+                </button>
+                <button type="button" class="python-console-panel__btn" @click="togglePythonConsolePanel('panel-collapse')">收起</button>
+              </div>
+            </div>
+
+            <div ref="pythonConsoleOutputRef" class="python-console-panel__output">
+              <div v-if="!pythonConsoleHistory.length && !pythonConsolePinnedOutput" class="python-console-panel__empty">
+                使用 `Ctrl+\`` 打开或关闭控制台，支持逐条执行 Python / IPython 风格命令。
+              </div>
+              <div v-for="item in pythonConsoleHistory" :key="item.id" class="python-console-panel__entry">
+                <div class="python-console-panel__prompt">In [ ]:</div>
+                <pre class="python-console-panel__code">{{ item.input }}</pre>
+                <div class="python-console-panel__prompt python-console-panel__prompt--out">Out:</div>
+                <pre class="python-console-panel__result">{{ item.output }}</pre>
+              </div>
+              <pre v-if="pythonConsolePinnedOutput" class="python-console-panel__result python-console-panel__result--pinned">{{ pythonConsolePinnedOutput }}</pre>
+            </div>
+
+            <textarea
+              v-model="pythonConsoleInput"
+              class="python-console-panel__input"
+              spellcheck="false"
+              placeholder="输入 Python / IPython 风格命令，按 Ctrl+Enter 执行"
+              @keydown.ctrl.enter.prevent="runPythonConsoleInput"
+            />
+          </div>
+        </div>
+      </transition>
 
       <GuaxiSelectionTranslatePanel v-if="selectionTranslatePanelVisible" :pos="selectionTranslatePanelPos"
         :raw="selectionTranslateRaw" :result="selectionTranslateResult" :error="selectionTranslateError"
@@ -14682,6 +14682,20 @@ const showPreview = computed(() => {
   return previewMode.value === 'toggle' ? mode.value === 'preview' : true;
 });
 
+const showEditorShell = computed(() => {
+  // 设计说明：
+  // 1. 终端面板现在已经从 editor-wrapper 中拆出，避免“无文件 + 打开终端”时仍然渲染出
+  //    面包屑栏和空编辑器容器，形成中间那块“未打开文件”的空区域。
+  // 2. 这里保留 selectedFile 作为硬条件，让编辑区只在真正存在活动文件时出现。
+  return !!selectedFile.value && ((previewMode.value !== 'realtime' && showEditor.value) || pythonConsoleVisible.value);
+});
+
+const showEditorEmptyState = computed(() => {
+  // 当终端单独打开时，不再显示“请选择一个文件以开始编辑”的占位文案，
+  // 这样界面会直接退化成纯 terminal 视图。
+  return !selectedFile.value && !pythonConsoleVisible.value;
+});
+
 watch(renderedHtml, () => {
   previewLineAnchorRevision += 1
   previewLineAnchorCache.container = null
@@ -14710,6 +14724,15 @@ watch([showEditor, editorSurfaceMode], ([editorVisible, surfaceMode]) => {
   if (surfaceMode === 'notebook' && canUseNotebookSurface.value) return
   nextTick(() => {
     ensurePrimarySourceEditorReady('editor-visible-or-surface-changed')
+  })
+}, { flush: 'post' })
+
+watch([showEditorShell, pythonConsoleVisible, selectedFile], ([shellVisible, terminalVisible, file]) => {
+  logger.debug('[EditorLayout] shell visibility updated', {
+    shellVisible,
+    terminalVisible,
+    hasSelectedFile: !!file,
+    filePath: String(file?.path || ''),
   })
 }, { flush: 'post' })
 
@@ -17576,6 +17599,7 @@ onUnmounted(() => {
 }
 
 .editor-content {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -18047,6 +18071,8 @@ onUnmounted(() => {
   color: var(--guaxi-text-primary, #1f2328);
 }
 
+.preview a,
+.preview a:visited,
 .preview :deep(a),
 .preview :deep(a:visited) {
   color: var(--guaxi-text-link, var(--primary-color, #0969da));
@@ -18054,15 +18080,55 @@ onUnmounted(() => {
   text-underline-offset: 2px;
 }
 
+.dark-mode .preview a,
+.dark-mode .preview a:visited,
 .dark-mode .preview :deep(a),
 .dark-mode .preview :deep(a:visited),
+.dark .preview a,
+.dark .preview a:visited,
 .dark .preview :deep(a),
 .dark .preview :deep(a:visited) {
   color: var(--guaxi-text-link-dark, #4acadb);
 }
 
+.preview a:hover,
 .preview :deep(a:hover) {
   opacity: 0.92;
+}
+
+/* 设计说明：
+ * 1. 预览 HTML 会混入 markdown-body 等外部样式，这些样式有机会把 p / li 设成 flex，
+ *    从而把普通链接挤到行尾，表现成参考式链接、列表项排版错乱。
+ * 2. 这里对预览容器里的基础文档流做一次轻量重置，只修正文档段落与列表的布局，
+ *    不影响专门的文件卡片、目录卡片等自定义组件。
+ */
+.preview p,
+.preview li > p,
+.preview .md-paragraph {
+  display: block !important;
+  width: auto !important;
+  max-width: 100%;
+  text-align: left;
+  justify-content: flex-start !important;
+  align-items: normal !important;
+}
+
+.preview li {
+  display: list-item !important;
+  width: auto !important;
+  max-width: 100%;
+  text-align: left;
+}
+
+.preview ul,
+.preview ol {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
+
+.preview li {
+  list-style-position: outside;
 }
 
 /* ==================== Markdown 任务列表（Task List）样式 ==================== */
@@ -19650,6 +19716,14 @@ img {
   border-top: none;
   background: var(--toolbar-bg, #252526);
   box-shadow: none;
+}
+
+.python-console-dock.terminal-only {
+  /* 设计说明：
+   * 1. 当没有活动文件时，状态栏与编辑区都不会渲染。
+   * 2. 这时终端 dock 直接贴到底部，避免底部再留出一条空白保留带。
+   */
+  bottom: 0 !important;
 }
 
 .python-console-dock::before,
