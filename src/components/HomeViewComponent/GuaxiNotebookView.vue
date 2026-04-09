@@ -1,5 +1,5 @@
 ﻿<template>
-  <div ref="notebookRootRef" class="guaxi-notebook" :class="themeClass">
+  <div ref="notebookRootRef" class="guaxi-notebook" :class="themeClass" @click="handleNotebookRenderedClick">
     <div class="guaxi-notebook__toolbar">
       <div class="guaxi-notebook__toolbar-main">
         <button
@@ -381,6 +381,7 @@ import trash2Icon from '@iconify-icons/lucide/trash-2'
 import undoIcon from '@iconify-icons/lucide/undo'
 import redoIcon from '@iconify-icons/lucide/redo'
 import { createLogger } from '../../utils/logger'
+import { useFileTreeStore } from '../../stores/fileTreeStore'
 import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
 import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
 import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
@@ -425,6 +426,7 @@ const emit = defineEmits(['update:markdown', 'state-change', 'open-console', 're
 const message = useMessage()
 const logger = createLogger('GuaxiNotebookView')
 const notebookOutlineMarkdownParser = new MarkdownIt()
+const fileTreeStore = useFileTreeStore()
 
 const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
@@ -455,6 +457,7 @@ const markdownEditorRefMap = new Map()
 const notebookMarkdownRenderCache = new Map()
 const notebookDisplayUrlCache = new Map()
 const notebookMarkdownWorkerPendingTasks = new Map()
+const notebookLinkCardMetaCache = new Map()
 let notebookSidecarPersistTimer = 0
 let notebookMarkdownEmitTimer = 0
 let notebookSearchIndexSyncTimer = 0
@@ -550,6 +553,64 @@ const getNotebookDocDir = () => {
   if (!filePath) return ''
   const lastSlash = filePath.lastIndexOf('/')
   return lastSlash >= 0 ? filePath.slice(0, lastSlash) : ''
+}
+// 设计说明：
+// 1. Explorer 模式里的 wikilink、卡片元信息和点击打开都会复用这个路径归一化函数。
+// 2. 旧实现先把 `E:/foo/bar.md` 拆成 `['E:', 'foo', 'bar.md']`，再额外补一次 `E:/` 前缀，
+//    最终生成 `E:/E:/foo/bar.md`，这正是你日志里看到的重复盘符问题。
+// 3. 这里改成和主编辑器同一思路：先识别锚定前缀（盘符/UNC/根目录），再只归一化后续路径片段，
+//    这样绝对路径、相对路径、`..` 回退都能稳定工作。
+const normalizeNotebookFsPath = (rawPath = '') => {
+  let normalized = String(rawPath || '').trim().replace(/\\/g, '/')
+  if (!normalized) return ''
+
+  if (/^\/[A-Za-z]:\//.test(normalized)) {
+    normalized = normalized.slice(1)
+  }
+
+  let anchored = false
+  let prefix = ''
+  let parts = []
+
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    anchored = true
+    prefix = normalized.slice(0, 3)
+    parts = normalized.slice(3).split('/')
+  } else if (normalized.startsWith('//')) {
+    const uncParts = normalized.slice(2).split('/').filter(Boolean)
+    if (uncParts.length >= 2) {
+      anchored = true
+      prefix = `//${uncParts[0]}/${uncParts[1]}`
+      parts = uncParts.slice(2)
+    } else {
+      return normalized
+    }
+  } else if (normalized.startsWith('/')) {
+    anchored = true
+    prefix = '/'
+    parts = normalized.slice(1).split('/')
+  } else {
+    parts = normalized.split('/')
+  }
+
+  const output = []
+  for (const part0 of parts) {
+    const part = String(part0 || '').trim()
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (output.length && output[output.length - 1] !== '..') {
+        output.pop()
+      } else if (!anchored) {
+        output.push(part)
+      }
+      continue
+    }
+    output.push(part)
+  }
+
+  if (!output.length) return prefix
+  if (!prefix) return output.join('/')
+  return prefix.endsWith('/') ? `${prefix}${output.join('/')}` : `${prefix}/${output.join('/')}`
 }
 const getNotebookDocStem = () => {
   const filePath = String(props.filePath || '').trim().replace(/\\/g, '/')
@@ -1215,6 +1276,139 @@ const createNotebookOutlinePayload = () => {
   }))
 }
 
+// 设计说明：
+// 1. 探索者模式是按 Cell 分段渲染的，markdown-it 的 TOC 插件拿不到“整篇文档”的标题上下文，
+//    因此不能直接复用单 Cell 的目录输出。
+// 2. 这里显式识别 [toc] / [[toc]] / [目录] 这类占位标记，再用 notebookOutlineEntries 汇总出的整篇标题树生成目录 HTML。
+// 3. 目录中的锚点直接指向我们自己写入 heading 的 id，保证探索者模式里的目录跳转和右侧大纲共用同一批标题节点。
+const NOTEBOOK_TOC_MARKER_RE = /^\s*(?:\[\[\s*(?:toc|目录)\s*\]\]|\[\s*(?:toc|目录)\s*\])\s*$/im
+
+const hasNotebookTocMarker = (markdown = '') => NOTEBOOK_TOC_MARKER_RE.test(String(markdown || ''))
+
+// 设计说明：
+// 1. 探索者模式此前直接把 markdown 原文送进 worker，`[[note]]` 这类 Obsidian wikilink 不会被 markdown-it 识别成 <a>。
+// 2. 文件卡片提升依赖最终 HTML 中已经存在链接节点，因此这里先把 wikilink 统一预处理成内部链接协议。
+// 3. 代码块内的内容必须保持原样，避免把示例代码中的 `[[...]]` 误转成真实链接。
+const preprocessNotebookObsidianWikilinks = (content = '') => {
+  const text = String(content || '')
+  if (!text.includes('[[')) return text
+
+  const lines = text.replace(/\r/g, '').split('\n')
+  let inFence = false
+  let fenceToken = ''
+
+  const out = lines.map((line) => {
+    const fence = line.match(/^\s*(```+|~~~+)/)
+    if (fence) {
+      const token = String(fence[1] || '')
+      if (!inFence) {
+        inFence = true
+        fenceToken = token
+      } else if (token.startsWith(fenceToken)) {
+        inFence = false
+        fenceToken = ''
+      }
+      return line
+    }
+
+    if (inFence || !line.includes('[[')) return line
+
+    return line.replace(/\[\[([^\]]+?)\]\]/g, (matched, innerRaw) => {
+      const inner = String(innerRaw || '').trim()
+      if (!inner || /^(toc|目录)$/i.test(inner)) return matched
+
+      const parts = inner.split('|')
+      const target = String(parts[0] || '').trim()
+      const alias = String(parts[1] || '').trim()
+
+      let filePart = target
+      let anchorPart = ''
+      const hashIndex = target.indexOf('#')
+      if (hashIndex >= 0) {
+        filePart = target.slice(0, hashIndex).trim()
+        anchorPart = target.slice(hashIndex + 1).trim()
+      }
+
+      const display = alias || anchorPart || filePart || target
+      const safeText = display.replace(/([\[\]\\])/g, '\\$1')
+      const href = `guaxi://wikilink?file=${encodeURIComponent(filePart)}&anchor=${encodeURIComponent(anchorPart)}`
+      return `[${safeText}](${href})`
+    })
+  })
+
+  return out.join('\n')
+}
+
+const buildNotebookMarkdownCacheKey = (content, options = {}) => {
+  const markdownText = String(content || '')
+  const theme = String(options.theme || props.theme || '')
+  const filePath = normalizeNotebookFsPath(options.filePath || props.filePath || '')
+  const basePath = normalizeNotebookFsPath(options.basePath || getNotebookBasePath())
+  return `${theme}::${filePath}::${basePath}::${markdownText}`
+}
+
+const escapeNotebookHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const buildNotebookTocHtml = ({ currentCellKey = '' } = {}) => {
+  const entries = Array.isArray(notebookOutlineEntries.value) ? notebookOutlineEntries.value : []
+  const tocEntries = entries.filter((entry) => {
+    const outlineId = String(entry?.outlineId || '').trim()
+    if (!outlineId) return false
+    // 设计说明：
+    // 如果目录占位本身写在一个带标题的 markdown Cell 里，目录中不再回指当前占位 Cell 的标题，避免自引用。
+    if (currentCellKey && String(entry?.cellKey || '') === String(currentCellKey || '')) return false
+    return true
+  })
+
+  if (!tocEntries.length) {
+    logger.info('[Notebook] build toc html skipped because no outline entries were found', {
+      currentCellKey,
+    })
+    return `
+      <nav class="guaxi-notebook__toc" data-guaxi-notebook-toc="true">
+        <div class="guaxi-notebook__toc-title">目录</div>
+        <div class="guaxi-notebook__toc-empty">当前文档还没有可用标题</div>
+      </nav>
+    `
+  }
+
+  const itemsHtml = tocEntries.map((entry) => {
+    const level = Math.max(1, Number(entry?.level || 1))
+    const outlineId = String(entry?.outlineId || '').trim()
+    const text = escapeNotebookHtml(String(entry?.text || '').trim() || '未命名标题')
+    const line = Math.max(1, Number(entry?.line || 1))
+    return `
+      <li class="guaxi-notebook__toc-item level-${level}">
+        <a
+          class="guaxi-notebook__toc-link"
+          href="#${outlineId}"
+          data-guaxi-outline-id="${outlineId}"
+          data-guaxi-outline-line="${line}"
+        >${text}</a>
+      </li>
+    `
+  }).join('')
+
+  logger.info('[Notebook] build toc html', {
+    currentCellKey,
+    headingCount: tocEntries.length,
+  })
+
+  return `
+    <nav class="guaxi-notebook__toc" data-guaxi-notebook-toc="true">
+      <div class="guaxi-notebook__toc-title">目录</div>
+      <ol class="guaxi-notebook__toc-list">
+        ${itemsHtml}
+      </ol>
+    </nav>
+  `
+}
+
 const decorateNotebookHeadingAnchors = (html, cellKey) => {
   const rawHtml = String(html || '')
   if (!rawHtml.trim()) return ''
@@ -1230,8 +1424,12 @@ const decorateNotebookHeadingAnchors = (html, cellKey) => {
     if (!(headingNode instanceof HTMLElement)) return
     const entry = outlineEntries[index]
     if (!entry) return
-    headingNode.setAttribute('data-guaxi-outline-id', String(entry.outlineId || ''))
+    const outlineId = String(entry.outlineId || '')
+    headingNode.setAttribute('data-guaxi-outline-id', outlineId)
     headingNode.setAttribute('data-guaxi-outline-line', String(entry.line || ''))
+    if (outlineId) {
+      headingNode.id = outlineId
+    }
   })
 
   return container.innerHTML
@@ -2231,6 +2429,336 @@ const formatPythonExecOutput = (res) => {
   if (resultRepr && resultRepr !== 'None' && !stdout.includes(resultRepr)) chunks.push(resultRepr)
   return chunks.join('\n\n').trim()
 }
+const getNotebookRepoRoot = () => {
+  const normalizedFilePath = normalizeNotebookFsPath(props.filePath)
+  if (!normalizedFilePath) return ''
+  const normalizedRepoCandidates = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
+  let best = ''
+  for (const candidate of normalizedRepoCandidates) {
+    const normalizedCandidate = normalizeNotebookFsPath(candidate)
+    if (!normalizedCandidate) continue
+    if (normalizedFilePath === normalizedCandidate || normalizedFilePath.startsWith(`${normalizedCandidate}/`)) {
+      if (normalizedCandidate.length > best.length) best = normalizedCandidate
+    }
+  }
+  return best
+}
+const splitNotebookFsLinkAndAnchor = (href = '') => {
+  const raw = String(href || '').trim()
+  if (!raw) return { link: '', anchor: '' }
+  const hashIndex = raw.indexOf('#')
+  if (hashIndex < 0) return { link: raw, anchor: '' }
+  return {
+    link: raw.slice(0, hashIndex),
+    anchor: raw.slice(hashIndex + 1),
+  }
+}
+const ensureNotebookMarkdownExt = (raw = '') => {
+  const normalized = String(raw || '').trim()
+  if (!normalized) return ''
+  if (/\.(md|markdown)$/i.test(normalized)) return normalized
+  if (/[.][^/\\]+$/.test(normalized)) return normalized
+  return `${normalized}.md`
+}
+const isNotebookHttpUrl = (href = '') => /^https?:\/\//i.test(String(href || '').trim())
+const isNotebookMarkdownFilePath = (filePath = '') => /\.(md|markdown)$/i.test(String(filePath || '').trim())
+const isNotebookWikilinkHref = (href = '') => String(href || '').trim().toLowerCase().startsWith('guaxi://wikilink')
+const isNotebookPathLikeToken = (href = '') => {
+  const raw = String(href || '').trim()
+  if (!raw) return false
+  if (raw.startsWith('#') || isNotebookHttpUrl(raw) || /^mailto:/i.test(raw)) return false
+  return isNotebookWikilinkHref(raw) || raw.startsWith('.') || raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw) || raw.includes('/') || raw.includes('\\')
+}
+const resolveNotebookRelativePath = (target, baseDir) => {
+  const normalizedTarget = String(target || '').trim()
+  if (!normalizedTarget) return ''
+  if (/^[A-Za-z]:[\\/]/.test(normalizedTarget)) return normalizeNotebookFsPath(normalizedTarget)
+  if (normalizedTarget.startsWith('/')) return normalizeNotebookFsPath(normalizedTarget)
+  return normalizeNotebookFsPath(joinNotebookPath(baseDir || '', normalizedTarget))
+}
+const buildNotebookLinkCardCacheKey = ({ targetPath = '', repoRoot = '', mtimeMs = null }) => {
+  const normalizedTargetPath = normalizeNotebookFsPath(targetPath)
+  const normalizedRepoRoot = normalizeNotebookFsPath(repoRoot)
+  const normalizedMtime = Number.isFinite(Number(mtimeMs)) ? String(Number(mtimeMs)) : 'unknown'
+  return `${normalizedRepoRoot}::${normalizedTargetPath}::${normalizedMtime}`
+}
+const extractNotebookLinkCardExcerpt = (content = '') => {
+  const lines = String(content || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+  for (const line of lines) {
+    if (/^\s{0,3}#{1,6}\s+/.test(line)) continue
+    if (/^\s*>/.test(line)) continue
+    if (/^\s*[-*+]\s+/.test(line)) continue
+    if (/^\s*```/.test(line)) continue
+    const cleaned = line
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\[\[([^\]]+)\]\]/g, '$1')
+      .replace(/[`*_>#-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (cleaned) return cleaned.slice(0, 96)
+  }
+  return '打开关联内容'
+}
+const buildNotebookLinkCardTitle = (content, absPath, fallbackText = '') => {
+  const heading = String(content || '').match(/^\s{0,3}#{1,6}\s+(.+)$/m)
+  if (heading?.[1]) {
+    return String(heading[1] || '').replace(/\s+#+\s*$/, '').trim()
+  }
+  const normalizedPath = normalizeNotebookFsPath(absPath)
+  const fileName = normalizedPath.split('/').pop() || String(fallbackText || '').trim() || normalizedPath
+  return fileName.replace(/\.(md|markdown)$/i, '') || '未命名笔记'
+}
+const buildNotebookLinkCardPathLabel = (absPath, repoRoot = '') => {
+  const normalizedPath = normalizeNotebookFsPath(absPath)
+  const normalizedRepoRoot = normalizeNotebookFsPath(repoRoot)
+  if (normalizedRepoRoot && normalizedPath.startsWith(`${normalizedRepoRoot}/`)) {
+    return normalizedPath.slice(normalizedRepoRoot.length + 1)
+  }
+  return normalizedPath
+}
+const resolveNotebookLinkTargetPath = async (href, { baseDocPath } = {}) => {
+  const rawHref = String(href || '').trim()
+  if (!rawHref) return ''
+  const normalizedBaseDocPath = normalizeNotebookFsPath(baseDocPath || '')
+  const baseDir = normalizedBaseDocPath
+    ? normalizedBaseDocPath.replace(/\/[^/]*$/, '')
+    : getNotebookDocDir()
+  if (rawHref.toLowerCase().startsWith('guaxi://wikilink')) {
+    try {
+      const url = new URL(rawHref)
+      const file = String(url.searchParams.get('file') || '').trim()
+      if (!file) return ''
+      return resolveNotebookRelativePath(ensureNotebookMarkdownExt(file), baseDir)
+    } catch (error) {
+      logger.warn('[NotebookLinkCard] resolve wikilink target failed', {
+        href: rawHref,
+        baseDocPath,
+        error: String(error?.message || error),
+      })
+      return ''
+    }
+  }
+  if (!isNotebookPathLikeToken(rawHref)) return ''
+  const { link } = splitNotebookFsLinkAndAnchor(rawHref)
+  const resolvedPath = resolveNotebookRelativePath(link, baseDir)
+  logger.info('[NotebookLinkCard] resolved notebook link target path', {
+    href: rawHref,
+    baseDocPath: normalizedBaseDocPath,
+    baseDir,
+    resolvedPath,
+  })
+  return resolvedPath
+}
+const canPromoteNotebookLinkToCard = (anchor) => {
+  if (!(anchor instanceof HTMLAnchorElement)) return false
+  const href = String(anchor.getAttribute('href') || '').trim()
+  if (!href || href.startsWith('#') || isNotebookHttpUrl(href)) return false
+  const container = anchor.closest('p, li, div')
+  if (!container) return false
+  const allAnchors = container.querySelectorAll('a')
+  if (allAnchors.length !== 1 || allAnchors[0] !== anchor) return false
+  const normalizeStandaloneLinkText = (value = '') => String(value || '')
+    .replace(/\[\[|\]\]|\[|\]|\(|\)|【|】/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const blockText = normalizeStandaloneLinkText(container.textContent || '')
+  const anchorText = normalizeStandaloneLinkText(anchor.textContent || '')
+  if (!!anchorText && blockText === anchorText) return true
+
+  const onlyHasAnchorAndWhitespace = Array.from(container.childNodes || []).every((node) => {
+    if (node === anchor) return true
+    if (node.nodeType === Node.TEXT_NODE) {
+      return !String(node.textContent || '').trim()
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node
+      if (element instanceof HTMLBRElement) return true
+      return element.contains(anchor) && normalizeStandaloneLinkText(element.textContent || '') === anchorText
+    }
+    return false
+  })
+  return !!anchorText && onlyHasAnchorAndWhitespace
+}
+const loadNotebookLinkCardMeta = async (targetPath, { repoRoot = '' } = {}) => {
+  const normalizedTargetPath = normalizeNotebookFsPath(targetPath)
+  if (!normalizedTargetPath) return null
+  try {
+    const fileMeta = await invoke('get_file_meta', { path: normalizedTargetPath })
+    const cacheKey = buildNotebookLinkCardCacheKey({
+      targetPath: normalizedTargetPath,
+      repoRoot,
+      mtimeMs: fileMeta?.mtime_ms,
+    })
+    const cached = notebookLinkCardMetaCache.get(cacheKey)
+    if (cached) {
+      logger.info('[NotebookLinkCard] meta cache hit', {
+        path: normalizedTargetPath,
+        repoRoot,
+        mtimeMs: fileMeta?.mtime_ms ?? null,
+      })
+      return cached
+    }
+    const isDirectory = !!fileMeta?.is_directory
+    let content = ''
+    if (!isDirectory && isNotebookMarkdownFilePath(normalizedTargetPath)) {
+      content = String(await invoke('read_file_content', { path: normalizedTargetPath }) || '')
+    }
+    const meta = {
+      path: normalizedTargetPath,
+      repoRoot: normalizeNotebookFsPath(repoRoot),
+      mtimeMs: fileMeta?.mtime_ms ?? null,
+      kind: isDirectory ? 'directory' : 'file',
+      title: isDirectory
+        ? (normalizedTargetPath.split('/').pop() || '目录')
+        : buildNotebookLinkCardTitle(content, normalizedTargetPath),
+      excerpt: isDirectory
+        ? '打开目录并继续浏览其中的笔记与资源'
+        : extractNotebookLinkCardExcerpt(content),
+      pathLabel: buildNotebookLinkCardPathLabel(normalizedTargetPath, repoRoot),
+    }
+    notebookLinkCardMetaCache.set(cacheKey, meta)
+    logger.info('[NotebookLinkCard] meta loaded', {
+      path: normalizedTargetPath,
+      kind: meta.kind,
+      repoRoot,
+      mtimeMs: meta.mtimeMs,
+    })
+    return meta
+  } catch (error) {
+    logger.warn('[NotebookLinkCard] load meta failed', {
+      path: normalizedTargetPath,
+      repoRoot,
+      error: String(error?.message || error),
+    })
+    return null
+  }
+}
+const enhanceNotebookHtmlWithLinkCards = async (html, { baseDocPath } = {}) => {
+  const rawHtml = String(html || '')
+  if (!rawHtml.includes('<a')) return rawHtml
+  const root = document.createElement('div')
+  root.innerHTML = rawHtml
+  const anchors = Array.from(root.querySelectorAll('a[href]'))
+  if (!anchors.length) return rawHtml
+  const repoRoot = getNotebookRepoRoot()
+  for (const anchor of anchors) {
+    try {
+      if (!canPromoteNotebookLinkToCard(anchor)) continue
+      const href = String(anchor.getAttribute('href') || '').trim()
+      const targetPath = await resolveNotebookLinkTargetPath(href, { baseDocPath })
+      if (!targetPath) continue
+      const meta = await loadNotebookLinkCardMeta(targetPath, { repoRoot })
+      if (!meta) continue
+      const sourceBlock = anchor.closest('p, li')
+      if (!sourceBlock) continue
+      const card = document.createElement('div')
+      card.className = `guaxi-preview-file-card guaxi-notebook__link-card is-${meta.kind}`
+      card.setAttribute('data-guaxi-preview-card', meta.kind === 'directory' ? 'directory-link' : 'file-link')
+      card.setAttribute('data-guaxi-preview-card-path', meta.path)
+      const cardLink = document.createElement('a')
+      cardLink.className = 'guaxi-preview-file-card__link'
+      cardLink.setAttribute('href', href)
+      cardLink.setAttribute('title', meta.path)
+      cardLink.innerHTML = `
+        <span class="guaxi-preview-file-card__eyebrow">${meta.kind === 'directory' ? '关联目录' : '关联笔记'}</span>
+        <span class="guaxi-preview-file-card__title">${escapeHtmlAttribute(meta.title)}</span>
+        <span class="guaxi-preview-file-card__excerpt">${escapeHtmlAttribute(meta.excerpt)}</span>
+        <span class="guaxi-preview-file-card__meta">${escapeHtmlAttribute(meta.pathLabel)}</span>
+      `
+      card.appendChild(cardLink)
+      sourceBlock.replaceWith(card)
+      logger.info('[NotebookLinkCard] promoted markdown link to card', {
+        href,
+        targetPath: meta.path,
+        kind: meta.kind,
+      })
+    } catch (error) {
+      logger.warn('[NotebookLinkCard] promote link to card failed', {
+        error: String(error?.message || error),
+      })
+    }
+  }
+  return root.innerHTML
+}
+
+// 设计说明：
+// 1. Explorer 模式里的 Markdown 图片和主预览一样，可能以“同一个段落里多张图片”的形式出现。
+// 2. 旧样式只把单张图片单独居中，没有给图片组容器建立布局，
+//    结果就是多图时整体不居中，或者一张一行导致排版松散。
+// 3. 这里把“纯图片段落”统一标记为媒体组，再交给样式层做更稳定的居中与间距控制。
+const enhanceNotebookHtmlWithMediaGroups = (html) => {
+  const rawHtml = String(html || '')
+  if (!rawHtml.includes('<img')) return rawHtml
+
+  const root = document.createElement('div')
+  root.innerHTML = rawHtml
+  const blocks = Array.from(root.querySelectorAll('p'))
+  let mediaGroupCount = 0
+  let mediaItemCount = 0
+
+  const isWhitespaceNode = (node) => {
+    if (!node) return true
+    if (node.nodeType === Node.TEXT_NODE) return !String(node.textContent || '').trim()
+    if (node.nodeType === Node.ELEMENT_NODE && node instanceof HTMLBRElement) return true
+    return false
+  }
+
+  const resolveMediaItem = (node) => {
+    if (!(node instanceof Element)) return null
+    if (node instanceof HTMLImageElement) {
+      return {
+        host: node,
+        image: node,
+      }
+    }
+    if (node instanceof HTMLAnchorElement) {
+      const childElements = Array.from(node.children || [])
+      if (childElements.length !== 1 || !(childElements[0] instanceof HTMLImageElement)) return null
+      const hasNonMediaChild = Array.from(node.childNodes || []).some((child) => {
+        if (child === childElements[0]) return false
+        return !isWhitespaceNode(child)
+      })
+      if (hasNonMediaChild) return null
+      return {
+        host: node,
+        image: childElements[0],
+      }
+    }
+    return null
+  }
+
+  for (const block of blocks) {
+    const meaningfulNodes = Array.from(block.childNodes || []).filter((node) => !isWhitespaceNode(node))
+    if (!meaningfulNodes.length) continue
+
+    const mediaItems = meaningfulNodes.map(resolveMediaItem)
+    if (mediaItems.some((item) => !item)) continue
+
+    block.classList.add('guaxi-media-group')
+    block.classList.toggle('is-single', mediaItems.length === 1)
+    block.classList.toggle('is-gallery', mediaItems.length > 1)
+
+    for (const item of mediaItems) {
+      item.host.classList.add('guaxi-media-group__item')
+      item.image.classList.add('guaxi-media-group__image')
+    }
+
+    mediaGroupCount += 1
+    mediaItemCount += mediaItems.length
+  }
+
+  logger.info('[Notebook] enhanced media groups', {
+    filePath: props.filePath,
+    mediaGroupCount,
+    mediaItemCount,
+  })
+  return root.innerHTML
+}
 
 const getGuaxiDisplayFromResult = (res) => {
   const value = res?.result_json?.__guaxi_display__
@@ -2359,10 +2887,19 @@ const hasVisibleOutput = (cell) => {
 }
 
 const renderMarkdownHtml = async (content, reason = 'unknown') => {
-  const markdownText = String(content || '')
+  const markdownText = preprocessNotebookObsidianWikilinks(String(content || ''))
   if (!markdownText.trim()) return ''
-  const cacheKey = computeNotebookDigest(markdownText)
+  const cacheKey = buildNotebookMarkdownCacheKey(markdownText, {
+    theme: props.theme,
+    filePath: props.filePath,
+    basePath: getNotebookBasePath(),
+  })
   if (notebookMarkdownRenderCache.has(cacheKey)) {
+    logger.info('[Notebook] markdown render cache hit', {
+      reason,
+      cacheKey,
+      filePath: props.filePath,
+    })
     return notebookMarkdownRenderCache.get(cacheKey)
   }
   try {
@@ -2381,7 +2918,16 @@ const renderMarkdownHtml = async (content, reason = 'unknown') => {
         markdownLength: markdownText.length,
       })
     }
+    html = await enhanceNotebookHtmlWithLinkCards(html, {
+      baseDocPath: props.filePath,
+    })
+    html = enhanceNotebookHtmlWithMediaGroups(html)
     notebookMarkdownRenderCache.set(cacheKey, html)
+    logger.info('[Notebook] markdown render cache store', {
+      reason,
+      cacheKey,
+      filePath: props.filePath,
+    })
     return html
   } catch (error) {
     logger.warn('[Notebook] worker markdown render failed, fallback to main thread renderer', {
@@ -2389,8 +2935,17 @@ const renderMarkdownHtml = async (content, reason = 'unknown') => {
       error: String(error?.message || error),
     })
     try {
-      const html = await renderMarkdown(markdownText, buildMarkdownRenderOptions())
+      let html = await renderMarkdown(markdownText, buildMarkdownRenderOptions())
+      html = await enhanceNotebookHtmlWithLinkCards(html, {
+        baseDocPath: props.filePath,
+      })
+      html = enhanceNotebookHtmlWithMediaGroups(html)
       notebookMarkdownRenderCache.set(cacheKey, html)
+      logger.info('[Notebook] markdown render cache store after fallback', {
+        reason,
+        cacheKey,
+        filePath: props.filePath,
+      })
       return html
     } catch (fallbackError) {
       logger.error('[Notebook] render markdown html failed', {
@@ -2429,7 +2984,21 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     if (cell?.type === 'markdown') {
       const cellKey = String(cell.key || '')
       const markdownText = String(cell.content || '')
-      const cacheKey = computeNotebookDigest(markdownText)
+      const cacheKey = buildNotebookMarkdownCacheKey(markdownText, {
+        theme: props.theme,
+        filePath: props.filePath,
+        basePath: getNotebookBasePath(),
+      })
+      if (hasNotebookTocMarker(markdownText)) {
+        nextMarkdownMap[cellKey] = buildNotebookTocHtml({ currentCellKey: cellKey })
+        markdownRenderCount += 1
+        logger.info('[Notebook] rendered synthetic toc for markdown cell', {
+          reason,
+          cellKey,
+          filePath: props.filePath,
+        })
+        continue
+      }
       if (previousMarkdownMap[cellKey] && notebookMarkdownRenderCache.has(cacheKey)) {
         nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(previousMarkdownMap[cellKey], cellKey)
         markdownCacheHitCount += 1
@@ -2499,6 +3068,87 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
 const getRenderedMarkdownCellHtml = (cell) => String(renderedMarkdownHtmlMap.value[String(cell?.key || '')] || '')
 
 const getRenderedOutputMarkdownHtml = (cell) => String(renderedOutputMarkdownHtmlMap.value[String(cell?.key || '')] || '')
+
+const handleNotebookRenderedClick = async (event) => {
+  const target = event?.target
+  const anchor = target instanceof Element ? target.closest('a[href]') : null
+  if (!(anchor instanceof HTMLAnchorElement)) return
+
+  const href = String(anchor.getAttribute('href') || '').trim()
+  if (!href) return
+  if (href.startsWith('#')) {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const outlineId = decodeURIComponent(href.slice(1))
+    const root = notebookRootRef.value
+    if (!(root instanceof HTMLElement) || !outlineId) return
+
+    const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(outlineId)
+      : outlineId.replace(/["\\]/g, '\\$&')
+    const heading = root.querySelector(`#${escapedId}`) || root.querySelector(`[data-guaxi-outline-id="${outlineId.replace(/"/g, '&quot;')}"]`)
+    if (heading instanceof HTMLElement) {
+      heading.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      logger.info('[Notebook] toc anchor navigated', {
+        outlineId,
+        filePath: props.filePath,
+      })
+    }
+    return
+  }
+  if (isNotebookHttpUrl(href)) return
+
+  // 设计说明：
+  // 1. `guaxi://wikilink` 是应用内协议，浏览器层并没有注册 handler。
+  // 2. 如果等到异步解析路径之后再 preventDefault，浏览器会先尝试打开该 scheme 并报错。
+  // 3. 因此这里对所有 notebook 内部链接都提前拦截，再交给本地文件跳转逻辑处理。
+  event.preventDefault()
+  event.stopPropagation()
+  logger.info('[NotebookLinkCard] intercept rendered notebook link before browser navigation', {
+    href,
+    filePath: props.filePath,
+  })
+
+  const targetPath = await resolveNotebookLinkTargetPath(href, {
+    baseDocPath: props.filePath,
+  })
+  if (!targetPath) return
+
+  try {
+    const meta = await invoke('get_file_meta', { path: targetPath })
+
+    if (meta?.is_directory) {
+      await invoke('open_in_file_explorer', { path: targetPath })
+      logger.info('[NotebookLinkCard] open directory from rendered notebook link', {
+        href,
+        path: targetPath,
+      })
+      return
+    }
+
+    if (isNotebookMarkdownFilePath(targetPath)) {
+      await fileTreeStore.openFileInTab(targetPath)
+      logger.info('[NotebookLinkCard] open markdown file from rendered notebook link', {
+        href,
+        path: targetPath,
+      })
+      return
+    }
+
+    await invoke('open_in_file_explorer', { path: targetPath })
+    logger.info('[NotebookLinkCard] reveal file from rendered notebook link', {
+      href,
+      path: targetPath,
+    })
+  } catch (error) {
+    logger.warn('[NotebookLinkCard] handle rendered link click failed', {
+      href,
+      path: targetPath,
+      error: String(error?.message || error),
+    })
+  }
+}
 
 const patchCellMeta = (cell, patch) => {
   const snapshot = getCellSnapshot(cell)
@@ -3889,11 +4539,239 @@ defineExpose({
   text-underline-offset: 2px;
 }
 
+.guaxi-notebook__markdown-preview :deep(img),
+.guaxi-notebook__rich.markdown-body :deep(img) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.guaxi-notebook__markdown-preview :deep(p > img:only-child),
+.guaxi-notebook__markdown-preview :deep(p > a:only-child > img:only-child),
+.guaxi-notebook__rich.markdown-body :deep(p > img:only-child),
+.guaxi-notebook__rich.markdown-body :deep(p > a:only-child > img:only-child) {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group) {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 18px;
+  margin: 18px auto;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single) {
+  gap: 0;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item) {
+  display: block;
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group__image),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__image) {
+  display: block;
+  max-width: min(100%, 520px);
+  height: auto;
+  margin: 0 auto;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 72%, transparent 28%);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 90%, var(--guaxi-notebook-panel) 10%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+}
+
 .guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(a),
 .guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(a:visited),
 .guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(a),
 .guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(a:visited) {
   color: var(--guaxi-text-link-dark, #4acadb);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card) {
+  display: inline-flex;
+  max-width: min(360px, 100%);
+  vertical-align: top;
+  margin: 6px 0;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 75%, transparent 25%);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 86%, var(--guaxi-notebook-panel) 14%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card__link),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card__link) {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card__link:hover),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card__link:hover) {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 92%, var(--guaxi-notebook-panel) 8%);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card__eyebrow),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card__eyebrow) {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--guaxi-notebook-muted);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card__title),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card__title) {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--guaxi-notebook-text);
+  line-height: 1.35;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card__excerpt),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card__excerpt) {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--guaxi-notebook-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card__meta),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card__meta) {
+  font-size: 11px;
+  color: var(--guaxi-notebook-muted);
+  opacity: 0.9;
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card) {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 90%, var(--guaxi-notebook-panel) 10%);
+  border-color: rgba(148, 163, 184, 0.22);
+  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.35);
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-preview-file-card__link:hover),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-preview-file-card__link:hover) {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 96%, var(--guaxi-notebook-panel) 4%);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc) {
+  display: grid;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 78%, transparent 22%);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 88%, var(--guaxi-notebook-panel) 12%) !important;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-title),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-title) {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--guaxi-notebook-muted);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-list),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-list) {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-item),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-item) {
+  margin: 0;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-item.level-2),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-item.level-2) {
+  padding-left: 18px;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-item.level-3),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-item.level-3) {
+  padding-left: 36px;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-item.level-4),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-item.level-4) {
+  padding-left: 54px;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-item.level-5),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-item.level-5) {
+  padding-left: 72px;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-item.level-6),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-item.level-6) {
+  padding-left: 90px;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-link),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-link) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 9px;
+  color: var(--guaxi-notebook-text);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 82%, var(--guaxi-notebook-panel-soft) 18%);
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-link:hover),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-link:hover) {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 92%, var(--guaxi-notebook-panel) 8%);
+  border-color: color-mix(in srgb, var(--guaxi-notebook-accent, #38bdf8) 28%, transparent 72%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--guaxi-notebook-accent, #38bdf8) 16%, transparent 84%) inset;
+}
+
+.guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-empty),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-empty) {
+  font-size: 13px;
+  color: var(--guaxi-notebook-muted);
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc) {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 90%, var(--guaxi-notebook-panel) 10%) !important;
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-link),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-link) {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 82%, var(--guaxi-notebook-panel-soft) 18%);
+  color: #e2e8f0;
+}
+
+.guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-notebook__toc-link:hover),
+.guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-notebook__toc-link:hover) {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 96%, var(--guaxi-notebook-panel) 4%);
+  border-color: rgba(74, 202, 219, 0.28);
+  box-shadow: 0 0 0 1px rgba(74, 202, 219, 0.16) inset;
 }
 
 :deep(.guaxi-notebook__search-hit) {

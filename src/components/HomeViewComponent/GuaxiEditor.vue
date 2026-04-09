@@ -14274,6 +14274,81 @@ const enhancePreviewHtmlWithFileCards = async (html, { baseDocPath } = {}) => {
   return root.innerHTML
 }
 
+// 设计说明：
+// 1. Markdown 渲染器会把 `![a](...) ![b](...)` 这类写法输出为同一个 `<p>` 里的多个图片节点。
+// 2. 旧样式只处理“单张图片居中”，没有处理“图片组容器”的布局，因此多图时不会整体居中；
+//    在 Explorer 模式里又会因为图片被逐张当作块级元素处理，造成一张一行，视觉上很生硬。
+// 3. 这里在渲染后识别“纯图片段落”，统一打上媒体组 class，让 preview / notebook 都能用同一套稳定布局。
+const enhancePreviewHtmlWithMediaGroups = (html) => {
+  const rawHtml = String(html || '')
+  if (!rawHtml.includes('<img')) return rawHtml
+
+  const root = document.createElement('div')
+  root.innerHTML = rawHtml
+  const blocks = Array.from(root.querySelectorAll('p'))
+  let mediaGroupCount = 0
+  let mediaItemCount = 0
+
+  const isWhitespaceNode = (node) => {
+    if (!node) return true
+    if (node.nodeType === Node.TEXT_NODE) return !String(node.textContent || '').trim()
+    if (node.nodeType === Node.ELEMENT_NODE && node instanceof HTMLBRElement) return true
+    return false
+  }
+
+  const resolveMediaItem = (node) => {
+    if (!(node instanceof Element)) return null
+    if (node instanceof HTMLImageElement) {
+      return {
+        kind: 'image',
+        host: node,
+        image: node,
+      }
+    }
+    if (node instanceof HTMLAnchorElement) {
+      const childElements = Array.from(node.children || [])
+      if (childElements.length !== 1 || !(childElements[0] instanceof HTMLImageElement)) return null
+      const hasNonMediaChild = Array.from(node.childNodes || []).some((child) => {
+        if (child === childElements[0]) return false
+        return !isWhitespaceNode(child)
+      })
+      if (hasNonMediaChild) return null
+      return {
+        kind: 'linked-image',
+        host: node,
+        image: childElements[0],
+      }
+    }
+    return null
+  }
+
+  for (const block of blocks) {
+    const meaningfulNodes = Array.from(block.childNodes || []).filter((node) => !isWhitespaceNode(node))
+    if (!meaningfulNodes.length) continue
+
+    const mediaItems = meaningfulNodes.map(resolveMediaItem)
+    if (mediaItems.some((item) => !item)) continue
+
+    block.classList.add('guaxi-media-group')
+    block.classList.toggle('is-single', mediaItems.length === 1)
+    block.classList.toggle('is-gallery', mediaItems.length > 1)
+
+    for (const item of mediaItems) {
+      item.host.classList.add('guaxi-media-group__item')
+      item.image.classList.add('guaxi-media-group__image')
+    }
+
+    mediaGroupCount += 1
+    mediaItemCount += mediaItems.length
+  }
+
+  logger.info('[Preview] enhanced media groups', {
+    mediaGroupCount,
+    mediaItemCount,
+  })
+  return root.innerHTML
+}
+
 const getPreviewRenderDelayMs = () => {
   if (previewMode.value === 'split') return PREVIEW_RENDER_DELAY_SPLIT_MS
   if (previewMode.value === 'toggle' && mode.value === 'preview') return PREVIEW_RENDER_DELAY_PREVIEW_ONLY_MS
@@ -14363,9 +14438,10 @@ const performPreviewRender = async (content, requestId = 0, reason = 'scheduled'
       }
     }
 
-    const enhancedHtml = await enhancePreviewHtmlWithFileCards(previewHtml, {
+    let enhancedHtml = await enhancePreviewHtmlWithFileCards(previewHtml, {
       baseDocPath: renderFilePath,
     })
+    enhancedHtml = enhancePreviewHtmlWithMediaGroups(enhancedHtml)
     const latestSelectedPath = String(selectedFile.value?.path || '').trim()
     if ((requestId && requestId !== previewRenderRequestId) || (renderFilePath && latestSelectedPath && renderFilePath !== latestSelectedPath)) {
       logger.info('[Preview] drop stale render result', {
@@ -17966,7 +18042,7 @@ onUnmounted(() => {
   margin: 8px 0;
   border-radius: 14px;
   border: 1px solid var(--guaxi-border, rgba(14, 116, 144, 0.16));
-  background: color-mix(in srgb, var(--guaxi-content-bg, #ffffff) 92%, rgba(34, 211, 238, 0.08));
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 86%, var(--guaxi-content-bg, #ffffff) 14%);
   overflow: hidden;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
 }
@@ -17983,7 +18059,7 @@ onUnmounted(() => {
 .preview :deep(.guaxi-preview-file-card__link:hover) {
   opacity: 1;
   text-decoration: none;
-  background: rgba(148, 163, 184, 0.08);
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 92%, var(--guaxi-content-bg, #ffffff) 8%);
 }
 
 .preview :deep(.guaxi-preview-file-card__eyebrow) {
@@ -18086,48 +18162,101 @@ onUnmounted(() => {
 }
 
 .preview :deep(.md-toc) {
-  border: 1px solid var(--guaxi-border, #e1e4e8);
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin: 12px 0;
-  background: rgba(175, 184, 193, 0.12);
+  display: grid;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-border, #d0d7de) 78%, transparent 22%);
+  background: color-mix(in srgb, var(--guaxi-code-bg, #f6f8fa) 88%, var(--guaxi-content-bg, #ffffff) 12%);
+}
+
+.preview :deep(.md-toc::before) {
+  content: '目录';
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--guaxi-text-secondary, #6b7280);
 }
 
 .preview :deep(.md-toc .md-toc-list) {
   list-style: none;
   padding-left: 0;
   margin: 0;
-}
-
-.preview :deep(.md-toc .md-toc-list .md-toc-list) {
-  padding-left: 16px;
-  margin-top: 6px;
+  display: grid;
+  gap: 6px;
 }
 
 .preview :deep(.md-toc-item) {
-  margin: 6px 0;
+  margin: 0;
   line-height: 1.35;
+  padding-left: 0;
+}
+
+.preview :deep(.md-toc-item.md-toc-level-2) {
+  padding-left: 18px;
+}
+
+.preview :deep(.md-toc-item.md-toc-level-3) {
+  padding-left: 36px;
+}
+
+.preview :deep(.md-toc-item.md-toc-level-4) {
+  padding-left: 54px;
+}
+
+.preview :deep(.md-toc-item.md-toc-level-5) {
+  padding-left: 72px;
+}
+
+.preview :deep(.md-toc-item.md-toc-level-6) {
+  padding-left: 90px;
 }
 
 .preview :deep(a.md-toc-link) {
-  color: var(--guaxi-text-link, var(--primary-color, #4acadb));
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 9px;
+  color: var(--guaxi-text-primary, #1f2328);
   text-decoration: none;
   cursor: pointer;
+  background: color-mix(in srgb, var(--guaxi-code-bg, #f6f8fa) 66%, transparent 34%);
 }
 
 .preview :deep(a.md-toc-link:hover) {
-  text-decoration: underline;
+  background: color-mix(in srgb, var(--guaxi-code-bg, #f6f8fa) 82%, #ffffff 18%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color, #4acadb) 16%, transparent 84%) inset;
 }
 
 .dark-mode .preview :deep(.md-toc),
-.dark .preview :deep(.md-toc) {
-  border-color: #30363d;
-  background: rgba(110, 118, 129, 0.12);
+.dark .preview :deep(.md-toc),
+:root[data-guaxi-theme='dark'] .preview :deep(.md-toc) {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #111827) 90%, var(--guaxi-content-bg, #0f172a) 10%);
+}
+
+.dark-mode .preview :deep(.md-toc::before),
+.dark .preview :deep(.md-toc::before),
+:root[data-guaxi-theme='dark'] .preview :deep(.md-toc::before) {
+  color: rgba(148, 163, 184, 0.92);
 }
 
 .dark-mode .preview :deep(a.md-toc-link),
-.dark .preview :deep(a.md-toc-link) {
-  color: var(--guaxi-text-link-dark, #4acadb);
+.dark .preview :deep(a.md-toc-link),
+:root[data-guaxi-theme='dark'] .preview :deep(a.md-toc-link) {
+  color: #e2e8f0;
+  background: color-mix(in srgb, var(--guaxi-content-bg, #0f172a) 82%, var(--guaxi-panel-bg, #111827) 18%);
+}
+
+.dark-mode .preview :deep(a.md-toc-link:hover),
+.dark .preview :deep(a.md-toc-link:hover),
+:root[data-guaxi-theme='dark'] .preview :deep(a.md-toc-link:hover) {
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #111827) 94%, var(--guaxi-content-bg, #0f172a) 6%);
+  box-shadow: 0 0 0 1px rgba(74, 202, 219, 0.16) inset;
 }
 
 :deep(.monaco-editor .guaxi-link-like),
@@ -19059,14 +19188,14 @@ onUnmounted(() => {
 :root.dark .preview :deep(.guaxi-preview-file-card),
 :root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card) {
   border-color: rgba(71, 85, 105, 0.42);
-  background: rgba(15, 23, 42, 0.94);
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #111827) 90%, var(--guaxi-content-bg, #0f172a) 10%);
   box-shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
 }
 
 .dark-mode .preview :deep(.guaxi-preview-file-card__link:hover),
 :root.dark .preview :deep(.guaxi-preview-file-card__link:hover),
 :root[data-guaxi-theme='dark'] .preview :deep(.guaxi-preview-file-card__link:hover) {
-  background: rgba(30, 41, 59, 0.28);
+  background: color-mix(in srgb, var(--guaxi-panel-bg, #111827) 94%, var(--guaxi-content-bg, #0f172a) 6%);
 }
 
 .dark-mode .preview :deep(.guaxi-preview-file-card__eyebrow),
@@ -19392,12 +19521,65 @@ onUnmounted(() => {
   border-color: #30363d;
 }
 
-.preview :deep(img),
+/* 设计说明：
+ * 1. 这里位于普通 `<style>` 块，不是 `<style scoped>`。
+ * 2. 旧代码使用 `.preview :deep(...)`，Vue 不会在这个样式块里帮我们展开 `:deep()`，
+ *    所以预览区图片规则实际上没有命中，表现出来就是图片始终靠左。
+ * 3. 预览内容直接通过 `v-html` 注入到 `.preview` 容器下，使用普通后代选择器即可准确生效。
+ */
+.preview img,
 img {
   max-width: 100%;
   height: auto;
   display: block;
   margin: 0 auto;
+}
+
+.preview p > img:only-child,
+.preview p > a:only-child > img:only-child {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* 设计说明：
+ * 1. Markdown 图片常被渲染成 `<p><a><img /></a></p>`，仅给 img 设置 `margin: auto`
+ *    时，外层 a 仍是 inline，视觉上不会真正居中。
+ * 2. 这里把“单图片段落”中的唯一链接提升为块级包裹盒，让纯图片链接预览与探索者模式保持一致。
+ */
+.preview p > a:only-child {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.preview .guaxi-media-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 18px;
+  margin: 18px auto;
+}
+
+.preview .guaxi-media-group.is-single {
+  gap: 0;
+}
+
+.preview .guaxi-media-group__item {
+  display: block;
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.preview .guaxi-media-group__image {
+  display: block;
+  max-width: min(100%, 520px);
+  height: auto;
+  margin: 0 auto;
+  border-radius: 10px;
 }
 
 .search-highlight {
