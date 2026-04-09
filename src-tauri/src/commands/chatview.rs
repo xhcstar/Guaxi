@@ -2992,6 +2992,7 @@ fn log_model_reply(tag: &str, session_id: &str, raw: &str) {
     );
 }
 
+#[allow(dead_code)]
 fn local_math_system_prompt() -> &'static str {
     "输出数学公式时请严格遵循：行内公式用 $...$；块级公式用 $$...$$ 且 $$ 必须独占一行。块级公式格式必须为：\n$$\n公式内容\n$$\n并且闭合 $$ 后下一行开始正文，严禁在同一行继续文字。若处于列表项中，公式块前后都要留空行。不要用反引号包裹任何数学公式。若提供代码，必须带注释。"
 }
