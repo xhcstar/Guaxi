@@ -956,6 +956,7 @@
             ref="terminalPanelRef"
             :visible="pythonConsoleVisible"
             :context-path="getTerminalContextPath(fileTreeStore.activeRegion || 'left')"
+            :defer-resize-sync="pythonConsoleResizing"
             @close="togglePythonConsolePanel('panel-collapse')"
           />
           <div v-if="false" class="python-console-panel" :class="{ busy: pythonConsoleBusy }">
@@ -18102,32 +18103,40 @@ onUnmounted(() => {
  * 2. 这里对预览容器里的基础文档流做一次轻量重置，只修正文档段落与列表的布局，
  *    不影响专门的文件卡片、目录卡片等自定义组件。
  */
-.preview p,
-.preview li > p,
-.preview .md-paragraph {
+.preview :deep(p),
+.preview :deep(li > p),
+.preview :deep(.md-paragraph) {
   display: block !important;
   width: auto !important;
   max-width: 100%;
   text-align: left;
+  white-space: normal;
   justify-content: flex-start !important;
   align-items: normal !important;
 }
 
-.preview li {
+.preview :deep(.md-paragraph > a:not(:only-child)),
+.preview :deep(p > a:not(:only-child)) {
+  display: inline !important;
+  width: auto !important;
+  margin: 0 !important;
+}
+
+.preview :deep(li) {
   display: list-item !important;
   width: auto !important;
   max-width: 100%;
   text-align: left;
 }
 
-.preview ul,
-.preview ol {
+.preview :deep(ul),
+.preview :deep(ol) {
   display: block;
   width: 100%;
   max-width: 100%;
 }
 
-.preview li {
+.preview :deep(li) {
   list-style-position: outside;
 }
 

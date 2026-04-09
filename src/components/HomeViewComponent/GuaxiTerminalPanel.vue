@@ -194,6 +194,10 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  deferResizeSync: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['close'])
@@ -221,6 +225,7 @@ let unlistenOutput = null
 let unlistenExit = null
 let terminalResizeObserver = null
 let pendingFitFrame = 0
+let lastSyncedTerminalSizeKey = ''
 
 const isWindows = typeof navigator !== 'undefined'
   ? /Windows/i.test(navigator.userAgent)
@@ -539,7 +544,7 @@ const scheduleFitTerminal = (reason = 'scheduled-fit') => {
   })
 }
 
-const fitTerminal = async (reason = 'manual-fit') => {
+const fitTerminal = async (reason = 'manual-fit', options = {}) => {
   if (!terminal || !fitAddon || !props.visible) return
   await nextTick()
   try {
@@ -561,13 +566,26 @@ const fitTerminal = async (reason = 'manual-fit') => {
     terminal.refresh?.(0, Math.max(terminal.rows - 1, 0))
 
     const sessionId = activeSessionId.value
-    if (sessionId) {
+    const skipBackendResize = !!(props.deferResizeSync || options?.skipBackendResize)
+    const resizeKey = sessionId ? `${sessionId}:${terminal.cols}x${terminal.rows}` : ''
+
+    if (sessionId && !skipBackendResize && resizeKey !== lastSyncedTerminalSizeKey) {
       await invoke('terminal_resize_session', {
         request: {
           session_id: sessionId,
           cols: terminal.cols,
           rows: terminal.rows,
         },
+      })
+      lastSyncedTerminalSizeKey = resizeKey
+    }
+
+    if (skipBackendResize) {
+      logger.debug('[TerminalPanel] defer backend resize sync', {
+        reason,
+        sessionId,
+        cols: terminal.cols,
+        rows: terminal.rows,
       })
     }
 
@@ -576,6 +594,7 @@ const fitTerminal = async (reason = 'manual-fit') => {
       cols: terminal.cols,
       rows: terminal.rows,
       sessionId,
+      skipBackendResize,
     })
   } catch (error) {
     logger.warn('[TerminalPanel] fit terminal failed', { reason, error })
@@ -589,6 +608,7 @@ const activateSession = (sessionId) => {
   if (session?.profile_id) {
     selectedProfileId.value = session.profile_id
   }
+  lastSyncedTerminalSizeKey = ''
   renderActiveSession()
   void fitTerminal('activate-session')
 }
@@ -791,6 +811,7 @@ const createSession = async (options = {}) => {
     }
     sessions.value = [...sessions.value, session]
     activeSessionId.value = session.session_id
+    lastSyncedTerminalSizeKey = ''
     renderActiveSession()
     if (createToken === sessionCreateToken.value) {
       void fitTerminal('create-session')
@@ -877,6 +898,7 @@ const closeSession = async (sessionId, options = {}) => {
   })
   if (activeSessionId.value === normalizedSessionId) {
     activeSessionId.value = nextSessions[0]?.session_id || ''
+    lastSyncedTerminalSizeKey = ''
     renderActiveSession()
     await fitTerminal('close-session')
   }
