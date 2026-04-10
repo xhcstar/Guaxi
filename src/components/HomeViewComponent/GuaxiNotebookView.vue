@@ -2729,12 +2729,18 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
   const blocks = Array.from(root.querySelectorAll('p'))
   let mediaGroupCount = 0
   let mediaItemCount = 0
+  let preservedAuthoredHtmlBlockCount = 0
 
   const isWhitespaceNode = (node) => {
     if (!node) return true
     if (node.nodeType === Node.TEXT_NODE) return !String(node.textContent || '').trim()
     if (node.nodeType === Node.ELEMENT_NODE && node instanceof HTMLBRElement) return true
     return false
+  }
+
+  const shouldPreserveAuthoredHtmlLayout = (block) => {
+    if (!(block instanceof HTMLParagraphElement)) return false
+    return block.hasAttribute('align') || block.hasAttribute('style')
   }
 
   const resolveMediaItem = (node) => {
@@ -2762,6 +2768,15 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
   }
 
   for (const block of blocks) {
+    // 设计说明：
+    // 1. Explorer 模式同样会遇到 Markdown 中嵌入的原生 HTML，最常见的布局声明也是 `align` / `style`。
+    // 2. 上一版判定条件过宽，导致标准 Markdown 图片段落也被误判。
+    // 3. 这里改成只跳过明确声明过布局的 HTML 段落，保证 Markdown 图片语法继续正常增强。
+    if (shouldPreserveAuthoredHtmlLayout(block)) {
+      preservedAuthoredHtmlBlockCount += 1
+      continue
+    }
+
     const meaningfulNodes = Array.from(block.childNodes || []).filter((node) => !isWhitespaceNode(node))
     if (!meaningfulNodes.length) continue
 
@@ -2799,6 +2814,7 @@ const enhanceNotebookHtmlWithMediaGroups = (html) => {
     filePath: props.filePath,
     mediaGroupCount,
     mediaItemCount,
+    preservedAuthoredHtmlBlockCount,
   })
   return root.innerHTML
 }
@@ -3042,9 +3058,22 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
         })
         continue
       }
-      if (previousMarkdownMap[cellKey] && notebookMarkdownRenderCache.has(cacheKey)) {
-        nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(previousMarkdownMap[cellKey], cellKey)
+      const cachedMarkdownHtml = notebookMarkdownRenderCache.get(cacheKey)
+      if (typeof cachedMarkdownHtml === 'string' && cachedMarkdownHtml) {
+        // 设计说明：
+        // 1. 旧实现只要“当前 cellKey 在上一次渲染 map 中存在”且“cacheKey 已命中”，
+        //    就直接复用 previousMarkdownMap[cellKey]。
+        // 2. 但切换不同文件时，cellKey 很容易重复（例如都叫 markdown-1），
+        //    这样会把“上一份文件”的 HTML 错误复用到“当前文件”上。
+        // 3. 这里改成严格按本次 cacheKey 读取缓存内容，确保命中的永远是当前文件对应的渲染结果。
+        nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(cachedMarkdownHtml, cellKey)
         markdownCacheHitCount += 1
+        logger.info('[Notebook] reuse cached markdown html for cell', {
+          reason,
+          cellKey,
+          cacheKey,
+          filePath: props.filePath,
+        })
         continue
       }
       renderTasks.push((async () => {
@@ -3065,10 +3094,21 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
         : ''
       if (!outputMarkdown.trim()) continue
       const cellKey = String(cell.key || '')
-      const cacheKey = computeNotebookDigest(outputMarkdown)
-      if (previousOutputMap[cellKey] && notebookMarkdownRenderCache.has(cacheKey)) {
-        nextOutputMap[cellKey] = previousOutputMap[cellKey]
+      const cacheKey = buildNotebookMarkdownCacheKey(outputMarkdown, {
+        theme: props.theme,
+        filePath: props.filePath,
+        basePath: getNotebookBasePath(),
+      })
+      const cachedOutputHtml = notebookMarkdownRenderCache.get(cacheKey)
+      if (typeof cachedOutputHtml === 'string' && cachedOutputHtml) {
+        nextOutputMap[cellKey] = cachedOutputHtml
         outputCacheHitCount += 1
+        logger.info('[Notebook] reuse cached markdown output html for python cell', {
+          reason,
+          cellKey,
+          cacheKey,
+          filePath: props.filePath,
+        })
         continue
       }
 
@@ -3794,8 +3834,20 @@ watch(
     const prevFilePath = Array.isArray(oldPair) ? oldPair[1] : ''
     const filePathChanged = String(prevFilePath || '') !== String(props.filePath || '')
     if (filePathChanged) {
+      // 设计说明：
+      // 1. Notebook 组件在 tab 间复用时，文件切换与新内容渲染之间存在一个异步窗口。
+      // 2. 如果不先清空旧文件的渲染结果，模板会短暂继续显示上一个文件的 HTML，
+      //    在 cellKey 重复时甚至可能被错误复用。
+      // 3. 因此在 filePath 切换的第一时间先重置渲染 map，确保界面只等待当前文件的新结果。
+      renderedMarkdownHtmlMap.value = {}
+      renderedOutputMarkdownHtmlMap.value = {}
+      resolvedDisplayUrlMap.value = {}
       notebookSearchIndexReady.value = false
       clearNotebookSearchHighlights()
+      logger.info('[Notebook] cleared rendered html maps for file switch', {
+        previousFilePath: String(prevFilePath || ''),
+        nextFilePath: String(props.filePath || ''),
+      })
     }
     syncNotebookCellsFromMarkdown(nextMarkdown, 'props-markdown-or-file-watch', {
       force: filePathChanged,
@@ -4608,20 +4660,26 @@ defineExpose({
   align-items: stretch;
   align-content: flex-start;
   gap: var(--guaxi-media-gap);
-  width: min(100%, 1000px) !important;
+  width: 100% !important;
+  max-width: 1000px;
   margin: 22px auto !important;
   padding: 6px 0;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single) {
+  display: block !important;
   width: min(100%, 760px) !important;
   gap: 0;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-gallery),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-gallery) {
-  width: min(100%, calc(var(--guaxi-media-count, 2) * 280px + (var(--guaxi-media-count, 2) - 1) * var(--guaxi-media-gap))) !important;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
+  justify-content: center !important;
+  justify-items: center;
+  align-items: start;
   padding-left: 6px;
   padding-right: 6px;
 }
@@ -4631,31 +4689,33 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 1 1 260px;
-  min-width: min(100%, 180px);
-  max-width: min(100%, 360px);
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
   box-sizing: border-box;
-  padding: 12px;
-  border-radius: 22px;
-  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 72%, transparent 28%);
-  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 92%, var(--guaxi-notebook-panel) 8%);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
-  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
   text-decoration: none;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  transition: opacity 0.18s ease;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item:hover),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item:hover) {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.14);
+  opacity: 0.98;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group.is-single > .guaxi-media-group__item),
 .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group.is-single > .guaxi-media-group__item) {
+  display: flex;
   flex: 0 1 auto;
   min-width: 0;
+  width: fit-content;
   max-width: min(100%, 760px);
+  margin-left: auto;
+  margin-right: auto;
   padding: 0;
   border: none;
   background: transparent;
@@ -4683,14 +4743,13 @@ defineExpose({
 
 .guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
 .guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item) {
-  border-color: rgba(100, 116, 139, 0.4);
-  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 58%, #0f172a 42%);
-  box-shadow: 0 18px 38px rgba(2, 6, 23, 0.28);
+  background: transparent;
+  box-shadow: none;
 }
 
 .guaxi-notebook.theme-dark .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item:hover),
 .guaxi-notebook.theme-dark .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item:hover) {
-  box-shadow: 0 22px 42px rgba(2, 6, 23, 0.34);
+  opacity: 0.98;
 }
 
 @media (max-width: 760px) {
@@ -4703,10 +4762,8 @@ defineExpose({
 
   .guaxi-notebook__markdown-preview :deep(.guaxi-media-group__item),
   .guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__item) {
-    flex-basis: min(100%, 220px);
     max-width: 100%;
-    padding: 8px;
-    border-radius: 18px;
+    width: 100%;
   }
 }
 

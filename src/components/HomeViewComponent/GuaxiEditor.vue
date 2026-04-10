@@ -14320,12 +14320,18 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
   const blocks = Array.from(root.querySelectorAll('p'))
   let mediaGroupCount = 0
   let mediaItemCount = 0
+  let preservedAuthoredHtmlBlockCount = 0
 
   const isWhitespaceNode = (node) => {
     if (!node) return true
     if (node.nodeType === Node.TEXT_NODE) return !String(node.textContent || '').trim()
     if (node.nodeType === Node.ELEMENT_NODE && node instanceof HTMLBRElement) return true
     return false
+  }
+
+  const shouldPreserveAuthoredHtmlLayout = (block) => {
+    if (!(block instanceof HTMLParagraphElement)) return false
+    return block.hasAttribute('align') || block.hasAttribute('style')
   }
 
   const resolveMediaItem = (node) => {
@@ -14355,6 +14361,15 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
   }
 
   for (const block of blocks) {
+    // 设计说明：
+    // 1. Markdown 中可以直接混写 HTML，而这类块最常见的布局意图就是 `align` / `style`。
+    // 2. 上一版把“手写 HTML”的识别做得过宽，误伤了正常 Markdown 图片段落。
+    // 3. 这里改为只尊重最明确的作者布局声明，让标准 Markdown 图片仍然继续走媒体增强流程。
+    if (shouldPreserveAuthoredHtmlLayout(block)) {
+      preservedAuthoredHtmlBlockCount += 1
+      continue
+    }
+
     const meaningfulNodes = Array.from(block.childNodes || []).filter((node) => !isWhitespaceNode(node))
     if (!meaningfulNodes.length) continue
 
@@ -14391,6 +14406,7 @@ const enhancePreviewHtmlWithMediaGroups = (html) => {
   logger.info('[Preview] enhanced media groups', {
     mediaGroupCount,
     mediaItemCount,
+    preservedAuthoredHtmlBlockCount,
   })
   return root.innerHTML
 }
@@ -19663,17 +19679,11 @@ img {
 }
 
 /* 设计说明：
- * 1. Markdown 图片常被渲染成 `<p><a><img /></a></p>`，仅给 img 设置 `margin: auto`
- *    时，外层 a 仍是 inline，视觉上不会真正居中。
- * 2. 这里把“单图片段落”中的唯一链接提升为块级包裹盒，让纯图片链接预览与探索者模式保持一致。
+ * 1. 这里不再对 `p > a:only-child` 做通用块级化处理，因为参考式链接、脚注链接等文本链接
+ *    也可能恰好成为段落中的唯一子元素，之前的写法会把它们错误地“媒体化”，导致正文排版被居中。
+ * 2. 纯图片链接现在统一由 `enhancePreviewHtmlWithMediaGroups` 转成 `.guaxi-media-group`，
+ *    由媒体分组样式负责居中和响应式布局，普通文字链接则继续走正常文档流。
  */
-.preview p > a:only-child {
-  display: block;
-  width: fit-content;
-  max-width: 100%;
-  margin-left: auto;
-  margin-right: auto;
-}
 
 .preview .guaxi-media-group {
   --guaxi-media-gap: clamp(14px, 2vw, 24px);
@@ -19690,6 +19700,7 @@ img {
 }
 
 .preview .guaxi-media-group.is-single {
+  display: block !important;
   width: min(100%, 760px);
   gap: 0;
 }
@@ -19698,7 +19709,7 @@ img {
   display: grid !important;
   grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
   justify-content: center !important;
-  justify-items: stretch;
+  justify-items: center;
   align-items: start;
   padding-left: 6px;
   padding-right: 6px;
@@ -19709,32 +19720,30 @@ img {
   align-items: center;
   justify-content: center;
   min-width: 0;
+  width: fit-content;
   max-width: 100%;
   box-sizing: border-box;
-  padding: 12px;
-  border-radius: 22px;
-  border: 1px solid color-mix(in srgb, var(--guaxi-border, #d0d7de) 78%, transparent 22%);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--guaxi-panel-bg, #ffffff) 94%, transparent 6%), color-mix(in srgb, var(--guaxi-content-bg, #ffffff) 96%, transparent 4%));
-  box-shadow:
-    0 14px 30px rgba(15, 23, 42, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72);
-  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
   text-decoration: none;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  transition: opacity 0.18s ease;
 }
 
 .preview .guaxi-media-group__item:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 18px 34px rgba(15, 23, 42, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  opacity: 0.98;
 }
 
 .preview .guaxi-media-group.is-single > .guaxi-media-group__item {
+  display: flex;
   flex: 0 1 auto;
   min-width: 0;
+  width: fit-content;
   max-width: min(100%, 760px);
+  margin-left: auto;
+  margin-right: auto;
   padding: 0;
   border: none;
   background: transparent;
@@ -19759,18 +19768,12 @@ img {
 }
 
 :global(:root[data-guaxi-theme='dark']) .preview .guaxi-media-group__item {
-  border-color: rgba(71, 85, 105, 0.46);
-  background:
-    linear-gradient(180deg, rgba(19, 28, 42, 0.92), rgba(14, 21, 33, 0.94));
-  box-shadow:
-    0 18px 36px rgba(2, 6, 23, 0.28),
-    inset 0 1px 0 rgba(148, 163, 184, 0.08);
+  background: transparent;
+  box-shadow: none;
 }
 
 :global(:root[data-guaxi-theme='dark']) .preview .guaxi-media-group__item:hover {
-  box-shadow:
-    0 22px 40px rgba(2, 6, 23, 0.34),
-    inset 0 1px 0 rgba(148, 163, 184, 0.12);
+  opacity: 0.98;
 }
 
 @media (max-width: 760px) {
@@ -19782,8 +19785,7 @@ img {
 
   .preview .guaxi-media-group__item {
     max-width: 100%;
-    padding: 8px;
-    border-radius: 18px;
+    width: 100%;
   }
 }
 
