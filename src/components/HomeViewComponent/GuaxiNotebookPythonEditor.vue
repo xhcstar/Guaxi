@@ -146,7 +146,7 @@ const mountMonacoEditor = async () => {
       tabSize: 4,
       insertSpaces: true,
       fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
-      fontSize: 13,
+      fontSize: 17,
       lineHeight: PYTHON_EDITOR_LINE_HEIGHT,
       padding: { top: 12, bottom: 12 },
       fixedOverflowWidgets: true,
