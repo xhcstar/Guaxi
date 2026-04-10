@@ -1,5 +1,11 @@
 ﻿<template>
-  <div ref="notebookRootRef" class="guaxi-notebook" :class="themeClass" @click="handleNotebookRenderedClick">
+  <div
+    ref="notebookRootRef"
+    class="guaxi-notebook"
+    :class="themeClass"
+    @click="handleNotebookRenderedClick"
+    @mouseup="handleNotebookSelectionMouseUp"
+  >
     <div class="guaxi-notebook__toolbar">
       <div class="guaxi-notebook__toolbar-main">
         <button
@@ -77,6 +83,53 @@
         <button class="guaxi-notebook__search-btn" type="button" @click="focusNextNotebookSearchMatch">下一个</button>
         <button class="guaxi-notebook__search-btn guaxi-notebook__search-btn--danger" type="button" @click="closeNotebookSearch">关闭</button>
       </div>
+    </div>
+
+    <div
+      v-show="notebookSelectionToolbarVisible"
+      class="guaxi-notebook__selection-toolbar"
+      :style="notebookSelectionToolbarStyle"
+      @mousedown.prevent
+      @click.stop
+    >
+      <button
+        type="button"
+        class="guaxi-notebook__selection-tool-btn"
+        :disabled="selectionTranslateBusy"
+        title="翻译选中文本"
+        aria-label="翻译选中文本"
+        @click="openNotebookSelectionTranslatePanel"
+      >
+        <Icon :icon="languagesIcon" width="16" height="16" />
+      </button>
+      <button
+        type="button"
+        class="guaxi-notebook__selection-tool-btn"
+        title="发送到助手"
+        aria-label="发送到助手"
+        @click="askNotebookSelectionWithAssistant"
+      >
+        <Icon :icon="messageCircleIcon" width="16" height="16" />
+      </button>
+      <button
+        type="button"
+        class="guaxi-notebook__selection-tool-btn"
+        title="用 AI 翻译"
+        aria-label="用 AI 翻译"
+        @click="sendNotebookSelectionAsAiTranslate"
+      >
+        <Icon :icon="botIcon" width="16" height="16" />
+      </button>
+      <button
+        type="button"
+        class="guaxi-notebook__selection-tool-btn"
+        :disabled="selectionReadAloudBusy"
+        :title="selectionReadAloudBusy ? '正在朗读' : '朗读选中文本'"
+        :aria-label="selectionReadAloudBusy ? '正在朗读' : '朗读选中文本'"
+        @click="readNotebookSelectionAloud"
+      >
+        <Icon :icon="volume2Icon" width="16" height="16" />
+      </button>
     </div>
 
     <template v-for="(cell, index) in notebookCells" :key="cell.key">
@@ -353,6 +406,29 @@
         </div>
       </div>
     </template>
+
+    <GuaxiSelectionTranslatePanel
+      v-if="selectionTranslatePanelVisible"
+      :pos="selectionTranslatePanelPos"
+      :raw="selectionTranslateRaw"
+      :result="selectionTranslateResult"
+      :error="selectionTranslateError"
+      :busy="selectionTranslateBusy"
+      :pinned="selectionTranslatePinned"
+      :items="selectionTranslateItems"
+      :word-meta="selectionTranslateWordMeta"
+      :from-lang="selectionTranslateFrom"
+      :to-lang="selectionTranslateTo"
+      :lang-options="selectionTranslateLangOptions"
+      @update:from-lang="(value) => (selectionTranslateFrom = String(value || 'auto'))"
+      @update:to-lang="(value) => (selectionTranslateTo = String(value || 'zh'))"
+      @swap-langs="swapNotebookSelectionTranslateLangs"
+      @translate="translateNotebookSelectionText"
+      @copy="copyNotebookSelectionTranslateResult"
+      @toggle-pin="toggleNotebookSelectionTranslatePinned"
+      @update:pos="handleNotebookSelectionTranslatePanelUpdatePos"
+      @close="closeNotebookSelectionTranslatePanel"
+    />
   </div>
 </template>
 
@@ -365,6 +441,7 @@ import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
 import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import mermaid from 'mermaid'
 import MarkdownIt from 'markdown-it'
+import { debounce } from 'lodash-es'
 import filePlusIcon from '@iconify-icons/lucide/file-plus'
 import terminalSquareIcon from '@iconify-icons/lucide/terminal-square'
 import playIcon from '@iconify-icons/lucide/play'
@@ -380,11 +457,18 @@ import terminalIcon from '@iconify-icons/lucide/terminal'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
 import undoIcon from '@iconify-icons/lucide/undo'
 import redoIcon from '@iconify-icons/lucide/redo'
+import languagesIcon from '@iconify-icons/lucide/languages'
+import messageCircleIcon from '@iconify-icons/lucide/message-circle'
+import botIcon from '@iconify-icons/lucide/bot'
+import volume2Icon from '@iconify-icons/lucide/volume-2'
 import { createLogger } from '../../utils/logger'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
+import { useRightSiderStore } from '../../stores/rightSiderStore'
+import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
 import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
 import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
+import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
   createPythonCellId,
@@ -427,6 +511,8 @@ const message = useMessage()
 const logger = createLogger('GuaxiNotebookView')
 const notebookOutlineMarkdownParser = new MarkdownIt()
 const fileTreeStore = useFileTreeStore()
+const rightSiderStore = useRightSiderStore()
+const siderStore = useSiderStore()
 
 const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
@@ -445,6 +531,9 @@ const notebookSearchCellMatches = ref([])
 const notebookSearchDomMatches = ref([])
 const notebookSearchActiveIndex = ref(-1)
 const notebookSearchIndexReady = ref(false)
+const notebookSelectionToolbarVisible = ref(false)
+const notebookSelectionToolbarStyle = ref({ left: '0px', top: '0px' })
+const notebookSelectionText = ref('')
 const notebookMarkdownWorkerRef = ref(null)
 const notebookMarkdownWorkerReady = ref(false)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
@@ -458,14 +547,50 @@ const notebookMarkdownRenderCache = new Map()
 const notebookDisplayUrlCache = new Map()
 const notebookMarkdownWorkerPendingTasks = new Map()
 const notebookLinkCardMetaCache = new Map()
+const selectionTranslatePanelVisible = ref(false)
+const selectionTranslatePinned = ref(false)
+const selectionTranslatePanelPos = ref({ left: 8, top: 8 })
+const selectionTranslateFrom = ref('auto')
+const selectionTranslateTo = ref('zh')
+const selectionTranslateBusy = ref(false)
+const selectionTranslateRaw = ref('')
+const selectionTranslateResult = ref('')
+const selectionTranslateError = ref('')
+const selectionTranslateItems = ref([])
+const selectionTranslateWordMeta = ref(null)
+const selectionReadAloudBusy = ref(false)
 let notebookSidecarPersistTimer = 0
 let notebookMarkdownEmitTimer = 0
 let notebookSearchIndexSyncTimer = 0
 let notebookSearchQueryTimer = 0
 let notebookMarkdownWorkerTaskId = 0
 let notebookMermaidRenderCounter = 0
+let selectionAudioElement = null
+let selectionAudioObjectUrl = ''
+let selectionTranslateMultiNotFoundWarned = false
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
+const selectionTranslateMultiAvailable = ref(true)
+const selectionTranslateLangOptions = [
+  { label: '自动检测', value: 'auto' },
+  { label: '中文', value: 'zh' },
+  { label: '英文', value: 'en' },
+  { label: '日文', value: 'ja' },
+  { label: '韩文', value: 'ko' },
+  { label: '法文', value: 'fr' },
+  { label: '德文', value: 'de' },
+  { label: '西班牙语', value: 'es' },
+  { label: '俄语', value: 'ru' },
+  { label: '葡萄牙语', value: 'pt' },
+  { label: '意大利语', value: 'it' },
+  { label: '荷兰语', value: 'nl' },
+  { label: '越南语', value: 'vi' },
+  { label: '泰语', value: 'th' },
+]
+const getSelectionTranslateLangLabel = (value) => {
+  const item = selectionTranslateLangOptions.find((entry) => entry.value === value)
+  return item ? String(item.label || '') : '中文'
+}
 
 const bumpRefresh = () => {
   refreshTick.value += 1
@@ -474,6 +599,8 @@ const bumpRefresh = () => {
 
 const normalizeNotebookMarkdownText = (markdown = '') => String(markdown || '').replace(/\r\n?/g, '\n')
 const escapeRegExp = (raw) => String(raw || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const NOTEBOOK_SELECTION_SURFACE_SELECTOR = '.guaxi-notebook__markdown-preview, .guaxi-notebook__rich, .guaxi-notebook__rich--html'
+const NOTEBOOK_SELECTION_IGNORE_SELECTOR = '.guaxi-notebook__toolbar, .guaxi-notebook__search-panel, .guaxi-notebook__selection-toolbar, .pot-selection-translate-panel, textarea, input, select, button, [contenteditable="true"]'
 const escapeHtmlAttribute = (raw) => String(raw || '')
   .replace(/&/g, '&amp;')
   .replace(/"/g, '&quot;')
@@ -612,6 +739,122 @@ const normalizeNotebookFsPath = (rawPath = '') => {
   if (!prefix) return output.join('/')
   return prefix.endsWith('/') ? `${prefix}${output.join('/')}` : `${prefix}/${output.join('/')}`
 }
+
+const writeClipboardText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(String(text || ''))
+    return true
+  } catch (error) {
+    logger.warn('[NotebookSelection] write clipboard failed', { error })
+    return false
+  }
+}
+
+const normalizeSelectionTextForLanguageTasks = (raw) => {
+  const text = String(raw || '').replace(/\r\n?/g, '\n')
+  if (!text.trim()) return ''
+  return text
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/([^\n，。！？?!;；:：])\n(?!\n)/g, '$1 ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+const isWordSelection = (raw) => {
+  const text = String(raw || '').trim()
+  if (!text || /\s/.test(text)) return false
+  return /^[A-Za-z][A-Za-z'-]{0,47}$/.test(text)
+}
+
+const hideNotebookSelectionToolbar = () => {
+  notebookSelectionToolbarVisible.value = false
+}
+
+const clearNotebookSelectionState = (reason = 'unknown') => {
+  notebookSelectionText.value = ''
+  hideNotebookSelectionToolbar()
+  logger.info('[NotebookSelection] cleared selection state', { reason })
+}
+
+const stopSelectionAudioPlayback = () => {
+  if (selectionAudioElement) {
+    try {
+      selectionAudioElement.pause()
+      selectionAudioElement.src = ''
+    } catch {}
+    selectionAudioElement = null
+  }
+  if (selectionAudioObjectUrl) {
+    try {
+      URL.revokeObjectURL(selectionAudioObjectUrl)
+    } catch {}
+    selectionAudioObjectUrl = ''
+  }
+}
+
+// 设计说明：
+// 1. Explorer 模式里存在多个渲染面：Markdown 预览、输出面板、HTML 输出容器。
+// 2. 这里统一从 `window.getSelection()` 反查最近的合法渲染面，避免把工具条错误地挂到搜索框、
+//    Cell 编辑器或工具按钮上。
+const resolveNotebookSelectionSurface = (selection, fallbackTarget = null) => {
+  const root = notebookRootRef.value
+  if (!(root instanceof HTMLElement) || !selection) return null
+
+  const candidates = [
+    selection.anchorNode,
+    selection.focusNode,
+    selection.rangeCount > 0 ? selection.getRangeAt(0).commonAncestorContainer : null,
+    fallbackTarget,
+  ]
+
+  for (const node of candidates) {
+    const element = node instanceof Element ? node : node?.parentElement
+    if (!(element instanceof Element)) continue
+    const surface = element.closest(NOTEBOOK_SELECTION_SURFACE_SELECTOR)
+    if (surface instanceof HTMLElement && root.contains(surface)) {
+      return surface
+    }
+  }
+
+  return null
+}
+
+const getNotebookSelectionTextFromWindow = (fallbackTarget = null) => {
+  const selection = window.getSelection?.()
+  const root = notebookRootRef.value
+  if (!selection || !(root instanceof HTMLElement) || selection.rangeCount === 0) {
+    return { text: '', surface: null }
+  }
+
+  const text = normalizeSelectionTextForLanguageTasks(selection.toString())
+  if (!text) return { text: '', surface: null }
+
+  const surface = resolveNotebookSelectionSurface(selection, fallbackTarget)
+  if (!(surface instanceof HTMLElement)) {
+    return { text: '', surface: null }
+  }
+
+  return { text, surface }
+}
+
+const getNotebookSelectionTextForLanguageTasks = () => {
+  const text = normalizeSelectionTextForLanguageTasks(
+    notebookSelectionText.value || getNotebookSelectionTextFromWindow().text,
+  )
+  return text
+}
+
+const scheduleSelectionTranslate = debounce(() => {
+  if (!selectionTranslatePanelVisible.value) return
+  if (selectionTranslateBusy.value) return
+
+  const raw = String(selectionTranslateRaw.value || '').trim()
+  if (!raw) return
+
+  translateNotebookSelectionText(raw)
+}, 250)
 const getNotebookDocStem = () => {
   const filePath = String(props.filePath || '').trim().replace(/\\/g, '/')
   const baseName = filePath.split('/').pop() || 'notebook'
@@ -3152,6 +3395,457 @@ const getRenderedMarkdownCellHtml = (cell) => String(renderedMarkdownHtmlMap.val
 
 const getRenderedOutputMarkdownHtml = (cell) => String(renderedOutputMarkdownHtmlMap.value[String(cell?.key || '')] || '')
 
+const handleNotebookSelectionMouseUp = (event) => {
+  const target = event?.target instanceof Element ? event.target : null
+  if (target?.closest(NOTEBOOK_SELECTION_IGNORE_SELECTOR)) return
+
+  const root = notebookRootRef.value
+  if (!(root instanceof HTMLElement)) return
+
+  const { text, surface } = getNotebookSelectionTextFromWindow(target)
+  if (!text || !(surface instanceof HTMLElement)) {
+    clearNotebookSelectionState('mouseup-empty-selection')
+    return
+  }
+
+  const rootRect = root.getBoundingClientRect()
+  const x = Number(event?.clientX || rootRect.left)
+  const y = Number(event?.clientY || rootRect.top)
+  const toolbarWidth = 196
+  const toolbarHeight = 38
+  const pad = 8
+  const gap = 10
+
+  let left = x - rootRect.left
+  let top = y - rootRect.top - toolbarHeight - gap
+  if (top < pad) {
+    top = y - rootRect.top + gap
+  }
+
+  const maxLeft = Math.max(pad, rootRect.width - toolbarWidth - pad)
+  const maxTop = Math.max(pad, rootRect.height - toolbarHeight - pad)
+
+  notebookSelectionText.value = text
+  notebookSelectionToolbarStyle.value = {
+    left: `${Math.min(Math.max(pad, left), maxLeft)}px`,
+    top: `${Math.min(Math.max(pad, top), maxTop)}px`,
+  }
+  notebookSelectionToolbarVisible.value = true
+
+  logger.info('[NotebookSelection] show toolbar from rendered selection', {
+    textLength: text.length,
+    tagName: surface.tagName,
+  })
+}
+
+const handleNotebookGlobalSelectionChange = () => {
+  if (!notebookSelectionToolbarVisible.value) return
+
+  const { text } = getNotebookSelectionTextFromWindow()
+  if (!text) {
+    clearNotebookSelectionState('global-selection-change-empty')
+    return
+  }
+
+  notebookSelectionText.value = text
+}
+
+const handleNotebookGlobalMouseDown = (event) => {
+  if (!notebookSelectionToolbarVisible.value) return
+
+  const target = event?.target instanceof Element ? event.target : null
+  if (!target) return
+  if (target.closest('.guaxi-notebook__selection-toolbar')) return
+  if (target.closest('.pot-selection-translate-panel')) return
+  if (target.closest(NOTEBOOK_SELECTION_SURFACE_SELECTOR)) return
+
+  clearNotebookSelectionState('global-mousedown-outside')
+}
+
+const handleNotebookSelectionTranslatePanelUpdatePos = (pos) => {
+  if (!pos) return
+
+  const left = Number(pos.left)
+  const top = Number(pos.top)
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return
+
+  const current = selectionTranslatePanelPos.value
+  if (Number(current.left) === left && Number(current.top) === top) return
+
+  selectionTranslatePanelPos.value = { left, top }
+  logger.info('[NotebookSelection] translate panel moved', { left, top })
+}
+
+const toggleNotebookSelectionTranslatePinned = () => {
+  selectionTranslatePinned.value = !selectionTranslatePinned.value
+  logger.info('[NotebookSelection] translate panel pin toggled', {
+    pinned: selectionTranslatePinned.value,
+  })
+}
+
+const swapNotebookSelectionTranslateLangs = () => {
+  const from = selectionTranslateFrom.value
+  selectionTranslateFrom.value = selectionTranslateTo.value
+  selectionTranslateTo.value = from
+  logger.info('[NotebookSelection] swap translate languages', {
+    from: selectionTranslateFrom.value,
+    to: selectionTranslateTo.value,
+  })
+
+  if (selectionTranslatePanelVisible.value && !selectionTranslateBusy.value) {
+    translateNotebookSelectionText(selectionTranslateRaw.value)
+  }
+}
+
+const closeNotebookSelectionTranslatePanel = () => {
+  selectionTranslatePanelVisible.value = false
+  selectionTranslatePinned.value = false
+  selectionTranslateWordMeta.value = null
+  logger.info('[NotebookSelection] close translate panel')
+}
+
+const openNotebookSelectionTranslatePanel = async () => {
+  const text = getNotebookSelectionTextForLanguageTasks()
+  if (!text) {
+    message.warning('请先框选要翻译的文本')
+    return
+  }
+
+  // 设计说明：
+  // 1. 翻译面板继续定位在 Notebook 根容器内部，和 Explorer 的滚动容器保持同一坐标系。
+  // 2. 先复用划词工具条的锚点，再做一次边界钳制，能避免长文档滚动后面板跑出可视区。
+  const root = notebookRootRef.value
+  const toolbarStyle = notebookSelectionToolbarStyle.value
+  const left = Number.parseFloat(String(toolbarStyle.left || ''))
+  const top = Number.parseFloat(String(toolbarStyle.top || ''))
+  const width = root?.clientWidth ?? window.innerWidth
+  const height = root?.clientHeight ?? window.innerHeight
+  const panelWidth = 360
+  const panelHeight = 260
+  const pad = 8
+
+  selectionTranslatePanelPos.value = {
+    left: Math.min(Math.max(pad, Number.isFinite(left) ? left : pad), Math.max(pad, width - panelWidth - pad)),
+    top: Math.min(Math.max(pad, (Number.isFinite(top) ? top : pad) + 44), Math.max(pad, height - panelHeight - pad)),
+  }
+  selectionTranslatePanelVisible.value = true
+  hideNotebookSelectionToolbar()
+
+  logger.info('[NotebookSelection] open translate panel', {
+    textLength: text.length,
+    left: selectionTranslatePanelPos.value.left,
+    top: selectionTranslatePanelPos.value.top,
+  })
+
+  await translateNotebookSelectionText(text)
+}
+
+const sendNotebookSelectionToAssistant = (overrideText, options = {}) => {
+  const text = String(overrideText ?? getNotebookSelectionTextForLanguageTasks()).trim()
+  if (!text) {
+    message.warning('请先框选要发送到助手的文本')
+    return false
+  }
+
+  const autoSend = options.autoSend !== false
+  const disableWebSearch = !!options.disableWebSearch
+  rightSiderStore.setPanel('assistant')
+  rightSiderStore.open()
+  siderStore.setRightSiderCollapsed('home', false)
+  rightSiderStore.appendAssistantDraft(text, { autoSend, disableWebSearch })
+  message.success(options.successMessage || (autoSend ? '已发送到助手并开始提问' : '已插入到助手输入框'))
+
+  logger.info('[NotebookSelection] send selection to assistant', {
+    textLength: text.length,
+    autoSend,
+    disableWebSearch,
+  })
+  return true
+}
+
+const askNotebookSelectionWithAssistant = () => {
+  sendNotebookSelectionToAssistant(undefined, {
+    autoSend: true,
+    successMessage: '已发送到助手并开始提问',
+  })
+}
+
+const sendNotebookSelectionAsAiTranslate = () => {
+  const text = getNotebookSelectionTextForLanguageTasks()
+  if (!text) {
+    message.warning('请先框选要翻译的文本')
+    return
+  }
+
+  const targetLang = String(selectionTranslateTo.value || 'zh')
+  const normalizedTargetLang = targetLang === 'auto' ? 'zh' : targetLang
+  const targetLangLabel = getSelectionTranslateLangLabel(normalizedTargetLang)
+  const prompt = `请将以下内容翻译成${targetLangLabel}，保持原意，并保留术语、代码、链接与原有格式，只输出译文：\n\n${text}`
+
+  sendNotebookSelectionToAssistant(prompt, {
+    autoSend: true,
+    disableWebSearch: true,
+    successMessage: `已发送到助手并翻译为${targetLangLabel}`,
+  })
+}
+
+const readNotebookSelectionAloud = async () => {
+  if (selectionReadAloudBusy.value) return
+
+  const text = getNotebookSelectionTextForLanguageTasks()
+  if (!text) {
+    message.warning('请先框选要朗读的文本')
+    return
+  }
+
+  selectionReadAloudBusy.value = true
+  try {
+    const tts = await invoke('get_tts_config')
+    const provider = String(tts?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
+    const model = String(tts?.model || '').trim() || (provider === 'sherpa-onnx'
+      ? 'utils/Models/tts/kokoro_multi_lang/model.onnx'
+      : 'FunAudioLLM/CosyVoice2-0.5B')
+    const tokens = String(tts?.tokens || '').trim()
+    const endpoint = provider === 'sherpa-onnx' ? String(tts?.exe || '').trim() : ''
+    const voice = provider === 'sherpa-onnx' ? '0' : 'alex'
+    const responseFormat = provider === 'sherpa-onnx' ? 'wav' : 'mp3'
+
+    logger.info('[NotebookSelection] start text to speech', {
+      provider,
+      model,
+      responseFormat,
+      textLength: text.length,
+    })
+
+    const response = await invoke('audio_text_to_speech', {
+      request: {
+        common: {
+          provider,
+          model,
+          endpoint,
+          tokens,
+        },
+        input: text,
+        voice,
+        response_format: responseFormat,
+        stream: false,
+      },
+    })
+
+    const audioBase64 = String(response?.audio_base64 || '')
+    if (!audioBase64) {
+      throw new Error('语音数据为空')
+    }
+
+    const contentType = String(response?.content_type || 'audio/mpeg')
+    const blob = new Blob([base64ToUint8Array(audioBase64)], { type: contentType })
+    stopSelectionAudioPlayback()
+    selectionAudioObjectUrl = URL.createObjectURL(blob)
+
+    const audio = new Audio(selectionAudioObjectUrl)
+    selectionAudioElement = audio
+    const waitForPlaybackEnd = new Promise((resolve, reject) => {
+      audio.onended = () => {
+        stopSelectionAudioPlayback()
+        resolve()
+      }
+      audio.onerror = () => {
+        stopSelectionAudioPlayback()
+        reject(new Error('音频播放失败'))
+      }
+    })
+
+    await audio.play()
+    await waitForPlaybackEnd
+  } catch (error) {
+    logger.error('[NotebookSelection] read aloud failed', { error })
+    message.error(`朗读失败：${String(error?.message || error || '')}`)
+  } finally {
+    selectionReadAloudBusy.value = false
+  }
+}
+
+const translateNotebookSelectionText = async (overrideText) => {
+  const text = normalizeSelectionTextForLanguageTasks(overrideText ?? getNotebookSelectionTextForLanguageTasks())
+  if (!text) {
+    message.warning('请先框选要翻译的文本')
+    return
+  }
+  if (selectionTranslateBusy.value) return
+
+  selectionTranslateRaw.value = text
+  selectionTranslateResult.value = ''
+  selectionTranslateError.value = ''
+  selectionTranslateItems.value = []
+  selectionTranslateWordMeta.value = null
+  selectionTranslateBusy.value = true
+
+  logger.info('[NotebookSelection] start translate', {
+    textLength: text.length,
+    from: selectionTranslateFrom.value,
+    to: selectionTranslateTo.value,
+  })
+
+  try {
+    let hasUsableMultiResult = false
+    if (selectionTranslateMultiAvailable.value) {
+      try {
+        const response = await invoke('selection_translate_free_multi', {
+          text,
+          from: selectionTranslateFrom.value,
+          to: selectionTranslateTo.value,
+        })
+
+        const items = Array.isArray(response?.items) ? response.items : []
+        selectionTranslateItems.value = items.map((item) => ({
+          engine: String(item?.engine || ''),
+          success: Boolean(item?.success),
+          text: String(item?.text || ''),
+          error: item?.error ? String(item.error) : '',
+        }))
+
+        const primary = selectionTranslateItems.value.find((item) => item.success && String(item.text || '').trim())
+        if (primary) {
+          selectionTranslateResult.value = String(primary.text || '')
+          hasUsableMultiResult = true
+          logger.info('[NotebookSelection] multi translate success', {
+            engines: selectionTranslateItems.value.length,
+          })
+        } else {
+          throw new Error(String(response?.error || '翻译结果为空'))
+        }
+      } catch (error) {
+        const messageText = String(error?.message || error || '')
+        if (messageText.includes('selection_translate_free_multi') && messageText.toLowerCase().includes('not found')) {
+          selectionTranslateMultiAvailable.value = false
+          if (!selectionTranslateMultiNotFoundWarned) {
+            selectionTranslateMultiNotFoundWarned = true
+            logger.warn('[NotebookSelection] multi translate command not found, fallback to single path')
+          }
+        } else {
+          logger.warn('[NotebookSelection] multi translate failed, fallback to single path', {
+            error,
+          })
+        }
+      }
+    }
+
+    if (!hasUsableMultiResult) {
+      const response = await invoke('translate_text_free', {
+        texts: [text],
+        from: selectionTranslateFrom.value,
+        to: selectionTranslateTo.value,
+      })
+      const translated = String(response?.translated_texts?.[0] || '')
+      if (!translated.trim() || translated.includes('[Translation Failed]')) {
+        throw new Error(String(response?.error || '翻译结果为空'))
+      }
+
+      selectionTranslateItems.value = [{ engine: 'Free', success: true, text: translated, error: '' }]
+      selectionTranslateResult.value = translated
+      logger.info('[NotebookSelection] single translate success', {
+        translatedLength: translated.length,
+      })
+    }
+
+    if (isWordSelection(text)) {
+      try {
+        const basic = await invoke('language_learning_enrich_word_basic', {
+          word: text,
+          sourceLang: selectionTranslateFrom.value,
+          targetLang: selectionTranslateTo.value,
+        })
+        selectionTranslateWordMeta.value = {
+          word: String(basic?.word || text).trim(),
+          phonetic: String(basic?.phonetic || '').trim(),
+          phonetic_uk: String(basic?.phonetic_uk || '').trim(),
+          phonetic_us: String(basic?.phonetic_us || '').trim(),
+          part_of_speech: String(basic?.part_of_speech || '').trim(),
+          meanings: Array.isArray(basic?.meanings) ? basic.meanings : [],
+          synonyms: [],
+          antonyms: [],
+          associates: [],
+          synonyms_translations: [],
+          antonyms_translations: [],
+          associates_translations: [],
+          phrases: [],
+          phrase_translations: [],
+          examples: [],
+          example_translations: [],
+        }
+
+        const details = await invoke('language_learning_enrich_word_details', {
+          word: text,
+          sourceLang: selectionTranslateFrom.value,
+          targetLang: selectionTranslateTo.value,
+        })
+        selectionTranslateWordMeta.value = {
+          ...selectionTranslateWordMeta.value,
+          synonyms: Array.isArray(details?.synonyms) ? details.synonyms : [],
+          antonyms: Array.isArray(details?.antonyms) ? details.antonyms : [],
+          associates: Array.isArray(details?.associates) ? details.associates : [],
+          synonyms_translations: Array.isArray(details?.synonyms_translations) ? details.synonyms_translations : [],
+          antonyms_translations: Array.isArray(details?.antonyms_translations) ? details.antonyms_translations : [],
+          associates_translations: Array.isArray(details?.associates_translations) ? details.associates_translations : [],
+          phrases: Array.isArray(details?.phrases) ? details.phrases : [],
+          phrase_translations: Array.isArray(details?.phrase_translations) ? details.phrase_translations : [],
+          examples: Array.isArray(details?.examples) ? details.examples : [],
+          example_translations: Array.isArray(details?.example_translations) ? details.example_translations : [],
+        }
+        logger.info('[NotebookSelection] enriched word translation metadata', {
+          word: text,
+        })
+      } catch (error) {
+        logger.warn('[NotebookSelection] enrich word failed', { error, word: text })
+      }
+    }
+
+    const finalTranslated = String(selectionTranslateResult.value || '').trim()
+    if (finalTranslated) {
+      try {
+        const primaryItem = selectionTranslateItems.value.find((item) => item.success && String(item.text || '').trim())
+        await invoke('language_learning_record_translation', {
+          input: {
+            source_text: text,
+            translated_text: finalTranslated,
+            source_lang: selectionTranslateFrom.value,
+            target_lang: selectionTranslateTo.value,
+            engine: String(primaryItem?.engine || 'Free'),
+            record_type: isWordSelection(text) ? 'word' : undefined,
+            word_meta: selectionTranslateWordMeta.value || undefined,
+          },
+        })
+      } catch (error) {
+        logger.warn('[NotebookSelection] record translation failed', { error })
+      }
+    }
+  } catch (error) {
+    const messageText = String(error?.message || error || '翻译失败')
+    selectionTranslateError.value = messageText
+    selectionTranslateItems.value = [{ engine: 'Free', success: false, text: '', error: messageText }]
+    logger.error('[NotebookSelection] translate failed', { error })
+    message.error(`翻译失败：${messageText}`)
+  } finally {
+    selectionTranslateBusy.value = false
+  }
+}
+
+const copyNotebookSelectionTranslateResult = async (payload) => {
+  const text = String((typeof payload === 'string' ? payload : payload?.text) || selectionTranslateResult.value || '')
+  if (!text) return
+
+  const ok = await writeClipboardText(text)
+  if (ok) {
+    message.success('已复制译文', { duration: 1200 })
+    logger.info('[NotebookSelection] copied translated text', {
+      textLength: text.length,
+    })
+    return
+  }
+
+  message.warning('复制失败：无法访问剪贴板')
+}
+
 const handleNotebookRenderedClick = async (event) => {
   const target = event?.target
   const anchor = target instanceof Element ? target.closest('a[href]') : null
@@ -3893,6 +4587,14 @@ watch(editingMarkdownCellKey, (nextKey) => {
   focusMarkdownEditor(nextKey, 'editing-markdown-cell-key')
 })
 
+watch([selectionTranslateFrom, selectionTranslateTo], ([from, to], [prevFrom, prevTo]) => {
+  if (!selectionTranslatePanelVisible.value) return
+  if (from === prevFrom && to === prevTo) return
+
+  logger.info('[NotebookSelection] translate language changed', { from, to })
+  scheduleSelectionTranslate()
+})
+
 watch(
   notebookOutlineEntries,
   (entries) => {
@@ -3926,6 +4628,9 @@ watch(
 
 onMounted(() => {
   initNotebookMarkdownWorker()
+  document.addEventListener('selectionchange', handleNotebookGlobalSelectionChange, true)
+  document.addEventListener('mousedown', handleNotebookGlobalMouseDown, true)
+  logger.info('[NotebookSelection] mounted selection listeners')
 })
 
 onBeforeUnmount(() => {
@@ -3937,6 +4642,11 @@ onBeforeUnmount(() => {
     window.clearTimeout(notebookSearchQueryTimer)
     notebookSearchQueryTimer = 0
   }
+  stopSelectionAudioPlayback()
+  closeNotebookSelectionTranslatePanel()
+  clearNotebookSelectionState('component-unmount')
+  document.removeEventListener('selectionchange', handleNotebookGlobalSelectionChange, true)
+  document.removeEventListener('mousedown', handleNotebookGlobalMouseDown, true)
   disposeNotebookMarkdownWorker('component-unmount')
 })
 
@@ -4127,6 +4837,45 @@ defineExpose({
 
 .guaxi-notebook__search-btn--danger {
   color: #ef4444;
+}
+
+.guaxi-notebook__selection-toolbar {
+  position: absolute;
+  z-index: 25;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 94%, transparent);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(10px);
+}
+
+.guaxi-notebook__selection-tool-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  border-radius: 9px;
+  background: var(--guaxi-notebook-panel-soft);
+  color: var(--guaxi-notebook-text);
+  cursor: pointer;
+  transition: transform 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.guaxi-notebook__selection-tool-btn:hover:not(:disabled) {
+  background: var(--guaxi-notebook-btn-hover);
+  border-color: color-mix(in srgb, var(--guaxi-notebook-primary) 36%, var(--guaxi-notebook-strong-border));
+  transform: translateY(-1px);
+}
+
+.guaxi-notebook__selection-tool-btn:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
 }
 
 .guaxi-notebook__toolbar-main {

@@ -412,19 +412,32 @@ let startTop = 0
 const clampToParent = (left, top) => {
   const el = panelRef.value
   const parent = el?.offsetParent
+  const parentRect = typeof parent?.getBoundingClientRect === 'function'
+    ? parent.getBoundingClientRect()
+    : null
   const pw = parent?.clientWidth ?? window.innerWidth
   const ph = parent?.clientHeight ?? window.innerHeight
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
 
   const w = el?.offsetWidth ?? 360
   const h = el?.offsetHeight ?? 220
 
   const pad = 8
-  const maxLeft = Math.max(pad, pw - w - pad)
-  const maxTop = Math.max(pad, ph - h - pad)
+  const visibleLeft = parentRect ? Math.max(pad, -parentRect.left + pad) : pad
+  const visibleTop = parentRect ? Math.max(pad, -parentRect.top + pad) : pad
+  const visibleRight = parentRect
+    ? Math.min(pw - pad, viewportWidth - parentRect.left - pad)
+    : viewportWidth - pad
+  const visibleBottom = parentRect
+    ? Math.min(ph - pad, viewportHeight - parentRect.top - pad)
+    : viewportHeight - pad
+  const maxLeft = Math.max(visibleLeft, visibleRight - w)
+  const maxTop = Math.max(visibleTop, visibleBottom - h)
 
   return {
-    left: Math.min(Math.max(pad, left), maxLeft),
-    top: Math.min(Math.max(pad, top), maxTop)
+    left: Math.min(Math.max(visibleLeft, left), maxLeft),
+    top: Math.min(Math.max(visibleTop, top), maxTop)
   }
 }
 
@@ -529,7 +542,7 @@ onUnmounted(() => {
   min-width: min(320px, calc(100% - 16px));
   min-height: 220px;
   max-width: calc(100% - 16px);
-  max-height: calc(70% - 16px);
+  max-height: min(calc(100dvh - 24px), 70vh);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
