@@ -133,33 +133,6 @@
     </div>
 
     <template v-for="(cell, index) in notebookCells" :key="cell.key">
-      <div v-if="index === 0" class="guaxi-notebook__insert-strip">
-        <div class="guaxi-notebook__insert-line"></div>
-        <div class="guaxi-notebook__insert-trigger" aria-hidden="true">
-          <Icon :icon="plusIcon" width="12" height="12" />
-        </div>
-        <div class="guaxi-notebook__insert-actions">
-          <button
-            type="button"
-            class="guaxi-notebook__icon-btn"
-            title="在这里插入 Markdown Cell"
-            aria-label="在这里插入 Markdown Cell"
-            @click="insertCell(index, 'above', 'markdown')"
-          >
-            <Icon :icon="filePlusIcon" width="16" height="16" />
-          </button>
-          <button
-            type="button"
-            class="guaxi-notebook__icon-btn"
-            title="在这里插入 Python Cell"
-            aria-label="在这里插入 Python Cell"
-            @click="insertCell(index, 'above', 'python')"
-          >
-            <Icon :icon="terminalSquareIcon" width="16" height="16" />
-          </button>
-        </div>
-      </div>
-
       <div
         class="guaxi-notebook__cell"
         :class="[
@@ -171,23 +144,20 @@
         ]"
         :data-cell-key="cell.key"
       >
+        <button
+          type="button"
+          class="guaxi-notebook__cell-delete"
+          title="删除当前 Cell"
+          aria-label="删除当前 Cell"
+          @click.stop="confirmRemoveCell(cell)"
+        >
+          <Icon :icon="trash2Icon" width="16" height="16" />
+        </button>
       <template v-if="cell.type === 'markdown'">
         <div
           class="guaxi-notebook__markdown-surface"
           :class="{ 'is-editing': isMarkdownCellEditing(cell) }"
         >
-          <div class="guaxi-notebook__markdown-actions">
-            <button
-              type="button"
-              class="guaxi-notebook__icon-btn danger"
-              title="删除当前 Cell"
-              aria-label="删除当前 Cell"
-                @click="confirmRemoveCell(cell)"
-            >
-              <Icon :icon="trash2Icon" width="16" height="16" />
-            </button>
-          </div>
-
           <div v-if="isMarkdownCellEditing(cell)" class="guaxi-notebook__markdown-edit-shell">
             <GuaxiNotebookMarkdownEditor
               :ref="(instance) => setMarkdownEditorRef(cell.key, instance)"
@@ -283,15 +253,6 @@
               >
                 <Icon :icon="terminalIcon" width="16" height="16" />
               </button>
-              <button
-                type="button"
-                class="guaxi-notebook__icon-btn danger"
-                title="删除当前 Cell"
-                aria-label="删除当前 Cell"
-                @click="confirmRemoveCell(cell)"
-              >
-                <Icon :icon="trash2Icon" width="16" height="16" />
-              </button>
             </div>
           </div>
 
@@ -379,7 +340,7 @@
       </template>
       </div>
 
-      <div class="guaxi-notebook__insert-strip">
+      <div v-if="index < notebookCells.length - 1" class="guaxi-notebook__insert-strip">
         <div class="guaxi-notebook__insert-line"></div>
         <div class="guaxi-notebook__insert-trigger" aria-hidden="true">
           <Icon :icon="plusIcon" width="12" height="12" />
@@ -4708,6 +4669,9 @@ defineExpose({
   --guaxi-notebook-danger: color-mix(in srgb, #ef4444 14%, var(--guaxi-panel-bg, #ffffff) 86%);
   --guaxi-notebook-focus-ring: rgba(59, 130, 246, 0.2);
   --guaxi-notebook-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+  --guaxi-notebook-sticky-top: 12px;
+  --guaxi-notebook-toolbar-sticky-height: 52px;
+  --guaxi-notebook-toolbar-max-width: min(100%, 520px);
   /* 设计说明：
    * 1. 探索模式整体字体统一追随主编辑器，避免 Markdown/Python/变量面板各自使用不同字族。
    * 2. `--editor-font-family` 定义在父级编辑器容器上，这里直接继承；若外层变量缺失，再回退到既有等宽字体。
@@ -4759,20 +4723,26 @@ defineExpose({
 }
 
 .guaxi-notebook__toolbar {
+  position: sticky;
+  top: var(--guaxi-notebook-sticky-top);
+  z-index: 26;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 10px 12px;
+  justify-content: center;
+  width: fit-content;
+  max-width: var(--guaxi-notebook-toolbar-max-width);
+  margin: 0 auto;
+  padding: 6px 10px;
+  backdrop-filter: blur(10px);
 }
 
 .guaxi-notebook__search-panel-shell {
   position: sticky;
-  top: 12px;
+  top: calc(var(--guaxi-notebook-sticky-top) + var(--guaxi-notebook-toolbar-sticky-height));
   z-index: 24;
-  height: 0;
+  min-height: 48px;
   display: flex;
+  align-items: flex-start;
   justify-content: flex-end;
   pointer-events: none;
 }
@@ -4785,7 +4755,8 @@ defineExpose({
   gap: 6px;
   flex-wrap: wrap;
   width: fit-content;
-  margin-top: 0;
+  min-height: 40px;
+  margin-top: 4px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 86%, transparent);
   border-radius: 12px;
@@ -4880,16 +4851,19 @@ defineExpose({
 
 .guaxi-notebook__toolbar-main {
   display: flex;
+  align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 8px;
 }
 
 .guaxi-notebook__toolbar-main--solo {
-  width: 100%;
-  justify-content: flex-end;
+  width: auto;
+  justify-content: center;
 }
 
 .guaxi-notebook__cell {
+  position: relative;
   overflow: hidden;
   transition: box-shadow 0.18s ease, outline-color 0.18s ease, background-color 0.18s ease;
 }
@@ -5005,30 +4979,37 @@ defineExpose({
   overflow: visible;
 }
 
-.guaxi-notebook__markdown-actions {
-  display: flex;
+.guaxi-notebook__cell-delete {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 4;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0 6px;
-  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 70%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--guaxi-notebook-panel) 94%, transparent);
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 78%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--guaxi-notebook-panel) 95%, transparent);
+  color: #dc2626;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
   opacity: 0;
-  transform: translateY(-2px);
+  transform: translateY(-4px);
   pointer-events: none;
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
 }
 
-.guaxi-notebook__markdown-surface:hover .guaxi-notebook__markdown-actions,
-.guaxi-notebook__markdown-surface:focus-within .guaxi-notebook__markdown-actions,
-.guaxi-notebook__markdown-surface.is-editing .guaxi-notebook__markdown-actions {
+.guaxi-notebook__cell:hover .guaxi-notebook__cell-delete,
+.guaxi-notebook__cell:focus-within .guaxi-notebook__cell-delete {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+.guaxi-notebook__cell-delete:hover {
+  background: color-mix(in srgb, #ef4444 12%, var(--guaxi-notebook-panel) 88%);
+  border-color: color-mix(in srgb, #ef4444 28%, var(--guaxi-notebook-strong-border));
 }
 
 .guaxi-notebook__markdown-edit-shell {
@@ -5191,8 +5172,7 @@ defineExpose({
   flex-wrap: wrap;
 }
 
-.guaxi-notebook__python-toolbar .guaxi-notebook__icon-btn,
-.guaxi-notebook__markdown-actions .guaxi-notebook__icon-btn {
+.guaxi-notebook__python-toolbar .guaxi-notebook__icon-btn {
   width: 28px;
   height: 28px;
   border-radius: 8px;
