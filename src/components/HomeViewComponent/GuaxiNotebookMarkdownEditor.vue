@@ -267,7 +267,7 @@ const mountMonacoEditor = async () => {
         occurrencesHighlight: 'off',
         selectionHighlight: false,
         fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
-        fontSize: 14,
+        fontSize: 17,
         lineHeight: MARKDOWN_EDITOR_LINE_HEIGHT,
         padding: { top: 14, bottom: 14 },
         fixedOverflowWidgets: true,
