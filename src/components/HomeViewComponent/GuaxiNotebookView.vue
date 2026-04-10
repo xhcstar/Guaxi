@@ -2,68 +2,79 @@
   <div
     ref="notebookRootRef"
     class="guaxi-notebook"
-    :class="themeClass"
+    :class="[themeClass, { 'is-top-toolbar-visible': isNotebookTopToolbarVisible }]"
+    @mousemove="handleNotebookRootMouseMove"
+    @mouseleave="handleNotebookRootMouseLeave"
     @click="handleNotebookRenderedClick"
     @mouseup="handleNotebookSelectionMouseUp"
   >
-    <div class="guaxi-notebook__toolbar">
-      <div class="guaxi-notebook__toolbar-main">
-        <button
-          type="button"
-          class="guaxi-notebook__icon-btn"
-          :disabled="!canUndoNotebookHistory"
-          title="撤销"
-          aria-label="撤销"
-          @click="undoNotebookHistory"
-        >
-          <Icon :icon="undoIcon" width="16" height="16" />
-        </button>
-        <button
-          type="button"
-          class="guaxi-notebook__icon-btn"
-          :disabled="!canRedoNotebookHistory"
-          title="重做"
-          aria-label="重做"
-          @click="redoNotebookHistory"
-        >
-          <Icon :icon="redoIcon" width="16" height="16" />
-        </button>
-        <button
-          type="button"
-          class="guaxi-notebook__icon-btn"
-          title="保存当前文档"
-          aria-label="保存当前文档"
-          @click="requestNotebookSave"
-        >
-          <Icon :icon="saveIcon" width="16" height="16" />
-        </button>
-        <button
-          type="button"
-          class="guaxi-notebook__icon-btn"
-          title="搜索探索模式内容"
-          aria-label="搜索探索模式内容"
-          @click="openNotebookSearch"
-        >
-          <Icon :icon="searchIcon" width="16" height="16" />
-        </button>
-        <button
-          type="button"
-          class="guaxi-notebook__icon-btn primary"
-          title="新增 Python Cell"
-          aria-label="新增 Python Cell"
-          @click="appendCell('python')"
-        >
-          <Icon :icon="terminalSquareIcon" width="16" height="16" />
-        </button>
-        <button
-          type="button"
-          class="guaxi-notebook__icon-btn"
-          title="新增 Markdown Cell"
-          aria-label="新增 Markdown Cell"
-          @click="appendCell('markdown')"
-        >
-          <Icon :icon="filePlusIcon" width="16" height="16" />
-        </button>
+    <div
+      class="guaxi-notebook__toolbar-shell"
+      :class="{ 'is-visible': isNotebookTopToolbarVisible }"
+      @mouseenter="revealNotebookTopToolbar('toolbar-shell-enter')"
+      @mouseleave="scheduleHideNotebookTopToolbar('toolbar-shell-leave')"
+      @focusin="revealNotebookTopToolbar('toolbar-focusin')"
+      @focusout="handleNotebookToolbarFocusOut"
+    >
+      <div class="guaxi-notebook__toolbar">
+        <div class="guaxi-notebook__toolbar-main">
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            :disabled="!canUndoNotebookHistory"
+            title="撤销"
+            aria-label="撤销"
+            @click="undoNotebookHistory"
+          >
+            <Icon :icon="undoIcon" width="16" height="16" />
+          </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            :disabled="!canRedoNotebookHistory"
+            title="重做"
+            aria-label="重做"
+            @click="redoNotebookHistory"
+          >
+            <Icon :icon="redoIcon" width="16" height="16" />
+          </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="保存当前文档"
+            aria-label="保存当前文档"
+            @click="requestNotebookSave"
+          >
+            <Icon :icon="saveIcon" width="16" height="16" />
+          </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="搜索探索模式内容"
+            aria-label="搜索探索模式内容"
+            @click="openNotebookSearch"
+          >
+            <Icon :icon="searchIcon" width="16" height="16" />
+          </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn primary"
+            title="新增 Python Cell"
+            aria-label="新增 Python Cell"
+            @click="appendCell('python')"
+          >
+            <Icon :icon="terminalSquareIcon" width="16" height="16" />
+          </button>
+          <button
+            type="button"
+            class="guaxi-notebook__icon-btn"
+            title="新增 Markdown Cell"
+            aria-label="新增 Markdown Cell"
+            @click="appendCell('markdown')"
+          >
+            <Icon :icon="filePlusIcon" width="16" height="16" />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -495,6 +506,7 @@ const notebookSearchIndexReady = ref(false)
 const notebookSelectionToolbarVisible = ref(false)
 const notebookSelectionToolbarStyle = ref({ left: '0px', top: '0px' })
 const notebookSelectionText = ref('')
+const notebookTopToolbarRevealed = ref(false)
 const notebookMarkdownWorkerRef = ref(null)
 const notebookMarkdownWorkerReady = ref(false)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
@@ -526,11 +538,13 @@ let notebookSearchIndexSyncTimer = 0
 let notebookSearchQueryTimer = 0
 let notebookMarkdownWorkerTaskId = 0
 let notebookMermaidRenderCounter = 0
+let notebookTopToolbarHideTimer = 0
 let selectionAudioElement = null
 let selectionAudioObjectUrl = ''
 let selectionTranslateMultiNotFoundWarned = false
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
+const isNotebookTopToolbarVisible = computed(() => notebookTopToolbarRevealed.value || notebookSearchVisible.value)
 const selectionTranslateMultiAvailable = ref(true)
 const selectionTranslateLangOptions = [
   { label: '自动检测', value: 'auto' },
@@ -556,6 +570,80 @@ const getSelectionTranslateLangLabel = (value) => {
 const bumpRefresh = () => {
   refreshTick.value += 1
   emit('state-change')
+}
+
+const clearNotebookTopToolbarHideTimer = () => {
+  if (!notebookTopToolbarHideTimer) return
+  window.clearTimeout(notebookTopToolbarHideTimer)
+  notebookTopToolbarHideTimer = 0
+}
+
+const NOTEBOOK_TOP_TOOLBAR_TRIGGER_DISTANCE = 56
+const NOTEBOOK_TOP_TOOLBAR_HIDE_DISTANCE = 120
+
+// 设计说明：
+// 1. 探索模式顶部工具条默认压缩成极薄的吸顶感应层，只在鼠标靠近顶部或键盘聚焦时展开。
+// 2. 搜索面板打开时强制保持工具条可见，避免搜索条和工具条的 sticky 叠层在滚动时来回跳动。
+const setNotebookTopToolbarRevealed = (visible, reason = 'unknown') => {
+  if (notebookTopToolbarRevealed.value === visible) return
+  notebookTopToolbarRevealed.value = visible
+  logger.info('[NotebookToolbar] top toolbar visibility changed', { visible, reason })
+}
+
+const revealNotebookTopToolbar = (reason = 'unknown') => {
+  clearNotebookTopToolbarHideTimer()
+  setNotebookTopToolbarRevealed(true, reason)
+}
+
+const hideNotebookTopToolbar = (reason = 'unknown') => {
+  if (notebookSearchVisible.value) {
+    logger.debug('[NotebookToolbar] keep toolbar visible because search panel is active', { reason })
+    return
+  }
+  setNotebookTopToolbarRevealed(false, reason)
+}
+
+const scheduleHideNotebookTopToolbar = (reason = 'unknown') => {
+  clearNotebookTopToolbarHideTimer()
+  notebookTopToolbarHideTimer = window.setTimeout(() => {
+    hideNotebookTopToolbar(reason)
+  }, 220)
+}
+
+const handleNotebookToolbarFocusOut = (event) => {
+  const nextTarget = event?.relatedTarget
+  if (nextTarget instanceof Node && notebookRootRef.value?.contains?.(nextTarget)) return
+  scheduleHideNotebookTopToolbar('toolbar-focusout')
+}
+
+const resolveNotebookToolbarTriggerRect = () => {
+  const root = notebookRootRef.value
+  if (!(root instanceof HTMLElement)) return null
+  const scrollHost = root.parentElement
+  if (scrollHost instanceof HTMLElement) {
+    return scrollHost.getBoundingClientRect()
+  }
+  return root.getBoundingClientRect()
+}
+
+// 设计说明：
+// 1. 触发区域改成“探索者滚动视口的顶部一段距离”，而不是隐藏后的 8px 细条，避免工具条实际上不可达。
+// 2. 这里使用 notebook 的滚动宿主边界作为基准，这样文档滚动很深时，鼠标靠近当前可视区顶部依然能唤起工具条。
+const handleNotebookRootMouseMove = (event) => {
+  const triggerRect = resolveNotebookToolbarTriggerRect()
+  if (!triggerRect) return
+  const offsetFromTop = Number(event?.clientY || 0) - triggerRect.top
+  if (offsetFromTop <= NOTEBOOK_TOP_TOOLBAR_TRIGGER_DISTANCE) {
+    revealNotebookTopToolbar('root-mouse-near-top')
+    return
+  }
+  if (offsetFromTop >= NOTEBOOK_TOP_TOOLBAR_HIDE_DISTANCE) {
+    scheduleHideNotebookTopToolbar('root-mouse-away-from-top')
+  }
+}
+
+const handleNotebookRootMouseLeave = () => {
+  scheduleHideNotebookTopToolbar('root-mouseleave')
 }
 
 const normalizeNotebookMarkdownText = (markdown = '') => String(markdown || '').replace(/\r\n?/g, '\n')
@@ -2259,6 +2347,7 @@ const focusNotebookSearchMatchAt = (index, { scroll = true } = {}) => {
 }
 
 const openNotebookSearch = async () => {
+  revealNotebookTopToolbar('open-search')
   notebookSearchVisible.value = true
   logger.info('[Notebook] open search panel')
   await nextTick()
@@ -2273,6 +2362,7 @@ const closeNotebookSearch = () => {
   notebookSearchKeyword.value = ''
   logger.info('[Notebook] close search panel')
   clearNotebookSearchHighlights()
+  scheduleHideNotebookTopToolbar('close-search')
 }
 
 const focusNextNotebookSearchMatch = () => {
@@ -4595,6 +4685,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearNotebookTopToolbarHideTimer()
   if (notebookSearchIndexSyncTimer) {
     window.clearTimeout(notebookSearchIndexSyncTimer)
     notebookSearchIndexSyncTimer = 0
@@ -4669,8 +4760,8 @@ defineExpose({
   --guaxi-notebook-danger: color-mix(in srgb, #ef4444 14%, var(--guaxi-panel-bg, #ffffff) 86%);
   --guaxi-notebook-focus-ring: rgba(59, 130, 246, 0.2);
   --guaxi-notebook-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
-  --guaxi-notebook-sticky-top: 12px;
-  --guaxi-notebook-toolbar-sticky-height: 52px;
+  --guaxi-notebook-sticky-top: 6px;
+  --guaxi-notebook-toolbar-shell-height: 8px;
   --guaxi-notebook-toolbar-max-width: min(100%, 520px);
   /* 设计说明：
    * 1. 探索模式整体字体统一追随主编辑器，避免 Markdown/Python/变量面板各自使用不同字族。
@@ -4722,25 +4813,62 @@ defineExpose({
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
 }
 
-.guaxi-notebook__toolbar {
+.guaxi-notebook.is-top-toolbar-visible {
+  --guaxi-notebook-toolbar-shell-height: 50px;
+}
+
+.guaxi-notebook__toolbar-shell {
   position: sticky;
   top: var(--guaxi-notebook-sticky-top);
   z-index: 26;
   display: flex;
+  justify-content: center;
+  height: var(--guaxi-notebook-toolbar-shell-height);
+  min-height: var(--guaxi-notebook-toolbar-shell-height);
+  margin: 0 auto 2px;
+  transition: height 0.18s ease, min-height 0.18s ease;
+  overflow: visible;
+}
+
+.guaxi-notebook__toolbar {
+  position: absolute;
+  inset: 0 auto auto 50%;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: fit-content;
-  max-width: var(--guaxi-notebook-toolbar-max-width);
-  margin: 0 auto;
-  padding: 6px 10px;
+  /* 设计说明：
+   * 1. 绝对定位元素搭配 `fit-content` 时，浏览器会走 shrink-to-fit 计算，视觉上容易出现底板宽度比按钮行更短。
+   * 2. 这里改成按内容宽度强制撑开，再给一个可视区上限，保证顶部工具条既能完整包裹 icon，也不会在窄窗口冲出容器。
+   */
+  width: max-content;
+  min-width: max-content;
+  max-width: min(var(--guaxi-notebook-toolbar-max-width), calc(100% - 24px));
+  margin: 0;
+  /* 设计说明：
+   * 1. 顶部工具条需要明确留出上下呼吸感，否则 30px 的 icon 按钮会显得比背景条更高。
+   * 2. 这里同步提高内边距和最小高度，让“底板”稳定包住整排入口，避免出现按钮悬在条外的观感。
+   */
+  min-height: 42px;
+  padding: 6px 12px;
+  box-sizing: border-box;
   backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% + 8px));
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.guaxi-notebook__toolbar-shell.is-visible .guaxi-notebook__toolbar {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
 }
 
 .guaxi-notebook__search-panel-shell {
   position: sticky;
-  top: calc(var(--guaxi-notebook-sticky-top) + var(--guaxi-notebook-toolbar-sticky-height));
+  top: calc(var(--guaxi-notebook-sticky-top) + var(--guaxi-notebook-toolbar-shell-height));
   z-index: 24;
-  min-height: 48px;
+  min-height: 42px;
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
@@ -4756,7 +4884,7 @@ defineExpose({
   flex-wrap: wrap;
   width: fit-content;
   min-height: 40px;
-  margin-top: 4px;
+  margin-top: 2px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 86%, transparent);
   border-radius: 12px;
@@ -4853,7 +4981,9 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-wrap: wrap;
+  width: max-content;
+  min-width: max-content;
+  flex-wrap: nowrap;
   gap: 8px;
 }
 
@@ -5767,8 +5897,37 @@ defineExpose({
 }
 
 @media (max-width: 1100px) {
-  .guaxi-notebook__toolbar,
+  .guaxi-notebook__toolbar-shell,
+  .guaxi-notebook.is-top-toolbar-visible {
+    --guaxi-notebook-toolbar-shell-height: 50px;
+  }
+
+  /* 设计说明：
+   * 1. 顶部中间工具条承担运行、保存等高频操作，窄视口下仍需要保持横向一排，避免入口被挤成纵向难以扫视。
+   * 2. Python Cell 工具条仍保留纵向折叠能力，因为它内容更长，窄屏时改成列布局更容易容纳。
+   */
+  .guaxi-notebook__toolbar {
+    position: relative;
+    inset: auto;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .guaxi-notebook__toolbar-main {
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
   .guaxi-notebook__python-toolbar {
+    position: relative;
+    inset: auto;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
     align-items: flex-start;
     flex-direction: column;
   }
