@@ -4620,6 +4620,25 @@ defineExpose({
   color: var(--guaxi-notebook-text);
 }
 
+/* 设计说明：
+ * 1. Explorer 模式下也需要区分“Markdown 渲染器生成的普通段落”和“作者手写的 HTML 段落”。
+ * 2. 对于显式带 `align` 的 HTML 段落，这里恢复其原始对齐语义，避免被后续基础样式吞掉。
+ */
+.guaxi-notebook__markdown-preview :deep(p[align='center']),
+.guaxi-notebook__rich.markdown-body :deep(p[align='center']) {
+  text-align: center !important;
+}
+
+.guaxi-notebook__markdown-preview :deep(p[align='right']),
+.guaxi-notebook__rich.markdown-body :deep(p[align='right']) {
+  text-align: right !important;
+}
+
+.guaxi-notebook__markdown-preview :deep(p[align='left']),
+.guaxi-notebook__rich.markdown-body :deep(p[align='left']) {
+  text-align: left !important;
+}
+
 .guaxi-notebook__markdown-preview :deep(*),
 .guaxi-notebook__rich.markdown-body :deep(*) {
   font-family: var(--guaxi-notebook-font);
@@ -4634,8 +4653,15 @@ defineExpose({
   text-underline-offset: 2px;
 }
 
-.guaxi-notebook__markdown-preview :deep(img),
-.guaxi-notebook__rich.markdown-body :deep(img) {
+/* 设计说明：
+ * 1. 这里的自动居中只服务于 Markdown 语法生成的图片与媒体组。
+ * 2. 手写 HTML 中的图片布局需要交给作者自己的段落 / 行内结构控制，不能再被统一 `margin:auto`
+ *    覆盖，否则徽章组、Logo 组会被错误地堆叠并居中。
+ */
+.guaxi-notebook__markdown-preview :deep(.md-paragraph img),
+.guaxi-notebook__rich.markdown-body :deep(.md-paragraph img),
+.guaxi-notebook__markdown-preview :deep(.guaxi-media-group__image),
+.guaxi-notebook__rich.markdown-body :deep(.guaxi-media-group__image) {
   display: block;
   max-width: 100%;
   height: auto;
@@ -4649,6 +4675,26 @@ defineExpose({
   display: block;
   margin-left: auto;
   margin-right: auto;
+}
+
+/* 设计说明：
+ * 1. 对于作者直接写进 Markdown 的 HTML 图片块，需要保留其 inline / badge 排版能力。
+ * 2. 因此带 `align` / `style="text-align"` 的段落里，把图片恢复为 inline-block，
+ *    由段落自身的对齐属性来控制最终布局。
+ */
+.guaxi-notebook__markdown-preview :deep(p[align] > img),
+.guaxi-notebook__markdown-preview :deep(p[align] > a > img),
+.guaxi-notebook__markdown-preview :deep(p[style*='text-align'] > img),
+.guaxi-notebook__markdown-preview :deep(p[style*='text-align'] > a > img),
+.guaxi-notebook__rich.markdown-body :deep(p[align] > img),
+.guaxi-notebook__rich.markdown-body :deep(p[align] > a > img),
+.guaxi-notebook__rich.markdown-body :deep(p[style*='text-align'] > img),
+.guaxi-notebook__rich.markdown-body :deep(p[style*='text-align'] > a > img) {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  margin: 0;
+  vertical-align: middle;
 }
 
 .guaxi-notebook__markdown-preview :deep(.guaxi-media-group),

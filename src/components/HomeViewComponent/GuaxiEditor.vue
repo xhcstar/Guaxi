@@ -18145,6 +18145,23 @@ onUnmounted(() => {
   align-items: normal !important;
 }
 
+/* 设计说明：
+ * 1. 预览区默认会把段落文本重新拉回普通文档流，但作者手写的 HTML 里如果显式写了 `align`
+ *    或 `style="text-align:..."`，就应当尊重其原始布局意图。
+ * 2. 这里单独为带 `align` 的段落恢复对应的文本对齐，避免它被上面的基础重置覆盖。
+ */
+.preview :deep(p[align='center']) {
+  text-align: center !important;
+}
+
+.preview :deep(p[align='right']) {
+  text-align: right !important;
+}
+
+.preview :deep(p[align='left']) {
+  text-align: left !important;
+}
+
 .preview :deep(.md-paragraph > a:not(:only-child)),
 .preview :deep(p > a:not(:only-child)) {
   display: inline !important;
@@ -19663,8 +19680,14 @@ onUnmounted(() => {
  *    所以预览区图片规则实际上没有命中，表现出来就是图片始终靠左。
  * 3. 预览内容直接通过 `v-html` 注入到 `.preview` 容器下，使用普通后代选择器即可准确生效。
  */
-.preview img,
-img {
+/* 设计说明：
+ * 1. 自动居中的图片规则只应作用于 Markdown 渲染器生成的普通段落与媒体组，
+ *    不能全局覆盖作者手写 HTML 的图片布局，否则像徽章组这类 inline 图片会被错误拆成一列。
+ * 2. 因此这里去掉裸 `img` 选择器，只保留 Markdown 段落和媒体组的图片约束。
+ */
+.preview .md-paragraph img,
+.preview .guaxi-media-group__image,
+.preview li > p img {
   max-width: 100%;
   height: auto;
   display: block;
@@ -19676,6 +19699,23 @@ img {
   display: block;
   margin-left: auto;
   margin-right: auto;
+}
+
+/* 设计说明：
+ * 1. 对于手写 HTML 段落（例如 `<p align="center"><a><img></a>...</p>`），
+ *    图片常常需要保持 inline / inline-block，交给段落自身的对齐方式控制。
+ * 2. 这里把带 `align` / `style` 的段落中的图片恢复为 inline-block，避免全局 block 图片规则
+ *    把徽章、Logo 组错误地一张一行展开。
+ */
+.preview p[align] > img,
+.preview p[align] > a > img,
+.preview p[style*='text-align'] > img,
+.preview p[style*='text-align'] > a > img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  margin: 0;
+  vertical-align: middle;
 }
 
 /* 设计说明：
