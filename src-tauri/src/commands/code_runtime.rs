@@ -15,10 +15,24 @@ use tracing::{info, warn};
 use uuid::Uuid;
 use zip::ZipArchive;
 
+#[cfg(all(windows, not(debug_assertions)))]
+use std::os::windows::process::CommandExt;
+
 static PY_WORKER_STATE: OnceLock<Mutex<Option<PythonWorkerState>>> = OnceLock::new();
 
 const PY_WORKER_FILE_NAME: &str = "guaxi_python_worker.py";
 const PY_WORKER_SOURCE: &str = include_str!("../../scripts/guaxi_python_worker.py");
+
+#[cfg(all(windows, not(debug_assertions)))]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn apply_python_process_no_window(cmd: &mut Command) {
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(all(windows, not(debug_assertions))))]
+fn apply_python_process_no_window(_cmd: &mut Command) {}
 
 #[derive(Debug, Deserialize)]
 pub struct PyExecRequest {
@@ -413,6 +427,12 @@ fn inspect_runtime_archive_path(zip_path: &Path) -> Result<PythonRuntimeArchiveI
 }
 
 fn command_output_trimmed(mut command: Command) -> Result<String, String> {
+    // 设计说明：
+    // 1. Python 工作台初始化、状态探测、pip 探测都会频繁走 `Command::output()`。
+    // 2. Windows release 下如果不显式设置 `CREATE_NO_WINDOW`，这些短命令会不断闪出控制台窗口；
+    //    dev 模式通常不明显，但打包后体验会很差。
+    // 3. 这里统一在公共出口加一层无窗口配置，避免后续新增探测命令时再次漏配。
+    apply_python_process_no_window(&mut command);
     let output = command
         .output()
         .map_err(|e| format!("spawn process failed: {e}"))?;
@@ -469,6 +489,7 @@ fn resolve_python_base_launch_spec() -> Result<PythonLaunchSpec, String> {
     for (program, base_args, source) in fallbacks {
         let mut command = Command::new(&program);
         command.args(&base_args).arg("--version");
+        apply_python_process_no_window(&mut command);
         if command.output().is_ok() {
             return Ok(PythonLaunchSpec {
                 program,
@@ -577,6 +598,7 @@ fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, Str
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .current_dir(&spec.runtime_dir);
+    apply_python_process_no_window(&mut command);
 
     let mut child = command
         .spawn()
@@ -1076,6 +1098,7 @@ pub async fn python_runtime_install_packages(
             .args(&packages)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        apply_python_process_no_window(&mut command);
         let output = command
             .output()
             .map_err(|e| format!("install python packages failed: {e}"))?;
@@ -1156,6 +1179,7 @@ pub async fn python_runtime_manage_packages(
             .args(&pip_args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        apply_python_process_no_window(&mut command);
         let output = command
             .output()
             .map_err(|e| format!("manage python packages failed: {e}"))?;
