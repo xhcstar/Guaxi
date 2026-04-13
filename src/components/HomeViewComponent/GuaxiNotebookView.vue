@@ -5098,7 +5098,7 @@ defineExpose({
 .guaxi-notebook__python-layout {
   display: grid;
   gap: 6px;
-  padding: 6px 10px 8px;
+  padding: 0px 0px 0px;
 }
 
 .guaxi-notebook__markdown-surface {
