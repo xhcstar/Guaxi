@@ -1106,6 +1106,11 @@ import {
   resetLspDisabled
 } from '../../monaco/lspClient'
 import { LSP_SUPPORTED_LANGUAGES } from '../../monaco/lspCapabilities'
+import {
+  retainVsCodeTextModel,
+  releaseVsCodeTextModel,
+  disposeAllVsCodeTextModelsForOwner,
+} from '../../monaco/vscodeModelBridge'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -1812,6 +1817,13 @@ let settingRealtimeVditorValue = false;
 let sourceEditorProgrammaticSyncDepth = 0;
 let realtimeVditorLinkInterceptorCleanup = null;
 const REALTIME_VDITOR_INIT_TIMEOUT_MS = 12000
+const PRIMARY_EDITOR_VSCODE_MODEL_OWNER = 'guaxi-editor-primary'
+const SECONDARY_EDITOR_VSCODE_MODEL_OWNER = 'guaxi-editor-secondary'
+
+const getMarkdownFenceVscodeModelOwner = (languageId) => {
+  const key = String(languageId || '').trim().toLowerCase() || 'unknown'
+  return `guaxi-editor-markdown-fence:${key}`
+}
 
 const getLocalVditorCdn = () => {
   // Vditor appends `/dist/...` internally, so the CDN value here must point to
@@ -5728,11 +5740,31 @@ const prepareEmbeddedVirtualModel = (embeddedCtx) => {
   if (!virtualModel) return null;
 
   virtualModel.setValue(embeddedCtx.blockText || '');
+  void retainVsCodeTextModel({
+    resource: virtualModel.uri,
+    content: virtualModel.getValue(),
+    languageId: embeddedCtx.languageId,
+    owner: getMarkdownFenceVscodeModelOwner(embeddedCtx.languageId),
+    reason: 'embedded-virtual-model-prepare',
+  })
 
   const hostEditor = getEmbeddedHostEditor();
   if (!hostEditor) return null;
 
-  initLspClient(hostEditor, embeddedCtx.languageId, virtualModel.uri.toString());
+  // 设计说明：
+  // 1. Markdown fenced code block 里的补全必须使用 fence 自己的虚拟文档 URI，
+  //    不能复用宿主 Markdown 文档 URI，否则 Python/C++ 等 LSP 会一直在错误文档上下文里初始化。
+  // 2. workspace 仍然沿用原始 Markdown 文件所在工作区，这样相对导入、工程上下文和根目录推断还能保持正确。
+  initLspClient(hostEditor, embeddedCtx.languageId, sourceFilePath || virtualModel.uri.toString(), {
+    documentUri: virtualModel.uri.toString(),
+    workspacePath: sourceFilePath || virtualModel.uri.toString(),
+  });
+  logger.info('[EmbeddedLsp] init requested for fenced code block', {
+    languageId: embeddedCtx.languageId,
+    sourceFilePath,
+    documentUri: virtualModel.uri.toString(),
+    workspacePath: sourceFilePath || virtualModel.uri.toString(),
+  })
   return virtualModel;
 };
 
@@ -5751,6 +5783,14 @@ const fetchEmbeddedSemanticTokens = async (embeddedCtx) => {
   if (!ready) return null;
 
   try {
+    await retainVsCodeTextModel({
+      resource: virtualModel.uri,
+      content: virtualModel.getValue(),
+      languageId: embeddedCtx.languageId,
+      owner: getMarkdownFenceVscodeModelOwner(embeddedCtx.languageId),
+      reason: 'embedded-semantic-tokens',
+    })
+
     const [legend, encoded] = await Promise.all([
       getEmbeddedSemanticTokenLegend(virtualModel),
       vscodeCommands.executeCommand(
@@ -6236,6 +6276,7 @@ const getOrCreateMarkdownFenceModelForSource = (languageId, sourceFilePath = '')
   let model = markdownFenceCompletionModels.get(key);
   if (model && !model.isDisposed?.()) {
     if (String(model.uri?.toString?.() || '') !== String(targetUri.toString())) {
+      releaseVsCodeTextModel(model.uri, getMarkdownFenceVscodeModelOwner(key), 'markdown-fence-uri-changed')
       markdownFenceCompletionModels.delete(key)
       model.dispose()
       model = null
@@ -6374,6 +6415,14 @@ const getEmbeddedHostEditor = () => (
 
 const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, positionInBlock, replaceRange, context) => {
   try {
+    await retainVsCodeTextModel({
+      resource: virtualModel.uri,
+      content: virtualModel.getValue(),
+      languageId: virtualModel.getLanguageId?.() || '',
+      owner: getMarkdownFenceVscodeModelOwner(virtualModel.getLanguageId?.() || ''),
+      reason: 'embedded-vscode-completion',
+    })
+
     const triggerCharacter = context?.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter
       ? String(context?.triggerCharacter || '')
       : undefined
@@ -6508,6 +6557,14 @@ const provideEmbeddedSignatureHelp = async (embeddedCtx, context) => {
   if (!ready) return null
 
   try {
+    await retainVsCodeTextModel({
+      resource: virtualModel.uri,
+      content: virtualModel.getValue(),
+      languageId: embeddedCtx.languageId,
+      owner: getMarkdownFenceVscodeModelOwner(embeddedCtx.languageId),
+      reason: 'embedded-signature-help',
+    })
+
     const triggerCharacter = String(context?.triggerCharacter || '')
     const result = await vscodeCommands.executeCommand(
       'vscode.executeSignatureHelpProvider',
@@ -7067,6 +7124,14 @@ const initEditor = () => {
     mouseWheelZoom: true  // 启用鼠标滚轮缩放
   });
 
+  ensureEditorModelBinding(editor, {
+    filePath: String(selectedFile.value?.path || activeTab.value?.path || ''),
+    languageId: language,
+    content: rawContent.value,
+    owner: PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+    reason: 'primary-editor-init',
+  })
+
   void refreshLspEnabledSetting().then(() => {
     enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '')
   })
@@ -7318,6 +7383,14 @@ const ensureSecondaryEditor = () => {
     automaticLayout: true,
   });
 
+  ensureEditorModelBinding(secondaryEditor, {
+    filePath: rightPath || '',
+    languageId: language,
+    content: rightTab?.content || '',
+    owner: SECONDARY_EDITOR_VSCODE_MODEL_OWNER,
+    reason: 'secondary-editor-init',
+  })
+
   enableLspForEditorLanguage(secondaryEditor, language, rightPath || '');
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'init');
   scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'init');
@@ -7407,6 +7480,13 @@ const ensureSecondaryEditor = () => {
       const content = model.getValue()
       rawContent.value = content
       fileTreeStore.updateTabContent(path, content)
+      void retainVsCodeTextModel({
+        resource: model.uri,
+        content,
+        languageId: model.getLanguageId?.() || 'plaintext',
+        owner: SECONDARY_EDITOR_VSCODE_MODEL_OWNER,
+        reason: 'secondary-editor-immediate-sync',
+      })
       logger.debug('[Editor] synced right source content immediately', {
         path,
         length: content.length,
@@ -7456,6 +7536,7 @@ const disposeSecondaryEditor = () => {
   }
 
   if (secondaryEditor) {
+    releaseVsCodeTextModel(secondaryEditor.getModel?.()?.uri, SECONDARY_EDITOR_VSCODE_MODEL_OWNER, 'secondary-editor-dispose')
     secondaryEditor.dispose();
     secondaryEditor = null;
   }
@@ -7843,6 +7924,13 @@ const setupEditorListeners = () => {
       const path = getEditorBoundTabPath(editor);
       rawContent.value = content;
       if (path) fileTreeStore.updateTabContent(path, content);
+      void retainVsCodeTextModel({
+        resource: model.uri,
+        content,
+        languageId: model.getLanguageId?.() || 'plaintext',
+        owner: PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+        reason: 'primary-editor-immediate-sync',
+      })
       logger.debug('[Editor] synced source content immediately', {
         path: String(path || ''),
         length: content.length,
@@ -10130,6 +10218,107 @@ const getEditorBoundTabPath = (targetEditor) => {
   return String(fileTreeStore.activeTab || fileTreeStore.activeTabLeft || '').trim()
 }
 
+const isBindableEditorFilePath = (filePath) => {
+  const normalized = String(filePath || '').trim()
+  if (!normalized) return false
+  if (normalized.startsWith('file://')) return true
+  if (/^[a-zA-Z]:[\\/]/.test(normalized)) return true
+  if (normalized.startsWith('/')) return true
+  return normalized.startsWith('\\')
+}
+
+const shouldDisposeTransientEditorModel = (targetModel) => {
+  const scheme = String(targetModel?.uri?.scheme || '').trim().toLowerCase()
+  return scheme === 'inmemory' || scheme === 'untitled'
+}
+
+const resolveEditorModelUri = (filePath) => {
+  const normalized = String(filePath || '').trim()
+  if (!isBindableEditorFilePath(normalized)) return null
+  try {
+    return normalized.startsWith('file://')
+      ? monaco.Uri.parse(normalized)
+      : monaco.Uri.file(normalized)
+  } catch (error) {
+    logger.warn('[Editor] resolveEditorModelUri failed', {
+      filePath: normalized,
+      error,
+    })
+    return null
+  }
+}
+
+const ensureEditorModelBinding = (targetEditor, options = {}) => {
+  if (!targetEditor) return null
+
+  const filePath = String(options.filePath || '').trim()
+  const modelOwner = String(options.owner || '').trim()
+  const languageId = String(
+    options.languageId
+      || targetEditor.getModel?.()?.getLanguageId?.()
+      || 'plaintext'
+  ).trim() || 'plaintext'
+  const desiredContent = String(options.content ?? '')
+  const targetUri = resolveEditorModelUri(filePath)
+  const currentModel = targetEditor.getModel?.() || null
+
+  if (!targetUri) {
+    if (modelOwner && currentModel?.uri) {
+      releaseVsCodeTextModel(currentModel.uri, modelOwner, 'editor-model-unbound')
+    }
+    if (currentModel && currentModel.getLanguageId?.() !== languageId) {
+      monaco.editor.setModelLanguage(currentModel, languageId)
+    }
+    return currentModel
+  }
+
+  let nextModel = monaco.editor.getModel(targetUri)
+  if (!nextModel) {
+    nextModel = monaco.editor.createModel(desiredContent, languageId, targetUri)
+    logger.info('[Editor] created bound Monaco model', {
+      reason: String(options.reason || 'manual'),
+      filePath,
+      languageId,
+      uri: targetUri.toString(),
+    })
+  } else {
+    if (nextModel.getLanguageId?.() !== languageId) {
+      monaco.editor.setModelLanguage(nextModel, languageId)
+    }
+    if (typeof options.content !== 'undefined' && nextModel.getValue() !== desiredContent) {
+      nextModel.setValue(desiredContent)
+    }
+  }
+
+  if (currentModel !== nextModel) {
+    if (modelOwner && currentModel?.uri) {
+      releaseVsCodeTextModel(currentModel.uri, modelOwner, 'editor-model-rebound')
+    }
+    targetEditor.setModel(nextModel)
+    logger.info('[Editor] rebound editor model to file URI', {
+      reason: String(options.reason || 'manual'),
+      filePath,
+      languageId,
+      uri: nextModel.uri?.toString?.() || '',
+    })
+    if (currentModel && shouldDisposeTransientEditorModel(currentModel)) {
+      currentModel.dispose()
+    }
+  }
+
+  if (modelOwner) {
+    void retainVsCodeTextModel({
+      resource: nextModel.uri,
+      content: desiredContent,
+      languageId,
+      owner: modelOwner,
+      reason: String(options.reason || 'manual'),
+    })
+  }
+
+  return nextModel
+}
+
 const updateEditorContent = (content) => {
   const nextContent = content ?? '';
   rawContent.value = nextContent;
@@ -10149,7 +10338,15 @@ const updateEditorContent = (content) => {
     readOnly: !!activeTab.value?.unsupported,
   });
 
-  const model = targetEditor.getModel();
+  const boundPath = getEditorBoundTabPath(targetEditor)
+  const boundLanguage = resolveMonacoLanguageByPath(boundPath || selectedFile.value?.path || '')
+  const model = ensureEditorModelBinding(targetEditor, {
+    filePath: boundPath,
+    languageId: boundLanguage,
+    content: nextContent,
+    owner: targetEditor === secondaryEditor ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+    reason: 'update-editor-content',
+  }) || targetEditor.getModel();
   const currentValue = model ? model.getValue() : targetEditor.getValue();
   if (currentValue === nextContent) return;
 
@@ -14640,7 +14837,13 @@ watch(selectedFile, async (newFile) => {
 
     const targetEditor = getActiveEditor();
     if (targetEditor) {
-      const model = targetEditor.getModel();
+      const model = ensureEditorModelBinding(targetEditor, {
+        filePath: newFile.path || '',
+        languageId: language,
+        content: rawContent.value,
+        owner: targetEditor === secondaryEditor ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+        reason: 'selected-file-changed',
+      }) || targetEditor.getModel();
       if (model) {
         monaco.editor.setModelLanguage(model, language);
       }
@@ -14660,6 +14863,8 @@ watch(selectedFile, async (newFile) => {
 
     await initGitService()
   } else {
+    disposeAllVsCodeTextModelsForOwner(PRIMARY_EDITOR_VSCODE_MODEL_OWNER, 'selected-file-cleared')
+    disposeAllVsCodeTextModelsForOwner(SECONDARY_EDITOR_VSCODE_MODEL_OWNER, 'selected-file-cleared')
     if (editor) {
       editor.setValue('');
       editor.getModel().setValue('');
@@ -16347,6 +16552,11 @@ onUnmounted(() => {
 
   markdownFenceCompletionModels.forEach((m) => {
     try {
+      releaseVsCodeTextModel(
+        m?.uri,
+        getMarkdownFenceVscodeModelOwner(m?.getLanguageId?.() || ''),
+        'guaxi-editor-unmount'
+      )
       m.dispose?.()
     } catch {
     }
@@ -16356,6 +16566,8 @@ onUnmounted(() => {
   disposeFeatureDisposables(filesystemPathCompletionDisposables)
   markdownFeaturesRegistered = false
   filesystemPathCompletionRegistered = false
+  disposeAllVsCodeTextModelsForOwner(PRIMARY_EDITOR_VSCODE_MODEL_OWNER, 'guaxi-editor-unmount')
+  disposeAllVsCodeTextModelsForOwner(SECONDARY_EDITOR_VSCODE_MODEL_OWNER, 'guaxi-editor-unmount')
   disposeAllLspClients()
 });
 

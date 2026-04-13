@@ -35,8 +35,18 @@ const LSP_FAILURE_THRESHOLD = 3
 const LSP_STOP_TIMEOUT_MS = 350
 const lspFailureTracker = new Map<string, { count: number; firstAt: number }>()
 
+const LSP_LANGUAGE_ALIASES: Record<string, string> = {
+  ra_syntax_tree: 'rust',
+  javascriptreact: 'javascript',
+  typescriptreact: 'typescript',
+  shellscript: 'shell',
+  sh: 'shell',
+  tex: 'latex',
+}
+
 const normalizeLanguageId = (languageId: string) =>
-  String(languageId || '').trim().toLowerCase()
+  LSP_LANGUAGE_ALIASES[String(languageId || '').trim().toLowerCase()]
+  || String(languageId || '').trim().toLowerCase()
 
 const getLspClientKey = (languageId: string) =>
   String(getLspServerForLanguage(languageId) || normalizeLanguageId(languageId)).trim().toLowerCase()
@@ -59,6 +69,17 @@ type LspConnectionStatePayload = {
   state: LspConnectionStateValue
   reason?: string
   updatedAt: number
+}
+
+type ResolvedLspDocumentContext = {
+  documentUri: string
+  workspacePath: string | null
+  workspaceUri: string | null
+}
+
+type InitLspClientOptions = {
+  workspacePath?: string
+  documentUri?: string
 }
 
 type OutputChannelLike = {
@@ -208,6 +229,13 @@ const stopClientSafely = async (client: MonacoLanguageClient | null) => {
   try {
     const disposableClient = client as MonacoLanguageClient & {
       stop?: (timeout?: number) => Promise<void> | void
+      state?: unknown
+      _state?: unknown
+    }
+    const currentState = String(disposableClient.state || disposableClient._state || '').toLowerCase()
+    if (currentState.includes('starting')) {
+      logger.warn('[LSP] skip stop while client is still starting', { currentState })
+      return
     }
 
     if (typeof disposableClient.stop === 'function') {
@@ -249,6 +277,72 @@ const isLikelyFilePath = (filePath: string) => {
   return path.startsWith('/')
 }
 
+const getParentDirectoryPath = (filePath: string) => {
+  const normalized = String(filePath || '').trim()
+  if (!normalized) return null
+  const sanitized = normalized.replace(/[\\/]+$/, '')
+  const slashIndex = Math.max(sanitized.lastIndexOf('/'), sanitized.lastIndexOf('\\'))
+  if (slashIndex <= 0) return null
+  return sanitized.slice(0, slashIndex)
+}
+
+const resolveWorkspacePath = (rawPath: string) => {
+  const normalized = String(rawPath || '').trim()
+  if (!normalized) return null
+
+  if (normalized.startsWith('file://')) {
+    try {
+      const uri = monaco.Uri.parse(normalized)
+      const fsPath = String(uri.fsPath || '').trim()
+      if (!isLikelyFilePath(fsPath)) return null
+      return getParentDirectoryPath(fsPath)
+    } catch (error) {
+      logger.warn('[LSP] failed to resolve workspace path from file URI', { rawPath: normalized, error })
+      return null
+    }
+  }
+
+  if (!isLikelyFilePath(normalized)) return null
+  return getParentDirectoryPath(normalized)
+}
+
+const resolveDocumentUri = (rawPath: string) => {
+  const normalized = String(rawPath || '').trim()
+  if (!normalized) return ''
+
+  if (normalized.startsWith('file://')) {
+    try {
+      return monaco.Uri.parse(normalized).toString()
+    } catch (error) {
+      logger.warn('[LSP] failed to normalize existing file URI', { rawPath: normalized, error })
+      return normalized
+    }
+  }
+
+  if (!isLikelyFilePath(normalized)) return normalized
+
+  try {
+    return monaco.Uri.file(normalized).toString()
+  } catch (error) {
+    logger.warn('[LSP] failed to convert file path into Monaco URI', { rawPath: normalized, error })
+    return normalized
+  }
+}
+
+const resolveLspDocumentContext = (
+  documentTarget: string,
+  workspaceTarget: string
+): ResolvedLspDocumentContext => {
+  const documentUri = resolveDocumentUri(documentTarget)
+  const workspacePath = resolveWorkspacePath(workspaceTarget || documentTarget)
+  const workspaceUri = workspacePath ? resolveDocumentUri(workspacePath) : null
+  return {
+    documentUri,
+    workspacePath,
+    workspaceUri,
+  }
+}
+
 const recordLspFailure = (languageId: string, reason: string, error?: unknown) => {
   const lang = getLspClientKey(languageId)
   if (!lang) return false
@@ -288,7 +382,8 @@ export function resetLspDisabled(languageId?: string) {
 export function initLspClient(
   editor: monaco.editor.IStandaloneCodeEditor,
   languageId: string,
-  filePath: string
+  filePath: string,
+  options: InitLspClientOptions = {}
 ) {
   if (!editor || !languageId) return
 
@@ -300,16 +395,33 @@ export function initLspClient(
   const clientKey = getLspClientKey(normalizedLanguageId)
   const documentSelector = getLspDocumentSelectorForLanguage(normalizedLanguageId)
   const startupLanguageId = normalizeLanguageId(documentSelector[0]?.language || normalizedLanguageId)
+  const modelDocumentUri = String(editor.getModel?.()?.uri?.toString?.() || '').trim()
+  const documentTarget = String(options.documentUri || modelDocumentUri || filePath || '').trim()
+  const workspaceTarget = String(options.workspacePath || filePath || '').trim()
+  const resolvedDocumentContext = resolveLspDocumentContext(documentTarget, workspaceTarget)
 
-  const normalizedFilePath = String(filePath || '').trim()
-  if (!isLikelyFilePath(normalizedFilePath)) {
+  if (!resolvedDocumentContext.documentUri) {
     getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
       setLspConnectionState(lang, 'disconnected', 'invalid-file-path')
     })
-    logger.warn('[LSP] skipped invalid file path', { languageId: normalizedLanguageId, filePath: normalizedFilePath })
+    logger.warn('[LSP] skipped invalid file path', {
+      languageId: normalizedLanguageId,
+      filePath,
+      modelDocumentUri,
+      documentTarget,
+      workspaceTarget,
+    })
     lspRetryBlockedUntil.set(clientKey, Date.now() + LSP_RETRY_BACKOFF_MS)
     return
   }
+
+  logger.info('[LSP] init request accepted', {
+    languageId: normalizedLanguageId,
+    clientKey,
+    documentUri: resolvedDocumentContext.documentUri,
+    workspacePath: resolvedDocumentContext.workspacePath,
+    workspaceUri: resolvedDocumentContext.workspaceUri,
+  })
 
   if (lspDisabled.has(normalizedLanguageId)) {
     return
@@ -407,9 +519,19 @@ export function initLspClient(
             outputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
             traceOutputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
             initializationOptions: {
-              workspaceFolders: [],
-              filePath,
-          },
+              workspaceFolders: resolvedDocumentContext.workspaceUri && resolvedDocumentContext.workspacePath
+                ? [{
+                    uri: resolvedDocumentContext.workspaceUri,
+                    name: resolvedDocumentContext.workspacePath.split(/[\\/]/).pop() || resolvedDocumentContext.workspacePath,
+                  }]
+                : [],
+              filePath: resolvedDocumentContext.workspacePath || filePath,
+              documentUri: resolvedDocumentContext.documentUri,
+              workspacePath: resolvedDocumentContext.workspacePath,
+              workspaceUri: resolvedDocumentContext.workspaceUri,
+              rootUri: resolvedDocumentContext.workspaceUri,
+              rootPath: resolvedDocumentContext.workspacePath,
+            },
           // Avoid restart loop/noisy reconnect logs when socket is intentionally closed.
           errorHandler: {
             error: () => ({ action: ErrorAction.Continue }),
@@ -465,11 +587,23 @@ export function initLspClient(
       })
   }
 
-  webSocket.onclose = () => {
+  webSocket.onclose = (event) => {
+    logger.warn('[LSP] websocket closed', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      code: Number(event?.code || 0),
+      reason: String(event?.reason || ''),
+      wasClean: !!event?.wasClean,
+    })
     cleanup('socket-close')
   }
 
-  webSocket.onerror = () => {
+  webSocket.onerror = (event) => {
+    logger.warn('[LSP] websocket errored', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      eventType: String(event?.type || 'error'),
+    })
     recordLspFailure(languageId, 'socket-error')
     cleanup('socket-error')
   }

@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "extensions": [
+    {
+      "id": "detachhead.basedpyright",
+      "display_name": "Based Pyright",
+      "description": "Python language intelligence powered by Based Pyright.",
+      "open_vsx": "detachhead.basedpyright",
+      "languages": ["python"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "basedpyright",
+        "runtime": "node_binary",
+        "bin_name": "basedpyright-langserver",
+        "args": ["--stdio"],
+        "entry_paths": [],
+        "resolve_order": ["extension_bin", "slidev_env_bin", "downloadable_server"],
+        "fallback_server": "basedpyright",
+        "fallback_bin_name": "basedpyright-langserver"
+      }
+    },
+    {
+      "id": "ms-vscode.vscode-typescript-next",
+      "display_name": "TypeScript and JavaScript Language Features",
+      "description": "TypeScript/JavaScript language features bridged through the LSP-first runtime.",
+      "open_vsx": "ms-vscode.vscode-typescript-next",
+      "languages": ["javascript", "typescript"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "typescript-language-server",
+        "runtime": "node_binary",
+        "bin_name": "typescript-language-server",
+        "args": ["--stdio"],
+        "entry_paths": [],
+        "resolve_order": ["extension_bin", "slidev_env_bin", "downloadable_server"],
+        "fallback_server": "typescript-language-server",
+        "fallback_bin_name": "typescript-language-server"
+      }
+    },
+    {
+      "id": "llvm-vs-code-extensions.vscode-clangd",
+      "display_name": "clangd",
+      "description": "C/C++ language server integration for clangd.",
+      "open_vsx": "llvm-vs-code-extensions.vscode-clangd",
+      "languages": ["c", "cpp"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "clangd",
+        "runtime": "binary",
+        "bin_name": "clangd",
+        "args": ["--enable-config"],
+        "entry_paths": [
+          "bin/clangd.exe",
+          "clangd.exe",
+          "bin/clangd",
+          "clangd"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "clangd",
+        "fallback_bin_name": "clangd"
+      }
+    },
+    {
+      "id": "rust-lang.rust-analyzer",
+      "display_name": "rust-analyzer",
+      "description": "Rust language support via rust-analyzer.",
+      "open_vsx": "rust-lang.rust-analyzer",
+      "languages": ["rust"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "rust-analyzer",
+        "runtime": "binary",
+        "bin_name": "rust-analyzer",
+        "args": [],
+        "entry_paths": [
+          "server/rust-analyzer.exe",
+          "rust-analyzer.exe",
+          "server/rust-analyzer",
+          "rust-analyzer"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "rust-analyzer",
+        "fallback_bin_name": "rust-analyzer"
+      }
+    },
+    {
+      "id": "sumneko.lua",
+      "display_name": "Lua Language Server",
+      "description": "Lua language intelligence backed by LuaLS.",
+      "open_vsx": "sumneko.lua",
+      "languages": ["lua"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "lua-language-server",
+        "runtime": "binary",
+        "bin_name": "lua-language-server",
+        "args": [],
+        "entry_paths": [
+          "server/bin/lua-language-server.exe",
+          "bin/lua-language-server.exe",
+          "server/bin/lua-language-server",
+          "bin/lua-language-server"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "lua-language-server",
+        "fallback_bin_name": "lua-language-server"
+      }
+    },
+    {
+      "id": "latex-lsp.texlab",
+      "display_name": "TexLab",
+      "description": "LaTeX language support powered by TexLab.",
+      "open_vsx": "latex-lsp.texlab",
+      "languages": ["latex"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "texlab",
+        "runtime": "binary",
+        "bin_name": "texlab",
+        "args": [],
+        "entry_paths": [
+          "texlab.exe",
+          "bin/texlab.exe",
+          "texlab",
+          "bin/texlab"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "texlab",
+        "fallback_bin_name": "texlab"
+      }
+    },
+    {
+      "id": "mads-hartmann.bash-ide-vscode",
+      "display_name": "Bash IDE",
+      "description": "Shell language support through bash-language-server.",
+      "open_vsx": "mads-hartmann.bash-ide-vscode",
+      "languages": ["shell"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "bash-language-server",
+        "runtime": "node_binary",
+        "bin_name": "bash-language-server",
+        "args": ["start"],
+        "entry_paths": [],
+        "resolve_order": ["extension_bin", "slidev_env_bin", "downloadable_server"],
+        "fallback_server": "bash-language-server",
+        "fallback_bin_name": "bash-language-server"
+      }
+    },
+    {
+      "id": "ms-vscode.html-language-features",
+      "display_name": "HTML Language Features",
+      "description": "HTML language features with a VSCode-compatible node server layout.",
+      "open_vsx": "ms-vscode.html-language-features",
+      "languages": ["html"],
+      "compatibility_level": "B",
+      "recommended": true,
+      "lsp": {
+        "server_id": "html-ls",
+        "runtime": "node_entry",
+        "bin_name": "",
+        "args": ["--stdio"],
+        "entry_paths": [
+          "server/dist/node/htmlServerMain.js",
+          "dist/node/htmlServerMain.js"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "html-ls",
+        "fallback_bin_name": "html-ls"
+      }
+    },
+    {
+      "id": "artempyanykh.marksman",
+      "display_name": "Marksman",
+      "description": "Markdown language support powered by Marksman.",
+      "open_vsx": "artempyanykh.marksman",
+      "languages": ["markdown"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "marksman",
+        "runtime": "binary",
+        "bin_name": "marksman",
+        "args": ["server"],
+        "entry_paths": [
+          "marksman.exe",
+          "bin/marksman.exe",
+          "marksman",
+          "bin/marksman"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "marksman",
+        "fallback_bin_name": "marksman"
+      }
+    }
+  ]
+}

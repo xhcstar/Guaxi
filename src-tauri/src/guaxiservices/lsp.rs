@@ -20,7 +20,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs as tokio_fs;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -29,6 +29,7 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 use flate2::read::GzDecoder;
 use crate::guaxiservices::bundled_resources;
+use crate::guaxiservices::lsp_extensions;
 use tar::Archive;
 
 #[derive(Debug, Clone)]
@@ -734,6 +735,23 @@ pub async fn install_lsp_server(
 }
 
 async fn prepare_lsp_command(language: &str) -> Result<LspCommandConfig, String> {
+    if let Some(resolved) = lsp_extensions::resolve_lsp_command_for_language(language).await? {
+        info!(
+            language = language,
+            extension_id = resolved.extension_id.as_str(),
+            extension_name = resolved.extension_display_name.as_str(),
+            server_id = resolved.server_id.as_str(),
+            program = resolved.program.as_str(),
+            "resolved LSP runtime from installed extension"
+        );
+        return Ok(LspCommandConfig {
+            program: resolved.program,
+            args: resolved.args,
+            envs: resolved.envs,
+            cwd: resolved.cwd,
+        });
+    }
+
     let entry = lsp_language_entry(language)
         .ok_or_else(|| format!("Unsupported language for LSP: {}", language))?;
 
@@ -791,7 +809,7 @@ impl Actor for LspWsSession {
             cmd.args(cfg.args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null());
+                .stderr(Stdio::piped());
 
             for (key, value) in cfg.envs {
                 cmd.env(key, value);
@@ -804,6 +822,7 @@ impl Actor for LspWsSession {
                 Ok(mut child) => {
                     let stdout = child.stdout.take();
                     let stdin = child.stdin.take();
+                    let stderr = child.stderr.take();
 
                     let stdin_arc = stdin.map(|s| Arc::new(Mutex::new(s)));
 
@@ -843,6 +862,40 @@ impl Actor for LspWsSession {
                                         }
                                     }
                                     Err(_) => break,
+                                }
+                            }
+                        });
+                    }
+
+                    if let Some(stderr) = stderr {
+                        let language_for_stderr = language.clone();
+                        let program_for_stderr = program_for_log.clone();
+                        actix::spawn(async move {
+                            let mut reader = BufReader::new(stderr).lines();
+                            loop {
+                                match reader.next_line().await {
+                                    Ok(Some(line)) => {
+                                        let trimmed = line.trim();
+                                        if trimmed.is_empty() {
+                                            continue;
+                                        }
+                                        warn!(
+                                            language = language_for_stderr.as_str(),
+                                            program = program_for_stderr.as_str(),
+                                            stderr = trimmed,
+                                            "LSP server stderr"
+                                        );
+                                    }
+                                    Ok(None) => break,
+                                    Err(error) => {
+                                        warn!(
+                                            language = language_for_stderr.as_str(),
+                                            program = program_for_stderr.as_str(),
+                                            error = ?error,
+                                            "failed to read LSP server stderr"
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                         });

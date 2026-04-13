@@ -24,6 +24,11 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createLogger } from '../../utils/logger'
+import { initLspClient } from '../../monaco/lspClient'
+import {
+  retainVsCodeTextModel,
+  releaseVsCodeTextModel,
+} from '../../monaco/vscodeModelBridge'
 
 const props = defineProps({
   modelValue: {
@@ -33,6 +38,10 @@ const props = defineProps({
   theme: {
     type: String,
     default: 'light',
+  },
+  documentPath: {
+    type: String,
+    default: '',
   },
   cellKey: {
     type: String,
@@ -56,6 +65,40 @@ let contentSizeDisposable = null
 let focusDisposable = null
 let blurDisposable = null
 let currentAppliedTheme = ''
+let usesVscodeModelBridge = false
+
+const getNotebookPythonModelOwner = () => {
+  const cellKey = String(props.cellKey || 'python-cell').trim() || 'python-cell'
+  const documentPath = String(props.documentPath || '').trim() || 'anonymous-document'
+  return `notebook-python:${documentPath}:${cellKey}`
+}
+
+const buildNotebookPythonVirtualFilePath = () => {
+  const rawCellKey = String(props.cellKey || 'python-cell').trim() || 'python-cell'
+  const safeCellKey = rawCellKey.replace(/[^a-zA-Z0-9_-]/g, '_')
+  const rawDocumentPath = String(props.documentPath || '').trim()
+  if (!rawDocumentPath) {
+    return `file:///guaxi-notebook/${safeCellKey}.py`
+  }
+
+  // 设计说明：
+  // 1. Python cell 也需要稳定 file URI，否则部分语言服务器只会把它当匿名内存文档，补全和诊断都不完整。
+  // 2. 这里和 Markdown cell 保持同一套路由，统一挂到当前文档目录下的虚拟 .guaxi-notebook 子空间。
+  const separator = rawDocumentPath.includes('\\') ? '\\' : '/'
+  const normalizedDocumentPath = rawDocumentPath.replace(/[\\/]+$/, '')
+  const lastSeparatorIndex = Math.max(
+    normalizedDocumentPath.lastIndexOf('/'),
+    normalizedDocumentPath.lastIndexOf('\\')
+  )
+  if (lastSeparatorIndex < 0) {
+    return `file:///guaxi-notebook/${safeCellKey}.py`
+  }
+  const directory = normalizedDocumentPath.slice(0, lastSeparatorIndex)
+  const baseName = normalizedDocumentPath
+    .slice(lastSeparatorIndex + 1)
+    .replace(/\.[^./\\]+$/, '') || 'notebook'
+  return `${directory}${separator}.guaxi-notebook${separator}${baseName}__${safeCellKey}.py`
+}
 
 // 设计说明：
 // 1. Python Cell 在未运行且代码很短时，不应该默认占出大块留白。
@@ -130,7 +173,34 @@ const mountMonacoEditor = async () => {
 
   try {
     monacoRef = await import('monaco-editor')
-    model = monacoRef.editor.createModel(String(props.modelValue || ''), 'python')
+    const virtualFilePath = buildNotebookPythonVirtualFilePath()
+    const virtualUri = String(virtualFilePath || '').startsWith('file://')
+      ? monacoRef.Uri.parse(virtualFilePath)
+      : monacoRef.Uri.file(virtualFilePath)
+    model = await retainVsCodeTextModel({
+      resource: virtualUri,
+      content: String(props.modelValue || ''),
+      languageId: 'python',
+      owner: getNotebookPythonModelOwner(),
+      reason: 'notebook-python-mount',
+    })
+    usesVscodeModelBridge = !!model
+    if (!model) {
+      // 设计说明：
+      // 1. 这里优先走 VSCode model bridge，让 notebook cell 能被补全/hover/LSP 识别。
+      // 2. 只有 bridge 初始化失败时才退回 standalone model，避免编辑器整体不可用。
+      model = monacoRef.editor.createModel(String(props.modelValue || ''), 'python', virtualUri)
+      logger.warn('[NotebookPythonEditor] VSCode model bridge unavailable, fallback to standalone Monaco model', {
+        cellKey: String(props.cellKey || ''),
+        virtualFilePath,
+      })
+    } else {
+      logger.info('[NotebookPythonEditor] retained VSCode model bridge for notebook cell', {
+        cellKey: String(props.cellKey || ''),
+        virtualFilePath,
+        owner: getNotebookPythonModelOwner(),
+      })
+    }
     applyTheme()
     editor = monacoRef.editor.create(host, {
       model,
@@ -192,6 +262,16 @@ const mountMonacoEditor = async () => {
     editorReady.value = true
     await nextTick()
     ensureHostHeight()
+    initLspClient(editor, 'python', virtualFilePath, {
+      workspacePath: String(props.documentPath || '').trim() || virtualFilePath,
+      documentUri: virtualUri.toString(),
+    })
+    logger.info('[NotebookPythonEditor] LSP init requested for notebook cell', {
+      cellKey: String(props.cellKey || ''),
+      language: 'python',
+      virtualFilePath,
+      documentPath: String(props.documentPath || ''),
+    })
     logger.info('[NotebookPythonEditor] mounted Monaco editor', {
       cellKey: String(props.cellKey || ''),
       theme: currentAppliedTheme,
@@ -206,6 +286,7 @@ const mountMonacoEditor = async () => {
 }
 
 const disposeMonacoEditor = () => {
+  const currentModelUri = model?.uri || null
   contentChangeDisposable?.dispose?.()
   contentChangeDisposable = null
   contentSizeDisposable?.dispose?.()
@@ -216,10 +297,15 @@ const disposeMonacoEditor = () => {
   blurDisposable = null
   editor?.dispose?.()
   editor = null
-  model?.dispose?.()
+  if (usesVscodeModelBridge && currentModelUri) {
+    releaseVsCodeTextModel(currentModelUri, getNotebookPythonModelOwner(), 'notebook-python-dispose')
+  } else {
+    model?.dispose?.()
+  }
   model = null
   monacoRef = null
   editorReady.value = false
+  usesVscodeModelBridge = false
 }
 
 const handleFallbackInput = (event) => {

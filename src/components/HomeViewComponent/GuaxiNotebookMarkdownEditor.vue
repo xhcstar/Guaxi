@@ -28,6 +28,11 @@ import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
 import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess.js'
 import { createLogger } from '../../utils/logger'
+import { initLspClient } from '../../monaco/lspClient'
+import {
+  retainVsCodeTextModel,
+  releaseVsCodeTextModel,
+} from '../../monaco/vscodeModelBridge'
 
 const props = defineProps({
   modelValue: {
@@ -37,6 +42,10 @@ const props = defineProps({
   theme: {
     type: String,
     default: 'light',
+  },
+  documentPath: {
+    type: String,
+    default: '',
   },
   cellKey: {
     type: String,
@@ -61,6 +70,40 @@ let focusDisposable = null
 let blurDisposable = null
 let currentAppliedTheme = ''
 let mountMonacoEditorPromise = null
+let usesVscodeModelBridge = false
+
+const getNotebookMarkdownModelOwner = () => {
+  const cellKey = String(props.cellKey || 'markdown-cell').trim() || 'markdown-cell'
+  const documentPath = String(props.documentPath || '').trim() || 'anonymous-document'
+  return `notebook-markdown:${documentPath}:${cellKey}`
+}
+
+const buildNotebookMarkdownVirtualFilePath = () => {
+  const rawCellKey = String(props.cellKey || 'markdown-cell').trim() || 'markdown-cell'
+  const safeCellKey = rawCellKey.replace(/[^a-zA-Z0-9_-]/g, '_')
+  const rawDocumentPath = String(props.documentPath || '').trim()
+  if (!rawDocumentPath) {
+    return `file:///guaxi-notebook/${safeCellKey}.md`
+  }
+
+  // 设计说明：
+  // 1. Explorer/Notebook 模式里的 cell 不是磁盘上的真实文件，但 LSP 对稳定的 file:// URI 更友好。
+  // 2. 这里把 cell 挂到当前文档同目录下的虚拟 .guaxi-notebook 命名空间里，让补全、hover、workspace 推断都更稳定。
+  const separator = rawDocumentPath.includes('\\') ? '\\' : '/'
+  const normalizedDocumentPath = rawDocumentPath.replace(/[\\/]+$/, '')
+  const lastSeparatorIndex = Math.max(
+    normalizedDocumentPath.lastIndexOf('/'),
+    normalizedDocumentPath.lastIndexOf('\\')
+  )
+  if (lastSeparatorIndex < 0) {
+    return `file:///guaxi-notebook/${safeCellKey}.md`
+  }
+  const directory = normalizedDocumentPath.slice(0, lastSeparatorIndex)
+  const baseName = normalizedDocumentPath
+    .slice(lastSeparatorIndex + 1)
+    .replace(/\.[^./\\]+$/, '') || 'notebook'
+  return `${directory}${separator}.guaxi-notebook${separator}${baseName}__${safeCellKey}.md`
+}
 
 // 设计说明：
 // 1. Markdown Cell 进入编辑态后，也应该像正文编辑一样尽量贴合当前内容。
@@ -238,6 +281,20 @@ const mountMonacoEditor = async () => {
       if (existingEditor) {
         editor = existingEditor
         model = editor.getModel?.() || null
+        if (model?.uri) {
+          const retainedModel = await retainVsCodeTextModel({
+            resource: model.uri,
+            content: model.getValue?.() || String(props.modelValue || ''),
+            languageId: model.getLanguageId?.() || 'markdown',
+            owner: getNotebookMarkdownModelOwner(),
+            reason: 'notebook-markdown-reuse-existing-editor',
+          })
+          if (retainedModel) {
+            model = retainedModel
+            editor.setModel(model)
+            usesVscodeModelBridge = true
+          }
+        }
         editorReady.value = true
         ensureHostHeight()
         logger.warn('[NotebookMarkdownEditor] reused existing Monaco editor bound to current host', {
@@ -246,7 +303,34 @@ const mountMonacoEditor = async () => {
         return editor
       }
 
-      model = monacoRef.editor.createModel(String(props.modelValue || ''), 'markdown')
+      const virtualFilePath = buildNotebookMarkdownVirtualFilePath()
+      const virtualUri = String(virtualFilePath || '').startsWith('file://')
+        ? monacoRef.Uri.parse(virtualFilePath)
+        : monacoRef.Uri.file(virtualFilePath)
+      model = await retainVsCodeTextModel({
+        resource: virtualUri,
+        content: String(props.modelValue || ''),
+        languageId: 'markdown',
+        owner: getNotebookMarkdownModelOwner(),
+        reason: 'notebook-markdown-mount',
+      })
+      usesVscodeModelBridge = !!model
+      if (!model) {
+        // 设计说明：
+        // 1. Markdown notebook cell 需要被 VSCode 文档服务识别，代码块内嵌补全才能沿着同一个 URI 工作。
+        // 2. 这里保留 standalone model 兜底，只在 bridge 失败时使用，避免编辑器挂掉。
+        model = monacoRef.editor.createModel(String(props.modelValue || ''), 'markdown', virtualUri)
+        logger.warn('[NotebookMarkdownEditor] VSCode model bridge unavailable, fallback to standalone Monaco model', {
+          cellKey: String(props.cellKey || ''),
+          virtualFilePath,
+        })
+      } else {
+        logger.info('[NotebookMarkdownEditor] retained VSCode model bridge for notebook cell', {
+          cellKey: String(props.cellKey || ''),
+          virtualFilePath,
+          owner: getNotebookMarkdownModelOwner(),
+        })
+      }
       applyTheme()
       editor = monacoRef.editor.create(host, {
         model,
@@ -310,6 +394,16 @@ const mountMonacoEditor = async () => {
       editorReady.value = true
       await nextTick()
       ensureHostHeight()
+      initLspClient(editor, 'markdown', virtualFilePath, {
+        workspacePath: String(props.documentPath || '').trim() || virtualFilePath,
+        documentUri: virtualUri.toString(),
+      })
+      logger.info('[NotebookMarkdownEditor] LSP init requested for notebook cell', {
+        cellKey: String(props.cellKey || ''),
+        language: 'markdown',
+        virtualFilePath,
+        documentPath: String(props.documentPath || ''),
+      })
       logger.info('[NotebookMarkdownEditor] mounted Monaco editor', {
         cellKey: String(props.cellKey || ''),
         theme: currentAppliedTheme,
@@ -331,6 +425,7 @@ const mountMonacoEditor = async () => {
 }
 
 const disposeMonacoEditor = () => {
+  const currentModelUri = model?.uri || null
   contentChangeDisposable?.dispose?.()
   contentChangeDisposable = null
   contentSizeDisposable?.dispose?.()
@@ -341,11 +436,16 @@ const disposeMonacoEditor = () => {
   blurDisposable = null
   editor?.dispose?.()
   editor = null
-  model?.dispose?.()
+  if (usesVscodeModelBridge && currentModelUri) {
+    releaseVsCodeTextModel(currentModelUri, getNotebookMarkdownModelOwner(), 'notebook-markdown-dispose')
+  } else {
+    model?.dispose?.()
+  }
   model = null
   monacoRef = null
   mountMonacoEditorPromise = null
   editorReady.value = false
+  usesVscodeModelBridge = false
 }
 
 const handleFallbackInput = (event) => {

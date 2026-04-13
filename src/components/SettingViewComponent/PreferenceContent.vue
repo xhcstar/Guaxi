@@ -110,6 +110,8 @@
               <div v-if="lspServerStatuses.length === 0" class="lsp-status-empty">暂无 LSP 配置</div>
             </div>
           </div>
+          <n-divider />
+          <LspExtensionPanel />
         </div>
 
         <n-divider />
@@ -339,6 +341,7 @@ import { ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import { NCard, NSpace, NDivider, NForm, NFormItem, NInputNumber, NInput, NButton, NAlert, NSwitch, NSelect } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../../stores/settingsStore'
+import LspExtensionPanel from './LspExtensionPanel.vue'
 
 const logger = createLogger('PreferenceContent')
 

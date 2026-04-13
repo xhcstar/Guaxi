@@ -9,6 +9,7 @@ use std::os::windows::process::CommandExt;
 
 use crate::guaxiservices::bundled_resources;
 use crate::guaxiservices::lsp;
+use crate::guaxiservices::lsp_extensions;
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -1111,6 +1112,62 @@ pub async fn install_lsp_server(language: String) -> Result<lsp::LspServerStatus
     let token = config.lsp_github_token.trim().to_string();
     let token = if token.is_empty() { None } else { Some(token) };
     lsp::install_lsp_server(&lang, token).await
+}
+
+#[tauri::command]
+pub fn list_lsp_extensions() -> Result<Vec<lsp_extensions::LspExtensionState>, String> {
+    lsp_extensions::list_lsp_extensions()
+}
+
+#[tauri::command]
+pub async fn search_open_vsx_extensions(
+    query: String,
+) -> Result<Vec<lsp_extensions::OpenVsxSearchResult>, String> {
+    lsp_extensions::search_open_vsx_extensions(&query).await
+}
+
+#[tauri::command]
+pub async fn install_open_vsx_extension(
+    extension_id: String,
+    version: Option<String>,
+    download_url: Option<String>,
+) -> Result<lsp_extensions::LspExtensionState, String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id 涓嶈兘涓虹┖".to_string());
+    }
+    lsp_extensions::install_open_vsx_extension(&id, version.as_deref(), download_url.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn import_lsp_extension_vsix(
+    vsix_path: String,
+) -> Result<lsp_extensions::LspExtensionState, String> {
+    let path = vsix_path.trim().to_string();
+    if path.is_empty() {
+        return Err("vsix_path 涓嶈兘涓虹┖".to_string());
+    }
+    lsp_extensions::import_vsix_extension(&path).await
+}
+
+#[tauri::command]
+pub async fn import_lsp_extension_directory(
+    dir_path: String,
+) -> Result<lsp_extensions::LspExtensionState, String> {
+    let path = dir_path.trim().to_string();
+    if path.is_empty() {
+        return Err("dir_path 涓嶈兘涓虹┖".to_string());
+    }
+    lsp_extensions::import_extension_directory(&path).await
+}
+
+#[tauri::command]
+pub fn remove_lsp_extension(extension_id: String) -> Result<(), String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id 涓嶈兘涓虹┖".to_string());
+    }
+    lsp_extensions::remove_lsp_extension(&id)
 }
 
 #[tauri::command]

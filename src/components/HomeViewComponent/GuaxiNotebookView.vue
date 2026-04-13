@@ -173,6 +173,7 @@
             <GuaxiNotebookMarkdownEditor
               :ref="(instance) => setMarkdownEditorRef(cell.key, instance)"
               :cell-key="cell.key"
+              :document-path="filePath"
               :model-value="cell.content"
               :theme="theme"
               @update:model-value="updateMarkdownCell(cell.key, $event)"
@@ -269,6 +270,7 @@
 
           <GuaxiNotebookPythonEditor
             :cell-key="cell.key"
+            :document-path="filePath"
             :model-value="cell.code"
             :theme="theme"
             @update:model-value="updatePythonCell(cell.key, $event)"
