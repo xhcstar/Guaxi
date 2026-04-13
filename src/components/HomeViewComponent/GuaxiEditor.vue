@@ -16005,14 +16005,22 @@ watch(() => editorStore.highlightInfo, () => {
 
 
 const md = new MarkdownIt()
-function generateOutline(content) {
-  const file = activeTab.value;
-  const ext = file?.path?.split('.').pop()?.toLowerCase();
-  if (ext !== 'md' && ext !== 'markdown') {
-    outlineStore.setOutline([]);
-    return;
+// 设计说明：
+// 1. 右侧大纲的真实数据源应该始终是 Markdown 标题本身，而不是 [TOC] 目录占位或某个渲染模式的临时结果。
+// 2. 这里把“标题提取”抽成纯函数，并显式传入 filePath，避免 debounce 执行时读取到瞬时失效的 activeTab，误把大纲清空。
+// 3. 当探索者模式暂时回传空大纲时，也能复用同一套解析逻辑做兜底，保证编辑 / 预览 / 探索者三种模式表现一致。
+const extractMarkdownOutlineEntries = (content, filePath, reason = 'unknown') => {
+  const normalizedPath = String(filePath || selectedFile.value?.path || activeTab.value?.path || '').trim()
+  const lowerPath = normalizedPath.toLowerCase()
+  if (!lowerPath.endsWith('.md') && !lowerPath.endsWith('.markdown')) {
+    logger.info('[Outline] skip extraction because file is not markdown', {
+      reason,
+      filePath: normalizedPath,
+    })
+    return []
   }
-  const tokens = md.parse(content, {})
+
+  const tokens = md.parse(String(content || ''), {})
   const result = []
   tokens.forEach((token, idx) => {
     if (token.type === 'heading_open') {
@@ -16027,11 +16035,23 @@ function generateOutline(content) {
       }
     }
   })
+
+  logger.info('[Outline] extracted markdown headings', {
+    reason,
+    filePath: normalizedPath,
+    count: result.length,
+    contentLength: String(content || '').length,
+  })
+  return result
+}
+
+function generateOutline(content, filePath, reason = 'unknown') {
+  const result = extractMarkdownOutlineEntries(content, filePath, reason)
   outlineStore.setOutline(result)
 }
 
-const generateOutlineDebounced = debounce((content) => {
-  generateOutline(content)
+const generateOutlineDebounced = debounce(({ content, filePath, reason }) => {
+  generateOutline(content, filePath, reason || 'debounced')
 }, 200)
 
 const syncNotebookOutlineState = async (reason = 'unknown') => {
@@ -16041,12 +16061,18 @@ const syncNotebookOutlineState = async (reason = 'unknown') => {
 
   await nextTick()
   const outline = notebookViewRef.value?.getOutline?.() || []
-  outlineStore.setOutline(Array.isArray(outline) ? outline : [])
+  const normalizedOutline = Array.isArray(outline) ? outline : []
+  const fallbackOutline = normalizedOutline.length
+    ? normalizedOutline
+    : extractMarkdownOutlineEntries(rawContent.value, selectedFile.value?.path || activeTab.value?.path || '', `${reason}-fallback-source`)
+  outlineStore.setOutline(fallbackOutline)
   outlineStore.setJumpToLine(jumpToLine)
 
   logger.info('[Outline] synced notebook outline state', {
     reason,
-    count: Array.isArray(outline) ? outline.length : 0,
+    count: fallbackOutline.length,
+    notebookCount: normalizedOutline.length,
+    usedSourceFallback: !normalizedOutline.length && fallbackOutline.length > 0,
     hasNotebookView: !!notebookViewRef.value,
   })
   return true
@@ -16055,10 +16081,15 @@ const syncNotebookOutlineState = async (reason = 'unknown') => {
 const handleNotebookOutlineChange = (outline) => {
   if (!(editorSurfaceMode.value === 'notebook' && canUseNotebookSurface.value)) return
   const normalizedOutline = Array.isArray(outline) ? outline : []
-  outlineStore.setOutline(normalizedOutline)
+  const finalOutline = normalizedOutline.length
+    ? normalizedOutline
+    : extractMarkdownOutlineEntries(rawContent.value, selectedFile.value?.path || activeTab.value?.path || '', 'notebook-outline-event-fallback')
+  outlineStore.setOutline(finalOutline)
   outlineStore.setJumpToLine(jumpToLine)
   logger.info('[Outline] received notebook outline change event', {
-    count: normalizedOutline.length,
+    count: finalOutline.length,
+    notebookCount: normalizedOutline.length,
+    usedSourceFallback: !normalizedOutline.length && finalOutline.length > 0,
     surfaceMode: editorSurfaceMode.value,
   })
 }
@@ -16108,7 +16139,11 @@ watch([() => fileTreeStore.activeTab, rawContent, editorSurfaceMode, canUseNoteb
     contentLength: String(content || '').length,
     surfaceMode: String(surfaceMode || ''),
   })
-  generateOutlineDebounced(content)
+  generateOutlineDebounced({
+    content,
+    filePath: String(tabPath || selectedFile.value?.path || ''),
+    reason: 'watch-source-outline-state',
+  })
 }, { immediate: true })
 
 const handleLspSettingChanged = (evt) => {
