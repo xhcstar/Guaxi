@@ -772,6 +772,7 @@ pub struct LspWsSession {
     language: String,
     child: Option<Child>,
     child_stdin: Option<Arc<Mutex<ChildStdin>>>,
+    pending_completion_request_ids: HashSet<String>,
 }
 
 impl LspWsSession {
@@ -780,6 +781,7 @@ impl LspWsSession {
             language,
             child: None,
             child_stdin: None,
+            pending_completion_request_ids: HashSet::new(),
         }
     }
 }
@@ -958,6 +960,11 @@ impl Handler<LspStdoutMessage> for LspWsSession {
     type Result = ();
 
     fn handle(&mut self, msg: LspStdoutMessage, ctx: &mut Self::Context) {
+        log_lsp_server_message(
+            self.language.as_str(),
+            msg.data.as_str(),
+            &mut self.pending_completion_request_ids,
+        );
         ctx.text(msg.data);
     }
 }
@@ -981,6 +988,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LspWsSession {
     fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match msg {
             Ok(ws::Message::Text(text)) => {
+                log_lsp_client_message(
+                    self.language.as_str(),
+                    text.as_ref(),
+                    &mut self.pending_completion_request_ids,
+                );
                 if let Some(stdin_arc) = &self.child_stdin {
                     let payload = text.into_bytes();
                     let stdin_clone = stdin_arc.clone();
@@ -1013,6 +1025,218 @@ pub async fn lsp_ws_route(
     let language = path.into_inner().0;
     let session = LspWsSession::new(language);
     ws::start(session, &req, stream)
+}
+
+fn lsp_json_id_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(v) => Some(v.clone()),
+        Value::Number(v) => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+fn extract_completion_item_count(result: &Value) -> usize {
+    if let Some(items) = result
+        .get("items")
+        .and_then(|value| value.as_array())
+    {
+        return items.len();
+    }
+    if let Some(items) = result.as_array() {
+        return items.len();
+    }
+    0
+}
+
+fn log_lsp_client_message(
+    language: &str,
+    payload: &str,
+    pending_completion_request_ids: &mut HashSet<String>,
+) {
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return;
+    };
+
+    let method = value
+        .get("method")
+        .and_then(|item| item.as_str())
+        .unwrap_or("");
+    if method.is_empty() {
+        return;
+    }
+
+    match method {
+        "textDocument/didOpen" => {
+            let text_document = value.get("params").and_then(|item| item.get("textDocument"));
+            let uri = text_document
+                .and_then(|item| item.get("uri"))
+                .and_then(|item| item.as_str())
+                .unwrap_or("");
+            let version = text_document
+                .and_then(|item| item.get("version"))
+                .and_then(|item| item.as_i64())
+                .unwrap_or(0);
+            let text_len = text_document
+                .and_then(|item| item.get("text"))
+                .and_then(|item| item.as_str())
+                .map(|text| text.len())
+                .unwrap_or(0);
+            info!(
+                language = language,
+                uri = uri,
+                version = version,
+                text_len = text_len,
+                "LSP client sent didOpen"
+            );
+        }
+        "textDocument/didChange" => {
+            let params = value.get("params");
+            let uri = params
+                .and_then(|item| item.get("textDocument"))
+                .and_then(|item| item.get("uri"))
+                .and_then(|item| item.as_str())
+                .unwrap_or("");
+            let version = params
+                .and_then(|item| item.get("textDocument"))
+                .and_then(|item| item.get("version"))
+                .and_then(|item| item.as_i64())
+                .unwrap_or(0);
+            let changes = params
+                .and_then(|item| item.get("contentChanges"))
+                .and_then(|item| item.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let latest_text_len = changes
+                .last()
+                .and_then(|item| item.get("text"))
+                .and_then(|item| item.as_str())
+                .map(|text| text.len())
+                .unwrap_or(0);
+            info!(
+                language = language,
+                uri = uri,
+                version = version,
+                change_count = changes.len(),
+                latest_text_len = latest_text_len,
+                "LSP client sent didChange"
+            );
+        }
+        "textDocument/completion" => {
+            let id = value
+                .get("id")
+                .and_then(lsp_json_id_to_string)
+                .unwrap_or_default();
+            let params = value.get("params");
+            let uri = params
+                .and_then(|item| item.get("textDocument"))
+                .and_then(|item| item.get("uri"))
+                .and_then(|item| item.as_str())
+                .unwrap_or("");
+            let line = params
+                .and_then(|item| item.get("position"))
+                .and_then(|item| item.get("line"))
+                .and_then(|item| item.as_i64())
+                .unwrap_or(-1);
+            let character = params
+                .and_then(|item| item.get("position"))
+                .and_then(|item| item.get("character"))
+                .and_then(|item| item.as_i64())
+                .unwrap_or(-1);
+            let trigger_kind = params
+                .and_then(|item| item.get("context"))
+                .and_then(|item| item.get("triggerKind"))
+                .and_then(|item| item.as_i64())
+                .unwrap_or(0);
+            let trigger_character = params
+                .and_then(|item| item.get("context"))
+                .and_then(|item| item.get("triggerCharacter"))
+                .and_then(|item| item.as_str())
+                .unwrap_or("");
+
+            if !id.is_empty() {
+                pending_completion_request_ids.insert(id.clone());
+            }
+
+            info!(
+                language = language,
+                id = id,
+                uri = uri,
+                line = line,
+                character = character,
+                trigger_kind = trigger_kind,
+                trigger_character = trigger_character,
+                "LSP client sent completion request"
+            );
+        }
+        "initialized" => {
+            info!(language = language, "LSP client sent initialized");
+        }
+        _ => {}
+    }
+}
+
+fn log_lsp_server_message(
+    language: &str,
+    payload: &str,
+    pending_completion_request_ids: &mut HashSet<String>,
+) {
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return;
+    };
+
+    if let Some(method) = value.get("method").and_then(|item| item.as_str()) {
+        match method {
+            "textDocument/publishDiagnostics" => {
+                let params = value.get("params");
+                let uri = params
+                    .and_then(|item| item.get("uri"))
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("");
+                let diagnostic_count = params
+                    .and_then(|item| item.get("diagnostics"))
+                    .and_then(|item| item.as_array())
+                    .map(|items| items.len())
+                    .unwrap_or(0);
+                info!(
+                    language = language,
+                    uri = uri,
+                    diagnostic_count = diagnostic_count,
+                    "LSP server published diagnostics"
+                );
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    let Some(id) = value.get("id").and_then(lsp_json_id_to_string) else {
+        return;
+    };
+
+    if !pending_completion_request_ids.remove(&id) {
+        return;
+    }
+
+    if let Some(error) = value.get("error") {
+        warn!(
+            language = language,
+            id = id,
+            error = error.to_string(),
+            "LSP server completion response returned error"
+        );
+        return;
+    }
+
+    let item_count = value
+        .get("result")
+        .map(extract_completion_item_count)
+        .unwrap_or(0);
+    info!(
+        language = language,
+        id = id,
+        item_count = item_count,
+        "LSP server completion response resolved"
+    );
 }
 
 fn parse_lsp_frame_header(bytes: &[u8]) -> Option<(usize, usize)> {

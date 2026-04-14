@@ -4967,6 +4967,38 @@ const registerMarkdownLanguageFeatures = () => {
   markdownLanguageFeatureDisposables.push(monaco.languages.registerCompletionItemProvider('markdown', {
     triggerCharacters: MARKDOWN_FENCE_TRIGGER_CHARACTERS,
     async provideCompletionItems(model, position, context) {
+      const mathCtx = getMarkdownMathContext(model, position);
+      if (mathCtx) {
+        // 设计思路：
+        // 1. 进入 Markdown 内嵌数学/代码块后，优先把补全请求交给对应语言的 LSP。
+        // 2. 之前这里先走 Markdown 路径上下文判断，像 Python 函数调用里的 `(` 会被误判成路径场景，
+        //    导致补全直接短路成空数组，界面只显示 `no suggestion`。
+        // 3. 这里改成“内嵌语言优先”，避免 Markdown 自己的补全逻辑拦截 fenced code block 的语法补全。
+        const mathLspSuggestions = await provideEmbeddedLspSuggestions(mathCtx, model, position, context);
+        logger.debug('[MarkdownCompletion] embedded math suggestions resolved', {
+          languageId: mathCtx.languageId,
+          lineNumber: position.lineNumber,
+          column: position.column,
+          suggestionCount: mathLspSuggestions.length,
+        });
+        return { suggestions: mathLspSuggestions };
+      }
+
+      const fenceCtx = getMarkdownFenceContext(model, position);
+      if (fenceCtx) {
+        // 设计思路：
+        // fenced code block 内的编辑体验应由目标语言主导，Markdown 只负责承载容器。
+        // 这里即使 LSP 返回空数组，也直接返回，避免继续掉进 Markdown 片段/路径补全分支。
+        const fenceLspSuggestions = await provideEmbeddedLspSuggestions(fenceCtx, model, position, context);
+        logger.debug('[MarkdownCompletion] embedded fence suggestions resolved', {
+          languageId: fenceCtx.languageId,
+          lineNumber: position.lineNumber,
+          column: position.column,
+          suggestionCount: fenceLspSuggestions.length,
+        });
+        return { suggestions: fenceLspSuggestions };
+      }
+
       const lineContent = model.getLineContent(position.lineNumber);
       const beforeCursor = lineContent.slice(0, position.column - 1);
 
@@ -4981,16 +5013,6 @@ const registerMarkdownLanguageFeatures = () => {
             token.startsWith('~') ||
             /^[a-zA-Z]:/.test(token)));
       if (inPathLike) return { suggestions: [] };
-
-      const mathLspSuggestions = await provideMarkdownMathLspSuggestions(model, position, context);
-      if (mathLspSuggestions.length) {
-        return { suggestions: mathLspSuggestions };
-      }
-
-      const fenceLspSuggestions = await provideMarkdownFenceLspSuggestions(model, position, context);
-      if (fenceLspSuggestions.length) {
-        return { suggestions: fenceLspSuggestions };
-      }
 
       const wordInfo = model.getWordUntilPosition(position);
       const word = wordInfo?.word || '';
@@ -5118,6 +5140,9 @@ const lspEnabled = ref(false)
 const markdownFenceCompletionModels = new Map()
 const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '@', '#', '(', ',', '[', '{', '-']
 const EMBEDDED_LSP_READY_TIMEOUT_MS = 4000
+const EMBEDDED_COMPLETION_CACHE_TTL_MS = 2500
+const embeddedCompletionCacheStates = new WeakMap()
+const embeddedCompletionRetriggerStates = new WeakMap()
 
 const getMarkdownMathContext = (model, position) => {
   if (!model || !position) return null;
@@ -5427,9 +5452,14 @@ const EMBEDDED_VISIBLE_BLOCK_LIMIT = 6;
 const EMBEDDED_WORD_SUGGEST_OPTIONS = {
   wordBasedSuggestions: 'off',
   quickSuggestions: {
-    other: false,
+    // 设计说明：
+    // 1. Markdown 围栏代码块仍然挂在 markdown 宿主 editor 上，真正的代码补全来自我们注册的 markdown completion provider。
+    // 2. 如果这里把 `other` 关掉，Monaco 会更偏向“只在显式命令下打开建议框”，
+    //    成员补全这种依赖 trigger character 的场景就容易出现“LSP 已经返回结果，但建议框没有真正弹出”。
+    // 3. 这里保留 `wordBasedSuggestions: off` 与 `showWords: false`，因此开启 quick suggestions 后只会放行 provider/LSP 建议，不会把普通 Markdown 单词噪音带回来。
+    other: true,
     comments: false,
-    strings: false
+    strings: true
   },
   suggest: {
     showWords: false,
@@ -5764,6 +5794,7 @@ const prepareEmbeddedVirtualModel = (embeddedCtx) => {
   initLspClient(hostEditor, embeddedCtx.languageId, sourceFilePath || virtualModel.uri.toString(), {
     documentUri: virtualModel.uri.toString(),
     workspacePath: sourceFilePath || virtualModel.uri.toString(),
+    requestSource: 'embedded-markdown-fence',
   });
   logger.info('[EmbeddedLsp] init requested for fenced code block', {
     languageId: embeddedCtx.languageId,
@@ -5839,9 +5870,127 @@ const refreshMarkdownSuggestMode = (targetEditor) => {
 
 const isSuggestWidgetVisibleForEditor = (targetEditor) => {
   const dom = targetEditor?.getDomNode?.();
-  if (!dom) return false;
-  return !!dom.querySelector('.suggest-widget.visible');
+  const doc = dom?.ownerDocument || (typeof document !== 'undefined' ? document : null)
+  if (!doc?.querySelector) return false;
+  // 设计思路：
+  // 1. 当前编辑器启用了 fixedOverflowWidgets，Monaco 的 suggest widget 可能被挂到编辑器 DOM 之外。
+  // 2. 之前只在 editor DOM 内查询 `.suggest-widget.visible`，会误判“建议框不可见”，从而重复触发 suggest。
+  // 3. 这里改成在所属 document 全局查询，避免把已经显示的 widget 误判成隐藏状态。
+  return !!doc.querySelector('.suggest-widget.visible');
 };
+
+const buildEmbeddedCompletionCacheKey = (model, position, embeddedCtx) => {
+  if (!model || !position || !embeddedCtx) return ''
+  const modelUri = String(model.uri?.toString?.() || '')
+  const languageId = String(embeddedCtx.languageId || '').trim().toLowerCase()
+  const blockLine = Number(embeddedCtx.positionInBlock?.lineNumber || 0)
+  const blockColumn = Number(embeddedCtx.positionInBlock?.column || 0)
+  const lineNumber = Number(position.lineNumber || 0)
+  const column = Number(position.column || 0)
+  const linePrefix = String(model.getLineContent?.(lineNumber) || '')
+    .slice(0, Math.max(0, column - 1))
+    .slice(-32)
+  return [
+    modelUri,
+    lineNumber,
+    column,
+    languageId,
+    blockLine,
+    blockColumn,
+    linePrefix,
+  ].join('::')
+}
+
+const readEmbeddedCompletionCache = (targetEditor, model, position, embeddedCtx) => {
+  if (!targetEditor || !model || !position || !embeddedCtx) return []
+  const state = embeddedCompletionCacheStates.get(targetEditor)
+  if (!state) return []
+  const cacheKey = buildEmbeddedCompletionCacheKey(model, position, embeddedCtx)
+  if (!cacheKey || state.key !== cacheKey) return []
+  if (Date.now() - Number(state.ts || 0) > EMBEDDED_COMPLETION_CACHE_TTL_MS) return []
+  const suggestions = Array.isArray(state.suggestions) ? state.suggestions : []
+  if (!suggestions.length) return []
+  logger.debug('[EmbeddedLsp] reuse cached completion suggestions', {
+    languageId: embeddedCtx.languageId,
+    cacheKey,
+    suggestionCount: suggestions.length,
+  })
+  return suggestions
+}
+
+const writeEmbeddedCompletionCache = (targetEditor, model, position, embeddedCtx, suggestions) => {
+  if (!targetEditor || !model || !position || !embeddedCtx) return
+  const normalizedSuggestions = Array.isArray(suggestions) ? suggestions : []
+  const cacheKey = buildEmbeddedCompletionCacheKey(model, position, embeddedCtx)
+  if (!cacheKey || !normalizedSuggestions.length) return
+  embeddedCompletionCacheStates.set(targetEditor, {
+    key: cacheKey,
+    ts: Date.now(),
+    suggestions: normalizedSuggestions,
+  })
+  logger.debug('[EmbeddedLsp] cached completion suggestions', {
+    languageId: embeddedCtx.languageId,
+    cacheKey,
+    suggestionCount: normalizedSuggestions.length,
+  })
+}
+
+const scheduleEmbeddedCompletionRetrigger = (targetEditor, model, position, embeddedCtx, reason) => {
+  if (!targetEditor || !model || !position || !embeddedCtx) return
+  const cacheKey = buildEmbeddedCompletionCacheKey(model, position, embeddedCtx)
+  if (!cacheKey) return
+
+  const prev = embeddedCompletionRetriggerStates.get(targetEditor)
+  const now = Date.now()
+  if (prev?.key === cacheKey && now - Number(prev?.ts || 0) < 800) {
+    return
+  }
+  embeddedCompletionRetriggerStates.set(targetEditor, { key: cacheKey, ts: now })
+
+  window.setTimeout(() => {
+    if (!targetEditor?.hasTextFocus?.()) return
+    const latestPosition = targetEditor.getPosition?.()
+    const latestModel = targetEditor.getModel?.()
+    if (!latestPosition || latestModel !== model) return
+    if (buildEmbeddedCompletionCacheKey(latestModel, latestPosition, embeddedCtx) !== cacheKey) return
+    logger.info('[EmbeddedLsp] retrigger suggest from cached completion results', {
+      languageId: embeddedCtx.languageId,
+      reason,
+      cacheKey,
+      lineNumber: latestPosition.lineNumber,
+      column: latestPosition.column,
+    })
+    try {
+      targetEditor.focus?.()
+      targetEditor.trigger('guaxi-embedded-lsp-cache', 'hideSuggestWidget', null)
+    } catch (error) {
+      logger.debug('[EmbeddedLsp] hide suggest widget before retrigger failed', {
+        languageId: embeddedCtx.languageId,
+        reason,
+        error,
+      })
+    }
+    markEmbeddedSuggestTriggered(targetEditor)
+    targetEditor.trigger('guaxi-embedded-lsp-cache', 'editor.action.triggerSuggest', {})
+    window.setTimeout(() => {
+      if (!targetEditor?.hasTextFocus?.()) return
+      const retryPosition = targetEditor.getPosition?.()
+      const retryModel = targetEditor.getModel?.()
+      if (!retryPosition || retryModel !== model) return
+      if (buildEmbeddedCompletionCacheKey(retryModel, retryPosition, embeddedCtx) !== cacheKey) return
+      if (isSuggestWidgetVisibleForEditor(targetEditor)) return
+      logger.info('[EmbeddedLsp] retrigger suggest second pass from cached completion results', {
+        languageId: embeddedCtx.languageId,
+        reason,
+        cacheKey,
+        lineNumber: retryPosition.lineNumber,
+        column: retryPosition.column,
+      })
+      markEmbeddedSuggestTriggered(targetEditor)
+      targetEditor.trigger('guaxi-embedded-lsp-cache-second', 'editor.action.triggerSuggest', {})
+    }, 80)
+  }, 24)
+}
 
 const markEmbeddedSuggestTriggered = (targetEditor) => {
   if (!targetEditor) return;
@@ -6385,7 +6534,41 @@ const dedupeCompletionSuggestions = (items) => {
   return suggestions
 }
 
-const convertVscodeCompletionItemToMonaco = (item, replaceRange, index) => {
+const EMBEDDED_COMPLETION_FILTER_CONTEXT_MAX_CHARS = 96
+
+const resolveEmbeddedCompletionFilterContext = (model, position) => {
+  if (!model || !position) {
+    return {
+      hostToken: '',
+      typedWord: '',
+      filterPrefix: '',
+    }
+  }
+
+  const lineContent = String(model.getLineContent?.(position.lineNumber) || '')
+  const beforeCursor = lineContent.slice(0, Math.max(0, Number(position.column || 1) - 1))
+  const hostToken = String(beforeCursor.match(/[^\s]+$/)?.[0] || '').slice(-EMBEDDED_COMPLETION_FILTER_CONTEXT_MAX_CHARS)
+  const typedWord = String(hostToken.match(/([A-Za-z0-9_$]*)$/)?.[1] || '')
+  const filterPrefix = hostToken.slice(0, Math.max(0, hostToken.length - typedWord.length))
+
+  return {
+    hostToken,
+    typedWord,
+    filterPrefix,
+  }
+}
+
+const buildEmbeddedCompletionFilterText = (rawFilterText, fallbackLabel, filterContext) => {
+  const baseFilterText = String(rawFilterText || fallbackLabel || '').trim()
+  if (!baseFilterText) return ''
+
+  const prefix = String(filterContext?.filterPrefix || '')
+  if (!prefix) return baseFilterText
+  if (baseFilterText.startsWith(prefix)) return baseFilterText
+  return `${prefix}${baseFilterText}`
+}
+
+const convertVscodeCompletionItemToMonaco = (item, replaceRange, index, filterContext = null) => {
   const label = normalizeCompletionLabel(item?.label)
   if (!label) return null
 
@@ -6402,7 +6585,7 @@ const convertVscodeCompletionItemToMonaco = (item, replaceRange, index) => {
     kind,
     detail: item?.detail,
     documentation,
-    filterText: item?.filterText,
+    filterText: buildEmbeddedCompletionFilterText(item?.filterText, label, filterContext),
     sortText: buildCompletionSortKey(item, label, index),
     insertText,
     insertTextRules: isSnippet
@@ -6419,7 +6602,7 @@ const getEmbeddedHostEditor = () => (
   secondaryEditor
 )
 
-const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, positionInBlock, replaceRange, context) => {
+const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, positionInBlock, replaceRange, context, filterContext = null) => {
   try {
     await retainVsCodeTextModel({
       resource: virtualModel.uri,
@@ -6433,20 +6616,61 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       ? String(context?.triggerCharacter || '')
       : undefined
 
-    const result = await vscodeCommands.executeCommand(
-      'vscode.executeCompletionItemProvider',
-      VscodeUri.parse(virtualModel.uri.toString()),
-      new VscodePosition(positionInBlock.lineNumber - 1, positionInBlock.column - 1),
-      triggerCharacter || undefined,
-      0
-    )
+    logger.info('[EmbeddedLsp] vscode completion command start', {
+      documentUri: String(virtualModel.uri?.toString?.() || ''),
+      languageId: String(virtualModel.getLanguageId?.() || ''),
+      triggerKind: Number(context?.triggerKind || 0),
+      triggerCharacter: triggerCharacter || '',
+      lineNumber: positionInBlock?.lineNumber || 0,
+      column: positionInBlock?.column || 0,
+      contentLength: Number(virtualModel.getValue?.()?.length || 0),
+    })
+
+    const completionTimeout = new Promise((resolve) => {
+      window.setTimeout(() => {
+        resolve({ __guaxiCompletionTimeout: true })
+      }, 1800)
+    })
+
+    const result = await Promise.race([
+      vscodeCommands.executeCommand(
+        'vscode.executeCompletionItemProvider',
+        VscodeUri.parse(virtualModel.uri.toString()),
+        new VscodePosition(positionInBlock.lineNumber - 1, positionInBlock.column - 1),
+        triggerCharacter || undefined,
+        0
+      ),
+      completionTimeout,
+    ])
+
+    if (result?.__guaxiCompletionTimeout) {
+      logger.warn('[EmbeddedLsp] vscode completion command timed out', {
+        documentUri: String(virtualModel.uri?.toString?.() || ''),
+        languageId: String(virtualModel.getLanguageId?.() || ''),
+        triggerKind: Number(context?.triggerKind || 0),
+        triggerCharacter: triggerCharacter || '',
+        lineNumber: positionInBlock?.lineNumber || 0,
+        column: positionInBlock?.column || 0,
+      })
+      return []
+    }
 
     const items = Array.isArray(result?.items) ? result.items : []
+    logger.info('[EmbeddedLsp] vscode completion command resolved', {
+      documentUri: String(virtualModel.uri?.toString?.() || ''),
+      languageId: String(virtualModel.getLanguageId?.() || ''),
+      triggerKind: Number(context?.triggerKind || 0),
+      triggerCharacter: triggerCharacter || '',
+      lineNumber: positionInBlock?.lineNumber || 0,
+      column: positionInBlock?.column || 0,
+      itemCount: items.length,
+      isIncomplete: !!result?.isIncomplete,
+    })
     if (!items.length) return []
 
     const suggestions = []
     for (let i = 0; i < items.length; i += 1) {
-      const mapped = convertVscodeCompletionItemToMonaco(items[i], replaceRange, i)
+      const mapped = convertVscodeCompletionItemToMonaco(items[i], replaceRange, i, filterContext)
       if (!mapped) continue
       suggestions.push(mapped)
     }
@@ -6457,37 +6681,127 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
   }
 }
 
-const buildEmbeddedReplaceRange = (model, position) => {
-  const wordInfo = model.getWordUntilPosition(position);
-  return new monaco.Range(
-    position.lineNumber,
-    wordInfo?.startColumn || position.column,
-    position.lineNumber,
-    wordInfo?.endColumn || position.column
-  );
+const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) => {
+  // 设计思路：
+  // 1. 这里不能再用宿主 Markdown model 的 `getWordUntilPosition()` 来算 replace range。
+  // 2. 在 `obj.` / `module.` 这种成员补全场景里，Markdown 会把 `obj` 识别成当前单词，
+  //    最终导致 Monaco 认为所有补全项都在替换 `obj`，前端过滤后直接显示 `no suggestion`。
+  // 3. 正确做法是基于 embedded 虚拟语言模型计算当前前缀，再把列偏移映射回宿主 Markdown 行列。
+  //    这样 Monaco 前端过滤使用的就是 Python 自己的前缀，而不是 Markdown 误判出来的单词。
+  const hostLineNumber = Number(position?.lineNumber || 1)
+  const hostColumn = Number(position?.column || 1)
+  const blockPosition = embeddedCtx?.positionInBlock
+  const virtualWordInfo = virtualModel?.getWordUntilPosition?.(blockPosition)
+
+  if (!virtualWordInfo || !blockPosition) {
+    const hostWordInfo = model.getWordUntilPosition(position);
+    const fallbackRange = new monaco.Range(
+      hostLineNumber,
+      hostWordInfo?.startColumn || hostColumn,
+      hostLineNumber,
+      hostWordInfo?.endColumn || hostColumn
+    )
+    logger.debug('[EmbeddedLsp] fallback to host replace range', {
+      languageId: embeddedCtx?.languageId || '',
+      hostLineNumber,
+      hostColumn,
+      startColumn: fallbackRange.startColumn,
+      endColumn: fallbackRange.endColumn,
+    })
+    return fallbackRange
+  }
+
+  const leftDelta = Math.max(0, Number(blockPosition.column || 1) - Number(virtualWordInfo.startColumn || blockPosition.column || 1))
+  const rightDelta = Math.max(0, Number(virtualWordInfo.endColumn || blockPosition.column || 1) - Number(blockPosition.column || 1))
+  const startColumn = Math.max(1, hostColumn - leftDelta)
+  const endColumn = Math.max(startColumn, hostColumn + rightDelta)
+  const range = new monaco.Range(
+    hostLineNumber,
+    startColumn,
+    hostLineNumber,
+    endColumn
+  )
+
+  logger.debug('[EmbeddedLsp] computed embedded replace range', {
+    languageId: embeddedCtx?.languageId || '',
+    hostLineNumber,
+    hostColumn,
+    blockLineNumber: Number(blockPosition.lineNumber || 0),
+    blockColumn: Number(blockPosition.column || 0),
+    embeddedWord: String(virtualWordInfo.word || ''),
+    startColumn,
+    endColumn,
+  })
+  return range
 }
 
 const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, context) => {
   if (!embeddedCtx) return [];
+  const hostEditor = getEmbeddedHostEditor()
+  const cachedSuggestions = readEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx)
+  if (cachedSuggestions.length) {
+    return cachedSuggestions
+  }
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
   if (!virtualModel) return [];
   const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
-  if (!ready) return [];
+  if (!ready) {
+    logger.info('[EmbeddedLsp] completion skipped because connection is not ready', {
+      languageId: embeddedCtx.languageId,
+      documentUri: String(virtualModel.uri?.toString?.() || ''),
+      lineNumber: position?.lineNumber || 0,
+      column: position?.column || 0,
+      blockLineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
+      blockColumn: embeddedCtx.positionInBlock?.column || 0,
+    });
+    return [];
+  }
 
-  const replaceRange = buildEmbeddedReplaceRange(model, position);
+  const replaceRange = buildEmbeddedReplaceRange(model, position, embeddedCtx, virtualModel);
+  const filterContext = resolveEmbeddedCompletionFilterContext(model, position)
+  logger.debug('[EmbeddedLsp] resolved completion filter context', {
+    languageId: embeddedCtx.languageId,
+    hostToken: filterContext.hostToken,
+    typedWord: filterContext.typedWord,
+    filterPrefix: filterContext.filterPrefix,
+    lineNumber: position?.lineNumber || 0,
+    column: position?.column || 0,
+    replaceStartColumn: replaceRange?.startColumn || 0,
+    replaceEndColumn: replaceRange?.endColumn || 0,
+  })
 
   const vscodeSuggestions = await provideEmbeddedVscodeCompletionSuggestions(
     virtualModel,
     embeddedCtx.positionInBlock,
     replaceRange,
-    context
+    context,
+    filterContext
   )
   if (vscodeSuggestions.length) {
+    writeEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, vscodeSuggestions)
+    if (hostEditor && !isSuggestWidgetVisibleForEditor(hostEditor)) {
+      scheduleEmbeddedCompletionRetrigger(hostEditor, model, position, embeddedCtx, 'vscode-completion')
+    }
+    logger.debug('[EmbeddedLsp] completion resolved from VSCode command', {
+      languageId: embeddedCtx.languageId,
+      documentUri: String(virtualModel.uri?.toString?.() || ''),
+      suggestionCount: vscodeSuggestions.length,
+      lineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
+      column: embeddedCtx.positionInBlock?.column || 0,
+      firstSuggestion: getCompletionItemLabelText(vscodeSuggestions[0]?.label),
+      firstSuggestionFilterText: String(vscodeSuggestions[0]?.filterText || ''),
+    });
     return vscodeSuggestions
   }
 
   const providers = (monaco.languages).CompletionProviderRegistry?.all?.(virtualModel) || [];
-  if (!providers.length) return [];
+  if (!providers.length) {
+    logger.info('[EmbeddedLsp] no Monaco completion providers available for embedded model', {
+      languageId: embeddedCtx.languageId,
+      documentUri: String(virtualModel.uri?.toString?.() || ''),
+    });
+    return [];
+  }
 
   const fallbackToken = {
     isCancellationRequested: false,
@@ -6512,6 +6826,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
         suggestions.push({
           ...item,
           insertText,
+          filterText: buildEmbeddedCompletionFilterText(item?.filterText, getCompletionItemLabelText(item?.label), filterContext),
           range: replaceRange,
           textEdit: undefined,
           additionalTextEdits: undefined,
@@ -6521,7 +6836,20 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
     }
   }
 
-  return dedupeCompletionSuggestions(suggestions);
+  const dedupedSuggestions = dedupeCompletionSuggestions(suggestions);
+  writeEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, dedupedSuggestions)
+  if (dedupedSuggestions.length && hostEditor && !isSuggestWidgetVisibleForEditor(hostEditor)) {
+    scheduleEmbeddedCompletionRetrigger(hostEditor, model, position, embeddedCtx, 'monaco-provider-completion')
+  }
+  logger.debug('[EmbeddedLsp] completion resolved from Monaco providers', {
+    languageId: embeddedCtx.languageId,
+    documentUri: String(virtualModel.uri?.toString?.() || ''),
+    providerCount: providers.length,
+    suggestionCount: dedupedSuggestions.length,
+    lineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
+    column: embeddedCtx.positionInBlock?.column || 0,
+  });
+  return dedupedSuggestions;
 };
 
 const provideMarkdownFenceLspSuggestions = async (model, position, context) => {
@@ -6727,7 +7055,9 @@ const enableLspForEditorLanguage = (targetEditor, languageId, filePath = '') => 
 
   if (!lspEnabled.value) return
   if (!LSP_SUPPORTED_LANGUAGES.has(lang)) return
-  initLspClient(targetEditor, lang, filePath || '')
+  initLspClient(targetEditor, lang, filePath || '', {
+    requestSource: 'editor-language-enable',
+  })
 }
 
 const ensureLanguagePairingConfig = (languageId) => {
@@ -8003,9 +8333,7 @@ const setupEditorListeners = () => {
   });
 
   const isSuggestWidgetVisible = () => {
-    const dom = editor?.getDomNode?.();
-    if (!dom) return false;
-    return !!dom.querySelector('.suggest-widget.visible');
+    return isSuggestWidgetVisibleForEditor(editor);
   };
 
   let lastSnipasteSuggestAt = 0;
