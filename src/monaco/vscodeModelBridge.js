@@ -242,6 +242,13 @@ const getEntryModel = (entry) => {
   return model
 }
 
+const getMonacoBackedModel = (uri) => {
+  if (!uri) return null
+  const model = monaco?.editor?.getModel?.(uri) || null
+  if (!model || model.isDisposed?.()) return null
+  return model
+}
+
 export const replaceModelContentPreserveUndo = (
   model,
   content,
@@ -446,7 +453,51 @@ export const retainVsCodeTextModel = async ({
 
   entry.owners.add(ownerKey)
   applyLanguageId(entry, languageId, reason, ownerKey)
-  return syncModelContent(entry, content, reason, ownerKey) || getEntryModel(entry)
+  const bridgeModel = syncModelContent(entry, content, reason, ownerKey) || getEntryModel(entry)
+  const monacoBackedModel = getMonacoBackedModel(uri)
+
+  // 设计说明：
+  // 1. `createModelReference(...).object.textEditorModel` 在 monaco-vscode 体系里可能是一个 projected model，
+  //    它适合给 VSCode 文档服务/LSP 使用，但直接挂到 standalone Monaco editor 上会触发视图层异常。
+  // 2. Notebook/Explorer 场景里的编辑器本体，应该优先绑定 `monaco.editor.getModel(uri)` 返回的真实 Monaco text model；
+  //    同时继续保留 VSCode reference，确保补全、hover、命令调用仍然命中同一个 URI。
+  // 3. 这里保底再把 Monaco text model 的内容和语言同步一次，避免 bridge model / editor model 在边界场景下短暂漂移。
+  if (monacoBackedModel) {
+    const nextLanguageId = String(languageId || '').trim()
+    if (nextLanguageId && monacoBackedModel.getLanguageId?.() !== nextLanguageId) {
+      monaco.editor.setModelLanguage(monacoBackedModel, nextLanguageId)
+      logger.info('[VSCodeModelBridge] synchronized Monaco-backed model language', {
+        uri: uriKey,
+        owner: ownerKey,
+        reason,
+        languageId: nextLanguageId,
+      })
+    }
+    replaceModelContentPreserveUndo(monacoBackedModel, content, {
+      logPrefix: '[VSCodeModelBridge] keep Monaco-backed model synchronized',
+      uri: uriKey,
+      owner: ownerKey,
+      reason,
+    })
+    if (bridgeModel && bridgeModel !== monacoBackedModel) {
+      logger.info('[VSCodeModelBridge] preferred Monaco-backed model for editor attachment', {
+        uri: uriKey,
+        owner: ownerKey,
+        reason,
+        bridgeModelType: String(bridgeModel?.constructor?.name || 'unknown'),
+        monacoModelType: String(monacoBackedModel?.constructor?.name || 'unknown'),
+      })
+    }
+    return monacoBackedModel
+  }
+
+  logger.warn('[VSCodeModelBridge] Monaco-backed model missing after retain, fallback to bridge model', {
+    uri: uriKey,
+    owner: ownerKey,
+    reason,
+    bridgeModelType: String(bridgeModel?.constructor?.name || 'unknown'),
+  })
+  return bridgeModel
 }
 
 export const releaseVsCodeTextModel = (resource, owner = 'global', reason = 'manual') => {

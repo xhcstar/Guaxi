@@ -26,6 +26,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createLogger } from '../../utils/logger'
 import { initLspClient } from '../../monaco/lspClient'
 import {
+  replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
   releaseVsCodeTextModel,
 } from '../../monaco/vscodeModelBridge'
@@ -357,12 +358,24 @@ watch(() => props.theme, () => {
 
 watch(() => props.modelValue, (nextValue) => {
   if (!editor || !model) return
+  const normalizedValue = String(nextValue || '')
   const currentValue = model.getValue()
-  if (currentValue === String(nextValue || '')) return
-  model.pushEditOperations([], [{
-    range: model.getFullModelRange(),
-    text: String(nextValue || ''),
-  }], () => null)
+  if (currentValue === normalizedValue) return
+
+  // 设计说明：
+  // 1. 外部 notebook 状态回推到 Cell 编辑器时，统一走 bridge 提供的“保留 undo 的最小替换”能力，
+  //    避免不同类型 text model（尤其是 monaco-vscode 的 bridge model）在直接 pushEditOperations 时出现边界异常。
+  // 2. 这里仍保留最小范围替换，而不是 setValue，全量覆盖会破坏用户的撤销栈和光标上下文。
+  replaceModelContentPreserveUndo(model, normalizedValue, {
+    logPrefix: '[NotebookPythonEditor] synchronize external cell content',
+    uri: String(model?.uri?.toString?.() || ''),
+    owner: getNotebookPythonModelOwner(),
+    reason: 'props-model-value-watch',
+  })
+  logger.debug('[NotebookPythonEditor] applied external model sync', {
+    cellKey: String(props.cellKey || ''),
+    nextLength: normalizedValue.length,
+  })
   ensureHostHeight()
 })
 </script>

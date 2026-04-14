@@ -30,6 +30,7 @@ import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCom
 import { createLogger } from '../../utils/logger'
 import { initLspClient } from '../../monaco/lspClient'
 import {
+  replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
   releaseVsCodeTextModel,
 } from '../../monaco/vscodeModelBridge'
@@ -508,10 +509,20 @@ watch(() => props.modelValue, (nextValue) => {
   const normalizedValue = String(nextValue || '')
   const currentValue = model.getValue()
   if (currentValue === normalizedValue) return
-  model.pushEditOperations([], [{
-    range: model.getFullModelRange(),
-    text: normalizedValue,
-  }], () => null)
+
+  // 设计说明：
+  // 1. Markdown / Python notebook cell 共享同一套外部回推策略，避免两个编辑器在 bridge model 上行为分叉。
+  // 2. 统一改用带日志的安全同步封装，后续若再出现内容回推异常，可以直接从日志定位到具体 cell 和 URI。
+  replaceModelContentPreserveUndo(model, normalizedValue, {
+    logPrefix: '[NotebookMarkdownEditor] synchronize external cell content',
+    uri: String(model?.uri?.toString?.() || ''),
+    owner: getNotebookMarkdownModelOwner(),
+    reason: 'props-model-value-watch',
+  })
+  logger.debug('[NotebookMarkdownEditor] applied external model sync', {
+    cellKey: String(props.cellKey || ''),
+    nextLength: normalizedValue.length,
+  })
   ensureHostHeight()
 })
 
