@@ -242,6 +242,71 @@ const getEntryModel = (entry) => {
   return model
 }
 
+export const replaceModelContentPreserveUndo = (
+  model,
+  content,
+  {
+    logPrefix = '[VSCodeModelBridge] model content sync',
+    uri = '',
+    owner = 'global',
+    reason = 'manual',
+  } = {}
+) => {
+  if (!model || model.isDisposed?.()) return model
+
+  const nextContent = String(content ?? '')
+  const currentContent = String(model.getValue?.() || '')
+  if (currentContent === nextContent) return model
+
+  const fullRange = typeof model.getFullModelRange === 'function'
+    ? model.getFullModelRange()
+    : null
+  if (!fullRange) {
+    model.setValue(nextContent)
+    logger.debug(`${logPrefix} fallback to setValue`, {
+      uri,
+      owner,
+      reason,
+      length: nextContent.length,
+    })
+    return model
+  }
+
+  try {
+    if (typeof model.pushEditOperations === 'function') {
+      model.pushEditOperations([], [{
+        range: fullRange,
+        text: nextContent,
+        forceMoveMarkers: true,
+      }], () => null)
+      logger.debug(`${logPrefix} via pushEditOperations`, {
+        uri,
+        owner,
+        reason,
+        length: nextContent.length,
+      })
+      return model
+    }
+  } catch (error) {
+    logger.warn(`${logPrefix} pushEditOperations failed, fallback to setValue`, {
+      uri,
+      owner,
+      reason,
+      length: nextContent.length,
+      error,
+    })
+  }
+
+  model.setValue(nextContent)
+  logger.debug(`${logPrefix} fallback to setValue`, {
+    uri,
+    owner,
+    reason,
+    length: nextContent.length,
+  })
+  return model
+}
+
 const applyLanguageId = (entry, languageId, reason, owner) => {
   const nextLanguageId = String(languageId || '').trim()
   const model = getEntryModel(entry)
@@ -296,9 +361,12 @@ const ensureMonacoTextModel = (uri, content, languageId, reason, owner) => {
   if (nextLanguageId && model.getLanguageId?.() !== nextLanguageId) {
     monaco.editor.setModelLanguage(model, nextLanguageId)
   }
-  if (model.getValue() !== nextContent) {
-    model.setValue(nextContent)
-  }
+  replaceModelContentPreserveUndo(model, nextContent, {
+    logPrefix: '[VSCodeModelBridge] ensure Monaco text model',
+    uri: uri.toString(),
+    owner,
+    reason,
+  })
   return model
 }
 
@@ -308,12 +376,11 @@ const syncModelContent = (entry, content, reason, owner) => {
 
   const nextContent = String(content ?? '')
   if (model.getValue() !== nextContent) {
-    model.setValue(nextContent)
-    logger.debug('[VSCodeModelBridge] model content synchronized', {
+    replaceModelContentPreserveUndo(model, nextContent, {
+      logPrefix: '[VSCodeModelBridge] model content synchronized',
       uri: entry.uri.toString(),
       owner,
       reason,
-      length: nextContent.length,
     })
   }
 

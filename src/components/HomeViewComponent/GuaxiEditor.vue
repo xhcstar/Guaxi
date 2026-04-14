@@ -1110,6 +1110,7 @@ import {
   retainVsCodeTextModel,
   releaseVsCodeTextModel,
   disposeAllVsCodeTextModelsForOwner,
+  replaceModelContentPreserveUndo,
 } from '../../monaco/vscodeModelBridge'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
@@ -5739,7 +5740,12 @@ const prepareEmbeddedVirtualModel = (embeddedCtx) => {
   const virtualModel = getOrCreateMarkdownFenceModelForSource(embeddedCtx.languageId, sourceFilePath);
   if (!virtualModel) return null;
 
-  virtualModel.setValue(embeddedCtx.blockText || '');
+  replaceModelContentPreserveUndo(virtualModel, embeddedCtx.blockText || '', {
+    logPrefix: '[EmbeddedLsp] synchronized virtual model content',
+    uri: String(virtualModel.uri?.toString?.() || ''),
+    owner: getMarkdownFenceVscodeModelOwner(embeddedCtx.languageId),
+    reason: 'embedded-virtual-model-prepare-local',
+  });
   void retainVsCodeTextModel({
     resource: virtualModel.uri,
     content: virtualModel.getValue(),
@@ -10037,7 +10043,14 @@ const applyNotebookMarkdown = (nextMarkdown) => {
   const targetEditor = editor || secondaryEditor
   const model = targetEditor?.getModel?.()
   if (model && model.getValue() !== nextText) {
-    model.setValue(nextText)
+    replaceModelContentPreserveUndo(model, nextText, {
+      logPrefix: '[NotebookAutosave] sync source editor from notebook surface',
+      uri: String(model.uri?.toString?.() || ''),
+      owner: targetEditor === secondaryEditor
+        ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER
+        : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+      reason: 'apply-notebook-markdown',
+    })
   }
 
   const targetPath = String(selectedFile.value?.path || '').trim()
@@ -10189,7 +10202,14 @@ const syncSourceEditorContent = (reason = 'manual-sync') => {
     const model = targetEditor.getModel?.()
     sourceEditorProgrammaticSyncDepth += 1
     if (model && model.getValue() !== nextText) {
-      model.setValue(nextText)
+      replaceModelContentPreserveUndo(model, nextText, {
+        logPrefix: '[Editor] sync source editor content',
+        uri: String(model.uri?.toString?.() || ''),
+        owner: targetEditor === secondaryEditor
+          ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER
+          : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+        reason,
+      })
     } else if (!model && typeof targetEditor.setValue === 'function') {
       targetEditor.setValue(nextText)
     }
@@ -10286,7 +10306,12 @@ const ensureEditorModelBinding = (targetEditor, options = {}) => {
       monaco.editor.setModelLanguage(nextModel, languageId)
     }
     if (typeof options.content !== 'undefined' && nextModel.getValue() !== desiredContent) {
-      nextModel.setValue(desiredContent)
+      replaceModelContentPreserveUndo(nextModel, desiredContent, {
+        logPrefix: '[Editor] sync bound Monaco model',
+        uri: String(nextModel.uri?.toString?.() || ''),
+        owner: modelOwner || 'editor-model-binding',
+        reason: String(options.reason || 'manual'),
+      })
     }
   }
 
@@ -10353,7 +10378,14 @@ const updateEditorContent = (content) => {
   sourceEditorProgrammaticSyncDepth += 1
   try {
     if (model) {
-      model.setValue(nextContent);
+      replaceModelContentPreserveUndo(model, nextContent, {
+        logPrefix: '[Editor] update editor content applied programmatic sync',
+        uri: String(model.uri?.toString?.() || ''),
+        owner: targetEditor === secondaryEditor
+          ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER
+          : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
+        reason: 'update-editor-content',
+      });
     } else {
       targetEditor.setValue(nextContent);
     }

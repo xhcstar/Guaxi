@@ -1,11 +1,10 @@
 <template>
-  <div class="lsp-extension-panel">
+  <div class="lsp-extension-panel" :class="{ 'is-dark': isDarkTheme }">
     <div class="lsp-extension-panel__header">
-      <div>
-        <h3>LSP 扩展架构</h3>
-        <p class="description">
-          这里管理 VSIX / Open VSX 语言扩展。Guaxi 会优先从已安装扩展解析语言能力和 LSP 运行时，
-          解析不到时再回退到旧的静态 LSP 方案，保证生产环境可平滑迁移。
+      <div class="lsp-extension-panel__hero">
+        <h3 class="lsp-extension-panel__title">LSP 扩展架构</h3>
+        <p class="lsp-extension-panel__description">
+          这里管理 VSIX / Open VSX 语言扩展
         </p>
       </div>
       <n-space class="lsp-extension-panel__header-actions" wrap>
@@ -22,47 +21,59 @@
         :disabled="loading || searching"
         @keydown.enter.prevent="handleSearch"
       />
-      <n-button type="primary" :loading="searching" :disabled="loading" @click="handleSearch">
+      <n-button
+        class="lsp-extension-panel__search-btn"
+        type="primary"
+        :loading="searching"
+        :disabled="loading"
+        @click="handleSearch"
+      >
         搜索 Open VSX
       </n-button>
     </div>
 
-    <div v-if="searchResults.length" class="lsp-extension-panel__section">
+    <section v-if="searchResults.length" class="lsp-extension-panel__section">
       <div class="lsp-extension-panel__section-title">Open VSX 搜索结果</div>
       <div class="lsp-extension-panel__list">
-        <div
+        <article
           v-for="item in searchResults"
           :key="`${item.id}-${item.version}`"
           class="lsp-extension-panel__item"
         >
           <div class="lsp-extension-panel__item-main">
-            <div class="lsp-extension-panel__item-title">{{ item.display_name || item.id }}</div>
+            <div class="lsp-extension-panel__item-title">
+              {{ item.display_name || item.id }}
+            </div>
             <div class="lsp-extension-panel__item-meta">{{ item.id }} · {{ item.version }}</div>
             <div v-if="item.description" class="lsp-extension-panel__item-desc">{{ item.description }}</div>
           </div>
-          <n-button
-            size="small"
-            type="primary"
-            :loading="installingExtensionId === item.id"
-            :disabled="loading && installingExtensionId !== item.id"
-            @click="handleInstallOpenVsx(item)"
-          >
-            安装
-          </n-button>
-        </div>
+          <div class="lsp-extension-panel__item-actions">
+            <n-button
+              size="small"
+              type="primary"
+              :loading="installingExtensionId === item.id"
+              :disabled="loading && installingExtensionId !== item.id"
+              @click="handleInstallOpenVsx(item)"
+            >
+              安装
+            </n-button>
+          </div>
+        </article>
       </div>
-    </div>
+    </section>
 
-    <div class="lsp-extension-panel__section">
+    <section class="lsp-extension-panel__section">
       <div class="lsp-extension-panel__section-title">
         已知语言扩展
         <span class="lsp-extension-panel__section-subtitle">
           已安装 {{ installedCount }} / {{ extensions.length }}
         </span>
       </div>
+
       <div v-if="loading" class="lsp-extension-panel__empty">正在加载扩展状态...</div>
+
       <div v-else-if="extensions.length" class="lsp-extension-panel__list">
-        <div v-for="item in extensions" :key="item.id" class="lsp-extension-panel__item">
+        <article v-for="item in extensions" :key="item.id" class="lsp-extension-panel__item">
           <div class="lsp-extension-panel__item-main">
             <div class="lsp-extension-panel__item-title">
               {{ item.display_name || item.id }}
@@ -76,11 +87,13 @@
                 兼容级别 {{ item.compatibility_level || 'C' }}
               </n-tag>
             </div>
+
             <div class="lsp-extension-panel__item-meta">
               {{ item.id }}
-              <span v-if="item.version && item.version !== 'not-installed'">· {{ item.version }}</span>
-              <span v-if="item.source">· 来源 {{ item.source }}</span>
+              <span v-if="item.version && item.version !== 'not-installed'"> · {{ item.version }}</span>
+              <span v-if="item.source"> · 来源 {{ item.source }}</span>
             </div>
+
             <div v-if="item.languages?.length" class="lsp-extension-panel__chips">
               <span
                 v-for="language in item.languages"
@@ -90,12 +103,14 @@
                 {{ language }}
               </span>
             </div>
+
             <div v-if="item.description" class="lsp-extension-panel__item-desc">{{ item.description }}</div>
             <div v-if="item.installed_path" class="lsp-extension-panel__path">{{ item.installed_path }}</div>
             <div v-if="item.runtime_status?.message" class="lsp-extension-panel__runtime">
               {{ item.runtime_status.message }}
             </div>
           </div>
+
           <div class="lsp-extension-panel__item-actions">
             <n-button
               v-if="!item.installed && item.open_vsx"
@@ -106,6 +121,7 @@
             >
               从 Open VSX 安装
             </n-button>
+
             <n-button
               v-if="item.installed"
               size="small"
@@ -117,10 +133,11 @@
               卸载
             </n-button>
           </div>
-        </div>
+        </article>
       </div>
+
       <div v-else class="lsp-extension-panel__empty">当前还没有可管理的语言扩展。</div>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -131,9 +148,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { createLogger } from '../../utils/logger'
 import { refreshLspRuntimeExtensionSnapshot } from '../../monaco/lspCapabilities'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 const logger = createLogger('LspExtensionPanel')
 const message = useMessage()
+const settingsStore = useSettingsStore()
 
 const loading = ref(false)
 const searching = ref(false)
@@ -146,6 +165,16 @@ const removingExtensionId = ref('')
 const installedCount = computed(() =>
   extensions.value.filter((item) => item?.installed).length
 )
+
+// 设计说明：
+// 1. 这块面板的卡片、边框和按钮都有自定义样式，不能只依赖全局 Naive UI 主题。
+// 2. 这里显式读取设置仓库和根节点 dataset，给组件根节点挂 `is-dark` class，
+//    让暗色模式和布局覆盖稳定落在组件内部，避免 scoped 选择器失配。
+const isDarkTheme = computed(() => {
+  const storeTheme = String(settingsStore.appearanceTheme || '').trim().toLowerCase()
+  const datasetTheme = String(document?.documentElement?.dataset?.guaxiTheme || '').trim().toLowerCase()
+  return storeTheme === 'dark' || datasetTheme === 'dark'
+})
 
 const runtimeTagType = (item) => {
   if (item?.runtime_status?.ready) return 'success'
@@ -179,6 +208,7 @@ const refreshExtensions = async () => {
     logger.info('[LspExtensionPanel] extension state refreshed', {
       count: extensions.value.length,
       installedCount: installedCount.value,
+      dark: isDarkTheme.value,
     })
   } catch (error) {
     logger.error('[LspExtensionPanel] refresh extension state failed', error)
@@ -227,7 +257,7 @@ const handleInstallOpenVsx = async (item) => {
       version: item?.version ? String(item.version) : null,
       downloadUrl: item?.download_url ? String(item.download_url) : null,
     })
-    message.success(`已安装扩展: ${extensionId}`)
+    message.success(`已安装扩展 ${extensionId}`)
     await refreshExtensions()
   } catch (error) {
     logger.error('[LspExtensionPanel] install from Open VSX failed', error)
@@ -292,7 +322,7 @@ const handleRemoveExtension = async (item) => {
     removingExtensionId.value = extensionId
     logger.info('[LspExtensionPanel] removing installed extension', { extensionId })
     await invoke('remove_lsp_extension', { extensionId })
-    message.success(`已卸载扩展: ${extensionId}`)
+    message.success(`已卸载扩展 ${extensionId}`)
     await refreshExtensions()
   } catch (error) {
     logger.error('[LspExtensionPanel] remove extension failed', error)
@@ -310,20 +340,34 @@ onMounted(() => {
 <style scoped>
 .lsp-extension-panel {
   /* 设计说明：
-   * 1. 设置页会跟随全局 data-guaxi-theme 切换，但这里原先大量硬编码浅色值，暗色模式下对比度和层次都会失真。
-   * 2. 这里统一抽成局部变量，再用 :global(:root[data-guaxi-theme='dark']) 覆盖，避免把主题判断塞进脚本层。 */
+   * 1. 这里统一抽出组件级颜色变量，亮暗两套主题只切变量，不改结构。
+   * 2. 顶部操作区和卡片操作区都做成可换行布局，解决按钮在窄宽度下堆叠混乱的问题。
+   */
   --lsp-panel-title: #1f2937;
   --lsp-panel-text: #111827;
   --lsp-panel-muted: #6b7280;
   --lsp-panel-border: rgba(15, 23, 42, 0.08);
   --lsp-panel-border-strong: rgba(148, 163, 184, 0.22);
-  --lsp-panel-surface: rgba(248, 250, 252, 0.92);
+  --lsp-panel-surface: rgba(83, 94, 105, 0.92);
   --lsp-panel-surface-elevated: rgba(255, 255, 255, 0.88);
   --lsp-panel-chip-bg: rgba(59, 130, 246, 0.1);
-  --lsp-panel-chip-text: #1d4ed8;
+  --lsp-panel-chip-text: #475068;
   --lsp-panel-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
   display: grid;
   gap: 16px;
+}
+
+.lsp-extension-panel.is-dark {
+  --lsp-panel-title: #e5edf8;
+  --lsp-panel-text: #f8fbff;
+  --lsp-panel-muted: #a7b4c8;
+  --lsp-panel-border: rgba(148, 163, 184, 0.2);
+  --lsp-panel-border-strong: rgba(148, 163, 184, 0.28);
+  --lsp-panel-surface: rgba(15, 23, 42, 0.92);
+  --lsp-panel-surface-elevated: rgba(30, 41, 59, 0.88);
+  --lsp-panel-chip-bg: rgba(56, 189, 248, 0.18);
+  --lsp-panel-chip-text: #8bdcff;
+  --lsp-panel-shadow: 0 18px 34px rgba(2, 6, 23, 0.28);
 }
 
 .lsp-extension-panel__header {
@@ -333,19 +377,43 @@ onMounted(() => {
   gap: 16px;
 }
 
+.lsp-extension-panel__hero {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.lsp-extension-panel__title {
+  margin: 0;
+  color: var(--lsp-panel-title);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.lsp-extension-panel__description {
+  margin: 0;
+  color: var(--lsp-panel-muted);
+  line-height: 1.75;
+}
+
 .lsp-extension-panel__header-actions {
   justify-content: flex-end;
   flex-wrap: wrap;
+  gap: 10px;
 }
 
 .lsp-extension-panel__header-actions :deep(.n-button) {
-  min-width: 108px;
+  min-width: 112px;
 }
 
 .lsp-extension-panel__search {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+}
+
+.lsp-extension-panel__search-btn {
+  min-width: 140px;
 }
 
 .lsp-extension-panel__section {
@@ -440,25 +508,9 @@ onMounted(() => {
   justify-content: center;
 }
 
-/* 设计说明：
- * 1. 设置页整体已经通过根节点 data-guaxi-theme 标识主题，因此这里直接覆写局部变量即可。
- * 2. 只改变量，不改结构选择器，能尽量降低 Naive UI 内部样式升级时的耦合。 */
-:global(:root[data-guaxi-theme='dark']) .lsp-extension-panel {
-  --lsp-panel-title: #e5edf8;
-  --lsp-panel-text: #f8fbff;
-  --lsp-panel-muted: #a7b4c8;
-  --lsp-panel-border: rgba(148, 163, 184, 0.2);
-  --lsp-panel-border-strong: rgba(148, 163, 184, 0.28);
-  --lsp-panel-surface: rgba(15, 23, 42, 0.92);
-  --lsp-panel-surface-elevated: rgba(30, 41, 59, 0.88);
-  --lsp-panel-chip-bg: rgba(56, 189, 248, 0.18);
-  --lsp-panel-chip-text: #8bdcff;
-  --lsp-panel-shadow: 0 18px 34px rgba(2, 6, 23, 0.28);
-}
-
-:global(:root[data-guaxi-theme='dark']) .lsp-extension-panel :deep(.n-input),
-:global(:root[data-guaxi-theme='dark']) .lsp-extension-panel :deep(.n-base-selection),
-:global(:root[data-guaxi-theme='dark']) .lsp-extension-panel :deep(.n-button:not(.n-button--primary-type)) {
+.lsp-extension-panel.is-dark :deep(.n-input),
+.lsp-extension-panel.is-dark :deep(.n-base-selection),
+.lsp-extension-panel.is-dark :deep(.n-button:not(.n-button--primary-type)) {
   --n-border: var(--lsp-panel-border-strong);
   --n-border-hover: color-mix(in srgb, var(--lsp-panel-border-strong) 70%, #8bdcff 30%);
   --n-border-pressed: color-mix(in srgb, var(--lsp-panel-border-strong) 64%, #8bdcff 36%);
@@ -480,6 +532,13 @@ onMounted(() => {
 
   .lsp-extension-panel__header-actions,
   .lsp-extension-panel__item-actions {
+    width: 100%;
+  }
+
+  .lsp-extension-panel__header-actions :deep(.n-button),
+  .lsp-extension-panel__item-actions :deep(.n-button),
+  .lsp-extension-panel__search-btn {
+    min-width: 0;
     width: 100%;
   }
 }
