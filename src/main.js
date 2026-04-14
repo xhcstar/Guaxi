@@ -57,6 +57,7 @@ import { initialize } from '@codingame/monaco-vscode-api'
 import getModelServiceOverride from '@codingame/monaco-vscode-model-service-override'
 import 'vscode/localExtensionHost'
 import { refreshLspRuntimeExtensionSnapshot } from './monaco/lspCapabilities'
+import { configureMonacoWorkers } from './monaco/workerBootstrap'
 
 const iconRegistry = {
   'mdi:folder-outline': mdiFolderOutline,
@@ -110,6 +111,18 @@ initFrontendLogging({
   forwardErrors: true
 })
 const logger = createLogger('Main')
+
+try {
+  // 设计说明：
+  // 1. 先在应用启动早期显式注册 `MonacoEnvironment.getWorker`，确保后续 Monaco、
+  //    TextMate 背景分词、以及 VSCode service override 在第一次取 Worker 时就能拿到正确入口。
+  // 2. 之前仅依赖 HTML 注入的 `getWorkerUrl`，在 Tauri + Vite 场景下路径一旦解析失败，
+  //    浏览器就会把返回的 `index.html` 当成模块脚本去加载，最终出现 `text/html` MIME 报错。
+  configureMonacoWorkers()
+  logger.info('[Main] Monaco worker bootstrap configured')
+} catch (error) {
+  logger.error('[Main] Monaco worker bootstrap failed:', error)
+}
 
 try {
   // 设计说明：
