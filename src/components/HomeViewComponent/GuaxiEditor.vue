@@ -5879,6 +5879,189 @@ const isSuggestWidgetVisibleForEditor = (targetEditor) => {
   return !!doc.querySelector('.suggest-widget.visible');
 };
 
+const getSuggestControllerDebugState = (targetEditor) => {
+  try {
+    if (!targetEditor?.getContribution) {
+      return {
+        state: -1,
+        widgetVisible: false,
+        filteredCount: 0,
+        rawCount: 0,
+        firstFiltered: null,
+        firstRaw: null,
+      }
+    }
+
+    const controller = targetEditor.getContribution('editor.contrib.suggestController')
+    const suggestModel = controller?.model
+    const completionModel = suggestModel?.completionModel || suggestModel?._completionModel
+    const filteredItems = Array.isArray(completionModel?.items) ? completionModel.items : []
+    const rawItems = Array.isArray(completionModel?._items)
+      ? completionModel._items
+      : filteredItems
+
+    return {
+      state: Number(suggestModel?.state ?? suggestModel?._state ?? -1),
+      widgetVisible: isSuggestWidgetVisibleForEditor(targetEditor),
+      filteredCount: filteredItems.length,
+      rawCount: rawItems.length,
+      firstFiltered: filteredItems[0] || null,
+      firstRaw: rawItems[0] || null,
+    }
+  } catch {
+    return {
+      state: -1,
+      widgetVisible: false,
+      filteredCount: 0,
+      rawCount: 0,
+      firstFiltered: null,
+      firstRaw: null,
+    }
+  }
+}
+
+const isSuggestWidgetStaleForEditor = (targetEditor) => {
+  const snapshot = getSuggestControllerDebugState(targetEditor)
+  return snapshot.widgetVisible && snapshot.filteredCount === 0 && snapshot.rawCount === 0
+}
+
+const logSuggestControllerSnapshot = (targetEditor, reason, extra = {}) => {
+  try {
+    const snapshot = getSuggestControllerDebugState(targetEditor)
+    const firstFiltered = snapshot.firstFiltered
+    const firstRaw = snapshot.firstRaw
+    logger.info('[EmbeddedLsp] suggest controller snapshot', {
+      reason,
+      state: snapshot.state,
+      widgetVisible: snapshot.widgetVisible,
+      filteredCount: snapshot.filteredCount,
+      rawCount: snapshot.rawCount,
+      staleVisibleWidget: snapshot.widgetVisible && snapshot.filteredCount === 0 && snapshot.rawCount === 0,
+      firstFilteredLabel: getCompletionItemLabelText(firstFiltered?.completion?.label || firstFiltered?.textLabel || ''),
+      firstFilteredWord: String(firstFiltered?.word || ''),
+      firstFilteredIsInvalid: !!firstFiltered?.isInvalid,
+      firstFilteredEditStart: firstFiltered?.editStart
+        ? `${firstFiltered.editStart.lineNumber}:${firstFiltered.editStart.column}`
+        : '',
+      firstRawLabel: getCompletionItemLabelText(firstRaw?.completion?.label || firstRaw?.textLabel || ''),
+      firstRawWord: String(firstRaw?.word || ''),
+      firstRawIsInvalid: !!firstRaw?.isInvalid,
+      firstRawEditStart: firstRaw?.editStart
+        ? `${firstRaw.editStart.lineNumber}:${firstRaw.editStart.column}`
+        : '',
+      ...extra,
+    })
+  } catch (error) {
+    logger.debug('[EmbeddedLsp] suggest controller snapshot failed', { reason, error })
+  }
+}
+
+const forceRetriggerEmbeddedCompletion = (targetEditor, source, reason, extra = {}) => {
+  if (!targetEditor) return
+
+  const beforeSnapshot = getSuggestControllerDebugState(targetEditor)
+  logger.info('[EmbeddedLsp] force retrigger suggest', {
+    reason,
+    beforeState: beforeSnapshot.state,
+    beforeWidgetVisible: beforeSnapshot.widgetVisible,
+    beforeFilteredCount: beforeSnapshot.filteredCount,
+    beforeRawCount: beforeSnapshot.rawCount,
+    beforeStaleVisibleWidget: beforeSnapshot.widgetVisible && beforeSnapshot.filteredCount === 0 && beforeSnapshot.rawCount === 0,
+    ...extra,
+  })
+
+  try {
+    targetEditor.focus?.()
+    if (beforeSnapshot.widgetVisible) {
+      targetEditor.trigger(source, 'hideSuggestWidget', null)
+      logger.debug('[EmbeddedLsp] hide suggest widget before force retrigger', {
+        reason,
+        ...extra,
+      })
+    }
+  } catch (error) {
+    logger.debug('[EmbeddedLsp] hide suggest widget before force retrigger failed', {
+      reason,
+      error,
+      ...extra,
+    })
+  }
+
+  markEmbeddedSuggestTriggered(targetEditor)
+  targetEditor.focus?.()
+  targetEditor.trigger(source, 'editor.action.triggerSuggest', {})
+}
+
+const attachSuggestControllerTrace = (targetEditor, reason, extra = {}) => {
+  try {
+    if (!targetEditor?.getContribution) return () => {}
+    const controller = targetEditor.getContribution('editor.contrib.suggestController')
+    const suggestModel = controller?.model
+    if (!suggestModel?.onDidCancel && !suggestModel?.onDidSuggest && !suggestModel?.onDidTrigger) {
+      return () => {}
+    }
+
+    const disposables = []
+    const pushDisposable = (candidate) => {
+      if (candidate?.dispose) disposables.push(candidate)
+    }
+
+    pushDisposable(suggestModel?.onDidTrigger?.((event) => {
+      logger.info('[EmbeddedLsp] suggest model triggered', {
+        reason,
+        auto: !!event?.auto,
+        shy: !!event?.shy,
+        position: event?.position
+          ? `${event.position.lineNumber}:${event.position.column}`
+          : '',
+        ...extra,
+      })
+    }))
+
+    pushDisposable(suggestModel?.onDidSuggest?.((event) => {
+      logger.info('[EmbeddedLsp] suggest model produced completion model', {
+        reason,
+        completionCount: Number(event?.completionModel?.items?.length || 0),
+        isFrozen: !!event?.isFrozen,
+        auto: !!event?.triggerOptions?.auto,
+        triggerKind: Number(event?.triggerOptions?.triggerKind || 0),
+        ...extra,
+      })
+    }))
+
+    pushDisposable(suggestModel?.onDidCancel?.((event) => {
+      logger.info('[EmbeddedLsp] suggest model cancelled', {
+        reason,
+        retrigger: !!event?.retrigger,
+        stateAfterCancel: Number(suggestModel?.state ?? -1),
+        ...extra,
+      })
+    }))
+
+    const timeout = window.setTimeout(() => {
+      for (const disposable of disposables) {
+        try {
+          disposable.dispose()
+        } catch {
+        }
+      }
+    }, 600)
+
+    return () => {
+      window.clearTimeout(timeout)
+      for (const disposable of disposables) {
+        try {
+          disposable.dispose()
+        } catch {
+        }
+      }
+    }
+  } catch (error) {
+    logger.debug('[EmbeddedLsp] attach suggest controller trace failed', { reason, error })
+    return () => {}
+  }
+}
+
 const buildEmbeddedCompletionCacheKey = (model, position, embeddedCtx) => {
   if (!model || !position || !embeddedCtx) return ''
   const modelUri = String(model.uri?.toString?.() || '')
@@ -5960,35 +6143,81 @@ const scheduleEmbeddedCompletionRetrigger = (targetEditor, model, position, embe
       lineNumber: latestPosition.lineNumber,
       column: latestPosition.column,
     })
-    try {
-      targetEditor.focus?.()
-      targetEditor.trigger('guaxi-embedded-lsp-cache', 'hideSuggestWidget', null)
-    } catch (error) {
-      logger.debug('[EmbeddedLsp] hide suggest widget before retrigger failed', {
+    const disposeTrace = attachSuggestControllerTrace(targetEditor, 'first-retrigger', {
+      languageId: embeddedCtx.languageId,
+      cacheKey,
+      lineNumber: latestPosition.lineNumber,
+      column: latestPosition.column,
+    })
+    forceRetriggerEmbeddedCompletion(targetEditor, 'guaxi-embedded-lsp-cache', 'first-retrigger', {
+      languageId: embeddedCtx.languageId,
+      cacheKey,
+      lineNumber: latestPosition.lineNumber,
+      column: latestPosition.column,
+    })
+    window.setTimeout(() => {
+      logSuggestControllerSnapshot(targetEditor, 'after-first-retrigger', {
         languageId: embeddedCtx.languageId,
-        reason,
-        error,
+        cacheKey,
+        lineNumber: latestPosition.lineNumber,
+        column: latestPosition.column,
       })
-    }
-    markEmbeddedSuggestTriggered(targetEditor)
-    targetEditor.trigger('guaxi-embedded-lsp-cache', 'editor.action.triggerSuggest', {})
+      disposeTrace()
+    }, 20)
     window.setTimeout(() => {
       if (!targetEditor?.hasTextFocus?.()) return
       const retryPosition = targetEditor.getPosition?.()
       const retryModel = targetEditor.getModel?.()
       if (!retryPosition || retryModel !== model) return
       if (buildEmbeddedCompletionCacheKey(retryModel, retryPosition, embeddedCtx) !== cacheKey) return
-      if (isSuggestWidgetVisibleForEditor(targetEditor)) return
+      const retrySnapshot = getSuggestControllerDebugState(targetEditor)
+      const hasVisibleSuggestions = retrySnapshot.widgetVisible && (retrySnapshot.filteredCount > 0 || retrySnapshot.rawCount > 0)
+      if (hasVisibleSuggestions) {
+        logger.debug('[EmbeddedLsp] skip second retrigger because suggestions are already visible', {
+          languageId: embeddedCtx.languageId,
+          reason,
+          cacheKey,
+          lineNumber: retryPosition.lineNumber,
+          column: retryPosition.column,
+          widgetVisible: retrySnapshot.widgetVisible,
+          filteredCount: retrySnapshot.filteredCount,
+          rawCount: retrySnapshot.rawCount,
+        })
+        return
+      }
       logger.info('[EmbeddedLsp] retrigger suggest second pass from cached completion results', {
         languageId: embeddedCtx.languageId,
         reason,
         cacheKey,
         lineNumber: retryPosition.lineNumber,
         column: retryPosition.column,
+        widgetVisible: retrySnapshot.widgetVisible,
+        filteredCount: retrySnapshot.filteredCount,
+        rawCount: retrySnapshot.rawCount,
+        staleVisibleWidget: retrySnapshot.widgetVisible && retrySnapshot.filteredCount === 0 && retrySnapshot.rawCount === 0,
       })
-      markEmbeddedSuggestTriggered(targetEditor)
-      targetEditor.trigger('guaxi-embedded-lsp-cache-second', 'editor.action.triggerSuggest', {})
-    }, 80)
+      const disposeSecondTrace = attachSuggestControllerTrace(targetEditor, 'second-retrigger', {
+        languageId: embeddedCtx.languageId,
+        cacheKey,
+        lineNumber: retryPosition.lineNumber,
+        column: retryPosition.column,
+      })
+      forceRetriggerEmbeddedCompletion(targetEditor, 'guaxi-embedded-lsp-cache-second', 'second-retrigger', {
+        languageId: embeddedCtx.languageId,
+        cacheKey,
+        lineNumber: retryPosition.lineNumber,
+        column: retryPosition.column,
+      })
+      window.setTimeout(() => {
+        logSuggestControllerSnapshot(targetEditor, 'after-second-retrigger', {
+          languageId: embeddedCtx.languageId,
+          cacheKey,
+          lineNumber: retryPosition.lineNumber,
+          column: retryPosition.column,
+        })
+        disposeSecondTrace()
+      }, 60)
+    }, 120)
   }, 24)
 }
 
@@ -6568,25 +6797,44 @@ const buildEmbeddedCompletionFilterText = (rawFilterText, fallbackLabel, filterC
   return `${prefix}${baseFilterText}`
 }
 
+const buildEmbeddedCompletionDisplayLabel = (label, filterContext) => {
+  const baseLabel = String(label || '').trim()
+  if (!baseLabel) return ''
+
+  const prefix = String(filterContext?.filterPrefix || '')
+  const typedWord = String(filterContext?.typedWord || '')
+  if (!prefix || typedWord) return baseLabel
+
+  // 设计说明：
+  // 1. 目前日志已经证明 embedded LSP 实际返回了 1423 条结果，但 Monaco widget 仍显示 `No suggestions`。
+  // 2. 这说明在 markdown 宿主里，前端过滤并不总是完全依赖 `filterText`，有概率仍按可见 label 做匹配。
+  // 3. 对于 `sys.` 这类成员补全，原始 label 只有 `exit / path / argv`，如果过滤阶段忽略了 filterText，
+  //    它们就会被当前前缀 `sys.` 全部筛掉。这里把显示 label 扩展成 `sys.exit` 这类完整前缀，
+  //    但 insertText 仍保持原始成员名，避免影响真正插入结果。
+  if (baseLabel.startsWith(prefix)) return baseLabel
+  return `${prefix}${baseLabel}`
+}
+
 const convertVscodeCompletionItemToMonaco = (item, replaceRange, index, filterContext = null) => {
-  const label = normalizeCompletionLabel(item?.label)
-  if (!label) return null
+  const rawLabel = normalizeCompletionLabel(item?.label)
+  if (!rawLabel) return null
 
   const insertTextValue = item?.insertText
   const insertText = typeof insertTextValue === 'string'
     ? insertTextValue
-    : String(insertTextValue?.value || label)
+    : String(insertTextValue?.value || rawLabel)
   const isSnippet = typeof insertTextValue === 'object' && insertTextValue !== null
   const documentation = normalizeCompletionDocumentation(item?.documentation)
   const kind = VSCODE_TO_MONACO_COMPLETION_KIND[item?.kind] || monaco.languages.CompletionItemKind.Text
+  const label = buildEmbeddedCompletionDisplayLabel(rawLabel, filterContext)
 
   return {
     label,
     kind,
     detail: item?.detail,
     documentation,
-    filterText: buildEmbeddedCompletionFilterText(item?.filterText, label, filterContext),
-    sortText: buildCompletionSortKey(item, label, index),
+    filterText: buildEmbeddedCompletionFilterText(item?.filterText, rawLabel, filterContext),
+    sortText: buildCompletionSortKey(item, rawLabel, index),
     insertText,
     insertTextRules: isSnippet
       ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
@@ -6681,6 +6929,38 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
   }
 }
 
+const resolveEmbeddedMemberAccessReplaceRange = (model, position) => {
+  const hostLineNumber = Number(position?.lineNumber || 1)
+  const hostColumn = Number(position?.column || 1)
+  const lineContent = String(model?.getLineContent?.(hostLineNumber) || '')
+  const beforeCursor = lineContent.slice(0, Math.max(0, hostColumn - 1))
+  const hostToken = String(beforeCursor.match(/[^\s]+$/)?.[0] || '')
+  if (!hostToken) return null
+
+  const typedWord = String(hostToken.match(/([A-Za-z0-9_$]*)$/)?.[1] || '')
+  const filterPrefix = hostToken.slice(0, Math.max(0, hostToken.length - typedWord.length))
+  if (!/(\.|::|->)$/.test(filterPrefix)) return null
+
+  const startColumn = Math.max(1, hostColumn - typedWord.length)
+  const range = new monaco.Range(
+    hostLineNumber,
+    startColumn,
+    hostLineNumber,
+    hostColumn
+  )
+
+  logger.debug('[EmbeddedLsp] resolved member-access replace range', {
+    hostLineNumber,
+    hostColumn,
+    hostToken,
+    typedWord,
+    filterPrefix,
+    startColumn,
+    endColumn: hostColumn,
+  })
+  return range
+}
+
 const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) => {
   // 设计思路：
   // 1. 这里不能再用宿主 Markdown model 的 `getWordUntilPosition()` 来算 replace range。
@@ -6688,6 +6968,11 @@ const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) =
   //    最终导致 Monaco 认为所有补全项都在替换 `obj`，前端过滤后直接显示 `no suggestion`。
   // 3. 正确做法是基于 embedded 虚拟语言模型计算当前前缀，再把列偏移映射回宿主 Markdown 行列。
   //    这样 Monaco 前端过滤使用的就是 Python 自己的前缀，而不是 Markdown 误判出来的单词。
+  const memberAccessRange = resolveEmbeddedMemberAccessReplaceRange(model, position)
+  if (memberAccessRange) {
+    return memberAccessRange
+  }
+
   const hostLineNumber = Number(position?.lineNumber || 1)
   const hostColumn = Number(position?.column || 1)
   const blockPosition = embeddedCtx?.positionInBlock
@@ -6779,7 +7064,27 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
   )
   if (vscodeSuggestions.length) {
     writeEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, vscodeSuggestions)
-    if (hostEditor && !isSuggestWidgetVisibleForEditor(hostEditor)) {
+    if (hostEditor) {
+      const visibleBeforeRetrigger = isSuggestWidgetVisibleForEditor(hostEditor)
+      // 设计说明：
+      // 1. 这里的 suggest widget “可见”并不等价于“已经正确展示了 embedded LSP 结果”。
+      // 2. 实际排查中最常见的是：Monaco 先显示了一个旧的 `no suggestions` widget，随后异步 LSP 才返回 1423 条结果；
+      //    如果我们因为“widget 可见”而跳过 retrigger，用户看到的就一直是空建议。
+      // 3. 因此只要拿到了真实 suggestions，就统一走一次基于缓存结果的 hide + retrigger，
+      //    让当前会话切换到 embedded fence 的补全结果上。节流仍由 scheduleEmbeddedCompletionRetrigger 内部负责。
+      logger.debug('[EmbeddedLsp] schedule retrigger after VSCode completion resolved', {
+        languageId: embeddedCtx.languageId,
+        suggestionCount: vscodeSuggestions.length,
+        visibleBeforeRetrigger,
+        lineNumber: position?.lineNumber || 0,
+        column: position?.column || 0,
+      })
+      logSuggestControllerSnapshot(hostEditor, 'before-schedule-retrigger-vscode-completion', {
+        languageId: embeddedCtx.languageId,
+        suggestionCount: vscodeSuggestions.length,
+        lineNumber: position?.lineNumber || 0,
+        column: position?.column || 0,
+      })
       scheduleEmbeddedCompletionRetrigger(hostEditor, model, position, embeddedCtx, 'vscode-completion')
     }
     logger.debug('[EmbeddedLsp] completion resolved from VSCode command', {
@@ -6838,7 +7143,15 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
 
   const dedupedSuggestions = dedupeCompletionSuggestions(suggestions);
   writeEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, dedupedSuggestions)
-  if (dedupedSuggestions.length && hostEditor && !isSuggestWidgetVisibleForEditor(hostEditor)) {
+  if (dedupedSuggestions.length && hostEditor) {
+    const visibleBeforeRetrigger = isSuggestWidgetVisibleForEditor(hostEditor)
+    logger.debug('[EmbeddedLsp] schedule retrigger after Monaco provider completion resolved', {
+      languageId: embeddedCtx.languageId,
+      suggestionCount: dedupedSuggestions.length,
+      visibleBeforeRetrigger,
+      lineNumber: position?.lineNumber || 0,
+      column: position?.column || 0,
+    })
     scheduleEmbeddedCompletionRetrigger(hostEditor, model, position, embeddedCtx, 'monaco-provider-completion')
   }
   logger.debug('[EmbeddedLsp] completion resolved from Monaco providers', {
