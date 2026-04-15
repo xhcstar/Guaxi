@@ -447,11 +447,109 @@ fn command_output_trimmed(mut command: Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn resolve_python_base_launch_spec() -> Result<PythonLaunchSpec, String> {
+fn probe_python_program(program: &str, base_args: &[String]) -> Result<String, String> {
+    let mut command = Command::new(program);
+    command.args(base_args).arg("--version");
+    command_output_trimmed(command)
+}
+
+fn can_probe_python_program(program: &str, base_args: &[String]) -> bool {
+    probe_python_program(program, base_args).is_ok()
+}
+
+fn resolve_bundled_python_base_launch_spec() -> Result<PythonLaunchSpec, String> {
     let runtime_dir = python_runtime_dir()?;
+
+    // 设计说明：
+    // 1. Python 会话运行时要求真正独立，`.venv` 必须永远从软件目录内置的基础解释器创建。
+    // 2. 因此这里故意不再接受 GUAXI_PYTHON / 系统 PATH 作为“托管虚拟环境的创建来源”，
+    //    避免系统 Python 重装后把会话环境重新绑回外部解释器。
+    // 3. 只要 bundled runtime 缺失，就明确返回错误，提示先安装/修复内置 Python 运行时。
+    for candidate in bundled_python_candidates(&runtime_dir) {
+        if !candidate.is_file() {
+            continue;
+        }
+        let candidate_str = candidate.to_string_lossy().to_string();
+        match probe_python_program(&candidate_str, &[]) {
+            Ok(version) => {
+                info!(
+                    program = candidate_str.as_str(),
+                    runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                    version = version.as_str(),
+                    "[PythonRuntime] resolved bundled base python"
+                );
+                return Ok(PythonLaunchSpec {
+                    program: candidate_str,
+                    base_args: Vec::new(),
+                    source: "bundled".to_string(),
+                    runtime_dir,
+                });
+            }
+            Err(error) => {
+                warn!(
+                    program = candidate_str.as_str(),
+                    runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                    error = error.as_str(),
+                    "[PythonRuntime] skip bundled runtime candidate because executable probe failed"
+                );
+            }
+        }
+    }
+
+    Err(format!(
+        "未找到可用的内置 Python 基础运行时，请先安装或修复目录：{}",
+        runtime_dir.to_string_lossy()
+    ))
+}
+
+fn resolve_python_base_launch_spec_internal(prefer_managed_runtime: bool) -> Result<PythonLaunchSpec, String> {
+    let runtime_dir = python_runtime_dir()?;
+
+    // 设计说明：
+    // 1. Guaxi 的 Python 工作台目标是优先使用软件目录里的托管运行时，而不是系统 Python。
+    // 2. 旧顺序只先看 bundled python.exe，再看 GUAXI_PYTHON / 系统 PATH；如果 runtime_dir 里只有 `.venv`，
+    //    状态查询会被外部解释器“抢走”，甚至在 GUAXI_PYTHON 失效时直接报错。
+    // 3. 这里把 `.venv` 提升到最高优先级，只要软件目录下已有托管虚拟环境，就始终以它为准。
+    if prefer_managed_runtime {
+        for candidate in managed_python_candidates(&runtime_dir) {
+            if !candidate.is_file() {
+                continue;
+            }
+            let candidate_str = candidate.to_string_lossy().to_string();
+            match probe_python_program(&candidate_str, &[]) {
+                Ok(version) => {
+                    info!(
+                        program = candidate_str.as_str(),
+                        runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                        version = version.as_str(),
+                        "[PythonRuntime] resolved base python from managed runtime"
+                    );
+                    return Ok(PythonLaunchSpec {
+                        program: candidate_str,
+                        base_args: Vec::new(),
+                        source: "managed-runtime".to_string(),
+                        runtime_dir,
+                    });
+                }
+                Err(error) => {
+                    warn!(
+                        program = candidate_str.as_str(),
+                        runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                        error = error.as_str(),
+                        "[PythonRuntime] skip broken managed runtime candidate because executable probe failed"
+                    );
+                }
+            }
+        }
+    }
 
     for candidate in bundled_python_candidates(&runtime_dir) {
         if candidate.is_file() {
+            info!(
+                program = candidate.to_string_lossy().as_ref(),
+                runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                "[PythonRuntime] resolved base python from bundled runtime"
+            );
             return Ok(PythonLaunchSpec {
                 program: candidate.to_string_lossy().to_string(),
                 base_args: Vec::new(),
@@ -464,12 +562,23 @@ fn resolve_python_base_launch_spec() -> Result<PythonLaunchSpec, String> {
     if let Ok(custom) = std::env::var("GUAXI_PYTHON") {
         let trimmed = custom.trim();
         if !trimmed.is_empty() {
-            return Ok(PythonLaunchSpec {
-                program: trimmed.to_string(),
-                base_args: Vec::new(),
-                source: "env".to_string(),
-                runtime_dir,
-            });
+            if can_probe_python_program(trimmed, &[]) {
+                info!(
+                    program = trimmed,
+                    "[PythonRuntime] resolved base python from GUAXI_PYTHON"
+                );
+                return Ok(PythonLaunchSpec {
+                    program: trimmed.to_string(),
+                    base_args: Vec::new(),
+                    source: "env".to_string(),
+                    runtime_dir,
+                });
+            }
+
+            warn!(
+                program = trimmed,
+                "[PythonRuntime] ignore invalid GUAXI_PYTHON because executable probe failed"
+            );
         }
     }
 
@@ -487,10 +596,12 @@ fn resolve_python_base_launch_spec() -> Result<PythonLaunchSpec, String> {
     };
 
     for (program, base_args, source) in fallbacks {
-        let mut command = Command::new(&program);
-        command.args(&base_args).arg("--version");
-        apply_python_process_no_window(&mut command);
-        if command.output().is_ok() {
+        if can_probe_python_program(&program, &base_args) {
+            info!(
+                program = program.as_str(),
+                source = source,
+                "[PythonRuntime] resolved base python from fallback"
+            );
             return Ok(PythonLaunchSpec {
                 program,
                 base_args,
@@ -522,14 +633,42 @@ fn managed_python_launch_spec(runtime_dir: &Path, source: String) -> Result<Pyth
 }
 
 fn ensure_managed_python_launch_spec() -> Result<PythonLaunchSpec, String> {
-    let base_spec = resolve_python_base_launch_spec()?;
-    let runtime_dir = base_spec.runtime_dir.clone();
+    let runtime_dir = python_runtime_dir()?;
     let venv_dir = managed_venv_dir(&runtime_dir);
-    let has_managed_python = managed_python_candidates(&runtime_dir)
-        .into_iter()
-        .any(|candidate| candidate.is_file());
+    let managed_spec = managed_python_launch_spec(&runtime_dir, "managed-runtime".to_string()).ok();
+    let has_managed_python = managed_spec.is_some();
+    let managed_runtime_broken = managed_spec
+        .as_ref()
+        .map(|spec| probe_python_program(&spec.program, &spec.base_args).is_err())
+        .unwrap_or(false);
 
-    if !has_managed_python {
+    // 设计说明：
+    // 1. pip 安装、worker 启动、状态读取这些运行期操作，只要托管 `.venv` 当前可用，就应该直接复用它。
+    // 2. 只有在“首次创建”或“已损坏需要重建”时，才必须依赖内置的 bundled base Python。
+    // 3. 上一版把 bundled base 解析提前到了函数入口，导致即使 `.venv` 已经健康可用，安装包也会被
+    //    “未找到内置基础运行时”误拦截。
+    if let Some(spec) = managed_spec.as_ref() {
+        if !managed_runtime_broken {
+            info!(
+                program = spec.program.as_str(),
+                runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                "[PythonRuntime] reuse existing managed virtual environment"
+            );
+            return Ok(spec.clone());
+        }
+    }
+
+    let base_spec = resolve_bundled_python_base_launch_spec()?;
+
+    if managed_runtime_broken {
+        warn!(
+            venv_dir = venv_dir.to_string_lossy().as_ref(),
+            "[PythonRuntime] detected broken managed virtual environment, recreate it from base python"
+        );
+        remove_path_if_exists(&venv_dir)?;
+    }
+
+    if !has_managed_python || managed_runtime_broken {
         fs::create_dir_all(&runtime_dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
 
         let mut command = Command::new(&base_spec.program);
@@ -876,36 +1015,54 @@ pub async fn python_runtime_drop_session(request: PythonSessionRequest) -> Resul
 #[command]
 pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let base_spec = resolve_python_base_launch_spec()?;
-        let runtime_dir = base_spec.runtime_dir.clone();
+        let runtime_dir = python_runtime_dir()?;
         let runtime_marker = runtime_marker_path(&runtime_dir);
         let bundled_runtime_present = bundled_python_candidates(&runtime_dir)
             .into_iter()
             .any(|candidate| candidate.is_file());
+        let base_spec = resolve_python_base_launch_spec_internal(true).ok();
         let initialized = runtime_is_initialized(&runtime_dir)
             && managed_python_candidates(&runtime_dir)
                 .into_iter()
                 .any(|candidate| candidate.is_file());
         let managed_spec = if initialized {
-            managed_python_launch_spec(&runtime_dir, base_spec.source.clone()).ok()
+            managed_python_launch_spec(&runtime_dir, "managed-runtime".to_string()).ok()
         } else {
             None
         };
 
-        let (python_path, version, pip_version, packages) = if let Some(spec) = managed_spec.as_ref() {
+        let (ready, source, python_path, version, pip_version, packages) = if let Some(spec) = managed_spec.as_ref() {
             let mut version_cmd = Command::new(&spec.program);
             version_cmd.args(&spec.base_args).arg("--version");
             let version = command_output_trimmed(version_cmd)?;
             let pip_version = ensure_pip_available(spec).unwrap_or_default();
             let packages = list_python_packages(spec);
-            (spec.program.clone(), version, pip_version, packages)
-        } else {
-            let mut version_cmd = Command::new(&base_spec.program);
-            version_cmd.args(&base_spec.base_args).arg("--version");
+            (
+                true,
+                "managed-runtime".to_string(),
+                spec.program.clone(),
+                version,
+                pip_version,
+                packages,
+            )
+        } else if let Some(spec) = base_spec.as_ref() {
+            let mut version_cmd = Command::new(&spec.program);
+            version_cmd.args(&spec.base_args).arg("--version");
             let version = command_output_trimmed(version_cmd)?;
             (
+                true,
+                spec.source.clone(),
                 managed_venv_dir(&runtime_dir).to_string_lossy().to_string(),
                 version,
+                String::new(),
+                Vec::new(),
+            )
+        } else {
+            (
+                false,
+                "bundled-missing".to_string(),
+                managed_venv_dir(&runtime_dir).to_string_lossy().to_string(),
+                String::new(),
                 String::new(),
                 Vec::new(),
             )
@@ -922,8 +1079,8 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
         };
 
         Ok(PythonRuntimeStatus {
-            ready: true,
-            source: base_spec.source,
+            ready,
+            source,
             python_path,
             runtime_dir: runtime_dir.to_string_lossy().to_string(),
             version,
