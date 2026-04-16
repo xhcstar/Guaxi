@@ -24,7 +24,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createLogger } from '../../utils/logger'
-import { initLspClient } from '../../monaco/lspClient'
+import { getLspConnectionState, initLspClient, waitForLspConnection } from '../../monaco/lspClient'
 import {
   replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
@@ -65,8 +65,61 @@ let contentChangeDisposable = null
 let contentSizeDisposable = null
 let focusDisposable = null
 let blurDisposable = null
+let typeDisposable = null
 let currentAppliedTheme = ''
 let usesVscodeModelBridge = false
+
+const NOTEBOOK_PYTHON_SUGGEST_TRIGGER_PATTERN = /[A-Za-z0-9_.:(\[,'"@]/
+
+const shouldNotebookPythonTriggerSuggestOnType = (text) => {
+  const value = String(text || '')
+  if (!value || value.length !== 1) return false
+  if (/\s/.test(value)) return false
+  return NOTEBOOK_PYTHON_SUGGEST_TRIGGER_PATTERN.test(value)
+}
+
+const triggerNotebookPythonSuggest = (reason = 'manual') => {
+  if (!editor || !monacoRef) return
+  try {
+    editor.trigger('guaxi-notebook-python', 'editor.action.triggerSuggest', {})
+    logger.debug('[NotebookPythonEditor] trigger suggest', {
+      cellKey: String(props.cellKey || ''),
+      reason,
+      position: editor.getPosition?.()
+        ? `${editor.getPosition().lineNumber}:${editor.getPosition().column}`
+        : '',
+    })
+  } catch (error) {
+    logger.debug('[NotebookPythonEditor] trigger suggest failed', {
+      cellKey: String(props.cellKey || ''),
+      reason,
+      error: String(error?.message || error),
+    })
+  }
+}
+
+const warmupNotebookPythonCompletion = async (reason = 'unknown') => {
+  const languageId = 'python'
+  const lspStateBefore = getLspConnectionState(languageId)
+  logger.info('[NotebookPythonEditor] warmup completion start', {
+    cellKey: String(props.cellKey || ''),
+    reason,
+    lspState: lspStateBefore?.state || 'unknown',
+  })
+
+  const ready = await waitForLspConnection(languageId, 2400)
+  logger.info('[NotebookPythonEditor] warmup completion resolved', {
+    cellKey: String(props.cellKey || ''),
+    reason,
+    ready,
+    lspState: getLspConnectionState(languageId)?.state || 'unknown',
+  })
+
+  if (!ready || !editor?.hasTextFocus?.()) return
+  window.setTimeout(() => {
+    triggerNotebookPythonSuggest(`warmup-${reason}`)
+  }, 30)
+}
 
 const getNotebookPythonModelOwner = () => {
   const cellKey = String(props.cellKey || 'python-cell').trim() || 'python-cell'
@@ -247,6 +300,7 @@ const mountMonacoEditor = async () => {
       logger.debug('[NotebookPythonEditor] editor focused', {
         cellKey: String(props.cellKey || ''),
       })
+      void warmupNotebookPythonCompletion('focus')
     })
 
     blurDisposable = editor.onDidBlurEditorText(() => {
@@ -258,6 +312,14 @@ const mountMonacoEditor = async () => {
 
     editor.addCommand(monacoRef.KeyCode.Escape, () => {
       blurEditorToPage('escape')
+    })
+
+    typeDisposable = editor.onDidType((text) => {
+      if (!shouldNotebookPythonTriggerSuggestOnType(text)) return
+      window.setTimeout(() => {
+        if (!editor?.hasTextFocus?.()) return
+        triggerNotebookPythonSuggest(`type:${text}`)
+      }, 0)
     })
 
     editorReady.value = true
@@ -273,6 +335,7 @@ const mountMonacoEditor = async () => {
       virtualFilePath,
       documentPath: String(props.documentPath || ''),
     })
+    void warmupNotebookPythonCompletion('mount')
     logger.info('[NotebookPythonEditor] mounted Monaco editor', {
       cellKey: String(props.cellKey || ''),
       theme: currentAppliedTheme,
@@ -296,6 +359,8 @@ const disposeMonacoEditor = () => {
   focusDisposable = null
   blurDisposable?.dispose?.()
   blurDisposable = null
+  typeDisposable?.dispose?.()
+  typeDisposable = null
   editor?.dispose?.()
   editor = null
   if (usesVscodeModelBridge && currentModelUri) {

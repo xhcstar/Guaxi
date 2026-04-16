@@ -6084,7 +6084,16 @@ const buildEmbeddedCompletionCacheKey = (model, position, embeddedCtx) => {
   ].join('::')
 }
 
-const readEmbeddedCompletionCache = (targetEditor, model, position, embeddedCtx) => {
+const hydrateEmbeddedCachedSuggestions = (suggestions, replaceRange) => {
+  const source = Array.isArray(suggestions) ? suggestions : []
+  if (!source.length) return []
+  return source.map((item) => ({
+    ...item,
+    range: replaceRange || item?.range,
+  }))
+}
+
+const readEmbeddedCompletionCache = (targetEditor, model, position, embeddedCtx, replaceRange = null) => {
   if (!targetEditor || !model || !position || !embeddedCtx) return []
   const state = embeddedCompletionCacheStates.get(targetEditor)
   if (!state) return []
@@ -6093,12 +6102,15 @@ const readEmbeddedCompletionCache = (targetEditor, model, position, embeddedCtx)
   if (Date.now() - Number(state.ts || 0) > EMBEDDED_COMPLETION_CACHE_TTL_MS) return []
   const suggestions = Array.isArray(state.suggestions) ? state.suggestions : []
   if (!suggestions.length) return []
+  const hydratedSuggestions = hydrateEmbeddedCachedSuggestions(suggestions, replaceRange)
   logger.debug('[EmbeddedLsp] reuse cached completion suggestions', {
     languageId: embeddedCtx.languageId,
     cacheKey,
-    suggestionCount: suggestions.length,
+    suggestionCount: hydratedSuggestions.length,
+    replaceStartColumn: replaceRange?.startColumn || 0,
+    replaceEndColumn: replaceRange?.endColumn || 0,
   })
-  return suggestions
+  return hydratedSuggestions
 }
 
 const writeEmbeddedCompletionCache = (targetEditor, model, position, embeddedCtx, suggestions) => {
@@ -6771,6 +6783,8 @@ const resolveEmbeddedCompletionFilterContext = (model, position) => {
       hostToken: '',
       typedWord: '',
       filterPrefix: '',
+      isMemberAccessContext: false,
+      shouldReplaceFullMemberAccessToken: false,
     }
   }
 
@@ -6779,11 +6793,16 @@ const resolveEmbeddedCompletionFilterContext = (model, position) => {
   const hostToken = String(beforeCursor.match(/[^\s]+$/)?.[0] || '').slice(-EMBEDDED_COMPLETION_FILTER_CONTEXT_MAX_CHARS)
   const typedWord = String(hostToken.match(/([A-Za-z0-9_$]*)$/)?.[1] || '')
   const filterPrefix = hostToken.slice(0, Math.max(0, hostToken.length - typedWord.length))
+  const isMemberAccessContext = /(\.|::|->)$/.test(filterPrefix)
+  const shouldReplaceFullMemberAccessToken = isMemberAccessContext
+    && /^(?:[A-Za-z_$][\w$]*)(?:(?:\.|::|->)[A-Za-z_$][\w$]*)*(?:\.|::|->)?[A-Za-z0-9_$]*$/.test(hostToken)
 
   return {
     hostToken,
     typedWord,
     filterPrefix,
+    isMemberAccessContext,
+    shouldReplaceFullMemberAccessToken,
   }
 }
 
@@ -6797,20 +6816,31 @@ const buildEmbeddedCompletionFilterText = (rawFilterText, fallbackLabel, filterC
   return `${prefix}${baseFilterText}`
 }
 
+const buildEmbeddedCompletionInsertText = (rawInsertText, fallbackLabel, filterContext) => {
+  const baseInsertText = String(rawInsertText ?? fallbackLabel ?? '')
+  if (!baseInsertText) return ''
+
+  const prefix = String(filterContext?.filterPrefix || '')
+  if (!prefix || !filterContext?.shouldReplaceFullMemberAccessToken) return baseInsertText
+  if (baseInsertText.startsWith(prefix)) return baseInsertText
+  return `${prefix}${baseInsertText}`
+}
+
 const buildEmbeddedCompletionDisplayLabel = (label, filterContext) => {
   const baseLabel = String(label || '').trim()
   if (!baseLabel) return ''
 
   const prefix = String(filterContext?.filterPrefix || '')
   const typedWord = String(filterContext?.typedWord || '')
-  if (!prefix || typedWord) return baseLabel
+  if (!prefix) return baseLabel
 
   // 设计说明：
   // 1. 目前日志已经证明 embedded LSP 实际返回了 1423 条结果，但 Monaco widget 仍显示 `No suggestions`。
   // 2. 这说明在 markdown 宿主里，前端过滤并不总是完全依赖 `filterText`，有概率仍按可见 label 做匹配。
   // 3. 对于 `sys.` 这类成员补全，原始 label 只有 `exit / path / argv`，如果过滤阶段忽略了 filterText，
-  //    它们就会被当前前缀 `sys.` 全部筛掉。这里把显示 label 扩展成 `sys.exit` 这类完整前缀，
-  //    但 insertText 仍保持原始成员名，避免影响真正插入结果。
+  //    它们就会被当前前缀 `sys.` 全部筛掉。这里把显示 label 扩展成 `sys.exit` 这类完整前缀；
+  //    对于安全的成员访问链，下面的 insertText/range 也会同步扩展成整段替换，避免 UI 过滤和实际插入文本漂移。
+  if (typedWord && !filterContext?.shouldReplaceFullMemberAccessToken) return baseLabel
   if (baseLabel.startsWith(prefix)) return baseLabel
   return `${prefix}${baseLabel}`
 }
@@ -6820,9 +6850,10 @@ const convertVscodeCompletionItemToMonaco = (item, replaceRange, index, filterCo
   if (!rawLabel) return null
 
   const insertTextValue = item?.insertText
-  const insertText = typeof insertTextValue === 'string'
+  const rawInsertText = typeof insertTextValue === 'string'
     ? insertTextValue
     : String(insertTextValue?.value || rawLabel)
+  const insertText = buildEmbeddedCompletionInsertText(rawInsertText, rawLabel, filterContext)
   const isSnippet = typeof insertTextValue === 'object' && insertTextValue !== null
   const documentation = normalizeCompletionDocumentation(item?.documentation)
   const kind = VSCODE_TO_MONACO_COMPLETION_KIND[item?.kind] || monaco.languages.CompletionItemKind.Text
@@ -6922,6 +6953,19 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       if (!mapped) continue
       suggestions.push(mapped)
     }
+    logger.debug('[EmbeddedLsp] vscode completion items mapped to Monaco suggestions', {
+      documentUri: String(virtualModel.uri?.toString?.() || ''),
+      languageId: String(virtualModel.getLanguageId?.() || ''),
+      mappedCount: suggestions.length,
+      firstMappedLabel: getCompletionItemLabelText(suggestions[0]?.label),
+      firstMappedInsertText: String(suggestions[0]?.insertText || ''),
+      firstMappedFilterText: String(suggestions[0]?.filterText || ''),
+      firstMappedRange: suggestions[0]?.range
+        ? `${suggestions[0].range.startLineNumber}:${suggestions[0].range.startColumn}-${suggestions[0].range.endLineNumber}:${suggestions[0].range.endColumn}`
+        : '',
+      shouldReplaceFullMemberAccessToken: !!filterContext?.shouldReplaceFullMemberAccessToken,
+      filterPrefix: String(filterContext?.filterPrefix || ''),
+    })
     return dedupeCompletionSuggestions(suggestions)
   } catch (error) {
     logger.debug('[EmbeddedLsp] vscode completion command failed, fallback to Monaco providers', error)
@@ -6940,8 +6984,17 @@ const resolveEmbeddedMemberAccessReplaceRange = (model, position) => {
   const typedWord = String(hostToken.match(/([A-Za-z0-9_$]*)$/)?.[1] || '')
   const filterPrefix = hostToken.slice(0, Math.max(0, hostToken.length - typedWord.length))
   if (!/(\.|::|->)$/.test(filterPrefix)) return null
+  if (!/^(?:[A-Za-z_$][\w$]*)(?:(?:\.|::|->)[A-Za-z_$][\w$]*)*(?:\.|::|->)?[A-Za-z0-9_$]*$/.test(hostToken)) {
+    return null
+  }
 
-  const startColumn = Math.max(1, hostColumn - typedWord.length)
+  // 设计思路：
+  // 1. 只替换光标后的“当前单词”虽然更接近普通代码补全，但在 Markdown 宿主里，
+  //    Monaco 会继续把 `sys.` 前面的 token 当成过滤依据，最终把所有 LSP 建议判空。
+  // 2. 对于简单成员访问链（如 `sys.` / `pkg.mod.ex`），这里直接把整段 host token 当作 replace range，
+  //    再配合下方补全项里的完整前缀 `sys.exit`，让 Monaco 的过滤文本、显示标签、插入文本三者保持一致。
+  // 3. 这样选中补全后会整体替换 `sys.` 或 `pkg.mod.ex`，最终文本仍然正确，但 suggest model 不会再被 Markdown 的词法边界误伤。
+  const startColumn = Math.max(1, hostColumn - hostToken.length)
   const range = new monaco.Range(
     hostLineNumber,
     startColumn,
@@ -6957,17 +7010,17 @@ const resolveEmbeddedMemberAccessReplaceRange = (model, position) => {
     filterPrefix,
     startColumn,
     endColumn: hostColumn,
+    shouldReplaceWholeToken: true,
   })
   return range
 }
 
 const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) => {
   // 设计思路：
-  // 1. 这里不能再用宿主 Markdown model 的 `getWordUntilPosition()` 来算 replace range。
-  // 2. 在 `obj.` / `module.` 这种成员补全场景里，Markdown 会把 `obj` 识别成当前单词，
-  //    最终导致 Monaco 认为所有补全项都在替换 `obj`，前端过滤后直接显示 `no suggestion`。
-  // 3. 正确做法是基于 embedded 虚拟语言模型计算当前前缀，再把列偏移映射回宿主 Markdown 行列。
-  //    这样 Monaco 前端过滤使用的就是 Python 自己的前缀，而不是 Markdown 误判出来的单词。
+  // 1. 这里不能直接照搬宿主 Markdown model 的 `getWordUntilPosition()`。
+  // 2. 对简单成员访问链（`obj.` / `pkg.mod.ex`）我们优先整段替换 host token，
+  //    让 Monaco 的过滤文本、显示标签、插入文本保持一致，避免出现“LSP 返回了，但 suggest model 判空”的情况。
+  // 3. 其他普通场景仍然基于 embedded 虚拟语言模型计算 replace range，再把列偏移映射回宿主 Markdown 行列。
   const memberAccessRange = resolveEmbeddedMemberAccessReplaceRange(model, position)
   if (memberAccessRange) {
     return memberAccessRange
@@ -7023,10 +7076,6 @@ const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) =
 const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, context) => {
   if (!embeddedCtx) return [];
   const hostEditor = getEmbeddedHostEditor()
-  const cachedSuggestions = readEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx)
-  if (cachedSuggestions.length) {
-    return cachedSuggestions
-  }
   const virtualModel = prepareEmbeddedVirtualModel(embeddedCtx);
   if (!virtualModel) return [];
   const ready = await waitForLspConnection(embeddedCtx.languageId, EMBEDDED_LSP_READY_TIMEOUT_MS);
@@ -7044,11 +7093,27 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
 
   const replaceRange = buildEmbeddedReplaceRange(model, position, embeddedCtx, virtualModel);
   const filterContext = resolveEmbeddedCompletionFilterContext(model, position)
+  const cachedSuggestions = readEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, replaceRange)
+  if (cachedSuggestions.length) {
+    logger.info('[EmbeddedLsp] completion resolved from hydrated cache', {
+      languageId: embeddedCtx.languageId,
+      lineNumber: position?.lineNumber || 0,
+      column: position?.column || 0,
+      suggestionCount: cachedSuggestions.length,
+      replaceStartColumn: replaceRange?.startColumn || 0,
+      replaceEndColumn: replaceRange?.endColumn || 0,
+      firstSuggestion: getCompletionItemLabelText(cachedSuggestions[0]?.label),
+      firstSuggestionInsertText: String(cachedSuggestions[0]?.insertText || ''),
+    })
+    return cachedSuggestions
+  }
   logger.debug('[EmbeddedLsp] resolved completion filter context', {
     languageId: embeddedCtx.languageId,
     hostToken: filterContext.hostToken,
     typedWord: filterContext.typedWord,
     filterPrefix: filterContext.filterPrefix,
+    isMemberAccessContext: !!filterContext.isMemberAccessContext,
+    shouldReplaceFullMemberAccessToken: !!filterContext.shouldReplaceFullMemberAccessToken,
     lineNumber: position?.lineNumber || 0,
     column: position?.column || 0,
     replaceStartColumn: replaceRange?.startColumn || 0,
@@ -7130,7 +7195,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
 
         suggestions.push({
           ...item,
-          insertText,
+          insertText: buildEmbeddedCompletionInsertText(insertText, getCompletionItemLabelText(item?.label), filterContext),
           filterText: buildEmbeddedCompletionFilterText(item?.filterText, getCompletionItemLabelText(item?.label), filterContext),
           range: replaceRange,
           textEdit: undefined,

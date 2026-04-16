@@ -156,6 +156,7 @@
         :data-cell-key="cell.key"
       >
         <button
+          v-if="cell.type === 'markdown'"
           type="button"
           class="guaxi-notebook__cell-delete"
           title="删除当前 Cell"
@@ -264,6 +265,15 @@
                 @click="$emit('open-console')"
               >
                 <Icon :icon="terminalIcon" width="16" height="16" />
+              </button>
+              <button
+                type="button"
+                class="guaxi-notebook__icon-btn danger"
+                title="删除当前 Python Cell"
+                aria-label="删除当前 Python Cell"
+                @click="confirmRemoveCell(cell)"
+              >
+                <Icon :icon="trash2Icon" width="16" height="16" />
               </button>
             </div>
           </div>
