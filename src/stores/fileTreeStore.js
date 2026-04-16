@@ -282,7 +282,15 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     async fetchFileContent(path) {
       try {
         const content = await invoke("read_file_content", { path });
-        this.selectedFile = { path, content, unsupported: false };
+        // 设计说明：
+        // 1. fetchFileContent 只负责“读取”，不负责切换当前活动文件。
+        // 2. 之前这里会提前写 selectedFile，导致 activeTab 仍指向旧文件时，
+        //    编辑器却开始用“新文件内容”重绑旧文件 model，最终把最后打开的内容串到其他 tab。
+        // 3. 当前活动文件的切换统一交给 openFileInTab / setActiveTab，避免读取阶段产生副作用。
+        console.debug("[fileTreeStore] fetchFileContent success", {
+          path,
+          length: String(content || "").length,
+        });
         return { ok: true, content, unsupported: false };
       } catch (error) {
         const code = classifyReadFileError(error);
@@ -290,12 +298,10 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
         if (code === "UNSUPPORTED") {
           const placeholder = `该文件为二进制文件或包含非 UTF-8 内容，当前不支持在编辑器中打开。\n\n路径：${path}\n\n你仍可通过右键菜单“在文件浏览器中打开”来查看该文件。`;
-          this.selectedFile = {
+          console.warn("[fileTreeStore] fetchFileContent unsupported", {
             path,
-            content: placeholder,
-            unsupported: true,
             error: errorMessage,
-          };
+          });
           return { ok: true, content: placeholder, unsupported: true };
         }
 

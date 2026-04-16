@@ -1902,6 +1902,7 @@ const createRealtimeVditorInitDiagnostics = () => {
 }
 
 const syncRealtimeValueToRawContent = debounce((value) => {
+  if (settingRealtimeVditorValue) return;
   rawContent.value = value;
   const path = fileTreeStore.activeTab;
   if (path) fileTreeStore.updateTabContent(path, value);
@@ -15504,6 +15505,7 @@ const canPreview = computed(() => {
 });
 
 const lastSelectedFilePath = ref(null)
+let skipPreviousTabSyncOnce = false
 
 // 监听文件选择
 watch(selectedFile, async (newFile) => {
@@ -15512,8 +15514,26 @@ watch(selectedFile, async (newFile) => {
     const nextPath = newFile.path || '';
     const prevPath = lastSelectedFilePath.value || '';
     const switchedToDifferentFile = !!nextPath && !!prevPath && nextPath !== prevPath;
+    const shouldSkipPreviousTabSync = skipPreviousTabSyncOnce
+    skipPreviousTabSyncOnce = false
 
     if (switchedToDifferentFile) {
+      // 设计说明：
+      // 1. 从文件树直接打开另一个文件时，不会经过 switchTab，需要在这里补一次旧文件内容回写。
+      // 2. 通过 tab 切换时 switchTab 已经做过回写；若这里再次读取编辑器内容，可能读到“新文件内容”，
+      //    反而把旧 tab 覆盖掉，所以用一次性标记跳过重复同步。
+      if (!shouldSkipPreviousTabSync && prevPath) {
+        const targetEditor = getActiveEditor();
+        const currentContent =
+          previewMode.value === 'realtime' && realtimeVditor
+            ? realtimeVditor.getValue()
+            : targetEditor
+              ? targetEditor.getValue()
+              : rawContent.value;
+
+        fileTreeStore.updateTabContent(prevPath, currentContent);
+      }
+
       if (previewRenderTimer) {
         window.clearTimeout(previewRenderTimer)
         previewRenderTimer = null
@@ -15575,13 +15595,7 @@ watch(selectedFile, async (newFile) => {
 
     const targetEditor = getActiveEditor();
     if (targetEditor) {
-      const model = ensureEditorModelBinding(targetEditor, {
-        filePath: newFile.path || '',
-        languageId: language,
-        content: rawContent.value,
-        owner: targetEditor === secondaryEditor ? SECONDARY_EDITOR_VSCODE_MODEL_OWNER : PRIMARY_EDITOR_VSCODE_MODEL_OWNER,
-        reason: 'selected-file-changed',
-      }) || targetEditor.getModel();
+      const model = targetEditor.getModel?.() || null
       if (model) {
         monaco.editor.setModelLanguage(model, language);
       }
@@ -16752,14 +16766,6 @@ const switchTab = (path, region) => {
   flushPythonCellDrafts()
   const targetRegion = region || 'left';
 
-  logger.debug('[Editor] switchTab', {
-    from: targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft,
-    to: path,
-    region: targetRegion,
-    hasEditor: !!editor,
-    hasSecondary: !!secondaryEditor,
-  })
-
   const currentPath = targetRegion === 'right' ? fileTreeStore.activeTabRight : fileTreeStore.activeTabLeft;
   if (currentPath) {
     const currentEditor = targetRegion === 'right' ? secondaryEditor : editor;
@@ -16772,24 +16778,9 @@ const switchTab = (path, region) => {
     fileTreeStore.updateTabContent(currentPath, currentContent);
   }
 
+  // 标记本次切换已经完成旧内容回写，selectedFile watcher 不再重复读取编辑器内容。
+  skipPreviousTabSyncOnce = true
   fileTreeStore.setActiveTab(path, targetRegion);
-  const tab = fileTreeStore.openTabs.find((t) => t.path === path);
-  if (!tab) return;
-
-  rawContent.value = tab.content;
-
-  if (previewMode.value === 'realtime' && realtimeVditor) {
-    initRealtimeVditor();
-  }
-
-  if (fileTreeStore.layoutMode !== 'single' && targetRegion === 'right') {
-    ensureSecondaryEditor();
-  }
-
-  updateEditorContent(tab.content);
-  nextTick(() => {
-    syncSourceEditorContent('switch-tab')
-  })
 };
 
 const closeTab = async (path, region) => {
