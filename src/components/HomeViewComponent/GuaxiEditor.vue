@@ -16887,12 +16887,27 @@ const applyHighlights = () => {
     editorStore.decorations = editor.deltaDecorations([], newDecorations);
 
     if (matches.length > 0) {
-      let first = matches[0];
-      let start = Math.max(0, Math.min(first.start, lineLength));
-      editor.revealPositionInCenter({
+      // 设计说明：
+      // 1. 搜索结果面板点击后，用户期待的是“直接落到命中的关键字上”，而不是只滚到命中行附近。
+      // 2. 因此这里除了 reveal，还同步设置 selection，让 Monaco 把首个命中片段真正聚焦出来。
+      // 3. 这样即便同一行里存在多个词，界面也会稳定落到后端返回的首个匹配区间。
+      const first = matches[0];
+      const start = Math.max(0, Math.min(first.start, lineLength));
+      const end = Math.max(start, Math.min(first.end, lineLength));
+      const focusRange = new monaco.Range(
         lineNumber,
-        column: start + 1
+        start + 1,
+        lineNumber,
+        Math.max(start + 1, end + 1)
+      );
+      logger.info('[Search] focus exact keyword range from structured matches', {
+        lineNumber,
+        start,
+        end,
+        text,
       });
+      editor.setSelection(focusRange);
+      editor.revealRangeInCenter(focusRange);
     } else {
       editor.revealLineInCenter(lineNumber);
     }
@@ -16911,7 +16926,17 @@ const applyHighlights = () => {
     editorStore.decorations = editor.deltaDecorations([], newDecorations);
 
     if (foundMatches.length > 0) {
-      editor.revealRangeInCenter(foundMatches[0].range);
+      const focusRange = foundMatches[0].range;
+      logger.info('[Search] focus exact keyword range from text fallback', {
+        lineNumber,
+        text: query,
+        startLineNumber: focusRange.startLineNumber,
+        startColumn: focusRange.startColumn,
+        endLineNumber: focusRange.endLineNumber,
+        endColumn: focusRange.endColumn,
+      });
+      editor.setSelection(focusRange);
+      editor.revealRangeInCenter(focusRange);
     }
   }
 };
@@ -20446,20 +20471,37 @@ onUnmounted(() => {
   padding: 0 !important;
 }
 
-.preview pre:not(.hljs)>code {
-  display: block;
+.preview pre:not(.hljs) {
   border-radius: 6px;
   border: 1px solid #e1e4e8;
-  background: #ffffff;
+  background: #ffffff !important;
+  margin: 1em 0;
+  overflow-x: auto;
+}
+
+.preview pre:not(.hljs)>code {
+  display: block;
+  border-radius: inherit;
+  border: 0;
+  background: transparent !important;
   color: #24292f;
   padding: 1.5em 1em;
-  overflow-x: auto;
+}
+
+.dark-mode .preview pre:not(.hljs),
+:global(:root[data-guaxi-theme='dark']) .preview pre:not(.hljs) {
+  /* 设计说明：
+   * 1. 未声明语言的 fenced code block 通常不会拿到 `.hljs` 类名，因此不能只依赖 `.hljs` 的暗色样式。
+   * 2. 这里把暗色代码块底色和边框提升到 `pre` 容器本身，确保无语言标记时也沿用统一深色外观。
+   * 3. `code` 子节点继续保持透明背景，这样不会与外层容器叠出一层亮色底板。
+   */
+  border-color: #30363d;
+  background: #1f242d !important;
 }
 
 .dark-mode .preview pre:not(.hljs)>code,
 :global(:root[data-guaxi-theme='dark']) .preview pre:not(.hljs)>code {
-  border-color: #30363d;
-  background: #1f242d;
+  background: transparent !important;
   color: #c9d1d9;
 }
 

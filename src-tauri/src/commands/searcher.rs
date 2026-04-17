@@ -131,8 +131,21 @@ fn has_ignored_dir(path: &Path) -> bool {
         .any(|c| is_ignored_dir_component(c.as_os_str()))
 }
 
+fn is_cellmeta_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().ends_with(".cellmeta"))
+        .unwrap_or(false)
+}
+
 fn should_skip_path(path: &Path) -> bool {
-    has_ignored_dir(path) || path.extension().map_or(false, is_binary_extension)
+    // 设计说明：
+    // 1. `.cellmeta` 是 Notebook 的侧车索引文件，供编辑器内部能力使用，并不是用户希望直接检索/打开的正文。
+    // 2. 之前把它纳入全文搜索后，右侧“搜索关键字”面板会出现这些技术文件，点击后自然无法精准跳回真实笔记内容。
+    // 3. 这里在搜索源头统一排除 `.cellmeta`，让文件搜索和内容搜索都只面向用户文档本身。
+    has_ignored_dir(path)
+        || is_cellmeta_file(path)
+        || path.extension().map_or(false, is_binary_extension)
 }
 
 #[tauri::command]

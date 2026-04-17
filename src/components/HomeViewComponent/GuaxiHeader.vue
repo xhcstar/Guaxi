@@ -679,14 +679,14 @@ watch(trimmedQuery, (q) => {
   selectedRowKey.value = ''
 
   try {
-    const prev = rightSiderStore.searchResults
-    rightSiderStore.setSearchResults({
-      ...prev,
-      searchQuery: '',
-      loading: false,
-      error: ''
-    })
-    logger.debug('[GuaxiHeader] cleared search query (kept right sider results)')
+    /*
+     * Design notes:
+     * 1. Clearing the top search box must also clear the right search panel.
+     * 2. Use the store-level reset instead of only blanking the query string.
+     * 3. This keeps file/note/excerpt/error/loading state in sync.
+     */
+    rightSiderStore.clearSearchResults()
+    logger.info('[GuaxiHeader] cleared search query and reset right sider search results')
   } catch (e) {
     logger.warn('[GuaxiHeader] clear right sider search query failed', e)
   }
@@ -712,6 +712,7 @@ const dirnameFromPath = (p) => {
   return parts.join('/')
 }
 const normalizeSlashes = (p) => String(p || '').replace(/\\\\/g, '/')
+const isCellmetaPath = (p) => normalizeSlashes(p).toLowerCase().endsWith('.cellmeta')
 const toRelativePath = (absPath, basePath) => {
   const abs = normalizeSlashes(absPath)
   const base = normalizeSlashes(basePath)
@@ -1050,7 +1051,7 @@ const normalizeSearchResults = (rawResults, type) => {
   if (!Array.isArray(rawResults)) return []
 
   if (type === 'file') {
-    return rawResults
+    const normalizedItems = rawResults
       .filter(item => item && typeof item === 'object')
       .map(item => ({
         path: String(item.path || ''),
@@ -1058,10 +1059,21 @@ const normalizeSearchResults = (rawResults, type) => {
         _searchType: 'file'
       }))
       .filter(item => item.path)
+    const filteredCellmetaCount = normalizedItems.filter(item => isCellmetaPath(item.path)).length
+    const results = normalizedItems
+      .filter(item => !isCellmetaPath(item.path))
+
+    logger.info('[GuaxiHeader] normalized file search results', {
+      rawCount: rawResults.length,
+      resultCount: results.length,
+      filteredCellmetaCount,
+    })
+
+    return results
   }
 
   if (type === 'note') {
-    return rawResults
+    const normalizedItems = rawResults
       .filter(item => item && typeof item === 'object')
       .map(item => ({
         path: String(item.path || ''),
@@ -1072,6 +1084,17 @@ const normalizeSearchResults = (rawResults, type) => {
         _searchType: 'note'
       }))
       .filter(item => item.path && item.preview)
+    const filteredCellmetaCount = normalizedItems.filter(item => isCellmetaPath(item.path)).length
+    const results = normalizedItems
+      .filter(item => !isCellmetaPath(item.path))
+
+    logger.info('[GuaxiHeader] normalized note search results', {
+      rawCount: rawResults.length,
+      resultCount: results.length,
+      filteredCellmetaCount,
+    })
+
+    return results
   }
 
   if (type === 'excerpt') {

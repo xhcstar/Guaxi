@@ -49,12 +49,22 @@ export const useRightSiderStore = defineStore("rightSider", {
       this.searchResults = results;
     },
     clearSearchResults() {
+      /*
+       * Design notes:
+       * 1. The empty state of the right search panel should be defined in one place.
+       * 2. Reset result lists, query, error, and loading together to avoid stale UI.
+       * 3. Keep a default lastSearchType so the next search still has a valid mode.
+       */
       this.searchResults = {
         fileResults: [],
         noteResults: [],
         excerptResults: [],
         searchQuery: "",
+        lastSearchType: "file",
+        error: "",
+        loading: false,
       };
+      console.info("[DEBUG][Store] Cleared right sider search results");
     },
     // 新增：设置当前面板类型
     setPanel(name) {

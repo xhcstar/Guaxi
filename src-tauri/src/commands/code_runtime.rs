@@ -1,8 +1,10 @@
 use crate::guaxiservices::bundled_resources;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -33,6 +35,15 @@ fn apply_python_process_no_window(cmd: &mut Command) {
 
 #[cfg(not(all(windows, not(debug_assertions))))]
 fn apply_python_process_no_window(_cmd: &mut Command) {}
+
+#[cfg(windows)]
+const AUTO_DOWNLOAD_PYTHON_VERSION: &str = "3.13.12";
+#[cfg(windows)]
+const AUTO_DOWNLOAD_PYTHON_BASE_URL: &str = "https://www.python.org/ftp/python";
+#[cfg(windows)]
+const AUTO_DOWNLOAD_PYTHON_USER_AGENT: &str = "guaxi-python-runtime-bootstrap/1.0";
+#[cfg(windows)]
+const AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL: &str = "https://www.python.org/downloads/windows/";
 
 #[derive(Debug, Deserialize)]
 pub struct PyExecRequest {
@@ -79,6 +90,8 @@ pub struct PythonRuntimeStatus {
     pub initialized: bool,
     pub worker_script_ready: bool,
     pub runtime_marker_path: String,
+    pub bootstrap_download_available: bool,
+    pub bootstrap_download_version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +117,32 @@ pub struct PythonRuntimeInitResponse {
     pub runtime_dir: String,
     pub python_path: String,
     pub pip_version: String,
+    pub download_version: String,
+    pub used_download_bootstrap: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonRuntimeInitializeRequest {
+    pub download_version: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PythonRuntimeDownloadVersion {
+    pub version: String,
+    pub series: String,
+    pub release_date: String,
+    pub archive_url: String,
+    pub label: String,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PythonRuntimeDownloadCatalog {
+    pub versions: Vec<PythonRuntimeDownloadVersion>,
+    pub default_version: String,
+    pub download_source: String,
+    pub bootstrap_download_available: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +199,441 @@ fn python_runtime_dir() -> Result<PathBuf, String> {
     let dir = bundled_resources::ensure_relative_dir("utils/python_runtime")?;
     fs::create_dir_all(&dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
     Ok(dir)
+}
+
+#[cfg(windows)]
+fn auto_download_python_available() -> bool {
+    true
+}
+
+#[cfg(not(windows))]
+fn auto_download_python_available() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn auto_download_python_version_label() -> &'static str {
+    AUTO_DOWNLOAD_PYTHON_VERSION
+}
+
+#[cfg(not(windows))]
+fn auto_download_python_version_label() -> &'static str {
+    ""
+}
+
+#[cfg(windows)]
+fn auto_download_python_archive_file_name_for_version(version: &str) -> String {
+    // 设计说明：
+    // 1. 这里需要下载的是 Windows embeddable package，而不是常规安装器同名资源。
+    // 2. 旧文件名缺少 `-embed-`，会把下载结果指向错误资源，随后触发 ZIP 校验失败。
+    // 3. 改成 embeddable ZIP 后，后续解压和创建 `.venv` 的流程才能正常继续。
+    match std::env::consts::ARCH {
+        "x86_64" => format!("python-{version}-embed-amd64.zip"),
+        "aarch64" => format!("python-{version}-embed-arm64.zip"),
+        _ => format!("python-{version}-embed-win32.zip"),
+    }
+}
+
+#[cfg(windows)]
+fn auto_download_python_archive_url_for_version(version: &str) -> String {
+    format!(
+        "{}/{}/{}",
+        AUTO_DOWNLOAD_PYTHON_BASE_URL,
+        version,
+        auto_download_python_archive_file_name_for_version(version)
+    )
+}
+
+#[cfg(windows)]
+fn auto_download_python_install_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("Python")
+}
+
+#[cfg(windows)]
+fn python_download_http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(30 * 60))
+        .user_agent(AUTO_DOWNLOAD_PYTHON_USER_AGENT)
+        .build()
+        .map_err(|e| format!("create python download client failed: {e}"))
+}
+
+#[cfg(windows)]
+fn download_file_to_path(url: &str, destination: &Path) -> Result<(), String> {
+    let client = python_download_http_client()?;
+
+    info!(
+        url = url,
+        destination = destination.to_string_lossy().as_ref(),
+        "[PythonRuntime] downloading official python archive"
+    );
+
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("download python archive failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "download python archive failed with http status {}",
+            response.status()
+        ));
+    }
+    let final_url = response.url().to_string();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    // reqwest 在响应体被完整读取后，`content_length()` 可能反映为剩余可读字节数。
+    // 这里必须在 copy_to 之前缓存服务端声明的长度，否则会把成功下载的文件误判成
+    // “期望 0 字节，实际 N 字节”。
+    let expected_len = response.content_length();
+    info!(
+        url = url,
+        final_url = final_url.as_str(),
+        content_type = content_type.as_str(),
+        expected_len = expected_len.unwrap_or_default(),
+        "[PythonRuntime] received python archive response headers"
+    );
+
+    let mut file = fs::File::create(destination)
+        .map_err(|e| format!("create archive file failed: {e}"))?;
+    response
+        .copy_to(&mut file)
+        .map_err(|e| format!("write archive file failed: {e}"))?;
+
+    if let Some(expected_len) = expected_len {
+        let actual_len = file
+            .metadata()
+            .map_err(|e| format!("stat downloaded archive failed: {e}"))?
+            .len();
+        if actual_len != expected_len {
+            let _ = remove_path_if_exists(destination);
+            return Err(format!(
+                "downloaded archive size mismatch: expected {expected_len} bytes, got {actual_len} bytes"
+            ));
+        }
+        info!(
+            url = url,
+            expected_len,
+            actual_len,
+            "[PythonRuntime] downloaded python archive size verified"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn normalize_python_download_version(version: Option<&str>) -> Result<String, String> {
+    let default_version = AUTO_DOWNLOAD_PYTHON_VERSION.to_string();
+    let raw = version.map(|value| value.trim()).unwrap_or_default();
+    if raw.is_empty() {
+        return Ok(default_version);
+    }
+    let version_regex = Regex::new(r"^\d+\.\d+\.\d+$").map_err(|e| e.to_string())?;
+    if !version_regex.is_match(raw) {
+        return Err(format!("不合法的 Python 版本号：{raw}"));
+    }
+    Ok(raw.to_string())
+}
+
+#[cfg(windows)]
+fn latest_compatible_python_download_version_from_windows_page() -> Result<String, String> {
+    let client = python_download_http_client()?;
+    let html = client
+        .get(AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|e| format!("fetch python windows page failed: {e}"))?
+        .text()
+        .map_err(|e| format!("read python windows page failed: {e}"))?;
+    let release_regex =
+        Regex::new(r"Python\s+(3\.(?:13|12)\.\d+)\s+-\s+([A-Za-z]+\.*\s+\d{1,2},\s+\d{4})")
+            .map_err(|e| e.to_string())?;
+    for capture in release_regex.captures_iter(&html) {
+        if let Some(version) = capture.get(1).map(|value| value.as_str().trim()) {
+            return Ok(version.to_string());
+        }
+    }
+    Err("无法从 Python Windows 下载页解析近期稳定版".to_string())
+}
+
+#[cfg(windows)]
+fn resolve_requested_python_download_version(version: Option<&str>) -> Result<String, String> {
+    let normalized = normalize_python_download_version(version)?;
+    if version.is_some() {
+        return Ok(normalized);
+    }
+    match latest_compatible_python_download_version_from_windows_page() {
+        Ok(latest) => Ok(latest),
+        Err(error) => {
+            warn!(
+                fallback = AUTO_DOWNLOAD_PYTHON_VERSION,
+                error = error.as_str(),
+                "[PythonRuntime] fallback to built-in default python download version"
+            );
+            Ok(normalized)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn python_download_cache_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join(".downloads")
+}
+
+#[cfg(windows)]
+fn cached_python_archive_path(runtime_dir: &Path, version: &str) -> PathBuf {
+    python_download_cache_dir(runtime_dir).join(auto_download_python_archive_file_name_for_version(version))
+}
+
+#[cfg(windows)]
+fn cached_python_archive_is_valid(archive_path: &Path) -> bool {
+    let Ok(file) = fs::File::open(archive_path) else {
+        return false;
+    };
+    ZipArchive::new(file).is_ok()
+}
+
+#[cfg(windows)]
+fn python_download_versions_fallback() -> PythonRuntimeDownloadCatalog {
+    let default_version = AUTO_DOWNLOAD_PYTHON_VERSION.to_string();
+    PythonRuntimeDownloadCatalog {
+        versions: vec![PythonRuntimeDownloadVersion {
+            version: default_version.clone(),
+            series: "3.13".to_string(),
+            release_date: "".to_string(),
+            archive_url: auto_download_python_archive_url_for_version(&default_version),
+            label: format!("Python {default_version}"),
+            is_default: true,
+        }],
+        default_version,
+        download_source: "fallback".to_string(),
+        bootstrap_download_available: true,
+    }
+}
+
+#[cfg(not(windows))]
+fn python_download_versions_fallback() -> PythonRuntimeDownloadCatalog {
+    PythonRuntimeDownloadCatalog {
+        versions: Vec::new(),
+        default_version: String::new(),
+        download_source: "unsupported".to_string(),
+        bootstrap_download_available: false,
+    }
+}
+
+#[cfg(windows)]
+fn fetch_python_download_versions_catalog() -> Result<PythonRuntimeDownloadCatalog, String> {
+    let client = python_download_http_client()?;
+    let html = client
+        .get(AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|e| format!("fetch python windows page failed: {e}"))?
+        .text()
+        .map_err(|e| format!("read python windows page failed: {e}"))?;
+    let release_regex =
+        Regex::new(r"Python\s+(3\.(?:13|12)\.\d+)\s+-\s+([A-Za-z]+\.*\s+\d{1,2},\s+\d{4})")
+            .map_err(|e| e.to_string())?;
+
+    let mut seen = HashSet::new();
+    let mut parsed_versions: Vec<(String, String)> = Vec::new();
+    for capture in release_regex.captures_iter(&html) {
+        let Some(version) = capture.get(1).map(|value| value.as_str().trim().to_string()) else {
+            continue;
+        };
+        let Some(release_date) = capture.get(2).map(|value| value.as_str().trim().to_string()) else {
+            continue;
+        };
+        if !seen.insert(version.clone()) {
+            continue;
+        }
+        parsed_versions.push((version, release_date));
+        if parsed_versions.len() >= 10 {
+            break;
+        }
+    }
+
+    if parsed_versions.is_empty() {
+        return Err("未获取到可用的 Python 版本列表".to_string());
+    }
+
+    let default_version = parsed_versions
+        .iter()
+        .find(|(version, _)| version.starts_with("3.13."))
+        .map(|(version, _)| version.clone())
+        .unwrap_or_else(|| parsed_versions[0].0.clone());
+
+    let versions = parsed_versions
+        .into_iter()
+        .map(|(version, release_date)| {
+            let mut parts = version.split('.');
+            let major = parts.next().unwrap_or("3");
+            let minor = parts.next().unwrap_or("13");
+            let series = format!("{major}.{minor}");
+            PythonRuntimeDownloadVersion {
+                archive_url: auto_download_python_archive_url_for_version(&version),
+                label: format!("Python {version} · {release_date}"),
+                is_default: version == default_version,
+                version,
+                series,
+                release_date,
+            }
+        })
+        .collect();
+
+    Ok(PythonRuntimeDownloadCatalog {
+        versions,
+        default_version,
+        download_source: AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL.to_string(),
+        bootstrap_download_available: true,
+    })
+}
+
+#[cfg(windows)]
+fn stage_downloaded_python_install(
+    runtime_dir: &Path,
+    install_dir: &Path,
+    version: &str,
+) -> Result<(), String> {
+    let cache_dir = python_download_cache_dir(runtime_dir);
+    let cached_archive = cached_python_archive_path(runtime_dir, version);
+    let partial_archive = cache_dir.join(format!(
+        "{}.partial",
+        auto_download_python_archive_file_name_for_version(version)
+    ));
+    let stage_dir = runtime_dir.join(format!("Python.__downloading_{}", Uuid::new_v4()));
+    let backup_dir = runtime_dir.join(format!("Python.__backup_{}", Uuid::new_v4()));
+
+    fs::create_dir_all(&cache_dir).map_err(|e| format!("create python archive cache dir failed: {e}"))?;
+    let _ = remove_path_if_exists(&partial_archive);
+    let _ = remove_path_if_exists(&stage_dir);
+    let _ = remove_path_if_exists(&backup_dir);
+
+    if !cached_python_archive_is_valid(&cached_archive) {
+        let _ = remove_path_if_exists(&cached_archive);
+        let archive_url = auto_download_python_archive_url_for_version(version);
+        info!(
+            archive_url = archive_url.as_str(),
+            archive_path = partial_archive.to_string_lossy().as_ref(),
+            version = version,
+            "[PythonRuntime] downloading fresh python archive because cache is missing or invalid"
+        );
+        download_file_to_path(&archive_url, &partial_archive)?;
+        if !cached_python_archive_is_valid(&partial_archive) {
+            warn!(
+                archive_url = archive_url.as_str(),
+                archive_path = partial_archive.to_string_lossy().as_ref(),
+                version = version,
+                "[PythonRuntime] downloaded python archive failed ZIP validation"
+            );
+            let _ = remove_path_if_exists(&partial_archive);
+            return Err("下载得到的 Python ZIP 校验失败，文件不是有效压缩包".to_string());
+        }
+        fs::rename(&partial_archive, &cached_archive)
+            .map_err(|e| format!("publish cached python archive failed: {e}"))?;
+    } else {
+        info!(
+            archive = cached_archive.to_string_lossy().as_ref(),
+            version = version,
+            "[PythonRuntime] reuse cached official python archive"
+        );
+    }
+
+    fs::create_dir_all(&stage_dir).map_err(|e| format!("create python stage dir failed: {e}"))?;
+    extract_zip_to_dir(&cached_archive, &stage_dir)
+        .map_err(|e| format!("extract downloaded python archive failed: {e}"))?;
+
+    if !bundled_python_candidates(&stage_dir)
+        .into_iter()
+        .any(|candidate| candidate.is_file())
+    {
+        let _ = remove_path_if_exists(&stage_dir);
+        return Err(format!(
+            "解压后的 Python 目录校验失败，未找到解释器入口：{}",
+            stage_dir.to_string_lossy()
+        ));
+    }
+
+    let publish_result: Result<(), String> = (|| {
+        if install_dir.exists() {
+            fs::rename(install_dir, &backup_dir)
+                .map_err(|e| format!("backup old python install failed: {e}"))?;
+        }
+        fs::rename(&stage_dir, install_dir)
+            .map_err(|e| format!("publish downloaded python dir failed: {e}"))?;
+        Ok(())
+    })();
+
+    match publish_result {
+        Ok(_) => {
+            let _ = remove_path_if_exists(&backup_dir);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = remove_path_if_exists(&stage_dir);
+            if backup_dir.exists() {
+                let _ = fs::rename(&backup_dir, install_dir);
+            }
+            Err(error)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn ensure_downloaded_bundled_python(runtime_dir: &Path, version: Option<&str>) -> Result<String, String> {
+    let resolved_version = resolve_requested_python_download_version(version)?;
+    for candidate in bundled_python_candidates(runtime_dir) {
+        if !candidate.is_file() {
+            continue;
+        }
+        let candidate_str = candidate.to_string_lossy().to_string();
+        match probe_python_program(&candidate_str, &[]) {
+            Ok(version) => {
+                info!(
+                    program = candidate_str.as_str(),
+                    version = version.as_str(),
+                    "[PythonRuntime] reuse downloaded bundled python"
+                );
+                return Ok(resolved_version);
+            }
+            Err(error) => {
+                warn!(
+                    program = candidate_str.as_str(),
+                    error = error.as_str(),
+                    "[PythonRuntime] bundled python exists but probe failed, will reinstall"
+                );
+            }
+        }
+    }
+
+    let install_dir = auto_download_python_install_dir(runtime_dir);
+    // 设计说明：
+    // 1. release 安装包不再内置整个 python_runtime 目录，避免显著放大安装体积。
+    // 2. 当首次初始化时发现基础解释器缺失，这里直接从 python.org 拉取官方 ZIP 包，
+    //    解压到 `utils/python_runtime/Python`，随后再在同目录下创建 `.venv`。
+    // 3. 下载与发布都带有校验/回滚：先缓存 ZIP，再解压到临时目录，最后再覆盖正式目录，
+    //    避免失败时把用户已有运行时目录破坏成半成品。
+    info!(
+        target_dir = install_dir.to_string_lossy().as_ref(),
+        version = resolved_version.as_str(),
+        archive_url = auto_download_python_archive_url_for_version(&resolved_version),
+        "[PythonRuntime] prepare official python archive bootstrap"
+    );
+
+    stage_downloaded_python_install(runtime_dir, &install_dir, &resolved_version)?;
+
+    let bundled_spec = resolve_bundled_python_base_launch_spec()?;
+    info!(
+        program = bundled_spec.program.as_str(),
+        source = bundled_spec.source.as_str(),
+        version = resolved_version.as_str(),
+        "[PythonRuntime] official python archive downloaded and extracted successfully"
+    );
+    Ok(resolved_version)
 }
 
 fn exe_dir() -> Result<PathBuf, String> {
@@ -502,6 +976,29 @@ fn resolve_bundled_python_base_launch_spec() -> Result<PythonLaunchSpec, String>
     ))
 }
 
+fn resolve_bootstrap_python_base_launch_spec(download_version: Option<&str>) -> Result<PythonLaunchSpec, String> {
+    match resolve_bundled_python_base_launch_spec() {
+        Ok(spec) => Ok(spec),
+        Err(original_error) => {
+            if auto_download_python_available() {
+                #[cfg(windows)]
+                {
+                    let runtime_dir = python_runtime_dir()?;
+                    warn!(
+                        runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                        error = original_error.as_str(),
+                        "[PythonRuntime] bundled runtime missing, fallback to official python download bootstrap"
+                    );
+                    let _ = ensure_downloaded_bundled_python(&runtime_dir, download_version)?;
+                    return resolve_bundled_python_base_launch_spec();
+                }
+            }
+
+            Err(original_error)
+        }
+    }
+}
+
 fn resolve_python_base_launch_spec_internal(prefer_managed_runtime: bool) -> Result<PythonLaunchSpec, String> {
     let runtime_dir = python_runtime_dir()?;
 
@@ -633,6 +1130,12 @@ fn managed_python_launch_spec(runtime_dir: &Path, source: String) -> Result<Pyth
 }
 
 fn ensure_managed_python_launch_spec() -> Result<PythonLaunchSpec, String> {
+    ensure_managed_python_launch_spec_with_download_version(None)
+}
+
+fn ensure_managed_python_launch_spec_with_download_version(
+    download_version: Option<&str>,
+) -> Result<PythonLaunchSpec, String> {
     let runtime_dir = python_runtime_dir()?;
     let venv_dir = managed_venv_dir(&runtime_dir);
     let managed_spec = managed_python_launch_spec(&runtime_dir, "managed-runtime".to_string()).ok();
@@ -658,7 +1161,7 @@ fn ensure_managed_python_launch_spec() -> Result<PythonLaunchSpec, String> {
         }
     }
 
-    let base_spec = resolve_bundled_python_base_launch_spec()?;
+    let base_spec = resolve_bootstrap_python_base_launch_spec(download_version)?;
 
     if managed_runtime_broken {
         warn!(
@@ -1020,6 +1523,7 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
         let bundled_runtime_present = bundled_python_candidates(&runtime_dir)
             .into_iter()
             .any(|candidate| candidate.is_file());
+        let auto_download_ready = !bundled_runtime_present && auto_download_python_available();
         let base_spec = resolve_python_base_launch_spec_internal(true).ok();
         let initialized = runtime_is_initialized(&runtime_dir)
             && managed_python_candidates(&runtime_dir)
@@ -1057,6 +1561,18 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
                 String::new(),
                 Vec::new(),
             )
+        } else if auto_download_ready {
+            (
+                true,
+                "bundled".to_string(),
+                managed_venv_dir(&runtime_dir).to_string_lossy().to_string(),
+                format!(
+                    "Python {} (首次初始化时自动下载安装)",
+                    auto_download_python_version_label()
+                ),
+                String::new(),
+                Vec::new(),
+            )
         } else {
             (
                 false,
@@ -1091,6 +1607,8 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
             initialized,
             worker_script_ready: worker_script_ready(&runtime_dir),
             runtime_marker_path: runtime_marker.to_string_lossy().to_string(),
+            bootstrap_download_available: auto_download_python_available(),
+            bootstrap_download_version: auto_download_python_version_label().to_string(),
         })
     })
     .await
@@ -1098,19 +1616,66 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
 }
 
 #[command]
-pub async fn python_runtime_initialize() -> Result<PythonRuntimeInitResponse, String> {
+pub async fn python_runtime_list_downloadable_versions() -> Result<PythonRuntimeDownloadCatalog, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let spec = ensure_managed_python_launch_spec()?;
+        if !auto_download_python_available() {
+            return Ok(python_download_versions_fallback());
+        }
+
+        #[cfg(windows)]
+        {
+            match fetch_python_download_versions_catalog() {
+                Ok(catalog) => {
+                    info!(
+                        count = catalog.versions.len(),
+                        default_version = catalog.default_version.as_str(),
+                        "[PythonRuntime] fetched downloadable python versions catalog"
+                    );
+                    Ok(catalog)
+                }
+                Err(error) => {
+                    warn!(
+                        error = error.as_str(),
+                        "[PythonRuntime] failed to fetch downloadable python versions catalog, fallback to built-in list"
+                    );
+                    Ok(python_download_versions_fallback())
+                }
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            Ok(python_download_versions_fallback())
+        }
+    })
+    .await
+    .map_err(|e| format!("python_runtime_list_downloadable_versions join failed: {e}"))?
+}
+
+#[command]
+pub async fn python_runtime_initialize(
+    request: Option<PythonRuntimeInitializeRequest>,
+) -> Result<PythonRuntimeInitResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let requested_download_version = request
+            .as_ref()
+            .and_then(|value| value.download_version.as_deref())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+        let spec = ensure_managed_python_launch_spec_with_download_version(requested_download_version)?;
         let pip_version = ensure_pip_available(&spec)?;
         let _ = ensure_worker_script(&spec.runtime_dir)?;
         clear_python_worker()?;
         let _ = with_python_worker(|_| Ok(()))?;
+        let used_download_bootstrap = spec.source == "bundled";
+        let download_version = requested_download_version.unwrap_or_default().to_string();
 
         let marker_path = runtime_marker_path(&spec.runtime_dir);
         let marker = json!({
             "python_path": spec.program,
             "source": spec.source,
             "pip_version": pip_version,
+            "download_version": download_version,
             "venv_dir": managed_venv_dir(&spec.runtime_dir).to_string_lossy().to_string(),
             "pip_config_path": managed_pip_config_path(&spec.runtime_dir).to_string_lossy().to_string(),
             "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
@@ -1128,6 +1693,8 @@ pub async fn python_runtime_initialize() -> Result<PythonRuntimeInitResponse, St
             runtime_dir: spec.runtime_dir.to_string_lossy().to_string(),
             python_path: spec.program,
             pip_version,
+            download_version,
+            used_download_bootstrap,
         })
     })
     .await

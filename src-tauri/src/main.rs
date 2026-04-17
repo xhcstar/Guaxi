@@ -534,6 +534,7 @@ async fn main() {
              commands::code_runtime::python_runtime_get_session_info,
              commands::code_runtime::python_runtime_drop_session,
              commands::code_runtime::python_runtime_get_status,
+             commands::code_runtime::python_runtime_list_downloadable_versions,
              commands::code_runtime::python_runtime_initialize,
              commands::code_runtime::python_runtime_inspect_archive,
              commands::code_runtime::python_runtime_install_archive,
