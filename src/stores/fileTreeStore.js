@@ -40,6 +40,7 @@ const classifyReadFileError = (error) => {
 };
 
 const normalizeTabPath = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+const normalizeEditorContent = (content) => String(content ?? "").replace(/\r\n?/g, "\n");
 
 export const useFileTreeStore = defineStore("fileTreeStore", {
   state: () => ({
@@ -255,13 +256,15 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         unsupported = !!res.unsupported;
       }
 
+      const normalizedContent = normalizeEditorContent(fileContent);
+
       const newTab = {
         path,
         fileName,
-        content: fileContent,
-        savedContent: fileContent,
+        content: normalizedContent,
+        savedContent: normalizedContent,
         dirty: false,
-        preview: this.generatePreview(fileContent),
+        preview: this.generatePreview(normalizedContent),
         unsupported,
       };
 
@@ -281,7 +284,8 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
     // 获取文件内容
     async fetchFileContent(path) {
       try {
-        const content = await invoke("read_file_content", { path });
+        const rawContent = await invoke("read_file_content", { path });
+        const content = normalizeEditorContent(rawContent);
         // 设计说明：
         // 1. fetchFileContent 只负责“读取”，不负责切换当前活动文件。
         // 2. 之前这里会提前写 selectedFile，导致 activeTab 仍指向旧文件时，
@@ -339,18 +343,19 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
 
     async updateFileContent(path, content) {
       try {
-        await invoke("write_file_content", { path, content });
+        const normalizedContent = normalizeEditorContent(content);
+        await invoke("write_file_content", { path, content: normalizedContent });
 
         const tabIndex = this.openTabs.findIndex((tab) => tab.path === path);
         if (tabIndex !== -1) {
-          this.openTabs[tabIndex].content = content;
-          this.openTabs[tabIndex].savedContent = content;
+          this.openTabs[tabIndex].content = normalizedContent;
+          this.openTabs[tabIndex].savedContent = normalizedContent;
           this.openTabs[tabIndex].dirty = false;
-          this.openTabs[tabIndex].preview = this.generatePreview(content);
+          this.openTabs[tabIndex].preview = this.generatePreview(normalizedContent);
         }
 
         if (this.selectedFile && this.selectedFile.path === path) {
-          this.selectedFile.content = content;
+          this.selectedFile.content = normalizedContent;
         } else {
           console.warn("当前选中的文件与更新的文件不匹配，未更新 selectedFile");
         }
@@ -363,12 +368,13 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       const tabIndex = this.openTabs.findIndex((tab) => tab.path === path);
       if (tabIndex !== -1) {
         const tab = this.openTabs[tabIndex];
-        tab.content = content;
-        tab.preview = this.generatePreview(content);
-        tab.dirty = (tab.savedContent ?? "") !== content;
+        const normalizedContent = normalizeEditorContent(content);
+        tab.content = normalizedContent;
+        tab.preview = this.generatePreview(normalizedContent);
+        tab.dirty = normalizeEditorContent(tab.savedContent) !== normalizedContent;
 
         if (this.selectedFile && this.selectedFile.path === path) {
-          this.selectedFile.content = content;
+          this.selectedFile.content = normalizedContent;
         }
       }
     },
