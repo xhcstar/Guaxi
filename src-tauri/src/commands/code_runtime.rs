@@ -44,6 +44,9 @@ const AUTO_DOWNLOAD_PYTHON_BASE_URL: &str = "https://www.python.org/ftp/python";
 const AUTO_DOWNLOAD_PYTHON_USER_AGENT: &str = "guaxi-python-runtime-bootstrap/1.0";
 #[cfg(windows)]
 const AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL: &str = "https://www.python.org/downloads/windows/";
+const GET_PIP_BOOTSTRAP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
+const PYTHON_PIP_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
+const PYTHON_PIP_TRUSTED_HOST: &str = "pypi.tuna.tsinghua.edu.cn";
 
 #[derive(Debug, Deserialize)]
 pub struct PyExecRequest {
@@ -183,6 +186,19 @@ struct PythonLaunchSpec {
     base_args: Vec<String>,
     source: String,
     runtime_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PythonRuntimeMarker {
+    python_path: String,
+    source: String,
+    pip_version: String,
+    download_version: String,
+    venv_dir: String,
+    pip_config_path: String,
+    pip_index_url: String,
+    used_download_bootstrap: bool,
 }
 
 struct PythonWorkerState {
@@ -741,6 +757,19 @@ fn managed_venv_dir(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join(".venv")
 }
 
+#[cfg(windows)]
+fn bootstrap_runtime_artifact_paths(runtime_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        auto_download_python_install_dir(runtime_dir),
+        python_download_cache_dir(runtime_dir),
+    ]
+}
+
+#[cfg(not(windows))]
+fn bootstrap_runtime_artifact_paths(_runtime_dir: &Path) -> Vec<PathBuf> {
+    Vec::new()
+}
+
 fn managed_python_candidates(runtime_dir: &Path) -> Vec<PathBuf> {
     let venv_dir = managed_venv_dir(runtime_dir);
     if cfg!(windows) {
@@ -836,6 +865,15 @@ fn ensure_managed_pip_mirror(runtime_dir: &Path) -> Result<(), String> {
     if needs_write {
         fs::write(&config_path, desired)
             .map_err(|e| format!("write managed pip mirror config failed: {e}"))?;
+        info!(
+            config_path = config_path.to_string_lossy().as_ref(),
+            "[PythonRuntime] refreshed managed pip mirror config"
+        );
+    } else {
+        info!(
+            config_path = config_path.to_string_lossy().as_ref(),
+            "[PythonRuntime] reuse existing managed pip mirror config"
+        );
     }
 
     Ok(())
@@ -848,6 +886,67 @@ fn runtime_marker_path(runtime_dir: &Path) -> PathBuf {
 
 fn runtime_is_initialized(runtime_dir: &Path) -> bool {
     runtime_marker_path(runtime_dir).is_file()
+}
+
+fn read_runtime_marker(runtime_dir: &Path) -> Result<Option<PythonRuntimeMarker>, String> {
+    let marker_path = runtime_marker_path(runtime_dir);
+    if !marker_path.is_file() {
+        return Ok(None);
+    }
+
+    let marker_content = fs::read_to_string(&marker_path)
+        .map_err(|e| format!("read python runtime marker failed: {e}"))?;
+    let marker = serde_json::from_str::<PythonRuntimeMarker>(&marker_content)
+        .map_err(|e| format!("decode python runtime marker failed: {e}"))?;
+    Ok(Some(marker))
+}
+
+fn write_runtime_marker(
+    spec: &PythonLaunchSpec,
+    pip_version: &str,
+    download_version: &str,
+    used_download_bootstrap: bool,
+) -> Result<PythonRuntimeMarker, String> {
+    let marker = PythonRuntimeMarker {
+        python_path: spec.program.clone(),
+        source: spec.source.clone(),
+        pip_version: pip_version.to_string(),
+        download_version: download_version.to_string(),
+        venv_dir: managed_venv_dir(&spec.runtime_dir)
+            .to_string_lossy()
+            .to_string(),
+        pip_config_path: managed_pip_config_path(&spec.runtime_dir)
+            .to_string_lossy()
+            .to_string(),
+        pip_index_url: PYTHON_PIP_INDEX_URL.to_string(),
+        used_download_bootstrap,
+    };
+
+    let marker_path = runtime_marker_path(&spec.runtime_dir);
+    fs::write(
+        &marker_path,
+        serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write python runtime marker failed: {e}"))?;
+
+    info!(
+        marker_path = marker_path.to_string_lossy().as_ref(),
+        source = marker.source.as_str(),
+        used_download_bootstrap = marker.used_download_bootstrap,
+        "[PythonRuntime] runtime marker updated"
+    );
+
+    Ok(marker)
+}
+
+#[cfg(windows)]
+fn did_use_download_bootstrap(runtime_dir: &Path, base_source: &str) -> bool {
+    base_source == "bundled" && auto_download_python_install_dir(runtime_dir).is_dir()
+}
+
+#[cfg(not(windows))]
+fn did_use_download_bootstrap(_runtime_dir: &Path, _base_source: &str) -> bool {
+    false
 }
 
 fn worker_script_ready(runtime_dir: &Path) -> bool {
@@ -1111,6 +1210,231 @@ fn resolve_python_base_launch_spec_internal(prefer_managed_runtime: bool) -> Res
     Err("未找到可用的 Python 解释器；请先提供 utils/python_runtime 或安装系统 Python。".to_string())
 }
 
+fn is_missing_venv_module_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("no module named venv") || normalized.contains("modulenotfounderror")
+}
+
+#[cfg(windows)]
+fn bundled_python_pth_file(runtime_dir: &Path) -> Option<PathBuf> {
+    let install_dir = auto_download_python_install_dir(runtime_dir);
+    fs::read_dir(&install_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case("_pth"))
+                .unwrap_or(false)
+        })
+}
+
+#[cfg(not(windows))]
+fn bundled_python_pth_file(_runtime_dir: &Path) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(windows)]
+fn enable_site_for_bundled_python(runtime_dir: &Path) -> Result<(), String> {
+    let Some(pth_path) = bundled_python_pth_file(runtime_dir) else {
+        return Ok(());
+    };
+    let content = fs::read_to_string(&pth_path)
+        .map_err(|e| format!("read bundled python _pth file failed: {e}"))?;
+    if content.lines().any(|line| line.trim() == "import site") {
+        return Ok(());
+    }
+
+    let mut changed = false;
+    let mut lines = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "#import site" || trimmed == "# import site" {
+            lines.push("import site".to_string());
+            changed = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !changed {
+        lines.push("import site".to_string());
+    }
+    let next = lines.join("\n");
+    fs::write(&pth_path, next).map_err(|e| format!("write bundled python _pth file failed: {e}"))?;
+    info!(
+        pth_path = pth_path.to_string_lossy().as_ref(),
+        "[PythonRuntime] enabled import site for bundled python"
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn enable_site_for_bundled_python(_runtime_dir: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn bundled_get_pip_script_path(runtime_dir: &Path) -> PathBuf {
+    python_download_cache_dir(runtime_dir).join("get-pip.py")
+}
+
+#[cfg(windows)]
+fn ensure_bundled_bootstrap_pip(base_spec: &PythonLaunchSpec) -> Result<(), String> {
+    enable_site_for_bundled_python(&base_spec.runtime_dir)?;
+
+    let mut pip_check = Command::new(&base_spec.program);
+    pip_check.args(&base_spec.base_args).args(["-m", "pip", "--version"]);
+    if command_output_trimmed(pip_check).is_ok() {
+        return Ok(());
+    }
+
+    let cache_dir = python_download_cache_dir(&base_spec.runtime_dir);
+    fs::create_dir_all(&cache_dir).map_err(|e| format!("create bundled bootstrap cache dir failed: {e}"))?;
+    let get_pip_path = bundled_get_pip_script_path(&base_spec.runtime_dir);
+    if !get_pip_path.is_file() {
+        info!(
+            url = GET_PIP_BOOTSTRAP_URL,
+            destination = get_pip_path.to_string_lossy().as_ref(),
+            "[PythonRuntime] downloading get-pip bootstrap script for bundled python"
+        );
+        download_file_to_path(GET_PIP_BOOTSTRAP_URL, &get_pip_path)?;
+    }
+
+    let mut command = Command::new(&base_spec.program);
+    command
+        .args(&base_spec.base_args)
+        .arg(&get_pip_path)
+        .args([
+            "--disable-pip-version-check",
+            "--no-warn-script-location",
+            "-i",
+            PYTHON_PIP_INDEX_URL,
+            "--trusted-host",
+            PYTHON_PIP_TRUSTED_HOST,
+        ])
+        .current_dir(&base_spec.runtime_dir);
+    let _ = command_output_trimmed(command)
+        .map_err(|e| format!("bootstrap bundled python pip failed: {e}"))?;
+    info!("[PythonRuntime] bootstrapped pip for bundled python");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn ensure_bundled_bootstrap_pip(_base_spec: &PythonLaunchSpec) -> Result<(), String> {
+    Ok(())
+}
+
+fn ensure_bundled_virtualenv(base_spec: &PythonLaunchSpec) -> Result<(), String> {
+    ensure_bundled_bootstrap_pip(base_spec)?;
+
+    let mut virtualenv_check = Command::new(&base_spec.program);
+    virtualenv_check
+        .args(&base_spec.base_args)
+        .args(["-m", "virtualenv", "--version"]);
+    if command_output_trimmed(virtualenv_check).is_ok() {
+        return Ok(());
+    }
+
+    let mut command = Command::new(&base_spec.program);
+    command
+        .args(&base_spec.base_args)
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "pip",
+            "setuptools",
+            "wheel",
+            "virtualenv",
+            "-i",
+            PYTHON_PIP_INDEX_URL,
+            "--trusted-host",
+            PYTHON_PIP_TRUSTED_HOST,
+        ])
+        .current_dir(&base_spec.runtime_dir);
+    let _ = command_output_trimmed(command)
+        .map_err(|e| format!("install bundled python bootstrap packages failed: {e}"))?;
+    info!("[PythonRuntime] installed virtualenv for bundled python");
+    Ok(())
+}
+
+fn create_managed_virtualenv(base_spec: &PythonLaunchSpec, venv_dir: &Path) -> Result<(), String> {
+    let mut command = Command::new(&base_spec.program);
+    command
+        .args(&base_spec.base_args)
+        .args(["-m", "venv"])
+        .arg(venv_dir)
+        .current_dir(&base_spec.runtime_dir);
+    match command_output_trimmed(command) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            if base_spec.source == "bundled" && is_missing_venv_module_error(&error) {
+                warn!(
+                    source = base_spec.source.as_str(),
+                    error = error.as_str(),
+                    "[PythonRuntime] bundled python is missing venv module, bootstrap virtualenv instead"
+                );
+                ensure_bundled_virtualenv(base_spec)?;
+                let mut fallback_command = Command::new(&base_spec.program);
+                fallback_command
+                    .args(&base_spec.base_args)
+                    .args(["-m", "virtualenv"])
+                    .arg(venv_dir)
+                    .current_dir(&base_spec.runtime_dir);
+                let _ = command_output_trimmed(fallback_command)
+                    .map_err(|e| format!("create Guaxi python virtualenv via virtualenv failed: {e}"))?;
+                return Ok(());
+            }
+            Err(format!("create Guaxi python virtualenv failed: {error}"))
+        }
+    }
+}
+
+fn managed_runtime_marker_exists(runtime_dir: &Path) -> bool {
+    runtime_marker_path(runtime_dir).is_file()
+}
+
+fn managed_python_runtime_health(spec: &PythonLaunchSpec) -> Result<(), String> {
+    let mut version_cmd = Command::new(&spec.program);
+    version_cmd.args(&spec.base_args).arg("--version");
+    let _ = command_output_trimmed(version_cmd)
+        .map_err(|e| format!("managed python probe failed: {e}"))?;
+
+    let mut pip_cmd = Command::new(&spec.program);
+    pip_cmd.args(&spec.base_args).args(["-m", "pip", "--version"]);
+    let _ = command_output_trimmed(pip_cmd)
+        .map_err(|e| format!("managed pip probe failed: {e}"))?;
+
+    if !managed_runtime_marker_exists(&spec.runtime_dir) {
+        return Err("managed runtime marker missing".to_string());
+    }
+
+    Ok(())
+}
+
+fn cleanup_bootstrap_runtime_artifacts(runtime_dir: &Path, reason: &str) {
+    for target in bootstrap_runtime_artifact_paths(runtime_dir) {
+        if !target.exists() {
+            continue;
+        }
+        match remove_path_if_exists(&target) {
+            Ok(_) => info!(
+                reason = reason,
+                target = target.to_string_lossy().as_ref(),
+                "[PythonRuntime] cleaned bootstrap runtime artifact"
+            ),
+            Err(error) => warn!(
+                reason = reason,
+                target = target.to_string_lossy().as_ref(),
+                error = error.as_str(),
+                "[PythonRuntime] failed to clean bootstrap runtime artifact"
+            ),
+        }
+    }
+}
+
 fn managed_python_launch_spec(runtime_dir: &Path, source: String) -> Result<PythonLaunchSpec, String> {
     for candidate in managed_python_candidates(runtime_dir) {
         if candidate.is_file() {
@@ -1140,10 +1464,12 @@ fn ensure_managed_python_launch_spec_with_download_version(
     let venv_dir = managed_venv_dir(&runtime_dir);
     let managed_spec = managed_python_launch_spec(&runtime_dir, "managed-runtime".to_string()).ok();
     let has_managed_python = managed_spec.is_some();
-    let managed_runtime_broken = managed_spec
+    let managed_runtime_health_error = managed_spec
         .as_ref()
-        .map(|spec| probe_python_program(&spec.program, &spec.base_args).is_err())
-        .unwrap_or(false);
+        .and_then(|spec| managed_python_runtime_health(spec).err());
+    let marker_missing_only =
+        managed_runtime_health_error.as_deref() == Some("managed runtime marker missing");
+    let managed_runtime_broken = managed_runtime_health_error.is_some() && !marker_missing_only;
 
     // 设计说明：
     // 1. pip 安装、worker 启动、状态读取这些运行期操作，只要托管 `.venv` 当前可用，就应该直接复用它。
@@ -1152,6 +1478,26 @@ fn ensure_managed_python_launch_spec_with_download_version(
     //    “未找到内置基础运行时”误拦截。
     if let Some(spec) = managed_spec.as_ref() {
         if !managed_runtime_broken {
+            if marker_missing_only {
+                // Recovery note:
+                // 1. Older bootstrap flows could leave a healthy `.venv` behind without persisting runtime.json.
+                // 2. We repair the marker in place instead of recreating the environment, so installed packages stay intact.
+                // 3. The original bootstrap source may be unrecoverable here, so we persist the current managed-runtime facts.
+                ensure_managed_pip_mirror(&runtime_dir)?;
+                let pip_version = ensure_pip_available(spec)?;
+                let _ = write_runtime_marker(
+                    spec,
+                    &pip_version,
+                    download_version.unwrap_or_default(),
+                    false,
+                )?;
+                cleanup_bootstrap_runtime_artifacts(&runtime_dir, "managed-runtime-marker-healed");
+                info!(
+                    program = spec.program.as_str(),
+                    runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                    "[PythonRuntime] healed runtime marker for existing managed virtual environment"
+                );
+            }
             info!(
                 program = spec.program.as_str(),
                 runtime_dir = runtime_dir.to_string_lossy().as_ref(),
@@ -1166,27 +1512,34 @@ fn ensure_managed_python_launch_spec_with_download_version(
     if managed_runtime_broken {
         warn!(
             venv_dir = venv_dir.to_string_lossy().as_ref(),
+            error = managed_runtime_health_error.as_deref().unwrap_or("unknown"),
             "[PythonRuntime] detected broken managed virtual environment, recreate it from base python"
         );
         remove_path_if_exists(&venv_dir)?;
+        let marker_path = runtime_marker_path(&runtime_dir);
+        let _ = remove_path_if_exists(&marker_path);
     }
 
     if !has_managed_python || managed_runtime_broken {
         fs::create_dir_all(&runtime_dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
-
-        let mut command = Command::new(&base_spec.program);
-        command
-            .args(&base_spec.base_args)
-            .args(["-m", "venv"])
-            .arg(&venv_dir)
-            .current_dir(&runtime_dir);
-        let _ = command_output_trimmed(command)
-            .map_err(|e| format!("create Guaxi python virtualenv failed: {e}"))?;
+        create_managed_virtualenv(&base_spec, &venv_dir)?;
+        info!(
+            source = base_spec.source.as_str(),
+            venv_dir = venv_dir.to_string_lossy().as_ref(),
+            "[PythonRuntime] managed virtual environment created from managed bootstrap pipeline"
+        );
     }
 
     ensure_managed_pip_mirror(&runtime_dir)?;
     let managed_spec = managed_python_launch_spec(&runtime_dir, base_spec.source.clone())?;
-    let _ = ensure_pip_available(&managed_spec)?;
+    let pip_version = ensure_pip_available(&managed_spec)?;
+    let _ = write_runtime_marker(
+        &managed_spec,
+        &pip_version,
+        download_version.unwrap_or_default(),
+        did_use_download_bootstrap(&runtime_dir, &base_spec.source),
+    )?;
+    cleanup_bootstrap_runtime_artifacts(&runtime_dir, "managed-runtime-ready");
     Ok(managed_spec)
 }
 
@@ -1667,21 +2020,15 @@ pub async fn python_runtime_initialize(
         let _ = ensure_worker_script(&spec.runtime_dir)?;
         clear_python_worker()?;
         let _ = with_python_worker(|_| Ok(()))?;
-        let used_download_bootstrap = spec.source == "bundled";
-        let download_version = requested_download_version.unwrap_or_default().to_string();
-
-        let marker_path = runtime_marker_path(&spec.runtime_dir);
-        let marker = json!({
-            "python_path": spec.program,
-            "source": spec.source,
-            "pip_version": pip_version,
-            "download_version": download_version,
-            "venv_dir": managed_venv_dir(&spec.runtime_dir).to_string_lossy().to_string(),
-            "pip_config_path": managed_pip_config_path(&spec.runtime_dir).to_string_lossy().to_string(),
-            "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
-        });
-        fs::write(&marker_path, serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("write python runtime marker failed: {e}"))?;
+        let marker = match read_runtime_marker(&spec.runtime_dir)? {
+            Some(existing) => existing,
+            None => write_runtime_marker(
+                &spec,
+                &pip_version,
+                requested_download_version.unwrap_or_default(),
+                false,
+            )?,
+        };
 
         info!(
             runtime_dir = %spec.runtime_dir.to_string_lossy(),
@@ -1693,8 +2040,8 @@ pub async fn python_runtime_initialize(
             runtime_dir: spec.runtime_dir.to_string_lossy().to_string(),
             python_path: spec.program,
             pip_version,
-            download_version,
-            used_download_bootstrap,
+            download_version: marker.download_version,
+            used_download_bootstrap: marker.used_download_bootstrap,
         })
     })
     .await

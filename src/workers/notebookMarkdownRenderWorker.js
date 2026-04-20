@@ -34,6 +34,11 @@ const safeEncode = (content) => {
     .replace(/\\/g, '%5C')
 }
 
+const renderPlainFenceBlock = (code, md) => {
+  const escaped = md.utils.escapeHtml(code)
+  return `<pre class="hljs hljs-plain"><code class="language-plaintext">${escaped}</code></pre>`
+}
+
 const preprocessMarkdownContent = async (content, options = {}) => {
   const chatPreprocess = !!options.chatPreprocess
   let finalContent = String(content || '')
@@ -263,7 +268,9 @@ const buildWorkerMarkdownRenderer = (sourceContent, options = {}) => {
             logWarn(`highlight failed (${lang})`, String(error?.message || error))
           }
         }
-        return `<pre><code>${md.utils.escapeHtml(code)}</code></pre>`
+        // Keep unlabeled fenced code blocks on the same structural path as highlighted blocks.
+        // That preserves the shared copy-button enhancement and lets dark mode reuse the same code-block shell.
+        return renderPlainFenceBlock(code, md)
       }
       : undefined,
   })

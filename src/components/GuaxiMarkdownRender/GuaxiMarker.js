@@ -9,6 +9,11 @@ import { createLogger } from '../../utils/logger'
 const logger = createLogger('GuaxiMarker')
 let mermaidRenderCounter = 0
 
+const renderPlainFenceBlock = (code, md) => {
+  const escaped = md.utils.escapeHtml(code);
+  return `<pre class="hljs hljs-plain"><code class="language-plaintext">${escaped}</code></pre>`;
+}
+
 const RenderOptions = {
   mermaid: undefined,
   math: undefined,
@@ -40,32 +45,72 @@ export const addCopyButtons = (container, options = {}) => {
 
   const shouldSkipForInteractiveCells = (el) => {
     try {
-      return !!el?.closest?.(
-        '.guaxi-codecell, .guaxi-pycell, .guaxi-codecell-media, .guaxi-pycell-media, .guaxi-pdf-preview-shell'
-      );
+      // 设计思路：
+      // 1. Python/Code Cell 的主代码块也需要复制按钮，不能再因为外层是 `.guaxi-pycell/.guaxi-codecell` 而整体跳过。
+      // 2. 但媒体展示区、PDF 预览壳、以及执行输出区不是“源码输入块”，继续跳过，避免生成无意义或重复的复制按钮。
+      // 3. 这里保留日志，方便后续继续判断实际命中的跳过类型。
+      const shouldSkip = !!el?.closest?.(
+        '.guaxi-codecell-media, .guaxi-pycell-media, .guaxi-pdf-preview-shell'
+      ) || el?.classList?.contains?.('guaxi-codecell-output') || el?.classList?.contains?.('guaxi-pycell-output');
+
+      if (shouldSkip) {
+        logger.debug('[MarkdownRender] skip copy button for interactive auxiliary block', {
+          blockTag: String(el?.tagName || '').toLowerCase(),
+          blockClass: String(el?.className || ''),
+        });
+      }
+
+      return shouldSkip;
     } catch {
       return false;
     }
   };
 
-  // 查找所有可能的代码块容器（包括 hljs 和 pre code）
+  // 设计说明：
+  // 1. Markdown fenced code block 的稳定块级边界是 `<pre>`，优先从这里挂载复制按钮。
+  // 2. 历史渲染结果里 `.hljs` 可能挂在 `<pre>`、`<code>` 或独立块节点上，因此保留 `.hljs` 兜底兼容。
+  // 3. 这样能把带语言标记和 plaintext 代码块统一到同一条识别路径，避免复制图标因结构差异漏挂。
   const codeContainers = Array.from(
-    container.querySelectorAll(".hljs, pre code")
+    container.querySelectorAll("pre, .hljs")
   );
   const processedBlocks = new Set();
 
   codeContainers.forEach((codeContainer) => {
-    // 确保容器存在且没有重复按钮
+    // 确保容器存在且没有重复按钮。
     if (!codeContainer || codeContainer.querySelector(".copy-button")) return;
 
-    // 获取实际的代码内容容器（可能是pre或.hljs）
-    const codeBlock = codeContainer.classList.contains("hljs")
-      ? codeContainer
-      : codeContainer.parentElement;
+    // 设计说明：
+    // 1. 标准 Markdown 代码块优先落到 `<pre>`。
+    // 2. 如果命中了 `<code class="hljs">`，则回退到外层 `<pre>`，避免按钮被塞进 `<pre>` 内层。
+    // 3. 对旧结构的块级 `.hljs` 节点继续兼容，保证历史消息和不同渲染链都能正常显示复制按钮。
+    let codeBlock = null;
+    const tagName = String(codeContainer.tagName || "").toUpperCase();
+    if (tagName === "PRE") {
+      codeBlock = codeContainer;
+    } else if (tagName === "CODE" && codeContainer.parentElement?.tagName === "PRE") {
+      codeBlock = codeContainer.parentElement;
+    } else if (codeContainer.classList.contains("hljs")) {
+      codeBlock = codeContainer;
+    }
 
     if (!codeBlock) return;
+    if (!codeBlock.querySelector("code")) {
+      logger.debug("[MarkdownRender] skip non-code block when adding copy button", {
+        blockTag: String(codeBlock.tagName || "").toLowerCase(),
+        blockClass: String(codeBlock.className || ""),
+      });
+      return;
+    }
     if (processedBlocks.has(codeBlock)) return;
     processedBlocks.add(codeBlock);
+
+    logger.debug("[MarkdownRender] normalize code block for copy button", {
+      containerTag: String(codeContainer.tagName || "").toLowerCase(),
+      containerClass: String(codeContainer.className || ""),
+      blockTag: String(codeBlock.tagName || "").toLowerCase(),
+      blockClass: String(codeBlock.className || ""),
+      languageClass: String(codeBlock.querySelector("code")?.className || ""),
+    });
 
     if (shouldSkipForNotes(codeBlock)) return;
     if (shouldSkipForInteractiveCells(codeBlock)) return;
@@ -1177,7 +1222,9 @@ export const renderMarkdown = async (content, options) => {
               logger.warn(`代码高亮错误 (${lang}):`, err);
             }
           }
-          return `<pre><code>${md.utils.escapeHtml(code)}</code></pre>`;
+          // Keep unlabeled fenced code blocks on the same structural path as highlighted blocks.
+          // That preserves the shared copy-button enhancement and lets dark mode reuse the same code-block shell.
+          return renderPlainFenceBlock(code, md);
         }
         : undefined,
     });

@@ -20471,7 +20471,7 @@ onUnmounted(() => {
   padding: 0 !important;
 }
 
-.preview pre:not(.hljs) {
+.preview :deep(pre:not(.hljs)) {
   border-radius: 6px;
   border: 1px solid #e1e4e8;
   background: #ffffff !important;
@@ -20479,7 +20479,7 @@ onUnmounted(() => {
   overflow-x: auto;
 }
 
-.preview pre:not(.hljs)>code {
+.preview :deep(pre:not(.hljs) > code) {
   display: block;
   border-radius: inherit;
   border: 0;
@@ -20488,19 +20488,19 @@ onUnmounted(() => {
   padding: 1.5em 1em;
 }
 
-.dark-mode .preview pre:not(.hljs),
-:global(:root[data-guaxi-theme='dark']) .preview pre:not(.hljs) {
+.dark-mode .preview :deep(pre:not(.hljs)),
+:global(:root[data-guaxi-theme='dark']) .preview :deep(pre:not(.hljs)) {
   /* 设计说明：
    * 1. 未声明语言的 fenced code block 通常不会拿到 `.hljs` 类名，因此不能只依赖 `.hljs` 的暗色样式。
-   * 2. 这里把暗色代码块底色和边框提升到 `pre` 容器本身，确保无语言标记时也沿用统一深色外观。
+   * 2. 这类代码块是通过 `v-html` 注入到预览区里的，`scoped` 下必须配合 `:deep(...)` 才能真正命中内部 `pre` 元素。
    * 3. `code` 子节点继续保持透明背景，这样不会与外层容器叠出一层亮色底板。
    */
   border-color: #30363d;
   background: #1f242d !important;
 }
 
-.dark-mode .preview pre:not(.hljs)>code,
-:global(:root[data-guaxi-theme='dark']) .preview pre:not(.hljs)>code {
+.dark-mode .preview :deep(pre:not(.hljs) > code),
+:global(:root[data-guaxi-theme='dark']) .preview :deep(pre:not(.hljs) > code) {
   background: transparent !important;
   color: #c9d1d9;
 }
