@@ -47,6 +47,9 @@ const AUTO_DOWNLOAD_PYTHON_WINDOWS_PAGE_URL: &str = "https://www.python.org/down
 const GET_PIP_BOOTSTRAP_URL: &str = "https://bootstrap.pypa.io/get-pip.py";
 const PYTHON_PIP_INDEX_URL: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
 const PYTHON_PIP_TRUSTED_HOST: &str = "pypi.tuna.tsinghua.edu.cn";
+const PYTHON_RUNTIME_RECOMMENDED_PACKAGES: &[&str] = &["pandas", "matplotlib", "openpyxl", "ipython"];
+const PYTHON_RUNTIME_BOOTSTRAP_PACKAGE_NAMES: &[&str] =
+    &["pip", "setuptools", "wheel", "virtualenv"];
 
 #[derive(Debug, Deserialize)]
 pub struct PyExecRequest {
@@ -1012,7 +1015,25 @@ fn command_output_trimmed(mut command: Command) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
-            format!("process exited with status {}", output.status)
+            #[cfg(windows)]
+            {
+                if output.status.code() == Some(0xc0000135_u32 as i32) {
+                    warn!(
+                        status = output.status.code().unwrap_or_default(),
+                        "[PythonRuntime] process exited with STATUS_DLL_NOT_FOUND"
+                    );
+                    format!(
+                        "process exited with status {} (STATUS_DLL_NOT_FOUND: 内置 Python 依赖的 DLL 未找到，请检查 utils/python_runtime/Python 与 .venv 是否完整)",
+                        output.status
+                    )
+                } else {
+                    format!("process exited with status {}", output.status)
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                format!("process exited with status {}", output.status)
+            }
         } else {
             stderr
         });
@@ -1140,18 +1161,33 @@ fn resolve_python_base_launch_spec_internal(prefer_managed_runtime: bool) -> Res
     }
 
     for candidate in bundled_python_candidates(&runtime_dir) {
-        if candidate.is_file() {
-            info!(
-                program = candidate.to_string_lossy().as_ref(),
-                runtime_dir = runtime_dir.to_string_lossy().as_ref(),
-                "[PythonRuntime] resolved base python from bundled runtime"
-            );
-            return Ok(PythonLaunchSpec {
-                program: candidate.to_string_lossy().to_string(),
-                base_args: Vec::new(),
-                source: "bundled".to_string(),
-                runtime_dir,
-            });
+        if !candidate.is_file() {
+            continue;
+        }
+        let candidate_str = candidate.to_string_lossy().to_string();
+        match probe_python_program(&candidate_str, &[]) {
+            Ok(version) => {
+                info!(
+                    program = candidate_str.as_str(),
+                    runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                    version = version.as_str(),
+                    "[PythonRuntime] resolved base python from bundled runtime"
+                );
+                return Ok(PythonLaunchSpec {
+                    program: candidate_str,
+                    base_args: Vec::new(),
+                    source: "bundled".to_string(),
+                    runtime_dir,
+                });
+            }
+            Err(error) => {
+                warn!(
+                    program = candidate_str.as_str(),
+                    runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                    error = error.as_str(),
+                    "[PythonRuntime] skip bundled runtime candidate because executable probe failed"
+                );
+            }
         }
     }
 
@@ -1392,8 +1428,320 @@ fn create_managed_virtualenv(base_spec: &PythonLaunchSpec, venv_dir: &Path) -> R
     }
 }
 
+#[cfg(windows)]
+fn should_copy_windows_runtime_support_file(file_name: &str) -> bool {
+    let normalized = file_name.trim().to_ascii_lowercase();
+    (normalized.starts_with("python")
+        && (normalized.ends_with(".dll") || normalized.ends_with(".zip")))
+        || (normalized.starts_with("vcruntime") && normalized.ends_with(".dll"))
+        || (normalized.starts_with("ucrtbase") && normalized.ends_with(".dll"))
+}
+
+#[cfg(not(windows))]
+fn should_copy_windows_runtime_support_file(_file_name: &str) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn sync_managed_runtime_support_files(base_spec: &PythonLaunchSpec, venv_dir: &Path) -> Result<(), String> {
+    if base_spec.source != "bundled" {
+        return Ok(());
+    }
+
+    let base_root = Path::new(&base_spec.program)
+        .parent()
+        .ok_or_else(|| format!("resolve bundled python parent dir failed: {}", base_spec.program))?;
+    let scripts_dir = venv_dir.join("Scripts");
+    fs::create_dir_all(venv_dir).map_err(|e| format!("create managed venv root failed: {e}"))?;
+    fs::create_dir_all(&scripts_dir).map_err(|e| format!("create managed venv Scripts dir failed: {e}"))?;
+
+    let mut copied_file_count = 0usize;
+    let mut copied_dir_count = 0usize;
+
+    // 设计说明：
+    // 1. Windows 下由 embeddable/bundled Python 创建出来的 `.venv`，启动时仍可能依赖基础目录中的
+    //    `python3*.dll`、`vcruntime*.dll`、`python*.zip` 和 `DLLs/` 目录。
+    // 2. 如果这些文件只停留在下载解压目录而没有同步进 `.venv`，状态检测或 worker 启动就可能出现
+    //    `0xc0000135 (STATUS_DLL_NOT_FOUND)`。
+    // 3. 因此在初始化阶段把运行时必要文件复制进托管环境，让 `.venv` 本身就是可直接运行的完整 Python 环境，
+    //    后续状态查询、pip 与执行链路都不再依赖额外搜索路径补丁。
+    for entry in fs::read_dir(base_root).map_err(|e| format!("read bundled python dir failed: {e}"))? {
+        let entry = entry.map_err(|e| format!("read bundled python dir entry failed: {e}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("read bundled python file type failed: {e}"))?;
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy().to_string();
+        if !should_copy_windows_runtime_support_file(&file_name_str) {
+            continue;
+        }
+
+        let source_path = entry.path();
+        let root_target_path = venv_dir.join(&file_name);
+        if root_target_path.exists() {
+            let _ = fs::remove_file(&root_target_path);
+        }
+        fs::copy(&source_path, &root_target_path)
+            .map_err(|e| format!("copy runtime support file to managed venv failed: {e}"))?;
+        copied_file_count += 1;
+
+        if file_name_str.to_ascii_lowercase().ends_with(".dll") {
+            let scripts_target_path = scripts_dir.join(&file_name);
+            if scripts_target_path.exists() {
+                let _ = fs::remove_file(&scripts_target_path);
+            }
+            fs::copy(&source_path, &scripts_target_path)
+                .map_err(|e| format!("copy runtime dll to managed Scripts failed: {e}"))?;
+            copied_file_count += 1;
+        }
+    }
+
+    let base_dlls_dir = base_root.join("DLLs");
+    if base_dlls_dir.is_dir() {
+        let managed_dlls_dir = venv_dir.join("DLLs");
+        if managed_dlls_dir.exists() {
+            remove_path_if_exists(&managed_dlls_dir)?;
+        }
+        copy_dir_recursive(&base_dlls_dir, &managed_dlls_dir)?;
+        copied_dir_count += 1;
+    }
+
+    info!(
+        base_root = base_root.to_string_lossy().as_ref(),
+        venv_dir = venv_dir.to_string_lossy().as_ref(),
+        copied_file_count,
+        copied_dir_count,
+        "[PythonRuntime] synchronized bundled runtime support files into managed virtual environment"
+    );
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_managed_runtime_support_files(_base_spec: &PythonLaunchSpec, _venv_dir: &Path) -> Result<(), String> {
+    Ok(())
+}
+
 fn managed_runtime_marker_exists(runtime_dir: &Path) -> bool {
     runtime_marker_path(runtime_dir).is_file()
+}
+
+fn normalize_python_package_name(package: &str) -> String {
+    package.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+fn should_skip_python_package_restore(package: &str) -> bool {
+    let normalized = normalize_python_package_name(package);
+    PYTHON_RUNTIME_BOOTSTRAP_PACKAGE_NAMES
+        .iter()
+        .any(|item| normalize_python_package_name(item) == normalized)
+}
+
+fn python_runtime_recommended_packages() -> Vec<String> {
+    PYTHON_RUNTIME_RECOMMENDED_PACKAGES
+        .iter()
+        .map(|item| (*item).to_string())
+        .collect()
+}
+
+fn list_python_package_names(spec: &PythonLaunchSpec) -> HashSet<String> {
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.base_args)
+        .args(["-m", "pip", "list", "--format=json"]);
+    match command_output_trimmed(command) {
+        Ok(output) => serde_json::from_str::<Vec<Value>>(&output)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_string))
+            .map(|name| normalize_python_package_name(&name))
+            .filter(|name| !name.is_empty())
+            .collect(),
+        Err(error) => {
+            warn!(
+                source = spec.source.as_str(),
+                error = error.as_str(),
+                "[PythonRuntime] list installed python package names failed"
+            );
+            HashSet::new()
+        }
+    }
+}
+
+#[cfg(windows)]
+fn managed_site_packages_candidates(venv_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        venv_dir.join("Lib").join("site-packages"),
+        venv_dir.join("lib").join("site-packages"),
+    ]
+}
+
+#[cfg(not(windows))]
+fn managed_site_packages_candidates(venv_dir: &Path) -> Vec<PathBuf> {
+    let lib_dir = venv_dir.join("lib");
+    let mut candidates = Vec::new();
+    if let Ok(entries) = fs::read_dir(&lib_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path().join("site-packages");
+            if path.is_dir() {
+                candidates.push(path);
+            }
+        }
+    }
+    if candidates.is_empty() {
+        candidates.push(lib_dir.join("site-packages"));
+    }
+    candidates
+}
+
+fn parse_package_name_from_dist_info_dir(path: &Path) -> Option<String> {
+    let metadata_path = path.join("METADATA");
+    if metadata_path.is_file() {
+        if let Ok(content) = fs::read_to_string(&metadata_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if let Some(value) = trimmed.strip_prefix("Name:") {
+                    let normalized = normalize_python_package_name(value);
+                    if !normalized.is_empty() {
+                        return Some(normalized);
+                    }
+                }
+            }
+        }
+    }
+
+    let file_name = path.file_name()?.to_string_lossy();
+    let base = file_name
+        .strip_suffix(".dist-info")
+        .or_else(|| file_name.strip_suffix(".egg-info"))
+        .unwrap_or(&file_name);
+    let inferred = base
+        .split('-')
+        .next()
+        .map(normalize_python_package_name)
+        .unwrap_or_default();
+    if inferred.is_empty() {
+        None
+    } else {
+        Some(inferred)
+    }
+}
+
+fn snapshot_managed_runtime_packages_from_filesystem(venv_dir: &Path) -> Vec<String> {
+    let mut packages = HashSet::new();
+
+    for site_packages_dir in managed_site_packages_candidates(venv_dir) {
+        if !site_packages_dir.is_dir() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&site_packages_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if !(file_name.ends_with(".dist-info") || file_name.ends_with(".egg-info")) {
+                continue;
+            }
+            if let Some(package_name) = parse_package_name_from_dist_info_dir(&path) {
+                if !should_skip_python_package_restore(&package_name) {
+                    packages.insert(package_name);
+                }
+            }
+        }
+    }
+
+    let mut sorted = packages.into_iter().collect::<Vec<_>>();
+    sorted.sort();
+    if !sorted.is_empty() {
+        info!(
+            venv_dir = venv_dir.to_string_lossy().as_ref(),
+            package_count = sorted.len(),
+            "[PythonRuntime] captured managed runtime package snapshot from filesystem"
+        );
+    }
+    sorted
+}
+
+fn snapshot_managed_runtime_packages(spec: &PythonLaunchSpec) -> Vec<String> {
+    let package_names = list_python_package_names(spec)
+        .into_iter()
+        .filter(|name| !should_skip_python_package_restore(name))
+        .collect::<Vec<_>>();
+    if !package_names.is_empty() {
+        info!(
+            runtime_dir = spec.runtime_dir.to_string_lossy().as_ref(),
+            package_count = package_names.len(),
+            "[PythonRuntime] captured managed runtime package snapshot from pip list"
+        );
+        return package_names;
+    }
+
+    snapshot_managed_runtime_packages_from_filesystem(&managed_venv_dir(&spec.runtime_dir))
+}
+
+fn ensure_python_packages_installed(
+    spec: &PythonLaunchSpec,
+    packages: &[String],
+    reason: &str,
+) -> Result<(), String> {
+    let desired_packages = packages
+        .iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .filter(|item| !should_skip_python_package_restore(item))
+        .collect::<Vec<_>>();
+    if desired_packages.is_empty() {
+        return Ok(());
+    }
+
+    let installed = list_python_package_names(spec);
+    let missing_packages = desired_packages
+        .into_iter()
+        .filter(|item| !installed.contains(&normalize_python_package_name(item)))
+        .collect::<Vec<_>>();
+    if missing_packages.is_empty() {
+        info!(
+            reason = reason,
+            runtime_dir = spec.runtime_dir.to_string_lossy().as_ref(),
+            "[PythonRuntime] all desired python packages already installed"
+        );
+        return Ok(());
+    }
+
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.base_args)
+        .args(["-m", "pip", "install"])
+        .args(&missing_packages)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_python_process_no_window(&mut command);
+    let output = command
+        .output()
+        .map_err(|e| format!("install managed runtime packages failed: {e}"))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "install managed runtime packages failed during {reason}: status={}, stdout={}, stderr={}",
+            output.status, stdout, stderr
+        ));
+    }
+
+    info!(
+        reason = reason,
+        runtime_dir = spec.runtime_dir.to_string_lossy().as_ref(),
+        package_count = missing_packages.len(),
+        packages = missing_packages.join(", ").as_str(),
+        "[PythonRuntime] installed missing managed runtime packages"
+    );
+    Ok(())
 }
 
 fn managed_python_runtime_health(spec: &PythonLaunchSpec) -> Result<(), String> {
@@ -1464,6 +1812,10 @@ fn ensure_managed_python_launch_spec_with_download_version(
     let venv_dir = managed_venv_dir(&runtime_dir);
     let managed_spec = managed_python_launch_spec(&runtime_dir, "managed-runtime".to_string()).ok();
     let has_managed_python = managed_spec.is_some();
+    let mut managed_package_snapshot = managed_spec
+        .as_ref()
+        .map(snapshot_managed_runtime_packages)
+        .unwrap_or_default();
     let managed_runtime_health_error = managed_spec
         .as_ref()
         .and_then(|spec| managed_python_runtime_health(spec).err());
@@ -1523,6 +1875,15 @@ fn ensure_managed_python_launch_spec_with_download_version(
     if !has_managed_python || managed_runtime_broken {
         fs::create_dir_all(&runtime_dir).map_err(|e| format!("create python runtime dir failed: {e}"))?;
         create_managed_virtualenv(&base_spec, &venv_dir)?;
+        sync_managed_runtime_support_files(&base_spec, &venv_dir)?;
+        for recommended_package in python_runtime_recommended_packages() {
+            if !managed_package_snapshot.iter().any(|item| {
+                normalize_python_package_name(item)
+                    == normalize_python_package_name(&recommended_package)
+            }) {
+                managed_package_snapshot.push(recommended_package);
+            }
+        }
         info!(
             source = base_spec.source.as_str(),
             venv_dir = venv_dir.to_string_lossy().as_ref(),
@@ -1533,6 +1894,17 @@ fn ensure_managed_python_launch_spec_with_download_version(
     ensure_managed_pip_mirror(&runtime_dir)?;
     let managed_spec = managed_python_launch_spec(&runtime_dir, base_spec.source.clone())?;
     let pip_version = ensure_pip_available(&managed_spec)?;
+    ensure_python_packages_installed(
+        &managed_spec,
+        &managed_package_snapshot,
+        if managed_runtime_broken {
+            "managed-runtime-repair"
+        } else if !has_managed_python {
+            "managed-runtime-initialize"
+        } else {
+            "managed-runtime-ensure"
+        },
+    )?;
     let _ = write_runtime_marker(
         &managed_spec,
         &pip_version,
@@ -1545,6 +1917,47 @@ fn ensure_managed_python_launch_spec_with_download_version(
 
 fn resolve_python_launch_spec() -> Result<PythonLaunchSpec, String> {
     ensure_managed_python_launch_spec()
+}
+
+fn auto_repair_managed_runtime_if_needed(
+    runtime_dir: &Path,
+    managed_spec: Option<PythonLaunchSpec>,
+    managed_health_error: Option<String>,
+) -> (Option<PythonLaunchSpec>, Option<String>) {
+    let Some(original_error) = managed_health_error else {
+        return (managed_spec, None);
+    };
+
+    // 设计说明：
+    // 1. 旧版本可能留下“文件还在、但 `.venv` 已损坏”的半成品环境；如果这里只返回错误，前端每次打开状态面板都会先撞到失败。
+    // 2. 现在线程已经处在后端阻塞任务中，最稳妥的做法是在探测到损坏时立即走一次与初始化相同的重建流程。
+    // 3. 这样用户看到的第一次状态就是“已自动修复后的结果”；只有自动修复本身失败时，才回退为待初始化/待处理状态。
+    warn!(
+        runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+        error = original_error.as_str(),
+        had_managed_spec = managed_spec.is_some(),
+        "[PythonRuntime] detected broken managed runtime during status probe, start automatic repair"
+    );
+
+    match ensure_managed_python_launch_spec_with_download_version(None) {
+        Ok(repaired_spec) => {
+            info!(
+                runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                program = repaired_spec.program.as_str(),
+                "[PythonRuntime] automatic managed runtime repair completed during status probe"
+            );
+            (Some(repaired_spec), None)
+        }
+        Err(repair_error) => {
+            warn!(
+                runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                original_error = original_error.as_str(),
+                repair_error = repair_error.as_str(),
+                "[PythonRuntime] automatic managed runtime repair failed during status probe"
+            );
+            (managed_spec, Some(repair_error))
+        }
+    }
 }
 
 fn ensure_worker_script(runtime_dir: &Path) -> Result<PathBuf, String> {
@@ -1878,30 +2291,82 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
             .any(|candidate| candidate.is_file());
         let auto_download_ready = !bundled_runtime_present && auto_download_python_available();
         let base_spec = resolve_python_base_launch_spec_internal(true).ok();
-        let initialized = runtime_is_initialized(&runtime_dir)
+        let managed_spec = if runtime_is_initialized(&runtime_dir)
             && managed_python_candidates(&runtime_dir)
                 .into_iter()
-                .any(|candidate| candidate.is_file());
-        let managed_spec = if initialized {
+                .any(|candidate| candidate.is_file())
+        {
             managed_python_launch_spec(&runtime_dir, "managed-runtime".to_string()).ok()
         } else {
             None
         };
+        let managed_health_error = managed_spec
+            .as_ref()
+            .and_then(|spec| managed_python_runtime_health(spec).err());
+        let (managed_spec, managed_health_error) = auto_repair_managed_runtime_if_needed(
+            &runtime_dir,
+            managed_spec,
+            managed_health_error,
+        );
+        let initialized = managed_health_error.is_none() && managed_spec.is_some();
+
+        if let Some(error) = managed_health_error.as_ref() {
+            warn!(
+                runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+                error = error.as_str(),
+                "[PythonRuntime] managed runtime is still unhealthy after automatic repair attempt"
+            );
+        }
 
         let (ready, source, python_path, version, pip_version, packages) = if let Some(spec) = managed_spec.as_ref() {
-            let mut version_cmd = Command::new(&spec.program);
-            version_cmd.args(&spec.base_args).arg("--version");
-            let version = command_output_trimmed(version_cmd)?;
-            let pip_version = ensure_pip_available(spec).unwrap_or_default();
-            let packages = list_python_packages(spec);
-            (
-                true,
-                "managed-runtime".to_string(),
-                spec.program.clone(),
-                version,
-                pip_version,
-                packages,
-            )
+            if managed_health_error.is_none() {
+                let mut version_cmd = Command::new(&spec.program);
+                version_cmd.args(&spec.base_args).arg("--version");
+                let version = command_output_trimmed(version_cmd)?;
+                let pip_version = ensure_pip_available(spec).unwrap_or_default();
+                let packages = list_python_packages(spec);
+                (
+                    true,
+                    "managed-runtime".to_string(),
+                    spec.program.clone(),
+                    version,
+                    pip_version,
+                    packages,
+                )
+            } else if let Some(spec) = base_spec.as_ref() {
+                let mut version_cmd = Command::new(&spec.program);
+                version_cmd.args(&spec.base_args).arg("--version");
+                let version = command_output_trimmed(version_cmd)?;
+                (
+                    true,
+                    spec.source.clone(),
+                    managed_venv_dir(&runtime_dir).to_string_lossy().to_string(),
+                    format!("{version} (managed runtime damaged, needs rebuild)"),
+                    String::new(),
+                    Vec::new(),
+                )
+            } else if auto_download_ready {
+                (
+                    true,
+                    "bundled".to_string(),
+                    managed_venv_dir(&runtime_dir).to_string_lossy().to_string(),
+                    format!(
+                        "Python {} (managed runtime damaged, initialization will rebuild it)",
+                        auto_download_python_version_label()
+                    ),
+                    String::new(),
+                    Vec::new(),
+                )
+            } else {
+                (
+                    false,
+                    "bundled-missing".to_string(),
+                    managed_venv_dir(&runtime_dir).to_string_lossy().to_string(),
+                    String::new(),
+                    String::new(),
+                    Vec::new(),
+                )
+            }
         } else if let Some(spec) = base_spec.as_ref() {
             let mut version_cmd = Command::new(&spec.program);
             version_cmd.args(&spec.base_args).arg("--version");
