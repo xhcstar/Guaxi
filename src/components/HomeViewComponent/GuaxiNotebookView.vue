@@ -2,7 +2,13 @@
   <div
     ref="notebookRootRef"
     class="guaxi-notebook"
-    :class="[themeClass, { 'is-top-toolbar-visible': isNotebookTopToolbarVisible }]"
+    :class="[
+      themeClass,
+      {
+        'is-top-toolbar-visible': isNotebookTopToolbarVisible,
+        'has-active-python-cell': !!activeNotebookPythonCell,
+      },
+    ]"
     @mousemove="handleNotebookRootMouseMove"
     @mouseleave="handleNotebookRootMouseLeave"
     @click="handleNotebookRenderedClick"
@@ -58,7 +64,7 @@
           </button>
           <button
             type="button"
-            class="guaxi-notebook__icon-btn primary"
+            class="guaxi-notebook__icon-btn"
             title="新增 Python Cell"
             aria-label="新增 Python Cell"
             @click="appendCell('python')"
@@ -74,6 +80,67 @@
           >
             <Icon :icon="filePlusIcon" width="16" height="16" />
           </button>
+          <template v-if="activeNotebookPythonCell">
+            <span class="guaxi-notebook__toolbar-divider" aria-hidden="true"></span>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn"
+              :disabled="isCellBusy(activeNotebookPythonCell)"
+              title="从外部导入表格到当前选中的 Python Cell 会话"
+              aria-label="从外部导入表格到当前选中的 Python Cell 会话"
+              @click="handleActivePythonToolbarAction('import-table')"
+            >
+              <Icon :icon="uploadIcon" width="16" height="16" />
+            </button>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn primary"
+              :disabled="isCellBusy(activeNotebookPythonCell)"
+              title="运行当前选中的 Python Cell"
+              aria-label="运行当前选中的 Python Cell"
+              @click="handleActivePythonToolbarAction('run')"
+            >
+              <Icon :icon="playIcon" width="16" height="16" />
+            </button>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn"
+              :disabled="isCellBusy(activeNotebookPythonCell)"
+              title="运行并将当前选中的 Python Cell 输出写回文档"
+              aria-label="运行并将当前选中的 Python Cell 输出写回文档"
+              @click="handleActivePythonToolbarAction('run-writeback')"
+            >
+              <Icon :icon="checkCircleIcon" width="16" height="16" />
+            </button>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn"
+              :disabled="!hasVisibleOutput(activeNotebookPythonCell)"
+              :title="activeNotebookPythonCellSnapshot.meta.outputCollapsed ? '显示当前选中 Python Cell 输出' : '隐藏当前选中 Python Cell 输出'"
+              :aria-label="activeNotebookPythonCellSnapshot.meta.outputCollapsed ? '显示当前选中 Python Cell 输出' : '隐藏当前选中 Python Cell 输出'"
+              @click="handleActivePythonToolbarAction('toggle-output')"
+            >
+              <Icon :icon="activeNotebookPythonCellSnapshot.meta.outputCollapsed ? eyeIcon : eyeOffIcon" width="16" height="16" />
+            </button>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn"
+              :title="activeNotebookPythonCellSnapshot.meta.sessionCollapsed ? '显示当前选中 Python Cell 变量' : '隐藏当前选中 Python Cell 变量'"
+              :aria-label="activeNotebookPythonCellSnapshot.meta.sessionCollapsed ? '显示当前选中 Python Cell 变量' : '隐藏当前选中 Python Cell 变量'"
+              @click="handleActivePythonToolbarAction('toggle-session')"
+            >
+              <Icon :icon="variableIcon" width="16" height="16" />
+            </button>
+            <button
+              type="button"
+              class="guaxi-notebook__icon-btn"
+              title="打开 Python 控制台"
+              aria-label="打开 Python 控制台"
+              @click="handleActivePythonToolbarAction('open-console')"
+            >
+              <Icon :icon="terminalIcon" width="16" height="16" />
+            </button>
+          </template>
         </div>
       </div>
     </div>
@@ -151,9 +218,11 @@
           {
             'is-search-match': isNotebookSearchMatchedCell(cell),
             'is-search-active': isNotebookSearchActiveCell(cell),
+            'is-active-python-cell': isActiveNotebookPythonCell(cell),
           },
         ]"
         :data-cell-key="cell.key"
+        @mousedown="handleNotebookCellPointerDown(cell, $event)"
       >
         <button
           v-if="cell.type === 'markdown'"
@@ -208,64 +277,6 @@
               <span v-if="String(cell.meta?.title || '').trim()" class="guaxi-notebook__python-title">{{ cell.meta?.title }}</span>
             </div>
             <div class="guaxi-notebook__python-toolbar-actions">
-              <button
-                type="button"
-                class="guaxi-notebook__icon-btn"
-                :disabled="isCellBusy(cell)"
-                title="从外部导入表格到当前 Python 会话"
-                aria-label="从外部导入表格到当前 Python 会话"
-                @click="importTableToPythonSession(cell)"
-              >
-                <Icon :icon="uploadIcon" width="16" height="16" />
-              </button>
-              <button
-                type="button"
-                class="guaxi-notebook__icon-btn primary"
-                :disabled="isCellBusy(cell)"
-                title="运行当前 Python Cell"
-                aria-label="运行当前 Python Cell"
-                @click="runPythonCell(cell, { writeBack: false })"
-              >
-                <Icon :icon="playIcon" width="16" height="16" />
-              </button>
-              <button
-                type="button"
-                class="guaxi-notebook__icon-btn"
-                :disabled="isCellBusy(cell)"
-                title="运行并将输出写回文档"
-                aria-label="运行并将输出写回文档"
-                @click="runPythonCell(cell, { writeBack: true })"
-              >
-                <Icon :icon="checkCircleIcon" width="16" height="16" />
-              </button>
-              <button
-                v-if="hasVisibleOutput(cell)"
-                type="button"
-                class="guaxi-notebook__icon-btn"
-                :title="getCellSnapshot(cell).meta.outputCollapsed ? '显示输出' : '隐藏输出'"
-                :aria-label="getCellSnapshot(cell).meta.outputCollapsed ? '显示输出' : '隐藏输出'"
-                @click="toggleCellOutput(cell)"
-              >
-                <Icon :icon="getCellSnapshot(cell).meta.outputCollapsed ? eyeIcon : eyeOffIcon" width="16" height="16" />
-              </button>
-              <button
-                type="button"
-                class="guaxi-notebook__icon-btn"
-                :title="getCellSnapshot(cell).meta.sessionCollapsed ? '显示变量' : '隐藏变量'"
-                :aria-label="getCellSnapshot(cell).meta.sessionCollapsed ? '显示变量' : '隐藏变量'"
-                @click="toggleCellSession(cell)"
-              >
-                <Icon :icon="variableIcon" width="16" height="16" />
-              </button>
-              <button
-                type="button"
-                class="guaxi-notebook__icon-btn"
-                title="打开 Python 控制台"
-                aria-label="打开 Python 控制台"
-                @click="$emit('open-console')"
-              >
-                <Icon :icon="terminalIcon" width="16" height="16" />
-              </button>
               <button
                 type="button"
                 class="guaxi-notebook__icon-btn danger"
@@ -519,6 +530,7 @@ const notebookSelectionToolbarVisible = ref(false)
 const notebookSelectionToolbarStyle = ref({ left: '0px', top: '0px' })
 const notebookSelectionText = ref('')
 const notebookTopToolbarRevealed = ref(false)
+const activeNotebookPythonCellKey = ref('')
 const notebookMarkdownWorkerRef = ref(null)
 const notebookMarkdownWorkerReady = ref(false)
 const lastEmittedMarkdown = ref(String(props.markdown || '').replace(/\r\n?/g, '\n'))
@@ -557,6 +569,9 @@ let selectionTranslateMultiNotFoundWarned = false
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
 const isNotebookTopToolbarVisible = computed(() => notebookTopToolbarRevealed.value || notebookSearchVisible.value)
+const activeNotebookPythonCell = computed(() => notebookCells.value.find((cell) => (
+  cell?.type === 'python' && String(cell?.key || '') === String(activeNotebookPythonCellKey.value || '')
+)) || null)
 const selectionTranslateMultiAvailable = ref(true)
 const selectionTranslateLangOptions = [
   { label: '自动检测', value: 'auto' },
@@ -579,9 +594,62 @@ const getSelectionTranslateLangLabel = (value) => {
   return item ? String(item.label || '') : '中文'
 }
 
+const activeNotebookPythonCellSnapshot = computed(() => {
+  if (!activeNotebookPythonCell.value) {
+    return {
+      meta: {
+        outputCollapsed: false,
+        sessionCollapsed: true,
+      },
+    }
+  }
+  return getCellSnapshot(activeNotebookPythonCell.value)
+})
+
 const bumpRefresh = () => {
   refreshTick.value += 1
   emit('state-change')
+}
+
+// 设计说明：
+// 1. 探索者模式顶部工具栏现在需要知道“当前选中的 Python Cell”是谁，才能把运行/导入/变量面板等操作代理过去。
+// 2. 这里把选中态收敛成一个单独的 key，而不是把整份 cell 对象长期缓存下来，避免 cell 重建后引用失效。
+// 3. Markdown Cell 被点击时会清空这份选中态，保证顶部工具栏只在真正选中 Python Cell 时才影响它。
+const setActiveNotebookPythonCellKey = (cellKey, reason = 'unknown') => {
+  const normalizedKey = String(cellKey || '').trim()
+  if (String(activeNotebookPythonCellKey.value || '') === normalizedKey) return
+  activeNotebookPythonCellKey.value = normalizedKey
+  logger.info('[NotebookToolbar] active python cell changed', {
+    cellKey: normalizedKey,
+    reason,
+  })
+}
+
+const clearActiveNotebookPythonCell = (reason = 'unknown') => {
+  if (!String(activeNotebookPythonCellKey.value || '').trim()) return
+  setActiveNotebookPythonCellKey('', reason)
+}
+
+const activateNotebookCell = (cell, reason = 'unknown') => {
+  if (cell?.type === 'python') {
+    setActiveNotebookPythonCellKey(String(cell?.key || ''), reason)
+    revealNotebookTopToolbar(`python-cell-selected:${reason}`)
+    return
+  }
+  clearActiveNotebookPythonCell(`non-python-cell:${reason}`)
+}
+
+const isNotebookInteractiveTarget = (target) => (
+  target instanceof HTMLElement
+  && !!target.closest('button, input, textarea, select, option, a, [contenteditable="true"]')
+)
+
+const handleNotebookCellPointerDown = (cell, event) => {
+  if (cell?.type === 'python') {
+    activateNotebookCell(cell, isNotebookInteractiveTarget(event?.target) ? 'python-interactive-pointerdown' : 'python-cell-pointerdown')
+    return
+  }
+  activateNotebookCell(cell, 'cell-pointerdown')
 }
 
 const clearNotebookTopToolbarHideTimer = () => {
@@ -2768,6 +2836,10 @@ const insertCell = (index, position = 'below', type = 'markdown') => {
   })
   if (type === 'markdown') {
     editingMarkdownCellKey.value = newCell.key
+    clearActiveNotebookPythonCell('insert-markdown-cell')
+  } else {
+    setActiveNotebookPythonCellKey(String(newCell.key || ''), 'insert-python-cell')
+    revealNotebookTopToolbar('insert-python-cell')
   }
   next.splice(Math.max(0, index + offset), 0, newCell)
   emitCells(next, newCell.key)
@@ -2788,6 +2860,15 @@ const removeCell = (key) => {
   const filtered = notebookCells.value.filter((cell) => String(cell.key) !== String(key))
   emitCells(filtered)
 }
+
+watch(notebookCells, (cells) => {
+  const activeKey = String(activeNotebookPythonCellKey.value || '')
+  if (!activeKey) return
+  const stillExists = cells.some((cell) => cell?.type === 'python' && String(cell?.key || '') === activeKey)
+  if (!stillExists) {
+    clearActiveNotebookPythonCell('active-cell-removed')
+  }
+}, { deep: false })
 
 const confirmRemoveCell = async (cell) => {
   const targetKey = String(cell?.key || '')
@@ -3215,6 +3296,11 @@ const getCellSnapshot = (cell) => {
       sessionCollapsed: snapshot?.meta?.sessionCollapsed ?? cell.meta?.sessionCollapsed ?? true,
     },
   }
+}
+
+const isActiveNotebookPythonCell = (cell) => {
+  if (cell?.type !== 'python') return false
+  return String(cell?.key || '') === String(activeNotebookPythonCellKey.value || '')
 }
 
 const getCellSessionVars = (cell) => Array.isArray(getCellSnapshot(cell).sessionVars) ? getCellSnapshot(cell).sessionVars : []
@@ -4086,6 +4172,46 @@ const toggleCellSession = (cell) => {
 
 const isCellBusy = (cell) => !!busyMap.value[String(cell.key)]
 
+const handleActivePythonToolbarAction = async (action) => {
+  const targetCell = activeNotebookPythonCell.value
+  if (!targetCell) {
+    message.warning('请先选中一个 Python Cell')
+    return
+  }
+
+  activateNotebookCell(targetCell, `toolbar-action:${action}`)
+
+  if (action === 'import-table') {
+    await importTableToPythonSession(targetCell)
+    return
+  }
+  if (action === 'run') {
+    await runPythonCell(targetCell, { writeBack: false })
+    return
+  }
+  if (action === 'run-writeback') {
+    await runPythonCell(targetCell, { writeBack: true })
+    return
+  }
+  if (action === 'toggle-output') {
+    toggleCellOutput(targetCell)
+    return
+  }
+  if (action === 'toggle-session') {
+    toggleCellSession(targetCell)
+    return
+  }
+  if (action === 'open-console') {
+    emit('open-console')
+    return
+  }
+
+  logger.warn('[NotebookToolbar] unknown active python action', {
+    action,
+    cellKey: String(targetCell?.key || ''),
+  })
+}
+
 const getPythonCellOrderIndex = (cell) => {
   const targetKey = String(cell?.key || '')
   if (!targetKey) return -1
@@ -4890,6 +5016,10 @@ defineExpose({
   --guaxi-notebook-toolbar-shell-height: 50px;
 }
 
+.guaxi-notebook.has-active-python-cell {
+  --guaxi-notebook-toolbar-max-width: min(100%, 760px);
+}
+
 .guaxi-notebook__toolbar-shell {
   position: sticky;
   top: var(--guaxi-notebook-sticky-top);
@@ -5060,6 +5190,13 @@ defineExpose({
   gap: 8px;
 }
 
+.guaxi-notebook__toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background: color-mix(in srgb, var(--guaxi-notebook-strong-border) 82%, transparent);
+  opacity: 0.8;
+}
+
 .guaxi-notebook__toolbar-main--solo {
   width: auto;
   justify-content: center;
@@ -5082,6 +5219,13 @@ defineExpose({
   outline-offset: 2px;
   border-radius: 10px;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--guaxi-notebook-primary) 16%, transparent);
+}
+
+.guaxi-notebook__cell.is-active-python-cell {
+  outline: 2px solid color-mix(in srgb, var(--guaxi-notebook-primary) 72%, transparent);
+  outline-offset: 2px;
+  border-radius: 14px;
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--guaxi-notebook-primary) 14%, transparent);
 }
 
 .guaxi-notebook__cell.is-markdown {
@@ -5376,6 +5520,7 @@ defineExpose({
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .guaxi-notebook__python-toolbar .guaxi-notebook__icon-btn {
