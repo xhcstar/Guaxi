@@ -37,7 +37,7 @@ fn apply_python_process_no_window(cmd: &mut Command) {
 fn apply_python_process_no_window(_cmd: &mut Command) {}
 
 #[cfg(windows)]
-const AUTO_DOWNLOAD_PYTHON_VERSION: &str = "3.13.12";
+const AUTO_DOWNLOAD_PYTHON_VERSION: &str = "3.13.13";
 #[cfg(windows)]
 const AUTO_DOWNLOAD_PYTHON_BASE_URL: &str = "https://www.python.org/ftp/python";
 #[cfg(windows)]

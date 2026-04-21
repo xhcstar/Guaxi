@@ -973,6 +973,31 @@ const getNotebookCellContentDigest = (cell) => {
   }
   return computeNotebookDigest(String(cell?.content || ''))
 }
+const isPythonCellSnapshotFresh = (cell, snapshot) => {
+  const currentCodeDigest = getNotebookCellContentDigest(cell)
+  const snapshotCodeDigest = String(snapshot?.codeDigest || '').trim()
+  return !!currentCodeDigest && !!snapshotCodeDigest && currentCodeDigest === snapshotCodeDigest
+}
+const buildStalePythonCellSnapshot = (cell, snapshot = {}, reason = 'unknown') => {
+  const nextSnapshot = {
+    codeDigest: getNotebookCellContentDigest(cell),
+    outputText: '',
+    display: null,
+    dataframe: null,
+    result: null,
+    sessionVars: [],
+    meta: snapshot?.meta && typeof snapshot.meta === 'object' ? { ...snapshot.meta } : {},
+  }
+  logger.info('[Notebook] invalidate stale python snapshot', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    stableId: getNotebookCellStableId(cell),
+    reason,
+    previousCodeDigest: String(snapshot?.codeDigest || ''),
+    nextCodeDigest: nextSnapshot.codeDigest,
+  })
+  return nextSnapshot
+}
 const buildNotebookCellRelation = (cells = [], index = 0) => {
   const current = cells[index] || null
   const previous = index > 0 ? cells[index - 1] : null
@@ -1054,6 +1079,7 @@ const serializeNotebookSnapshotsForSidecar = (cells = []) => {
 const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
   const nextSnapshots = {}
   let restoredCount = 0
+  let skippedCount = 0
   normalizeNotebookCells(cells).forEach((cell) => {
     if (cell?.type !== 'python') return
     const cellId = String(cell?.cellId || '')
@@ -1063,7 +1089,20 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
       ? snapshots[stableId] || snapshots[cellId] || null
       : null
     if (!persisted || typeof persisted !== 'object') return
+    const snapshotCodeDigest = String(persisted.codeDigest || '').trim()
+    const currentCodeDigest = getNotebookCellContentDigest(cell)
+    if (!snapshotCodeDigest || snapshotCodeDigest !== currentCodeDigest) {
+      skippedCount += 1
+      logger.info('[Notebook] skip stale sidecar snapshot', {
+        cellId,
+        stableId,
+        snapshotCodeDigest,
+        currentCodeDigest,
+      })
+      return
+    }
     nextSnapshots[cellId] = {
+      codeDigest: snapshotCodeDigest,
       outputText: String(persisted.outputText || ''),
       display: persisted.display || null,
       dataframe: persisted.dataframe || null,
@@ -1076,6 +1115,7 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
   logger.info('[Notebook] applied sidecar python snapshots', {
     cellCount: normalizeNotebookCells(cells).filter((cell) => cell?.type === 'python').length,
     restoredCount,
+    skippedCount,
     snapshotCount: Object.keys(snapshots && typeof snapshots === 'object' ? snapshots : {}).length,
   })
 }
@@ -2686,6 +2726,20 @@ const updatePythonCell = (key, payload) => {
   const value = typeof payload === 'string'
     ? payload
     : String(payload?.target?.value || '')
+  const targetCell = notebookCells.value.find((cell) => cell?.type === 'python' && String(cell?.key || '') === String(key))
+  if (targetCell) {
+    const currentDigest = getNotebookCellContentDigest(targetCell)
+    const nextDigest = computeNotebookDigest(value)
+    if (currentDigest !== nextDigest) {
+      const currentSnapshot = getPythonCellSnapshot(props.filePath, targetCell.cellId)
+      patchPythonCellSnapshot(
+        props.filePath,
+        targetCell.cellId,
+        buildStalePythonCellSnapshot(targetCell, currentSnapshot, 'code-edited'),
+      )
+      bumpRefresh()
+    }
+  }
   emitCells(
     notebookCells.value.map((cell) => {
       if (cell.type !== 'python' || String(cell.key) !== String(key)) return cell
@@ -3143,8 +3197,12 @@ const getGuaxiDataFrameFromResult = (res) => {
 
 const getCellSnapshot = (cell) => {
   refreshTick.value
-  const snapshot = getPythonCellSnapshot(props.filePath, cell.cellId)
+  const persistedSnapshot = getPythonCellSnapshot(props.filePath, cell.cellId)
+  const snapshot = isPythonCellSnapshotFresh(cell, persistedSnapshot)
+    ? persistedSnapshot
+    : buildStalePythonCellSnapshot(cell, persistedSnapshot, 'snapshot-read')
   return {
+    codeDigest: String(snapshot?.codeDigest || getNotebookCellContentDigest(cell)),
     outputText: String(snapshot?.outputText || ''),
     display: snapshot?.display || null,
     dataframe: snapshot?.dataframe || null,
@@ -4467,6 +4525,7 @@ const importTableToPythonSession = async (cell) => {
       // 设计说明：
       // 导入外部表格属于“向共享 Python 会话注入变量”的准备动作，
       // 不应该把导入脚本本身伪装成当前 Cell 的一次运行结果。
+      codeDigest: getNotebookCellContentDigest(cell),
       outputText: `已导入表格到会话变量 ${variableName}`,
       display: null,
       dataframe: importedTable,
@@ -4539,6 +4598,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     })
 
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
+      codeDigest: getNotebookCellContentDigest(cell),
       outputText: hideOutput ? '' : outputText,
       display,
       dataframe,
@@ -4564,6 +4624,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     message.success(writeBack ? '运行完成，输出已写回文档' : '运行完成')
   } catch (error) {
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
+      codeDigest: getNotebookCellContentDigest(cell),
       outputText: `运行失败：${String(error?.message || error)}`,
       display: null,
       dataframe: null,
@@ -5006,7 +5067,7 @@ defineExpose({
 
 .guaxi-notebook__cell {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   transition: box-shadow 0.18s ease, outline-color 0.18s ease, background-color 0.18s ease;
 }
 
@@ -5036,8 +5097,9 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 12px;
-  margin: -2px 0;
+  min-height: 24px;
+  margin: 2px 0 4px;
+  z-index: 3;
 }
 
 .guaxi-notebook__insert-line {
@@ -5064,6 +5126,7 @@ defineExpose({
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
   transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
   pointer-events: none;
+  z-index: 1;
 }
 
 .guaxi-notebook__insert-actions {
@@ -5080,6 +5143,7 @@ defineExpose({
   transform: translateY(2px) scale(0.96);
   transition: opacity 0.2s ease, transform 0.2s ease;
   pointer-events: none;
+  z-index: 2;
 }
 
 .guaxi-notebook__insert-strip:hover .guaxi-notebook__insert-line,

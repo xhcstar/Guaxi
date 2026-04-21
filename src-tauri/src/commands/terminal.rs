@@ -8,6 +8,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(all(windows, not(debug_assertions)))]
+use std::os::windows::process::CommandExt;
+
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Emitter};
@@ -24,9 +27,20 @@ type SessionMap = HashMap<String, Arc<TerminalSessionHandle>>;
 
 static TERMINAL_SESSIONS: OnceLock<Mutex<SessionMap>> = OnceLock::new();
 
+#[cfg(all(windows, not(debug_assertions)))]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 fn session_store() -> &'static Mutex<SessionMap> {
     TERMINAL_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn apply_terminal_process_no_window(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(all(windows, not(debug_assertions))))]
+fn apply_terminal_process_no_window(_command: &mut Command) {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalProfile {
@@ -324,12 +338,32 @@ fn quick_runtime_ipython() -> Option<PathBuf> {
 }
 
 fn python_supports_ipython(program: &Path) -> bool {
-    Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(["-c", "import IPython"])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // 设计说明：
+    // 1. 这里只是探测 IPython 能力，不应在 release 模式下额外弹出后台终端窗口。
+    // 2. 真正的终端会话仍然走 PTY；这里只压制探测子进程窗口即可。
+    apply_terminal_process_no_window(&mut command);
+    command
         .status()
         .map(|status| status.success())
+        .inspect(|supported| {
+            info!(
+                program = %program.to_string_lossy(),
+                supported,
+                "[Terminal] probed IPython capability"
+            );
+        })
+        .inspect_err(|error| {
+            warn!(
+                program = %program.to_string_lossy(),
+                error = %error,
+                "[Terminal] probe IPython capability failed"
+            );
+        })
         .unwrap_or(false)
 }
 
