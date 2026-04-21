@@ -1,3 +1,4 @@
+use crate::commands::notebook::preprocess_markdown_for_static_render;
 use crate::commands::knowledgebase::get_knowledge_base_list;
 use actix_web::{get, web, HttpResponse};
 use serde::Deserialize;
@@ -343,10 +344,18 @@ async fn browser_raw(query: web::Query<PathQuery>) -> HttpResponse {
     );
 
     match web::block(move || fs::read_to_string(file_path)).await {
-        Ok(Ok(content)) => HttpResponse::Ok()
+        Ok(Ok(content)) => {
+            let processed = preprocess_markdown_for_static_render(&content);
+            info!(
+                original_len = content.len(),
+                processed_len = processed.len(),
+                "browser preview: preprocessed markdown for static preview"
+            );
+            HttpResponse::Ok()
             .content_type("text/plain; charset=utf-8")
             .append_header(("Cache-Control", "no-store"))
-            .body(content),
+            .body(processed)
+        }
         Ok(Err(e)) => {
             error!(error = %e, "browser preview: /browser/raw read failed");
             HttpResponse::InternalServerError().finish()
@@ -470,9 +479,89 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
             code {{ font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; }}
             img {{ max-width: 100%; }}
             a {{ color: #0969da; }}
+            .content a[id^="guaxi-toc-"] {{ display: block; position: relative; top: -72px; visibility: hidden; pointer-events: none; }}
+            .guaxi-media-group {{
+              --guaxi-media-gap: clamp(14px, 2vw, 24px);
+              display: flex !important;
+              flex-wrap: wrap;
+              justify-content: center !important;
+              align-items: stretch;
+              align-content: flex-start;
+              gap: var(--guaxi-media-gap);
+              width: 100%;
+              max-width: 1000px;
+              margin: 22px auto;
+              padding: 6px 0;
+            }}
+            .guaxi-media-group.is-single {{
+              display: block !important;
+              width: min(100%, 760px);
+              gap: 0;
+            }}
+            .guaxi-media-group.is-gallery {{
+              display: grid !important;
+              grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
+              justify-content: center !important;
+              justify-items: center;
+              align-items: start;
+              padding-left: 6px;
+              padding-right: 6px;
+            }}
+            .guaxi-media-group__item {{
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              min-width: 0;
+              width: fit-content;
+              max-width: 100%;
+              box-sizing: border-box;
+              padding: 0;
+              border: none;
+              background: transparent;
+              box-shadow: none;
+              overflow: visible;
+              text-decoration: none;
+              transition: opacity 0.18s ease;
+            }}
+            .guaxi-media-group__item:hover {{ opacity: 0.98; }}
+            .guaxi-media-group.is-single > .guaxi-media-group__item {{
+              display: flex;
+              flex: 0 1 auto;
+              min-width: 0;
+              width: fit-content;
+              max-width: min(100%, 760px);
+              margin-left: auto;
+              margin-right: auto;
+            }}
+            .guaxi-media-group__image {{
+              display: block;
+              width: 100%;
+              max-width: 100%;
+              max-height: min(56vh, 420px);
+              height: auto;
+              margin: 0;
+              border-radius: 16px;
+              object-fit: contain;
+            }}
+            .guaxi-media-group.is-single .guaxi-media-group__image {{
+              width: auto;
+              max-width: min(100%, 760px);
+              max-height: min(72vh, 640px);
+            }}
             table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
             th, td {{ border: 1px solid rgba(0,0,0,0.16); padding: 6px 10px; }}
             thead th {{ background: rgba(0,0,0,0.04); }}
+            @media (max-width: 760px) {{
+              .guaxi-media-group,
+              .guaxi-media-group.is-gallery {{
+                width: 100%;
+                max-width: 100%;
+              }}
+              .guaxi-media-group__item {{
+                max-width: 100%;
+                width: 100%;
+              }}
+            }}
           </style>
           <link rel="stylesheet" href="/browser/assets/highlightjs/styles/atom-one-light.css" />
           <script>
@@ -513,6 +602,59 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
                 .replaceAll('&', '&amp;')
                 .replaceAll('<', '&lt;')
                 .replaceAll('>', '&gt;');
+            }}
+
+            function enhanceMediaGroups(root) {{
+              if (!(root instanceof Element) || !root.querySelector('img')) {{
+                return;
+              }}
+
+              const blocks = Array.from(root.querySelectorAll('p'));
+              const isWhitespaceNode = (node) => {{
+                if (!node) return true;
+                if (node.nodeType === Node.TEXT_NODE) return !String(node.textContent || '').trim();
+                if (node.nodeType === Node.ELEMENT_NODE && node instanceof HTMLBRElement) return true;
+                return false;
+              }};
+              const resolveMediaItem = (node) => {{
+                if (!(node instanceof Element)) return null;
+                if (node instanceof HTMLImageElement) {{
+                  return {{ kind: 'image', host: node, image: node }};
+                }}
+                if (node instanceof HTMLAnchorElement) {{
+                  const childElements = Array.from(node.children || []);
+                  if (childElements.length !== 1 || !(childElements[0] instanceof HTMLImageElement)) return null;
+                  const hasNonMediaChild = Array.from(node.childNodes || []).some((child) => child !== childElements[0] && !isWhitespaceNode(child));
+                  if (hasNonMediaChild) return null;
+                  return {{ kind: 'linked-image', host: node, image: childElements[0] }};
+                }}
+                return null;
+              }};
+
+              blocks.forEach((block) => {{
+                const meaningfulNodes = Array.from(block.childNodes || []).filter((node) => !isWhitespaceNode(node));
+                if (!meaningfulNodes.length) return;
+                const mediaItems = meaningfulNodes.map(resolveMediaItem);
+                if (mediaItems.some((item) => !item)) return;
+
+                block.classList.add('guaxi-media-group');
+                block.classList.toggle('is-single', mediaItems.length === 1);
+                block.classList.toggle('is-gallery', mediaItems.length > 1);
+
+                mediaItems.forEach((item) => {{
+                  if (item.host === item.image) {{
+                    const wrapper = document.createElement('span');
+                    wrapper.setAttribute('data-guaxi-media-item', item.kind);
+                    item.image.replaceWith(wrapper);
+                    wrapper.appendChild(item.image);
+                    item.host = wrapper;
+                  }} else {{
+                    item.host.setAttribute('data-guaxi-media-item', item.kind);
+                  }}
+                  item.host.classList.add('guaxi-media-group__item');
+                  item.image.classList.add('guaxi-media-group__image');
+                }});
+              }});
             }}
 
             async function loadAndRender() {{
@@ -557,6 +699,7 @@ async fn browser_preview(query: web::Query<PathQuery>) -> HttpResponse {
               const mdIt = window.markdownit({{ html: true, linkify: true, breaks: true }});
 
               contentEl.innerHTML = mdIt.render(processed);
+              enhanceMediaGroups(contentEl);
 
               if (window.MathJax) {{
                 try {{

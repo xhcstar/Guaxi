@@ -23,6 +23,7 @@ use reqwest::Client;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
+use crate::commands::notebook::preprocess_markdown_for_static_render;
 use crate::guaxiservices::bundled_resources;
 
 #[cfg(windows)]
@@ -1423,6 +1424,13 @@ async fn preprocess_markdown(
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let content = std::fs::read_to_string(input_path)
         .map_err(|e| format!("读取 Markdown 失败: {}", e))?;
+    let static_content = preprocess_markdown_for_static_render(&content);
+    info!(
+        input_path = input_path,
+        original_len = content.len(),
+        processed_len = static_content.len(),
+        "[DocExport] preprocessed markdown for static export"
+    );
 
     let tmp_base = std::env::temp_dir().join("guaxi_pandoc");
     std::fs::create_dir_all(&tmp_base)
@@ -1439,13 +1447,13 @@ async fn preprocess_markdown(
         .map_err(|e| e.to_string())?;
     let client = Client::new();
 
-    let mut result = String::with_capacity(content.len());
+    let mut result = String::with_capacity(static_content.len());
     let mut last_end = 0;
     let mut idx = 0;
 
-    for caps in re.captures_iter(&content) {
+    for caps in re.captures_iter(&static_content) {
         if let Some(m) = caps.get(0) {
-            result.push_str(&content[last_end..m.start()]);
+            result.push_str(&static_content[last_end..m.start()]);
             let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let url = caps.get(2).map(|m| m.as_str()).unwrap_or("");
             idx += 1;
@@ -1486,7 +1494,7 @@ async fn preprocess_markdown(
         }
     }
 
-    result.push_str(&content[last_end..]);
+    result.push_str(&static_content[last_end..]);
 
     let processed_md_path = tmp_dir.join("processed.md");
     std::fs::write(&processed_md_path, &result)

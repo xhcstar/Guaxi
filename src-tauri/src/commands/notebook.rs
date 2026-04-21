@@ -352,6 +352,250 @@ fn split_markdown_segments(markdown: &str) -> Vec<String> {
     segments
 }
 
+fn strip_python_cell_blocks(markdown: &str) -> String {
+    let lines: Vec<&str> = markdown.split('\n').collect();
+    let mut kept = Vec::new();
+    let mut inside_py_cell = false;
+
+    for line in lines {
+        let text = line.trim();
+        let is_start = text == "<!--py-->"
+            || (text.starts_with("<!--py ") && text.ends_with("-->"))
+            || (text.starts_with("<!-- guaxi:py-cell") && text.ends_with("-->"));
+        let is_end = text == "<!--/py-->"
+            || text == "<!-- /py -->"
+            || text == "<!--/guaxi:py-cell-->"
+            || text == "<!-- /guaxi:py-cell -->";
+
+        if is_start {
+            inside_py_cell = true;
+            continue;
+        }
+        if inside_py_cell && is_end {
+            inside_py_cell = false;
+            continue;
+        }
+        if !inside_py_cell {
+            kept.push(line);
+        }
+    }
+
+    kept.join("\n")
+}
+
+fn is_toc_marker_line(line: &str) -> bool {
+    matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "[toc]" | "[目录]" | "[[toc]]" | "[[目录]]"
+    )
+}
+
+fn normalize_static_wikilink_text(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let (target_part, alias_part) = match trimmed.split_once('|') {
+        Some((target, alias)) => (target.trim(), alias.trim()),
+        None => (trimmed, ""),
+    };
+
+    if !alias_part.is_empty() {
+        return alias_part.to_string();
+    }
+
+    let (file_part, anchor_part) = match target_part.split_once('#') {
+        Some((file, anchor)) => (file.trim(), anchor.trim()),
+        None => (target_part, ""),
+    };
+
+    if !file_part.is_empty() {
+        return file_part.to_string();
+    }
+
+    anchor_part
+        .trim_start_matches('^')
+        .trim()
+        .to_string()
+}
+
+fn replace_static_wikilinks(line: &str) -> String {
+    let mut result = String::new();
+    let mut remaining = line;
+
+    while let Some(start) = remaining.find("[[") {
+        result.push_str(&remaining[..start]);
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find("]]") else {
+            result.push_str(&remaining[start..]);
+            return result;
+        };
+
+        let inner = &after_start[..end];
+        let normalized = inner.trim().to_ascii_lowercase();
+        if normalized == "toc" || normalized == "目录" {
+            result.push_str("目录");
+        } else {
+            result.push_str(&normalize_static_wikilink_text(inner));
+        }
+        remaining = &after_start[end + 2..];
+    }
+
+    result.push_str(remaining);
+    result
+}
+
+#[derive(Debug, Clone)]
+struct StaticHeading {
+    line_index: usize,
+    level: usize,
+    title: String,
+    anchor: String,
+}
+
+fn slugify_static_heading_title(title: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_sep = false;
+
+    for ch in title.trim().chars() {
+        if ch.is_alphanumeric() || ch == '_' || (!ch.is_ascii() && !ch.is_whitespace()) {
+            if ch.is_ascii() {
+                out.push(ch.to_ascii_lowercase());
+            } else {
+                out.push(ch);
+            }
+            last_was_sep = false;
+        } else if !last_was_sep && !out.is_empty() {
+            out.push('-');
+            last_was_sep = true;
+        }
+    }
+
+    let normalized = out.trim_matches('-').trim();
+    if normalized.is_empty() {
+        "section".to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn collect_headings_for_static_toc(markdown: &str) -> Vec<StaticHeading> {
+    let mut headings = Vec::new();
+    let mut fence_active = false;
+    let mut fence_marker = String::new();
+    let mut anchor_counts: HashMap<String, usize> = HashMap::new();
+
+    for (line_index, raw_line) in markdown.split('\n').enumerate() {
+        let trimmed = raw_line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            let marker_len = trimmed.chars().take_while(|ch| *ch == '`' || *ch == '~').count();
+            let marker = trimmed.chars().next().unwrap_or('`').to_string().repeat(marker_len.max(3));
+            if !fence_active {
+                fence_active = true;
+                fence_marker = marker;
+            } else if trimmed.starts_with(&fence_marker) {
+                fence_active = false;
+                fence_marker.clear();
+            }
+            continue;
+        }
+        if fence_active {
+            continue;
+        }
+
+        let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+        if !(1..=6).contains(&level) {
+            continue;
+        }
+        let title = trimmed[level..].trim();
+        if title.is_empty() {
+            continue;
+        }
+        let normalized_title = replace_static_wikilinks(title.trim_end_matches('#').trim());
+        let slug = slugify_static_heading_title(&normalized_title);
+        let counter = anchor_counts.entry(slug.clone()).or_insert(0);
+        *counter += 1;
+        let unique_anchor = if *counter == 1 {
+            format!("guaxi-toc-{slug}")
+        } else {
+            format!("guaxi-toc-{slug}-{}", *counter)
+        };
+        headings.push(StaticHeading {
+            line_index,
+            level,
+            title: normalized_title,
+            anchor: unique_anchor,
+        });
+    }
+
+    headings
+}
+
+pub fn preprocess_markdown_for_static_render(markdown: &str) -> String {
+    let normalized = normalize_markdown_text(markdown);
+    let without_outputs = strip_output_blocks(&normalized);
+    let without_python_cells = strip_python_cell_blocks(&without_outputs);
+    let headings = collect_headings_for_static_toc(&without_python_cells);
+    let toc_markdown = if headings.is_empty() {
+        "## 目录\n\n> 当前文档未检测到可用于生成目录的标题".to_string()
+    } else {
+        let min_level = headings.iter().map(|item| item.level).min().unwrap_or(1);
+        let mut lines = vec!["## 目录".to_string(), String::new()];
+        for item in &headings {
+            let indent = "  ".repeat(item.level.saturating_sub(min_level));
+            lines.push(format!("{indent}- [{}](#{})", item.title, item.anchor));
+        }
+        lines.join("\n")
+    };
+
+    let mut output = Vec::new();
+    let mut fence_active = false;
+    let mut fence_marker = String::new();
+    let mut heading_iter = headings.iter().peekable();
+
+    for (line_index, raw_line) in without_python_cells.split('\n').enumerate() {
+        let trimmed = raw_line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            let marker_len = trimmed.chars().take_while(|ch| *ch == '`' || *ch == '~').count();
+            let marker = trimmed.chars().next().unwrap_or('`').to_string().repeat(marker_len.max(3));
+            if !fence_active {
+                fence_active = true;
+                fence_marker = marker;
+            } else if trimmed.starts_with(&fence_marker) {
+                fence_active = false;
+                fence_marker.clear();
+            }
+            output.push(raw_line.to_string());
+            continue;
+        }
+
+        if fence_active {
+            output.push(raw_line.to_string());
+            continue;
+        }
+
+        while heading_iter
+            .peek()
+            .map(|item| item.line_index == line_index)
+            .unwrap_or(false)
+        {
+            if let Some(item) = heading_iter.next() {
+                output.push(format!(r#"<a id="{}"></a>"#, item.anchor));
+            }
+        }
+
+        if is_toc_marker_line(raw_line) {
+            output.push(toc_markdown.clone());
+            continue;
+        }
+
+        output.push(replace_static_wikilinks(raw_line));
+    }
+
+    output.join("\n")
+}
+
 fn build_markdown_cells(markdown: &str) -> Vec<NotebookCell> {
     let text = normalize_markdown_text(markdown);
     let lines: Vec<&str> = text.split('\n').collect();
