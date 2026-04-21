@@ -1346,6 +1346,11 @@ pub async fn export_markdown_pandoc(
     }
 
     let (processed_md_path, tmp_dir) = preprocess_markdown(&input_path).await?;
+    info!(
+        processed_md_path = processed_md_path.to_string_lossy().as_ref(),
+        tmp_dir = tmp_dir.to_string_lossy().as_ref(),
+        "[DocExport] prepared processed markdown for pandoc"
+    );
 
     let input_dir = Path::new(&input_path)
         .parent()
@@ -1377,19 +1382,48 @@ pub async fn export_markdown_pandoc(
         .arg("-o")
         .arg(&output_path)
         .arg("--from")
-        .arg("markdown+hard_line_breaks+raw_html+implicit_figures")
+        // 设计说明：
+        // 1. 导出链路需要显式保留 fenced code blocks，否则 Mermaid 代码块里以 `---` 开头的配置
+        //    会被 Pandoc 误判为 YAML metadata，最终触发 “did not find expected <document start>”。
+        // 2. 这里补上常用 Markdown 扩展，保证导出解析结果更接近软件内预览。
+        .arg("markdown+hard_line_breaks+raw_html+implicit_figures+fenced_code_blocks+backtick_code_blocks+pipe_tables+task_lists+footnotes+tex_math_dollars")
         .arg("--resource-path")
         .arg(input_dir_str)
-        .arg("--highlight-style=tango");
+        // 设计说明：
+        // 1. Pandoc 新参数名是 `--syntax-highlighting`，但取值仍需使用它支持的内置风格。
+        // 2. `highlight` 不是合法值，这里改回稳定可用的 `default`，避免导出直接失败。
+        .arg("--syntax-highlighting=default");
 
     if format == "pdf" {
-        cmd.arg("--pdf-engine=xelatex")
-            .arg("-V")
-            .arg("mainfont=Microsoft YaHei")
-            .arg("-V")
-            .arg("CJKmainfont=Microsoft YaHei")
-            .arg("-V")
-            .arg("monofont=Consolas");
+        let pdf_engine = select_pandoc_pdf_engine()?;
+        let pdf_engine_arg = format!("--pdf-engine={}", pdf_engine.program.to_string_lossy());
+        info!(
+            engine = pdf_engine.display_name.as_str(),
+            program = %pdf_engine.program.display(),
+            bundled = pdf_engine.is_bundled,
+            output = output_path.as_str(),
+            "[DocExport] configuring pandoc pdf engine"
+        );
+
+        cmd.arg(pdf_engine_arg);
+
+        if pdf_engine.supports_font_config {
+            // 设计说明：
+            // 1. 中文 PDF 导出对字体很敏感，不显式指定字体时，常见问题是中文乱码或方块字。
+            // 2. 这里只在支持字体变量的引擎上注入字体设置，避免把不兼容的变量传给
+            //    `pdflatex` 之类的引擎，反而引入新的导出失败。
+            cmd.arg("-V")
+                .arg("mainfont=Microsoft YaHei")
+                .arg("-V")
+                .arg("CJKmainfont=Microsoft YaHei")
+                .arg("-V")
+                .arg("monofont=Consolas");
+        } else {
+            warn!(
+                engine = pdf_engine.display_name.as_str(),
+                "[DocExport] current pdf engine does not support explicit CJK font variables; export result may depend on local latex defaults"
+            );
+        }
     } else if format == "tex" {
         cmd.arg("-t").arg("latex");
     } else if format == "txt" {
@@ -1400,23 +1434,214 @@ pub async fn export_markdown_pandoc(
         cmd.arg("--lua-filter").arg(lua);
     }
 
-    let status = cmd
-        .status()
+    let output = cmd
+        .output()
         .map_err(|e| format!("Failed to execute pandoc: {}", e))?;
 
-    if let Err(e) = std::fs::remove_file(&processed_md_path) {
-        error!("Failed to remove temp markdown file: {:?}", e);
-    }
-    if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
-        error!("Failed to remove temp directory: {:?}", e);
-    }
+    let stdout_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr_text = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
-    if status.success() {
+    if output.status.success() {
+        if !stdout_text.is_empty() {
+            info!(stdout = stdout_text.as_str(), "[DocExport] pandoc stdout");
+        }
+        if !stderr_text.is_empty() {
+            warn!(stderr = stderr_text.as_str(), "[DocExport] pandoc stderr");
+        }
+        if let Err(e) = std::fs::remove_file(&processed_md_path) {
+            error!("Failed to remove temp markdown file: {:?}", e);
+        }
+        if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
+            error!("Failed to remove temp directory: {:?}", e);
+        }
         info!("Pandoc export succeeded: {}", output_path);
         Ok(())
     } else {
-        Err(format!("Pandoc export failed with status: {:?}", status.code()))
+        error!(
+            status = ?output.status.code(),
+            stdout = stdout_text.as_str(),
+            stderr = stderr_text.as_str(),
+            processed_md_path = processed_md_path.to_string_lossy().as_ref(),
+            tmp_dir = tmp_dir.to_string_lossy().as_ref(),
+            "[DocExport] pandoc export failed"
+        );
+        Err(format!(
+            "Pandoc export failed with status: {:?}. processed_md_path={}. stderr={}",
+            output.status.code(),
+            processed_md_path.to_string_lossy(),
+            if stderr_text.is_empty() { stdout_text } else { stderr_text }
+        ))
     }
+}
+
+#[derive(Debug, Clone)]
+struct PandocPdfEngine {
+    program: PathBuf,
+    display_name: String,
+    is_bundled: bool,
+    supports_font_config: bool,
+}
+
+fn can_execute_program(program: &Path) -> bool {
+    let mut cmd = Command::new(program);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    match cmd
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) => {
+            let ok = status.success();
+            info!(
+                program = %program.display(),
+                status = ?status.code(),
+                ok,
+                "[DocExport] probe external program"
+            );
+            ok
+        }
+        Err(err) => {
+            warn!(
+                program = %program.display(),
+                error = %err,
+                "[DocExport] external program probe failed"
+            );
+            false
+        }
+    }
+}
+
+fn select_pandoc_pdf_engine() -> Result<PandocPdfEngine, String> {
+    // 设计说明：
+    // 1. 过去固定写死 `xelatex`，只要用户机器上没有安装它，Pandoc 就会直接失败。
+    // 2. 这里改为按顺序探测可用引擎，优先使用项目更容易控制的 `tectonic`，
+    //    其次回退到常见的 `xelatex` / `lualatex` / `pdflatex`。
+    // 3. 每次探测和最终选择都会打日志，后续如果某些机器仍然导出失败，可以直接从日志看出
+    //    选中了哪个引擎、是否使用了内置二进制，以及失败前最后一步停在哪。
+    let (tectonic_path, is_bundled_tectonic) = find_tectonic_exe_for_export()?;
+    let candidates = vec![
+        PandocPdfEngine {
+            program: tectonic_path,
+            display_name: "tectonic".to_string(),
+            is_bundled: is_bundled_tectonic,
+            supports_font_config: true,
+        },
+        PandocPdfEngine {
+            program: PathBuf::from("xelatex"),
+            display_name: "xelatex".to_string(),
+            is_bundled: false,
+            supports_font_config: true,
+        },
+        PandocPdfEngine {
+            program: PathBuf::from("lualatex"),
+            display_name: "lualatex".to_string(),
+            is_bundled: false,
+            supports_font_config: true,
+        },
+        PandocPdfEngine {
+            program: PathBuf::from("pdflatex"),
+            display_name: "pdflatex".to_string(),
+            is_bundled: false,
+            supports_font_config: false,
+        },
+    ];
+
+    for candidate in candidates {
+        if can_execute_program(&candidate.program) {
+            info!(
+                engine = candidate.display_name.as_str(),
+                program = %candidate.program.display(),
+                bundled = candidate.is_bundled,
+                supports_font_config = candidate.supports_font_config,
+                "[DocExport] selected pandoc pdf engine"
+            );
+            return Ok(candidate);
+        }
+    }
+
+    Err("未找到可用的 PDF 引擎。请安装 xelatex/lualatex/pdflatex，或将 tectonic 放到 src-tauri/utils 后重试。".to_string())
+}
+
+fn clamp_static_toc_for_pdf(markdown: &str, max_indent_levels: usize) -> (String, bool) {
+    // 设计说明：
+    // 1. `preprocess_markdown_for_static_render()` 会把 `[toc]` 展开成按标题层级缩进的 Markdown 列表。
+    // 2. HTML 预览可以接受很深的目录层级，但 Pandoc 导出到 LaTeX 时，过深的 `itemize`
+    //    会触发 `Too deeply nested`，尤其是文档包含 5~6 级标题时。
+    // 3. 这里仅在 PDF 导出链路中把 TOC 的缩进层级钳制到安全范围，避免影响编辑器里的原始预览体验。
+    let toc_heading_regex = Regex::new(r"^\s{0,3}##\s+(目录|TOC)\s*$")
+        .expect("valid toc heading regex");
+    let toc_item_regex = Regex::new(r"^(?P<indent>\s*)-\s+\[[^\]]+\]\(#guaxi-toc-[^)]+\)\s*$")
+        .expect("valid toc item regex");
+
+    let mut lines: Vec<String> = markdown.split('\n').map(|line| line.to_string()).collect();
+    let mut changed = false;
+    let mut inside_toc = false;
+    let mut toc_item_count = 0usize;
+    let mut deepest_original_level = 0usize;
+
+    for line in &mut lines {
+        if !inside_toc {
+            if toc_heading_regex.is_match(line.trim_end()) {
+                inside_toc = true;
+                toc_item_count = 0;
+                deepest_original_level = 0;
+            }
+            continue;
+        }
+
+        if line.trim().is_empty() && toc_item_count == 0 {
+            continue;
+        }
+
+        if let Some(captures) = toc_item_regex.captures(line) {
+            let indent = captures
+                .name("indent")
+                .map(|m| m.as_str())
+                .unwrap_or_default();
+            let original_level = indent.len() / 2;
+            let clamped_level = original_level.min(max_indent_levels);
+            deepest_original_level = deepest_original_level.max(original_level);
+            toc_item_count += 1;
+
+            if clamped_level != original_level {
+                let trimmed = line.trim_start();
+                *line = format!("{}{}", "  ".repeat(clamped_level), trimmed);
+                changed = true;
+            }
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            inside_toc = false;
+            if toc_item_count > 0 {
+                info!(
+                    toc_item_count,
+                    deepest_original_level,
+                    max_indent_levels,
+                    changed,
+                    "[DocExport] finished clamping static toc for pdf"
+                );
+            }
+            continue;
+        }
+
+        inside_toc = false;
+        if toc_item_count > 0 {
+            info!(
+                toc_item_count,
+                deepest_original_level,
+                max_indent_levels,
+                changed,
+                "[DocExport] finished clamping static toc for pdf"
+            );
+        }
+    }
+
+    (lines.join("\n"), changed)
 }
 
 async fn preprocess_markdown(
@@ -1425,10 +1650,12 @@ async fn preprocess_markdown(
     let content = std::fs::read_to_string(input_path)
         .map_err(|e| format!("读取 Markdown 失败: {}", e))?;
     let static_content = preprocess_markdown_for_static_render(&content);
+    let (static_content, toc_clamped) = clamp_static_toc_for_pdf(&static_content, 3);
     info!(
         input_path = input_path,
         original_len = content.len(),
         processed_len = static_content.len(),
+        toc_clamped,
         "[DocExport] preprocessed markdown for static export"
     );
 

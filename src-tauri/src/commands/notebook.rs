@@ -390,6 +390,10 @@ fn is_toc_marker_line(line: &str) -> bool {
     )
 }
 
+fn is_standalone_horizontal_rule_line(line: &str) -> bool {
+    matches!(line.trim(), "---" | "___")
+}
+
 fn normalize_static_wikilink_text(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -536,6 +540,8 @@ pub fn preprocess_markdown_for_static_render(markdown: &str) -> String {
     let normalized = normalize_markdown_text(markdown);
     let without_outputs = strip_output_blocks(&normalized);
     let without_python_cells = strip_python_cell_blocks(&without_outputs);
+    let lines: Vec<&str> = without_python_cells.split('\n').collect();
+    let frontmatter_end = detect_frontmatter_end(&lines);
     let headings = collect_headings_for_static_toc(&without_python_cells);
     let toc_markdown = if headings.is_empty() {
         "## 目录\n\n> 当前文档未检测到可用于生成目录的标题".to_string()
@@ -554,7 +560,8 @@ pub fn preprocess_markdown_for_static_render(markdown: &str) -> String {
     let mut fence_marker = String::new();
     let mut heading_iter = headings.iter().peekable();
 
-    for (line_index, raw_line) in without_python_cells.split('\n').enumerate() {
+    for (line_index, raw_line) in lines.iter().enumerate() {
+        let raw_line = *raw_line;
         let trimmed = raw_line.trim_start();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             let marker_len = trimmed.chars().take_while(|ch| *ch == '`' || *ch == '~').count();
@@ -587,6 +594,17 @@ pub fn preprocess_markdown_for_static_render(markdown: &str) -> String {
 
         if is_toc_marker_line(raw_line) {
             output.push(toc_markdown.clone());
+            continue;
+        }
+
+        if !matches!(frontmatter_end, Some(end) if line_index < end)
+            && is_standalone_horizontal_rule_line(raw_line)
+        {
+            // 设计说明：
+            // 1. Pandoc 会把某些位置上的 `---` 误判成 YAML metadata block 起始符。
+            // 2. 导出/浏览器预览只需要保留“水平分割线”的语义，因此这里改写成等价的 `***`。
+            // 3. 顶部 frontmatter 区域必须原样保留，所以显式排除 frontmatter 范围。
+            output.push("***".to_string());
             continue;
         }
 
