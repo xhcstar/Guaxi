@@ -65,35 +65,31 @@ def _safe_repr(value):
 
 
 def _configure_verbose_object_rendering(globals_dict):
-    if globals_dict.get("__guaxi_verbose_repr_configured__"):
-        return
-
     # Design notes:
-    # 1. Explorer mode now needs the exact text users would expect from long
-    #    pandas/numpy objects instead of the libraries' default truncated repr.
-    # 2. We configure these modules once per persisted session so normal Python
-    #    execution stays stable while repeated cells do not keep reapplying
-    #    global print settings.
-    try:
-        import pandas as pd
+    # 1. Python Cell 每次执行都会先经过这里，哪怕只是简单的 `print("hello world")`。
+    # 2. 如果为了格式化输出而在这里主动 import pandas / numpy，一旦这些大库的导入异常变慢或卡住，
+    #    前端就会表现成“一直运行中”。
+    # 3. 因此这里只对当前 worker 已经加载过的模块补一次显示配置，既保留完整 repr，又避免无关 cell 被重型依赖拖住。
+    pandas_module = sys.modules.get("pandas")
+    if pandas_module is not None and not globals_dict.get("__guaxi_pandas_verbose_repr_configured__"):
+        try:
+            pandas_module.set_option("display.max_rows", None)
+            pandas_module.set_option("display.min_rows", None)
+            pandas_module.set_option("display.max_columns", None)
+            pandas_module.set_option("display.max_colwidth", None)
+            pandas_module.set_option("display.width", None)
+            pandas_module.set_option("display.expand_frame_repr", False)
+            globals_dict["__guaxi_pandas_verbose_repr_configured__"] = True
+        except Exception:
+            pass
 
-        pd.set_option("display.max_rows", None)
-        pd.set_option("display.min_rows", None)
-        pd.set_option("display.max_columns", None)
-        pd.set_option("display.max_colwidth", None)
-        pd.set_option("display.width", None)
-        pd.set_option("display.expand_frame_repr", False)
-    except Exception:
-        pass
-
-    try:
-        import numpy as np
-
-        np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
-    except Exception:
-        pass
-
-    globals_dict["__guaxi_verbose_repr_configured__"] = True
+    numpy_module = sys.modules.get("numpy")
+    if numpy_module is not None and not globals_dict.get("__guaxi_numpy_verbose_repr_configured__"):
+        try:
+            numpy_module.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
+            globals_dict["__guaxi_numpy_verbose_repr_configured__"] = True
+        except Exception:
+            pass
 
 
 def _summarize_value(value):
@@ -117,9 +113,8 @@ def _summarize_value(value):
         pass
 
     try:
-        import pandas as pd
-
-        if isinstance(value, pd.DataFrame):
+        pandas_module = sys.modules.get("pandas")
+        if pandas_module is not None and isinstance(value, pandas_module.DataFrame):
             summary["rows"] = int(len(value.index))
             summary["columns"] = int(len(value.columns))
     except Exception:
@@ -140,6 +135,10 @@ def _snapshot_session_vars(globals_dict):
         "_result",
         "_guaxi_session",
         "_guaxi_inline_matplotlib",
+        "__guaxi_pandas_verbose_repr_configured__",
+        "__guaxi_numpy_verbose_repr_configured__",
+        "_guaxi_cwd",
+        "_guaxi_sandbox_dir",
         "_doc_path",
         "_py_cell_id",
     }
@@ -202,12 +201,11 @@ def _maybe_prepare_inline_matplotlib():
 
 
 def _build_dataframe_payload(df, source_path=None):
-    try:
-        import pandas as pd
-    except Exception:
+    pandas_module = sys.modules.get("pandas")
+    if pandas_module is None:
         return None
 
-    if not isinstance(df, pd.DataFrame):
+    if not isinstance(df, pandas_module.DataFrame):
         return None
 
     # Design notes:
@@ -216,7 +214,7 @@ def _build_dataframe_payload(df, source_path=None):
     #    silently truncated to a short preview.
     # 2. We still normalize missing values to None so JSON transport remains
     #    stable across pandas dtypes.
-    preview_df = df.astype(object).where(pd.notnull(df), None)
+    preview_df = df.astype(object).where(pandas_module.notnull(df), None)
     rows = []
     for row in preview_df.values.tolist():
         rows.append([_normalize_basic(item) for item in row])
@@ -472,7 +470,6 @@ def _handle_exec(payload):
     if vars_map.get("_guaxi_inline_matplotlib", None) is True or "_py_cell_id" in vars_map or "_guaxi_session" in vars_map:
         _maybe_prepare_inline_matplotlib()
         _install_plotly_notebook_hook(globals_dict)
-    _configure_verbose_object_rendering(globals_dict)
 
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -506,6 +503,7 @@ def _handle_exec(payload):
             ast.fix_missing_locations(tree)
 
         exec(compile(tree, "<guaxi-worker>", "exec"), globals_dict, globals_dict)
+        _configure_verbose_object_rendering(globals_dict)
 
         if has_last_expr and "__guaxi_last_value" in globals_dict and "_result" not in globals_dict:
             globals_dict["_result"] = globals_dict.get("__guaxi_last_value")

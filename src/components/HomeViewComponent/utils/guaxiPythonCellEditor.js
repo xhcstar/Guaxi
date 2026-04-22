@@ -660,8 +660,12 @@ export const createGuaxiPythonCellEditorManager = ({
             },
           })
           setStateOutput(state, res)
+          // 设计说明：
+          // 导入表格属于“把数据带进当前会话”的动作，这里保留 dataframe 结果卡片和变量刷新，
+          // 但不额外输出“已导入到变量 xxx”的文本，避免把真正的表格结果往下挤。
+          state.outputText = ''
           renderCellOutput(state, outputContainer, block)
-          message?.success?.(`表格已导入到会话变量 ${variableName}`)
+          logger?.info?.('[PyCellEditor] table imported into session', { variableName, sourcePath: String(selected) })
         },
         onExport: async (format) => saveTableToFile(state.dataframe, format),
         onInsertMarkdown: async () => {
@@ -760,7 +764,9 @@ export const createGuaxiPythonCellEditorManager = ({
       return
     }
 
+    const card = outputContainer?.closest?.('.guaxi-pycell-card')
     state.busy = true
+    card?.classList?.add('is-running')
     syncSnapshot(cellId, state)
     renderCellOutput({ ...state, outputText: '运行中...' }, outputContainer, block)
 
@@ -814,6 +820,7 @@ export const createGuaxiPythonCellEditorManager = ({
       message?.error?.(`运行失败：${String(error?.message || error)}`)
     } finally {
       state.busy = false
+      card?.classList?.remove('is-running')
       syncSnapshot(cellId, state)
     }
   }
@@ -1006,11 +1013,12 @@ export const createGuaxiPythonCellEditorManager = ({
       }
       if (action === 'toggle-output') {
         togglePanel(outputContainer, 'outputCollapsed')
+        button.textContent = state.meta.outputCollapsed ? '显示输出' : '隐藏输出'
         return
       }
       if (action === 'toggle-session') {
         togglePanel(sessionContainer, 'sessionCollapsed')
-        button.textContent = state.meta.sessionCollapsed ? '鏄剧ず鍙橀噺' : '闅愯棌鍙橀噺'
+        button.textContent = state.meta.sessionCollapsed ? '显示变量' : '隐藏变量'
         return
       }
       if (action === 'open-console') {

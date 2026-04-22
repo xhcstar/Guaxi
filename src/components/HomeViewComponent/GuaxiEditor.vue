@@ -12640,6 +12640,97 @@ const handlePreviewClick = async (e) => {
     return normalized || 'guaxi:pycell:global'
   }
 
+  const getPyCellSessionLabel = (sessionId) => {
+    const normalized = String(sessionId || '').trim()
+    if (!normalized) return 'global'
+    const parts = normalized.split(/[\\/]/).filter(Boolean)
+    return parts.length ? parts[parts.length - 1] : normalized
+  }
+
+  const createPyCellOutputModuleId = (prefix = 'module') => {
+    return `pycell-${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  const setPyCellBusyState = (cell, busy) => {
+    if (!(cell instanceof HTMLElement)) return
+    cell.classList.toggle('is-running', !!busy)
+    cell.setAttribute('data-pycell-busy', busy ? 'true' : 'false')
+    const hint = cell.querySelector?.('.guaxi-pycell-hint')
+    if (hint) {
+      hint.textContent = busy
+        ? 'Python 正在运行，请稍候...'
+        : '共享当前笔记的 Python 会话，支持导入表格、注入笔记和查看变量'
+    }
+  }
+
+  const normalizePyCellOutputModule = (module) => {
+    if (!module || typeof module !== 'object') return null
+    const type = String(module.type || '').trim()
+    if (!type) return null
+    return {
+      id: String(module.id || createPyCellOutputModuleId(type)).trim(),
+      type,
+      title: String(module.title || '输出模块').trim() || '输出模块',
+      meta: String(module.meta || '').trim(),
+      table: module.table && typeof module.table === 'object' ? module.table : null,
+      display: module.display && typeof module.display === 'object' ? module.display : null,
+    }
+  }
+
+  const getPyCellOutputModulesFromSnapshot = (cellId) => {
+    const snapshot = getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)
+    const modules = Array.isArray(snapshot?.outputModules) ? snapshot.outputModules : []
+    return modules
+      .map((module) => normalizePyCellOutputModule(module))
+      .filter(Boolean)
+  }
+
+  const buildPyCellOutputModules = (res) => {
+    const modules = []
+    const dataframe = getGuaxiDataFrameFromResult(res)
+    const display = getGuaxiDisplayFromResult(res)
+
+    if (dataframe) {
+      const sourceName = String(dataframe.sourcePath || '').trim().split(/[\\/]/).pop() || ''
+      modules.push(normalizePyCellOutputModule({
+        id: createPyCellOutputModuleId('table'),
+        type: 'dataframe',
+        title: '表格输出',
+        meta: sourceName || `${dataframe.rowCount} 行 × ${(dataframe.columns || []).length} 列`,
+        table: dataframe,
+      }))
+    }
+
+    if (display) {
+      const typeLabelMap = {
+        image: '图像输出',
+        html: 'HTML 输出',
+        svg: 'SVG 输出',
+        markdown: 'Markdown 输出',
+      }
+      modules.push(normalizePyCellOutputModule({
+        id: createPyCellOutputModuleId(display.type || 'display'),
+        type: 'display',
+        title: typeLabelMap[String(display.type || '').trim().toLowerCase()] || '富输出',
+        meta: String(display.mime || '').trim(),
+        display,
+      }))
+    }
+
+    return modules.filter(Boolean)
+  }
+
+  const mergePyCellOutputModules = (cellId, incomingModules = [], { replace = false } = {}) => {
+    const normalizedIncoming = (Array.isArray(incomingModules) ? incomingModules : [])
+      .map((module) => normalizePyCellOutputModule(module))
+      .filter(Boolean)
+    if (replace) return normalizedIncoming
+
+    const prevModules = getPyCellOutputModulesFromSnapshot(cellId)
+    if (!normalizedIncoming.length) return prevModules
+    return [...prevModules, ...normalizedIncoming]
+  }
+
   const sanitizePythonIdentifier = (value, fallback = 'df') => {
     const normalized = String(value || '')
       .replace(/\.[^.]+$/, '')
@@ -12694,6 +12785,48 @@ const handlePreviewClick = async (e) => {
     return String(selectedFile.value?.path || '').trim()
   }
 
+  const ensurePyCellTextOutputToggle = (cell, outputPre, cellId = '') => {
+    if (!(cell instanceof Element) || !(outputPre instanceof HTMLElement)) return null
+
+    let shell = outputPre.parentElement
+    if (!shell || !shell.classList.contains('guaxi-pycell-text-output-shell')) {
+      shell = document.createElement('div')
+      shell.className = 'guaxi-pycell-text-output-shell'
+      outputPre.parentNode?.insertBefore(shell, outputPre)
+      shell.appendChild(outputPre)
+    }
+
+    let toolbar = shell.querySelector('.guaxi-pycell-output-module-toolbar')
+    if (!toolbar) {
+      toolbar = document.createElement('div')
+      toolbar.className = 'guaxi-pycell-output-module-toolbar'
+      shell.insertBefore(toolbar, shell.firstChild)
+    }
+
+    let meta = toolbar.querySelector('.guaxi-pycell-output-module-meta')
+    if (!meta) {
+      meta = document.createElement('div')
+      meta.className = 'guaxi-pycell-output-module-meta'
+      meta.textContent = '文本输出'
+      toolbar.appendChild(meta)
+    }
+
+    let btn = toolbar.querySelector('[data-guaxi-py-action="toggle-text-output"]')
+    if (!btn) {
+      btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'guaxi-pycell-output-module-btn'
+      btn.setAttribute('data-guaxi-py-action', 'toggle-text-output')
+      toolbar.appendChild(btn)
+    }
+
+    if (cellId) btn.setAttribute('data-guaxi-py-cell-id', cellId)
+    const visible = String(outputPre.style.display || '').trim() !== 'none'
+    btn.setAttribute('title', visible ? '隐藏文本输出' : '显示文本输出')
+    btn.textContent = visible ? '▾ 文本' : '▸ 文本'
+    return btn
+  }
+
   function patchSharedPythonCellState(cellId, patch = {}) {
     if (!cellId) return null
     return patchPythonCellSnapshot(getActivePythonCellFilePath(), cellId, patch)
@@ -12707,6 +12840,7 @@ const handlePreviewClick = async (e) => {
 
     const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
     const outputPre = outputEl ? outputEl.closest?.('pre') : null
+    ensurePyCellTextOutputToggle(cell, outputPre, cellId)
     if (outputEl) {
       outputEl.textContent = String(snapshot.outputText || '')
     }
@@ -12714,8 +12848,20 @@ const handlePreviewClick = async (e) => {
       outputPre.style.display = String(snapshot.outputText || '').trim() ? '' : 'none'
     }
 
-    if (snapshot.result) {
-      renderPyCellDisplay(cell, outputPre, snapshot.result, String(snapshot.outputText || ''))
+    if (Array.isArray(snapshot.outputModules) && snapshot.outputModules.length > 0) {
+      renderPyCellDisplay(cell, outputPre, null, String(snapshot.outputText || ''), {
+        cellId,
+        modules: snapshot.outputModules,
+      })
+      if (snapshot.result) {
+        renderPyCellSessionState(cell, snapshot.result, {
+          forceVisible: snapshot.meta?.sessionCollapsed === false,
+        })
+      }
+    } else if (snapshot.result) {
+      renderPyCellDisplay(cell, outputPre, snapshot.result, String(snapshot.outputText || ''), {
+        cellId,
+      })
       renderPyCellSessionState(cell, snapshot.result, {
         forceVisible: snapshot.meta?.sessionCollapsed === false,
       })
@@ -12737,6 +12883,7 @@ const handlePreviewClick = async (e) => {
     const sessionToggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-session"]')
     if (sessionToggleBtn) {
       const panel = cell.querySelector?.('.guaxi-pycell-session')
+      const textToggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-text-output"]')
       const visible = panel && String(panel.style.display || '').trim() !== 'none'
       sessionToggleBtn.textContent = visible ? '隐藏变量' : '会话变量'
     }
@@ -12784,6 +12931,7 @@ const handlePreviewClick = async (e) => {
 
     const vars = Array.isArray(res?.session_vars) ? res.session_vars : []
     const sessionId = String(res?.session_id || '').trim()
+    const sessionLabel = getPyCellSessionLabel(sessionId)
     const visible = forceVisible || panel.getAttribute('data-force-visible') === 'true'
     if (visible) panel.setAttribute('data-force-visible', 'true')
 
@@ -12812,8 +12960,8 @@ const handlePreviewClick = async (e) => {
     panel.innerHTML = `
       <div class="guaxi-pycell-session-header">
         <div>
-          <div class="guaxi-pycell-session-title">Python 会话</div>
-          <div class="guaxi-pycell-session-meta">${escapeHtml(sessionId ? `共享会话 · ${vars.length} 个变量` : `${vars.length} 个变量`)}</div>
+          <div class="guaxi-pycell-session-title">Python 会话 · ${escapeHtml(sessionLabel)}</div>
+          <div class="guaxi-pycell-session-meta">${escapeHtml(`${vars.length} 个变量`)}</div>
         </div>
       </div>
       <div class="guaxi-pycell-session-list">${rowsHtml}</div>
@@ -13437,9 +13585,9 @@ const handlePreviewClick = async (e) => {
       return btn
     }
 
-    actions.appendChild(createButton('导入文件', onImport))
-    actions.appendChild(createButton('导出 CSV', () => onExport?.('csv')))
-    actions.appendChild(createButton('导出 JSON', () => onExport?.('json')))
+    if (typeof onImport === 'function') actions.appendChild(createButton('导入文件', onImport))
+    if (typeof onExport === 'function') actions.appendChild(createButton('导出 CSV', () => onExport?.('csv')))
+    if (typeof onExport === 'function') actions.appendChild(createButton('导出 JSON', () => onExport?.('json')))
     toolbar.appendChild(meta)
     toolbar.appendChild(actions)
 
@@ -13509,101 +13657,75 @@ const handlePreviewClick = async (e) => {
     return media
   }
 
-  const renderPyCellDisplay = (cell, outputPre, res, outputText) => {
-    const display = getGuaxiDisplayFromResult(res)
-    const dataframe = getGuaxiDataFrameFromResult(res)
-    const shouldHideText = String(outputText || '').trim().length === 0
+  const createPyCellModuleShell = (module) => {
+    const shell = document.createElement('div')
+    shell.className = 'guaxi-pycell-output-module'
+    shell.setAttribute('data-pycell-module-id', String(module.id || ''))
+    shell.setAttribute('data-pycell-module-type', String(module.type || 'display'))
 
-    if (!display && !dataframe) {
-      const media = cell?.querySelector?.('.guaxi-pycell-media')
-      if (media) {
-        media.innerHTML = ''
-        media.style.display = 'none'
-      }
-      if (outputPre && shouldHideText) outputPre.style.display = 'none'
-      return
+    const toolbar = document.createElement('div')
+    toolbar.className = 'guaxi-pycell-output-module-toolbar'
+
+    const meta = document.createElement('div')
+    meta.className = 'guaxi-pycell-output-module-meta'
+    meta.textContent = module.meta ? `${module.title} · ${module.meta}` : module.title
+
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'guaxi-pycell-output-module-btn'
+    btn.setAttribute('data-guaxi-py-action', 'toggle-output-module')
+    btn.setAttribute('data-guaxi-py-module-id', String(module.id || ''))
+    btn.setAttribute('title', '隐藏该输出模块')
+    btn.textContent = '▾ 模块'
+
+    const body = document.createElement('div')
+    body.className = 'guaxi-pycell-output-module-body'
+
+    toolbar.appendChild(meta)
+    toolbar.appendChild(btn)
+    shell.appendChild(toolbar)
+    shell.appendChild(body)
+    return { shell, body, btn }
+  }
+
+  const renderPyCellModuleBody = (body, module) => {
+    body.innerHTML = ''
+
+    if (module.type === 'dataframe' && module.table) {
+      body.appendChild(createDataFramePreviewCard(module.table, {
+        onImport: async () => {},
+        onExport: async (format) => {
+          await saveDataFrameToFile(module.table, format)
+        },
+      }))
+      return true
     }
 
-    const media = ensurePyCellMediaContainer(cell, outputPre)
-    if (!media) return
+    const display = module.display
+    if (!display || typeof display !== 'object') return false
 
-    if (dataframe) {
-      const renderDataFrame = (table) => {
-        media.innerHTML = ''
-        media.appendChild(createDataFramePreviewCard(table, {
-          onImport: async () => {
-            try {
-              const selected = await open({
-                multiple: false,
-                filters: [{
-                  name: 'Table',
-                  extensions: ['csv', 'tsv', 'json', 'xlsx', 'xls', 'parquet'],
-                }],
-              })
-              if (!selected || Array.isArray(selected)) return
-              const imported = await invoke('python_runtime_import_table_file', { request: { path: String(selected) } })
-              if (!imported?.ok || !imported?.table) {
-                throw new Error(String(imported?.error || '导入失败'))
-              }
-              const nextTable = {
-                columns: Array.isArray(imported.table.columns) ? imported.table.columns.map((item) => String(item ?? '')) : [],
-                rows: Array.isArray(imported.table.rows) ? imported.table.rows : [],
-                rowCount: Number(imported.table.row_count || 0),
-                truncated: !!imported.table.truncated,
-                dtypes: imported.table.dtypes || {},
-                sourcePath: String(imported.table.source_path || '').trim(),
-              }
-              renderDataFrame(nextTable)
-              message.success('表格已导入到预览区')
-            } catch (error) {
-              logger.error('[PyCell] dataframe import failed', error)
-              message.error(`导入表格失败：${String(error?.message || error)}`)
-            }
-          },
-          onExport: async (format) => {
-            await saveDataFrameToFile(table, format)
-          },
-        }))
-        media.style.display = 'flex'
-      }
-
-      renderDataFrame(dataframe)
-      if (outputPre && shouldHideText) {
-        outputPre.style.display = 'none'
-      }
-      return
-    }
-
-    media.innerHTML = ''
-
-    if (display?.type === 'html' && display.html) {
+    if (display.type === 'html' && display.html) {
       const box = document.createElement('div')
       box.className = 'guaxi-pycell-rich-display guaxi-pycell-html-display'
       box.innerHTML = display.html
-      media.appendChild(box)
-      media.style.display = 'flex'
-      if (outputPre && shouldHideText) outputPre.style.display = 'none'
-      return
+      body.appendChild(box)
+      return true
     }
 
-    if (display?.type === 'svg' && display.svg) {
+    if (display.type === 'svg' && display.svg) {
       const box = document.createElement('div')
       box.className = 'guaxi-pycell-rich-display guaxi-pycell-svg-display'
       box.innerHTML = display.svg
-      media.appendChild(box)
-      media.style.display = 'flex'
-      if (outputPre && shouldHideText) outputPre.style.display = 'none'
-      return
+      body.appendChild(box)
+      return true
     }
 
-    if (display?.type === 'markdown' && display.markdown) {
+    if (display.type === 'markdown' && display.markdown) {
       const box = document.createElement('pre')
       box.className = 'guaxi-pycell-rich-display guaxi-pycell-markdown-display'
       box.textContent = display.markdown
-      media.appendChild(box)
-      media.style.display = 'flex'
-      if (outputPre && shouldHideText) outputPre.style.display = 'none'
-      return
+      body.appendChild(box)
+      return true
     }
 
     const img = document.createElement('img')
@@ -13614,28 +13736,70 @@ const handlePreviewClick = async (e) => {
     img.style.marginRight = 'auto'
 
     let src = ''
-    if (display.dataUrl && display.dataUrl.startsWith('data:')) {
-      src = display.dataUrl
-    } else if (display.dataBase64) {
-      src = `data:${display.mime};base64,${display.dataBase64}`
-    } else if (display.data != null) {
-      src = `data:${display.mime},${encodeURIComponent(display.data)}`
-    }
+    if (display.dataUrl && display.dataUrl.startsWith('data:')) src = display.dataUrl
+    else if (display.dataBase64) src = `data:${display.mime};base64,${display.dataBase64}`
+    else if (display.data != null) src = `data:${display.mime},${encodeURIComponent(display.data)}`
+    if (!src) return false
 
-    if (!src) {
+    img.src = src
+    body.appendChild(img)
+    return true
+  }
+
+  const applyPyCellModuleVisibility = (cellId, media) => {
+    if (!cellId || !(media instanceof HTMLElement)) return
+    const snapshot = getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)
+    const collapsedMap = snapshot?.meta?.moduleCollapsedMap && typeof snapshot.meta.moduleCollapsedMap === 'object'
+      ? snapshot.meta.moduleCollapsedMap
+      : {}
+
+    media.querySelectorAll?.('.guaxi-pycell-output-module')?.forEach?.((moduleEl) => {
+      const moduleId = String(moduleEl.getAttribute('data-pycell-module-id') || '').trim()
+      const body = moduleEl.querySelector('.guaxi-pycell-output-module-body')
+      const btn = moduleEl.querySelector('[data-guaxi-py-action="toggle-output-module"]')
+      const collapsed = !!collapsedMap[moduleId]
+      if (body) body.style.display = collapsed ? 'none' : ''
+      if (btn) {
+        btn.textContent = collapsed ? '▸ 模块' : '▾ 模块'
+        btn.setAttribute('title', collapsed ? '显示该输出模块' : '隐藏该输出模块')
+      }
+    })
+  }
+
+  const renderPyCellDisplay = (cell, outputPre, res, outputText, { cellId = '', modules = null } = {}) => {
+    const shouldHideText = String(outputText || '').trim().length === 0
+    const resolvedModules = (Array.isArray(modules) ? modules : buildPyCellOutputModules(res))
+      .map((module) => normalizePyCellOutputModule(module))
+      .filter(Boolean)
+
+    ensurePyCellTextOutputToggle(cell, outputPre, cellId)
+
+    const media = ensurePyCellMediaContainer(cell, outputPre)
+    if (!media) return
+
+    if (!resolvedModules.length) {
       media.innerHTML = ''
       media.style.display = 'none'
+      if (outputPre && shouldHideText) outputPre.style.display = 'none'
       return
     }
 
-    img.src = src
     media.innerHTML = ''
-    media.appendChild(img)
-    media.style.display = 'flex'
+    resolvedModules.forEach((module) => {
+      const { shell, body } = createPyCellModuleShell(module)
+      const ok = renderPyCellModuleBody(body, module)
+      if (ok) media.appendChild(shell)
+    })
+    media.style.display = media.childNodes.length > 0 ? 'flex' : 'none'
+    applyPyCellModuleVisibility(cellId, media)
 
-    if (outputPre && shouldHideText) {
-      outputPre.style.display = 'none'
-    }
+    logger.info('[PyCell] rendered output modules', {
+      cellId,
+      moduleCount: resolvedModules.length,
+      hasTextOutput: !shouldHideText,
+    })
+
+    if (outputPre && shouldHideText) outputPre.style.display = 'none'
   }
 
   const upsertPythonOutputBlock = (markdown, startLine, cellId, outputText) => {
@@ -13818,15 +13982,77 @@ const handlePreviewClick = async (e) => {
     const docPath = selectedFile.value?.path || ''
     const sessionId = buildPyCellSessionId(docPath)
     const cellId = guaxiSafeDecode(cell.getAttribute('data-guaxi-py-cell'))
+    ensurePyCellTextOutputToggle(cell, outputPre, cellId)
 
     const syncPyCellButtons = () => {
       const media = cell.querySelector?.('.guaxi-pycell-media')
       const panel = cell.querySelector?.('.guaxi-pycell-session')
+      const textToggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-text-output"]')
       const textVisible = outputPre ? String(outputPre.style.display || '').trim() !== 'none' : false
       const mediaVisible = media ? String(media.style.display || '').trim() !== 'none' : false
       const panelVisible = panel ? String(panel.style.display || '').trim() !== 'none' : false
       if (toggleBtn) toggleBtn.textContent = textVisible || mediaVisible ? '隐藏结果' : '显示结果'
       if (sessionBtn) sessionBtn.textContent = panelVisible ? '隐藏变量' : '会话变量'
+      if (textToggleBtn) {
+        textToggleBtn.textContent = textVisible ? '▾ 文本' : '▸ 文本'
+        textToggleBtn.setAttribute('title', textVisible ? '隐藏文本输出' : '显示文本输出')
+      }
+    }
+
+    if (action === 'toggle-text-output') {
+      if (!outputPre) return
+      const hasText = String(outputEl?.textContent || '').trim().length > 0
+      const nextVisible = String(outputPre.style.display || '').trim() === 'none'
+      outputPre.style.display = nextVisible && hasText ? '' : 'none'
+      pyCellBtn.textContent = nextVisible && hasText ? '▾' : '▸'
+      pyCellBtn.setAttribute('title', nextVisible && hasText ? '隐藏文本输出' : '显示文本输出')
+      logger.info('[PyCell] toggled text output visibility', { cellId, nextVisible, hasText })
+      patchSharedPythonCellState(cellId, {
+        meta: {
+          ...(getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)?.meta || {}),
+          textOutputCollapsed: !(nextVisible && hasText),
+        },
+      })
+      syncPyCellButtons()
+      scheduleRefreshPythonCellManagers()
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
+    if (action === 'toggle-output-module') {
+      const moduleId = String(pyCellBtn.getAttribute('data-guaxi-py-module-id') || '').trim()
+      const moduleEl = moduleId
+        ? cell.querySelector?.(`.guaxi-pycell-output-module[data-pycell-module-id="${moduleId}"]`)
+        : pyCellBtn.closest?.('.guaxi-pycell-output-module')
+      const body = moduleEl?.querySelector?.('.guaxi-pycell-output-module-body')
+      if (!moduleId || !body) return
+
+      const nextVisible = String(body.style.display || '').trim() === 'none'
+      body.style.display = nextVisible ? '' : 'none'
+      pyCellBtn.textContent = nextVisible ? '▾' : '▸'
+      pyCellBtn.setAttribute('title', nextVisible ? '隐藏该输出模块' : '显示该输出模块')
+
+      const snapshot = getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)
+      const moduleCollapsedMap = {
+        ...((snapshot?.meta?.moduleCollapsedMap && typeof snapshot.meta.moduleCollapsedMap === 'object')
+          ? snapshot.meta.moduleCollapsedMap
+          : {}),
+        [moduleId]: !nextVisible,
+      }
+
+      logger.info('[PyCell] toggled output module visibility', { cellId, moduleId, nextVisible })
+      patchSharedPythonCellState(cellId, {
+        meta: {
+          ...(snapshot?.meta || {}),
+          moduleCollapsedMap,
+        },
+      })
+      syncPyCellButtons()
+      scheduleRefreshPythonCellManagers()
+      e.preventDefault()
+      e.stopPropagation()
+      return
     }
 
     if (action === 'toggle-output') {
@@ -13899,6 +14125,7 @@ const handlePreviewClick = async (e) => {
           outputText: '',
           display: null,
           dataframe: null,
+          outputModules: [],
           result: { session_id: sessionId, session_vars: [] },
           sessionVars: [],
         })
@@ -13947,7 +14174,17 @@ const handlePreviewClick = async (e) => {
     }
 
     if (action === 'import-table') {
+      const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
       try {
+        setPyCellBusyState(cell, true)
+        relatedBtns.forEach((b) => {
+          try {
+            b.setAttribute('disabled', 'true')
+            b.style.opacity = '0.6'
+            b.style.cursor = 'not-allowed'
+          } catch {
+          }
+        })
         const selected = await open({
           multiple: false,
           filters: [{
@@ -14013,30 +14250,48 @@ const handlePreviewClick = async (e) => {
             },
           },
         })
-        const outputText = formatPythonExecOutput(res)
+        // 设计说明：
+        // 1. “导入表格”是一次数据装载操作，不属于用户显式希望看到的标准输出。
+        // 2. 这里保留 dataframe/display 模块和 session 变量刷新，但不再额外制造文本输出，
+        //    这样导入后的 cell 会稳定保留表格模块，而不会出现“已导入到变量 xxx”的冗余提示。
+        const outputText = ''
+        const nextModules = mergePyCellOutputModules(cellId, buildPyCellOutputModules(res))
         if (outputEl) outputEl.textContent = outputText
         if (outputPre) outputPre.style.display = String(outputText || '').trim().length > 0 ? '' : 'none'
-        renderPyCellDisplay(cell, outputPre, res, outputText)
+        renderPyCellDisplay(cell, outputPre, res, outputText, { cellId, modules: nextModules })
         renderPyCellSessionState(cell, res, { forceVisible: true })
+        logger.info('[PyCell] imported table modules updated', { cellId, moduleCount: nextModules.length })
         syncPyCellButtons()
         patchSharedPythonCellState(cellId, {
           outputText,
           display: getGuaxiDisplayFromResult(res),
           dataframe: getGuaxiDataFrameFromResult(res),
+          outputModules: nextModules,
           result: res,
           sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
           meta: {
             ...(getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)?.meta || {}),
             outputCollapsed: String(outputText || '').trim().length === 0,
             sessionCollapsed: false,
+            textOutputCollapsed: String(outputText || '').trim().length === 0,
           },
         })
         scheduleRefreshPythonCellManagers()
         if (res?.ok === false) throw new Error(String(res?.stderr || res?.stdout || '导入失败'))
-        message.success(`表格已导入到会话变量 ${variableName}`)
+        logger.info('[PyCell] imported table into session', { cellId, variableName, selectedPath })
       } catch (err) {
         logger.error('[PyCell] import table failed', err)
         message.error(`导入表格失败：${String(err?.message || err)}`)
+      } finally {
+        setPyCellBusyState(cell, false)
+        relatedBtns.forEach((b) => {
+          try {
+            b.removeAttribute('disabled')
+            b.style.opacity = ''
+            b.style.cursor = ''
+          } catch {
+          }
+        })
       }
       e.preventDefault()
       e.stopPropagation()
@@ -14052,17 +14307,12 @@ const handlePreviewClick = async (e) => {
         return
       }
 
-      const media = cell.querySelector?.('.guaxi-pycell-media')
-      if (media) {
-        media.innerHTML = ''
-        media.style.display = 'none'
-      }
-
       if (outputPre) outputPre.style.display = ''
       if (outputEl) outputEl.textContent = '运行中...'
       syncPyCellButtons()
 
       const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
+      setPyCellBusyState(cell, true)
       relatedBtns.forEach((b) => {
         try {
           b.setAttribute('disabled', 'true')
@@ -14087,22 +14337,26 @@ const handlePreviewClick = async (e) => {
         })
 
         const outputText = formatPythonExecOutput(res)
+        const nextModules = mergePyCellOutputModules(cellId, buildPyCellOutputModules(res))
         const hideText = String(outputText || '').trim().length === 0
         if (outputPre) outputPre.style.display = hideText ? 'none' : ''
         if (outputEl) outputEl.textContent = hideText ? '' : outputText
 
-        renderPyCellDisplay(cell, outputPre, res, outputText)
+        renderPyCellDisplay(cell, outputPre, res, outputText, { cellId, modules: nextModules })
         renderPyCellSessionState(cell, res)
+        logger.info('[PyCell] run output modules updated', { cellId, moduleCount: nextModules.length, hideText })
         syncPyCellButtons()
         patchSharedPythonCellState(cellId, {
           outputText: hideText ? '' : outputText,
           display: getGuaxiDisplayFromResult(res),
           dataframe: getGuaxiDataFrameFromResult(res),
+          outputModules: nextModules,
           result: res,
           sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
           meta: {
             ...(getPythonCellSnapshot(getActivePythonCellFilePath(), cellId)?.meta || {}),
             outputCollapsed: hideText,
+            textOutputCollapsed: hideText,
           },
         })
         scheduleRefreshPythonCellManagers()
@@ -14145,208 +14399,7 @@ const handlePreviewClick = async (e) => {
         scheduleRefreshPythonCellManagers()
         message.error('运行失败')
       } finally {
-        relatedBtns.forEach((b) => {
-          try {
-            b.removeAttribute('disabled')
-            b.style.opacity = ''
-            b.style.cursor = ''
-          } catch {
-          }
-        })
-      }
-
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-  }
-
-  // 可执行 Python 代码块：预览点击“运行/运行并写回/显示结果”
-  const pyBtn = base.closest?.('[data-guaxi-py-action]')
-  if (pyBtn && previewContainer.value && previewContainer.value.contains(pyBtn)) {
-    const action = String(pyBtn.getAttribute('data-guaxi-py-action') || '').trim()
-
-    if (action === 'toggle-output') {
-      const cell = pyBtn.closest?.('.guaxi-pycell')
-      if (!cell) return
-
-      const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
-      const outputPre = outputEl ? outputEl.closest?.('pre') : null
-      const media = cell.querySelector?.('.guaxi-pycell-media')
-
-      if (!outputPre && !media) {
-        message.warning('未找到运行结果区域')
-        e.stopPropagation()
-        return
-      }
-
-      const hasText = String(outputEl?.textContent || '').trim().length > 0
-      const hasImage = !!media?.querySelector?.('img')
-
-      const isVisible = (el) => {
-        if (!el) return false
-        return String(el.style.display || '').trim() !== 'none'
-      }
-
-      const currentlyVisible = isVisible(outputPre) || isVisible(media)
-      const nextShow = !currentlyVisible
-
-      if (outputPre) {
-        outputPre.style.display = nextShow && hasText ? '' : 'none'
-      }
-      if (media) {
-        media.style.display = nextShow && hasImage ? 'flex' : 'none'
-      }
-
-      const anyVisibleAfter = isVisible(outputPre) || isVisible(media)
-      pyBtn.textContent = anyVisibleAfter ? '隐藏结果' : '显示结果'
-
-      logger.info('[PyCell] toggle output', {
-        nextShow,
-        hasText,
-        hasImage,
-        textVisible: isVisible(outputPre),
-        imageVisible: isVisible(media),
-      })
-
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-
-    if (action === 'run' || action === 'run-save') {
-      const cell = pyBtn.closest?.('.guaxi-pycell')
-      if (!cell) return
-
-      const code = guaxiSafeDecode(cell.getAttribute('data-guaxi-py-code'))
-      const cellId = guaxiSafeDecode(cell.getAttribute('data-guaxi-py-cell'))
-      const startLine = Number(cell.getAttribute('data-guaxi-md-start-line'))
-
-      if (!code) {
-        message.warning('Python 代码为空')
-        e.stopPropagation()
-        return
-      }
-
-      const outputEl = cell.querySelector?.('[data-guaxi-py-output]')
-      const outputPre = outputEl ? outputEl.closest?.('pre') : null
-      const toggleBtn = cell.querySelector?.('[data-guaxi-py-action="toggle-output"]')
-      const syncToggleText = () => {
-        if (!toggleBtn) return
-        const media = cell.querySelector?.('.guaxi-pycell-media')
-        const textVisible = outputPre ? String(outputPre.style.display || '').trim() !== 'none' : false
-        const imageVisible = media ? String(media.style.display || '').trim() !== 'none' : false
-        toggleBtn.textContent = textVisible || imageVisible ? '隐藏结果' : '显示结果'
-      }
-
-      // 说明：输出容器默认隐藏（避免未运行时占位）；运行时再展示。
-      // 运行前清理上次的展示（例如 __guaxi_display__ 生成的图片），避免旧内容闪现。
-      const media = cell.querySelector?.('.guaxi-pycell-media')
-      if (media) {
-        media.innerHTML = ''
-        media.style.display = 'none'
-      }
-
-      if (outputPre) {
-        outputPre.style.display = ''
-      }
-
-      syncToggleText()
-      if (outputEl) outputEl.textContent = '运行中...'
-
-      const relatedBtns = Array.from(cell.querySelectorAll?.('[data-guaxi-py-action]') || [])
-      relatedBtns.forEach((b) => {
-        try {
-          b.setAttribute('disabled', 'true')
-          b.style.opacity = '0.6'
-          b.style.cursor = 'not-allowed'
-        } catch {
-        }
-      })
-
-      try {
-        const docPath = selectedFile.value?.path || ''
-        const sessionId = docPath ? String(docPath) : 'guaxi:pycell:global'
-
-        logger.info('[PyCell] python_exec', {
-          action,
-          cellId,
-          codeLen: code.length,
-          docPath,
-          sessionId,
-        })
-
-        const res = await invoke('python_exec', {
-          request: {
-            code,
-            persist: true,
-            expect_json: true,
-            vars: {
-              _guaxi_session: sessionId,
-              _doc_path: String(docPath),
-              _py_cell_id: String(cellId || ''),
-            },
-          },
-        })
-
-        logger.info('[PyCell] python_exec result', {
-          ok: res?.ok,
-          stdoutLen: String(res?.stdout || '').length,
-          stderrLen: String(res?.stderr || '').length,
-          hasResultRepr: !!res?.result_repr,
-          hasResultJson: res?.result_json != null,
-        })
-
-        const outputText = formatPythonExecOutput(res)
-
-        const hideText = String(outputText || '').trim().length === 0
-
-        if (outputPre) {
-          outputPre.style.display = hideText ? 'none' : ''
-        }
-        syncToggleText()
-
-        if (outputEl) {
-          outputEl.textContent = hideText ? '' : outputText
-        }
-
-        renderPyCellDisplay(cell, outputPre, res, outputText)
-
-        if (res?.ok === false) {
-          message.error('Python 执行失败')
-        }
-
-        if (action === 'run-save') {
-          const hasTextOutput = String(outputText || '').trim().length > 0
-          if (!hasTextOutput) {
-            logger.info('[PyCell] run-save skipped: empty text output', { cellId })
-            message.success('运行完成（无文字输出，未写回）')
-          } else {
-            suppressPreviewAutoRenderOnce(`pycell:${action}`, 1500)
-
-            const current = String(editor?.getModel?.()?.getValue?.() || rawContent.value || '')
-            const nextMarkdown = upsertPythonOutputBlock(
-              current,
-              Number.isFinite(startLine) ? startLine : null,
-              cellId || 'pycell',
-              outputText
-            )
-
-            applyMarkdownReplaceFromPreview(nextMarkdown, { action: 'pycell-run-save' })
-            message.success('已写回到文档（未自动保存）')
-          }
-        } else {
-          message.success('运行完成')
-        }
-      } catch (err) {
-        logger.error('[PyCell] run failed', err)
-        if (outputPre) {
-          outputPre.style.display = ''
-        }
-        syncToggleText()
-        if (outputEl) outputEl.textContent = `运行失败：${String(err?.message || err)}`
-        message.error('运行失败')
-      } finally {
+        setPyCellBusyState(cell, false)
         relatedBtns.forEach((b) => {
           try {
             b.removeAttribute('disabled')
@@ -16365,6 +16418,11 @@ const buildPrintHtml = (bodyHtml, title) => {
   color: var(--pycell-prompt);
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.guaxi-editor .guaxi-pycell-card.is-running .guaxi-pycell-card__prompt {
+  color: #2563eb;
+  animation: guaxi-pycell-prompt-pulse 1.1s ease-in-out infinite;
 }
 
 .guaxi-editor .guaxi-pycell-card__title {
@@ -19754,6 +19812,86 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
+/* 设计说明：
+ * 1. 预览态 Python cell 本身没有稳定的独立图标节点，因此这里在 toolbar 前面补一个轻量的 Py 徽标。
+ * 2. 运行中只切换 cell 的 `is-running` class，就能驱动徽标旋转和高亮，避免额外插入/销毁 DOM。
+ */
+.preview .guaxi-pycell-toolbar::before {
+  content: 'Py';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(14, 165, 233, 0.24));
+  border: 1px solid rgba(59, 130, 246, 0.26);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+  flex: 0 0 auto;
+}
+
+.preview .guaxi-pycell.is-running .guaxi-pycell-toolbar::before {
+  animation: guaxi-pycell-badge-spin 1.2s linear infinite, guaxi-pycell-badge-pulse 1.4s ease-in-out infinite;
+}
+
+.guaxi-pycell-text-output-shell,
+.guaxi-pycell-media {
+  margin-top: 10px;
+}
+
+.guaxi-pycell-media {
+  gap: 12px;
+}
+
+.guaxi-pycell-output-module {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.92);
+  overflow: hidden;
+}
+
+.guaxi-pycell-output-module-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.guaxi-pycell-output-module-meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--guaxi-text-secondary, #475569);
+}
+
+.guaxi-pycell-output-module-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--guaxi-text-primary, #0f172a);
+  cursor: pointer;
+}
+
+.guaxi-pycell-output-module-body {
+  padding: 12px;
+}
+
+.guaxi-pycell-text-output-shell pre {
+  margin: 0;
+}
+
 .guaxi-pycell-session {
   margin-top: 10px;
   border: 1px solid rgba(148, 163, 184, 0.22);
@@ -19900,6 +20038,42 @@ onUnmounted(() => {
 .preview .guaxi-pycell-hint {
   white-space: nowrap;
   flex: 0 1 auto;
+}
+
+.preview .guaxi-pycell.is-running .guaxi-pycell-hint {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+@keyframes guaxi-pycell-badge-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes guaxi-pycell-badge-pulse {
+  0%,
+  100% {
+    box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+  }
+  50% {
+    box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
+  }
+}
+
+@keyframes guaxi-pycell-prompt-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.58;
+    transform: translateY(-1px);
+  }
 }
 
 .guaxi-dataframe-card {
@@ -21091,6 +21265,11 @@ onUnmounted(() => {
   color: var(--pycell-prompt);
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.guaxi-pycell-card.is-running .guaxi-pycell-card__prompt {
+  color: #2563eb;
+  animation: guaxi-pycell-prompt-pulse 1.1s ease-in-out infinite;
 }
 
 .guaxi-pycell-card__title {

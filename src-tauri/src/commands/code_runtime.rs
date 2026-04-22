@@ -11,7 +11,10 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 use tauri::command;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -24,6 +27,7 @@ static PY_WORKER_STATE: OnceLock<Mutex<Option<PythonWorkerState>>> = OnceLock::n
 
 const PY_WORKER_FILE_NAME: &str = "guaxi_python_worker.py";
 const PY_WORKER_SOURCE: &str = include_str!("../../scripts/guaxi_python_worker.py");
+const PY_WORKER_REQUEST_TIMEOUT_SECS: u64 = 45;
 
 #[cfg(all(windows, not(debug_assertions)))]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1489,13 +1493,14 @@ fn sync_managed_runtime_support_files(base_spec: &PythonLaunchSpec, venv_dir: &P
             .map_err(|e| format!("copy runtime support file to managed venv failed: {e}"))?;
         copied_file_count += 1;
 
-        if file_name_str.to_ascii_lowercase().ends_with(".dll") {
+        let normalized_file_name = file_name_str.to_ascii_lowercase();
+        if normalized_file_name.ends_with(".dll") || normalized_file_name.ends_with(".zip") {
             let scripts_target_path = scripts_dir.join(&file_name);
             if scripts_target_path.exists() {
                 let _ = fs::remove_file(&scripts_target_path);
             }
             fs::copy(&source_path, &scripts_target_path)
-                .map_err(|e| format!("copy runtime dll to managed Scripts failed: {e}"))?;
+                .map_err(|e| format!("copy runtime support file to managed Scripts failed: {e}"))?;
             copied_file_count += 1;
         }
     }
@@ -1749,6 +1754,19 @@ fn managed_python_runtime_health(spec: &PythonLaunchSpec) -> Result<(), String> 
     version_cmd.args(&spec.base_args).arg("--version");
     let _ = command_output_trimmed(version_cmd)
         .map_err(|e| format!("managed python probe failed: {e}"))?;
+
+    let mut script_mode_cmd = Command::new(&spec.program);
+    script_mode_cmd
+        .args(&spec.base_args)
+        .args(["-c", "import encodings, sys; print(sys.executable)"]);
+    let script_mode_probe = command_output_trimmed(script_mode_cmd)
+        .map_err(|e| format!("managed python script-mode probe failed: {e}"))?;
+    info!(
+        program = spec.program.as_str(),
+        source = spec.source.as_str(),
+        executable = script_mode_probe.as_str(),
+        "[PythonRuntime] managed runtime script-mode probe succeeded"
+    );
 
     let mut pip_cmd = Command::new(&spec.program);
     pip_cmd.args(&spec.base_args).args(["-m", "pip", "--version"]);
@@ -2035,6 +2053,74 @@ fn spawn_python_worker(spec: &PythonLaunchSpec) -> Result<PythonWorkerState, Str
     })
 }
 
+fn start_python_worker_request_watchdog(
+    pid: u32,
+    worker_cmd: String,
+    session_id: String,
+    cell_id: String,
+    timeout_secs: u64,
+) -> Arc<AtomicBool> {
+    let done = Arc::new(AtomicBool::new(false));
+    let done_flag = Arc::clone(&done);
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(timeout_secs));
+        if done_flag.load(Ordering::SeqCst) {
+            return;
+        }
+
+        warn!(
+            pid,
+            cmd = worker_cmd.as_str(),
+            session_id = session_id.as_str(),
+            cell_id = cell_id.as_str(),
+            timeout_secs,
+            "[PythonRuntime] worker request timed out, terminating python process"
+        );
+
+        let _ = terminate_process_by_pid(pid);
+    });
+    done
+}
+
+#[cfg(windows)]
+fn terminate_process_by_pid(pid: u32) -> Result<(), String> {
+    let mut command = Command::new("taskkill");
+    command.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    apply_python_process_no_window(&mut command);
+    let output = command
+        .output()
+        .map_err(|e| format!("terminate python worker process failed: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "terminate python worker process failed: status={}, stdout={}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+fn terminate_process_by_pid(pid: u32) -> Result<(), String> {
+    let mut command = Command::new("kill");
+    command.args(["-9", &pid.to_string()]);
+    let output = command
+        .output()
+        .map_err(|e| format!("terminate python worker process failed: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "terminate python worker process failed: status={}, stdout={}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 fn worker_is_alive(state: &mut PythonWorkerState) -> bool {
     match state.child.try_wait() {
         Ok(Some(status)) => {
@@ -2073,8 +2159,35 @@ fn with_python_worker<R>(f: impl FnOnce(&mut PythonWorkerState) -> Result<R, Str
 
 fn send_worker_request(payload: &Value) -> Result<Value, String> {
     with_python_worker(|state| {
+        let worker_cmd = payload
+            .get("cmd")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let worker_vars = payload.get("vars");
+        let session_id = worker_vars
+            .and_then(|vars| vars.get("_guaxi_session"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let cell_id = worker_vars
+            .and_then(|vars| vars.get("_py_cell_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let watchdog = start_python_worker_request_watchdog(
+            state.child.id(),
+            worker_cmd.to_string(),
+            session_id.to_string(),
+            cell_id.to_string(),
+            PY_WORKER_REQUEST_TIMEOUT_SECS,
+        );
         let line = serde_json::to_string(payload)
             .map_err(|e| format!("serialize worker request failed: {e}"))?;
+        info!(
+            cmd = worker_cmd,
+            session_id,
+            cell_id,
+            payload_len = line.len(),
+            "[PythonRuntime] sending worker request"
+        );
         state
             .stdin
             .write_all(line.as_bytes())
@@ -2093,13 +2206,110 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
             .stdout
             .read_line(&mut response_line)
             .map_err(|e| format!("read worker stdout failed: {e}"))?;
+        watchdog.store(true, Ordering::SeqCst);
         if bytes_read == 0 {
             return Err("python worker closed stdout unexpectedly".to_string());
         }
+        info!(
+            cmd = worker_cmd,
+            session_id,
+            cell_id,
+            response_len = response_line.len(),
+            "[PythonRuntime] received worker response"
+        );
 
         serde_json::from_str::<Value>(response_line.trim())
             .map_err(|e| format!("parse worker response failed: {e}"))
     })
+}
+
+fn send_one_shot_worker_request(payload: &Value) -> Result<Value, String> {
+    let worker_cmd = payload
+        .get("cmd")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let spec = resolve_python_launch_spec()?;
+    let worker_script_path = ensure_worker_script(&spec.runtime_dir)?;
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.base_args)
+        .arg("-u")
+        .arg(&worker_script_path)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(&spec.runtime_dir);
+    apply_python_process_no_window(&mut command);
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("spawn one-shot python worker failed: {e}"))?;
+    let pid = child.id();
+    let watchdog = start_python_worker_request_watchdog(
+        pid,
+        worker_cmd.to_string(),
+        String::new(),
+        String::new(),
+        PY_WORKER_REQUEST_TIMEOUT_SECS,
+    );
+    let line = serde_json::to_string(payload)
+        .map_err(|e| format!("serialize one-shot worker request failed: {e}"))?;
+    info!(
+        cmd = worker_cmd,
+        pid,
+        payload_len = line.len(),
+        "[PythonRuntime] sending one-shot worker request"
+    );
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(line.as_bytes())
+            .map_err(|e| format!("write one-shot worker stdin failed: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .map_err(|e| format!("write one-shot worker newline failed: {e}"))?;
+        stdin
+            .flush()
+            .map_err(|e| format!("flush one-shot worker stdin failed: {e}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("wait one-shot worker output failed: {e}"))?;
+    watchdog.store(true, Ordering::SeqCst);
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(format!(
+            "one-shot python worker failed: status={}, stdout={}, stderr={}",
+            output.status, stdout, stderr
+        ));
+    }
+    if stdout.is_empty() {
+        return Err(format!(
+            "one-shot python worker returned empty stdout, stderr={stderr}"
+        ));
+    }
+
+    let response_line = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    info!(
+        cmd = worker_cmd,
+        pid,
+        response_len = response_line.len(),
+        "[PythonRuntime] received one-shot worker response"
+    );
+
+    serde_json::from_str::<Value>(&response_line)
+        .map_err(|e| format!("parse one-shot worker response failed: {e}, stdout={stdout}, stderr={stderr}"))
 }
 
 fn list_python_packages(spec: &PythonLaunchSpec) -> Vec<String> {
@@ -2740,7 +2950,7 @@ pub async fn python_runtime_import_table_file(
         "path": request.path,
     });
 
-    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
+    let response = tauri::async_runtime::spawn_blocking(move || send_one_shot_worker_request(&payload))
         .await
         .map_err(|e| format!("python_runtime_import_table_file join failed: {e}"))??;
 

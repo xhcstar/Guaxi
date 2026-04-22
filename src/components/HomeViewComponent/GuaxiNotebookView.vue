@@ -95,12 +95,13 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn primary"
+              :class="{ 'is-busy': isCellBusy(activeNotebookPythonCell) }"
               :disabled="isCellBusy(activeNotebookPythonCell)"
-              title="运行当前选中的 Python Cell"
-              aria-label="运行当前选中的 Python Cell"
+              :title="isCellBusy(activeNotebookPythonCell) ? '当前选中的 Python Cell 正在运行' : '运行当前选中的 Python Cell'"
+              :aria-label="isCellBusy(activeNotebookPythonCell) ? '当前选中的 Python Cell 正在运行' : '运行当前选中的 Python Cell'"
               @click="handleActivePythonToolbarAction('run')"
             >
-              <Icon :icon="playIcon" width="16" height="16" />
+              <Icon :icon="playIcon" width="16" height="16" :class="{ 'guaxi-notebook__busy-spin': isCellBusy(activeNotebookPythonCell) }" />
             </button>
             <button
               type="button"
@@ -273,7 +274,16 @@
         <div class="guaxi-notebook__python-layout">
           <div class="guaxi-notebook__python-toolbar">
             <div class="guaxi-notebook__python-toolbar-copy">
-              <span class="guaxi-notebook__python-badge">Python</span>
+              <span class="guaxi-notebook__python-badge" :class="{ 'is-busy': isCellBusy(cell) }">
+                <Icon
+                  :icon="pythonIcon"
+                  width="14"
+                  height="14"
+                  class="guaxi-notebook__python-badge-icon"
+                  :class="{ 'guaxi-notebook__busy-spin': isCellBusy(cell) }"
+                />
+                <span>{{ isCellBusy(cell) ? '运行中' : 'Python' }}</span>
+              </span>
               <span v-if="String(cell.meta?.title || '').trim()" class="guaxi-notebook__python-title">{{ cell.meta?.title }}</span>
             </div>
             <div class="guaxi-notebook__python-toolbar-actions">
@@ -297,12 +307,12 @@
             @update:model-value="updatePythonCell(cell.key, $event)"
           />
 
-          <div v-if="hasVisibleOutput(cell) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
+          <div v-if="(hasVisibleOutput(cell) || isCellBusy(cell)) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
             <div class="guaxi-notebook__panel-head">
-              <div class="guaxi-notebook__panel-title">输出</div>
+              <div class="guaxi-notebook__panel-title">输出 · {{ getCellOutputModules(cell).length }}</div>
               <div class="guaxi-notebook__panel-actions">
                 <button
-                  v-if="getCellSnapshot(cell).outputText"
+                  v-if="getLatestTextOutputModule(cell)"
                   type="button"
                   class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
                   title="复制文本输出"
@@ -316,54 +326,98 @@
               </div>
             </div>
             <div class="guaxi-notebook__panel-content">
-              <div v-if="getCellSnapshot(cell).display?.type === 'html'" class="guaxi-notebook__rich guaxi-notebook__rich--html">
-                <GuaxiNotebookHtmlOutput
-                  :html="String(getCellSnapshot(cell).display.html || '')"
-                  :theme="theme"
-                  :title="`Python Cell HTML Output ${cell.cellId || cell.key || ''}`"
-                />
-              </div>
-              <div v-else-if="getCellSnapshot(cell).display?.type === 'svg'" class="guaxi-notebook__rich" v-html="String(getCellSnapshot(cell).display.svg || '')"></div>
+              <div v-if="isCellBusy(cell)" class="guaxi-notebook__running-banner">Python 正在运行，请稍候...</div>
               <div
-                v-else-if="getCellSnapshot(cell).display?.type === 'markdown'"
-                class="guaxi-notebook__rich markdown-body"
-                v-html="getRenderedOutputMarkdownHtml(cell)"
-              ></div>
-              <img
-                v-else-if="getCellDisplayKind(cell) === 'image' && getCellDisplayUrl(cell)"
-                class="guaxi-notebook__image"
-                :src="getCellDisplayUrl(cell)"
-                alt="Python Cell Output"
-              />
-              <audio
-                v-else-if="getCellDisplayKind(cell) === 'audio' && getCellDisplayUrl(cell)"
-                class="guaxi-notebook__media"
-                :src="getCellDisplayUrl(cell)"
-                controls
-                preload="metadata"
-              ></audio>
-              <video
-                v-else-if="getCellDisplayKind(cell) === 'video' && getCellDisplayUrl(cell)"
-                class="guaxi-notebook__media guaxi-notebook__media--video"
-                :src="getCellDisplayUrl(cell)"
-                controls
-                preload="metadata"
-              ></video>
-              <div v-else-if="getCellSnapshot(cell).dataframe" class="guaxi-notebook__dataframe">
-                <table>
-                  <thead>
-                    <tr>
-                      <th v-for="column in getCellSnapshot(cell).dataframe.columns || []" :key="column">{{ column }}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="(row, rowIndex) in getCellSnapshot(cell).dataframe.rows || []" :key="`${cell.key}-row-${rowIndex}`">
-                      <td v-for="(value, colIndex) in row" :key="`${cell.key}-${rowIndex}-${colIndex}`">{{ value }}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                v-for="outputModule in getCellOutputModules(cell)"
+                :key="`${cell.key}-${outputModule.id}`"
+                class="guaxi-notebook__output-module"
+                :class="{ 'is-collapsed': outputModule.collapsed }"
+              >
+                <div class="guaxi-notebook__output-module-head">
+                  <div class="guaxi-notebook__output-module-copy">
+                    <span class="guaxi-notebook__output-module-title">{{ getNotebookOutputModuleTitle(outputModule) }}</span>
+                    <span v-if="getNotebookOutputModuleSummary(outputModule)" class="guaxi-notebook__output-module-summary">
+                      {{ getNotebookOutputModuleSummary(outputModule) }}
+                    </span>
+                  </div>
+                  <div class="guaxi-notebook__output-module-actions">
+                    <button
+                      v-if="outputModule.kind === 'text'"
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                      title="复制当前模块文本"
+                      aria-label="复制当前模块文本"
+                      @click="copyPythonCellTextOutput(cell, outputModule.id)"
+                    >
+                      <Icon :icon="copyIcon" width="14" height="14" />
+                    </button>
+                    <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell, outputModule.id)">写回 Markdown</button>
+                    <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell, outputModule.id)">导出文件</button>
+                    <button
+                      type="button"
+                      class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                      :title="outputModule.collapsed ? '显示当前输出模块' : '隐藏当前输出模块'"
+                      :aria-label="outputModule.collapsed ? '显示当前输出模块' : '隐藏当前输出模块'"
+                      @click="toggleCellOutputModule(cell, outputModule.id)"
+                    >
+                      <Icon :icon="outputModule.collapsed ? eyeIcon : eyeOffIcon" width="14" height="14" />
+                    </button>
+                  </div>
+                </div>
+                <div v-if="!outputModule.collapsed" class="guaxi-notebook__output-module-body">
+                  <div v-if="outputModule.kind === 'html'" class="guaxi-notebook__rich guaxi-notebook__rich--html">
+                    <GuaxiNotebookHtmlOutput
+                      :html="String(outputModule.display?.html || '')"
+                      :theme="theme"
+                      :title="`Python Cell HTML Output ${cell.cellId || cell.key || ''}`"
+                    />
+                  </div>
+                  <div v-else-if="outputModule.kind === 'svg'" class="guaxi-notebook__rich" v-html="String(outputModule.display?.svg || '')"></div>
+                  <div
+                    v-else-if="outputModule.kind === 'markdown'"
+                    class="guaxi-notebook__rich markdown-body"
+                    v-html="getRenderedOutputMarkdownHtml(cell, outputModule)"
+                  ></div>
+                  <img
+                    v-else-if="outputModule.kind === 'image' && getCellDisplayUrl(cell, outputModule)"
+                    class="guaxi-notebook__image"
+                    :src="getCellDisplayUrl(cell, outputModule)"
+                    alt="Python Cell Output"
+                  />
+                  <audio
+                    v-else-if="outputModule.kind === 'audio' && getCellDisplayUrl(cell, outputModule)"
+                    class="guaxi-notebook__media"
+                    :src="getCellDisplayUrl(cell, outputModule)"
+                    controls
+                    preload="metadata"
+                  ></audio>
+                  <video
+                    v-else-if="outputModule.kind === 'video' && getCellDisplayUrl(cell, outputModule)"
+                    class="guaxi-notebook__media guaxi-notebook__media--video"
+                    :src="getCellDisplayUrl(cell, outputModule)"
+                    controls
+                    preload="metadata"
+                  ></video>
+                  <div v-else-if="outputModule.kind === 'table' && outputModule.table" class="guaxi-notebook__dataframe">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th v-for="column in outputModule.table.columns || []" :key="column">{{ column }}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(row, rowIndex) in outputModule.table.rows || []" :key="`${cell.key}-${outputModule.id}-row-${rowIndex}`">
+                          <td v-for="(value, colIndex) in row" :key="`${cell.key}-${outputModule.id}-${rowIndex}-${colIndex}`">{{ value }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <pre v-else-if="outputModule.kind === 'text'" class="guaxi-notebook__output-text">{{ outputModule.text }}</pre>
+                </div>
               </div>
-              <pre v-if="getCellSnapshot(cell).outputText" class="guaxi-notebook__output-text">{{ getCellSnapshot(cell).outputText }}</pre>
+              <div v-if="!getCellOutputModules(cell).length && !isCellBusy(cell)" class="guaxi-notebook__empty guaxi-notebook__empty--dashed">
+                当前还没有输出结果
+              </div>
             </div>
           </div>
         </div>
@@ -453,6 +507,7 @@ import languagesIcon from '@iconify-icons/lucide/languages'
 import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
 import volume2Icon from '@iconify-icons/lucide/volume-2'
+import pythonIcon from '@iconify-icons/vscode-icons/file-type-python'
 import { createLogger } from '../../utils/logger'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
@@ -469,6 +524,18 @@ import {
   parsePythonCellBlocks,
   replacePythonCellBlock,
 } from './utils/guaxiPythonCellSyntax'
+import {
+  appendPythonCellOutputModules,
+  buildPythonCellOutputModules,
+  getLatestPythonCellOutputModule,
+  getLatestPythonCellOutputModuleByKind,
+  getPythonCellOutputDisplayDataUrl,
+  getPythonCellOutputDisplaySourcePath,
+  isPythonCellDisplayOutputKind,
+  normalizePythonCellOutputDisplayType,
+  normalizePythonCellOutputModules,
+  togglePythonCellOutputModuleCollapsed,
+} from './utils/guaxiPythonCellOutputs'
 import {
   createNotebookCellsFromMarkdown,
   createNotebookMarkdownCell,
@@ -1074,6 +1141,7 @@ const buildStalePythonCellSnapshot = (cell, snapshot = {}, reason = 'unknown') =
     outputText: '',
     display: null,
     dataframe: null,
+    outputs: [],
     result: null,
     sessionVars: [],
     meta: snapshot?.meta && typeof snapshot.meta === 'object' ? { ...snapshot.meta } : {},
@@ -1160,6 +1228,7 @@ const serializeNotebookSnapshotsForSidecar = (cells = []) => {
       outputText: String(snapshot?.outputText || ''),
       display: snapshot?.display || null,
       dataframe: snapshot?.dataframe || null,
+      outputs: Array.isArray(snapshot?.outputs) ? snapshot.outputs : [],
       sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
       meta: snapshot?.meta || {},
     }
@@ -1196,6 +1265,7 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
       outputText: String(persisted.outputText || ''),
       display: persisted.display || null,
       dataframe: persisted.dataframe || null,
+      outputs: Array.isArray(persisted.outputs) ? persisted.outputs : [],
       sessionVars: Array.isArray(persisted.sessionVars) ? persisted.sessionVars : [],
       meta: persisted.meta && typeof persisted.meta === 'object' ? persisted.meta : {},
     }
@@ -1378,31 +1448,10 @@ const registerResourceFile = async ({
   }
 }
 const normalizeDisplayType = (display) => {
-  const explicitType = String(display?.type || '').trim().toLowerCase()
-  const mime = String(display?.mime || '').trim().toLowerCase()
-  if (explicitType) return explicitType
-  if (mime.startsWith('image/')) return 'image'
-  if (mime.startsWith('audio/')) return 'audio'
-  if (mime.startsWith('video/')) return 'video'
-  if (mime.includes('markdown')) return 'markdown'
-  if (mime.includes('html')) return 'html'
-  return ''
+  return normalizePythonCellOutputDisplayType(display)
 }
-const getDisplaySourcePath = (display) => String(
-  display?.path ||
-  display?.file_path ||
-  display?.src ||
-  display?.source_path ||
-  display?.url ||
-  '',
-).trim()
-const getDisplayDataUrl = (display) => {
-  const directDataUrl = String(display?.dataUrl || display?.data_url || '').trim()
-  if (directDataUrl.startsWith('data:')) return directDataUrl
-  const base64 = String(display?.data_base64 || display?.base64 || '').trim()
-  if (!base64) return ''
-  return `data:${String(display?.mime || 'application/octet-stream')};base64,${base64}`
-}
+const getDisplaySourcePath = (display) => getPythonCellOutputDisplaySourcePath(display)
+const getDisplayDataUrl = (display) => getPythonCellOutputDisplayDataUrl(display)
 
 const decorateNotebookCells = (cells = []) => {
   return normalizeNotebookCells(cells).map((cell, index) => {
@@ -1430,7 +1479,7 @@ const buildNotebookSidecarPayload = (cells = [], markdown = '') => {
   const normalizedCells = decorateNotebookCells(cells)
   const sourceCore = normalizeNotebookSourceForSidecar(markdown)
   return {
-    version: 2,
+    version: 3,
     filePath: String(props.filePath || ''),
     updatedAt: new Date().toISOString(),
     sourceDigest: computeNotebookDigest(sourceCore),
@@ -2277,14 +2326,9 @@ const buildNotebookSearchDocuments = (cells = []) => {
   return (Array.isArray(cells) ? cells : []).map((cell) => {
     if (cell?.type === 'python') {
       const snapshot = getCellSnapshot(cell)
-      const dataframeMarkdown = snapshot?.dataframe ? dataframeToMarkdownTable(snapshot.dataframe) : ''
-      const displayMarkdown = snapshot?.display?.type === 'markdown'
-        ? String(snapshot.display.markdown || '')
-        : snapshot?.display?.type === 'html'
-          ? stripHtmlTags(String(snapshot.display.html || ''))
-          : snapshot?.display?.type === 'svg'
-            ? stripHtmlTags(String(snapshot.display.svg || ''))
-            : ''
+      const outputTexts = getCellOutputModules(cell)
+        .map((outputModule) => buildOutputModuleSearchText(outputModule))
+        .filter(Boolean)
       const sessionText = Array.isArray(snapshot?.sessionVars)
         ? snapshot.sessionVars
           .map((item) => `${item?.name || ''} ${item?.value_type || item?.type || ''} ${item?.preview || ''}`.trim())
@@ -2293,9 +2337,7 @@ const buildNotebookSearchDocuments = (cells = []) => {
       const parts = [
         String(cell?.meta?.title || ''),
         String(cell?.code || ''),
-        String(snapshot?.outputText || ''),
-        dataframeMarkdown,
-        displayMarkdown,
+        ...outputTexts,
         sessionText,
       ].filter(Boolean)
       const searchText = parts.join('\n\n')
@@ -2304,7 +2346,7 @@ const buildNotebookSearchDocuments = (cells = []) => {
         cell_type: 'python',
         digest: computeNotebookDigest(searchText),
         search_text: searchText,
-        summary_text: [String(cell?.meta?.title || ''), String(snapshot?.outputText || ''), displayMarkdown]
+        summary_text: [String(cell?.meta?.title || ''), ...outputTexts.slice(0, 2)]
           .filter(Boolean)
           .join(' ')
           .trim(),
@@ -3291,11 +3333,63 @@ const getGuaxiDataFrameFromResult = (res) => {
   const value = res?.result_json?.__guaxi_dataframe__
   if (!value || typeof value !== 'object') return null
   return {
-    columns: Array.isArray(value.columns) ? value.columns : [],
+    columns: Array.isArray(value.columns) ? value.columns.map((item) => String(item ?? '')) : [],
     rows: Array.isArray(value.rows) ? value.rows : [],
     rowCount: Number(value.row_count || 0),
     truncated: !!value.truncated,
+    dtypes: value.dtypes && typeof value.dtypes === 'object' ? value.dtypes : {},
+    sourcePath: String(value.source_path || '').trim(),
   }
+}
+
+const getCellOutputModules = (cell) => {
+  const snapshot = getCellSnapshot(cell)
+  return Array.isArray(snapshot?.outputs) ? snapshot.outputs : []
+}
+
+const getCellOutputModule = (cell, moduleId = '') => {
+  const modules = getCellOutputModules(cell)
+  const normalizedId = String(moduleId || '').trim()
+  if (normalizedId) {
+    return modules.find((item) => String(item?.id || '') === normalizedId) || null
+  }
+  return getLatestPythonCellOutputModule(modules) || null
+}
+
+const getLatestTextOutputModule = (cell) => getLatestPythonCellOutputModuleByKind(getCellOutputModules(cell), 'text')
+
+const getNotebookOutputModuleTitle = (outputModule) => String(outputModule?.title || '输出结果')
+
+const getNotebookOutputModuleSummary = (outputModule) => String(outputModule?.summary || '')
+
+const buildOutputModuleMarkdownText = (outputModule) => {
+  if (!outputModule) return ''
+  if (outputModule.kind === 'table' && outputModule.table) {
+    return dataframeToMarkdownTable(outputModule.table)
+  }
+  if (outputModule.kind === 'markdown') {
+    return String(outputModule.display?.markdown || '')
+  }
+  if (outputModule.kind === 'html') {
+    return String(outputModule.display?.html || '')
+  }
+  if (outputModule.kind === 'svg') {
+    return String(outputModule.display?.svg || '')
+  }
+  if (outputModule.kind === 'text') {
+    return String(outputModule.text || '')
+  }
+  return ''
+}
+
+const buildOutputModuleSearchText = (outputModule) => {
+  if (!outputModule) return ''
+  if (outputModule.kind === 'table') return buildOutputModuleMarkdownText(outputModule)
+  if (outputModule.kind === 'markdown') return String(outputModule.display?.markdown || '')
+  if (outputModule.kind === 'html') return stripHtmlTags(String(outputModule.display?.html || ''))
+  if (outputModule.kind === 'svg') return stripHtmlTags(String(outputModule.display?.svg || ''))
+  if (outputModule.kind === 'text') return String(outputModule.text || '')
+  return String(outputModule.summary || '')
 }
 
 const getCellSnapshot = (cell) => {
@@ -3304,11 +3398,26 @@ const getCellSnapshot = (cell) => {
   const snapshot = isPythonCellSnapshotFresh(cell, persistedSnapshot)
     ? persistedSnapshot
     : buildStalePythonCellSnapshot(cell, persistedSnapshot, 'snapshot-read')
-  return {
-    codeDigest: String(snapshot?.codeDigest || getNotebookCellContentDigest(cell)),
+  // 设计说明：
+  // 1. 旧快照里可能还只有 `outputText/display/dataframe` 三槽结构，这里读取时即时迁移成 `outputs[]`。
+  // 2. Notebook 的新渲染层始终围绕模块列表工作，这样导入表格、运行结果、错误输出才能同时保留。
+  // 3. 同时继续回填一份“最新文本/最新表格/最新富输出”给旧逻辑复用，降低这次改造对其余功能的侵入面。
+  const outputs = normalizePythonCellOutputModules(snapshot?.outputs, {
     outputText: String(snapshot?.outputText || ''),
     display: snapshot?.display || null,
     dataframe: snapshot?.dataframe || null,
+    source: 'legacy-snapshot',
+    idPrefix: `legacy-${String(cell?.cellId || cell?.key || 'cell')}`,
+  })
+  const latestTextOutput = getLatestPythonCellOutputModuleByKind(outputs, 'text')
+  const latestTableOutput = getLatestPythonCellOutputModuleByKind(outputs, 'table')
+  const latestDisplayOutput = outputs.find((item) => isPythonCellDisplayOutputKind(item?.kind))
+  return {
+    codeDigest: String(snapshot?.codeDigest || getNotebookCellContentDigest(cell)),
+    outputText: latestTextOutput?.text || String(snapshot?.outputText || ''),
+    display: latestDisplayOutput?.display || snapshot?.display || null,
+    dataframe: latestTableOutput?.table || snapshot?.dataframe || null,
+    outputs,
     result: snapshot?.result || null,
     sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
     meta: {
@@ -3380,14 +3489,26 @@ const isActiveNotebookPythonCell = (cell) => {
   return String(cell?.key || '') === String(activeNotebookPythonCellKey.value || '')
 }
 
-const getCellDisplayKind = (cell) => normalizeDisplayType(getCellSnapshot(cell).display)
+const buildCellOutputModuleCacheKey = (cell, outputModule) => [
+  String(cell?.key || ''),
+  String(outputModule?.id || ''),
+].join('::')
 
-const getCellDisplayUrl = (cell) => String(resolvedDisplayUrlMap.value[String(cell?.key || '')] || '')
+const getCellDisplayKind = (cell, outputModule = null) => {
+  const targetModule = outputModule || getCellOutputModule(cell)
+  return String(targetModule?.kind || '').trim()
+}
+
+const getCellDisplayUrl = (cell, outputModule = null) => {
+  const targetModule = outputModule || getCellOutputModule(cell)
+  if (!targetModule) return ''
+  return String(resolvedDisplayUrlMap.value[buildCellOutputModuleCacheKey(cell, targetModule)] || '')
+}
 
 const buildDisplayCacheKey = (display) => {
-  const kind = normalizeDisplayType(display)
-  const source = getDisplaySourcePath(display)
-  const dataUrl = getDisplayDataUrl(display)
+  const kind = normalizePythonCellOutputDisplayType(display)
+  const source = getPythonCellOutputDisplaySourcePath(display)
+  const dataUrl = getPythonCellOutputDisplayDataUrl(display)
   const mime = String(display?.mime || '')
   return [
     kind,
@@ -3398,10 +3519,10 @@ const buildDisplayCacheKey = (display) => {
 }
 
 const resolveDisplayUrl = async (display) => {
-  const dataUrl = getDisplayDataUrl(display)
+  const dataUrl = getPythonCellOutputDisplayDataUrl(display)
   if (dataUrl) return dataUrl
 
-  const source = getDisplaySourcePath(display)
+  const source = getPythonCellOutputDisplaySourcePath(display)
   if (!source) return ''
   if (/^(https?:|data:|blob:)/i.test(source)) return source
 
@@ -3426,29 +3547,31 @@ const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
 
   for (const cell of Array.isArray(cells) ? cells : []) {
     if (cell?.type !== 'python') continue
-    const display = getCellSnapshot(cell).display
-    const kind = normalizeDisplayType(display)
-    if (!['image', 'audio', 'video'].includes(kind)) continue
-    const cacheKey = buildDisplayCacheKey(display)
-    if (cacheKey && notebookDisplayUrlCache.has(cacheKey)) {
-      nextMap[String(cell.key || '')] = notebookDisplayUrlCache.get(cacheKey)
-      cacheHitCount += 1
-      continue
-    }
-    if (cacheKey && previousMap[String(cell.key || '')]) {
-      nextMap[String(cell.key || '')] = previousMap[String(cell.key || '')]
-      notebookDisplayUrlCache.set(cacheKey, previousMap[String(cell.key || '')])
-      cacheHitCount += 1
-      continue
-    }
-    tasks.push((async () => {
-      const resolvedUrl = await resolveDisplayUrl(display)
-      nextMap[String(cell.key || '')] = resolvedUrl
-      if (cacheKey) {
-        notebookDisplayUrlCache.set(cacheKey, resolvedUrl)
+    for (const outputModule of getCellOutputModules(cell)) {
+      if (!['image', 'audio', 'video'].includes(String(outputModule?.kind || ''))) continue
+      const display = outputModule?.display || null
+      const mapKey = buildCellOutputModuleCacheKey(cell, outputModule)
+      const cacheKey = buildDisplayCacheKey(display)
+      if (cacheKey && notebookDisplayUrlCache.has(cacheKey)) {
+        nextMap[mapKey] = notebookDisplayUrlCache.get(cacheKey)
+        cacheHitCount += 1
+        continue
       }
-      resolvedCount += 1
-    })())
+      if (cacheKey && previousMap[mapKey]) {
+        nextMap[mapKey] = previousMap[mapKey]
+        notebookDisplayUrlCache.set(cacheKey, previousMap[mapKey])
+        cacheHitCount += 1
+        continue
+      }
+      tasks.push((async () => {
+        const resolvedUrl = await resolveDisplayUrl(display)
+        nextMap[mapKey] = resolvedUrl
+        if (cacheKey) {
+          notebookDisplayUrlCache.set(cacheKey, resolvedUrl)
+        }
+        resolvedCount += 1
+      })())
+    }
   }
 
   await Promise.all(tasks)
@@ -3462,12 +3585,7 @@ const syncResolvedDisplayUrls = async (cells, reason = 'unknown') => {
 }
 
 const hasVisibleOutput = (cell) => {
-  const snapshot = getCellSnapshot(cell)
-  return !!(
-    snapshot.outputText ||
-    snapshot.display ||
-    snapshot.dataframe
-  )
+  return getCellOutputModules(cell).length > 0
 }
 
 const renderMarkdownHtml = async (content, reason = 'unknown') => {
@@ -3555,7 +3673,6 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
   })
 
   const previousMarkdownMap = renderedMarkdownHtmlMap.value || {}
-  const previousOutputMap = renderedOutputMarkdownHtmlMap.value || {}
   const nextMarkdownMap = {}
   const nextOutputMap = {}
   const renderTasks = []
@@ -3613,37 +3730,39 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
     }
 
     if (cell?.type === 'python') {
-      const snapshot = getCellSnapshot(cell)
-      const outputMarkdown = snapshot?.display?.type === 'markdown'
-        ? String(snapshot.display.markdown || '')
-        : ''
-      if (!outputMarkdown.trim()) continue
-      const cellKey = String(cell.key || '')
-      const cacheKey = buildNotebookMarkdownCacheKey(outputMarkdown, {
-        theme: props.theme,
-        filePath: props.filePath,
-        basePath: getNotebookBasePath(),
-      })
-      const cachedOutputHtml = notebookMarkdownRenderCache.get(cacheKey)
-      if (typeof cachedOutputHtml === 'string' && cachedOutputHtml) {
-        nextOutputMap[cellKey] = cachedOutputHtml
-        outputCacheHitCount += 1
-        logger.info('[Notebook] reuse cached markdown output html for python cell', {
-          reason,
-          cellKey,
-          cacheKey,
+      for (const outputModule of getCellOutputModules(cell)) {
+        if (outputModule.kind !== 'markdown') continue
+        const outputMarkdown = String(outputModule.display?.markdown || '')
+        if (!outputMarkdown.trim()) continue
+        const cellKey = String(cell.key || '')
+        const outputMapKey = buildCellOutputModuleCacheKey(cell, outputModule)
+        const cacheKey = buildNotebookMarkdownCacheKey(outputMarkdown, {
+          theme: props.theme,
           filePath: props.filePath,
+          basePath: getNotebookBasePath(),
         })
-        continue
-      }
+        const cachedOutputHtml = notebookMarkdownRenderCache.get(cacheKey)
+        if (typeof cachedOutputHtml === 'string' && cachedOutputHtml) {
+          nextOutputMap[outputMapKey] = cachedOutputHtml
+          outputCacheHitCount += 1
+          logger.info('[Notebook] reuse cached markdown output html for python cell module', {
+            reason,
+            cellKey,
+            outputModuleId: String(outputModule.id || ''),
+            cacheKey,
+            filePath: props.filePath,
+          })
+          continue
+        }
 
-      renderTasks.push((async () => {
-        nextOutputMap[cellKey] = await renderMarkdownHtml(
-          outputMarkdown,
-          `python-output:${cellKey}`,
-        )
-        outputRenderCount += 1
-      })())
+        renderTasks.push((async () => {
+          nextOutputMap[outputMapKey] = await renderMarkdownHtml(
+            outputMarkdown,
+            `python-output:${cellKey}:${String(outputModule.id || '')}`,
+          )
+          outputRenderCount += 1
+        })())
+      }
     }
   }
 
@@ -3675,7 +3794,11 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
 
 const getRenderedMarkdownCellHtml = (cell) => String(renderedMarkdownHtmlMap.value[String(cell?.key || '')] || '')
 
-const getRenderedOutputMarkdownHtml = (cell) => String(renderedOutputMarkdownHtmlMap.value[String(cell?.key || '')] || '')
+const getRenderedOutputMarkdownHtml = (cell, outputModule = null) => {
+  const targetModule = outputModule || getCellOutputModule(cell)
+  if (!targetModule) return ''
+  return String(renderedOutputMarkdownHtmlMap.value[buildCellOutputModuleCacheKey(cell, targetModule)] || '')
+}
 
 const handleNotebookSelectionMouseUp = (event) => {
   const target = event?.target instanceof Element ? event.target : null
@@ -4233,6 +4356,22 @@ const toggleCellOutput = (cell) => {
   })
 }
 
+const toggleCellOutputModule = (cell, moduleId) => {
+  const snapshot = getCellSnapshot(cell)
+  const nextOutputs = togglePythonCellOutputModuleCollapsed(snapshot?.outputs || [], moduleId)
+  patchPythonCellSnapshot(props.filePath, cell.cellId, {
+    outputs: nextOutputs,
+  })
+  logger.info('[Notebook] toggle output module panel', {
+    key: String(cell?.key || ''),
+    cellId: String(cell?.cellId || ''),
+    outputModuleId: String(moduleId || ''),
+    outputModuleCount: nextOutputs.length,
+  })
+  bumpRefresh()
+  schedulePersistNotebookSidecar('toggle-output-module')
+}
+
 // Design notes:
 // 1. Session variables are now presented in the shared right sider instead of
 //    an inline card under each Python cell.
@@ -4505,13 +4644,16 @@ const serializeDisplayAssetForMarkdown = async (display, cellId) => {
   }
 }
 
-const buildMarkdownOutputFromSnapshot = async (cell, snapshot) => {
-  if (snapshot?.dataframe) {
-    return dataframeToMarkdownTable(snapshot.dataframe)
+const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot = null) => {
+  const resolvedSnapshot = snapshot || getCellSnapshot(cell)
+  const targetModule = outputModule || getCellOutputModule(cell)
+
+  if (targetModule?.kind === 'table' && targetModule.table) {
+    return dataframeToMarkdownTable(targetModule.table)
   }
 
-  const display = snapshot?.display
-  const displayType = normalizeDisplayType(display)
+  const display = targetModule?.display || resolvedSnapshot?.display || null
+  const displayType = targetModule?.kind || normalizeDisplayType(display)
   if (displayType === 'markdown' && display?.markdown) return String(display.markdown)
   if (displayType === 'html' && display?.html) return String(display.html)
   if (displayType === 'svg' && display?.svg) return String(display.svg)
@@ -4531,16 +4673,19 @@ const buildMarkdownOutputFromSnapshot = async (cell, snapshot) => {
     }
   }
 
-  const text = String(snapshot?.outputText || '').trim()
+  const text = String(targetModule?.text || resolvedSnapshot?.outputText || '').trim()
   if (!text) return ''
   return `\`\`\`text\n${text}\n\`\`\``
 }
 
-const buildExportPayloadFromSnapshot = async (cell, snapshot) => {
-  if (snapshot?.dataframe) {
+const buildExportPayloadFromModule = async (cell, outputModule = null, snapshot = null) => {
+  const resolvedSnapshot = snapshot || getCellSnapshot(cell)
+  const targetModule = outputModule || getCellOutputModule(cell)
+
+  if (targetModule?.kind === 'table' && targetModule.table) {
     const csvLines = [
-      (snapshot.dataframe.columns || []).join(','),
-      ...(snapshot.dataframe.rows || []).map((row) => (Array.isArray(row) ? row : []).map((value) => JSON.stringify(value ?? '')).join(',')),
+      (targetModule.table.columns || []).join(','),
+      ...(targetModule.table.rows || []).map((row) => (Array.isArray(row) ? row : []).map((value) => JSON.stringify(value ?? '')).join(',')),
     ].join('\n')
     return {
       defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'csv').fileName,
@@ -4550,8 +4695,8 @@ const buildExportPayloadFromSnapshot = async (cell, snapshot) => {
     }
   }
 
-  const display = snapshot?.display
-  const displayType = normalizeDisplayType(display)
+  const display = targetModule?.display || resolvedSnapshot?.display || null
+  const displayType = targetModule?.kind || normalizeDisplayType(display)
   if (displayType === 'markdown' && display?.markdown) {
     return {
       defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'md').fileName,
@@ -4605,7 +4750,7 @@ const buildExportPayloadFromSnapshot = async (cell, snapshot) => {
     }
   }
 
-  const text = String(snapshot?.outputText || '').trim()
+  const text = String(targetModule?.text || resolvedSnapshot?.outputText || '').trim()
   if (!text) return null
   return {
     defaultName: buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'txt').fileName,
@@ -4615,8 +4760,9 @@ const buildExportPayloadFromSnapshot = async (cell, snapshot) => {
   }
 }
 
-const copyPythonCellTextOutput = async (cell) => {
-  const text = String(getCellSnapshot(cell)?.outputText || '')
+const copyPythonCellTextOutput = async (cell, moduleId = '') => {
+  const outputModule = moduleId ? getCellOutputModule(cell, moduleId) : getLatestTextOutputModule(cell)
+  const text = String(outputModule?.text || '')
   if (!text) {
     message.warning('当前没有可复制的文本输出')
     return
@@ -4630,15 +4776,17 @@ const copyPythonCellTextOutput = async (cell) => {
 
   logger.info('[Notebook] copied python cell text output', {
     cellId: String(cell?.cellId || ''),
+    outputModuleId: String(outputModule?.id || ''),
     textLength: text.length,
   })
   message.success('文本输出已复制')
 }
 
-const writeCellOutputToMarkdown = async (cell) => {
+const writeCellOutputToMarkdown = async (cell, moduleId = '') => {
   flushPendingNotebookMarkdown('before-writeback')
   const snapshot = getCellSnapshot(cell)
-  const markdownOutput = await buildMarkdownOutputFromSnapshot(cell, snapshot)
+  const outputModule = getCellOutputModule(cell, moduleId)
+  const markdownOutput = await buildMarkdownOutputFromModule(cell, outputModule, snapshot)
   if (!markdownOutput) {
     message.warning('当前输出暂时无法写回到 Markdown')
     return
@@ -4665,9 +4813,10 @@ const writeCellOutputToMarkdown = async (cell) => {
     key: String(cell?.key || ''),
     cellId: String(cell?.cellId || ''),
     stableId: String(cell?.meta?.id || ''),
+    outputModuleId: String(outputModule?.id || ''),
     matchStrategy: String(resolvedBlock?.matchStrategy || 'unknown'),
     persistedStableId: !!normalized.persisted,
-    outputKind: normalizeDisplayType(snapshot?.display) || (snapshot?.dataframe ? 'dataframe' : 'text'),
+    outputKind: String(outputModule?.kind || normalizeDisplayType(snapshot?.display) || (snapshot?.dataframe ? 'dataframe' : 'text')),
   })
   emit('update:markdown', nextMarkdown)
   lastEmittedMarkdown.value = normalizeNotebookMarkdownText(nextMarkdown)
@@ -4675,9 +4824,10 @@ const writeCellOutputToMarkdown = async (cell) => {
   message.success('Python Cell 输出已写回到源 Markdown')
 }
 
-const exportCellOutputToFile = async (cell) => {
+const exportCellOutputToFile = async (cell, moduleId = '') => {
   const snapshot = getCellSnapshot(cell)
-  const payload = await buildExportPayloadFromSnapshot(cell, snapshot)
+  const outputModule = getCellOutputModule(cell, moduleId)
+  const payload = await buildExportPayloadFromModule(cell, outputModule, snapshot)
   if (!payload) {
     message.warning('当前没有可导出的输出内容')
     return
@@ -4717,6 +4867,12 @@ const exportCellOutputToFile = async (cell) => {
 }
 
 const importTableToPythonSession = async (cell) => {
+  if (!cell?.key) return
+  busyMap.value = {
+    ...busyMap.value,
+    [cell.key]: true,
+  }
+
   try {
     const selected = await open({
       multiple: false,
@@ -4729,32 +4885,83 @@ const importTableToPythonSession = async (cell) => {
       selected: String(selected),
     })
 
-    const imported = await invoke('python_runtime_import_table_file', { request: { path: String(selected) } })
-    if (!imported?.ok) {
-      throw new Error(String(imported?.error || '导入失败'))
-    }
-
     const fileName = String(selected).split(/[\\/]/).pop() || 'df'
     const variableName = sanitizeFileSegment(fileName.replace(/\.[^.]+$/, ''), 'df').replace(/-/g, '_')
     const code = [
+      // 设计说明：
+      // 1. 探索模式这里直接复用当前 Python 会话来完成“读取文件 + 注入变量 + 返回 dataframe 预览”三件事。
+      // 2. 旧实现会先调用 one-shot `import_table` 预解析文件，再调用 `python_exec` 注入会话；
+      //    日志显示前者在部分环境里经常卡到 45 秒超时，导致界面长时间停留在“运行中”。
+      // 3. 现在统一改成单次 `python_exec`，既能沿用已经预热好的会话环境，也能让输出模块与运行态共用同一条收尾链路。
       'from pathlib import Path',
       `__guaxi_table_path = ${JSON.stringify(String(selected))}`,
       `__guaxi_var_name = ${JSON.stringify(variableName)}`,
       '__guaxi_ext = Path(__guaxi_table_path).suffix.lower()',
-      'import pandas as pd',
-      "if __guaxi_ext in ('.csv', '.txt'):",
-      '    __guaxi_value = pd.read_csv(__guaxi_table_path)',
-      "elif __guaxi_ext == '.tsv':",
-      "    __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
-      "elif __guaxi_ext in ('.xlsx', '.xls'):",
-      '    __guaxi_value = pd.read_excel(__guaxi_table_path)',
-      "elif __guaxi_ext == '.json':",
-      '    __guaxi_value = pd.read_json(__guaxi_table_path)',
-      "elif __guaxi_ext == '.parquet':",
-      '    __guaxi_value = pd.read_parquet(__guaxi_table_path)',
+      'def __guaxi_build_table_payload(__guaxi_value, __guaxi_source_path):',
+      '    # 设计说明：',
+      '    # 1. 当当前运行环境没有 pandas 时，csv/json 兜底分支会得到 list[dict]，',
+      '    #    这类对象本身不会被 worker 自动识别成 dataframe。',
+      '    # 2. 这里手工把它转成前端既有的 __guaxi_dataframe__ 结构，',
+      '    #    这样探索模式依然可以继续复用现成的表格卡片渲染。',
+      '    if not isinstance(__guaxi_value, list) or not __guaxi_value:',
+      '        return None',
+      '    if not isinstance(__guaxi_value[0], dict):',
+      '        return None',
+      '    __guaxi_columns = []',
+      '    for __guaxi_item in __guaxi_value:',
+      '        if not isinstance(__guaxi_item, dict):',
+      '            return None',
+      '        for __guaxi_key in __guaxi_item.keys():',
+      '            __guaxi_key_text = str(__guaxi_key)',
+      '            if __guaxi_key_text not in __guaxi_columns:',
+      '                __guaxi_columns.append(__guaxi_key_text)',
+      '    __guaxi_preview_rows = []',
+      '    __guaxi_limit = 200',
+      '    for __guaxi_item in __guaxi_value[:__guaxi_limit]:',
+      '        __guaxi_preview_rows.append([__guaxi_item.get(__guaxi_col, "") for __guaxi_col in __guaxi_columns])',
+      '    return {',
+      '        "columns": __guaxi_columns,',
+      '        "rows": __guaxi_preview_rows,',
+      '        "row_count": len(__guaxi_value),',
+      '        "truncated": len(__guaxi_value) > __guaxi_limit,',
+      '        "dtypes": {__guaxi_col: "json" for __guaxi_col in __guaxi_columns},',
+      '        "source_path": __guaxi_source_path,',
+      '    }',
+      'try:',
+      '    import pandas as pd',
+      'except Exception:',
+      '    pd = None',
+      'if pd is not None:',
+      "    if __guaxi_ext in ('.csv', '.txt'):",
+      '        __guaxi_value = pd.read_csv(__guaxi_table_path)',
+      "    elif __guaxi_ext == '.tsv':",
+      "        __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
+      "    elif __guaxi_ext in ('.xlsx', '.xls'):",
+      '        __guaxi_value = pd.read_excel(__guaxi_table_path)',
+      "    elif __guaxi_ext == '.json':",
+      '        __guaxi_value = pd.read_json(__guaxi_table_path)',
+      "    elif __guaxi_ext == '.parquet':",
+      '        __guaxi_value = pd.read_parquet(__guaxi_table_path)',
+      '    else:',
+      "        raise ValueError(f'Unsupported table format: {__guaxi_ext or __guaxi_table_path}')",
       'else:',
-      "    raise ValueError(f'Unsupported table format: {__guaxi_ext or __guaxi_table_path}')",
+      "    if __guaxi_ext in ('.csv', '.txt', '.tsv'):",
+      '        import csv',
+      "        with open(__guaxi_table_path, 'r', encoding='utf-8-sig', newline='') as __guaxi_f:",
+      "            __guaxi_rows = list(csv.DictReader(__guaxi_f, delimiter='\\t' if __guaxi_ext == '.tsv' else ','))",
+      '        __guaxi_value = __guaxi_rows',
+      "    elif __guaxi_ext == '.json':",
+      '        import json',
+      "        with open(__guaxi_table_path, 'r', encoding='utf-8') as __guaxi_f:",
+      '            __guaxi_value = json.load(__guaxi_f)',
+      '    else:',
+      "        raise ValueError('当前运行环境需要 pandas 才能导入这种文件类型')",
+      '__guaxi_preview = __guaxi_build_table_payload(__guaxi_value, __guaxi_table_path)',
       'globals()[__guaxi_var_name] = __guaxi_value',
+      'if __guaxi_preview is not None:',
+      '    _result = {"__guaxi_dataframe__": __guaxi_preview}',
+      'else:',
+      '    _result = __guaxi_value',
     ].join('\n')
 
     const sessionId = createPythonSessionId(props.filePath)
@@ -4771,14 +4978,31 @@ const importTableToPythonSession = async (cell) => {
       },
     })
 
-    const importedTable = imported?.table && typeof imported.table === 'object'
-      ? {
-        columns: Array.isArray(imported.table.columns) ? imported.table.columns : [],
-        rows: Array.isArray(imported.table.rows) ? imported.table.rows : [],
-        rowCount: Number(imported.table.row_count || 0),
-        truncated: !!imported.table.truncated,
-      }
-      : null
+    if (result?.ok === false) {
+      throw new Error(String(result?.stderr || result?.stdout || '导入失败'))
+    }
+
+    const importedTable = getGuaxiDataFrameFromResult(result)
+    if (!importedTable) {
+      logger.warn('[Notebook] import table finished without dataframe payload', {
+        cellId: String(cell?.cellId || ''),
+        selected: String(selected),
+        variableName,
+        hasResultJson: !!result?.result_json,
+        resultKeys: Object.keys(result?.result_json || {}),
+      })
+    }
+
+    const snapshot = getCellSnapshot(cell)
+    const nextOutputs = appendPythonCellOutputModules(
+      snapshot?.outputs || [],
+      buildPythonCellOutputModules({
+        outputText: '',
+        display: null,
+        dataframe: importedTable,
+        source: 'import-table',
+      }),
+    )
 
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
       // 设计说明：
@@ -4788,19 +5012,23 @@ const importTableToPythonSession = async (cell) => {
       outputText: `已导入表格到会话变量 ${variableName}`,
       display: null,
       dataframe: importedTable,
+      outputs: nextOutputs,
       result,
       sessionVars: Array.isArray(result?.session_vars) ? result.session_vars : [],
       meta: {
-        ...(getCellSnapshot(cell).meta || {}),
-        outputCollapsed: !importedTable,
+        ...(snapshot?.meta || {}),
+        outputCollapsed: !nextOutputs.length,
       },
     })
     logger.info('[Notebook] import table injected into python session', {
       cellId: String(cell?.cellId || ''),
       stableId: String(cell?.meta?.id || ''),
       variableName,
+      selected: String(selected),
       rowCount: Number(importedTable?.rowCount || 0),
       hasPreview: !!importedTable,
+      sessionVarCount: Array.isArray(result?.session_vars) ? result.session_vars.length : 0,
+      outputModuleCount: nextOutputs.length,
     })
     bumpRefresh()
     schedulePersistNotebookSidecar('import-table-to-python-session')
@@ -4811,6 +5039,14 @@ const importTableToPythonSession = async (cell) => {
       error: String(error?.message || error),
     })
     message.error(`导入表格失败：${String(error?.message || error)}`)
+  } finally {
+    // 设计说明：
+    // 导入表格虽然不是“执行当前 cell 代码”，但它会串行占用同一条 Python 会话链路。
+    // 这里复用 busyMap，让顶部工具栏、卡片状态和运行提示与真实后端占用保持一致。
+    busyMap.value = {
+      ...busyMap.value,
+      [cell.key]: false,
+    }
   }
 }
 
@@ -4845,7 +5081,17 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     const display = getGuaxiDisplayFromResult(res)
     const dataframe = getGuaxiDataFrameFromResult(res)
     const hasRenderableOutput = !!(String(outputText || '').trim() || display || dataframe)
-    const hideOutput = !hasRenderableOutput
+    const snapshot = getCellSnapshot(cell)
+    const runOutputs = buildPythonCellOutputModules({
+      outputText,
+      display,
+      dataframe,
+      source: 'execution',
+    })
+    const nextOutputs = hasRenderableOutput
+      ? appendPythonCellOutputModules(snapshot?.outputs || [], runOutputs)
+      : (snapshot?.outputs || [])
+    const hideOutput = !nextOutputs.length
     logger.info('[Notebook] python cell executed', {
       key: String(cell?.key || ''),
       cellId: String(cell?.cellId || ''),
@@ -4854,6 +5100,8 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       hasDisplay: !!display,
       hasDataframe: !!dataframe,
       hideOutput,
+      appendedOutputModuleCount: runOutputs.length,
+      totalOutputModuleCount: nextOutputs.length,
     })
 
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
@@ -4861,10 +5109,11 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       outputText: hideOutput ? '' : outputText,
       display,
       dataframe,
+      outputs: nextOutputs,
       result: res,
       sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
       meta: {
-        ...(getCellSnapshot(cell).meta || {}),
+        ...(snapshot?.meta || {}),
         outputCollapsed: hideOutput,
       },
     })
@@ -4882,17 +5131,34 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
 
     message.success(writeBack ? '运行完成，输出已写回文档' : '运行完成')
   } catch (error) {
+    const snapshot = getCellSnapshot(cell)
+    const errorOutputs = appendPythonCellOutputModules(
+      snapshot?.outputs || [],
+      buildPythonCellOutputModules({
+        outputText: `运行失败：${String(error?.message || error)}`,
+        display: null,
+        dataframe: null,
+        source: 'execution-error',
+      }),
+    )
     patchPythonCellSnapshot(props.filePath, cell.cellId, {
       codeDigest: getNotebookCellContentDigest(cell),
       outputText: `运行失败：${String(error?.message || error)}`,
       display: null,
       dataframe: null,
+      outputs: errorOutputs,
       result: null,
       sessionVars: [],
       meta: {
-        ...(getCellSnapshot(cell).meta || {}),
+        ...(snapshot?.meta || {}),
         outputCollapsed: false,
       },
+    })
+    logger.error('[Notebook] python cell execution failed', {
+      key: String(cell?.key || ''),
+      cellId: String(cell?.cellId || ''),
+      outputModuleCount: errorOutputs.length,
+      error: String(error?.message || error),
     })
     bumpRefresh()
     schedulePersistNotebookSidecar('run-python-cell-failed')
@@ -5645,6 +5911,20 @@ defineExpose({
   text-transform: uppercase;
 }
 
+.guaxi-notebook__python-badge.is-busy {
+  color: #1d4ed8;
+  border-color: color-mix(in srgb, #60a5fa 48%, var(--guaxi-notebook-strong-border));
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.14);
+}
+
+.guaxi-notebook__python-badge-icon {
+  flex: 0 0 auto;
+}
+
+.guaxi-notebook__busy-spin {
+  animation: guaxi-notebook-busy-spin 0.9s linear infinite;
+}
+
 .guaxi-notebook__python-title {
   min-width: 0;
   color: var(--guaxi-notebook-muted);
@@ -5687,6 +5967,62 @@ defineExpose({
 .guaxi-notebook__panel-content {
   display: grid;
   gap: 10px;
+}
+
+.guaxi-notebook__output-module {
+  border-radius: 12px;
+  border: 1px solid var(--guaxi-notebook-strong-border);
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 86%, var(--guaxi-notebook-panel) 14%);
+  overflow: hidden;
+}
+
+.guaxi-notebook__output-module.is-collapsed {
+  background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 74%, var(--guaxi-notebook-panel) 26%);
+}
+
+.guaxi-notebook__output-module-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--guaxi-notebook-strong-border) 74%, transparent);
+}
+
+.guaxi-notebook__output-module.is-collapsed .guaxi-notebook__output-module-head {
+  border-bottom: none;
+}
+
+.guaxi-notebook__output-module-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.guaxi-notebook__output-module-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--guaxi-notebook-text);
+}
+
+.guaxi-notebook__output-module-summary {
+  font-size: 12px;
+  color: var(--guaxi-notebook-muted);
+  word-break: break-word;
+}
+
+.guaxi-notebook__output-module-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.guaxi-notebook__output-module-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
 }
 
 .guaxi-notebook__panel-head {
@@ -5832,9 +6168,19 @@ defineExpose({
 .guaxi-notebook.theme-dark .guaxi-notebook__rich,
 .guaxi-notebook.theme-dark .guaxi-notebook__output-text,
 .guaxi-notebook.theme-dark .guaxi-notebook__dataframe,
+.guaxi-notebook.theme-dark .guaxi-notebook__output-module,
 .guaxi-notebook.theme-dark .guaxi-notebook__var,
 .guaxi-notebook.theme-dark .guaxi-notebook__python-editor {
   background: color-mix(in srgb, var(--guaxi-notebook-panel-soft) 88%, #0f172a 12%);
+}
+
+@keyframes guaxi-notebook-busy-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .guaxi-notebook__markdown-preview :deep(.md-paragraph),
