@@ -23,11 +23,15 @@ use zip::ZipArchive;
 #[cfg(all(windows, not(debug_assertions)))]
 use std::os::windows::process::CommandExt;
 
-static PY_WORKER_STATE: OnceLock<Mutex<Option<PythonWorkerState>>> = OnceLock::new();
+static PY_WORKER_STATES: OnceLock<Mutex<HashMap<String, Arc<Mutex<PythonWorkerState>>>>> =
+    OnceLock::new();
 
 const PY_WORKER_FILE_NAME: &str = "guaxi_python_worker.py";
 const PY_WORKER_SOURCE: &str = include_str!("../../scripts/guaxi_python_worker.py");
 const PY_WORKER_REQUEST_TIMEOUT_SECS: u64 = 45;
+const PY_WORKER_EXEC_TIMEOUT_SECS: u64 = 300;
+const PY_WORKER_TABLE_IO_TIMEOUT_SECS: u64 = 180;
+const PY_WORKER_DEFAULT_KEY: &str = "__guaxi_default_worker__";
 
 #[cfg(all(windows, not(debug_assertions)))]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -39,6 +43,14 @@ fn apply_python_process_no_window(cmd: &mut Command) {
 
 #[cfg(not(all(windows, not(debug_assertions))))]
 fn apply_python_process_no_window(_cmd: &mut Command) {}
+
+fn python_worker_timeout_secs_for_cmd(worker_cmd: &str) -> u64 {
+    match worker_cmd {
+        "exec" => PY_WORKER_EXEC_TIMEOUT_SECS,
+        "table_slice" | "table_export" | "import_table" => PY_WORKER_TABLE_IO_TIMEOUT_SECS,
+        _ => PY_WORKER_REQUEST_TIMEOUT_SECS,
+    }
+}
 
 #[cfg(windows)]
 const AUTO_DOWNLOAD_PYTHON_VERSION: &str = "3.13.13";
@@ -187,6 +199,53 @@ pub struct PythonImportTableResponse {
     pub table: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonTableRowsRequest {
+    pub handle: String,
+    pub table_key: Option<String>,
+    pub manifest_path: Option<String>,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonTableRowsResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub table_key: Option<String>,
+    pub table_name: Option<String>,
+    pub table_kind: Option<String>,
+    pub columns: Option<Vec<String>>,
+    pub rows: Option<Vec<Vec<Value>>>,
+    pub row_count: Option<usize>,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonTableExportRequest {
+    pub handle: String,
+    pub table_key: Option<String>,
+    pub manifest_path: Option<String>,
+    pub output_path: String,
+    pub format: String,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonTableExportResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub output_path: Option<String>,
+    pub format: Option<String>,
+    pub scope: Option<String>,
+    pub table_count: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 struct PythonLaunchSpec {
     program: String,
@@ -214,8 +273,35 @@ struct PythonWorkerState {
     stdout: BufReader<ChildStdout>,
 }
 
-fn python_worker_state_cell() -> &'static Mutex<Option<PythonWorkerState>> {
-    PY_WORKER_STATE.get_or_init(|| Mutex::new(None))
+fn python_worker_states_cell() -> &'static Mutex<HashMap<String, Arc<Mutex<PythonWorkerState>>>> {
+    PY_WORKER_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn python_worker_key_for_session(session_id: &str) -> String {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        PY_WORKER_DEFAULT_KEY.to_string()
+    } else {
+        format!("session::{trimmed}")
+    }
+}
+
+fn python_worker_key_from_payload(payload: &Value) -> String {
+    let session_id_from_vars = payload
+        .get("vars")
+        .and_then(Value::as_object)
+        .and_then(|vars| vars.get("_guaxi_session"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let session_id = if session_id_from_vars.trim().is_empty() {
+        payload
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    } else {
+        session_id_from_vars
+    };
+    python_worker_key_for_session(session_id)
 }
 
 fn python_runtime_dir() -> Result<PathBuf, String> {
@@ -2135,30 +2221,100 @@ fn worker_is_alive(state: &mut PythonWorkerState) -> bool {
     }
 }
 
-fn with_python_worker<R>(f: impl FnOnce(&mut PythonWorkerState) -> Result<R, String>) -> Result<R, String> {
-    let mut guard = python_worker_state_cell()
+fn terminate_python_worker_state(worker_key: &str, worker: Arc<Mutex<PythonWorkerState>>) {
+    match worker.lock() {
+        Ok(mut state) => {
+            let _ = state.child.kill();
+            info!(worker_key, "[PythonRuntime] worker terminated");
+        }
+        Err(_) => {
+            warn!(worker_key, "[PythonRuntime] lock python worker state failed during terminate");
+        }
+    }
+}
+
+fn remove_python_worker_by_key(
+    worker_key: &str,
+) -> Result<Option<Arc<Mutex<PythonWorkerState>>>, String> {
+    let mut guard = python_worker_states_cell()
+        .lock()
+        .map_err(|_| "lock python worker states failed".to_string())?;
+    Ok(guard.remove(worker_key))
+}
+
+fn ensure_python_worker_for_key(worker_key: &str) -> Result<Arc<Mutex<PythonWorkerState>>, String> {
+    let existing_worker = {
+        let guard = python_worker_states_cell()
+            .lock()
+            .map_err(|_| "lock python worker states failed".to_string())?;
+        guard.get(worker_key).cloned()
+    };
+
+    if let Some(worker) = existing_worker {
+        let mut state = worker
+            .lock()
+            .map_err(|_| "lock python worker state failed".to_string())?;
+        if worker_is_alive(&mut state) {
+            drop(state);
+            return Ok(worker);
+        }
+        warn!(worker_key, "[PythonRuntime] cached worker is no longer alive, respawn it");
+    }
+
+    if let Some(stale_worker) = remove_python_worker_by_key(worker_key)? {
+        terminate_python_worker_state(worker_key, stale_worker);
+    }
+
+    let spec = resolve_python_launch_spec()?;
+    let spawned_worker = Arc::new(Mutex::new(spawn_python_worker(&spec)?));
+
+    let winner = {
+        let mut guard = python_worker_states_cell()
+            .lock()
+            .map_err(|_| "lock python worker states failed".to_string())?;
+        match guard.get(worker_key).cloned() {
+            Some(existing_worker) => existing_worker,
+            None => {
+                guard.insert(worker_key.to_string(), Arc::clone(&spawned_worker));
+                Arc::clone(&spawned_worker)
+            }
+        }
+    };
+
+    if !Arc::ptr_eq(&winner, &spawned_worker) {
+        terminate_python_worker_state(worker_key, spawned_worker);
+    }
+
+    Ok(winner)
+}
+
+fn with_python_worker_for_key<R>(
+    worker_key: &str,
+    f: impl FnOnce(&mut PythonWorkerState) -> Result<R, String>,
+) -> Result<R, String> {
+    let worker = ensure_python_worker_for_key(worker_key)?;
+    let mut state = worker
         .lock()
         .map_err(|_| "lock python worker state failed".to_string())?;
 
-    let need_spawn = match guard.as_mut() {
-        Some(state) => !worker_is_alive(state),
-        None => true,
-    };
-
-    if need_spawn {
-        *guard = None;
-        let spec = resolve_python_launch_spec()?;
-        *guard = Some(spawn_python_worker(&spec)?);
+    if !worker_is_alive(&mut state) {
+        drop(state);
+        if let Some(stale_worker) = remove_python_worker_by_key(worker_key)? {
+            terminate_python_worker_state(worker_key, stale_worker);
+        }
+        let respawned_worker = ensure_python_worker_for_key(worker_key)?;
+        let mut respawned_state = respawned_worker
+            .lock()
+            .map_err(|_| "lock python worker state failed".to_string())?;
+        return f(&mut respawned_state);
     }
 
-    let state = guard
-        .as_mut()
-        .ok_or_else(|| "python worker not available".to_string())?;
-    f(state)
+    f(&mut state)
 }
 
 fn send_worker_request(payload: &Value) -> Result<Value, String> {
-    with_python_worker(|state| {
+    let worker_key = python_worker_key_from_payload(payload);
+    with_python_worker_for_key(&worker_key, |state| {
         let worker_cmd = payload
             .get("cmd")
             .and_then(Value::as_str)
@@ -2172,20 +2328,23 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
             .and_then(|vars| vars.get("_py_cell_id"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let timeout_secs = python_worker_timeout_secs_for_cmd(worker_cmd);
         let watchdog = start_python_worker_request_watchdog(
             state.child.id(),
             worker_cmd.to_string(),
             session_id.to_string(),
             cell_id.to_string(),
-            PY_WORKER_REQUEST_TIMEOUT_SECS,
+            timeout_secs,
         );
         let line = serde_json::to_string(payload)
             .map_err(|e| format!("serialize worker request failed: {e}"))?;
         info!(
+            worker_key = worker_key.as_str(),
             cmd = worker_cmd,
             session_id,
             cell_id,
             payload_len = line.len(),
+            timeout_secs,
             "[PythonRuntime] sending worker request"
         );
         state
@@ -2211,6 +2370,7 @@ fn send_worker_request(payload: &Value) -> Result<Value, String> {
             return Err("python worker closed stdout unexpectedly".to_string());
         }
         info!(
+            worker_key = worker_key.as_str(),
             cmd = worker_cmd,
             session_id,
             cell_id,
@@ -2228,6 +2388,7 @@ fn send_one_shot_worker_request(payload: &Value) -> Result<Value, String> {
         .get("cmd")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let timeout_secs = python_worker_timeout_secs_for_cmd(worker_cmd);
     let spec = resolve_python_launch_spec()?;
     let worker_script_path = ensure_worker_script(&spec.runtime_dir)?;
     let mut command = Command::new(&spec.program);
@@ -2252,7 +2413,7 @@ fn send_one_shot_worker_request(payload: &Value) -> Result<Value, String> {
         worker_cmd.to_string(),
         String::new(),
         String::new(),
-        PY_WORKER_REQUEST_TIMEOUT_SECS,
+        timeout_secs,
     );
     let line = serde_json::to_string(payload)
         .map_err(|e| format!("serialize one-shot worker request failed: {e}"))?;
@@ -2260,6 +2421,7 @@ fn send_one_shot_worker_request(payload: &Value) -> Result<Value, String> {
         cmd = worker_cmd,
         pid,
         payload_len = line.len(),
+        timeout_secs,
         "[PythonRuntime] sending one-shot worker request"
     );
 
@@ -2341,33 +2503,42 @@ fn list_python_packages(spec: &PythonLaunchSpec) -> Vec<String> {
 }
 
 fn clear_python_worker() -> Result<(), String> {
-    let mut guard = python_worker_state_cell()
-        .lock()
-        .map_err(|_| "lock python worker state failed".to_string())?;
-    if let Some(state) = guard.as_mut() {
-        let _ = state.child.kill();
+    let workers = {
+        let mut guard = python_worker_states_cell()
+            .lock()
+            .map_err(|_| "lock python worker states failed".to_string())?;
+        guard.drain().collect::<Vec<_>>()
+    };
+    for (worker_key, worker) in workers {
+        terminate_python_worker_state(&worker_key, worker);
     }
-    *guard = None;
+    Ok(())
+}
+
+fn clear_python_worker_for_session(session_id: &str) -> Result<(), String> {
+    let worker_key = python_worker_key_for_session(session_id);
+    if let Some(worker) = remove_python_worker_by_key(&worker_key)? {
+        terminate_python_worker_state(&worker_key, worker);
+    }
     Ok(())
 }
 
 #[command]
 pub async fn python_reset_repl() -> Result<(), String> {
-    let payload = json!({ "cmd": "reset" });
-    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
-        .await
-        .map_err(|e| format!("python_reset_repl join failed: {e}"))??;
-
-    if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-        info!("[PythonRuntime] worker sessions reset");
+    tauri::async_runtime::spawn_blocking(move || {
+        clear_python_worker()?;
+        let runtime_dir = python_runtime_dir()?;
+        let sessions_dir = runtime_dir.join("sessions");
+        if sessions_dir.exists() {
+            remove_path_if_exists(&sessions_dir)?;
+        }
+        fs::create_dir_all(&sessions_dir)
+            .map_err(|e| format!("recreate python sessions dir failed: {e}"))?;
+        info!("[PythonRuntime] worker sessions reset by clearing all session workers");
         Ok(())
-    } else {
-        Err(response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("reset python worker failed")
-            .to_string())
-    }
+    })
+    .await
+    .map_err(|e| format!("python_reset_repl join failed: {e}"))?
 }
 
 #[command]
@@ -2460,31 +2631,14 @@ pub async fn python_runtime_drop_session(request: PythonSessionRequest) -> Resul
 
     let runtime_dir = python_runtime_dir()?;
     let sandbox_dir = python_session_sandbox_dir(&runtime_dir, &session_id);
-    let payload = json!({
-        "cmd": "drop_session",
-        "session_id": session_id,
-    });
-
-    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
-        .await
-        .map_err(|e| format!("python_runtime_drop_session join failed: {e}"))??;
-
-    let ok = response.get("ok").and_then(Value::as_bool).unwrap_or(false);
-    if !ok {
-        return Err(
-            response
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("drop python session failed")
-                .to_string(),
-        );
-    }
+    clear_python_worker_for_session(&session_id)?;
 
     if sandbox_dir.exists() {
         remove_path_if_exists(&sandbox_dir)?;
     }
 
     info!(
+        session_id = session_id.as_str(),
         sandbox_dir = sandbox_dir.to_string_lossy().as_ref(),
         "[PythonRuntime] session dropped"
     );
@@ -2613,12 +2767,21 @@ pub async fn python_runtime_get_status() -> Result<PythonRuntimeStatus, String> 
         };
 
         let worker_alive = {
-            let mut guard = python_worker_state_cell()
-                .lock()
-                .map_err(|_| "lock python worker state failed".to_string())?;
-            match (initialized, guard.as_mut()) {
-                (true, Some(state)) => worker_is_alive(state),
-                _ => false,
+            let workers = {
+                let guard = python_worker_states_cell()
+                    .lock()
+                    .map_err(|_| "lock python worker states failed".to_string())?;
+                guard.values().cloned().collect::<Vec<_>>()
+            };
+            if !initialized {
+                false
+            } else {
+                workers.into_iter().any(|worker| {
+                    worker
+                        .lock()
+                        .map(|mut state| worker_is_alive(&mut state))
+                        .unwrap_or(false)
+                })
             }
         };
 
@@ -2694,7 +2857,7 @@ pub async fn python_runtime_initialize(
         let pip_version = ensure_pip_available(&spec)?;
         let _ = ensure_worker_script(&spec.runtime_dir)?;
         clear_python_worker()?;
-        let _ = with_python_worker(|_| Ok(()))?;
+        let _ = with_python_worker_for_key(PY_WORKER_DEFAULT_KEY, |_| Ok(()))?;
         let marker = match read_runtime_marker(&spec.runtime_dir)? {
             Some(existing) => existing,
             None => write_runtime_marker(
@@ -2962,4 +3125,68 @@ pub async fn python_runtime_import_table_file(
             .map(|s| s.to_string()),
         table: response.get("table").cloned(),
     })
+}
+
+#[command]
+pub async fn python_runtime_get_table_rows(
+    request: PythonTableRowsRequest,
+) -> Result<PythonTableRowsResponse, String> {
+    let payload = json!({
+        "cmd": "table_slice",
+        "handle": request.handle,
+        "table_key": request.table_key.unwrap_or_default(),
+        "manifest_path": request.manifest_path.unwrap_or_default(),
+        "offset": request.offset.unwrap_or(0),
+        "limit": request.limit.unwrap_or(200),
+    });
+
+    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
+        .await
+        .map_err(|e| format!("python_runtime_get_table_rows join failed: {e}"))??;
+
+    let parsed: PythonTableRowsResponse = serde_json::from_value(response)
+        .map_err(|e| format!("decode python table rows response failed: {e}"))?;
+
+    info!(
+        ok = parsed.ok,
+        table_key = parsed.table_key.as_deref().unwrap_or_default(),
+        row_count = parsed.row_count.unwrap_or_default(),
+        returned_rows = parsed.rows.as_ref().map(|rows| rows.len()).unwrap_or_default(),
+        "[PythonRuntime] table rows response decoded"
+    );
+
+    Ok(parsed)
+}
+
+#[command]
+pub async fn python_runtime_export_table_result(
+    request: PythonTableExportRequest,
+) -> Result<PythonTableExportResponse, String> {
+    let payload = json!({
+        "cmd": "table_export",
+        "handle": request.handle,
+        "table_key": request.table_key.unwrap_or_default(),
+        "manifest_path": request.manifest_path.unwrap_or_default(),
+        "output_path": request.output_path,
+        "format": request.format,
+        "scope": request.scope.unwrap_or_else(|| "table".to_string()),
+    });
+
+    let response = tauri::async_runtime::spawn_blocking(move || send_worker_request(&payload))
+        .await
+        .map_err(|e| format!("python_runtime_export_table_result join failed: {e}"))??;
+
+    let parsed: PythonTableExportResponse = serde_json::from_value(response)
+        .map_err(|e| format!("decode python table export response failed: {e}"))?;
+
+    info!(
+        ok = parsed.ok,
+        format = parsed.format.as_deref().unwrap_or_default(),
+        scope = parsed.scope.as_deref().unwrap_or_default(),
+        table_count = parsed.table_count.unwrap_or_default(),
+        output_path = parsed.output_path.as_deref().unwrap_or_default(),
+        "[PythonRuntime] table export response decoded"
+    );
+
+    Ok(parsed)
 }

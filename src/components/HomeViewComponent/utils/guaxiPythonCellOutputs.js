@@ -8,14 +8,31 @@ const normalizeTablePayload = (table = {}) => {
   if (!table || typeof table !== 'object') return null;
   const columns = Array.isArray(table.columns) ? table.columns.map((item) => String(item ?? '')) : [];
   const rows = Array.isArray(table.rows) ? table.rows.map((row) => (Array.isArray(row) ? [...row] : [])) : [];
-  if (!columns.length && !rows.length) return null;
+  const rowCount = Number(table.rowCount ?? table.row_count ?? rows.length ?? 0);
+  const resultHandle = normalizeText(table.resultHandle ?? table.result_handle ?? table.handle ?? '');
+  const manifestPath = normalizeText(table.manifestPath ?? table.manifest_path ?? '');
+  const artifactPath = normalizeText(table.artifactPath ?? table.artifact_path ?? '');
+  const tableKey = normalizeText(table.tableKey ?? table.table_key ?? '');
+  const tableName = normalizeText(table.tableName ?? table.table_name ?? '');
+  const tableKind = normalizeText(table.tableKind ?? table.table_kind ?? 'table');
+  const tableCount = Number(table.tableCount ?? table.table_count ?? 1);
+  const remote = !!table.remote || (!!resultHandle && rows.length === 0);
+  if (!columns.length && !rows.length && !rowCount && !resultHandle) return null;
   return {
     columns,
     rows,
-    rowCount: Number(table.rowCount ?? table.row_count ?? rows.length ?? 0),
+    rowCount,
     truncated: !!table.truncated,
     dtypes: table.dtypes && typeof table.dtypes === 'object' ? { ...table.dtypes } : {},
     sourcePath: normalizeText(table.sourcePath ?? table.source_path ?? ''),
+    resultHandle,
+    manifestPath,
+    artifactPath,
+    tableKey,
+    tableName,
+    tableKind,
+    tableCount,
+    remote,
   };
 };
 
@@ -51,11 +68,13 @@ export const getPythonCellOutputDisplayDataUrl = (display) => {
 
 export const isPythonCellDisplayOutputKind = (kind) => DISPLAY_OUTPUT_KINDS.has(normalizeText(kind).toLowerCase());
 
-const buildDefaultOutputTitle = (kind, source = 'execution') => {
+const buildDefaultOutputTitle = (kind, source = 'execution', table = null) => {
   const normalizedKind = normalizeText(kind).toLowerCase();
   const normalizedSource = normalizeText(source).toLowerCase();
 
   if (normalizedKind === 'table') {
+    const tableName = normalizeText(table?.tableName ?? table?.table_name ?? '');
+    if (tableName) return tableName;
     return normalizedSource === 'import-table' ? '导入表格' : '表格输出';
   }
   if (normalizedKind === 'text') {
@@ -74,8 +93,9 @@ const buildDefaultOutputSummary = (kind, { table = null, display = null, text = 
   const normalizedKind = normalizeText(kind).toLowerCase();
   if (normalizedKind === 'table' && table) {
     const summaryParts = [`${Number(table.rowCount || 0)} 行`, `${Array.isArray(table.columns) ? table.columns.length : 0} 列`];
-    if (table.truncated) summaryParts.push('已截断预览');
+    if (table.tableCount > 1) summaryParts.push(`共 ${Number(table.tableCount || 1)} 个表`);
     if (table.sourcePath) summaryParts.push(String(table.sourcePath).split(/[\\/]/).pop() || table.sourcePath);
+    if (table.remote) summaryParts.push('按需加载');
     return summaryParts.join(' · ');
   }
   if (normalizedKind === 'text') {
@@ -133,7 +153,7 @@ export const createPythonCellOutputModule = ({
       id: normalizeText(id) || createOutputId(),
       kind: 'table',
       source: normalizeText(source) || 'execution',
-      title: normalizeText(title) || buildDefaultOutputTitle('table', source),
+      title: normalizeText(title) || buildDefaultOutputTitle('table', source, normalizedTable),
       summary: normalizeText(summary) || buildDefaultOutputSummary('table', { table: normalizedTable }),
       collapsed: !!collapsed,
       createdAt: normalizeText(createdAt) || new Date().toISOString(),
@@ -165,6 +185,7 @@ export const buildPythonCellOutputModules = ({
   outputText = '',
   display = null,
   dataframe = null,
+  tables = [],
   source = 'execution',
   idPrefix = '',
 } = {}) => {
@@ -174,17 +195,22 @@ export const buildPythonCellOutputModules = ({
   // 3. 当调用方提供 `idPrefix` 时，模块 id 会保持稳定，避免旧快照迁移阶段的折叠状态抖动。
   const modules = [];
   let itemIndex = 0;
+  const normalizedTables = Array.isArray(tables) && tables.length
+    ? tables.map((item) => normalizeTablePayload(item)).filter(Boolean)
+    : [normalizeTablePayload(dataframe)].filter(Boolean);
 
-  const tableModule = createPythonCellOutputModule({
-    id: idPrefix ? `${idPrefix}-table-${itemIndex}` : '',
-    kind: 'table',
-    source,
-    table: dataframe,
+  normalizedTables.forEach((table) => {
+    const tableModule = createPythonCellOutputModule({
+      id: idPrefix ? `${idPrefix}-table-${itemIndex}` : '',
+      kind: 'table',
+      source,
+      table,
+    });
+    if (tableModule) {
+      modules.push(tableModule);
+      itemIndex += 1;
+    }
   });
-  if (tableModule) {
-    modules.push(tableModule);
-    itemIndex += 1;
-  }
 
   const displayModule = createPythonCellOutputModule({
     id: idPrefix ? `${idPrefix}-${normalizePythonCellOutputDisplayType(display) || 'display'}-${itemIndex}` : '',

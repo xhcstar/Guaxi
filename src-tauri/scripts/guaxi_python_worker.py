@@ -2,14 +2,17 @@ import ast
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import traceback
+import uuid
 
 SESSIONS = {}
 RESULT_HISTORY = {}
 SESSION_DIRS = {}
+TABLE_HANDLES = {}
 
 
 def _normalize_basic(value):
@@ -64,6 +67,89 @@ def _safe_repr(value):
     return str(text)
 
 
+def _truncate_text(text, limit=240):
+    raw = str(text or "")
+    if len(raw) <= limit:
+        return raw
+    return raw[: max(0, limit - 3)] + "..."
+
+
+def _is_small_basic_structure(value, depth=0):
+    if depth > 2:
+        return False
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return len(value) <= 12 and all(_is_small_basic_structure(item, depth + 1) for item in value)
+    if isinstance(value, dict):
+        return len(value) <= 12 and all(
+            isinstance(key, (bool, int, float, str)) and _is_small_basic_structure(item, depth + 1)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _compact_preview(value):
+    # 设计说明：
+    # 1. 之前这里大量依赖 repr(value)，大 DataFrame / 多 sheet dict / ndarray 会在“执行已完成”后还继续花很久组装字符串。
+    # 2. 用户看到的现象就是前端一直停在“Python 正在运行”，但真正拖慢的往往不是读表，而是结果摘要和变量快照。
+    # 3. 因此这里改成“简单对象保留内容，大对象只返回结构摘要”，优先保证产品可用性和稳定时延。
+    if _is_small_basic_structure(value):
+        return _truncate_text(_safe_repr(value))
+
+    if isinstance(value, str):
+        return repr(_truncate_text(value))
+
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{type(value).__name__} len={len(value)}>"
+
+    pandas_module = sys.modules.get("pandas")
+    if pandas_module is not None:
+        try:
+            if isinstance(value, pandas_module.DataFrame):
+                columns = [str(col) for col in value.columns.tolist()[:8]]
+                suffix = "..." if len(value.columns) > len(columns) else ""
+                return (
+                    f"<DataFrame rows={len(value.index)} cols={len(value.columns)} "
+                    f"columns={columns}{suffix}>"
+                )
+            if isinstance(value, pandas_module.Series):
+                return f"<Series len={len(value)} dtype={getattr(value, 'dtype', 'unknown')}>"
+        except Exception:
+            pass
+
+    numpy_module = sys.modules.get("numpy")
+    if numpy_module is not None:
+        try:
+            if isinstance(value, numpy_module.ndarray):
+                return f"<ndarray shape={list(value.shape)} dtype={value.dtype}>"
+        except Exception:
+            pass
+
+    if isinstance(value, dict):
+        keys = [str(key) for key in list(value.keys())[:6]]
+        suffix = "..." if len(value) > len(keys) else ""
+        return f"<dict len={len(value)} keys={keys}{suffix}>"
+
+    if isinstance(value, (list, tuple, set)):
+        return f"<{type(value).__name__} len={len(value)}>"
+
+    try:
+        shape = getattr(value, "shape")
+        if isinstance(shape, tuple):
+            return f"<{type(value).__name__} shape={list(shape)}>"
+    except Exception:
+        pass
+
+    try:
+        if hasattr(value, "__len__"):
+            return f"<{type(value).__name__} len={len(value)}>"
+    except Exception:
+        pass
+
+    return f"<{type(value).__name__}>"
+
+
 def _configure_verbose_object_rendering(globals_dict):
     # Design notes:
     # 1. Python Cell 每次执行都会先经过这里，哪怕只是简单的 `print("hello world")`。
@@ -95,7 +181,7 @@ def _configure_verbose_object_rendering(globals_dict):
 def _summarize_value(value):
     summary = {
         "type": type(value).__name__,
-        "preview": _safe_repr(value),
+        "preview": _compact_preview(value),
     }
 
     try:
@@ -227,6 +313,393 @@ def _build_dataframe_payload(df, source_path=None):
         "dtypes": {str(k): str(v) for k, v in df.dtypes.astype(str).to_dict().items()},
         "source_path": source_path or "",
     }
+
+
+def _normalize_table_key(value, fallback="table"):
+    text = str(value or "").strip()
+    if not text:
+        text = fallback
+    text = re.sub(r"[^0-9A-Za-z_\-.]+", "_", text).strip("._")
+    return text or fallback
+
+
+def _normalize_table_display_name(value, fallback="Table"):
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def _normalize_table_rows_payload(columns, rows):
+    normalized_rows = []
+    for row in rows:
+        normalized_row = []
+        if isinstance(row, dict):
+            for column in columns:
+                normalized_row.append(_normalize_basic(row.get(column)))
+        else:
+            raw_row = row if isinstance(row, (list, tuple)) else []
+            for index in range(len(columns)):
+                normalized_row.append(_normalize_basic(raw_row[index] if index < len(raw_row) else None))
+        normalized_rows.append(normalized_row)
+    return normalized_rows
+
+
+def _normalize_records_table(value):
+    if not isinstance(value, list):
+        return None
+    if value and not isinstance(value[0], dict):
+        return None
+
+    columns = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        for key in item.keys():
+            key_text = str(key)
+            if key_text not in columns:
+                columns.append(key_text)
+
+    return {
+        "columns": columns,
+        "rows": _normalize_table_rows_payload(columns, value),
+        "row_count": len(value),
+        "dtypes": {str(column): "json" for column in columns},
+        "kind": "records",
+    }
+
+
+def _table_result_root_dir(globals_dict, handle):
+    sandbox_dir = str(globals_dict.get("_guaxi_sandbox_dir") or "").strip()
+    if sandbox_dir:
+        root = os.path.join(sandbox_dir, ".guaxi_table_results", handle)
+    else:
+        root = os.path.join(os.getcwd(), ".guaxi_table_results", handle)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _persist_dataframe_table(df, output_path):
+    df.to_pickle(output_path)
+
+
+def _persist_records_table(rows, output_path):
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump(rows, handle, ensure_ascii=False)
+
+
+def _build_remote_table_payload(
+    *,
+    handle,
+    manifest_path,
+    artifact_path,
+    table_key,
+    table_name,
+    columns,
+    row_count,
+    dtypes,
+    source_path,
+    table_count,
+    table_kind,
+):
+    return {
+        "columns": [str(col) for col in columns],
+        "rows": [],
+        "row_count": int(row_count),
+        "truncated": False,
+        "dtypes": {str(k): str(v) for k, v in (dtypes or {}).items()},
+        "source_path": source_path or "",
+        "result_handle": handle,
+        "manifest_path": manifest_path,
+        "artifact_path": artifact_path,
+        "table_key": table_key,
+        "table_name": table_name,
+        "table_kind": table_kind,
+        "table_count": int(table_count),
+        "remote": True,
+    }
+
+
+def _extract_table_bundle(result, globals_dict):
+    pandas_module = sys.modules.get("pandas")
+    source_path = str(globals_dict.get("__guaxi_table_path") or "").strip()
+    table_specs = []
+
+    if pandas_module is not None and isinstance(result, pandas_module.DataFrame):
+        table_specs.append({
+            "table_key": "table",
+            "table_name": "Table",
+            "kind": "dataframe",
+            "value": result,
+        })
+    elif pandas_module is not None and isinstance(result, dict) and result:
+        if all(isinstance(value, pandas_module.DataFrame) for value in result.values()):
+            for index, (name, value) in enumerate(result.items(), start=1):
+                table_specs.append({
+                    "table_key": _normalize_table_key(name, f"sheet_{index}"),
+                    "table_name": _normalize_table_display_name(name, f"Sheet {index}"),
+                    "kind": "dataframe",
+                    "value": value,
+                })
+        elif all(_normalize_records_table(value) is not None for value in result.values()):
+            for index, (name, value) in enumerate(result.items(), start=1):
+                table_specs.append({
+                    "table_key": _normalize_table_key(name, f"table_{index}"),
+                    "table_name": _normalize_table_display_name(name, f"Table {index}"),
+                    "kind": "records",
+                    "value": value,
+                })
+    elif pandas_module is not None and isinstance(result, (list, tuple)) and result and all(
+        isinstance(value, pandas_module.DataFrame) for value in result
+    ):
+        for index, value in enumerate(result, start=1):
+            table_specs.append({
+                "table_key": f"table_{index}",
+                "table_name": f"Table {index}",
+                "kind": "dataframe",
+                "value": value,
+            })
+    else:
+        normalized_records = _normalize_records_table(result)
+        if normalized_records is not None:
+            table_specs.append({
+                "table_key": "table",
+                "table_name": "Table",
+                "kind": "records",
+                "value": result,
+            })
+
+    if not table_specs:
+        return None
+
+    handle = f"tbl_{uuid.uuid4().hex}"
+    table_root = _table_result_root_dir(globals_dict, handle)
+    manifest_path = os.path.join(table_root, "manifest.json")
+    table_payloads = []
+    registry_tables = {}
+    manifest_tables = []
+
+    for spec in table_specs:
+        table_key = _normalize_table_key(spec.get("table_key"), "table")
+        table_name = _normalize_table_display_name(spec.get("table_name"), "Table")
+        table_kind = str(spec.get("kind") or "").strip() or "records"
+        artifact_ext = "pkl" if table_kind == "dataframe" else "json"
+        artifact_path = os.path.join(table_root, f"{table_key}.{artifact_ext}")
+
+        if table_kind == "dataframe":
+            df = spec.get("value")
+            _persist_dataframe_table(df, artifact_path)
+            columns = [str(col) for col in df.columns.tolist()]
+            row_count = int(len(df.index))
+            dtypes = {str(k): str(v) for k, v in df.dtypes.astype(str).to_dict().items()}
+            registry_tables[table_key] = {
+                "kind": "dataframe",
+                "value": df,
+                "columns": columns,
+                "row_count": row_count,
+                "dtypes": dtypes,
+                "artifact_path": artifact_path,
+                "table_name": table_name,
+            }
+        else:
+            normalized = _normalize_records_table(spec.get("value")) or {
+                "columns": [],
+                "rows": [],
+                "row_count": 0,
+                "dtypes": {},
+                "kind": "records",
+            }
+            _persist_records_table(spec.get("value"), artifact_path)
+            columns = normalized["columns"]
+            row_count = int(normalized["row_count"])
+            dtypes = normalized["dtypes"]
+            registry_tables[table_key] = {
+                "kind": "records",
+                "value": spec.get("value"),
+                "columns": columns,
+                "row_count": row_count,
+                "dtypes": dtypes,
+                "artifact_path": artifact_path,
+                "table_name": table_name,
+            }
+
+        manifest_entry = {
+            "table_key": table_key,
+            "table_name": table_name,
+            "table_kind": table_kind,
+            "artifact_path": artifact_path,
+            "columns": columns,
+            "row_count": row_count,
+            "dtypes": dtypes,
+            "source_path": source_path,
+        }
+        manifest_tables.append(manifest_entry)
+        table_payloads.append(_build_remote_table_payload(
+            handle=handle,
+            manifest_path=manifest_path,
+            artifact_path=artifact_path,
+            table_key=table_key,
+            table_name=table_name,
+            columns=columns,
+            row_count=row_count,
+            dtypes=dtypes,
+            source_path=source_path,
+            table_count=len(table_specs),
+            table_kind=table_kind,
+        ))
+
+    manifest = {
+        "handle": handle,
+        "manifest_path": manifest_path,
+        "table_count": len(manifest_tables),
+        "source_path": source_path,
+        "tables": manifest_tables,
+    }
+    with open(manifest_path, "w", encoding="utf-8") as handle_file:
+        json.dump(manifest, handle_file, ensure_ascii=False)
+
+    TABLE_HANDLES[handle] = {
+        "manifest": manifest,
+        "manifest_path": manifest_path,
+        "tables": registry_tables,
+    }
+
+    return {
+        "handle": handle,
+        "manifest_path": manifest_path,
+        "table_count": len(manifest_tables),
+        "tables": table_payloads,
+        "source_path": source_path,
+    }
+
+
+def _load_table_bundle(handle="", manifest_path=""):
+    normalized_handle = str(handle or "").strip()
+    if normalized_handle and normalized_handle in TABLE_HANDLES:
+        return TABLE_HANDLES[normalized_handle]
+
+    resolved_manifest_path = str(manifest_path or "").strip()
+    if not resolved_manifest_path and normalized_handle:
+        cached = TABLE_HANDLES.get(normalized_handle)
+        if cached:
+            resolved_manifest_path = str(cached.get("manifest_path") or "").strip()
+
+    if not resolved_manifest_path or not os.path.exists(resolved_manifest_path):
+        return None
+
+    with open(resolved_manifest_path, "r", encoding="utf-8") as handle_file:
+        manifest = json.load(handle_file)
+
+    bundle = {
+        "manifest": manifest,
+        "manifest_path": resolved_manifest_path,
+        "tables": {},
+    }
+    if normalized_handle:
+        TABLE_HANDLES[normalized_handle] = bundle
+    return bundle
+
+
+def _load_table_entry_value(entry):
+    if "value" in entry:
+        return entry["value"]
+
+    artifact_path = str(entry.get("artifact_path") or "").strip()
+    table_kind = str(entry.get("kind") or entry.get("table_kind") or "").strip() or "records"
+    if not artifact_path or not os.path.exists(artifact_path):
+        raise FileNotFoundError(f"Table artifact not found: {artifact_path}")
+
+    if table_kind == "dataframe":
+        try:
+            import pandas as pd
+        except Exception as exc:
+            raise RuntimeError(f"Loading dataframe artifact requires pandas: {exc}") from exc
+        value = pd.read_pickle(artifact_path)
+    else:
+        with open(artifact_path, "r", encoding="utf-8") as handle_file:
+            value = json.load(handle_file)
+
+    entry["value"] = value
+    return value
+
+
+def _resolve_table_entry(payload):
+    handle = str(payload.get("handle") or "").strip()
+    manifest_path = str(payload.get("manifest_path") or "").strip()
+    table_key = _normalize_table_key(payload.get("table_key"), "table")
+
+    bundle = _load_table_bundle(handle=handle, manifest_path=manifest_path)
+    if not bundle:
+        raise ValueError("Table handle or manifest is missing")
+
+    manifest = bundle.get("manifest") or {}
+    manifest_tables = manifest.get("tables") or []
+    manifest_entry = next(
+        (item for item in manifest_tables if _normalize_table_key(item.get("table_key"), "table") == table_key),
+        None,
+    )
+    if manifest_entry is None and manifest_tables:
+        manifest_entry = manifest_tables[0]
+        table_key = _normalize_table_key(manifest_entry.get("table_key"), "table")
+    if manifest_entry is None:
+        raise ValueError(f"Table entry not found: {table_key}")
+
+    table_entry = bundle.setdefault("tables", {}).get(table_key)
+    if table_entry is None:
+        table_entry = {
+            "kind": str(manifest_entry.get("table_kind") or "records"),
+            "artifact_path": str(manifest_entry.get("artifact_path") or ""),
+            "table_name": str(manifest_entry.get("table_name") or table_key),
+            "columns": [str(col) for col in manifest_entry.get("columns") or []],
+            "row_count": int(manifest_entry.get("row_count") or 0),
+            "dtypes": manifest_entry.get("dtypes") or {},
+        }
+        bundle["tables"][table_key] = table_entry
+
+    return bundle, manifest, table_key, manifest_entry, table_entry
+
+
+def _dataframe_rows_slice(df, offset, limit):
+    if limit <= 0:
+        return []
+    sliced = df.iloc[offset : offset + limit]
+    preview_df = sliced.astype(object).where(sliced.notnull(), None)
+    return [[_normalize_basic(item) for item in row] for row in preview_df.values.tolist()]
+
+
+def _records_rows_slice(records, columns, offset, limit):
+    if limit <= 0:
+        return []
+    sliced = records[offset : offset + limit]
+    return _normalize_table_rows_payload(columns, sliced)
+
+
+def _table_to_records(entry):
+    value = _load_table_entry_value(entry)
+    if str(entry.get("kind") or "").strip() == "dataframe":
+        pandas_module = sys.modules.get("pandas")
+        if pandas_module is None:
+            raise RuntimeError("Exporting dataframe artifacts requires pandas")
+        preview_df = value.astype(object).where(pandas_module.notnull(value), None)
+        columns = [str(col) for col in value.columns.tolist()]
+        rows = preview_df.to_dict(orient="records")
+        return columns, rows
+
+    normalized = _normalize_records_table(value) or {
+        "columns": [],
+        "rows": [],
+    }
+    rows = []
+    for raw_row in value:
+        row = {}
+        for index, column in enumerate(normalized["columns"]):
+            row[column] = raw_row.get(column) if isinstance(raw_row, dict) else None
+        rows.append(row)
+    return normalized["columns"], rows
+
+
+def _sheet_name_for_export(value, fallback):
+    normalized = _normalize_table_display_name(value, fallback)
+    normalized = re.sub(r"[\[\]:*?/\\]+", "_", normalized).strip()
+    return normalized[:31] or fallback[:31] or "Sheet1"
 
 
 def _capture_rich_display(result):
@@ -513,32 +986,42 @@ def _handle_exec(payload):
         if "_result" in globals_dict:
             result = globals_dict.get("_result")
             if result is not None:
-                try:
-                    result_repr = repr(result)
-                except Exception:
-                    result_repr = None
+                result_repr = _compact_preview(result)
 
                 if expect_json:
                     result_json = _json_basic(result)
 
-                dataframe_payload = _build_dataframe_payload(result)
-                if dataframe_payload:
-                    if isinstance(result_json, dict):
-                        result_json.setdefault("__guaxi_dataframe__", dataframe_payload)
-                    elif result_json is None:
-                        result_json = {"__guaxi_dataframe__": dataframe_payload}
-                    else:
-                        result_json = {
-                            "__guaxi_dataframe__": dataframe_payload,
-                            "__guaxi_result__": result_json,
-                        }
+                table_bundle = _extract_table_bundle(result, globals_dict)
+                if table_bundle:
+                    table_payloads = table_bundle.get("tables") or []
+                    next_table_json = {
+                        "__guaxi_tables__": table_payloads,
+                        "__guaxi_table_bundle__": {
+                            "handle": table_bundle.get("handle"),
+                            "manifest_path": table_bundle.get("manifest_path"),
+                            "table_count": table_bundle.get("table_count"),
+                            "source_path": table_bundle.get("source_path") or "",
+                        },
+                    }
+                    if table_payloads:
+                        next_table_json["__guaxi_dataframe__"] = table_payloads[0]
 
-                rich_display = _capture_rich_display(result)
-                if rich_display:
                     if isinstance(result_json, dict):
-                        result_json.setdefault("__guaxi_display__", rich_display)
+                        result_json.setdefault("__guaxi_dataframe__", next_table_json.get("__guaxi_dataframe__"))
+                        result_json["__guaxi_tables__"] = table_payloads
+                        result_json["__guaxi_table_bundle__"] = next_table_json["__guaxi_table_bundle__"]
                     elif result_json is None:
-                        result_json = {"__guaxi_display__": rich_display}
+                        result_json = next_table_json
+                    else:
+                        next_table_json["__guaxi_result__"] = result_json
+                        result_json = next_table_json
+                else:
+                    rich_display = _capture_rich_display(result)
+                    if rich_display:
+                        if isinstance(result_json, dict):
+                            result_json.setdefault("__guaxi_display__", rich_display)
+                        elif result_json is None:
+                            result_json = {"__guaxi_display__": rich_display}
                     else:
                         result_json = {
                             "__guaxi_display__": rich_display,
@@ -609,6 +1092,7 @@ def _handle_exec(payload):
 def _handle_reset(_payload):
     SESSIONS.clear()
     RESULT_HISTORY.clear()
+    TABLE_HANDLES.clear()
     for _, sandbox_dir in list(SESSION_DIRS.items()):
         try:
             shutil.rmtree(sandbox_dir, ignore_errors=True)
@@ -641,6 +1125,14 @@ def _handle_drop_session(payload):
         except Exception:
             pass
 
+    table_prefix = f"{session_id}-"
+    for handle in list(TABLE_HANDLES.keys()):
+        if session_id == "__guaxi_global__":
+            break
+        manifest_path = str(TABLE_HANDLES.get(handle, {}).get("manifest_path") or "")
+        if sandbox_dir and manifest_path.startswith(sandbox_dir):
+            TABLE_HANDLES.pop(handle, None)
+
     return {
         "ok": True,
         "stdout": "",
@@ -650,6 +1142,138 @@ def _handle_drop_session(payload):
         "session_id": session_id,
         "session_vars": [],
     }
+
+
+def _handle_table_slice(payload):
+    try:
+        _, _, table_key, manifest_entry, table_entry = _resolve_table_entry(payload)
+        offset = max(0, int(payload.get("offset") or 0))
+        limit = max(1, min(2000, int(payload.get("limit") or 200)))
+
+        value = _load_table_entry_value(table_entry)
+        columns = [str(col) for col in manifest_entry.get("columns") or table_entry.get("columns") or []]
+        row_count = int(manifest_entry.get("row_count") or table_entry.get("row_count") or 0)
+        table_name = str(manifest_entry.get("table_name") or table_entry.get("table_name") or table_key)
+        table_kind = str(manifest_entry.get("table_kind") or table_entry.get("kind") or "records")
+
+        if table_kind == "dataframe":
+            rows = _dataframe_rows_slice(value, offset, limit)
+        else:
+            rows = _records_rows_slice(value, columns, offset, limit)
+
+        return {
+            "ok": True,
+            "error": None,
+            "table_key": table_key,
+            "table_name": table_name,
+            "table_kind": table_kind,
+            "columns": columns,
+            "rows": rows,
+            "row_count": row_count,
+            "offset": offset,
+            "limit": limit,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": _format_traceback(exc),
+            "rows": [],
+        }
+
+
+def _handle_table_export(payload):
+    try:
+        bundle, manifest, table_key, manifest_entry, table_entry = _resolve_table_entry(payload)
+        output_path = str(payload.get("output_path") or "").strip()
+        export_format = str(payload.get("format") or "").strip().lower()
+        export_scope = str(payload.get("scope") or "table").strip().lower()
+        if not output_path:
+            return {"ok": False, "error": "Missing output_path"}
+        if not export_format:
+            return {"ok": False, "error": "Missing format"}
+
+        tables_meta = manifest.get("tables") or []
+        export_entries = []
+        if export_scope == "workbook":
+            for item in tables_meta:
+                item_key = _normalize_table_key(item.get("table_key"), "table")
+                entry = bundle.setdefault("tables", {}).get(item_key) or {
+                    "kind": str(item.get("table_kind") or "records"),
+                    "artifact_path": str(item.get("artifact_path") or ""),
+                    "table_name": str(item.get("table_name") or item_key),
+                    "columns": [str(col) for col in item.get("columns") or []],
+                    "row_count": int(item.get("row_count") or 0),
+                    "dtypes": item.get("dtypes") or {},
+                }
+                bundle["tables"][item_key] = entry
+                export_entries.append((item_key, item, entry))
+        else:
+            export_entries.append((table_key, manifest_entry, table_entry))
+
+        if export_format in ("xlsx", "xls"):
+            try:
+                import pandas as pd
+            except Exception as exc:
+                raise RuntimeError(f"Exporting Excel files requires pandas: {exc}") from exc
+
+            with pd.ExcelWriter(output_path) as writer:
+                for index, (_, item_meta, entry) in enumerate(export_entries, start=1):
+                    columns, rows = _table_to_records(entry)
+                    df = pd.DataFrame(rows, columns=columns)
+                    sheet_name = _sheet_name_for_export(item_meta.get("table_name"), f"Sheet{index}")
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+        elif export_format in ("csv", "tsv"):
+            if len(export_entries) != 1:
+                raise ValueError("CSV/TSV export supports a single table only")
+            _, _, entry = export_entries[0]
+            columns, rows = _table_to_records(entry)
+            delimiter = "\t" if export_format == "tsv" else ","
+            import csv
+
+            with open(output_path, "w", encoding="utf-8-sig", newline="") as handle_file:
+                writer = csv.DictWriter(handle_file, fieldnames=columns, delimiter=delimiter)
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(row)
+        elif export_format == "json":
+            if len(export_entries) == 1 and export_scope != "workbook":
+                _, _, entry = export_entries[0]
+                _, rows = _table_to_records(entry)
+                payload_json = rows
+            else:
+                payload_json = {}
+                for index, (_, item_meta, entry) in enumerate(export_entries, start=1):
+                    sheet_name = _sheet_name_for_export(item_meta.get("table_name"), f"Sheet{index}")
+                    _, rows = _table_to_records(entry)
+                    payload_json[sheet_name] = rows
+            with open(output_path, "w", encoding="utf-8") as handle_file:
+                json.dump(payload_json, handle_file, ensure_ascii=False, indent=2)
+        elif export_format == "parquet":
+            if len(export_entries) != 1:
+                raise ValueError("Parquet export supports a single table only")
+            try:
+                import pandas as pd
+            except Exception as exc:
+                raise RuntimeError(f"Exporting parquet files requires pandas: {exc}") from exc
+            _, _, entry = export_entries[0]
+            columns, rows = _table_to_records(entry)
+            pd.DataFrame(rows, columns=columns).to_parquet(output_path, index=False)
+        else:
+            raise ValueError(f"Unsupported export format: {export_format}")
+
+        return {
+            "ok": True,
+            "error": None,
+            "output_path": output_path,
+            "format": export_format,
+            "scope": export_scope,
+            "table_count": len(export_entries),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": _format_traceback(exc),
+        }
 
 
 def _handle_import_table(payload):
@@ -748,6 +1372,10 @@ def _dispatch(payload):
         return _handle_drop_session(payload)
     if cmd == "import_table":
         return _handle_import_table(payload)
+    if cmd == "table_slice":
+        return _handle_table_slice(payload)
+    if cmd == "table_export":
+        return _handle_table_export(payload)
     return {"ok": False, "error": f"Unknown worker command: {cmd}"}
 
 

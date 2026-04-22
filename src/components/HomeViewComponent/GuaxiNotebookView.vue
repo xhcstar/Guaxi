@@ -399,18 +399,7 @@
                     preload="metadata"
                   ></video>
                   <div v-else-if="outputModule.kind === 'table' && outputModule.table" class="guaxi-notebook__dataframe">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th v-for="column in outputModule.table.columns || []" :key="column">{{ column }}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="(row, rowIndex) in outputModule.table.rows || []" :key="`${cell.key}-${outputModule.id}-row-${rowIndex}`">
-                          <td v-for="(value, colIndex) in row" :key="`${cell.key}-${outputModule.id}-${rowIndex}-${colIndex}`">{{ value }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
+                    <GuaxiNotebookTableOutput :table="outputModule.table" />
                   </div>
                   <pre v-else-if="outputModule.kind === 'text'" class="guaxi-notebook__output-text">{{ outputModule.text }}</pre>
                 </div>
@@ -515,6 +504,7 @@ import { useSiderStore } from '../../stores/useSiderStore'
 import GuaxiNotebookPythonEditor from './GuaxiNotebookPythonEditor.vue'
 import GuaxiNotebookMarkdownEditor from './GuaxiNotebookMarkdownEditor.vue'
 import GuaxiNotebookHtmlOutput from './GuaxiNotebookHtmlOutput.vue'
+import GuaxiNotebookTableOutput from './GuaxiNotebookTableOutput.vue'
 import GuaxiSelectionTranslatePanel from './GuaxiSelectionTranslatePanel.vue'
 import { renderMarkdown } from '../GuaxiMarkdownRender/GuaxiMarker'
 import {
@@ -3329,18 +3319,37 @@ const getGuaxiDisplayFromResult = (res) => {
   return value && typeof value === 'object' ? value : null
 }
 
-const getGuaxiDataFrameFromResult = (res) => {
-  const value = res?.result_json?.__guaxi_dataframe__
+const normalizeGuaxiTablePayloadFromResult = (value) => {
   if (!value || typeof value !== 'object') return null
   return {
     columns: Array.isArray(value.columns) ? value.columns.map((item) => String(item ?? '')) : [],
     rows: Array.isArray(value.rows) ? value.rows : [],
-    rowCount: Number(value.row_count || 0),
+    rowCount: Number(value.row_count ?? (Array.isArray(value.rows) ? value.rows.length : 0)),
     truncated: !!value.truncated,
     dtypes: value.dtypes && typeof value.dtypes === 'object' ? value.dtypes : {},
     sourcePath: String(value.source_path || '').trim(),
+    resultHandle: String(value.result_handle || '').trim(),
+    manifestPath: String(value.manifest_path || '').trim(),
+    artifactPath: String(value.artifact_path || '').trim(),
+    tableKey: String(value.table_key || '').trim(),
+    tableName: String(value.table_name || '').trim(),
+    tableKind: String(value.table_kind || '').trim(),
+    tableCount: Number(value.table_count || 1),
+    remote: !!value.remote,
   }
 }
+
+const getGuaxiTablesFromResult = (res) => {
+  const explicitTables = Array.isArray(res?.result_json?.__guaxi_tables__)
+    ? res.result_json.__guaxi_tables__.map((item) => normalizeGuaxiTablePayloadFromResult(item)).filter(Boolean)
+    : []
+  if (explicitTables.length) return explicitTables
+
+  const fallback = normalizeGuaxiTablePayloadFromResult(res?.result_json?.__guaxi_dataframe__)
+  return fallback ? [fallback] : []
+}
+
+const getGuaxiDataFrameFromResult = (res) => getGuaxiTablesFromResult(res)[0] || null
 
 const getCellOutputModules = (cell) => {
   const snapshot = getCellSnapshot(cell)
@@ -4644,12 +4653,52 @@ const serializeDisplayAssetForMarkdown = async (display, cellId) => {
   }
 }
 
+const ensureNotebookTableRowsMaterialized = async (table = null) => {
+  if (!table || typeof table !== 'object') return null
+  const expectedRowCount = Math.max(0, Number(table.rowCount || 0))
+  const existingRows = Array.isArray(table.rows) ? table.rows : []
+  if (!String(table.resultHandle || '').trim() || existingRows.length >= expectedRowCount) {
+    return table
+  }
+
+  logger.info('[Notebook] materialize full table rows for downstream action', {
+    tableKey: String(table.tableKey || ''),
+    tableName: String(table.tableName || ''),
+    expectedRowCount,
+  })
+
+  const rows = []
+  const pageSize = 1000
+  for (let offset = 0; offset < expectedRowCount; offset += pageSize) {
+    const response = await invoke('python_runtime_get_table_rows', {
+      request: {
+        handle: String(table.resultHandle || ''),
+        tableKey: String(table.tableKey || ''),
+        manifestPath: String(table.manifestPath || ''),
+        offset,
+        limit: Math.min(pageSize, expectedRowCount - offset),
+      },
+    })
+    if (!response?.ok) {
+      throw new Error(String(response?.error || '读取完整表格数据失败'))
+    }
+    const nextRows = Array.isArray(response?.rows) ? response.rows : []
+    rows.push(...nextRows)
+  }
+
+  return {
+    ...table,
+    rows,
+  }
+}
+
 const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot = null) => {
   const resolvedSnapshot = snapshot || getCellSnapshot(cell)
   const targetModule = outputModule || getCellOutputModule(cell)
 
   if (targetModule?.kind === 'table' && targetModule.table) {
-    return dataframeToMarkdownTable(targetModule.table)
+    const materializedTable = await ensureNotebookTableRowsMaterialized(targetModule.table)
+    return dataframeToMarkdownTable(materializedTable)
   }
 
   const display = targetModule?.display || resolvedSnapshot?.display || null
@@ -4678,11 +4727,46 @@ const buildMarkdownOutputFromModule = async (cell, outputModule = null, snapshot
   return `\`\`\`text\n${text}\n\`\`\``
 }
 
+const getTableExportFilters = (table = {}, cell = null) => {
+  const totalTables = Number(table?.tableCount || 1)
+  const baseStem = buildNotebookAssetTarget(String(cell?.cellId || cell?.key || 'export'), 'xlsx').fileName.replace(/\.[^.]+$/, '')
+  const preferredSheetName = String(table?.tableName || table?.tableKey || 'table').trim().replace(/[^\w.-]+/g, '_')
+  const defaultBase = preferredSheetName ? `${baseStem}-${preferredSheetName}` : baseStem
+  const filters = []
+
+  if (totalTables > 1) {
+    filters.push({ name: 'Excel 工作簿', extensions: ['xlsx'] })
+    filters.push({ name: 'JSON 工作簿', extensions: ['json'] })
+  }
+  filters.push({ name: 'CSV', extensions: ['csv'] })
+  filters.push({ name: 'TSV', extensions: ['tsv'] })
+  filters.push({ name: 'JSON', extensions: ['json'] })
+  filters.push({ name: 'Excel', extensions: ['xlsx'] })
+  filters.push({ name: 'Parquet', extensions: ['parquet'] })
+
+  return {
+    defaultBase,
+    filters,
+  }
+}
+
 const buildExportPayloadFromModule = async (cell, outputModule = null, snapshot = null) => {
   const resolvedSnapshot = snapshot || getCellSnapshot(cell)
   const targetModule = outputModule || getCellOutputModule(cell)
 
   if (targetModule?.kind === 'table' && targetModule.table) {
+    if (String(targetModule.table.resultHandle || '').trim()) {
+      const { defaultBase, filters } = getTableExportFilters(targetModule.table, cell)
+      return {
+        kind: 'python-table-handle',
+        defaultName: `${defaultBase}.xlsx`,
+        filters,
+        bytes: null,
+        summary: 'python-table-handle',
+        table: targetModule.table,
+      }
+    }
+
     const csvLines = [
       (targetModule.table.columns || []).join(','),
       ...(targetModule.table.rows || []).map((row) => (Array.isArray(row) ? row : []).map((value) => JSON.stringify(value ?? '')).join(',')),
@@ -4825,45 +4909,102 @@ const writeCellOutputToMarkdown = async (cell, moduleId = '') => {
 }
 
 const exportCellOutputToFile = async (cell, moduleId = '') => {
-  const snapshot = getCellSnapshot(cell)
-  const outputModule = getCellOutputModule(cell, moduleId)
-  const payload = await buildExportPayloadFromModule(cell, outputModule, snapshot)
-  if (!payload) {
-    message.warning('当前没有可导出的输出内容')
-    return
-  }
+  try {
+    const snapshot = getCellSnapshot(cell)
+    const outputModule = getCellOutputModule(cell, moduleId)
+    const payload = await buildExportPayloadFromModule(cell, outputModule, snapshot)
+    if (!payload) {
+      message.warning('当前没有可导出的输出内容')
+      return
+    }
 
-  if (!payload.bytes) {
+    if (payload.kind === 'python-table-handle' && payload.table) {
+      const outputPath = await save({
+        defaultPath: payload.defaultName,
+        filters: payload.filters,
+      })
+      if (!outputPath) return
+
+      const extension = String(outputPath).split('.').pop()?.trim().toLowerCase() || 'xlsx'
+      const exportScope = Number(payload.table?.tableCount || 1) > 1 && ['xlsx', 'json'].includes(extension)
+        ? 'workbook'
+        : 'table'
+
+      logger.info('[Notebook] start export handled python table result', {
+        cellId: String(cell?.cellId || ''),
+        outputModuleId: String(outputModule?.id || ''),
+        tableKey: String(payload.table?.tableKey || ''),
+        tableCount: Number(payload.table?.tableCount || 1),
+        format: extension,
+        exportScope,
+        outputPath,
+      })
+
+      const response = await invoke('python_runtime_export_table_result', {
+        request: {
+          handle: String(payload.table?.resultHandle || ''),
+          tableKey: String(payload.table?.tableKey || ''),
+          manifestPath: String(payload.table?.manifestPath || ''),
+          outputPath: String(outputPath),
+          format: extension,
+          scope: exportScope,
+        },
+      })
+      if (!response?.ok) {
+        throw new Error(String(response?.error || '导出表格失败'))
+      }
+
+      logger.info('[Notebook] export handled python table result completed', {
+        cellId: String(cell?.cellId || ''),
+        outputModuleId: String(outputModule?.id || ''),
+        tableKey: String(payload.table?.tableKey || ''),
+        format: extension,
+        exportScope,
+        outputPath,
+      })
+      message.success('当前表格输出已导出到文件')
+      return
+    }
+
+    if (!payload.bytes) {
+      const outputPath = await save({
+        defaultPath: payload.defaultName,
+        filters: payload.filters,
+      })
+      if (!outputPath) return
+
+      const sourceBytes = await readFile(String(payload.summary || ''))
+      await writeBytesToPath(outputPath, sourceBytes, 'export-existing-file')
+      logger.info('[Notebook] export existing output file to new path', {
+        cellId: String(cell?.cellId || ''),
+        sourcePath: payload.summary,
+        outputPath,
+      })
+      message.success('当前输出文件已另存为新文件')
+      return
+    }
+
     const outputPath = await save({
       defaultPath: payload.defaultName,
       filters: payload.filters,
     })
     if (!outputPath) return
 
-    const sourceBytes = await readFile(String(payload.summary || ''))
-    await writeBytesToPath(outputPath, sourceBytes, 'export-existing-file')
-    logger.info('[Notebook] export existing output file to new path', {
+    await writeBytesToPath(outputPath, payload.bytes, 'export-payload')
+    logger.info('[Notebook] export cell output to file', {
       cellId: String(cell?.cellId || ''),
-      sourcePath: payload.summary,
       outputPath,
+      summary: payload.summary,
     })
-    message.success('当前输出文件已另存为新文件')
-    return
+    message.success('当前输出已导出到文件')
+  } catch (error) {
+    logger.error('[Notebook] export cell output to file failed', {
+      cellId: String(cell?.cellId || ''),
+      outputModuleId: String(moduleId || ''),
+      error: String(error?.message || error),
+    })
+    message.error(`导出输出失败：${String(error?.message || error)}`)
   }
-
-  const outputPath = await save({
-    defaultPath: payload.defaultName,
-    filters: payload.filters,
-  })
-  if (!outputPath) return
-
-  await writeBytesToPath(outputPath, payload.bytes, 'export-payload')
-  logger.info('[Notebook] export cell output to file', {
-    cellId: String(cell?.cellId || ''),
-    outputPath,
-    summary: payload.summary,
-  })
-  message.success('当前输出已导出到文件')
 }
 
 const importTableToPythonSession = async (cell) => {
@@ -4889,44 +5030,13 @@ const importTableToPythonSession = async (cell) => {
     const variableName = sanitizeFileSegment(fileName.replace(/\.[^.]+$/, ''), 'df').replace(/-/g, '_')
     const code = [
       // 设计说明：
-      // 1. 探索模式这里直接复用当前 Python 会话来完成“读取文件 + 注入变量 + 返回 dataframe 预览”三件事。
-      // 2. 旧实现会先调用 one-shot `import_table` 预解析文件，再调用 `python_exec` 注入会话；
-      //    日志显示前者在部分环境里经常卡到 45 秒超时，导致界面长时间停留在“运行中”。
-      // 3. 现在统一改成单次 `python_exec`，既能沿用已经预热好的会话环境，也能让输出模块与运行态共用同一条收尾链路。
+      // 1. 这里直接把外部数据文件读进当前 Python 会话，并把真正的数据对象交给 worker 侧的新表格协议处理。
+      // 2. worker 会把大表/多 sheet 结果登记成句柄并按需分片返回，避免超大 JSON 卡住 stdout 管道。
+      // 3. 对 Excel 统一使用 `sheet_name=None`，这样一个工作簿里的多个 sheet 会完整导入到同一个会话变量中。
       'from pathlib import Path',
       `__guaxi_table_path = ${JSON.stringify(String(selected))}`,
       `__guaxi_var_name = ${JSON.stringify(variableName)}`,
       '__guaxi_ext = Path(__guaxi_table_path).suffix.lower()',
-      'def __guaxi_build_table_payload(__guaxi_value, __guaxi_source_path):',
-      '    # 设计说明：',
-      '    # 1. 当当前运行环境没有 pandas 时，csv/json 兜底分支会得到 list[dict]，',
-      '    #    这类对象本身不会被 worker 自动识别成 dataframe。',
-      '    # 2. 这里手工把它转成前端既有的 __guaxi_dataframe__ 结构，',
-      '    #    这样探索模式依然可以继续复用现成的表格卡片渲染。',
-      '    if not isinstance(__guaxi_value, list) or not __guaxi_value:',
-      '        return None',
-      '    if not isinstance(__guaxi_value[0], dict):',
-      '        return None',
-      '    __guaxi_columns = []',
-      '    for __guaxi_item in __guaxi_value:',
-      '        if not isinstance(__guaxi_item, dict):',
-      '            return None',
-      '        for __guaxi_key in __guaxi_item.keys():',
-      '            __guaxi_key_text = str(__guaxi_key)',
-      '            if __guaxi_key_text not in __guaxi_columns:',
-      '                __guaxi_columns.append(__guaxi_key_text)',
-      '    __guaxi_preview_rows = []',
-      '    __guaxi_limit = 200',
-      '    for __guaxi_item in __guaxi_value[:__guaxi_limit]:',
-      '        __guaxi_preview_rows.append([__guaxi_item.get(__guaxi_col, "") for __guaxi_col in __guaxi_columns])',
-      '    return {',
-      '        "columns": __guaxi_columns,',
-      '        "rows": __guaxi_preview_rows,',
-      '        "row_count": len(__guaxi_value),',
-      '        "truncated": len(__guaxi_value) > __guaxi_limit,',
-      '        "dtypes": {__guaxi_col: "json" for __guaxi_col in __guaxi_columns},',
-      '        "source_path": __guaxi_source_path,',
-      '    }',
       'try:',
       '    import pandas as pd',
       'except Exception:',
@@ -4937,7 +5047,7 @@ const importTableToPythonSession = async (cell) => {
       "    elif __guaxi_ext == '.tsv':",
       "        __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
       "    elif __guaxi_ext in ('.xlsx', '.xls'):",
-      '        __guaxi_value = pd.read_excel(__guaxi_table_path)',
+      '        __guaxi_value = pd.read_excel(__guaxi_table_path, sheet_name=None)',
       "    elif __guaxi_ext == '.json':",
       '        __guaxi_value = pd.read_json(__guaxi_table_path)',
       "    elif __guaxi_ext == '.parquet':",
@@ -4956,12 +5066,8 @@ const importTableToPythonSession = async (cell) => {
       '            __guaxi_value = json.load(__guaxi_f)',
       '    else:',
       "        raise ValueError('当前运行环境需要 pandas 才能导入这种文件类型')",
-      '__guaxi_preview = __guaxi_build_table_payload(__guaxi_value, __guaxi_table_path)',
       'globals()[__guaxi_var_name] = __guaxi_value',
-      'if __guaxi_preview is not None:',
-      '    _result = {"__guaxi_dataframe__": __guaxi_preview}',
-      'else:',
-      '    _result = __guaxi_value',
+      '_result = __guaxi_value',
     ].join('\n')
 
     const sessionId = createPythonSessionId(props.filePath)
@@ -4982,8 +5088,9 @@ const importTableToPythonSession = async (cell) => {
       throw new Error(String(result?.stderr || result?.stdout || '导入失败'))
     }
 
-    const importedTable = getGuaxiDataFrameFromResult(result)
-    if (!importedTable) {
+    const importedTables = getGuaxiTablesFromResult(result)
+    const importedTable = importedTables[0] || null
+    if (!importedTables.length) {
       logger.warn('[Notebook] import table finished without dataframe payload', {
         cellId: String(cell?.cellId || ''),
         selected: String(selected),
@@ -5000,6 +5107,7 @@ const importTableToPythonSession = async (cell) => {
         outputText: '',
         display: null,
         dataframe: importedTable,
+        tables: importedTables,
         source: 'import-table',
       }),
     )
@@ -5026,6 +5134,7 @@ const importTableToPythonSession = async (cell) => {
       variableName,
       selected: String(selected),
       rowCount: Number(importedTable?.rowCount || 0),
+      tableCount: importedTables.length,
       hasPreview: !!importedTable,
       sessionVarCount: Array.isArray(result?.session_vars) ? result.session_vars.length : 0,
       outputModuleCount: nextOutputs.length,
@@ -5079,13 +5188,15 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
 
     const outputText = formatPythonExecOutput(res)
     const display = getGuaxiDisplayFromResult(res)
-    const dataframe = getGuaxiDataFrameFromResult(res)
-    const hasRenderableOutput = !!(String(outputText || '').trim() || display || dataframe)
+    const tables = getGuaxiTablesFromResult(res)
+    const dataframe = tables[0] || null
+    const hasRenderableOutput = !!(String(outputText || '').trim() || display || tables.length)
     const snapshot = getCellSnapshot(cell)
     const runOutputs = buildPythonCellOutputModules({
       outputText,
       display,
       dataframe,
+      tables,
       source: 'execution',
     })
     const nextOutputs = hasRenderableOutput
@@ -5099,6 +5210,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       hasTextOutput: !!String(outputText || '').trim(),
       hasDisplay: !!display,
       hasDataframe: !!dataframe,
+      tableCount: tables.length,
       hideOutput,
       appendedOutputModuleCount: runOutputs.length,
       totalOutputModuleCount: nextOutputs.length,
