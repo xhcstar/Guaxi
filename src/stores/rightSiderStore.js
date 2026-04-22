@@ -35,6 +35,16 @@ export const useRightSiderStore = defineStore("rightSider", {
       draftAutoSend: false,
       draftDisableWebSearch: false,
     },
+    pythonSessionInspector: {
+      filePath: "",
+      cellId: "",
+      cellKey: "",
+      cellTitle: "",
+      sessionId: "",
+      hasActiveCell: false,
+      variables: [],
+      updatedAt: 0,
+    },
   }),
   actions: {
     setSearchResults(results) {
@@ -69,14 +79,17 @@ export const useRightSiderStore = defineStore("rightSider", {
     // 新增：设置当前面板类型
     setPanel(name) {
       this.panel = name;
+      console.info("[RightSiderStore] set panel", { panel: name });
     },
     // 新增：展开右侧边栏
     open() {
       this.isOpen = true;
+      console.info("[RightSiderStore] open right sider", { panel: this.panel });
     },
     // 新增：关闭右侧边栏
     close() {
       this.isOpen = false;
+      console.info("[RightSiderStore] close right sider", { panel: this.panel });
     },
     addAssistantMessage(message) {
       if (!message || typeof message !== "object") return;
@@ -145,6 +158,37 @@ export const useRightSiderStore = defineStore("rightSider", {
         autoSend,
         disableWebSearch,
       };
+    },
+    setPythonSessionInspector(payload) {
+      const next = payload && typeof payload === "object" ? payload : {};
+      this.pythonSessionInspector = {
+        filePath: String(next.filePath || ""),
+        cellId: String(next.cellId || ""),
+        cellKey: String(next.cellKey || ""),
+        cellTitle: String(next.cellTitle || ""),
+        sessionId: String(next.sessionId || ""),
+        hasActiveCell: !!next.hasActiveCell,
+        variables: Array.isArray(next.variables) ? next.variables : [],
+        updatedAt: Date.now(),
+      };
+      console.debug("[RightSiderStore] sync python session inspector", {
+        cellId: this.pythonSessionInspector.cellId,
+        hasActiveCell: this.pythonSessionInspector.hasActiveCell,
+        variableCount: this.pythonSessionInspector.variables.length,
+      });
+    },
+    clearPythonSessionInspector() {
+      this.pythonSessionInspector = {
+        filePath: "",
+        cellId: "",
+        cellKey: "",
+        cellTitle: "",
+        sessionId: "",
+        hasActiveCell: false,
+        variables: [],
+        updatedAt: Date.now(),
+      };
+      console.info("[RightSiderStore] cleared python session inspector");
     },
   },
 });

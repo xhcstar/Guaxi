@@ -7,6 +7,7 @@
       :search-query="rightSiderStore.searchResults.searchQuery"
       :excerpt-results="rightSiderStore.searchResults.excerptResults"
       :last-search-type="rightSiderStore.searchResults.lastSearchType" />
+    <GuaxiNotebookSessionPanel v-show="rightSiderStore.panel === 'python-session'" />
     <KeepAlive>
       <GuaxiAgentAssistant v-if="rightSiderStore.panel === 'assistant'" />
     </KeepAlive>
@@ -17,6 +18,7 @@
 import GuaxiSearchNavigator from "./GuaxiSearchNavigator.vue"
 import GuaxiAgentAssistant from "./GuaxiAgentAssistant.vue"
 import GuaxiOutline from './GuaxiOutline.vue'
+import GuaxiNotebookSessionPanel from './GuaxiNotebookSessionPanel.vue'
 import { useRightSiderStore } from '../../stores/rightSiderStore'
 
 const rightSiderStore = useRightSiderStore()

@@ -125,8 +125,8 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              :title="activeNotebookPythonCellSnapshot.meta.sessionCollapsed ? '显示当前选中 Python Cell 变量' : '隐藏当前选中 Python Cell 变量'"
-              :aria-label="activeNotebookPythonCellSnapshot.meta.sessionCollapsed ? '显示当前选中 Python Cell 变量' : '隐藏当前选中 Python Cell 变量'"
+              :title="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 变量' : '显示当前选中 Python Cell 变量'"
+              :aria-label="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 变量' : '显示当前选中 Python Cell 变量'"
               @click="handleActivePythonToolbarAction('toggle-session')"
             >
               <Icon :icon="variableIcon" width="16" height="16" />
@@ -301,6 +301,16 @@
             <div class="guaxi-notebook__panel-head">
               <div class="guaxi-notebook__panel-title">输出</div>
               <div class="guaxi-notebook__panel-actions">
+                <button
+                  v-if="getCellSnapshot(cell).outputText"
+                  type="button"
+                  class="guaxi-notebook__icon-btn guaxi-notebook__panel-icon-btn"
+                  title="复制文本输出"
+                  aria-label="复制文本输出"
+                  @click="copyPythonCellTextOutput(cell)"
+                >
+                  <Icon :icon="copyIcon" width="14" height="14" />
+                </button>
                 <button type="button" class="guaxi-notebook__panel-btn" @click="writeCellOutputToMarkdown(cell)">写回 Markdown</button>
                 <button type="button" class="guaxi-notebook__panel-btn" @click="exportCellOutputToFile(cell)">导出文件</button>
               </div>
@@ -355,20 +365,6 @@
               </div>
               <pre v-if="getCellSnapshot(cell).outputText" class="guaxi-notebook__output-text">{{ getCellSnapshot(cell).outputText }}</pre>
             </div>
-          </div>
-
-          <div v-if="!getCellSnapshot(cell).meta.sessionCollapsed" class="guaxi-notebook__panel">
-            <div class="guaxi-notebook__panel-title">会话变量</div>
-            <div v-if="getCellSessionVars(cell).length" class="guaxi-notebook__vars">
-              <div v-for="item in getCellSessionVars(cell)" :key="`${cell.key}-${item.name}`" class="guaxi-notebook__var">
-                <div class="guaxi-notebook__var-main">
-                  <span class="guaxi-notebook__var-name">{{ item.name }}</span>
-                  <span class="guaxi-notebook__var-type">{{ item.value_type || item.type || 'value' }}</span>
-                </div>
-                <div class="guaxi-notebook__var-preview">{{ item.preview || '' }}</div>
-              </div>
-            </div>
-            <div v-else class="guaxi-notebook__empty">当前会话里还没有可见变量</div>
           </div>
         </div>
       </template>
@@ -452,6 +448,7 @@ import terminalIcon from '@iconify-icons/lucide/terminal'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
 import undoIcon from '@iconify-icons/lucide/undo'
 import redoIcon from '@iconify-icons/lucide/redo'
+import copyIcon from '@iconify-icons/lucide/copy'
 import languagesIcon from '@iconify-icons/lucide/languages'
 import messageCircleIcon from '@iconify-icons/lucide/message-circle'
 import botIcon from '@iconify-icons/lucide/bot'
@@ -508,6 +505,7 @@ const notebookOutlineMarkdownParser = new MarkdownIt()
 const fileTreeStore = useFileTreeStore()
 const rightSiderStore = useRightSiderStore()
 const siderStore = useSiderStore()
+const NOTEBOOK_RIGHT_SIDER_VIEW_KEY = 'home'
 
 const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
@@ -605,6 +603,11 @@ const activeNotebookPythonCellSnapshot = computed(() => {
   }
   return getCellSnapshot(activeNotebookPythonCell.value)
 })
+const isNotebookPythonSessionPanelVisible = computed(() => (
+  rightSiderStore.isOpen
+  && rightSiderStore.panel === 'python-session'
+  && siderStore.isRightSiderCollapsed?.[NOTEBOOK_RIGHT_SIDER_VIEW_KEY] === false
+))
 
 const bumpRefresh = () => {
   refreshTick.value += 1
@@ -628,6 +631,10 @@ const setActiveNotebookPythonCellKey = (cellKey, reason = 'unknown') => {
 const clearActiveNotebookPythonCell = (reason = 'unknown') => {
   if (!String(activeNotebookPythonCellKey.value || '').trim()) return
   setActiveNotebookPythonCellKey('', reason)
+  rightSiderStore.clearPythonSessionInspector()
+  logger.info('[NotebookToolbar] cleared python session inspector because active cell was cleared', {
+    reason,
+  })
 }
 
 const activateNotebookCell = (cell, reason = 'unknown') => {
@@ -870,11 +877,26 @@ const normalizeNotebookFsPath = (rawPath = '') => {
 }
 
 const writeClipboardText = async (text) => {
+  const value = String(text || '')
+  if (!value) return false
+
   try {
-    await navigator.clipboard.writeText(String(text || ''))
+    await navigator.clipboard.writeText(value)
     return true
   } catch (error) {
-    logger.warn('[NotebookSelection] write clipboard failed', { error })
+    logger.warn('[NotebookSelection] navigator clipboard write failed', {
+      error: String(error?.message || error),
+    })
+  }
+
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager')
+    await mod.writeText(value)
+    return true
+  } catch (error) {
+    logger.error('[NotebookSelection] clipboard write failed', {
+      error: String(error?.message || error),
+    })
     return false
   }
 }
@@ -3298,12 +3320,65 @@ const getCellSnapshot = (cell) => {
   }
 }
 
+const buildNotebookPythonSessionInspectorPayload = (cell) => {
+  if (cell?.type !== 'python') {
+    return {
+      filePath: String(props.filePath || ''),
+      cellId: '',
+      cellKey: '',
+      cellTitle: '',
+      sessionId: createPythonSessionId(props.filePath),
+      hasActiveCell: false,
+      variables: [],
+    }
+  }
+
+  const snapshot = getCellSnapshot(cell)
+  return {
+    filePath: String(props.filePath || ''),
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    cellTitle: String(cell?.meta?.title || ''),
+    sessionId: createPythonSessionId(props.filePath),
+    hasActiveCell: true,
+    variables: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+  }
+}
+
+const syncNotebookPythonSessionInspector = (cell, reason = 'unknown') => {
+  const payload = buildNotebookPythonSessionInspectorPayload(cell)
+  rightSiderStore.setPythonSessionInspector(payload)
+  logger.debug('[Notebook] sync python session inspector payload', {
+    reason,
+    cellId: payload.cellId,
+    hasActiveCell: payload.hasActiveCell,
+    variableCount: payload.variables.length,
+  })
+  return payload
+}
+
+watch(
+  [
+    () => activeNotebookPythonCellKey.value,
+    () => refreshTick.value,
+    () => props.filePath,
+  ],
+  () => {
+    const targetCell = activeNotebookPythonCell.value
+    if (targetCell?.type === 'python') {
+      syncNotebookPythonSessionInspector(targetCell, 'active-cell-or-refresh-watch')
+      return
+    }
+    rightSiderStore.clearPythonSessionInspector()
+    logger.debug('[Notebook] cleared python session inspector from watch because no active python cell exists')
+  },
+  { immediate: true },
+)
+
 const isActiveNotebookPythonCell = (cell) => {
   if (cell?.type !== 'python') return false
   return String(cell?.key || '') === String(activeNotebookPythonCellKey.value || '')
 }
-
-const getCellSessionVars = (cell) => Array.isArray(getCellSnapshot(cell).sessionVars) ? getCellSnapshot(cell).sessionVars : []
 
 const getCellDisplayKind = (cell) => normalizeDisplayType(getCellSnapshot(cell).display)
 
@@ -4158,16 +4233,54 @@ const toggleCellOutput = (cell) => {
   })
 }
 
+// Design notes:
+// 1. Session variables are now presented in the shared right sider instead of
+//    an inline card under each Python cell.
+// 2. We still mirror the open/closed state back into the cell metadata so the
+//    notebook sidecar keeps a stable semantic flag for the selected cell.
+const openNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
+  const payload = syncNotebookPythonSessionInspector(cell, `open-session-panel:${reason}`)
+  rightSiderStore.setPanel('python-session')
+  rightSiderStore.open()
+  siderStore.setRightSiderCollapsed(NOTEBOOK_RIGHT_SIDER_VIEW_KEY, false)
+  patchCellMeta(cell, {
+    sessionCollapsed: false,
+  })
+  logger.info('[Notebook] open python session panel', {
+    reason,
+    cellId: payload.cellId,
+    variableCount: payload.variables.length,
+  })
+}
+
+const closeNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
+  if (rightSiderStore.panel === 'python-session') {
+    rightSiderStore.close()
+    siderStore.setRightSiderCollapsed(NOTEBOOK_RIGHT_SIDER_VIEW_KEY, true)
+  }
+  if (cell?.type === 'python') {
+    patchCellMeta(cell, {
+      sessionCollapsed: true,
+    })
+  }
+  logger.info('[Notebook] close python session panel', {
+    reason,
+    cellId: String(cell?.cellId || ''),
+  })
+}
+
 const toggleCellSession = (cell) => {
-  const snapshot = getCellSnapshot(cell)
-  logger.info('[Notebook] toggle session panel', {
+  const nextVisible = !isNotebookPythonSessionPanelVisible.value
+  logger.info('[Notebook] toggle python session panel', {
     key: String(cell?.key || ''),
     cellId: String(cell?.cellId || ''),
-    nextCollapsed: !snapshot.meta.sessionCollapsed,
+    nextVisible,
   })
-  patchCellMeta(cell, {
-    sessionCollapsed: !snapshot.meta.sessionCollapsed,
-  })
+  if (nextVisible) {
+    openNotebookPythonSessionPanel(cell, 'toolbar-toggle')
+    return
+  }
+  closeNotebookPythonSessionPanel(cell, 'toolbar-toggle')
 }
 
 const isCellBusy = (cell) => !!busyMap.value[String(cell.key)]
@@ -4500,6 +4613,26 @@ const buildExportPayloadFromSnapshot = async (cell, snapshot) => {
     bytes: new TextEncoder().encode(text),
     summary: 'text',
   }
+}
+
+const copyPythonCellTextOutput = async (cell) => {
+  const text = String(getCellSnapshot(cell)?.outputText || '')
+  if (!text) {
+    message.warning('当前没有可复制的文本输出')
+    return
+  }
+
+  const copied = await writeClipboardText(text)
+  if (!copied) {
+    message.error('复制文本输出失败')
+    return
+  }
+
+  logger.info('[Notebook] copied python cell text output', {
+    cellId: String(cell?.cellId || ''),
+    textLength: text.length,
+  })
+  message.success('文本输出已复制')
 }
 
 const writeCellOutputToMarkdown = async (cell) => {
@@ -5137,6 +5270,12 @@ defineExpose({
   background: var(--guaxi-notebook-btn-hover);
 }
 
+.guaxi-notebook__panel-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
 .guaxi-notebook__search-btn--danger {
   color: #ef4444;
 }
@@ -5583,8 +5722,9 @@ defineExpose({
   border: 1px solid var(--guaxi-notebook-strong-border);
   background: var(--guaxi-notebook-panel-soft);
   padding: 12px 14px;
+  max-height: min(62vh, 720px);
   overflow-x: auto;
-  overflow-y: visible;
+  overflow-y: auto;
 }
 
 .guaxi-notebook__rich {
@@ -5594,10 +5734,12 @@ defineExpose({
 
 .guaxi-notebook__output-text {
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .guaxi-notebook__dataframe table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
 }
 

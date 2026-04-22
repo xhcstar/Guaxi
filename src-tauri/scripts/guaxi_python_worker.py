@@ -10,7 +10,6 @@ import traceback
 SESSIONS = {}
 RESULT_HISTORY = {}
 SESSION_DIRS = {}
-TABLE_PREVIEW_LIMIT = 200
 
 
 def _normalize_basic(value):
@@ -57,15 +56,44 @@ def _normalize_exec_code(value):
     return text
 
 
-def _safe_repr(value, limit=160):
+def _safe_repr(value):
     try:
         text = repr(value)
     except Exception:
         text = f"<{type(value).__name__}>"
-    text = str(text)
-    if len(text) > limit:
-        return text[: limit - 1] + "..."
-    return text
+    return str(text)
+
+
+def _configure_verbose_object_rendering(globals_dict):
+    if globals_dict.get("__guaxi_verbose_repr_configured__"):
+        return
+
+    # Design notes:
+    # 1. Explorer mode now needs the exact text users would expect from long
+    #    pandas/numpy objects instead of the libraries' default truncated repr.
+    # 2. We configure these modules once per persisted session so normal Python
+    #    execution stays stable while repeated cells do not keep reapplying
+    #    global print settings.
+    try:
+        import pandas as pd
+
+        pd.set_option("display.max_rows", None)
+        pd.set_option("display.min_rows", None)
+        pd.set_option("display.max_columns", None)
+        pd.set_option("display.max_colwidth", None)
+        pd.set_option("display.width", None)
+        pd.set_option("display.expand_frame_repr", False)
+    except Exception:
+        pass
+
+    try:
+        import numpy as np
+
+        np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
+    except Exception:
+        pass
+
+    globals_dict["__guaxi_verbose_repr_configured__"] = True
 
 
 def _summarize_value(value):
@@ -182,8 +210,13 @@ def _build_dataframe_payload(df, source_path=None):
     if not isinstance(df, pd.DataFrame):
         return None
 
-    preview_df = df.head(TABLE_PREVIEW_LIMIT).copy()
-    preview_df = preview_df.astype(object).where(pd.notnull(preview_df), None)
+    # Design notes:
+    # 1. The frontend session/output panels now need the full table body so
+    #    imported tables and result dataframes can be scrolled instead of being
+    #    silently truncated to a short preview.
+    # 2. We still normalize missing values to None so JSON transport remains
+    #    stable across pandas dtypes.
+    preview_df = df.astype(object).where(pd.notnull(df), None)
     rows = []
     for row in preview_df.values.tolist():
         rows.append([_normalize_basic(item) for item in row])
@@ -192,7 +225,7 @@ def _build_dataframe_payload(df, source_path=None):
         "columns": [str(col) for col in df.columns.tolist()],
         "rows": rows,
         "row_count": int(len(df.index)),
-        "truncated": bool(len(df.index) > TABLE_PREVIEW_LIMIT),
+        "truncated": False,
         "dtypes": {str(k): str(v) for k, v in df.dtypes.astype(str).to_dict().items()},
         "source_path": source_path or "",
     }
@@ -439,6 +472,7 @@ def _handle_exec(payload):
     if vars_map.get("_guaxi_inline_matplotlib", None) is True or "_py_cell_id" in vars_map or "_guaxi_session" in vars_map:
         _maybe_prepare_inline_matplotlib()
         _install_plotly_notebook_hook(globals_dict)
+    _configure_verbose_object_rendering(globals_dict)
 
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -668,14 +702,14 @@ def _handle_import_table(payload):
                     },
                 }
             columns = [str(col) for col in rows[0]]
-            body = rows[1 : 1 + TABLE_PREVIEW_LIMIT]
+            body = rows[1:]
             return {
                 "ok": True,
                 "table": {
                     "columns": columns,
                     "rows": [[_normalize_basic(item) for item in row] for row in body],
                     "row_count": max(0, len(rows) - 1),
-                    "truncated": len(rows) - 1 > TABLE_PREVIEW_LIMIT,
+                    "truncated": False,
                     "dtypes": {str(col): "str" for col in columns},
                     "source_path": path,
                 },
@@ -686,7 +720,7 @@ def _handle_import_table(payload):
                 payload_json = json.load(f)
             if isinstance(payload_json, list) and payload_json and isinstance(payload_json[0], dict):
                 columns = sorted({str(key) for item in payload_json for key in item.keys()})
-                body = payload_json[:TABLE_PREVIEW_LIMIT]
+                body = payload_json
                 rows = [[_normalize_basic(item.get(col)) for col in columns] for item in body]
                 return {
                     "ok": True,
@@ -694,7 +728,7 @@ def _handle_import_table(payload):
                         "columns": columns,
                         "rows": rows,
                         "row_count": len(payload_json),
-                        "truncated": len(payload_json) > TABLE_PREVIEW_LIMIT,
+                        "truncated": False,
                         "dtypes": {str(col): "json" for col in columns},
                         "source_path": path,
                     },
