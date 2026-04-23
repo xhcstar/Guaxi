@@ -1112,6 +1112,7 @@ import {
   disposeAllVsCodeTextModelsForOwner,
   replaceModelContentPreserveUndo,
 } from '../../monaco/vscodeModelBridge'
+import { registerPythonCompletionBridge } from '../../monaco/pythonCompletionBridge'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -1141,6 +1142,7 @@ import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
 const logger = createLogger('GuaxiEditor')
+registerPythonCompletionBridge(monaco, ['python'])
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
 const outlineStore = useOutlineStore()
 

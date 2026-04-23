@@ -25,6 +25,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createLogger } from '../../utils/logger'
 import { getLspConnectionState, initLspClient, waitForLspConnection } from '../../monaco/lspClient'
+import { registerPythonCompletionBridge } from '../../monaco/pythonCompletionBridge'
 import {
   replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
@@ -227,6 +228,7 @@ const mountMonacoEditor = async () => {
 
   try {
     monacoRef = await import('monaco-editor')
+    registerPythonCompletionBridge(monacoRef, ['python'])
     const virtualFilePath = buildNotebookPythonVirtualFilePath()
     const virtualUri = String(virtualFilePath || '').startsWith('file://')
       ? monacoRef.Uri.parse(virtualFilePath)
