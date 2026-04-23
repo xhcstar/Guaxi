@@ -6,7 +6,7 @@
       :style="{ '--guaxi-notebook-table-height': `${viewportHeight}px` }"
       @scroll="handleViewportScroll"
     >
-      <table class="guaxi-notebook-table-output__table">
+      <table class="guaxi-notebook-table-output__table" :style="tableStyle">
         <thead>
           <tr>
             <th v-for="column in columns" :key="column">{{ column }}</th>
@@ -39,7 +39,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { createLogger } from '../../utils/logger'
 
@@ -52,15 +52,16 @@ const props = defineProps({
 
 const logger = createLogger('GuaxiNotebookTableOutput')
 const viewportRef = ref(null)
-const refreshTick = ref(0)
 const loadedRowsMap = ref(new Map())
 const loadingPages = new Set()
+let scrollFrameId = 0
 
 const ROW_HEIGHT = 36
 const OVERSCAN_ROWS = 24
 const PAGE_SIZE = 200
 const MAX_VIEWPORT_HEIGHT = 460
 const MIN_VIEWPORT_HEIGHT = 160
+const MIN_COLUMN_WIDTH = 140
 
 const inlineRows = computed(() => (Array.isArray(props.table?.rows) ? props.table.rows : []))
 const columns = computed(() => (Array.isArray(props.table?.columns) ? props.table.columns.map((item) => String(item ?? '')) : []))
@@ -96,21 +97,23 @@ const tableIdentity = computed(() => [
   String(props.table?.manifestPath || ''),
   String(props.table?.tableName || ''),
 ].join(':'))
-
-const bumpRefresh = () => {
-  refreshTick.value += 1
-}
+const tableStyle = computed(() => ({
+  width: `max(100%, ${columnCount.value * MIN_COLUMN_WIDTH}px)`,
+}))
 
 const resetLoadedRows = () => {
   loadedRowsMap.value = new Map()
   loadingPages.clear()
-  bumpRefresh()
+  logger.info('[NotebookTable] reset remote row cache', {
+    tableKey: String(props.table?.tableKey || ''),
+    totalRows: totalRows.value,
+    remoteEnabled: remoteEnabled.value,
+  })
 }
 
 const getInlineRow = (rowIndex) => inlineRows.value[rowIndex] || null
 
 const getRemoteRow = (rowIndex) => {
-  refreshTick.value
   return loadedRowsMap.value.get(rowIndex) || null
 }
 
@@ -167,7 +170,6 @@ const loadRemoteRows = async (offset, limit) => {
       nextMap.set(offset + index, Array.isArray(row) ? row : [])
     })
     loadedRowsMap.value = nextMap
-    bumpRefresh()
     logger.info('[NotebookTable] loaded remote rows', {
       tableKey: String(props.table?.tableKey || ''),
       offset,
@@ -212,9 +214,24 @@ const ensureVisibleWindowLoaded = () => {
   }
 }
 
-const handleViewportScroll = (event) => {
-  scrollTop.value = Number(event?.target?.scrollTop || 0)
+const syncViewportScrollTop = (nextScrollTop) => {
+  scrollTop.value = Number(nextScrollTop || 0)
   ensureVisibleWindowLoaded()
+}
+
+const handleViewportScroll = (event) => {
+  const nextScrollTop = Number(event?.target?.scrollTop || 0)
+  if (scrollFrameId) {
+    window.cancelAnimationFrame(scrollFrameId)
+  }
+  // 设计说明：
+  // 1. 表格滚动时如果每个原生 scroll 事件都同步改写可视窗口，虚拟行和列宽都会高频重算，肉眼会看到轻微闪烁。
+  // 2. 这里把滚动同步收敛到每帧一次，让滚动、远程分页加载和 DOM 重排在浏览器同一帧内完成。
+  // 3. 这样既保留大表的虚拟滚动能力，也能明显减轻持续向下滚动时整表反复抖动的问题。
+  scrollFrameId = window.requestAnimationFrame(() => {
+    scrollFrameId = 0
+    syncViewportScrollTop(nextScrollTop)
+  })
 }
 
 watch(
@@ -228,15 +245,19 @@ watch(
   { immediate: true },
 )
 
-watch(
-  () => [startIndex.value, endIndex.value, totalRows.value, remoteEnabled.value],
-  () => {
-    ensureVisibleWindowLoaded()
-  },
-)
+watch([startIndex, endIndex, totalRows, remoteEnabled], () => {
+  ensureVisibleWindowLoaded()
+})
 
 onMounted(() => {
   ensureVisibleWindowLoaded()
+})
+
+onBeforeUnmount(() => {
+  if (scrollFrameId) {
+    window.cancelAnimationFrame(scrollFrameId)
+    scrollFrameId = 0
+  }
 })
 </script>
 
@@ -257,7 +278,9 @@ onMounted(() => {
 .guaxi-notebook-table-output__table {
   width: max-content;
   min-width: 100%;
-  border-collapse: collapse;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .guaxi-notebook-table-output__table thead th {
@@ -280,6 +303,8 @@ onMounted(() => {
 
 .guaxi-notebook-table-output__table td {
   color: var(--guaxi-notebook-text, #0f172a);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .guaxi-notebook-table-output__table tr.is-spacer td {
