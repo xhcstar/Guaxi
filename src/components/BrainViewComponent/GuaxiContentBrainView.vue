@@ -90,11 +90,22 @@ const onMouseMoveRightSidebar = (event) => {
 };
 
 const onMouseUpRightSidebar = () => {
+  logger.info('right sidebar resize finished', {
+    width: rightSiderbarWidth.value
+  })
   rightSidebarresizing.value = false;
   // Remove mousemove and mouseup listeners
   document.removeEventListener("mousemove", onMouseMoveRightSidebar);
   document.removeEventListener("mouseup", onMouseUpRightSidebar);
 };
+
+onMounted(() => {
+  logger.info('brain layout mounted', {
+    leftSidebarWidth: leftSiderbarWidth.value,
+    rightSidebarWidth: rightSiderbarWidth.value,
+    isRightSiderCollapsed: isRightSiderCollapsed.value
+  })
+})
 
 // Cleanup listeners when the component is unmounted
 onBeforeUnmount(() => {
@@ -139,6 +150,9 @@ onBeforeUnmount(() => {
 }
 
 .brain-sider {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   height: 100%;
   min-height: 0;
   overflow: hidden;

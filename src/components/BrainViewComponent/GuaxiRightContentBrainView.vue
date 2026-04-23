@@ -1,6 +1,6 @@
 <template>
-  <div class="right-sider-content">
-    <n-space vertical :size="12" class="panel">
+  <div ref="rightSiderContentRef" class="right-sider-content">
+    <div class="panel">
       <n-card title="节点信息" size="small" class="node-info-card">
         <n-space v-if="selectedGraphNode" vertical>
           <n-tag :type="getNodeTagType(selectedGraphNode.type)" size="small">
@@ -10,7 +10,9 @@
           <n-text v-if="selectedGraphNode.file_path">file_path: {{ selectedGraphNode.file_path }}</n-text>
           <n-text v-if="selectedGraphNode.stable_id">stable_id: {{ selectedGraphNode.stable_id }}</n-text>
           <n-text v-if="selectedGraphNode.start_line">行: {{ selectedGraphNode.start_line }}</n-text>
-          <n-text v-if="Array.isArray(selectedGraphNode.tags) && selectedGraphNode.tags.length">标签: {{ selectedGraphNode.tags.join(', ') }}</n-text>
+          <n-text v-if="Array.isArray(selectedGraphNode.tags) && selectedGraphNode.tags.length">
+            标签: {{ selectedGraphNode.tags.join(', ') }}
+          </n-text>
           <n-button-group size="small">
             <n-button @click="focusSelected">聚焦</n-button>
             <n-button @click="highlightSelected">高亮连接</n-button>
@@ -18,7 +20,7 @@
             <n-button @click="clearSelected">清除</n-button>
           </n-button-group>
         </n-space>
-        <n-text v-else depth="3">点击图谱中的节点查看属性</n-text>
+        <n-text v-else depth="3">点击图谱中的节点查看详情</n-text>
       </n-card>
 
       <n-card title="搜索" size="small">
@@ -51,41 +53,45 @@
         />
       </n-card>
 
-      <n-card title="结果" size="small">
+      <n-card ref="resultsCardRef" title="结果" size="small" class="results-card">
         <n-list v-if="filteredResults.length > 0" class="search-results">
-          <n-list-item v-for="n in filteredResults" :key="n.id" @click="focusNode(n)">
+          <n-list-item
+            v-for="n in filteredResults"
+            :key="n.id ?? n.stable_id ?? n.path ?? n.name"
+            @click="focusNode(n)"
+          >
             <n-thing :title="n.name" :description="resultDesc(n)" />
           </n-list-item>
         </n-list>
-        <n-text v-else depth="3">无匹配结果</n-text>
+        <n-text v-else depth="3" class="results-empty">暂无匹配结果</n-text>
       </n-card>
-    </n-space>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { createLogger } from '../../utils/logger'
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useKnowledgeBaseStore } from '../../stores/knowledgeBaseStore'
 import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { useEditorStore } from '../../stores/editorStore'
 
 import {
+  NButton,
+  NButtonGroup,
   NCard,
-  NInput,
-  NIcon,
-  NSpace,
   NCheckbox,
   NCheckboxGroup,
-  NSelect,
+  NIcon,
+  NInput,
   NList,
   NListItem,
-  NThing,
-  NText,
+  NSelect,
+  NSpace,
   NTag,
-  NButton,
-  NButtonGroup
+  NText,
+  NThing
 } from 'naive-ui'
 
 import { SearchOutline } from '@vicons/ionicons5'
@@ -94,6 +100,11 @@ const logger = createLogger('GuaxiRightContentBrainView')
 const store = useKnowledgeBaseStore()
 const fileTreeStore = useFileTreeStore()
 const editorStore = useEditorStore()
+const rightSiderContentRef = ref(null)
+const resultsCardRef = ref(null)
+
+let rightSidebarResizeObserver = null
+let layoutLogFrameId = 0
 
 const { searchQuery, visibleTypes, selectedTags, graphNodes, tagOptions, selectedGraphNode } = storeToRefs(store)
 
@@ -107,95 +118,147 @@ const typeOptions = [
 
 const searchQueryModel = computed({
   get: () => searchQuery.value,
-  set: (v) => store.setSearchQuery(v)
+  set: (value) => store.setSearchQuery(value)
 })
 
 const visibleTypesModel = computed({
   get: () => visibleTypes.value,
-  set: (v) => store.setVisibleTypes(v)
+  set: (value) => store.setVisibleTypes(value)
 })
 
 const selectedTagsModel = computed({
   get: () => selectedTags.value,
-  set: (v) => store.setSelectedTags(v)
+  set: (value) => store.setSelectedTags(value)
 })
 
-const normalize = (v) => String(v || '').toLowerCase()
+const normalize = (value) => String(value || '').toLowerCase()
 
 const filteredResults = computed(() => {
   const all = Array.isArray(graphNodes.value) ? graphNodes.value : []
   const allowedTypes = new Set(Array.isArray(visibleTypes.value) ? visibleTypes.value : [])
-  const selTags = Array.isArray(selectedTags.value) ? selectedTags.value : []
-  const q = normalize(searchQuery.value).trim()
+  const selectedTagList = Array.isArray(selectedTags.value) ? selectedTags.value : []
+  const query = normalize(searchQuery.value).trim()
 
-  const out = all.filter((n) => {
-    if (!n || !allowedTypes.has(n.type)) return false
+  const results = all.filter((node) => {
+    if (!node || !allowedTypes.has(node.type)) return false
 
-    if (selTags.length > 0) {
-      const ts = Array.isArray(n.tags) ? n.tags : []
-      const ok = selTags.some(t => ts.includes(t))
-      if (!ok) return false
+    if (selectedTagList.length > 0) {
+      const tags = Array.isArray(node.tags) ? node.tags : []
+      const hasSelectedTag = selectedTagList.some((tag) => tags.includes(tag))
+      if (!hasSelectedTag) return false
     }
 
-    if (!q) return true
-    const hay = `${n.name || ''} ${n.path || ''} ${n.stable_id || ''} ${(Array.isArray(n.tags) ? n.tags.join(',') : '')}`
-    return normalize(hay).includes(q)
+    if (!query) return true
+
+    const haystack = [
+      node.name || '',
+      node.path || '',
+      node.stable_id || '',
+      Array.isArray(node.tags) ? node.tags.join(',') : ''
+    ].join(' ')
+
+    return normalize(haystack).includes(query)
   })
 
-  out.sort((a, b) => {
-    if (a.type !== b.type) return String(a.type).localeCompare(String(b.type), 'zh')
-    return String(a.name || '').localeCompare(String(b.name || ''), 'zh')
+  results.sort((left, right) => {
+    if (left.type !== right.type) {
+      return String(left.type).localeCompare(String(right.type), 'zh')
+    }
+    return String(left.name || '').localeCompare(String(right.name || ''), 'zh')
   })
 
-  return out.slice(0, 200)
+  return results.slice(0, 200)
 })
 
-const typeLabel = (t) => {
-  const found = typeOptions.find(x => x.value === t)
-  return found ? found.label : String(t || '')
+const typeLabel = (type) => {
+  const matched = typeOptions.find((option) => option.value === type)
+  return matched ? matched.label : String(type || '')
 }
 
 const getNodeTagType = (type) => {
   switch (type) {
-    case 'knowledge-base': return 'warning'
-    case 'directory': return 'info'
-    case 'file': return 'success'
-    case 'section': return 'primary'
-    case 'paragraph': return 'default'
-    default: return 'default'
+    case 'knowledge-base':
+      return 'warning'
+    case 'directory':
+      return 'info'
+    case 'file':
+      return 'success'
+    case 'section':
+      return 'primary'
+    case 'paragraph':
+      return 'default'
+    default:
+      return 'default'
   }
 }
 
 const canOpenSelected = computed(() => {
-  const n = selectedGraphNode.value
-  if (!n) return false
-  const path = n.path || n.file_path
+  const node = selectedGraphNode.value
+  if (!node) return false
+
+  const path = node.path || node.file_path
   if (!path) return false
-  return ['file', 'section', 'paragraph'].includes(n.type)
+
+  return ['file', 'section', 'paragraph'].includes(node.type)
 })
 
+const requestFocusForNode = (node, reason) => {
+  if (!node) return
+
+  logger.info('[right-sidebar] request focus for node', {
+    reason,
+    nodeId: node.id ?? null,
+    stableId: node.stable_id ?? null,
+    path: node.path || node.file_path || null,
+    type: node.type || null
+  })
+
+  if (node.id != null) {
+    store.requestFocus({ mode: 'id', value: node.id })
+    return
+  }
+
+  if (node.stable_id) {
+    store.requestFocus({ mode: 'stable_id', value: node.stable_id })
+    return
+  }
+
+  if (node.path || node.file_path) {
+    store.requestFocus({ mode: 'path', value: node.path || node.file_path })
+  }
+}
+
 const focusSelected = () => {
-  const n = selectedGraphNode.value
-  if (!n) return
-  if (n.id != null) store.requestFocus({ mode: 'id', value: n.id })
-  else if (n.stable_id) store.requestFocus({ mode: 'stable_id', value: n.stable_id })
-  else if (n.path || n.file_path) store.requestFocus({ mode: 'path', value: n.path || n.file_path })
+  requestFocusForNode(selectedGraphNode.value, 'selected-node')
 }
 
 const highlightSelected = () => {
-  const n = selectedGraphNode.value
-  if (!n) return
-  store.setSelectedGraphNode({ ...n, __highlight_ts: Date.now() })
+  const node = selectedGraphNode.value
+  if (!node) return
+
+  logger.info('[right-sidebar] highlight selected node', {
+    nodeId: node.id ?? null,
+    stableId: node.stable_id ?? null,
+    type: node.type || null
+  })
+
+  store.setSelectedGraphNode({ ...node, __highlight_ts: Date.now() })
 }
 
 const openSelected = async () => {
-  const n = selectedGraphNode.value
-  if (!n) return
+  const node = selectedGraphNode.value
+  if (!node) return
 
-  const path = n?.file_path || n?.path
+  const path = node.file_path || node.path
   if (!path) return
 
-  const lineNumber = Number(n?.start_line || 1)
+  const lineNumber = Number(node.start_line || 1)
+
+  logger.info('[right-sidebar] open selected node', {
+    path,
+    lineNumber,
+    type: node.type || null
+  })
 
   try {
     await fileTreeStore.openFileInTab(path)
@@ -207,55 +270,157 @@ const openSelected = async () => {
       highlightInfo: {
         lineNumber,
         matches: [{ start: 0, end: 1000000 }],
-        text: n?.name || ''
+        text: node.name || ''
       }
     })
 
     window.location.hash = '/'
-  } catch (e) {
-    logger.error('打开节点失败:', e)
+  } catch (error) {
+    logger.error('[right-sidebar] failed to open selected node', error)
   }
 }
 
 const clearSelected = () => {
+  logger.info('[right-sidebar] clear selected node')
   store.setSelectedGraphNode(null)
 }
 
-const resultDesc = (n) => {
+const resultDesc = (node) => {
   const parts = []
-  if (n?.type) parts.push(typeLabel(n.type))
-  if (n?.path) parts.push(String(n.path))
-  const ts = Array.isArray(n?.tags) ? n.tags : []
-  if (ts.length) parts.push(ts.join(', '))
+  if (node?.type) parts.push(typeLabel(node.type))
+  if (node?.path) parts.push(String(node.path))
+  const tags = Array.isArray(node?.tags) ? node.tags : []
+  if (tags.length) parts.push(tags.join(', '))
   return parts.join(' | ')
 }
 
-const focusNode = (n) => {
-  if (!n) return
-  if (n.id != null) store.requestFocus({ mode: 'id', value: n.id })
-  else if (n.stable_id) store.requestFocus({ mode: 'stable_id', value: n.stable_id })
-  else if (n.path) store.requestFocus({ mode: 'path', value: n.path })
+const focusNode = (node) => {
+  requestFocusForNode(node, 'result-list')
 }
+
+const resolveElement = (target) => {
+  if (!target) return null
+  if (typeof HTMLElement !== 'undefined' && target instanceof HTMLElement) return target
+  if (typeof target === 'object' && target.$el && typeof HTMLElement !== 'undefined' && target.$el instanceof HTMLElement) {
+    return target.$el
+  }
+  return null
+}
+
+/* 设计说明：
+ * 1. 这次右栏问题的根因是高度链路被中途截断，所以这里统一记录根容器、结果卡片和结果列表的可视高度与滚动高度。
+ * 2. 当窗口缩放、筛选结果变化或容器自身尺寸变化时，日志能帮助我们快速判断是外层没有伸缩，还是内层列表没有拿到滚动空间。
+ */
+const logRightSidebarLayout = (reason) => {
+  const rootEl = resolveElement(rightSiderContentRef.value)
+  const resultsCardEl = resolveElement(resultsCardRef.value)
+  const resultsListEl = resultsCardEl?.querySelector('.search-results')
+
+  logger.info('[layout] right sidebar metrics', {
+    reason,
+    rootHeight: rootEl?.clientHeight ?? null,
+    resultsCardHeight: resultsCardEl?.clientHeight ?? null,
+    resultsListClientHeight: resultsListEl?.clientHeight ?? null,
+    resultsListScrollHeight: resultsListEl?.scrollHeight ?? null,
+    resultCount: filteredResults.value.length
+  })
+}
+
+const scheduleRightSidebarLayoutLog = (reason) => {
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    logRightSidebarLayout(reason)
+    return
+  }
+
+  if (layoutLogFrameId) {
+    window.cancelAnimationFrame(layoutLogFrameId)
+  }
+
+  layoutLogFrameId = window.requestAnimationFrame(() => {
+    layoutLogFrameId = 0
+    logRightSidebarLayout(reason)
+  })
+}
+
+const handleWindowResize = () => {
+  scheduleRightSidebarLayoutLog('window-resize')
+}
+
+onMounted(async () => {
+  await nextTick()
+
+  const rootEl = resolveElement(rightSiderContentRef.value)
+  if (rootEl && typeof ResizeObserver !== 'undefined') {
+    rightSidebarResizeObserver = new ResizeObserver(() => {
+      scheduleRightSidebarLayoutLog('resize-observer')
+    })
+    rightSidebarResizeObserver.observe(rootEl)
+  }
+
+  window.addEventListener('resize', handleWindowResize)
+  scheduleRightSidebarLayoutLog('mounted')
+})
+
+watch(
+  () => filteredResults.value.length,
+  (nextCount, prevCount) => {
+    logger.info('[search] filtered result count changed', {
+      prevCount,
+      nextCount
+    })
+    scheduleRightSidebarLayoutLog('filtered-results-change')
+  },
+  { flush: 'post' }
+)
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleWindowResize)
+  rightSidebarResizeObserver?.disconnect()
+  rightSidebarResizeObserver = null
+
+  if (layoutLogFrameId && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(layoutLogFrameId)
+    layoutLogFrameId = 0
+  }
+})
 </script>
 
 <style scoped>
 .right-sider-content {
   flex: 1 1 auto;
-  height: 100%;
+  min-width: 0;
+  min-height: 0;
   width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', system-ui;
   font-size: 14px;
 }
 
+/* 设计说明：
+ * 1. 右侧栏改成标准纵向 flex 布局，让前面的筛选卡片维持自然高度，最后的结果卡片吃掉剩余空间。
+ * 2. 这样在窗口缩放时，结果区会自动重新分配高度，不再依赖固定的 max-height。
+ */
 .panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   padding: 8px;
-  height: 100%;
+  box-sizing: border-box;
   overflow: hidden;
 }
 
+.panel > * {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 .node-info-card :deep(.n-card__content) {
-  max-height: 220px;
+  max-height: min(220px, 28vh);
   overflow: auto;
 }
 
@@ -263,8 +428,28 @@ const focusNode = (n) => {
   word-break: break-all;
 }
 
+.results-card {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.results-card :deep(.n-card__content) {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .search-results {
-  max-height: 380px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
+  padding-bottom: 8px;
+}
+
+.results-empty {
+  display: block;
 }
 </style>
