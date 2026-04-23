@@ -10,6 +10,7 @@ const normalizeTablePayload = (table = {}) => {
   const rows = Array.isArray(table.rows) ? table.rows.map((row) => (Array.isArray(row) ? [...row] : [])) : [];
   const rowCount = Number(table.rowCount ?? table.row_count ?? rows.length ?? 0);
   const resultHandle = normalizeText(table.resultHandle ?? table.result_handle ?? table.handle ?? '');
+  const sessionId = normalizeText(table.sessionId ?? table.session_id ?? '');
   const manifestPath = normalizeText(table.manifestPath ?? table.manifest_path ?? '');
   const artifactPath = normalizeText(table.artifactPath ?? table.artifact_path ?? '');
   const tableKey = normalizeText(table.tableKey ?? table.table_key ?? '');
@@ -26,6 +27,7 @@ const normalizeTablePayload = (table = {}) => {
     dtypes: table.dtypes && typeof table.dtypes === 'object' ? { ...table.dtypes } : {},
     sourcePath: normalizeText(table.sourcePath ?? table.source_path ?? ''),
     resultHandle,
+    sessionId,
     manifestPath,
     artifactPath,
     tableKey,

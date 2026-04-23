@@ -85,9 +85,9 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              :disabled="isCellBusy(activeNotebookPythonCell)"
-              title="从外部导入表格到当前选中的 Python Cell 会话"
-              aria-label="从外部导入表格到当前选中的 Python Cell 会话"
+              :disabled="isActiveNotebookPythonSessionBusy"
+              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入表格' : '从外部导入表格到当前选中的 Python Cell 会话'"
+              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入表格' : '从外部导入表格到当前选中的 Python Cell 会话'"
               @click="handleActivePythonToolbarAction('import-table')"
             >
               <Icon :icon="uploadIcon" width="16" height="16" />
@@ -95,18 +95,18 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn primary"
-              :class="{ 'is-busy': isCellBusy(activeNotebookPythonCell) }"
-              :disabled="isCellBusy(activeNotebookPythonCell)"
-              :title="isCellBusy(activeNotebookPythonCell) ? '当前选中的 Python Cell 正在运行' : '运行当前选中的 Python Cell'"
-              :aria-label="isCellBusy(activeNotebookPythonCell) ? '当前选中的 Python Cell 正在运行' : '运行当前选中的 Python Cell'"
+              :class="{ 'is-busy': isActiveNotebookPythonSessionBusy }"
+              :disabled="isActiveNotebookPythonSessionBusy"
+              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行' : '运行当前选中的 Python Cell'"
+              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行' : '运行当前选中的 Python Cell'"
               @click="handleActivePythonToolbarAction('run')"
             >
-              <Icon :icon="playIcon" width="16" height="16" :class="{ 'guaxi-notebook__busy-spin': isCellBusy(activeNotebookPythonCell) }" />
+              <Icon :icon="playIcon" width="16" height="16" :class="{ 'guaxi-notebook__busy-spin': isActiveNotebookPythonSessionBusy }" />
             </button>
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              :disabled="isCellBusy(activeNotebookPythonCell)"
+              :disabled="isActiveNotebookPythonSessionBusy"
               title="运行并将当前选中的 Python Cell 输出写回文档"
               aria-label="运行并将当前选中的 Python Cell 输出写回文档"
               @click="handleActivePythonToolbarAction('run-writeback')"
@@ -567,6 +567,7 @@ const NOTEBOOK_RIGHT_SIDER_VIEW_KEY = 'home'
 const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
 const busyMap = ref({})
+const notebookPendingPythonImport = ref(null)
 const notebookRootRef = ref(null)
 const notebookSearchInputRef = ref(null)
 const editingMarkdownCellKey = ref('')
@@ -3329,6 +3330,7 @@ const normalizeGuaxiTablePayloadFromResult = (value) => {
     dtypes: value.dtypes && typeof value.dtypes === 'object' ? value.dtypes : {},
     sourcePath: String(value.source_path || '').trim(),
     resultHandle: String(value.result_handle || '').trim(),
+    sessionId: String(value.session_id || '').trim(),
     manifestPath: String(value.manifest_path || '').trim(),
     artifactPath: String(value.artifact_path || '').trim(),
     tableKey: String(value.table_key || '').trim(),
@@ -4431,7 +4433,70 @@ const toggleCellSession = (cell) => {
   closeNotebookPythonSessionPanel(cell, 'toolbar-toggle')
 }
 
-const isCellBusy = (cell) => !!busyMap.value[String(cell.key)]
+const NOTEBOOK_PYTHON_SESSION_BUSY_PREFIX = 'python-session::'
+const createNotebookActionRequestId = (prefix = 'nb-task') => [
+  prefix,
+  Date.now().toString(36),
+  Math.random().toString(36).slice(2, 10),
+].join('-')
+const buildNotebookPythonSessionBusyKey = (filePath = props.filePath) => {
+  const sessionId = String(createPythonSessionId(filePath) || '').trim()
+  if (!sessionId) return ''
+  return `${NOTEBOOK_PYTHON_SESSION_BUSY_PREFIX}${sessionId}`
+}
+const getNotebookPythonCellIdentity = (cell) => ({
+  cellId: String(cell?.cellId || '').trim(),
+  cellKey: String(cell?.key || '').trim(),
+  stableId: getNotebookCellStableId(cell),
+})
+const resolveNotebookPythonCellByIdentity = (identity = {}) => {
+  const targetCellId = String(identity?.cellId || '').trim()
+  const targetCellKey = String(identity?.cellKey || '').trim()
+  const targetStableId = String(identity?.stableId || '').trim()
+  return notebookCells.value.find((entry) => {
+    if (entry?.type !== 'python') return false
+    if (targetCellId && String(entry?.cellId || '').trim() === targetCellId) return true
+    if (targetCellKey && String(entry?.key || '').trim() === targetCellKey) return true
+    return !!targetStableId && getNotebookCellStableId(entry) === targetStableId
+  }) || null
+}
+const getNotebookBusyKeys = (cell) => {
+  const cellKey = String(cell?.key || '').trim()
+  return cellKey ? [cellKey] : []
+}
+const getNotebookPythonSessionBusyKeys = (cell) => {
+  if (cell?.type !== 'python') return []
+  const sessionBusyKey = buildNotebookPythonSessionBusyKey(props.filePath)
+  return sessionBusyKey ? [sessionBusyKey] : []
+}
+// 设计说明：
+// 1. 同一份 Notebook 的 Python Cell 共享会话，所以“导入表格/运行代码”的后端占用不能只挂在单个 cell 上。
+// 2. 这里同时写入 cell 级 busy 标记和 session 级 busy 标记，这样用户切换到别的 Python Cell 时，UI 仍然知道共享会话正在忙。
+// 3. 这样既能避免误判空闲导致的串行请求叠加，也方便排查“切换选中 cell 后结果串写”的问题。
+const setNotebookBusyState = (cell, nextBusy, reason = 'unknown') => {
+  const busyKeys = [
+    ...getNotebookBusyKeys(cell),
+    ...getNotebookPythonSessionBusyKeys(cell),
+  ]
+  if (!busyKeys.length) return
+  const nextMap = {
+    ...busyMap.value,
+  }
+  busyKeys.forEach((key) => {
+    nextMap[key] = !!nextBusy
+  })
+  busyMap.value = nextMap
+  logger.debug('[Notebook] updated busy state', {
+    reason,
+    nextBusy: !!nextBusy,
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    busyKeys,
+  })
+}
+const isCellBusy = (cell) => getNotebookBusyKeys(cell).some((key) => !!busyMap.value[key])
+const isNotebookPythonSessionBusy = (cell) => getNotebookPythonSessionBusyKeys(cell).some((key) => !!busyMap.value[key])
+const isActiveNotebookPythonSessionBusy = computed(() => isNotebookPythonSessionBusy(activeNotebookPythonCell.value))
 
 const handleActivePythonToolbarAction = async (action) => {
   const targetCell = activeNotebookPythonCell.value
@@ -4673,6 +4738,7 @@ const ensureNotebookTableRowsMaterialized = async (table = null) => {
     const response = await invoke('python_runtime_get_table_rows', {
       request: {
         handle: String(table.resultHandle || ''),
+        sessionId: String(table.sessionId || ''),
         tableKey: String(table.tableKey || ''),
         manifestPath: String(table.manifestPath || ''),
         offset,
@@ -4943,6 +5009,7 @@ const exportCellOutputToFile = async (cell, moduleId = '') => {
       const response = await invoke('python_runtime_export_table_result', {
         request: {
           handle: String(payload.table?.resultHandle || ''),
+          sessionId: String(payload.table?.sessionId || ''),
           tableKey: String(payload.table?.tableKey || ''),
           manifestPath: String(payload.table?.manifestPath || ''),
           outputPath: String(outputPath),
@@ -5009,10 +5076,15 @@ const exportCellOutputToFile = async (cell, moduleId = '') => {
 
 const importTableToPythonSession = async (cell) => {
   if (!cell?.key) return
-  busyMap.value = {
-    ...busyMap.value,
-    [cell.key]: true,
+  const requestId = createNotebookActionRequestId('nb-import')
+  const targetIdentity = getNotebookPythonCellIdentity(cell)
+  const activeCellKeyAtStart = String(activeNotebookPythonCellKey.value || '')
+  notebookPendingPythonImport.value = {
+    requestId,
+    ...targetIdentity,
+    filePath: String(props.filePath || ''),
   }
+  setNotebookBusyState(cell, true, `import-table:start:${requestId}`)
 
   try {
     const selected = await open({
@@ -5022,7 +5094,12 @@ const importTableToPythonSession = async (cell) => {
     if (!selected) return
 
     logger.info('[Notebook] import table file selected', {
+      requestId,
       cellId: String(cell?.cellId || ''),
+      cellKey: String(cell?.key || ''),
+      targetCellId: targetIdentity.cellId,
+      targetCellKey: targetIdentity.cellKey,
+      targetStableId: targetIdentity.stableId,
       selected: String(selected),
     })
 
@@ -5090,9 +5167,15 @@ const importTableToPythonSession = async (cell) => {
 
     const importedTables = getGuaxiTablesFromResult(result)
     const importedTable = importedTables[0] || null
+    const targetCell = resolveNotebookPythonCellByIdentity(targetIdentity)
+    if (!targetCell) {
+      throw new Error('导入目标 Python Cell 已不存在，请重新选择后再试')
+    }
     if (!importedTables.length) {
       logger.warn('[Notebook] import table finished without dataframe payload', {
+        requestId,
         cellId: String(cell?.cellId || ''),
+        targetCellId: String(targetCell?.cellId || ''),
         selected: String(selected),
         variableName,
         hasResultJson: !!result?.result_json,
@@ -5100,7 +5183,7 @@ const importTableToPythonSession = async (cell) => {
       })
     }
 
-    const snapshot = getCellSnapshot(cell)
+    const snapshot = getCellSnapshot(targetCell)
     const nextOutputs = appendPythonCellOutputModules(
       snapshot?.outputs || [],
       buildPythonCellOutputModules({
@@ -5112,11 +5195,12 @@ const importTableToPythonSession = async (cell) => {
       }),
     )
 
-    patchPythonCellSnapshot(props.filePath, cell.cellId, {
+    patchPythonCellSnapshot(props.filePath, targetCell.cellId, {
       // 设计说明：
       // 导入外部表格属于“向共享 Python 会话注入变量”的准备动作，
       // 不应该把导入脚本本身伪装成当前 Cell 的一次运行结果。
-      codeDigest: getNotebookCellContentDigest(cell),
+      // 这里显式按导入发起时锁定的目标 cell 写回，避免用户在导入过程中切换选中态后把结果串到其它 cell。
+      codeDigest: getNotebookCellContentDigest(targetCell),
       outputText: `已导入表格到会话变量 ${variableName}`,
       display: null,
       dataframe: importedTable,
@@ -5129,8 +5213,10 @@ const importTableToPythonSession = async (cell) => {
       },
     })
     logger.info('[Notebook] import table injected into python session', {
-      cellId: String(cell?.cellId || ''),
-      stableId: String(cell?.meta?.id || ''),
+      requestId,
+      cellId: String(targetCell?.cellId || ''),
+      cellKey: String(targetCell?.key || ''),
+      stableId: String(targetCell?.meta?.id || ''),
       variableName,
       selected: String(selected),
       rowCount: Number(importedTable?.rowCount || 0),
@@ -5138,13 +5224,19 @@ const importTableToPythonSession = async (cell) => {
       hasPreview: !!importedTable,
       sessionVarCount: Array.isArray(result?.session_vars) ? result.session_vars.length : 0,
       outputModuleCount: nextOutputs.length,
+      activeCellChangedDuringImport: activeCellKeyAtStart !== String(activeNotebookPythonCellKey.value || ''),
+      activeCellKeyAtFinish: String(activeNotebookPythonCellKey.value || ''),
     })
     bumpRefresh()
     schedulePersistNotebookSidecar('import-table-to-python-session')
     message.success(`表格已导入到会话变量 ${variableName}`)
   } catch (error) {
     logger.error('[Notebook] import table to python session failed', {
+      requestId,
       cellId: String(cell?.cellId || ''),
+      cellKey: String(cell?.key || ''),
+      targetCellId: targetIdentity.cellId,
+      targetCellKey: targetIdentity.cellKey,
       error: String(error?.message || error),
     })
     message.error(`导入表格失败：${String(error?.message || error)}`)
@@ -5152,10 +5244,11 @@ const importTableToPythonSession = async (cell) => {
     // 设计说明：
     // 导入表格虽然不是“执行当前 cell 代码”，但它会串行占用同一条 Python 会话链路。
     // 这里复用 busyMap，让顶部工具栏、卡片状态和运行提示与真实后端占用保持一致。
-    busyMap.value = {
-      ...busyMap.value,
-      [cell.key]: false,
+    if (String(notebookPendingPythonImport.value?.requestId || '') === requestId) {
+      notebookPendingPythonImport.value = null
     }
+    const resolvedTargetCell = resolveNotebookPythonCellByIdentity(targetIdentity) || cell
+    setNotebookBusyState(resolvedTargetCell, false, `import-table:finish:${requestId}`)
   }
 }
 
@@ -5166,10 +5259,8 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     return
   }
 
-  busyMap.value = {
-    ...busyMap.value,
-    [cell.key]: true,
-  }
+  const requestId = createNotebookActionRequestId('nb-run')
+  setNotebookBusyState(cell, true, `run-python-cell:start:${requestId}`)
 
   try {
     const sessionId = createPythonSessionId(props.filePath)
@@ -5204,6 +5295,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       : (snapshot?.outputs || [])
     const hideOutput = !nextOutputs.length
     logger.info('[Notebook] python cell executed', {
+      requestId,
       key: String(cell?.key || ''),
       cellId: String(cell?.cellId || ''),
       writeBack,
@@ -5267,6 +5359,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       },
     })
     logger.error('[Notebook] python cell execution failed', {
+      requestId,
       key: String(cell?.key || ''),
       cellId: String(cell?.cellId || ''),
       outputModuleCount: errorOutputs.length,
@@ -5276,10 +5369,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     schedulePersistNotebookSidecar('run-python-cell-failed')
     message.error(`运行失败：${String(error?.message || error)}`)
   } finally {
-    busyMap.value = {
-      ...busyMap.value,
-      [cell.key]: false,
-    }
+    setNotebookBusyState(cell, false, `run-python-cell:finish:${requestId}`)
   }
 }
 

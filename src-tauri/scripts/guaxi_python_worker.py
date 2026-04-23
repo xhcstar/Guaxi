@@ -211,6 +211,7 @@ def _summarize_value(value):
 
 def _snapshot_session_vars(globals_dict):
     items = []
+    module_type = type(sys)
     hidden_names = {
         "__builtins__",
         "__guaxi_last_value",
@@ -233,7 +234,16 @@ def _snapshot_session_vars(globals_dict):
         if name in hidden_names or str(name).startswith("__"):
             continue
         try:
-            items.append({"name": str(name), **_summarize_value(globals_dict.get(name))})
+            value = globals_dict.get(name)
+            if isinstance(value, module_type):
+                continue
+            if isinstance(value, type):
+                continue
+            if callable(value):
+                continue
+            items.append({"name": str(name), **_summarize_value(value)})
+            if len(items) >= 128:
+                break
         except Exception:
             items.append({
                 "name": str(name),
@@ -367,30 +377,12 @@ def _normalize_records_table(value):
     }
 
 
-def _table_result_root_dir(globals_dict, handle):
-    sandbox_dir = str(globals_dict.get("_guaxi_sandbox_dir") or "").strip()
-    if sandbox_dir:
-        root = os.path.join(sandbox_dir, ".guaxi_table_results", handle)
-    else:
-        root = os.path.join(os.getcwd(), ".guaxi_table_results", handle)
-    os.makedirs(root, exist_ok=True)
-    return root
-
-
-def _persist_dataframe_table(df, output_path):
-    df.to_pickle(output_path)
-
-
-def _persist_records_table(rows, output_path):
-    with open(output_path, "w", encoding="utf-8") as handle:
-        json.dump(rows, handle, ensure_ascii=False)
-
-
 def _build_remote_table_payload(
     *,
     handle,
     manifest_path,
     artifact_path,
+    session_id,
     table_key,
     table_name,
     columns,
@@ -410,6 +402,7 @@ def _build_remote_table_payload(
         "result_handle": handle,
         "manifest_path": manifest_path,
         "artifact_path": artifact_path,
+        "session_id": session_id,
         "table_key": table_key,
         "table_name": table_name,
         "table_kind": table_kind,
@@ -421,6 +414,7 @@ def _build_remote_table_payload(
 def _extract_table_bundle(result, globals_dict):
     pandas_module = sys.modules.get("pandas")
     source_path = str(globals_dict.get("__guaxi_table_path") or "").strip()
+    session_id = str(globals_dict.get("_guaxi_session") or "").strip()
     table_specs = []
 
     if pandas_module is not None and isinstance(result, pandas_module.DataFrame):
@@ -471,8 +465,7 @@ def _extract_table_bundle(result, globals_dict):
         return None
 
     handle = f"tbl_{uuid.uuid4().hex}"
-    table_root = _table_result_root_dir(globals_dict, handle)
-    manifest_path = os.path.join(table_root, "manifest.json")
+    manifest_path = ""
     table_payloads = []
     registry_tables = {}
     manifest_tables = []
@@ -481,12 +474,10 @@ def _extract_table_bundle(result, globals_dict):
         table_key = _normalize_table_key(spec.get("table_key"), "table")
         table_name = _normalize_table_display_name(spec.get("table_name"), "Table")
         table_kind = str(spec.get("kind") or "").strip() or "records"
-        artifact_ext = "pkl" if table_kind == "dataframe" else "json"
-        artifact_path = os.path.join(table_root, f"{table_key}.{artifact_ext}")
+        artifact_path = ""
 
         if table_kind == "dataframe":
             df = spec.get("value")
-            _persist_dataframe_table(df, artifact_path)
             columns = [str(col) for col in df.columns.tolist()]
             row_count = int(len(df.index))
             dtypes = {str(k): str(v) for k, v in df.dtypes.astype(str).to_dict().items()}
@@ -507,7 +498,6 @@ def _extract_table_bundle(result, globals_dict):
                 "dtypes": {},
                 "kind": "records",
             }
-            _persist_records_table(spec.get("value"), artifact_path)
             columns = normalized["columns"]
             row_count = int(normalized["row_count"])
             dtypes = normalized["dtypes"]
@@ -536,6 +526,7 @@ def _extract_table_bundle(result, globals_dict):
             handle=handle,
             manifest_path=manifest_path,
             artifact_path=artifact_path,
+            session_id=session_id,
             table_key=table_key,
             table_name=table_name,
             columns=columns,
@@ -553,8 +544,6 @@ def _extract_table_bundle(result, globals_dict):
         "source_path": source_path,
         "tables": manifest_tables,
     }
-    with open(manifest_path, "w", encoding="utf-8") as handle_file:
-        json.dump(manifest, handle_file, ensure_ascii=False)
 
     TABLE_HANDLES[handle] = {
         "manifest": manifest,
@@ -962,6 +951,14 @@ def _handle_exec(payload):
 
         if "\0" in code:
             raise ValueError("Python code contains NUL byte (\\0), cannot execute")
+
+        # 设计说明：
+        # 1. `_result` / `__guaxi_last_value` 是 worker 内部为“本次执行结果提取”准备的临时槽位，不应跨 cell 执行残留。
+        # 2. 如果这里不提前清掉，上一次导入表格或表达式求值留下的 `_result` 会被下一次普通执行重复当成当前输出，
+        #    前端就会误以为“别的 Python cell 的表格也在当前 cell 里输出了”。
+        # 3. 真正需要跨 cell 复用的数据应该由用户显式命名变量保存，而不是依赖内部 `_result` 缓存。
+        globals_dict.pop("_result", None)
+        globals_dict.pop("__guaxi_last_value", None)
 
         tree = ast.parse(code, mode="exec")
         has_last_expr = bool(tree.body) and isinstance(tree.body[-1], ast.Expr)

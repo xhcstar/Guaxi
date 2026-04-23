@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::thread;
 use std::time::Duration;
 use tauri::command;
@@ -203,6 +203,7 @@ pub struct PythonImportTableResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PythonTableRowsRequest {
     pub handle: String,
+    pub session_id: Option<String>,
     pub table_key: Option<String>,
     pub manifest_path: Option<String>,
     pub offset: Option<usize>,
@@ -228,6 +229,7 @@ pub struct PythonTableRowsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PythonTableExportRequest {
     pub handle: String,
+    pub session_id: Option<String>,
     pub table_key: Option<String>,
     pub manifest_path: Option<String>,
     pub output_path: String,
@@ -2293,7 +2295,30 @@ fn with_python_worker_for_key<R>(
     f: impl FnOnce(&mut PythonWorkerState) -> Result<R, String>,
 ) -> Result<R, String> {
     let worker = ensure_python_worker_for_key(worker_key)?;
-    let mut state = worker
+    let worker_probe = Arc::clone(&worker);
+    let active_worker = match worker_probe.try_lock() {
+        Ok(state) => {
+            drop(state);
+            worker
+        }
+        Err(TryLockError::WouldBlock) => {
+            warn!(
+                worker_key,
+                "[PythonRuntime] worker state is still locked, replace cached worker to avoid hanging requests"
+            );
+            let _ = remove_python_worker_by_key(worker_key)?;
+            ensure_python_worker_for_key(worker_key)?
+        }
+        Err(TryLockError::Poisoned(_)) => {
+            warn!(
+                worker_key,
+                "[PythonRuntime] worker state lock poisoned, replace cached worker"
+            );
+            let _ = remove_python_worker_by_key(worker_key)?;
+            ensure_python_worker_for_key(worker_key)?
+        }
+    };
+    let mut state = active_worker
         .lock()
         .map_err(|_| "lock python worker state failed".to_string())?;
 
@@ -3134,6 +3159,7 @@ pub async fn python_runtime_get_table_rows(
     let payload = json!({
         "cmd": "table_slice",
         "handle": request.handle,
+        "session_id": request.session_id.unwrap_or_default(),
         "table_key": request.table_key.unwrap_or_default(),
         "manifest_path": request.manifest_path.unwrap_or_default(),
         "offset": request.offset.unwrap_or(0),
@@ -3165,6 +3191,7 @@ pub async fn python_runtime_export_table_result(
     let payload = json!({
         "cmd": "table_export",
         "handle": request.handle,
+        "session_id": request.session_id.unwrap_or_default(),
         "table_key": request.table_key.unwrap_or_default(),
         "manifest_path": request.manifest_path.unwrap_or_default(),
         "output_path": request.output_path,

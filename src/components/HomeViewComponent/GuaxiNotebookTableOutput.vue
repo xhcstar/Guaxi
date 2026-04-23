@@ -148,6 +148,7 @@ const loadRemoteRows = async (offset, limit) => {
     const response = await invoke('python_runtime_get_table_rows', {
       request: {
         handle: String(props.table?.resultHandle || ''),
+        sessionId: String(props.table?.sessionId || ''),
         tableKey: String(props.table?.tableKey || ''),
         manifestPath: String(props.table?.manifestPath || ''),
         offset,
