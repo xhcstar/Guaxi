@@ -96,9 +96,8 @@
               type="button"
               class="guaxi-notebook__icon-btn primary"
               :class="{ 'is-busy': isActiveNotebookPythonSessionBusy }"
-              :disabled="isActiveNotebookPythonSessionBusy"
-              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行' : '运行当前选中的 Python Cell'"
-              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行' : '运行当前选中的 Python Cell'"
+              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell'"
+              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行当前选中的 Python Cell' : '运行当前选中的 Python Cell'"
               @click="handleActivePythonToolbarAction('run')"
             >
               <Icon :icon="playIcon" width="16" height="16" :class="{ 'guaxi-notebook__busy-spin': isActiveNotebookPythonSessionBusy }" />
@@ -106,9 +105,8 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              :disabled="isActiveNotebookPythonSessionBusy"
-              title="运行并将当前选中的 Python Cell 输出写回文档"
-              aria-label="运行并将当前选中的 Python Cell 输出写回文档"
+              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行并写回当前选中的 Python Cell' : '运行并将当前选中的 Python Cell 输出写回文档'"
+              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，点击后会在空闲时自动运行并写回当前选中的 Python Cell' : '运行并将当前选中的 Python Cell 输出写回文档'"
               @click="handleActivePythonToolbarAction('run-writeback')"
             >
               <Icon :icon="checkCircleIcon" width="16" height="16" />
@@ -568,6 +566,7 @@ const refreshTick = ref(0)
 const pendingFocusCellKey = ref('')
 const busyMap = ref({})
 const notebookPendingPythonImport = ref(null)
+const notebookQueuedPythonAction = ref(null)
 const notebookRootRef = ref(null)
 const notebookSearchInputRef = ref(null)
 const editingMarkdownCellKey = ref('')
@@ -4497,6 +4496,71 @@ const setNotebookBusyState = (cell, nextBusy, reason = 'unknown') => {
 const isCellBusy = (cell) => getNotebookBusyKeys(cell).some((key) => !!busyMap.value[key])
 const isNotebookPythonSessionBusy = (cell) => getNotebookPythonSessionBusyKeys(cell).some((key) => !!busyMap.value[key])
 const isActiveNotebookPythonSessionBusy = computed(() => isNotebookPythonSessionBusy(activeNotebookPythonCell.value))
+const queueNotebookPythonAction = (cell, action, reason = 'unknown') => {
+  const targetIdentity = getNotebookPythonCellIdentity(cell)
+  const queuedRequestId = createNotebookActionRequestId('nb-queued-python')
+  notebookQueuedPythonAction.value = {
+    requestId: queuedRequestId,
+    action: String(action || ''),
+    targetIdentity,
+    queuedAt: Date.now(),
+    reason: String(reason || 'unknown'),
+  }
+  logger.info('[Notebook] queued python action', {
+    queuedRequestId,
+    action: String(action || ''),
+    reason: String(reason || 'unknown'),
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    targetCellId: targetIdentity.cellId,
+    targetCellKey: targetIdentity.cellKey,
+    activeImportRequestId: String(notebookPendingPythonImport.value?.requestId || ''),
+  })
+}
+
+const flushQueuedNotebookPythonActionIfIdle = async (reason = 'unknown') => {
+  const queuedAction = notebookQueuedPythonAction.value
+  if (!queuedAction?.action) return
+  const targetCell = resolveNotebookPythonCellByIdentity(queuedAction.targetIdentity)
+  if (!targetCell) {
+    logger.warn('[Notebook] drop queued python action because target cell no longer exists', {
+      queuedRequestId: String(queuedAction?.requestId || ''),
+      action: String(queuedAction?.action || ''),
+      reason: String(reason || 'unknown'),
+      targetCellId: String(queuedAction?.targetIdentity?.cellId || ''),
+      targetCellKey: String(queuedAction?.targetIdentity?.cellKey || ''),
+    })
+    notebookQueuedPythonAction.value = null
+    return
+  }
+  if (isNotebookPythonSessionBusy(targetCell)) {
+    logger.debug('[Notebook] queued python action still waiting for idle session', {
+      queuedRequestId: String(queuedAction?.requestId || ''),
+      action: String(queuedAction?.action || ''),
+      reason: String(reason || 'unknown'),
+      cellId: String(targetCell?.cellId || ''),
+      cellKey: String(targetCell?.key || ''),
+    })
+    return
+  }
+
+  notebookQueuedPythonAction.value = null
+  logger.info('[Notebook] flush queued python action', {
+    queuedRequestId: String(queuedAction?.requestId || ''),
+    action: String(queuedAction?.action || ''),
+    reason: String(reason || 'unknown'),
+    cellId: String(targetCell?.cellId || ''),
+    cellKey: String(targetCell?.key || ''),
+  })
+
+  if (queuedAction.action === 'run') {
+    await runPythonCell(targetCell, { writeBack: false })
+    return
+  }
+  if (queuedAction.action === 'run-writeback') {
+    await runPythonCell(targetCell, { writeBack: true })
+  }
+}
 
 const handleActivePythonToolbarAction = async (action) => {
   const targetCell = activeNotebookPythonCell.value
@@ -4506,6 +4570,14 @@ const handleActivePythonToolbarAction = async (action) => {
   }
 
   activateNotebookCell(targetCell, `toolbar-action:${action}`)
+
+  if ((action === 'run' || action === 'run-writeback') && isNotebookPythonSessionBusy(targetCell)) {
+    queueNotebookPythonAction(targetCell, action, `toolbar:${action}:session-busy`)
+    message.info(action === 'run'
+      ? '当前 Python 会话正在忙，已在空闲后自动运行当前 Cell'
+      : '当前 Python 会话正在忙，已在空闲后自动运行并写回当前 Cell')
+    return
+  }
 
   if (action === 'import-table') {
     await importTableToPythonSession(targetCell)
@@ -5107,44 +5179,40 @@ const importTableToPythonSession = async (cell) => {
     const variableName = sanitizeFileSegment(fileName.replace(/\.[^.]+$/, ''), 'df').replace(/-/g, '_')
     const code = [
       // 设计说明：
-      // 1. 这里直接把外部数据文件读进当前 Python 会话，并把真正的数据对象交给 worker 侧的新表格协议处理。
-      // 2. worker 会把大表/多 sheet 结果登记成句柄并按需分片返回，避免超大 JSON 卡住 stdout 管道。
-      // 3. 对 Excel 统一使用 `sheet_name=None`，这样一个工作簿里的多个 sheet 会完整导入到同一个会话变量中。
+      // 1. 导入动作现在只负责“把外部数据读进当前 Python 会话变量”，不再把导入结果立即当作一次表格输出渲染。
+      // 2. 这样做可以避开导入阶段的表格句柄登记、前端表格模块生成与后续搜索/写回链路，优先保证导入动作尽快结束。
+      // 3. 如果用户后续需要查看、导出或写回处理后的 DataFrame，可以显式运行 Python Cell 输出该变量，再走现有输出操作链。
       'from pathlib import Path',
       `__guaxi_table_path = ${JSON.stringify(String(selected))}`,
       `__guaxi_var_name = ${JSON.stringify(variableName)}`,
       '__guaxi_ext = Path(__guaxi_table_path).suffix.lower()',
-      'try:',
-      '    import pandas as pd',
-      'except Exception:',
-      '    pd = None',
-      'if pd is not None:',
-      "    if __guaxi_ext in ('.csv', '.txt'):",
-      '        __guaxi_value = pd.read_csv(__guaxi_table_path)',
-      "    elif __guaxi_ext == '.tsv':",
-      "        __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
-      "    elif __guaxi_ext in ('.xlsx', '.xls'):",
-      '        __guaxi_value = pd.read_excel(__guaxi_table_path, sheet_name=None)',
-      "    elif __guaxi_ext == '.json':",
-      '        __guaxi_value = pd.read_json(__guaxi_table_path)',
-      "    elif __guaxi_ext == '.parquet':",
-      '        __guaxi_value = pd.read_parquet(__guaxi_table_path)',
-      '    else:',
-      "        raise ValueError(f'Unsupported table format: {__guaxi_ext or __guaxi_table_path}')",
+      "__guaxi_import_sheet = ''",
+      'import pandas as pd',
+      "if __guaxi_ext in ('.csv', '.txt'):",
+      '    __guaxi_value = pd.read_csv(__guaxi_table_path)',
+      "elif __guaxi_ext == '.tsv':",
+      "    __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
+      "elif __guaxi_ext in ('.xlsx', '.xls'):",
+      '    __guaxi_excel_file = pd.ExcelFile(__guaxi_table_path)',
+      '    __guaxi_sheet_names = list(__guaxi_excel_file.sheet_names or [])',
+      "    if not __guaxi_sheet_names: raise ValueError('Excel 文件中没有可导入的工作表')",
+      '    __guaxi_import_sheet = str(__guaxi_sheet_names[0])',
+      '    __guaxi_value = pd.read_excel(__guaxi_table_path, sheet_name=__guaxi_import_sheet)',
+      "elif __guaxi_ext == '.json':",
+      '    __guaxi_value = pd.read_json(__guaxi_table_path)',
+      "elif __guaxi_ext == '.parquet':",
+      '    __guaxi_value = pd.read_parquet(__guaxi_table_path)',
       'else:',
-      "    if __guaxi_ext in ('.csv', '.txt', '.tsv'):",
-      '        import csv',
-      "        with open(__guaxi_table_path, 'r', encoding='utf-8-sig', newline='') as __guaxi_f:",
-      "            __guaxi_rows = list(csv.DictReader(__guaxi_f, delimiter='\\t' if __guaxi_ext == '.tsv' else ','))",
-      '        __guaxi_value = __guaxi_rows',
-      "    elif __guaxi_ext == '.json':",
-      '        import json',
-      "        with open(__guaxi_table_path, 'r', encoding='utf-8') as __guaxi_f:",
-      '            __guaxi_value = json.load(__guaxi_f)',
-      '    else:',
-      "        raise ValueError('当前运行环境需要 pandas 才能导入这种文件类型')",
+      "    raise ValueError(f'Unsupported table format: {__guaxi_ext or __guaxi_table_path}')",
+      'if not isinstance(__guaxi_value, pd.DataFrame):',
+      '    __guaxi_value = pd.DataFrame(__guaxi_value)',
+      'print(',
+      "    f'[GuaxiNotebook] import table prepared dataframe var={__guaxi_var_name} '",
+      "    f'rows={len(__guaxi_value.index)} cols={len(__guaxi_value.columns)} '",
+      '    f"sheet={__guaxi_import_sheet or \'<default>\'}"',
+      ')',
       'globals()[__guaxi_var_name] = __guaxi_value',
-      '_result = __guaxi_value',
+      '_result = None',
     ].join('\n')
 
     const sessionId = createPythonSessionId(props.filePath)
@@ -5152,7 +5220,7 @@ const importTableToPythonSession = async (cell) => {
       request: {
         code,
         persist: true,
-        expect_json: true,
+        expect_json: false,
         vars: {
           _guaxi_session: sessionId,
           _doc_path: String(props.filePath || ''),
@@ -5165,35 +5233,24 @@ const importTableToPythonSession = async (cell) => {
       throw new Error(String(result?.stderr || result?.stdout || '导入失败'))
     }
 
-    const importedTables = getGuaxiTablesFromResult(result)
-    const importedTable = importedTables[0] || null
     const targetCell = resolveNotebookPythonCellByIdentity(targetIdentity)
     if (!targetCell) {
       throw new Error('导入目标 Python Cell 已不存在，请重新选择后再试')
     }
-    if (!importedTables.length) {
-      logger.warn('[Notebook] import table finished without dataframe payload', {
-        requestId,
-        cellId: String(cell?.cellId || ''),
-        targetCellId: String(targetCell?.cellId || ''),
-        selected: String(selected),
-        variableName,
-        hasResultJson: !!result?.result_json,
-        resultKeys: Object.keys(result?.result_json || {}),
-      })
-    }
 
     const snapshot = getCellSnapshot(targetCell)
-    const nextOutputs = appendPythonCellOutputModules(
-      snapshot?.outputs || [],
-      buildPythonCellOutputModules({
-        outputText: '',
-        display: null,
-        dataframe: importedTable,
-        tables: importedTables,
-        source: 'import-table',
-      }),
-    )
+    const previousOutputCount = Array.isArray(snapshot?.outputs) ? snapshot.outputs.length : 0
+    const nextOutputs = buildPythonCellOutputModules({
+      // 设计说明：
+      // 1. 导入表格现在只是“向会话注入变量”，不是当前 cell 的一次可视化执行结果。
+      // 2. 这里不再沿用 append 逻辑，避免把该 cell 之前遗留的表格/富输出继续显示出来，造成“导入后仍然出现表格”的错觉。
+      // 3. 保留一条轻量文本提示即可，后续真正需要展示时，再由用户显式输出 dataframe。
+      outputText: `已导入数据文件到 DataFrame 变量 ${variableName}，如需查看或导出，请在 Python Cell 中显式输出该变量。`,
+      display: null,
+      dataframe: null,
+      tables: [],
+      source: 'import-table',
+    })
 
     patchPythonCellSnapshot(props.filePath, targetCell.cellId, {
       // 设计说明：
@@ -5203,9 +5260,9 @@ const importTableToPythonSession = async (cell) => {
       codeDigest: getNotebookCellContentDigest(targetCell),
       outputText: `已导入表格到会话变量 ${variableName}`,
       display: null,
-      dataframe: importedTable,
+      dataframe: null,
       outputs: nextOutputs,
-      result,
+      result: null,
       sessionVars: Array.isArray(result?.session_vars) ? result.session_vars : [],
       meta: {
         ...(snapshot?.meta || {}),
@@ -5219,9 +5276,8 @@ const importTableToPythonSession = async (cell) => {
       stableId: String(targetCell?.meta?.id || ''),
       variableName,
       selected: String(selected),
-      rowCount: Number(importedTable?.rowCount || 0),
-      tableCount: importedTables.length,
-      hasPreview: !!importedTable,
+      hasPreview: false,
+      previousOutputCount,
       sessionVarCount: Array.isArray(result?.session_vars) ? result.session_vars.length : 0,
       outputModuleCount: nextOutputs.length,
       activeCellChangedDuringImport: activeCellKeyAtStart !== String(activeNotebookPythonCellKey.value || ''),
@@ -5249,6 +5305,7 @@ const importTableToPythonSession = async (cell) => {
     }
     const resolvedTargetCell = resolveNotebookPythonCellByIdentity(targetIdentity) || cell
     setNotebookBusyState(resolvedTargetCell, false, `import-table:finish:${requestId}`)
+    await flushQueuedNotebookPythonActionIfIdle(`import-table:finish:${requestId}`)
   }
 }
 
@@ -5370,6 +5427,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
     message.error(`运行失败：${String(error?.message || error)}`)
   } finally {
     setNotebookBusyState(cell, false, `run-python-cell:finish:${requestId}`)
+    await flushQueuedNotebookPythonActionIfIdle(`run-python-cell:finish:${requestId}`)
   }
 }
 
