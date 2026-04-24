@@ -2,6 +2,10 @@ use crate::guaxiservices::chrome_extension_service;
 use crate::guaxiservices::lsp;
 use crate::guaxiservices::markdown_browser::browser_preview_config;
 use crate::guaxiservices::markdown_image_process;
+use crate::commands::notebook_lab::{
+    dispatch_notebook_data_lab_rpc, notebook_data_lab_health_response,
+    NotebookDataLabRpcRequest,
+};
 use crate::state::SharedState;
 use actix_cors::Cors;
 use actix_web::web::{Data, JsonConfig, PayloadConfig};
@@ -108,6 +112,26 @@ async fn web_model_chat_push(
     HttpResponse::Ok().json(json!({ "success": true }))
 }
 
+async fn notebook_data_lab_health() -> HttpResponse {
+    HttpResponse::Ok().json(notebook_data_lab_health_response())
+}
+
+async fn notebook_data_lab_rpc_http(
+    state: Data<SharedState>,
+    req: web::Json<NotebookDataLabRpcRequest>,
+) -> HttpResponse {
+    match dispatch_notebook_data_lab_rpc(state.get_ref(), &req.0, "http-api") {
+        Ok(response) => HttpResponse::Ok().json(response),
+        Err(error) => {
+            warn!(error = error.as_str(), "[NotebookDataLabRpc] http rpc failed");
+            HttpResponse::BadRequest().json(json!({
+                "success": false,
+                "message": error,
+            }))
+        }
+    }
+}
+
 pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
     let server = HttpServer::new(move || {
         let cors = Cors::default()
@@ -123,6 +147,8 @@ pub async fn start_backend_services(state: SharedState) -> std::io::Result<()> {
             .configure(browser_preview_config)
             .configure(|cfg| chrome_extension_service::config(cfg, Data::new(state.clone())))
             .route("/api/web-model-chat", web::post().to(web_model_chat_push))
+            .route("/api/notebook/data-lab/health", web::get().to(notebook_data_lab_health))
+            .route("/api/notebook/data-lab/action", web::post().to(notebook_data_lab_rpc_http))
             .route("/lsp/{language}", web::get().to(lsp::lsp_ws_route))
             .app_data(JsonConfig::default().limit(10 * 1024 * 1024))
             .app_data(PayloadConfig::default().limit(10 * 1024 * 1024))

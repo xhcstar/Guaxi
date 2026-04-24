@@ -86,8 +86,8 @@
               type="button"
               class="guaxi-notebook__icon-btn"
               :disabled="isActiveNotebookPythonSessionBusy"
-              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入表格' : '从外部导入表格到当前选中的 Python Cell 会话'"
-              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入表格' : '从外部导入表格到当前选中的 Python Cell 会话'"
+              :title="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入数据' : '从外部文件导入数据到当前选中的 Python Cell 实验室会话'"
+              :aria-label="isActiveNotebookPythonSessionBusy ? '当前文档的 Python 会话正在运行，请稍候再导入数据' : '从外部文件导入数据到当前选中的 Python Cell 实验室会话'"
               @click="handleActivePythonToolbarAction('import-table')"
             >
               <Icon :icon="uploadIcon" width="16" height="16" />
@@ -124,11 +124,11 @@
             <button
               type="button"
               class="guaxi-notebook__icon-btn"
-              :title="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 变量' : '显示当前选中 Python Cell 变量'"
-              :aria-label="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 变量' : '显示当前选中 Python Cell 变量'"
+              :title="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 数据实验室' : '显示当前选中 Python Cell 数据实验室'"
+              :aria-label="isNotebookPythonSessionPanelVisible ? '隐藏当前选中 Python Cell 数据实验室' : '显示当前选中 Python Cell 数据实验室'"
               @click="handleActivePythonToolbarAction('toggle-session')"
             >
-              <Icon :icon="variableIcon" width="16" height="16" />
+              <Icon :icon="flaskConicalIcon" width="16" height="16" />
             </button>
             <button
               type="button"
@@ -467,6 +467,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
+import { listen } from '@tauri-apps/api/event'
 import { useMessage } from 'naive-ui'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { confirm as confirmDialog, open, save } from '@tauri-apps/plugin-dialog'
@@ -484,7 +485,7 @@ import saveIcon from '@iconify-icons/lucide/save'
 import uploadIcon from '@iconify-icons/lucide/upload'
 import eyeIcon from '@iconify-icons/lucide/eye'
 import eyeOffIcon from '@iconify-icons/lucide/eye-off'
-import variableIcon from '@iconify-icons/lucide/variable'
+import flaskConicalIcon from '@iconify-icons/lucide/flask-conical'
 import terminalIcon from '@iconify-icons/lucide/terminal'
 import trash2Icon from '@iconify-icons/lucide/trash-2'
 import undoIcon from '@iconify-icons/lucide/undo'
@@ -536,6 +537,15 @@ import {
   patchPythonCellSnapshot,
   replacePythonCellSnapshots,
 } from './utils/guaxiPythonCellState'
+import {
+  NOTEBOOK_DATALAB_EVENT,
+  buildNotebookLabDatasetDescriptors,
+  buildNotebookLabImportPlan,
+  buildNotebookLabMaterializeCode,
+  decorateNotebookLabOutputModules,
+  installNotebookDataLabBridge,
+  upsertNotebookLabImportRecord,
+} from './utils/guaxiNotebookDataLab'
 
 const props = defineProps({
   markdown: {
@@ -621,6 +631,8 @@ let notebookTopToolbarHideTimer = 0
 let selectionAudioElement = null
 let selectionAudioObjectUrl = ''
 let selectionTranslateMultiNotFoundWarned = false
+let disposeNotebookDataLabBridge = null
+let notebookDataLabRpcUnlisten = null
 
 const themeClass = computed(() => (String(props.theme || '').toLowerCase() === 'dark' ? 'theme-dark' : 'theme-light'))
 const isNotebookTopToolbarVisible = computed(() => notebookTopToolbarRevealed.value || notebookSearchVisible.value)
@@ -672,7 +684,7 @@ const bumpRefresh = () => {
 }
 
 // 设计说明：
-// 1. 探索者模式顶部工具栏现在需要知道“当前选中的 Python Cell”是谁，才能把运行/导入/变量面板等操作代理过去。
+// 1. 探索者模式顶部工具栏现在需要知道“当前选中的 Python Cell”是谁，才能把运行/导入/数据实验室面板等操作代理过去。
 // 2. 这里把选中态收敛成一个单独的 key，而不是把整份 cell 对象长期缓存下来，避免 cell 重建后引用失效。
 // 3. Markdown Cell 被点击时会清空这份选中态，保证顶部工具栏只在真正选中 Python Cell 时才影响它。
 const setActiveNotebookPythonCellKey = (cellKey, reason = 'unknown') => {
@@ -958,6 +970,28 @@ const writeClipboardText = async (text) => {
   }
 }
 
+const readClipboardText = async () => {
+  if (navigator?.clipboard?.readText) {
+    try {
+      return String(await navigator.clipboard.readText())
+    } catch (error) {
+      logger.warn('[NotebookDataLab] navigator clipboard read failed', {
+        error: String(error?.message || error),
+      })
+    }
+  }
+
+  try {
+    const mod = await import('@tauri-apps/plugin-clipboard-manager')
+    return String(await mod.readText())
+  } catch (error) {
+    logger.error('[NotebookDataLab] clipboard read failed', {
+      error: String(error?.message || error),
+    })
+    throw new Error('读取剪贴板失败')
+  }
+}
+
 const normalizeSelectionTextForLanguageTasks = (raw) => {
   const text = String(raw || '').replace(/\r\n?/g, '\n')
   if (!text.trim()) return ''
@@ -1134,6 +1168,14 @@ const buildStalePythonCellSnapshot = (cell, snapshot = {}, reason = 'unknown') =
     outputs: [],
     result: null,
     sessionVars: [],
+    lab: snapshot?.lab && typeof snapshot.lab === 'object'
+      ? {
+        ...snapshot.lab,
+        imports: Array.isArray(snapshot?.lab?.imports) ? [...snapshot.lab.imports] : [],
+      }
+      : {
+        imports: [],
+      },
     meta: snapshot?.meta && typeof snapshot.meta === 'object' ? { ...snapshot.meta } : {},
   }
   logger.info('[Notebook] invalidate stale python snapshot', {
@@ -1220,6 +1262,14 @@ const serializeNotebookSnapshotsForSidecar = (cells = []) => {
       dataframe: snapshot?.dataframe || null,
       outputs: Array.isArray(snapshot?.outputs) ? snapshot.outputs : [],
       sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+      lab: snapshot?.lab && typeof snapshot.lab === 'object'
+        ? {
+          ...snapshot.lab,
+          imports: Array.isArray(snapshot?.lab?.imports) ? snapshot.lab.imports : [],
+        }
+        : {
+          imports: [],
+        },
       meta: snapshot?.meta || {},
     }
   })
@@ -1257,6 +1307,14 @@ const applyNotebookSidecarSnapshots = (cells = [], snapshots = {}) => {
       dataframe: persisted.dataframe || null,
       outputs: Array.isArray(persisted.outputs) ? persisted.outputs : [],
       sessionVars: Array.isArray(persisted.sessionVars) ? persisted.sessionVars : [],
+      lab: persisted?.lab && typeof persisted.lab === 'object'
+        ? {
+          ...persisted.lab,
+          imports: Array.isArray(persisted?.lab?.imports) ? persisted.lab.imports : [],
+        }
+        : {
+          imports: [],
+        },
       meta: persisted.meta && typeof persisted.meta === 'object' ? persisted.meta : {},
     }
     restoredCount += 1
@@ -1469,7 +1527,7 @@ const buildNotebookSidecarPayload = (cells = [], markdown = '') => {
   const normalizedCells = decorateNotebookCells(cells)
   const sourceCore = normalizeNotebookSourceForSidecar(markdown)
   return {
-    version: 3,
+    version: 4,
     filePath: String(props.filePath || ''),
     updatedAt: new Date().toISOString(),
     sourceDigest: computeNotebookDigest(sourceCore),
@@ -3430,6 +3488,14 @@ const getCellSnapshot = (cell) => {
     outputs,
     result: snapshot?.result || null,
     sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+    lab: snapshot?.lab && typeof snapshot.lab === 'object'
+      ? {
+        ...snapshot.lab,
+        imports: Array.isArray(snapshot?.lab?.imports) ? snapshot.lab.imports : [],
+      }
+      : {
+        imports: [],
+      },
     meta: {
       ...(cell.meta || {}),
       ...(snapshot?.meta || {}),
@@ -3439,15 +3505,34 @@ const getCellSnapshot = (cell) => {
   }
 }
 
+const getCellLabImports = (cell) => {
+  const snapshot = getCellSnapshot(cell)
+  return Array.isArray(snapshot?.lab?.imports) ? snapshot.lab.imports : []
+}
+
+const patchCellSnapshotLab = (cell, patch = {}) => {
+  const snapshot = getCellSnapshot(cell)
+  const nextLab = {
+    ...(snapshot?.lab && typeof snapshot.lab === 'object' ? snapshot.lab : {}),
+    ...(patch && typeof patch === 'object' ? patch : {}),
+  }
+  if (!Array.isArray(nextLab.imports)) {
+    nextLab.imports = []
+  }
+  return nextLab
+}
+
 const buildNotebookPythonSessionInspectorPayload = (cell) => {
   if (cell?.type !== 'python') {
     return {
       filePath: String(props.filePath || ''),
       cellId: '',
       cellKey: '',
+      stableId: '',
       cellTitle: '',
       sessionId: createPythonSessionId(props.filePath),
       hasActiveCell: false,
+      datasets: [],
       variables: [],
     }
   }
@@ -3457,9 +3542,14 @@ const buildNotebookPythonSessionInspectorPayload = (cell) => {
     filePath: String(props.filePath || ''),
     cellId: String(cell?.cellId || ''),
     cellKey: String(cell?.key || ''),
+    stableId: String(cell?.meta?.id || ''),
     cellTitle: String(cell?.meta?.title || ''),
     sessionId: createPythonSessionId(props.filePath),
     hasActiveCell: true,
+    datasets: buildNotebookLabDatasetDescriptors(
+      Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+      Array.isArray(snapshot?.lab?.imports) ? snapshot.lab.imports : [],
+    ),
     variables: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
   }
 }
@@ -4383,10 +4473,8 @@ const toggleCellOutputModule = (cell, moduleId) => {
 }
 
 // Design notes:
-// 1. Session variables are now presented in the shared right sider instead of
-//    an inline card under each Python cell.
-// 2. We still mirror the open/closed state back into the cell metadata so the
-//    notebook sidecar keeps a stable semantic flag for the selected cell.
+// 1. 数据实验室现在挂在共享右侧栏里，而不是 Python Cell 下方的内联变量卡片。
+// 2. 这里仍然把开关状态镜像回 cell meta，保证 notebook sidecar 能稳定记录“该 cell 的实验室面板是否展开”。
 const openNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
   const payload = syncNotebookPythonSessionInspector(cell, `open-session-panel:${reason}`)
   rightSiderStore.setPanel('python-session')
@@ -4395,9 +4483,10 @@ const openNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
   patchCellMeta(cell, {
     sessionCollapsed: false,
   })
-  logger.info('[Notebook] open python session panel', {
+  logger.info('[Notebook] open data lab panel', {
     reason,
     cellId: payload.cellId,
+    datasetCount: Array.isArray(payload.datasets) ? payload.datasets.length : 0,
     variableCount: payload.variables.length,
   })
 }
@@ -4412,7 +4501,7 @@ const closeNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
       sessionCollapsed: true,
     })
   }
-  logger.info('[Notebook] close python session panel', {
+  logger.info('[Notebook] close data lab panel', {
     reason,
     cellId: String(cell?.cellId || ''),
   })
@@ -4420,7 +4509,7 @@ const closeNotebookPythonSessionPanel = (cell, reason = 'unknown') => {
 
 const toggleCellSession = (cell) => {
   const nextVisible = !isNotebookPythonSessionPanelVisible.value
-  logger.info('[Notebook] toggle python session panel', {
+  logger.info('[Notebook] toggle data lab panel', {
     key: String(cell?.key || ''),
     cellId: String(cell?.cellId || ''),
     nextVisible,
@@ -5146,9 +5235,15 @@ const exportCellOutputToFile = async (cell, moduleId = '') => {
   }
 }
 
-const importTableToPythonSession = async (cell) => {
+const importExternalDataToPythonSession = async (cell, {
+  sourceType = 'file',
+  inlineText = '',
+  sourceLabel = '',
+  variableName = '',
+} = {}) => {
   if (!cell?.key) return
   const requestId = createNotebookActionRequestId('nb-import')
+  const normalizedSourceType = String(sourceType || 'file').trim().toLowerCase()
   const targetIdentity = getNotebookPythonCellIdentity(cell)
   const activeCellKeyAtStart = String(activeNotebookPythonCellKey.value || '')
   notebookPendingPythonImport.value = {
@@ -5156,69 +5251,56 @@ const importTableToPythonSession = async (cell) => {
     ...targetIdentity,
     filePath: String(props.filePath || ''),
   }
-  setNotebookBusyState(cell, true, `import-table:start:${requestId}`)
+  setNotebookBusyState(cell, true, `import-data:start:${requestId}`)
 
   try {
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: 'Tabular Data', extensions: ['csv', 'tsv', 'txt', 'xlsx', 'xls', 'json', 'parquet'] }],
-    })
-    if (!selected) return
+    let selectedPath = ''
+    let effectiveText = String(inlineText || '')
+    let effectiveLabel = String(sourceLabel || '')
 
-    logger.info('[Notebook] import table file selected', {
+    if (normalizedSourceType === 'file') {
+      const selected = await open({
+        multiple: false,
+        filters: [{
+          name: 'External Data',
+          extensions: ['csv', 'tsv', 'txt', 'xlsx', 'xls', 'json', 'parquet', 'md', 'markdown', 'yaml', 'yml', 'log', 'py', 'js', 'ts'],
+        }],
+      })
+      if (!selected) return
+      selectedPath = String(selected)
+      effectiveLabel = effectiveLabel || (selectedPath.split(/[\\/]/).pop() || selectedPath)
+    } else if (normalizedSourceType === 'clipboard') {
+      effectiveText = String(await readClipboardText())
+      if (!String(effectiveText || '').trim()) {
+        message.warning('剪贴板里没有可导入的文本数据')
+        return
+      }
+      effectiveLabel = effectiveLabel || 'clipboard'
+    } else if (!String(effectiveText || '').trim()) {
+      throw new Error('缺少可导入的数据内容')
+    }
+
+    const importPlan = buildNotebookLabImportPlan({
+      sourceType: normalizedSourceType,
+      sourcePath: selectedPath,
+      sourceLabel: effectiveLabel,
+      variableName,
+      text: effectiveText,
+    })
+    logger.info('[NotebookDataLab] prepared import plan', {
       requestId,
+      sourceType: normalizedSourceType,
+      sourceLabel: importPlan.sourceLabel,
+      variableName: importPlan.variableName,
       cellId: String(cell?.cellId || ''),
-      cellKey: String(cell?.key || ''),
       targetCellId: targetIdentity.cellId,
-      targetCellKey: targetIdentity.cellKey,
       targetStableId: targetIdentity.stableId,
-      selected: String(selected),
     })
-
-    const fileName = String(selected).split(/[\\/]/).pop() || 'df'
-    const variableName = sanitizeFileSegment(fileName.replace(/\.[^.]+$/, ''), 'df').replace(/-/g, '_')
-    const code = [
-      // 设计说明：
-      // 1. 导入动作现在只负责“把外部数据读进当前 Python 会话变量”，不再把导入结果立即当作一次表格输出渲染。
-      // 2. 这样做可以避开导入阶段的表格句柄登记、前端表格模块生成与后续搜索/写回链路，优先保证导入动作尽快结束。
-      // 3. 如果用户后续需要查看、导出或写回处理后的 DataFrame，可以显式运行 Python Cell 输出该变量，再走现有输出操作链。
-      'from pathlib import Path',
-      `__guaxi_table_path = ${JSON.stringify(String(selected))}`,
-      `__guaxi_var_name = ${JSON.stringify(variableName)}`,
-      '__guaxi_ext = Path(__guaxi_table_path).suffix.lower()',
-      "__guaxi_import_sheet = ''",
-      'import pandas as pd',
-      "if __guaxi_ext in ('.csv', '.txt'):",
-      '    __guaxi_value = pd.read_csv(__guaxi_table_path)',
-      "elif __guaxi_ext == '.tsv':",
-      "    __guaxi_value = pd.read_csv(__guaxi_table_path, sep='\\t')",
-      "elif __guaxi_ext in ('.xlsx', '.xls'):",
-      '    __guaxi_excel_file = pd.ExcelFile(__guaxi_table_path)',
-      '    __guaxi_sheet_names = list(__guaxi_excel_file.sheet_names or [])',
-      "    if not __guaxi_sheet_names: raise ValueError('Excel 文件中没有可导入的工作表')",
-      '    __guaxi_import_sheet = str(__guaxi_sheet_names[0])',
-      '    __guaxi_value = pd.read_excel(__guaxi_table_path, sheet_name=__guaxi_import_sheet)',
-      "elif __guaxi_ext == '.json':",
-      '    __guaxi_value = pd.read_json(__guaxi_table_path)',
-      "elif __guaxi_ext == '.parquet':",
-      '    __guaxi_value = pd.read_parquet(__guaxi_table_path)',
-      'else:',
-      "    raise ValueError(f'Unsupported table format: {__guaxi_ext or __guaxi_table_path}')",
-      'if not isinstance(__guaxi_value, pd.DataFrame):',
-      '    __guaxi_value = pd.DataFrame(__guaxi_value)',
-      'print(',
-      "    f'[GuaxiNotebook] import table prepared dataframe var={__guaxi_var_name} '",
-      "    f'rows={len(__guaxi_value.index)} cols={len(__guaxi_value.columns)} '",
-      '    f"sheet={__guaxi_import_sheet or \'<default>\'}"',
-      ')',
-      'globals()[__guaxi_var_name] = __guaxi_value',
-      '_result = None',
-    ].join('\n')
 
     const sessionId = createPythonSessionId(props.filePath)
     const result = await invoke('python_exec', {
       request: {
-        code,
+        code: importPlan.code,
         persist: true,
         expect_json: false,
         vars: {
@@ -5240,43 +5322,53 @@ const importTableToPythonSession = async (cell) => {
 
     const snapshot = getCellSnapshot(targetCell)
     const previousOutputCount = Array.isArray(snapshot?.outputs) ? snapshot.outputs.length : 0
-    const nextOutputs = buildPythonCellOutputModules({
-      // 设计说明：
-      // 1. 导入表格现在只是“向会话注入变量”，不是当前 cell 的一次可视化执行结果。
-      // 2. 这里不再沿用 append 逻辑，避免把该 cell 之前遗留的表格/富输出继续显示出来，造成“导入后仍然出现表格”的错觉。
-      // 3. 保留一条轻量文本提示即可，后续真正需要展示时，再由用户显式输出 dataframe。
-      outputText: `已导入数据文件到 DataFrame 变量 ${variableName}，如需查看或导出，请在 Python Cell 中显式输出该变量。`,
-      display: null,
-      dataframe: null,
-      tables: [],
-      source: 'import-table',
+    const outputText = normalizedSourceType === 'clipboard'
+      ? `已将剪贴板数据导入到会话变量 ${importPlan.variableName}，可以在实验室面板中继续生成输出、写回 Markdown 或导出。`
+      : `已将外部文件 ${importPlan.sourceLabel} 导入到会话变量 ${importPlan.variableName}，可以在实验室面板中继续生成输出、写回 Markdown 或导出。`
+    const nextOutputs = appendPythonCellOutputModules(
+      snapshot?.outputs || [],
+      buildPythonCellOutputModules({
+        outputText,
+        display: null,
+        dataframe: null,
+        tables: [],
+        source: 'data-lab-import',
+      }),
+    )
+    const nextImports = upsertNotebookLabImportRecord(getCellLabImports(targetCell), {
+      variableName: importPlan.variableName,
+      sourceType: importPlan.sourceType,
+      sourceLabel: importPlan.sourceLabel,
+      dataKind: 'value',
+      importedAt: new Date().toISOString(),
     })
 
     patchPythonCellSnapshot(props.filePath, targetCell.cellId, {
-      // 设计说明：
-      // 导入外部表格属于“向共享 Python 会话注入变量”的准备动作，
-      // 不应该把导入脚本本身伪装成当前 Cell 的一次运行结果。
-      // 这里显式按导入发起时锁定的目标 cell 写回，避免用户在导入过程中切换选中态后把结果串到其它 cell。
       codeDigest: getNotebookCellContentDigest(targetCell),
-      outputText: `已导入表格到会话变量 ${variableName}`,
-      display: null,
-      dataframe: null,
+      outputText,
+      display: snapshot?.display || null,
+      dataframe: snapshot?.dataframe || null,
       outputs: nextOutputs,
-      result: null,
+      result: snapshot?.result || null,
       sessionVars: Array.isArray(result?.session_vars) ? result.session_vars : [],
+      lab: patchCellSnapshotLab(targetCell, {
+        imports: nextImports,
+        lastImportSourceType: importPlan.sourceType,
+        lastImportAt: new Date().toISOString(),
+      }),
       meta: {
         ...(snapshot?.meta || {}),
-        outputCollapsed: !nextOutputs.length,
+        outputCollapsed: false,
       },
     })
-    logger.info('[Notebook] import table injected into python session', {
+    logger.info('[NotebookDataLab] imported external data into python session', {
       requestId,
       cellId: String(targetCell?.cellId || ''),
       cellKey: String(targetCell?.key || ''),
       stableId: String(targetCell?.meta?.id || ''),
-      variableName,
-      selected: String(selected),
-      hasPreview: false,
+      variableName: importPlan.variableName,
+      sourceType: importPlan.sourceType,
+      sourceLabel: importPlan.sourceLabel,
       previousOutputCount,
       sessionVarCount: Array.isArray(result?.session_vars) ? result.session_vars.length : 0,
       outputModuleCount: nextOutputs.length,
@@ -5284,29 +5376,244 @@ const importTableToPythonSession = async (cell) => {
       activeCellKeyAtFinish: String(activeNotebookPythonCellKey.value || ''),
     })
     bumpRefresh()
-    schedulePersistNotebookSidecar('import-table-to-python-session')
-    message.success(`表格已导入到会话变量 ${variableName}`)
+    schedulePersistNotebookSidecar('import-data-to-python-session')
+    message.success(`已导入到会话变量 ${importPlan.variableName}`)
   } catch (error) {
-    logger.error('[Notebook] import table to python session failed', {
+    logger.error('[NotebookDataLab] import external data to python session failed', {
       requestId,
       cellId: String(cell?.cellId || ''),
       cellKey: String(cell?.key || ''),
       targetCellId: targetIdentity.cellId,
       targetCellKey: targetIdentity.cellKey,
+      sourceType: normalizedSourceType,
       error: String(error?.message || error),
     })
-    message.error(`导入表格失败：${String(error?.message || error)}`)
+    message.error(`导入数据失败：${String(error?.message || error)}`)
   } finally {
-    // 设计说明：
-    // 导入表格虽然不是“执行当前 cell 代码”，但它会串行占用同一条 Python 会话链路。
-    // 这里复用 busyMap，让顶部工具栏、卡片状态和运行提示与真实后端占用保持一致。
     if (String(notebookPendingPythonImport.value?.requestId || '') === requestId) {
       notebookPendingPythonImport.value = null
     }
     const resolvedTargetCell = resolveNotebookPythonCellByIdentity(targetIdentity) || cell
-    setNotebookBusyState(resolvedTargetCell, false, `import-table:finish:${requestId}`)
-    await flushQueuedNotebookPythonActionIfIdle(`import-table:finish:${requestId}`)
+    setNotebookBusyState(resolvedTargetCell, false, `import-data:finish:${requestId}`)
+    await flushQueuedNotebookPythonActionIfIdle(`import-data:finish:${requestId}`)
   }
+}
+
+const importTableToPythonSession = async (cell) => {
+  await importExternalDataToPythonSession(cell, { sourceType: 'file' })
+}
+
+const materializeSessionVariableOutput = async (cell, dataset = {}, {
+  writeBack = false,
+  exportAfter = false,
+} = {}) => {
+  if (!cell?.key) return null
+  const variableName = String(dataset?.variableName || '').trim()
+  if (!variableName) {
+    message.warning('缺少变量名，无法生成实验室输出')
+    return null
+  }
+
+  const requestId = createNotebookActionRequestId('nb-lab')
+  setNotebookBusyState(cell, true, `data-lab-materialize:start:${requestId}`)
+
+  try {
+    const code = buildNotebookLabMaterializeCode(dataset)
+    if (!code) {
+      throw new Error('缺少实验室输出脚本')
+    }
+
+    const res = await invoke('python_exec', {
+      request: {
+        code,
+        persist: true,
+        expect_json: true,
+        vars: {
+          _guaxi_session: createPythonSessionId(props.filePath),
+          _doc_path: String(props.filePath || ''),
+          _py_cell_id: String(cell.cellId || ''),
+        },
+      },
+    })
+
+    const outputText = formatPythonExecOutput(res)
+    const display = getGuaxiDisplayFromResult(res)
+    const tables = getGuaxiTablesFromResult(res)
+    const dataframe = tables[0] || null
+    const runOutputs = decorateNotebookLabOutputModules(
+      buildPythonCellOutputModules({
+        outputText,
+        display,
+        dataframe,
+        tables,
+        source: 'data-lab-materialize',
+      }),
+      dataset,
+      'data-lab-materialize',
+    )
+    const snapshot = getCellSnapshot(cell)
+    const hasRenderableOutput = !!(String(outputText || '').trim() || display || tables.length)
+    const nextOutputs = hasRenderableOutput
+      ? appendPythonCellOutputModules(snapshot?.outputs || [], runOutputs)
+      : (snapshot?.outputs || [])
+    const outputModuleId = String(runOutputs?.[0]?.id || '')
+    const hideOutput = !nextOutputs.length
+
+    patchPythonCellSnapshot(props.filePath, cell.cellId, {
+      codeDigest: getNotebookCellContentDigest(cell),
+      outputText: hideOutput ? '' : outputText,
+      display,
+      dataframe,
+      outputs: nextOutputs,
+      result: res,
+      sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
+      lab: patchCellSnapshotLab(cell, {
+        lastMaterializedVariable: variableName,
+        lastMaterializedAt: new Date().toISOString(),
+      }),
+      meta: {
+        ...(snapshot?.meta || {}),
+        outputCollapsed: hideOutput,
+      },
+    })
+    logger.info('[NotebookDataLab] materialized session variable output', {
+      requestId,
+      cellId: String(cell?.cellId || ''),
+      variableName,
+      dataKind: String(dataset?.dataKind || ''),
+      hasTextOutput: !!String(outputText || '').trim(),
+      hasDisplay: !!display,
+      tableCount: tables.length,
+      outputModuleId,
+      totalOutputModuleCount: nextOutputs.length,
+      writeBack,
+      exportAfter,
+    })
+    bumpRefresh()
+    schedulePersistNotebookSidecar('data-lab-materialize-success')
+
+    if (writeBack && outputModuleId) {
+      await writeCellOutputToMarkdown(cell, outputModuleId)
+    }
+    if (exportAfter && outputModuleId) {
+      await exportCellOutputToFile(cell, outputModuleId)
+    }
+
+    if (res?.ok === false) {
+      message.error(`变量 ${variableName} 生成输出失败`)
+      return {
+        outputModuleId,
+        ok: false,
+      }
+    }
+
+    if (!writeBack && !exportAfter) {
+      message.success(`变量 ${variableName} 已生成输出`)
+    }
+    return {
+      outputModuleId,
+      ok: true,
+    }
+  } catch (error) {
+    const snapshot = getCellSnapshot(cell)
+    const errorOutputs = appendPythonCellOutputModules(
+      snapshot?.outputs || [],
+      decorateNotebookLabOutputModules(
+        buildPythonCellOutputModules({
+          outputText: `变量 ${variableName} 生成失败：${String(error?.message || error)}`,
+          display: null,
+          dataframe: null,
+          source: 'data-lab-error',
+        }),
+        dataset,
+        'data-lab-error',
+      ),
+    )
+    patchPythonCellSnapshot(props.filePath, cell.cellId, {
+      codeDigest: getNotebookCellContentDigest(cell),
+      outputText: `变量 ${variableName} 生成失败：${String(error?.message || error)}`,
+      display: null,
+      dataframe: null,
+      outputs: errorOutputs,
+      result: null,
+      sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+      lab: snapshot?.lab || { imports: [] },
+      meta: {
+        ...(snapshot?.meta || {}),
+        outputCollapsed: false,
+      },
+    })
+    logger.error('[NotebookDataLab] materialize session variable failed', {
+      requestId,
+      cellId: String(cell?.cellId || ''),
+      variableName,
+      error: String(error?.message || error),
+    })
+    bumpRefresh()
+    schedulePersistNotebookSidecar('data-lab-materialize-failed')
+    message.error(`生成变量输出失败：${String(error?.message || error)}`)
+    return null
+  } finally {
+    setNotebookBusyState(cell, false, `data-lab-materialize:finish:${requestId}`)
+    await flushQueuedNotebookPythonActionIfIdle(`data-lab-materialize:finish:${requestId}`)
+  }
+}
+
+const handleNotebookDataLabActionEvent = async (event) => {
+  const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {}
+  const targetFilePath = String(detail?.filePath || '').trim()
+  if (targetFilePath && targetFilePath !== String(props.filePath || '').trim()) return
+
+  const targetCell = resolveNotebookPythonCellByIdentity(detail) || activeNotebookPythonCell.value
+  if (!targetCell) {
+    logger.warn('[NotebookDataLab] ignored lab action because target cell is missing', {
+      action: String(detail?.action || ''),
+      cellId: String(detail?.cellId || ''),
+      stableId: String(detail?.stableId || ''),
+    })
+    return
+  }
+
+  activateNotebookCell(targetCell, `data-lab:${String(detail?.action || 'unknown')}`)
+  const dataset = {
+    variableName: String(detail?.variableName || ''),
+    dataKind: String(detail?.dataKind || ''),
+  }
+
+  if (detail.action === 'import-file') {
+    await importExternalDataToPythonSession(targetCell, { sourceType: 'file' })
+    return
+  }
+  if (detail.action === 'import-clipboard') {
+    await importExternalDataToPythonSession(targetCell, { sourceType: 'clipboard' })
+    return
+  }
+  if (detail.action === 'import-inline-data') {
+    await importExternalDataToPythonSession(targetCell, {
+      sourceType: String(detail?.sourceType || 'inline'),
+      inlineText: String(detail?.text || ''),
+      sourceLabel: String(detail?.sourceLabel || ''),
+      variableName: String(detail?.variableName || ''),
+    })
+    return
+  }
+  if (detail.action === 'materialize-variable') {
+    await materializeSessionVariableOutput(targetCell, dataset)
+    return
+  }
+  if (detail.action === 'writeback-variable') {
+    await materializeSessionVariableOutput(targetCell, dataset, { writeBack: true })
+    return
+  }
+  if (detail.action === 'export-variable') {
+    await materializeSessionVariableOutput(targetCell, dataset, { exportAfter: true })
+    return
+  }
+
+  logger.warn('[NotebookDataLab] unknown lab action received', {
+    action: String(detail?.action || ''),
+    cellId: String(targetCell?.cellId || ''),
+  })
 }
 
 const runPythonCell = async (cell, { writeBack = false } = {}) => {
@@ -5539,6 +5846,50 @@ onMounted(() => {
   initNotebookMarkdownWorker()
   document.addEventListener('selectionchange', handleNotebookGlobalSelectionChange, true)
   document.addEventListener('mousedown', handleNotebookGlobalMouseDown, true)
+  window.addEventListener(NOTEBOOK_DATALAB_EVENT, handleNotebookDataLabActionEvent)
+  void listen('notebook-data-lab-rpc', (event) => {
+    logger.info('[NotebookDataLab] received backend rpc event', {
+      requestId: String(event?.payload?.requestId || ''),
+      action: String(event?.payload?.action || ''),
+      filePath: String(event?.payload?.filePath || ''),
+    })
+    return handleNotebookDataLabActionEvent({
+      detail: event?.payload && typeof event.payload === 'object' ? event.payload : {},
+    })
+  }).then((unlisten) => {
+    notebookDataLabRpcUnlisten = unlisten
+  }).catch((error) => {
+    logger.warn('[NotebookDataLab] failed to bind backend rpc listener', {
+      error: String(error?.message || error),
+    })
+  })
+  disposeNotebookDataLabBridge = installNotebookDataLabBridge({
+    getContext: () => {
+      const targetCell = activeNotebookPythonCell.value
+      const snapshot = targetCell ? getCellSnapshot(targetCell) : null
+      return {
+        filePath: String(props.filePath || ''),
+        sessionId: createPythonSessionId(props.filePath),
+        activeCell: targetCell
+          ? {
+            cellId: String(targetCell?.cellId || ''),
+            cellKey: String(targetCell?.key || ''),
+            stableId: String(targetCell?.meta?.id || ''),
+            title: String(targetCell?.meta?.title || ''),
+          }
+          : null,
+        datasets: targetCell
+          ? buildNotebookLabDatasetDescriptors(
+            Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+            Array.isArray(snapshot?.lab?.imports) ? snapshot.lab.imports : [],
+          )
+          : [],
+      }
+    },
+  })
+  logger.info('[NotebookDataLab] mounted event bridge', {
+    filePath: String(props.filePath || ''),
+  })
   logger.info('[NotebookSelection] mounted selection listeners')
 })
 
@@ -5557,6 +5908,15 @@ onBeforeUnmount(() => {
   clearNotebookSelectionState('component-unmount')
   document.removeEventListener('selectionchange', handleNotebookGlobalSelectionChange, true)
   document.removeEventListener('mousedown', handleNotebookGlobalMouseDown, true)
+  window.removeEventListener(NOTEBOOK_DATALAB_EVENT, handleNotebookDataLabActionEvent)
+  if (typeof notebookDataLabRpcUnlisten === 'function') {
+    notebookDataLabRpcUnlisten()
+    notebookDataLabRpcUnlisten = null
+  }
+  if (typeof disposeNotebookDataLabBridge === 'function') {
+    disposeNotebookDataLabBridge()
+    disposeNotebookDataLabBridge = null
+  }
   disposeNotebookMarkdownWorker('component-unmount')
 })
 
