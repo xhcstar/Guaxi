@@ -72,6 +72,8 @@ pub struct PyExecRequest {
     pub code: String,
     pub persist: bool,
     pub expect_json: bool,
+    pub include_session_vars: Option<bool>,
+    pub session_var_names: Option<Vec<String>>,
     pub vars: Option<HashMap<String, Value>>,
 }
 
@@ -2568,9 +2570,22 @@ pub async fn python_reset_repl() -> Result<(), String> {
 
 #[command]
 pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, String> {
+    let include_session_vars = request.include_session_vars.unwrap_or(true);
+    let session_var_name_count = request
+        .session_var_names
+        .as_ref()
+        .map(|items| items.len())
+        .unwrap_or_default();
+    let session_var_names = request
+        .session_var_names
+        .as_ref()
+        .filter(|items| !items.is_empty())
+        .cloned();
     info!(
         persist = request.persist,
         expect_json = request.expect_json,
+        include_session_vars,
+        session_var_name_count,
         code_len = request.code.len(),
         "[PythonRuntime] python_exec called"
     );
@@ -2599,6 +2614,14 @@ pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, Strin
         "code": request.code,
         "persist": request.persist,
         "expect_json": request.expect_json,
+        "include_session_vars": include_session_vars,
+        // 设计说明：
+        // 1. `session_var_names = None` 的语义是“返回当前会话里的全部变量”；
+        // 2. 旧实现这里用了 `unwrap_or_default()`，会把 `None` 错误地序列化成空数组 `[]`；
+        // 3. Python worker 收到 `[]` 后会把它当成“按空名单过滤”，最终稳定返回 0 个变量，
+        //    于是就出现“cell 内还能 print(y1)，但右侧会话变量始终为空”的现象；
+        // 4. 这里改为把 `None` 保持为 JSON null，只在调用方明确给出变量名列表时才传数组。
+        "session_var_names": session_var_names,
         "vars": vars,
     });
 
@@ -2615,6 +2638,7 @@ pub async fn python_exec(request: PyExecRequest) -> Result<PyExecResponse, Strin
         stderr_len = parsed.stderr.len(),
         has_result_repr = parsed.result_repr.is_some(),
         has_result_json = parsed.result_json.is_some(),
+        session_var_count = parsed.session_vars.as_ref().map(|items| items.len()).unwrap_or_default(),
         "[PythonRuntime] python_exec completed"
     );
 

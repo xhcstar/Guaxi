@@ -270,9 +270,9 @@ onBeforeUnmount(() => {
 .guaxi-notebook-table-output__viewport {
   max-height: var(--guaxi-notebook-table-height, 360px);
   overflow: auto;
-  border: 1px solid var(--guaxi-notebook-strong-border, rgba(148, 163, 184, 0.3));
-  border-radius: 12px;
-  background: var(--guaxi-notebook-panel-soft, #f8fafc);
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
 .guaxi-notebook-table-output__table {

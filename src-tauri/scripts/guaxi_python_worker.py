@@ -209,7 +209,27 @@ def _summarize_value(value):
     return summary
 
 
-def _snapshot_session_vars(globals_dict):
+def _normalize_session_var_names(value):
+    if not isinstance(value, (list, tuple, set)):
+        return None
+
+    names = []
+    seen = set()
+    for item in value:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+
+    # 设计说明：
+    # 1. `None` 表示“不过滤，返回全部会话变量”，而空列表 `[]` 在产品语义上通常不是一个有意义的调用方式；
+    # 2. 历史上中间层一度把未传值错误编码成 `[]`，导致 worker 把它解释成“过滤后无任何变量”；
+    # 3. 这里把归一化后的空列表回退为 None，作为防御性兼容，避免未来再次出现同类问题。
+    return names or None
+
+
+def _snapshot_session_vars(globals_dict, selected_names=None):
     items = []
     module_type = type(sys)
     hidden_names = {
@@ -230,10 +250,13 @@ def _snapshot_session_vars(globals_dict):
         "_py_cell_id",
     }
 
-    for name in sorted(globals_dict.keys()):
+    candidate_names = selected_names if selected_names is not None else sorted(globals_dict.keys())
+    for name in candidate_names:
         if name in hidden_names or str(name).startswith("__"):
             continue
         try:
+            if name not in globals_dict:
+                continue
             value = globals_dict.get(name)
             if isinstance(value, module_type):
                 continue
@@ -863,7 +886,7 @@ def _run_pip(args):
     }
 
 
-def _handle_magic(code, globals_dict, session_id):
+def _handle_magic(code, globals_dict, session_id, include_session_vars=True, session_var_names=None):
     stripped = str(code or "").strip()
     if not stripped.startswith("%"):
         return None
@@ -897,7 +920,7 @@ def _handle_magic(code, globals_dict, session_id):
             "result_repr": None,
             "result_json": None,
             "session_id": session_id or "__guaxi_global__",
-            "session_vars": _snapshot_session_vars(globals_dict),
+            "session_vars": _snapshot_session_vars(globals_dict, session_var_names) if include_session_vars else [],
         }
 
     if stripped.startswith("%pip "):
@@ -910,7 +933,7 @@ def _handle_magic(code, globals_dict, session_id):
         "result_repr": None,
         "result_json": None,
         "session_id": session_id or "__guaxi_global__",
-        "session_vars": _snapshot_session_vars(globals_dict),
+        "session_vars": _snapshot_session_vars(globals_dict, session_var_names) if include_session_vars else [],
     }
 
 
@@ -918,6 +941,8 @@ def _handle_exec(payload):
     code = _normalize_exec_code(payload.get("code"))
     persist = bool(payload.get("persist"))
     expect_json = bool(payload.get("expect_json"))
+    include_session_vars = bool(payload.get("include_session_vars", True))
+    session_var_names = _normalize_session_var_names(payload.get("session_var_names"))
     vars_map = payload.get("vars") or {}
     session_id = str(vars_map.get("_guaxi_session") or "").strip()
 
@@ -925,7 +950,13 @@ def _handle_exec(payload):
     globals_dict.update(vars_map)
     sandbox_dir = _prepare_session_dir(resolved_session_id, globals_dict)
 
-    magic_res = _handle_magic(code, globals_dict, resolved_session_id)
+    magic_res = _handle_magic(
+        code,
+        globals_dict,
+        resolved_session_id,
+        include_session_vars=include_session_vars,
+        session_var_names=session_var_names,
+    )
     if magic_res is not None:
         return magic_res
 
@@ -1075,6 +1106,8 @@ def _handle_exec(payload):
             stderr += "\n"
         stderr += err_trace
 
+    session_vars = _snapshot_session_vars(globals_dict, session_var_names) if include_session_vars else []
+
     return {
         "ok": ok,
         "stdout": stdout,
@@ -1082,7 +1115,7 @@ def _handle_exec(payload):
         "result_repr": result_repr,
         "result_json": result_json,
         "session_id": resolved_session_id,
-        "session_vars": _snapshot_session_vars(globals_dict),
+        "session_vars": session_vars,
     }
 
 

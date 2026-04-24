@@ -303,6 +303,7 @@
             :model-value="cell.code"
             :theme="theme"
             @update:model-value="updatePythonCell(cell.key, $event)"
+            @focus="handleNotebookPythonEditorFocus(cell)"
           />
 
           <div v-if="(hasVisibleOutput(cell) || isCellBusy(cell)) && !getCellSnapshot(cell).meta.outputCollapsed" class="guaxi-notebook__panel">
@@ -726,6 +727,24 @@ const handleNotebookCellPointerDown = (cell, event) => {
     return
   }
   activateNotebookCell(cell, 'cell-pointerdown')
+}
+
+// 设计说明：
+// 1. Monaco 编辑器经常会在内部吞掉 pointer 事件，导致“已经在当前 Python Cell 中编辑/运行”，
+//    但探索模式外层并不知道该 Cell 已经成为当前上下文。
+// 2. 右侧“数据实验室”完全依赖 active cell 来同步会话变量，因此这里在编辑器 focus 时显式补一次激活。
+// 3. 如果右侧实验室已经打开，则顺手同步最新 inspector，避免用户运行后还停留在空变量面板。
+const handleNotebookPythonEditorFocus = (cell) => {
+  if (cell?.type !== 'python') return
+  activateNotebookCell(cell, 'python-editor-focus')
+  if (isNotebookPythonSessionPanelVisible.value) {
+    syncNotebookPythonSessionInspector(cell, 'python-editor-focus')
+  }
+  logger.debug('[Notebook] python editor focused and synced active cell context', {
+    cellId: String(cell?.cellId || ''),
+    cellKey: String(cell?.key || ''),
+    sessionPanelVisible: isNotebookPythonSessionPanelVisible.value,
+  })
 }
 
 const clearNotebookTopToolbarHideTimer = () => {
@@ -1167,7 +1186,12 @@ const buildStalePythonCellSnapshot = (cell, snapshot = {}, reason = 'unknown') =
     dataframe: null,
     outputs: [],
     result: null,
-    sessionVars: [],
+    // 设计说明：
+    // 1. Python Notebook 这里使用的是“文件级持久会话”，代码被编辑后，旧输出确实应该失效；
+    // 2. 但会话里的变量并不会因为用户改了一行代码就自动从 Python 进程里消失，
+    //    否则就会出现“cell 中还能 print 出来，右侧实验室却显示 0 个变量”的割裂体验；
+    // 3. 因此 stale snapshot 只清空依赖当前代码版本的输出，不再顺手清空 sessionVars。
+    sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
     lab: snapshot?.lab && typeof snapshot.lab === 'object'
       ? {
         ...snapshot.lab,
@@ -1185,6 +1209,7 @@ const buildStalePythonCellSnapshot = (cell, snapshot = {}, reason = 'unknown') =
     reason,
     previousCodeDigest: String(snapshot?.codeDigest || ''),
     nextCodeDigest: nextSnapshot.codeDigest,
+    preservedSessionVarCount: nextSnapshot.sessionVars.length,
   })
   return nextSnapshot
 }
@@ -3522,6 +3547,55 @@ const patchCellSnapshotLab = (cell, patch = {}) => {
   return nextLab
 }
 
+const mergeNotebookSessionVarSummaries = (currentItems = [], updatedItems = []) => {
+  const map = new Map()
+
+  // 设计说明：
+  // 1. 数据实验室导入现在走“仅回传目标变量摘要”的快路径，不能再用返回值直接覆盖整份会话变量列表。
+  // 2. 这里把已有快照与增量更新按变量名合并，既保留旧变量，又让新导入的数据集可以立即出现在右侧实验室面板里。
+  // 3. 统一在前端按名称排序，保证侧栏顺序稳定，避免用户误以为变量丢失或重复。
+  ;(Array.isArray(currentItems) ? currentItems : []).forEach((item) => {
+    const name = String(item?.name || '').trim()
+    if (!name) return
+    map.set(name, {
+      ...item,
+      name,
+    })
+  })
+
+  ;(Array.isArray(updatedItems) ? updatedItems : []).forEach((item) => {
+    const name = String(item?.name || '').trim()
+    if (!name) return
+    map.set(name, {
+      ...(map.get(name) || {}),
+      ...item,
+      name,
+    })
+  })
+
+  return Array.from(map.values()).sort((left, right) => {
+    const leftName = String(left?.name || '')
+    const rightName = String(right?.name || '')
+    return leftName.localeCompare(rightName, 'zh-Hans-CN')
+  })
+}
+
+// 设计说明：
+// 1. Python worker 的正常执行链路应该返回 `session_vars`，但历史兼容路径或异常恢复路径可能缺失这个字段。
+// 2. 旧逻辑一旦遇到“字段缺失”就把前端快照清空，右侧实验室会立刻显示成 0 个变量，形成“变量明明还能 print 却面板为空”的错觉。
+// 3. 这里改成“字段存在就覆盖，字段缺失就保留上一次快照”，只在后端明确返回数组时才认定为最新会话变量列表。
+const resolveNotebookSessionVarsFromExecResult = (result, previousSessionVars = []) => {
+  if (Array.isArray(result?.session_vars)) {
+    return result.session_vars
+  }
+  logger.warn('[Notebook] python execution response missing session_vars, keep previous snapshot variables', {
+    hasResult: !!result,
+    resultKeys: result && typeof result === 'object' ? Object.keys(result) : [],
+    previousSessionVarCount: Array.isArray(previousSessionVars) ? previousSessionVars.length : 0,
+  })
+  return Array.isArray(previousSessionVars) ? previousSessionVars : []
+}
+
 const buildNotebookPythonSessionInspectorPayload = (cell) => {
   if (cell?.type !== 'python') {
     return {
@@ -5303,6 +5377,8 @@ const importExternalDataToPythonSession = async (cell, {
         code: importPlan.code,
         persist: true,
         expect_json: false,
+        include_session_vars: true,
+        session_var_names: [importPlan.variableName],
         vars: {
           _guaxi_session: sessionId,
           _doc_path: String(props.filePath || ''),
@@ -5321,6 +5397,10 @@ const importExternalDataToPythonSession = async (cell, {
     }
 
     const snapshot = getCellSnapshot(targetCell)
+    const nextSessionVars = mergeNotebookSessionVarSummaries(
+      Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+      Array.isArray(result?.session_vars) ? result.session_vars : [],
+    )
     const previousOutputCount = Array.isArray(snapshot?.outputs) ? snapshot.outputs.length : 0
     const outputText = normalizedSourceType === 'clipboard'
       ? `已将剪贴板数据导入到会话变量 ${importPlan.variableName}，可以在实验室面板中继续生成输出、写回 Markdown 或导出。`
@@ -5350,7 +5430,7 @@ const importExternalDataToPythonSession = async (cell, {
       dataframe: snapshot?.dataframe || null,
       outputs: nextOutputs,
       result: snapshot?.result || null,
-      sessionVars: Array.isArray(result?.session_vars) ? result.session_vars : [],
+      sessionVars: nextSessionVars,
       lab: patchCellSnapshotLab(targetCell, {
         imports: nextImports,
         lastImportSourceType: importPlan.sourceType,
@@ -5370,7 +5450,8 @@ const importExternalDataToPythonSession = async (cell, {
       sourceType: importPlan.sourceType,
       sourceLabel: importPlan.sourceLabel,
       previousOutputCount,
-      sessionVarCount: Array.isArray(result?.session_vars) ? result.session_vars.length : 0,
+      updatedSessionVarCount: Array.isArray(result?.session_vars) ? result.session_vars.length : 0,
+      sessionVarCount: nextSessionVars.length,
       outputModuleCount: nextOutputs.length,
       activeCellChangedDuringImport: activeCellKeyAtStart !== String(activeNotebookPythonCellKey.value || ''),
       activeCellKeyAtFinish: String(activeNotebookPythonCellKey.value || ''),
@@ -5428,6 +5509,7 @@ const materializeSessionVariableOutput = async (cell, dataset = {}, {
         code,
         persist: true,
         expect_json: true,
+        include_session_vars: false,
         vars: {
           _guaxi_session: createPythonSessionId(props.filePath),
           _doc_path: String(props.filePath || ''),
@@ -5466,7 +5548,7 @@ const materializeSessionVariableOutput = async (cell, dataset = {}, {
       dataframe,
       outputs: nextOutputs,
       result: res,
-      sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
+      sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
       lab: patchCellSnapshotLab(cell, {
         lastMaterializedVariable: variableName,
         lastMaterializedAt: new Date().toISOString(),
@@ -5654,6 +5736,10 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       tables,
       source: 'execution',
     })
+    const nextSessionVars = resolveNotebookSessionVarsFromExecResult(
+      res,
+      Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
+    )
     const nextOutputs = hasRenderableOutput
       ? appendPythonCellOutputModules(snapshot?.outputs || [], runOutputs)
       : (snapshot?.outputs || [])
@@ -5667,6 +5753,7 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       hasDisplay: !!display,
       hasDataframe: !!dataframe,
       tableCount: tables.length,
+      sessionVarCount: nextSessionVars.length,
       hideOutput,
       appendedOutputModuleCount: runOutputs.length,
       totalOutputModuleCount: nextOutputs.length,
@@ -5679,12 +5766,15 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       dataframe,
       outputs: nextOutputs,
       result: res,
-      sessionVars: Array.isArray(res?.session_vars) ? res.session_vars : [],
+      sessionVars: nextSessionVars,
       meta: {
         ...(snapshot?.meta || {}),
         outputCollapsed: hideOutput,
       },
     })
+    if (isActiveNotebookPythonCell(cell) || isNotebookPythonSessionPanelVisible.value) {
+      syncNotebookPythonSessionInspector(cell, 'run-python-cell-success')
+    }
     bumpRefresh()
     schedulePersistNotebookSidecar('run-python-cell-success')
 
@@ -5716,7 +5806,12 @@ const runPythonCell = async (cell, { writeBack = false } = {}) => {
       dataframe: null,
       outputs: errorOutputs,
       result: null,
-      sessionVars: [],
+      // 设计说明：
+      // 1. 运行失败并不等于 Python 持久会话被重置，之前已有的变量往往仍然存在；
+      // 2. 保留上一份变量快照，可以避免用户一次失败后右侧实验室瞬间“清空”，
+      //    与同一会话里后续仍能访问旧变量的行为不一致；
+      // 3. 真正需要清空变量时，应由 `%reset` / drop session / 后端明确返回空变量列表来决定。
+      sessionVars: Array.isArray(snapshot?.sessionVars) ? snapshot.sessionVars : [],
       meta: {
         ...(snapshot?.meta || {}),
         outputCollapsed: false,
@@ -6586,7 +6681,7 @@ defineExpose({
 
 .guaxi-notebook__panel-content {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .guaxi-notebook__output-module {
@@ -6641,8 +6736,8 @@ defineExpose({
 
 .guaxi-notebook__output-module-body {
   display: grid;
-  gap: 10px;
-  padding: 0 12px 12px;
+  gap: 8px;
+  padding: 0 12px 10px;
 }
 
 .guaxi-notebook__panel-head {
@@ -6674,10 +6769,10 @@ defineExpose({
 .guaxi-notebook__rich,
 .guaxi-notebook__dataframe {
   margin: 0;
-  border-radius: 12px;
-  border: 1px solid var(--guaxi-notebook-strong-border);
-  background: var(--guaxi-notebook-panel-soft);
-  padding: 12px 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
   max-height: min(62vh, 720px);
   overflow-x: auto;
   overflow-y: auto;
@@ -6686,11 +6781,13 @@ defineExpose({
 .guaxi-notebook__rich {
   font-size: 17px;
   line-height: 1.5;
+  padding-top: 2px;
 }
 
 .guaxi-notebook__output-text {
   white-space: pre-wrap;
   word-break: break-word;
+  padding-top: 2px;
 }
 
 .guaxi-notebook__dataframe table {
