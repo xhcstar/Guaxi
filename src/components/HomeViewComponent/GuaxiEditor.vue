@@ -10173,7 +10173,16 @@ const buildAlignedTableLines = (rows) => {
   const sepRow = safeRows[1] || [];
   const aligns = Array.from({ length: colCount }, (_, i) => detectSeparatorAlign(sepRow[i]));
 
-  const widths = Array.from({ length: colCount }, () => 3);
+  const widths = Array.from({ length: colCount }, (_, i) => {
+    const align = aligns[i];
+    // 设计说明：
+    // 1. Markdown 分隔行的 `:` 本身也占据源码列宽，不能只把宽度理解成 `-` 的数量。
+    // 2. 左/右对齐至少需要 `:---` / `---:` 4 列，居中至少需要 `:---:` 5 列。
+    // 3. 先把列宽提升到“分隔单元格总宽度”，后续正文补空格与分隔行渲染才能让 `|` 完全对齐。
+    if (align === 'center') return 5;
+    if (align === 'left' || align === 'right') return 4;
+    return 3;
+  });
   safeRows.forEach((row, rowIndex) => {
     if (!Array.isArray(row) || rowIndex === 1) return;
     for (let i = 0; i < colCount; i += 1) {
@@ -10188,8 +10197,9 @@ const buildAlignedTableLines = (rows) => {
     if (rowIndex === 1) {
       const sepCells = cells.map((c, i) => {
         const a = aligns[i];
-        const w = Math.max(3, widths[i]);
-        const dashes = '-'.repeat(w);
+        const colonCount = a === 'center' ? 2 : (a === 'left' || a === 'right' ? 1 : 0);
+        const w = Math.max(3 + colonCount, widths[i]);
+        const dashes = '-'.repeat(Math.max(3, w - colonCount));
         if (a === 'left') return `:${dashes}`;
         if (a === 'center') return `:${dashes}:`;
         if (a === 'right') return `${dashes}:`;
