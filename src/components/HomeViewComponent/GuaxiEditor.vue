@@ -10662,8 +10662,192 @@ const insertTable = () => {
   insertTableWithSize(2, 2)
 };
 
-const insertImage = () => {
-  insertBlockSnippet('![图片描述](路径或URL)\n');
+const MARKDOWN_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+
+const sanitizeResourceFileSegment = (raw, fallback = 'image') => {
+  const normalized = String(raw || '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || fallback;
+};
+
+const joinResourceRepoPath = (...parts) => parts
+  .map((part, index) => {
+    const normalized = String(part || '').replace(/\\/g, '/');
+    return index === 0 ? normalized.replace(/\/+$/g, '') : normalized.replace(/^\/+|\/+$/g, '');
+  })
+  .filter(Boolean)
+  .join('/');
+
+const normalizePickedLocalPath = (path) => {
+  const normalized = String(path || '').trim().replace(/\\/g, '/');
+  // 设计说明：Windows 下部分 WebView / file URL 场景会把 `C:/...` 传成 `/C:/...`。
+  // 后端复制文件前先在前端规整一次，避免资源入库阶段误判源文件不存在。
+  return normalized.replace(/^\/([a-zA-Z]:\/)/, '$1');
+};
+
+const getFileNameFromPath = (path) => {
+  const normalized = String(path || '').replace(/\\/g, '/');
+  return normalized.split('/').filter(Boolean).pop() || '';
+};
+
+const getMarkdownImageExtension = (path) => {
+  const fileName = getFileNameFromPath(path);
+  const ext = String(fileName.split('.').pop() || '').trim().toLowerCase();
+  return MARKDOWN_IMAGE_EXTENSIONS.includes(ext) ? ext : 'png';
+};
+
+const buildMarkdownImageResourceTarget = (sourcePath) => {
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const stamp = [
+    year,
+    month,
+    day,
+    '_',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+    '_',
+    String(now.getMilliseconds()).padStart(3, '0')
+  ].join('');
+  const sourceName = getFileNameFromPath(sourcePath);
+  const ext = getMarkdownImageExtension(sourceName);
+  const stem = sanitizeResourceFileSegment(sourceName.replace(/\.[^.]+$/, ''), 'image');
+  const fileName = `${stem}-${stamp}.${ext}`;
+  const relativeDir = joinResourceRepoPath('images', year, month, day);
+  const relativePath = joinResourceRepoPath(relativeDir, fileName);
+
+  return {
+    fileName,
+    relativeDir,
+    relativePath,
+    alt: stem
+  };
+};
+
+const importMarkdownImageToResourceRepo = async (sourcePath) => {
+  const normalizedSourcePath = normalizePickedLocalPath(sourcePath);
+  if (!normalizedSourcePath) throw new Error('未选择图片文件');
+
+  const root = String(await invoke('get_image_bed_root') || '').trim();
+  if (!root) throw new Error('资源库根目录不可用');
+
+  const target = buildMarkdownImageResourceTarget(normalizedSourcePath);
+  const destDir = joinResourceRepoPath(root, target.relativeDir);
+  const absolutePath = joinResourceRepoPath(root, target.relativePath);
+  const ownerFilePath = String(selectedFile.value?.path || fileTreeStore.activeTab || '').trim();
+
+  logger.info('[MarkdownImage] import selected image to resource repo start', {
+    sourcePath: normalizedSourcePath,
+    destDir,
+    fileName: target.fileName,
+    ownerFilePath
+  });
+
+  await invoke('copy_image_file', {
+    srcPath: normalizedSourcePath,
+    destDir,
+    fileName: target.fileName
+  });
+
+  await invoke('add_resource', {
+    resource: {
+      resource_type: 'image',
+      file_name: target.fileName,
+      relative_path: target.relativePath,
+      absolute_path: absolutePath,
+      owner_file_path: ownerFilePath,
+      created_at: '',
+      extra: JSON.stringify({
+        source: 'markdown-editor-insert-image',
+        original_path: normalizedSourcePath
+      })
+    }
+  });
+
+  const url = `http://localhost:8888/markdown/api/bed/${encodeURIComponent(target.relativePath)}`;
+  logger.info('[MarkdownImage] image imported and resource registered', {
+    relativePath: target.relativePath,
+    absolutePath,
+    url
+  });
+
+  return {
+    url,
+    alt: target.alt,
+    relativePath: target.relativePath,
+    absolutePath
+  };
+};
+
+const insertMarkdownTextAtCursor = (text, source = 'markdown-toolbar') => {
+  const targetEditor = getActiveEditor();
+  if (!ensureMarkdownEditor(targetEditor)) return false;
+
+  const selection = targetEditor.getSelection?.();
+  const position = targetEditor.getPosition?.() || new monaco.Position(1, 1);
+  const range = selection || new monaco.Range(
+    position.lineNumber,
+    position.column,
+    position.lineNumber,
+    position.column
+  );
+
+  targetEditor.executeEdits(source, [
+    {
+      range,
+      text,
+      forceMoveMarkers: true
+    }
+  ]);
+
+  targetEditor.focus();
+  return true;
+};
+
+const insertImage = async () => {
+  try {
+    const targetEditor = getActiveEditor();
+    if (!ensureMarkdownEditor(targetEditor)) {
+      logger.warn('[MarkdownImage] insert aborted because markdown editor is not ready');
+      return;
+    }
+
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [
+        {
+          name: 'Image',
+          extensions: MARKDOWN_IMAGE_EXTENSIONS
+        }
+      ]
+    });
+
+    const sourcePath = Array.isArray(selected) ? selected[0] : selected;
+    if (!sourcePath) {
+      logger.debug('[MarkdownImage] insert cancelled by user');
+      return;
+    }
+
+    const imported = await importMarkdownImageToResourceRepo(sourcePath);
+    const markdown = `![${imported.alt}](${imported.url})\n`;
+    const inserted = insertMarkdownTextAtCursor(markdown, 'markdown-image-insert');
+    if (!inserted) throw new Error('插入失败：Markdown 编辑器未就绪');
+    message.success('图片已导入资源库并插入');
+    logger.info('[MarkdownImage] markdown inserted', {
+      relativePath: imported.relativePath,
+      markdownLength: markdown.length
+    });
+  } catch (error) {
+    logger.error('[MarkdownImage] insert image failed', error);
+    message.error(`插入图片失败：${String(error?.message || error || '')}`);
+  }
 };
 
 const insertCodeBlock = (lang) => {
