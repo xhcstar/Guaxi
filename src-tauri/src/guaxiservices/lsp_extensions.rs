@@ -1,13 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::{info, warn};
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -27,6 +28,7 @@ struct CatalogExtension {
     display_name: String,
     description: Option<String>,
     open_vsx: Option<String>,
+    vscode_marketplace: Option<String>,
     languages: Vec<String>,
     compatibility_level: String,
     recommended: bool,
@@ -50,6 +52,7 @@ struct InstalledExtensionMeta {
     installed_at: String,
     download_url: Option<String>,
     open_vsx: Option<String>,
+    vscode_marketplace: Option<String>,
     original_file_name: Option<String>,
 }
 
@@ -74,6 +77,7 @@ pub struct LspExtensionState {
     pub compatibility_level: String,
     pub recommended: bool,
     pub open_vsx: Option<String>,
+    pub vscode_marketplace: Option<String>,
     pub manifest_name: Option<String>,
     pub manifest_publisher: Option<String>,
     pub manifest_browser: Option<String>,
@@ -86,6 +90,18 @@ pub struct LspExtensionState {
 pub struct OpenVsxSearchResult {
     pub id: String,
     pub namespace: String,
+    pub name: String,
+    pub version: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub download_url: Option<String>,
+    pub icon_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VscodeMarketplaceSearchResult {
+    pub id: String,
+    pub publisher: String,
     pub name: String,
     pub version: String,
     pub display_name: String,
@@ -114,6 +130,7 @@ struct InstalledExtensionRecord {
     source: String,
     install_dir: PathBuf,
     open_vsx: Option<String>,
+    vscode_marketplace: Option<String>,
     manifest_name: Option<String>,
     manifest_publisher: Option<String>,
     manifest_browser: Option<String>,
@@ -261,6 +278,7 @@ fn read_extension_meta(dir: &Path) -> InstalledExtensionMeta {
         installed_at: now_rfc3339(),
         download_url: None,
         open_vsx: None,
+        vscode_marketplace: None,
         original_file_name: None,
     }
 }
@@ -394,6 +412,7 @@ fn record_from_dir(dir: &Path) -> Option<InstalledExtensionRecord> {
         source: meta.source,
         install_dir: manifest_root,
         open_vsx: meta.open_vsx,
+        vscode_marketplace: meta.vscode_marketplace,
         manifest_name: Some(name),
         manifest_publisher: Some(publisher),
         manifest_browser: manifest
@@ -673,6 +692,10 @@ fn build_extension_state(
         .as_ref()
         .and_then(|item| item.open_vsx.clone())
         .or_else(|| catalog.as_ref().and_then(|item| item.open_vsx.clone()));
+    let vscode_marketplace = record
+        .as_ref()
+        .and_then(|item| item.vscode_marketplace.clone())
+        .or_else(|| catalog.as_ref().and_then(|item| item.vscode_marketplace.clone()));
 
     LspExtensionState {
         id,
@@ -694,6 +717,7 @@ fn build_extension_state(
         compatibility_level,
         recommended,
         open_vsx,
+        vscode_marketplace,
         manifest_name: record.as_ref().and_then(|item| item.manifest_name.clone()),
         manifest_publisher: record.as_ref().and_then(|item| item.manifest_publisher.clone()),
         manifest_browser: record.as_ref().and_then(|item| item.manifest_browser.clone()),
@@ -773,6 +797,7 @@ async fn download_to_file(url: &str, destination: &Path) -> Result<(), String> {
 fn finalize_install_from_unpacked_root(
     unpacked_root: &Path,
     meta: InstalledExtensionMeta,
+    expected_extension_id: Option<&str>,
 ) -> Result<LspExtensionState, String> {
     let (manifest_root, manifest) = manifest_root_from_dir(unpacked_root)
         .ok_or_else(|| "failed to locate extension package.json in unpacked extension".to_string())?;
@@ -796,6 +821,22 @@ fn finalize_install_from_unpacked_root(
             .unwrap_or("0.0.0"),
     );
     let id = normalize_extension_id(&format!("{publisher}.{name}"));
+    let expected_id = expected_extension_id
+        .map(normalize_extension_id)
+        .filter(|item| !item.is_empty());
+    if let Some(expected_id) = expected_id.as_deref() {
+        if id != expected_id {
+            warn!(
+                expected_extension_id = expected_id,
+                manifest_extension_id = id.as_str(),
+                "extension archive manifest id mismatch"
+            );
+            return Err(format!(
+                "扩展包内容不匹配：请求安装 {}，但 VSIX manifest 是 {}。已阻止安装错误扩展。",
+                expected_id, id
+            ));
+        }
+    }
 
     remove_existing_extension_versions(&id)?;
 
@@ -814,6 +855,86 @@ fn finalize_install_from_unpacked_root(
     let record = record_from_dir(&install_dir)
         .ok_or_else(|| "failed to rebuild installed extension record after install".to_string())?;
     Ok(build_extension_state(Some(record), catalog_by_id().get(&id).cloned()))
+}
+
+fn write_catalog_extension_package(
+    dest_dir: &Path,
+    catalog: &CatalogExtension,
+) -> Result<(), String> {
+    let (publisher, name) = parse_extension_identifier(&catalog.id)?;
+    fs::create_dir_all(dest_dir).map_err(|e| format!("failed to create catalog extension dir: {e}"))?;
+
+    let manifest = json!({
+        "publisher": publisher,
+        "name": name,
+        "displayName": catalog.display_name,
+        "description": catalog.description,
+        "version": format!("catalog.{}", LSP_EXTENSION_CATALOG.version),
+        "activationEvents": catalog.languages.iter().map(|lang| format!("onLanguage:{lang}")).collect::<Vec<_>>(),
+        "contributes": {
+            "languages": catalog.languages.iter().map(|lang| json!({ "id": lang })).collect::<Vec<_>>()
+        },
+        "guaxi": {
+            "catalogExtension": true,
+            "serverId": catalog.lsp.server_id,
+            "runtime": catalog.lsp.runtime,
+            "fallbackServer": catalog.lsp.fallback_server,
+        }
+    });
+    let manifest_content = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("failed to serialize catalog extension manifest: {e}"))?;
+    fs::write(dest_dir.join("package.json"), manifest_content)
+        .map_err(|e| format!("failed to write catalog extension manifest: {e}"))?;
+
+    let mut readme = fs::File::create(dest_dir.join("README.md"))
+        .map_err(|e| format!("failed to create catalog extension readme: {e}"))?;
+    writeln!(
+        readme,
+        "# {}\n\nThis is a Guaxi managed LSP catalog extension. It provides a stable extension registry entry and lets Guaxi resolve the configured language server runtime.",
+        catalog.display_name
+    )
+    .map_err(|e| format!("failed to write catalog extension readme: {e}"))?;
+    Ok(())
+}
+
+pub fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExtensionState, String> {
+    let id = normalize_extension_id(extension_id);
+    if id.is_empty() {
+        return Err("extension_id cannot be empty".to_string());
+    }
+    let catalog = catalog_by_id()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown LSP catalog extension: {}", extension_id))?;
+
+    // 设计说明：
+    // 1. VSCode Marketplace / Open VSX 并不保证每个语言功能都有可下载 VSIX，尤其是 VSCode 内置扩展。
+    // 2. Guaxi 的“已知语言扩展”按钮因此不应把搜索市场作为唯一安装路径，而是直接安装 catalog 扩展记录。
+    // 3. 运行时仍由 catalog.lsp.resolve_order 解析：扩展自带 server 优先，缺失时走确定的 fallback server。
+    let version = format!("catalog.{}", LSP_EXTENSION_CATALOG.version);
+    remove_existing_extension_versions(&id)?;
+    let install_dir = extensions_root_dir()?.join(install_dir_name(&id, &version));
+    write_catalog_extension_package(&install_dir, &catalog)?;
+    write_extension_meta(
+        &install_dir,
+        &InstalledExtensionMeta {
+            source: "guaxi-catalog".to_string(),
+            installed_at: now_rfc3339(),
+            download_url: None,
+            open_vsx: catalog.open_vsx.clone(),
+            vscode_marketplace: catalog.vscode_marketplace.clone(),
+            original_file_name: None,
+        },
+    )?;
+
+    info!(
+        extension_id = id.as_str(),
+        install_dir = install_dir.to_string_lossy().as_ref(),
+        "catalog LSP extension installed"
+    );
+    let record = record_from_dir(&install_dir)
+        .ok_or_else(|| "failed to rebuild catalog extension record after install".to_string())?;
+    Ok(build_extension_state(Some(record), Some(catalog)))
 }
 
 pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState, String> {
@@ -838,8 +959,10 @@ pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState,
             installed_at: now_rfc3339(),
             download_url: None,
             open_vsx: None,
+            vscode_marketplace: None,
             original_file_name: source_path.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
+        None,
     );
 
     let _ = fs::remove_dir_all(&unpack_root);
@@ -864,8 +987,10 @@ pub async fn import_extension_directory(dir_path: &str) -> Result<LspExtensionSt
             installed_at: now_rfc3339(),
             download_url: None,
             open_vsx: None,
+            vscode_marketplace: None,
             original_file_name: source_dir.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
+        None,
     )
 }
 
@@ -951,6 +1076,127 @@ pub async fn search_open_vsx_extensions(query: &str) -> Result<Vec<OpenVsxSearch
         .filter_map(parse_open_vsx_result)
         .collect::<Vec<_>>();
 
+    result.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    Ok(result)
+}
+
+fn parse_marketplace_extension(item: &Value) -> Option<VscodeMarketplaceSearchResult> {
+    let name = normalize_string(item.get("extensionName")?.as_str()?);
+    let publisher = normalize_string(
+        item.get("publisher")
+            .and_then(|publisher| publisher.get("publisherName"))
+            .and_then(Value::as_str)?,
+    );
+    let id = normalize_extension_id(&format!("{publisher}.{name}"));
+    let display_name = normalize_string(
+        item.get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or(&name),
+    );
+    let version_item = item
+        .get("versions")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())?;
+    let version = normalize_string(version_item.get("version").and_then(Value::as_str).unwrap_or("latest"));
+    let files = version_item
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let asset_url = |asset_type: &str| {
+        files
+            .iter()
+            .find(|file| file.get("assetType").and_then(Value::as_str) == Some(asset_type))
+            .and_then(|file| file.get("source").and_then(Value::as_str))
+            .map(normalize_string)
+    };
+
+    let download_url = asset_url("Microsoft.VisualStudio.Services.VSIXPackage")
+        .or_else(|| {
+            Some(format!(
+                "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/{}/vsextensions/{}/{}/vspackage",
+                publisher, name, version
+            ))
+        });
+    let icon_url = asset_url("Microsoft.VisualStudio.Services.Icons.Default");
+
+    Some(VscodeMarketplaceSearchResult {
+        id,
+        publisher,
+        name,
+        version,
+        display_name,
+        description: item
+            .get("shortDescription")
+            .or_else(|| item.get("description"))
+            .and_then(Value::as_str)
+            .map(normalize_string),
+        download_url,
+        icon_url,
+    })
+}
+
+pub async fn search_vscode_marketplace_extensions(
+    query: &str,
+) -> Result<Vec<VscodeMarketplaceSearchResult>, String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // 设计说明：
+    // 1. VSCode Marketplace 没有像 Open VSX 那样简单的公开搜索 GET 接口，VSCode 客户端使用 gallery
+    //    extensionquery API 查询，这里按 VS Code Target + 搜索文本组合过滤。
+    // 2. flags 取回版本、asset files、manifest 等下载所需信息；真正安装仍统一走 VSIX 解包与 manifest 解析。
+    // 3. 这样配置页可以同时支持 Marketplace 与 Open VSX，但运行时 registry 仍只有一份。
+    let body = json!({
+        "filters": [{
+            "criteria": [
+                { "filterType": 8, "value": "Microsoft.VisualStudio.Code" },
+                { "filterType": 10, "value": trimmed }
+            ],
+            "pageNumber": 1,
+            "pageSize": 20,
+            "sortBy": 0,
+            "sortOrder": 0
+        }],
+        "flags": 914
+    });
+
+    info!(query = trimmed, "searching VSCode Marketplace extensions");
+    let client = Client::new();
+    let response = client
+        .post("https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery")
+        .header("Accept", "application/json;api-version=3.0-preview.1")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "guaxi-lsp-extension")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("failed to query VSCode Marketplace: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("VSCode Marketplace search failed: HTTP {}", response.status()));
+    }
+
+    let payload = response
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("failed to parse VSCode Marketplace response: {e}"))?;
+    let items = payload
+        .get("results")
+        .and_then(Value::as_array)
+        .and_then(|results| results.first())
+        .and_then(|result| result.get("extensions"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut result = items
+        .iter()
+        .filter_map(parse_marketplace_extension)
+        .collect::<Vec<_>>();
     result.sort_by(|a, b| a.display_name.cmp(&b.display_name));
     Ok(result)
 }
@@ -1122,9 +1368,82 @@ pub async fn install_open_vsx_extension(
             source: "openvsx".to_string(),
             installed_at: now_rfc3339(),
             download_url: Some(resolved_url),
-            open_vsx: Some(resolved_id),
+            open_vsx: Some(resolved_id.clone()),
+            vscode_marketplace: None,
             original_file_name: download_file.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
+        Some(&resolved_id),
+    );
+
+    let _ = fs::remove_file(&download_file);
+    let _ = fs::remove_dir_all(&unpack_root);
+    result
+}
+
+pub async fn install_vscode_marketplace_extension(
+    identifier: &str,
+    version: Option<&str>,
+    download_url: Option<&str>,
+) -> Result<LspExtensionState, String> {
+    let (publisher, name) = parse_extension_identifier(identifier)?;
+    let requested_version = version.map(normalize_string).filter(|item| !item.is_empty());
+
+    let resolved = if let Some(url) = download_url {
+        (
+            normalize_string(url),
+            requested_version.unwrap_or_else(|| "latest".to_string()),
+            format!("{publisher}.{name}"),
+        )
+    } else {
+        let search_result = search_vscode_marketplace_extensions(&format!("{publisher}.{name}")).await?;
+        let matched = search_result
+            .into_iter()
+            .find(|item| normalize_extension_id(&item.id) == normalize_extension_id(identifier))
+            .ok_or_else(|| format!("VSCode Marketplace did not return extension: {}", identifier))?;
+        let resolved_version = requested_version.unwrap_or_else(|| matched.version.clone());
+        let resolved_url = matched.download_url.unwrap_or_else(|| {
+            format!(
+                "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/{}/vsextensions/{}/{}/vspackage",
+                publisher, name, resolved_version
+            )
+        });
+        (resolved_url, resolved_version, matched.id)
+    };
+
+    let (resolved_url, resolved_version, resolved_id) = resolved;
+    let download_file = temp_root_dir()?.join(format!(
+        "{}-{}.vsix",
+        sanitize_dir_fragment(&resolved_id),
+        sanitize_dir_fragment(&resolved_version)
+    ));
+
+    info!(
+        extension_id = resolved_id.as_str(),
+        version = resolved_version.as_str(),
+        download_url = resolved_url.as_str(),
+        destination = download_file.to_string_lossy().as_ref(),
+        "downloading VSCode Marketplace extension archive"
+    );
+
+    download_to_file(&resolved_url, &download_file).await?;
+
+    let unpack_root = temp_root_dir()?.join(format!("marketplace_{}", Uuid::new_v4()));
+    fs::create_dir_all(&unpack_root)
+        .map_err(|e| format!("failed to create Marketplace temp directory: {e}"))?;
+    extract_zip_to_dir(&download_file, &unpack_root)?;
+
+    let expected_id = resolved_id.clone();
+    let result = finalize_install_from_unpacked_root(
+        &unpack_root,
+        InstalledExtensionMeta {
+            source: "vscode-marketplace".to_string(),
+            installed_at: now_rfc3339(),
+            download_url: Some(resolved_url),
+            open_vsx: None,
+            vscode_marketplace: Some(resolved_id),
+            original_file_name: download_file.file_name().and_then(|item| item.to_str()).map(normalize_string),
+        },
+        Some(&expected_id),
     );
 
     let _ = fs::remove_file(&download_file);
@@ -1140,6 +1459,23 @@ pub fn remove_lsp_extension(extension_id: &str) -> Result<(), String> {
 
     info!(extension_id = normalized.as_str(), "removing installed LSP extension");
     remove_existing_extension_versions(&normalized)
+}
+
+pub(crate) fn has_installed_lsp_extension_for_language(language: &str) -> Result<bool, String> {
+    let normalized_language = normalize_language(language);
+    if normalized_language.is_empty() {
+        return Ok(false);
+    }
+
+    let catalog = catalog_by_id();
+    let installed = load_installed_extensions()?;
+    let matched = installed.into_iter().any(|item| {
+        if !item.languages.iter().any(|lang| normalize_language(lang) == normalized_language) {
+            return false;
+        }
+        catalog.contains_key(&normalize_extension_id(&item.id))
+    });
+    Ok(matched)
 }
 
 pub(crate) async fn resolve_lsp_command_for_language(

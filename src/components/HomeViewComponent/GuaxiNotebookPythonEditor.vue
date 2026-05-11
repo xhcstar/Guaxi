@@ -267,8 +267,21 @@ const mountMonacoEditor = async () => {
       roundedSelection: false,
       scrollBeyondLastLine: false,
       wordWrap: 'on',
-      quickSuggestions: true,
+      // 设计说明：
+      // 1. Notebook Python 单元格的补全应来自 Python LSP/bridge，而不是 Monaco 默认的文档单词扫描。
+      // 2. 默认 word suggestions 会把 `sys.007aff`、`sys..2f` 这类同文档碎片展示成候选，看起来像 LSP 返回了错误结果。
+      // 3. 关闭 showWords 后，如果 LSP 尚未就绪，界面会宁可暂时无候选，也不显示误导性的伪语义补全。
+      wordBasedSuggestions: 'off',
+      quickSuggestions: {
+        other: true,
+        comments: false,
+        strings: true,
+      },
       suggestOnTriggerCharacters: true,
+      suggest: {
+        showWords: false,
+        snippetsPreventQuickSuggestions: false,
+      },
       tabSize: 4,
       insertSpaces: true,
       fontFamily: 'var(--editor-font-family, "Maple Mono NF CN", "JetBrainsMono Nerd Font Mono", Consolas, monospace)',
@@ -286,6 +299,11 @@ const mountMonacoEditor = async () => {
         verticalScrollbarSize: 8,
         horizontalScrollbarSize: 8,
       },
+    })
+    logger.debug('[NotebookPythonEditor] python lsp suggest options applied', {
+      cellKey: String(props.cellKey || ''),
+      wordBasedSuggestions: 'off',
+      showWords: false,
     })
 
     contentChangeDisposable = editor.onDidChangeModelContent(() => {

@@ -81,30 +81,45 @@ const dedupeCompletionSuggestions = (suggestions = []) => {
   return output
 }
 
-const resolvePythonMemberAccessContext = (monaco, model, position) => {
+const resolveCompletionContext = (monaco, model, position) => {
   const lineNumber = Number(position?.lineNumber || 1)
   const column = Number(position?.column || 1)
   const lineContent = String(model?.getLineContent?.(lineNumber) || '')
   const beforeCursor = lineContent.slice(0, Math.max(0, column - 1))
-  const hostToken = String(beforeCursor.match(/[^\s]+$/)?.[0] || '')
-  if (!hostToken) return null
+  const hostToken = String(beforeCursor.match(/[^\s()[\]{}"'`,;]+$/)?.[0] || '')
+  const fallbackWord = model?.getWordUntilPosition?.(position)
 
   const typedWord = String(hostToken.match(/([A-Za-z0-9_$]*)$/)?.[1] || '')
   const filterPrefix = hostToken.slice(0, Math.max(0, hostToken.length - typedWord.length))
-  if (!/(\.|::|->)$/.test(filterPrefix)) return null
-  if (!/^(?:[A-Za-z_$][\w$]*)(?:(?:\.|::|->)[A-Za-z_$][\w$]*)*(?:\.|::|->)?[A-Za-z0-9_$]*$/.test(hostToken)) {
-    return null
+  const isMemberAccess = !!hostToken
+    && /(\.|::|->)$/.test(filterPrefix)
+    && /^(?:[A-Za-z_$][\w$]*)(?:(?:\.|::|->)[A-Za-z_$][\w$]*)*(?:\.|::|->)?[A-Za-z0-9_$]*$/.test(hostToken)
+
+  if (isMemberAccess) {
+    return {
+      hostToken,
+      typedWord,
+      filterPrefix,
+      replaceRange: new monaco.Range(
+        lineNumber,
+        Math.max(1, column - hostToken.length),
+        lineNumber,
+        column,
+      ),
+    }
   }
 
+  const wordStart = Number(fallbackWord?.startColumn || column)
+  const wordEnd = Number(fallbackWord?.endColumn || column)
   return {
-    hostToken,
-    typedWord,
-    filterPrefix,
+    hostToken: String(fallbackWord?.word || typedWord || ''),
+    typedWord: String(fallbackWord?.word || typedWord || ''),
+    filterPrefix: '',
     replaceRange: new monaco.Range(
       lineNumber,
-      Math.max(1, column - hostToken.length),
+      Math.max(1, wordStart),
       lineNumber,
-      column,
+      Math.max(wordStart, wordEnd),
     ),
   }
 }
@@ -130,17 +145,14 @@ const buildBridgedInsertText = (insertText, rawLabel, context) => {
   return `${context.filterPrefix}${baseText}`
 }
 
-const createPythonCompletionBridgeProvider = (monaco, languageId) => ({
-  triggerCharacters: ['.', ':', '>'],
+const createLspCompletionBridgeProvider = (monaco, languageId) => ({
+  triggerCharacters: ['.', ':', '>', '/', '\\', '"', "'", '@', '#', '<'],
   async provideCompletionItems(model, position, context) {
     if (normalizeLanguageId(model?.getLanguageId?.()) !== languageId) {
       return { suggestions: [] }
     }
 
-    const memberAccessContext = resolvePythonMemberAccessContext(monaco, model, position)
-    if (!memberAccessContext) {
-      return { suggestions: [] }
-    }
+    const completionContext = resolveCompletionContext(monaco, model, position)
 
     const uriString = String(model?.uri?.toString?.() || '').trim()
     if (!uriString) {
@@ -181,14 +193,14 @@ const createPythonCompletionBridgeProvider = (monaco, languageId) => ({
       const items = Array.isArray(result?.items) ? result.items : []
       if (!items.length) {
         logger.debug('[PythonCompletionBridge] vscode completion returned no items', {
-          languageId,
-          uriString,
-          lineNumber: Number(position?.lineNumber || 0),
-          column: Number(position?.column || 0),
-          hostToken: memberAccessContext.hostToken,
-        })
-        return { suggestions: [] }
-      }
+        languageId,
+        uriString,
+        lineNumber: Number(position?.lineNumber || 0),
+        column: Number(position?.column || 0),
+        hostToken: completionContext.hostToken,
+      })
+      return { suggestions: [] }
+    }
 
       const suggestions = []
       for (let index = 0; index < items.length; index += 1) {
@@ -199,31 +211,31 @@ const createPythonCompletionBridgeProvider = (monaco, languageId) => ({
           ? item.insertText
           : String(item?.insertText?.value || rawLabel)
         const mapped = {
-          label: buildBridgedDisplayLabel(rawLabel, memberAccessContext),
+          label: buildBridgedDisplayLabel(rawLabel, completionContext),
           kind: VSCODE_TO_MONACO_COMPLETION_KIND[item?.kind] || monaco.languages.CompletionItemKind.Text,
           detail: String(item?.detail || ''),
           documentation: normalizeCompletionDocumentation(item?.documentation),
-          filterText: buildBridgedFilterText(item?.filterText, rawLabel, memberAccessContext),
+          filterText: buildBridgedFilterText(item?.filterText, rawLabel, completionContext),
           sortText: buildCompletionSortKey(item, rawLabel, index),
-          insertText: buildBridgedInsertText(rawInsertText, rawLabel, memberAccessContext),
+          insertText: buildBridgedInsertText(rawInsertText, rawLabel, completionContext),
           insertTextRules: item?.insertText && typeof item.insertText === 'object'
             ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
             : undefined,
-          range: memberAccessContext.replaceRange,
+          range: completionContext.replaceRange,
         }
         suggestions.push(mapped)
       }
 
       const dedupedSuggestions = dedupeCompletionSuggestions(suggestions)
-      logger.info('[PythonCompletionBridge] bridged vscode completion items for Monaco', {
+      logger.info('[LspCompletionBridge] bridged vscode completion items for Monaco', {
         languageId,
         uriString,
         lineNumber: Number(position?.lineNumber || 0),
         column: Number(position?.column || 0),
         triggerCharacter: triggerCharacter || '',
-        hostToken: memberAccessContext.hostToken,
-        typedWord: memberAccessContext.typedWord,
-        filterPrefix: memberAccessContext.filterPrefix,
+        hostToken: completionContext.hostToken,
+        typedWord: completionContext.typedWord,
+        filterPrefix: completionContext.filterPrefix,
         itemCount: items.length,
         suggestionCount: dedupedSuggestions.length,
         firstSuggestionLabel: normalizeCompletionLabel(dedupedSuggestions[0]?.label || ''),
@@ -233,7 +245,7 @@ const createPythonCompletionBridgeProvider = (monaco, languageId) => ({
         incomplete: !!result?.isIncomplete,
       }
     } catch (error) {
-      logger.warn('[PythonCompletionBridge] vscode completion bridge failed', {
+      logger.warn('[LspCompletionBridge] vscode completion bridge failed', {
         languageId,
         uriString,
         lineNumber: Number(position?.lineNumber || 0),
@@ -248,23 +260,25 @@ const createPythonCompletionBridgeProvider = (monaco, languageId) => ({
 })
 
 // 设计说明：
-// 1. 这里专门桥接 Python 的“成员访问补全”场景，例如 `sys.`、`pkg.mod.`。
-// 2. 实际排查里后端/LSP 已经成功返回 completion items，但 Monaco 仍会把当前 host token 当成过滤前缀，
-//    结果 widget 最终显示成 `No suggestions`。
-// 3. 这个 bridge 主动把 VSCode completion item 映射成 Monaco 更容易接受的 `label/filterText/range`，
-//    并把整段成员访问 token 作为 replace range，从而避免前端过滤阶段把真实结果全部筛空。
-export const registerPythonCompletionBridge = (monaco, languageIds = ['python']) => {
+// 1. 统一 LSP 扩展体系后，Monaco 和 VSCode completion provider 之间仍需要一层薄桥接。
+// 2. 语言服务器实际返回了候选时，Standalone Monaco 在成员访问上下文里可能按 `sys.` / `foo::`
+//    这种宿主 token 过滤，最终把真实语义候选筛成 `No suggestions`。
+// 3. 这里对所有扩展启用的 LSP 语言注册桥接 provider，主动把 VSCode completion item 映射成 Monaco
+//    可接受的 label/filterText/range，并用请求 key 防止递归调用自身。
+export const registerLspCompletionBridge = (monaco, languageIds = ['python']) => {
   if (!monaco?.languages?.registerCompletionItemProvider) return
   for (const rawLanguageId of Array.isArray(languageIds) ? languageIds : []) {
     const languageId = normalizeLanguageId(rawLanguageId)
     if (!languageId || registeredLanguageProviders.has(languageId)) continue
     const disposable = monaco.languages.registerCompletionItemProvider(
       languageId,
-      createPythonCompletionBridgeProvider(monaco, languageId),
+      createLspCompletionBridgeProvider(monaco, languageId),
     )
     registeredLanguageProviders.set(languageId, disposable)
-    logger.info('[PythonCompletionBridge] registered completion bridge', {
+    logger.info('[LspCompletionBridge] registered completion bridge', {
       languageId,
     })
   }
 }
+
+export const registerPythonCompletionBridge = registerLspCompletionBridge

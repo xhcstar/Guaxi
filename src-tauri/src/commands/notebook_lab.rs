@@ -134,10 +134,6 @@ pub async fn notebook_data_lab_rpc(
     dispatch_notebook_data_lab_rpc(state.inner(), &request, "tauri-command")
 }
 
-pub fn notebook_data_lab_rpc_event_name() -> &'static str {
-    NOTEBOOK_DATALAB_RPC_EVENT
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotebookDataLabHttpHealth {

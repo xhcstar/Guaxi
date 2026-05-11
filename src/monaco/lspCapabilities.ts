@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core'
-import legacyLspLanguageEntries from '../../shared/lsp_languages.json'
 import lspExtensionCatalog from '../../shared/lsp_extensions.json'
 import { createLogger } from '../utils/logger'
 
@@ -48,17 +47,6 @@ const normalizeLanguage = (languageId: string) =>
 
 export const normalizeLspLanguageId = (languageId: string) => normalizeLanguage(languageId)
 
-const normalizeEntries = (Array.isArray(legacyLspLanguageEntries) ? legacyLspLanguageEntries : [])
-  .map((entry) => ({
-    language: normalizeLanguage(entry?.language),
-    server: String(entry?.server || '').trim(),
-    bin_name: String(entry?.bin_name || '').trim(),
-    args: Array.isArray(entry?.args) ? entry.args.map((item) => String(item || '')) : [],
-    auto_download: !!entry?.auto_download,
-    source: 'legacy',
-  }))
-  .filter((entry) => !!entry.language)
-
 const normalizeCatalogEntries = (
   Array.isArray((lspExtensionCatalog as { extensions?: unknown[] })?.extensions)
     ? (lspExtensionCatalog as { extensions: ExtensionCatalogEntry[] }).extensions
@@ -93,28 +81,54 @@ const rebuildLanguageRegistry = () => {
   LSP_SUPPORTED_LANGUAGES_INTERNAL.clear()
   entryByLanguage.clear()
 
-  const merged = [...normalizeEntries]
+  // 设计说明：
+  // 1. LSP 能力表现在只从“已安装且运行时就绪”的扩展快照生成，避免旧的 shared/lsp_languages.json
+  //    把未安装扩展的语言也暴露成可用 LSP。
+  // 2. catalog 仍负责描述语言和 server 映射，但必须由运行时 registry 确认扩展可用后才加入编辑器能力表。
+  // 3. 这样编辑器、Notebook、状态栏都会看到同一套 VSCode-like 扩展能力，不再和独立 LSP 状态分叉。
   normalizeCatalogEntries.forEach((entry) => {
-    if (!merged.some((item) => item.language === entry.language)) {
-      merged.push(entry)
+    const normalized = normalizeLanguage(entry.language)
+    const runtimeEntry = runtimeExtensionByLanguage.get(normalized)
+    const runtimeReady = runtimeEntry?.runtime_status?.ready !== false
+    if (!normalized || !runtimeEntry?.installed || !runtimeReady) return
+
+    const effectiveEntry = {
+      ...entry,
+      server: String(
+        normalizeCatalogEntries.find((item) => item.extension_id === normalizeLanguage(runtimeEntry.id || '') && item.language === normalized)?.server
+          || entry.server
+      ).trim(),
+      extension_id: String(runtimeEntry.id || entry.extension_id || '').trim().toLowerCase() || entry.extension_id,
+      source: 'runtime',
     }
+
+    entryByLanguage.set(normalized, effectiveEntry)
+    LSP_LANGUAGE_ENTRIES_INTERNAL.push(effectiveEntry)
+    LSP_SUPPORTED_LANGUAGES_INTERNAL.add(normalized)
   })
 
-  merged.forEach((entry) => {
-    const normalized = normalizeLanguage(entry.language)
-    if (!normalized) return
-    const runtimeEntry = runtimeExtensionByLanguage.get(normalized)
-    const effectiveEntry = runtimeEntry?.installed
+  runtimeExtensionByLanguage.forEach((runtimeEntry, language) => {
+    const normalized = normalizeLanguage(language)
+    if (!normalized || entryByLanguage.has(normalized)) return
+    const runtimeReady = runtimeEntry?.runtime_status?.ready !== false
+    if (!runtimeEntry?.installed || !runtimeReady) return
+
+    const catalogEntry = normalizeCatalogEntries.find((item) => item.language === normalized)
+    const effectiveEntry = catalogEntry
       ? {
-          ...entry,
-          server: String(
-            normalizeCatalogEntries.find((item) => item.extension_id === normalizeLanguage(runtimeEntry.id || '') && item.language === normalized)?.server
-              || entry.server
-          ).trim(),
-          extension_id: String(runtimeEntry.id || entry.extension_id || '').trim().toLowerCase() || entry.extension_id,
+          ...catalogEntry,
+          extension_id: String(runtimeEntry.id || catalogEntry.extension_id || '').trim().toLowerCase() || catalogEntry.extension_id,
           source: 'runtime',
         }
-      : entry
+      : {
+          language: normalized,
+          server: normalized,
+          bin_name: '',
+          args: [],
+          auto_download: false,
+          extension_id: String(runtimeEntry.id || '').trim().toLowerCase() || undefined,
+          source: 'runtime',
+        }
 
     entryByLanguage.set(normalized, effectiveEntry)
     LSP_LANGUAGE_ENTRIES_INTERNAL.push(effectiveEntry)

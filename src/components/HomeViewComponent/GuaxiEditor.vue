@@ -1112,7 +1112,7 @@ import {
   disposeAllVsCodeTextModelsForOwner,
   replaceModelContentPreserveUndo,
 } from '../../monaco/vscodeModelBridge'
-import { registerPythonCompletionBridge } from '../../monaco/pythonCompletionBridge'
+import { registerLspCompletionBridge } from '../../monaco/pythonCompletionBridge'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -1142,7 +1142,7 @@ import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
 const logger = createLogger('GuaxiEditor')
-registerPythonCompletionBridge(monaco, ['python'])
+registerLspCompletionBridge(monaco, Array.from(LSP_SUPPORTED_LANGUAGES))
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
 const outlineStore = useOutlineStore()
 
@@ -5494,6 +5494,23 @@ const DEFAULT_WORD_SUGGEST_OPTIONS = {
   }
 };
 
+const DIRECT_LSP_SUGGEST_OPTIONS = {
+  wordBasedSuggestions: 'off',
+  quickSuggestions: {
+    // 设计说明：
+    // 1. 直接编辑 Python/Lua/LaTeX/HTML 等 LSP 语言时，建议列表应优先来自语言服务器。
+    // 2. Monaco 的文档单词补全会把 `sys..2f` 这类源码碎片也作为候选，容易盖住真实语义补全。
+    // 3. 因此对受 LSP 管理的非 Markdown 文件关闭 word suggestions，只保留 provider/LSP 结果。
+    other: true,
+    comments: false,
+    strings: true
+  },
+  suggest: {
+    showWords: false,
+    snippetsPreventQuickSuggestions: false
+  }
+};
+
 const getMarkdownFenceHighlightState = (targetEditor) => {
   let state = markdownFenceHighlightStates.get(targetEditor);
   if (!state) {
@@ -5880,6 +5897,20 @@ const refreshMarkdownSuggestMode = (targetEditor) => {
 
   state.embedded = inEmbeddedMarkdown;
   targetEditor.updateOptions(inEmbeddedMarkdown ? EMBEDDED_WORD_SUGGEST_OPTIONS : DEFAULT_WORD_SUGGEST_OPTIONS);
+};
+
+const refreshDirectLspSuggestMode = (targetEditor, languageId) => {
+  if (!targetEditor || typeof targetEditor.updateOptions !== 'function') return;
+  const lang = String(languageId || targetEditor.getModel?.()?.getLanguageId?.() || '').trim().toLowerCase();
+  if (!lang || lang === 'markdown') return;
+  const useDirectLspMode = !!lspEnabled.value && LSP_SUPPORTED_LANGUAGES.has(lang);
+  targetEditor.updateOptions(useDirectLspMode
+    ? DIRECT_LSP_SUGGEST_OPTIONS
+    : DEFAULT_WORD_SUGGEST_OPTIONS);
+  logger.debug('[DirectLsp] suggest mode refreshed', {
+    languageId: lang,
+    useDirectLspMode,
+  });
 };
 
 const isSuggestWidgetVisibleForEditor = (targetEditor) => {
@@ -6319,6 +6350,37 @@ const maybeTriggerEmbeddedSuggestOnType = (targetEditor, text) => {
       targetEditor.trigger('guaxi-embedded-lsp-type', 'editor.action.triggerSuggest', {});
     } catch (error) {
       logger.debug('[EmbeddedLsp] trigger suggest on type failed', error);
+    }
+  }, 0);
+};
+
+const maybeTriggerDirectLspSuggestOnType = (targetEditor, text) => {
+  if (!targetEditor || !shouldTriggerEmbeddedSuggestOnType(text)) return;
+
+  const model = targetEditor.getModel?.();
+  const position = targetEditor.getPosition?.();
+  const languageId = String(model?.getLanguageId?.() || '').trim().toLowerCase();
+  if (!model || !position || !languageId || languageId === 'markdown') return;
+  if (!LSP_SUPPORTED_LANGUAGES.has(languageId)) return;
+  if (!lspEnabled.value) return;
+  if (isSuggestWidgetVisibleForEditor(targetEditor)) return;
+  if (shouldThrottleEmbeddedSuggestTrigger(targetEditor, 120)) return;
+
+  // 设计说明：
+  // 1. Markdown 内嵌代码块有自己的虚拟文档触发逻辑，普通源码文件则应直接让 Monaco/LSP provider 响应。
+  // 2. 主编辑器之前只主动触发 Markdown 内嵌 LSP，Python/Lua/HTML 等直接文件只能等待 Monaco 默认策略，
+  //    这会表现为“编辑模式不触发 LSP 语法补全”。
+  // 3. 这里只在受 LSP 管理的非 Markdown 语言中触发，并配合关闭 word suggestions，避免出现文档碎片候选。
+  window.setTimeout(() => {
+    try {
+      targetEditor.trigger('guaxi-direct-lsp-type', 'editor.action.triggerSuggest', {});
+      logger.debug('[DirectLsp] trigger suggest on type', {
+        languageId,
+        lineNumber: position.lineNumber,
+        column: position.column,
+      });
+    } catch (error) {
+      logger.debug('[DirectLsp] trigger suggest on type failed', { languageId }, error);
     }
   }, 0);
 };
@@ -7441,6 +7503,9 @@ const enableLspForEditorLanguage = (targetEditor, languageId, filePath = '') => 
   const lang = String(languageId || '').trim().toLowerCase()
   if (!lang) return
 
+  refreshDirectLspSuggestMode(targetEditor, lang)
+  registerLspCompletionBridge(monaco, [lang])
+
   initTextmate(targetEditor, lang).catch((e) => {
     logger.warn('[Editor] initTextmate failed, ignored', { language: lang }, e)
   })
@@ -7864,7 +7929,6 @@ const initEditor = () => {
     enableLspForEditorLanguage(editor, language, selectedFile.value?.path || '')
   })
   refreshMarkdownSuggestMode(editor)
-  refreshMarkdownSuggestMode(editor)
 
   // 注册编辑器实例到store
   editorStore.setEditorInstance(editor);
@@ -8161,6 +8225,7 @@ const ensureSecondaryEditor = () => {
     editorEffectsRight?.spawnExplosionAtCursor(text);
     editorEffectsRight?.updateCursorTarget();
     maybeTriggerEmbeddedSuggestOnType(secondaryEditor, text)
+    maybeTriggerDirectLspSuggestOnType(secondaryEditor, text)
   });
 
   secondaryEditor.onDidChangeModelLanguage(() => {
@@ -8774,6 +8839,7 @@ const setupEditorListeners = () => {
     editorEffectsLeft?.spawnExplosionAtCursor(text);
     editorEffectsLeft?.updateCursorTarget();
     maybeTriggerEmbeddedSuggestOnType(editor, text)
+    maybeTriggerDirectLspSuggestOnType(editor, text)
 
     const model = editor.getModel();
     const pos = editor.getPosition();
@@ -17371,7 +17437,8 @@ watch([() => fileTreeStore.activeTab, rawContent, editorSurfaceMode, canUseNoteb
 }, { immediate: true })
 
 const handleLspSettingChanged = (evt) => {
-  const enabled = !!evt?.detail?.enabled
+  const hasExplicitEnabled = typeof evt?.detail?.enabled === 'boolean'
+  const enabled = hasExplicitEnabled ? !!evt.detail.enabled : !!lspEnabled.value
   lspEnabled.value = enabled
   applyMonacoThemeByLsp(enabled)
   scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')

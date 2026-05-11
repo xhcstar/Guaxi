@@ -49,68 +49,17 @@
         <div>
           <h3>LSP 配置</h3>
           <p class="description">
-            关闭后将不会初始化 LSP 语法高亮和代码智能，重新打开后新建编辑器才会生效。
+            LSP 能力统一由下方语言扩展提供；安装对应扩展后，新建或重新打开编辑器即可获得语法高亮和语义补全。
           </p>
           <n-form label-placement="left" label-width="auto" :show-require-mark="false">
-            <n-form-item label="启用 LSP 语法高亮">
+            <n-form-item label="启用 LSP 扩展能力">
               <n-switch
                 v-model:value="lspHighlightEnabled"
                 :disabled="loading"
                 @update:value="handleLspHighlightChange"
               />
             </n-form-item>
-            <n-form-item label="GitHub Token">
-              <n-input
-                v-model:value="lspGithubToken"
-                type="password"
-                autocomplete="new-password"
-                placeholder="可选，用于提升 GitHub API 限额"
-                :disabled="loading || lspTokenSaving"
-              />
-            </n-form-item>
-            <n-form-item>
-              <n-button
-                type="primary"
-                size="small"
-                :disabled="loading || lspTokenSaving"
-                @click="handleLspGithubTokenSave"
-              >
-                保存 Token
-              </n-button>
-            </n-form-item>
           </n-form>
-          <div class="lsp-status-panel">
-            <div class="lsp-status-head">
-              <span class="lsp-status-title">语言 LSP 状态</span>
-              <n-button size="small" :disabled="loading || lspStatusLoading" @click="refreshLspServerStatus">刷新</n-button>
-            </div>
-            <div v-if="lspStatusLoading" class="lsp-status-loading">正在加载 LSP 状态...</div>
-            <div v-else class="lsp-status-list">
-              <div v-for="item in lspServerStatuses" :key="item.language" class="lsp-status-item">
-                <div class="lsp-status-row">
-                  <div class="lsp-status-name">{{ item.language }} / {{ item.server }}</div>
-                  <span :class="['lsp-status-chip', item.installing ? 'loading' : (item.installed ? 'ok' : (item.supported ? 'warn' : 'info'))]">
-                    {{ item.installing ? '下载中' : (item.installed ? '已安装' : (item.supported ? '未安装' : '需手动配置')) }}
-                  </span>
-                </div>
-                <div v-if="item.install_dir" class="lsp-status-path">{{ item.install_dir }}</div>
-                <div v-if="item.message" class="lsp-status-message">{{ item.message }}</div>
-                <div class="lsp-status-actions">
-                  <n-button
-                    size="small"
-                    type="primary"
-                    :loading="item.installing"
-                    :disabled="loading || lspStatusLoading || item.installing"
-                    @click="handleLspInstall(item.language)"
-                  >
-                    下载
-                  </n-button>
-                </div>
-              </div>
-              <div v-if="lspServerStatuses.length === 0" class="lsp-status-empty">暂无 LSP 配置</div>
-            </div>
-          </div>
-          <n-divider />
           <LspExtensionPanel />
         </div>
 
@@ -355,11 +304,9 @@ const themeOptions = [
 const themeValue = ref('light')
 const gcCycleHours = ref(1)
 const lspHighlightEnabled = ref(false)
-const lspGithubToken = ref('')
 const webrtcSignalUrl = ref('')
 const terminalDefaultProfile = ref('powershell')
 const terminalGitBashPath = ref('')
-const lspServerStatuses = ref([])
 const ttsProvider = ref('sherpa-onnx')
 const ttsModel = ref('')
 const ttsTokens = ref('')
@@ -370,10 +317,8 @@ const asrModel = ref('')
 const asrExe = ref('')
 const asrTestFilePath = ref('')
 const asrTestResult = ref('')
-const lspStatusLoading = ref(false)
 const loading = ref(false)
 const themeSaving = ref(false)
-const lspTokenSaving = ref(false)
 const webrtcSignalSaving = ref(false)
 const ttsSaving = ref(false)
 const ttsTesting = ref(false)
@@ -417,11 +362,10 @@ onMounted(async () => {
     await Promise.all([
       settingsStore.loadAppearanceConfig(),
       (async () => {
-        const [seconds, enabled, signalUrl, githubToken, ttsConfig, asrConfig, terminalConfig] = await Promise.all([
+        const [seconds, enabled, signalUrl, ttsConfig, asrConfig, terminalConfig] = await Promise.all([
           invoke('get_gc_cycle_seconds'),
           invoke('get_lsp_syntax_highlight_enabled'),
           invoke('get_webrtc_signal_url'),
-          invoke('get_lsp_github_token'),
           invoke('get_tts_config'),
           invoke('get_asr_config'),
           invoke('get_terminal_config'),
@@ -435,7 +379,6 @@ onMounted(async () => {
 
         lspHighlightEnabled.value = !!enabled
         webrtcSignalUrl.value = typeof signalUrl === 'string' ? signalUrl : ''
-        lspGithubToken.value = typeof githubToken === 'string' ? githubToken : ''
         ttsProvider.value = String(ttsConfig?.provider || 'sherpa-onnx').trim() || 'sherpa-onnx'
         ttsModel.value = String(ttsConfig?.model || '').trim()
         ttsTokens.value = String(ttsConfig?.tokens || '').trim()
@@ -453,7 +396,6 @@ onMounted(async () => {
     logger.error('加载偏好设置失败:', error)
     gcCycleHours.value = 1
     lspHighlightEnabled.value = false
-    lspGithubToken.value = ''
     themeValue.value = 'light'
     ttsProvider.value = 'sherpa-onnx'
     ttsModel.value = 'utils/Models/tts/kokoro_multi_lang/model.onnx'
@@ -467,8 +409,6 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-
-  await refreshLspServerStatus()
 })
 
 const handleThemeChange = async (value) => {
@@ -530,63 +470,6 @@ const handleLspHighlightChange = async (value) => {
     logger.error('更新 LSP 语法高亮配置失败:', error)
   } finally {
     loading.value = false
-  }
-}
-
-const refreshLspServerStatus = async (options = {}) => {
-  const silent = !!options.silent
-  if (!silent && lspStatusLoading.value) return
-  try {
-    if (!silent) lspStatusLoading.value = true
-    const data = await invoke('get_lsp_server_statuses')
-    lspServerStatuses.value = Array.isArray(data) ? data : []
-  } catch (error) {
-    logger.error('加载 LSP 状态失败:', error)
-    lspServerStatuses.value = []
-  } finally {
-    if (!silent) lspStatusLoading.value = false
-  }
-}
-
-const updateLspStatusItem = (language, patch) => {
-  const lang = String(language || '').trim()
-  if (!lang) return
-  lspServerStatuses.value = lspServerStatuses.value.map((item) => {
-    if (item.language !== lang) return item
-    return { ...item, ...patch }
-  })
-}
-
-const handleLspGithubTokenSave = async () => {
-  try {
-    lspTokenSaving.value = true
-    const token = String(lspGithubToken.value || '').trim()
-    logger.info('保存 LSP GitHub Token')
-    await invoke('set_lsp_github_token', { token })
-    logger.info('LSP GitHub Token 保存完成')
-  } catch (error) {
-    logger.error('保存 LSP GitHub Token 失败:', error)
-  } finally {
-    lspTokenSaving.value = false
-  }
-}
-
-const handleLspInstall = async (language) => {
-  const lang = String(language || '').trim()
-  if (!lang) return
-
-  updateLspStatusItem(lang, { installing: true })
-  try {
-    logger.info('开始下载 LSP:', { language: lang })
-    await invoke('install_lsp_server', { language: lang })
-    logger.info('LSP 下载完成:', { language: lang })
-    updateLspStatusItem(lang, { message: null })
-  } catch (error) {
-    logger.error('下载 LSP 失败:', error)
-    updateLspStatusItem(lang, { message: `下载失败: ${String(error)}` })
-  } finally {
-    updateLspStatusItem(lang, { installing: false })
-    await refreshLspServerStatus({ silent: true })
   }
 }
 

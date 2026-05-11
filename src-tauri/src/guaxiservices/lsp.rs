@@ -17,7 +17,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex as ParkingMutex;
 use regex::Regex;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::fs as tokio_fs;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -69,18 +69,6 @@ struct LspLanguageEntry {
     bin_name: String,
     args: Vec<String>,
     auto_download: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LspServerStatus {
-    pub language: String,
-    pub server: String,
-    pub supported: bool,
-    pub installed: bool,
-    pub installing: bool,
-    pub install_dir: String,
-    pub bin_path: Option<String>,
-    pub message: Option<String>,
 }
 
 static LSP_LANGUAGES: Lazy<Vec<LspLanguageEntry>> = Lazy::new(|| {
@@ -673,67 +661,6 @@ async fn ensure_lsp_binary(
     }
 }
 
-fn build_lsp_status(entry: &LspLanguageEntry) -> LspServerStatus {
-    let install_dir = if is_bundled_node_lsp(&entry.server) {
-        slidev_env_root().ok()
-    } else {
-        lsp_server_dir(&entry.server).ok()
-    };
-    let bin_path = find_existing_lsp_program(entry);
-    let installed = bin_path.is_some();
-    let supported = is_bundled_node_lsp(&entry.server)
-        || (entry.auto_download && lsp_binary_spec(&entry.server).is_some());
-    let installing = LSP_INSTALLING.lock().contains(&entry.server);
-    let mut message = None;
-
-    if !supported {
-        message = Some("需要手动配置运行环境".to_string());
-    } else if is_bundled_node_lsp(&entry.server) && !installed {
-        message = Some("缺少内置 SlidevEnv 的 Node LSP 依赖".to_string());
-    } else if LSP_INSTALL_FAILED.lock().contains(&entry.server) {
-        message = Some("上次安装失败".to_string());
-    }
-
-    LspServerStatus {
-        language: entry.language.to_string(),
-        server: entry.server.to_string(),
-        supported,
-        installed,
-        installing,
-        install_dir: install_dir
-            .map(|dir| dir.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        bin_path: bin_path.map(|p| p.to_string_lossy().to_string()),
-        message,
-    }
-}
-
-pub async fn get_lsp_server_statuses() -> Vec<LspServerStatus> {
-    LSP_LANGUAGES.iter().map(build_lsp_status).collect()
-}
-
-pub async fn install_lsp_server(
-    language: &str,
-    token: Option<String>,
-) -> Result<LspServerStatus, String> {
-    let entry = lsp_language_entry(language)
-        .ok_or_else(|| format!("不支持的语言: {}", language))?;
-
-    if is_bundled_node_lsp(&entry.server) {
-        if find_existing_lsp_program(entry).is_some() {
-            return Ok(build_lsp_status(entry));
-        }
-        return Err("当前 LSP 依赖内置的 SlidevEnv 包，请重新构建或恢复 SlidevEnv/node_modules".to_string());
-    }
-
-    if lsp_binary_spec(&entry.server).is_none() {
-        return Err(format!("当前语言暂不支持自动下载: {}", language));
-    }
-
-    let _ = ensure_lsp_binary(&entry.server, &entry.bin_name, token.as_deref()).await?;
-    Ok(build_lsp_status(entry))
-}
-
 async fn prepare_lsp_command(language: &str) -> Result<LspCommandConfig, String> {
     if let Some(resolved) = lsp_extensions::resolve_lsp_command_for_language(language).await? {
         info!(
@@ -752,6 +679,18 @@ async fn prepare_lsp_command(language: &str) -> Result<LspCommandConfig, String>
         });
     }
 
+    if !lsp_extensions::has_installed_lsp_extension_for_language(language)? {
+        return Err(format!(
+            "当前语言未安装可用的 LSP 扩展，请先在设置的 LSP 扩展架构中安装对应语言插件: {}",
+            language
+        ));
+    }
+
+    // 设计说明：
+    // 1. 用户可见的 LSP 体系已经统一为“扩展优先”，这里不再允许未安装扩展的语言直接走旧语言表。
+    // 2. 旧的 binary 下载/SlidevEnv 解析仅作为已安装扩展的 fallback runtime 使用，解决 marksman/texlab/lua-language-server
+    //    这类 VSIX 本身不总是携带完整 server 的生产可用性问题。
+    // 3. 这样设置页只保留扩展管理，但已有下载器能力仍能在扩展明确授权后兜底启动真实 LSP server。
     let entry = lsp_language_entry(language)
         .ok_or_else(|| format!("Unsupported language for LSP: {}", language))?;
 

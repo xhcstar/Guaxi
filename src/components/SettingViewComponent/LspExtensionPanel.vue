@@ -4,7 +4,7 @@
       <div class="lsp-extension-panel__hero">
         <h3 class="lsp-extension-panel__title">LSP 扩展架构</h3>
         <p class="lsp-extension-panel__description">
-          这里管理 VSIX / Open VSX 语言扩展
+          这里管理 VSCode Marketplace / Open VSX / 本地 VSIX 语言扩展
         </p>
       </div>
       <n-space class="lsp-extension-panel__header-actions" wrap>
@@ -15,9 +15,15 @@
     </div>
 
     <div class="lsp-extension-panel__search">
+      <n-select
+        v-model:value="searchSource"
+        class="lsp-extension-panel__source"
+        :options="searchSourceOptions"
+        :disabled="loading || searching"
+      />
       <n-input
         v-model:value="searchQuery"
-        placeholder="搜索 Open VSX 语言扩展，例如 clangd / basedpyright / rust-analyzer"
+        placeholder="搜索语言扩展，例如 basedpyright / lua / marksman / html"
         :disabled="loading || searching"
         @keydown.enter.prevent="handleSearch"
       />
@@ -28,12 +34,12 @@
         :disabled="loading"
         @click="handleSearch"
       >
-        搜索 Open VSX
+        搜索扩展
       </n-button>
     </div>
 
     <section v-if="searchResults.length" class="lsp-extension-panel__section">
-      <div class="lsp-extension-panel__section-title">Open VSX 搜索结果</div>
+      <div class="lsp-extension-panel__section-title">{{ searchSourceLabel }} 搜索结果</div>
       <div class="lsp-extension-panel__list">
         <article
           v-for="item in searchResults"
@@ -53,7 +59,7 @@
               type="primary"
               :loading="installingExtensionId === item.id"
               :disabled="loading && installingExtensionId !== item.id"
-              @click="handleInstallOpenVsx(item)"
+              @click="handleInstallSearchResult(item)"
             >
               安装
             </n-button>
@@ -113,13 +119,13 @@
 
           <div class="lsp-extension-panel__item-actions">
             <n-button
-              v-if="!item.installed && item.open_vsx"
+              v-if="!item.installed && (item.vscode_marketplace || item.open_vsx)"
               size="small"
               type="primary"
               :loading="installingExtensionId === item.id"
               @click="handleInstallCatalogExtension(item)"
             >
-              从 Open VSX 安装
+              安装扩展
             </n-button>
 
             <n-button
@@ -157,6 +163,7 @@ const settingsStore = useSettingsStore()
 const loading = ref(false)
 const searching = ref(false)
 const searchQuery = ref('')
+const searchSource = ref('marketplace')
 const searchResults = ref([])
 const extensions = ref([])
 const installingExtensionId = ref('')
@@ -164,6 +171,15 @@ const removingExtensionId = ref('')
 
 const installedCount = computed(() =>
   extensions.value.filter((item) => item?.installed).length
+)
+
+const searchSourceOptions = [
+  { label: 'VSCode Marketplace', value: 'marketplace' },
+  { label: 'Open VSX', value: 'openvsx' },
+]
+
+const searchSourceLabel = computed(() =>
+  searchSource.value === 'openvsx' ? 'Open VSX' : 'VSCode Marketplace'
 )
 
 // 设计说明：
@@ -196,6 +212,11 @@ const compatibilityTagType = (level) => {
 
 const syncRuntimeSnapshot = async () => {
   await refreshLspRuntimeExtensionSnapshot()
+  window.dispatchEvent(
+    new CustomEvent('guaxi:lsp-setting-changed', {
+      detail: { source: 'lsp-extension-runtime-snapshot' },
+    })
+  )
   logger.info('[LspExtensionPanel] runtime snapshot refreshed after extension mutation')
 }
 
@@ -227,21 +248,25 @@ const handleSearch = async () => {
 
   try {
     searching.value = true
-    const result = await invoke('search_open_vsx_extensions', { query })
+    const command = searchSource.value === 'openvsx'
+      ? 'search_open_vsx_extensions'
+      : 'search_vscode_marketplace_extensions'
+    const result = await invoke(command, { query })
     searchResults.value = Array.isArray(result) ? result : []
-    logger.info('[LspExtensionPanel] Open VSX search completed', {
+    logger.info('[LspExtensionPanel] extension search completed', {
       query,
+      source: searchSource.value,
       resultCount: searchResults.value.length,
     })
   } catch (error) {
-    logger.error('[LspExtensionPanel] Open VSX search failed', error)
-    message.error(`搜索 Open VSX 失败: ${String(error)}`)
+    logger.error('[LspExtensionPanel] extension search failed', error)
+    message.error(`搜索扩展失败: ${String(error)}`)
   } finally {
     searching.value = false
   }
 }
 
-const handleInstallOpenVsx = async (item) => {
+const handleInstallOpenVsx = async (item, options = {}) => {
   const extensionId = String(item?.id || '').trim()
   if (!extensionId) return
 
@@ -257,19 +282,90 @@ const handleInstallOpenVsx = async (item) => {
       version: item?.version ? String(item.version) : null,
       downloadUrl: item?.download_url ? String(item.download_url) : null,
     })
-    message.success(`已安装扩展 ${extensionId}`)
+    if (!options.silentSuccess) {
+      message.success(`已安装扩展 ${extensionId}`)
+    }
     await refreshExtensions()
   } catch (error) {
     logger.error('[LspExtensionPanel] install from Open VSX failed', error)
+    if (options.throwOnError) {
+      throw error
+    }
     message.error(`安装扩展失败: ${String(error)}`)
   } finally {
     installingExtensionId.value = ''
   }
 }
 
+const handleInstallMarketplace = async (item, options = {}) => {
+  const extensionId = String(item?.id || '').trim()
+  if (!extensionId) return
+
+  try {
+    installingExtensionId.value = extensionId
+    logger.info('[LspExtensionPanel] installing extension from VSCode Marketplace', {
+      extensionId,
+      version: String(item?.version || ''),
+      downloadUrl: String(item?.download_url || ''),
+    })
+    await invoke('install_vscode_marketplace_extension', {
+      extensionId,
+      version: item?.version ? String(item.version) : null,
+      downloadUrl: item?.download_url ? String(item.download_url) : null,
+    })
+    if (!options.silentSuccess) {
+      message.success(`已安装扩展 ${extensionId}`)
+    }
+    await refreshExtensions()
+  } catch (error) {
+    logger.error('[LspExtensionPanel] install from VSCode Marketplace failed', error)
+    if (options.throwOnError) {
+      throw error
+    }
+    message.error(`安装扩展失败: ${String(error)}`)
+  } finally {
+    installingExtensionId.value = ''
+  }
+}
+
+const handleInstallSearchResult = async (item) => {
+  if (searchSource.value === 'openvsx') {
+    await handleInstallOpenVsx(item)
+    return
+  }
+  await handleInstallMarketplace(item)
+}
+
 const handleInstallCatalogExtension = async (item) => {
+  const marketplaceId = String(item?.vscode_marketplace || '').trim()
+  const openVsxId = String(item?.open_vsx || '').trim()
+
+  if (item?.vscode_marketplace) {
+    try {
+      await handleInstallMarketplace({
+        id: marketplaceId,
+        version: null,
+        download_url: null,
+      }, {
+        throwOnError: !!openVsxId,
+        silentSuccess: false,
+      })
+      return
+    } catch (error) {
+      logger.warn('[LspExtensionPanel] Marketplace install failed, falling back to Open VSX', {
+        marketplaceId,
+        openVsxId,
+        error: String(error),
+      })
+      if (!openVsxId) {
+        message.error(`安装扩展失败: ${String(error)}`)
+        return
+      }
+    }
+  }
+
   await handleInstallOpenVsx({
-    id: item?.open_vsx || item?.id,
+    id: openVsxId || item?.id,
     version: null,
     download_url: null,
   })
@@ -408,8 +504,12 @@ onMounted(() => {
 
 .lsp-extension-panel__search {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) auto;
   gap: 10px;
+}
+
+.lsp-extension-panel__source {
+  min-width: 0;
 }
 
 .lsp-extension-panel__search-btn {

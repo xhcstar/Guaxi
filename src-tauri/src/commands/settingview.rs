@@ -8,7 +8,6 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 
 use crate::guaxiservices::bundled_resources;
-use crate::guaxiservices::lsp;
 use crate::guaxiservices::lsp_extensions;
 
 use aes_gcm::aead::{Aead, KeyInit};
@@ -1098,23 +1097,6 @@ pub fn set_lsp_github_token(token: String) {
 }
 
 #[tauri::command]
-pub async fn get_lsp_server_statuses() -> Result<Vec<lsp::LspServerStatus>, String> {
-    Ok(lsp::get_lsp_server_statuses().await)
-}
-
-#[tauri::command]
-pub async fn install_lsp_server(language: String) -> Result<lsp::LspServerStatus, String> {
-    let lang = language.trim().to_string();
-    if lang.is_empty() {
-        return Err("language 不能为空".to_string());
-    }
-    let config = load_config();
-    let token = config.lsp_github_token.trim().to_string();
-    let token = if token.is_empty() { None } else { Some(token) };
-    lsp::install_lsp_server(&lang, token).await
-}
-
-#[tauri::command]
 pub fn list_lsp_extensions() -> Result<Vec<lsp_extensions::LspExtensionState>, String> {
     lsp_extensions::list_lsp_extensions()
 }
@@ -1124,6 +1106,13 @@ pub async fn search_open_vsx_extensions(
     query: String,
 ) -> Result<Vec<lsp_extensions::OpenVsxSearchResult>, String> {
     lsp_extensions::search_open_vsx_extensions(&query).await
+}
+
+#[tauri::command]
+pub async fn search_vscode_marketplace_extensions(
+    query: String,
+) -> Result<Vec<lsp_extensions::VscodeMarketplaceSearchResult>, String> {
+    lsp_extensions::search_vscode_marketplace_extensions(&query).await
 }
 
 #[tauri::command]
@@ -1137,6 +1126,19 @@ pub async fn install_open_vsx_extension(
         return Err("extension_id 涓嶈兘涓虹┖".to_string());
     }
     lsp_extensions::install_open_vsx_extension(&id, version.as_deref(), download_url.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn install_vscode_marketplace_extension(
+    extension_id: String,
+    version: Option<String>,
+    download_url: Option<String>,
+) -> Result<lsp_extensions::LspExtensionState, String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id 不能为空".to_string());
+    }
+    lsp_extensions::install_vscode_marketplace_extension(&id, version.as_deref(), download_url.as_deref()).await
 }
 
 #[tauri::command]
