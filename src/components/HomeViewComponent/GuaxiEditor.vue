@@ -4718,14 +4718,25 @@ const registerFilesystemPathCompletionFeatures = () => {
           const suffix = isDir ? '/' : '';
 
           return {
-            label: `${name}${suffix}`,
+            // 设计说明：
+            // 1. 目录补全的可见 label / filterText 只保留目录名，避免 `/` 参与 Monaco 的前缀过滤。
+            // 2. insertText 仍然补入尾随 `/`，让路径语义进入下一层目录。
+            // 3. 接受目录项后通过 command 立刻触发下一轮 suggest，实现类似 nvim-cmp 的连续路径补全体验。
+            label: isDir ? { label: name, detail: suffix } : name,
             kind: isDir
               ? monaco.languages.CompletionItemKind.Folder
               : monaco.languages.CompletionItemKind.File,
             insertText: `${name}${suffix}`,
+            filterText: name,
             range: replaceRangeForPartial,
             detail: isDir ? '目录' : '文件',
-            sortText: isDir ? `0_${name}` : `1_${name}`
+            sortText: isDir ? `0_${name}` : `1_${name}`,
+            command: isDir
+              ? {
+                  id: 'editor.action.triggerSuggest',
+                  title: '继续补全路径'
+                }
+              : undefined
           };
         });
 
