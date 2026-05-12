@@ -28,7 +28,10 @@ const MERMAID_ARCHITECTURE_WARNING_PREFIX =
   'Do not assign mappings to elements without corresponding data'
 const MERMAID_ARCHITECTURE_WARNING_HINT =
   'property `label` with data field `label`'
+const TAURI_IPC_FALLBACK_WARNING =
+  'IPC custom protocol failed, Tauri will now use the postMessage interface instead'
 let mermaidArchitectureWarningSuppressCount = 0
+let tauriIpcFallbackWarningSuppressCount = 0
 
 function normalizeLevel(level) {
   const v = String(level || '').toLowerCase()
@@ -86,6 +89,30 @@ function formatMessage(args) {
 function shouldSuppressKnownWarn(args) {
   const message = formatMessage(args)
   if (!message) return false
+
+  // 设计思路：
+  // 1. Tauri 在部分 WebView2 环境下会先尝试 ipc.localhost 自定义协议；
+  //    如果该通道不可用，会自动降级到 postMessage，这条 warn 本身不代表业务命令失败。
+  // 2. 前端日志接管 console.warn 后，如果继续转发这条 warn，会在用户点击 LSP 安装按钮时
+  //    把一次正常降级误放大成“下载插件失败”的线索，因此这里将它作为已知运行时噪声过滤。
+  // 3. 真正的 invoke 失败仍会进入各业务 catch，并由业务代码记录 error 日志。
+  if (message.includes(TAURI_IPC_FALLBACK_WARNING)) {
+    tauriIpcFallbackWarningSuppressCount += 1
+    if (
+      tauriIpcFallbackWarningSuppressCount === 1 ||
+      tauriIpcFallbackWarningSuppressCount % 20 === 0
+    ) {
+      enqueue({
+        level: 'debug',
+        scope: state.scope,
+        message: '[FrontendLogger] suppressed known Tauri IPC fallback warning',
+        fields: {
+          suppressCount: tauriIpcFallbackWarningSuppressCount
+        }
+      })
+    }
+    return true
+  }
 
   return (
     message.includes(MERMAID_ARCHITECTURE_WARNING_PREFIX) &&

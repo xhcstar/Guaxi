@@ -153,11 +153,11 @@ const shouldDropNoisyPythonMemberCandidate = (languageId, item, completionSource
     : VSCODE_COMPLETION_KIND_NAMES[rawKind]
 
   // 设计说明：
-  // 1. `obj.` 成员访问期望的是对象属性/方法/变量，Text/Keyword/Snippet 通常来自全局词表或补全片段。
-  // 2. 这些候选在 `showWords:false` 下原本会被 Monaco 丢掉；上一层为了保留语义候选做了 Property 兜底，
-  //    因此必须先在这里把明显非成员访问语义的候选过滤掉，避免出现按字母排序的全局噪音列表。
-  // 3. 真正的 basedpyright 成员候选通常会带 Method/Function/Variable/Property/Module 等语义 kind。
-  return kindName === 'Text' || kindName === 'Keyword' || kindName === 'Snippet'
+  // 1. 这里只丢弃明显属于模板/关键字的候选，不再因为 kind=Text 就整批过滤。
+  // 2. basedpyright 在部分 Notebook 虚拟文档场景会把真实成员候选标成 Text；旧逻辑会在 `obj.` 后
+  //    把这些真实候选全部丢掉，最终 Monaco 只显示 No suggestions。
+  // 3. URI/path 噪声已经由 shouldKeepBridgedCompletionItem 过滤；剩余 Text 候选会在 kind 映射阶段兜底成 Property。
+  return kindName === 'Keyword' || kindName === 'Snippet'
 }
 
 const resolveBridgedCompletionKind = (monaco, item, completionSource, context) => {
@@ -167,9 +167,12 @@ const resolveBridgedCompletionKind = (monaco, item, completionSource, context) =
     : VSCODE_COMPLETION_KIND_NAMES
   const kindName = Number.isFinite(rawKind) ? kindNames[rawKind] : ''
   const memberAccess = isPythonMemberAccessContext(context?.languageId, context)
+  const pythonLanguage = normalizeLanguageId(context?.languageId) === 'python'
   const effectiveKindName = memberAccess && (!kindName || kindName === 'Text')
     ? 'Property'
-    : (kindName || 'Text')
+    : pythonLanguage && (!kindName || kindName === 'Text')
+      ? 'Variable'
+      : (kindName || 'Text')
   const resolvedKind = monaco?.languages?.CompletionItemKind?.[effectiveKindName]
 
   // 设计说明：
@@ -177,8 +180,8 @@ const resolveBridgedCompletionKind = (monaco, item, completionSource, context) =
   //    直接 LSP 返回的是协议层 1 基准 kind，两者不能共用一张表。
   // 2. Notebook/Python 编辑器关闭了 `showWords`，如果语义候选被错误兜底成 Text(18)，
   //    Monaco 会在进入 completion model 前把它们全部过滤掉，界面就只剩 `No suggestions`。
-  // 3. 成员访问里缺失 kind 或被标成 Text 时兜底为 Property，保留语义候选，
-  //    同时继续过滤掉普通文档单词噪音。
+  // 3. Python 的未知/Text 候选统一兜底成 Variable；成员访问里兜底成 Property，
+  //    既保留 basedpyright 的真实候选，又避免重新打开 Monaco 文档词补全噪声。
   return Number.isFinite(resolvedKind)
     ? resolvedKind
     : monaco.languages.CompletionItemKind.Text

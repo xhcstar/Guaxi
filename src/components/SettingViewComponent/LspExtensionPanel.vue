@@ -153,7 +153,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { createLogger } from '../../utils/logger'
 import { refreshLspRuntimeExtensionSnapshot } from '../../monaco/lspCapabilities'
@@ -212,6 +212,48 @@ const compatibilityTagType = (level) => {
   if (String(level || '').toUpperCase() === 'A') return 'success'
   if (String(level || '').toUpperCase() === 'B') return 'warning'
   return 'default'
+}
+
+const getTauriIpcSnapshot = () => {
+  const internals = window?.__TAURI_INTERNALS__
+  return {
+    isTauri: isTauri(),
+    hasTauriInvoke: typeof internals?.invoke === 'function',
+    hasPostMessageIpc: typeof window?.ipc?.postMessage === 'function',
+    protocol: String(window?.location?.protocol || ''),
+    href: String(window?.location?.href || ''),
+  }
+}
+
+const isTauriIpcTransportError = (error) => {
+  const text = `${String(error?.name || '')} ${String(error?.message || error || '')}`
+  return (
+    text.includes('Failed to fetch') ||
+    text.includes('ipc.localhost') ||
+    text.includes('__TAURI_INTERNALS__')
+  )
+}
+
+const handleTauriIpcInstallError = (operation, error) => {
+  const snapshot = getTauriIpcSnapshot()
+
+  // 设计思路：
+  // 1. LSP 扩展安装依赖 Rust 侧下载、解包和 runtime 探测，必须通过 Tauri IPC 调后端命令。
+  // 2. 当页面运行在普通浏览器、WebView2 IPC 注入异常，或 ipc.localhost 自定义协议无法降级成功时，
+  //    前端拿到的通常只是 TypeError: Failed to fetch，和真实 Marketplace/Open VSX 下载错误长得很像。
+  // 3. 这里记录一份运行时快照，并给用户更明确的重启/运行环境提示，避免误判为 LSP 插件源不可用。
+  logger.error('[LspExtensionPanel] LSP install IPC/runtime failure snapshot', {
+    operation,
+    error: String(error),
+    snapshot,
+  })
+
+  if (!isTauriIpcTransportError(error)) {
+    return false
+  }
+
+  message.error('无法连接 Tauri 后端 IPC，请确认当前是在桌面应用中运行。若已在桌面端，请重启应用后再安装 LSP 扩展。')
+  return true
 }
 
 const syncRuntimeSnapshot = async () => {
@@ -386,8 +428,10 @@ const handleInstallCatalogExtension = async (item) => {
     notifyInstallResult(state, extensionId)
     await refreshExtensions()
   } catch (error) {
-    logger.error('[LspExtensionPanel] install catalog extension failed', error)
-    message.error(`安装扩展失败: ${String(error)}`)
+    if (!handleTauriIpcInstallError('install_catalog_lsp_extension', error)) {
+      logger.error('[LspExtensionPanel] install catalog extension failed', error)
+      message.error(`安装扩展失败: ${String(error)}`)
+    }
   } finally {
     installingExtensionId.value = ''
   }
@@ -420,8 +464,10 @@ const handleInstallRecommendedExtensions = async () => {
     message.success(`已安装 ${targets.length} 个推荐 LSP 扩展`)
     await refreshExtensions()
   } catch (error) {
-    logger.error('[LspExtensionPanel] install recommended catalog extensions failed', error)
-    message.error(`安装推荐扩展失败: ${String(error)}`)
+    if (!handleTauriIpcInstallError('install_recommended_catalog_lsp_extensions', error)) {
+      logger.error('[LspExtensionPanel] install recommended catalog extensions failed', error)
+      message.error(`安装推荐扩展失败: ${String(error)}`)
+    }
   } finally {
     installingRecommended.value = false
     installingExtensionId.value = ''

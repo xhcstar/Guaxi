@@ -58,6 +58,7 @@ import getModelServiceOverride from '@codingame/monaco-vscode-model-service-over
 import 'vscode/localExtensionHost'
 import { refreshLspRuntimeExtensionSnapshot } from './monaco/lspCapabilities'
 import { configureMonacoWorkers } from './monaco/workerBootstrap'
+import { ensureVsCodeVirtualFileSystemProvidersRegistered } from './monaco/vscodeModelBridge'
 
 const iconRegistry = {
   'mdi:folder-outline': mdiFolderOutline,
@@ -125,6 +126,7 @@ try {
 }
 
 try {
+  ensureVsCodeVirtualFileSystemProvidersRegistered()
   // 设计说明：
   // 1. 根包 `@codingame/monaco-vscode-api` 默认会注入 base/files/extensions 等常用 override，
   //    但不会自动注入 model-service-override。

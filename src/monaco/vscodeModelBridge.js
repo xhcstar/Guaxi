@@ -5,6 +5,7 @@ import {
   FileSystemProviderError,
   FileSystemProviderErrorCode,
   FileType,
+  registerCustomProvider,
   registerFileSystemOverlay,
 } from '@codingame/monaco-vscode-files-service-override'
 import { createLogger } from '../utils/logger'
@@ -15,6 +16,7 @@ const vscodeModelBridgeEntries = new Map()
 
 let overlayProvider = null
 let overlayDisposable = null
+let virtualModelProvider = null
 
 const normalizeOwner = (owner) => String(owner || 'global').trim() || 'global'
 
@@ -245,6 +247,30 @@ const createOverlayProvider = () => {
   return provider
 }
 
+export const ensureVsCodeVirtualFileSystemProvidersRegistered = () => {
+  if (virtualModelProvider) return virtualModelProvider
+
+  virtualModelProvider = createOverlayProvider()
+  const rootUri = monaco.Uri.parse('inmemory://model/')
+  virtualModelProvider.mkdir(rootUri).catch((error) => {
+    logger.warn('[VSCodeModelBridge] create inmemory model root failed', { error })
+  })
+
+  try {
+    // 设计说明：
+    // 1. monaco-vscode 的内部 TextModel 默认会落在 `inmemory://model/<id>`。
+    // 2. VSCode services 初始化后，文件服务会对 `inmemory://model/` 做 stat/readdir；
+    //    如果没有 provider 或根目录不存在，控制台会反复出现 “File or directory inmemory://model/ does not exist”。
+    // 3. 这里必须在 initialize(...) 之前注册 provider，让内部虚拟模型和 Notebook/LSP 的 file overlay 各走各的虚拟文件层。
+    registerCustomProvider('inmemory', virtualModelProvider)
+    logger.info('[VSCodeModelBridge] registered inmemory model filesystem provider')
+  } catch (error) {
+    logger.warn('[VSCodeModelBridge] register inmemory model filesystem provider failed', { error })
+  }
+
+  return virtualModelProvider
+}
+
 const ensureOverlayProviderRegistered = () => {
   if (overlayProvider && overlayDisposable) {
     return overlayProvider
@@ -258,6 +284,34 @@ const ensureOverlayProviderRegistered = () => {
   overlayDisposable = registerFileSystemOverlay(1, overlayProvider)
   logger.info('[VSCodeModelBridge] registered direct file-uri overlay provider')
   return overlayProvider
+}
+
+export const syncVsCodeTextModelOverlay = (resource, content = '', {
+  owner = 'global',
+  reason = 'manual',
+} = {}) => {
+  const uri = normalizeResourceUri(resource)
+  if (!uri) return null
+
+  try {
+    const provider = ensureOverlayProviderRegistered()
+    const syncedUri = provider?.ensureFile?.(uri, content) || null
+    logger.debug('[VSCodeModelBridge] synchronized overlay content', {
+      uri: uri.toString(),
+      owner: normalizeOwner(owner),
+      reason,
+      length: String(content ?? '').length,
+    })
+    return syncedUri
+  } catch (error) {
+    logger.warn('[VSCodeModelBridge] synchronize overlay content failed', {
+      uri: uri.toString(),
+      owner: normalizeOwner(owner),
+      reason,
+      error,
+    })
+    return null
+  }
 }
 
 const getEntryModel = (entry) => {
