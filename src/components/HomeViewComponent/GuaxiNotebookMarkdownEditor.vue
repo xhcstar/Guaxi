@@ -29,6 +29,7 @@ import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js'
 import 'monaco-editor/esm/vs/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess.js'
 import { createLogger } from '../../utils/logger'
 import { initLspClient } from '../../monaco/lspClient'
+import { registerLspCompletionBridge } from '../../monaco/pythonCompletionBridge'
 import {
   replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
@@ -276,6 +277,10 @@ const mountMonacoEditor = async () => {
   mountMonacoEditorPromise = (async () => {
     try {
       monacoRef = await import('monaco-editor')
+      registerLspCompletionBridge(monacoRef, ['markdown'])
+      logger.info('[NotebookMarkdownEditor] registered LSP completion bridge for notebook markdown cell', {
+        cellKey: String(props.cellKey || ''),
+      })
 
       const existingEditor = monacoRef?.editor?.getEditors?.()
         ?.find?.((item) => item?.getContainerDomNode?.() === host) || null
@@ -344,8 +349,17 @@ const mountMonacoEditor = async () => {
         roundedSelection: false,
         scrollBeyondLastLine: false,
         wordWrap: 'on',
+        // 设计说明：
+        // 1. Markdown Cell 的候选应优先来自 Marksman/VSCode completion provider。
+        // 2. 关闭文档词兜底，避免 LSP 桥接失败时 Monaco 用当前文档碎片伪装成“语义补全”。
+        // 3. 这样如果仍然没有候选，日志里的 bridge/LSP 状态就是排查根因的单一入口。
+        wordBasedSuggestions: 'off',
         quickSuggestions: true,
         suggestOnTriggerCharacters: true,
+        suggest: {
+          showWords: false,
+          snippetsPreventQuickSuggestions: false,
+        },
         tabSize: 2,
         insertSpaces: true,
         renderLineHighlight: 'none',

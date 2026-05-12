@@ -62,6 +62,38 @@ const getRelatedLspLanguages = (languageId: string) => {
   return selectors.length ? selectors : [normalizeLanguageId(languageId)].filter(Boolean)
 }
 
+const normalizeCompletionLabelForLog = (label: unknown): string => {
+  if (typeof label === 'string') return label
+  if (label && typeof label === 'object') {
+    const objectLabel = (label as { label?: unknown; value?: unknown }).label
+      ?? (label as { label?: unknown; value?: unknown }).value
+    return typeof objectLabel === 'string' ? objectLabel : ''
+  }
+  return ''
+}
+
+const summarizeCompletionItemForLog = (item: unknown) => {
+  const value = item && typeof item === 'object' ? item as {
+    label?: unknown
+    kind?: unknown
+    detail?: unknown
+    filterText?: unknown
+    insertText?: unknown
+  } : {}
+  const insertText = typeof value.insertText === 'string'
+    ? value.insertText
+    : value.insertText && typeof value.insertText === 'object'
+      ? String((value.insertText as { value?: unknown }).value || '')
+      : ''
+  return {
+    label: normalizeCompletionLabelForLog(value.label),
+    kind: Number(value.kind ?? -1),
+    detail: typeof value.detail === 'string' ? value.detail : '',
+    filterText: typeof value.filterText === 'string' ? value.filterText : '',
+    insertText,
+  }
+}
+
 type LspConnectionStateValue = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'disabled'
 type LspConnectionState = {
   state: LspConnectionStateValue
@@ -227,6 +259,110 @@ export function waitForLspConnection(languageId: string, timeoutMs: number = 150
       done(getLspConnectionState(lang).state === 'connected')
     }, Math.max(50, Number(timeoutMs) || 1500))
   })
+}
+
+export async function requestLspCompletionItems(
+  languageId: string,
+  documentUri: string,
+  lineNumber: number,
+  column: number,
+  triggerCharacter?: string,
+  timeoutMs: number = 180
+): Promise<{ items: unknown[]; isIncomplete: boolean; source: string } | null> {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  const clientKey = getLspClientKey(normalizedLanguageId)
+  const entry = lspClients.get(clientKey)
+  const client = entry?.client as (MonacoLanguageClient & {
+    sendRequest?: (method: string, params: unknown) => Promise<unknown>
+  }) | null
+
+  if (!normalizedLanguageId || !client?.sendRequest || entry?.disposed) {
+    logger.debug('[LSP] direct completion skipped because client is unavailable', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri,
+      hasEntry: !!entry,
+      hasClient: !!client,
+      disposed: !!entry?.disposed,
+    })
+    return null
+  }
+
+  const params = {
+    textDocument: { uri: String(documentUri || '') },
+    position: {
+      line: Math.max(0, Number(lineNumber || 1) - 1),
+      character: Math.max(0, Number(column || 1) - 1),
+    },
+    context: {
+      triggerKind: triggerCharacter ? 2 : 1,
+      triggerCharacter: triggerCharacter || undefined,
+    },
+  }
+
+  logger.info('[LSP] direct completion request', {
+    languageId: normalizedLanguageId,
+    clientKey,
+    documentUri,
+    lineNumber,
+    column,
+    triggerCharacter: triggerCharacter || '',
+    timeoutMs,
+  })
+
+  try {
+    const result = await Promise.race([
+      client.sendRequest('textDocument/completion', params),
+      new Promise((resolve) => window.setTimeout(
+        () => resolve({ __guaxiDirectCompletionTimeout: true }),
+        Math.max(80, Number(timeoutMs) || 180)
+      )),
+    ]) as {
+      __guaxiDirectCompletionTimeout?: boolean
+      items?: unknown[]
+      isIncomplete?: boolean
+    } | unknown[]
+
+    if ((result as { __guaxiDirectCompletionTimeout?: boolean })?.__guaxiDirectCompletionTimeout) {
+      logger.warn('[LSP] direct completion timed out', {
+        languageId: normalizedLanguageId,
+        clientKey,
+        documentUri,
+        lineNumber,
+        column,
+        timeoutMs,
+      })
+      return null
+    }
+
+    const items = Array.isArray(result)
+      ? result
+      : Array.isArray((result as { items?: unknown[] })?.items)
+        ? (result as { items: unknown[] }).items
+        : []
+    const isIncomplete = !Array.isArray(result) && !!(result as { isIncomplete?: boolean })?.isIncomplete
+    logger.info('[LSP] direct completion resolved', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri,
+      lineNumber,
+      column,
+      itemCount: items.length,
+      isIncomplete,
+      firstItem: summarizeCompletionItemForLog(items[0]),
+    })
+    return { items, isIncomplete, source: 'direct-lsp' }
+  } catch (error) {
+    logger.warn('[LSP] direct completion failed', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri,
+      lineNumber,
+      column,
+      error: resolveErrorMessage(error),
+    })
+    return null
+  }
 }
 
 const stopClientSafely = async (client: MonacoLanguageClient | null) => {

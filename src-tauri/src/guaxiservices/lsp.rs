@@ -688,8 +688,8 @@ async fn prepare_lsp_command(language: &str) -> Result<LspCommandConfig, String>
 
     // 设计说明：
     // 1. 用户可见的 LSP 体系已经统一为“扩展优先”，这里不再允许未安装扩展的语言直接走旧语言表。
-    // 2. 旧的 binary 下载/SlidevEnv 解析仅作为已安装扩展的 fallback runtime 使用，解决 marksman/texlab/lua-language-server
-    //    这类 VSIX 本身不总是携带完整 server 的生产可用性问题。
+    // 2. 旧的 binary 下载/SlidevEnv 解析只在“已安装扩展授权该 server”后作为托管 runtime 使用，
+    //    解决 marksman/texlab/lua-language-server 这类 VSIX 本身不总是携带完整 server 的生产可用性问题。
     // 3. 这样设置页只保留扩展管理，但已有下载器能力仍能在扩展明确授权后兜底启动真实 LSP server。
     let entry = lsp_language_entry(language)
         .ok_or_else(|| format!("Unsupported language for LSP: {}", language))?;
@@ -711,6 +711,7 @@ pub struct LspWsSession {
     language: String,
     child: Option<Child>,
     child_stdin: Option<Arc<Mutex<ChildStdin>>>,
+    pending_client_payloads: Vec<Vec<u8>>,
     pending_completion_request_ids: HashSet<String>,
 }
 
@@ -720,9 +721,20 @@ impl LspWsSession {
             language,
             child: None,
             child_stdin: None,
+            pending_client_payloads: Vec::new(),
             pending_completion_request_ids: HashSet::new(),
         }
     }
+}
+
+fn write_lsp_payload_to_stdin(stdin_arc: Arc<Mutex<ChildStdin>>, payload: Vec<u8>) {
+    actix::spawn(async move {
+        let mut guard = stdin_arc.lock().await;
+        let header = format!("Content-Length: {}\r\n\r\n", payload.len());
+        let _ = guard.write_all(header.as_bytes()).await;
+        let _ = guard.write_all(&payload).await;
+        let _ = guard.flush().await;
+    });
 }
 
 impl Actor for LspWsSession {
@@ -883,7 +895,21 @@ impl Handler<LspChildStarted> for LspWsSession {
 
     fn handle(&mut self, msg: LspChildStarted, _ctx: &mut Self::Context) {
         self.child = Some(msg.child);
-        self.child_stdin = msg.stdin;
+        self.child_stdin = msg.stdin.clone();
+
+        if let Some(stdin_arc) = msg.stdin {
+            let pending_count = self.pending_client_payloads.len();
+            if pending_count > 0 {
+                info!(
+                    language = self.language.as_str(),
+                    pending_count = pending_count,
+                    "flushing buffered LSP client messages after server stdin became ready"
+                );
+            }
+            for payload in self.pending_client_payloads.drain(..) {
+                write_lsp_payload_to_stdin(stdin_arc.clone(), payload);
+            }
+        }
     }
 }
 
@@ -933,15 +959,21 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LspWsSession {
                     &mut self.pending_completion_request_ids,
                 );
                 if let Some(stdin_arc) = &self.child_stdin {
-                    let payload = text.into_bytes();
-                    let stdin_clone = stdin_arc.clone();
-                    actix::spawn(async move {
-                        let mut guard = stdin_clone.lock().await;
-                        let header = format!("Content-Length: {}\r\n\r\n", payload.len());
-                        let _ = guard.write_all(header.as_bytes()).await;
-                        let _ = guard.write_all(&payload).await;
-                        let _ = guard.flush().await;
-                    });
+                    let payload = text.into_bytes().to_vec();
+                    write_lsp_payload_to_stdin(stdin_arc.clone(), payload);
+                } else {
+                    // 设计说明：
+                    // 1. WebSocket 建立后，前端 language client 会立刻发送 initialize/didOpen/completion。
+                    // 2. 后端 LSP 子进程是在 Actor started() 中异步启动的，stdin 尚未就绪时不能丢消息。
+                    // 3. 这里先缓冲客户端帧，等 LspChildStarted 后按原顺序写入 stdin，确保初始化和首次补全不丢。
+                    let payload = text.into_bytes().to_vec();
+                    let buffered_count = self.pending_client_payloads.len() + 1;
+                    self.pending_client_payloads.push(payload);
+                    info!(
+                        language = self.language.as_str(),
+                        buffered_count = buffered_count,
+                        "buffered LSP client message until server stdin is ready"
+                    );
                 }
             }
             Ok(ws::Message::Binary(_bin)) => {}
@@ -985,6 +1017,50 @@ fn extract_completion_item_count(result: &Value) -> usize {
         return items.len();
     }
     0
+}
+
+fn extract_completion_items(result: &Value) -> Option<&Vec<Value>> {
+    result
+        .get("items")
+        .and_then(|value| value.as_array())
+        .or_else(|| result.as_array())
+}
+
+fn extract_completion_label(item: &Value) -> String {
+    let Some(label) = item.get("label") else {
+        return String::new();
+    };
+    if let Some(text) = label.as_str() {
+        return text.to_string();
+    }
+    label
+        .get("label")
+        .or_else(|| label.get("value"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn extract_completion_result_log_summary(result: &Value) -> (usize, String, i64, String) {
+    let item_count = extract_completion_item_count(result);
+    let Some(items) = extract_completion_items(result) else {
+        return (0, String::new(), -1, String::new());
+    };
+    let first = items.first();
+    let first_label = first
+        .map(extract_completion_label)
+        .unwrap_or_default();
+    let first_kind = first
+        .and_then(|item| item.get("kind"))
+        .and_then(|value| value.as_i64())
+        .unwrap_or(-1);
+    let first_detail = first
+        .and_then(|item| item.get("detail"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    (item_count, first_label, first_kind, first_detail)
 }
 
 fn log_lsp_client_message(
@@ -1166,14 +1242,17 @@ fn log_lsp_server_message(
         return;
     }
 
-    let item_count = value
+    let (item_count, first_label, first_kind, first_detail) = value
         .get("result")
-        .map(extract_completion_item_count)
-        .unwrap_or(0);
+        .map(extract_completion_result_log_summary)
+        .unwrap_or((0, String::new(), -1, String::new()));
     info!(
         language = language,
         id = id,
         item_count = item_count,
+        first_label = first_label,
+        first_kind = first_kind,
+        first_detail = first_detail,
         "LSP server completion response resolved"
     );
 }

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import lspExtensionCatalog from '../../shared/lsp_extensions.json'
+import baseLspLanguageCatalog from '../../shared/lsp_languages.json'
 import { createLogger } from '../utils/logger'
 
 export type LspLanguageEntry = {
@@ -18,6 +19,11 @@ type ExtensionCatalogEntry = {
   lsp?: {
     server_id?: string
   }
+}
+
+type BaseLanguageCatalogEntry = {
+  language?: string
+  server?: string
 }
 
 type RuntimeExtensionState = {
@@ -70,6 +76,27 @@ const normalizeCatalogEntries = (
       source: 'catalog',
     }))
   })
+
+// Design note:
+// Runtime extension snapshots arrive asynchronously after app startup. The LSP
+// client key must still be stable before that snapshot is ready; otherwise
+// Python starts as `python` while completion later looks for `basedpyright`.
+const normalizeBaseLanguageEntries = (
+  Array.isArray(baseLspLanguageCatalog)
+    ? (baseLspLanguageCatalog as BaseLanguageCatalogEntry[])
+    : Array.isArray((baseLspLanguageCatalog as { languages?: unknown[] })?.languages)
+      ? (baseLspLanguageCatalog as { languages: BaseLanguageCatalogEntry[] }).languages
+      : []
+)
+  .flatMap((entry) => {
+    const language = normalizeLanguage(String(entry?.language || ''))
+    const server = String(entry?.server || '').trim().toLowerCase()
+    return language && server ? [{ language, server }] : []
+  })
+
+const baseEntryByLanguage = new Map(
+  normalizeBaseLanguageEntries.map((entry) => [entry.language, entry])
+)
 
 const LSP_LANGUAGE_ENTRIES_INTERNAL: LspLanguageEntry[] = []
 const LSP_SUPPORTED_LANGUAGES_INTERNAL = new Set<string>()
@@ -175,12 +202,18 @@ export const getLspLanguageEntry = (languageId: string) =>
   entryByLanguage.get(normalizeLanguage(languageId)) || null
 
 export const getLspServerForLanguage = (languageId: string) =>
-  String(getLspLanguageEntry(languageId)?.server || normalizeLanguage(languageId))
+  String(
+    getLspLanguageEntry(languageId)?.server
+    || baseEntryByLanguage.get(normalizeLanguage(languageId))?.server
+    || normalizeLanguage(languageId)
+  )
 
 export const getLspDocumentSelectorForLanguage = (languageId: string) => {
   const normalizedLanguageId = normalizeLanguage(languageId)
   const entry = getLspLanguageEntry(normalizedLanguageId)
-  if (!entry?.server) {
+  const baseEntry = baseEntryByLanguage.get(normalizedLanguageId)
+  const server = entry?.server || baseEntry?.server || ''
+  if (!server) {
     return normalizedLanguageId ? [{ language: normalizedLanguageId }] : []
   }
 
@@ -195,8 +228,13 @@ export const getLspDocumentSelectorForLanguage = (languageId: string) => {
   }
 
   return LSP_LANGUAGE_ENTRIES_INTERNAL
-    .filter((item) => item.server === entry.server)
+    .filter((item) => item.server === server)
     .map((item) => ({ language: item.language }))
+    .concat(
+      normalizeBaseLanguageEntries
+        .filter((item) => item.server === server && !LSP_LANGUAGE_ENTRIES_INTERNAL.some((entryItem) => entryItem.language === item.language))
+        .map((item) => ({ language: item.language }))
+    )
 }
 
 export const getLspRuntimeExtensionForLanguage = (languageId: string) =>
@@ -204,3 +242,4 @@ export const getLspRuntimeExtensionForLanguage = (languageId: string) =>
 
 export const isLspSupportedLanguage = (languageId: string) =>
   LSP_SUPPORTED_LANGUAGES_INTERNAL.has(normalizeLanguage(languageId))
+  || baseEntryByLanguage.has(normalizeLanguage(languageId))

@@ -72,6 +72,120 @@ let usesVscodeModelBridge = false
 
 const NOTEBOOK_PYTHON_SUGGEST_TRIGGER_PATTERN = /[A-Za-z0-9_.:(\[,'"@]/
 
+const getNotebookSuggestControllerState = () => {
+  try {
+    const controller = editor?.getContribution?.('editor.contrib.suggestController')
+    const suggestModel = controller?.model
+    const completionModel = suggestModel?.completionModel || suggestModel?._completionModel
+    const filteredItems = Array.isArray(completionModel?.items) ? completionModel.items : []
+    const rawItems = Array.isArray(completionModel?._items) ? completionModel._items : filteredItems
+    const doc = editor?.getDomNode?.()?.ownerDocument || (typeof document !== 'undefined' ? document : null)
+    return {
+      state: Number(suggestModel?.state ?? suggestModel?._state ?? -1),
+      widgetVisible: !!doc?.querySelector?.('.suggest-widget.visible'),
+      filteredCount: filteredItems.length,
+      rawCount: rawItems.length,
+      firstFilteredLabel: String(filteredItems[0]?.completion?.label || filteredItems[0]?.textLabel || ''),
+      firstRawLabel: String(rawItems[0]?.completion?.label || rawItems[0]?.textLabel || ''),
+    }
+  } catch {
+    return {
+      state: -1,
+      widgetVisible: false,
+      filteredCount: 0,
+      rawCount: 0,
+      firstFilteredLabel: '',
+      firstRawLabel: '',
+    }
+  }
+}
+
+const getNotebookCompletionProviderState = () => {
+  try {
+    const activeModel = editor?.getModel?.()
+    const providers = monacoRef?.languages?.CompletionProviderRegistry?.all?.(activeModel)
+    return {
+      modelLanguageId: String(activeModel?.getLanguageId?.() || ''),
+      modelUri: String(activeModel?.uri?.toString?.() || ''),
+      providerCount: Array.isArray(providers) ? providers.length : -1,
+    }
+  } catch (error) {
+    return {
+      modelLanguageId: '',
+      modelUri: '',
+      providerCount: -1,
+      providerStateError: String(error?.message || error),
+    }
+  }
+}
+
+const attachNotebookSuggestTrace = (reason = 'unknown') => {
+  try {
+    const controller = editor?.getContribution?.('editor.contrib.suggestController')
+    const suggestModel = controller?.model
+    if (!suggestModel?.onDidCancel && !suggestModel?.onDidSuggest && !suggestModel?.onDidTrigger) return () => {}
+
+    const disposables = []
+    const pushDisposable = (candidate) => {
+      if (candidate?.dispose) disposables.push(candidate)
+    }
+
+    pushDisposable(suggestModel?.onDidTrigger?.((event) => {
+      logger.info('[NotebookPythonEditor] suggest model triggered', {
+        cellKey: String(props.cellKey || ''),
+        reason,
+        auto: !!event?.auto,
+        shy: !!event?.shy,
+        position: event?.position ? `${event.position.lineNumber}:${event.position.column}` : '',
+      })
+    }))
+    pushDisposable(suggestModel?.onDidSuggest?.((event) => {
+      logger.info('[NotebookPythonEditor] suggest model produced completion model', {
+        cellKey: String(props.cellKey || ''),
+        reason,
+        completionCount: Number(event?.completionModel?.items?.length || 0),
+        isFrozen: !!event?.isFrozen,
+        auto: !!event?.triggerOptions?.auto,
+        triggerKind: Number(event?.triggerOptions?.triggerKind || 0),
+      })
+    }))
+    pushDisposable(suggestModel?.onDidCancel?.((event) => {
+      logger.info('[NotebookPythonEditor] suggest model cancelled', {
+        cellKey: String(props.cellKey || ''),
+        reason,
+        retrigger: !!event?.retrigger,
+        stateAfterCancel: Number(suggestModel?.state ?? -1),
+      })
+    }))
+
+    const timeout = window.setTimeout(() => {
+      disposables.forEach((disposable) => {
+        try {
+          disposable.dispose()
+        } catch {
+        }
+      })
+    }, 1400)
+
+    return () => {
+      window.clearTimeout(timeout)
+      disposables.forEach((disposable) => {
+        try {
+          disposable.dispose()
+        } catch {
+        }
+      })
+    }
+  } catch (error) {
+    logger.debug('[NotebookPythonEditor] attach suggest trace failed', {
+      cellKey: String(props.cellKey || ''),
+      reason,
+      error: String(error?.message || error),
+    })
+    return () => {}
+  }
+}
+
 const shouldNotebookPythonTriggerSuggestOnType = (text) => {
   const value = String(text || '')
   if (!value || value.length !== 1) return false
@@ -82,14 +196,31 @@ const shouldNotebookPythonTriggerSuggestOnType = (text) => {
 const triggerNotebookPythonSuggest = (reason = 'manual') => {
   if (!editor || !monacoRef) return
   try {
+    const disposeTrace = attachNotebookSuggestTrace(reason)
     editor.trigger('guaxi-notebook-python', 'editor.action.triggerSuggest', {})
+    const providerState = getNotebookCompletionProviderState()
     logger.debug('[NotebookPythonEditor] trigger suggest', {
       cellKey: String(props.cellKey || ''),
       reason,
       position: editor.getPosition?.()
         ? `${editor.getPosition().lineNumber}:${editor.getPosition().column}`
         : '',
+      beforeState: getNotebookSuggestControllerState(),
+      ...providerState,
     })
+    const logSnapshot = (delayMs) => {
+      logger.info('[NotebookPythonEditor] suggest controller snapshot', {
+        cellKey: String(props.cellKey || ''),
+        reason: `after-${reason}-${delayMs}ms`,
+        ...getNotebookSuggestControllerState(),
+        ...getNotebookCompletionProviderState(),
+      })
+    }
+    window.setTimeout(() => logSnapshot(260), 260)
+    window.setTimeout(() => {
+      logSnapshot(1100)
+      disposeTrace()
+    }, 1100)
   } catch (error) {
     logger.debug('[NotebookPythonEditor] trigger suggest failed', {
       cellKey: String(props.cellKey || ''),

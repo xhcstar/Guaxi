@@ -9,6 +9,9 @@
       </div>
       <n-space class="lsp-extension-panel__header-actions" wrap>
         <n-button size="small" :disabled="loading" @click="refreshExtensions">刷新状态</n-button>
+        <n-button size="small" :loading="installingRecommended" :disabled="loading" @click="handleInstallRecommendedExtensions">
+          安装推荐扩展
+        </n-button>
         <n-button size="small" :disabled="loading" @click="handleImportDirectory">导入扩展目录</n-button>
         <n-button size="small" type="primary" :disabled="loading" @click="handleImportVsix">导入 VSIX</n-button>
       </n-space>
@@ -168,6 +171,7 @@ const searchResults = ref([])
 const extensions = ref([])
 const installingExtensionId = ref('')
 const removingExtensionId = ref('')
+const installingRecommended = ref(false)
 
 const installedCount = computed(() =>
   extensions.value.filter((item) => item?.installed).length
@@ -337,38 +341,62 @@ const handleInstallSearchResult = async (item) => {
 }
 
 const handleInstallCatalogExtension = async (item) => {
-  const marketplaceId = String(item?.vscode_marketplace || '').trim()
-  const openVsxId = String(item?.open_vsx || '').trim()
+  const extensionId = String(item?.id || '').trim()
+  if (!extensionId) return
 
-  if (item?.vscode_marketplace) {
-    try {
-      await handleInstallMarketplace({
-        id: marketplaceId,
-        version: null,
-        download_url: null,
-      }, {
-        throwOnError: !!openVsxId,
-        silentSuccess: false,
-      })
-      return
-    } catch (error) {
-      logger.warn('[LspExtensionPanel] Marketplace install failed, falling back to Open VSX', {
-        marketplaceId,
-        openVsxId,
-        error: String(error),
-      })
-      if (!openVsxId) {
-        message.error(`安装扩展失败: ${String(error)}`)
-        return
-      }
-    }
+  try {
+    installingExtensionId.value = extensionId
+    // 设计说明：
+    // 1. 已知语言扩展来自 shared/lsp_extensions.json，是 Guaxi 已验证过 runtime 解析方式的能力目录。
+    // 2. 这里优先安装 catalog 记录，而不是先碰 Marketplace/Open VSX 网络，让 HTML/Markdown/Lua/TeX
+    //    这些核心语言不会因为市场搜索或内置扩展不可下载而安装失败。
+    // 3. 真正 server runtime 仍按 catalog.resolve_order 启动：扩展自带优先，缺失时走受控下载器。
+    logger.info('[LspExtensionPanel] installing catalog LSP extension', {
+      extensionId,
+      languages: Array.isArray(item?.languages) ? item.languages : [],
+    })
+    await invoke('install_catalog_lsp_extension', { extensionId })
+    message.success(`已安装扩展 ${extensionId}`)
+    await refreshExtensions()
+  } catch (error) {
+    logger.error('[LspExtensionPanel] install catalog extension failed', error)
+    message.error(`安装扩展失败: ${String(error)}`)
+  } finally {
+    installingExtensionId.value = ''
+  }
+}
+
+const handleInstallRecommendedExtensions = async () => {
+  const targets = extensions.value
+    .filter((item) => item?.recommended && !item?.installed)
+    .map((item) => String(item.id || '').trim())
+    .filter(Boolean)
+  if (!targets.length) {
+    message.info('推荐扩展均已安装')
+    return
   }
 
-  await handleInstallOpenVsx({
-    id: openVsxId || item?.id,
-    version: null,
-    download_url: null,
-  })
+  try {
+    installingRecommended.value = true
+    logger.info('[LspExtensionPanel] installing recommended catalog LSP extensions', {
+      targets,
+    })
+    for (const extensionId of targets) {
+      installingExtensionId.value = extensionId
+      await invoke('install_catalog_lsp_extension', { extensionId })
+      logger.info('[LspExtensionPanel] recommended catalog extension installed', {
+        extensionId,
+      })
+    }
+    message.success(`已安装 ${targets.length} 个推荐 LSP 扩展`)
+    await refreshExtensions()
+  } catch (error) {
+    logger.error('[LspExtensionPanel] install recommended catalog extensions failed', error)
+    message.error(`安装推荐扩展失败: ${String(error)}`)
+  } finally {
+    installingRecommended.value = false
+    installingExtensionId.value = ''
+  }
 }
 
 const handleImportVsix = async () => {

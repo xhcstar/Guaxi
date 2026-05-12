@@ -1102,6 +1102,7 @@ import {
   disposeAllLspClients,
   getLspConnectionState,
   onLspConnectionStateChange,
+  requestLspCompletionItems,
   waitForLspConnection,
   resetLspDisabled
 } from '../../monaco/lspClient'
@@ -1142,7 +1143,7 @@ import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
 const logger = createLogger('GuaxiEditor')
-registerLspCompletionBridge(monaco, Array.from(LSP_SUPPORTED_LANGUAGES))
+registerLspCompletionBridge(monaco, Array.from(LSP_SUPPORTED_LANGUAGES).filter((lang) => lang !== 'markdown'))
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
 const outlineStore = useOutlineStore()
 
@@ -5155,6 +5156,9 @@ const markdownFenceCompletionModels = new Map()
 const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '@', '#', '(', ',', '[', '{', '-']
 const EMBEDDED_LSP_READY_TIMEOUT_MS = 4000
 const EMBEDDED_COMPLETION_CACHE_TTL_MS = 2500
+const EMBEDDED_COMPLETION_CACHE_VERSION = 'embedded-completion-word-range-v4'
+const EMBEDDED_MEMBER_COMPLETION_TIMEOUT_MS = 1400
+const EMBEDDED_DEFAULT_COMPLETION_TIMEOUT_MS = 260
 const embeddedCompletionCacheStates = new WeakMap()
 const embeddedCompletionRetriggerStates = new WeakMap()
 
@@ -6119,6 +6123,7 @@ const buildEmbeddedCompletionCacheKey = (model, position, embeddedCtx) => {
     .slice(0, Math.max(0, column - 1))
     .slice(-32)
   return [
+    EMBEDDED_COMPLETION_CACHE_VERSION,
     modelUri,
     lineNumber,
     column,
@@ -6797,6 +6802,34 @@ const VSCODE_TO_MONACO_COMPLETION_KIND = {
   26: monaco.languages.CompletionItemKind.User,
 }
 
+const LSP_TO_MONACO_COMPLETION_KIND = {
+  1: monaco.languages.CompletionItemKind.Text,
+  2: monaco.languages.CompletionItemKind.Method,
+  3: monaco.languages.CompletionItemKind.Function,
+  4: monaco.languages.CompletionItemKind.Constructor,
+  5: monaco.languages.CompletionItemKind.Field,
+  6: monaco.languages.CompletionItemKind.Variable,
+  7: monaco.languages.CompletionItemKind.Class,
+  8: monaco.languages.CompletionItemKind.Interface,
+  9: monaco.languages.CompletionItemKind.Module,
+  10: monaco.languages.CompletionItemKind.Property,
+  11: monaco.languages.CompletionItemKind.Unit,
+  12: monaco.languages.CompletionItemKind.Value,
+  13: monaco.languages.CompletionItemKind.Enum,
+  14: monaco.languages.CompletionItemKind.Keyword,
+  15: monaco.languages.CompletionItemKind.Snippet,
+  16: monaco.languages.CompletionItemKind.Color,
+  17: monaco.languages.CompletionItemKind.File,
+  18: monaco.languages.CompletionItemKind.Reference,
+  19: monaco.languages.CompletionItemKind.Folder,
+  20: monaco.languages.CompletionItemKind.EnumMember,
+  21: monaco.languages.CompletionItemKind.Constant,
+  22: monaco.languages.CompletionItemKind.Struct,
+  23: monaco.languages.CompletionItemKind.Event,
+  24: monaco.languages.CompletionItemKind.Operator,
+  25: monaco.languages.CompletionItemKind.TypeParameter,
+}
+
 const normalizeCompletionLabel = (label) => {
   if (typeof label === 'string') return label
   if (label && typeof label === 'object') {
@@ -6851,7 +6884,85 @@ const dedupeCompletionSuggestions = (items) => {
   return suggestions
 }
 
+const PYTHON_IDENTIFIER_COMPLETION_RE = /^[A-Za-z_]\w*$/
 const EMBEDDED_COMPLETION_FILTER_CONTEXT_MAX_CHARS = 96
+
+const isEmbeddedPythonMemberAccessContext = (languageId, filterContext) => (
+  String(languageId || '').trim().toLowerCase() === 'python'
+  && String(filterContext?.filterPrefix || '').endsWith('.')
+)
+
+const normalizePythonMemberCompletionCandidate = (value) => (
+  String(value || '')
+    .trim()
+    .replace(/\s.*$/, '')
+    .replace(/\(.*$/, '')
+)
+
+const isEncodedOrPathLikeCompletionText = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return false
+  return /%[0-9a-f]{2}/i.test(text)
+    || /[\\/]/.test(text)
+    || /:\/\/|^[.]?[0-9a-f]{2}$/i.test(text)
+}
+
+const shouldKeepEmbeddedCompletionCandidate = (languageId, rawLabel, rawInsertText, rawFilterText, filterContext) => {
+  if (!isEmbeddedPythonMemberAccessContext(languageId, filterContext)) return true
+
+  // Design note:
+  // VSCode completion can include word/path candidates from the virtual document.
+  // In Python member access (`sys.`) those candidates are invalid attributes; if
+  // one is prefixed into `sys..2f`, Monaco's suggest filtering can collapse the
+  // whole visible result set into "No suggestions" although LSP returned items.
+  const labelCandidate = normalizePythonMemberCompletionCandidate(rawLabel)
+  if (!PYTHON_IDENTIFIER_COMPLETION_RE.test(labelCandidate)) return false
+  if (isEncodedOrPathLikeCompletionText(rawLabel)) return false
+  if (isEncodedOrPathLikeCompletionText(rawInsertText)) return false
+  if (isEncodedOrPathLikeCompletionText(rawFilterText)) return false
+  return true
+}
+
+const shouldDropNoisyEmbeddedMemberCandidate = (languageId, item, completionSource, filterContext) => {
+  if (!isEmbeddedPythonMemberAccessContext(languageId, filterContext)) return false
+  const rawKind = Number(item?.kind)
+  if (!Number.isFinite(rawKind)) return false
+  const mappedTextKind = completionSource === 'direct-lsp'
+    ? LSP_TO_MONACO_COMPLETION_KIND[rawKind]
+    : VSCODE_TO_MONACO_COMPLETION_KIND[rawKind]
+
+  // 设计说明：
+  // 1. Python 成员访问补全应该来自对象属性/方法/变量，而不是全局 Text/Keyword/Snippet。
+  // 2. direct LSP 可能稍慢；若退到 VSCode command，它会聚合更多 provider，容易把词表候选也带进来。
+  // 3. 这里先过滤非成员访问语义候选，再做 Property 兜底，避免显示按字母排列的无关列表。
+  return mappedTextKind === monaco.languages.CompletionItemKind.Text
+    || mappedTextKind === monaco.languages.CompletionItemKind.Keyword
+    || mappedTextKind === monaco.languages.CompletionItemKind.Snippet
+}
+
+const resolveEmbeddedCompletionKind = (item, completionSource, filterContext, languageId = '') => {
+  const rawKind = Number(item?.kind)
+  const kindMap = completionSource === 'direct-lsp'
+    ? LSP_TO_MONACO_COMPLETION_KIND
+    : VSCODE_TO_MONACO_COMPLETION_KIND
+  const mappedKind = Number.isFinite(rawKind) ? kindMap[rawKind] : undefined
+  if (
+    Number.isFinite(mappedKind)
+    && !(isEmbeddedPythonMemberAccessContext(languageId, filterContext) && mappedKind === monaco.languages.CompletionItemKind.Text)
+  ) {
+    return mappedKind
+  }
+
+  // 设计说明：
+  // 1. direct LSP 返回协议层 1 基准 kind，VSCode command 返回 API 层 0 基准 kind，
+  //    两者如果混用映射表，会把语义候选错误落到 Text。
+  // 2. 当前 fenced code/Notebook 都关闭了 `showWords`，Text 候选会被 Monaco 的 kind filter 丢弃。
+  // 3. Python 成员访问缺 kind 或被标成 Text 时兜底为 Property，
+  //    既保留 LSP 语义补全，又不会放开普通文档单词补全。
+  return isEmbeddedPythonMemberAccessContext(languageId, filterContext)
+    ? monaco.languages.CompletionItemKind.Property
+    : monaco.languages.CompletionItemKind.Text
+}
 
 const resolveEmbeddedCompletionFilterContext = (model, position) => {
   if (!model || !position) {
@@ -6885,6 +6996,9 @@ const resolveEmbeddedCompletionFilterContext = (model, position) => {
 const buildEmbeddedCompletionFilterText = (rawFilterText, fallbackLabel, filterContext) => {
   const baseFilterText = String(rawFilterText || fallbackLabel || '').trim()
   if (!baseFilterText) return ''
+  if (filterContext?.isMemberAccessContext) {
+    return baseFilterText
+  }
 
   const prefix = String(filterContext?.filterPrefix || '')
   if (!prefix) return baseFilterText
@@ -6895,11 +7009,19 @@ const buildEmbeddedCompletionFilterText = (rawFilterText, fallbackLabel, filterC
 const buildEmbeddedCompletionInsertText = (rawInsertText, fallbackLabel, filterContext) => {
   const baseInsertText = String(rawInsertText ?? fallbackLabel ?? '')
   if (!baseInsertText) return ''
+  if (filterContext?.isMemberAccessContext) return baseInsertText
 
   const prefix = String(filterContext?.filterPrefix || '')
   if (!prefix || !filterContext?.shouldReplaceFullMemberAccessToken) return baseInsertText
   if (baseInsertText.startsWith(prefix)) return baseInsertText
   return `${prefix}${baseInsertText}`
+}
+
+const getVscodeOrLspCompletionInsertText = (item, fallbackLabel) => {
+  if (typeof item?.insertText === 'string') return item.insertText
+  if (typeof item?.insertText?.value === 'string') return item.insertText.value
+  if (typeof item?.textEdit?.newText === 'string') return item.textEdit.newText
+  return String(fallbackLabel || '')
 }
 
 const buildEmbeddedCompletionDisplayLabel = (label, filterContext) => {
@@ -6909,30 +7031,32 @@ const buildEmbeddedCompletionDisplayLabel = (label, filterContext) => {
   const prefix = String(filterContext?.filterPrefix || '')
   const typedWord = String(filterContext?.typedWord || '')
   if (!prefix) return baseLabel
+  if (filterContext?.isMemberAccessContext) {
+    return baseLabel
+  }
 
   // 设计说明：
-  // 1. 目前日志已经证明 embedded LSP 实际返回了 1423 条结果，但 Monaco widget 仍显示 `No suggestions`。
-  // 2. 这说明在 markdown 宿主里，前端过滤并不总是完全依赖 `filterText`，有概率仍按可见 label 做匹配。
-  // 3. 对于 `sys.` 这类成员补全，原始 label 只有 `exit / path / argv`，如果过滤阶段忽略了 filterText，
-  //    它们就会被当前前缀 `sys.` 全部筛掉。这里把显示 label 扩展成 `sys.exit` 这类完整前缀；
-  //    对于安全的成员访问链，下面的 insertText/range 也会同步扩展成整段替换，避免 UI 过滤和实际插入文本漂移。
+  // 1. 非成员访问场景仍可能需要保留宿主前缀，让 Markdown 宿主里的普通补全可以按完整 token 匹配。
+  // 2. 成员访问场景已经在上方提前返回原始成员名，避免 `sys.` 被拼进 label/filterText 后和空替换区间打架。
+  // 3. 因此这里仅处理非成员访问的兜底前缀拼接。
   if (typedWord && !filterContext?.shouldReplaceFullMemberAccessToken) return baseLabel
   if (baseLabel.startsWith(prefix)) return baseLabel
   return `${prefix}${baseLabel}`
 }
 
-const convertVscodeCompletionItemToMonaco = (item, replaceRange, index, filterContext = null) => {
+const convertVscodeCompletionItemToMonaco = (item, replaceRange, index, filterContext = null, languageId = '', completionSource = 'vscode-command') => {
   const rawLabel = normalizeCompletionLabel(item?.label)
   if (!rawLabel) return null
 
   const insertTextValue = item?.insertText
-  const rawInsertText = typeof insertTextValue === 'string'
-    ? insertTextValue
-    : String(insertTextValue?.value || rawLabel)
+  const rawInsertText = getVscodeOrLspCompletionInsertText(item, rawLabel)
+  if (!shouldKeepEmbeddedCompletionCandidate(languageId, rawLabel, rawInsertText, item?.filterText, filterContext)) {
+    return null
+  }
   const insertText = buildEmbeddedCompletionInsertText(rawInsertText, rawLabel, filterContext)
   const isSnippet = typeof insertTextValue === 'object' && insertTextValue !== null
   const documentation = normalizeCompletionDocumentation(item?.documentation)
-  const kind = VSCODE_TO_MONACO_COMPLETION_KIND[item?.kind] || monaco.languages.CompletionItemKind.Text
+  const kind = resolveEmbeddedCompletionKind(item, completionSource, filterContext, languageId)
   const label = buildEmbeddedCompletionDisplayLabel(rawLabel, filterContext)
 
   return {
@@ -6944,6 +7068,7 @@ const convertVscodeCompletionItemToMonaco = (item, replaceRange, index, filterCo
     sortText: buildCompletionSortKey(item, rawLabel, index),
     insertText,
     insertTextRules: isSnippet
+      || Number(item?.insertTextFormat || 0) === 2
       ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
       : undefined,
     range: replaceRange,
@@ -6970,16 +7095,78 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
     const triggerCharacter = context?.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter
       ? String(context?.triggerCharacter || '')
       : undefined
+    const languageId = String(virtualModel.getLanguageId?.() || '')
 
     logger.info('[EmbeddedLsp] vscode completion command start', {
       documentUri: String(virtualModel.uri?.toString?.() || ''),
-      languageId: String(virtualModel.getLanguageId?.() || ''),
+      languageId,
       triggerKind: Number(context?.triggerKind || 0),
       triggerCharacter: triggerCharacter || '',
       lineNumber: positionInBlock?.lineNumber || 0,
       column: positionInBlock?.column || 0,
+      linePrefix: String(virtualModel.getLineContent?.(Number(positionInBlock?.lineNumber || 1)) || '')
+        .slice(0, Math.max(0, Number(positionInBlock?.column || 1) - 1))
+        .slice(-80),
       contentLength: Number(virtualModel.getValue?.()?.length || 0),
     })
+
+    const directResult = await requestLspCompletionItems(
+      languageId,
+      String(virtualModel.uri?.toString?.() || ''),
+      Number(positionInBlock?.lineNumber || 1),
+      Number(positionInBlock?.column || 1),
+      triggerCharacter || undefined,
+      filterContext?.isMemberAccessContext
+        ? EMBEDDED_MEMBER_COMPLETION_TIMEOUT_MS
+        : EMBEDDED_DEFAULT_COMPLETION_TIMEOUT_MS
+    )
+    if (directResult?.items?.length) {
+      const suggestions = []
+      let filteredOutCount = 0
+      let noisyKindFilteredCount = 0
+      let firstFilteredOutLabel = ''
+      let firstRawKind = ''
+      let firstMappedKind = ''
+      let textKindSuggestionCount = 0
+      for (let i = 0; i < directResult.items.length; i += 1) {
+        const rawItemLabel = normalizeCompletionLabel(directResult.items[i]?.label)
+        if (shouldDropNoisyEmbeddedMemberCandidate(languageId, directResult.items[i], 'direct-lsp', filterContext)) {
+          noisyKindFilteredCount += 1
+          if (!firstFilteredOutLabel && rawItemLabel) firstFilteredOutLabel = rawItemLabel
+          continue
+        }
+        const mapped = convertVscodeCompletionItemToMonaco(directResult.items[i], replaceRange, i, filterContext, languageId, 'direct-lsp')
+        if (!mapped) {
+          filteredOutCount += 1
+          if (!firstFilteredOutLabel && rawItemLabel) firstFilteredOutLabel = rawItemLabel
+          continue
+        }
+        if (!firstRawKind) firstRawKind = String(directResult.items[i]?.kind ?? '')
+        if (!firstMappedKind) firstMappedKind = String(mapped.kind ?? '')
+        if (mapped.kind === monaco.languages.CompletionItemKind.Text) textKindSuggestionCount += 1
+        suggestions.push(mapped)
+      }
+      const dedupedDirectSuggestions = dedupeCompletionSuggestions(suggestions)
+      logger.info('[EmbeddedLsp] direct LSP completion items mapped to Monaco suggestions', {
+        documentUri: String(virtualModel.uri?.toString?.() || ''),
+        languageId,
+        rawItemCount: directResult.items.length,
+        filteredOutCount,
+        noisyKindFilteredCount,
+        firstFilteredOutLabel,
+        mappedCount: dedupedDirectSuggestions.length,
+        firstMappedLabel: getCompletionItemLabelText(dedupedDirectSuggestions[0]?.label),
+        firstMappedInsertText: String(dedupedDirectSuggestions[0]?.insertText || ''),
+        firstMappedFilterText: String(dedupedDirectSuggestions[0]?.filterText || ''),
+        firstRawKind,
+        firstMappedKind,
+        textKindSuggestionCount,
+        firstMappedRange: dedupedDirectSuggestions[0]?.range
+          ? `${dedupedDirectSuggestions[0].range.startLineNumber}:${dedupedDirectSuggestions[0].range.startColumn}-${dedupedDirectSuggestions[0].range.endLineNumber}:${dedupedDirectSuggestions[0].range.endColumn}`
+          : '',
+      })
+      if (dedupedDirectSuggestions.length) return dedupedDirectSuggestions
+    }
 
     const completionTimeout = new Promise((resolve) => {
       window.setTimeout(() => {
@@ -7024,18 +7211,44 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
     if (!items.length) return []
 
     const suggestions = []
+    let filteredOutCount = 0
+    let noisyKindFilteredCount = 0
+    let firstFilteredOutLabel = ''
+    let firstRawKind = ''
+    let firstMappedKind = ''
+    let textKindSuggestionCount = 0
     for (let i = 0; i < items.length; i += 1) {
-      const mapped = convertVscodeCompletionItemToMonaco(items[i], replaceRange, i, filterContext)
-      if (!mapped) continue
+      const rawItemLabel = normalizeCompletionLabel(items[i]?.label)
+      if (shouldDropNoisyEmbeddedMemberCandidate(languageId, items[i], 'vscode-command', filterContext)) {
+        noisyKindFilteredCount += 1
+        if (!firstFilteredOutLabel && rawItemLabel) firstFilteredOutLabel = rawItemLabel
+        continue
+      }
+      const mapped = convertVscodeCompletionItemToMonaco(items[i], replaceRange, i, filterContext, languageId, 'vscode-command')
+      if (!mapped) {
+        filteredOutCount += 1
+        if (!firstFilteredOutLabel && rawItemLabel) firstFilteredOutLabel = rawItemLabel
+        continue
+      }
+      if (!firstRawKind) firstRawKind = String(items[i]?.kind ?? '')
+      if (!firstMappedKind) firstMappedKind = String(mapped.kind ?? '')
+      if (mapped.kind === monaco.languages.CompletionItemKind.Text) textKindSuggestionCount += 1
       suggestions.push(mapped)
     }
     logger.debug('[EmbeddedLsp] vscode completion items mapped to Monaco suggestions', {
       documentUri: String(virtualModel.uri?.toString?.() || ''),
       languageId: String(virtualModel.getLanguageId?.() || ''),
+      rawItemCount: items.length,
+      filteredOutCount,
+      noisyKindFilteredCount,
+      firstFilteredOutLabel,
       mappedCount: suggestions.length,
       firstMappedLabel: getCompletionItemLabelText(suggestions[0]?.label),
       firstMappedInsertText: String(suggestions[0]?.insertText || ''),
       firstMappedFilterText: String(suggestions[0]?.filterText || ''),
+      firstRawKind,
+      firstMappedKind,
+      textKindSuggestionCount,
       firstMappedRange: suggestions[0]?.range
         ? `${suggestions[0].range.startLineNumber}:${suggestions[0].range.startColumn}-${suggestions[0].range.endLineNumber}:${suggestions[0].range.endColumn}`
         : '',
@@ -7065,12 +7278,11 @@ const resolveEmbeddedMemberAccessReplaceRange = (model, position) => {
   }
 
   // 设计思路：
-  // 1. 只替换光标后的“当前单词”虽然更接近普通代码补全，但在 Markdown 宿主里，
-  //    Monaco 会继续把 `sys.` 前面的 token 当成过滤依据，最终把所有 LSP 建议判空。
-  // 2. 对于简单成员访问链（如 `sys.` / `pkg.mod.ex`），这里直接把整段 host token 当作 replace range，
-  //    再配合下方补全项里的完整前缀 `sys.exit`，让 Monaco 的过滤文本、显示标签、插入文本三者保持一致。
-  // 3. 这样选中补全后会整体替换 `sys.` 或 `pkg.mod.ex`，最终文本仍然正确，但 suggest model 不会再被 Markdown 的词法边界误伤。
-  const startColumn = Math.max(1, hostColumn - hostToken.length)
+  // 1. 成员访问补全要遵守 Monaco 的原生约定：range 只覆盖点号后的当前成员名。
+  // 2. 对于简单成员访问链（如 `sys.` / `pkg.mod.ex`），这里只替换点号后的当前成员名。
+  // 3. 候选项保持为 `exit/path/argv` 这类成员名，让 Monaco 用 `pa` 匹配 `path`，
+  //    避免 `sys.path` 这类带宿主前缀的 filterText 和空 range 组合后被 suggest model 全部过滤。
+  const startColumn = Math.max(1, hostColumn - typedWord.length)
   const range = new monaco.Range(
     hostLineNumber,
     startColumn,
@@ -7086,7 +7298,7 @@ const resolveEmbeddedMemberAccessReplaceRange = (model, position) => {
     filterPrefix,
     startColumn,
     endColumn: hostColumn,
-    shouldReplaceWholeToken: true,
+    shouldReplaceWholeToken: false,
   })
   return range
 }
@@ -7265,18 +7477,34 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
           fallbackToken
         );
       const items = Array.isArray(result?.suggestions) ? result.suggestions : [];
+      let fallbackFilteredOutCount = 0
+      let firstFallbackFilteredOutLabel = ''
+      const languageId = String(virtualModel.getLanguageId?.() || '')
       for (const item of items) {
-        const insertText = String(item?.insertText || item?.textEdit?.text || '');
-        if (!getCompletionItemLabelText(item?.label)) continue;
+        const labelText = getCompletionItemLabelText(item?.label)
+        const insertText = getVscodeOrLspCompletionInsertText(item, labelText)
+        if (!labelText) continue;
+        if (!shouldKeepEmbeddedCompletionCandidate(languageId, labelText, insertText, item?.filterText, filterContext)) {
+          fallbackFilteredOutCount += 1
+          if (!firstFallbackFilteredOutLabel) firstFallbackFilteredOutLabel = labelText
+          continue
+        }
 
         suggestions.push({
           ...item,
-          insertText: buildEmbeddedCompletionInsertText(insertText, getCompletionItemLabelText(item?.label), filterContext),
-          filterText: buildEmbeddedCompletionFilterText(item?.filterText, getCompletionItemLabelText(item?.label), filterContext),
+          insertText: buildEmbeddedCompletionInsertText(insertText, labelText, filterContext),
+          filterText: buildEmbeddedCompletionFilterText(item?.filterText, labelText, filterContext),
           range: replaceRange,
           textEdit: undefined,
           additionalTextEdits: undefined,
         });
+      }
+      if (fallbackFilteredOutCount) {
+        logger.debug('[EmbeddedLsp] filtered invalid fallback completion candidates', {
+          languageId,
+          filteredOutCount: fallbackFilteredOutCount,
+          firstFilteredOutLabel: firstFallbackFilteredOutLabel,
+        })
       }
     } catch {
     }

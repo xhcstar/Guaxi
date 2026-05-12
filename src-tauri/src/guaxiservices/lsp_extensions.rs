@@ -1586,8 +1586,8 @@ pub(crate) async fn resolve_lsp_command_for_language(
                         info!(
                             language = normalized_language.as_str(),
                             extension_id = candidate.id.as_str(),
-                            fallback_server = server_id,
-                            "extension runtime not directly resolved, falling back to downloadable/static server"
+                            managed_server = server_id,
+                            "extension runtime not directly bundled, requesting managed LSP server runtime"
                         );
                         return Ok(None);
                     }

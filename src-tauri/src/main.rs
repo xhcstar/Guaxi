@@ -325,6 +325,7 @@ async fn main() {
             commands::settingview::search_vscode_marketplace_extensions,
             commands::settingview::install_open_vsx_extension,
             commands::settingview::install_vscode_marketplace_extension,
+            commands::settingview::install_catalog_lsp_extension,
             commands::settingview::import_lsp_extension_vsix,
             commands::settingview::import_lsp_extension_directory,
             commands::settingview::remove_lsp_extension,

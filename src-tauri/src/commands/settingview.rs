@@ -1142,6 +1142,17 @@ pub async fn install_vscode_marketplace_extension(
 }
 
 #[tauri::command]
+pub fn install_catalog_lsp_extension(
+    extension_id: String,
+) -> Result<lsp_extensions::LspExtensionState, String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id 不能为空".to_string());
+    }
+    lsp_extensions::install_catalog_lsp_extension(&id)
+}
+
+#[tauri::command]
 pub async fn import_lsp_extension_vsix(
     vsix_path: String,
 ) -> Result<lsp_extensions::LspExtensionState, String> {
