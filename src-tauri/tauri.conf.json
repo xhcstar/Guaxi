@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https: http://localhost:8888 http://asset.localhost https://tile.openstreetmap.org https://a.tile.openstreetmap.org https://b.tile.openstreetmap.org https://c.tile.openstreetmap.org https://*.is.autonavi.com https://*.autonavi.com; frame-src 'self' http://localhost:* http://127.0.0.1:*; connect-src 'self' http://ipc.localhost http://localhost:8888 http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https: http://localhost:8888 http://asset.localhost https://tile.openstreetmap.org https://a.tile.openstreetmap.org https://b.tile.openstreetmap.org https://c.tile.openstreetmap.org https://*.is.autonavi.com https://*.autonavi.com; frame-src 'self' http://localhost:* http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost http://localhost:8888 http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
       "assetProtocol": {
         "enable": true,
         "scope": [

@@ -12,11 +12,13 @@
       "recommended": true,
       "lsp": {
         "server_id": "basedpyright",
-        "runtime": "node_binary",
+        "runtime": "node_entry",
         "bin_name": "basedpyright-langserver",
         "args": ["--stdio"],
-        "entry_paths": [],
-        "resolve_order": ["extension_bin", "slidev_env_bin", "downloadable_server"],
+        "entry_paths": [
+          "dist/server.js"
+        ],
+        "resolve_order": ["extension_entry", "extension_bin", "slidev_env_bin", "downloadable_server"],
         "fallback_server": "basedpyright",
         "fallback_bin_name": "basedpyright-langserver"
       }

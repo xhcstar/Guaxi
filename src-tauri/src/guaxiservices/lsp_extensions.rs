@@ -1748,6 +1748,11 @@ pub(crate) async fn resolve_lsp_command_for_language(
                     if let Some(path) = resolve_relative_entry(&candidate.install_dir, &catalog_entry.lsp.entry_paths) {
                         if normalize_string(&catalog_entry.lsp.runtime) == "node_entry" {
                             if let Some(node_path) = slidev_node_path() {
+                                // Design note: VSCode extensions such as basedpyright ship the
+                                // language server as a bundled JS entry under the downloaded
+                                // extension directory, not as node_modules/.bin. We still use the
+                                // bundled Node executable from SlidevEnv, but the server code is
+                                // loaded from the installed extension in `extensions`.
                                 let mut args = vec![path.to_string_lossy().to_string()];
                                 args.extend(catalog_entry.lsp.args.clone());
                                 let env_roots = vec![
@@ -1755,6 +1760,16 @@ pub(crate) async fn resolve_lsp_command_for_language(
                                     candidate.install_dir.join("node_modules").join(".bin"),
                                     slidev_env_root().unwrap_or_else(|_| PathBuf::from(".")),
                                 ];
+                                info!(
+                                    language = normalized_language.as_str(),
+                                    extension_id = candidate.id.as_str(),
+                                    strategy = "extension_entry",
+                                    runtime = catalog_entry.lsp.runtime.as_str(),
+                                    node = node_path.to_string_lossy().as_ref(),
+                                    entry = path.to_string_lossy().as_ref(),
+                                    cwd = candidate.install_dir.to_string_lossy().as_ref(),
+                                    "resolved LSP server from downloaded extension entry"
+                                );
                                 return Ok(Some(ResolvedLspExtensionCommand {
                                     program: node_path.to_string_lossy().to_string(),
                                     args,
