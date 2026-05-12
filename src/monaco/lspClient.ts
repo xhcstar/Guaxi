@@ -601,6 +601,15 @@ export function initLspClient(
   if (!editor || !languageId) return
 
   if (!isLspSupportedLanguage(languageId)) {
+    const normalizedLanguageId = normalizeLanguageId(languageId)
+    if (normalizedLanguageId) {
+      setLspConnectionState(normalizedLanguageId, 'disconnected', 'runtime-not-ready')
+      logger.warn('[LSP] init skipped because runtime extension is not ready', {
+        languageId: normalizedLanguageId,
+        filePath,
+        requestSource: String(options.requestSource || 'unknown'),
+      })
+    }
     return
   }
 

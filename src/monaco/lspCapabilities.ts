@@ -184,6 +184,12 @@ export const setLspRuntimeExtensionSnapshot = (snapshot: RuntimeExtensionState[]
   logger.info('[LSP] runtime extension snapshot applied', {
     installedExtensionCount: Array.isArray(snapshot) ? snapshot.filter((item) => item?.installed).length : 0,
     runtimeLanguageCount: runtimeExtensionByLanguage.size,
+    supportedLanguages: Array.from(LSP_SUPPORTED_LANGUAGES_INTERNAL),
+    runtimeLanguages: Array.from(runtimeExtensionByLanguage.entries()).map(([language, item]) => ({
+      language,
+      extensionId: String(item?.id || ''),
+      ready: item?.runtime_status?.ready !== false,
+    })),
   })
 }
 
@@ -242,4 +248,3 @@ export const getLspRuntimeExtensionForLanguage = (languageId: string) =>
 
 export const isLspSupportedLanguage = (languageId: string) =>
   LSP_SUPPORTED_LANGUAGES_INTERNAL.has(normalizeLanguage(languageId))
-  || baseEntryByLanguage.has(normalizeLanguage(languageId))

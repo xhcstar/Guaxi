@@ -14,7 +14,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-use crate::guaxiservices::bundled_resources;
+use crate::guaxiservices::{bundled_resources, lsp};
 
 #[derive(Debug, Clone, Deserialize)]
 struct CatalogRoot {
@@ -569,11 +569,37 @@ fn resolve_extension_bin(dir: &Path, bin_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn extension_bin_candidate_paths(dir: &Path, bin_name: &str) -> Vec<String> {
+    if bin_name.trim().is_empty() {
+        return vec![];
+    }
+
+    let bin_dir = dir.join("node_modules").join(".bin");
+    let mut candidates = vec![];
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(bin_dir.join(format!("{bin_name}.cmd")));
+        candidates.push(bin_dir.join(format!("{bin_name}.exe")));
+    }
+    candidates.push(bin_dir.join(bin_name));
+    candidates
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect()
+}
+
 fn resolve_relative_entry(dir: &Path, entry_paths: &[String]) -> Option<PathBuf> {
     entry_paths
         .iter()
         .map(|item| dir.join(item))
         .find(|path| path.is_file())
+}
+
+fn relative_entry_candidate_paths(dir: &Path, entry_paths: &[String]) -> Vec<String> {
+    entry_paths
+        .iter()
+        .map(|item| dir.join(item).to_string_lossy().to_string())
+        .collect()
 }
 
 fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Option<&CatalogExtension>) -> LspExtensionRuntimeStatus {
@@ -897,24 +923,107 @@ fn write_catalog_extension_package(
     Ok(())
 }
 
-pub fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExtensionState, String> {
-    let id = normalize_extension_id(extension_id);
-    if id.is_empty() {
-        return Err("extension_id cannot be empty".to_string());
+async fn verify_catalog_extension_runtime(
+    state: &LspExtensionState,
+    source_label: &str,
+) -> Result<Vec<lsp::LspRuntimeProbeResult>, String> {
+    if !state.installed {
+        return Err(format!("{} did not install extension {}", source_label, state.id));
     }
-    let catalog = catalog_by_id()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| format!("unknown LSP catalog extension: {}", extension_id))?;
 
-    // 设计说明：
-    // 1. VSCode Marketplace / Open VSX 并不保证每个语言功能都有可下载 VSIX，尤其是 VSCode 内置扩展。
-    // 2. Guaxi 的“已知语言扩展”按钮因此不应把搜索市场作为唯一安装路径，而是直接安装 catalog 扩展记录。
-    // 3. 运行时仍由 catalog.lsp.resolve_order 解析：扩展自带 server 优先，缺失时走确定的 fallback server。
+    let languages = state
+        .languages
+        .iter()
+        .map(|item| normalize_language(item))
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    if languages.is_empty() {
+        return Err(format!("{} installed extension {} but no languages were declared", source_label, state.id));
+    }
+
+    let mut probes = vec![];
+    let mut errors = vec![];
+    for language in languages {
+        match lsp::probe_lsp_runtime_for_language(&language, None).await {
+            Ok(probe) => {
+                if !probe.completion_provider {
+                    errors.push(format!(
+                        "{}: initialize succeeded but completionProvider is missing",
+                        language
+                    ));
+                    continue;
+                }
+                probes.push(probe);
+            }
+            Err(error) => {
+                errors.push(format!("{}: {}", language, error));
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(format!(
+            "{} runtime probe failed for {}: {}",
+            source_label,
+            state.id,
+            errors.join(" | ")
+        ));
+    }
+
+    Ok(probes)
+}
+
+async fn verify_if_catalog_extension_runtime(
+    state: LspExtensionState,
+    source_label: &str,
+) -> Result<LspExtensionState, String> {
+    let catalog = catalog_by_id();
+    let id = normalize_extension_id(&state.id);
+    if !catalog.contains_key(&id) {
+        return Ok(state);
+    }
+
+    match verify_catalog_extension_runtime(&state, source_label).await {
+        Ok(probes) => {
+            info!(
+                extension_id = id.as_str(),
+                source = source_label,
+                probe_count = probes.len(),
+                probes = ?probes,
+                "verified installed catalog LSP extension runtime"
+            );
+            Ok(state)
+        }
+        Err(error) => {
+            rollback_failed_catalog_install(&id, &error);
+            Err(error)
+        }
+    }
+}
+
+fn rollback_failed_catalog_install(extension_id: &str, reason: &str) {
+    warn!(
+        extension_id = extension_id,
+        reason = reason,
+        "rolling back LSP extension installation because runtime verification failed"
+    );
+    if let Err(error) = remove_existing_extension_versions(extension_id) {
+        warn!(
+            extension_id = extension_id,
+            error = error.as_str(),
+            "failed to rollback LSP extension after runtime verification failure"
+        );
+    }
+}
+
+fn install_catalog_lsp_extension_record(
+    catalog: &CatalogExtension,
+) -> Result<LspExtensionState, String> {
+    let id = normalize_extension_id(&catalog.id);
     let version = format!("catalog.{}", LSP_EXTENSION_CATALOG.version);
     remove_existing_extension_versions(&id)?;
     let install_dir = extensions_root_dir()?.join(install_dir_name(&id, &version));
-    write_catalog_extension_package(&install_dir, &catalog)?;
+    write_catalog_extension_package(&install_dir, catalog)?;
     write_extension_meta(
         &install_dir,
         &InstalledExtensionMeta {
@@ -934,7 +1043,102 @@ pub fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExtensionS
     );
     let record = record_from_dir(&install_dir)
         .ok_or_else(|| "failed to rebuild catalog extension record after install".to_string())?;
-    Ok(build_extension_state(Some(record), Some(catalog)))
+    Ok(build_extension_state(Some(record), Some(catalog.clone())))
+}
+
+pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExtensionState, String> {
+    let id = normalize_extension_id(extension_id);
+    if id.is_empty() {
+        return Err("extension_id cannot be empty".to_string());
+    }
+    let catalog = catalog_by_id()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown LSP catalog extension: {}", extension_id))?;
+
+    // 设计说明：
+    // 1. “安装成功”必须代表后端可以真实启动 language server，而不只是写入一个扩展登记项。
+    // 2. 因此按真实 VSIX -> Open VSX -> Guaxi catalog fallback 的顺序尝试，每次安装后都发送 initialize 探测。
+    // 3. 探测要求 completionProvider 存在；语法高亮由前端 TextMate grammar 保底，semanticTokens 会在日志中记录。
+    let mut attempts = vec![];
+
+    if let Some(identifier) = catalog.vscode_marketplace.as_deref() {
+        match install_vscode_marketplace_extension(identifier, None, None).await {
+            Ok(state) => match verify_catalog_extension_runtime(&state, "VSCode Marketplace").await {
+                Ok(probes) => {
+                    info!(
+                        extension_id = id.as_str(),
+                        probe_count = probes.len(),
+                        probes = ?probes,
+                        "catalog LSP extension verified from VSCode Marketplace"
+                    );
+                    return Ok(state);
+                }
+                Err(error) => {
+                    rollback_failed_catalog_install(&id, &error);
+                    attempts.push(error);
+                }
+            },
+            Err(error) => {
+                warn!(
+                    extension_id = id.as_str(),
+                    error = error.as_str(),
+                    "VSCode Marketplace catalog install attempt failed"
+                );
+                attempts.push(format!("VSCode Marketplace install failed: {}", error));
+            }
+        }
+    }
+
+    if let Some(identifier) = catalog.open_vsx.as_deref() {
+        match install_open_vsx_extension(identifier, None, None).await {
+            Ok(state) => match verify_catalog_extension_runtime(&state, "Open VSX").await {
+                Ok(probes) => {
+                    info!(
+                        extension_id = id.as_str(),
+                        probe_count = probes.len(),
+                        probes = ?probes,
+                        "catalog LSP extension verified from Open VSX"
+                    );
+                    return Ok(state);
+                }
+                Err(error) => {
+                    rollback_failed_catalog_install(&id, &error);
+                    attempts.push(error);
+                }
+            },
+            Err(error) => {
+                warn!(
+                    extension_id = id.as_str(),
+                    error = error.as_str(),
+                    "Open VSX catalog install attempt failed"
+                );
+                attempts.push(format!("Open VSX install failed: {}", error));
+            }
+        }
+    }
+
+    let state = install_catalog_lsp_extension_record(&catalog)?;
+    match verify_catalog_extension_runtime(&state, "Guaxi catalog fallback").await {
+        Ok(probes) => {
+            info!(
+                extension_id = id.as_str(),
+                probe_count = probes.len(),
+                probes = ?probes,
+                "catalog LSP extension verified from Guaxi fallback runtime"
+            );
+            Ok(state)
+        }
+        Err(error) => {
+            rollback_failed_catalog_install(&id, &error);
+            attempts.push(error);
+            Err(format!(
+                "LSP 扩展 {} 安装后未能通过真实启动检查，已回滚。尝试结果: {}",
+                id,
+                attempts.join(" || ")
+            ))
+        }
+    }
 }
 
 pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState, String> {
@@ -966,7 +1170,8 @@ pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState,
     );
 
     let _ = fs::remove_dir_all(&unpack_root);
-    result
+    let state = result?;
+    verify_if_catalog_extension_runtime(state, "local VSIX").await
 }
 
 pub async fn import_extension_directory(dir_path: &str) -> Result<LspExtensionState, String> {
@@ -980,7 +1185,7 @@ pub async fn import_extension_directory(dir_path: &str) -> Result<LspExtensionSt
         "importing unpacked extension directory"
     );
 
-    finalize_install_from_unpacked_root(
+    let state = finalize_install_from_unpacked_root(
         &source_dir,
         InstalledExtensionMeta {
             source: "local-directory".to_string(),
@@ -991,7 +1196,8 @@ pub async fn import_extension_directory(dir_path: &str) -> Result<LspExtensionSt
             original_file_name: source_dir.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
         None,
-    )
+    )?;
+    verify_if_catalog_extension_runtime(state, "local directory").await
 }
 
 fn parse_open_vsx_result(item: &Value) -> Option<OpenVsxSearchResult> {
@@ -1377,7 +1583,8 @@ pub async fn install_open_vsx_extension(
 
     let _ = fs::remove_file(&download_file);
     let _ = fs::remove_dir_all(&unpack_root);
-    result
+    let state = result?;
+    verify_if_catalog_extension_runtime(state, "Open VSX").await
 }
 
 pub async fn install_vscode_marketplace_extension(
@@ -1448,7 +1655,8 @@ pub async fn install_vscode_marketplace_extension(
 
     let _ = fs::remove_file(&download_file);
     let _ = fs::remove_dir_all(&unpack_root);
-    result
+    let state = result?;
+    verify_if_catalog_extension_runtime(state, "VSCode Marketplace").await
 }
 
 pub fn remove_lsp_extension(extension_id: &str) -> Result<(), String> {
@@ -1527,6 +1735,14 @@ pub(crate) async fn resolve_lsp_command_for_language(
                             server_id: catalog_entry.lsp.server_id.clone(),
                         }));
                     }
+                    info!(
+                        language = normalized_language.as_str(),
+                        extension_id = candidate.id.as_str(),
+                        strategy = "extension_bin",
+                        bin_name = catalog_entry.lsp.bin_name.as_str(),
+                        candidates = ?extension_bin_candidate_paths(&candidate.install_dir, &catalog_entry.lsp.bin_name),
+                        "LSP extension runtime strategy did not resolve"
+                    );
                 }
                 "extension_entry" => {
                     if let Some(path) = resolve_relative_entry(&candidate.install_dir, &catalog_entry.lsp.entry_paths) {
@@ -1549,6 +1765,13 @@ pub(crate) async fn resolve_lsp_command_for_language(
                                     server_id: catalog_entry.lsp.server_id.clone(),
                                 }));
                             }
+                            info!(
+                                language = normalized_language.as_str(),
+                                extension_id = candidate.id.as_str(),
+                                strategy = "extension_entry",
+                                entry = path.to_string_lossy().as_ref(),
+                                "LSP extension entry exists but bundled node runtime is missing"
+                            );
                         } else {
                             return Ok(Some(ResolvedLspExtensionCommand {
                                 program: path.to_string_lossy().to_string(),
@@ -1561,6 +1784,13 @@ pub(crate) async fn resolve_lsp_command_for_language(
                             }));
                         }
                     }
+                    info!(
+                        language = normalized_language.as_str(),
+                        extension_id = candidate.id.as_str(),
+                        strategy = "extension_entry",
+                        candidates = ?relative_entry_candidate_paths(&candidate.install_dir, &catalog_entry.lsp.entry_paths),
+                        "LSP extension runtime strategy did not resolve"
+                    );
                 }
                 "slidev_env_bin" => {
                     if let Some(root) = slidev_env_root().ok() {
@@ -1579,6 +1809,21 @@ pub(crate) async fn resolve_lsp_command_for_language(
                                 server_id: catalog_entry.lsp.server_id.clone(),
                             }));
                         }
+                        info!(
+                            language = normalized_language.as_str(),
+                            extension_id = candidate.id.as_str(),
+                            strategy = "slidev_env_bin",
+                            bin_name = catalog_entry.lsp.bin_name.as_str(),
+                            candidates = ?extension_bin_candidate_paths(&root, &catalog_entry.lsp.bin_name),
+                            "LSP extension runtime strategy did not resolve"
+                        );
+                    } else {
+                        info!(
+                            language = normalized_language.as_str(),
+                            extension_id = candidate.id.as_str(),
+                            strategy = "slidev_env_bin",
+                            "SlidevEnv root is unavailable while resolving LSP extension runtime"
+                        );
                     }
                 }
                 "downloadable_server" => {

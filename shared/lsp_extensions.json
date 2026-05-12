@@ -168,8 +168,8 @@
       "open_vsx": "ms-vscode.html-language-features",
       "vscode_marketplace": "ms-vscode.html-language-features",
       "languages": ["html"],
-      "compatibility_level": "B",
-      "recommended": true,
+      "compatibility_level": "C",
+      "recommended": false,
       "lsp": {
         "server_id": "html-ls",
         "runtime": "node_entry",
