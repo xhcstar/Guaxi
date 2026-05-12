@@ -48,6 +48,12 @@ const createFileNotFoundError = (uri) => new FileSystemProviderError(
   FileSystemProviderErrorCode.FileNotFound
 )
 
+const isVirtualDirectoryRoot = (uri) => {
+  const scheme = String(uri?.scheme || '').trim().toLowerCase()
+  const path = String(uri?.path || '').trim() || '/'
+  return (scheme === 'inmemory' || scheme === 'untitled') && path === '/'
+}
+
 const splitPathSegments = (uri) => String(uri?.path || '/').split('/').filter(Boolean)
 
 const joinSegmentsToPath = (segments) => `/${segments.join('/')}`
@@ -93,6 +99,20 @@ const createOverlayProvider = () => {
     async stat(resource) {
       const uri = normalizeResourceUri(resource)
       if (!uri) throw createFileNotFoundError(resource)
+
+      if (isVirtualDirectoryRoot(uri)) {
+        // 设计思路：
+        // 1. monaco-vscode 在解析 inmemory://model/... 这类虚拟模型时会先 stat 根目录。
+        // 2. 这些模型并不对应真实磁盘文件，但根目录存在性应该由 overlay 兜底，否则控制台会刷
+        //    "File or directory inmemory://model/ does not exist"。
+        // 3. 文件内容仍只由 ensureFile 注册，避免把未知虚拟文件误读成空文件。
+        return {
+          type: FileType.Directory,
+          ctime: Date.now(),
+          mtime: Date.now(),
+          size: 0,
+        }
+      }
 
       const fileEntry = files.get(uri.toString())
       if (fileEntry) {
@@ -141,6 +161,10 @@ const createOverlayProvider = () => {
     async readdir(resource) {
       const uri = normalizeResourceUri(resource)
       if (!uri) throw createFileNotFoundError(resource)
+
+      if (isVirtualDirectoryRoot(uri) && !directories.has(uri.toString())) {
+        return []
+      }
 
       const targetPath = String(uri.path || '/').replace(/[\\/]+$/, '') || '/'
       const children = new Map()

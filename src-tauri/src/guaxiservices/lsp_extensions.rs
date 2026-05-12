@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use once_cell::sync::Lazy;
@@ -125,6 +126,7 @@ pub(crate) struct ResolvedLspExtensionCommand {
 struct InstalledExtensionRecord {
     id: String,
     version: String,
+    installed_at: String,
     display_name: String,
     description: Option<String>,
     source: String,
@@ -226,6 +228,21 @@ fn install_dir_name(id: &str, version: &str) -> String {
         sanitize_dir_fragment(&normalize_extension_id(id)),
         sanitize_dir_fragment(version)
     )
+}
+
+fn unique_install_dir(id: &str, version: &str) -> Result<PathBuf, String> {
+    let root = extensions_root_dir()?;
+    let base_name = install_dir_name(id, version);
+    let base = root.join(&base_name);
+    if !base.exists() {
+        return Ok(base);
+    }
+
+    Ok(root.join(format!(
+        "{}-{}",
+        base_name,
+        sanitize_dir_fragment(&Uuid::new_v4().to_string())
+    )))
 }
 
 fn parse_extension_identifier(id: &str) -> Result<(String, String), String> {
@@ -404,6 +421,7 @@ fn record_from_dir(dir: &Path) -> Option<InstalledExtensionRecord> {
     Some(InstalledExtensionRecord {
         id,
         version,
+        installed_at: meta.installed_at.clone(),
         display_name,
         description: manifest
             .get("description")
@@ -442,6 +460,16 @@ fn load_installed_extensions() -> Result<Vec<InstalledExtensionRecord>, String> 
         }
     }
 
+    // 设计思路：
+    // 1. Windows 上 LSP 子进程可能仍把旧扩展目录作为 cwd，导致删除旧版本返回 os error 32。
+    // 2. 安装新版本时我们会使用唯一目录名，因此这里按 extension id 只保留 installed_at 最新的一条，
+    //    避免一个被锁住的旧目录继续参与 runtime 解析或重复出现在设置页。
+    result.sort_by(|a, b| {
+        a.id.cmp(&b.id)
+            .then(b.installed_at.cmp(&a.installed_at))
+            .then(a.display_name.cmp(&b.display_name))
+    });
+    result.dedup_by(|a, b| normalize_extension_id(&a.id) == normalize_extension_id(&b.id));
     result.sort_by(|a, b| a.display_name.cmp(&b.display_name));
     Ok(result)
 }
@@ -478,6 +506,68 @@ fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn try_remove_extension_dir(target: &Path, extension_id: &str, reason: &str) -> bool {
+    for attempt in 1..=3 {
+        match fs::remove_dir_all(target) {
+            Ok(_) => {
+                info!(
+                    extension_id = extension_id,
+                    path = target.to_string_lossy().as_ref(),
+                    attempt = attempt,
+                    reason = reason,
+                    "removed LSP extension directory"
+                );
+                return true;
+            }
+            Err(error) => {
+                warn!(
+                    extension_id = extension_id,
+                    path = target.to_string_lossy().as_ref(),
+                    attempt = attempt,
+                    reason = reason,
+                    error = ?error,
+                    "failed to remove LSP extension directory, will retry or defer cleanup"
+                );
+                std::thread::sleep(Duration::from_millis(120 * attempt));
+            }
+        }
+    }
+
+    if let Some(parent) = target.parent() {
+        let pending_name = format!(
+            ".delete-pending-{}-{}",
+            sanitize_dir_fragment(&normalize_extension_id(extension_id)),
+            sanitize_dir_fragment(&Uuid::new_v4().to_string())
+        );
+        let pending_path = parent.join(pending_name);
+        match fs::rename(target, &pending_path) {
+            Ok(_) => {
+                warn!(
+                    extension_id = extension_id,
+                    from = target.to_string_lossy().as_ref(),
+                    to = pending_path.to_string_lossy().as_ref(),
+                    reason = reason,
+                    "renamed locked LSP extension directory for deferred cleanup"
+                );
+                let _ = fs::remove_dir_all(&pending_path);
+                return true;
+            }
+            Err(error) => {
+                warn!(
+                    extension_id = extension_id,
+                    path = target.to_string_lossy().as_ref(),
+                    pending_path = pending_path.to_string_lossy().as_ref(),
+                    reason = reason,
+                    error = ?error,
+                    "locked LSP extension directory could not be renamed; installation will continue with a unique target directory"
+                );
+            }
+        }
+    }
+
+    false
+}
+
 fn remove_existing_extension_versions(extension_id: &str) -> Result<(), String> {
     let root = extensions_root_dir()?;
     let installed = load_installed_extensions()?;
@@ -492,8 +582,7 @@ fn remove_existing_extension_versions(extension_id: &str) -> Result<(), String> 
                 path = target.to_string_lossy().as_ref(),
                 "removing previous installed extension version"
             );
-            fs::remove_dir_all(&target)
-                .map_err(|e| format!("failed to remove previous extension version: {e}"))?;
+            let _ = try_remove_extension_dir(&target, extension_id, "replace-installed-version");
         }
     }
 
@@ -505,7 +594,7 @@ fn remove_existing_extension_versions(extension_id: &str) -> Result<(), String> 
         }
         if let Some(name) = path.file_name().and_then(|item| item.to_str()) {
             if name.starts_with(&format!("{}-", sanitize_dir_fragment(extension_id))) {
-                let _ = fs::remove_dir_all(&path);
+                let _ = try_remove_extension_dir(&path, extension_id, "cleanup-stale-version");
             }
         }
     }
@@ -569,6 +658,53 @@ fn resolve_extension_bin(dir: &Path, bin_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn node_package_candidates_for_bin(bin_name: &str) -> Vec<String> {
+    let normalized = bin_name.trim();
+    let mut candidates = match normalized {
+        "basedpyright-langserver" => vec!["basedpyright".to_string()],
+        "bash-language-server" => vec!["bash-language-server".to_string()],
+        "typescript-language-server" => vec!["typescript-language-server".to_string()],
+        _ => vec![],
+    };
+    if !normalized.is_empty() && !candidates.iter().any(|item| item == normalized) {
+        candidates.push(normalized.to_string());
+    }
+    candidates
+}
+
+fn resolve_node_module_bin_entry(dir: &Path, bin_name: &str) -> Option<PathBuf> {
+    if bin_name.trim().is_empty() {
+        return None;
+    }
+
+    for package_name in node_package_candidates_for_bin(bin_name) {
+        let package_dir = dir.join("node_modules").join(&package_name);
+        let manifest_path = package_dir.join("package.json");
+        let Some(manifest) = parse_manifest_from_path(&manifest_path) else {
+            continue;
+        };
+        let Some(bin) = manifest.get("bin") else {
+            continue;
+        };
+        let Some(relative) = (match bin {
+            Value::String(value) => Some(value.as_str()),
+            Value::Object(map) => map
+                .get(bin_name)
+                .or_else(|| map.values().next())
+                .and_then(Value::as_str),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let entry = package_dir.join(relative);
+        if entry.is_file() {
+            return Some(entry);
+        }
+    }
+
+    None
+}
+
 fn extension_bin_candidate_paths(dir: &Path, bin_name: &str) -> Vec<String> {
     if bin_name.trim().is_empty() {
         return vec![];
@@ -582,6 +718,13 @@ fn extension_bin_candidate_paths(dir: &Path, bin_name: &str) -> Vec<String> {
         candidates.push(bin_dir.join(format!("{bin_name}.exe")));
     }
     candidates.push(bin_dir.join(bin_name));
+    for package_name in node_package_candidates_for_bin(bin_name) {
+        candidates.push(
+            dir.join("node_modules")
+                .join(package_name)
+                .join("package.json"),
+        );
+    }
     candidates
         .into_iter()
         .map(|path| path.to_string_lossy().to_string())
@@ -635,6 +778,22 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                         message: Some("resolved from extension packaged node binary".to_string()),
                     };
                 }
+                if runtime == "node_binary" {
+                    if let (Some(node_path), Some(entry_path)) = (
+                        slidev_node_path(),
+                        resolve_node_module_bin_entry(install_dir, &catalog.lsp.bin_name),
+                    ) {
+                        return LspExtensionRuntimeStatus {
+                            ready: true,
+                            runtime: runtime.clone(),
+                            program_path: Some(node_path.to_string_lossy().to_string()),
+                            message: Some(format!(
+                                "resolved from extension node package entry: {}",
+                                entry_path.to_string_lossy()
+                            )),
+                        };
+                    }
+                }
             }
             "extension_entry" => {
                 if let Some(path) = resolve_relative_entry(install_dir, &catalog.lsp.entry_paths) {
@@ -655,6 +814,22 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                             program_path: Some(path.to_string_lossy().to_string()),
                             message: Some("resolved from bundled SlidevEnv node runtime".to_string()),
                         };
+                    }
+                    if runtime == "node_binary" {
+                        if let (Some(node_path), Some(entry_path)) = (
+                            slidev_node_path(),
+                            resolve_node_module_bin_entry(&root, &catalog.lsp.bin_name),
+                        ) {
+                            return LspExtensionRuntimeStatus {
+                                ready: true,
+                                runtime: runtime.clone(),
+                                program_path: Some(node_path.to_string_lossy().to_string()),
+                                message: Some(format!(
+                                    "resolved from bundled SlidevEnv node package entry: {}",
+                                    entry_path.to_string_lossy()
+                                )),
+                            };
+                        }
                     }
                 }
             }
@@ -866,7 +1041,7 @@ fn finalize_install_from_unpacked_root(
 
     remove_existing_extension_versions(&id)?;
 
-    let install_dir = extensions_root_dir()?.join(install_dir_name(&id, &version));
+    let install_dir = unique_install_dir(&id, &version)?;
     copy_dir_contents(&manifest_root, &install_dir)?;
     write_extension_meta(&install_dir, &meta)?;
 
@@ -941,6 +1116,18 @@ async fn verify_catalog_extension_runtime(
         return Err(format!("{} installed extension {} but no languages were declared", source_label, state.id));
     }
 
+    if !state.runtime_status.ready {
+        warn!(
+            extension_id = state.id.as_str(),
+            source = source_label,
+            languages = ?languages,
+            runtime = state.runtime_status.runtime.as_str(),
+            message = state.runtime_status.message.as_deref().unwrap_or(""),
+            "catalog LSP extension installed but runtime is not ready; keep extension record and report pending runtime"
+        );
+        return Ok(vec![]);
+    }
+
     let mut probes = vec![];
     let mut errors = vec![];
     for language in languages {
@@ -953,6 +1140,18 @@ async fn verify_catalog_extension_runtime(
                     ));
                     continue;
                 }
+                info!(
+                    extension_id = state.id.as_str(),
+                    source = source_label,
+                    language = language.as_str(),
+                    completion_provider = probe.completion_provider,
+                    hover_provider = probe.hover_provider,
+                    definition_provider = probe.definition_provider,
+                    semantic_tokens_provider = probe.semantic_tokens_provider,
+                    server_name = probe.server_name.as_deref().unwrap_or(""),
+                    server_version = probe.server_version.as_deref().unwrap_or(""),
+                    "catalog LSP extension runtime capability probe completed"
+                );
                 probes.push(probe);
             }
             Err(error) => {
@@ -1022,7 +1221,7 @@ fn install_catalog_lsp_extension_record(
     let id = normalize_extension_id(&catalog.id);
     let version = format!("catalog.{}", LSP_EXTENSION_CATALOG.version);
     remove_existing_extension_versions(&id)?;
-    let install_dir = extensions_root_dir()?.join(install_dir_name(&id, &version));
+    let install_dir = unique_install_dir(&id, &version)?;
     write_catalog_extension_package(&install_dir, catalog)?;
     write_extension_meta(
         &install_dir,
@@ -1735,6 +1934,43 @@ pub(crate) async fn resolve_lsp_command_for_language(
                             server_id: catalog_entry.lsp.server_id.clone(),
                         }));
                     }
+                    if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
+                        if let (Some(node_path), Some(entry_path)) = (
+                            slidev_node_path(),
+                            resolve_node_module_bin_entry(&candidate.install_dir, &catalog_entry.lsp.bin_name),
+                        ) {
+                            // 设计思路：
+                            // 1. 有些 VSCode/Open VSX 扩展或离线包只带 node_modules/<pkg>/package.json，
+                            //    没有生成 node_modules/.bin/<bin>.cmd。
+                            // 2. 这类情况仍然可以用内置 Node 直接执行 package.json 的 bin 入口，
+                            //    避免因为缺一个 shim 文件就把已下载的 LSP 插件判定为不可用。
+                            let mut args = vec![entry_path.to_string_lossy().to_string()];
+                            args.extend(catalog_entry.lsp.args.clone());
+                            let env_roots = vec![
+                                candidate.install_dir.clone(),
+                                candidate.install_dir.join("node_modules").join(".bin"),
+                                slidev_env_root().unwrap_or_else(|_| PathBuf::from(".")),
+                            ];
+                            info!(
+                                language = normalized_language.as_str(),
+                                extension_id = candidate.id.as_str(),
+                                strategy = "extension_bin_node_entry",
+                                node = node_path.to_string_lossy().as_ref(),
+                                entry = entry_path.to_string_lossy().as_ref(),
+                                cwd = candidate.install_dir.to_string_lossy().as_ref(),
+                                "resolved LSP server from extension node package bin entry"
+                            );
+                            return Ok(Some(ResolvedLspExtensionCommand {
+                                program: node_path.to_string_lossy().to_string(),
+                                args,
+                                envs: build_path_env_with_roots(&env_roots),
+                                cwd: Some(candidate.install_dir.to_string_lossy().to_string()),
+                                extension_id: candidate.id.clone(),
+                                extension_display_name: candidate.display_name.clone(),
+                                server_id: catalog_entry.lsp.server_id.clone(),
+                            }));
+                        }
+                    }
                     info!(
                         language = normalized_language.as_str(),
                         extension_id = candidate.id.as_str(),
@@ -1823,6 +2059,37 @@ pub(crate) async fn resolve_lsp_command_for_language(
                                 extension_display_name: candidate.display_name.clone(),
                                 server_id: catalog_entry.lsp.server_id.clone(),
                             }));
+                        }
+                        if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
+                            if let (Some(node_path), Some(entry_path)) = (
+                                slidev_node_path(),
+                                resolve_node_module_bin_entry(&root, &catalog_entry.lsp.bin_name),
+                            ) {
+                                let mut args = vec![entry_path.to_string_lossy().to_string()];
+                                args.extend(catalog_entry.lsp.args.clone());
+                                let mut env_roots = vec![root.clone()];
+                                if let Some(bin_dir) = slidev_bin_dir() {
+                                    env_roots.push(bin_dir);
+                                }
+                                info!(
+                                    language = normalized_language.as_str(),
+                                    extension_id = candidate.id.as_str(),
+                                    strategy = "slidev_env_node_entry",
+                                    node = node_path.to_string_lossy().as_ref(),
+                                    entry = entry_path.to_string_lossy().as_ref(),
+                                    cwd = root.to_string_lossy().as_ref(),
+                                    "resolved LSP server from bundled SlidevEnv node package bin entry"
+                                );
+                                return Ok(Some(ResolvedLspExtensionCommand {
+                                    program: node_path.to_string_lossy().to_string(),
+                                    args,
+                                    envs: build_path_env_with_roots(&env_roots),
+                                    cwd: Some(root.to_string_lossy().to_string()),
+                                    extension_id: candidate.id.clone(),
+                                    extension_display_name: candidate.display_name.clone(),
+                                    server_id: catalog_entry.lsp.server_id.clone(),
+                                }));
+                            }
                         }
                         info!(
                             language = normalized_language.as_str(),

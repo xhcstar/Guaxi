@@ -224,6 +224,33 @@ const syncRuntimeSnapshot = async () => {
   logger.info('[LspExtensionPanel] runtime snapshot refreshed after extension mutation')
 }
 
+const notifyInstallResult = (state, extensionId, options = {}) => {
+  const installedId = String(state?.id || extensionId || '').trim()
+  const runtimeReady = state?.runtime_status?.ready !== false
+  const runtimeMessage = String(state?.runtime_status?.message || '').trim()
+
+  // 设计思路：
+  // 1. 扩展包下载成功和 language server runtime 可启动是两个状态。
+  // 2. 这里把“已安装但运行时待补齐”明确提示出来，避免 bash-language-server 这类依赖缺失时被误认为插件下载失败。
+  // 3. 同时写日志记录 runtime message，便于后续定位是扩展入口、SlidevEnv 还是 PATH 缺失。
+  if (runtimeReady) {
+    if (!options.silentSuccess) {
+      message.success(`已安装并验证 LSP 扩展 ${installedId}`)
+    }
+    logger.info('[LspExtensionPanel] extension installed with ready runtime', {
+      extensionId: installedId,
+      runtimeMessage,
+    })
+    return
+  }
+
+  message.warning(`已安装扩展 ${installedId}，但 LSP 运行时待补齐：${runtimeMessage || '未找到可执行文件'}`)
+  logger.warn('[LspExtensionPanel] extension installed but runtime is pending', {
+    extensionId: installedId,
+    runtimeMessage,
+  })
+}
+
 const refreshExtensions = async () => {
   try {
     loading.value = true
@@ -355,8 +382,8 @@ const handleInstallCatalogExtension = async (item) => {
       extensionId,
       languages: Array.isArray(item?.languages) ? item.languages : [],
     })
-    await invoke('install_catalog_lsp_extension', { extensionId })
-    message.success(`已安装扩展 ${extensionId}`)
+    const state = await invoke('install_catalog_lsp_extension', { extensionId })
+    notifyInstallResult(state, extensionId)
     await refreshExtensions()
   } catch (error) {
     logger.error('[LspExtensionPanel] install catalog extension failed', error)
@@ -383,9 +410,11 @@ const handleInstallRecommendedExtensions = async () => {
     })
     for (const extensionId of targets) {
       installingExtensionId.value = extensionId
-      await invoke('install_catalog_lsp_extension', { extensionId })
+      const state = await invoke('install_catalog_lsp_extension', { extensionId })
       logger.info('[LspExtensionPanel] recommended catalog extension installed', {
         extensionId,
+        runtimeReady: state?.runtime_status?.ready !== false,
+        runtimeMessage: String(state?.runtime_status?.message || ''),
       })
     }
     message.success(`已安装 ${targets.length} 个推荐 LSP 扩展`)
