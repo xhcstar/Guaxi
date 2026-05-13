@@ -6932,7 +6932,7 @@ const shouldDropNoisyEmbeddedMemberCandidate = (languageId, item, completionSour
     : VSCODE_TO_MONACO_COMPLETION_KIND[rawKind]
 
   // 设计说明：
-  // 1. basedpyright 在 Markdown fence 虚拟文档里可能把真实成员候选标成 Text。
+  // 1. Python LSP 在 Markdown fence 虚拟文档里可能把真实成员候选标成 Text。
   // 2. 旧逻辑把 `sys.` 后的 Text 全部视为噪声，导致 rawItemCount 有值但 noisyKindFilteredCount 等于全部数量。
   // 3. Text 候选后续会兜底映射为 Property；这里只继续丢弃 Keyword/Snippet 这类明确不是对象成员的候选。
   return mappedKind === monaco.languages.CompletionItemKind.Keyword

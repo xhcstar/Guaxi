@@ -443,7 +443,7 @@ const mountMonacoEditor = async () => {
       if (usesVscodeModelBridge && model?.uri) {
         // 设计说明：
         // 1. Notebook Python cell 绑定的是 `file://.../.guaxi-notebook/*.py` 虚拟文件。
-        // 2. basedpyright 补全读取的是 VSCode 文件服务里的 overlay 内容，而不是只看 Monaco editor 当前缓冲区。
+        // 2. Python LSP 补全读取的是 VSCode 文件服务里的 overlay 内容，而不是只看 Monaco editor 当前缓冲区。
         // 3. 每次编辑都同步 overlay，避免 LSP 仍拿旧代码计算补全，表现成请求成功但候选为 0。
         syncVsCodeTextModelOverlay(model.uri, nextValue, {
           owner: getNotebookPythonModelOwner(),

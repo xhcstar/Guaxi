@@ -80,7 +80,7 @@ const normalizeCatalogEntries = (
 // Design note:
 // Runtime extension snapshots arrive asynchronously after app startup. The LSP
 // client key must still be stable before that snapshot is ready; otherwise
-// Python starts as `python` while completion later looks for `basedpyright`.
+// Python starts as `python` while completion later looks for `pyright`.
 const normalizeBaseLanguageEntries = (
   Array.isArray(baseLspLanguageCatalog)
     ? (baseLspLanguageCatalog as BaseLanguageCatalogEntry[])
@@ -102,6 +102,7 @@ const LSP_LANGUAGE_ENTRIES_INTERNAL: LspLanguageEntry[] = []
 const LSP_SUPPORTED_LANGUAGES_INTERNAL = new Set<string>()
 const entryByLanguage = new Map<string, LspLanguageEntry>()
 const runtimeExtensionByLanguage = new Map<string, RuntimeExtensionState>()
+const runtimeExtensionById = new Map<string, RuntimeExtensionState>()
 
 const rebuildLanguageRegistry = () => {
   LSP_LANGUAGE_ENTRIES_INTERNAL.splice(0, LSP_LANGUAGE_ENTRIES_INTERNAL.length)
@@ -111,20 +112,17 @@ const rebuildLanguageRegistry = () => {
   // 设计说明：
   // 1. LSP 能力表现在只从“已安装且运行时就绪”的扩展快照生成，避免旧的 shared/lsp_languages.json
   //    把未安装扩展的语言也暴露成可用 LSP。
-  // 2. catalog 仍负责描述语言和 server 映射，但必须由运行时 registry 确认扩展可用后才加入编辑器能力表。
+  // 2. catalog 扩展必须按 extension id 精确匹配；否则旧的 Python LSP 残留会把新的 Pyright
+  //    catalog 条目误激活，导致前端 clientKey 和后端实际运行时不一致。
   // 3. 这样编辑器、Notebook、状态栏都会看到同一套 VSCode-like 扩展能力，不再和独立 LSP 状态分叉。
   normalizeCatalogEntries.forEach((entry) => {
     const normalized = normalizeLanguage(entry.language)
-    const runtimeEntry = runtimeExtensionByLanguage.get(normalized)
+    const runtimeEntry = runtimeExtensionById.get(String(entry.extension_id || '').trim().toLowerCase())
     const runtimeReady = runtimeEntry?.runtime_status?.ready !== false
     if (!normalized || !runtimeEntry?.installed || !runtimeReady) return
 
     const effectiveEntry = {
       ...entry,
-      server: String(
-        normalizeCatalogEntries.find((item) => item.extension_id === normalizeLanguage(runtimeEntry.id || '') && item.language === normalized)?.server
-          || entry.server
-      ).trim(),
       extension_id: String(runtimeEntry.id || entry.extension_id || '').trim().toLowerCase() || entry.extension_id,
       source: 'runtime',
     }
@@ -141,6 +139,16 @@ const rebuildLanguageRegistry = () => {
     if (!runtimeEntry?.installed || !runtimeReady) return
 
     const catalogEntry = normalizeCatalogEntries.find((item) => item.language === normalized)
+    const runtimeExtensionId = String(runtimeEntry.id || '').trim().toLowerCase()
+    if (catalogEntry && runtimeExtensionId !== String(catalogEntry.extension_id || '').trim().toLowerCase()) {
+      logger.info('[LSP] skipped installed extension because catalog language is owned by another extension', {
+        language: normalized,
+        installedExtensionId: runtimeExtensionId,
+        catalogExtensionId: String(catalogEntry.extension_id || ''),
+        catalogServer: String(catalogEntry.server || ''),
+      })
+      return
+    }
     const effectiveEntry = catalogEntry
       ? {
           ...catalogEntry,
@@ -170,8 +178,11 @@ export const LSP_SUPPORTED_LANGUAGES = LSP_SUPPORTED_LANGUAGES_INTERNAL
 
 export const setLspRuntimeExtensionSnapshot = (snapshot: RuntimeExtensionState[]) => {
   runtimeExtensionByLanguage.clear()
+  runtimeExtensionById.clear()
   ;(Array.isArray(snapshot) ? snapshot : []).forEach((item) => {
     if (!item?.installed) return
+    const extensionId = String(item.id || '').trim().toLowerCase()
+    if (extensionId) runtimeExtensionById.set(extensionId, item)
     const languages = Array.isArray(item.languages) ? item.languages : []
     languages
       .map((language) => normalizeLanguage(language))

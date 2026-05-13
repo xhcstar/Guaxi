@@ -26,7 +26,7 @@
       />
       <n-input
         v-model:value="searchQuery"
-        placeholder="搜索语言扩展，例如 basedpyright / lua / marksman / html"
+        placeholder="搜索语言扩展，例如 pyright / lua / marksman / html"
         :disabled="loading || searching"
         @keydown.enter.prevent="handleSearch"
       />
@@ -236,7 +236,7 @@ const runtimeTagType = (item) => {
 
 const runtimeTagText = (item) => {
   if (item?.runtime_status?.ready) return '运行时已就绪'
-  if (item?.installed) return '运行时待补齐'
+  if (item?.installed) return '运行时未就绪'
   return '等待安装'
 }
 
@@ -304,9 +304,9 @@ const notifyInstallResult = (state, extensionId, options = {}) => {
   const runtimeMessage = String(state?.runtime_status?.message || '').trim()
 
   // 设计思路：
-  // 1. 扩展包下载成功和 language server runtime 可启动是两个状态。
-  // 2. 这里把“已安装但运行时待补齐”明确提示出来，避免 bash-language-server 这类依赖缺失时被误认为插件下载失败。
-  // 3. 同时写日志记录 runtime message，便于后续定位是扩展入口、SlidevEnv 还是 PATH 缺失。
+  // 1. catalog 安装现在会自动准备共享运行时，并在后端完成真实 initialize 探测。
+  // 2. 因此正常安装结果应当是“已安装并验证”；如果仍出现未就绪，通常代表手动导入或旧记录需要重新安装。
+  // 3. 这里保留日志记录 runtime message，便于定位是扩展入口、共享运行时还是 PATH 缺失。
   if (runtimeReady) {
     if (!options.silentSuccess) {
       message.success(`已安装并验证 LSP 扩展 ${installedId}`)
@@ -318,7 +318,7 @@ const notifyInstallResult = (state, extensionId, options = {}) => {
     return
   }
 
-  message.warning(`已安装扩展 ${installedId}，但 LSP 运行时待补齐：${runtimeMessage || '未找到可执行文件'}`)
+  message.warning(`已安装扩展 ${installedId}，但 LSP 运行时未就绪：${runtimeMessage || '未找到可执行文件，请重新安装该扩展'}`)
   logger.warn('[LspExtensionPanel] extension installed but runtime is pending', {
     extensionId: installedId,
     runtimeMessage,

@@ -40,8 +40,8 @@
   },
   {
     "language": "python",
-    "server": "basedpyright",
-    "bin_name": "basedpyright-langserver",
+    "server": "pyright",
+    "bin_name": "pyright-langserver",
     "args": [
       "--stdio"
     ],

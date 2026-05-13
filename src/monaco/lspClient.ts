@@ -72,6 +72,17 @@ const normalizeCompletionLabelForLog = (label: unknown): string => {
   return ''
 }
 
+const stringifyCompletionLogValue = (value: unknown): string => {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return Object.prototype.toString.call(value)
+  }
+}
+
 const summarizeCompletionItemForLog = (item: unknown) => {
   const value = item && typeof item === 'object' ? item as {
     label?: unknown
@@ -79,6 +90,9 @@ const summarizeCompletionItemForLog = (item: unknown) => {
     detail?: unknown
     filterText?: unknown
     insertText?: unknown
+    sortText?: unknown
+    labelDetails?: unknown
+    data?: unknown
   } : {}
   const insertText = typeof value.insertText === 'string'
     ? value.insertText
@@ -90,7 +104,33 @@ const summarizeCompletionItemForLog = (item: unknown) => {
     kind: Number(value.kind ?? -1),
     detail: typeof value.detail === 'string' ? value.detail : '',
     filterText: typeof value.filterText === 'string' ? value.filterText : '',
+    sortText: typeof value.sortText === 'string' ? value.sortText : '',
     insertText,
+    labelDetails: stringifyCompletionLogValue(value.labelDetails),
+    dataKeys: value.data && typeof value.data === 'object'
+      ? Object.keys(value.data as Record<string, unknown>).slice(0, 12)
+      : [],
+  }
+}
+
+const summarizeCompletionItemsForLog = (items: unknown[], limit = 80) => {
+  const kindHistogram: Record<string, number> = {}
+  for (const item of items) {
+    const kind = item && typeof item === 'object'
+      ? Number((item as { kind?: unknown }).kind ?? -1)
+      : -1
+    const kindKey = Number.isFinite(kind) ? String(kind) : 'unknown'
+    kindHistogram[kindKey] = (kindHistogram[kindKey] || 0) + 1
+  }
+  return {
+    itemCount: items.length,
+    kindHistogram,
+    sampleLimit: Math.max(1, Number(limit) || 80),
+    // 设计说明：
+    // 1. 这里打印的是 direct LSP 的原始返回预览，不经过 Monaco provider、排序和过滤。
+    // 2. 样本包含 label/kind/detail/insertText/filterText/sortText，便于和 VSCode 原生补全逐项对照。
+    // 3. 不一次性展开全部候选，避免 Python LSP 返回上千项时把控制台和渲染线程拖慢。
+    sample: items.slice(0, Math.max(1, Number(limit) || 80)).map(summarizeCompletionItemForLog),
   }
 }
 
@@ -350,6 +390,7 @@ export async function requestLspCompletionItems(
       itemCount: items.length,
       isIncomplete,
       firstItem: summarizeCompletionItemForLog(items[0]),
+      rawItemsPreview: summarizeCompletionItemsForLog(items, 120),
     })
     return { items, isIncomplete, source: 'direct-lsp' }
   } catch (error) {

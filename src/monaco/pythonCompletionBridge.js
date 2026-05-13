@@ -154,7 +154,7 @@ const shouldDropNoisyPythonMemberCandidate = (languageId, item, completionSource
 
   // 设计说明：
   // 1. 这里只丢弃明显属于模板/关键字的候选，不再因为 kind=Text 就整批过滤。
-  // 2. basedpyright 在部分 Notebook 虚拟文档场景会把真实成员候选标成 Text；旧逻辑会在 `obj.` 后
+  // 2. Python LSP 在部分 Notebook 虚拟文档场景会把真实成员候选标成 Text；旧逻辑会在 `obj.` 后
   //    把这些真实候选全部丢掉，最终 Monaco 只显示 No suggestions。
   // 3. URI/path 噪声已经由 shouldKeepBridgedCompletionItem 过滤；剩余 Text 候选会在 kind 映射阶段兜底成 Property。
   return kindName === 'Keyword' || kindName === 'Snippet'
@@ -181,7 +181,7 @@ const resolveBridgedCompletionKind = (monaco, item, completionSource, context) =
   // 2. Notebook/Python 编辑器关闭了 `showWords`，如果语义候选被错误兜底成 Text(18)，
   //    Monaco 会在进入 completion model 前把它们全部过滤掉，界面就只剩 `No suggestions`。
   // 3. Python 的未知/Text 候选统一兜底成 Variable；成员访问里兜底成 Property，
-  //    既保留 basedpyright 的真实候选，又避免重新打开 Monaco 文档词补全噪声。
+  //    既保留 Python LSP 的真实候选，又避免重新打开 Monaco 文档词补全噪声。
   return Number.isFinite(resolvedKind)
     ? resolvedKind
     : monaco.languages.CompletionItemKind.Text

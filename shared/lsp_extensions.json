@@ -2,25 +2,27 @@
   "version": 1,
   "extensions": [
     {
-      "id": "detachhead.basedpyright",
-      "display_name": "Based Pyright",
-      "description": "Python language intelligence powered by Based Pyright.",
-      "open_vsx": "detachhead.basedpyright",
-      "vscode_marketplace": "detachhead.basedpyright",
+      "id": "ms-pyright.pyright",
+      "display_name": "Pyright",
+      "description": "Python language intelligence powered by Microsoft's Pyright language server.",
+      "open_vsx": "ms-pyright.pyright",
+      "vscode_marketplace": "ms-pyright.pyright",
       "languages": ["python"],
       "compatibility_level": "A",
       "recommended": true,
       "lsp": {
-        "server_id": "basedpyright",
-        "runtime": "node_entry",
-        "bin_name": "basedpyright-langserver",
+        "server_id": "pyright",
+        "runtime": "node_binary",
+        "bin_name": "pyright-langserver",
         "args": ["--stdio"],
         "entry_paths": [
+          "node_modules/pyright/langserver.index.js",
+          "dist/pyright-langserver.js",
           "dist/server.js"
         ],
-        "resolve_order": ["extension_entry", "extension_bin", "slidev_env_bin", "downloadable_server"],
-        "fallback_server": "basedpyright",
-        "fallback_bin_name": "basedpyright-langserver"
+        "resolve_order": ["extension_bin", "extension_entry", "shared_node_runtime", "downloadable_server"],
+        "fallback_server": "pyright",
+        "fallback_bin_name": "pyright-langserver"
       }
     },
     {
@@ -38,7 +40,7 @@
         "bin_name": "typescript-language-server",
         "args": ["--stdio"],
         "entry_paths": [],
-        "resolve_order": ["extension_bin", "slidev_env_bin", "downloadable_server"],
+        "resolve_order": ["extension_bin", "shared_node_runtime", "downloadable_server"],
         "fallback_server": "typescript-language-server",
         "fallback_bin_name": "typescript-language-server"
       }
@@ -158,7 +160,7 @@
         "bin_name": "bash-language-server",
         "args": ["start"],
         "entry_paths": [],
-        "resolve_order": ["extension_bin", "slidev_env_bin", "downloadable_server"],
+        "resolve_order": ["extension_bin", "shared_node_runtime", "downloadable_server"],
         "fallback_server": "bash-language-server",
         "fallback_bin_name": "bash-language-server"
       }

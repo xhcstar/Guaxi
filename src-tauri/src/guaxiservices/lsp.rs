@@ -289,7 +289,7 @@ fn find_lsp_binary_in_server(server: &str, bin_name: &str) -> Option<PathBuf> {
 fn is_bundled_node_lsp(server: &str) -> bool {
     matches!(
         server,
-        "basedpyright" | "bash-language-server" | "typescript-language-server"
+        "bash-language-server" | "typescript-language-server"
     )
 }
 
@@ -839,7 +839,7 @@ async fn prepare_lsp_command_with_token(
 
     // 设计说明：
     // 1. 用户可见的 LSP 体系已经统一为“扩展优先”，这里不再允许未安装扩展的语言直接走旧语言表。
-    // 2. 旧的 binary 下载/SlidevEnv 解析只在“已安装扩展授权该 server”后作为托管 runtime 使用，
+    // 2. 旧的 binary 下载/共享运行时解析只在“已安装扩展授权该 server”后作为托管 runtime 使用，
     //    解决 marksman/texlab/lua-language-server 这类 VSIX 本身不总是携带完整 server 的生产可用性问题。
     // 3. 这样设置页只保留扩展管理，但已有下载器能力仍能在扩展明确授权后兜底启动真实 LSP server。
     let entry = lsp_language_entry(language)
@@ -869,7 +869,7 @@ async fn prepare_lsp_command_with_token(
             })?
     } else {
         return Err(format!(
-            "LSP runtime is not ready: language={} server={} bin={}。请确认对应语言插件已安装，并且运行时可执行文件存在于扩展、SlidevEnv 或 PATH 中。",
+            "LSP runtime is not ready: language={} server={} bin={}。请确认对应语言插件已安装，并且运行时可执行文件存在于扩展、共享运行时或 PATH 中。",
             language, entry.server, entry.bin_name
         ));
     };

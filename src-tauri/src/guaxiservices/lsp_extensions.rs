@@ -11,6 +11,7 @@ use parking_lot::Mutex as ParkingMutex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::process::Command;
 use tracing::{info, warn};
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -199,6 +200,18 @@ fn temp_root_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn lsp_runtime_root_dir() -> Result<PathBuf, String> {
+    let dir = exe_dir()?.join("LspRuntimes");
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create LSP runtime root: {e}"))?;
+    Ok(dir)
+}
+
+fn shared_node_runtime_dir() -> Result<PathBuf, String> {
+    let dir = lsp_runtime_root_dir()?.join("node");
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create shared Node LSP runtime root: {e}"))?;
+    Ok(dir)
+}
+
 fn slidev_env_root() -> Result<PathBuf, String> {
     bundled_resources::ensure_relative_dir("utils/SlidevEnv")
 }
@@ -303,6 +316,12 @@ fn update_lsp_extension_task(
             "updated LSP extension background task"
         );
     }
+}
+
+fn node_command_program() -> String {
+    slidev_node_path()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| "node".to_string())
 }
 
 fn insert_lsp_extension_task(operation: &str, extension_id: &str, message: &str) -> Result<LspExtensionTaskSnapshot, String> {
@@ -827,7 +846,7 @@ fn resolve_extension_bin(dir: &Path, bin_name: &str) -> Option<PathBuf> {
 fn node_package_candidates_for_bin(bin_name: &str) -> Vec<String> {
     let normalized = bin_name.trim();
     let mut candidates = match normalized {
-        "basedpyright-langserver" => vec!["basedpyright".to_string()],
+        "pyright-langserver" => vec!["pyright".to_string()],
         "bash-language-server" => vec!["bash-language-server".to_string()],
         "typescript-language-server" => vec!["typescript-language-server".to_string()],
         _ => vec![],
@@ -836,6 +855,22 @@ fn node_package_candidates_for_bin(bin_name: &str) -> Vec<String> {
         candidates.push(normalized.to_string());
     }
     candidates
+}
+
+fn node_package_name_for_bin(bin_name: &str) -> Option<String> {
+    node_package_candidates_for_bin(bin_name)
+        .into_iter()
+        .find(|item| item.trim() != bin_name.trim() && !item.trim().is_empty())
+}
+
+#[cfg(target_os = "windows")]
+fn npm_command_name() -> &'static str {
+    "npm.cmd"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn npm_command_name() -> &'static str {
+    "npm"
 }
 
 fn resolve_node_module_bin_entry(dir: &Path, bin_name: &str) -> Option<PathBuf> {
@@ -897,6 +932,13 @@ fn extension_bin_candidate_paths(dir: &Path, bin_name: &str) -> Vec<String> {
         .collect()
 }
 
+fn shared_node_runtime_candidate_paths(bin_name: &str) -> Vec<String> {
+    match shared_node_runtime_dir() {
+        Ok(dir) => extension_bin_candidate_paths(&dir, bin_name),
+        Err(error) => vec![format!("shared node runtime unavailable: {error}")],
+    }
+}
+
 fn resolve_relative_entry(dir: &Path, entry_paths: &[String]) -> Option<PathBuf> {
     entry_paths
         .iter()
@@ -909,6 +951,93 @@ fn relative_entry_candidate_paths(dir: &Path, entry_paths: &[String]) -> Vec<Str
         .iter()
         .map(|item| dir.join(item).to_string_lossy().to_string())
         .collect()
+}
+
+async fn prepare_shared_node_runtime(
+    catalog: &CatalogExtension,
+    source_label: &str,
+) -> Result<(), String> {
+    if normalize_string(&catalog.lsp.runtime) != "node_binary" {
+        return Err(format!(
+            "{} runtime for {} is not a node_binary runtime and cannot be prepared automatically",
+            source_label, catalog.id
+        ));
+    }
+    let runtime_dir = shared_node_runtime_dir()?;
+    if resolve_extension_bin(&runtime_dir, &catalog.lsp.bin_name).is_some()
+        || resolve_node_module_bin_entry(&runtime_dir, &catalog.lsp.bin_name).is_some()
+    {
+        return Ok(());
+    }
+
+    let package_name = node_package_name_for_bin(&catalog.lsp.bin_name)
+        .ok_or_else(|| format!("no npm package mapping for LSP bin {}", catalog.lsp.bin_name))?;
+    let npm = npm_command_name();
+    let package_spec = format!("{}@latest", package_name);
+    info!(
+        extension_id = catalog.id.as_str(),
+        source = source_label,
+        runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+        package = package_spec.as_str(),
+        bin_name = catalog.lsp.bin_name.as_str(),
+        "preparing missing shared LSP node runtime"
+    );
+
+    // 设计说明：
+    // 1. 插件安装完成后必须立刻补齐 runtime，不能把问题留给运行时再暴露。
+    // 2. Node LSP 包统一安装到 <软件目录>/LspRuntimes/node，多个语言插件共用一份 node_modules，避免每个扩展目录重复占用磁盘。
+    // 3. 这里只写共享 runtime 目录，不修改 SlidevEnv；安装后会再次解析并执行 initialize 探测。
+    let output = Command::new(npm)
+        .arg("install")
+        .arg("--prefix")
+        .arg(&runtime_dir)
+        .arg("--no-save")
+        .arg("--no-audit")
+        .arg("--no-fund")
+        .arg(&package_spec)
+        .output()
+        .await
+        .map_err(|e| format!("failed to start npm runtime install for {}: {}", catalog.id, e))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        warn!(
+            extension_id = catalog.id.as_str(),
+            source = source_label,
+            status = ?output.status,
+            stdout = stdout.as_str(),
+            stderr = stderr.as_str(),
+            "failed to prepare shared LSP node runtime"
+        );
+        return Err(format!(
+            "failed to install shared LSP runtime package {}: {}{}{}",
+            package_spec,
+            stderr,
+            if stderr.is_empty() || stdout.is_empty() { "" } else { " | " },
+            stdout
+        ));
+    }
+
+    if resolve_extension_bin(&runtime_dir, &catalog.lsp.bin_name).is_none()
+        && resolve_node_module_bin_entry(&runtime_dir, &catalog.lsp.bin_name).is_none()
+    {
+        return Err(format!(
+            "runtime package {} installed but bin {} was not found in {}",
+            package_spec,
+            catalog.lsp.bin_name,
+            runtime_dir.to_string_lossy()
+        ));
+    }
+
+    info!(
+        extension_id = catalog.id.as_str(),
+        source = source_label,
+        runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+        package = package_spec.as_str(),
+        "prepared shared LSP node runtime"
+    );
+    Ok(())
 }
 
 fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Option<&CatalogExtension>) -> LspExtensionRuntimeStatus {
@@ -945,14 +1074,11 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                     };
                 }
                 if runtime == "node_binary" {
-                    if let (Some(node_path), Some(entry_path)) = (
-                        slidev_node_path(),
-                        resolve_node_module_bin_entry(install_dir, &catalog.lsp.bin_name),
-                    ) {
+                    if let Some(entry_path) = resolve_node_module_bin_entry(install_dir, &catalog.lsp.bin_name) {
                         return LspExtensionRuntimeStatus {
                             ready: true,
                             runtime: runtime.clone(),
-                            program_path: Some(node_path.to_string_lossy().to_string()),
+                            program_path: Some(node_command_program()),
                             message: Some(format!(
                                 "resolved from extension node package entry: {}",
                                 entry_path.to_string_lossy()
@@ -969,6 +1095,31 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                         program_path: Some(path.to_string_lossy().to_string()),
                         message: Some("resolved from extension bundled entry".to_string()),
                     };
+                }
+            }
+            "shared_node_runtime" => {
+                if runtime == "node_binary" {
+                    if let Ok(root) = shared_node_runtime_dir() {
+                        if let Some(path) = resolve_extension_bin(&root, &catalog.lsp.bin_name) {
+                            return LspExtensionRuntimeStatus {
+                                ready: true,
+                                runtime: runtime.clone(),
+                                program_path: Some(path.to_string_lossy().to_string()),
+                                message: Some("resolved from shared Node LSP runtime".to_string()),
+                            };
+                        }
+                        if let Some(entry_path) = resolve_node_module_bin_entry(&root, &catalog.lsp.bin_name) {
+                            return LspExtensionRuntimeStatus {
+                                ready: true,
+                                runtime: runtime.clone(),
+                                program_path: Some(node_command_program()),
+                                message: Some(format!(
+                                    "resolved from shared Node LSP runtime package entry: {}",
+                                    entry_path.to_string_lossy()
+                                )),
+                            };
+                        }
+                    }
                 }
             }
             "slidev_env_bin" => {
@@ -1019,7 +1170,7 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
         ready: false,
         runtime,
         program_path: None,
-        message: Some("runtime entry could not be resolved from extension, SlidevEnv, or fallback server".to_string()),
+        message: Some("runtime entry could not be resolved from extension, shared runtime, SlidevEnv, or fallback server".to_string()),
     }
 }
 
@@ -1292,18 +1443,6 @@ async fn verify_catalog_extension_runtime(
         return Err(format!("{} installed extension {} but no languages were declared", source_label, state.id));
     }
 
-    if !state.runtime_status.ready {
-        warn!(
-            extension_id = state.id.as_str(),
-            source = source_label,
-            languages = ?languages,
-            runtime = state.runtime_status.runtime.as_str(),
-            message = state.runtime_status.message.as_deref().unwrap_or(""),
-            "catalog LSP extension installed but runtime is not ready; keep extension record and report pending runtime"
-        );
-        return Ok(vec![]);
-    }
-
     let mut probes = vec![];
     let mut errors = vec![];
     for language in languages {
@@ -1348,6 +1487,61 @@ async fn verify_catalog_extension_runtime(
     Ok(probes)
 }
 
+async fn prepare_catalog_extension_runtime_if_missing(
+    state: LspExtensionState,
+    source_label: &str,
+) -> Result<LspExtensionState, String> {
+    if state.runtime_status.ready {
+        return Ok(state);
+    }
+
+    let catalog = catalog_by_id()
+        .get(&normalize_extension_id(&state.id))
+        .cloned()
+        .ok_or_else(|| format!("{} installed extension {} but it is not in the LSP catalog", source_label, state.id))?;
+    let install_dir = state
+        .installed_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("{} installed extension {} but no install path was recorded", source_label, state.id))?;
+
+    warn!(
+        extension_id = state.id.as_str(),
+        source = source_label,
+        runtime = state.runtime_status.runtime.as_str(),
+        message = state.runtime_status.message.as_deref().unwrap_or(""),
+        install_dir = install_dir.to_string_lossy().as_ref(),
+        "catalog LSP extension runtime is missing; preparing runtime before verification"
+    );
+
+    match normalize_string(&catalog.lsp.runtime).as_str() {
+        "node_binary" => {
+            prepare_shared_node_runtime(&catalog, source_label).await?;
+        }
+        runtime => {
+            return Err(format!(
+                "{} installed extension {} but runtime is not ready and automatic preparation is unsupported for runtime {}: {}",
+                source_label,
+                state.id,
+                runtime,
+                state.runtime_status.message.unwrap_or_else(|| "missing runtime entry".to_string())
+            ));
+        }
+    }
+
+    let record = record_from_dir(&install_dir)
+        .ok_or_else(|| format!("failed to rebuild extension record after preparing runtime for {}", state.id))?;
+    let refreshed = build_extension_state(Some(record), Some(catalog));
+    if !refreshed.runtime_status.ready {
+        return Err(format!(
+            "runtime preparation completed for {} but runtime is still not ready: {}",
+            refreshed.id,
+            refreshed.runtime_status.message.unwrap_or_else(|| "missing runtime entry".to_string())
+        ));
+    }
+    Ok(refreshed)
+}
+
 async fn verify_if_catalog_extension_runtime(
     state: LspExtensionState,
     source_label: &str,
@@ -1357,6 +1551,15 @@ async fn verify_if_catalog_extension_runtime(
     if !catalog.contains_key(&id) {
         return Ok(state);
     }
+
+    let prepared = prepare_catalog_extension_runtime_if_missing(state, source_label).await;
+    let state = match prepared {
+        Ok(state) => state,
+        Err(error) => {
+            rollback_failed_catalog_install(&id, &error);
+            return Err(error);
+        }
+    };
 
     match verify_catalog_extension_runtime(&state, source_label).await {
         Ok(probes) => {
@@ -1448,16 +1651,22 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
 
     if let Some(identifier) = catalog.vscode_marketplace.as_deref() {
         match install_vscode_marketplace_extension(identifier, None, None).await {
-            Ok(state) => match verify_catalog_extension_runtime(&state, "VSCode Marketplace").await {
-                Ok(probes) => {
-                    info!(
-                        extension_id = id.as_str(),
-                        probe_count = probes.len(),
-                        probes = ?probes,
-                        "catalog LSP extension verified from VSCode Marketplace"
-                    );
-                    return Ok(state);
-                }
+            Ok(state) => match prepare_catalog_extension_runtime_if_missing(state, "VSCode Marketplace").await {
+                Ok(state) => match verify_catalog_extension_runtime(&state, "VSCode Marketplace").await {
+                    Ok(probes) => {
+                        info!(
+                            extension_id = id.as_str(),
+                            probe_count = probes.len(),
+                            probes = ?probes,
+                            "catalog LSP extension verified from VSCode Marketplace"
+                        );
+                        return Ok(state);
+                    }
+                    Err(error) => {
+                        rollback_failed_catalog_install(&id, &error);
+                        attempts.push(error);
+                    }
+                },
                 Err(error) => {
                     rollback_failed_catalog_install(&id, &error);
                     attempts.push(error);
@@ -1476,16 +1685,22 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
 
     if let Some(identifier) = catalog.open_vsx.as_deref() {
         match install_open_vsx_extension(identifier, None, None).await {
-            Ok(state) => match verify_catalog_extension_runtime(&state, "Open VSX").await {
-                Ok(probes) => {
-                    info!(
-                        extension_id = id.as_str(),
-                        probe_count = probes.len(),
-                        probes = ?probes,
-                        "catalog LSP extension verified from Open VSX"
-                    );
-                    return Ok(state);
-                }
+            Ok(state) => match prepare_catalog_extension_runtime_if_missing(state, "Open VSX").await {
+                Ok(state) => match verify_catalog_extension_runtime(&state, "Open VSX").await {
+                    Ok(probes) => {
+                        info!(
+                            extension_id = id.as_str(),
+                            probe_count = probes.len(),
+                            probes = ?probes,
+                            "catalog LSP extension verified from Open VSX"
+                        );
+                        return Ok(state);
+                    }
+                    Err(error) => {
+                        rollback_failed_catalog_install(&id, &error);
+                        attempts.push(error);
+                    }
+                },
                 Err(error) => {
                     rollback_failed_catalog_install(&id, &error);
                     attempts.push(error);
@@ -1503,6 +1718,18 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
     }
 
     let state = install_catalog_lsp_extension_record(&catalog).await?;
+    let state = match prepare_catalog_extension_runtime_if_missing(state, "Guaxi catalog fallback").await {
+        Ok(state) => state,
+        Err(error) => {
+            rollback_failed_catalog_install(&id, &error);
+            attempts.push(error);
+            return Err(format!(
+                "LSP 扩展 {} 安装后未能完成运行时准备，已回滚。尝试结果: {}",
+                id,
+                attempts.join(" || ")
+            ));
+        }
+    };
     match verify_catalog_extension_runtime(&state, "Guaxi catalog fallback").await {
         Ok(probes) => {
             info!(
@@ -2202,7 +2429,6 @@ pub(crate) async fn resolve_lsp_command_for_language(
                         let env_roots = vec![
                             candidate.install_dir.clone(),
                             candidate.install_dir.join("node_modules").join(".bin"),
-                            slidev_env_root().unwrap_or_else(|_| PathBuf::from(".")),
                         ];
                         return Ok(Some(ResolvedLspExtensionCommand {
                             program: path.to_string_lossy().to_string(),
@@ -2215,10 +2441,7 @@ pub(crate) async fn resolve_lsp_command_for_language(
                         }));
                     }
                     if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
-                        if let (Some(node_path), Some(entry_path)) = (
-                            slidev_node_path(),
-                            resolve_node_module_bin_entry(&candidate.install_dir, &catalog_entry.lsp.bin_name),
-                        ) {
+                        if let Some(entry_path) = resolve_node_module_bin_entry(&candidate.install_dir, &catalog_entry.lsp.bin_name) {
                             // 设计思路：
                             // 1. 有些 VSCode/Open VSX 扩展或离线包只带 node_modules/<pkg>/package.json，
                             //    没有生成 node_modules/.bin/<bin>.cmd。
@@ -2229,19 +2452,19 @@ pub(crate) async fn resolve_lsp_command_for_language(
                             let env_roots = vec![
                                 candidate.install_dir.clone(),
                                 candidate.install_dir.join("node_modules").join(".bin"),
-                                slidev_env_root().unwrap_or_else(|_| PathBuf::from(".")),
                             ];
+                            let node_program = node_command_program();
                             info!(
                                 language = normalized_language.as_str(),
                                 extension_id = candidate.id.as_str(),
                                 strategy = "extension_bin_node_entry",
-                                node = node_path.to_string_lossy().as_ref(),
+                                node = node_program.as_str(),
                                 entry = entry_path.to_string_lossy().as_ref(),
                                 cwd = candidate.install_dir.to_string_lossy().as_ref(),
                                 "resolved LSP server from extension node package bin entry"
                             );
                             return Ok(Some(ResolvedLspExtensionCommand {
-                                program: node_path.to_string_lossy().to_string(),
+                                program: node_program,
                                 args,
                                 envs: build_path_env_with_roots(&env_roots),
                                 cwd: Some(candidate.install_dir.to_string_lossy().to_string()),
@@ -2257,52 +2480,43 @@ pub(crate) async fn resolve_lsp_command_for_language(
                         strategy = "extension_bin",
                         bin_name = catalog_entry.lsp.bin_name.as_str(),
                         candidates = ?extension_bin_candidate_paths(&candidate.install_dir, &catalog_entry.lsp.bin_name),
+                        shared_candidates = ?shared_node_runtime_candidate_paths(&catalog_entry.lsp.bin_name),
                         "LSP extension runtime strategy did not resolve"
                     );
                 }
                 "extension_entry" => {
                     if let Some(path) = resolve_relative_entry(&candidate.install_dir, &catalog_entry.lsp.entry_paths) {
                         if normalize_string(&catalog_entry.lsp.runtime) == "node_entry" {
-                            if let Some(node_path) = slidev_node_path() {
-                                // Design note: VSCode extensions such as basedpyright ship the
-                                // language server as a bundled JS entry under the downloaded
-                                // extension directory, not as node_modules/.bin. We still use the
-                                // bundled Node executable from SlidevEnv, but the server code is
-                                // loaded from the installed extension in `extensions`.
-                                let mut args = vec![path.to_string_lossy().to_string()];
-                                args.extend(catalog_entry.lsp.args.clone());
-                                let env_roots = vec![
-                                    candidate.install_dir.clone(),
-                                    candidate.install_dir.join("node_modules").join(".bin"),
-                                    slidev_env_root().unwrap_or_else(|_| PathBuf::from(".")),
-                                ];
-                                info!(
-                                    language = normalized_language.as_str(),
-                                    extension_id = candidate.id.as_str(),
-                                    strategy = "extension_entry",
-                                    runtime = catalog_entry.lsp.runtime.as_str(),
-                                    node = node_path.to_string_lossy().as_ref(),
-                                    entry = path.to_string_lossy().as_ref(),
-                                    cwd = candidate.install_dir.to_string_lossy().as_ref(),
-                                    "resolved LSP server from downloaded extension entry"
-                                );
-                                return Ok(Some(ResolvedLspExtensionCommand {
-                                    program: node_path.to_string_lossy().to_string(),
-                                    args,
-                                    envs: build_path_env_with_roots(&env_roots),
-                                    cwd: Some(candidate.install_dir.to_string_lossy().to_string()),
-                                    extension_id: candidate.id.clone(),
-                                    extension_display_name: candidate.display_name.clone(),
-                                    server_id: catalog_entry.lsp.server_id.clone(),
-                                }));
-                            }
+                            // Design note: VSCode extensions can ship the language server as a
+                            // bundled JS entry under the downloaded extension directory. We run
+                            // that JS entry with the available Node command while keeping package
+                            // lookup scoped to the extension and shared runtime directories.
+                            let mut args = vec![path.to_string_lossy().to_string()];
+                            args.extend(catalog_entry.lsp.args.clone());
+                            let env_roots = vec![
+                                candidate.install_dir.clone(),
+                                candidate.install_dir.join("node_modules").join(".bin"),
+                            ];
+                            let node_program = node_command_program();
                             info!(
                                 language = normalized_language.as_str(),
                                 extension_id = candidate.id.as_str(),
                                 strategy = "extension_entry",
+                                runtime = catalog_entry.lsp.runtime.as_str(),
+                                node = node_program.as_str(),
                                 entry = path.to_string_lossy().as_ref(),
-                                "LSP extension entry exists but bundled node runtime is missing"
+                                cwd = candidate.install_dir.to_string_lossy().as_ref(),
+                                "resolved LSP server from downloaded extension entry"
                             );
+                            return Ok(Some(ResolvedLspExtensionCommand {
+                                program: node_program,
+                                args,
+                                envs: build_path_env_with_roots(&env_roots),
+                                cwd: Some(candidate.install_dir.to_string_lossy().to_string()),
+                                extension_id: candidate.id.clone(),
+                                extension_display_name: candidate.display_name.clone(),
+                                server_id: catalog_entry.lsp.server_id.clone(),
+                            }));
                         } else {
                             return Ok(Some(ResolvedLspExtensionCommand {
                                 program: path.to_string_lossy().to_string(),
@@ -2322,6 +2536,70 @@ pub(crate) async fn resolve_lsp_command_for_language(
                         candidates = ?relative_entry_candidate_paths(&candidate.install_dir, &catalog_entry.lsp.entry_paths),
                         "LSP extension runtime strategy did not resolve"
                     );
+                }
+                "shared_node_runtime" => {
+                    if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
+                        let Ok(root) = shared_node_runtime_dir() else {
+                            info!(
+                                language = normalized_language.as_str(),
+                                extension_id = candidate.id.as_str(),
+                                strategy = "shared_node_runtime",
+                                "shared Node LSP runtime root is unavailable while resolving extension runtime"
+                            );
+                            continue;
+                        };
+                        if let Some(path) = resolve_extension_bin(&root, &catalog_entry.lsp.bin_name) {
+                            let env_roots = vec![root.clone(), root.join("node_modules").join(".bin")];
+                            info!(
+                                language = normalized_language.as_str(),
+                                extension_id = candidate.id.as_str(),
+                                strategy = "shared_node_runtime_bin",
+                                bin = path.to_string_lossy().as_ref(),
+                                cwd = root.to_string_lossy().as_ref(),
+                                "resolved LSP server from shared Node runtime bin"
+                            );
+                            return Ok(Some(ResolvedLspExtensionCommand {
+                                program: path.to_string_lossy().to_string(),
+                                args: catalog_entry.lsp.args.clone(),
+                                envs: build_path_env_with_roots(&env_roots),
+                                cwd: Some(root.to_string_lossy().to_string()),
+                                extension_id: candidate.id.clone(),
+                                extension_display_name: candidate.display_name.clone(),
+                                server_id: catalog_entry.lsp.server_id.clone(),
+                            }));
+                        }
+                        if let Some(entry_path) = resolve_node_module_bin_entry(&root, &catalog_entry.lsp.bin_name) {
+                            let mut args = vec![entry_path.to_string_lossy().to_string()];
+                            args.extend(catalog_entry.lsp.args.clone());
+                            let env_roots = vec![root.clone(), root.join("node_modules").join(".bin")];
+                            let node_program = node_command_program();
+                            info!(
+                                language = normalized_language.as_str(),
+                                extension_id = candidate.id.as_str(),
+                                strategy = "shared_node_runtime_entry",
+                                node = node_program.as_str(),
+                                entry = entry_path.to_string_lossy().as_ref(),
+                                cwd = root.to_string_lossy().as_ref(),
+                                "resolved LSP server from shared Node runtime package entry"
+                            );
+                            return Ok(Some(ResolvedLspExtensionCommand {
+                                program: node_program,
+                                args,
+                                envs: build_path_env_with_roots(&env_roots),
+                                cwd: Some(root.to_string_lossy().to_string()),
+                                extension_id: candidate.id.clone(),
+                                extension_display_name: candidate.display_name.clone(),
+                                server_id: catalog_entry.lsp.server_id.clone(),
+                            }));
+                        }
+                        info!(
+                            language = normalized_language.as_str(),
+                            extension_id = candidate.id.as_str(),
+                            strategy = "shared_node_runtime",
+                            candidates = ?shared_node_runtime_candidate_paths(&catalog_entry.lsp.bin_name),
+                            "LSP extension shared Node runtime strategy did not resolve"
+                        );
+                    }
                 }
                 "slidev_env_bin" => {
                     if let Some(root) = slidev_env_root().ok() {
