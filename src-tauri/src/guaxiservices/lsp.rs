@@ -16,7 +16,7 @@ use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex as ParkingMutex;
 use regex::Regex;
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::fs as tokio_fs;
@@ -256,6 +256,33 @@ fn lsp_file_name(name: &str) -> String {
 
 fn asset_name_from_url(url: &str, fallback: &str) -> String {
     url.split('/').last().filter(|v| !v.is_empty()).unwrap_or(fallback).to_string()
+}
+
+fn proxy_env_is_set(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn lsp_binary_http_client(operation: &str) -> Result<Client, String> {
+    info!(
+        operation,
+        http_proxy = proxy_env_is_set("HTTP_PROXY") || proxy_env_is_set("http_proxy"),
+        https_proxy = proxy_env_is_set("HTTPS_PROXY") || proxy_env_is_set("https_proxy"),
+        all_proxy = proxy_env_is_set("ALL_PROXY") || proxy_env_is_set("all_proxy"),
+        no_proxy = proxy_env_is_set("NO_PROXY") || proxy_env_is_set("no_proxy"),
+        "building managed LSP binary HTTP client with system/env proxy support"
+    );
+
+    // 设计思路：
+    // 1. 托管 LSP 二进制通常来自 GitHub Release，跨地区访问速度差异很大，所以保留 reqwest 默认代理能力。
+    // 2. 不记录代理地址，只记录代理环境是否存在，避免把带认证信息的代理 URL 写进日志。
+    // 3. 设置连接和请求总超时，下载源不可达时能尽快给出可诊断错误，而不是长时间卡住安装流程。
+    ClientBuilder::new()
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("failed to build managed LSP binary HTTP client: {e}"))
 }
 
 fn find_file_by_name(root: &Path, name: &str) -> Option<PathBuf> {
@@ -676,7 +703,7 @@ async fn download_and_install_lsp_binary(
     spec: &LspBinarySpec,
     token: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let client = Client::new();
+    let client = lsp_binary_http_client("download-managed-lsp-binary")?;
     let asset = if let Some(url) = spec.direct_url {
         info!(server = server, url = url, "使用直链下载 LSP");
         GithubAsset {

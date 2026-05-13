@@ -8,7 +8,7 @@ use std::time::Duration;
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex as ParkingMutex;
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::Command;
@@ -210,6 +210,37 @@ fn shared_node_runtime_dir() -> Result<PathBuf, String> {
     let dir = lsp_runtime_root_dir()?.join("node");
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create shared Node LSP runtime root: {e}"))?;
     Ok(dir)
+}
+
+fn proxy_env_is_set(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn log_lsp_network_proxy_context(operation: &str) {
+    info!(
+        operation,
+        http_proxy = proxy_env_is_set("HTTP_PROXY") || proxy_env_is_set("http_proxy"),
+        https_proxy = proxy_env_is_set("HTTPS_PROXY") || proxy_env_is_set("https_proxy"),
+        all_proxy = proxy_env_is_set("ALL_PROXY") || proxy_env_is_set("all_proxy"),
+        no_proxy = proxy_env_is_set("NO_PROXY") || proxy_env_is_set("no_proxy"),
+        "building LSP extension HTTP client with system/env proxy support"
+    );
+}
+
+fn lsp_extension_http_client(operation: &str) -> Result<Client, String> {
+    log_lsp_network_proxy_context(operation);
+
+    // 设计思路：
+    // 1. LSP 扩展下载面向 Open VSX、VSCode Marketplace、GitHub 等外网站点，不能禁用 reqwest 默认代理能力。
+    // 2. reqwest 默认会读取系统/环境代理；这里集中构造 Client，避免后续调用点误用 no_proxy。
+    // 3. 下载慢时更需要稳定超时而不是无限挂起，所以连接和整体请求分别设置上限，并用日志记录代理环境是否存在。
+    ClientBuilder::new()
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("failed to build LSP extension HTTP client: {e}"))
 }
 
 fn slidev_env_root() -> Result<PathBuf, String> {
@@ -845,12 +876,9 @@ fn resolve_extension_bin(dir: &Path, bin_name: &str) -> Option<PathBuf> {
 
 fn node_package_candidates_for_bin(bin_name: &str) -> Vec<String> {
     let normalized = bin_name.trim();
-    let mut candidates = match normalized {
-        "pyright-langserver" => vec!["pyright".to_string()],
-        "bash-language-server" => vec!["bash-language-server".to_string()],
-        "typescript-language-server" => vec!["typescript-language-server".to_string()],
-        _ => vec![],
-    };
+    let mut candidates = node_package_name_for_bin(normalized)
+        .map(|item| vec![item])
+        .unwrap_or_default();
     if !normalized.is_empty() && !candidates.iter().any(|item| item == normalized) {
         candidates.push(normalized.to_string());
     }
@@ -858,9 +886,18 @@ fn node_package_candidates_for_bin(bin_name: &str) -> Vec<String> {
 }
 
 fn node_package_name_for_bin(bin_name: &str) -> Option<String> {
-    node_package_candidates_for_bin(bin_name)
-        .into_iter()
-        .find(|item| item.trim() != bin_name.trim() && !item.trim().is_empty())
+    let normalized = bin_name.trim();
+
+    // 设计思路：
+    // 1. npm 包名和 language server 可执行名并不总是相同，例如 pyright-langserver 来自 pyright。
+    // 2. 但 typescript-language-server、bash-language-server 的包名本身就等于 bin 名，不能再把“相等”当成无效映射过滤掉。
+    // 3. 这里保留显式白名单，避免未知 bin 名被盲目 npm install；缺映射时仍然返回清晰错误，方便继续补 catalog。
+    match normalized {
+        "pyright-langserver" => Some("pyright".to_string()),
+        "bash-language-server" => Some("bash-language-server".to_string()),
+        "typescript-language-server" => Some("typescript-language-server".to_string()),
+        _ => None,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -871,6 +908,42 @@ fn npm_command_name() -> &'static str {
 #[cfg(not(target_os = "windows"))]
 fn npm_command_name() -> &'static str {
     "npm"
+}
+
+fn apply_proxy_env_pair_to_child(cmd: &mut Command, upper: &str, lower: &str) -> bool {
+    let upper_value = std::env::var(upper).ok().filter(|value| !value.trim().is_empty());
+    let lower_value = std::env::var(lower).ok().filter(|value| !value.trim().is_empty());
+    match (upper_value, lower_value) {
+        (Some(value), None) => {
+            cmd.env(lower, &value);
+            true
+        }
+        (None, Some(value)) => {
+            cmd.env(upper, &value);
+            true
+        }
+        (Some(_), Some(_)) => true,
+        (None, None) => false,
+    }
+}
+
+fn apply_proxy_env_to_npm(cmd: &mut Command) {
+    let http_proxy = apply_proxy_env_pair_to_child(cmd, "HTTP_PROXY", "http_proxy");
+    let https_proxy = apply_proxy_env_pair_to_child(cmd, "HTTPS_PROXY", "https_proxy");
+    let all_proxy = apply_proxy_env_pair_to_child(cmd, "ALL_PROXY", "all_proxy");
+    let no_proxy = apply_proxy_env_pair_to_child(cmd, "NO_PROXY", "no_proxy");
+
+    // 设计思路：
+    // 1. npm 会继承父进程环境变量，但不同代理工具可能只写入大写或小写变量。
+    // 2. 这里不记录代理 URL，避免日志泄露账号密码，只记录是否存在代理配置。
+    // 3. 非中国大陆网络或用户开启系统代理时，只要代理工具同步了环境变量，runtime 安装就能沿用这条通道。
+    info!(
+        http_proxy,
+        https_proxy,
+        all_proxy,
+        no_proxy,
+        "prepared proxy environment for npm LSP runtime install"
+    );
 }
 
 fn resolve_node_module_bin_entry(dir: &Path, bin_name: &str) -> Option<PathBuf> {
@@ -987,13 +1060,21 @@ async fn prepare_shared_node_runtime(
     // 1. 插件安装完成后必须立刻补齐 runtime，不能把问题留给运行时再暴露。
     // 2. Node LSP 包统一安装到 <软件目录>/LspRuntimes/node，多个语言插件共用一份 node_modules，避免每个扩展目录重复占用磁盘。
     // 3. 这里只写共享 runtime 目录，不修改 SlidevEnv；安装后会再次解析并执行 initialize 探测。
-    let output = Command::new(npm)
+    let mut npm_install = Command::new(npm);
+    apply_proxy_env_to_npm(&mut npm_install);
+    let output = npm_install
         .arg("install")
         .arg("--prefix")
         .arg(&runtime_dir)
         .arg("--no-save")
         .arg("--no-audit")
         .arg("--no-fund")
+        .arg("--fetch-retries")
+        .arg("5")
+        .arg("--fetch-retry-mintimeout")
+        .arg("10000")
+        .arg("--fetch-retry-maxtimeout")
+        .arg("120000")
         .arg(&package_spec)
         .output()
         .await
@@ -1285,7 +1366,7 @@ pub fn list_lsp_extensions() -> Result<Vec<LspExtensionState>, String> {
 }
 
 async fn download_to_file(url: &str, destination: &Path) -> Result<(), String> {
-    let client = Client::new();
+    let client = lsp_extension_http_client("download-extension-archive")?;
     let response = client
         .get(url)
         .header("User-Agent", "guaxi-lsp-extension")
@@ -1866,7 +1947,7 @@ pub async fn search_open_vsx_extensions(query: &str) -> Result<Vec<OpenVsxSearch
     );
     info!(query = trimmed, url = url.as_str(), "searching Open VSX extensions");
 
-    let client = Client::new();
+    let client = lsp_extension_http_client("search-open-vsx")?;
     let response = client
         .get(&url)
         .header("User-Agent", "guaxi-lsp-extension")
@@ -1984,7 +2065,7 @@ pub async fn search_vscode_marketplace_extensions(
     });
 
     info!(query = trimmed, "searching VSCode Marketplace extensions");
-    let client = Client::new();
+    let client = lsp_extension_http_client("search-vscode-marketplace")?;
     let response = client
         .post("https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery")
         .header("Accept", "application/json;api-version=3.0-preview.1")
@@ -2097,7 +2178,7 @@ async fn resolve_open_vsx_download(
         "resolving Open VSX extension download URL"
     );
 
-    let client = Client::new();
+    let client = lsp_extension_http_client("resolve-open-vsx-detail")?;
     let response = client
         .get(&detail_url)
         .header("User-Agent", "guaxi-lsp-extension")
