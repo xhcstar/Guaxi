@@ -60,8 +60,8 @@
             <n-button
               size="small"
               type="primary"
-              :loading="installingExtensionId === item.id"
-              :disabled="loading && installingExtensionId !== item.id"
+              :loading="isInstallingExtension(item.id)"
+              :disabled="loading && !isInstallingExtension(item.id)"
               @click="handleInstallSearchResult(item)"
             >
               安装
@@ -125,7 +125,7 @@
               v-if="!item.installed && (item.vscode_marketplace || item.open_vsx)"
               size="small"
               type="primary"
-              :loading="installingExtensionId === item.id"
+              :loading="isInstallingExtension(item.id)"
               @click="handleInstallCatalogExtension(item)"
             >
               安装扩展
@@ -136,7 +136,7 @@
               size="small"
               tertiary
               type="error"
-              :loading="removingExtensionId === item.id"
+              :loading="isRemovingExtension(item.id)"
               @click="handleRemoveExtension(item)"
             >
               卸载
@@ -151,7 +151,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -172,10 +172,42 @@ const extensions = ref([])
 const installingExtensionId = ref('')
 const removingExtensionId = ref('')
 const installingRecommended = ref(false)
+const activeTaskSnapshots = ref({})
+const pollingTaskIds = new Set()
+let panelDisposed = false
 
 const installedCount = computed(() =>
   extensions.value.filter((item) => item?.installed).length
 )
+
+const activeTaskList = computed(() =>
+  Object.values(activeTaskSnapshots.value).filter((task) =>
+    ['queued', 'running'].includes(String(task?.status || ''))
+  )
+)
+
+const normalizeExtensionTaskId = (value) => String(value || '').trim().toLowerCase()
+
+const isTaskForExtension = (task, extensionId) =>
+  normalizeExtensionTaskId(task?.extension_id) === normalizeExtensionTaskId(extensionId)
+
+const isInstallingExtension = (extensionId) => {
+  const id = normalizeExtensionTaskId(extensionId)
+  if (!id) return false
+  if (normalizeExtensionTaskId(installingExtensionId.value) === id) return true
+  return activeTaskList.value.some((task) =>
+    isTaskForExtension(task, id) && String(task.operation || '').startsWith('install')
+  )
+}
+
+const isRemovingExtension = (extensionId) => {
+  const id = normalizeExtensionTaskId(extensionId)
+  if (!id) return false
+  if (normalizeExtensionTaskId(removingExtensionId.value) === id) return true
+  return activeTaskList.value.some((task) =>
+    isTaskForExtension(task, id) && String(task.operation || '') === 'remove'
+  )
+}
 
 const searchSourceOptions = [
   { label: 'VSCode Marketplace', value: 'marketplace' },
@@ -293,6 +325,113 @@ const notifyInstallResult = (state, extensionId, options = {}) => {
   })
 }
 
+const isFinishedTask = (task) => ['success', 'error'].includes(String(task?.status || ''))
+
+const rememberTaskSnapshot = (task) => {
+  const taskId = String(task?.task_id || '').trim()
+  if (!taskId) return
+  activeTaskSnapshots.value = {
+    ...activeTaskSnapshots.value,
+    [taskId]: task,
+  }
+}
+
+const forgetTaskSnapshot = (taskId) => {
+  const id = String(taskId || '').trim()
+  if (!id || !activeTaskSnapshots.value[id]) return
+  const next = { ...activeTaskSnapshots.value }
+  delete next[id]
+  activeTaskSnapshots.value = next
+}
+
+const finishExtensionTask = async (task, fallbackExtensionId = '') => {
+  const operation = String(task?.operation || '')
+  const extensionId = String(task?.state?.id || task?.extension_id || fallbackExtensionId || '').trim()
+
+  if (String(task?.status || '') === 'success') {
+    if (operation === 'remove') {
+      message.success(`已卸载扩展 ${extensionId}`)
+    } else if (task?.state) {
+      notifyInstallResult(task.state, extensionId)
+    } else {
+      message.success(`LSP 扩展任务已完成 ${extensionId}`)
+    }
+    await refreshExtensions()
+    return
+  }
+
+  const errorText = String(task?.error || task?.message || '未知错误')
+  logger.error('[LspExtensionPanel] extension background task failed', {
+    taskId: task?.task_id,
+    operation,
+    extensionId,
+    error: errorText,
+  })
+  message.error(`LSP 扩展任务失败: ${errorText}`)
+}
+
+const waitForExtensionTask = async (task, fallbackExtensionId = '') => {
+  const taskId = String(task?.task_id || '').trim()
+  if (!taskId || pollingTaskIds.has(taskId)) return task
+  pollingTaskIds.add(taskId)
+
+  try {
+    let snapshot = task
+    rememberTaskSnapshot(snapshot)
+    while (!panelDisposed) {
+      if (isFinishedTask(snapshot)) {
+        await finishExtensionTask(snapshot, fallbackExtensionId)
+        return snapshot
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 900))
+      const latest = await invoke('get_lsp_extension_task', { taskId })
+      if (!latest) {
+        logger.warn('[LspExtensionPanel] extension task disappeared while polling', { taskId })
+        return snapshot
+      }
+      snapshot = latest
+      rememberTaskSnapshot(snapshot)
+    }
+    return snapshot
+  } finally {
+    pollingTaskIds.delete(taskId)
+    forgetTaskSnapshot(taskId)
+  }
+}
+
+const startExtensionTask = async (command, args, options = {}) => {
+  const extensionId = String(options.extensionId || args?.extensionId || '').trim()
+  logger.info('[LspExtensionPanel] starting LSP extension background task', {
+    command,
+    extensionId,
+  })
+  const task = await invoke(command, args)
+  rememberTaskSnapshot(task)
+  void waitForExtensionTask(task, extensionId)
+  return task
+}
+
+const resumeActiveExtensionTasks = async () => {
+  try {
+    const tasks = await invoke('list_lsp_extension_tasks')
+    const activeTasks = Array.isArray(tasks)
+      ? tasks.filter((task) => ['queued', 'running'].includes(String(task?.status || '')))
+      : []
+    if (!activeTasks.length) return
+
+    logger.info('[LspExtensionPanel] resuming active LSP extension tasks', {
+      count: activeTasks.length,
+      taskIds: activeTasks.map((task) => task.task_id),
+    })
+    activeTasks.forEach((task) => {
+      rememberTaskSnapshot(task)
+      void waitForExtensionTask(task, task?.extension_id)
+    })
+  } catch (error) {
+    logger.warn('[LspExtensionPanel] resume active extension tasks failed', { error: String(error) })
+  }
+}
+
 const refreshExtensions = async () => {
   try {
     loading.value = true
@@ -342,6 +481,7 @@ const handleSearch = async () => {
 const handleInstallOpenVsx = async (item, options = {}) => {
   const extensionId = String(item?.id || '').trim()
   if (!extensionId) return
+  options.silentSuccess = true
 
   try {
     installingExtensionId.value = extensionId
@@ -350,15 +490,16 @@ const handleInstallOpenVsx = async (item, options = {}) => {
       version: String(item?.version || ''),
       downloadUrl: String(item?.download_url || ''),
     })
-    await invoke('install_open_vsx_extension', {
+    await startExtensionTask('start_install_open_vsx_extension_task', {
       extensionId,
       version: item?.version ? String(item.version) : null,
       downloadUrl: item?.download_url ? String(item.download_url) : null,
+    }, {
+      extensionId,
     })
     if (!options.silentSuccess) {
       message.success(`已安装扩展 ${extensionId}`)
     }
-    await refreshExtensions()
   } catch (error) {
     logger.error('[LspExtensionPanel] install from Open VSX failed', error)
     if (options.throwOnError) {
@@ -373,6 +514,7 @@ const handleInstallOpenVsx = async (item, options = {}) => {
 const handleInstallMarketplace = async (item, options = {}) => {
   const extensionId = String(item?.id || '').trim()
   if (!extensionId) return
+  options.silentSuccess = true
 
   try {
     installingExtensionId.value = extensionId
@@ -381,15 +523,16 @@ const handleInstallMarketplace = async (item, options = {}) => {
       version: String(item?.version || ''),
       downloadUrl: String(item?.download_url || ''),
     })
-    await invoke('install_vscode_marketplace_extension', {
+    await startExtensionTask('start_install_vscode_marketplace_extension_task', {
       extensionId,
       version: item?.version ? String(item.version) : null,
       downloadUrl: item?.download_url ? String(item.download_url) : null,
+    }, {
+      extensionId,
     })
     if (!options.silentSuccess) {
       message.success(`已安装扩展 ${extensionId}`)
     }
-    await refreshExtensions()
   } catch (error) {
     logger.error('[LspExtensionPanel] install from VSCode Marketplace failed', error)
     if (options.throwOnError) {
@@ -424,9 +567,7 @@ const handleInstallCatalogExtension = async (item) => {
       extensionId,
       languages: Array.isArray(item?.languages) ? item.languages : [],
     })
-    const state = await invoke('install_catalog_lsp_extension', { extensionId })
-    notifyInstallResult(state, extensionId)
-    await refreshExtensions()
+    await startExtensionTask('start_install_catalog_lsp_extension_task', { extensionId }, { extensionId })
   } catch (error) {
     if (!handleTauriIpcInstallError('install_catalog_lsp_extension', error)) {
       logger.error('[LspExtensionPanel] install catalog extension failed', error)
@@ -454,15 +595,13 @@ const handleInstallRecommendedExtensions = async () => {
     })
     for (const extensionId of targets) {
       installingExtensionId.value = extensionId
-      const state = await invoke('install_catalog_lsp_extension', { extensionId })
-      logger.info('[LspExtensionPanel] recommended catalog extension installed', {
+      const task = await startExtensionTask('start_install_catalog_lsp_extension_task', { extensionId }, { extensionId })
+      logger.info('[LspExtensionPanel] recommended catalog extension task started', {
         extensionId,
-        runtimeReady: state?.runtime_status?.ready !== false,
-        runtimeMessage: String(state?.runtime_status?.message || ''),
+        taskId: String(task?.task_id || ''),
       })
     }
-    message.success(`已安装 ${targets.length} 个推荐 LSP 扩展`)
-    await refreshExtensions()
+    message.success(`已启动 ${targets.length} 个推荐 LSP 扩展安装任务`)
   } catch (error) {
     if (!handleTauriIpcInstallError('install_recommended_catalog_lsp_extensions', error)) {
       logger.error('[LspExtensionPanel] install recommended catalog extensions failed', error)
@@ -485,9 +624,8 @@ const handleImportVsix = async () => {
     if (!vsixPath) return
 
     logger.info('[LspExtensionPanel] importing VSIX extension', { vsixPath })
-    await invoke('import_lsp_extension_vsix', { vsixPath })
-    message.success('VSIX 扩展导入完成')
-    await refreshExtensions()
+    await startExtensionTask('start_import_lsp_extension_vsix_task', { vsixPath }, { extensionId: `local-vsix:${vsixPath}` })
+    message.success('VSIX 扩展导入任务已启动')
   } catch (error) {
     logger.error('[LspExtensionPanel] import VSIX failed', error)
     message.error(`导入 VSIX 失败: ${String(error)}`)
@@ -504,9 +642,8 @@ const handleImportDirectory = async () => {
     if (!dirPath) return
 
     logger.info('[LspExtensionPanel] importing unpacked extension directory', { dirPath })
-    await invoke('import_lsp_extension_directory', { dirPath })
-    message.success('扩展目录导入完成')
-    await refreshExtensions()
+    await startExtensionTask('start_import_lsp_extension_directory_task', { dirPath }, { extensionId: `local-directory:${dirPath}` })
+    message.success('扩展目录导入任务已启动')
   } catch (error) {
     logger.error('[LspExtensionPanel] import extension directory failed', error)
     message.error(`导入扩展目录失败: ${String(error)}`)
@@ -520,9 +657,7 @@ const handleRemoveExtension = async (item) => {
   try {
     removingExtensionId.value = extensionId
     logger.info('[LspExtensionPanel] removing installed extension', { extensionId })
-    await invoke('remove_lsp_extension', { extensionId })
-    message.success(`已卸载扩展 ${extensionId}`)
-    await refreshExtensions()
+    await startExtensionTask('start_remove_lsp_extension_task', { extensionId }, { extensionId })
   } catch (error) {
     logger.error('[LspExtensionPanel] remove extension failed', error)
     message.error(`卸载扩展失败: ${String(error)}`)
@@ -532,7 +667,13 @@ const handleRemoveExtension = async (item) => {
 }
 
 onMounted(() => {
+  panelDisposed = false
   void refreshExtensions()
+  void resumeActiveExtensionTasks()
+})
+
+onUnmounted(() => {
+  panelDisposed = true
 })
 </script>
 

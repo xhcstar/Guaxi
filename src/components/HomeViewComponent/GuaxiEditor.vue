@@ -6927,17 +6927,16 @@ const shouldDropNoisyEmbeddedMemberCandidate = (languageId, item, completionSour
   if (!isEmbeddedPythonMemberAccessContext(languageId, filterContext)) return false
   const rawKind = Number(item?.kind)
   if (!Number.isFinite(rawKind)) return false
-  const mappedTextKind = completionSource === 'direct-lsp'
+  const mappedKind = completionSource === 'direct-lsp'
     ? LSP_TO_MONACO_COMPLETION_KIND[rawKind]
     : VSCODE_TO_MONACO_COMPLETION_KIND[rawKind]
 
   // 设计说明：
-  // 1. Python 成员访问补全应该来自对象属性/方法/变量，而不是全局 Text/Keyword/Snippet。
-  // 2. direct LSP 可能稍慢；若退到 VSCode command，它会聚合更多 provider，容易把词表候选也带进来。
-  // 3. 这里先过滤非成员访问语义候选，再做 Property 兜底，避免显示按字母排列的无关列表。
-  return mappedTextKind === monaco.languages.CompletionItemKind.Text
-    || mappedTextKind === monaco.languages.CompletionItemKind.Keyword
-    || mappedTextKind === monaco.languages.CompletionItemKind.Snippet
+  // 1. basedpyright 在 Markdown fence 虚拟文档里可能把真实成员候选标成 Text。
+  // 2. 旧逻辑把 `sys.` 后的 Text 全部视为噪声，导致 rawItemCount 有值但 noisyKindFilteredCount 等于全部数量。
+  // 3. Text 候选后续会兜底映射为 Property；这里只继续丢弃 Keyword/Snippet 这类明确不是对象成员的候选。
+  return mappedKind === monaco.languages.CompletionItemKind.Keyword
+    || mappedKind === monaco.languages.CompletionItemKind.Snippet
 }
 
 const resolveEmbeddedCompletionKind = (item, completionSource, filterContext, languageId = '') => {

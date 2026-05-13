@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use once_cell::sync::Lazy;
+use parking_lot::Mutex as ParkingMutex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -111,6 +112,19 @@ pub struct VscodeMarketplaceSearchResult {
     pub icon_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LspExtensionTaskSnapshot {
+    pub task_id: String,
+    pub operation: String,
+    pub extension_id: String,
+    pub status: String,
+    pub message: String,
+    pub error: Option<String>,
+    pub state: Option<LspExtensionState>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedLspExtensionCommand {
     pub(crate) program: String,
@@ -145,6 +159,8 @@ static LSP_EXTENSION_CATALOG: Lazy<CatalogRoot> = Lazy::new(|| {
     serde_json::from_str(include_str!("../../../shared/lsp_extensions.json"))
         .expect("invalid shared LSP extension catalog")
 });
+static LSP_EXTENSION_TASKS: Lazy<ParkingMutex<HashMap<String, LspExtensionTaskSnapshot>>> =
+    Lazy::new(|| ParkingMutex::new(HashMap::new()));
 
 fn normalize_string(raw: &str) -> String {
     raw.trim().to_string()
@@ -258,6 +274,156 @@ fn parse_extension_identifier(id: &str) -> Result<(String, String), String> {
 
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+fn is_lsp_extension_task_running(status: &str) -> bool {
+    matches!(status, "queued" | "running")
+}
+
+fn update_lsp_extension_task(
+    task_id: &str,
+    status: &str,
+    message: &str,
+    error: Option<String>,
+    state: Option<LspExtensionState>,
+) {
+    let mut tasks = LSP_EXTENSION_TASKS.lock();
+    if let Some(task) = tasks.get_mut(task_id) {
+        task.status = status.to_string();
+        task.message = message.to_string();
+        task.error = error;
+        task.state = state;
+        task.updated_at = now_rfc3339();
+        info!(
+            task_id = task.task_id.as_str(),
+            operation = task.operation.as_str(),
+            extension_id = task.extension_id.as_str(),
+            status = task.status.as_str(),
+            message = task.message.as_str(),
+            "updated LSP extension background task"
+        );
+    }
+}
+
+fn insert_lsp_extension_task(operation: &str, extension_id: &str, message: &str) -> Result<LspExtensionTaskSnapshot, String> {
+    let normalized_extension_id = normalize_extension_id(extension_id);
+    if normalized_extension_id.is_empty() {
+        return Err("extension_id cannot be empty".to_string());
+    }
+
+    let mut tasks = LSP_EXTENSION_TASKS.lock();
+    if let Some(running) = tasks.values().find(|task| {
+        normalize_extension_id(&task.extension_id) == normalized_extension_id
+            && is_lsp_extension_task_running(&task.status)
+    }) {
+        warn!(
+            operation = operation,
+            extension_id = normalized_extension_id.as_str(),
+            running_task_id = running.task_id.as_str(),
+            running_operation = running.operation.as_str(),
+            "LSP extension mutation task is already running"
+        );
+        return Err(format!(
+            "LSP extension task already running for {}: {}",
+            normalized_extension_id, running.operation
+        ));
+    }
+
+    let now = now_rfc3339();
+    let snapshot = LspExtensionTaskSnapshot {
+        task_id: Uuid::new_v4().to_string(),
+        operation: operation.to_string(),
+        extension_id: normalized_extension_id,
+        status: "queued".to_string(),
+        message: message.to_string(),
+        error: None,
+        state: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    tasks.insert(snapshot.task_id.clone(), snapshot.clone());
+    info!(
+        task_id = snapshot.task_id.as_str(),
+        operation = snapshot.operation.as_str(),
+        extension_id = snapshot.extension_id.as_str(),
+        "created LSP extension background task"
+    );
+    Ok(snapshot)
+}
+
+fn spawn_lsp_extension_task<F>(snapshot: LspExtensionTaskSnapshot, future: F) -> LspExtensionTaskSnapshot
+where
+    F: std::future::Future<Output = Result<LspExtensionState, String>> + Send + 'static,
+{
+    let task_id = snapshot.task_id.clone();
+    tokio::spawn(async move {
+        update_lsp_extension_task(&task_id, "running", "task is running", None, None);
+        match future.await {
+            Ok(state) => {
+                update_lsp_extension_task(
+                    &task_id,
+                    "success",
+                    "task completed",
+                    None,
+                    Some(state),
+                );
+            }
+            Err(error) => {
+                warn!(
+                    task_id = task_id.as_str(),
+                    error = error.as_str(),
+                    "LSP extension background task failed"
+                );
+                update_lsp_extension_task(
+                    &task_id,
+                    "error",
+                    "task failed",
+                    Some(error),
+                    None,
+                );
+            }
+        }
+    });
+    snapshot
+}
+
+fn spawn_lsp_extension_void_task<F>(snapshot: LspExtensionTaskSnapshot, future: F) -> LspExtensionTaskSnapshot
+where
+    F: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
+    let task_id = snapshot.task_id.clone();
+    tokio::spawn(async move {
+        update_lsp_extension_task(&task_id, "running", "task is running", None, None);
+        match future.await {
+            Ok(()) => {
+                update_lsp_extension_task(&task_id, "success", "task completed", None, None);
+            }
+            Err(error) => {
+                warn!(
+                    task_id = task_id.as_str(),
+                    error = error.as_str(),
+                    "LSP extension background task failed"
+                );
+                update_lsp_extension_task(&task_id, "error", "task failed", Some(error), None);
+            }
+        }
+    });
+    snapshot
+}
+
+pub fn get_lsp_extension_task(task_id: &str) -> Option<LspExtensionTaskSnapshot> {
+    LSP_EXTENSION_TASKS.lock().get(task_id).cloned()
+}
+
+pub fn list_lsp_extension_tasks() -> Vec<LspExtensionTaskSnapshot> {
+    let mut tasks = LSP_EXTENSION_TASKS
+        .lock()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    tasks.truncate(80);
+    tasks
 }
 
 fn is_downloadable_fallback(server_id: &str) -> bool {
@@ -995,7 +1161,7 @@ async fn download_to_file(url: &str, destination: &Path) -> Result<(), String> {
     fs::write(destination, &bytes).map_err(|e| format!("failed to save extension archive: {e}"))
 }
 
-fn finalize_install_from_unpacked_root(
+async fn finalize_install_from_unpacked_root(
     unpacked_root: &Path,
     meta: InstalledExtensionMeta,
     expected_extension_id: Option<&str>,
@@ -1039,6 +1205,16 @@ fn finalize_install_from_unpacked_root(
         }
     }
 
+    // 设计说明：
+    // 1. Windows 会锁住正在运行的 language server 所在目录，直接覆盖或删除扩展容易遇到 os error 32。
+    // 2. 安装新版本前先按扩展 id 停掉活跃 LSP 子进程，再做目录替换，避免下载任务和旧进程互相打断。
+    // 3. 这里写入日志记录被停止的进程数量，后续排查“为什么卸载/覆盖慢”时能定位到 LSP runtime 占用。
+    let stopped = lsp::stop_lsp_processes_for_extension(&id).await;
+    info!(
+        extension_id = id.as_str(),
+        stopped_process_count = stopped,
+        "stopped active LSP processes before finalizing extension install"
+    );
     remove_existing_extension_versions(&id)?;
 
     let install_dir = unique_install_dir(&id, &version)?;
@@ -1215,11 +1391,20 @@ fn rollback_failed_catalog_install(extension_id: &str, reason: &str) {
     }
 }
 
-fn install_catalog_lsp_extension_record(
+async fn install_catalog_lsp_extension_record(
     catalog: &CatalogExtension,
 ) -> Result<LspExtensionState, String> {
     let id = normalize_extension_id(&catalog.id);
     let version = format!("catalog.{}", LSP_EXTENSION_CATALOG.version);
+    // 设计说明：
+    // 1. catalog 扩展也可能已经拉起了托管 LSP server，卸载旧 catalog 目录前必须先释放进程。
+    // 2. 这里和真实 VSIX 安装使用同一套停止逻辑，保证“下载/覆盖”和“卸载”对文件锁的处理一致。
+    let stopped = lsp::stop_lsp_processes_for_extension(&id).await;
+    info!(
+        extension_id = id.as_str(),
+        stopped_process_count = stopped,
+        "stopped active LSP processes before installing catalog extension"
+    );
     remove_existing_extension_versions(&id)?;
     let install_dir = unique_install_dir(&id, &version)?;
     write_catalog_extension_package(&install_dir, catalog)?;
@@ -1317,7 +1502,7 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
         }
     }
 
-    let state = install_catalog_lsp_extension_record(&catalog)?;
+    let state = install_catalog_lsp_extension_record(&catalog).await?;
     match verify_catalog_extension_runtime(&state, "Guaxi catalog fallback").await {
         Ok(probes) => {
             info!(
@@ -1366,7 +1551,8 @@ pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState,
             original_file_name: source_path.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
         None,
-    );
+    )
+    .await;
 
     let _ = fs::remove_dir_all(&unpack_root);
     let state = result?;
@@ -1395,7 +1581,8 @@ pub async fn import_extension_directory(dir_path: &str) -> Result<LspExtensionSt
             original_file_name: source_dir.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
         None,
-    )?;
+    )
+    .await?;
     verify_if_catalog_extension_runtime(state, "local directory").await
 }
 
@@ -1778,7 +1965,8 @@ pub async fn install_open_vsx_extension(
             original_file_name: download_file.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
         Some(&resolved_id),
-    );
+    )
+    .await;
 
     let _ = fs::remove_file(&download_file);
     let _ = fs::remove_dir_all(&unpack_root);
@@ -1850,7 +2038,8 @@ pub async fn install_vscode_marketplace_extension(
             original_file_name: download_file.file_name().and_then(|item| item.to_str()).map(normalize_string),
         },
         Some(&expected_id),
-    );
+    )
+    .await;
 
     let _ = fs::remove_file(&download_file);
     let _ = fs::remove_dir_all(&unpack_root);
@@ -1858,14 +2047,86 @@ pub async fn install_vscode_marketplace_extension(
     verify_if_catalog_extension_runtime(state, "VSCode Marketplace").await
 }
 
-pub fn remove_lsp_extension(extension_id: &str) -> Result<(), String> {
+pub async fn remove_lsp_extension(extension_id: &str) -> Result<(), String> {
     let normalized = normalize_extension_id(extension_id);
     if normalized.is_empty() {
         return Err("extension_id cannot be empty".to_string());
     }
 
     info!(extension_id = normalized.as_str(), "removing installed LSP extension");
+    // 设计说明：
+    // 1. 卸载失败最常见的原因是 language server 进程仍以扩展目录为 cwd 或正在读取扩展内入口文件。
+    // 2. 删除目录前统一通知 LSP actor 关闭，并短暂等待子进程退出，让 Windows 文件锁先释放。
+    // 3. 如果仍有外部进程占用，后续 try_remove_extension_dir 会继续做重试和延迟删除兜底。
+    let stopped = lsp::stop_lsp_processes_for_extension(&normalized).await;
+    info!(
+        extension_id = normalized.as_str(),
+        stopped_process_count = stopped,
+        "stopped active LSP processes before removing extension"
+    );
     remove_existing_extension_versions(&normalized)
+}
+
+pub fn start_install_open_vsx_extension_task(
+    identifier: String,
+    version: Option<String>,
+    download_url: Option<String>,
+) -> Result<LspExtensionTaskSnapshot, String> {
+    let extension_id = normalize_extension_id(&identifier);
+    let snapshot = insert_lsp_extension_task("install-openvsx", &extension_id, "queued Open VSX install")?;
+    Ok(spawn_lsp_extension_task(snapshot, async move {
+        install_open_vsx_extension(&identifier, version.as_deref(), download_url.as_deref()).await
+    }))
+}
+
+pub fn start_install_vscode_marketplace_extension_task(
+    identifier: String,
+    version: Option<String>,
+    download_url: Option<String>,
+) -> Result<LspExtensionTaskSnapshot, String> {
+    let extension_id = normalize_extension_id(&identifier);
+    let snapshot = insert_lsp_extension_task(
+        "install-marketplace",
+        &extension_id,
+        "queued VSCode Marketplace install",
+    )?;
+    Ok(spawn_lsp_extension_task(snapshot, async move {
+        install_vscode_marketplace_extension(&identifier, version.as_deref(), download_url.as_deref()).await
+    }))
+}
+
+pub fn start_install_catalog_lsp_extension_task(
+    identifier: String,
+) -> Result<LspExtensionTaskSnapshot, String> {
+    let extension_id = normalize_extension_id(&identifier);
+    let snapshot = insert_lsp_extension_task("install-catalog", &extension_id, "queued catalog install")?;
+    Ok(spawn_lsp_extension_task(snapshot, async move {
+        install_catalog_lsp_extension(&identifier).await
+    }))
+}
+
+pub fn start_import_vsix_extension_task(path: String) -> Result<LspExtensionTaskSnapshot, String> {
+    let task_key = format!("local-vsix:{}", path.trim().to_lowercase());
+    let snapshot = insert_lsp_extension_task("import-vsix", &task_key, "queued VSIX import")?;
+    Ok(spawn_lsp_extension_task(snapshot, async move {
+        import_vsix_extension(&path).await
+    }))
+}
+
+pub fn start_import_extension_directory_task(path: String) -> Result<LspExtensionTaskSnapshot, String> {
+    let task_key = format!("local-directory:{}", path.trim().to_lowercase());
+    let snapshot = insert_lsp_extension_task("import-directory", &task_key, "queued extension directory import")?;
+    Ok(spawn_lsp_extension_task(snapshot, async move {
+        import_extension_directory(&path).await
+    }))
+}
+
+pub fn start_remove_lsp_extension_task(identifier: String) -> Result<LspExtensionTaskSnapshot, String> {
+    let extension_id = normalize_extension_id(&identifier);
+    let snapshot = insert_lsp_extension_task("remove", &extension_id, "queued extension removal")?;
+    Ok(spawn_lsp_extension_void_task(snapshot, async move {
+        remove_lsp_extension(&identifier).await
+    }))
 }
 
 pub(crate) fn has_installed_lsp_extension_for_language(language: &str) -> Result<bool, String> {
@@ -1882,6 +2143,25 @@ pub(crate) fn has_installed_lsp_extension_for_language(language: &str) -> Result
         }
         catalog.contains_key(&normalize_extension_id(&item.id))
     });
+    Ok(matched)
+}
+
+pub(crate) fn installed_lsp_extension_ids_for_language(language: &str) -> Result<Vec<String>, String> {
+    let normalized_language = normalize_language(language);
+    if normalized_language.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let catalog = catalog_by_id();
+    let mut matched = load_installed_extensions()?
+        .into_iter()
+        .filter(|item| item.languages.iter().any(|lang| normalize_language(lang) == normalized_language))
+        .filter(|item| catalog.contains_key(&normalize_extension_id(&item.id)))
+        .map(|item| normalize_extension_id(&item.id))
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    matched.sort();
+    matched.dedup();
     Ok(matched)
 }
 

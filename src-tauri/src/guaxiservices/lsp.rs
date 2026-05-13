@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -38,6 +38,8 @@ struct LspCommandConfig {
     args: Vec<String>,
     envs: Vec<(String, String)>,
     cwd: Option<String>,
+    extension_id: Option<String>,
+    server_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +96,119 @@ static LSP_INSTALLING: Lazy<ParkingMutex<HashSet<String>>> =
     Lazy::new(|| ParkingMutex::new(HashSet::new()));
 static LSP_INSTALL_FAILED: Lazy<ParkingMutex<HashSet<String>>> =
     Lazy::new(|| ParkingMutex::new(HashSet::new()));
+static ACTIVE_LSP_EXTENSION_PROCESSES: Lazy<ParkingMutex<HashMap<String, Vec<LspProcessRef>>>> =
+    Lazy::new(|| ParkingMutex::new(HashMap::new()));
+
+#[derive(Clone)]
+struct LspProcessRef {
+    process_id: u32,
+    addr: Addr<LspWsSession>,
+}
+
+fn normalize_extension_id_for_process(raw: &str) -> String {
+    raw.trim().to_lowercase()
+}
+
+fn register_lsp_extension_process(extension_id: &str, process_id: u32, addr: Addr<LspWsSession>) {
+    let normalized = normalize_extension_id_for_process(extension_id);
+    if normalized.is_empty() || process_id == 0 {
+        return;
+    }
+
+    let mut processes = ACTIVE_LSP_EXTENSION_PROCESSES.lock();
+    let entries = processes.entry(normalized.clone()).or_default();
+    entries.retain(|item| item.process_id != process_id);
+    entries.push(LspProcessRef { process_id, addr });
+    info!(
+        extension_id = normalized.as_str(),
+        process_id = process_id,
+        active_count = entries.len(),
+        "registered active LSP process for extension"
+    );
+}
+
+fn unregister_lsp_extension_process(extension_id: Option<&str>, process_id: Option<u32>, reason: &str) {
+    let Some(process_id) = process_id.filter(|id| *id != 0) else {
+        return;
+    };
+    let Some(extension_id) = extension_id.map(normalize_extension_id_for_process).filter(|id| !id.is_empty()) else {
+        return;
+    };
+
+    let mut processes = ACTIVE_LSP_EXTENSION_PROCESSES.lock();
+    if let Some(entries) = processes.get_mut(&extension_id) {
+        let before = entries.len();
+        entries.retain(|item| item.process_id != process_id);
+        let after = entries.len();
+        if entries.is_empty() {
+            processes.remove(&extension_id);
+        }
+        info!(
+            extension_id = extension_id.as_str(),
+            process_id = process_id,
+            removed = before.saturating_sub(after),
+            reason = reason,
+            "unregistered active LSP process for extension"
+        );
+    }
+}
+
+pub(crate) async fn stop_lsp_processes_for_extension(extension_id: &str) -> usize {
+    let normalized = normalize_extension_id_for_process(extension_id);
+    if normalized.is_empty() {
+        return 0;
+    }
+
+    let processes = ACTIVE_LSP_EXTENSION_PROCESSES
+        .lock()
+        .get(&normalized)
+        .cloned()
+        .unwrap_or_default();
+    if processes.is_empty() {
+        info!(
+            extension_id = normalized.as_str(),
+            "no active LSP process needs to be stopped before extension mutation"
+        );
+        return 0;
+    }
+
+    info!(
+        extension_id = normalized.as_str(),
+        process_count = processes.len(),
+        "stopping active LSP processes before extension mutation"
+    );
+
+    let mut stopped = 0usize;
+    for process in processes {
+        match process
+            .addr
+            .send(StopLspSession {
+                reason: format!("extension-mutation:{normalized}"),
+            })
+            .await
+        {
+            Ok(_) => {
+                stopped += 1;
+                info!(
+                    extension_id = normalized.as_str(),
+                    process_id = process.process_id,
+                    "requested active LSP process stop"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    extension_id = normalized.as_str(),
+                    process_id = process.process_id,
+                    error = ?error,
+                    "failed to request active LSP process stop"
+                );
+            }
+        }
+    }
+
+    sleep(Duration::from_millis(350)).await;
+    stopped
+}
 
 fn exe_dir() -> Result<PathBuf, String> {
     let current_exe = std::env::current_exe().map_err(|e| format!("无法获取 exe 路径: {e}"))?;
@@ -295,7 +410,11 @@ fn lsp_language_entry(language: &str) -> Option<&'static LspLanguageEntry> {
     LSP_LANGUAGES.iter().find(|entry| entry.language == language)
 }
 
-fn build_lsp_command(entry: &LspLanguageEntry, program: String) -> LspCommandConfig {
+fn build_lsp_command(
+    entry: &LspLanguageEntry,
+    program: String,
+    extension_id: Option<String>,
+) -> LspCommandConfig {
     let mut envs = vec![];
     let mut cwd = None;
 
@@ -317,6 +436,8 @@ fn build_lsp_command(entry: &LspLanguageEntry, program: String) -> LspCommandCon
         args: entry.args.clone(),
         envs,
         cwd,
+        extension_id,
+        server_id: entry.server.clone(),
     }
 }
 
@@ -704,6 +825,8 @@ async fn prepare_lsp_command_with_token(
             args: resolved.args,
             envs: resolved.envs,
             cwd: resolved.cwd,
+            extension_id: Some(resolved.extension_id),
+            server_id: resolved.server_id,
         });
     }
 
@@ -751,10 +874,14 @@ async fn prepare_lsp_command_with_token(
         ));
     };
 
-    let cfg = build_lsp_command(entry, program);
+    let extension_id = lsp_extensions::installed_lsp_extension_ids_for_language(language)?
+        .into_iter()
+        .find(|item| !item.trim().is_empty());
+    let cfg = build_lsp_command(entry, program, extension_id);
     info!(
         language = language,
         server = entry.server.as_str(),
+        extension_id = cfg.extension_id.as_deref().unwrap_or(""),
         program = cfg.program.as_str(),
         args = ?cfg.args,
         cwd = cfg.cwd.as_deref().unwrap_or(""),
@@ -772,6 +899,9 @@ pub struct LspWsSession {
     language: String,
     child: Option<Child>,
     child_stdin: Option<Arc<Mutex<ChildStdin>>>,
+    extension_id: Option<String>,
+    server_id: Option<String>,
+    process_id: Option<u32>,
     pending_client_payloads: Vec<Vec<u8>>,
     pending_completion_request_ids: HashSet<String>,
 }
@@ -782,6 +912,9 @@ impl LspWsSession {
             language,
             child: None,
             child_stdin: None,
+            extension_id: None,
+            server_id: None,
+            process_id: None,
             pending_client_payloads: Vec::new(),
             pending_completion_request_ids: HashSet::new(),
         }
@@ -1156,8 +1289,12 @@ impl Actor for LspWsSession {
             let args_for_log = cfg.args.clone();
             let cwd_for_log = cfg.cwd.clone();
             let env_count_for_log = cfg.envs.len();
+            let extension_id_for_process = cfg.extension_id.clone();
+            let server_id_for_process = cfg.server_id.clone();
             info!(
                 language = language.as_str(),
+                extension_id = extension_id_for_process.as_deref().unwrap_or(""),
+                server_id = server_id_for_process.as_str(),
                 program = program_for_log.as_str(),
                 args = ?args_for_log,
                 cwd = cwd_for_log.as_deref().unwrap_or(""),
@@ -1191,6 +1328,8 @@ impl Actor for LspWsSession {
                     let process_id = child.id().unwrap_or(0);
                     info!(
                         language = language.as_str(),
+                        extension_id = extension_id_for_process.as_deref().unwrap_or(""),
+                        server_id = server_id_for_process.as_str(),
                         program = program_for_log.as_str(),
                         process_id = process_id,
                         has_stdin = stdin_arc.is_some(),
@@ -1307,7 +1446,13 @@ impl Actor for LspWsSession {
                         });
                     }
 
-                    addr.do_send(LspChildStarted { child, stdin: stdin_arc });
+                    addr.do_send(LspChildStarted {
+                        child,
+                        stdin: stdin_arc,
+                        extension_id: extension_id_for_process,
+                        server_id: server_id_for_process,
+                        process_id,
+                    });
                 }
                 Err(e) => {
                     let error_message = format!("Failed to start LSP process: program={} error={}", program_for_log, e);
@@ -1330,11 +1475,19 @@ impl Actor for LspWsSession {
                     Ok(Some(status)) => {
                         warn!(
                             language = act.language.as_str(),
+                            extension_id = act.extension_id.as_deref().unwrap_or(""),
+                            server_id = act.server_id.as_deref().unwrap_or(""),
                             status = status.to_string().as_str(),
                             "LSP server process exited"
                         );
+                        unregister_lsp_extension_process(
+                            act.extension_id.as_deref(),
+                            act.process_id,
+                            "process-exited",
+                        );
                         act.child = None;
                         act.child_stdin = None;
+                        act.process_id = None;
                         ctx.close(Some(ws::CloseReason {
                             code: ws::CloseCode::Error,
                             description: Some(websocket_close_description(&format!(
@@ -1357,17 +1510,27 @@ impl Actor for LspWsSession {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
+        unregister_lsp_extension_process(
+            self.extension_id.as_deref(),
+            self.process_id,
+            "actor-stopped",
+        );
         if let Some(mut child) = self.child.take() {
             actix::spawn(async move {
                 let _ = child.kill().await;
             });
         }
+        self.child_stdin = None;
+        self.process_id = None;
     }
 }
 
 struct LspChildStarted {
     child: Child,
     stdin: Option<Arc<Mutex<ChildStdin>>>,
+    extension_id: Option<String>,
+    server_id: String,
+    process_id: u32,
 }
 
 impl Message for LspChildStarted {
@@ -1377,7 +1540,13 @@ impl Message for LspChildStarted {
 impl Handler<LspChildStarted> for LspWsSession {
     type Result = ();
 
-    fn handle(&mut self, msg: LspChildStarted, _ctx: &mut Self::Context) {
+    fn handle(&mut self, msg: LspChildStarted, ctx: &mut Self::Context) {
+        self.extension_id = msg.extension_id.clone();
+        self.server_id = Some(msg.server_id.clone());
+        self.process_id = Some(msg.process_id);
+        if let Some(extension_id) = msg.extension_id.as_deref() {
+            register_lsp_extension_process(extension_id, msg.process_id, ctx.address());
+        }
         self.child = Some(msg.child);
         self.child_stdin = msg.stdin.clone();
 
@@ -1394,6 +1563,49 @@ impl Handler<LspChildStarted> for LspWsSession {
                 write_lsp_payload_to_stdin(stdin_arc.clone(), payload);
             }
         }
+    }
+}
+
+struct StopLspSession {
+    reason: String,
+}
+
+impl Message for StopLspSession {
+    type Result = ();
+}
+
+impl Handler<StopLspSession> for LspWsSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: StopLspSession, ctx: &mut Self::Context) {
+        info!(
+            language = self.language.as_str(),
+            extension_id = self.extension_id.as_deref().unwrap_or(""),
+            server_id = self.server_id.as_deref().unwrap_or(""),
+            process_id = self.process_id.unwrap_or(0),
+            reason = msg.reason.as_str(),
+            "stopping LSP session on extension mutation request"
+        );
+
+        unregister_lsp_extension_process(
+            self.extension_id.as_deref(),
+            self.process_id,
+            "extension-mutation-stop",
+        );
+        self.child_stdin = None;
+        self.process_id = None;
+
+        if let Some(mut child) = self.child.take() {
+            actix::spawn(async move {
+                let _ = child.kill().await;
+            });
+        }
+
+        ctx.close(Some(ws::CloseReason {
+            code: ws::CloseCode::Normal,
+            description: Some(websocket_close_description("LSP extension is being updated or removed")),
+        }));
+        ctx.stop();
     }
 }
 

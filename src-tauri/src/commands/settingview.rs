@@ -1175,12 +1175,94 @@ pub async fn import_lsp_extension_directory(
 }
 
 #[tauri::command]
-pub fn remove_lsp_extension(extension_id: String) -> Result<(), String> {
+pub async fn remove_lsp_extension(extension_id: String) -> Result<(), String> {
     let id = extension_id.trim().to_string();
     if id.is_empty() {
         return Err("extension_id 涓嶈兘涓虹┖".to_string());
     }
-    lsp_extensions::remove_lsp_extension(&id)
+    lsp_extensions::remove_lsp_extension(&id).await
+}
+
+#[tauri::command]
+pub fn get_lsp_extension_task(
+    task_id: String,
+) -> Result<Option<lsp_extensions::LspExtensionTaskSnapshot>, String> {
+    Ok(lsp_extensions::get_lsp_extension_task(task_id.trim()))
+}
+
+#[tauri::command]
+pub fn list_lsp_extension_tasks() -> Result<Vec<lsp_extensions::LspExtensionTaskSnapshot>, String> {
+    Ok(lsp_extensions::list_lsp_extension_tasks())
+}
+
+#[tauri::command]
+pub fn start_install_open_vsx_extension_task(
+    extension_id: String,
+    version: Option<String>,
+    download_url: Option<String>,
+) -> Result<lsp_extensions::LspExtensionTaskSnapshot, String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id cannot be empty".to_string());
+    }
+    lsp_extensions::start_install_open_vsx_extension_task(id, version, download_url)
+}
+
+#[tauri::command]
+pub fn start_install_vscode_marketplace_extension_task(
+    extension_id: String,
+    version: Option<String>,
+    download_url: Option<String>,
+) -> Result<lsp_extensions::LspExtensionTaskSnapshot, String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id cannot be empty".to_string());
+    }
+    lsp_extensions::start_install_vscode_marketplace_extension_task(id, version, download_url)
+}
+
+#[tauri::command]
+pub fn start_install_catalog_lsp_extension_task(
+    extension_id: String,
+) -> Result<lsp_extensions::LspExtensionTaskSnapshot, String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id cannot be empty".to_string());
+    }
+    lsp_extensions::start_install_catalog_lsp_extension_task(id)
+}
+
+#[tauri::command]
+pub fn start_import_lsp_extension_vsix_task(
+    vsix_path: String,
+) -> Result<lsp_extensions::LspExtensionTaskSnapshot, String> {
+    let path = vsix_path.trim().to_string();
+    if path.is_empty() {
+        return Err("vsix_path cannot be empty".to_string());
+    }
+    lsp_extensions::start_import_vsix_extension_task(path)
+}
+
+#[tauri::command]
+pub fn start_import_lsp_extension_directory_task(
+    dir_path: String,
+) -> Result<lsp_extensions::LspExtensionTaskSnapshot, String> {
+    let path = dir_path.trim().to_string();
+    if path.is_empty() {
+        return Err("dir_path cannot be empty".to_string());
+    }
+    lsp_extensions::start_import_extension_directory_task(path)
+}
+
+#[tauri::command]
+pub fn start_remove_lsp_extension_task(
+    extension_id: String,
+) -> Result<lsp_extensions::LspExtensionTaskSnapshot, String> {
+    let id = extension_id.trim().to_string();
+    if id.is_empty() {
+        return Err("extension_id cannot be empty".to_string());
+    }
+    lsp_extensions::start_remove_lsp_extension_task(id)
 }
 
 #[tauri::command]
