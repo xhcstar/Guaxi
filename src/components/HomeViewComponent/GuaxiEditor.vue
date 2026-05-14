@@ -9242,6 +9242,8 @@ function analyzeMarkdown(content, model) {
   let warnings = 0;
   const markers = [];
   const lines = content.split('\n');
+  const pyCellStartRe = /^<!--\s*(?:py|guaxi:py-cell)(?:\s+\{.*\})?\s*-->$/;
+  const pyCellEndRe = /^<!--\s*(?:\/py|\/guaxi:py-cell)\s*-->$/;
 
   const pushMarker = (lineNumber, message, severity) => {
     if (!model) return;
@@ -9307,6 +9309,7 @@ function analyzeMarkdown(content, model) {
   const fenceLines = [];
   let inFence = false;
   let fenceToken = '';
+  let inHiddenPythonCell = false;
 
   lines.forEach((line, index) => {
     const trimmed = line.trim();
@@ -9323,6 +9326,19 @@ function analyzeMarkdown(content, model) {
       } else if (token[0] === fenceToken[0] && token.length >= fenceToken.length) {
         inFence = false;
         fenceToken = '';
+      }
+      return;
+    }
+
+    // 1.5) 隐藏 Python Cell 是 Guaxi 的编辑态存储语法，内部是 Python 源码而不是 Markdown 正文。
+    //      这里跳过 Cell 内容，避免 `colors=[...]`、DataFrame 索引等代码被误判为“不完整链接”。
+    if (pyCellStartRe.test(trimmed)) {
+      inHiddenPythonCell = true;
+      return;
+    }
+    if (inHiddenPythonCell) {
+      if (pyCellEndRe.test(trimmed)) {
+        inHiddenPythonCell = false;
       }
       return;
     }
@@ -19439,6 +19455,22 @@ onUnmounted(() => {
 
 :global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb:hover) {
   background-color: rgba(255, 255, 255, 0.45);
+}
+
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .glyph-margin),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .monaco-editor-background) {
+  background-color: #282c34 !important;
+}
+
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .current-line),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .view-overlays .current-line),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays .current-line),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .line-numbers.active-line-number) {
+  background-color: #2c313a !important;
+  border-color: transparent !important;
 }
 
 .guaxi-editor :deep(.md-fence-token-base) { color: #abb2bf; }

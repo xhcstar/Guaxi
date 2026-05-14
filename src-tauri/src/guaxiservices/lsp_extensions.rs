@@ -1005,6 +1005,13 @@ fn node_package_candidates_for_bin(bin_name: &str) -> Vec<String> {
     let mut candidates = node_package_name_for_bin(normalized)
         .map(|item| vec![item])
         .unwrap_or_default();
+    if normalized == "pyright-langserver"
+        && !candidates.iter().any(|item| item == "basedpyright")
+    {
+        // 设计说明：打包环境里可能预置 basedpyright，它兼容提供 pyright-langserver bin。
+        // 把它作为只针对 Pyright 的候选，不影响其他 LSP 包名的精确解析。
+        candidates.push("basedpyright".to_string());
+    }
     if !normalized.is_empty() && !candidates.iter().any(|item| item == normalized) {
         candidates.push(normalized.to_string());
     }
@@ -1124,6 +1131,32 @@ fn resolve_node_module_bin_entry(dir: &Path, bin_name: &str) -> Option<PathBuf> 
     }
 
     None
+}
+
+fn resolve_node_binary_entry(dir: &Path, bin_name: &str) -> Option<PathBuf> {
+    resolve_node_module_bin_entry(dir, bin_name)
+}
+
+fn resolve_node_binary_command_from_entry(
+    entry_path: &Path,
+    args: &[String],
+    cwd: &Path,
+    env_roots: &[PathBuf],
+    extension_id: &str,
+    extension_display_name: &str,
+    server_id: &str,
+) -> ResolvedLspExtensionCommand {
+    let mut command_args = vec![entry_path.to_string_lossy().to_string()];
+    command_args.extend(args.iter().cloned());
+    ResolvedLspExtensionCommand {
+        program: node_command_program(),
+        args: command_args,
+        envs: build_path_env_with_roots(env_roots),
+        cwd: Some(cwd.to_string_lossy().to_string()),
+        extension_id: extension_id.to_string(),
+        extension_display_name: extension_display_name.to_string(),
+        server_id: server_id.to_string(),
+    }
 }
 
 fn extension_bin_candidate_paths(dir: &Path, bin_name: &str) -> Vec<String> {
@@ -1539,17 +1572,11 @@ fn resolve_runtime_status(
     for item in &catalog.lsp.resolve_order {
         match item.as_str() {
             "extension_bin" => {
-                if let Some(path) = resolve_extension_bin(install_dir, &catalog.lsp.bin_name) {
-                    return LspExtensionRuntimeStatus {
-                        ready: true,
-                        runtime: runtime.clone(),
-                        program_path: Some(path.to_string_lossy().to_string()),
-                        message: Some("resolved from extension packaged node binary".to_string()),
-                    };
-                }
                 if runtime == "node_binary" {
+                    // 设计说明：状态页和真实启动路径必须一致；Node LSP 优先展示 JS bin 入口，
+                    // 避免用户看到 .cmd ready，但实际探针改走 node entry 时难以对应日志。
                     if let Some(entry_path) =
-                        resolve_node_module_bin_entry(install_dir, &catalog.lsp.bin_name)
+                        resolve_node_binary_entry(install_dir, &catalog.lsp.bin_name)
                     {
                         return LspExtensionRuntimeStatus {
                             ready: true,
@@ -1561,6 +1588,14 @@ fn resolve_runtime_status(
                             )),
                         };
                     }
+                }
+                if let Some(path) = resolve_extension_bin(install_dir, &catalog.lsp.bin_name) {
+                    return LspExtensionRuntimeStatus {
+                        ready: true,
+                        runtime: runtime.clone(),
+                        program_path: Some(path.to_string_lossy().to_string()),
+                        message: Some("resolved from extension packaged node binary".to_string()),
+                    };
                 }
             }
             "extension_entry" => {
@@ -1587,16 +1622,9 @@ fn resolve_runtime_status(
             "shared_node_runtime" => {
                 if runtime == "node_binary" {
                     if let Ok(root) = shared_node_runtime_dir() {
-                        if let Some(path) = resolve_extension_bin(&root, &catalog.lsp.bin_name) {
-                            return LspExtensionRuntimeStatus {
-                                ready: true,
-                                runtime: runtime.clone(),
-                                program_path: Some(path.to_string_lossy().to_string()),
-                                message: Some("resolved from shared Node LSP runtime".to_string()),
-                            };
-                        }
+                        // 设计说明：共享 runtime 也优先报告 package.json bin 入口，和安装验证/编辑器启动保持同源。
                         if let Some(entry_path) =
-                            resolve_node_module_bin_entry(&root, &catalog.lsp.bin_name)
+                            resolve_node_binary_entry(&root, &catalog.lsp.bin_name)
                         {
                             return LspExtensionRuntimeStatus {
                                 ready: true,
@@ -1608,25 +1636,24 @@ fn resolve_runtime_status(
                                 )),
                             };
                         }
+                        if let Some(path) = resolve_extension_bin(&root, &catalog.lsp.bin_name) {
+                            return LspExtensionRuntimeStatus {
+                                ready: true,
+                                runtime: runtime.clone(),
+                                program_path: Some(path.to_string_lossy().to_string()),
+                                message: Some("resolved from shared Node LSP runtime".to_string()),
+                            };
+                        }
                     }
                 }
             }
             "slidev_env_bin" => {
                 if let Some(root) = slidev_env_root().ok() {
-                    if let Some(path) = resolve_extension_bin(&root, &catalog.lsp.bin_name) {
-                        return LspExtensionRuntimeStatus {
-                            ready: true,
-                            runtime: runtime.clone(),
-                            program_path: Some(path.to_string_lossy().to_string()),
-                            message: Some(
-                                "resolved from bundled SlidevEnv node runtime".to_string(),
-                            ),
-                        };
-                    }
                     if runtime == "node_binary" {
+                        // 设计说明：内置 SlidevEnv 中的 Node 包同样绕过 .cmd shim，减少 Windows stdio 卡死点。
                         if let (Some(node_path), Some(entry_path)) = (
                             slidev_node_path(),
-                            resolve_node_module_bin_entry(&root, &catalog.lsp.bin_name),
+                            resolve_node_binary_entry(&root, &catalog.lsp.bin_name),
                         ) {
                             return LspExtensionRuntimeStatus {
                                 ready: true,
@@ -1638,6 +1665,16 @@ fn resolve_runtime_status(
                                 )),
                             };
                         }
+                    }
+                    if let Some(path) = resolve_extension_bin(&root, &catalog.lsp.bin_name) {
+                        return LspExtensionRuntimeStatus {
+                            ready: true,
+                            runtime: runtime.clone(),
+                            program_path: Some(path.to_string_lossy().to_string()),
+                            message: Some(
+                                "resolved from bundled SlidevEnv node runtime".to_string(),
+                            ),
+                        };
                     }
                 }
             }
@@ -3175,6 +3212,42 @@ pub(crate) async fn resolve_lsp_command_for_language(
         for strategy in &catalog_entry.lsp.resolve_order {
             match strategy.as_str() {
                 "extension_bin" => {
+                    if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
+                        if let Some(entry_path) = resolve_node_binary_entry(
+                            &candidate.install_dir,
+                            &catalog_entry.lsp.bin_name,
+                        ) {
+                            // 设计说明：
+                            // 1. Windows 下 npm 生成的 .cmd shim 在后台管道场景里偶发无法正确保持 stdio，
+                            //    日志表现为 initialize/completion 探针一直超时但没有 stderr。
+                            // 2. 对 Node 类 LSP 优先使用 package.json 的 bin 入口，并由内置 node.exe 直接执行，
+                            //    可以绕过 cmd.exe/bat 包装层，让安装探针和编辑器补全走同一条稳定 stdio 通道。
+                            // 3. PATH 仍包含扩展目录和 .bin，保留 server 运行时按需查找相邻依赖的能力。
+                            let env_roots = vec![
+                                candidate.install_dir.clone(),
+                                candidate.install_dir.join("node_modules").join(".bin"),
+                            ];
+                            let node_program = node_command_program();
+                            info!(
+                                language = normalized_language.as_str(),
+                                extension_id = candidate.id.as_str(),
+                                strategy = "extension_bin_node_entry",
+                                node = node_program.as_str(),
+                                entry = entry_path.to_string_lossy().as_ref(),
+                                cwd = candidate.install_dir.to_string_lossy().as_ref(),
+                                "resolved LSP server from extension node package bin entry"
+                            );
+                            return Ok(Some(resolve_node_binary_command_from_entry(
+                                &entry_path,
+                                &catalog_entry.lsp.args,
+                                &candidate.install_dir,
+                                &env_roots,
+                                &candidate.id,
+                                &candidate.display_name,
+                                &catalog_entry.lsp.server_id,
+                            )));
+                        }
+                    }
                     if let Some(path) =
                         resolve_extension_bin(&candidate.install_dir, &catalog_entry.lsp.bin_name)
                     {
@@ -3191,43 +3264,6 @@ pub(crate) async fn resolve_lsp_command_for_language(
                             extension_display_name: candidate.display_name.clone(),
                             server_id: catalog_entry.lsp.server_id.clone(),
                         }));
-                    }
-                    if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
-                        if let Some(entry_path) = resolve_node_module_bin_entry(
-                            &candidate.install_dir,
-                            &catalog_entry.lsp.bin_name,
-                        ) {
-                            // 设计思路：
-                            // 1. 有些 VSCode/Open VSX 扩展或离线包只带 node_modules/<pkg>/package.json，
-                            //    没有生成 node_modules/.bin/<bin>.cmd。
-                            // 2. 这类情况仍然可以用内置 Node 直接执行 package.json 的 bin 入口，
-                            //    避免因为缺一个 shim 文件就把已下载的 LSP 插件判定为不可用。
-                            let mut args = vec![entry_path.to_string_lossy().to_string()];
-                            args.extend(catalog_entry.lsp.args.clone());
-                            let env_roots = vec![
-                                candidate.install_dir.clone(),
-                                candidate.install_dir.join("node_modules").join(".bin"),
-                            ];
-                            let node_program = node_command_program();
-                            info!(
-                                language = normalized_language.as_str(),
-                                extension_id = candidate.id.as_str(),
-                                strategy = "extension_bin_node_entry",
-                                node = node_program.as_str(),
-                                entry = entry_path.to_string_lossy().as_ref(),
-                                cwd = candidate.install_dir.to_string_lossy().as_ref(),
-                                "resolved LSP server from extension node package bin entry"
-                            );
-                            return Ok(Some(ResolvedLspExtensionCommand {
-                                program: node_program,
-                                args,
-                                envs: build_path_env_with_roots(&env_roots),
-                                cwd: Some(candidate.install_dir.to_string_lossy().to_string()),
-                                extension_id: candidate.id.clone(),
-                                extension_display_name: candidate.display_name.clone(),
-                                server_id: catalog_entry.lsp.server_id.clone(),
-                            }));
-                        }
                     }
                     info!(
                         language = normalized_language.as_str(),
@@ -3308,6 +3344,35 @@ pub(crate) async fn resolve_lsp_command_for_language(
                             );
                             continue;
                         };
+                        if let Some(entry_path) =
+                            resolve_node_binary_entry(&root, &catalog_entry.lsp.bin_name)
+                        {
+                            // 设计说明：
+                            // 1. 共享 Node runtime 是 HTML/CSS/JSON/TS/Python 等插件的共同兜底，稳定性比单个插件更关键。
+                            // 2. 这里同样优先执行 npm package 的真实 JS 入口，避免 .cmd shim 在 Rust 子进程管道中造成无响应。
+                            // 3. 日志记录 node、entry、cwd，后续排查能直接复现启动命令。
+                            let env_roots =
+                                vec![root.clone(), root.join("node_modules").join(".bin")];
+                            let node_program = node_command_program();
+                            info!(
+                                language = normalized_language.as_str(),
+                                extension_id = candidate.id.as_str(),
+                                strategy = "shared_node_runtime_entry",
+                                node = node_program.as_str(),
+                                entry = entry_path.to_string_lossy().as_ref(),
+                                cwd = root.to_string_lossy().as_ref(),
+                                "resolved LSP server from shared Node runtime package entry"
+                            );
+                            return Ok(Some(resolve_node_binary_command_from_entry(
+                                &entry_path,
+                                &catalog_entry.lsp.args,
+                                &root,
+                                &env_roots,
+                                &candidate.id,
+                                &candidate.display_name,
+                                &catalog_entry.lsp.server_id,
+                            )));
+                        }
                         if let Some(path) =
                             resolve_extension_bin(&root, &catalog_entry.lsp.bin_name)
                         {
@@ -3331,33 +3396,6 @@ pub(crate) async fn resolve_lsp_command_for_language(
                                 server_id: catalog_entry.lsp.server_id.clone(),
                             }));
                         }
-                        if let Some(entry_path) =
-                            resolve_node_module_bin_entry(&root, &catalog_entry.lsp.bin_name)
-                        {
-                            let mut args = vec![entry_path.to_string_lossy().to_string()];
-                            args.extend(catalog_entry.lsp.args.clone());
-                            let env_roots =
-                                vec![root.clone(), root.join("node_modules").join(".bin")];
-                            let node_program = node_command_program();
-                            info!(
-                                language = normalized_language.as_str(),
-                                extension_id = candidate.id.as_str(),
-                                strategy = "shared_node_runtime_entry",
-                                node = node_program.as_str(),
-                                entry = entry_path.to_string_lossy().as_ref(),
-                                cwd = root.to_string_lossy().as_ref(),
-                                "resolved LSP server from shared Node runtime package entry"
-                            );
-                            return Ok(Some(ResolvedLspExtensionCommand {
-                                program: node_program,
-                                args,
-                                envs: build_path_env_with_roots(&env_roots),
-                                cwd: Some(root.to_string_lossy().to_string()),
-                                extension_id: candidate.id.clone(),
-                                extension_display_name: candidate.display_name.clone(),
-                                server_id: catalog_entry.lsp.server_id.clone(),
-                            }));
-                        }
                         info!(
                             language = normalized_language.as_str(),
                             extension_id = candidate.id.as_str(),
@@ -3369,6 +3407,38 @@ pub(crate) async fn resolve_lsp_command_for_language(
                 }
                 "slidev_env_bin" => {
                     if let Some(root) = slidev_env_root().ok() {
+                        if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
+                            if let (Some(node_path), Some(entry_path)) = (
+                                slidev_node_path(),
+                                resolve_node_binary_entry(&root, &catalog_entry.lsp.bin_name),
+                            ) {
+                                let env_roots = {
+                                    let mut roots = vec![root.clone()];
+                                    if let Some(bin_dir) = slidev_bin_dir() {
+                                        roots.push(bin_dir);
+                                    }
+                                    roots
+                                };
+                                info!(
+                                    language = normalized_language.as_str(),
+                                    extension_id = candidate.id.as_str(),
+                                    strategy = "slidev_env_node_entry",
+                                    node = node_path.to_string_lossy().as_ref(),
+                                    entry = entry_path.to_string_lossy().as_ref(),
+                                    cwd = root.to_string_lossy().as_ref(),
+                                    "resolved LSP server from bundled SlidevEnv node package bin entry"
+                                );
+                                return Ok(Some(resolve_node_binary_command_from_entry(
+                                    &entry_path,
+                                    &catalog_entry.lsp.args,
+                                    &root,
+                                    &env_roots,
+                                    &candidate.id,
+                                    &candidate.display_name,
+                                    &catalog_entry.lsp.server_id,
+                                )));
+                            }
+                        }
                         if let Some(path) =
                             resolve_extension_bin(&root, &catalog_entry.lsp.bin_name)
                         {
@@ -3385,37 +3455,6 @@ pub(crate) async fn resolve_lsp_command_for_language(
                                 extension_display_name: candidate.display_name.clone(),
                                 server_id: catalog_entry.lsp.server_id.clone(),
                             }));
-                        }
-                        if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
-                            if let (Some(node_path), Some(entry_path)) = (
-                                slidev_node_path(),
-                                resolve_node_module_bin_entry(&root, &catalog_entry.lsp.bin_name),
-                            ) {
-                                let mut args = vec![entry_path.to_string_lossy().to_string()];
-                                args.extend(catalog_entry.lsp.args.clone());
-                                let mut env_roots = vec![root.clone()];
-                                if let Some(bin_dir) = slidev_bin_dir() {
-                                    env_roots.push(bin_dir);
-                                }
-                                info!(
-                                    language = normalized_language.as_str(),
-                                    extension_id = candidate.id.as_str(),
-                                    strategy = "slidev_env_node_entry",
-                                    node = node_path.to_string_lossy().as_ref(),
-                                    entry = entry_path.to_string_lossy().as_ref(),
-                                    cwd = root.to_string_lossy().as_ref(),
-                                    "resolved LSP server from bundled SlidevEnv node package bin entry"
-                                );
-                                return Ok(Some(ResolvedLspExtensionCommand {
-                                    program: node_path.to_string_lossy().to_string(),
-                                    args,
-                                    envs: build_path_env_with_roots(&env_roots),
-                                    cwd: Some(root.to_string_lossy().to_string()),
-                                    extension_id: candidate.id.clone(),
-                                    extension_display_name: candidate.display_name.clone(),
-                                    server_id: catalog_entry.lsp.server_id.clone(),
-                                }));
-                            }
                         }
                         info!(
                             language = normalized_language.as_str(),

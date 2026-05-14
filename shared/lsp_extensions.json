@@ -20,7 +20,7 @@
           "dist/pyright-langserver.js",
           "dist/server.js"
         ],
-        "resolve_order": ["extension_bin", "extension_entry", "shared_node_runtime", "downloadable_server"],
+        "resolve_order": ["extension_bin", "shared_node_runtime", "slidev_env_bin", "extension_entry", "downloadable_server"],
         "fallback_server": "pyright",
         "fallback_bin_name": "pyright-langserver"
       }
@@ -176,7 +176,7 @@
         "bin_name": "vscode-html-language-server",
         "args": ["--stdio"],
         "entry_paths": [],
-        "resolve_order": ["extension_bin", "shared_node_runtime", "downloadable_server"],
+        "resolve_order": ["extension_bin", "shared_node_runtime", "slidev_env_bin", "downloadable_server"],
         "fallback_server": "html-ls",
         "fallback_bin_name": "vscode-html-language-server"
       }

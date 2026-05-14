@@ -1098,6 +1098,55 @@ fn read_server_info(value: &Value, field: &str) -> Option<String> {
         .map(|item| item.to_string())
 }
 
+fn lsp_probe_server_request_result(method: &str, params: Option<&Value>) -> Value {
+    match method {
+        "workspace/configuration" => {
+            let count = params
+                .and_then(|item| item.get("items"))
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0);
+            Value::Array((0..count).map(|_| json!({})).collect())
+        }
+        "workspace/workspaceFolders" => json!([]),
+        "client/registerCapability" | "client/unregisterCapability" => Value::Null,
+        "window/showMessageRequest" => Value::Null,
+        _ => Value::Null,
+    }
+}
+
+async fn respond_to_lsp_probe_server_request_if_needed(
+    stdin: &mut ChildStdin,
+    language: &str,
+    value: &Value,
+) -> Result<bool, String> {
+    let Some(method) = value.get("method").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(id) = value.get("id").cloned() else {
+        return Ok(false);
+    };
+
+    // 设计说明：
+    // 1. Pyright 等 Node LSP 在 initialized/didOpen 后会主动发 workspace/configuration 请求。
+    // 2. 探针不是完整编辑器客户端，如果不回复这些服务端请求，server 会一直等待配置结果，
+    //    后续 completion/semanticTokens 就会被卡住，最终把可用 runtime 误判为超时失败。
+    // 3. 这里返回最小安全结果，并记录日志，既保证安装校验能走完，也不会伪造用户配置。
+    let result = lsp_probe_server_request_result(method, value.get("params"));
+    let response = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    });
+    info!(
+        language = language,
+        request_method = method,
+        "responding to LSP probe server request with minimal client capability result"
+    );
+    write_lsp_probe_payload_to_child_stdin(stdin, &response).await?;
+    Ok(true)
+}
+
 fn read_lsp_capability_bool(capabilities: &Value, field: &str) -> bool {
     match capabilities.get(field) {
         Some(Value::Bool(value)) => *value,
@@ -1415,6 +1464,9 @@ pub async fn probe_lsp_runtime_for_language(
                     truncate_for_log(&payload, 2000)
                 )
             })?;
+            if respond_to_lsp_probe_server_request_if_needed(&mut stdin, language, &value).await? {
+                continue;
+            }
             if value.get("id").and_then(Value::as_i64) != Some(1) {
                 continue;
             }
@@ -1532,6 +1584,11 @@ pub async fn probe_lsp_runtime_for_language(
                         truncate_for_log(&payload, 2000)
                     )
                 })?;
+                if respond_to_lsp_probe_server_request_if_needed(&mut stdin, language, &value)
+                    .await?
+                {
+                    continue;
+                }
                 if value.get("id").and_then(Value::as_i64) != Some(2) {
                     continue;
                 }
@@ -1562,6 +1619,11 @@ pub async fn probe_lsp_runtime_for_language(
                             truncate_for_log(&payload, 2000)
                         )
                     })?;
+                    if respond_to_lsp_probe_server_request_if_needed(&mut stdin, language, &value)
+                        .await?
+                    {
+                        continue;
+                    }
                     if value.get("id").and_then(Value::as_i64) != Some(3) {
                         continue;
                     }
@@ -1600,7 +1662,7 @@ pub async fn probe_lsp_runtime_for_language(
         }
     };
 
-    let result = timeout(Duration::from_secs(12), probe_result)
+    let result = timeout(Duration::from_secs(25), probe_result)
         .await
         .map_err(|_| "LSP runtime probe timed out while waiting for initialize/completion/semanticTokens response".to_string())?;
 
