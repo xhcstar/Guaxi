@@ -25,7 +25,6 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createLogger } from '../../utils/logger'
 import { getLspConnectionState, initLspClient, waitForLspConnection } from '../../monaco/lspClient'
-import { registerPythonCompletionBridge } from '../../monaco/pythonCompletionBridge'
 import {
   replaceModelContentPreserveUndo,
   retainVsCodeTextModel,
@@ -360,7 +359,6 @@ const mountMonacoEditor = async () => {
 
   try {
     monacoRef = await import('monaco-editor')
-    registerPythonCompletionBridge(monacoRef, ['python'])
     const virtualFilePath = buildNotebookPythonVirtualFilePath()
     const virtualUri = String(virtualFilePath || '').startsWith('file://')
       ? monacoRef.Uri.parse(virtualFilePath)
@@ -400,7 +398,7 @@ const mountMonacoEditor = async () => {
       scrollBeyondLastLine: false,
       wordWrap: 'on',
       // 设计说明：
-      // 1. Notebook Python 单元格的补全应来自 Python LSP/bridge，而不是 Monaco 默认的文档单词扫描。
+      // 1. Notebook Python 单元格的补全统一来自 monaco-languageclient 注册的标准 LSP provider。
       // 2. 默认 word suggestions 会把 `sys.007aff`、`sys..2f` 这类同文档碎片展示成候选，看起来像 LSP 返回了错误结果。
       // 3. 关闭 showWords 后，如果 LSP 尚未就绪，界面会宁可暂时无候选，也不显示误导性的伪语义补全。
       wordBasedSuggestions: 'off',

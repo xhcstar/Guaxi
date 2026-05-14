@@ -4,6 +4,7 @@ import path from "node:path";
 import monacoEditorPlugin from "vite-plugin-monaco-editor";
 
 const host = process.env.TAURI_DEV_HOST;
+const projectRoot = path.resolve(__dirname);
 const ignoredBuildWarnings = [
   /Module level directives cause errors when bundled, "use client" .* was ignored\./,
   /dynamic import will not move module into another chunk\./,
@@ -11,6 +12,12 @@ const ignoredBuildWarnings = [
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
+  // Design note:
+  // Vite 6 emits the transformed HTML through Rollup. On Windows, when the
+  // current working directory and Vite's normalized HTML id disagree on drive
+  // casing, Rollup can receive an absolute fileName such as E:/.../index.html.
+  // Pinning the root keeps HTML output names relative and production builds stable.
+  root: projectRoot,
   plugins: [
     vue(),
     monacoEditorPlugin.default({

@@ -53,12 +53,9 @@ import { useChatStore } from './stores/chatStore'
 import { useRightSiderStore } from './stores/rightSiderStore'
 import { useSiderStore } from './stores/useSiderStore'
 import { initFrontendLogging, createLogger } from './utils/logger'
-import { initialize } from '@codingame/monaco-vscode-api'
-import getModelServiceOverride from '@codingame/monaco-vscode-model-service-override'
-import 'vscode/localExtensionHost'
 import { refreshLspRuntimeExtensionSnapshot } from './monaco/lspCapabilities'
 import { configureMonacoWorkers } from './monaco/workerBootstrap'
-import { ensureVsCodeVirtualFileSystemProvidersRegistered } from './monaco/vscodeModelBridge'
+import { initializeGuaxiVscodeServices } from './monaco/vscodeApiBootstrap'
 
 const iconRegistry = {
   'mdi:folder-outline': mdiFolderOutline,
@@ -126,17 +123,8 @@ try {
 }
 
 try {
-  ensureVsCodeVirtualFileSystemProvidersRegistered()
-  // 设计说明：
-  // 1. 根包 `@codingame/monaco-vscode-api` 默认会注入 base/files/extensions 等常用 override，
-  //    但不会自动注入 model-service-override。
-  // 2. 如果缺少这个 override，`createModelReference` 会回退到 StandaloneTextModelService，
-  //    最终所有 VSCode 文档命令都会报 `Model not found`，补全链路也就完全断掉。
-  // 3. 这里显式补上 model service，让 Monaco model 能被 VSCode 文档服务正确解析。
-  await initialize({
-    ...getModelServiceOverride(),
-  })
-  logger.info('[Main] vscode services initialized')
+  await initializeGuaxiVscodeServices()
+  logger.info('[Main] vscode services initialized for language client')
 } catch (error) {
   logger.error('[Main] vscode services init failed:', error)
 }

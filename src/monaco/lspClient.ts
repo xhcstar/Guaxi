@@ -1,7 +1,10 @@
 import * as monaco from 'monaco-editor'
 import { MonacoLanguageClient } from 'monaco-languageclient'
-import { CloseAction, ErrorAction } from 'vscode-languageclient'
-import type { MessageTransports } from 'vscode-languageclient/browser.js'
+import {
+  CloseAction,
+  ErrorAction,
+  type MessageTransports,
+} from 'vscode-languageclient/browser.js'
 import {
   toSocket,
   WebSocketMessageReader,
@@ -60,78 +63,6 @@ const getRelatedLspLanguages = (languageId: string) => {
     .map((item) => normalizeLanguageId(item?.language || ''))
     .filter(Boolean)
   return selectors.length ? selectors : [normalizeLanguageId(languageId)].filter(Boolean)
-}
-
-const normalizeCompletionLabelForLog = (label: unknown): string => {
-  if (typeof label === 'string') return label
-  if (label && typeof label === 'object') {
-    const objectLabel = (label as { label?: unknown; value?: unknown }).label
-      ?? (label as { label?: unknown; value?: unknown }).value
-    return typeof objectLabel === 'string' ? objectLabel : ''
-  }
-  return ''
-}
-
-const stringifyCompletionLogValue = (value: unknown): string => {
-  if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return Object.prototype.toString.call(value)
-  }
-}
-
-const summarizeCompletionItemForLog = (item: unknown) => {
-  const value = item && typeof item === 'object' ? item as {
-    label?: unknown
-    kind?: unknown
-    detail?: unknown
-    filterText?: unknown
-    insertText?: unknown
-    sortText?: unknown
-    labelDetails?: unknown
-    data?: unknown
-  } : {}
-  const insertText = typeof value.insertText === 'string'
-    ? value.insertText
-    : value.insertText && typeof value.insertText === 'object'
-      ? String((value.insertText as { value?: unknown }).value || '')
-      : ''
-  return {
-    label: normalizeCompletionLabelForLog(value.label),
-    kind: Number(value.kind ?? -1),
-    detail: typeof value.detail === 'string' ? value.detail : '',
-    filterText: typeof value.filterText === 'string' ? value.filterText : '',
-    sortText: typeof value.sortText === 'string' ? value.sortText : '',
-    insertText,
-    labelDetails: stringifyCompletionLogValue(value.labelDetails),
-    dataKeys: value.data && typeof value.data === 'object'
-      ? Object.keys(value.data as Record<string, unknown>).slice(0, 12)
-      : [],
-  }
-}
-
-const summarizeCompletionItemsForLog = (items: unknown[], limit = 80) => {
-  const kindHistogram: Record<string, number> = {}
-  for (const item of items) {
-    const kind = item && typeof item === 'object'
-      ? Number((item as { kind?: unknown }).kind ?? -1)
-      : -1
-    const kindKey = Number.isFinite(kind) ? String(kind) : 'unknown'
-    kindHistogram[kindKey] = (kindHistogram[kindKey] || 0) + 1
-  }
-  return {
-    itemCount: items.length,
-    kindHistogram,
-    sampleLimit: Math.max(1, Number(limit) || 80),
-    // 设计说明：
-    // 1. 这里打印的是 direct LSP 的原始返回预览，不经过 Monaco provider、排序和过滤。
-    // 2. 样本包含 label/kind/detail/insertText/filterText/sortText，便于和 VSCode 原生补全逐项对照。
-    // 3. 不一次性展开全部候选，避免 Python LSP 返回上千项时把控制台和渲染线程拖慢。
-    sample: items.slice(0, Math.max(1, Number(limit) || 80)).map(summarizeCompletionItemForLog),
-  }
 }
 
 type LspConnectionStateValue = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'disabled'
@@ -299,111 +230,6 @@ export function waitForLspConnection(languageId: string, timeoutMs: number = 150
       done(getLspConnectionState(lang).state === 'connected')
     }, Math.max(50, Number(timeoutMs) || 1500))
   })
-}
-
-export async function requestLspCompletionItems(
-  languageId: string,
-  documentUri: string,
-  lineNumber: number,
-  column: number,
-  triggerCharacter?: string,
-  timeoutMs: number = 180
-): Promise<{ items: unknown[]; isIncomplete: boolean; source: string } | null> {
-  const normalizedLanguageId = normalizeLanguageId(languageId)
-  const clientKey = getLspClientKey(normalizedLanguageId)
-  const entry = lspClients.get(clientKey)
-  const client = entry?.client as (MonacoLanguageClient & {
-    sendRequest?: (method: string, params: unknown) => Promise<unknown>
-  }) | null
-
-  if (!normalizedLanguageId || !client?.sendRequest || entry?.disposed) {
-    logger.debug('[LSP] direct completion skipped because client is unavailable', {
-      languageId: normalizedLanguageId,
-      clientKey,
-      documentUri,
-      hasEntry: !!entry,
-      hasClient: !!client,
-      disposed: !!entry?.disposed,
-    })
-    return null
-  }
-
-  const params = {
-    textDocument: { uri: String(documentUri || '') },
-    position: {
-      line: Math.max(0, Number(lineNumber || 1) - 1),
-      character: Math.max(0, Number(column || 1) - 1),
-    },
-    context: {
-      triggerKind: triggerCharacter ? 2 : 1,
-      triggerCharacter: triggerCharacter || undefined,
-    },
-  }
-
-  logger.info('[LSP] direct completion request', {
-    languageId: normalizedLanguageId,
-    clientKey,
-    documentUri,
-    lineNumber,
-    column,
-    triggerCharacter: triggerCharacter || '',
-    timeoutMs,
-  })
-
-  try {
-    const result = await Promise.race([
-      client.sendRequest('textDocument/completion', params),
-      new Promise((resolve) => window.setTimeout(
-        () => resolve({ __guaxiDirectCompletionTimeout: true }),
-        Math.max(80, Number(timeoutMs) || 180)
-      )),
-    ]) as {
-      __guaxiDirectCompletionTimeout?: boolean
-      items?: unknown[]
-      isIncomplete?: boolean
-    } | unknown[]
-
-    if ((result as { __guaxiDirectCompletionTimeout?: boolean })?.__guaxiDirectCompletionTimeout) {
-      logger.warn('[LSP] direct completion timed out', {
-        languageId: normalizedLanguageId,
-        clientKey,
-        documentUri,
-        lineNumber,
-        column,
-        timeoutMs,
-      })
-      return null
-    }
-
-    const items = Array.isArray(result)
-      ? result
-      : Array.isArray((result as { items?: unknown[] })?.items)
-        ? (result as { items: unknown[] }).items
-        : []
-    const isIncomplete = !Array.isArray(result) && !!(result as { isIncomplete?: boolean })?.isIncomplete
-    logger.info('[LSP] direct completion resolved', {
-      languageId: normalizedLanguageId,
-      clientKey,
-      documentUri,
-      lineNumber,
-      column,
-      itemCount: items.length,
-      isIncomplete,
-      firstItem: summarizeCompletionItemForLog(items[0]),
-      rawItemsPreview: summarizeCompletionItemsForLog(items, 120),
-    })
-    return { items, isIncomplete, source: 'direct-lsp' }
-  } catch (error) {
-    logger.warn('[LSP] direct completion failed', {
-      languageId: normalizedLanguageId,
-      clientKey,
-      documentUri,
-      lineNumber,
-      column,
-      error: resolveErrorMessage(error),
-    })
-    return null
-  }
 }
 
 const stopClientSafely = async (client: MonacoLanguageClient | null) => {
@@ -813,29 +639,34 @@ export function initLspClient(
     entry.writer = writer
 
     const messageTransports: MessageTransports = { reader, writer }
+    // Design note:
+    // 1. monaco-languageclient v10 expects transports inside the constructor options.
+    // 2. Without this binding the editor falls back to empty Monaco providers or word completion.
+    // 3. Completion, diagnostics, hover, and semantic tokens share one standard LSP client path.
 
     let client: MonacoLanguageClient
     try {
-        client = new MonacoLanguageClient({
-          name: `${clientKey} Language Client`,
-          clientOptions: {
-            documentSelector,
-            outputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
-            traceOutputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
-            initializationOptions: {
-              workspaceFolders: resolvedDocumentContext.workspaceUri && resolvedDocumentContext.workspacePath
-                ? [{
-                    uri: resolvedDocumentContext.workspaceUri,
-                    name: resolvedDocumentContext.workspacePath.split(/[\\/]/).pop() || resolvedDocumentContext.workspacePath,
-                  }]
-                : [],
-              filePath: resolvedDocumentContext.workspacePath || filePath,
-              documentUri: resolvedDocumentContext.documentUri,
-              workspacePath: resolvedDocumentContext.workspacePath,
-              workspaceUri: resolvedDocumentContext.workspaceUri,
-              rootUri: resolvedDocumentContext.workspaceUri,
-              rootPath: resolvedDocumentContext.workspacePath,
-            },
+      client = new MonacoLanguageClient({
+        id: `${clientKey}-language-client`,
+        name: `${clientKey} Language Client`,
+        clientOptions: {
+          documentSelector,
+          outputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
+          traceOutputChannel: LSP_NOOP_OUTPUT_CHANNEL as never,
+          initializationOptions: {
+            workspaceFolders: resolvedDocumentContext.workspaceUri && resolvedDocumentContext.workspacePath
+              ? [{
+                  uri: resolvedDocumentContext.workspaceUri,
+                  name: resolvedDocumentContext.workspacePath.split(/[\\/]/).pop() || resolvedDocumentContext.workspacePath,
+                }]
+              : [],
+            filePath: resolvedDocumentContext.workspacePath || filePath,
+            documentUri: resolvedDocumentContext.documentUri,
+            workspacePath: resolvedDocumentContext.workspacePath,
+            workspaceUri: resolvedDocumentContext.workspaceUri,
+            rootUri: resolvedDocumentContext.workspaceUri,
+            rootPath: resolvedDocumentContext.workspacePath,
+          },
           // Avoid restart loop/noisy reconnect logs when socket is intentionally closed.
           errorHandler: {
             error: () => ({ action: ErrorAction.Continue }),

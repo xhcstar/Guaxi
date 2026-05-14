@@ -77,7 +77,25 @@
   {
     "language": "html",
     "server": "html-ls",
-    "bin_name": "html-ls",
+    "bin_name": "vscode-html-language-server",
+    "args": [
+      "--stdio"
+    ],
+    "auto_download": false
+  },
+  {
+    "language": "css",
+    "server": "css-ls",
+    "bin_name": "vscode-css-language-server",
+    "args": [
+      "--stdio"
+    ],
+    "auto_download": false
+  },
+  {
+    "language": "json",
+    "server": "json-ls",
+    "bin_name": "vscode-json-language-server",
     "args": [
       "--stdio"
     ],

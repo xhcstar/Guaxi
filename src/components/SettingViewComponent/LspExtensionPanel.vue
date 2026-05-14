@@ -122,7 +122,7 @@
 
           <div class="lsp-extension-panel__item-actions">
             <n-button
-              v-if="!item.installed && (item.vscode_marketplace || item.open_vsx)"
+              v-if="canInstallCatalogExtension(item)"
               size="small"
               type="primary"
               :loading="isInstallingExtension(item.id)"
@@ -244,6 +244,20 @@ const compatibilityTagType = (level) => {
   if (String(level || '').toUpperCase() === 'A') return 'success'
   if (String(level || '').toUpperCase() === 'B') return 'warning'
   return 'default'
+}
+
+const canInstallCatalogExtension = (item) => {
+  const extensionId = String(item?.id || '').trim()
+  if (!extensionId || item?.installed) return false
+
+  const source = String(item?.source || '').trim().toLowerCase()
+  const version = String(item?.version || '').trim().toLowerCase()
+
+  // 设计说明：
+  // 1. 已知语言列表来自后端 catalog，不只有 Marketplace/Open VSX 扩展，也包含 guaxi.mermaid-lsp 这类托管 runtime。
+  // 2. 安装入口统一走 start_install_catalog_lsp_extension_task，由后端按 catalog 决定下载 VSIX、创建 Guaxi catalog 记录或下载 server。
+  // 3. 因此前端不能再用 open_vsx/vscode_marketplace 字段判断是否显示安装按钮，否则 Mermaid/HTML/CSS/JSON 这类 runtime-first 条目会没有安装入口。
+  return source === 'catalog' || version === 'not-installed'
 }
 
 const getTauriIpcSnapshot = () => {
@@ -565,6 +579,9 @@ const handleInstallCatalogExtension = async (item) => {
     // 3. 真正 server runtime 仍按 catalog.resolve_order 启动：扩展自带优先，缺失时走受控下载器。
     logger.info('[LspExtensionPanel] installing catalog LSP extension', {
       extensionId,
+      source: String(item?.source || ''),
+      openVsx: String(item?.open_vsx || ''),
+      vscodeMarketplace: String(item?.vscode_marketplace || ''),
       languages: Array.isArray(item?.languages) ? item.languages : [],
     })
     await startExtensionTask('start_install_catalog_lsp_extension_task', { extensionId }, { extensionId })

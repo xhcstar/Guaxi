@@ -84,6 +84,7 @@ import { useFileTreeStore } from '../../stores/fileTreeStore'
 import { NPopover, NTooltip, NIcon } from 'naive-ui'
 import { CheckmarkCircleOutline, AlertCircleOutline } from '@vicons/ionicons5'
 import { getLspConnectionState, onLspConnectionStateChange } from '../../monaco/lspClient'
+import { isLspKnownLanguage } from '../../monaco/lspCapabilities'
 
 const logger = createLogger('GuaxiEditorStatusBar')
 const editorStore = useEditorStore()
@@ -99,10 +100,16 @@ const supportedLanguages = [
   { id: 'typescript', name: 'TypeScript' },
   { id: 'html', name: 'HTML' },
   { id: 'css', name: 'CSS' },
+  { id: 'json', name: 'JSON' },
   { id: 'python', name: 'Python' },
+  { id: 'c', name: 'C' },
   { id: 'cpp', name: 'C++' },
   { id: 'rust', name: 'Rust' },
+  { id: 'lua', name: 'Lua' },
   { id: 'shell', name: 'Shell' },
+  { id: 'latex', name: 'LaTeX' },
+  { id: 'java', name: 'Java' },
+  { id: 'mermaid', name: 'Mermaid' },
   { id: 'markdown', name: 'Markdown' },
   { id: 'plaintext', name: 'Plain Text' }
 ]
@@ -117,21 +124,6 @@ const supportedEncodings = [
   'Big5',
   'Shift-JIS'
 ]
-
-const lspSupportedLanguages = new Set([
-  'cpp',
-  'c',
-  'rust',
-  'python',
-  'shell',
-  'lua',
-  'java',
-  'javascript',
-  'typescript',
-  'html',
-  'markdown',
-  'latex'
-])
 
 const lspState = ref(getLspConnectionState(editorStore.language))
 
@@ -190,7 +182,7 @@ const lspStatusInfo = computed(() => {
   if (!languageId) {
     return { status: 'bad', label: 'LSP 异常', detail: '未识别语言' }
   }
-  if (!lspSupportedLanguages.has(languageId)) {
+  if (!isLspKnownLanguage(languageId)) {
     return { status: 'bad', label: 'LSP 异常', detail: '当前语言未启用 LSP' }
   }
   const state = lspState.value?.state || 'idle'
@@ -320,14 +312,22 @@ const toggleIndentation = () => {
 <style scoped>
 /* 保持原有样式不变 */
 .status-bar {
+  --guaxi-status-bar-background: var(--guaxi-panel-bg, #ffffff);
+  --guaxi-status-bar-border: var(--guaxi-border, #d0d7de);
+  --guaxi-status-bar-foreground: var(--guaxi-text-primary, #1f2328);
+  --guaxi-status-bar-hover-background: rgba(64, 120, 242, 0.08);
+  --guaxi-status-bar-error-color: #e45649;
+  --guaxi-status-bar-warning-color: #c18401;
+  --guaxi-status-bar-lsp-ok-color: #2f855a;
+  --guaxi-status-bar-lsp-bad-color: #c53030;
   display: flex;
   justify-content: space-between;
   height: 22px;
-  background-color: var(--statusBar-background);
-  border-top: 1px solid var(--statusBar-border);
+  background-color: var(--guaxi-status-bar-background);
+  border-top: 1px solid var(--guaxi-status-bar-border);
   font-size: 12px;
   font-family: var(--editor-font-family);
-  color: var(--statusBar-foreground);
+  color: var(--guaxi-status-bar-foreground);
   padding: 0 8px;
   user-select: none;
 }
@@ -348,7 +348,7 @@ const toggleIndentation = () => {
 }
 
 .status-bar-item:hover {
-  background-color: var(--statusBarItem-hoverBackground);
+  background-color: var(--guaxi-status-bar-hover-background);
 }
 
 .status-bar-text {
@@ -367,11 +367,11 @@ const toggleIndentation = () => {
 }
 
 .lsp-status-ok {
-  color: var(--lsp-ok-color);
+  color: var(--guaxi-status-bar-lsp-ok-color);
 }
 
 .lsp-status-bad {
-  color: var(--lsp-bad-color);
+  color: var(--guaxi-status-bar-lsp-bad-color);
 }
 
 .lsp-status-tooltip {
@@ -380,11 +380,11 @@ const toggleIndentation = () => {
 
 /* 问题计数特殊样式 */
 .has-errors {
-  color: var(--error-color);
+  color: var(--guaxi-status-bar-error-color);
 }
 
 .has-warnings {
-  color: var(--warning-color);
+  color: var(--guaxi-status-bar-warning-color);
 }
 
 /* 菜单样式 */
@@ -402,32 +402,22 @@ const toggleIndentation = () => {
 
 .language-item:hover,
 .encoding-item:hover {
-  background-color: var(--menuItem-hoverBackground);
+  background-color: var(--guaxi-status-bar-hover-background);
 }
 
 /* 主题适配 */
-.vs .status-bar {
-  --statusBar-background: #007acc;
-  --statusBar-border: #ccc;
-  --statusBar-foreground: #ffffff;
-  --statusBarItem-hoverBackground: rgba(255, 255, 255, 0.1);
-  --menuItem-hoverBackground: rgba(255, 255, 255, 0.1);
-  --error-color: #ff5555;
-  --warning-color: #ffb86c;
-  --lsp-ok-color: #2f855a;
-  --lsp-bad-color: #c53030;
-}
-
-.vs-dark .status-bar,
-.hc-black .status-bar {
-  --statusBar-background: #1e1e1e;
-  --statusBar-border: #333;
-  --statusBar-foreground: #ffffff;
-  --statusBarItem-hoverBackground: rgba(255, 255, 255, 0.1);
-  --menuItem-hoverBackground: rgba(255, 255, 255, 0.1);
-  --error-color: #ff5555;
-  --warning-color: #ffb86c;
-  --lsp-ok-color: #68d391;
-  --lsp-bad-color: #fc8181;
+/* 设计说明：
+   1. monaco-vscode-api 会注入 VSCode 兼容变量，例如 --statusBar-background，默认亮色主题是蓝色。
+   2. Guaxi 的状态栏不是 VSCode workbench status bar，不能再直接读取这些全局变量，否则切换主题时会被覆盖。
+   3. 这里使用 Guaxi 自己的变量，并通过根节点 data-guaxi-theme 同步亮/暗色，避免 scoped CSS 依赖 Monaco 的 .vs/.vs-dark 类。 */
+:global(:root[data-guaxi-theme='dark']) .status-bar {
+  --guaxi-status-bar-background: var(--guaxi-panel-bg, #21252b);
+  --guaxi-status-bar-border: var(--guaxi-border, #3e4451);
+  --guaxi-status-bar-foreground: var(--guaxi-text-primary, #abb2bf);
+  --guaxi-status-bar-hover-background: rgba(255, 255, 255, 0.08);
+  --guaxi-status-bar-error-color: #e06c75;
+  --guaxi-status-bar-warning-color: #e5c07b;
+  --guaxi-status-bar-lsp-ok-color: #98c379;
+  --guaxi-status-bar-lsp-bad-color: #e06c75;
 }
 </style>

@@ -9,9 +9,12 @@ use std::sync::Arc;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::time::Duration;
 
+use crate::guaxiservices::bundled_resources;
+use crate::guaxiservices::lsp_extensions;
 use actix::prelude::*;
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
+use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex as ParkingMutex;
@@ -19,6 +22,7 @@ use regex::Regex;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tar::Archive;
 use tokio::fs as tokio_fs;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -27,10 +31,6 @@ use tokio::time::{sleep, timeout};
 use tracing::{error, info, warn};
 use walkdir::WalkDir;
 use zip::ZipArchive;
-use flate2::read::GzDecoder;
-use crate::guaxiservices::bundled_resources;
-use crate::guaxiservices::lsp_extensions;
-use tar::Archive;
 
 #[derive(Debug, Clone)]
 struct LspCommandConfig {
@@ -54,6 +54,8 @@ pub struct LspRuntimeProbeResult {
     pub hover_provider: bool,
     pub definition_provider: bool,
     pub semantic_tokens_provider: bool,
+    pub semantic_tokens_request_ok: bool,
+    pub semantic_tokens_token_count: usize,
     pub server_name: Option<String>,
     pub server_version: Option<String>,
 }
@@ -108,6 +110,7 @@ static LSP_INSTALL_FAILED: Lazy<ParkingMutex<HashSet<String>>> =
     Lazy::new(|| ParkingMutex::new(HashSet::new()));
 static ACTIVE_LSP_EXTENSION_PROCESSES: Lazy<ParkingMutex<HashMap<String, Vec<LspProcessRef>>>> =
     Lazy::new(|| ParkingMutex::new(HashMap::new()));
+const LSP_EDITOR_RUNTIME_PREPARE_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone)]
 struct LspProcessRef {
@@ -137,11 +140,18 @@ fn register_lsp_extension_process(extension_id: &str, process_id: u32, addr: Add
     );
 }
 
-fn unregister_lsp_extension_process(extension_id: Option<&str>, process_id: Option<u32>, reason: &str) {
+fn unregister_lsp_extension_process(
+    extension_id: Option<&str>,
+    process_id: Option<u32>,
+    reason: &str,
+) {
     let Some(process_id) = process_id.filter(|id| *id != 0) else {
         return;
     };
-    let Some(extension_id) = extension_id.map(normalize_extension_id_for_process).filter(|id| !id.is_empty()) else {
+    let Some(extension_id) = extension_id
+        .map(normalize_extension_id_for_process)
+        .filter(|id| !id.is_empty())
+    else {
         return;
     };
 
@@ -265,7 +275,11 @@ fn lsp_file_name(name: &str) -> String {
 }
 
 fn asset_name_from_url(url: &str, fallback: &str) -> String {
-    url.split('/').last().filter(|v| !v.is_empty()).unwrap_or(fallback).to_string()
+    url.split('/')
+        .last()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 fn proxy_env_is_set(name: &str) -> bool {
@@ -388,7 +402,9 @@ fn find_program_on_path(bin_name: &str) -> Option<PathBuf> {
                             .collect::<Vec<_>>()
                     })
                     .filter(|items| !items.is_empty())
-                    .unwrap_or_else(|| vec!["EXE".to_string(), "CMD".to_string(), "BAT".to_string()]);
+                    .unwrap_or_else(|| {
+                        vec!["EXE".to_string(), "CMD".to_string(), "BAT".to_string()]
+                    });
                 let mut names = vec![raw_name.to_string()];
                 names.extend(pathext.into_iter().map(|ext| format!("{raw_name}.{ext}")));
                 names
@@ -444,7 +460,9 @@ fn find_existing_lsp_program(entry: &LspLanguageEntry) -> Option<PathBuf> {
 }
 
 fn lsp_language_entry(language: &str) -> Option<&'static LspLanguageEntry> {
-    LSP_LANGUAGES.iter().find(|entry| entry.language == language)
+    LSP_LANGUAGES
+        .iter()
+        .find(|entry| entry.language == language)
 }
 
 fn build_lsp_command(
@@ -564,10 +582,7 @@ async fn download_to_path(
         req = req.bearer_auth(token);
     }
 
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("下载失败: {e}"))?;
+    let resp = req.send().await.map_err(|e| format!("下载失败: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("下载失败: HTTP {}", resp.status()));
@@ -625,7 +640,9 @@ fn extract_targz_to_dir(tar_path: &Path, dest_dir: &Path) -> Result<(), String> 
     let file = fs::File::open(tar_path).map_err(|e| format!("打开压缩包失败: {e}"))?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
-    archive.unpack(dest_dir).map_err(|e| format!("解压失败: {e}"))?;
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| format!("解压失败: {e}"))?;
     Ok(())
 }
 
@@ -658,9 +675,7 @@ async fn fetch_github_asset(
     if !status.is_success() {
         let lower = body.to_lowercase();
         if status.as_u16() == 403 && lower.contains("rate limit") && token.is_none() {
-            return Err(
-                "GitHub API 触发限流，请在设置中填写 GitHub Token 后重试".to_string(),
-            );
+            return Err("GitHub API 触发限流，请在设置中填写 GitHub Token 后重试".to_string());
         }
         return Err(format!("获取发布信息失败: HTTP {}: {}", status, body));
     }
@@ -741,9 +756,11 @@ async fn download_and_install_lsp_binary(
 
             let zip_path_clone = zip_path.clone();
             let install_dir_clone = install_dir.clone();
-            tokio::task::spawn_blocking(move || extract_zip_to_dir(&zip_path_clone, &install_dir_clone))
-                .await
-                .map_err(|e| format!("解压失败: {e}"))??;
+            tokio::task::spawn_blocking(move || {
+                extract_zip_to_dir(&zip_path_clone, &install_dir_clone)
+            })
+            .await
+            .map_err(|e| format!("解压失败: {e}"))??;
 
             let Some(bin_path) = find_file_by_name(&install_dir, spec.bin_name) else {
                 return Err(format!("未找到 LSP 可执行文件: {}", spec.bin_name));
@@ -755,7 +772,11 @@ async fn download_and_install_lsp_binary(
         LspAssetKind::Raw => {
             let bin_file = lsp_file_name(spec.bin_name);
             let bin_path = install_dir.join(&bin_file);
-            info!(server = server, asset = asset.name.as_str(), "下载 LSP 可执行文件");
+            info!(
+                server = server,
+                asset = asset.name.as_str(),
+                "下载 LSP 可执行文件"
+            );
             download_to_path(&client, &asset.browser_download_url, &bin_path, token).await?;
 
             if !bin_path.exists() {
@@ -770,14 +791,20 @@ async fn download_and_install_lsp_binary(
             ensure_dir(&download_dir)?;
 
             let tar_path = download_dir.join(&asset.name);
-            info!(server = server, asset = asset.name.as_str(), "下载 LSP 压缩包");
+            info!(
+                server = server,
+                asset = asset.name.as_str(),
+                "下载 LSP 压缩包"
+            );
             download_to_path(&client, &asset.browser_download_url, &tar_path, token).await?;
 
             let tar_path_clone = tar_path.clone();
             let install_dir_clone = install_dir.clone();
-            tokio::task::spawn_blocking(move || extract_targz_to_dir(&tar_path_clone, &install_dir_clone))
-                .await
-                .map_err(|e| format!("解压失败: {e}"))??;
+            tokio::task::spawn_blocking(move || {
+                extract_targz_to_dir(&tar_path_clone, &install_dir_clone)
+            })
+            .await
+            .map_err(|e| format!("解压失败: {e}"))??;
 
             let Some(bin_path) = find_file_by_name(&install_dir, spec.bin_name) else {
                 return Err(format!("未找到 LSP 可执行文件: {}", spec.bin_name));
@@ -847,6 +874,7 @@ async fn ensure_lsp_binary(
 async fn prepare_lsp_command_with_token(
     language: &str,
     token: Option<&str>,
+    allow_runtime_download: bool,
 ) -> Result<LspCommandConfig, String> {
     if let Some(resolved) = lsp_extensions::resolve_lsp_command_for_language(language).await? {
         info!(
@@ -891,7 +919,10 @@ async fn prepare_lsp_command_with_token(
             "resolved managed LSP program from local runtime"
         );
         path.to_string_lossy().to_string()
-    } else if entry.auto_download && lsp_binary_spec(&entry.server).is_some() {
+    } else if allow_runtime_download
+        && entry.auto_download
+        && lsp_binary_spec(&entry.server).is_some()
+    {
         ensure_lsp_binary(&entry.server, &entry.bin_name, token)
             .await
             .map(|p| {
@@ -929,7 +960,11 @@ async fn prepare_lsp_command_with_token(
 }
 
 async fn prepare_lsp_command(language: &str) -> Result<LspCommandConfig, String> {
-    prepare_lsp_command_with_token(language, None).await
+    // 设计说明：
+    // 1. 编辑器 WebSocket 路径只负责连接已经准备好的 runtime，不能在用户敲代码时触发下载/解压。
+    // 2. 下载和构建 runtime 必须发生在安装任务或健康探测任务里，失败时通过状态栏提示，不阻塞前端编辑体验。
+    // 3. 如果 runtime 缺失，这里快速失败并关闭 LSP WebSocket，Monaco 仍可继续作为普通编辑器使用。
+    prepare_lsp_command_with_token(language, None, false).await
 }
 
 pub struct LspWsSession {
@@ -1026,7 +1061,9 @@ where
         }
         pending.extend_from_slice(&buf[..n]);
         if pending.len() > 1024 * 1024 {
-            return Err("LSP probe stdout buffer exceeded 1MiB before a complete frame".to_string());
+            return Err(
+                "LSP probe stdout buffer exceeded 1MiB before a complete frame".to_string(),
+            );
         }
     }
 }
@@ -1070,7 +1107,10 @@ fn read_lsp_capability_bool(capabilities: &Value, field: &str) -> bool {
 }
 
 fn read_lsp_capability_present(capabilities: &Value, field: &str) -> bool {
-    !matches!(capabilities.get(field), None | Some(Value::Null) | Some(Value::Bool(false)))
+    !matches!(
+        capabilities.get(field),
+        None | Some(Value::Null) | Some(Value::Bool(false))
+    )
 }
 
 fn lsp_probe_document_for_language(language: &str) -> LspProbeDocument {
@@ -1088,12 +1128,48 @@ fn lsp_probe_document_for_language(language: &str) -> LspProbeDocument {
             1,
             11,
         ),
+        "html" => (
+            "html",
+            "<!doctype html>\n<html>\n<body>\n<div cla".to_string(),
+            3,
+            8,
+        ),
+        "css" => (
+            "css",
+            ".guaxi-probe {\n  col".to_string(),
+            1,
+            5,
+        ),
+        "json" => (
+            "json",
+            "{\n  \"name\": \"guaxi\",\n  \"".to_string(),
+            2,
+            3,
+        ),
         "python" => ("py", "import os\nos.".to_string(), 1, 3),
+        "c" => (
+            "c",
+            "#include <stdio.h>\nint main(void) {\n    pri\n}\n".to_string(),
+            2,
+            7,
+        ),
+        "cpp" => (
+            "cpp",
+            "#include <string>\nint main() {\n    std::string guaxi_value;\n    guaxi_value.\n}\n".to_string(),
+            3,
+            16,
+        ),
         "rust" => (
             "rs",
             "fn main() {\n    let guaxi_value = String::new();\n    guaxi_value.\n}\n".to_string(),
             2,
             16,
+        ),
+        "java" => (
+            "java",
+            "class GuaxiProbe {\n  void run() {\n    String value = \"\";\n    value.\n  }\n}\n".to_string(),
+            3,
+            10,
         ),
         "markdown" => (
             "md",
@@ -1103,6 +1179,12 @@ fn lsp_probe_document_for_language(language: &str) -> LspProbeDocument {
         ),
         "shell" => ("sh", "echo $".to_string(), 0, 6),
         "lua" => ("lua", "local guaxi_value = string\nstring.".to_string(), 1, 7),
+        "mermaid" => (
+            "mmd",
+            "graph TD\n  A-->".to_string(),
+            1,
+            7,
+        ),
         "latex" => (
             "tex",
             "\\documentclass{article}\n\\begin{document}\n\\ref{".to_string(),
@@ -1111,9 +1193,7 @@ fn lsp_probe_document_for_language(language: &str) -> LspProbeDocument {
         ),
         _ => ("txt", "guaxi".to_string(), 0, 5),
     };
-    let base_dir = exe_dir()
-        .ok()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let base_dir = exe_dir().ok().unwrap_or_else(|| PathBuf::from("."));
     let uri = format!(
         "file:///{}/__guaxi_lsp_probe__/probe.{}",
         base_dir.to_string_lossy().replace('\\', "/"),
@@ -1129,6 +1209,13 @@ fn lsp_probe_document_for_language(language: &str) -> LspProbeDocument {
 }
 
 fn validate_lsp_completion_probe_result(result: &Value) -> Result<(usize, Option<String>), String> {
+    // 设计说明：
+    // 1. LSP completion 的合法返回值包含 CompletionList、CompletionItem[] 和 null。
+    // 2. null/空数组只说明当前探针位置没有候选，不能用来判定 rust-analyzer、TexLab、Marksman 等 server 不可用。
+    // 3. 真正的安装健康检查由 initialize、capabilities 和进程是否持续响应决定；候选数量只作为日志诊断信号。
+    if result.is_null() {
+        return Ok((0, None));
+    }
     let Some(items) = extract_completion_items(result) else {
         return Err(format!(
             "completion response did not contain a completion list: {}",
@@ -1136,16 +1223,44 @@ fn validate_lsp_completion_probe_result(result: &Value) -> Result<(usize, Option
         ));
     };
     if items.is_empty() {
-        return Err("completion response contained zero items".to_string());
+        return Ok((0, None));
     }
-    Ok((items.len(), items.first().map(extract_completion_label).filter(|item| !item.is_empty())))
+    Ok((
+        items.len(),
+        items
+            .first()
+            .map(extract_completion_label)
+            .filter(|item| !item.is_empty()),
+    ))
+}
+
+fn validate_lsp_semantic_tokens_probe_result(result: &Value) -> Result<usize, String> {
+    if result.is_null() {
+        return Ok(0);
+    }
+
+    let Some(data) = result.get("data").and_then(Value::as_array) else {
+        return Err(format!(
+            "semanticTokens response did not contain a data array: {}",
+            truncate_for_log(&result.to_string(), 1000)
+        ));
+    };
+
+    if data.len() % 5 != 0 {
+        return Err(format!(
+            "semanticTokens response data length is invalid: {}",
+            data.len()
+        ));
+    }
+
+    Ok(data.len() / 5)
 }
 
 pub async fn probe_lsp_runtime_for_language(
     language: &str,
     token: Option<&str>,
 ) -> Result<LspRuntimeProbeResult, String> {
-    let cfg = prepare_lsp_command_with_token(language, token).await?;
+    let cfg = prepare_lsp_command_with_token(language, token, true).await?;
     let program_for_log = cfg.program.clone();
     let args_for_log = cfg.args.clone();
     let cwd_for_log = cfg.cwd.clone();
@@ -1175,9 +1290,12 @@ pub async fn probe_lsp_runtime_for_language(
         cmd.current_dir(dir);
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("LSP runtime probe failed to start process: program={} error={}", cfg.program, e))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        format!(
+            "LSP runtime probe failed to start process: program={} error={}",
+            cfg.program, e
+        )
+    })?;
     let mut stdin = child
         .stdin
         .take()
@@ -1190,7 +1308,7 @@ pub async fn probe_lsp_runtime_for_language(
     if let Some(stderr) = stderr {
         let language_for_stderr = language.to_string();
         let program_for_stderr = program_for_log.clone();
-        actix::spawn(async move {
+        tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             loop {
                 match reader.next_line().await {
@@ -1285,11 +1403,18 @@ pub async fn probe_lsp_runtime_for_language(
         write_lsp_probe_payload_to_child_stdin(&mut stdin, &initialize_payload).await?;
         let mut pending = Vec::new();
         loop {
-            let Some(payload) = read_lsp_payload_from_stdout(&mut stdout, &mut pending).await? else {
-                return Err("LSP runtime probe stdout closed before initialize response".to_string());
+            let Some(payload) = read_lsp_payload_from_stdout(&mut stdout, &mut pending).await?
+            else {
+                return Err(
+                    "LSP runtime probe stdout closed before initialize response".to_string()
+                );
             };
-            let value = serde_json::from_str::<Value>(&payload)
-                .map_err(|e| format!("failed to parse LSP initialize response: {e}; payload={}", truncate_for_log(&payload, 2000)))?;
+            let value = serde_json::from_str::<Value>(&payload).map_err(|e| {
+                format!(
+                    "failed to parse LSP initialize response: {e}; payload={}",
+                    truncate_for_log(&payload, 2000)
+                )
+            })?;
             if value.get("id").and_then(Value::as_i64) != Some(1) {
                 continue;
             }
@@ -1302,7 +1427,8 @@ pub async fn probe_lsp_runtime_for_language(
                 .and_then(|item| item.get("capabilities"))
                 .cloned()
                 .unwrap_or(Value::Null);
-            let completion_provider = read_lsp_capability_present(&capabilities, "completionProvider");
+            let completion_provider =
+                read_lsp_capability_present(&capabilities, "completionProvider");
             let hover_provider = read_lsp_capability_bool(&capabilities, "hoverProvider");
             let definition_provider = read_lsp_capability_bool(&capabilities, "definitionProvider");
             let semantic_tokens_provider =
@@ -1343,9 +1469,19 @@ pub async fn probe_lsp_runtime_for_language(
                     }
                 }
             });
-            let shutdown_payload = json!({
+            let semantic_tokens_payload = json!({
                 "jsonrpc": "2.0",
                 "id": 3,
+                "method": "textDocument/semanticTokens/full",
+                "params": {
+                    "textDocument": {
+                        "uri": probe_document.uri.clone(),
+                    }
+                }
+            });
+            let shutdown_payload = json!({
+                "jsonrpc": "2.0",
+                "id": 4,
                 "method": "shutdown",
                 "params": null
             });
@@ -1368,6 +1504,8 @@ pub async fn probe_lsp_runtime_for_language(
                     hover_provider,
                     definition_provider,
                     semantic_tokens_provider,
+                    semantic_tokens_request_ok: false,
+                    semantic_tokens_token_count: 0,
                     server_name: read_server_info(&value, "name"),
                     server_version: read_server_info(&value, "version"),
                 });
@@ -1375,17 +1513,25 @@ pub async fn probe_lsp_runtime_for_language(
 
             // 设计思路：
             // 1. initialize 只能证明进程能启动，不能证明 LSP 真的能处理编辑器请求。
-            // 2. 这里打开一份最小测试文档并发送 textDocument/completion，只有收到非空补全项才算 runtime 配置成功。
+            // 2. 这里打开一份最小测试文档并发送 completion；若 server 声明 semanticTokensProvider，
+            //    还要追加 semanticTokens/full，避免把只会 initialize 的半成品 runtime 标记为可用。
             // 3. 失败时错误会回传给扩展安装任务，由任务退避重试配置，避免把“半配置好”的 runtime 标记为可用。
             write_lsp_probe_payload_to_child_stdin(&mut stdin, &did_open_payload).await?;
             write_lsp_probe_payload_to_child_stdin(&mut stdin, &completion_payload).await?;
 
             let (completion_item_count, completion_first_label) = loop {
-                let Some(payload) = read_lsp_payload_from_stdout(&mut stdout, &mut pending).await? else {
-                    return Err("LSP runtime probe stdout closed before completion response".to_string());
+                let Some(payload) = read_lsp_payload_from_stdout(&mut stdout, &mut pending).await?
+                else {
+                    return Err(
+                        "LSP runtime probe stdout closed before completion response".to_string()
+                    );
                 };
-                let value = serde_json::from_str::<Value>(&payload)
-                    .map_err(|e| format!("failed to parse LSP completion response: {e}; payload={}", truncate_for_log(&payload, 2000)))?;
+                let value = serde_json::from_str::<Value>(&payload).map_err(|e| {
+                    format!(
+                        "failed to parse LSP completion response: {e}; payload={}",
+                        truncate_for_log(&payload, 2000)
+                    )
+                })?;
                 if value.get("id").and_then(Value::as_i64) != Some(2) {
                     continue;
                 }
@@ -1397,6 +1543,40 @@ pub async fn probe_lsp_runtime_for_language(
                     .ok_or_else(|| "LSP completion response did not contain result".to_string())?;
                 break validate_lsp_completion_probe_result(result)?;
             };
+
+            let semantic_tokens_token_count = if semantic_tokens_provider {
+                write_lsp_probe_payload_to_child_stdin(&mut stdin, &semantic_tokens_payload)
+                    .await?;
+                loop {
+                    let Some(payload) =
+                        read_lsp_payload_from_stdout(&mut stdout, &mut pending).await?
+                    else {
+                        return Err(
+                            "LSP runtime probe stdout closed before semanticTokens response"
+                                .to_string(),
+                        );
+                    };
+                    let value = serde_json::from_str::<Value>(&payload).map_err(|e| {
+                        format!(
+                            "failed to parse LSP semanticTokens response: {e}; payload={}",
+                            truncate_for_log(&payload, 2000)
+                        )
+                    })?;
+                    if value.get("id").and_then(Value::as_i64) != Some(3) {
+                        continue;
+                    }
+                    if let Some(error) = value.get("error") {
+                        return Err(format!("LSP semanticTokens returned error: {}", error));
+                    }
+                    let result = value.get("result").ok_or_else(|| {
+                        "LSP semanticTokens response did not contain result".to_string()
+                    })?;
+                    break validate_lsp_semantic_tokens_probe_result(result)?;
+                }
+            } else {
+                0
+            };
+            let semantic_tokens_request_ok = semantic_tokens_provider;
 
             let _ = write_lsp_probe_payload_to_child_stdin(&mut stdin, &shutdown_payload).await;
             let _ = write_lsp_probe_payload_to_child_stdin(&mut stdin, &exit_payload).await;
@@ -1412,6 +1592,8 @@ pub async fn probe_lsp_runtime_for_language(
                 hover_provider,
                 definition_provider,
                 semantic_tokens_provider,
+                semantic_tokens_request_ok,
+                semantic_tokens_token_count,
                 server_name: read_server_info(&value, "name"),
                 server_version: read_server_info(&value, "version"),
             });
@@ -1420,7 +1602,7 @@ pub async fn probe_lsp_runtime_for_language(
 
     let result = timeout(Duration::from_secs(12), probe_result)
         .await
-        .map_err(|_| "LSP runtime probe timed out while waiting for initialize response".to_string())?;
+        .map_err(|_| "LSP runtime probe timed out while waiting for initialize/completion/semanticTokens response".to_string())?;
 
     match &result {
         Ok(probe) => {
@@ -1433,6 +1615,8 @@ pub async fn probe_lsp_runtime_for_language(
                 hover_provider = probe.hover_provider,
                 definition_provider = probe.definition_provider,
                 semantic_tokens_provider = probe.semantic_tokens_provider,
+                semantic_tokens_request_ok = probe.semantic_tokens_request_ok,
+                semantic_tokens_token_count = probe.semantic_tokens_token_count,
                 server_name = probe.server_name.as_deref().unwrap_or(""),
                 server_version = probe.server_version.as_deref().unwrap_or(""),
                 "LSP runtime probe succeeded"
@@ -1459,15 +1643,36 @@ impl Actor for LspWsSession {
         let addr = ctx.address();
         let language = self.language.clone();
         actix::spawn(async move {
-            let cfg = match prepare_lsp_command(&language).await {
-                Ok(cfg) => cfg,
-                Err(err) => {
-                    warn!(language = language.as_str(), error = err.as_str(), "LSP 配置准备失败");
+            let cfg = match timeout(
+                LSP_EDITOR_RUNTIME_PREPARE_TIMEOUT,
+                prepare_lsp_command(&language),
+            )
+            .await
+            {
+                Ok(Ok(cfg)) => cfg,
+                Ok(Err(err)) => {
+                    warn!(
+                        language = language.as_str(),
+                        error = err.as_str(),
+                        "LSP 配置准备失败"
+                    );
+                    let _ = addr.try_send(LspProcessFailed { error: err });
+                    return;
+                }
+                Err(_) => {
+                    let err = format!(
+                        "LSP runtime prepare timed out after {}s; install or repair the LSP extension runtime from Settings",
+                        LSP_EDITOR_RUNTIME_PREPARE_TIMEOUT.as_secs()
+                    );
+                    warn!(
+                        language = language.as_str(),
+                        timeout_secs = LSP_EDITOR_RUNTIME_PREPARE_TIMEOUT.as_secs(),
+                        "LSP 配置准备超时，已快速关闭本次编辑器连接"
+                    );
                     let _ = addr.try_send(LspProcessFailed { error: err });
                     return;
                 }
             };
-
             let program_for_log = cfg.program.clone();
             let args_for_log = cfg.args.clone();
             let cwd_for_log = cfg.cwd.clone();
@@ -1638,13 +1843,18 @@ impl Actor for LspWsSession {
                     });
                 }
                 Err(e) => {
-                    let error_message = format!("Failed to start LSP process: program={} error={}", program_for_log, e);
+                    let error_message = format!(
+                        "Failed to start LSP process: program={} error={}",
+                        program_for_log, e
+                    );
                     error!(
                         program = program_for_log.as_str(),
                         error = ?e,
                         "Failed to start LSP process"
                     );
-                    let _ = addr.try_send(LspProcessFailed { error: error_message });
+                    let _ = addr.try_send(LspProcessFailed {
+                        error: error_message,
+                    });
                 }
             }
         });
@@ -1786,7 +1996,9 @@ impl Handler<StopLspSession> for LspWsSession {
 
         ctx.close(Some(ws::CloseReason {
             code: ws::CloseCode::Normal,
-            description: Some(websocket_close_description("LSP extension is being updated or removed")),
+            description: Some(websocket_close_description(
+                "LSP extension is being updated or removed",
+            )),
         }));
         ctx.stop();
     }
@@ -1928,10 +2140,7 @@ fn completion_items_preview_for_log(result: &Value, max_items: usize) -> String 
 }
 
 fn extract_completion_item_count(result: &Value) -> usize {
-    if let Some(items) = result
-        .get("items")
-        .and_then(|value| value.as_array())
-    {
+    if let Some(items) = result.get("items").and_then(|value| value.as_array()) {
         return items.len();
     }
     if let Some(items) = result.as_array() {
@@ -1968,9 +2177,7 @@ fn extract_completion_result_log_summary(result: &Value) -> (usize, String, i64,
         return (0, String::new(), -1, String::new());
     };
     let first = items.first();
-    let first_label = first
-        .map(extract_completion_label)
-        .unwrap_or_default();
+    let first_label = first.map(extract_completion_label).unwrap_or_default();
     let first_kind = first
         .and_then(|item| item.get("kind"))
         .and_then(|value| value.as_i64())
@@ -2003,7 +2210,9 @@ fn log_lsp_client_message(
 
     match method {
         "textDocument/didOpen" => {
-            let text_document = value.get("params").and_then(|item| item.get("textDocument"));
+            let text_document = value
+                .get("params")
+                .and_then(|item| item.get("textDocument"));
             let uri = text_document
                 .and_then(|item| item.get("uri"))
                 .and_then(|item| item.as_str())

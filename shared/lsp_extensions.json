@@ -26,11 +26,9 @@
       }
     },
     {
-      "id": "ms-vscode.vscode-typescript-next",
+      "id": "guaxi.typescript-language-server",
       "display_name": "TypeScript and JavaScript Language Features",
-      "description": "TypeScript/JavaScript language features bridged through the LSP-first runtime.",
-      "open_vsx": "ms-vscode.vscode-typescript-next",
-      "vscode_marketplace": "ms-vscode.vscode-typescript-next",
+      "description": "TypeScript/JavaScript language features powered by the well-known typescript-language-server runtime.",
       "languages": ["javascript", "typescript"],
       "compatibility_level": "A",
       "recommended": true,
@@ -121,11 +119,11 @@
       }
     },
     {
-      "id": "latex-lsp.texlab",
+      "id": "efoerster.texlab",
       "display_name": "TexLab",
       "description": "LaTeX language support powered by TexLab.",
-      "open_vsx": "latex-lsp.texlab",
-      "vscode_marketplace": "latex-lsp.texlab",
+      "open_vsx": "efoerster.texlab",
+      "vscode_marketplace": "efoerster.texlab",
       "languages": ["latex"],
       "compatibility_level": "A",
       "recommended": true,
@@ -166,34 +164,65 @@
       }
     },
     {
-      "id": "ms-vscode.html-language-features",
+      "id": "guaxi.html-language-server",
       "display_name": "HTML Language Features",
-      "description": "HTML language features with a VSCode-compatible node server layout.",
-      "open_vsx": "ms-vscode.html-language-features",
-      "vscode_marketplace": "ms-vscode.html-language-features",
+      "description": "HTML language features powered by the VSCode extracted language server.",
       "languages": ["html"],
-      "compatibility_level": "C",
-      "recommended": false,
+      "compatibility_level": "A",
+      "recommended": true,
       "lsp": {
         "server_id": "html-ls",
-        "runtime": "node_entry",
-        "bin_name": "",
+        "runtime": "node_binary",
+        "bin_name": "vscode-html-language-server",
         "args": ["--stdio"],
-        "entry_paths": [
-          "server/dist/node/htmlServerMain.js",
-          "dist/node/htmlServerMain.js"
-        ],
-        "resolve_order": ["extension_entry", "downloadable_server"],
+        "entry_paths": [],
+        "resolve_order": ["extension_bin", "shared_node_runtime", "downloadable_server"],
         "fallback_server": "html-ls",
-        "fallback_bin_name": "html-ls"
+        "fallback_bin_name": "vscode-html-language-server"
       }
     },
     {
-      "id": "artempyanykh.marksman",
+      "id": "guaxi.css-language-server",
+      "display_name": "CSS Language Features",
+      "description": "CSS, SCSS and Less language features powered by the VSCode extracted language server.",
+      "languages": ["css"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "css-ls",
+        "runtime": "node_binary",
+        "bin_name": "vscode-css-language-server",
+        "args": ["--stdio"],
+        "entry_paths": [],
+        "resolve_order": ["extension_bin", "shared_node_runtime", "downloadable_server"],
+        "fallback_server": "css-ls",
+        "fallback_bin_name": "vscode-css-language-server"
+      }
+    },
+    {
+      "id": "guaxi.json-language-server",
+      "display_name": "JSON Language Features",
+      "description": "JSON language features powered by the VSCode extracted language server.",
+      "languages": ["json"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "json-ls",
+        "runtime": "node_binary",
+        "bin_name": "vscode-json-language-server",
+        "args": ["--stdio"],
+        "entry_paths": [],
+        "resolve_order": ["extension_bin", "shared_node_runtime", "downloadable_server"],
+        "fallback_server": "json-ls",
+        "fallback_bin_name": "vscode-json-language-server"
+      }
+    },
+    {
+      "id": "arr.marksman",
       "display_name": "Marksman",
       "description": "Markdown language support powered by Marksman.",
-      "open_vsx": "artempyanykh.marksman",
-      "vscode_marketplace": "artempyanykh.marksman",
+      "open_vsx": "arr.marksman",
+      "vscode_marketplace": "arr.marksman",
       "languages": ["markdown"],
       "compatibility_level": "A",
       "recommended": true,
@@ -211,6 +240,29 @@
         "resolve_order": ["extension_entry", "downloadable_server"],
         "fallback_server": "marksman",
         "fallback_bin_name": "marksman"
+      }
+    },
+    {
+      "id": "guaxi.mermaid-lsp",
+      "display_name": "Mermaid LSP",
+      "description": "Mermaid diagram language support powered by the managed mermaid-lsp runtime.",
+      "languages": ["mermaid"],
+      "compatibility_level": "A",
+      "recommended": true,
+      "lsp": {
+        "server_id": "mermaid-lsp",
+        "runtime": "binary",
+        "bin_name": "mermaid-lsp",
+        "args": [],
+        "entry_paths": [
+          "mermaid-lsp.exe",
+          "bin/mermaid-lsp.exe",
+          "mermaid-lsp",
+          "bin/mermaid-lsp"
+        ],
+        "resolve_order": ["extension_entry", "downloadable_server"],
+        "fallback_server": "mermaid-lsp",
+        "fallback_bin_name": "mermaid-lsp"
       }
     }
   ]

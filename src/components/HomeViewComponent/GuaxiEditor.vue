@@ -1102,7 +1102,6 @@ import {
   disposeAllLspClients,
   getLspConnectionState,
   onLspConnectionStateChange,
-  requestLspCompletionItems,
   waitForLspConnection,
   resetLspDisabled
 } from '../../monaco/lspClient'
@@ -1117,10 +1116,6 @@ import {
   disposeAllVsCodeTextModelsForOwner,
   replaceModelContentPreserveUndo,
 } from '../../monaco/vscodeModelBridge'
-import {
-  registerLspCompletionBridge,
-  setLspCompletionBridgeEnabled,
-} from '../../monaco/pythonCompletionBridge'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -1150,7 +1145,6 @@ import { save, open, confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { commands as vscodeCommands, Position as VscodePosition, Uri as VscodeUri } from 'vscode'
 
 const logger = createLogger('GuaxiEditor')
-registerLspCompletionBridge(monaco, Array.from(LSP_SUPPORTED_LANGUAGES).filter((lang) => lang !== 'markdown'))
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
 const outlineStore = useOutlineStore()
 
@@ -5165,8 +5159,6 @@ const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '
 const EMBEDDED_LSP_READY_TIMEOUT_MS = 4000
 const EMBEDDED_COMPLETION_CACHE_TTL_MS = 2500
 const EMBEDDED_COMPLETION_CACHE_VERSION = 'embedded-completion-word-range-v4'
-const EMBEDDED_MEMBER_COMPLETION_TIMEOUT_MS = 1400
-const EMBEDDED_DEFAULT_COMPLETION_TIMEOUT_MS = 900
 const embeddedCompletionCacheStates = new WeakMap()
 const embeddedCompletionRetriggerStates = new WeakMap()
 
@@ -7124,70 +7116,17 @@ const provideEmbeddedVscodeCompletionSuggestions = async (virtualModel, position
       contentLength: Number(virtualModel.getValue?.()?.length || 0),
     })
 
-    const directResult = await requestLspCompletionItems(
-      languageId,
-      String(virtualModel.uri?.toString?.() || ''),
-      Number(positionInBlock?.lineNumber || 1),
-      Number(positionInBlock?.column || 1),
-      triggerCharacter || undefined,
-      filterContext?.isMemberAccessContext
-        ? EMBEDDED_MEMBER_COMPLETION_TIMEOUT_MS
-        : EMBEDDED_DEFAULT_COMPLETION_TIMEOUT_MS
-    )
-    if (directResult?.items?.length) {
-      const suggestions = []
-      let filteredOutCount = 0
-      let noisyKindFilteredCount = 0
-      let firstFilteredOutLabel = ''
-      let firstRawKind = ''
-      let firstMappedKind = ''
-      let textKindSuggestionCount = 0
-      for (let i = 0; i < directResult.items.length; i += 1) {
-        const rawItemLabel = normalizeCompletionLabel(directResult.items[i]?.label)
-        if (shouldDropNoisyEmbeddedMemberCandidate(languageId, directResult.items[i], 'direct-lsp', filterContext)) {
-          noisyKindFilteredCount += 1
-          if (!firstFilteredOutLabel && rawItemLabel) firstFilteredOutLabel = rawItemLabel
-          continue
-        }
-        const mapped = convertVscodeCompletionItemToMonaco(directResult.items[i], replaceRange, i, filterContext, languageId, 'direct-lsp')
-        if (!mapped) {
-          filteredOutCount += 1
-          if (!firstFilteredOutLabel && rawItemLabel) firstFilteredOutLabel = rawItemLabel
-          continue
-        }
-        if (!firstRawKind) firstRawKind = String(directResult.items[i]?.kind ?? '')
-        if (!firstMappedKind) firstMappedKind = String(mapped.kind ?? '')
-        if (mapped.kind === monaco.languages.CompletionItemKind.Text) textKindSuggestionCount += 1
-        suggestions.push(mapped)
-      }
-      const dedupedDirectSuggestions = dedupeCompletionSuggestions(suggestions)
-      logger.info('[EmbeddedLsp] direct LSP completion items mapped to Monaco suggestions', {
-        documentUri: String(virtualModel.uri?.toString?.() || ''),
-        languageId,
-        rawItemCount: directResult.items.length,
-        filteredOutCount,
-        noisyKindFilteredCount,
-        firstFilteredOutLabel,
-        mappedCount: dedupedDirectSuggestions.length,
-        firstMappedLabel: getCompletionItemLabelText(dedupedDirectSuggestions[0]?.label),
-        firstMappedInsertText: String(dedupedDirectSuggestions[0]?.insertText || ''),
-        firstMappedFilterText: String(dedupedDirectSuggestions[0]?.filterText || ''),
-        firstRawKind,
-        firstMappedKind,
-        textKindSuggestionCount,
-        firstMappedRange: dedupedDirectSuggestions[0]?.range
-          ? `${dedupedDirectSuggestions[0].range.startLineNumber}:${dedupedDirectSuggestions[0].range.startColumn}-${dedupedDirectSuggestions[0].range.endLineNumber}:${dedupedDirectSuggestions[0].range.endColumn}`
-          : '',
-      })
-      if (dedupedDirectSuggestions.length) return dedupedDirectSuggestions
-    }
-
     const completionTimeout = new Promise((resolve) => {
       window.setTimeout(() => {
         resolve({ __guaxiCompletionTimeout: true })
       }, 1800)
     })
 
+    // 设计说明：
+    // 1. Markdown 内嵌代码块仍然需要一个宿主 provider，把 fenced block 的虚拟文档候选映射回 Markdown range。
+    // 2. 但候选来源不再绕过 monaco-languageclient 手写 `textDocument/completion` 请求，
+    //    而是统一调用 VSCode/Monaco 已注册的 completion provider，保持 completion/resolve/排序过滤都走成熟 LSP 栈。
+    // 3. 日志保留 provider 命令入口，方便确认候选来自标准语言客户端而不是旧 bridge。
     const result = await Promise.race([
       vscodeCommands.executeCommand(
         'vscode.executeCompletionItemProvider',
@@ -7702,12 +7641,10 @@ const refreshLspEnabledSetting = async () => {
   try {
     const enabled = await invoke('get_lsp_syntax_highlight_enabled')
     lspEnabled.value = !!enabled
-    setLspCompletionBridgeEnabled(lspEnabled.value)
     applyMonacoThemeByLsp(lspEnabled.value)
   } catch (error) {
     logger.error('加载 LSP 配置失败:', error)
     lspEnabled.value = false
-    setLspCompletionBridgeEnabled(false)
     applyMonacoThemeByLsp(false)
   }
 }
@@ -7784,7 +7721,6 @@ const enableLspForEditorLanguage = async (targetEditor, languageId, filePath = '
     return
   }
 
-  registerLspCompletionBridge(monaco, [lang])
   if (LSP_SUPPORTED_LANGUAGES.has(lang)) {
     startLspClientForEditorLanguage(targetEditor, lang, filePath, 'editor-language-enable')
     return
@@ -7937,6 +7873,7 @@ const initEditor = () => {
       'editor.selectionBackground': '#e5e5e6',
       'editor.inactiveSelectionBackground': '#e5e5e6',
       'editor.lineHighlightBackground': '#f0f0f0',
+      'editor.lineHighlightBorder': '#00000000',
       'editorBracketMatch.background': '#d7dae0',
       'editorBracketMatch.border': '#c5c8ce',
       'editorBracketHighlight.foreground1': '#d73a49',
@@ -8067,6 +8004,7 @@ const initEditor = () => {
       'editor.selectionBackground': '#3e4451',
       'editor.inactiveSelectionBackground': '#3e4451',
       'editor.lineHighlightBackground': '#2c313a',
+      'editor.lineHighlightBorder': '#00000000',
       'editorBracketMatch.background': '#3e4451',
       'editorBracketMatch.border': '#61afef',
       'editorBracketHighlight.foreground1': '#e06c75',
@@ -17726,7 +17664,6 @@ const handleLspSettingChanged = (evt) => {
   const hasExplicitEnabled = typeof evt?.detail?.enabled === 'boolean'
   const enabled = hasExplicitEnabled ? !!evt.detail.enabled : !!lspEnabled.value
   lspEnabled.value = enabled
-  setLspCompletionBridgeEnabled(enabled)
   logger.info('[DirectLsp] editor LSP setting changed', {
     enabled,
     hasExplicitEnabled,
@@ -17764,7 +17701,6 @@ const handleLspSettingChanged = (evt) => {
 }
 
 watch(lspEnabled, (enabled) => {
-  setLspCompletionBridgeEnabled(enabled)
   refreshDirectLspSuggestMode(editor, editor?.getModel?.()?.getLanguageId?.() || '')
   refreshDirectLspSuggestMode(secondaryEditor, secondaryEditor?.getModel?.()?.getLanguageId?.() || '')
   applyMonacoThemeByLsp(enabled)
@@ -19633,8 +19569,12 @@ onUnmounted(() => {
 
 .editor-status-bar {
   height: 22px;
-  background-color: var(--statusBar-background);
-  border-top: 1px solid var(--statusBar-border);
+  /* 设计说明：
+     1. 子组件内部已经按 Guaxi 主题绘制状态栏。
+     2. 这里不能继续使用 VSCode 兼容变量 --statusBar-background，否则 monaco-vscode-api 的默认蓝色会覆盖 Guaxi 主题。
+     3. 外层只保留稳定尺寸和层级，背景/边框交给状态栏组件自己的主题变量。 */
+  background-color: transparent;
+  border-top: 0;
   flex-shrink: 0;
   /* 防止状态栏被压缩 */
   z-index: 2;

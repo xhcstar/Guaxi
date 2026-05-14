@@ -12,6 +12,7 @@ use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -162,6 +163,9 @@ static LSP_EXTENSION_CATALOG: Lazy<CatalogRoot> = Lazy::new(|| {
 });
 static LSP_EXTENSION_TASKS: Lazy<ParkingMutex<HashMap<String, LspExtensionTaskSnapshot>>> =
     Lazy::new(|| ParkingMutex::new(HashMap::new()));
+static LSP_SHARED_NODE_RUNTIME_INSTALL_LOCK: Lazy<AsyncMutex<()>> =
+    Lazy::new(|| AsyncMutex::new(()));
+const LSP_CATALOG_RUNTIME_CONFIGURE_MAX_ATTEMPTS: u32 = 4;
 
 fn normalize_string(raw: &str) -> String {
     raw.trim().to_string()
@@ -176,7 +180,8 @@ fn normalize_extension_id(raw: &str) -> String {
 }
 
 fn exe_dir() -> Result<PathBuf, String> {
-    let current_exe = std::env::current_exe().map_err(|e| format!("failed to resolve current exe: {e}"))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("failed to resolve current exe: {e}"))?;
     let dir = current_exe
         .parent()
         .ok_or_else(|| "failed to resolve current exe directory".to_string())?
@@ -208,7 +213,8 @@ fn lsp_runtime_root_dir() -> Result<PathBuf, String> {
 
 fn shared_node_runtime_dir() -> Result<PathBuf, String> {
     let dir = lsp_runtime_root_dir()?.join("node");
-    fs::create_dir_all(&dir).map_err(|e| format!("failed to create shared Node LSP runtime root: {e}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create shared Node LSP runtime root: {e}"))?;
     Ok(dir)
 }
 
@@ -316,6 +322,113 @@ fn parse_extension_identifier(id: &str) -> Result<(String, String), String> {
     Ok((namespace.to_string(), name.to_string()))
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    Some("win32-x64")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    Some("win32-arm64")
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86"))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    Some("win32-ia32")
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    Some("linux-x64")
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    Some("linux-arm64")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    Some("darwin-x64")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    Some("darwin-arm64")
+}
+
+#[cfg(not(any(
+    all(
+        target_os = "windows",
+        any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86")
+    ),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(
+        target_os = "macos",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+)))]
+fn current_open_vsx_target_platform() -> Option<&'static str> {
+    None
+}
+
+fn is_open_vsx_target_platform_segment(value: &str) -> bool {
+    matches!(
+        value,
+        "win32-x64"
+            | "win32-arm64"
+            | "win32-ia32"
+            | "linux-x64"
+            | "linux-arm64"
+            | "linux-armhf"
+            | "darwin-x64"
+            | "darwin-arm64"
+            | "alpine-x64"
+            | "alpine-arm64"
+    )
+}
+
+fn rewrite_open_vsx_download_url_for_current_platform(url: &str) -> String {
+    let Some(target_platform) = current_open_vsx_target_platform() else {
+        return normalize_string(url);
+    };
+    let mut parts = normalize_string(url)
+        .split('/')
+        .map(|item| item.to_string())
+        .collect::<Vec<_>>();
+
+    let Some(platform_index) = parts
+        .iter()
+        .position(|item| is_open_vsx_target_platform_segment(item))
+    else {
+        return parts.join("/");
+    };
+    let source_platform = parts[platform_index].clone();
+    if source_platform == target_platform {
+        return parts.join("/");
+    }
+
+    parts[platform_index] = target_platform.to_string();
+    if let Some(file_name) = parts.last_mut() {
+        *file_name = file_name.replace(
+            &format!("@{source_platform}.vsix"),
+            &format!("@{target_platform}.vsix"),
+        );
+    }
+    let rewritten = parts.join("/");
+    warn!(
+        source_platform = source_platform.as_str(),
+        target_platform,
+        original_url = url,
+        rewritten_url = rewritten.as_str(),
+        "rewrote Open VSX platform-specific download URL for current runtime platform"
+    );
+    rewritten
+}
+
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -355,7 +468,11 @@ fn node_command_program() -> String {
         .unwrap_or_else(|| "node".to_string())
 }
 
-fn insert_lsp_extension_task(operation: &str, extension_id: &str, message: &str) -> Result<LspExtensionTaskSnapshot, String> {
+fn insert_lsp_extension_task(
+    operation: &str,
+    extension_id: &str,
+    message: &str,
+) -> Result<LspExtensionTaskSnapshot, String> {
     let normalized_extension_id = normalize_extension_id(extension_id);
     if normalized_extension_id.is_empty() {
         return Err("extension_id cannot be empty".to_string());
@@ -401,7 +518,10 @@ fn insert_lsp_extension_task(operation: &str, extension_id: &str, message: &str)
     Ok(snapshot)
 }
 
-fn spawn_lsp_extension_task<F>(snapshot: LspExtensionTaskSnapshot, future: F) -> LspExtensionTaskSnapshot
+fn spawn_lsp_extension_task<F>(
+    snapshot: LspExtensionTaskSnapshot,
+    future: F,
+) -> LspExtensionTaskSnapshot
 where
     F: std::future::Future<Output = Result<LspExtensionState, String>> + Send + 'static,
 {
@@ -410,13 +530,7 @@ where
         update_lsp_extension_task(&task_id, "running", "task is running", None, None);
         match future.await {
             Ok(state) => {
-                update_lsp_extension_task(
-                    &task_id,
-                    "success",
-                    "task completed",
-                    None,
-                    Some(state),
-                );
+                update_lsp_extension_task(&task_id, "success", "task completed", None, Some(state));
             }
             Err(error) => {
                 warn!(
@@ -424,20 +538,17 @@ where
                     error = error.as_str(),
                     "LSP extension background task failed"
                 );
-                update_lsp_extension_task(
-                    &task_id,
-                    "error",
-                    "task failed",
-                    Some(error),
-                    None,
-                );
+                update_lsp_extension_task(&task_id, "error", "task failed", Some(error), None);
             }
         }
     });
     snapshot
 }
 
-fn spawn_lsp_extension_void_task<F>(snapshot: LspExtensionTaskSnapshot, future: F) -> LspExtensionTaskSnapshot
+fn spawn_lsp_extension_void_task<F>(
+    snapshot: LspExtensionTaskSnapshot,
+    future: F,
+) -> LspExtensionTaskSnapshot
 where
     F: std::future::Future<Output = Result<(), String>> + Send + 'static,
 {
@@ -568,7 +679,8 @@ fn read_string_array(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(Value::as_str)
                 .map(normalize_string)
                 .filter(|item| !item.is_empty())
@@ -629,7 +741,13 @@ fn record_from_dir(dir: &Path) -> Option<InstalledExtensionRecord> {
         } else {
             catalog_by_id()
                 .get(&id)
-                .map(|entry| entry.languages.iter().map(|lang| normalize_language(lang)).collect())
+                .map(|entry| {
+                    entry
+                        .languages
+                        .iter()
+                        .map(|lang| normalize_language(lang))
+                        .collect()
+                })
                 .unwrap_or_default()
         }
     };
@@ -692,7 +810,8 @@ fn load_installed_extensions() -> Result<Vec<InstalledExtensionRecord>, String> 
 
 fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
     let file = fs::File::open(zip_path).map_err(|e| format!("failed to open zip archive: {e}"))?;
-    let mut archive = ZipArchive::new(file).map_err(|e| format!("failed to parse zip archive: {e}"))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("failed to parse zip archive: {e}"))?;
 
     for index in 0..archive.len() {
         let mut file = archive
@@ -714,9 +833,10 @@ fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
                 .map_err(|e| format!("failed to create extracted parent directory: {e}"))?;
         }
 
-        let mut out_file =
-            fs::File::create(&out_path).map_err(|e| format!("failed to create extracted file: {e}"))?;
-        io::copy(&mut file, &mut out_file).map_err(|e| format!("failed to write extracted file: {e}"))?;
+        let mut out_file = fs::File::create(&out_path)
+            .map_err(|e| format!("failed to create extracted file: {e}"))?;
+        io::copy(&mut file, &mut out_file)
+            .map_err(|e| format!("failed to write extracted file: {e}"))?;
     }
 
     Ok(())
@@ -820,16 +940,19 @@ fn remove_existing_extension_versions(extension_id: &str) -> Result<(), String> 
 
 fn copy_dir_contents(src_dir: &Path, dest_dir: &Path) -> Result<(), String> {
     if dest_dir.exists() {
-        fs::remove_dir_all(dest_dir).map_err(|e| format!("failed to reset destination directory: {e}"))?;
+        fs::remove_dir_all(dest_dir)
+            .map_err(|e| format!("failed to reset destination directory: {e}"))?;
     }
-    fs::create_dir_all(dest_dir).map_err(|e| format!("failed to create destination directory: {e}"))?;
+    fs::create_dir_all(dest_dir)
+        .map_err(|e| format!("failed to create destination directory: {e}"))?;
 
     let mut options = CopyOptions::new();
     options.copy_inside = true;
     options.overwrite = true;
     options.content_only = true;
 
-    copy_dir(src_dir, dest_dir, &options).map_err(|e| format!("failed to copy extension directory: {e}"))?;
+    copy_dir(src_dir, dest_dir, &options)
+        .map_err(|e| format!("failed to copy extension directory: {e}"))?;
     Ok(())
 }
 
@@ -866,9 +989,12 @@ fn resolve_extension_bin(dir: &Path, bin_name: &str) -> Option<PathBuf> {
         }
     }
 
-    let direct = bin_dir.join(bin_name);
-    if direct.is_file() {
-        return Some(direct);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let direct = bin_dir.join(bin_name);
+        if direct.is_file() {
+            return Some(direct);
+        }
     }
 
     None
@@ -896,7 +1022,27 @@ fn node_package_name_for_bin(bin_name: &str) -> Option<String> {
         "pyright-langserver" => Some("pyright".to_string()),
         "bash-language-server" => Some("bash-language-server".to_string()),
         "typescript-language-server" => Some("typescript-language-server".to_string()),
+        "vscode-html-language-server" => Some("vscode-langservers-extracted".to_string()),
+        "vscode-css-language-server" => Some("vscode-langservers-extracted".to_string()),
+        "vscode-json-language-server" => Some("vscode-langservers-extracted".to_string()),
         _ => None,
+    }
+}
+
+fn node_package_install_specs_for_bin(bin_name: &str) -> Vec<String> {
+    match bin_name.trim() {
+        "typescript-language-server" => vec![
+            "typescript-language-server@latest".to_string(),
+            "typescript@latest".to_string(),
+        ],
+        "vscode-html-language-server"
+        | "vscode-css-language-server"
+        | "vscode-json-language-server" => {
+            vec!["vscode-langservers-extracted@latest".to_string()]
+        }
+        _ => node_package_name_for_bin(bin_name)
+            .map(|name| vec![format!("{name}@latest")])
+            .unwrap_or_default(),
     }
 }
 
@@ -911,8 +1057,12 @@ fn npm_command_name() -> &'static str {
 }
 
 fn apply_proxy_env_pair_to_child(cmd: &mut Command, upper: &str, lower: &str) -> bool {
-    let upper_value = std::env::var(upper).ok().filter(|value| !value.trim().is_empty());
-    let lower_value = std::env::var(lower).ok().filter(|value| !value.trim().is_empty());
+    let upper_value = std::env::var(upper)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let lower_value = std::env::var(lower)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
     match (upper_value, lower_value) {
         (Some(value), None) => {
             cmd.env(lower, &value);
@@ -939,10 +1089,7 @@ fn apply_proxy_env_to_npm(cmd: &mut Command) {
     // 3. 非中国大陆网络或用户开启系统代理时，只要代理工具同步了环境变量，runtime 安装就能沿用这条通道。
     info!(
         http_proxy,
-        https_proxy,
-        all_proxy,
-        no_proxy,
-        "prepared proxy environment for npm LSP runtime install"
+        https_proxy, all_proxy, no_proxy, "prepared proxy environment for npm LSP runtime install"
     );
 }
 
@@ -1016,7 +1163,7 @@ fn resolve_relative_entry(dir: &Path, entry_paths: &[String]) -> Option<PathBuf>
     entry_paths
         .iter()
         .map(|item| dir.join(item))
-        .find(|path| path.is_file())
+        .find(|path| is_supported_runtime_entry_path(path))
 }
 
 fn relative_entry_candidate_paths(dir: &Path, entry_paths: &[String]) -> Vec<String> {
@@ -1024,6 +1171,227 @@ fn relative_entry_candidate_paths(dir: &Path, entry_paths: &[String]) -> Vec<Str
         .iter()
         .map(|item| dir.join(item).to_string_lossy().to_string())
         .collect()
+}
+
+fn is_node_runtime_entry_path(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|item| item.to_str())
+        .map(|item| item.to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(extension.as_str(), "js" | "cjs" | "mjs")
+}
+
+fn is_supported_runtime_entry_path(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    if is_node_runtime_entry_path(path) {
+        return true;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let extension = path
+            .extension()
+            .and_then(|item| item.to_str())
+            .map(|item| item.to_ascii_lowercase())
+            .unwrap_or_default();
+        matches!(extension.as_str(), "exe" | "cmd" | "bat")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        true
+    }
+}
+
+fn shared_node_runtime_marker_path(runtime_dir: &Path, bin_name: &str) -> PathBuf {
+    runtime_dir.join(format!(
+        ".guaxi-node-runtime-ready-{}.json",
+        sanitize_dir_fragment(bin_name)
+    ))
+}
+
+fn shared_node_runtime_marker_matches(
+    runtime_dir: &Path,
+    bin_name: &str,
+    package_specs: &[String],
+) -> bool {
+    let marker_path = shared_node_runtime_marker_path(runtime_dir, bin_name);
+    let Ok(content) = fs::read_to_string(&marker_path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&content) else {
+        return false;
+    };
+    let marker_bin = value
+        .get("bin_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let marker_packages = value
+        .get("packages")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    marker_bin == bin_name && marker_packages == package_specs
+}
+
+fn write_shared_node_runtime_marker(
+    runtime_dir: &Path,
+    catalog: &CatalogExtension,
+    source_label: &str,
+    package_specs: &[String],
+) -> Result<(), String> {
+    let marker = json!({
+        "extension_id": catalog.id.as_str(),
+        "source": source_label,
+        "bin_name": catalog.lsp.bin_name.as_str(),
+        "packages": package_specs,
+        "prepared_at": now_rfc3339(),
+    });
+    fs::write(
+        shared_node_runtime_marker_path(runtime_dir, &catalog.lsp.bin_name),
+        serde_json::to_string_pretty(&marker)
+            .map_err(|e| format!("failed to serialize shared Node runtime marker: {e}"))?,
+    )
+    .map_err(|e| format!("failed to write shared Node runtime marker: {e}"))
+}
+
+fn npm_output_indicates_runtime_tree_corruption(output: &str) -> bool {
+    let normalized = output.to_ascii_uppercase();
+    normalized.contains("TAR_ENTRY_ERROR")
+        || normalized.contains("ENOTEMPTY")
+        || normalized.contains("ENOENT")
+        || normalized.contains("MODULE_NOT_FOUND")
+}
+
+fn reset_shared_node_runtime_tree(runtime_dir: &Path, reason: &str) -> Result<(), String> {
+    info!(
+        runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+        reason = reason,
+        "resetting shared Node LSP runtime cache before npm repair"
+    );
+
+    // 设计说明：
+    // 1. 共享 Node runtime 是自动生成缓存，不是用户源码；并发 npm install 失败后会留下半安装 node_modules。
+    // 2. 遇到 ENOENT/ENOTEMPTY/TAR_ENTRY_ERROR 这类目录树损坏信号时，继续增量安装通常只会反复失败。
+    // 3. 这里只清理 runtime_dir 下的 npm 产物和 Guaxi 标记文件，并保留目录本身，降低误删范围。
+    for relative in [
+        "node_modules",
+        "package-lock.json",
+        "package.json",
+        ".guaxi-node-runtime-ready.json",
+    ] {
+        let target = runtime_dir.join(relative);
+        if target.is_dir() {
+            fs::remove_dir_all(&target).map_err(|e| {
+                format!(
+                    "failed to remove shared Node runtime dir {}: {e}",
+                    target.to_string_lossy()
+                )
+            })?;
+        } else if target.is_file() {
+            fs::remove_file(&target).map_err(|e| {
+                format!(
+                    "failed to remove shared Node runtime file {}: {e}",
+                    target.to_string_lossy()
+                )
+            })?;
+        }
+    }
+    for entry in fs::read_dir(runtime_dir)
+        .map_err(|e| {
+            format!(
+                "failed to list shared Node runtime dir {}: {e}",
+                runtime_dir.to_string_lossy()
+            )
+        })?
+        .flatten()
+    {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|item| item.to_str()) else {
+            continue;
+        };
+        if path.is_file()
+            && name.starts_with(".guaxi-node-runtime-ready-")
+            && name.ends_with(".json")
+        {
+            fs::remove_file(&path).map_err(|e| {
+                format!(
+                    "failed to remove shared Node runtime marker {}: {e}",
+                    path.to_string_lossy()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+async fn run_shared_node_runtime_npm_install(
+    catalog: &CatalogExtension,
+    source_label: &str,
+    runtime_dir: &Path,
+    package_specs: &[String],
+) -> Result<(), String> {
+    let npm = npm_command_name();
+    let mut npm_install = Command::new(npm);
+    apply_proxy_env_to_npm(&mut npm_install);
+    let output = npm_install
+        .arg("install")
+        .arg("--prefix")
+        .arg(runtime_dir)
+        .arg("--no-save")
+        .arg("--no-audit")
+        .arg("--no-fund")
+        .arg("--fetch-retries")
+        .arg("5")
+        .arg("--fetch-retry-mintimeout")
+        .arg("10000")
+        .arg("--fetch-retry-maxtimeout")
+        .arg("120000")
+        .args(package_specs)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "failed to start npm runtime install for {}: {}",
+                catalog.id, e
+            )
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    warn!(
+        extension_id = catalog.id.as_str(),
+        source = source_label,
+        status = ?output.status,
+        stdout = stdout.as_str(),
+        stderr = stderr.as_str(),
+        "failed to prepare shared LSP node runtime"
+    );
+    Err(format!(
+        "failed to install shared LSP runtime packages {}: {}{}{}",
+        package_specs.join(", "),
+        stderr,
+        if stderr.is_empty() || stdout.is_empty() {
+            ""
+        } else {
+            " | "
+        },
+        stdout
+    ))
 }
 
 async fn prepare_shared_node_runtime(
@@ -1037,21 +1405,34 @@ async fn prepare_shared_node_runtime(
         ));
     }
     let runtime_dir = shared_node_runtime_dir()?;
-    if resolve_extension_bin(&runtime_dir, &catalog.lsp.bin_name).is_some()
-        || resolve_node_module_bin_entry(&runtime_dir, &catalog.lsp.bin_name).is_some()
+    let package_specs = node_package_install_specs_for_bin(&catalog.lsp.bin_name);
+    if package_specs.is_empty() {
+        return Err(format!(
+            "no npm package mapping for LSP bin {}",
+            catalog.lsp.bin_name
+        ));
+    }
+    let runtime_entry_exists = || {
+        resolve_extension_bin(&runtime_dir, &catalog.lsp.bin_name).is_some()
+            || resolve_node_module_bin_entry(&runtime_dir, &catalog.lsp.bin_name).is_some()
+    };
+    if runtime_entry_exists()
+        && shared_node_runtime_marker_matches(&runtime_dir, &catalog.lsp.bin_name, &package_specs)
     {
+        info!(
+            extension_id = catalog.id.as_str(),
+            source = source_label,
+            runtime_dir = runtime_dir.to_string_lossy().as_ref(),
+            bin_name = catalog.lsp.bin_name.as_str(),
+            "shared LSP node runtime already prepared"
+        );
         return Ok(());
     }
-
-    let package_name = node_package_name_for_bin(&catalog.lsp.bin_name)
-        .ok_or_else(|| format!("no npm package mapping for LSP bin {}", catalog.lsp.bin_name))?;
-    let npm = npm_command_name();
-    let package_spec = format!("{}@latest", package_name);
     info!(
         extension_id = catalog.id.as_str(),
         source = source_label,
         runtime_dir = runtime_dir.to_string_lossy().as_ref(),
-        package = package_spec.as_str(),
+        packages = ?package_specs,
         bin_name = catalog.lsp.bin_name.as_str(),
         "preparing missing shared LSP node runtime"
     );
@@ -1060,74 +1441,86 @@ async fn prepare_shared_node_runtime(
     // 1. 插件安装完成后必须立刻补齐 runtime，不能把问题留给运行时再暴露。
     // 2. Node LSP 包统一安装到 <软件目录>/LspRuntimes/node，多个语言插件共用一份 node_modules，避免每个扩展目录重复占用磁盘。
     // 3. 这里只写共享 runtime 目录，不修改 SlidevEnv；安装后会再次解析并执行 initialize 探测。
-    let mut npm_install = Command::new(npm);
-    apply_proxy_env_to_npm(&mut npm_install);
-    let output = npm_install
-        .arg("install")
-        .arg("--prefix")
-        .arg(&runtime_dir)
-        .arg("--no-save")
-        .arg("--no-audit")
-        .arg("--no-fund")
-        .arg("--fetch-retries")
-        .arg("5")
-        .arg("--fetch-retry-mintimeout")
-        .arg("10000")
-        .arg("--fetch-retry-maxtimeout")
-        .arg("120000")
-        .arg(&package_spec)
-        .output()
-        .await
-        .map_err(|e| format!("failed to start npm runtime install for {}: {}", catalog.id, e))?;
-
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        warn!(
+    // 设计说明：
+    // 1. 多个 LSP 扩展共用同一个 LspRuntimes/node/node_modules，npm install 必须串行执行。
+    // 2. 进入锁后再次检查 marker，避免排队期间前一个任务已经完成安装，后一个任务重复写目录。
+    // 3. 老版本并发安装可能留下半安装依赖；遇到 npm 文件树错误时清理缓存并重试一次。
+    info!(
+        extension_id = catalog.id.as_str(),
+        source = source_label,
+        "waiting for shared LSP node runtime install lock"
+    );
+    let _install_guard = LSP_SHARED_NODE_RUNTIME_INSTALL_LOCK.lock().await;
+    if runtime_entry_exists()
+        && shared_node_runtime_marker_matches(&runtime_dir, &catalog.lsp.bin_name, &package_specs)
+    {
+        info!(
             extension_id = catalog.id.as_str(),
             source = source_label,
-            status = ?output.status,
-            stdout = stdout.as_str(),
-            stderr = stderr.as_str(),
-            "failed to prepare shared LSP node runtime"
+            "shared LSP node runtime became ready while waiting for install lock"
         );
-        return Err(format!(
-            "failed to install shared LSP runtime package {}: {}{}{}",
-            package_spec,
-            stderr,
-            if stderr.is_empty() || stdout.is_empty() { "" } else { " | " },
-            stdout
-        ));
+        return Ok(());
+    }
+
+    let first_install =
+        run_shared_node_runtime_npm_install(catalog, source_label, &runtime_dir, &package_specs)
+            .await;
+    if let Err(error) = first_install {
+        if npm_output_indicates_runtime_tree_corruption(&error) {
+            warn!(
+                extension_id = catalog.id.as_str(),
+                source = source_label,
+                error = error.as_str(),
+                "shared LSP node runtime install looks corrupted; resetting cache and retrying once"
+            );
+            reset_shared_node_runtime_tree(&runtime_dir, "npm-tree-corruption")?;
+            run_shared_node_runtime_npm_install(
+                catalog,
+                source_label,
+                &runtime_dir,
+                &package_specs,
+            )
+            .await?;
+        } else {
+            return Err(error);
+        }
     }
 
     if resolve_extension_bin(&runtime_dir, &catalog.lsp.bin_name).is_none()
         && resolve_node_module_bin_entry(&runtime_dir, &catalog.lsp.bin_name).is_none()
     {
         return Err(format!(
-            "runtime package {} installed but bin {} was not found in {}",
-            package_spec,
+            "runtime packages {} installed but bin {} was not found in {}",
+            package_specs.join(", "),
             catalog.lsp.bin_name,
             runtime_dir.to_string_lossy()
         ));
     }
+    write_shared_node_runtime_marker(&runtime_dir, catalog, source_label, &package_specs)?;
 
     info!(
         extension_id = catalog.id.as_str(),
         source = source_label,
         runtime_dir = runtime_dir.to_string_lossy().as_ref(),
-        package = package_spec.as_str(),
+        packages = ?package_specs,
         "prepared shared LSP node runtime"
     );
     Ok(())
 }
 
-fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Option<&CatalogExtension>) -> LspExtensionRuntimeStatus {
+fn resolve_runtime_status(
+    record: Option<&InstalledExtensionRecord>,
+    catalog: Option<&CatalogExtension>,
+) -> LspExtensionRuntimeStatus {
     let Some(catalog) = catalog else {
         return LspExtensionRuntimeStatus {
             ready: false,
             runtime: "unknown".to_string(),
             program_path: None,
-            message: Some("extension is installed but not covered by the Guaxi LSP compatibility catalog".to_string()),
+            message: Some(
+                "extension is installed but not covered by the Guaxi LSP compatibility catalog"
+                    .to_string(),
+            ),
         };
     };
 
@@ -1155,7 +1548,9 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                     };
                 }
                 if runtime == "node_binary" {
-                    if let Some(entry_path) = resolve_node_module_bin_entry(install_dir, &catalog.lsp.bin_name) {
+                    if let Some(entry_path) =
+                        resolve_node_module_bin_entry(install_dir, &catalog.lsp.bin_name)
+                    {
                         return LspExtensionRuntimeStatus {
                             ready: true,
                             runtime: runtime.clone(),
@@ -1170,6 +1565,17 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
             }
             "extension_entry" => {
                 if let Some(path) = resolve_relative_entry(install_dir, &catalog.lsp.entry_paths) {
+                    if is_node_runtime_entry_path(&path) {
+                        return LspExtensionRuntimeStatus {
+                            ready: true,
+                            runtime: runtime.clone(),
+                            program_path: Some(node_command_program()),
+                            message: Some(format!(
+                                "resolved from extension bundled Node entry: {}",
+                                path.to_string_lossy()
+                            )),
+                        };
+                    }
                     return LspExtensionRuntimeStatus {
                         ready: true,
                         runtime: runtime.clone(),
@@ -1189,7 +1595,9 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                                 message: Some("resolved from shared Node LSP runtime".to_string()),
                             };
                         }
-                        if let Some(entry_path) = resolve_node_module_bin_entry(&root, &catalog.lsp.bin_name) {
+                        if let Some(entry_path) =
+                            resolve_node_module_bin_entry(&root, &catalog.lsp.bin_name)
+                        {
                             return LspExtensionRuntimeStatus {
                                 ready: true,
                                 runtime: runtime.clone(),
@@ -1210,7 +1618,9 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                             ready: true,
                             runtime: runtime.clone(),
                             program_path: Some(path.to_string_lossy().to_string()),
-                            message: Some("resolved from bundled SlidevEnv node runtime".to_string()),
+                            message: Some(
+                                "resolved from bundled SlidevEnv node runtime".to_string(),
+                            ),
                         };
                     }
                     if runtime == "node_binary" {
@@ -1238,7 +1648,9 @@ fn resolve_runtime_status(record: Option<&InstalledExtensionRecord>, catalog: Op
                             ready: true,
                             runtime: runtime.clone(),
                             program_path: None,
-                            message: Some("server runtime can be auto-downloaded on first use".to_string()),
+                            message: Some(
+                                "server runtime can be auto-downloaded on first use".to_string(),
+                            ),
                         };
                     }
                 }
@@ -1263,7 +1675,11 @@ fn build_extension_state(
     let id = record
         .as_ref()
         .map(|item| item.id.clone())
-        .or_else(|| catalog.as_ref().map(|item| normalize_extension_id(&item.id)))
+        .or_else(|| {
+            catalog
+                .as_ref()
+                .map(|item| normalize_extension_id(&item.id))
+        })
         .unwrap_or_default();
     let display_name = record
         .as_ref()
@@ -1279,14 +1695,22 @@ fn build_extension_state(
     } else {
         catalog
             .as_ref()
-            .map(|item| item.languages.iter().map(|lang| normalize_language(lang)).collect())
+            .map(|item| {
+                item.languages
+                    .iter()
+                    .map(|lang| normalize_language(lang))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let compatibility_level = catalog
         .as_ref()
         .map(|item| item.compatibility_level.clone())
         .unwrap_or_else(|| "C".to_string());
-    let recommended = catalog.as_ref().map(|item| item.recommended).unwrap_or(false);
+    let recommended = catalog
+        .as_ref()
+        .map(|item| item.recommended)
+        .unwrap_or(false);
     let open_vsx = record
         .as_ref()
         .and_then(|item| item.open_vsx.clone())
@@ -1294,7 +1718,11 @@ fn build_extension_state(
     let vscode_marketplace = record
         .as_ref()
         .and_then(|item| item.vscode_marketplace.clone())
-        .or_else(|| catalog.as_ref().and_then(|item| item.vscode_marketplace.clone()));
+        .or_else(|| {
+            catalog
+                .as_ref()
+                .and_then(|item| item.vscode_marketplace.clone())
+        });
 
     LspExtensionState {
         id,
@@ -1318,8 +1746,12 @@ fn build_extension_state(
         open_vsx,
         vscode_marketplace,
         manifest_name: record.as_ref().and_then(|item| item.manifest_name.clone()),
-        manifest_publisher: record.as_ref().and_then(|item| item.manifest_publisher.clone()),
-        manifest_browser: record.as_ref().and_then(|item| item.manifest_browser.clone()),
+        manifest_publisher: record
+            .as_ref()
+            .and_then(|item| item.manifest_publisher.clone()),
+        manifest_browser: record
+            .as_ref()
+            .and_then(|item| item.manifest_browser.clone()),
         manifest_main: record.as_ref().and_then(|item| item.manifest_main.clone()),
         activation_events: record
             .as_ref()
@@ -1387,7 +1819,8 @@ async fn download_to_file(url: &str, destination: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to read extension archive response: {e}"))?;
 
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("failed to create download parent directory: {e}"))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create download parent directory: {e}"))?;
     }
 
     fs::write(destination, &bytes).map_err(|e| format!("failed to save extension archive: {e}"))
@@ -1398,8 +1831,9 @@ async fn finalize_install_from_unpacked_root(
     meta: InstalledExtensionMeta,
     expected_extension_id: Option<&str>,
 ) -> Result<LspExtensionState, String> {
-    let (manifest_root, manifest) = manifest_root_from_dir(unpacked_root)
-        .ok_or_else(|| "failed to locate extension package.json in unpacked extension".to_string())?;
+    let (manifest_root, manifest) = manifest_root_from_dir(unpacked_root).ok_or_else(|| {
+        "failed to locate extension package.json in unpacked extension".to_string()
+    })?;
 
     let publisher = normalize_string(
         manifest
@@ -1463,7 +1897,10 @@ async fn finalize_install_from_unpacked_root(
 
     let record = record_from_dir(&install_dir)
         .ok_or_else(|| "failed to rebuild installed extension record after install".to_string())?;
-    Ok(build_extension_state(Some(record), catalog_by_id().get(&id).cloned()))
+    Ok(build_extension_state(
+        Some(record),
+        catalog_by_id().get(&id).cloned(),
+    ))
 }
 
 fn write_catalog_extension_package(
@@ -1471,7 +1908,8 @@ fn write_catalog_extension_package(
     catalog: &CatalogExtension,
 ) -> Result<(), String> {
     let (publisher, name) = parse_extension_identifier(&catalog.id)?;
-    fs::create_dir_all(dest_dir).map_err(|e| format!("failed to create catalog extension dir: {e}"))?;
+    fs::create_dir_all(dest_dir)
+        .map_err(|e| format!("failed to create catalog extension dir: {e}"))?;
 
     let manifest = json!({
         "publisher": publisher,
@@ -1511,7 +1949,10 @@ async fn verify_catalog_extension_runtime(
     source_label: &str,
 ) -> Result<Vec<lsp::LspRuntimeProbeResult>, String> {
     if !state.installed {
-        return Err(format!("{} did not install extension {}", source_label, state.id));
+        return Err(format!(
+            "{} did not install extension {}",
+            source_label, state.id
+        ));
     }
 
     let languages = state
@@ -1521,7 +1962,10 @@ async fn verify_catalog_extension_runtime(
         .filter(|item| !item.is_empty())
         .collect::<Vec<_>>();
     if languages.is_empty() {
-        return Err(format!("{} installed extension {} but no languages were declared", source_label, state.id));
+        return Err(format!(
+            "{} installed extension {} but no languages were declared",
+            source_label, state.id
+        ));
     }
 
     let mut probes = vec![];
@@ -1537,11 +1981,16 @@ async fn verify_catalog_extension_runtime(
                     continue;
                 }
                 if probe.completion_item_count == 0 {
-                    errors.push(format!(
-                        "{}: completion probe returned zero items",
-                        language
-                    ));
-                    continue;
+                    // 设计说明：
+                    // 1. LSP 允许 completion 返回 null 或空列表，这只表示当前探针文本没有候选，不代表 server 不可用。
+                    // 2. rust-analyzer、Marksman、TexLab、bash-language-server 在最小临时文档里经常返回空结果。
+                    // 3. 安装验证只要求 initialize 成功且声明 completionProvider；候选数量保留在日志中用于后续调试。
+                    info!(
+                        extension_id = state.id.as_str(),
+                        source = source_label,
+                        language = language.as_str(),
+                        "catalog LSP extension completion probe returned zero items; accepting initialized runtime"
+                    );
                 }
                 info!(
                     extension_id = state.id.as_str(),
@@ -1553,6 +2002,8 @@ async fn verify_catalog_extension_runtime(
                     hover_provider = probe.hover_provider,
                     definition_provider = probe.definition_provider,
                     semantic_tokens_provider = probe.semantic_tokens_provider,
+                    semantic_tokens_request_ok = probe.semantic_tokens_request_ok,
+                    semantic_tokens_token_count = probe.semantic_tokens_token_count,
                     server_name = probe.server_name.as_deref().unwrap_or(""),
                     server_version = probe.server_version.as_deref().unwrap_or(""),
                     "catalog LSP extension runtime capability probe completed"
@@ -1581,19 +2032,29 @@ async fn prepare_catalog_extension_runtime_if_missing(
     state: LspExtensionState,
     source_label: &str,
 ) -> Result<LspExtensionState, String> {
-    if state.runtime_status.ready {
-        return Ok(state);
-    }
-
     let catalog = catalog_by_id()
         .get(&normalize_extension_id(&state.id))
         .cloned()
-        .ok_or_else(|| format!("{} installed extension {} but it is not in the LSP catalog", source_label, state.id))?;
+        .ok_or_else(|| {
+            format!(
+                "{} installed extension {} but it is not in the LSP catalog",
+                source_label, state.id
+            )
+        })?;
     let install_dir = state
         .installed_path
         .as_deref()
         .map(PathBuf::from)
-        .ok_or_else(|| format!("{} installed extension {} but no install path was recorded", source_label, state.id))?;
+        .ok_or_else(|| {
+            format!(
+                "{} installed extension {} but no install path was recorded",
+                source_label, state.id
+            )
+        })?;
+
+    if state.runtime_status.ready && normalize_string(&catalog.lsp.runtime) != "node_binary" {
+        return Ok(state);
+    }
 
     warn!(
         extension_id = state.id.as_str(),
@@ -1606,6 +2067,10 @@ async fn prepare_catalog_extension_runtime_if_missing(
 
     match normalize_string(&catalog.lsp.runtime).as_str() {
         "node_binary" => {
+            // 设计说明：
+            // 1. 共享 Node runtime 只看 bin 文件是否存在不足够，旧版本并发 npm install 会留下可解析但不可运行的半安装依赖。
+            // 2. 因此 node_binary catalog 每次安装验证前都会经过 prepare_shared_node_runtime，由该函数用 marker 决定是否跳过。
+            // 3. 这样可以自动修复日志里的 core-js MODULE_NOT_FOUND、TAR_ENTRY_ERROR、ENOTEMPTY 等缓存损坏。
             prepare_shared_node_runtime(&catalog, source_label).await?;
         }
         runtime => {
@@ -1619,14 +2084,21 @@ async fn prepare_catalog_extension_runtime_if_missing(
         }
     }
 
-    let record = record_from_dir(&install_dir)
-        .ok_or_else(|| format!("failed to rebuild extension record after preparing runtime for {}", state.id))?;
+    let record = record_from_dir(&install_dir).ok_or_else(|| {
+        format!(
+            "failed to rebuild extension record after preparing runtime for {}",
+            state.id
+        )
+    })?;
     let refreshed = build_extension_state(Some(record), Some(catalog));
     if !refreshed.runtime_status.ready {
         return Err(format!(
             "runtime preparation completed for {} but runtime is still not ready: {}",
             refreshed.id,
-            refreshed.runtime_status.message.unwrap_or_else(|| "missing runtime entry".to_string())
+            refreshed
+                .runtime_status
+                .message
+                .unwrap_or_else(|| "missing runtime entry".to_string())
         ));
     }
     Ok(refreshed)
@@ -1723,7 +2195,9 @@ async fn install_catalog_lsp_extension_record(
     Ok(build_extension_state(Some(record), Some(catalog.clone())))
 }
 
-pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExtensionState, String> {
+pub async fn install_catalog_lsp_extension(
+    extension_id: &str,
+) -> Result<LspExtensionState, String> {
     let id = normalize_extension_id(extension_id);
     if id.is_empty() {
         return Err("extension_id cannot be empty".to_string());
@@ -1741,27 +2215,33 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
 
     if let Some(identifier) = catalog.vscode_marketplace.as_deref() {
         match install_vscode_marketplace_extension(identifier, None, None).await {
-            Ok(state) => match prepare_catalog_extension_runtime_if_missing(state, "VSCode Marketplace").await {
-                Ok(state) => match verify_catalog_extension_runtime(&state, "VSCode Marketplace").await {
-                    Ok(probes) => {
-                        info!(
-                            extension_id = id.as_str(),
-                            probe_count = probes.len(),
-                            probes = ?probes,
-                            "catalog LSP extension verified from VSCode Marketplace"
-                        );
-                        return Ok(state);
+            Ok(state) => {
+                match prepare_catalog_extension_runtime_if_missing(state, "VSCode Marketplace")
+                    .await
+                {
+                    Ok(state) => {
+                        match verify_catalog_extension_runtime(&state, "VSCode Marketplace").await {
+                            Ok(probes) => {
+                                info!(
+                                    extension_id = id.as_str(),
+                                    probe_count = probes.len(),
+                                    probes = ?probes,
+                                    "catalog LSP extension verified from VSCode Marketplace"
+                                );
+                                return Ok(state);
+                            }
+                            Err(error) => {
+                                rollback_failed_catalog_install(&id, &error);
+                                attempts.push(error);
+                            }
+                        }
                     }
                     Err(error) => {
                         rollback_failed_catalog_install(&id, &error);
                         attempts.push(error);
                     }
-                },
-                Err(error) => {
-                    rollback_failed_catalog_install(&id, &error);
-                    attempts.push(error);
                 }
-            },
+            }
             Err(error) => {
                 warn!(
                     extension_id = id.as_str(),
@@ -1775,27 +2255,29 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
 
     if let Some(identifier) = catalog.open_vsx.as_deref() {
         match install_open_vsx_extension(identifier, None, None).await {
-            Ok(state) => match prepare_catalog_extension_runtime_if_missing(state, "Open VSX").await {
-                Ok(state) => match verify_catalog_extension_runtime(&state, "Open VSX").await {
-                    Ok(probes) => {
-                        info!(
-                            extension_id = id.as_str(),
-                            probe_count = probes.len(),
-                            probes = ?probes,
-                            "catalog LSP extension verified from Open VSX"
-                        );
-                        return Ok(state);
-                    }
+            Ok(state) => {
+                match prepare_catalog_extension_runtime_if_missing(state, "Open VSX").await {
+                    Ok(state) => match verify_catalog_extension_runtime(&state, "Open VSX").await {
+                        Ok(probes) => {
+                            info!(
+                                extension_id = id.as_str(),
+                                probe_count = probes.len(),
+                                probes = ?probes,
+                                "catalog LSP extension verified from Open VSX"
+                            );
+                            return Ok(state);
+                        }
+                        Err(error) => {
+                            rollback_failed_catalog_install(&id, &error);
+                            attempts.push(error);
+                        }
+                    },
                     Err(error) => {
                         rollback_failed_catalog_install(&id, &error);
                         attempts.push(error);
                     }
-                },
-                Err(error) => {
-                    rollback_failed_catalog_install(&id, &error);
-                    attempts.push(error);
                 }
-            },
+            }
             Err(error) => {
                 warn!(
                     extension_id = id.as_str(),
@@ -1808,18 +2290,19 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
     }
 
     let state = install_catalog_lsp_extension_record(&catalog).await?;
-    let state = match prepare_catalog_extension_runtime_if_missing(state, "Guaxi catalog fallback").await {
-        Ok(state) => state,
-        Err(error) => {
-            rollback_failed_catalog_install(&id, &error);
-            attempts.push(error);
-            return Err(format!(
-                "LSP 扩展 {} 安装后未能完成运行时准备，已回滚。尝试结果: {}",
-                id,
-                attempts.join(" || ")
-            ));
-        }
-    };
+    let state =
+        match prepare_catalog_extension_runtime_if_missing(state, "Guaxi catalog fallback").await {
+            Ok(state) => state,
+            Err(error) => {
+                rollback_failed_catalog_install(&id, &error);
+                attempts.push(error);
+                return Err(format!(
+                    "LSP 扩展 {} 安装后未能完成运行时准备，已回滚。尝试结果: {}",
+                    id,
+                    attempts.join(" || ")
+                ));
+            }
+        };
     match verify_catalog_extension_runtime(&state, "Guaxi catalog fallback").await {
         Ok(probes) => {
             info!(
@@ -1845,7 +2328,10 @@ pub async fn install_catalog_lsp_extension(extension_id: &str) -> Result<LspExte
 pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState, String> {
     let source_path = PathBuf::from(vsix_path.trim());
     if !source_path.is_file() {
-        return Err(format!("vsix file not found: {}", source_path.to_string_lossy()));
+        return Err(format!(
+            "vsix file not found: {}",
+            source_path.to_string_lossy()
+        ));
     }
 
     info!(
@@ -1854,7 +2340,8 @@ pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState,
     );
 
     let unpack_root = temp_root_dir()?.join(format!("vsix_{}", Uuid::new_v4()));
-    fs::create_dir_all(&unpack_root).map_err(|e| format!("failed to create VSIX temp directory: {e}"))?;
+    fs::create_dir_all(&unpack_root)
+        .map_err(|e| format!("failed to create VSIX temp directory: {e}"))?;
     extract_zip_to_dir(&source_path, &unpack_root)?;
 
     let result = finalize_install_from_unpacked_root(
@@ -1865,7 +2352,10 @@ pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState,
             download_url: None,
             open_vsx: None,
             vscode_marketplace: None,
-            original_file_name: source_path.file_name().and_then(|item| item.to_str()).map(normalize_string),
+            original_file_name: source_path
+                .file_name()
+                .and_then(|item| item.to_str())
+                .map(normalize_string),
         },
         None,
     )
@@ -1879,7 +2369,10 @@ pub async fn import_vsix_extension(vsix_path: &str) -> Result<LspExtensionState,
 pub async fn import_extension_directory(dir_path: &str) -> Result<LspExtensionState, String> {
     let source_dir = PathBuf::from(dir_path.trim());
     if !source_dir.is_dir() {
-        return Err(format!("extension directory not found: {}", source_dir.to_string_lossy()));
+        return Err(format!(
+            "extension directory not found: {}",
+            source_dir.to_string_lossy()
+        ));
     }
 
     info!(
@@ -1895,7 +2388,10 @@ pub async fn import_extension_directory(dir_path: &str) -> Result<LspExtensionSt
             download_url: None,
             open_vsx: None,
             vscode_marketplace: None,
-            original_file_name: source_dir.file_name().and_then(|item| item.to_str()).map(normalize_string),
+            original_file_name: source_dir
+                .file_name()
+                .and_then(|item| item.to_str())
+                .map(normalize_string),
         },
         None,
     )
@@ -1907,7 +2403,11 @@ fn parse_open_vsx_result(item: &Value) -> Option<OpenVsxSearchResult> {
     let namespace = normalize_string(item.get("namespace")?.as_str()?);
     let name = normalize_string(item.get("name")?.as_str()?);
     let id = normalize_extension_id(&format!("{namespace}.{name}"));
-    let version = normalize_string(item.get("version").and_then(Value::as_str).unwrap_or("latest"));
+    let version = normalize_string(
+        item.get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("latest"),
+    );
     let display_name = normalize_string(
         item.get("displayName")
             .and_then(Value::as_str)
@@ -1920,14 +2420,22 @@ fn parse_open_vsx_result(item: &Value) -> Option<OpenVsxSearchResult> {
         .and_then(|files| files.get("download"))
         .and_then(Value::as_str)
         .map(normalize_string)
-        .or_else(|| item.get("downloadUrl").and_then(Value::as_str).map(normalize_string));
+        .or_else(|| {
+            item.get("downloadUrl")
+                .and_then(Value::as_str)
+                .map(normalize_string)
+        });
 
     let icon_url = item
         .get("files")
         .and_then(|files| files.get("icon"))
         .and_then(Value::as_str)
         .map(normalize_string)
-        .or_else(|| item.get("iconUrl").and_then(Value::as_str).map(normalize_string));
+        .or_else(|| {
+            item.get("iconUrl")
+                .and_then(Value::as_str)
+                .map(normalize_string)
+        });
 
     Some(OpenVsxSearchResult {
         id,
@@ -1954,7 +2462,11 @@ pub async fn search_open_vsx_extensions(query: &str) -> Result<Vec<OpenVsxSearch
         "https://open-vsx.org/api/-/search?size=20&query={}",
         urlencoding::encode(trimmed)
     );
-    info!(query = trimmed, url = url.as_str(), "searching Open VSX extensions");
+    info!(
+        query = trimmed,
+        url = url.as_str(),
+        "searching Open VSX extensions"
+    );
 
     let client = lsp_extension_http_client("search-open-vsx")?;
     let response = client
@@ -1965,7 +2477,10 @@ pub async fn search_open_vsx_extensions(query: &str) -> Result<Vec<OpenVsxSearch
         .map_err(|e| format!("failed to query Open VSX search API: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Open VSX search failed: HTTP {}", response.status()));
+        return Err(format!(
+            "Open VSX search failed: HTTP {}",
+            response.status()
+        ));
     }
 
     let payload = response
@@ -2006,7 +2521,12 @@ fn parse_marketplace_extension(item: &Value) -> Option<VscodeMarketplaceSearchRe
         .get("versions")
         .and_then(Value::as_array)
         .and_then(|items| items.first())?;
-    let version = normalize_string(version_item.get("version").and_then(Value::as_str).unwrap_or("latest"));
+    let version = normalize_string(
+        version_item
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("latest"),
+    );
     let files = version_item
         .get("files")
         .and_then(Value::as_array)
@@ -2086,7 +2606,10 @@ pub async fn search_vscode_marketplace_extensions(
         .map_err(|e| format!("failed to query VSCode Marketplace: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("VSCode Marketplace search failed: HTTP {}", response.status()));
+        return Err(format!(
+            "VSCode Marketplace search failed: HTTP {}",
+            response.status()
+        ));
     }
 
     let payload = response
@@ -2151,6 +2674,7 @@ async fn resolve_open_vsx_download_from_search(
             item.namespace, item.name, resolved_version, item.id, resolved_version
         )
     });
+    let resolved_url = rewrite_open_vsx_download_url_for_current_platform(&resolved_url);
 
     info!(
         extension_id = normalized_identifier.as_str(),
@@ -2172,7 +2696,11 @@ async fn resolve_open_vsx_download(
 
     if let Some(url) = download_url {
         let effective_version = requested_version.unwrap_or_else(|| "latest".to_string());
-        return Ok((normalize_string(url), effective_version, format!("{namespace}.{name}")));
+        return Ok((
+            normalize_string(url),
+            effective_version,
+            format!("{namespace}.{name}"),
+        ));
     }
 
     let detail_url = if let Some(version) = requested_version.as_deref() {
@@ -2212,8 +2740,7 @@ async fn resolve_open_vsx_download(
 
         return Err(format!(
             "Open VSX detail lookup failed for {}: HTTP {}",
-            identifier,
-            status
+            identifier, status
         ));
     }
 
@@ -2240,8 +2767,13 @@ async fn resolve_open_vsx_download(
                 "https://open-vsx.org/api/{namespace}/{name}/{resolved_version}/file/{namespace}.{name}-{resolved_version}.vsix"
             )
         });
+    let resolved_url = rewrite_open_vsx_download_url_for_current_platform(&resolved_url);
 
-    Ok((resolved_url, resolved_version, format!("{namespace}.{name}")))
+    Ok((
+        resolved_url,
+        resolved_version,
+        format!("{namespace}.{name}"),
+    ))
 }
 
 pub async fn install_open_vsx_extension(
@@ -2268,7 +2800,8 @@ pub async fn install_open_vsx_extension(
     download_to_file(&resolved_url, &download_file).await?;
 
     let unpack_root = temp_root_dir()?.join(format!("openvsx_{}", Uuid::new_v4()));
-    fs::create_dir_all(&unpack_root).map_err(|e| format!("failed to create Open VSX temp directory: {e}"))?;
+    fs::create_dir_all(&unpack_root)
+        .map_err(|e| format!("failed to create Open VSX temp directory: {e}"))?;
     extract_zip_to_dir(&download_file, &unpack_root)?;
 
     let result = finalize_install_from_unpacked_root(
@@ -2279,7 +2812,10 @@ pub async fn install_open_vsx_extension(
             download_url: Some(resolved_url),
             open_vsx: Some(resolved_id.clone()),
             vscode_marketplace: None,
-            original_file_name: download_file.file_name().and_then(|item| item.to_str()).map(normalize_string),
+            original_file_name: download_file
+                .file_name()
+                .and_then(|item| item.to_str())
+                .map(normalize_string),
         },
         Some(&resolved_id),
     )
@@ -2297,7 +2833,9 @@ pub async fn install_vscode_marketplace_extension(
     download_url: Option<&str>,
 ) -> Result<LspExtensionState, String> {
     let (publisher, name) = parse_extension_identifier(identifier)?;
-    let requested_version = version.map(normalize_string).filter(|item| !item.is_empty());
+    let requested_version = version
+        .map(normalize_string)
+        .filter(|item| !item.is_empty());
 
     let resolved = if let Some(url) = download_url {
         (
@@ -2306,11 +2844,17 @@ pub async fn install_vscode_marketplace_extension(
             format!("{publisher}.{name}"),
         )
     } else {
-        let search_result = search_vscode_marketplace_extensions(&format!("{publisher}.{name}")).await?;
+        let search_result =
+            search_vscode_marketplace_extensions(&format!("{publisher}.{name}")).await?;
         let matched = search_result
             .into_iter()
             .find(|item| normalize_extension_id(&item.id) == normalize_extension_id(identifier))
-            .ok_or_else(|| format!("VSCode Marketplace did not return extension: {}", identifier))?;
+            .ok_or_else(|| {
+                format!(
+                    "VSCode Marketplace did not return extension: {}",
+                    identifier
+                )
+            })?;
         let resolved_version = requested_version.unwrap_or_else(|| matched.version.clone());
         let resolved_url = matched.download_url.unwrap_or_else(|| {
             format!(
@@ -2352,7 +2896,10 @@ pub async fn install_vscode_marketplace_extension(
             download_url: Some(resolved_url),
             open_vsx: None,
             vscode_marketplace: Some(resolved_id),
-            original_file_name: download_file.file_name().and_then(|item| item.to_str()).map(normalize_string),
+            original_file_name: download_file
+                .file_name()
+                .and_then(|item| item.to_str())
+                .map(normalize_string),
         },
         Some(&expected_id),
     )
@@ -2370,7 +2917,10 @@ pub async fn remove_lsp_extension(extension_id: &str) -> Result<(), String> {
         return Err("extension_id cannot be empty".to_string());
     }
 
-    info!(extension_id = normalized.as_str(), "removing installed LSP extension");
+    info!(
+        extension_id = normalized.as_str(),
+        "removing installed LSP extension"
+    );
     // 设计说明：
     // 1. 卸载失败最常见的原因是 language server 进程仍以扩展目录为 cwd 或正在读取扩展内入口文件。
     // 2. 删除目录前统一通知 LSP actor 关闭，并短暂等待子进程退出，让 Windows 文件锁先释放。
@@ -2390,7 +2940,8 @@ pub fn start_install_open_vsx_extension_task(
     download_url: Option<String>,
 ) -> Result<LspExtensionTaskSnapshot, String> {
     let extension_id = normalize_extension_id(&identifier);
-    let snapshot = insert_lsp_extension_task("install-openvsx", &extension_id, "queued Open VSX install")?;
+    let snapshot =
+        insert_lsp_extension_task("install-openvsx", &extension_id, "queued Open VSX install")?;
     Ok(spawn_lsp_extension_task(snapshot, async move {
         install_open_vsx_extension(&identifier, version.as_deref(), download_url.as_deref()).await
     }))
@@ -2408,7 +2959,12 @@ pub fn start_install_vscode_marketplace_extension_task(
         "queued VSCode Marketplace install",
     )?;
     Ok(spawn_lsp_extension_task(snapshot, async move {
-        install_vscode_marketplace_extension(&identifier, version.as_deref(), download_url.as_deref()).await
+        install_vscode_marketplace_extension(
+            &identifier,
+            version.as_deref(),
+            download_url.as_deref(),
+        )
+        .await
     }))
 }
 
@@ -2416,7 +2972,8 @@ pub fn start_install_catalog_lsp_extension_task(
     identifier: String,
 ) -> Result<LspExtensionTaskSnapshot, String> {
     let extension_id = normalize_extension_id(&identifier);
-    let snapshot = insert_lsp_extension_task("install-catalog", &extension_id, "queued catalog install")?;
+    let snapshot =
+        insert_lsp_extension_task("install-catalog", &extension_id, "queued catalog install")?;
     let task_id = snapshot.task_id.clone();
     Ok({
         tokio::spawn(async move {
@@ -2448,6 +3005,26 @@ pub fn start_install_catalog_lsp_extension_task(
                         break;
                     }
                     Err(error) => {
+                        if attempt >= LSP_CATALOG_RUNTIME_CONFIGURE_MAX_ATTEMPTS {
+                            warn!(
+                                task_id = task_id.as_str(),
+                                extension_id = extension_id.as_str(),
+                                attempt,
+                                error = error.as_str(),
+                                "catalog LSP extension runtime configuration reached max attempts"
+                            );
+                            update_lsp_extension_task(
+                                &task_id,
+                                "error",
+                                &format!(
+                                    "runtime configuration failed after {} attempts",
+                                    LSP_CATALOG_RUNTIME_CONFIGURE_MAX_ATTEMPTS
+                                ),
+                                Some(error),
+                                None,
+                            );
+                            break;
+                        }
                         let delay_secs = u64::from((attempt.min(10)) * 6);
                         warn!(
                             task_id = task_id.as_str(),
@@ -2468,10 +3045,10 @@ pub fn start_install_catalog_lsp_extension_task(
                             None,
                         );
 
-                        // 设计思路：
-                        // 1. catalog 安装只有在真实 LSP completion probe 成功后才标记 success。
-                        // 2. 网络、npm registry、GitHub Release 或运行时初始化可能短暂失败，因此失败后保留任务并退避重试。
-                        // 3. 已存在的 running 任务会阻止重复启动同一扩展配置，避免多个重试循环互相覆盖 runtime 目录。
+                        // Design note:
+                        // 1. Catalog install is marked successful only after a real LSP completion probe passes.
+                        // 2. Network, npm registry, GitHub Release, or runtime startup failures can be transient, so retry with backoff.
+                        // 3. The retry count is capped to avoid a bad source consuming background resources forever.
                         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
                         attempt = attempt.saturating_add(1);
                     }
@@ -2490,15 +3067,23 @@ pub fn start_import_vsix_extension_task(path: String) -> Result<LspExtensionTask
     }))
 }
 
-pub fn start_import_extension_directory_task(path: String) -> Result<LspExtensionTaskSnapshot, String> {
+pub fn start_import_extension_directory_task(
+    path: String,
+) -> Result<LspExtensionTaskSnapshot, String> {
     let task_key = format!("local-directory:{}", path.trim().to_lowercase());
-    let snapshot = insert_lsp_extension_task("import-directory", &task_key, "queued extension directory import")?;
+    let snapshot = insert_lsp_extension_task(
+        "import-directory",
+        &task_key,
+        "queued extension directory import",
+    )?;
     Ok(spawn_lsp_extension_task(snapshot, async move {
         import_extension_directory(&path).await
     }))
 }
 
-pub fn start_remove_lsp_extension_task(identifier: String) -> Result<LspExtensionTaskSnapshot, String> {
+pub fn start_remove_lsp_extension_task(
+    identifier: String,
+) -> Result<LspExtensionTaskSnapshot, String> {
     let extension_id = normalize_extension_id(&identifier);
     let snapshot = insert_lsp_extension_task("remove", &extension_id, "queued extension removal")?;
     Ok(spawn_lsp_extension_void_task(snapshot, async move {
@@ -2515,7 +3100,11 @@ pub(crate) fn has_installed_lsp_extension_for_language(language: &str) -> Result
     let catalog = catalog_by_id();
     let installed = load_installed_extensions()?;
     let matched = installed.into_iter().any(|item| {
-        if !item.languages.iter().any(|lang| normalize_language(lang) == normalized_language) {
+        if !item
+            .languages
+            .iter()
+            .any(|lang| normalize_language(lang) == normalized_language)
+        {
             return false;
         }
         catalog.contains_key(&normalize_extension_id(&item.id))
@@ -2523,7 +3112,9 @@ pub(crate) fn has_installed_lsp_extension_for_language(language: &str) -> Result
     Ok(matched)
 }
 
-pub(crate) fn installed_lsp_extension_ids_for_language(language: &str) -> Result<Vec<String>, String> {
+pub(crate) fn installed_lsp_extension_ids_for_language(
+    language: &str,
+) -> Result<Vec<String>, String> {
     let normalized_language = normalize_language(language);
     if normalized_language.is_empty() {
         return Ok(vec![]);
@@ -2532,7 +3123,11 @@ pub(crate) fn installed_lsp_extension_ids_for_language(language: &str) -> Result
     let catalog = catalog_by_id();
     let mut matched = load_installed_extensions()?
         .into_iter()
-        .filter(|item| item.languages.iter().any(|lang| normalize_language(lang) == normalized_language))
+        .filter(|item| {
+            item.languages
+                .iter()
+                .any(|lang| normalize_language(lang) == normalized_language)
+        })
         .filter(|item| catalog.contains_key(&normalize_extension_id(&item.id)))
         .map(|item| normalize_extension_id(&item.id))
         .filter(|item| !item.is_empty())
@@ -2555,13 +3150,18 @@ pub(crate) async fn resolve_lsp_command_for_language(
 
     let mut candidates = installed
         .into_iter()
-        .filter(|item| item.languages.iter().any(|lang| normalize_language(lang) == normalized_language))
+        .filter(|item| {
+            item.languages
+                .iter()
+                .any(|lang| normalize_language(lang) == normalized_language)
+        })
         .collect::<Vec<_>>();
 
     candidates.sort_by(|a, b| a.display_name.cmp(&b.display_name));
 
     for candidate in candidates {
-        let Some(catalog_entry) = catalog.get(&normalize_extension_id(&candidate.id)).cloned() else {
+        let Some(catalog_entry) = catalog.get(&normalize_extension_id(&candidate.id)).cloned()
+        else {
             continue;
         };
 
@@ -2575,7 +3175,9 @@ pub(crate) async fn resolve_lsp_command_for_language(
         for strategy in &catalog_entry.lsp.resolve_order {
             match strategy.as_str() {
                 "extension_bin" => {
-                    if let Some(path) = resolve_extension_bin(&candidate.install_dir, &catalog_entry.lsp.bin_name) {
+                    if let Some(path) =
+                        resolve_extension_bin(&candidate.install_dir, &catalog_entry.lsp.bin_name)
+                    {
                         let env_roots = vec![
                             candidate.install_dir.clone(),
                             candidate.install_dir.join("node_modules").join(".bin"),
@@ -2591,7 +3193,10 @@ pub(crate) async fn resolve_lsp_command_for_language(
                         }));
                     }
                     if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
-                        if let Some(entry_path) = resolve_node_module_bin_entry(&candidate.install_dir, &catalog_entry.lsp.bin_name) {
+                        if let Some(entry_path) = resolve_node_module_bin_entry(
+                            &candidate.install_dir,
+                            &catalog_entry.lsp.bin_name,
+                        ) {
                             // 设计思路：
                             // 1. 有些 VSCode/Open VSX 扩展或离线包只带 node_modules/<pkg>/package.json，
                             //    没有生成 node_modules/.bin/<bin>.cmd。
@@ -2635,8 +3240,13 @@ pub(crate) async fn resolve_lsp_command_for_language(
                     );
                 }
                 "extension_entry" => {
-                    if let Some(path) = resolve_relative_entry(&candidate.install_dir, &catalog_entry.lsp.entry_paths) {
-                        if normalize_string(&catalog_entry.lsp.runtime) == "node_entry" {
+                    if let Some(path) = resolve_relative_entry(
+                        &candidate.install_dir,
+                        &catalog_entry.lsp.entry_paths,
+                    ) {
+                        if normalize_string(&catalog_entry.lsp.runtime) == "node_entry"
+                            || is_node_runtime_entry_path(&path)
+                        {
                             // Design note: VSCode extensions can ship the language server as a
                             // bundled JS entry under the downloaded extension directory. We run
                             // that JS entry with the available Node command while keeping package
@@ -2698,8 +3308,11 @@ pub(crate) async fn resolve_lsp_command_for_language(
                             );
                             continue;
                         };
-                        if let Some(path) = resolve_extension_bin(&root, &catalog_entry.lsp.bin_name) {
-                            let env_roots = vec![root.clone(), root.join("node_modules").join(".bin")];
+                        if let Some(path) =
+                            resolve_extension_bin(&root, &catalog_entry.lsp.bin_name)
+                        {
+                            let env_roots =
+                                vec![root.clone(), root.join("node_modules").join(".bin")];
                             info!(
                                 language = normalized_language.as_str(),
                                 extension_id = candidate.id.as_str(),
@@ -2718,10 +3331,13 @@ pub(crate) async fn resolve_lsp_command_for_language(
                                 server_id: catalog_entry.lsp.server_id.clone(),
                             }));
                         }
-                        if let Some(entry_path) = resolve_node_module_bin_entry(&root, &catalog_entry.lsp.bin_name) {
+                        if let Some(entry_path) =
+                            resolve_node_module_bin_entry(&root, &catalog_entry.lsp.bin_name)
+                        {
                             let mut args = vec![entry_path.to_string_lossy().to_string()];
                             args.extend(catalog_entry.lsp.args.clone());
-                            let env_roots = vec![root.clone(), root.join("node_modules").join(".bin")];
+                            let env_roots =
+                                vec![root.clone(), root.join("node_modules").join(".bin")];
                             let node_program = node_command_program();
                             info!(
                                 language = normalized_language.as_str(),
@@ -2753,7 +3369,9 @@ pub(crate) async fn resolve_lsp_command_for_language(
                 }
                 "slidev_env_bin" => {
                     if let Some(root) = slidev_env_root().ok() {
-                        if let Some(path) = resolve_extension_bin(&root, &catalog_entry.lsp.bin_name) {
+                        if let Some(path) =
+                            resolve_extension_bin(&root, &catalog_entry.lsp.bin_name)
+                        {
                             let mut env_roots = vec![root.clone()];
                             if let Some(bin_dir) = slidev_bin_dir() {
                                 env_roots.push(bin_dir);
