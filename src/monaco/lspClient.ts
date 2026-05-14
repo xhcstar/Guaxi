@@ -49,6 +49,7 @@ const lspFailureTracker = new Map<string, { count: number; firstAt: number }>()
 const directCompletionProviderDisposables = new Map<string, monaco.IDisposable>()
 const directSyncedDocuments = new Map<string, { version: number; content: string; languageId: string }>()
 const DIRECT_LSP_SYNC_SETTLE_MS = 35
+const DIRECT_LSP_CLIENT_READY_TIMEOUT_MS = 1500
 
 const LSP_TO_MONACO_COMPLETION_KIND: Record<number, monaco.languages.CompletionItemKind> = {
   1: monaco.languages.CompletionItemKind.Text,
@@ -113,6 +114,18 @@ const getRelatedLspLanguages = (languageId: string) => {
     .map((item) => normalizeLanguageId(item?.language || ''))
     .filter(Boolean)
   return selectors.length ? selectors : [normalizeLanguageId(languageId)].filter(Boolean)
+}
+
+const getLspClientLanguages = (languageId: string) => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  // 设计说明：
+  // 1. clangd 这类服务端会同时服务 c/cpp，但运行时 extension snapshot 有时只把启动语言放进 selector。
+  // 2. 复用同一个 clientKey 时，当前 languageId 必须显式纳入状态和补全 provider 注册范围。
+  // 3. 否则会出现日志里 client 已复用、readyPromise 已完成，但 c/cpp 其中一个语言仍停在 idle 的情况。
+  return Array.from(new Set([
+    normalizedLanguageId,
+    ...getRelatedLspLanguages(normalizedLanguageId),
+  ].filter(Boolean)))
 }
 
 const waitForDirectLspDocumentSync = () =>
@@ -313,9 +326,34 @@ export const provideDirectLspCompletionSuggestions = async (
   const normalizedLanguageId = normalizeLanguageId(languageId)
   const clientKey = getLspClientKey(normalizedLanguageId)
   const entry = lspClients.get(clientKey)
-  if (!entry?.client || entry.disposed || getLspConnectionState(normalizedLanguageId).state !== 'connected') {
+  if (!entry?.client || entry.disposed) {
     return []
   }
+  const connectionStateBeforeDirectCompletion = getLspConnectionState(normalizedLanguageId).state
+  if (connectionStateBeforeDirectCompletion !== 'connected') {
+    const ready = await waitForSharedLspClientReady(entry)
+    if (!ready || token?.isCancellationRequested) {
+      logger.debug('[LSP] direct completion skipped because shared client is not ready', {
+        languageId: normalizedLanguageId,
+        clientKey,
+        state: getLspConnectionState(normalizedLanguageId).state,
+        documentUri: String(model.uri?.toString?.() || entry.documentUri || ''),
+      })
+      return []
+    }
+
+    getLspClientLanguages(normalizedLanguageId).forEach((lang) => {
+      setLspConnectionState(lang, 'connected', 'shared-client-direct-completion')
+      ensureDirectCompletionProviderRegistered(lang, 'shared-client-direct-completion')
+    })
+    logger.info('[LSP] direct completion using ready shared client', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      previousState: connectionStateBeforeDirectCompletion,
+      documentUri: String(model.uri?.toString?.() || entry.documentUri || ''),
+    })
+  }
+  ensureDirectCompletionProviderRegistered(normalizedLanguageId, 'direct-completion-request')
 
   const params = {
     textDocument: {
@@ -405,6 +443,59 @@ const ensureDirectCompletionProviderRegistered = (languageId: string, reason = '
     reason,
     triggerCharacters: DIRECT_COMPLETION_TRIGGER_CHARACTERS,
   })
+}
+
+const waitForSharedLspClientReady = (
+  entry: LspClientEntry,
+  timeoutMs = DIRECT_LSP_CLIENT_READY_TIMEOUT_MS
+) =>
+  new Promise<boolean>((resolve) => {
+    if (!entry || entry.disposed) {
+      resolve(false)
+      return
+    }
+
+    let settled = false
+    let timer: ReturnType<typeof window.setTimeout> | null = null
+    const done = (value: boolean) => {
+      if (settled) return
+      settled = true
+      if (timer) window.clearTimeout(timer)
+      resolve(value)
+    }
+    timer = window.setTimeout(() => done(false), Math.max(50, Number(timeoutMs) || DIRECT_LSP_CLIENT_READY_TIMEOUT_MS))
+
+    Promise.resolve(entry.readyPromise)
+      .then((ready) => done(!!ready && !entry.disposed && !!entry.client))
+      .catch(() => done(false))
+  })
+
+const markSharedLspClientReadyForLanguage = (
+  entry: LspClientEntry,
+  clientKey: string,
+  languageId: string,
+  reason: string
+) => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  if (!entry || !normalizedLanguageId) return
+
+  void waitForSharedLspClientReady(entry)
+    .then((ready) => {
+      if (!ready || entry.disposed || lspClients.get(clientKey) !== entry) return
+
+      const languages = getLspClientLanguages(normalizedLanguageId)
+      languages.forEach((lang) => {
+        setLspConnectionState(lang, 'connected', reason)
+        ensureDirectCompletionProviderRegistered(lang, reason)
+      })
+      logger.info('[LSP] shared client marked ready for language', {
+        languageId: normalizedLanguageId,
+        clientKey,
+        reason,
+        languages,
+        activeDocumentUri: entry.documentUri,
+      })
+    })
 }
 
 type LspConnectionStateValue = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'disabled'
@@ -538,6 +629,12 @@ export function waitForLspConnection(languageId: string, timeoutMs: number = 150
       Promise.resolve(existingEntry.readyPromise)
         .then((value) => {
           window.clearTimeout(timer)
+          if (value && getLspConnectionState(lang).state !== 'connected') {
+            getLspClientLanguages(lang).forEach((item) => {
+              setLspConnectionState(item, 'connected', 'wait-shared-client-ready')
+              ensureDirectCompletionProviderRegistered(item, 'wait-shared-client-ready')
+            })
+          }
           resolve(!!value)
         })
         .catch(() => {
@@ -665,7 +762,7 @@ const cleanupLspClientEntry = (
       directSyncedDocuments.delete(syncKey)
     }
   })
-  const relatedLanguages = getRelatedLspLanguages(cur.languageId || languageId)
+  const relatedLanguages = getLspClientLanguages(cur.languageId || languageId)
   if (relatedLanguages.some((lang) => lspDisabled.has(lang))) {
     relatedLanguages.forEach((lang) => {
       const disabledReason = lspDisabledReason.get(lang) || reason
@@ -682,7 +779,7 @@ const cleanupLspClientEntry = (
 }
 
 const disableLsp = (languageId: string, reason: string, error?: unknown) => {
-  const relatedLanguages = getRelatedLspLanguages(languageId)
+  const relatedLanguages = getLspClientLanguages(languageId)
   relatedLanguages.forEach((lang) => {
     if (!lspDisabled.has(lang)) {
       lspDisabled.add(lang)
@@ -839,7 +936,7 @@ export function initLspClient(
   const forceRetry = !!options.forceRetry
 
   if (!resolvedDocumentContext.documentUri) {
-    getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+    getLspClientLanguages(normalizedLanguageId).forEach((lang) => {
       setLspConnectionState(lang, 'disconnected', 'invalid-file-path')
     })
     logger.warn('[LSP] skipped invalid file path', {
@@ -897,9 +994,11 @@ export function initLspClient(
         workspacePath: existingClient.workspacePath,
       })
       if (getLspConnectionState(normalizedLanguageId).state === 'connected') {
-        getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+        getLspClientLanguages(normalizedLanguageId).forEach((lang) => {
           ensureDirectCompletionProviderRegistered(lang, 'reuse-connected-client')
         })
+      } else {
+        markSharedLspClientReadyForLanguage(existingClient, clientKey, normalizedLanguageId, 'reuse-shared-client-ready')
       }
       return
     }
@@ -913,9 +1012,14 @@ export function initLspClient(
       state: getLspConnectionState(normalizedLanguageId).state,
     })
     if (getLspConnectionState(normalizedLanguageId).state === 'connected') {
-      getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+      getLspClientLanguages(normalizedLanguageId).forEach((lang) => {
         ensureDirectCompletionProviderRegistered(lang, 'reuse-existing-entry')
       })
+    } else {
+      const existingEntry = lspClients.get(clientKey)
+      if (existingEntry) {
+        markSharedLspClientReadyForLanguage(existingEntry, clientKey, normalizedLanguageId, 'reuse-existing-entry-ready')
+      }
     }
     return
   }
@@ -974,7 +1078,7 @@ export function initLspClient(
     workspaceUri: resolvedDocumentContext.workspaceUri,
   }
   lspClients.set(clientKey, entry)
-  getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+  getLspClientLanguages(normalizedLanguageId).forEach((lang) => {
     setLspConnectionState(lang, 'connecting')
   })
 
@@ -1067,7 +1171,7 @@ export function initLspClient(
           requestSource,
           documentUri: resolvedDocumentContext.documentUri,
         })
-        getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+        getLspClientLanguages(normalizedLanguageId).forEach((lang) => {
           setLspConnectionState(lang, 'connected')
           ensureDirectCompletionProviderRegistered(lang, 'client-start-resolved')
         })
