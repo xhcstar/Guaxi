@@ -1103,7 +1103,8 @@ import {
   getLspConnectionState,
   onLspConnectionStateChange,
   waitForLspConnection,
-  resetLspDisabled
+  resetLspDisabled,
+  provideDirectLspCompletionSuggestions
 } from '../../monaco/lspClient'
 import {
   LSP_SUPPORTED_LANGUAGES,
@@ -7403,6 +7404,57 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
       firstSuggestionFilterText: String(vscodeSuggestions[0]?.filterText || ''),
     });
     return vscodeSuggestions
+  }
+
+  const directLspSuggestions = await provideDirectLspCompletionSuggestions(
+    embeddedCtx.languageId,
+    virtualModel,
+    embeddedCtx.positionInBlock,
+    context || { triggerKind: monaco.languages.CompletionTriggerKind.Invoke },
+    undefined
+  )
+  if (directLspSuggestions.length) {
+    const languageId = String(virtualModel.getLanguageId?.() || embeddedCtx.languageId || '')
+    const mappedSuggestions = []
+    let directFilteredOutCount = 0
+    let firstDirectFilteredOutLabel = ''
+    for (const item of directLspSuggestions) {
+      const labelText = getCompletionItemLabelText(item?.label)
+      const insertText = getVscodeOrLspCompletionInsertText(item, labelText)
+      if (!labelText) continue
+      if (!shouldKeepEmbeddedCompletionCandidate(languageId, labelText, insertText, item?.filterText, filterContext)) {
+        directFilteredOutCount += 1
+        if (!firstDirectFilteredOutLabel) firstDirectFilteredOutLabel = labelText
+        continue
+      }
+
+      mappedSuggestions.push({
+        ...item,
+        insertText: buildEmbeddedCompletionInsertText(insertText, labelText, filterContext),
+        filterText: buildEmbeddedCompletionFilterText(item?.filterText, labelText, filterContext),
+        range: replaceRange,
+        textEdit: undefined,
+        additionalTextEdits: undefined,
+      })
+    }
+
+    const dedupedDirectSuggestions = dedupeCompletionSuggestions(mappedSuggestions)
+    writeEmbeddedCompletionCache(hostEditor, model, position, embeddedCtx, dedupedDirectSuggestions)
+    if (dedupedDirectSuggestions.length && hostEditor) {
+      scheduleEmbeddedCompletionRetrigger(hostEditor, model, position, embeddedCtx, 'direct-lsp-completion')
+    }
+    logger.info('[EmbeddedLsp] completion resolved from direct LSP request', {
+      languageId,
+      documentUri: String(virtualModel.uri?.toString?.() || ''),
+      rawSuggestionCount: directLspSuggestions.length,
+      suggestionCount: dedupedDirectSuggestions.length,
+      directFilteredOutCount,
+      firstDirectFilteredOutLabel,
+      lineNumber: embeddedCtx.positionInBlock?.lineNumber || 0,
+      column: embeddedCtx.positionInBlock?.column || 0,
+      firstSuggestion: getCompletionItemLabelText(dedupedDirectSuggestions[0]?.label),
+    })
+    if (dedupedDirectSuggestions.length) return dedupedDirectSuggestions
   }
 
   const providers = (monaco.languages).CompletionProviderRegistry?.all?.(virtualModel) || [];
@@ -19468,9 +19520,15 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .current-line),
 :global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .view-overlays .current-line),
 :global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays .current-line),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays .current-line-margin),
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays .line-numbers),
 :global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .line-numbers.active-line-number) {
   background-color: #2c313a !important;
   border-color: transparent !important;
+}
+
+:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .line-numbers.active-line-number) {
+  color: #d7deea !important;
 }
 
 .guaxi-editor :deep(.md-fence-token-base) { color: #abb2bf; }

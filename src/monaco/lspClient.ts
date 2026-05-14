@@ -6,6 +6,11 @@ import {
   type MessageTransports,
 } from 'vscode-languageclient/browser.js'
 import {
+  CompletionRequest,
+  DidChangeTextDocumentNotification,
+  DidOpenTextDocumentNotification,
+} from 'vscode-languageserver-protocol'
+import {
   toSocket,
   WebSocketMessageReader,
   WebSocketMessageWriter,
@@ -41,6 +46,51 @@ const LSP_FAILURE_WINDOW_MS = 60000
 const LSP_FAILURE_THRESHOLD = 3
 const LSP_STOP_TIMEOUT_MS = 350
 const lspFailureTracker = new Map<string, { count: number; firstAt: number }>()
+const directCompletionProviderDisposables = new Map<string, monaco.IDisposable>()
+const directSyncedDocuments = new Map<string, { version: number; content: string; languageId: string }>()
+const DIRECT_LSP_SYNC_SETTLE_MS = 35
+
+const LSP_TO_MONACO_COMPLETION_KIND: Record<number, monaco.languages.CompletionItemKind> = {
+  1: monaco.languages.CompletionItemKind.Text,
+  2: monaco.languages.CompletionItemKind.Method,
+  3: monaco.languages.CompletionItemKind.Function,
+  4: monaco.languages.CompletionItemKind.Constructor,
+  5: monaco.languages.CompletionItemKind.Field,
+  6: monaco.languages.CompletionItemKind.Variable,
+  7: monaco.languages.CompletionItemKind.Class,
+  8: monaco.languages.CompletionItemKind.Interface,
+  9: monaco.languages.CompletionItemKind.Module,
+  10: monaco.languages.CompletionItemKind.Property,
+  11: monaco.languages.CompletionItemKind.Unit,
+  12: monaco.languages.CompletionItemKind.Value,
+  13: monaco.languages.CompletionItemKind.Enum,
+  14: monaco.languages.CompletionItemKind.Keyword,
+  15: monaco.languages.CompletionItemKind.Snippet,
+  16: monaco.languages.CompletionItemKind.Color,
+  17: monaco.languages.CompletionItemKind.File,
+  18: monaco.languages.CompletionItemKind.Reference,
+  19: monaco.languages.CompletionItemKind.Folder,
+  20: monaco.languages.CompletionItemKind.EnumMember,
+  21: monaco.languages.CompletionItemKind.Constant,
+  22: monaco.languages.CompletionItemKind.Struct,
+  23: monaco.languages.CompletionItemKind.Event,
+  24: monaco.languages.CompletionItemKind.Operator,
+  25: monaco.languages.CompletionItemKind.TypeParameter,
+}
+
+const DIRECT_COMPLETION_TRIGGER_CHARACTERS = [
+  '.',
+  ':',
+  '>',
+  '/',
+  '\\',
+  '"',
+  '\'',
+  '`',
+  '@',
+  '#',
+  '<',
+]
 
 const LSP_LANGUAGE_ALIASES: Record<string, string> = {
   ra_syntax_tree: 'rust',
@@ -63,6 +113,298 @@ const getRelatedLspLanguages = (languageId: string) => {
     .map((item) => normalizeLanguageId(item?.language || ''))
     .filter(Boolean)
   return selectors.length ? selectors : [normalizeLanguageId(languageId)].filter(Boolean)
+}
+
+const waitForDirectLspDocumentSync = () =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, DIRECT_LSP_SYNC_SETTLE_MS)
+  })
+
+const convertMonacoCompletionTriggerKindToLsp = (triggerKind: unknown) => {
+  const value = Number(triggerKind)
+  if (value === monaco.languages.CompletionTriggerKind.TriggerCharacter) return 2
+  if (value === monaco.languages.CompletionTriggerKind.TriggerForIncompleteCompletions) return 3
+  return 1
+}
+
+const convertLspRangeToMonaco = (range: unknown) => {
+  const typedRange = range as {
+    start?: { line?: number; character?: number }
+    end?: { line?: number; character?: number }
+  } | null
+  if (
+    typeof typedRange?.start?.line !== 'number'
+    || typeof typedRange?.start?.character !== 'number'
+    || typeof typedRange?.end?.line !== 'number'
+    || typeof typedRange?.end?.character !== 'number'
+  ) {
+    return null
+  }
+
+  return new monaco.Range(
+    typedRange.start.line + 1,
+    typedRange.start.character + 1,
+    typedRange.end.line + 1,
+    typedRange.end.character + 1
+  )
+}
+
+const resolveLspCompletionInsertText = (item: Record<string, unknown>) => {
+  const textEdit = item.textEdit as Record<string, unknown> | undefined
+  const insertReplaceEdit = textEdit as {
+    newText?: unknown
+  } | undefined
+  return String(
+    insertReplaceEdit?.newText
+    ?? item.insertText
+    ?? item.label
+    ?? ''
+  )
+}
+
+const resolveLspCompletionRange = (
+  item: Record<string, unknown>,
+  model: monaco.editor.ITextModel,
+  position: monaco.Position
+) => {
+  const textEdit = item.textEdit as {
+    range?: unknown
+    insert?: unknown
+    replace?: unknown
+  } | undefined
+  const editRange = convertLspRangeToMonaco(textEdit?.range)
+    || convertLspRangeToMonaco(textEdit?.insert)
+    || convertLspRangeToMonaco(textEdit?.replace)
+  if (editRange) return editRange
+
+  const wordInfo = model.getWordUntilPosition(position)
+  return new monaco.Range(
+    position.lineNumber,
+    wordInfo?.startColumn || position.column,
+    position.lineNumber,
+    wordInfo?.endColumn || position.column
+  )
+}
+
+const convertLspCompletionItemToMonaco = (
+  item: Record<string, unknown>,
+  model: monaco.editor.ITextModel,
+  position: monaco.Position,
+  index: number
+): monaco.languages.CompletionItem | null => {
+  const label = String(item.label || '').trim()
+  if (!label) return null
+
+  const insertText = resolveLspCompletionInsertText(item)
+  if (!insertText) return null
+
+  const sortText = String(item.sortText || '').trim() || `${String(index).padStart(5, '0')}_${label}`
+  const filterText = String(item.filterText || '').trim() || label
+  const documentation = item.documentation as
+    | string
+    | { kind?: string; value?: string }
+    | undefined
+
+  return {
+    label,
+    kind: LSP_TO_MONACO_COMPLETION_KIND[Number(item.kind || 1)] || monaco.languages.CompletionItemKind.Text,
+    insertText,
+    insertTextRules: Number(item.insertTextFormat || 1) === 2
+      ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+      : undefined,
+    detail: typeof item.detail === 'string' ? item.detail : undefined,
+    documentation: typeof documentation === 'string'
+      ? documentation
+      : documentation?.value
+        ? { value: documentation.value }
+        : undefined,
+    sortText,
+    filterText,
+    range: resolveLspCompletionRange(item, model, position),
+    commitCharacters: Array.isArray(item.commitCharacters)
+      ? item.commitCharacters.map((value) => String(value)).filter(Boolean)
+      : undefined,
+    preselect: !!item.preselect,
+  }
+}
+
+const synchronizeDirectLspTextDocument = async (
+  entry: LspClientEntry,
+  clientKey: string,
+  languageId: string,
+  model: monaco.editor.ITextModel
+) => {
+  const uri = String(model.uri?.toString?.() || entry.documentUri || '')
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  const content = String(model.getValue?.() || '')
+  if (!uri || !entry.client) return
+
+  const syncKey = `${clientKey}:${uri}`
+  const previous = directSyncedDocuments.get(syncKey)
+  const clientWithNotifications = entry.client as unknown as {
+    sendNotification: (type: typeof DidOpenTextDocumentNotification.type | typeof DidChangeTextDocumentNotification.type, params: unknown) => Promise<void>
+  }
+
+  try {
+    // 设计说明：
+    // 1. Markdown fence 和 Notebook cell 使用的是虚拟 file:// 文档，Monaco/overlay 内容同步并不总会触发
+    //    vscode-languageclient 的 didOpen/didChange 事件。
+    // 2. pyright 在未看到最新 textDocument 内容时仍会响应 completion，但会返回 0 个候选，
+    //    日志表现为 direct completion request resolved 之后仍然 no suggestions。
+    // 3. 因此 direct completion 前主动发送一次全量文档同步，确保服务端用当前模型内容计算补全。
+    if (!previous) {
+      const version = 1
+      await clientWithNotifications.sendNotification(DidOpenTextDocumentNotification.type, {
+        textDocument: {
+          uri,
+          languageId: normalizedLanguageId,
+          version,
+          text: content,
+        },
+      })
+      directSyncedDocuments.set(syncKey, { version, content, languageId: normalizedLanguageId })
+      logger.info('[LSP] direct text document opened before completion', {
+        languageId: normalizedLanguageId,
+        clientKey,
+        documentUri: uri,
+        version,
+        length: content.length,
+      })
+      await waitForDirectLspDocumentSync()
+      return
+    }
+
+    if (previous.content === content && previous.languageId === normalizedLanguageId) return
+
+    const version = previous.version + 1
+    await clientWithNotifications.sendNotification(DidChangeTextDocumentNotification.type, {
+      textDocument: {
+        uri,
+        version,
+      },
+      contentChanges: [{ text: content }],
+    })
+    directSyncedDocuments.set(syncKey, { version, content, languageId: normalizedLanguageId })
+    logger.info('[LSP] direct text document changed before completion', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri: uri,
+      version,
+      length: content.length,
+    })
+    await waitForDirectLspDocumentSync()
+  } catch (error) {
+    logger.warn('[LSP] direct text document sync failed before completion', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri: uri,
+      error: String((error as Error)?.message || error),
+    })
+  }
+}
+
+export const provideDirectLspCompletionSuggestions = async (
+  languageId: string,
+  model: monaco.editor.ITextModel,
+  position: monaco.Position,
+  context: monaco.languages.CompletionContext | undefined,
+  token: monaco.CancellationToken | undefined
+) => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  const clientKey = getLspClientKey(normalizedLanguageId)
+  const entry = lspClients.get(clientKey)
+  if (!entry?.client || entry.disposed || getLspConnectionState(normalizedLanguageId).state !== 'connected') {
+    return []
+  }
+
+  const params = {
+    textDocument: {
+      uri: String(model.uri?.toString?.() || entry.documentUri || ''),
+    },
+    position: {
+      line: Math.max(0, Number(position.lineNumber || 1) - 1),
+      character: Math.max(0, Number(position.column || 1) - 1),
+    },
+    context: {
+      triggerKind: convertMonacoCompletionTriggerKindToLsp(context?.triggerKind),
+      triggerCharacter: context?.triggerCharacter || undefined,
+    },
+  }
+
+  try {
+    await synchronizeDirectLspTextDocument(entry, clientKey, normalizedLanguageId, model)
+
+    // 设计说明：
+    // 1. monaco-languageclient 正常会通过 VSCode API 注册 completion provider。
+    // 2. 当前应用里存在 VSCode registry 已连接但 Standalone Monaco registry 为空的场景，
+    //    表现为 LSP connected、suggest widget 打开，但候选数始终为 0。
+    // 3. 这里保留标准 client 生命周期，只在 provider 层补一条直接 textDocument/completion
+    //    请求，让编辑模式、探索者模式和 Markdown fence fallback 都走同一个 LSP client。
+    const result = await (entry.client as unknown as {
+      sendRequest: (type: typeof CompletionRequest.type, params: unknown, token?: unknown) => Promise<unknown>
+    }).sendRequest(CompletionRequest.type, params, token)
+
+    if (token?.isCancellationRequested) return []
+    const rawItems = Array.isArray(result)
+      ? result
+      : Array.isArray((result as { items?: unknown[] } | null)?.items)
+        ? ((result as { items: unknown[] }).items)
+        : []
+
+    logger.info('[LSP] direct completion request resolved', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri: params.textDocument.uri,
+      lineNumber: position.lineNumber,
+      column: position.column,
+      rawItemCount: rawItems.length,
+      isIncomplete: !!(result as { isIncomplete?: boolean } | null)?.isIncomplete,
+    })
+
+    return rawItems
+      .map((item, index) => convertLspCompletionItemToMonaco(
+        item as Record<string, unknown>,
+        model,
+        position,
+        index
+      ))
+      .filter((item): item is monaco.languages.CompletionItem => !!item)
+  } catch (error) {
+    logger.warn('[LSP] direct completion request failed', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri: params.textDocument.uri,
+      lineNumber: position.lineNumber,
+      column: position.column,
+      error: String((error as Error)?.message || error),
+    })
+    return []
+  }
+}
+
+const ensureDirectCompletionProviderRegistered = (languageId: string, reason = 'client-start') => {
+  const normalizedLanguageId = normalizeLanguageId(languageId)
+  if (!normalizedLanguageId || directCompletionProviderDisposables.has(normalizedLanguageId)) return
+
+  const disposable = monaco.languages.registerCompletionItemProvider(normalizedLanguageId, {
+    triggerCharacters: DIRECT_COMPLETION_TRIGGER_CHARACTERS,
+    async provideCompletionItems(model, position, context, token) {
+      const suggestions = await provideDirectLspCompletionSuggestions(
+        normalizedLanguageId,
+        model,
+        position,
+        context,
+        token
+      )
+      return { suggestions }
+    },
+  })
+  directCompletionProviderDisposables.set(normalizedLanguageId, disposable)
+  logger.info('[LSP] registered direct Monaco completion provider', {
+    languageId: normalizedLanguageId,
+    reason,
+    triggerCharacters: DIRECT_COMPLETION_TRIGGER_CHARACTERS,
+  })
 }
 
 type LspConnectionStateValue = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'disabled'
@@ -318,6 +660,11 @@ const cleanupLspClientEntry = (
   cur.resolveReady(false)
 
   lspClients.delete(clientKey)
+  Array.from(directSyncedDocuments.keys()).forEach((syncKey) => {
+    if (syncKey.startsWith(`${clientKey}:`)) {
+      directSyncedDocuments.delete(syncKey)
+    }
+  })
   const relatedLanguages = getRelatedLspLanguages(cur.languageId || languageId)
   if (relatedLanguages.some((lang) => lspDisabled.has(lang))) {
     relatedLanguages.forEach((lang) => {
@@ -549,6 +896,11 @@ export function initLspClient(
         documentUri: existingClient.documentUri,
         workspacePath: existingClient.workspacePath,
       })
+      if (getLspConnectionState(normalizedLanguageId).state === 'connected') {
+        getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+          ensureDirectCompletionProviderRegistered(lang, 'reuse-connected-client')
+        })
+      }
       return
     }
   }
@@ -560,6 +912,11 @@ export function initLspClient(
       requestSource,
       state: getLspConnectionState(normalizedLanguageId).state,
     })
+    if (getLspConnectionState(normalizedLanguageId).state === 'connected') {
+      getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
+        ensureDirectCompletionProviderRegistered(lang, 'reuse-existing-entry')
+      })
+    }
     return
   }
   const blockedUntil = lspRetryBlockedUntil.get(clientKey) || 0
@@ -712,6 +1069,7 @@ export function initLspClient(
         })
         getRelatedLspLanguages(normalizedLanguageId).forEach((lang) => {
           setLspConnectionState(lang, 'connected')
+          ensureDirectCompletionProviderRegistered(lang, 'client-start-resolved')
         })
         active.resolveReady(true)
       })
