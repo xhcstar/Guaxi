@@ -259,3 +259,10 @@ export const getLspRuntimeExtensionForLanguage = (languageId: string) =>
 
 export const isLspSupportedLanguage = (languageId: string) =>
   LSP_SUPPORTED_LANGUAGES_INTERNAL.has(normalizeLanguage(languageId))
+
+export const isLspKnownLanguage = (languageId: string) => {
+  const normalized = normalizeLanguage(languageId)
+  if (!normalized) return false
+  return normalizeCatalogEntries.some((entry) => entry.language === normalized)
+    || baseEntryByLanguage.has(normalized)
+}

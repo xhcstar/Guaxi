@@ -10,7 +10,8 @@ const scheduledRetriggers = new Map()
 const BRIDGED_COMPLETION_CACHE_TTL_MS = 3500
 const BRIDGED_COMPLETION_RETRIGGER_GAP_MS = 450
 const DIRECT_MEMBER_COMPLETION_TIMEOUT_MS = 1400
-const DIRECT_DEFAULT_COMPLETION_TIMEOUT_MS = 260
+const DIRECT_DEFAULT_COMPLETION_TIMEOUT_MS = 900
+let lspCompletionBridgeEnabled = false
 
 const VSCODE_COMPLETION_KIND_NAMES = {
   0: 'Text',
@@ -365,6 +366,17 @@ const createLspCompletionBridgeProvider = (monaco, languageId) => ({
     if (normalizeLanguageId(model?.getLanguageId?.()) !== languageId) {
       return { suggestions: [] }
     }
+    if (!lspCompletionBridgeEnabled) {
+      // Design note: completion providers stay registered in Monaco after the
+      // editor switch is turned off, so the switch must gate every request.
+      logger.debug('[LspCompletionBridge] skipped because bridge is disabled by editor setting', {
+        languageId,
+        uriString: String(model?.uri?.toString?.() || ''),
+        lineNumber: Number(position?.lineNumber || 0),
+        column: Number(position?.column || 0),
+      })
+      return { suggestions: [] }
+    }
     if (languageId === 'markdown' && isMarkdownFencedCodePosition(model, position)) {
       logger.debug('[LspCompletionBridge] markdown bridge skipped inside fenced code block', {
         uriString: String(model?.uri?.toString?.() || ''),
@@ -603,6 +615,15 @@ const createLspCompletionBridgeProvider = (monaco, languageId) => ({
 //    这种宿主 token 过滤，最终把真实语义候选筛成 `No suggestions`。
 // 3. 这里对所有扩展启用的 LSP 语言注册桥接 provider，主动把 VSCode completion item 映射成 Monaco
 //    可接受的 label/filterText/range，并用请求 key 防止递归调用自身。
+export const setLspCompletionBridgeEnabled = (enabled) => {
+  const nextEnabled = !!enabled
+  if (lspCompletionBridgeEnabled === nextEnabled) return
+  lspCompletionBridgeEnabled = nextEnabled
+  logger.info('[LspCompletionBridge] bridge enabled state changed', {
+    enabled: lspCompletionBridgeEnabled,
+  })
+}
+
 export const registerLspCompletionBridge = (monaco, languageIds = ['python']) => {
   if (!monaco?.languages?.registerCompletionItemProvider) return
   const registeredLanguageProviders = getRegisteredLanguageProviders(monaco)

@@ -1106,14 +1106,21 @@ import {
   waitForLspConnection,
   resetLspDisabled
 } from '../../monaco/lspClient'
-import { LSP_SUPPORTED_LANGUAGES } from '../../monaco/lspCapabilities'
+import {
+  LSP_SUPPORTED_LANGUAGES,
+  refreshLspRuntimeExtensionSnapshot,
+  isLspKnownLanguage,
+} from '../../monaco/lspCapabilities'
 import {
   retainVsCodeTextModel,
   releaseVsCodeTextModel,
   disposeAllVsCodeTextModelsForOwner,
   replaceModelContentPreserveUndo,
 } from '../../monaco/vscodeModelBridge'
-import { registerLspCompletionBridge } from '../../monaco/pythonCompletionBridge'
+import {
+  registerLspCompletionBridge,
+  setLspCompletionBridgeEnabled,
+} from '../../monaco/pythonCompletionBridge'
 // 更新所有语言导入路径
 import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
@@ -5152,13 +5159,14 @@ const tabRegionRightRef = ref(null)
 
 const languagePairingConfigured = new Set()
 const lspEnabled = ref(false)
+let lspRuntimeSnapshotRefreshPromise = null
 const markdownFenceCompletionModels = new Map()
 const MARKDOWN_FENCE_TRIGGER_CHARACTERS = ['.', ':', '>', '/', '\\', '"', "'", '@', '#', '(', ',', '[', '{', '-']
 const EMBEDDED_LSP_READY_TIMEOUT_MS = 4000
 const EMBEDDED_COMPLETION_CACHE_TTL_MS = 2500
 const EMBEDDED_COMPLETION_CACHE_VERSION = 'embedded-completion-word-range-v4'
 const EMBEDDED_MEMBER_COMPLETION_TIMEOUT_MS = 1400
-const EMBEDDED_DEFAULT_COMPLETION_TIMEOUT_MS = 260
+const EMBEDDED_DEFAULT_COMPLETION_TIMEOUT_MS = 900
 const embeddedCompletionCacheStates = new WeakMap()
 const embeddedCompletionRetriggerStates = new WeakMap()
 
@@ -5907,12 +5915,19 @@ const refreshDirectLspSuggestMode = (targetEditor, languageId) => {
   if (!targetEditor || typeof targetEditor.updateOptions !== 'function') return;
   const lang = String(languageId || targetEditor.getModel?.()?.getLanguageId?.() || '').trim().toLowerCase();
   if (!lang || lang === 'markdown') return;
-  const useDirectLspMode = !!lspEnabled.value && LSP_SUPPORTED_LANGUAGES.has(lang);
+  const knownLspLanguage = isLspKnownLanguage(lang);
+  const runtimeSupported = LSP_SUPPORTED_LANGUAGES.has(lang);
+  // Design note: for languages managed by LSP, keep Monaco word suggestions
+  // off while the switch is on. Otherwise a slow or not-yet-ready runtime looks
+  // like "completion works", but only returns current-document words.
+  const useDirectLspMode = !!lspEnabled.value && knownLspLanguage;
   targetEditor.updateOptions(useDirectLspMode
     ? DIRECT_LSP_SUGGEST_OPTIONS
     : DEFAULT_WORD_SUGGEST_OPTIONS);
   logger.debug('[DirectLsp] suggest mode refreshed', {
     languageId: lang,
+    knownLspLanguage,
+    runtimeSupported,
     useDirectLspMode,
   });
 };
@@ -6366,8 +6381,8 @@ const maybeTriggerDirectLspSuggestOnType = (targetEditor, text) => {
   const position = targetEditor.getPosition?.();
   const languageId = String(model?.getLanguageId?.() || '').trim().toLowerCase();
   if (!model || !position || !languageId || languageId === 'markdown') return;
-  if (!LSP_SUPPORTED_LANGUAGES.has(languageId)) return;
   if (!lspEnabled.value) return;
+  if (!isLspKnownLanguage(languageId)) return;
   if (isSuggestWidgetVisibleForEditor(targetEditor)) return;
   if (shouldThrottleEmbeddedSuggestTrigger(targetEditor, 120)) return;
 
@@ -7687,10 +7702,12 @@ const refreshLspEnabledSetting = async () => {
   try {
     const enabled = await invoke('get_lsp_syntax_highlight_enabled')
     lspEnabled.value = !!enabled
+    setLspCompletionBridgeEnabled(lspEnabled.value)
     applyMonacoThemeByLsp(lspEnabled.value)
   } catch (error) {
     logger.error('加载 LSP 配置失败:', error)
     lspEnabled.value = false
+    setLspCompletionBridgeEnabled(false)
     applyMonacoThemeByLsp(false)
   }
 }
@@ -7725,22 +7742,64 @@ const applyMonacoThemeByLsp = (enabled) => {
   applyMonacoTheme('lsp')
 }
 
-const enableLspForEditorLanguage = (targetEditor, languageId, filePath = '') => {
+const refreshLspRuntimeSnapshotOnce = async (reason = 'editor') => {
+  // Design note: installing an extension updates the backend snapshot before
+  // the already-open editor knows about it. Share one refresh promise so cursor
+  // moves or split editors do not stampede the backend.
+  if (!lspRuntimeSnapshotRefreshPromise) {
+    logger.info('[DirectLsp] refresh runtime extension snapshot requested', { reason })
+    lspRuntimeSnapshotRefreshPromise = refreshLspRuntimeExtensionSnapshot()
+      .finally(() => {
+        lspRuntimeSnapshotRefreshPromise = null
+      })
+  }
+  return lspRuntimeSnapshotRefreshPromise
+}
+
+const startLspClientForEditorLanguage = (targetEditor, lang, filePath, requestSource) => {
+  initLspClient(targetEditor, lang, filePath || '', {
+    requestSource,
+  })
+  logger.info('[DirectLsp] client start requested for editor language', {
+    languageId: lang,
+    filePath: String(filePath || ''),
+    requestSource,
+  })
+}
+
+const enableLspForEditorLanguage = async (targetEditor, languageId, filePath = '') => {
   if (!targetEditor) return
   const lang = String(languageId || '').trim().toLowerCase()
   if (!lang) return
 
   refreshDirectLspSuggestMode(targetEditor, lang)
-  registerLspCompletionBridge(monaco, [lang])
 
   initTextmate(targetEditor, lang).catch((e) => {
     logger.warn('[Editor] initTextmate failed, ignored', { language: lang }, e)
   })
 
   if (!lspEnabled.value) return
-  if (!LSP_SUPPORTED_LANGUAGES.has(lang)) return
-  initLspClient(targetEditor, lang, filePath || '', {
-    requestSource: 'editor-language-enable',
+  if (!isLspKnownLanguage(lang)) {
+    logger.debug('[DirectLsp] skip unknown LSP language', { languageId: lang })
+    return
+  }
+
+  registerLspCompletionBridge(monaco, [lang])
+  if (LSP_SUPPORTED_LANGUAGES.has(lang)) {
+    startLspClientForEditorLanguage(targetEditor, lang, filePath, 'editor-language-enable')
+    return
+  }
+
+  await refreshLspRuntimeSnapshotOnce('editor-language-enable-runtime-miss')
+  refreshDirectLspSuggestMode(targetEditor, lang)
+  if (LSP_SUPPORTED_LANGUAGES.has(lang)) {
+    startLspClientForEditorLanguage(targetEditor, lang, filePath, 'editor-language-enable-after-runtime-refresh')
+    return
+  }
+
+  logger.info('[DirectLsp] runtime not ready for known language after snapshot refresh', {
+    languageId: lang,
+    filePath: String(filePath || ''),
   })
 }
 
@@ -17667,11 +17726,26 @@ const handleLspSettingChanged = (evt) => {
   const hasExplicitEnabled = typeof evt?.detail?.enabled === 'boolean'
   const enabled = hasExplicitEnabled ? !!evt.detail.enabled : !!lspEnabled.value
   lspEnabled.value = enabled
+  setLspCompletionBridgeEnabled(enabled)
+  logger.info('[DirectLsp] editor LSP setting changed', {
+    enabled,
+    hasExplicitEnabled,
+  })
   applyMonacoThemeByLsp(enabled)
   scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')
   scheduleMarkdownMathSyntaxHighlight(editor, 'setting')
   scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'setting')
+
+  const mainModel = editor?.getModel?.()
+  const rightPath = fileTreeStore.activeTabRight || ''
+  const rightModel = secondaryEditor?.getModel?.()
+  if (mainModel) {
+    refreshDirectLspSuggestMode(editor, mainModel.getLanguageId?.() || 'plaintext')
+  }
+  if (rightModel) {
+    refreshDirectLspSuggestMode(secondaryEditor, rightModel.getLanguageId?.() || 'plaintext')
+  }
 
   if (!enabled) {
     disposeAllLspClients()
@@ -17680,19 +17754,19 @@ const handleLspSettingChanged = (evt) => {
 
   resetLspDisabled()
 
-  const mainModel = editor?.getModel?.()
   if (mainModel) {
     enableLspForEditorLanguage(editor, mainModel.getLanguageId?.() || 'plaintext', selectedFile.value?.path || '')
   }
 
-  const rightPath = fileTreeStore.activeTabRight || ''
-  const rightModel = secondaryEditor?.getModel?.()
   if (rightModel) {
     enableLspForEditorLanguage(secondaryEditor, rightModel.getLanguageId?.() || 'plaintext', rightPath)
   }
 }
 
 watch(lspEnabled, (enabled) => {
+  setLspCompletionBridgeEnabled(enabled)
+  refreshDirectLspSuggestMode(editor, editor?.getModel?.()?.getLanguageId?.() || '')
+  refreshDirectLspSuggestMode(secondaryEditor, secondaryEditor?.getModel?.()?.getLanguageId?.() || '')
   applyMonacoThemeByLsp(enabled)
   scheduleMarkdownFenceSyntaxHighlight(editor, 'setting')
   scheduleMarkdownFenceSyntaxHighlight(secondaryEditor, 'setting')

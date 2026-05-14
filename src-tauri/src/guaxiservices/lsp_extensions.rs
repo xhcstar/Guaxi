@@ -1536,11 +1536,20 @@ async fn verify_catalog_extension_runtime(
                     ));
                     continue;
                 }
+                if probe.completion_item_count == 0 {
+                    errors.push(format!(
+                        "{}: completion probe returned zero items",
+                        language
+                    ));
+                    continue;
+                }
                 info!(
                     extension_id = state.id.as_str(),
                     source = source_label,
                     language = language.as_str(),
                     completion_provider = probe.completion_provider,
+                    completion_item_count = probe.completion_item_count,
+                    completion_first_label = probe.completion_first_label.as_deref().unwrap_or(""),
                     hover_provider = probe.hover_provider,
                     definition_provider = probe.definition_provider,
                     semantic_tokens_provider = probe.semantic_tokens_provider,
@@ -2408,9 +2417,69 @@ pub fn start_install_catalog_lsp_extension_task(
 ) -> Result<LspExtensionTaskSnapshot, String> {
     let extension_id = normalize_extension_id(&identifier);
     let snapshot = insert_lsp_extension_task("install-catalog", &extension_id, "queued catalog install")?;
-    Ok(spawn_lsp_extension_task(snapshot, async move {
-        install_catalog_lsp_extension(&identifier).await
-    }))
+    let task_id = snapshot.task_id.clone();
+    Ok({
+        tokio::spawn(async move {
+            let mut attempt: u32 = 1;
+            loop {
+                update_lsp_extension_task(
+                    &task_id,
+                    "running",
+                    &format!("configuring LSP extension runtime, attempt {}", attempt),
+                    None,
+                    None,
+                );
+                info!(
+                    task_id = task_id.as_str(),
+                    extension_id = extension_id.as_str(),
+                    attempt,
+                    "starting catalog LSP extension install/configuration attempt"
+                );
+
+                match install_catalog_lsp_extension(&identifier).await {
+                    Ok(state) => {
+                        update_lsp_extension_task(
+                            &task_id,
+                            "success",
+                            "task completed after runtime probe returned completion items",
+                            None,
+                            Some(state),
+                        );
+                        break;
+                    }
+                    Err(error) => {
+                        let delay_secs = u64::from((attempt.min(10)) * 6);
+                        warn!(
+                            task_id = task_id.as_str(),
+                            extension_id = extension_id.as_str(),
+                            attempt,
+                            delay_secs,
+                            error = error.as_str(),
+                            "catalog LSP extension runtime is not ready; retrying configuration"
+                        );
+                        update_lsp_extension_task(
+                            &task_id,
+                            "running",
+                            &format!(
+                                "runtime probe failed on attempt {}; retrying in {}s: {}",
+                                attempt, delay_secs, error
+                            ),
+                            Some(error),
+                            None,
+                        );
+
+                        // 设计思路：
+                        // 1. catalog 安装只有在真实 LSP completion probe 成功后才标记 success。
+                        // 2. 网络、npm registry、GitHub Release 或运行时初始化可能短暂失败，因此失败后保留任务并退避重试。
+                        // 3. 已存在的 running 任务会阻止重复启动同一扩展配置，避免多个重试循环互相覆盖 runtime 目录。
+                        tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                        attempt = attempt.saturating_add(1);
+                    }
+                }
+            }
+        });
+        snapshot
+    })
 }
 
 pub fn start_import_vsix_extension_task(path: String) -> Result<LspExtensionTaskSnapshot, String> {

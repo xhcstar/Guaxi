@@ -49,11 +49,21 @@ pub struct LspRuntimeProbeResult {
     pub args: Vec<String>,
     pub cwd: Option<String>,
     pub completion_provider: bool,
+    pub completion_item_count: usize,
+    pub completion_first_label: Option<String>,
     pub hover_provider: bool,
     pub definition_provider: bool,
     pub semantic_tokens_provider: bool,
     pub server_name: Option<String>,
     pub server_version: Option<String>,
+}
+
+struct LspProbeDocument {
+    uri: String,
+    language_id: String,
+    text: String,
+    completion_line: u32,
+    completion_character: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -1063,6 +1073,74 @@ fn read_lsp_capability_present(capabilities: &Value, field: &str) -> bool {
     !matches!(capabilities.get(field), None | Some(Value::Null) | Some(Value::Bool(false)))
 }
 
+fn lsp_probe_document_for_language(language: &str) -> LspProbeDocument {
+    let language_id = language.trim().to_lowercase();
+    let (ext, text, completion_line, completion_character) = match language_id.as_str() {
+        "javascript" => (
+            "js",
+            "const guaxiValue = { alpha: 1, beta: 2 };\nguaxiValue.".to_string(),
+            1,
+            11,
+        ),
+        "typescript" => (
+            "ts",
+            "const guaxiValue = { alpha: number; beta: number } = { alpha: 1, beta: 2 };\nguaxiValue.".to_string(),
+            1,
+            11,
+        ),
+        "python" => ("py", "import os\nos.".to_string(), 1, 3),
+        "rust" => (
+            "rs",
+            "fn main() {\n    let guaxi_value = String::new();\n    guaxi_value.\n}\n".to_string(),
+            2,
+            16,
+        ),
+        "markdown" => (
+            "md",
+            "# Guaxi Heading\n\n[Guaxi Heading](#".to_string(),
+            2,
+            17,
+        ),
+        "shell" => ("sh", "echo $".to_string(), 0, 6),
+        "lua" => ("lua", "local guaxi_value = string\nstring.".to_string(), 1, 7),
+        "latex" => (
+            "tex",
+            "\\documentclass{article}\n\\begin{document}\n\\ref{".to_string(),
+            2,
+            5,
+        ),
+        _ => ("txt", "guaxi".to_string(), 0, 5),
+    };
+    let base_dir = exe_dir()
+        .ok()
+        .unwrap_or_else(|| PathBuf::from("."));
+    let uri = format!(
+        "file:///{}/__guaxi_lsp_probe__/probe.{}",
+        base_dir.to_string_lossy().replace('\\', "/"),
+        ext
+    );
+    LspProbeDocument {
+        uri,
+        language_id,
+        text,
+        completion_line,
+        completion_character,
+    }
+}
+
+fn validate_lsp_completion_probe_result(result: &Value) -> Result<(usize, Option<String>), String> {
+    let Some(items) = extract_completion_items(result) else {
+        return Err(format!(
+            "completion response did not contain a completion list: {}",
+            truncate_for_log(&result.to_string(), 1000)
+        ));
+    };
+    if items.is_empty() {
+        return Err("completion response contained zero items".to_string());
+    }
+    Ok((items.len(), items.first().map(extract_completion_label).filter(|item| !item.is_empty())))
+}
+
 pub async fn probe_lsp_runtime_for_language(
     language: &str,
     token: Option<&str>,
@@ -1235,9 +1313,39 @@ pub async fn probe_lsp_runtime_for_language(
                 "method": "initialized",
                 "params": {}
             });
-            let shutdown_payload = json!({
+            let probe_document = lsp_probe_document_for_language(language);
+            let did_open_payload = json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {
+                    "textDocument": {
+                        "uri": probe_document.uri.clone(),
+                        "languageId": probe_document.language_id.clone(),
+                        "version": 1,
+                        "text": probe_document.text.clone(),
+                    }
+                }
+            });
+            let completion_payload = json!({
                 "jsonrpc": "2.0",
                 "id": 2,
+                "method": "textDocument/completion",
+                "params": {
+                    "textDocument": {
+                        "uri": probe_document.uri.clone(),
+                    },
+                    "position": {
+                        "line": probe_document.completion_line,
+                        "character": probe_document.completion_character,
+                    },
+                    "context": {
+                        "triggerKind": 1
+                    }
+                }
+            });
+            let shutdown_payload = json!({
+                "jsonrpc": "2.0",
+                "id": 3,
                 "method": "shutdown",
                 "params": null
             });
@@ -1246,6 +1354,50 @@ pub async fn probe_lsp_runtime_for_language(
                 "method": "exit"
             });
             let _ = write_lsp_probe_payload_to_child_stdin(&mut stdin, &initialized_payload).await;
+            if !completion_provider {
+                let _ = write_lsp_probe_payload_to_child_stdin(&mut stdin, &shutdown_payload).await;
+                let _ = write_lsp_probe_payload_to_child_stdin(&mut stdin, &exit_payload).await;
+                return Ok(LspRuntimeProbeResult {
+                    language: language.to_string(),
+                    program: cfg.program.clone(),
+                    args: cfg.args.clone(),
+                    cwd: cfg.cwd.clone(),
+                    completion_provider,
+                    completion_item_count: 0,
+                    completion_first_label: None,
+                    hover_provider,
+                    definition_provider,
+                    semantic_tokens_provider,
+                    server_name: read_server_info(&value, "name"),
+                    server_version: read_server_info(&value, "version"),
+                });
+            }
+
+            // 设计思路：
+            // 1. initialize 只能证明进程能启动，不能证明 LSP 真的能处理编辑器请求。
+            // 2. 这里打开一份最小测试文档并发送 textDocument/completion，只有收到非空补全项才算 runtime 配置成功。
+            // 3. 失败时错误会回传给扩展安装任务，由任务退避重试配置，避免把“半配置好”的 runtime 标记为可用。
+            write_lsp_probe_payload_to_child_stdin(&mut stdin, &did_open_payload).await?;
+            write_lsp_probe_payload_to_child_stdin(&mut stdin, &completion_payload).await?;
+
+            let (completion_item_count, completion_first_label) = loop {
+                let Some(payload) = read_lsp_payload_from_stdout(&mut stdout, &mut pending).await? else {
+                    return Err("LSP runtime probe stdout closed before completion response".to_string());
+                };
+                let value = serde_json::from_str::<Value>(&payload)
+                    .map_err(|e| format!("failed to parse LSP completion response: {e}; payload={}", truncate_for_log(&payload, 2000)))?;
+                if value.get("id").and_then(Value::as_i64) != Some(2) {
+                    continue;
+                }
+                if let Some(error) = value.get("error") {
+                    return Err(format!("LSP completion returned error: {}", error));
+                }
+                let result = value
+                    .get("result")
+                    .ok_or_else(|| "LSP completion response did not contain result".to_string())?;
+                break validate_lsp_completion_probe_result(result)?;
+            };
+
             let _ = write_lsp_probe_payload_to_child_stdin(&mut stdin, &shutdown_payload).await;
             let _ = write_lsp_probe_payload_to_child_stdin(&mut stdin, &exit_payload).await;
 
@@ -1255,6 +1407,8 @@ pub async fn probe_lsp_runtime_for_language(
                 args: cfg.args.clone(),
                 cwd: cfg.cwd.clone(),
                 completion_provider,
+                completion_item_count,
+                completion_first_label,
                 hover_provider,
                 definition_provider,
                 semantic_tokens_provider,
@@ -1274,6 +1428,8 @@ pub async fn probe_lsp_runtime_for_language(
                 language = language,
                 program = probe.program.as_str(),
                 completion_provider = probe.completion_provider,
+                completion_item_count = probe.completion_item_count,
+                completion_first_label = probe.completion_first_label.as_deref().unwrap_or(""),
                 hover_provider = probe.hover_provider,
                 definition_provider = probe.definition_provider,
                 semantic_tokens_provider = probe.semantic_tokens_provider,
