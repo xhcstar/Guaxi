@@ -735,6 +735,48 @@ fn extract_manifest_languages(manifest: &Value) -> Vec<String> {
     result
 }
 
+fn merge_catalog_languages_for_installed_extension(
+    extension_id: &str,
+    manifest_languages: Vec<String>,
+) -> Vec<String> {
+    let normalized_extension_id = normalize_extension_id(extension_id);
+    let mut result = manifest_languages;
+
+    // 设计思路：
+    // 1. 有些官方 VSIX 只在 package.json 里声明主语言，例如 clangd 只声明 cpp，
+    //    但 Guaxi catalog 明确知道同一个 LSP 扩展同时服务 c/cpp。
+    // 2. 后端启动 LSP 时按语言查“已安装扩展”，如果只信 manifest，会把 c 误判为未安装，
+    //    前端随后得到一个已创建但未 Running 的 language client。
+    // 3. 因此安装记录以 manifest 为基础，再合并 catalog 中同一 extension id 的语言别名。
+    if let Some(catalog_entry) = catalog_by_id().get(&normalized_extension_id) {
+        let before_count = result.len();
+        let manifest_languages_for_log = result.clone();
+        result.extend(
+            catalog_entry
+                .languages
+                .iter()
+                .map(|lang| normalize_language(lang))
+                .filter(|lang| !lang.is_empty()),
+        );
+        result.sort();
+        result.dedup();
+
+        if result.len() != before_count {
+            info!(
+                extension_id = normalized_extension_id.as_str(),
+                manifest_languages = ?manifest_languages_for_log,
+                effective_languages = ?result,
+                "merged catalog LSP languages into installed extension record"
+            );
+        }
+        return result;
+    }
+
+    result.sort();
+    result.dedup();
+    result
+}
+
 fn record_from_dir(dir: &Path) -> Option<InstalledExtensionRecord> {
     let meta = read_extension_meta(dir);
     let (manifest_root, manifest) = manifest_root_from_dir(dir)?;
@@ -759,23 +801,10 @@ fn record_from_dir(dir: &Path) -> Option<InstalledExtensionRecord> {
             .unwrap_or(&name),
     );
 
-    let languages = {
-        let manifest_languages = extract_manifest_languages(&manifest);
-        if !manifest_languages.is_empty() {
-            manifest_languages
-        } else {
-            catalog_by_id()
-                .get(&id)
-                .map(|entry| {
-                    entry
-                        .languages
-                        .iter()
-                        .map(|lang| normalize_language(lang))
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
-    };
+    let languages = merge_catalog_languages_for_installed_extension(
+        &id,
+        extract_manifest_languages(&manifest),
+    );
 
     Some(InstalledExtensionRecord {
         id,

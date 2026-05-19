@@ -133,6 +133,102 @@ const waitForDirectLspDocumentSync = () =>
     window.setTimeout(resolve, DIRECT_LSP_SYNC_SETTLE_MS)
   })
 
+const getLanguageClientRuntimeState = (client: MonacoLanguageClient | null) => {
+  const candidate = client as (MonacoLanguageClient & {
+    isRunning?: () => boolean
+    state?: unknown
+    _state?: unknown
+  }) | null
+  if (!candidate) {
+    return { isRunning: false, publicState: '', privateState: '' }
+  }
+
+  let isRunning = false
+  try {
+    isRunning = candidate.isRunning?.() === true
+  } catch {
+    isRunning = false
+  }
+
+  return {
+    isRunning,
+    publicState: String(candidate.state ?? ''),
+    privateState: String(candidate._state ?? ''),
+  }
+}
+
+const isLspClientNotRunningError = (error: unknown) =>
+  resolveErrorMessage(error).toLowerCase().includes('client is not running')
+
+const waitForLanguageClientRunning = (
+  client: MonacoLanguageClient | null,
+  timeoutMs = DIRECT_LSP_CLIENT_READY_TIMEOUT_MS
+) =>
+  new Promise<boolean>((resolve) => {
+    const initialState = getLanguageClientRuntimeState(client)
+    if (initialState.isRunning) {
+      resolve(true)
+      return
+    }
+
+    const candidate = client as (MonacoLanguageClient & {
+      onDidChangeState?: (listener: (event: { newState?: unknown }) => void) => monaco.IDisposable
+    }) | null
+    if (!candidate?.onDidChangeState) {
+      resolve(false)
+      return
+    }
+
+    let settled = false
+    let disposable: monaco.IDisposable | null = null
+    const done = (value: boolean) => {
+      if (settled) return
+      settled = true
+      disposable?.dispose?.()
+      resolve(value)
+    }
+
+    const timer = window.setTimeout(() => {
+      done(getLanguageClientRuntimeState(client).isRunning)
+    }, Math.max(50, Number(timeoutMs) || DIRECT_LSP_CLIENT_READY_TIMEOUT_MS))
+
+    disposable = candidate.onDidChangeState((event) => {
+      const runtimeState = getLanguageClientRuntimeState(client)
+      if (runtimeState.isRunning || Number(event?.newState) === 2) {
+        window.clearTimeout(timer)
+        done(true)
+      }
+    })
+  })
+
+const ensureLspClientReadyForDirectRequest = async (
+  entry: LspClientEntry,
+  clientKey: string,
+  languageId: string,
+  documentUri: string
+) => {
+  const ready = await waitForSharedLspClientReady(entry)
+  if (!ready || entry.disposed || !entry.client) return false
+
+  const running = await waitForLanguageClientRunning(entry.client)
+  if (running && !entry.disposed && lspClients.get(clientKey) === entry) return true
+
+  const runtimeState = getLanguageClientRuntimeState(entry.client)
+  logger.warn('[LSP] direct completion found non-running shared client; recycling stale entry', {
+    languageId,
+    clientKey,
+    documentUri,
+    publicState: runtimeState.publicState,
+    privateState: runtimeState.privateState,
+    ready,
+    disposed: entry.disposed,
+  })
+  cleanupLspClientEntry(clientKey, languageId, 'direct-completion-client-not-running', {
+    suppressRetryBackoff: true,
+  })
+  return false
+}
+
 const convertMonacoCompletionTriggerKindToLsp = (triggerKind: unknown) => {
   const value = Number(triggerKind)
   if (value === monaco.languages.CompletionTriggerKind.TriggerCharacter) return 2
@@ -250,7 +346,7 @@ const synchronizeDirectLspTextDocument = async (
   const uri = String(model.uri?.toString?.() || entry.documentUri || '')
   const normalizedLanguageId = normalizeLanguageId(languageId)
   const content = String(model.getValue?.() || '')
-  if (!uri || !entry.client) return
+  if (!uri || !entry.client) return false
 
   const syncKey = `${clientKey}:${uri}`
   const previous = directSyncedDocuments.get(syncKey)
@@ -284,10 +380,10 @@ const synchronizeDirectLspTextDocument = async (
         length: content.length,
       })
       await waitForDirectLspDocumentSync()
-      return
+      return true
     }
 
-    if (previous.content === content && previous.languageId === normalizedLanguageId) return
+    if (previous.content === content && previous.languageId === normalizedLanguageId) return true
 
     const version = previous.version + 1
     await clientWithNotifications.sendNotification(DidChangeTextDocumentNotification.type, {
@@ -306,6 +402,7 @@ const synchronizeDirectLspTextDocument = async (
       length: content.length,
     })
     await waitForDirectLspDocumentSync()
+    return true
   } catch (error) {
     logger.warn('[LSP] direct text document sync failed before completion', {
       languageId: normalizedLanguageId,
@@ -313,6 +410,13 @@ const synchronizeDirectLspTextDocument = async (
       documentUri: uri,
       error: String((error as Error)?.message || error),
     })
+    if (isLspClientNotRunningError(error)) {
+      cleanupLspClientEntry(clientKey, normalizedLanguageId, 'direct-sync-client-not-running', {
+        suppressRetryBackoff: true,
+      })
+      return false
+    }
+    return true
   }
 }
 
@@ -329,15 +433,30 @@ export const provideDirectLspCompletionSuggestions = async (
   if (!entry?.client || entry.disposed) {
     return []
   }
+  const documentUri = String(model.uri?.toString?.() || entry.documentUri || '')
+  const directClientReady = await ensureLspClientReadyForDirectRequest(
+    entry,
+    clientKey,
+    normalizedLanguageId,
+    documentUri
+  )
+  if (!directClientReady || token?.isCancellationRequested) {
+    logger.debug('[LSP] direct completion skipped because language client is not running', {
+      languageId: normalizedLanguageId,
+      clientKey,
+      documentUri,
+      state: getLspConnectionState(normalizedLanguageId).state,
+    })
+    return []
+  }
   const connectionStateBeforeDirectCompletion = getLspConnectionState(normalizedLanguageId).state
   if (connectionStateBeforeDirectCompletion !== 'connected') {
-    const ready = await waitForSharedLspClientReady(entry)
-    if (!ready || token?.isCancellationRequested) {
+    if (token?.isCancellationRequested) {
       logger.debug('[LSP] direct completion skipped because shared client is not ready', {
         languageId: normalizedLanguageId,
         clientKey,
         state: getLspConnectionState(normalizedLanguageId).state,
-        documentUri: String(model.uri?.toString?.() || entry.documentUri || ''),
+        documentUri,
       })
       return []
     }
@@ -350,14 +469,14 @@ export const provideDirectLspCompletionSuggestions = async (
       languageId: normalizedLanguageId,
       clientKey,
       previousState: connectionStateBeforeDirectCompletion,
-      documentUri: String(model.uri?.toString?.() || entry.documentUri || ''),
+      documentUri,
     })
   }
   ensureDirectCompletionProviderRegistered(normalizedLanguageId, 'direct-completion-request')
 
   const params = {
     textDocument: {
-      uri: String(model.uri?.toString?.() || entry.documentUri || ''),
+      uri: documentUri,
     },
     position: {
       line: Math.max(0, Number(position.lineNumber || 1) - 1),
@@ -370,7 +489,8 @@ export const provideDirectLspCompletionSuggestions = async (
   }
 
   try {
-    await synchronizeDirectLspTextDocument(entry, clientKey, normalizedLanguageId, model)
+    const synced = await synchronizeDirectLspTextDocument(entry, clientKey, normalizedLanguageId, model)
+    if (!synced || token?.isCancellationRequested) return []
 
     // 设计说明：
     // 1. monaco-languageclient 正常会通过 VSCode API 注册 completion provider。
@@ -416,6 +536,11 @@ export const provideDirectLspCompletionSuggestions = async (
       column: position.column,
       error: String((error as Error)?.message || error),
     })
+    if (isLspClientNotRunningError(error)) {
+      cleanupLspClientEntry(clientKey, normalizedLanguageId, 'direct-request-client-not-running', {
+        suppressRetryBackoff: true,
+      })
+    }
     return []
   }
 }

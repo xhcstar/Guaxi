@@ -5163,6 +5163,43 @@ const EMBEDDED_COMPLETION_CACHE_VERSION = 'embedded-completion-word-range-v4'
 const embeddedCompletionCacheStates = new WeakMap()
 const embeddedCompletionRetriggerStates = new WeakMap()
 
+const EMBEDDED_LATEX_COMMAND_FALLBACKS = [
+  'alpha',
+  'beta',
+  'gamma',
+  'delta',
+  'epsilon',
+  'theta',
+  'lambda',
+  'mu',
+  'pi',
+  'sigma',
+  'phi',
+  'omega',
+  'frac',
+  'sqrt',
+  'sum',
+  'prod',
+  'int',
+  'lim',
+  'cdot',
+  'times',
+  'pm',
+  'to',
+  'infty',
+  'text',
+  'mathbf',
+  'mathbb',
+  'mathcal',
+  'begin',
+  'end',
+  'label',
+  'ref',
+  'cite',
+  'includegraphics',
+  'tableofcontents',
+]
+
 const getMarkdownMathContext = (model, position) => {
   if (!model || !position) return null;
   if (model.getLanguageId?.() !== 'markdown') return null;
@@ -7024,6 +7061,36 @@ const buildEmbeddedCompletionInsertText = (rawInsertText, fallbackLabel, filterC
   return `${prefix}${baseInsertText}`
 }
 
+const normalizeEmbeddedCompletionInsertText = (languageId, rawInsertText, fallbackLabel, filterContext) => {
+  const baseInsertText = buildEmbeddedCompletionInsertText(rawInsertText, fallbackLabel, filterContext)
+  if (!baseInsertText) return ''
+
+  const filterPrefix = String(filterContext?.filterPrefix || '')
+  if (!filterContext?.isMemberAccessContext || !filterPrefix) return baseInsertText
+
+  const duplicatedOperator = ['::', '->', '.'].find((operator) => (
+    filterPrefix.endsWith(operator)
+    && baseInsertText.startsWith(operator)
+  ))
+  if (!duplicatedOperator) return baseInsertText
+
+  // 设计思路：
+  // 1. TypeScript LSP 在 `screen.` 后返回的 textEdit.newText 可能是 `.availHeight`，
+  //    这是给虚拟文档 range 使用的完整替换文本。
+  // 2. Markdown fence 映射回宿主时，成员访问 range 只覆盖点号后的成员名，点号已经真实存在，
+  //    因此必须剥掉服务端 newText 前面的访问符，避免插入成 `screen..availHeight`。
+  // 3. 只在成员访问上下文处理 `. / :: / ->`，不会影响 LaTeX 命令、路径补全或普通标识符补全。
+  const normalized = baseInsertText.slice(duplicatedOperator.length)
+  logger.debug('[EmbeddedLsp] normalized member-access insert text', {
+    languageId: String(languageId || ''),
+    operator: duplicatedOperator,
+    rawInsertText: String(rawInsertText ?? fallbackLabel ?? '').slice(0, 80),
+    normalizedInsertText: normalized.slice(0, 80),
+    filterPrefix,
+  })
+  return normalized
+}
+
 const getVscodeOrLspCompletionInsertText = (item, fallbackLabel) => {
   if (typeof item?.insertText === 'string') return item.insertText
   if (typeof item?.insertText?.value === 'string') return item.insertText.value
@@ -7060,7 +7127,7 @@ const convertVscodeCompletionItemToMonaco = (item, replaceRange, index, filterCo
   if (!shouldKeepEmbeddedCompletionCandidate(languageId, rawLabel, rawInsertText, item?.filterText, filterContext)) {
     return null
   }
-  const insertText = buildEmbeddedCompletionInsertText(rawInsertText, rawLabel, filterContext)
+  const insertText = normalizeEmbeddedCompletionInsertText(languageId, rawInsertText, rawLabel, filterContext)
   const isSnippet = typeof insertTextValue === 'object' && insertTextValue !== null
   const documentation = normalizeCompletionDocumentation(item?.documentation)
   const kind = resolveEmbeddedCompletionKind(item, completionSource, filterContext, languageId)
@@ -7430,7 +7497,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
 
       mappedSuggestions.push({
         ...item,
-        insertText: buildEmbeddedCompletionInsertText(insertText, labelText, filterContext),
+        insertText: normalizeEmbeddedCompletionInsertText(languageId, insertText, labelText, filterContext),
         filterText: buildEmbeddedCompletionFilterText(item?.filterText, labelText, filterContext),
         range: replaceRange,
         textEdit: undefined,
@@ -7497,7 +7564,7 @@ const provideEmbeddedLspSuggestions = async (embeddedCtx, model, position, conte
 
         suggestions.push({
           ...item,
-          insertText: buildEmbeddedCompletionInsertText(insertText, labelText, filterContext),
+          insertText: normalizeEmbeddedCompletionInsertText(languageId, insertText, labelText, filterContext),
           filterText: buildEmbeddedCompletionFilterText(item?.filterText, labelText, filterContext),
           range: replaceRange,
           textEdit: undefined,
