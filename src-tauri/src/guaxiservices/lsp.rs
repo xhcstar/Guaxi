@@ -9,7 +9,6 @@ use std::sync::Arc;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::time::Duration;
 
-use crate::guaxiservices::bundled_resources;
 use crate::guaxiservices::lsp_extensions;
 use actix::prelude::*;
 use actix_web::{web, Error, HttpRequest, HttpResponse};
@@ -240,15 +239,15 @@ fn exe_dir() -> Result<PathBuf, String> {
 }
 
 fn lsp_root_dir() -> Result<PathBuf, String> {
-    Ok(exe_dir()?.join("lsp"))
+    // 设计说明：
+    // 1. LSP server 只能来自 Guaxi 管理的扩展目录或 LspRuntimes 目录，不能误用 utils/lsp 这类历史残留工具。
+    // 2. 这里把托管二进制统一放到 LspRuntimes/lsp/<server>，和 Node 类 LSP 的 LspRuntimes/node 保持同一运行时边界。
+    // 3. SlidevEnv 只提供 node.exe 解释器，不能作为 language server 包或 native LSP 二进制的来源。
+    Ok(exe_dir()?.join("LspRuntimes").join("lsp"))
 }
 
 fn lsp_server_dir(server: &str) -> Result<PathBuf, String> {
     Ok(lsp_root_dir()?.join(server))
-}
-
-fn slidev_env_root() -> Result<PathBuf, String> {
-    bundled_resources::ensure_relative_dir("utils/SlidevEnv")
 }
 
 fn lsp_download_dir() -> Result<PathBuf, String> {
@@ -337,126 +336,28 @@ fn find_lsp_binary_in_server(server: &str, bin_name: &str) -> Option<PathBuf> {
     None
 }
 
-fn is_bundled_node_lsp(server: &str) -> bool {
-    matches!(
-        server,
-        "bash-language-server" | "typescript-language-server"
-    )
-}
-
-fn find_bundled_node_lsp_bin(bin_name: &str) -> Option<PathBuf> {
-    if bin_name.trim().is_empty() {
-        return None;
-    }
-
-    let root = slidev_env_root().ok()?;
-    let bin_dir = root.join("node_modules").join(".bin");
-
-    #[cfg(target_os = "windows")]
-    {
-        let cmd_path = bin_dir.join(format!("{bin_name}.cmd"));
-        if cmd_path.is_file() {
-            return Some(cmd_path);
-        }
-
-        let exe_path = bin_dir.join(format!("{bin_name}.exe"));
-        if exe_path.is_file() {
-            return Some(exe_path);
-        }
-    }
-
-    let direct_path = bin_dir.join(bin_name);
-    if direct_path.is_file() {
-        return Some(direct_path);
-    }
-
-    None
-}
-
-fn find_program_on_path(bin_name: &str) -> Option<PathBuf> {
-    let raw_name = bin_name.trim();
-    if raw_name.is_empty() {
-        return None;
-    }
-
-    let raw_path = PathBuf::from(raw_name);
-    if raw_path.is_file() {
-        return Some(raw_path);
-    }
-
-    let path_env = std::env::var_os("PATH")?;
-    let search_names = {
-        #[cfg(target_os = "windows")]
-        {
-            let path = Path::new(raw_name);
-            if path.extension().is_some() {
-                vec![raw_name.to_string()]
-            } else {
-                let pathext = std::env::var_os("PATHEXT")
-                    .map(|value| {
-                        value
-                            .to_string_lossy()
-                            .split(';')
-                            .map(|item| item.trim().trim_start_matches('.').to_string())
-                            .filter(|item| !item.is_empty())
-                            .collect::<Vec<_>>()
-                    })
-                    .filter(|items| !items.is_empty())
-                    .unwrap_or_else(|| {
-                        vec!["EXE".to_string(), "CMD".to_string(), "BAT".to_string()]
-                    });
-                let mut names = vec![raw_name.to_string()];
-                names.extend(pathext.into_iter().map(|ext| format!("{raw_name}.{ext}")));
-                names
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            vec![raw_name.to_string()]
-        }
-    };
-
-    std::env::split_paths(&path_env).find_map(|dir| {
-        search_names
-            .iter()
-            .map(|name| dir.join(name))
-            .find(|path| path.is_file())
-    })
-}
-
 fn find_existing_lsp_program(entry: &LspLanguageEntry) -> Option<PathBuf> {
-    if is_bundled_node_lsp(&entry.server) {
-        if let Some(path) = find_bundled_node_lsp_bin(&entry.bin_name) {
-            return Some(path);
-        }
-    }
-
     let bin_file = lsp_file_name(&entry.bin_name);
     if let Some(path) = find_lsp_binary_in_server(&entry.server, &bin_file) {
+        info!(
+            server = entry.server.as_str(),
+            bin_name = entry.bin_name.as_str(),
+            program = path.to_string_lossy().as_ref(),
+            "resolved managed LSP program from approved runtime directory"
+        );
         return Some(path);
     }
 
-    let base_dir = exe_dir().ok()?;
-    let mut candidates = vec![base_dir.join("lsp").join(&bin_file)];
-    if let Ok(utils_lsp_bin) =
-        bundled_resources::ensure_relative_dir(&format!("utils/lsp/{bin_file}"))
-    {
-        candidates.push(utils_lsp_bin);
-    }
-
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        candidates.push(
-            PathBuf::from(manifest_dir)
-                .join("utils")
-                .join("lsp")
-                .join(&bin_file),
-        );
-    }
-
-    candidates
-        .into_iter()
-        .find(|path| path.exists())
-        .or_else(|| find_program_on_path(&entry.bin_name))
+    info!(
+        server = entry.server.as_str(),
+        bin_name = entry.bin_name.as_str(),
+        runtime_dir = lsp_server_dir(&entry.server)
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default()
+            .as_str(),
+        "managed LSP program is not present in approved runtime directory"
+    );
+    None
 }
 
 fn lsp_language_entry(language: &str) -> Option<&'static LspLanguageEntry> {
@@ -470,27 +371,14 @@ fn build_lsp_command(
     program: String,
     extension_id: Option<String>,
 ) -> LspCommandConfig {
-    let mut envs = vec![];
-    let mut cwd = None;
-
-    if is_bundled_node_lsp(&entry.server) {
-        if let Ok(root) = slidev_env_root() {
-            let mut paths = vec![root.clone(), root.join("node_modules").join(".bin")];
-            if let Some(old) = std::env::var_os("PATH") {
-                paths.extend(std::env::split_paths(&old));
-            }
-            if let Ok(joined) = std::env::join_paths(paths) {
-                envs.push(("PATH".to_string(), joined.to_string_lossy().to_string()));
-            }
-            cwd = Some(root.to_string_lossy().to_string());
-        }
-    }
-
+    // 设计说明：这里仅用于托管 native LSP fallback。Node 类 LSP 统一由
+    // lsp_extensions.rs 解析为“SlidevEnv/node.exe + LspRuntimes/node 包入口”，
+    // 避免把 SlidevEnv/node_modules 误当作 language server 来源。
     LspCommandConfig {
         program,
         args: entry.args.clone(),
-        envs,
-        cwd,
+        envs: vec![],
+        cwd: None,
         extension_id,
         server_id: entry.server.clone(),
     }
@@ -903,10 +791,9 @@ async fn prepare_lsp_command_with_token(
     }
 
     // 设计说明：
-    // 1. 用户可见的 LSP 体系已经统一为“扩展优先”，这里不再允许未安装扩展的语言直接走旧语言表。
-    // 2. 旧的 binary 下载/共享运行时解析只在“已安装扩展授权该 server”后作为托管 runtime 使用，
-    //    解决 marksman/texlab/lua-language-server 这类 VSIX 本身不总是携带完整 server 的生产可用性问题。
-    // 3. 这样设置页只保留扩展管理，但已有下载器能力仍能在扩展明确授权后兜底启动真实 LSP server。
+    // 1. WebSocket 启动阶段只允许连接已经准备好的扩展或 LspRuntimes，不从 utils/SlidevEnv/node_modules、utils/lsp、PATH 捡历史残留。
+    // 2. 已安装扩展仍然可以授权托管 runtime；安装/探测阶段负责下载或补齐 runtime，编辑器输入时不触发安装。
+    // 3. 这样设置页、运行时目录和实际补全进程会看到同一套来源边界，避免不同模块互相串用。
     let entry = lsp_language_entry(language)
         .ok_or_else(|| format!("Unsupported language for LSP: {}", language))?;
 
@@ -937,7 +824,7 @@ async fn prepare_lsp_command_with_token(
             })?
     } else {
         return Err(format!(
-            "LSP runtime is not ready: language={} server={} bin={}。请确认对应语言插件已安装，并且运行时可执行文件存在于扩展、共享运行时或 PATH 中。",
+            "LSP runtime is not ready: language={} server={} bin={}。请确认对应语言插件已安装，并且运行时可执行文件存在于扩展目录或 LspRuntimes 目录中。",
             language, entry.server, entry.bin_name
         ));
     };

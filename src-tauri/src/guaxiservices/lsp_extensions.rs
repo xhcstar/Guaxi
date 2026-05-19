@@ -218,6 +218,41 @@ fn shared_node_runtime_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn managed_lsp_runtime_server_dir(server_id: &str) -> Result<PathBuf, String> {
+    Ok(lsp_runtime_root_dir()?.join("lsp").join(server_id))
+}
+
+fn managed_lsp_file_name(bin_name: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if Path::new(bin_name).extension().is_some() {
+            bin_name.to_string()
+        } else {
+            format!("{bin_name}.exe")
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        bin_name.to_string()
+    }
+}
+
+fn find_managed_lsp_runtime_program(server_id: &str, bin_name: &str) -> Option<PathBuf> {
+    let dir = managed_lsp_runtime_server_dir(server_id).ok()?;
+    if !dir.is_dir() {
+        return None;
+    }
+
+    let file_name = managed_lsp_file_name(bin_name);
+    WalkDir::new(dir).into_iter().flatten().find_map(|entry| {
+        if entry.file_type().is_file() && entry.file_name() == file_name.as_str() {
+            Some(entry.path().to_path_buf())
+        } else {
+            None
+        }
+    })
+}
+
 fn proxy_env_is_set(name: &str) -> bool {
     std::env::var(name)
         .map(|value| !value.trim().is_empty())
@@ -261,16 +296,6 @@ fn slidev_node_path() -> Option<PathBuf> {
     let candidate = root.join("node");
     if candidate.is_file() {
         Some(candidate)
-    } else {
-        None
-    }
-}
-
-fn slidev_bin_dir() -> Option<PathBuf> {
-    let root = slidev_env_root().ok()?;
-    let dir = root.join("node_modules").join(".bin");
-    if dir.is_dir() {
-        Some(dir)
     } else {
         None
     }
@@ -1053,6 +1078,45 @@ fn node_package_install_specs_for_bin(bin_name: &str) -> Vec<String> {
     }
 }
 
+fn normalize_node_runtime_package_specs(specs: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut normalized = specs
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn shared_node_runtime_package_specs_for_installed_extensions(
+    current_catalog: &CatalogExtension,
+) -> Vec<String> {
+    let mut specs = node_package_install_specs_for_bin(&current_catalog.lsp.bin_name);
+    let catalog = catalog_by_id();
+    match load_installed_extensions() {
+        Ok(installed) => {
+            for record in installed {
+                let Some(entry) = catalog.get(&normalize_extension_id(&record.id)) else {
+                    continue;
+                };
+                if normalize_string(&entry.lsp.runtime) != "node_binary" {
+                    continue;
+                }
+                specs.extend(node_package_install_specs_for_bin(&entry.lsp.bin_name));
+            }
+        }
+        Err(error) => {
+            warn!(
+                extension_id = current_catalog.id.as_str(),
+                error = error.as_str(),
+                "failed to collect installed extensions while preparing shared Node LSP runtime"
+            );
+        }
+    }
+    normalize_node_runtime_package_specs(specs)
+}
+
 #[cfg(target_os = "windows")]
 fn npm_command_name() -> &'static str {
     "npm.cmd"
@@ -1252,6 +1316,16 @@ fn shared_node_runtime_marker_matches(
     bin_name: &str,
     package_specs: &[String],
 ) -> bool {
+    // 设计说明：
+    // 1. marker 只说明某次安装流程写入过成功状态，不能代表 node_modules 中的入口仍然存在。
+    // 2. 多个 Node LSP 共用 LspRuntimes/node 时，后续 npm install 可能改写依赖树；必须同时检查真实 bin 入口。
+    // 3. 这样状态页和编辑器启动都不会被过期 marker 误导成“已就绪”。
+    if resolve_extension_bin(runtime_dir, bin_name).is_none()
+        && resolve_node_module_bin_entry(runtime_dir, bin_name).is_none()
+    {
+        return false;
+    }
+
     let marker_path = shared_node_runtime_marker_path(runtime_dir, bin_name);
     let Ok(content) = fs::read_to_string(&marker_path) else {
         return false;
@@ -1438,7 +1512,7 @@ async fn prepare_shared_node_runtime(
         ));
     }
     let runtime_dir = shared_node_runtime_dir()?;
-    let package_specs = node_package_install_specs_for_bin(&catalog.lsp.bin_name);
+    let package_specs = shared_node_runtime_package_specs_for_installed_extensions(catalog);
     if package_specs.is_empty() {
         return Err(format!(
             "no npm package mapping for LSP bin {}",
@@ -1471,9 +1545,10 @@ async fn prepare_shared_node_runtime(
     );
 
     // 设计说明：
+    // 设计说明：
     // 1. 插件安装完成后必须立刻补齐 runtime，不能把问题留给运行时再暴露。
     // 2. Node LSP 包统一安装到 <软件目录>/LspRuntimes/node，多个语言插件共用一份 node_modules，避免每个扩展目录重复占用磁盘。
-    // 3. 这里只写共享 runtime 目录，不修改 SlidevEnv；安装后会再次解析并执行 initialize 探测。
+    // 3. 每次安装都按“已安装 Node LSP 扩展全集”安装 package_specs，避免后装 TS 时清掉 HTML/CSS/JSON 的 vscode-langservers-extracted。
     // 设计说明：
     // 1. 多个 LSP 扩展共用同一个 LspRuntimes/node/node_modules，npm install 必须串行执行。
     // 2. 进入锁后再次检查 marker，避免排队期间前一个任务已经完成安装，后一个任务重复写目录。
@@ -1648,45 +1723,41 @@ fn resolve_runtime_status(
                 }
             }
             "slidev_env_bin" => {
-                if let Some(root) = slidev_env_root().ok() {
-                    if runtime == "node_binary" {
-                        // 设计说明：内置 SlidevEnv 中的 Node 包同样绕过 .cmd shim，减少 Windows stdio 卡死点。
-                        if let (Some(node_path), Some(entry_path)) = (
-                            slidev_node_path(),
-                            resolve_node_binary_entry(&root, &catalog.lsp.bin_name),
-                        ) {
-                            return LspExtensionRuntimeStatus {
-                                ready: true,
-                                runtime: runtime.clone(),
-                                program_path: Some(node_path.to_string_lossy().to_string()),
-                                message: Some(format!(
-                                    "resolved from bundled SlidevEnv node package entry: {}",
-                                    entry_path.to_string_lossy()
-                                )),
-                            };
-                        }
-                    }
-                    if let Some(path) = resolve_extension_bin(&root, &catalog.lsp.bin_name) {
-                        return LspExtensionRuntimeStatus {
-                            ready: true,
-                            runtime: runtime.clone(),
-                            program_path: Some(path.to_string_lossy().to_string()),
-                            message: Some(
-                                "resolved from bundled SlidevEnv node runtime".to_string(),
-                            ),
-                        };
-                    }
-                }
+                // 设计说明：
+                // 1. SlidevEnv 只允许提供 node.exe 解释器，不能把其中的 node_modules/.bin 当成 LSP server 来源。
+                // 2. 如果 catalog 仍带有历史 resolve_order，这里显式跳过并记录日志，避免旧配置继续误判 runtime ready。
+                // 3. 真正的 Node language server 包必须来自扩展目录或 LspRuntimes/node。
+                info!(
+                    extension_id = catalog.id.as_str(),
+                    bin_name = catalog.lsp.bin_name.as_str(),
+                    "skipped SlidevEnv package runtime while resolving LSP runtime status"
+                );
             }
             "downloadable_server" => {
                 if let Some(server_id) = catalog.lsp.fallback_server.as_deref() {
                     if is_downloadable_fallback(server_id) {
+                        if let Some(path) =
+                            find_managed_lsp_runtime_program(server_id, &catalog.lsp.bin_name)
+                        {
+                            return LspExtensionRuntimeStatus {
+                                ready: true,
+                                runtime: runtime.clone(),
+                                program_path: Some(path.to_string_lossy().to_string()),
+                                message: Some(
+                                    "resolved from managed LspRuntimes native runtime".to_string(),
+                                ),
+                            };
+                        }
+                        // 设计说明：
+                        // 1. downloadable_server 只表示 Guaxi 知道如何准备 runtime，不代表当前机器已经有可执行文件。
+                        // 2. 状态页必须按 LspRuntimes 中的真实文件判断 ready，避免编辑器启动时又去误用 utils/lsp 或 PATH。
+                        // 3. 安装/修复流程仍会在探测阶段触发下载；普通编辑器 WebSocket 只连接已准备好的 runtime。
                         return LspExtensionRuntimeStatus {
-                            ready: true,
+                            ready: false,
                             runtime: runtime.clone(),
                             program_path: None,
                             message: Some(
-                                "server runtime can be auto-downloaded on first use".to_string(),
+                                "managed native LSP runtime can be prepared, but no executable exists in LspRuntimes yet".to_string(),
                             ),
                         };
                     }
@@ -1700,7 +1771,10 @@ fn resolve_runtime_status(
         ready: false,
         runtime,
         program_path: None,
-        message: Some("runtime entry could not be resolved from extension, shared runtime, SlidevEnv, or fallback server".to_string()),
+        message: Some(
+            "runtime entry could not be resolved from extension directory or LspRuntimes"
+                .to_string(),
+        ),
     }
 }
 
@@ -2110,6 +2184,27 @@ async fn prepare_catalog_extension_runtime_if_missing(
             // 3. 这样可以自动修复日志里的 core-js MODULE_NOT_FOUND、TAR_ENTRY_ERROR、ENOTEMPTY 等缓存损坏。
             prepare_shared_node_runtime(&catalog, source_label).await?;
         }
+        runtime
+            if catalog
+                .lsp
+                .fallback_server
+                .as_deref()
+                .map(is_downloadable_fallback)
+                .unwrap_or(false) =>
+        {
+            // 设计说明：
+            // 1. native downloadable runtime 的实际下载由后续 probe_lsp_runtime_for_language 执行，这样安装验证和手动修复共用同一路径。
+            // 2. 这里不从 utils/lsp 或 PATH 兜底，只允许探测阶段把二进制写入 LspRuntimes/lsp/<server>。
+            // 3. 日志明确记录“等待探测下载”，避免把 runtime_status.ready=false 误解为会使用外部残留工具。
+            info!(
+                extension_id = state.id.as_str(),
+                source = source_label,
+                runtime,
+                fallback_server = catalog.lsp.fallback_server.as_deref().unwrap_or(""),
+                "native LSP runtime will be prepared by verification probe"
+            );
+            return Ok(state);
+        }
         runtime => {
             return Err(format!(
                 "{} installed extension {} but runtime is not ready and automatic preparation is unsupported for runtime {}: {}",
@@ -2162,14 +2257,23 @@ async fn verify_if_catalog_extension_runtime(
 
     match verify_catalog_extension_runtime(&state, source_label).await {
         Ok(probes) => {
+            let refreshed_state = state
+                .installed_path
+                .as_deref()
+                .map(PathBuf::from)
+                .and_then(|install_path| record_from_dir(&install_path))
+                .map(|record| build_extension_state(Some(record), catalog.get(&id).cloned()))
+                .unwrap_or_else(|| state.clone());
             info!(
                 extension_id = id.as_str(),
                 source = source_label,
                 probe_count = probes.len(),
                 probes = ?probes,
+                runtime_ready = refreshed_state.runtime_status.ready,
+                runtime_message = refreshed_state.runtime_status.message.as_deref().unwrap_or(""),
                 "verified installed catalog LSP extension runtime"
             );
-            Ok(state)
+            Ok(refreshed_state)
         }
         Err(error) => {
             rollback_failed_catalog_install(&id, &error);
@@ -3406,72 +3510,17 @@ pub(crate) async fn resolve_lsp_command_for_language(
                     }
                 }
                 "slidev_env_bin" => {
-                    if let Some(root) = slidev_env_root().ok() {
-                        if normalize_string(&catalog_entry.lsp.runtime) == "node_binary" {
-                            if let (Some(node_path), Some(entry_path)) = (
-                                slidev_node_path(),
-                                resolve_node_binary_entry(&root, &catalog_entry.lsp.bin_name),
-                            ) {
-                                let env_roots = {
-                                    let mut roots = vec![root.clone()];
-                                    if let Some(bin_dir) = slidev_bin_dir() {
-                                        roots.push(bin_dir);
-                                    }
-                                    roots
-                                };
-                                info!(
-                                    language = normalized_language.as_str(),
-                                    extension_id = candidate.id.as_str(),
-                                    strategy = "slidev_env_node_entry",
-                                    node = node_path.to_string_lossy().as_ref(),
-                                    entry = entry_path.to_string_lossy().as_ref(),
-                                    cwd = root.to_string_lossy().as_ref(),
-                                    "resolved LSP server from bundled SlidevEnv node package bin entry"
-                                );
-                                return Ok(Some(resolve_node_binary_command_from_entry(
-                                    &entry_path,
-                                    &catalog_entry.lsp.args,
-                                    &root,
-                                    &env_roots,
-                                    &candidate.id,
-                                    &candidate.display_name,
-                                    &catalog_entry.lsp.server_id,
-                                )));
-                            }
-                        }
-                        if let Some(path) =
-                            resolve_extension_bin(&root, &catalog_entry.lsp.bin_name)
-                        {
-                            let mut env_roots = vec![root.clone()];
-                            if let Some(bin_dir) = slidev_bin_dir() {
-                                env_roots.push(bin_dir);
-                            }
-                            return Ok(Some(ResolvedLspExtensionCommand {
-                                program: path.to_string_lossy().to_string(),
-                                args: catalog_entry.lsp.args.clone(),
-                                envs: build_path_env_with_roots(&env_roots),
-                                cwd: Some(root.to_string_lossy().to_string()),
-                                extension_id: candidate.id.clone(),
-                                extension_display_name: candidate.display_name.clone(),
-                                server_id: catalog_entry.lsp.server_id.clone(),
-                            }));
-                        }
-                        info!(
-                            language = normalized_language.as_str(),
-                            extension_id = candidate.id.as_str(),
-                            strategy = "slidev_env_bin",
-                            bin_name = catalog_entry.lsp.bin_name.as_str(),
-                            candidates = ?extension_bin_candidate_paths(&root, &catalog_entry.lsp.bin_name),
-                            "LSP extension runtime strategy did not resolve"
-                        );
-                    } else {
-                        info!(
-                            language = normalized_language.as_str(),
-                            extension_id = candidate.id.as_str(),
-                            strategy = "slidev_env_bin",
-                            "SlidevEnv root is unavailable while resolving LSP extension runtime"
-                        );
-                    }
+                    // 设计说明：
+                    // 1. SlidevEnv 只提供 node.exe，language server 包必须来自扩展目录或 LspRuntimes/node。
+                    // 2. 这里保留分支是为了兼容旧 catalog 字段，但永远不从 SlidevEnv/node_modules 解析 LSP server。
+                    // 3. 日志中记录跳过行为，排查时能确认没有误用历史残留的 npm 包。
+                    info!(
+                        language = normalized_language.as_str(),
+                        extension_id = candidate.id.as_str(),
+                        strategy = "slidev_env_bin",
+                        bin_name = catalog_entry.lsp.bin_name.as_str(),
+                        "skipped SlidevEnv package runtime while resolving LSP command"
+                    );
                 }
                 "downloadable_server" => {
                     if let Some(server_id) = catalog_entry.lsp.fallback_server.as_deref() {
