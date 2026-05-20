@@ -304,6 +304,7 @@ const ensureGuaxiMonacoThemes = () => {
       'editor.selectionBackground': '#d7dae0',
       'editor.inactiveSelectionBackground': '#e3f2fd',
       'editor.lineHighlightBackground': '#f0f0f0',
+      'editor.lineHighlightBorder': '#00000000',
       'editorBracketMatch.background': '#e1f5fe',
       'editorBracketMatch.border': '#90caf9',
       'editor.selectionHighlightBackground': '#ffe0b2',
@@ -319,6 +320,18 @@ const ensureGuaxiMonacoThemes = () => {
       'editorSuggestWidget.selectedBackground': '#e3f2fd',
       'editorWidget.background': '#ffffff',
       'editorWidget.border': '#e0e0e0',
+      'input.background': '#ffffff',
+      'input.foreground': '#383a42',
+      'input.border': '#e0e0e0',
+      'input.placeholderForeground': '#8c8d91',
+      'widget.border': '#e0e0e0',
+      'widget.shadow': '#00000022',
+      'focusBorder': '#4078f280',
+      'editorStickyScroll.background': '#fafafa',
+      'editorStickyScrollGutter.background': '#fafafa',
+      'editorStickyScrollHover.background': '#f0f0f0',
+      'editorStickyScroll.border': '#e0e0e0',
+      'editorStickyScroll.shadow': '#00000022',
       'editorGutter.background': '#fafafa',
       'scrollbar.shadow': '#00000033'
     }
@@ -354,6 +367,7 @@ const ensureGuaxiMonacoThemes = () => {
       'editor.selectionBackground': '#3e4451',
       'editor.inactiveSelectionBackground': '#3e4451',
       'editor.lineHighlightBackground': '#2c313a',
+      'editor.lineHighlightBorder': '#00000000',
       'editorBracketMatch.background': '#3e4451',
       'editorBracketMatch.border': '#528bff',
       'editor.selectionHighlightBackground': '#3e4451',
@@ -369,6 +383,19 @@ const ensureGuaxiMonacoThemes = () => {
       'editorSuggestWidget.selectedBackground': '#2c313a',
       'editorWidget.background': '#282c34',
       'editorWidget.border': '#3b4048',
+      'input.background': '#21252b',
+      'input.foreground': '#abb2bf',
+      'input.border': '#3b4048',
+      'input.placeholderForeground': '#7f8898',
+      'inputOption.activeBorder': '#528bff80',
+      'widget.border': '#3b4048',
+      'widget.shadow': '#00000066',
+      'focusBorder': '#528bff80',
+      'editorStickyScroll.background': '#282c34',
+      'editorStickyScrollGutter.background': '#282c34',
+      'editorStickyScrollHover.background': '#2c313a',
+      'editorStickyScroll.border': '#00000000',
+      'editorStickyScroll.shadow': '#00000066',
       'editorGutter.background': '#282c34',
       'scrollbar.shadow': '#00000066'
     }
@@ -384,7 +411,12 @@ const getMonacoTheme = () => {
 
 const applyMonacoTheme = () => {
   try {
-    monaco.editor.setTheme(getMonacoTheme())
+    const themeName = getMonacoTheme()
+    monaco.editor.setTheme(themeName)
+    logger.debug('[theme] applied slidev monaco chrome palette', {
+      themeName,
+      appearanceTheme: settingsStore.appearanceTheme
+    })
   } catch (e) {
     logger.warn('[theme] apply failed', e)
   }
@@ -1542,9 +1574,14 @@ const ensureEditor = async () => {
     wordWrap: 'on',
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
+    renderLineHighlight: 'line',
     fontSize: 18,
+    lineHeight: 24,
     fontFamily: "'Maple Mono NF CN','JetBrainsMono Nerd Font Mono', Consolas, monospace, 'Microsoft YaHei', 'Courier New'",
     padding: { top: 8, bottom: 8 },
+    find: {
+      addExtraSpaceOnTop: false
+    },
     contextmenu: {
       enabled: true,
       addDefaultActions: true,
@@ -2860,6 +2897,95 @@ onUnmounted(() => {
 
 :global(:root[data-guaxi-theme='dark']) .lite-editor :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb:hover) {
   background-color: rgba(255, 255, 255, 0.45);
+}
+
+/* 设计说明：
+   1. PPT/Slidev 编辑器与主编辑器共用 Monaco，但位于独立窗口和 scoped 样式域内，主题 token 有时覆盖不到
+      find-widget、sticky scroll、当前行左侧 margin 等 Monaco 内部 DOM。
+   2. 这里使用整条 :global(...) 选择器做暗色兜底，避免 Vue scoped CSS 把选择器截断后只命中根节点。
+   3. 所有颜色与 guaxi-dark 主题保持一致，专门修复暗色模式首行左侧、搜索框、当前行背景露出亮色的问题。 */
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .margin),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .glyph-margin),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .margin-view-overlays),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .monaco-editor-background) {
+  background-color: #282c34 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor) {
+  --vscode-editorWidget-background: #282c34 !important;
+  --vscode-editorWidget-foreground: #abb2bf !important;
+  --vscode-widget-border: #3b4048 !important;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.42) !important;
+  --vscode-input-background: #21252b !important;
+  --vscode-input-foreground: #abb2bf !important;
+  --vscode-input-border: #3b4048 !important;
+  --vscode-input-placeholderForeground: #7f8898 !important;
+  --vscode-focusBorder: rgba(82, 139, 255, 0.5) !important;
+  --vscode-editorStickyScroll-background: #282c34 !important;
+  --vscode-editorStickyScrollGutter-background: #282c34 !important;
+  --vscode-editorStickyScrollHover-background: #2c313a !important;
+  --vscode-editorStickyScroll-border: transparent !important;
+  --vscode-editorStickyScroll-shadow: rgba(0, 0, 0, 0.42) !important;
+  --vscode-editorLineNumber-foreground: #5c6370 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-widget),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-widget-line-numbers),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-widget-lines-scrollable),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-widget-lines),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-line-number),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-line-content) {
+  background-color: #282c34 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-widget) {
+  border-bottom-color: transparent !important;
+  box-shadow: rgba(0, 0, 0, 0.42) 0 4px 2px -2px !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-line-number-inner),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-line-number .codicon) {
+  color: #5c6370 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .sticky-line-content:hover) {
+  background-color: #2c313a !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .find-widget) {
+  background-color: #282c34 !important;
+  border-color: #3b4048 !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32) !important;
+  color: #abb2bf !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .find-widget .monaco-inputbox) {
+  background-color: #21252b !important;
+  border-color: #3b4048 !important;
+  color: #abb2bf !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .find-widget .monaco-inputbox.synthetic-focus) {
+  outline-color: rgba(82, 139, 255, 0.5) !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .find-widget textarea::placeholder) {
+  color: #7f8898 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .current-line),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .view-overlays .current-line),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .margin-view-overlays .current-line),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .margin-view-overlays .current-line-margin),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .margin-view-overlays .line-numbers),
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .line-numbers.active-line-number) {
+  background-color: #2c313a !important;
+  border-color: transparent !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .slidev-lite-editor .monaco-editor .line-numbers.active-line-number) {
+  color: #d7deea !important;
 }
 
 .host-mask {

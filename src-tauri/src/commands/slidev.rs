@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
@@ -144,12 +145,159 @@ fn inject_slidev_env_path(cmd: &mut Command, env_root: &Path) {
             warn!("[Slidev] join_paths failed: {}", e);
         }
     }
+
+    // 设计说明：
+    // 1. Slidev CLI 解析 theme 时会围绕当前演示文稿 workdir 查找依赖。
+    // 2. 注入 NODE_PATH 可以把内置 SlidevEnv/node_modules 作为额外兜底。
+    // 3. 这不会覆盖用户已有依赖，只增加运行时解析路径并输出日志方便排查。
+    let env_node_modules = env_root.join("node_modules");
+    let mut node_paths: Vec<PathBuf> = vec![env_node_modules.clone()];
+    if let Some(old) = std::env::var_os("NODE_PATH") {
+        node_paths.extend(std::env::split_paths(&old));
+    }
+    match std::env::join_paths(node_paths) {
+        Ok(joined) => {
+            cmd.env("NODE_PATH", joined);
+            info!(
+                "[Slidev] injected NODE_PATH fallback: {}",
+                env_node_modules.to_string_lossy()
+            );
+        }
+        Err(e) => {
+            warn!("[Slidev] join NODE_PATH failed: {}", e);
+        }
+    }
+}
+
+fn bundled_default_theme_dir(env_root: &Path) -> Result<PathBuf, String> {
+    let theme_dir = env_root
+        .join("node_modules")
+        .join("@slidev")
+        .join("theme-default");
+    let pkg = theme_dir.join("package.json");
+    if !pkg.is_file() {
+        return Err(format!(
+            "内置 SlidevEnv 缺少默认主题依赖：@slidev/theme-default，期望文件：{}",
+            pkg.to_string_lossy()
+        ));
+    }
+    Ok(theme_dir)
+}
+
+fn create_workdir_theme_link(src: &Path, dst: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let dst_s = dst.to_string_lossy().replace('/', "\\");
+        let src_s = src.to_string_lossy().replace('/', "\\");
+
+        info!(
+            "[Slidev] creating theme-default junction: dst={} src={} (powershell)",
+            dst_s, src_s
+        );
+
+        let dst_ps = dst_s.replace('"', "`\"");
+        let src_ps = src_s.replace('"', "`\"");
+        let script = format!(
+            "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; New-Item -ItemType Junction -Path \"{}\" -Target \"{}\" -ErrorAction Stop | Out-Null",
+            dst_ps, src_ps
+        );
+
+        let out = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ])
+            .output()
+            .map_err(|e| format!("创建 theme-default 联接失败: {e}"))?;
+
+        if !out.status.success() {
+            let so = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let se = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!(
+                "创建 theme-default 联接失败: status={} stdout={} stderr={}",
+                out.status, so, se
+            ));
+        }
+
+        info!("[Slidev] theme-default junction created: {} -> {}", dst_s, src_s);
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::os::unix::fs::symlink(src, dst)
+            .map_err(|e| format!("创建 theme-default symlink 失败: {e}"))?;
+        info!(
+            "[Slidev] theme-default symlink created: {} -> {}",
+            dst.to_string_lossy(),
+            src.to_string_lossy()
+        );
+        Ok(())
+    }
+}
+
+fn ensure_workdir_default_theme(workdir_node_modules: &Path, env_root: &Path) -> Result<(), String> {
+    let bundled_theme = bundled_default_theme_dir(env_root)?;
+    let scoped_dir = workdir_node_modules.join("@slidev");
+    let theme_dir = scoped_dir.join("theme-default");
+    let theme_pkg = theme_dir.join("package.json");
+
+    if theme_pkg.is_file() {
+        info!(
+            "[Slidev] workdir default theme ready: {}",
+            theme_pkg.to_string_lossy()
+        );
+        return Ok(());
+    }
+
+    if theme_dir.exists() {
+        return Err(format!(
+            "SlideRepo/node_modules/@slidev/theme-default 已存在但缺少 package.json：{}。请检查该目录是否损坏，或删除后重试。",
+            theme_dir.to_string_lossy()
+        ));
+    }
+
+    if scoped_dir.exists() && !scoped_dir.is_dir() {
+        return Err(format!(
+            "SlideRepo/node_modules/@slidev 已存在但不是目录：{}",
+            scoped_dir.to_string_lossy()
+        ));
+    }
+
+    // 设计说明：
+    // 1. 旧版本或用户操作可能已经在 SlideRepo 中留下自己的 node_modules。
+    // 2. 直接删除会破坏已有依赖，所以只补默认主题这一条最小链接。
+    // 3. Slidev 的 theme resolver 就能在 workdir/node_modules 下找到 @slidev/theme-default。
+    fs::create_dir_all(&scoped_dir).map_err(|e| {
+        format!(
+            "创建 SlideRepo/node_modules/@slidev 目录失败：{} error={}",
+            scoped_dir.to_string_lossy(),
+            e
+        )
+    })?;
+
+    info!(
+        "[Slidev] workdir node_modules missing default theme, linking bundled theme: dst={} src={}",
+        theme_dir.to_string_lossy(),
+        bundled_theme.to_string_lossy()
+    );
+    create_workdir_theme_link(&bundled_theme, &theme_dir)?;
+    Ok(())
 }
 
 fn ensure_workdir_node_modules(workdir: &Path, env_root: &Path) -> Result<bool, String> {
     let dst = workdir.join("node_modules");
     if dst.exists() {
         if dst.is_dir() {
+            info!(
+                "[Slidev] using existing workdir node_modules: {}",
+                dst.to_string_lossy()
+            );
+            ensure_workdir_default_theme(&dst, env_root)?;
             return Ok(false);
         }
         return Err(format!(
@@ -165,6 +313,8 @@ fn ensure_workdir_node_modules(workdir: &Path, env_root: &Path) -> Result<bool, 
             src.to_string_lossy()
         ));
     }
+
+    bundled_default_theme_dir(env_root)?;
 
     #[cfg(windows)]
     {
