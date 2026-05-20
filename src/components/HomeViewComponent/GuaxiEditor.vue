@@ -8027,6 +8027,18 @@ const initEditor = () => {
       'editorSuggestWidget.selectedBackground': '#e5e5e6',
       'editorWidget.background': '#ffffff',
       'editorWidget.border': '#dcdfe4',
+      'input.background': '#ffffff',
+      'input.foreground': '#383a42',
+      'input.border': '#dcdfe4',
+      'input.placeholderForeground': '#8c8d91',
+      'widget.border': '#dcdfe4',
+      'widget.shadow': '#00000022',
+      'focusBorder': '#4078f280',
+      'editorStickyScroll.background': '#ffffff',
+      'editorStickyScrollGutter.background': '#ffffff',
+      'editorStickyScrollHover.background': '#f0f0f0',
+      'editorStickyScroll.border': '#dcdfe4',
+      'editorStickyScroll.shadow': '#00000022',
       'scrollbar.shadow': '#00000033'
     }
   });
@@ -8159,11 +8171,30 @@ const initEditor = () => {
       'editorWidget.background': '#282c34',
       'editorWidget.border': '#3b4048',
       'editorGutter.background': '#282c34',
+      'input.background': '#21252b',
+      'input.foreground': '#abb2bf',
+      'input.border': '#3b4048',
+      'input.placeholderForeground': '#7f8898',
+      'inputOption.activeBorder': '#528bff80',
+      'widget.border': '#3b4048',
+      'widget.shadow': '#00000066',
+      'focusBorder': '#528bff80',
+      'editorStickyScroll.background': '#282c34',
+      'editorStickyScrollGutter.background': '#282c34',
+      'editorStickyScrollHover.background': '#2c313a',
+      'editorStickyScroll.border': '#00000000',
+      'editorStickyScroll.shadow': '#00000066',
       'scrollbar.shadow': '#00000066'
     }
   });
 
   const themeName = isDark ? 'guaxi-dark' : 'guaxi-light';
+  logger.debug('[theme] monaco chrome palette prepared', {
+    themeName,
+    isDark,
+    stickyScrollBackground: isDark ? '#282c34' : '#ffffff',
+    inputBorder: isDark ? '#3b4048' : '#dcdfe4'
+  });
 
   editor = monaco.editor.create(editorContainer.value, {
     value: rawContent.value,
@@ -18072,7 +18103,26 @@ onUnmounted(() => {
   --pycell-var-preview: #506177;
 }
 
-:global(:root[data-guaxi-theme='dark']) .guaxi-editor {
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor) {
+  /* 设计说明：
+     1. monaco-vscode-api 会注入 VSCode 兼容 CSS 变量，查找框和 sticky scroll 会优先读取这些变量。
+     2. Guaxi 编辑器只需要组件内部跟随自有暗色 UI，因此在 .guaxi-editor 作用域内重置 widget/input/sticky scroll 变量。
+     3. 这里和 defineTheme 的颜色保持一致，避免滚动吸顶行号、查找框边框在暗色模式下短暂回落到亮色默认值。 */
+  --vscode-editorWidget-background: #282c34;
+  --vscode-editorWidget-foreground: #abb2bf;
+  --vscode-widget-border: #3b4048;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.42);
+  --vscode-input-background: #21252b;
+  --vscode-input-foreground: #abb2bf;
+  --vscode-input-border: #3b4048;
+  --vscode-input-placeholderForeground: #7f8898;
+  --vscode-focusBorder: rgba(82, 139, 255, 0.5);
+  --vscode-editorStickyScroll-background: #282c34;
+  --vscode-editorStickyScrollGutter-background: #282c34;
+  --vscode-editorStickyScrollHover-background: #2c313a;
+  --vscode-editorStickyScroll-border: transparent;
+  --vscode-editorStickyScroll-shadow: rgba(0, 0, 0, 0.42);
+  --vscode-editorLineNumber-foreground: #5c6370;
   --pycell-card-border: rgba(148, 163, 184, 0.22);
   --pycell-card-bg:
     radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 28%),
@@ -19564,37 +19614,103 @@ onUnmounted(() => {
   background-color: rgba(120, 120, 120, 0.65);
 }
 
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-scrollable-element) {
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-scrollable-element) {
   scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
 }
 
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb) {
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-scrollable-element::-webkit-scrollbar-thumb) {
   background-color: rgba(255, 255, 255, 0.28);
 }
 
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-scrollable-element::-webkit-scrollbar-thumb:hover) {
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-scrollable-element::-webkit-scrollbar-thumb:hover) {
   background-color: rgba(255, 255, 255, 0.45);
 }
 
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .glyph-margin),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .monaco-editor-background) {
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .glyph-margin),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin-view-overlays),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .monaco-editor-background) {
   background-color: #282c34 !important;
 }
 
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .current-line),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .view-overlays .current-line),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays .current-line),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays .current-line-margin),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .margin-view-overlays .line-numbers),
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .line-numbers.active-line-number) {
+/* 设计说明：
+   1. sticky scroll 的行号区域由 monaco-vscode-api 使用 .sticky-widget-line-numbers 单独渲染，不会命中普通 .line-numbers 覆盖。
+   2. 查找框的边框来自 --vscode-widget-border / --vscode-input-border；这里加 DOM 兜底，防止依赖加载顺序让亮色变量短暂获胜。
+   3. 整条选择器放进 :global(...)，避免 Vue scoped CSS 把 :global(:root) 和 :deep(...) 编译成只命中根节点的规则。 */
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor) {
+  --vscode-editorWidget-background: #282c34 !important;
+  --vscode-editorWidget-foreground: #abb2bf !important;
+  --vscode-widget-border: #3b4048 !important;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.42) !important;
+  --vscode-input-background: #21252b !important;
+  --vscode-input-foreground: #abb2bf !important;
+  --vscode-input-border: #3b4048 !important;
+  --vscode-input-placeholderForeground: #7f8898 !important;
+  --vscode-focusBorder: rgba(82, 139, 255, 0.5) !important;
+  --vscode-editorStickyScroll-background: #282c34 !important;
+  --vscode-editorStickyScrollGutter-background: #282c34 !important;
+  --vscode-editorStickyScrollHover-background: #2c313a !important;
+  --vscode-editorStickyScroll-border: transparent !important;
+  --vscode-editorStickyScroll-shadow: rgba(0, 0, 0, 0.42) !important;
+  --vscode-editorLineNumber-foreground: #5c6370 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-widget),
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-widget-line-numbers),
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-widget-lines-scrollable),
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-widget-lines),
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-line-number),
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-line-content) {
+  background-color: #282c34 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-widget) {
+  border-bottom-color: transparent !important;
+  box-shadow: rgba(0, 0, 0, 0.42) 0 4px 2px -2px !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-line-number-inner),
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-line-number .codicon) {
+  color: #5c6370 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .sticky-line-content:hover) {
+  background-color: #2c313a !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .find-widget) {
+  background-color: #282c34 !important;
+  border-color: #3b4048 !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32) !important;
+  color: #abb2bf !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .find-widget .monaco-inputbox) {
+  background-color: #21252b !important;
+  border-color: #3b4048 !important;
+  color: #abb2bf !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .find-widget .monaco-inputbox.synthetic-focus) {
+  outline-color: rgba(82, 139, 255, 0.5) !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .find-widget textarea::placeholder) {
+  color: #7f8898 !important;
+}
+
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .current-line),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .view-overlays .current-line),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin-view-overlays .current-line),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin-view-overlays .current-line-margin),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .margin-view-overlays .line-numbers),
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .line-numbers.active-line-number) {
   background-color: #2c313a !important;
   border-color: transparent !important;
 }
 
-:global(:root[data-guaxi-theme='dark']) .editor-wrapper :deep(.monaco-editor .line-numbers.active-line-number) {
+:global(:root[data-guaxi-theme='dark'] .editor-wrapper .monaco-editor .line-numbers.active-line-number) {
   color: #d7deea !important;
 }
 
