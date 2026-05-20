@@ -4596,6 +4596,19 @@ const registerFilesystemPathCompletionFeatures = () => {
         const token = extractPathToken(beforeCursor);
         const pathContext = isFilesystemPathContext(beforeCursor);
 
+        if (language === 'markdown' && (getMarkdownMathContext(model, position) || getMarkdownFenceContext(model, position))) {
+          // 设计说明：
+          // 1. LaTeX 命令和 Mermaid 语句都经常以 `\`、`.`、`:` 触发补全，和路径补全触发字符重叠。
+          // 2. Markdown 内嵌语言区域应由对应语言 provider 主导；路径补全只在普通 Markdown 文本和链接上下文工作。
+          // 3. 这里主动让出 embedded context，避免 `\cos` / `graph TD` 这类语法补全被文件列表候选稀释或覆盖。
+          logger.debug('[PathCompletion] skipped inside markdown embedded context', {
+            token,
+            lineNumber: position.lineNumber,
+            column: position.column,
+          });
+          return { suggestions: [] };
+        }
+
         const looksLikePath =
           (!!token &&
             (/[\\/]/.test(token) ||
@@ -4885,8 +4898,132 @@ const registerMarkdownLanguageFeatures = () => {
     createLatexSnippet('subseteq', '\\subseteq', '⊆'),
     createLatexSnippet('supseteq', '\\supseteq', '⊇'),
     createLatexSnippet('in', '\\in', '∈'),
-    createLatexSnippet('notin', '\\notin', '∉')
+    createLatexSnippet('notin', '\\notin', '∉'),
+    createLatexSnippet('sin', '\\sin', '正弦'),
+    createLatexSnippet('cos', '\\cos', '余弦'),
+    createLatexSnippet('tan', '\\tan', '正切'),
+    createLatexSnippet('log', '\\log', '对数'),
+    createLatexSnippet('ln', '\\ln', '自然对数'),
+    createLatexSnippet('exp', '\\exp', '指数'),
+    createLatexSnippet('partial', '\\partial', '偏导符号'),
+    createLatexSnippet('nabla', '\\nabla', 'Nabla 符号'),
+    createLatexSnippet('vec', '\\vec{${1:v}}', '向量'),
+    createLatexSnippet('hat', '\\hat{${1:x}}', '帽子重音'),
+    createLatexSnippet('bar', '\\bar{${1:x}}', '横线重音'),
+    createLatexSnippet('overline', '\\overline{${1:x}}', '上划线'),
+    createLatexSnippet('underline', '\\underline{${1:x}}', '下划线'),
+    createLatexSnippet('label', '\\label{${1:key}}', '标签'),
+    createLatexSnippet('ref', '\\ref{${1:key}}', '引用标签'),
+    createLatexSnippet('eqref', '\\eqref{${1:key}}', '公式引用'),
+    createLatexSnippet('cite', '\\cite{${1:key}}', '文献引用'),
+    createLatexSnippet('item', '\\item ${1:text}', '列表项'),
+    createLatexSnippet('emph', '\\emph{${1:text}}', '强调文本'),
+    createLatexSnippet('section', '\\section{${1:title}}', '章节标题'),
+    createLatexSnippet('subsection', '\\subsection{${1:title}}', '二级章节'),
+    createLatexSnippet('subsubsection', '\\subsubsection{${1:title}}', '三级章节'),
+    createLatexSnippet('document', '\\begin{document}\n${0}\n\\end{document}', 'document 环境', '\\begin{document}...\\end{document}'),
+    createLatexSnippet('equation', '\\begin{equation}\n  ${0}\n\\end{equation}', 'equation 环境', '\\begin{equation}...\\end{equation}'),
+    createLatexSnippet('matrix', '\\begin{matrix}\n  ${1:a} & ${2:b}\\\\\n  ${3:c} & ${4:d}\n\\end{matrix}', 'matrix 环境', '\\begin{matrix}...\\end{matrix}'),
+    createLatexSnippet('pmatrix', '\\begin{pmatrix}\n  ${1:a} & ${2:b}\\\\\n  ${3:c} & ${4:d}\n\\end{pmatrix}', 'pmatrix 环境', '\\begin{pmatrix}...\\end{pmatrix}'),
+    createLatexSnippet('bmatrix', '\\begin{bmatrix}\n  ${1:a} & ${2:b}\\\\\n  ${3:c} & ${4:d}\n\\end{bmatrix}', 'bmatrix 环境', '\\begin{bmatrix}...\\end{bmatrix}'),
+    createLatexSnippet('enumerate', '\\begin{enumerate}\n  \\item ${1:item}\n\\end{enumerate}', 'enumerate 环境', '\\begin{enumerate}...\\end{enumerate}'),
+    createLatexSnippet('itemize', '\\begin{itemize}\n  \\item ${1:item}\n\\end{itemize}', 'itemize 环境', '\\begin{itemize}...\\end{itemize}')
   ];
+
+  const createMermaidSnippet = (key, insertText, detail, label) => ({
+    key: String(key || '').toLowerCase(),
+    label: label || key,
+    kind: monaco.languages.CompletionItemKind.Snippet,
+    insertText,
+    insertTextRules:
+      monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    detail
+  });
+
+  const mermaidSnippets = [
+    createMermaidSnippet('graph', 'graph ${1:TD}\n  ${2:A}[${3:Start}] --> ${4:B}[${5:End}]', 'Mermaid flowchart'),
+    createMermaidSnippet('flowchart', 'flowchart ${1:TD}\n  ${2:A}[${3:Start}] --> ${4:B}[${5:End}]', 'Mermaid flowchart'),
+    createMermaidSnippet('sequenceDiagram', 'sequenceDiagram\n  participant ${1:A}\n  participant ${2:B}\n  ${1:A}->>${2:B}: ${3:message}', 'Mermaid sequence diagram'),
+    createMermaidSnippet('classDiagram', 'classDiagram\n  class ${1:Name} {\n    +${2:method}()\n  }', 'Mermaid class diagram'),
+    createMermaidSnippet('stateDiagram-v2', 'stateDiagram-v2\n  [*] --> ${1:State}\n  ${1:State} --> [*]', 'Mermaid state diagram'),
+    createMermaidSnippet('erDiagram', 'erDiagram\n  ${1:USER} ||--o{ ${2:ORDER} : ${3:places}', 'Mermaid ER diagram'),
+    createMermaidSnippet('gantt', 'gantt\n  title ${1:Project}\n  dateFormat YYYY-MM-DD\n  section ${2:Phase}\n  ${3:Task} :${4:task_id}, ${5:2026-01-01}, ${6:7d}', 'Mermaid gantt'),
+    createMermaidSnippet('pie', 'pie title ${1:Title}\n  "${2:A}" : ${3:40}\n  "${4:B}" : ${5:60}', 'Mermaid pie chart'),
+    createMermaidSnippet('mindmap', 'mindmap\n  root((${1:Root}))\n    ${2:Topic}\n      ${3:Item}', 'Mermaid mindmap'),
+    createMermaidSnippet('timeline', 'timeline\n  title ${1:Timeline}\n  ${2:2026} : ${3:Event}', 'Mermaid timeline'),
+    createMermaidSnippet('gitGraph', 'gitGraph\n  commit\n  branch ${1:feature}\n  checkout ${1:feature}\n  commit\n  checkout main\n  merge ${1:feature}', 'Mermaid gitGraph'),
+    createMermaidSnippet('direction', 'direction ${1:LR}', '设置子图方向'),
+    createMermaidSnippet('subgraph', 'subgraph ${1:title}\n  ${2:A} --> ${3:B}\nend', 'subgraph 块'),
+    createMermaidSnippet('style', 'style ${1:A} fill:${2:#f9f},stroke:${3:#333},stroke-width:${4:2px}', '节点样式'),
+    createMermaidSnippet('linkStyle', 'linkStyle ${1:0} stroke:${2:#f66},stroke-width:${3:2px}', '连线样式'),
+    createMermaidSnippet('click', 'click ${1:A} "${2:https://example.com}" "${3:tooltip}"', '节点点击链接'),
+    createMermaidSnippet('participant', 'participant ${1:Alice}', 'sequence participant'),
+    createMermaidSnippet('actor', 'actor ${1:User}', 'sequence actor'),
+    createMermaidSnippet('note', 'Note ${1:right of} ${2:Alice}: ${3:text}', 'sequence note')
+  ];
+
+  const getEmbeddedSyntaxSnippetSuggestions = (languageId, model, position) => {
+    const normalizedLanguageId = String(languageId || '').trim().toLowerCase();
+    if (normalizedLanguageId !== 'latex' && normalizedLanguageId !== 'mermaid') return [];
+
+    const lineContent = model.getLineContent(position.lineNumber);
+    const beforeCursor = lineContent.slice(0, position.column - 1);
+    const snippetSource = normalizedLanguageId === 'latex' ? latexSnippets : mermaidSnippets;
+    const match = normalizedLanguageId === 'latex'
+      ? /\\[A-Za-z]*$/.exec(beforeCursor)
+      : /[A-Za-z][\w-]*$/.exec(beforeCursor);
+
+    if (normalizedLanguageId === 'latex' && !match) return [];
+
+    const typed = normalizedLanguageId === 'latex'
+      ? String(match?.[0] || '').slice(1)
+      : String(match?.[0] || '');
+    const prefix = typed.toLowerCase();
+    const startColumn = match
+      ? Math.max(1, position.column - match[0].length)
+      : position.column;
+    const range = new monaco.Range(
+      position.lineNumber,
+      startColumn,
+      position.lineNumber,
+      position.column
+    );
+
+    const suggestions = snippetSource
+      .filter((s) => !prefix || String(s.key || '').startsWith(prefix))
+      .slice(0, normalizedLanguageId === 'latex' ? 120 : 80)
+      .map((s, index) => ({
+        ...s,
+        range,
+        sortText: `0_${normalizedLanguageId}_${String(index).padStart(3, '0')}_${String(s.key || '')}`,
+      }));
+
+    if (suggestions.length) {
+      logger.debug('[MarkdownCompletion] embedded syntax snippets resolved', {
+        languageId: normalizedLanguageId,
+        typed,
+        lineNumber: position.lineNumber,
+        column: position.column,
+        suggestionCount: suggestions.length,
+      });
+    }
+    return suggestions;
+  };
+
+  const mergeEmbeddedSyntaxAndLspSuggestions = (languageId, localSuggestions, lspSuggestions) => {
+    const local = Array.isArray(localSuggestions) ? localSuggestions : [];
+    const lsp = Array.isArray(lspSuggestions) ? lspSuggestions : [];
+    const merged = dedupeCompletionSuggestions([...local, ...lsp]);
+    logger.debug('[MarkdownCompletion] merged embedded syntax and LSP suggestions', {
+      languageId,
+      localCount: local.length,
+      lspCount: lsp.length,
+      mergedCount: merged.length,
+      firstLocal: getCompletionItemLabelText(local[0]?.label),
+      firstLsp: getCompletionItemLabelText(lsp[0]?.label),
+    });
+    return merged;
+  };
 
   const isInMarkdownMath = (model, position) => {
     const maxScanLines = 250;
@@ -4986,34 +5123,74 @@ const registerMarkdownLanguageFeatures = () => {
     async provideCompletionItems(model, position, context) {
       const mathCtx = getMarkdownMathContext(model, position);
       if (mathCtx) {
+        const localSyntaxSuggestions = getEmbeddedSyntaxSnippetSuggestions(mathCtx.languageId, model, position);
+        const lspEnabled = LSP_SUPPORTED_LANGUAGES.has(String(mathCtx.languageId || '').trim().toLowerCase());
+        if (!lspEnabled) {
+          logger.debug('[MarkdownCompletion] embedded math LSP skipped, use local syntax snippets', {
+            languageId: mathCtx.languageId,
+            lineNumber: position.lineNumber,
+            column: position.column,
+            localSuggestionCount: localSyntaxSuggestions.length,
+          });
+          return { suggestions: dedupeCompletionSuggestions(localSyntaxSuggestions) };
+        }
+
         // 设计思路：
         // 1. 进入 Markdown 内嵌数学/代码块后，优先把补全请求交给对应语言的 LSP。
-        // 2. 之前这里先走 Markdown 路径上下文判断，像 Python 函数调用里的 `(` 会被误判成路径场景，
+        // 2. LaTeX 这类语言的 LSP 常返回工程符号，本地语法片段负责补齐 vimtex 风格的命令/环境候选。
+        // 3. 之前这里先走 Markdown 路径上下文判断，像 Python 函数调用里的 `(` 会被误判成路径场景，
         //    导致补全直接短路成空数组，界面只显示 `no suggestion`。
-        // 3. 这里改成“内嵌语言优先”，避免 Markdown 自己的补全逻辑拦截 fenced code block 的语法补全。
+        // 4. 这里改成“内嵌语言优先”，避免 Markdown 自己的补全逻辑拦截 fenced code block 的语法补全。
         const mathLspSuggestions = await provideEmbeddedLspSuggestions(mathCtx, model, position, context);
+        const mergedSuggestions = mergeEmbeddedSyntaxAndLspSuggestions(
+          mathCtx.languageId,
+          localSyntaxSuggestions,
+          mathLspSuggestions
+        );
         logger.debug('[MarkdownCompletion] embedded math suggestions resolved', {
           languageId: mathCtx.languageId,
           lineNumber: position.lineNumber,
           column: position.column,
-          suggestionCount: mathLspSuggestions.length,
+          lspSuggestionCount: mathLspSuggestions.length,
+          localSuggestionCount: localSyntaxSuggestions.length,
+          suggestionCount: mergedSuggestions.length,
         });
-        return { suggestions: mathLspSuggestions };
+        return { suggestions: mergedSuggestions };
       }
 
       const fenceCtx = getMarkdownFenceContext(model, position);
       if (fenceCtx) {
+        const localSyntaxSuggestions = getEmbeddedSyntaxSnippetSuggestions(fenceCtx.languageId, model, position);
+        const lspEnabled = LSP_SUPPORTED_LANGUAGES.has(String(fenceCtx.languageId || '').trim().toLowerCase());
+        if (!lspEnabled) {
+          logger.debug('[MarkdownCompletion] embedded fence LSP skipped, use local syntax snippets', {
+            languageId: fenceCtx.languageId,
+            lineNumber: position.lineNumber,
+            column: position.column,
+            localSuggestionCount: localSyntaxSuggestions.length,
+          });
+          return { suggestions: dedupeCompletionSuggestions(localSyntaxSuggestions) };
+        }
+
         // 设计思路：
-        // fenced code block 内的编辑体验应由目标语言主导，Markdown 只负责承载容器。
-        // 这里即使 LSP 返回空数组，也直接返回，避免继续掉进 Markdown 片段/路径补全分支。
+        // 1. fenced code block 内的编辑体验应由目标语言主导，Markdown 只负责承载容器。
+        // 2. LSP 候选和本地语法片段合并，保证 texlab/mermaid-lsp 不返回语法关键字时仍有可用补全。
+        // 3. 这里即使合并后为空，也直接返回，避免继续掉进 Markdown 片段/路径补全分支。
         const fenceLspSuggestions = await provideEmbeddedLspSuggestions(fenceCtx, model, position, context);
+        const mergedSuggestions = mergeEmbeddedSyntaxAndLspSuggestions(
+          fenceCtx.languageId,
+          localSyntaxSuggestions,
+          fenceLspSuggestions
+        );
         logger.debug('[MarkdownCompletion] embedded fence suggestions resolved', {
           languageId: fenceCtx.languageId,
           lineNumber: position.lineNumber,
           column: position.column,
-          suggestionCount: fenceLspSuggestions.length,
+          lspSuggestionCount: fenceLspSuggestions.length,
+          localSuggestionCount: localSyntaxSuggestions.length,
+          suggestionCount: mergedSuggestions.length,
         });
-        return { suggestions: fenceLspSuggestions };
+        return { suggestions: mergedSuggestions };
       }
 
       const lineContent = model.getLineContent(position.lineNumber);
