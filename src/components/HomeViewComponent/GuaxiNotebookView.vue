@@ -511,6 +511,7 @@ import {
   createPythonCellId,
   createPythonSessionId,
   dataframeToMarkdownTable,
+  maskPythonCellBlocksForMarkdown,
   parsePythonCellBlocks,
   replacePythonCellBlock,
 } from './utils/guaxiPythonCellSyntax'
@@ -1786,7 +1787,8 @@ const notebookOutlineEntries = computed(() => {
     const cellKey = String(cell.key || '')
     const content = String(cell.content || '')
     const baseLine = Number(cellStartLineMap.get(cellKey) || 1)
-    const tokens = notebookOutlineMarkdownParser.parse(content, {})
+    const outlineSource = maskPythonCellBlocksForMarkdown(content)
+    const tokens = notebookOutlineMarkdownParser.parse(outlineSource, {})
     let cellHeadingIndex = 0
 
     tokens.forEach((token, tokenIndex) => {
@@ -3112,7 +3114,7 @@ const extractNotebookLinkCardExcerpt = (content = '') => {
   return '打开关联内容'
 }
 const buildNotebookLinkCardTitle = (content, absPath, fallbackText = '') => {
-  const heading = String(content || '').match(/^\s{0,3}#{1,6}\s+(.+)$/m)
+  const heading = maskPythonCellBlocksForMarkdown(content).match(/^\s{0,3}#{1,6}\s+(.+)$/m)
   if (heading?.[1]) {
     return String(heading[1] || '').replace(/\s+#+\s*$/, '').trim()
   }

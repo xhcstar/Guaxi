@@ -185,6 +185,7 @@ import { debounce } from 'lodash-es'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createLogger } from '../../utils/logger'
+import { maskPythonCellBlocksForMarkdown } from './utils/guaxiPythonCellSyntax'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { useSlidevEditorStore } from '../../stores/slidevEditorStore'
@@ -858,7 +859,9 @@ const generateOutline = (content) => {
     outlineStore.setOutline([])
     return
   }
-  const tokens = md.parse(String(content || ''), {})
+  // Slidev 本质仍是 Markdown，生成大纲时同样要屏蔽 Python Cell 源码，避免 `#` 注释污染标题列表。
+  const outlineSource = maskPythonCellBlocksForMarkdown(content)
+  const tokens = md.parse(outlineSource, {})
   const result = []
   tokens.forEach((token, idx) => {
     if (token.type === 'heading_open') {

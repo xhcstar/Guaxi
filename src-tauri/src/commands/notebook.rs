@@ -169,40 +169,38 @@ fn create_fallback_stable_id(seed: &str) -> String {
     format!("py-rs-{}", compute_digest(seed).replace("nb-", ""))
 }
 
+// 设计说明：
+// 1. 后端 Notebook 同步只识别统一后的 Markdown 注释标记：<!--py--> / <!--py {...}--> / <!--/py-->。
+// 2. 旧分支已移除，避免前后端对 Cell 边界产生两套语义，导致保存、索引和搜索结果不一致。
+fn parse_python_cell_start_marker(line: &str) -> Option<&str> {
+    let text = line.trim();
+    if text == "<!--py-->" {
+        return Some("");
+    }
+    if text.starts_with("<!--py ") && text.ends_with("-->") {
+        return Some(text.trim_start_matches("<!--py").trim_end_matches("-->").trim());
+    }
+    None
+}
+
+fn is_python_cell_end_marker(line: &str) -> bool {
+    line.trim() == "<!--/py-->"
+}
+
 fn parse_python_cell_blocks(markdown: &str) -> Vec<PyBlock> {
     let lines: Vec<&str> = markdown.split('\n').collect();
     let mut blocks = Vec::new();
     let mut index = 0usize;
 
     while index < lines.len() {
-        let line = lines[index].trim();
-        let (is_start, meta_text) = if line == "<!--py-->" {
-            (true, "")
-        } else if line.starts_with("<!--py ") && line.ends_with("-->") {
-            let inner = line
-                .trim_start_matches("<!--py")
-                .trim_end_matches("-->")
-                .trim();
-            (true, inner)
-        } else if line.starts_with("<!-- guaxi:py-cell") && line.ends_with("-->") {
-            let inner = line
-                .trim_start_matches("<!-- guaxi:py-cell")
-                .trim_end_matches("-->")
-                .trim();
-            (true, inner)
-        } else {
-            (false, "")
-        };
-
-        if !is_start {
+        let Some(meta_text) = parse_python_cell_start_marker(lines[index]) else {
             index += 1;
             continue;
-        }
+        };
 
         let mut end_index = None;
         for j in (index + 1)..lines.len() {
-            let text = lines[j].trim();
-            if text == "<!--/py-->" || text == "<!-- /py -->" || text == "<!--/guaxi:py-cell-->" || text == "<!-- /guaxi:py-cell -->" {
+            if is_python_cell_end_marker(lines[j]) {
                 end_index = Some(j);
                 break;
             }
@@ -358,20 +356,11 @@ fn strip_python_cell_blocks(markdown: &str) -> String {
     let mut inside_py_cell = false;
 
     for line in lines {
-        let text = line.trim();
-        let is_start = text == "<!--py-->"
-            || (text.starts_with("<!--py ") && text.ends_with("-->"))
-            || (text.starts_with("<!-- guaxi:py-cell") && text.ends_with("-->"));
-        let is_end = text == "<!--/py-->"
-            || text == "<!-- /py -->"
-            || text == "<!--/guaxi:py-cell-->"
-            || text == "<!-- /guaxi:py-cell -->";
-
-        if is_start {
+        if parse_python_cell_start_marker(line).is_some() {
             inside_py_cell = true;
             continue;
         }
-        if inside_py_cell && is_end {
+        if inside_py_cell && is_python_cell_end_marker(line) {
             inside_py_cell = false;
             continue;
         }

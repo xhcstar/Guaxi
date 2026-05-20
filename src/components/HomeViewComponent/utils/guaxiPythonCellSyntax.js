@@ -1,11 +1,11 @@
 // 设计说明：
-// 1. 主推最短语法：<!--py--> ... <!--/py-->，减少手动输入负担。
-// 2. 兼容旧语法 <!-- guaxi:py-cell ... -->，避免已有隐藏 Cell 内容失效。
+// 1. Python Cell 统一使用 Markdown HTML 注释哨兵：<!--py--> ... <!--/py-->。
+// 2. 带状态的 Cell 使用同一套开始标记承载 JSON：<!--py {"id":"..."}-->，不再引入第二种旧标记。
 // 3. 普通 ```python fenced code block 保持 Markdown 原生行为，不再被编辑态 Cell 接管。
 // 4. 预览阶段会剥离隐藏 Cell 源码，只保留用户后续写回的 Markdown 输出。
 
-const PY_CELL_START_RE = /^<!--\s*(?:py|guaxi:py-cell)(?:\s+(\{.*\}))?\s*-->$/;
-const PY_CELL_END_RE = /^<!--\s*(?:\/py|\/guaxi:py-cell)\s*-->$/;
+const PY_CELL_START_RE = /^<!--\s*py(?:\s+(\{.*\}))?\s*-->$/;
+const PY_CELL_END_RE = /^<!--\s*\/py\s*-->$/;
 
 const defaultCellMeta = () => ({
   title: '',
@@ -130,6 +130,50 @@ export const stripPythonCellBlocksFromMarkdown = (markdown = '') => {
   }
 
   return kept.join('\n');
+};
+
+export const maskPythonCellBlocksForMarkdown = (markdown = '') => {
+  const text = String(markdown || '').replace(/\r\n?/g, '\n');
+  const lines = text.split('\n');
+  const masked = [];
+  let insidePyCell = false;
+  let maskedLineCount = 0;
+
+  for (const line of lines) {
+    const textLine = String(line || '');
+    const trimmed = textLine.trim();
+
+    // 设计说明：
+    // 1. Python Cell 的真实存储格式是 Markdown HTML 注释哨兵，内部内容仍是 Python 源码。
+    // 2. 大纲、lint、目录等 Markdown 解析器不能直接读取这些源码，否则 `# 注释` 会被识别成 Markdown 标题。
+    // 3. 这里用空行替换 Cell 区域而不是直接删除，保留原始行号，保证右侧大纲和面包屑跳转仍然准确。
+    if (!insidePyCell && PY_CELL_START_RE.test(trimmed)) {
+      insidePyCell = true;
+      masked.push('');
+      maskedLineCount += 1;
+      continue;
+    }
+
+    if (insidePyCell) {
+      masked.push('');
+      maskedLineCount += 1;
+      if (PY_CELL_END_RE.test(trimmed)) {
+        insidePyCell = false;
+      }
+      continue;
+    }
+
+    masked.push(textLine);
+  }
+
+  if (maskedLineCount > 0) {
+    console.info('[PythonCellSyntax] masked python cells for markdown parser', {
+      maskedLineCount,
+      totalLineCount: lines.length,
+    });
+  }
+
+  return masked.join('\n');
 };
 
 export const transformPythonCellBlocksForPreview = (markdown = '', { filePath = '' } = {}) => {

@@ -300,6 +300,7 @@ import { platform } from '@tauri-apps/plugin-os';
 import { storeToRefs } from 'pinia'
 import { repoStore } from '../../stores/repoStore'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
+import { maskPythonCellBlocksForMarkdown } from '../HomeViewComponent/utils/guaxiPythonCellSyntax'
 import { NCard, NButton, NIcon, NText, NModal, NSelect, useMessage, NDropdown } from 'naive-ui'
 import MarkdownIt from 'markdown-it'
 import { useOutlineStore } from '../../stores/outlineStore'
@@ -1131,7 +1132,9 @@ function generateOutlineFromMarkdown(content) {
     outlineStore.setOutline([]);
     return;
   }
-  const tokens = md.parse(content, {});
+  // Python Cell 使用 Markdown 注释哨兵存储，生成 Reader 大纲前先屏蔽源码区，避免 Python `#` 注释被当作标题。
+  const outlineSource = maskPythonCellBlocksForMarkdown(content);
+  const tokens = md.parse(outlineSource, {});
   const result = [];
   const headingLines = [];
   tokens.forEach((token, idx) => {

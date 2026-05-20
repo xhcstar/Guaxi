@@ -1085,7 +1085,7 @@ import { dirname, homeDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { renderMarkdown, addCopyButtons, addMediaViewerButtons } from '../GuaxiMarkdownRender/GuaxiMarker'
 import { createGuaxiPythonCellEditorManager } from './utils/guaxiPythonCellEditor'
-import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, createPythonSessionId, dataframeToMarkdownTable, parsePythonCellBlocks, transformPythonCellBlocksForPreview } from './utils/guaxiPythonCellSyntax'
+import { buildPythonCellBlock, createPythonCellId, createPythonCellStableId, createPythonSessionId, dataframeToMarkdownTable, maskPythonCellBlocksForMarkdown, parsePythonCellBlocks, transformPythonCellBlocksForPreview } from './utils/guaxiPythonCellSyntax'
 import { getPythonCellSnapshot, patchPythonCellSnapshot } from './utils/guaxiPythonCellState'
 import { createMarkdownPreviewSegments } from './utils/guaxiNotebookCells'
 import Vditor from 'vditor'
@@ -9569,8 +9569,8 @@ function analyzeMarkdown(content, model) {
   let warnings = 0;
   const markers = [];
   const lines = content.split('\n');
-  const pyCellStartRe = /^<!--\s*(?:py|guaxi:py-cell)(?:\s+\{.*\})?\s*-->$/;
-  const pyCellEndRe = /^<!--\s*(?:\/py|\/guaxi:py-cell)\s*-->$/;
+  const pyCellStartRe = /^<!--\s*py(?:\s+\{.*\})?\s*-->$/;
+  const pyCellEndRe = /^<!--\s*\/py\s*-->$/;
 
   const pushMarker = (lineNumber, message, severity) => {
     if (!model) return;
@@ -9595,7 +9595,8 @@ function analyzeMarkdown(content, model) {
 
   let lastHeadingLevel = 0;
   const headingTexts = new Map();
-  const tokens = md.parse(content, {});
+  const lintParseContent = maskPythonCellBlocksForMarkdown(content);
+  const tokens = md.parse(lintParseContent, {});
 
   tokens.forEach((token, idx) => {
     if (token.type !== 'heading_open') return;
@@ -17877,7 +17878,8 @@ const extractMarkdownOutlineEntries = (content, filePath, reason = 'unknown') =>
     return []
   }
 
-  const tokens = md.parse(String(content || ''), {})
+  const outlineSource = maskPythonCellBlocksForMarkdown(content)
+  const tokens = md.parse(outlineSource, {})
   const result = []
   tokens.forEach((token, idx) => {
     if (token.type === 'heading_open') {
