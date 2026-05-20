@@ -7924,13 +7924,15 @@ const resolveMonacoLanguageByPath = (path) => {
 
 const resolveFenceLanguageId = (infoRaw) => {
   const info = String(infoRaw || '').trim().toLowerCase()
-  if (!info) return ''
+  if (!info) return 'plaintext'
   const langToken = info.split(/\s+/)[0] || ''
   const mapped = MARKDOWN_FENCE_LANG_MAP[langToken]
   if (mapped) return mapped
   const languages = monaco.languages?.getLanguages?.() || []
   const exists = languages.some((item) => item?.id === langToken)
-  return exists ? langToken : ''
+  if (exists) return langToken
+  logger.debug('[MarkdownFence] unknown fence language, fallback to plaintext', { infoRaw })
+  return 'plaintext'
 }
 
 const refreshLspEnabledSetting = async () => {
@@ -9754,7 +9756,15 @@ const invokeMarkdownFormat = async (content) => {
     throw new Error(typeof error === 'string' ? error : 'Markdown 格式化失败');
   }
 
-  return formatted;
+  const tableAligned = formatMarkdownTablesInText(formatted, 'markdown-format-command');
+  if (tableAligned !== formatted) {
+    logger.info('[MarkdownTable] aligned tables after markdown format', {
+      originalLength: formatted.length,
+      alignedLength: tableAligned.length
+    });
+  }
+
+  return tableAligned;
 };
 
 const formatMarkdownDocument = async () => {
@@ -10674,23 +10684,108 @@ const handleMarkdownListEnter = (e) => {
 const isPotentialTableLine = (line) => {
   const trimmed = (line || '').trim();
   if (!trimmed) return false;
-  const pipeCount = (trimmed.match(/\|/g) || []).length;
+  const pipeCount = getMarkdownTablePipeCount(trimmed);
   return pipeCount >= 2;
+};
+
+const getMarkdownTablePipeCount = (line) => {
+  const text = String(line || '');
+  let count = 0;
+  let escaped = false;
+  let codeTickLen = 0;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '`') {
+      let j = i;
+      while (j < text.length && text[j] === '`') j += 1;
+      const len = j - i;
+      if (!codeTickLen) {
+        codeTickLen = len;
+      } else if (len >= codeTickLen) {
+        codeTickLen = 0;
+      }
+      i = j - 1;
+      continue;
+    }
+    if (ch === '|' && !codeTickLen) count += 1;
+  }
+
+  return count;
+};
+
+const splitMarkdownTableRowCells = (line) => {
+  const raw = String(line || '').trim();
+  let text = raw;
+  if (!text.startsWith('|')) text = `| ${text}`;
+  if (!text.endsWith('|')) text = `${text} |`;
+
+  const parts = [];
+  let current = '';
+  let escaped = false;
+  let codeTickLen = 0;
+
+  // 设计说明：
+  // 1. Markdown 表格允许用 `\|` 表示单元格内的竖线，也允许在代码 span 中出现 `|`。
+  // 2. 旧版直接 split('|') 会把这些内容误拆成多列，导致“某行分隔符数量不一致”时越格式化越歪。
+  // 3. 这里只把非转义、非代码 span 中的 `|` 当作列分隔符。
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '`') {
+      let j = i;
+      while (j < text.length && text[j] === '`') j += 1;
+      const ticks = text.slice(i, j);
+      current += ticks;
+      const len = ticks.length;
+      if (!codeTickLen) {
+        codeTickLen = len;
+      } else if (len >= codeTickLen) {
+        codeTickLen = 0;
+      }
+      i = j - 1;
+      continue;
+    }
+    if (ch === '|' && !codeTickLen) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current);
+
+  if (parts.length && !parts[0].trim()) parts.shift();
+  if (parts.length && !parts[parts.length - 1].trim()) parts.pop();
+  return parts.map((c) => c.trim());
 };
 
 const isTableSeparatorLine = (line) => {
   const trimmed = (line || '').trim();
   if (!trimmed) return false;
-  return /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(trimmed);
+  const cells = splitMarkdownTableRowCells(trimmed);
+  return cells.length >= 2 && cells.every((cell) => /^\s*:?-{3,}:?\s*$/.test(cell));
 };
 
 const normalizeTableRowCells = (line) => {
-  const raw = (line || '').trim();
-  let text = raw;
-  if (!text.startsWith('|')) text = `| ${text}`;
-  if (!text.endsWith('|')) text = `${text} |`;
-  const parts = text.split('|');
-  return parts.slice(1, -1).map((c) => c.trim());
+  return splitMarkdownTableRowCells(line);
 };
 
 const buildTableRow = (cells) => {
@@ -10737,6 +10832,25 @@ const isCombiningCodePoint = (cp) => {
   );
 };
 
+const isZeroWidthCodePoint = (cp) => {
+  return (
+    isCombiningCodePoint(cp) ||
+    cp === 0x200d ||
+    cp === 0xfe0e ||
+    cp === 0xfe0f ||
+    (cp >= 0x1f3fb && cp <= 0x1f3ff) ||
+    (cp >= 0xe0100 && cp <= 0xe01ef)
+  );
+};
+
+const isEmojiLikeCodePoint = (cp) => {
+  return (
+    (cp >= 0x2300 && cp <= 0x23ff) ||
+    (cp >= 0x2600 && cp <= 0x27bf) ||
+    (cp >= 0x1f000 && cp <= 0x1faff)
+  );
+};
+
 // 判断 Unicode 码点是否为“全宽”字符。
 // 用于近似估算等宽字体下的显示宽度：CJK/全角标点/emoji 等通常按 2 列宽处理。
 const isFullWidthCodePoint = (cp) => {
@@ -10752,11 +10866,25 @@ const isFullWidthCodePoint = (cp) => {
     (cp >= 0xff00 && cp <= 0xff60) ||
     (cp >= 0xffe0 && cp <= 0xffe6) ||
     (cp >= 0x1f300 && cp <= 0x1f64f) ||
+    (cp >= 0x1f680 && cp <= 0x1f6ff) ||
     (cp >= 0x1f900 && cp <= 0x1f9ff) ||
+    (cp >= 0x1fa70 && cp <= 0x1faff) ||
     (cp >= 0x20000 && cp <= 0x3fffd)
   )) return true;
 
   return false;
+};
+
+const segmentDisplayGraphemes = (input) => {
+  const s = String(input ?? '');
+  try {
+    if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+      const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+      return Array.from(segmenter.segment(s), (item) => item.segment);
+    }
+  } catch {
+  }
+  return Array.from(s);
 };
 
 // 计算字符串的“可视宽度”（用于 Markdown 表格源码对齐）。
@@ -10766,14 +10894,22 @@ const getDisplayWidth = (input) => {
   const s = String(input ?? '');
   let width = 0;
 
-  for (const ch of s) {
-    const cp = ch.codePointAt(0) || 0;
-
-    if (cp === 0) continue;
-    if (cp < 32 || cp === 0x7f) continue;
-    if (isCombiningCodePoint(cp)) continue;
-
-    width += isFullWidthCodePoint(cp) ? 2 : 1;
+  // 设计说明：
+  // 1. 表格源码对齐看的是 Monaco 等宽字体中的“显示列宽”，不是 JS string.length。
+  // 2. ✅ / ⏳ / 🚫 等 emoji 由单个或多个 code point 组成，通常显示为 2 列。
+  // 3. 优先按 grapheme cluster 计宽，避免组合音标、变体选择符、ZWJ emoji 序列导致列宽漂移。
+  for (const cluster of segmentDisplayGraphemes(s)) {
+    const cps = Array.from(cluster).map((ch) => ch.codePointAt(0) || 0).filter(Boolean);
+    if (!cps.length) continue;
+    if (cps.every((cp) => cp < 32 || cp === 0x7f || isZeroWidthCodePoint(cp))) continue;
+    if (cps.some((cp) => isEmojiLikeCodePoint(cp) || isFullWidthCodePoint(cp))) {
+      width += 2;
+      continue;
+    }
+    for (const cp of cps) {
+      if (cp < 32 || cp === 0x7f || isZeroWidthCodePoint(cp)) continue;
+      width += isFullWidthCodePoint(cp) ? 2 : 1;
+    }
   }
 
   return width;
@@ -10845,6 +10981,108 @@ const buildAlignedTableLines = (rows) => {
     const padded = cells.map((c, i) => padTableCell(c, widths[i], aligns[i]));
     return `| ${padded.join(' | ')} |`;
   });
+};
+
+const formatMarkdownTableBlockLines = (lines) => {
+  const rawLines = Array.isArray(lines) ? lines : [];
+  if (rawLines.length < 2) return rawLines;
+  const rows = rawLines.map((line) => normalizeTableRowCells(line));
+  const colCount = rows.reduce((m, r) => Math.max(m, Array.isArray(r) ? r.length : 0), 0) || 1;
+  const paddedRows = rows.map((row, rowIndex) => {
+    const next = [...row];
+    while (next.length < colCount) next.push('');
+    if (rowIndex === 1) {
+      return next.map((cell) => normalizeSeparatorCell(cell, null));
+    }
+    return next.map((cell) => String(cell ?? '').trim());
+  });
+  return buildAlignedTableLines(paddedRows);
+};
+
+const formatMarkdownTablesInText = (content, source = 'manual') => {
+  const text = String(content ?? '');
+  if (!text.includes('|')) return text;
+
+  const hasTrailingNewline = /\n$/.test(text);
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  if (hasTrailingNewline && lines.length && lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+
+  const result = [];
+  let formattedCount = 0;
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+
+  // 设计说明：
+  // 1. 后端 Markdown 格式化器目前只保留表格块，不负责源码列对齐。
+  // 2. 这里在前端二次处理真实 Markdown 表格，跳过 fenced code block，避免误改代码中的 `|`。
+  // 3. 分隔行可能不在当前扫描块第一行，取“分隔行上一行”作为表头，兼容表格前后紧贴其它含 `|` 的行。
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i] || '';
+    const fence = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      const mark = fence[1];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = mark[0];
+        fenceLen = mark.length;
+      } else if (mark[0] === fenceChar && mark.length >= fenceLen) {
+        inFence = false;
+        fenceChar = '';
+        fenceLen = 0;
+      }
+      result.push(line);
+      i += 1;
+      continue;
+    }
+
+    if (inFence || !isPotentialTableLine(line)) {
+      result.push(line);
+      i += 1;
+      continue;
+    }
+
+    let end = i;
+    while (end < lines.length && isPotentialTableLine(lines[end] || '')) {
+      end += 1;
+    }
+
+    let separatorIndex = -1;
+    for (let idx = i; idx < end; idx += 1) {
+      if (isTableSeparatorLine(lines[idx] || '')) {
+        separatorIndex = idx;
+        break;
+      }
+    }
+
+    if (separatorIndex <= i) {
+      result.push(line);
+      i += 1;
+      continue;
+    }
+
+    const tableStart = separatorIndex - 1;
+    for (let idx = i; idx < tableStart; idx += 1) {
+      result.push(lines[idx]);
+    }
+
+    const tableLines = lines.slice(tableStart, end);
+    const nextTableLines = formatMarkdownTableBlockLines(tableLines);
+    result.push(...nextTableLines);
+    formattedCount += 1;
+    i = end;
+  }
+
+  const nextText = `${result.join('\n')}${hasTrailingNewline ? '\n' : ''}`;
+  if (formattedCount > 0 && nextText !== text) {
+    logger.info('[MarkdownTable] formatted markdown table blocks', {
+      source,
+      tableCount: formattedCount
+    });
+  }
+  return nextText;
 };
 
 const getColumnIndexFromCursor = (line, column, colCount) => {
@@ -19893,7 +20131,7 @@ onUnmounted(() => {
   color: #d7deea !important;
 }
 
-.guaxi-editor :deep(.md-fence-token-base) { color: #abb2bf; }
+.guaxi-editor :deep(.md-fence-token-base) { color: #383a42; }
 .guaxi-editor :deep(.md-fence-token-keyword) { color: #c678dd; }
 .guaxi-editor :deep(.md-fence-token-string) { color: #98c379; }
 .guaxi-editor :deep(.md-fence-token-number) { color: #d19a66; }
@@ -19940,6 +20178,14 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-decorator) { color: #c678dd; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-operator) { color: #56b6c2; }
 :global(:root[data-guaxi-theme='dark']) .guaxi-editor :deep(.md-fence-token-delimiter) { color: #abb2bf; }
+
+/* 设计说明：
+   1. 未标注语言的 Markdown fenced code block 会按 plaintext 走整行 base 装饰。
+   2. Monaco 装饰类位于编辑器内部 DOM，Vue scoped CSS 的 :deep + :global 组合在部分加载顺序下会被亮色 base 覆盖。
+   3. 这里使用完整全局选择器和 !important 兜底，确保暗色模式下纯文本代码块始终保持可读亮色。 */
+:global(:root[data-guaxi-theme='dark'] .guaxi-editor .monaco-editor .md-fence-token-base) {
+  color: #abb2bf !important;
+}
 
 .editor-split-wrapper {
   flex: 1;
