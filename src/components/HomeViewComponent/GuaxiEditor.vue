@@ -11734,6 +11734,19 @@ const insertPythonCellBlock = () => {
     return
   }
 
+  if (canUseNotebookSurface.value) {
+    logger.info('[Editor] route python cell insertion to explorer sidecar storage', {
+      filePath: String(selectedFile.value?.path || ''),
+      previousSurfaceMode: editorSurfaceMode.value,
+    })
+    void handlePreviewModeSelect('explorer').then(() => {
+      nextTick(() => {
+        notebookViewRef.value?.insertCell?.('python')
+      })
+    })
+    return
+  }
+
   const snippet = `${buildPythonCellBlock({
     code: ['# Python Cell', 'print("Hello from Guaxi Python Cell")'].join('\n'),
     meta: {

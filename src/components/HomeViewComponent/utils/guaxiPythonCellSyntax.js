@@ -22,6 +22,7 @@ export const normalizePythonCellMeta = (meta = {}) => {
   };
 
   next.title = String(next.title || '').trim();
+  next.storage = String(next.storage || '').trim();
   next.codeCollapsed = !!next.codeCollapsed;
   next.outputCollapsed = !!next.outputCollapsed;
   next.sessionCollapsed = next.sessionCollapsed !== false;
@@ -41,16 +42,34 @@ export const tryParsePythonCellMeta = (rawMeta) => {
 
 export const serializePythonCellMeta = (meta = {}) => {
   const normalized = normalizePythonCellMeta(meta);
+  const defaultKeys = Object.keys(defaultCellMeta());
+  const hasExtraMeta = Object.keys(normalized).some((key) => {
+    if (defaultKeys.includes(key)) return false;
+    const value = normalized[key];
+    if (typeof value === 'string') return value.trim();
+    return value !== undefined && value !== null && value !== false;
+  });
   const hasCustomMeta =
     normalized.title ||
+    normalized.storage ||
     normalized.codeCollapsed ||
     normalized.outputCollapsed ||
     !normalized.sessionCollapsed ||
-    normalized.consoleCollapsed;
+    normalized.consoleCollapsed ||
+    hasExtraMeta;
   if (!hasCustomMeta) {
     return '<!--py-->';
   }
-  const json = JSON.stringify(normalized);
+  const defaults = defaultCellMeta();
+  const compactMeta = {};
+  Object.keys(normalized).forEach((key) => {
+    const value = normalized[key];
+    if (Object.prototype.hasOwnProperty.call(defaults, key) && defaults[key] === value) return;
+    if (typeof value === 'string' && !value.trim()) return;
+    if (value === undefined || value === null) return;
+    compactMeta[key] = value;
+  });
+  const json = JSON.stringify(compactMeta);
   return `<!--py ${json}-->`;
 };
 
@@ -61,6 +80,20 @@ export const buildPythonCellBlock = ({
   const normalizedMeta = normalizePythonCellMeta(meta);
   const codeText = String(code || '').replace(/\r\n?/g, '\n');
   return `${serializePythonCellMeta(normalizedMeta)}\n${codeText}\n<!--/py-->`;
+};
+
+// 设计说明：
+// 1. 探索者模式下 Python 代码正文保存在 `.cellmeta` 的 cells[].code 中，源 Markdown 只保留轻量引用块。
+// 2. 引用块保留稳定 id 与 storage 标记，用来维持 cell 在文档中的位置、顺序和跨次加载匹配关系。
+// 3. 旧文档中的完整 <!--py-->...<!--/py--> 块仍由 parsePythonCellBlocks 读取；保存时再迁移为引用块，避免破坏兼容性。
+export const buildPythonCellReferenceBlock = ({
+  meta = {},
+} = {}) => {
+  const normalizedMeta = normalizePythonCellMeta({
+    ...(meta || {}),
+    storage: 'cellmeta',
+  });
+  return `${serializePythonCellMeta(normalizedMeta)}\n<!--/py-->`;
 };
 
 export const createPythonCellStableId = () => `py-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

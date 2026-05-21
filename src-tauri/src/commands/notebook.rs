@@ -742,6 +742,24 @@ fn reconcile_cells_with_sidecar(scanned_cells: Vec<NotebookCell>, sidecar: Optio
 
             if let Some(persisted_cell) = persisted {
                 let mut next = cell.clone();
+                // 设计说明：
+                // 1. 新版探索者模式允许 Markdown 只保存 Python Cell 引用块，代码正文保存在 `.cellmeta`。
+                // 2. 当前扫描结果如果是 `storage: cellmeta` 且代码为空，就从 sidecar 中恢复代码。
+                // 3. 旧版完整源码块仍按 Markdown 内容优先，避免 sidecar 覆盖用户刚在源文件里手工修改的代码。
+                let current_storage = cell
+                    .meta
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .and_then(|meta| meta.get("storage"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let current_code_empty = cell.code.as_deref().unwrap_or("").is_empty();
+                let persisted_code = persisted_cell.code.clone().unwrap_or_default();
+                if current_storage == "cellmeta" && current_code_empty && !persisted_code.is_empty() {
+                    next.code = Some(persisted_code);
+                }
                 if let (Some(Value::Object(mut persisted_meta)), Some(Value::Object(current_meta))) =
                     (persisted_cell.meta.clone(), cell.meta.clone())
                 {

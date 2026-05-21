@@ -1400,14 +1400,29 @@ const reconcileNotebookCellsWithSidecar = (markdownCells = [], sidecar = null) =
     if (!persistedCell) {
       return cell
     }
+    const currentStorage = String(cell?.meta?.storage || '').trim()
+    const currentCode = String(cell?.code || '')
+    const persistedCode = String(persistedCell?.code || '')
+    const shouldRestoreSidecarCode =
+      cell?.type === 'python' &&
+      currentStorage === 'cellmeta' &&
+      !currentCode &&
+      !!persistedCode
     if (matchStrategy === 'stable-id') {
       stableIdMatchedCount += 1
     } else if (matchStrategy === 'code-digest') {
       codeDigestMatchedCount += 1
     }
+    if (shouldRestoreSidecarCode) {
+      logger.info('[Notebook] restored python cell code from sidecar reference block', {
+        stableId,
+        codeLength: persistedCode.length,
+        matchStrategy,
+      })
+    }
     return createNotebookPythonCell({
       ...cell,
-      code: String(cell.code || ''),
+      code: shouldRestoreSidecarCode ? persistedCode : String(cell.code || ''),
       meta: {
         ...(persistedCell.meta || {}),
         ...(cell.meta || {}),

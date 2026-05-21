@@ -1,5 +1,5 @@
 ﻿import {
-  buildPythonCellBlock,
+  buildPythonCellReferenceBlock,
   createPythonCellId,
   createPythonCellStableId,
   normalizePythonCellMeta,
@@ -211,8 +211,11 @@ export const serializeNotebookCells = (cells = []) => {
   const normalized = normalizeNotebookCells(cells)
   const parts = normalized.map((cell) => {
     if (cell.type === 'python') {
-      return buildPythonCellBlock({
-        code: cell.code || '',
+      // 设计说明：
+      // 1. 探索者模式保存时不再把 Python 源码写回 Markdown 正文，而是写入同名 `.cellmeta`。
+      // 2. Markdown 仅保留引用块作为 cell 的位置锚点，避免源码编辑模式被大段 `<!--py-->` 内容干扰。
+      // 3. 旧 Markdown 中已有的完整 Python Cell 仍能在加载时解析，下一次保存会自动迁移到 sidecar 存储。
+      return buildPythonCellReferenceBlock({
         meta: cell.meta || {},
       })
     }
