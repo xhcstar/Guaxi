@@ -80,9 +80,7 @@
                         @click.stop="handleStageAll"
                         :disabled="unstagedFiles.length === 0"
                       >
-                        <n-icon size="18" class="panel-header-icon">
-                          <AddCircleOutline />
-                        </n-icon>
+                        <Codicon name="add" />
                       </button>
                     </template>
                     暂存全部
@@ -95,9 +93,7 @@
                         @click.stop="handleDiscardAll"
                         :disabled="unstagedFiles.length === 0"
                       >
-                        <n-icon size="18" class="panel-header-icon">
-                          <TrashOutline />
-                        </n-icon>
+                        <Codicon name="discard" />
                       </button>
                     </template>
                     丢弃全部
@@ -109,9 +105,8 @@
                   <n-list-item v-for="file in unstagedFiles" :key="file.path">
                     <div class="git-file-row">
                       <div class="git-file-left" @click="handleFileClick(file)">
-                        <n-icon
-                          :component="getFileStatusIcon(file.status)"
-                          size="16"
+                        <Codicon
+                          :name="getFileStatusCodicon(file.status)"
                           class="git-status-icon"
                           :class="getStatusClass(file.status)"
                         />
@@ -126,25 +121,27 @@
                         <n-space>
                           <n-tooltip trigger="hover">
                             <template #trigger>
-                              <n-button text @click.stop="handleStageFile(file)">
-                                <template #icon>
-                                  <n-icon size="18" class="panel-header-icon">
-                                    <AddOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
+                              <button
+                                class="vscode-action-button"
+                                type="button"
+                                @click.stop="handleStageFile(file)"
+                                :disabled="isGitFileBusy(file.path)"
+                              >
+                                <Codicon name="add" />
+                              </button>
                             </template>
                             暂存
                           </n-tooltip>
                           <n-tooltip trigger="hover">
                             <template #trigger>
-                              <n-button text @click.stop="handleDiscardFile(file)">
-                                <template #icon>
-                                  <n-icon size="18" class="panel-header-icon">
-                                    <CloseCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
+                              <button
+                                class="vscode-action-button"
+                                type="button"
+                                @click.stop="handleDiscardFile(file)"
+                                :disabled="isGitFileBusy(file.path)"
+                              >
+                                <Codicon name="discard" />
+                              </button>
                             </template>
                             丢弃
                           </n-tooltip>
@@ -177,9 +174,7 @@
                         @click.stop="handleUnstageAll"
                         :disabled="stagedFiles.length === 0"
                       >
-                        <n-icon size="18" class="panel-header-icon">
-                          <RemoveOutline />
-                        </n-icon>
+                          <Codicon name="remove" />
                       </button>
                     </template>
                     取消暂存全部
@@ -191,9 +186,8 @@
                   <n-list-item v-for="file in stagedFiles" :key="file.path">
                     <div class="git-file-row">
                       <div class="git-file-left" @click="handleFileClick(file)">
-                        <n-icon
-                          :component="getFileStatusIcon(file.status)"
-                          size="16"
+                        <Codicon
+                          :name="getFileStatusCodicon(file.status)"
                           class="git-status-icon"
                           :class="getStatusClass(file.status)"
                         />
@@ -208,13 +202,14 @@
                         <n-space>
                           <n-tooltip trigger="hover">
                             <template #trigger>
-                              <n-button text @click.stop="handleUnstageFile(file)">
-                                <template #icon>
-                                  <n-icon size="18" class="panel-header-icon">
-                                    <RemoveCircleOutline />
-                                  </n-icon>
-                                </template>
-                              </n-button>
+                              <button
+                                class="vscode-action-button"
+                                type="button"
+                                @click.stop="handleUnstageFile(file)"
+                                :disabled="isGitFileBusy(file.path)"
+                              >
+                                <Codicon name="remove" />
+                              </button>
                             </template>
                             取消暂存
                           </n-tooltip>
@@ -294,7 +289,7 @@
                   class="commit-history-spin"
                 >
                   <n-tooltip
-                    v-for="commit in commits"
+                    v-for="commit in visibleCommits"
                     :key="commit.id"
                     trigger="hover"
                     placement="right-start"
@@ -355,9 +350,8 @@
                       >
                         <div class="git-file-row">
                           <div class="git-file-left">
-                            <n-icon
-                              :component="getFileStatusIcon(file.status)"
-                              size="16"
+                            <Codicon
+                              :name="getFileStatusCodicon(file.status)"
                               class="git-status-icon"
                               :class="getStatusClass(file.status)"
                             />
@@ -394,6 +388,14 @@
                     <div class="commit-tooltip-hash">{{ commit.id.slice(0, 7) }}</div>
                   </div>
                   </n-tooltip>
+                  <button
+                    v-if="visibleCommits.length < commits.length"
+                    class="commit-load-more"
+                    type="button"
+                    @click.stop="showMoreCommits"
+                  >
+                    显示更多提交 ({{ commits.length - visibleCommits.length }})
+                  </button>
                 </n-spin>
               </div>
             </div>
@@ -473,19 +475,30 @@
           <div
             v-if="selectedFile && !selectedCommit && diffHunkActionVisible"
             class="diff-hunk-action"
-            :style="{ top: `${diffHunkActionTop}px` }"
+            :style="{ top: `${diffHunkActionTop}px`, left: `${diffHunkActionLeft}px` }"
           >
             <n-tooltip trigger="hover">
               <template #trigger>
                 <button
                   class="diff-hunk-action-button"
                   type="button"
+                  @click="handleStageDiffHunk"
+                  :disabled="!canStageCurrentHunk"
+                >
+                  <Codicon name="add" />
+                </button>
+              </template>
+              暂存当前差异块
+            </n-tooltip>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <button
+                  class="diff-hunk-action-button danger"
+                  type="button"
                   @click="handleDiscardDiffHunk"
                   :disabled="!canRevertCurrentHunk"
                 >
-                  <n-icon size="16">
-                    <CloseCircleOutline />
-                  </n-icon>
+                  <Codicon name="discard" />
                 </button>
               </template>
               撤销当前差异块
@@ -596,6 +609,11 @@ import { createLogger } from '../../utils/logger'
 const frontendLogger = createLogger('GitPanel')
 
 const { notification } = createDiscreteApi(['notification'])
+
+const Codicon = (props) => h('span', {
+  class: ['codicon', `codicon-${props.name}`, 'git-codicon'],
+  'aria-hidden': 'true'
+})
 
 const settingsStore = useSettingsStore()
 
@@ -796,6 +814,7 @@ const currentBranch = ref('')
 const branches = ref([])
 const commits = ref([])
 const commitHistoryLoading = ref(false)
+const commitHistoryVisibleLimit = ref(60)
 const headMarkers = ref({
   local_head: null,
   remote_head: null,
@@ -804,6 +823,7 @@ const headMarkers = ref({
 const unstagedFiles = ref([])
 const stagedFiles = ref([])
 const selectedFile = ref(null)
+const gitFileOperationKeys = ref(new Set())
 const gitLoading = ref({
   pull: false,
   push: false,
@@ -857,6 +877,9 @@ const diffEditorContainer = ref(null)
 const isEditorInitialized = ref(false)
 let diffEditor = null
 let resizeObserver = null
+let diffHunkAnimationFrameId = null
+let diffLineChangesCache = []
+let diffUpdateDisposable = null
 
 const diffLoading = ref({
   file: false,
@@ -866,16 +889,66 @@ const diffLoading = ref({
 });
 
 const diffHunkActionTop = ref(8)
+const diffHunkActionLeft = ref(8)
 const diffHunkActionVisible = ref(false)
 let diffHunkScrollDisposable = null
 let diffHunkCursorDisposable = null
+const diffRenderSideBySide = ref(true)
+
+const visibleCommits = computed(() => commits.value.slice(0, commitHistoryVisibleLimit.value))
+const showMoreCommits = () => {
+  commitHistoryVisibleLimit.value += 60
+  frontendLogger.info('[GitPanel] Expanded visible commit history', {
+    visible: Math.min(commitHistoryVisibleLimit.value, commits.value.length),
+    total: commits.value.length
+  })
+}
+
+const isGitFileBusy = (filePath) => gitFileOperationKeys.value.has(String(filePath || ''))
+const setGitFileBusy = (filePath, busy) => {
+  const key = String(filePath || '')
+  if (!key) return
+  const next = new Set(gitFileOperationKeys.value)
+  if (busy) next.add(key)
+  else next.delete(key)
+  gitFileOperationKeys.value = next
+}
+
+const getDiffPerformanceOptions = (originalContent = '', modifiedContent = '') => {
+  const originalLines = String(originalContent || '').split(/\r\n|\r|\n/).length
+  const modifiedLines = String(modifiedContent || '').split(/\r\n|\r|\n/).length
+  const totalLines = originalLines + modifiedLines
+  const largeDiff = totalLines > 8000 || String(originalContent).length + String(modifiedContent).length > 900_000
+  return {
+    largeDiff,
+    options: {
+      renderSideBySide: !largeDiff,
+      renderIndicators: !largeDiff,
+      renderWhitespace: largeDiff ? 'none' : 'selection',
+      renderOverviewRuler: !largeDiff,
+      occurrencesHighlight: largeDiff ? 'off' : 'singleFile',
+      selectionHighlight: !largeDiff,
+      readOnly: true,
+      automaticLayout: false
+    }
+  }
+}
 
 const canRevertCurrentHunk = computed(() => {
   if (!selectedFile.value) return false
   if (selectedCommit.value) return false
   if (diffLoading.value.file || diffLoading.value.commit || diffLoading.value.hunk) return false
-  const status = selectedFile.value.status
+  const status = normalizeGitStatus(selectedFile.value.status)
   if (status === 'D') return false
+  if (!diffHunkActionVisible.value) return false
+  return !!diffEditor
+})
+
+const canStageCurrentHunk = computed(() => {
+  if (!selectedFile.value) return false
+  if (selectedCommit.value) return false
+  if (diffLoading.value.file || diffLoading.value.commit || diffLoading.value.hunk) return false
+  if (selectedFile.value.staged) return false
   if (!diffHunkActionVisible.value) return false
   return !!diffEditor
 })
@@ -889,12 +962,25 @@ const toggleSidebar = () => {
 }
 
 // 新增辅助函数 - 获取状态标签类型
+const normalizeGitStatus = (status) => {
+  const value = String(status || '').trim()
+  if (!value) return ''
+  if (value.includes('?')) return '?'
+  if (value.includes('A')) return 'A'
+  if (value.includes('M')) return 'M'
+  if (value.includes('D')) return 'D'
+  if (value.includes('R')) return 'R'
+  if (value.includes('T')) return 'T'
+  return value[0] || ''
+}
+
 const getStatusTagType = (status) => {
-  switch (status) {
+  switch (normalizeGitStatus(status)) {
     case 'A': return 'success'
     case 'M': return 'warning'
     case 'D': return 'error'
     case 'R': return 'info'
+    case '?': return 'info'
     default: return 'default'
   }
 }
@@ -989,6 +1075,7 @@ const handleCommitFileClick = async (file) => {
       original: originalModel,
       modified: modifiedModel
     });
+    refreshDiffLineChangesCache()
 
     // 清理旧模型（如果有）
     if (oldModel) {
@@ -998,14 +1085,13 @@ const handleCommitFileClick = async (file) => {
       }, 100);
     }
 
-    // 配置差异编辑器
-    diffEditor.updateOptions({
-      renderSideBySide: true,
-      renderIndicators: true,
-      renderWhitespace: 'selection',
-      readOnly: true,
-      automaticLayout: true
-    });
+    // 大文件/大差异时切到性能模式，减少 Monaco diff editor 的横向分栏和装饰计算。
+    const diffPerf = getDiffPerformanceOptions(originalContent, modifiedContent)
+    diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
+    diffEditor.updateOptions(diffPerf.options);
+    if (diffPerf.largeDiff) {
+      frontendLogger.info('[Diff] Large commit file diff rendered in performance mode', { filePath: file.path })
+    }
 
     // 确保布局正确
     await nextTick();
@@ -1114,12 +1200,19 @@ const navigateDiff = async (direction) => {
 
 const getCurrentDiffChange = () => {
   if (!diffEditor) return null
-  let changes = []
-  try {
-    changes = diffEditor.getLineChanges() || []
-  } catch (error) {
-    frontendLogger.warn('[Diff] Unable to get line changes', error)
-    return null
+  let changes = diffLineChangesCache.length ? diffLineChangesCache : []
+  if (!changes.length) {
+    try {
+      changes = diffEditor.getLineChanges() || []
+      diffLineChangesCache = changes
+      if (changes.length) {
+        frontendLogger.info('[Diff] Recovered line changes from Monaco on demand', {
+          changes: changes.length
+        })
+      }
+    } catch (error) {
+      frontendLogger.warn('[Diff] Failed to recover line changes on demand', error)
+    }
   }
   if (!changes.length) return null
   const editor = diffEditor.getModifiedEditor()
@@ -1148,6 +1241,31 @@ const getCurrentDiffChange = () => {
   return nearest
 }
 
+const refreshDiffLineChangesCache = () => {
+  if (!diffEditor) {
+    diffLineChangesCache = []
+    return
+  }
+  try {
+    diffLineChangesCache = diffEditor.getLineChanges() || []
+    frontendLogger.info('[Diff] Cached line changes for hunk toolbar', {
+      changes: diffLineChangesCache.length
+    })
+    scheduleHunkActionPositionUpdate()
+  } catch (error) {
+    diffLineChangesCache = []
+    frontendLogger.warn('[Diff] Unable to cache line changes', error)
+  }
+}
+
+const scheduleHunkActionPositionUpdate = () => {
+  if (diffHunkAnimationFrameId) return
+  diffHunkAnimationFrameId = window.requestAnimationFrame(() => {
+    diffHunkAnimationFrameId = null
+    updateHunkActionPosition()
+  })
+}
+
 const updateHunkActionPosition = () => {
   if (!diffEditor || !selectedFile.value || selectedCommit.value) {
     diffHunkActionVisible.value = false
@@ -1166,9 +1284,16 @@ const updateHunkActionPosition = () => {
   const scrollTop = editor.getScrollTop()
   const layout = editor.getLayoutInfo()
   const viewTop = top - scrollTop
-  const maxTop = Math.max(8, layout.height - 28)
+  const actionHeight = 52
+  const maxTop = Math.max(8, layout.height - actionHeight - 8)
 
   diffHunkActionTop.value = Math.min(Math.max(viewTop, 8), maxTop)
+  // 设计说明：VS Code 的 diff hunk 操作按钮停在左右编辑器分隔线附近，
+  // 不压住行号，也不会随着长行横向滚动跑出屏幕。这里按 diff 容器宽度
+  // 计算 gutter 侧位置；单栏性能模式下退回到左侧 gutter 内侧。
+  const containerWidth = diffEditorContainer.value?.clientWidth || layout.width || 0
+  const sideBySideLeft = Math.max(8, Math.floor(containerWidth / 2) - 34)
+  diffHunkActionLeft.value = diffRenderSideBySide.value ? sideBySideLeft : 8
   diffHunkActionVisible.value = true
 }
 
@@ -1185,7 +1310,7 @@ const getChangeLineForRevert = (change) => {
 const handleDiscardDiffHunk = async () => {
   if (!selectedFile.value || selectedCommit.value || diffLoading.value.hunk) return
 
-  const status = selectedFile.value.status
+  const status = normalizeGitStatus(selectedFile.value.status)
   const targetFilePath = selectedFile.value.path
   if (status === 'D') {
     notification.warning({
@@ -1251,7 +1376,63 @@ const handleDiscardDiffHunk = async () => {
     })
   } finally {
     diffLoading.value.hunk = false
-    updateHunkActionPosition()
+    scheduleHunkActionPositionUpdate()
+  }
+}
+
+const handleStageDiffHunk = async () => {
+  if (!selectedFile.value || selectedCommit.value || diffLoading.value.hunk) return
+
+  const targetFilePath = selectedFile.value.path
+  const change = getCurrentDiffChange()
+  if (!change) {
+    notification.warning({
+      title: '无法暂存差异块',
+      content: '未找到可暂存的差异块',
+      duration: 2000
+    })
+    return
+  }
+
+  const line = getChangeLineForRevert(change)
+  diffLoading.value.hunk = true
+  frontendLogger.info('[Diff] Staging hunk', {
+    filePath: targetFilePath,
+    line,
+    originalStart: change.originalStartLineNumber,
+    originalEnd: change.originalEndLineNumber,
+    modifiedStart: change.modifiedStartLineNumber,
+    modifiedEnd: change.modifiedEndLineNumber
+  })
+
+  try {
+    await invoke('stage_hunk', {
+      path: props.workspacePath,
+      filePath: targetFilePath,
+      line
+    })
+    await refreshGitStatus({ resetSelection: false, includeCommits: false })
+    const all = [...unstagedFiles.value, ...stagedFiles.value]
+    const nextFile = all.find((item) => item?.path === targetFilePath) || selectedFile.value
+    if (nextFile) {
+      selectedFile.value = nextFile
+      await updateFileDiff(nextFile)
+    }
+    notification.success({
+      title: '已暂存差异块',
+      content: targetFilePath,
+      duration: 1600
+    })
+  } catch (error) {
+    frontendLogger.error('[Diff] Failed to stage hunk', error)
+    notification.error({
+      title: '暂存差异块失败',
+      content: String(error?.message || error),
+      duration: 3000
+    })
+  } finally {
+    diffLoading.value.hunk = false
+    scheduleHunkActionPositionUpdate()
   }
 }
 
@@ -1280,6 +1461,10 @@ const updateCommitDiff = async (commit) => {
       original: originalModel,
       modified: modifiedModel
     });
+    refreshDiffLineChangesCache()
+    const diffPerf = getDiffPerformanceOptions(original, modified)
+    diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
+    diffEditor.updateOptions(diffPerf.options)
 
     if (oldModel) {
       setTimeout(() => {
@@ -1883,14 +2068,16 @@ const loadCommitHistory = async () => {
       currentBranch.value = branch
     }
 
+    // 提交历史区域优先保证面板响应速度：先加载较小窗口，列表内再逐步展开可见项。
     commits.value = await invoke('get_git_log', {
       path: props.workspacePath,
       branchName: branch || currentBranch.value,
-      limit: 200
+      limit: 80
     })
+    commitHistoryVisibleLimit.value = 60
 
     headMarkers.value = markers
-    logger.debug('Commit history loaded', { count: commits.value.length })
+    logger.debug('Commit history loaded', { count: commits.value.length, visible: commitHistoryVisibleLimit.value })
   } catch (error) {
     logger.error('Failed to load commit history', error)
   } finally {
@@ -1902,8 +2089,20 @@ const formatDateFull = (timestamp) => {
   return new Date(parseInt(timestamp) * 1000).toLocaleString()
 }
 
+const getFileStatusCodicon = (status) => {
+  switch (normalizeGitStatus(status)) {
+    case 'A': return 'diff-added'
+    case 'M': return 'diff-modified'
+    case 'D': return 'diff-removed'
+    case '?': return 'new-file'
+    case 'R': return 'diff-renamed'
+    case 'T': return 'symbol-file'
+    default: return 'file'
+  }
+}
+
 const getFileStatusIcon = (status) => {
-  switch (status) {
+  switch (normalizeGitStatus(status)) {
     case 'A': return AddCircleOutline
     case 'M': return CreateOutline
     case 'D': return RemoveCircleOutline
@@ -1915,7 +2114,7 @@ const getFileStatusIcon = (status) => {
 }
 
 const getStatusClass = (status) => {
-  switch (status) {
+  switch (normalizeGitStatus(status)) {
     case 'A': return 'git-status-a'
     case 'M': return 'git-status-m'
     case 'D': return 'git-status-d'
@@ -1957,7 +2156,7 @@ const initMonacoEditor = async () => {
     diffEditor = markRaw(monaco.editor.createDiffEditor(editorContainer, {
       originalEditable: false,
       readOnly: true,
-      automaticLayout: true,
+      automaticLayout: false,
       scrollbar: {
         verticalScrollbarSize: 10,
         horizontalScrollbarSize: 10,
@@ -2002,6 +2201,7 @@ const initMonacoEditor = async () => {
       original: emptyModel,
       modified: emptyModel
     });
+    diffLineChangesCache = []
 
     if (diffHunkScrollDisposable) {
       diffHunkScrollDisposable.dispose()
@@ -2011,14 +2211,26 @@ const initMonacoEditor = async () => {
       diffHunkCursorDisposable.dispose()
       diffHunkCursorDisposable = null
     }
+    if (diffUpdateDisposable) {
+      diffUpdateDisposable.dispose()
+      diffUpdateDisposable = null
+    }
 
     const modifiedEditor = diffEditor.getModifiedEditor()
     diffHunkScrollDisposable = modifiedEditor.onDidScrollChange(() => {
-      updateHunkActionPosition()
+      scheduleHunkActionPositionUpdate()
     })
     diffHunkCursorDisposable = modifiedEditor.onDidChangeCursorPosition(() => {
-      updateHunkActionPosition()
+      scheduleHunkActionPositionUpdate()
     })
+    if (typeof diffEditor.onDidUpdateDiff === 'function') {
+      diffUpdateDisposable = diffEditor.onDidUpdateDiff(() => {
+        refreshDiffLineChangesCache()
+        frontendLogger.info('[Diff] Monaco diff update completed; hunk actions refreshed')
+      })
+    } else {
+      frontendLogger.warn('[Diff] Monaco diff editor does not expose onDidUpdateDiff; using demand cache fallback')
+    }
 
     // 添加resize observer
     resizeObserver = new ResizeObserver(() => {
@@ -2026,7 +2238,7 @@ const initMonacoEditor = async () => {
         const height = editorContainer.clientHeight;
         const width = editorContainer.clientWidth;
         diffEditor.layout({ width, height });
-        updateHunkActionPosition()
+        scheduleHunkActionPositionUpdate()
       }
     });
     resizeObserver.observe(editorContainer);
@@ -2092,6 +2304,7 @@ const updateFileDiff = async (file) => {
       original: originalModel,
       modified: modifiedModel
     });
+    refreshDiffLineChangesCache()
 
     // 清理旧模型（如果有）
     if (oldModel) {
@@ -2101,14 +2314,13 @@ const updateFileDiff = async (file) => {
       }, 100);
     }
 
-    // 配置差异编辑器
-    diffEditor.updateOptions({
-      renderSideBySide: true,
-      renderIndicators: true,
-      renderWhitespace: 'selection',
-      readOnly: true,
-      automaticLayout: true
-    });
+    // 大文件/大差异时切到性能模式，避免 diff 操作因装饰和分栏计算卡顿。
+    const diffPerf = getDiffPerformanceOptions(originalContent, modifiedContent)
+    diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
+    diffEditor.updateOptions(diffPerf.options);
+    if (diffPerf.largeDiff) {
+      frontendLogger.info('[Diff] Large working tree diff rendered in performance mode', { filePath })
+    }
 
     // 确保布局正确
     await nextTick();
@@ -2137,6 +2349,7 @@ const updateFileDiff = async (file) => {
       original: errorModel,
       modified: errorModel
     });
+    diffLineChangesCache = []
   } finally {
     diffLoading.value.file = false;
   }
@@ -2174,6 +2387,9 @@ const handleFileClick = async (file) => {
 }
 
 const handleStageFile = async (file) => {
+  if (isGitFileBusy(file.path)) return
+  setGitFileBusy(file.path, true)
+  frontendLogger.info('[GitPanel] Stage file requested', { filePath: file.path })
   try {
     // 1. 立即从unstagedFiles中移除文件（视觉反馈）
     const fileIndex = unstagedFiles.value.findIndex(f => f.path === file.path)
@@ -2202,22 +2418,7 @@ const handleStageFile = async (file) => {
       stagedFiles.value[stagedIndex].__pending = false
     }
 
-    // 5. 执行完整状态刷新（但保留现有UI状态）
-    const freshStatus = await invoke('get_git_status', { path: props.workspacePath })
-
-    // 6. 智能合并状态（而不是完全替换）
-    freshStatus.forEach(freshFile => {
-      if (freshFile.path === file.path) {
-        const existingIndex = stagedFiles.value.findIndex(f => f.path === freshFile.path)
-        if (existingIndex !== -1) {
-          // 保留用户可能已经展开查看的diff内容
-          stagedFiles.value[existingIndex] = {
-            ...freshFile,
-            diff: stagedFiles.value[existingIndex].diff || freshFile.diff || ''
-          }
-        }
-      }
-    })
+    scheduleAutoRefresh()
 
   } catch (error) {
     // 回滚UI状态
@@ -2232,10 +2433,16 @@ const handleStageFile = async (file) => {
         __pending: undefined
       })
     }
+    frontendLogger.error('[GitPanel] Stage file failed', { filePath: file.path, error })
+  } finally {
+    setGitFileBusy(file.path, false)
   }
 }
 
 const handleUnstageFile = async (file) => {
+  if (isGitFileBusy(file.path)) return
+  setGitFileBusy(file.path, true)
+  frontendLogger.info('[GitPanel] Unstage file requested', { filePath: file.path })
   try {
     // 1. 立即从stagedFiles中移除文件
     const fileIndex = stagedFiles.value.findIndex(f => f.path === file.path)
@@ -2264,20 +2471,7 @@ const handleUnstageFile = async (file) => {
       unstagedFiles.value[unstagedIndex].__pending = false
     }
 
-    // 5. 智能刷新状态
-    const freshStatus = await invoke('get_git_status', { path: props.workspacePath })
-
-    freshStatus.forEach(freshFile => {
-      if (freshFile.path === file.path) {
-        const existingIndex = unstagedFiles.value.findIndex(f => f.path === freshFile.path)
-        if (existingIndex !== -1) {
-          unstagedFiles.value[existingIndex] = {
-            ...freshFile,
-            diff: unstagedFiles.value[existingIndex].diff || freshFile.diff || ''
-          }
-        }
-      }
-    })
+    scheduleAutoRefresh()
 
   } catch (error) {
     // 回滚UI状态
@@ -2292,6 +2486,9 @@ const handleUnstageFile = async (file) => {
         __pending: undefined
       })
     }
+    frontendLogger.error('[GitPanel] Unstage file failed', { filePath: file.path, error })
+  } finally {
+    setGitFileBusy(file.path, false)
   }
 }
 
@@ -2577,6 +2774,10 @@ onUnmounted(() => {
     clearInterval(autoRefreshIntervalId)
     autoRefreshIntervalId = null
   }
+  if (diffHunkAnimationFrameId) {
+    window.cancelAnimationFrame(diffHunkAnimationFrameId)
+    diffHunkAnimationFrameId = null
+  }
   if (fileChangeUnlisten.value) {
     fileChangeUnlisten.value().catch(() => {})
     fileChangeUnlisten.value = null
@@ -2614,6 +2815,10 @@ onUnmounted(() => {
   if (diffHunkCursorDisposable) {
     diffHunkCursorDisposable.dispose()
     diffHunkCursorDisposable = null
+  }
+  if (diffUpdateDisposable) {
+    diffUpdateDisposable.dispose()
+    diffUpdateDisposable = null
   }
 
   // 移除resize observer
@@ -2808,6 +3013,16 @@ onUnmounted(() => {
   flex: 0 0 16px;
 }
 
+.git-codicon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  line-height: 1;
+}
+
 .git-status-a {
   color: #2da44e;
 }
@@ -2990,6 +3205,30 @@ onUnmounted(() => {
   flex: 0 0 auto;
 }
 
+.vscode-action-button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 3px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-color-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.vscode-action-button:hover:not(:disabled) {
+  background-color: var(--hover-color);
+  color: var(--text-color);
+}
+
+.vscode-action-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .section-header {
   display: flex;
   align-items: center;
@@ -3169,41 +3408,47 @@ onUnmounted(() => {
 
 .diff-hunk-action {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
   z-index: 5;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--divider-color);
+  border-radius: 4px;
+  background-color: var(--card-bg);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
   pointer-events: auto;
+  transform: none;
 }
 
 .diff-hunk-action-button {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 1px solid var(--divider-color);
-  background-color: var(--card-bg);
-  color: var(--text-color);
+  width: 24px;
+  height: 22px;
+  border-radius: 3px;
+  border: 0;
+  background-color: transparent;
+  color: var(--text-color-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  transition: all 0.15s ease;
-  opacity: 0.9;
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 
 .diff-hunk-action-button:hover:not(:disabled) {
   background-color: var(--hover-color);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.16);
-  opacity: 1;
+  color: var(--text-color);
+}
+
+.diff-hunk-action-button.danger:hover:not(:disabled) {
+  color: #f85149;
 }
 
 .diff-hunk-action-button:disabled {
   color: var(--text-color-secondary);
   cursor: default;
-  box-shadow: none;
   opacity: 0.5;
 }
 
@@ -3486,6 +3731,23 @@ onUnmounted(() => {
   margin-left: 16px;
   border-left: 2px solid var(--divider-color);
   padding-left: 8px;
+}
+
+.commit-load-more {
+  width: calc(100% - 16px);
+  margin: 6px 8px 10px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-color-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.commit-load-more:hover {
+  background-color: var(--hover-color);
+  color: var(--text-color);
 }
 
 .selected-file {

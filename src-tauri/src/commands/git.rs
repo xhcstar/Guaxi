@@ -1515,6 +1515,134 @@ pub fn discard_hunk(
     Ok(())
 }
 
+fn parse_unified_hunk_new_range(header: &str) -> Option<(u32, u32)> {
+    let new_part = header
+        .split_whitespace()
+        .find(|part| part.starts_with('+'))?
+        .trim_start_matches('+');
+    let mut parts = new_part.split(',');
+    let start = parts.next()?.parse::<u32>().ok()?;
+    let count = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1);
+    let end = start.saturating_add(count.saturating_sub(1));
+    Some((start, end.max(start)))
+}
+
+#[tauri::command]
+pub fn stage_hunk(path: String, file_path: String, line: u32) -> Result<(), String> {
+    info!(
+        "Staging hunk for file: {} in path: {}, line: {}",
+        file_path, path, line
+    );
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
+    let normalized_path = file_path.replace('\\', "/");
+
+    let diff_output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .arg("diff")
+        .arg("--unified=0")
+        .arg("--")
+        .arg(&normalized_path)
+        .output()
+        .map_err(|e| format!("无法执行 git diff：{}", e))?;
+
+    if !diff_output.status.success() {
+        let stderr = String::from_utf8_lossy(&diff_output.stderr);
+        return Err(format!("暂存差异块失败：{}", stderr.trim()));
+    }
+
+    let diff_text = String::from_utf8_lossy(&diff_output.stdout);
+    let mut header_lines = Vec::<String>::new();
+    let mut current_hunk = Vec::<String>::new();
+    let mut matched_hunk = Vec::<String>::new();
+    let mut in_hunk = false;
+    let mut current_matches = false;
+
+    for raw_line in diff_text.lines() {
+        if raw_line.starts_with("@@ ") {
+            if in_hunk && current_matches {
+                matched_hunk = current_hunk.clone();
+                break;
+            }
+            in_hunk = true;
+            current_hunk.clear();
+            current_hunk.push(raw_line.to_string());
+            current_matches = parse_unified_hunk_new_range(raw_line)
+                .map(|(start, end)| line >= start && line <= end)
+                .unwrap_or(false);
+        } else if in_hunk {
+            current_hunk.push(raw_line.to_string());
+        } else {
+            header_lines.push(raw_line.to_string());
+        }
+    }
+
+    if in_hunk && current_matches && matched_hunk.is_empty() {
+        matched_hunk = current_hunk;
+    }
+
+    if matched_hunk.is_empty() {
+        return Err(format!("暂存差异块失败：未找到第 {} 行附近的差异块", line));
+    }
+
+    let mut patch = String::new();
+    for item in header_lines {
+        patch.push_str(&item);
+        patch.push('\n');
+    }
+    for item in matched_hunk {
+        patch.push_str(&item);
+        patch.push('\n');
+    }
+
+    let mut child = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .arg("apply")
+        .arg("--cached")
+        .arg("--whitespace=nowarn")
+        .arg("--unidiff-zero")
+        .arg("--recount")
+        .arg("-p1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法执行 git apply --cached：{}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("写入暂存补丁失败：{}", e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("执行 git apply --cached 失败：{}", e))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
+        };
+        error!("git apply --cached failed: {}", msg);
+        return Err(format!("暂存差异块失败：{}", msg));
+    }
+
+    info!("Hunk staged successfully");
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_commit_diff(path: String, commit_id: String) -> Result<String, String> {
     info!("Getting diff for commit: {} in path: {}", commit_id, path);

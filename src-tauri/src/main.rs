@@ -435,6 +435,7 @@ async fn main() {
             commands::git::discard_file,
             commands::git::discard_all,
             commands::git::discard_hunk,
+            commands::git::stage_hunk,
             commands::git::get_commit_diff,
             commands::git::create_git_window,
             commands::markdown_manual::create_markdown_manual_window,
