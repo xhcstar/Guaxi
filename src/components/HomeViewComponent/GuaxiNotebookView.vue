@@ -1858,6 +1858,86 @@ const NOTEBOOK_TOC_MARKER_RE = /^\s*(?:\[\[\s*(?:toc|目录)\s*\]\]|\[\s*(?:toc|
 
 const hasNotebookTocMarker = (markdown = '') => NOTEBOOK_TOC_MARKER_RE.test(String(markdown || ''))
 
+const isNotebookTocMarkerLine = (line = '') => /^\s*(?:\[\[\s*(?:toc|目录)\s*\]\]|\[\s*(?:toc|目录)\s*\])\s*$/i.test(String(line || ''))
+
+const splitNotebookMarkdownByTocMarkers = (markdown = '') => {
+  const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n')
+  const parts = []
+  let chunkStart = 0
+  let fenceState = { active: false, char: '', length: 0 }
+
+  const pushMarkdownChunk = (startIndex, endExclusive) => {
+    const chunk = lines.slice(startIndex, endExclusive).join('\n')
+    if (chunk.trim()) {
+      parts.push({
+        type: 'markdown',
+        content: chunk,
+      })
+    }
+  }
+
+  lines.forEach((line, index) => {
+    const textLine = String(line || '')
+    if (!fenceState.active && isNotebookTocMarkerLine(textLine)) {
+      pushMarkdownChunk(chunkStart, index)
+      parts.push({
+        type: 'toc',
+        content: textLine,
+      })
+      chunkStart = index + 1
+      return
+    }
+
+    const fenceMatch = textLine.match(/^\s*(`{3,}|~{3,})/)
+    if (!fenceMatch) return
+
+    const fenceText = String(fenceMatch[1] || '')
+    const fenceChar = fenceText[0] || ''
+    const fenceLength = fenceText.length
+    if (!fenceState.active) {
+      fenceState = { active: true, char: fenceChar, length: fenceLength }
+      return
+    }
+    if (fenceState.char === fenceChar && fenceLength >= fenceState.length) {
+      fenceState = { active: false, char: '', length: 0 }
+    }
+  })
+
+  pushMarkdownChunk(chunkStart, lines.length)
+  return parts
+}
+
+// 设计说明：
+// 1. `[TOC]` 是一个行级占位符，不应该吞掉同一个 Markdown Cell 中的其它正文。
+// 2. 因此这里按行切分，只把真正的 TOC 标记行替换成探索者模式的整篇目录 HTML。
+// 3. 切分时显式跳过 fenced code block，避免示例代码里的 `[TOC]` 被误当作目录占位。
+const renderNotebookMarkdownHtmlWithSyntheticToc = async (markdownText, cellKey, reason = 'unknown') => {
+  const parts = splitNotebookMarkdownByTocMarkers(markdownText)
+  if (!parts.length) return ''
+
+  const htmlParts = []
+  let tocCount = 0
+  let markdownChunkCount = 0
+  for (const part of parts) {
+    if (part.type === 'toc') {
+      tocCount += 1
+      htmlParts.push(buildNotebookTocHtml({ currentCellKey: cellKey }))
+      continue
+    }
+    markdownChunkCount += 1
+    htmlParts.push(await renderMarkdownHtml(part.content, `${reason}:toc-chunk:${markdownChunkCount}`))
+  }
+
+  logger.info('[Notebook] rendered markdown cell with inline synthetic toc', {
+    reason,
+    cellKey,
+    tocCount,
+    markdownChunkCount,
+    filePath: props.filePath,
+  })
+  return htmlParts.join('\n')
+}
+
 // 设计说明：
 // 1. 探索者模式此前直接把 markdown 原文送进 worker，`[[note]]` 这类 Obsidian wikilink 不会被 markdown-it 识别成 <a>。
 // 2. 文件卡片提升依赖最终 HTML 中已经存在链接节点，因此这里先把 wikilink 统一预处理成内部链接协议。
@@ -3882,13 +3962,15 @@ const syncRenderedMarkdownHtml = async (cells, reason = 'unknown') => {
         basePath: getNotebookBasePath(),
       })
       if (hasNotebookTocMarker(markdownText)) {
-        nextMarkdownMap[cellKey] = buildNotebookTocHtml({ currentCellKey: cellKey })
-        markdownRenderCount += 1
-        logger.info('[Notebook] rendered synthetic toc for markdown cell', {
-          reason,
-          cellKey,
-          filePath: props.filePath,
-        })
+        renderTasks.push((async () => {
+          const renderedHtml = await renderNotebookMarkdownHtmlWithSyntheticToc(
+            markdownText,
+            cellKey,
+            `markdown-cell:${cellKey}`,
+          )
+          nextMarkdownMap[cellKey] = decorateNotebookHeadingAnchors(renderedHtml, cellKey)
+          markdownRenderCount += 1
+        })())
         continue
       }
       const cachedMarkdownHtml = notebookMarkdownRenderCache.get(cacheKey)
