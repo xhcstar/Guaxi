@@ -683,9 +683,13 @@ const ensureGuaxiMonacoThemes = () => {
       'editor.selectionBackground': '#3e4451',
       'editor.inactiveSelectionBackground': '#323842',
       'editor.lineHighlightBackground': '#2c313a',
+      'editor.lineHighlightBorder': '#00000000',
       'editorBracketMatch.background': '#3b4048',
       'editorBracketMatch.border': '#528bff',
       'editor.selectionHighlightBackground': '#3e445155',
+      'editor.findMatchBackground': '#3b5f8a66',
+      'editor.findMatchHighlightBackground': '#3e4451aa',
+      'editor.findRangeHighlightBackground': '#3e445155',
       'editor.foldBackground': '#2c313a',
       'editorWhitespace.foreground': '#3b4048',
       'editorIndentGuide.background': '#3b4048',
@@ -698,12 +702,18 @@ const ensureGuaxiMonacoThemes = () => {
       'editorSuggestWidget.selectedBackground': '#2c313a',
       'editorWidget.background': '#282c34',
       'editorWidget.border': '#3b4048',
+      'input.background': '#21252b',
+      'input.foreground': '#abb2bf',
+      'input.border': '#3b4048',
+      'input.placeholderForeground': '#7f8898',
+      'focusBorder': '#528bff80',
       'editorGutter.background': '#282c34',
       'scrollbar.shadow': '#00000066'
     }
   })
 
   guaxiMonacoThemesReady = true
+  frontendLogger.info('[DiffTheme] Monaco themes registered with GitPanel dark overrides')
 }
 
 const getMonacoTheme = () => {
@@ -1961,6 +1971,11 @@ const initMonacoEditor = async () => {
       renderSideBySide: true,
       renderIndicators: true,
       scrollBeyondLastLine: false,
+      // Git diff 面板不依赖 sticky scroll；关闭它可以避免 Monaco 在暗色模式下渲染
+      // editor.contrib.stickyScrollWidget 时，把首行左侧 gutter 露成亮色块。
+      stickyScroll: {
+        enabled: false
+      },
       diffAlgorithm: 'advanced',
       diffWordWrap: 'on',
       enableSplitViewResizing: true,
@@ -1975,6 +1990,7 @@ const initMonacoEditor = async () => {
         followCaret: true
       }
     }));
+    frontendLogger.info('[DiffTheme] Sticky scroll disabled for GitPanel diff editor')
 
     isEditorInitialized.value = true;
     ensureGuaxiMonacoThemes()
@@ -2638,6 +2654,99 @@ onUnmounted(() => {
   --deleted-bg: rgba(220, 53, 69, 0.16);
   --current-branch-bg: rgba(40, 167, 69, 0.22);
   --git-monaco-bg: #282c34;
+}
+
+/* 设计说明：
+   1. Git diff 视图使用 Monaco DiffEditor，内部的 find-widget、当前行 margin、active line number
+      不完全受主题 token 控制，暗色模式下会露出默认亮色边框或背景。
+   2. 这里把兜底样式限制在 .gitkraken-container 内，避免影响主编辑器、Slidev 编辑器等其他 Monaco 实例。
+   3. 主题 defineTheme 负责语义颜色；这组 CSS 只修复 Monaco 内部 DOM 在暗色模式下的残留亮色块。 */
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .margin,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .glyph-margin,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .margin-view-overlays,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .monaco-editor-background {
+  background-color: #282c34 !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor {
+  --vscode-editorWidget-background: #282c34 !important;
+  --vscode-editorWidget-foreground: #abb2bf !important;
+  --vscode-widget-border: #3b4048 !important;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.42) !important;
+  --vscode-input-background: #21252b !important;
+  --vscode-input-foreground: #abb2bf !important;
+  --vscode-input-border: #3b4048 !important;
+  --vscode-input-placeholderForeground: #7f8898 !important;
+  --vscode-focusBorder: rgba(82, 139, 255, 0.5) !important;
+  --vscode-editorStickyScroll-background: #282c34 !important;
+  --vscode-editorStickyScrollGutter-background: #282c34 !important;
+  --vscode-editorStickyScrollHover-background: #2c313a !important;
+  --vscode-editorStickyScroll-border: transparent !important;
+  --vscode-editorStickyScroll-shadow: rgba(0, 0, 0, 0.42) !important;
+  --vscode-editorLineNumber-foreground: #5c6370 !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-widget,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-widget-line-numbers,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-widget-lines-scrollable,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-widget-lines,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-line-number,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-line-content {
+  background-color: #282c34 !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-widget {
+  border-bottom-color: transparent !important;
+  box-shadow: rgba(0, 0, 0, 0.42) 0 4px 2px -2px !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-line-number-inner,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-line-number .codicon {
+  color: #5c6370 !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .sticky-line-content:hover {
+  background-color: #2c313a !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .find-widget {
+  background-color: #282c34 !important;
+  border-color: #3b4048 !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32) !important;
+  color: #abb2bf !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .find-widget .monaco-inputbox,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .find-widget .monaco-inputbox .input,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .find-widget input,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .find-widget textarea {
+  background-color: #21252b !important;
+  border-color: #3b4048 !important;
+  color: #abb2bf !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .find-widget .monaco-inputbox.synthetic-focus {
+  border-color: rgba(82, 139, 255, 0.5) !important;
+  outline-color: rgba(82, 139, 255, 0.5) !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .find-widget textarea::placeholder {
+  color: #7f8898 !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .current-line,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .view-overlays .current-line,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .margin-view-overlays .current-line,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .margin-view-overlays .current-line-margin,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .margin-view-overlays .current-line-margin-both,
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .line-numbers.active-line-number {
+  background-color: #2c313a !important;
+  border-color: transparent !important;
+}
+
+:root[data-guaxi-theme='dark'] .gitkraken-container .monaco-editor .line-numbers.active-line-number {
+  color: #d7deea !important;
 }
 
 .n-card {
