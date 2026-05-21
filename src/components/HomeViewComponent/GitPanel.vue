@@ -475,7 +475,7 @@
           <div
             v-if="selectedFile && !selectedCommit && diffHunkActionVisible"
             class="diff-hunk-action"
-            :style="{ top: `${diffHunkActionTop}px`, left: `${diffHunkActionLeft}px` }"
+            :style="{ top: `${diffHunkActionTop}px`, left: `${diffHunkActionLeft}px`, height: `${diffHunkActionHeight}px` }"
           >
             <n-tooltip trigger="hover">
               <template #trigger>
@@ -493,15 +493,16 @@
             <n-tooltip trigger="hover">
               <template #trigger>
                 <button
-                  class="diff-hunk-action-button danger"
+                  class="diff-hunk-action-button"
+                  :class="{ danger: !selectedFile?.staged }"
                   type="button"
                   @click="handleDiscardDiffHunk"
                   :disabled="!canRevertCurrentHunk"
                 >
-                  <Codicon name="discard" />
+                  <Codicon :name="selectedFile?.staged ? 'remove' : 'discard'" />
                 </button>
               </template>
-              撤销当前差异块
+              {{ currentHunkRevertTooltip }}
             </n-tooltip>
           </div>
         </div>
@@ -578,6 +579,7 @@ import {
   NInput,
   NSpin,
   createDiscreteApi,
+  darkTheme,
 } from 'naive-ui'
 import {
   GitBranchOutline,
@@ -608,14 +610,48 @@ import { createLogger } from '../../utils/logger'
 
 const frontendLogger = createLogger('GitPanel')
 
-const { notification } = createDiscreteApi(['notification'])
+const settingsStore = useSettingsStore()
+
+const gitPanelNaiveConfigProviderProps = computed(() => {
+  const isDark = settingsStore.appearanceTheme === 'dark'
+  const palette = isDark
+    ? {
+        panel: '#21252b',
+        border: '#3e4451',
+        text1: '#abb2bf',
+        text2: '#9da5b4',
+      }
+    : {
+        panel: '#ffffff',
+        border: '#d0d7de',
+        text1: '#1f2328',
+        text2: '#57606a',
+      }
+
+  // 设计说明：GitPanel 使用 createDiscreteApi 创建通知，它不继承 App 顶层的
+  // n-config-provider；这里显式传入同一套亮/暗色基础变量，避免暗色模式弹出亮色通知。
+  return {
+    theme: isDark ? darkTheme : null,
+    themeOverrides: {
+      common: {
+        cardColor: palette.panel,
+        popoverColor: palette.panel,
+        borderColor: palette.border,
+        textColor1: palette.text1,
+        textColor2: palette.text2,
+      },
+    },
+  }
+})
+
+const { notification } = createDiscreteApi(['notification'], {
+  configProviderProps: gitPanelNaiveConfigProviderProps,
+})
 
 const Codicon = (props) => h('span', {
   class: ['codicon', `codicon-${props.name}`, 'git-codicon'],
   'aria-hidden': 'true'
 })
-
-const settingsStore = useSettingsStore()
 
 let guaxiMonacoThemesReady = false
 const ensureGuaxiMonacoThemes = () => {
@@ -879,6 +915,12 @@ let diffEditor = null
 let resizeObserver = null
 let diffHunkAnimationFrameId = null
 let diffLineChangesCache = []
+let diffLineChangesCacheContext = null
+let diffGitHunksCache = []
+let diffGitHunksCacheContext = null
+let diffActiveContext = null
+let diffFileDiffRequestId = 0
+let suppressSelectedFileDiffWatch = false
 let diffUpdateDisposable = null
 
 const diffLoading = ref({
@@ -890,8 +932,10 @@ const diffLoading = ref({
 
 const diffHunkActionTop = ref(8)
 const diffHunkActionLeft = ref(8)
+const diffHunkActionHeight = ref(52)
 const diffHunkActionVisible = ref(false)
 let diffHunkScrollDisposable = null
+let diffHunkOriginalScrollDisposable = null
 let diffHunkCursorDisposable = null
 const diffRenderSideBySide = ref(true)
 
@@ -934,12 +978,64 @@ const getDiffPerformanceOptions = (originalContent = '', modifiedContent = '') =
   }
 }
 
+const normalizeDiffFilePath = (filePath) => String(filePath || '').replace(/\\/g, '/')
+
+const createDiffContext = (filePath, staged) => {
+  const normalizedPath = normalizeDiffFilePath(filePath)
+  return {
+    filePath: normalizedPath,
+    staged: !!staged,
+    key: `${normalizedPath}::${staged ? 'staged' : 'unstaged'}`
+  }
+}
+
+const getSelectedDiffContext = () => {
+  if (!selectedFile.value) return null
+  return createDiffContext(selectedFile.value.path, selectedFile.value.staged)
+}
+
+const isSameDiffContext = (left, right) => !!left && !!right && left.key === right.key
+
+const isCurrentDiffContext = (context, requestId = diffFileDiffRequestId) => {
+  if (!isSameDiffContext(diffActiveContext, context)) return false
+  if (!isSameDiffContext(getSelectedDiffContext(), context)) return false
+  return requestId === diffFileDiffRequestId
+}
+
+const clearDiffHunkCaches = (reason, context = diffActiveContext) => {
+  diffLineChangesCache = []
+  diffLineChangesCacheContext = null
+  diffGitHunksCache = []
+  diffGitHunksCacheContext = null
+  frontendLogger.info('[Diff] Cleared hunk caches', {
+    reason,
+    context: context?.key || null
+  })
+}
+
+const selectFileAndUpdateDiff = async (file, reason = 'select-file') => {
+  suppressSelectedFileDiffWatch = true
+  selectedFile.value = file
+  selectedCommit.value = null
+  try {
+    await nextTick()
+  } finally {
+    suppressSelectedFileDiffWatch = false
+  }
+  frontendLogger.info('[Diff] Selecting file for explicit diff refresh', {
+    reason,
+    context: createDiffContext(file?.path, file?.staged).key
+  })
+  await updateFileDiff(file)
+}
+
 const canRevertCurrentHunk = computed(() => {
   if (!selectedFile.value) return false
   if (selectedCommit.value) return false
   if (diffLoading.value.file || diffLoading.value.commit || diffLoading.value.hunk) return false
+  if (!isSameDiffContext(diffActiveContext, getSelectedDiffContext())) return false
   const status = normalizeGitStatus(selectedFile.value.status)
-  if (status === 'D') return false
+  if (!selectedFile.value.staged && status === 'D') return false
   if (!diffHunkActionVisible.value) return false
   return !!diffEditor
 })
@@ -948,10 +1044,15 @@ const canStageCurrentHunk = computed(() => {
   if (!selectedFile.value) return false
   if (selectedCommit.value) return false
   if (diffLoading.value.file || diffLoading.value.commit || diffLoading.value.hunk) return false
+  if (!isSameDiffContext(diffActiveContext, getSelectedDiffContext())) return false
   if (selectedFile.value.staged) return false
   if (!diffHunkActionVisible.value) return false
   return !!diffEditor
 })
+
+const currentHunkRevertTooltip = computed(() => (
+  selectedFile.value?.staged ? '取消暂存当前差异块' : '撤销当前差异块'
+))
 
 // 添加侧边栏折叠状态
 const isSidebarCollapsed = ref(false)
@@ -1141,48 +1242,65 @@ const navigateDiff = async (direction) => {
       return;
     }
 
-    // 尝试获取导航动作
-    const actionName = direction === 'prev'
-      ? 'editor.action.diffReview.prev'
-      : 'editor.action.diffReview.next';
+    const changes = diffEditor.getLineChanges?.() || []
+    if (changes.length > 0) {
+      const currentLine = editor.getPosition()?.lineNumber || 1
+      const lineOf = (change) => Math.max(1, change.modifiedStartLineNumber || change.modifiedEndLineNumber || change.originalStartLineNumber || change.originalEndLineNumber || 1)
+      const endLineOf = (change) => Math.max(lineOf(change), change.modifiedEndLineNumber || change.modifiedStartLineNumber || change.originalEndLineNumber || change.originalStartLineNumber || lineOf(change))
+      const currentIndex = changes.findIndex((change) => currentLine >= lineOf(change) && currentLine <= endLineOf(change))
+      let target = null
 
-    const action = editor.getAction(actionName);
-    if (!action) {
-      // 如果标准动作不存在，尝试备用方案
-      logger.warn(`Action ${actionName} not found, trying alternative approach`);
-
-      // 备用方案：直接操作编辑器选择第一个差异
-      const changes = diffEditor.getLineChanges();
-      if (changes && changes.length > 0) {
-        const change = direction === 'prev'
-          ? changes[changes.length - 1]
-          : changes[0];
-
-        editor.setPosition({
-          lineNumber: change.modifiedStartLineNumber,
-          column: 1
-        });
-        editor.revealPositionInCenter({
-          lineNumber: change.modifiedStartLineNumber,
-          column: 1
-        });
-        editor.focus();
-        logger.debug('Navigated using line changes API');
-        return;
+      if (currentIndex >= 0) {
+        const targetIndex = direction === 'next'
+          ? (currentIndex + 1) % changes.length
+          : (currentIndex - 1 + changes.length) % changes.length
+        target = changes[targetIndex]
+      } else if (direction === 'next') {
+        target = changes.find((change) => lineOf(change) > currentLine) || changes[0]
+      } else {
+        for (let i = changes.length - 1; i >= 0; i -= 1) {
+          if (lineOf(changes[i]) < currentLine) {
+            target = changes[i]
+            break
+          }
+        }
+        target = target || changes[changes.length - 1]
       }
 
-      throw new Error(`No navigation action or changes available`);
+      const targetPosition = {
+        lineNumber: lineOf(target),
+        column: 1
+      }
+      editor.setPosition(targetPosition)
+      editor.revealPositionInCenter(targetPosition)
+      editor.focus()
+      refreshDiffLineChangesCache()
+      updateHunkActionPosition()
+      logger.debug('Navigated using line changes API', {
+        direction,
+        currentLine,
+        targetLine: targetPosition.lineNumber,
+        changes: changes.length
+      })
+      return
     }
 
-    logger.debug(`Executing ${actionName}`);
-    await action.run();
+    // Monaco 版本差异较大，有些构建没有 diffReview action；有 changes 时优先使用上面的稳定实现。
+    const actionName = direction === 'prev'
+      ? 'editor.action.diffReview.prev'
+      : 'editor.action.diffReview.next'
+    const action = editor.getAction(actionName)
+    if (!action) throw new Error(`No navigation action or changes available`)
 
-    // 确保视图滚动到差异位置
-    const position = editor.getPosition();
+    logger.debug(`Executing ${actionName}`)
+    await action.run()
+
+    const position = editor.getPosition()
     if (position) {
-      editor.revealPositionInCenter(position);
-      editor.focus();
-      logger.debug('Navigation completed successfully');
+      editor.revealPositionInCenter(position)
+      editor.focus()
+      updateHunkActionPosition()
+      logger.debug('Navigation completed successfully')
     }
 
     updateHunkActionPosition()
@@ -1200,14 +1318,47 @@ const navigateDiff = async (direction) => {
 
 const getCurrentDiffChange = () => {
   if (!diffEditor) return null
-  let changes = diffLineChangesCache.length ? diffLineChangesCache : []
+  const context = getSelectedDiffContext()
+  if (!isSameDiffContext(diffActiveContext, context)) return null
+
+  const gitHunks = isSameDiffContext(diffGitHunksCacheContext, context) ? diffGitHunksCache : []
+  if (gitHunks.length) {
+    const editor = diffEditor.getModifiedEditor()
+    const position = editor?.getPosition()
+    const line = position?.lineNumber || 1
+    const exact = gitHunks.find((hunk) => {
+      const start = Math.max(1, hunk.modifiedStartLineNumber || hunk.modifiedEndLineNumber || 1)
+      const end = Math.max(start, hunk.modifiedEndLineNumber || hunk.modifiedStartLineNumber || start)
+      return line >= start && line <= end
+    })
+    if (exact) return exact
+
+    let nearest = gitHunks[0]
+    let best = Number.POSITIVE_INFINITY
+    for (const hunk of gitHunks) {
+      const start = Math.max(1, hunk.modifiedStartLineNumber || hunk.modifiedEndLineNumber || 1)
+      const end = Math.max(start, hunk.modifiedEndLineNumber || hunk.modifiedStartLineNumber || start)
+      const dist = line < start ? start - line : line > end ? line - end : 0
+      if (dist < best) {
+        best = dist
+        nearest = hunk
+      }
+    }
+    return nearest
+  }
+
+  let changes = isSameDiffContext(diffLineChangesCacheContext, context) && diffLineChangesCache.length
+    ? diffLineChangesCache
+    : []
   if (!changes.length) {
     try {
       changes = diffEditor.getLineChanges() || []
       diffLineChangesCache = changes
+      diffLineChangesCacheContext = context
       if (changes.length) {
         frontendLogger.info('[Diff] Recovered line changes from Monaco on demand', {
-          changes: changes.length
+          changes: changes.length,
+          context: context?.key || null
         })
       }
     } catch (error) {
@@ -1244,17 +1395,95 @@ const getCurrentDiffChange = () => {
 const refreshDiffLineChangesCache = () => {
   if (!diffEditor) {
     diffLineChangesCache = []
+    diffLineChangesCacheContext = null
+    return
+  }
+  const context = getSelectedDiffContext()
+  if (!isSameDiffContext(diffActiveContext, context)) {
+    diffLineChangesCache = []
+    diffLineChangesCacheContext = null
+    frontendLogger.warn('[Diff] Skipped Monaco line change cache refresh for inactive context', {
+      active: diffActiveContext?.key || null,
+      selected: context?.key || null
+    })
     return
   }
   try {
     diffLineChangesCache = diffEditor.getLineChanges() || []
+    diffLineChangesCacheContext = context
     frontendLogger.info('[Diff] Cached line changes for hunk toolbar', {
-      changes: diffLineChangesCache.length
+      changes: diffLineChangesCache.length,
+      context: context?.key || null
     })
     scheduleHunkActionPositionUpdate()
   } catch (error) {
     diffLineChangesCache = []
+    diffLineChangesCacheContext = null
     frontendLogger.warn('[Diff] Unable to cache line changes', error)
+  }
+}
+
+const toMonacoLikeGitHunk = (hunk) => {
+  const oldStart = Math.max(1, Number(hunk?.old_start || hunk?.oldStart || 1))
+  const oldCount = Math.max(0, Number(hunk?.old_count || hunk?.oldCount || 0))
+  const newStart = Math.max(1, Number(hunk?.new_start || hunk?.newStart || 1))
+  const newCount = Math.max(0, Number(hunk?.new_count || hunk?.newCount || 0))
+  return {
+    hunkIndex: Number(hunk?.index ?? 0),
+    gitHeader: String(hunk?.header || ''),
+    originalStartLineNumber: oldStart,
+    originalEndLineNumber: oldCount > 0 ? oldStart + oldCount - 1 : oldStart,
+    modifiedStartLineNumber: newStart,
+    modifiedEndLineNumber: newCount > 0 ? newStart + newCount - 1 : newStart,
+    originalLineCount: oldCount,
+    modifiedLineCount: newCount
+  }
+}
+
+const refreshGitHunksCache = async (context, requestId = diffFileDiffRequestId) => {
+  const filePath = context?.filePath || ''
+  const staged = !!context?.staged
+  try {
+    const hunks = await invoke('get_file_diff_hunks', {
+      path: props.workspacePath,
+      filePath,
+      staged
+    })
+    if (!isCurrentDiffContext(context, requestId)) {
+      frontendLogger.warn('[Diff] Ignored stale git hunk cache result', {
+        context: context?.key || null,
+        active: diffActiveContext?.key || null,
+        selected: getSelectedDiffContext()?.key || null,
+        requestId,
+        currentRequestId: diffFileDiffRequestId
+      })
+      return false
+    }
+    diffGitHunksCache = Array.isArray(hunks) ? hunks.map(toMonacoLikeGitHunk) : []
+    diffGitHunksCacheContext = context
+    frontendLogger.info(`[Diff] Git hunk cache loaded ${JSON.stringify({
+      filePath,
+      staged,
+      context: context?.key || null,
+      hunks: diffGitHunksCache.map((h) => ({
+        index: h.hunkIndex,
+        header: h.gitHeader,
+        original: [h.originalStartLineNumber, h.originalEndLineNumber, h.originalLineCount],
+        modified: [h.modifiedStartLineNumber, h.modifiedEndLineNumber, h.modifiedLineCount]
+      }))
+    })}`)
+    scheduleHunkActionPositionUpdate()
+    return true
+  } catch (error) {
+    if (isCurrentDiffContext(context, requestId)) {
+      diffGitHunksCache = []
+      diffGitHunksCacheContext = null
+    }
+    frontendLogger.warn('[Diff] Failed to load git hunk cache; falling back to Monaco changes', {
+      context: context?.key || null,
+      error
+    })
+    return false
   }
 }
 
@@ -1264,6 +1493,74 @@ const scheduleHunkActionPositionUpdate = () => {
     diffHunkAnimationFrameId = null
     updateHunkActionPosition()
   })
+}
+
+const getDiffEditorLineHeight = (editor) => {
+  try {
+    return editor?.getOption?.(monaco.editor.EditorOption.lineHeight) || 20
+  } catch {
+    return 20
+  }
+}
+
+const getDiffRangeViewportRect = (editor, startLine, endLine) => {
+  if (!editor) return null
+  const model = editor.getModel?.()
+  const lineCount = Math.max(1, model?.getLineCount?.() || 1)
+  const rawStart = Number.isFinite(startLine) && startLine > 0 ? startLine : endLine
+  const rawEnd = Number.isFinite(endLine) && endLine > 0 ? endLine : rawStart
+  if (!Number.isFinite(rawStart) || rawStart <= 0) return null
+
+  const start = Math.min(Math.max(1, rawStart), lineCount)
+  const end = Math.min(Math.max(start, rawEnd || start), lineCount)
+  const scrollTop = editor.getScrollTop()
+  const lineHeight = getDiffEditorLineHeight(editor)
+  return {
+    top: editor.getTopForLineNumber(start) - scrollTop,
+    bottom: editor.getTopForLineNumber(end) - scrollTop + lineHeight
+  }
+}
+
+const getDiffChangeViewportRect = (change) => {
+  const originalEditor = diffEditor?.getOriginalEditor?.()
+  const modifiedEditor = diffEditor?.getModifiedEditor?.()
+  const modifiedRect = getDiffRangeViewportRect(
+    modifiedEditor,
+    change?.modifiedStartLineNumber,
+    change?.modifiedEndLineNumber
+  )
+  const originalRect = getDiffRangeViewportRect(
+    originalEditor,
+    change?.originalStartLineNumber,
+    change?.originalEndLineNumber
+  )
+
+  // 设计说明：操作条贴在右侧编辑器 gutter 旁边，所以高度优先跟随右侧 hunk。
+  // 纯删除块右侧没有真实变更行时，再回退到左侧 hunk，避免被对齐填充区拉高。
+  return modifiedRect || originalRect || null
+}
+
+const getDiffHunkActionLeft = (editor, layout) => {
+  const fallbackLeft = diffRenderSideBySide.value
+    ? Math.max(8, Math.floor((diffEditorContainer.value?.clientWidth || layout.width || 0) / 2) + 8)
+    : 8
+  const containerRect = diffEditorContainer.value?.getBoundingClientRect?.()
+  const editorRect = editor?.getDomNode?.()?.getBoundingClientRect?.()
+  if (!containerRect || !editorRect || !layout) return fallbackLeft
+
+  const editorLeft = editorRect.left - containerRect.left
+  const lineNumberLeft = editorLeft + (layout.lineNumbersLeft || 0)
+  const glyphMarginLeft = editorLeft + (layout.glyphMarginLeft || 0)
+  const actionWidth = 24
+
+  if (diffRenderSideBySide.value) {
+    // 设计说明：优先放在右侧编辑器行号左边的 gutter 空隙内，既不压右侧行号，
+    // 也不占左侧 editor 的滚动条/overview ruler。空间不足时贴着右侧编辑器左边界。
+    const gutterLeft = Math.min(glyphMarginLeft, lineNumberLeft)
+    return Math.max(editorLeft + 4, gutterLeft - actionWidth - 2)
+  }
+
+  return Math.max(8, lineNumberLeft - actionWidth - 2)
 }
 
 const updateHunkActionPosition = () => {
@@ -1279,25 +1576,56 @@ const updateHunkActionPosition = () => {
   }
 
   const editor = diffEditor.getModifiedEditor()
-  const line = Math.max(1, change.modifiedStartLineNumber || change.modifiedEndLineNumber || 1)
-  const top = editor.getTopForLineNumber(line)
-  const scrollTop = editor.getScrollTop()
   const layout = editor.getLayoutInfo()
-  const viewTop = top - scrollTop
-  const actionHeight = 52
-  const maxTop = Math.max(8, layout.height - actionHeight - 8)
+  const hunkRect = getDiffChangeViewportRect(change)
+  if (!hunkRect) {
+    diffHunkActionVisible.value = false
+    return
+  }
 
-  diffHunkActionTop.value = Math.min(Math.max(viewTop, 8), maxTop)
-  // 设计说明：VS Code 的 diff hunk 操作按钮停在左右编辑器分隔线附近，
-  // 不压住行号，也不会随着长行横向滚动跑出屏幕。这里按 diff 容器宽度
-  // 计算 gutter 侧位置；单栏性能模式下退回到左侧 gutter 内侧。
-  const containerWidth = diffEditorContainer.value?.clientWidth || layout.width || 0
-  const sideBySideLeft = Math.max(8, Math.floor(containerWidth / 2) - 34)
-  diffHunkActionLeft.value = diffRenderSideBySide.value ? sideBySideLeft : 8
+  const viewportPadding = 8
+  const viewportTop = viewportPadding
+  const viewportBottom = Math.max(viewportPadding, layout.height - viewportPadding)
+  const hunkTop = Math.min(hunkRect.top, hunkRect.bottom)
+  const hunkBottom = Math.max(hunkRect.top, hunkRect.bottom)
+  const hunkHeight = Math.max(1, hunkBottom - hunkTop)
+  const visibleTop = Math.max(hunkTop, viewportTop)
+  const visibleBottom = Math.min(hunkBottom, viewportBottom)
+  const hasVisibleOverlap = visibleBottom > visibleTop
+  const normalActionHeight = 52
+
+  // 设计说明：条形区域高度跟随当前 hunk 的真实可见高度；
+  // 当 hunk 高度超过一屏时，只取当前屏幕内可见的那一段，按钮组保持在可见条形区中央。
+  // 单行/短 hunk 低于胶囊正常高度时，允许胶囊略高于变更区，避免按钮被挤压。
+  const visibleHeight = hasVisibleOverlap
+    ? Math.max(1, visibleBottom - visibleTop)
+    : Math.min(hunkHeight, Math.max(1, viewportBottom - Math.min(Math.max(hunkTop, viewportTop), viewportBottom)))
+  const actionHeight = Math.min(
+    Math.max(visibleHeight, normalActionHeight),
+    Math.max(normalActionHeight, viewportBottom - viewportTop)
+  )
+  const anchorCenter = hasVisibleOverlap
+    ? (visibleTop + visibleBottom) / 2
+    : Math.min(Math.max((hunkTop + hunkBottom) / 2, viewportTop), viewportBottom)
+  const actionTop = Math.min(
+    Math.max(anchorCenter - actionHeight / 2, viewportTop),
+    Math.max(viewportTop, viewportBottom - actionHeight)
+  )
+
+  diffHunkActionTop.value = actionTop
+  diffHunkActionHeight.value = actionHeight
+  diffHunkActionLeft.value = getDiffHunkActionLeft(editor, layout)
   diffHunkActionVisible.value = true
 }
 
 const getChangeLineForRevert = (change) => {
+  const cursorLine = diffEditor?.getModifiedEditor?.()?.getPosition?.()?.lineNumber
+  const modifiedStart = Math.max(1, change?.modifiedStartLineNumber || change?.modifiedEndLineNumber || 1)
+  const modifiedEnd = Math.max(modifiedStart, change?.modifiedEndLineNumber || change?.modifiedStartLineNumber || modifiedStart)
+  if (Number.isFinite(cursorLine) && cursorLine >= modifiedStart && cursorLine <= modifiedEnd) {
+    return cursorLine
+  }
+
   const candidates = [
     change?.modifiedStartLineNumber,
     change?.modifiedEndLineNumber,
@@ -1307,12 +1635,59 @@ const getChangeLineForRevert = (change) => {
   return candidates.length ? candidates[0] : 1
 }
 
+const getDiffHunkInvokeArgs = (change) => {
+  const context = getSelectedDiffContext()
+  const gitHunks = isSameDiffContext(diffGitHunksCacheContext, context) ? diffGitHunksCache : []
+  const lineChanges = isSameDiffContext(diffLineChangesCacheContext, context) ? diffLineChangesCache : []
+  const changes = gitHunks.length
+    ? gitHunks
+    : (lineChanges.length ? lineChanges : (diffEditor?.getLineChanges?.() || []))
+  const source = gitHunks.length ? 'git-hunks' : 'monaco-lineChanges'
+  const hunkIndex = Number.isFinite(change?.hunkIndex)
+    ? change.hunkIndex
+    : changes.findIndex((item) => item === change)
+  const args = {
+    line: getChangeLineForRevert(change),
+    hunkIndex: hunkIndex >= 0 ? hunkIndex : null,
+    originalStartLine: Number.isFinite(change?.originalStartLineNumber) ? change.originalStartLineNumber : null,
+    originalEndLine: Number.isFinite(change?.originalEndLineNumber) ? change.originalEndLineNumber : null,
+    modifiedStartLine: Number.isFinite(change?.modifiedStartLineNumber) ? change.modifiedStartLineNumber : null,
+    modifiedEndLine: Number.isFinite(change?.modifiedEndLineNumber) ? change.modifiedEndLineNumber : null,
+  }
+  frontendLogger.info(`[Diff] Prepared hunk invoke args ${JSON.stringify({
+    hunkIndex: args.hunkIndex,
+    line: args.line,
+    source,
+    totalHunks: changes.length,
+    context: context?.key || null,
+    gitHeader: change?.gitHeader || null,
+    originalRange: [args.originalStartLine, args.originalEndLine],
+    modifiedRange: [args.modifiedStartLine, args.modifiedEndLine]
+  })}`)
+  return args
+}
+
 const handleDiscardDiffHunk = async () => {
   if (!selectedFile.value || selectedCommit.value || diffLoading.value.hunk) return
 
   const status = normalizeGitStatus(selectedFile.value.status)
   const targetFilePath = selectedFile.value.path
-  if (status === 'D') {
+  const isStagedDiff = !!selectedFile.value.staged
+  const targetContext = createDiffContext(targetFilePath, isStagedDiff)
+  if (!isSameDiffContext(diffActiveContext, targetContext)) {
+    frontendLogger.warn('[Diff] Blocked hunk revert/unstage because diff context is stale', {
+      target: targetContext.key,
+      active: diffActiveContext?.key || null,
+      selected: getSelectedDiffContext()?.key || null
+    })
+    notification.warning({
+      title: isStagedDiff ? '无法取消暂存差异块' : '无法撤销差异块',
+      content: '当前差异视图仍在刷新，请稍后重试',
+      duration: 2000
+    })
+    return
+  }
+  if (!isStagedDiff && status === 'D') {
     notification.warning({
       title: '无法撤销差异块',
       content: '已删除文件不支持差异块撤销',
@@ -1331,12 +1706,13 @@ const handleDiscardDiffHunk = async () => {
     return
   }
 
-  const line = getChangeLineForRevert(change)
+  const hunkArgs = getDiffHunkInvokeArgs(change)
 
   diffLoading.value.hunk = true
-  frontendLogger.info('[Diff] Reverting hunk', {
+  frontendLogger.info(isStagedDiff ? '[Diff] Unstaging hunk' : '[Diff] Reverting hunk', {
     filePath: targetFilePath,
-    line,
+    staged: isStagedDiff,
+    ...hunkArgs,
     originalStart: change.originalStartLineNumber,
     originalEnd: change.originalEndLineNumber,
     modifiedStart: change.modifiedStartLineNumber,
@@ -1344,33 +1720,42 @@ const handleDiscardDiffHunk = async () => {
   })
 
   try {
-    await invoke('discard_hunk', {
+    const command = isStagedDiff ? 'unstage_hunk' : 'discard_hunk'
+    const payload = {
       path: props.workspacePath,
       filePath: targetFilePath,
-      line,
-      reverse: true
+      ...hunkArgs
+    }
+    if (!isStagedDiff) {
+      payload.reverse = true
+    }
+    await invoke(command, payload)
+    frontendLogger.info(isStagedDiff ? '[Diff] Hunk unstaged' : '[Diff] Hunk reverted', {
+      filePath: targetFilePath,
+      line: hunkArgs.line,
+      staged: isStagedDiff
     })
-    frontendLogger.info('[Diff] Hunk reverted', { filePath: targetFilePath, line })
     await refreshGitStatus({ resetSelection: false, includeCommits: false })
-    const fileForDiff = selectedFile.value || {
-      path: targetFilePath,
-      status: ' ',
-      diff: '',
-      staged: false
+    const fileForDiff = (isStagedDiff ? stagedFiles.value : unstagedFiles.value)
+      .find((item) => item?.path === targetFilePath)
+    // 设计说明：块级操作后只保持当前面板上下文。比如在“更改”里暂存/撤销
+    // 当前 hunk 后，它不应该跳去“已暂存”同名文件继续展示刚处理掉的块。
+    if (fileForDiff) {
+      await selectFileAndUpdateDiff(fileForDiff, isStagedDiff ? 'unstage-hunk-refresh' : 'discard-hunk-refresh')
+    } else {
+      selectedFile.value = null
+      diffHunkActionVisible.value = false
+      diffEditor?.setModel?.(null)
     }
-    if (!selectedFile.value) {
-      selectedFile.value = fileForDiff
-    }
-    await updateFileDiff(fileForDiff)
     notification.success({
-      title: '已撤销差异块',
+      title: isStagedDiff ? '已取消暂存差异块' : '已撤销差异块',
       content: targetFilePath,
       duration: 2000
     })
   } catch (error) {
-    frontendLogger.error('[Diff] Failed to revert hunk', error)
+    frontendLogger.error(isStagedDiff ? '[Diff] Failed to unstage hunk' : '[Diff] Failed to revert hunk', error)
     notification.error({
-      title: '撤销差异块失败',
+      title: isStagedDiff ? '取消暂存差异块失败' : '撤销差异块失败',
       content: String(error?.message || error),
       duration: 3000
     })
@@ -1382,8 +1767,28 @@ const handleDiscardDiffHunk = async () => {
 
 const handleStageDiffHunk = async () => {
   if (!selectedFile.value || selectedCommit.value || diffLoading.value.hunk) return
+  if (selectedFile.value.staged) {
+    frontendLogger.warn('[Diff] Blocked hunk stage from staged diff view', {
+      filePath: selectedFile.value.path
+    })
+    return
+  }
 
   const targetFilePath = selectedFile.value.path
+  const targetContext = createDiffContext(targetFilePath, selectedFile.value.staged)
+  if (!isSameDiffContext(diffActiveContext, targetContext)) {
+    frontendLogger.warn('[Diff] Blocked hunk stage because diff context is stale', {
+      target: targetContext.key,
+      active: diffActiveContext?.key || null,
+      selected: getSelectedDiffContext()?.key || null
+    })
+    notification.warning({
+      title: '无法暂存差异块',
+      content: '当前差异视图仍在刷新，请稍后重试',
+      duration: 2000
+    })
+    return
+  }
   const change = getCurrentDiffChange()
   if (!change) {
     notification.warning({
@@ -1394,11 +1799,11 @@ const handleStageDiffHunk = async () => {
     return
   }
 
-  const line = getChangeLineForRevert(change)
+  const hunkArgs = getDiffHunkInvokeArgs(change)
   diffLoading.value.hunk = true
   frontendLogger.info('[Diff] Staging hunk', {
     filePath: targetFilePath,
-    line,
+    ...hunkArgs,
     originalStart: change.originalStartLineNumber,
     originalEnd: change.originalEndLineNumber,
     modifiedStart: change.modifiedStartLineNumber,
@@ -1409,14 +1814,16 @@ const handleStageDiffHunk = async () => {
     await invoke('stage_hunk', {
       path: props.workspacePath,
       filePath: targetFilePath,
-      line
+      ...hunkArgs
     })
     await refreshGitStatus({ resetSelection: false, includeCommits: false })
-    const all = [...unstagedFiles.value, ...stagedFiles.value]
-    const nextFile = all.find((item) => item?.path === targetFilePath) || selectedFile.value
+    const nextFile = unstagedFiles.value.find((item) => item?.path === targetFilePath)
     if (nextFile) {
-      selectedFile.value = nextFile
-      await updateFileDiff(nextFile)
+      await selectFileAndUpdateDiff(nextFile, 'stage-hunk-refresh')
+    } else {
+      selectedFile.value = null
+      diffHunkActionVisible.value = false
+      diffEditor?.setModel?.(null)
     }
     notification.success({
       title: '已暂存差异块',
@@ -1973,6 +2380,9 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
   frontendLogger.info('repo path:', props.workspacePath)
 
   const prevSelectedFilePath = selectedFile.value?.path
+  const prevSelectedFileStaged = typeof selectedFile.value?.staged === 'boolean'
+    ? selectedFile.value.staged
+    : null
   const prevSelectedCommitId = selectedCommit.value?.id
 
   try {
@@ -2028,9 +2438,22 @@ const refreshGitStatus = async ({ resetSelection = true, includeCommits = true }
 
       if (prevSelectedFilePath && !prevSelectedCommitId) {
         const all = [...stagedFiles.value, ...unstagedFiles.value]
-        const matched = all.find((f) => f?.path === prevSelectedFilePath)
+        // 设计说明：同一文件在部分暂存后会同时出现在“更改”和“已暂存”。
+        // 刷新状态时必须优先恢复原来的 staged/unstaged 面板上下文，否则胶囊按钮
+        // 会拿当前视图的缓存去操作另一侧的 hunk，或因上下文不一致被隐藏。
+        const matched = all.find((f) => f?.path === prevSelectedFilePath && f?.staged === prevSelectedFileStaged)
+          || all.find((f) => f?.path === prevSelectedFilePath)
         if (matched) {
-          if (selectedFile.value && selectedFile.value.path === matched.path) {
+          frontendLogger.info('[GitPanel] Restored selected file after status refresh', {
+            filePath: matched.path,
+            previousStaged: prevSelectedFileStaged,
+            restoredStaged: matched.staged
+          })
+          if (
+            selectedFile.value
+            && selectedFile.value.path === matched.path
+            && selectedFile.value.staged === matched.staged
+          ) {
             Object.assign(selectedFile.value, matched)
           } else {
             selectedFile.value = matched
@@ -2201,11 +2624,15 @@ const initMonacoEditor = async () => {
       original: emptyModel,
       modified: emptyModel
     });
-    diffLineChangesCache = []
+    clearDiffHunkCaches('diff-editor-initial-model', null)
 
     if (diffHunkScrollDisposable) {
       diffHunkScrollDisposable.dispose()
       diffHunkScrollDisposable = null
+    }
+    if (diffHunkOriginalScrollDisposable) {
+      diffHunkOriginalScrollDisposable.dispose()
+      diffHunkOriginalScrollDisposable = null
     }
     if (diffHunkCursorDisposable) {
       diffHunkCursorDisposable.dispose()
@@ -2217,7 +2644,11 @@ const initMonacoEditor = async () => {
     }
 
     const modifiedEditor = diffEditor.getModifiedEditor()
+    const originalEditor = diffEditor.getOriginalEditor()
     diffHunkScrollDisposable = modifiedEditor.onDidScrollChange(() => {
+      scheduleHunkActionPositionUpdate()
+    })
+    diffHunkOriginalScrollDisposable = originalEditor.onDidScrollChange(() => {
       scheduleHunkActionPositionUpdate()
     })
     diffHunkCursorDisposable = modifiedEditor.onDidChangeCursorPosition(() => {
@@ -2265,30 +2696,76 @@ const updateFileDiff = async (file) => {
     return;
   }
 
+  const requestId = diffFileDiffRequestId + 1
   diffLoading.value.file = true;
 
   try {
-    const filePath = file.path.replace(/\\/g, '/');
-    frontendLogger.info('[Diff] Loading diff for:', filePath);
+    const filePath = normalizeDiffFilePath(file.path);
+    const isStagedDiff = !!file.staged
+    const context = createDiffContext(filePath, isStagedDiff)
+    diffFileDiffRequestId = requestId
+    diffActiveContext = context
+    clearDiffHunkCaches('file-diff-request-start', context)
+    diffHunkActionVisible.value = false
 
-    // 先获取新内容
+    const originalRevision = isStagedDiff ? 'HEAD' : 'INDEX'
+    const modifiedRevision = isStagedDiff ? 'INDEX' : null
+    frontendLogger.info('[Diff] Loading diff for:', {
+      filePath,
+      staged: isStagedDiff,
+      originalRevision,
+      modifiedRevision: modifiedRevision || 'WORKTREE',
+      context: context.key,
+      requestId
+    });
+
+    // 设计说明：部分暂存后，同一文件会在“更改”和“已暂存”各出现一条。
+    // 已暂存视图展示 HEAD -> INDEX；未暂存视图展示 INDEX -> 工作区，
+    // 这样胶囊按钮拿到的 hunk 范围才和当前面板一致。
+    const modifiedContentRequest = {
+      path: props.workspacePath,
+      filePath: filePath
+    }
+    if (modifiedRevision) {
+      modifiedContentRequest.revision = modifiedRevision
+    }
+
     const [originalContent, modifiedContent] = await Promise.all([
       invoke('get_file_content', {
         path: props.workspacePath,
         filePath: filePath,
-        revision: 'HEAD'
+        revision: originalRevision
       }).catch(e => {
         frontendLogger.warn('Failed to get original content:', e);
         return ''; // 对于新文件，原始内容为空
       }),
-      invoke('get_file_content', {
-        path: props.workspacePath,
-        filePath: filePath
-      }).catch(e => {
+      invoke('get_file_content', modifiedContentRequest).catch(e => {
         frontendLogger.error('Failed to get modified content:', e);
         throw e;
       })
     ]);
+    if (!isCurrentDiffContext(context, requestId)) {
+      frontendLogger.warn('[Diff] Ignored stale file diff content result', {
+        context: context.key,
+        active: diffActiveContext?.key || null,
+        selected: getSelectedDiffContext()?.key || null,
+        requestId,
+        currentRequestId: diffFileDiffRequestId
+      })
+      return
+    }
+
+    await refreshGitHunksCache(context, requestId)
+    if (!isCurrentDiffContext(context, requestId)) {
+      frontendLogger.warn('[Diff] Ignored stale file diff after hunk cache refresh', {
+        context: context.key,
+        active: diffActiveContext?.key || null,
+        selected: getSelectedDiffContext()?.key || null,
+        requestId,
+        currentRequestId: diffFileDiffRequestId
+      })
+      return
+    }
 
     const language = getLanguageForFile(file.path);
 
@@ -2319,11 +2796,24 @@ const updateFileDiff = async (file) => {
     diffRenderSideBySide.value = !!diffPerf.options.renderSideBySide
     diffEditor.updateOptions(diffPerf.options);
     if (diffPerf.largeDiff) {
-      frontendLogger.info('[Diff] Large working tree diff rendered in performance mode', { filePath })
+      frontendLogger.info('[Diff] Large working tree diff rendered in performance mode', {
+        filePath,
+        context: context.key
+      })
     }
 
     // 确保布局正确
     await nextTick();
+    if (!isCurrentDiffContext(context, requestId)) {
+      frontendLogger.warn('[Diff] Skipped stale file diff layout', {
+        context: context.key,
+        active: diffActiveContext?.key || null,
+        selected: getSelectedDiffContext()?.key || null,
+        requestId,
+        currentRequestId: diffFileDiffRequestId
+      })
+      return
+    }
     if (diffEditor && diffEditorContainer.value) {
       const height = diffEditorContainer.value.clientHeight;
       const width = diffEditorContainer.value.clientWidth;
@@ -2331,6 +2821,16 @@ const updateFileDiff = async (file) => {
 
       // 导航到第一个差异
       setTimeout(async () => {
+        if (!isCurrentDiffContext(context, requestId)) {
+          frontendLogger.warn('[Diff] Skipped stale initial diff navigation', {
+            context: context.key,
+            active: diffActiveContext?.key || null,
+            selected: getSelectedDiffContext()?.key || null,
+            requestId,
+            currentRequestId: diffFileDiffRequestId
+          })
+          return
+        }
         const modifiedEditor = diffEditor.getModifiedEditor();
         const diffNavAction = modifiedEditor.getAction('editor.action.diffReview.next');
         if (diffNavAction) {
@@ -2340,6 +2840,14 @@ const updateFileDiff = async (file) => {
       }, 100);
     }
   } catch (error) {
+    if (requestId !== diffFileDiffRequestId) {
+      frontendLogger.warn('[Diff] Ignored stale file diff error', {
+        requestId,
+        currentRequestId: diffFileDiffRequestId,
+        error
+      })
+      return
+    }
     frontendLogger.error('[Diff] Error in updateFileDiff:', error);
     const errorModel = monaco.editor.createModel(
       `Error loading file diff:\n${error.message}`,
@@ -2349,9 +2857,11 @@ const updateFileDiff = async (file) => {
       original: errorModel,
       modified: errorModel
     });
-    diffLineChangesCache = []
+    clearDiffHunkCaches('file-diff-error', diffActiveContext)
   } finally {
-    diffLoading.value.file = false;
+    if (requestId === diffFileDiffRequestId) {
+      diffLoading.value.file = false;
+    }
   }
 }
 
@@ -2367,15 +2877,11 @@ const handleEditorResize = () => {
 // 修改文件点击处理
 const handleFileClick = async (file) => {
   try {
-    selectedFile.value = file
-    selectedCommit.value = null
-
     if (!isEditorInitialized.value) {
       await initMonacoEditor()
     }
 
-    await nextTick()
-    await updateFileDiff(file)
+    await selectFileAndUpdateDiff(file, 'file-click')
   } catch (error) {
     frontendLogger.error('Failed to load file content', error)
     notification.error({
@@ -2666,6 +3172,12 @@ const formatDateRelative = (timestamp) => {
 
 // 监听 selectedFile 变化
 watch(selectedFile, (newVal) => {
+  if (suppressSelectedFileDiffWatch) {
+    frontendLogger.info('[Diff] Skipped selectedFile watcher because explicit diff refresh is running', {
+      context: newVal ? createDiffContext(newVal.path, newVal.staged).key : null
+    })
+    return
+  }
   if (newVal && !selectedCommit.value) {
     nextTick(() => {
       updateFileDiff(newVal)
@@ -2746,9 +3258,9 @@ onMounted(() => {
           stagedHeight.value = panelsHeight.value * 0.3
           commitsHeight.value = panelsHeight.value * 0.4
 
-          const changesHeader = changesSection.value.querySelector('.n-collapse-item__header')
-          const stagedHeader = stagedSection.value.querySelector('.n-collapse-item__header')
-          const commitsHeader = commitsSection.value.querySelector('.n-collapse-item__header')
+          const changesHeader = changesSection.value.querySelector('.section-header')
+          const stagedHeader = stagedSection.value.querySelector('.section-header')
+          const commitsHeader = commitsSection.value.querySelector('.section-header')
 
           changesHeaderHeight.value = changesHeader?.offsetHeight || 40
           stagedHeaderHeight.value = stagedHeader?.offsetHeight || 40
@@ -2811,6 +3323,10 @@ onUnmounted(() => {
   if (diffHunkScrollDisposable) {
     diffHunkScrollDisposable.dispose()
     diffHunkScrollDisposable = null
+  }
+  if (diffHunkOriginalScrollDisposable) {
+    diffHunkOriginalScrollDisposable.dispose()
+    diffHunkOriginalScrollDisposable = null
   }
   if (diffHunkCursorDisposable) {
     diffHunkCursorDisposable.dispose()
@@ -3413,23 +3929,34 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  padding: 2px;
-  border: 1px solid var(--divider-color);
-  border-radius: 4px;
-  background-color: var(--card-bg);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  gap: 4px;
+  width: 24px;
+  padding: 2px 1px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--divider-color) 55%, transparent);
+  border-radius: 5px;
+  background-color: color-mix(in srgb, var(--git-monaco-bg) 88%, var(--card-bg));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   pointer-events: auto;
   transform: none;
+  overflow: visible;
+  transition: background-color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.diff-hunk-action:hover {
+  border-color: color-mix(in srgb, var(--text-color-secondary) 34%, var(--divider-color));
+  background-color: color-mix(in srgb, var(--git-monaco-bg) 76%, var(--hover-color));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
 }
 
 .diff-hunk-action-button {
-  width: 24px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
   border-radius: 3px;
   border: 0;
   background-color: transparent;
-  color: var(--text-color-secondary);
+  color: color-mix(in srgb, var(--text-color-secondary) 85%, var(--git-monaco-bg));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3438,7 +3965,7 @@ onUnmounted(() => {
 }
 
 .diff-hunk-action-button:hover:not(:disabled) {
-  background-color: var(--hover-color);
+  background-color: color-mix(in srgb, var(--hover-color) 75%, transparent);
   color: var(--text-color);
 }
 
@@ -3529,17 +4056,19 @@ onUnmounted(() => {
 }
 
 .commit-history-spin {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+  min-height: 100%;
 }
 
 .commit-history-spin :deep(.n-spin-container) {
-  height: 100%;
-  min-height: 0;
+  min-height: 100%;
+  height: auto;
   display: flex;
   flex-direction: column;
+}
+
+.commit-history-spin :deep(.n-spin-content) {
+  flex: 1 0 auto;
+  min-height: 0;
 }
 
 .commit-history-spin :deep(.n-spin-body) {
@@ -3656,7 +4185,7 @@ onUnmounted(() => {
   overflow-x: hidden;
   overflow-y: auto;
   margin-bottom: 0;
-  padding-bottom: 16px;
+  padding-bottom: 0;
   scrollbar-gutter: stable;
 }
 

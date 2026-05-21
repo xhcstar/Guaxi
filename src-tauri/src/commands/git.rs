@@ -13,6 +13,7 @@ use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tracing::{debug, error, info, warn};
 use urlencoding::encode;
 
+const HUNK_LINE_MATCH_TOLERANCE: u32 = 1;
 
 fn is_ignored_git_path(path: &str) -> bool {
     let p = path.replace('\\', "/");
@@ -158,6 +159,16 @@ pub struct GitChange {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct GitDiffHunk {
+    index: u32,
+    header: String,
+    old_start: u32,
+    old_count: u32,
+    new_start: u32,
+    new_count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GitBranch {
     name: String,
     is_current: bool,
@@ -263,98 +274,103 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitChange>, String> {
                 continue;
             }
 
-            let (status, staged) = if entry.status().is_index_new() {
-                ("A", true)
-            } else if entry.status().is_index_modified() {
-                ("M", true)
-            } else if entry.status().is_index_deleted() {
-                ("D", true)
-            } else if entry.status().is_wt_new() {
-                ("?", false)
-            } else if entry.status().is_wt_modified() {
-                ("M", false)
-            } else if entry.status().is_wt_deleted() {
-                ("D", false)
-            } else if entry.status().is_wt_renamed() {
-                ("R", false)
-            } else if entry.status().is_wt_typechange() {
-                ("T", false)
-            } else {
-                (" ", false)
-            };
+            let mut append_change = |status: &str, staged: bool| -> Result<(), String> {
+                let mut lines_added: Vec<u32> = Vec::new();
+                let mut lines_modified: Vec<u32> = Vec::new();
+                let mut lines_deleted: Vec<u32> = Vec::new();
 
-            let mut lines_added: Vec<u32> = Vec::new();
-            let mut lines_modified: Vec<u32> = Vec::new();
-            let mut lines_deleted: Vec<u32> = Vec::new();
-
-            if status == "?" {
-                let abs = repo_root.join(Path::new(&rel_path));
-                if let Ok(content) = std::fs::read_to_string(&abs) {
-                    let line_count = content.lines().count() as u32;
-                    if line_count > 0 {
-                        lines_added = (1..=line_count).collect();
-                    }
-                }
-            } else if status == "A" || status == "M" || status == "D" {
-                let mut diff_options = DiffOptions::new();
-                diff_options.context_lines(0);
-                diff_options.pathspec(rel_path.clone());
-
-                let diff = if staged {
-                    repo.diff_tree_to_tree(
-                        Some(&head_tree),
-                        Some(&index_tree),
-                        Some(&mut diff_options),
-                    )
-                    .map_err(|e| format!("Failed to create staged diff: {}", e))?
-                } else {
-                    repo.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
-                        .map_err(|e| format!("Failed to create workdir diff: {}", e))?
-                };
-
-                let (a, m, d) = collect_line_changes_from_diff(&diff);
-
-                if status == "M" {
-                    let mut all = BTreeSet::<u32>::new();
-                    all.extend(a);
-                    all.extend(m);
-                    all.extend(d);
-                    lines_modified = all.into_iter().collect();
-
-                    if lines_modified.is_empty() {
-                        lines_modified.push(1);
-                    }
-                } else if status == "A" {
-                    lines_added = a;
-                    if lines_added.is_empty() {
-                        let abs = repo_root.join(Path::new(&rel_path));
-                        if let Ok(content) = std::fs::read_to_string(&abs) {
-                            let line_count = content.lines().count() as u32;
-                            if line_count > 0 {
-                                lines_added = (1..=line_count).collect();
-                            }
+                if status == "?" {
+                    let abs = repo_root.join(Path::new(&rel_path));
+                    if let Ok(content) = std::fs::read_to_string(&abs) {
+                        let line_count = content.lines().count() as u32;
+                        if line_count > 0 {
+                            lines_added = (1..=line_count).collect();
                         }
                     }
-                    if lines_added.is_empty() {
-                        lines_added.push(1);
-                    }
-                } else if status == "D" {
-                    lines_deleted = d;
-                    if lines_deleted.is_empty() {
-                        lines_deleted.push(1);
+                } else if status == "A" || status == "M" || status == "D" {
+                    let mut diff_options = DiffOptions::new();
+                    diff_options.context_lines(0);
+                    diff_options.pathspec(rel_path.clone());
+
+                    let diff = if staged {
+                        repo.diff_tree_to_tree(
+                            Some(&head_tree),
+                            Some(&index_tree),
+                            Some(&mut diff_options),
+                        )
+                        .map_err(|e| format!("Failed to create staged diff: {}", e))?
+                    } else {
+                        repo.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
+                            .map_err(|e| format!("Failed to create workdir diff: {}", e))?
+                    };
+
+                    let (a, m, d) = collect_line_changes_from_diff(&diff);
+
+                    if status == "M" {
+                        let mut all = BTreeSet::<u32>::new();
+                        all.extend(a);
+                        all.extend(m);
+                        all.extend(d);
+                        lines_modified = all.into_iter().collect();
+
+                        if lines_modified.is_empty() {
+                            lines_modified.push(1);
+                        }
+                    } else if status == "A" {
+                        lines_added = a;
+                        if lines_added.is_empty() {
+                            let abs = repo_root.join(Path::new(&rel_path));
+                            if let Ok(content) = std::fs::read_to_string(&abs) {
+                                let line_count = content.lines().count() as u32;
+                                if line_count > 0 {
+                                    lines_added = (1..=line_count).collect();
+                                }
+                            }
+                        }
+                        if lines_added.is_empty() {
+                            lines_added.push(1);
+                        }
+                    } else if status == "D" {
+                        lines_deleted = d;
+                        if lines_deleted.is_empty() {
+                            lines_deleted.push(1);
+                        }
                     }
                 }
+
+                changes.push(GitChange {
+                    path: rel_path.clone(),
+                    status: status.to_string(),
+                    lines_added,
+                    lines_modified,
+                    lines_deleted,
+                    diff: String::new(),
+                    staged,
+                });
+                Ok(())
+            };
+
+            // 设计说明：同一路径可能同时存在“已暂存”和“未暂存”两份差异。
+            // VS Code 会在两个分组各显示一个条目；这里不能用 else-if 折叠掉工作区状态。
+            if entry.status().is_index_new() {
+                append_change("A", true)?;
+            } else if entry.status().is_index_modified() {
+                append_change("M", true)?;
+            } else if entry.status().is_index_deleted() {
+                append_change("D", true)?;
             }
 
-            changes.push(GitChange {
-                path: rel_path,
-                status: status.to_string(),
-                lines_added,
-                lines_modified,
-                lines_deleted,
-                diff: String::new(),
-                staged,
-            });
+            if entry.status().is_wt_new() {
+                append_change("?", false)?;
+            } else if entry.status().is_wt_modified() {
+                append_change("M", false)?;
+            } else if entry.status().is_wt_deleted() {
+                append_change("D", false)?;
+            } else if entry.status().is_wt_renamed() {
+                append_change("R", false)?;
+            } else if entry.status().is_wt_typechange() {
+                append_change("T", false)?;
+            }
         }
 
         Ok(changes)
@@ -1323,24 +1339,32 @@ pub fn discard_hunk(
     path: String,
     file_path: String,
     line: u32,
+    hunk_index: Option<u32>,
+    original_start_line: Option<u32>,
+    original_end_line: Option<u32>,
+    modified_start_line: Option<u32>,
+    modified_end_line: Option<u32>,
     reverse: bool,
 ) -> Result<(), String> {
     info!(
-        "Discarding hunk for file: {} in path: {}, line: {}, reverse: {}",
-        file_path, path, line, reverse
+        "Discarding hunk for file: {} in path: {}, line: {}, hunk_index: {:?}, original_range: {:?}-{:?}, modified_range: {:?}-{:?}, reverse: {}",
+        file_path,
+        path,
+        line,
+        hunk_index,
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line,
+        reverse
     );
     let repo = Repository::discover(&path).map_err(|e| {
         error!("Failed to discover repository: {}", e);
         e.to_string()
     })?;
 
-    let head = repo.head().map_err(|e| {
-        error!("Failed to get HEAD: {}", e);
-        e.to_string()
-    })?;
-
-    let head_tree = head.peel_to_tree().map_err(|e| {
-        error!("Failed to peel to tree: {}", e);
+    let index = repo.index().map_err(|e| {
+        error!("Failed to get index for hunk discard: {}", e);
         e.to_string()
     })?;
 
@@ -1350,8 +1374,11 @@ pub fn discard_hunk(
     diff_options.recurse_untracked_dirs(true);
     diff_options.context_lines(0);
 
+    // 设计说明：撤销未暂存 hunk 必须比较“索引 -> 工作区”，不能比较
+    // “HEAD -> 工作区”。否则文件已经部分暂存时，点击未暂存视图里的单块撤销
+    // 会把已暂存块也纳入候选 patch，看起来像整文件被撤销。
     let diff = repo
-        .diff_tree_to_workdir_with_index(Some(&head_tree), Some(&mut diff_options))
+        .diff_index_to_workdir(Some(&index), Some(&mut diff_options))
         .map_err(|e| {
             error!("Failed to get diff for file: {}", e);
             e.to_string()
@@ -1360,15 +1387,19 @@ pub fn discard_hunk(
     let normalized_path = file_path.replace('\\', "/");
 
     struct HunkState {
-        patch: String,
-        target_header: String,
-        target_found: bool,
+        target_header: Option<String>,
+        target_status: Option<Delta>,
+        best_match_distance: u32,
+        range_matched: bool,
+        hunk_count: u32,
     }
 
     let state = RefCell::new(HunkState {
-        patch: String::new(),
-        target_header: String::new(),
-        target_found: false,
+        target_header: None,
+        target_status: None,
+        best_match_distance: u32::MAX,
+        range_matched: false,
+        hunk_count: 0,
     });
 
     diff.foreach(
@@ -1376,65 +1407,124 @@ pub fn discard_hunk(
         None,
         Some(&mut |delta, hunk| {
             let mut state = state.borrow_mut();
-            if state.target_found {
+            let current_index = state.hunk_count;
+            state.hunk_count = state.hunk_count.saturating_add(1);
+
+            let ranges = UnifiedHunkRanges {
+                old_start: hunk.old_start() as u32,
+                old_count: hunk.old_lines() as u32,
+                new_start: hunk.new_start() as u32,
+                new_count: hunk.new_lines() as u32,
+            };
+            let distance = line_distance_to_unified_hunk(line, ranges);
+            let range_matches = unified_hunk_matches_selection(
+                ranges,
+                original_start_line,
+                original_end_line,
+                modified_start_line,
+                modified_end_line,
+            );
+            if hunk_index == Some(current_index) {
+                // 设计说明：前端知道当前 Monaco diff change 的顺序，后端优先按顺序取
+                // git hunk，避免行号范围过宽时把同一文件的多个 hunk 一起撤销。
+                state.range_matched = true;
+                state.best_match_distance = distance;
+                state.target_header = Some(String::from_utf8_lossy(hunk.header()).to_string());
+                state.target_status = Some(delta.status());
                 return true;
             }
-
-            let new_start = hunk.new_start() as u32;
-            let new_lines = hunk.new_lines() as u32;
-            let old_start = hunk.old_start() as u32;
-            let old_lines = hunk.old_lines() as u32;
-
-            let new_end = new_start.saturating_add(new_lines.saturating_sub(1));
-            let old_end = old_start.saturating_add(old_lines.saturating_sub(1));
-            let in_new = new_lines > 0 && line >= new_start && line <= new_end;
-            let in_old = old_lines > 0 && line >= old_start && line <= old_end;
-
-            if in_new || in_old {
-                state.target_found = true;
-                state.target_header = String::from_utf8_lossy(hunk.header()).to_string();
-
-                state.patch.push_str(&format!(
-                    "diff --git a/{0} b/{0}\n",
-                    normalized_path
-                ));
-
-                match delta.status() {
-                    Delta::Added => {
-                        state.patch.push_str("--- /dev/null\n");
-                        state
-                            .patch
-                            .push_str(&format!("+++ b/{}\n", normalized_path));
-                    }
-                    Delta::Deleted => {
-                        state.patch.push_str(&format!("--- a/{}\n", normalized_path));
-                        state.patch.push_str("+++ /dev/null\n");
-                    }
-                    _ => {
-                        state.patch.push_str(&format!("--- a/{}\n", normalized_path));
-                        state
-                            .patch
-                            .push_str(&format!("+++ b/{}\n", normalized_path));
-                    }
-                }
-
-                let header = state.target_header.clone();
-                state.patch.push_str(&header);
-                if !header.ends_with('\n') {
-                    state.patch.push('\n');
-                }
+            if hunk_index.is_some() {
+                return true;
+            }
+            // 设计说明：Monaco 的当前差异块按钮可能锚在插入块前一行；
+            // 撤销差异块优先使用前端传入的可视 diff 范围；范围没有命中时，
+            // 再退回“精确优先，允许 1 行邻近”的单行策略，和暂存保持一致。
+            if range_matches
+                && (!state.range_matched || distance < state.best_match_distance)
+            {
+                // 设计说明：Monaco 的可视范围在少数场景可能覆盖多个 git hunk。
+                // 这里仍只选择离当前光标锚点最近的一块，保证胶囊按钮是块级操作。
+                state.range_matched = true;
+                state.best_match_distance = distance;
+                state.target_header = Some(String::from_utf8_lossy(hunk.header()).to_string());
+                state.target_status = Some(delta.status());
+            } else if !state.range_matched
+                && distance <= HUNK_LINE_MATCH_TOLERANCE
+                && distance < state.best_match_distance
+            {
+                state.best_match_distance = distance;
+                state.target_header = Some(String::from_utf8_lossy(hunk.header()).to_string());
+                state.target_status = Some(delta.status());
             }
             true
         }),
+        None,
+    )
+    .map_err(|e| {
+        error!("Failed to inspect diff hunks: {}", e);
+        e.to_string()
+    })?;
+
+    let state = state.into_inner();
+    let Some(target_header) = state.target_header else {
+        error!(
+            "No matching hunk found for file: {}, line: {}, hunk_count: {}",
+            normalized_path, line, state.hunk_count
+        );
+        return Err("撤销差异块失败：未找到匹配的差异块".to_string());
+    };
+
+    if state.range_matched {
+        debug!(
+            "Matched hunk for discard by index/range: file={}, line={}, hunk_index={:?}, header={}",
+            normalized_path,
+            line,
+            hunk_index,
+            target_header.trim()
+        );
+    } else if state.best_match_distance == 0 {
+        debug!(
+            "Matched hunk for discard by exact line: file={}, line={}",
+            normalized_path, line
+        );
+    } else {
+        warn!(
+            "Matched hunk for discard by nearby anchor: file={}, line={}, distance={}",
+            normalized_path, line, state.best_match_distance
+        );
+    }
+
+    let mut patch = format!("diff --git a/{0} b/{0}\n", normalized_path);
+    match state.target_status.unwrap_or(Delta::Modified) {
+        Delta::Added | Delta::Untracked => {
+            patch.push_str("--- /dev/null\n");
+            patch.push_str(&format!("+++ b/{}\n", normalized_path));
+        }
+        Delta::Deleted => {
+            patch.push_str(&format!("--- a/{}\n", normalized_path));
+            patch.push_str("+++ /dev/null\n");
+        }
+        _ => {
+            patch.push_str(&format!("--- a/{}\n", normalized_path));
+            patch.push_str(&format!("+++ b/{}\n", normalized_path));
+        }
+    }
+    let selected_hunk_lines = RefCell::new(Vec::<String>::new());
+    let appended_header = RefCell::new(false);
+    diff.foreach(
+        &mut |_delta, _| true,
+        None,
+        None,
         Some(&mut |_delta, hunk, line_info| {
-            let mut state = state.borrow_mut();
-            if state.target_header.is_empty() {
-                return true;
-            }
             if let Some(current_hunk) = hunk {
                 let header = String::from_utf8_lossy(current_hunk.header());
-                if header != state.target_header.as_str() {
+                if header != target_header.as_str() {
                     return true;
+                }
+                let header_text = header.to_string();
+                if !*appended_header.borrow() {
+                    selected_hunk_lines.borrow_mut().push(header_text);
+                    *appended_header.borrow_mut() = true;
                 }
             }
             let origin = line_info.origin();
@@ -1445,9 +1535,9 @@ pub fn discard_hunk(
             }
             if let Ok(content) = std::str::from_utf8(line_info.content()) {
                 let trimmed = content.trim_end_matches(|c| c == '\n' || c == '\r');
-                state.patch.push(origin);
-                state.patch.push_str(trimmed);
-                state.patch.push('\n');
+                selected_hunk_lines
+                    .borrow_mut()
+                    .push(format!("{}{}", origin, trimmed));
             }
             true
         }),
@@ -1457,14 +1547,30 @@ pub fn discard_hunk(
         e.to_string()
     })?;
 
-    let state = state.into_inner();
-    let patch = state.patch;
-    let target_found = state.target_found;
-
-    if !target_found || patch.is_empty() {
-        error!("No matching hunk found for line {}", line);
+    let selected_hunk_lines = selected_hunk_lines.into_inner();
+    if selected_hunk_lines.is_empty() {
+        error!("Matched hunk produced an empty patch for line {}", line);
         return Err("撤销差异块失败：未找到匹配的差异块".to_string());
     }
+    let precise_hunk = crop_hunk_to_selection(
+        &selected_hunk_lines,
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line,
+        "撤销",
+    )?;
+    for item in precise_hunk {
+        patch.push_str(&item);
+        patch.push('\n');
+    }
+    info!(
+        "Discard hunk patch prepared: file={}, hunk_index={:?}, patch_lines={}, patch_preview={}",
+        normalized_path,
+        hunk_index,
+        patch.lines().count(),
+        patch.lines().take(8).collect::<Vec<_>>().join(" | ")
+    );
 
     let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
     let mut cmd = std::process::Command::new("git");
@@ -1515,26 +1621,263 @@ pub fn discard_hunk(
     Ok(())
 }
 
-fn parse_unified_hunk_new_range(header: &str) -> Option<(u32, u32)> {
-    let new_part = header
+#[derive(Clone, Copy, Debug)]
+struct UnifiedHunkRanges {
+    old_start: u32,
+    old_count: u32,
+    new_start: u32,
+    new_count: u32,
+}
+
+fn parse_unified_hunk_range_part(header: &str, prefix: char) -> Option<(u32, u32)> {
+    let part = header
         .split_whitespace()
-        .find(|part| part.starts_with('+'))?
-        .trim_start_matches('+');
-    let mut parts = new_part.split(',');
+        .find(|part| part.starts_with(prefix))?
+        .trim_start_matches(prefix);
+    let mut parts = part.split(',');
     let start = parts.next()?.parse::<u32>().ok()?;
     let count = parts
         .next()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(1);
-    let end = start.saturating_add(count.saturating_sub(1));
-    Some((start, end.max(start)))
+    Some((start, count))
+}
+
+fn parse_unified_hunk_ranges(header: &str) -> Option<UnifiedHunkRanges> {
+    let (old_start, old_count) = parse_unified_hunk_range_part(header, '-')?;
+    let (new_start, new_count) = parse_unified_hunk_range_part(header, '+')?;
+    Some(UnifiedHunkRanges {
+        old_start,
+        old_count,
+        new_start,
+        new_count,
+    })
+}
+
+fn unified_hunk_range_end(start: u32, count: u32) -> u32 {
+    start.saturating_add(count.saturating_sub(1)).max(start)
+}
+
+fn line_distance_to_unified_range(line: u32, start: u32, count: u32) -> u32 {
+    let end = unified_hunk_range_end(start, count);
+    if line < start {
+        start - line
+    } else if line > end {
+        line - end
+    } else {
+        0
+    }
+}
+
+fn line_distance_to_unified_hunk(line: u32, ranges: UnifiedHunkRanges) -> u32 {
+    let old_distance = line_distance_to_unified_range(line, ranges.old_start, ranges.old_count);
+    let new_distance = line_distance_to_unified_range(line, ranges.new_start, ranges.new_count);
+    old_distance.min(new_distance)
+}
+
+fn normalized_selection_range(start: Option<u32>, end: Option<u32>) -> Option<(u32, u32)> {
+    let start = start.filter(|value| *value > 0)?;
+    let end = end.filter(|value| *value > 0).unwrap_or(start);
+    Some((start.min(end), start.max(end)))
+}
+
+fn range_overlaps_unified_range(selection: Option<(u32, u32)>, start: u32, count: u32) -> bool {
+    let Some((selection_start, selection_end)) = selection else {
+        return false;
+    };
+    let range_end = unified_hunk_range_end(start, count);
+    selection_start <= range_end && selection_end >= start
+}
+
+fn unified_hunk_matches_selection(
+    ranges: UnifiedHunkRanges,
+    original_start_line: Option<u32>,
+    original_end_line: Option<u32>,
+    modified_start_line: Option<u32>,
+    modified_end_line: Option<u32>,
+) -> bool {
+    let original_range = normalized_selection_range(original_start_line, original_end_line);
+    let modified_range = normalized_selection_range(modified_start_line, modified_end_line);
+    range_overlaps_unified_range(original_range, ranges.old_start, ranges.old_count)
+        || range_overlaps_unified_range(modified_range, ranges.new_start, ranges.new_count)
+}
+
+fn range_contains_line(start: Option<u32>, end: Option<u32>, line: u32) -> bool {
+    let Some((start, end)) = normalized_selection_range(start, end) else {
+        return false;
+    };
+    line >= start && line <= end
+}
+
+fn has_precise_hunk_range(
+    original_start_line: Option<u32>,
+    original_end_line: Option<u32>,
+    modified_start_line: Option<u32>,
+    modified_end_line: Option<u32>,
+) -> bool {
+    normalized_selection_range(original_start_line, original_end_line).is_some()
+        || normalized_selection_range(modified_start_line, modified_end_line).is_some()
+}
+
+fn format_unified_range(prefix: char, start: u32, count: u32) -> String {
+    if count == 1 {
+        format!("{}{}", prefix, start)
+    } else {
+        format!("{}{},{}", prefix, start, count)
+    }
+}
+
+fn crop_hunk_to_selection(
+    hunk_lines: &[String],
+    original_start_line: Option<u32>,
+    original_end_line: Option<u32>,
+    modified_start_line: Option<u32>,
+    modified_end_line: Option<u32>,
+    action_name: &str,
+) -> Result<Vec<String>, String> {
+    let Some(header) = hunk_lines.first() else {
+        return Err(format!("{}差异块失败：空的差异块", action_name));
+    };
+    let Some(ranges) = parse_unified_hunk_ranges(header) else {
+        return Err(format!("{}差异块失败：无法解析差异块范围", action_name));
+    };
+
+    if !has_precise_hunk_range(
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line,
+    ) {
+        warn!(
+            "No precise Monaco hunk range received; refusing to use the full git hunk: action={}, header={}",
+            action_name,
+            header.trim()
+        );
+        return Err(format!(
+            "{}差异块失败：未收到精确的差异块范围，请重新点击目标块",
+            action_name
+        ));
+    }
+
+    let mut old_line = ranges.old_start.max(1);
+    let mut new_line = ranges.new_start.max(1);
+    let mut selected_lines = Vec::<String>::new();
+    let mut old_start: Option<u32> = None;
+    let mut new_start: Option<u32> = None;
+    let mut old_count = 0u32;
+    let mut new_count = 0u32;
+    let mut last_selected = false;
+
+    for raw_line in hunk_lines.iter().skip(1) {
+        let origin = raw_line.chars().next().unwrap_or('\0');
+        match origin {
+            '-' => {
+                let current_old = old_line;
+                old_line = old_line.saturating_add(1);
+                if range_contains_line(original_start_line, original_end_line, current_old) {
+                    old_start = Some(old_start.unwrap_or(current_old));
+                    old_count = old_count.saturating_add(1);
+                    selected_lines.push(raw_line.clone());
+                    last_selected = true;
+                } else {
+                    last_selected = false;
+                }
+            }
+            '+' => {
+                let current_new = new_line;
+                new_line = new_line.saturating_add(1);
+                if range_contains_line(modified_start_line, modified_end_line, current_new) {
+                    new_start = Some(new_start.unwrap_or(current_new));
+                    new_count = new_count.saturating_add(1);
+                    selected_lines.push(raw_line.clone());
+                    last_selected = true;
+                } else {
+                    last_selected = false;
+                }
+            }
+            ' ' => {
+                let current_old = old_line;
+                let current_new = new_line;
+                old_line = old_line.saturating_add(1);
+                new_line = new_line.saturating_add(1);
+                let selected = range_contains_line(original_start_line, original_end_line, current_old)
+                    || range_contains_line(modified_start_line, modified_end_line, current_new);
+                if selected {
+                    old_start = Some(old_start.unwrap_or(current_old));
+                    new_start = Some(new_start.unwrap_or(current_new));
+                    old_count = old_count.saturating_add(1);
+                    new_count = new_count.saturating_add(1);
+                    selected_lines.push(raw_line.clone());
+                    last_selected = true;
+                } else {
+                    last_selected = false;
+                }
+            }
+            '\\' => {
+                if last_selected {
+                    selected_lines.push(raw_line.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if selected_lines.is_empty() {
+        warn!(
+            "Precise hunk crop produced no lines: action={}, header={}, original_range={:?}-{:?}, modified_range={:?}-{:?}",
+            action_name,
+            header.trim(),
+            original_start_line,
+            original_end_line,
+            modified_start_line,
+            modified_end_line
+        );
+        return Err(format!("{}差异块失败：未找到当前胶囊对应的变更行", action_name));
+    }
+
+    let old_start = old_start.unwrap_or(ranges.old_start);
+    let new_start = new_start.unwrap_or(ranges.new_start);
+    let cropped_header = format!(
+        "@@ {} {} @@",
+        format_unified_range('-', old_start, old_count),
+        format_unified_range('+', new_start, new_count)
+    );
+    let mut result = Vec::with_capacity(selected_lines.len() + 1);
+    result.push(cropped_header);
+    result.extend(selected_lines);
+    debug!(
+        "Cropped hunk for {}: old_start={}, old_count={}, new_start={}, new_count={}, lines={}",
+        action_name,
+        old_start,
+        old_count,
+        new_start,
+        new_count,
+        result.len().saturating_sub(1)
+    );
+    Ok(result)
 }
 
 #[tauri::command]
-pub fn stage_hunk(path: String, file_path: String, line: u32) -> Result<(), String> {
+pub fn stage_hunk(
+    path: String,
+    file_path: String,
+    line: u32,
+    hunk_index: Option<u32>,
+    original_start_line: Option<u32>,
+    original_end_line: Option<u32>,
+    modified_start_line: Option<u32>,
+    modified_end_line: Option<u32>,
+) -> Result<(), String> {
     info!(
-        "Staging hunk for file: {} in path: {}, line: {}",
-        file_path, path, line
+        "Staging hunk for file: {} in path: {}, line: {}, hunk_index: {:?}, original_range: {:?}-{:?}, modified_range: {:?}-{:?}",
+        file_path,
+        path,
+        line,
+        hunk_index,
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line
     );
     let repo = Repository::discover(&path).map_err(|e| {
         error!("Failed to discover repository: {}", e);
@@ -1561,21 +1904,61 @@ pub fn stage_hunk(path: String, file_path: String, line: u32) -> Result<(), Stri
     let mut header_lines = Vec::<String>::new();
     let mut current_hunk = Vec::<String>::new();
     let mut matched_hunk = Vec::<String>::new();
+    let mut fallback_hunk = Vec::<String>::new();
     let mut in_hunk = false;
-    let mut current_matches = false;
+    let mut hunk_count = 0u32;
+    let mut best_match_distance = u32::MAX;
+    let mut current_match_distance = u32::MAX;
+    let mut current_range_matches = false;
+    let mut range_matched = false;
+    let mut index_matched = false;
 
     for raw_line in diff_text.lines() {
         if raw_line.starts_with("@@ ") {
-            if in_hunk && current_matches {
-                matched_hunk = current_hunk.clone();
-                break;
+            // 设计说明：Monaco 对纯插入/纯删除块可能会把工具栏锚到相邻行，
+            // 而 git diff --unified=0 的 hunk 头只记录真实变更行号。这里优先使用
+            // 前端传入的可视 diff 范围，范围没有命中时再使用单行邻近兜底。
+            if in_hunk {
+                let current_index = hunk_count.saturating_sub(1);
+                if hunk_index == Some(current_index) {
+                    index_matched = true;
+                    matched_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                } else if hunk_index.is_none()
+                    && current_range_matches
+                    && (!range_matched || current_match_distance < best_match_distance)
+                {
+                    // 设计说明：即使前端可视范围覆盖多个 git hunk，也只暂存
+                    // 离当前光标锚点最近的一块，避免块级按钮退化成整文件暂存。
+                    range_matched = true;
+                    matched_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                } else if !range_matched
+                    && hunk_index.is_none()
+                    && current_match_distance <= HUNK_LINE_MATCH_TOLERANCE
+                    && current_match_distance < best_match_distance
+                {
+                    fallback_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                }
             }
             in_hunk = true;
+            hunk_count = hunk_count.saturating_add(1);
             current_hunk.clear();
             current_hunk.push(raw_line.to_string());
-            current_matches = parse_unified_hunk_new_range(raw_line)
-                .map(|(start, end)| line >= start && line <= end)
-                .unwrap_or(false);
+            if let Some(ranges) = parse_unified_hunk_ranges(raw_line) {
+                current_match_distance = line_distance_to_unified_hunk(line, ranges);
+                current_range_matches = unified_hunk_matches_selection(
+                    ranges,
+                    original_start_line,
+                    original_end_line,
+                    modified_start_line,
+                    modified_end_line,
+                );
+            } else {
+                current_match_distance = u32::MAX;
+                current_range_matches = false;
+            }
         } else if in_hunk {
             current_hunk.push(raw_line.to_string());
         } else {
@@ -1583,12 +1966,73 @@ pub fn stage_hunk(path: String, file_path: String, line: u32) -> Result<(), Stri
         }
     }
 
-    if in_hunk && current_matches && matched_hunk.is_empty() {
-        matched_hunk = current_hunk;
+    if in_hunk {
+        let current_index = hunk_count.saturating_sub(1);
+        if hunk_index == Some(current_index) {
+            index_matched = true;
+            matched_hunk = current_hunk;
+            best_match_distance = current_match_distance;
+        } else if hunk_index.is_none()
+            && current_range_matches
+            && (!range_matched || current_match_distance < best_match_distance)
+        {
+            range_matched = true;
+            matched_hunk = current_hunk;
+            best_match_distance = current_match_distance;
+        } else if !range_matched
+            && hunk_index.is_none()
+            && current_match_distance <= HUNK_LINE_MATCH_TOLERANCE
+            && current_match_distance < best_match_distance
+        {
+            fallback_hunk = current_hunk;
+            best_match_distance = current_match_distance;
+        }
+    }
+
+    if hunk_index.is_some() && !index_matched {
+        warn!(
+            "Requested hunk index not found for staging: file={}, hunk_index={:?}, hunk_count={}",
+            normalized_path, hunk_index, hunk_count
+        );
+    }
+
+    if matched_hunk.is_empty() && !fallback_hunk.is_empty() {
+        matched_hunk = fallback_hunk;
     }
 
     if matched_hunk.is_empty() {
+        warn!(
+            "No matching hunk found for file: {}, line: {}, hunk_count: {}",
+            normalized_path, line, hunk_count
+        );
         return Err(format!("暂存差异块失败：未找到第 {} 行附近的差异块", line));
+    }
+
+    if index_matched {
+        debug!(
+            "Matched hunk for staging by index: file={}, line={}, hunk_index={:?}, header={}",
+            normalized_path,
+            line,
+            hunk_index,
+            matched_hunk.first().map(String::as_str).unwrap_or("").trim()
+        );
+    } else if range_matched {
+        debug!(
+            "Matched hunk for staging by visual range: file={}, line={}, header={}",
+            normalized_path,
+            line,
+            matched_hunk.first().map(String::as_str).unwrap_or("").trim()
+        );
+    } else if best_match_distance == 0 {
+        debug!(
+            "Matched hunk for staging by exact line: file={}, line={}",
+            normalized_path, line
+        );
+    } else {
+        warn!(
+            "Matched hunk for staging by nearby anchor: file={}, line={}, distance={}",
+            normalized_path, line, best_match_distance
+        );
     }
 
     let mut patch = String::new();
@@ -1596,10 +2040,25 @@ pub fn stage_hunk(path: String, file_path: String, line: u32) -> Result<(), Stri
         patch.push_str(&item);
         patch.push('\n');
     }
-    for item in matched_hunk {
+    let precise_hunk = crop_hunk_to_selection(
+        &matched_hunk,
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line,
+        "暂存",
+    )?;
+    for item in precise_hunk {
         patch.push_str(&item);
         patch.push('\n');
     }
+    info!(
+        "Stage hunk patch prepared: file={}, hunk_index={:?}, patch_lines={}, patch_preview={}",
+        normalized_path,
+        hunk_index,
+        patch.lines().count(),
+        patch.lines().take(8).collect::<Vec<_>>().join(" | ")
+    );
 
     let mut child = std::process::Command::new("git")
         .current_dir(repo_dir)
@@ -1640,6 +2099,233 @@ pub fn stage_hunk(path: String, file_path: String, line: u32) -> Result<(), Stri
     }
 
     info!("Hunk staged successfully");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unstage_hunk(
+    path: String,
+    file_path: String,
+    line: u32,
+    hunk_index: Option<u32>,
+    original_start_line: Option<u32>,
+    original_end_line: Option<u32>,
+    modified_start_line: Option<u32>,
+    modified_end_line: Option<u32>,
+) -> Result<(), String> {
+    info!(
+        "Unstaging hunk for file: {} in path: {}, line: {}, hunk_index: {:?}, original_range: {:?}-{:?}, modified_range: {:?}-{:?}",
+        file_path,
+        path,
+        line,
+        hunk_index,
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line
+    );
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
+    let normalized_path = file_path.replace('\\', "/");
+
+    let diff_output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .arg("diff")
+        .arg("--cached")
+        .arg("--unified=0")
+        .arg("--")
+        .arg(&normalized_path)
+        .output()
+        .map_err(|e| format!("无法执行 git diff --cached：{}", e))?;
+
+    if !diff_output.status.success() {
+        let stderr = String::from_utf8_lossy(&diff_output.stderr);
+        return Err(format!("取消暂存差异块失败：{}", stderr.trim()));
+    }
+
+    let diff_text = String::from_utf8_lossy(&diff_output.stdout);
+    let mut header_lines = Vec::<String>::new();
+    let mut current_hunk = Vec::<String>::new();
+    let mut matched_hunk = Vec::<String>::new();
+    let mut fallback_hunk = Vec::<String>::new();
+    let mut in_hunk = false;
+    let mut hunk_count = 0u32;
+    let mut best_match_distance = u32::MAX;
+    let mut current_match_distance = u32::MAX;
+    let mut current_range_matches = false;
+    let mut range_matched = false;
+    let mut index_matched = false;
+
+    for raw_line in diff_text.lines() {
+        if raw_line.starts_with("@@ ") {
+            if in_hunk {
+                let current_index = hunk_count.saturating_sub(1);
+                if hunk_index == Some(current_index) {
+                    index_matched = true;
+                    matched_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                } else if hunk_index.is_none()
+                    && current_range_matches
+                    && (!range_matched || current_match_distance < best_match_distance)
+                {
+                    // 设计说明：已暂存视图同样保持块级操作，只取消暂存当前胶囊对应的 hunk。
+                    range_matched = true;
+                    matched_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                } else if !range_matched
+                    && hunk_index.is_none()
+                    && current_match_distance <= HUNK_LINE_MATCH_TOLERANCE
+                    && current_match_distance < best_match_distance
+                {
+                    fallback_hunk = current_hunk.clone();
+                    best_match_distance = current_match_distance;
+                }
+            }
+            in_hunk = true;
+            hunk_count = hunk_count.saturating_add(1);
+            current_hunk.clear();
+            current_hunk.push(raw_line.to_string());
+            if let Some(ranges) = parse_unified_hunk_ranges(raw_line) {
+                current_match_distance = line_distance_to_unified_hunk(line, ranges);
+                current_range_matches = unified_hunk_matches_selection(
+                    ranges,
+                    original_start_line,
+                    original_end_line,
+                    modified_start_line,
+                    modified_end_line,
+                );
+            } else {
+                current_match_distance = u32::MAX;
+                current_range_matches = false;
+            }
+        } else if in_hunk {
+            current_hunk.push(raw_line.to_string());
+        } else {
+            header_lines.push(raw_line.to_string());
+        }
+    }
+
+    if in_hunk {
+        let current_index = hunk_count.saturating_sub(1);
+        if hunk_index == Some(current_index) {
+            index_matched = true;
+            matched_hunk = current_hunk;
+            best_match_distance = current_match_distance;
+        } else if hunk_index.is_none()
+            && current_range_matches
+            && (!range_matched || current_match_distance < best_match_distance)
+        {
+            range_matched = true;
+            matched_hunk = current_hunk;
+            best_match_distance = current_match_distance;
+        } else if !range_matched
+            && hunk_index.is_none()
+            && current_match_distance <= HUNK_LINE_MATCH_TOLERANCE
+            && current_match_distance < best_match_distance
+        {
+            fallback_hunk = current_hunk;
+            best_match_distance = current_match_distance;
+        }
+    }
+
+    if hunk_index.is_some() && !index_matched {
+        warn!(
+            "Requested hunk index not found for unstaging: file={}, hunk_index={:?}, hunk_count={}",
+            normalized_path, hunk_index, hunk_count
+        );
+    }
+
+    if matched_hunk.is_empty() && !fallback_hunk.is_empty() {
+        matched_hunk = fallback_hunk;
+    }
+
+    if matched_hunk.is_empty() {
+        warn!(
+            "No matching staged hunk found for file: {}, line: {}, hunk_count: {}",
+            normalized_path, line, hunk_count
+        );
+        return Err(format!("取消暂存差异块失败：未找到第 {} 行附近的差异块", line));
+    }
+
+    debug!(
+        "Matched hunk for unstaging: file={}, line={}, hunk_index={:?}, header={}, index_matched={}, range_matched={}, distance={}",
+        normalized_path,
+        line,
+        hunk_index,
+        matched_hunk.first().map(String::as_str).unwrap_or("").trim(),
+        index_matched,
+        range_matched,
+        best_match_distance
+    );
+
+    let mut patch = String::new();
+    for item in header_lines {
+        patch.push_str(&item);
+        patch.push('\n');
+    }
+    let precise_hunk = crop_hunk_to_selection(
+        &matched_hunk,
+        original_start_line,
+        original_end_line,
+        modified_start_line,
+        modified_end_line,
+        "取消暂存",
+    )?;
+    for item in precise_hunk {
+        patch.push_str(&item);
+        patch.push('\n');
+    }
+    info!(
+        "Unstage hunk patch prepared: file={}, hunk_index={:?}, patch_lines={}, patch_preview={}",
+        normalized_path,
+        hunk_index,
+        patch.lines().count(),
+        patch.lines().take(8).collect::<Vec<_>>().join(" | ")
+    );
+
+    let mut child = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .arg("apply")
+        .arg("--cached")
+        .arg("--reverse")
+        .arg("--whitespace=nowarn")
+        .arg("--unidiff-zero")
+        .arg("--recount")
+        .arg("-p1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法执行 git apply --cached --reverse：{}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("写入取消暂存补丁失败：{}", e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("执行 git apply --cached --reverse 失败：{}", e))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
+        };
+        error!("git apply --cached --reverse failed: {}", msg);
+        return Err(format!("取消暂存差异块失败：{}", msg));
+    }
+
+    info!("Hunk unstaged successfully");
     Ok(())
 }
 
@@ -1835,16 +2521,34 @@ pub fn get_file_content(
     // 获取指定版本或工作目录的文件内容
     let content = if let Some(rev) = revision {
         debug!("Getting content from revision: {}", rev);
-        // 获取指定版本的文件内容
-        let object = repo.revparse_single(&rev).map_err(|e| {
-            error!("Failed to find revision {}: {}", rev, e);
-            format!("Failed to find revision {}: {}", rev, e)
-        })?;
+        // 设计说明：Git 面板需要分别渲染已暂存和未暂存 diff。
+        // INDEX 表示当前暂存区快照；未暂存视图用 INDEX -> 工作区，
+        // 已暂存视图用 HEAD -> INDEX，才能在部分暂存后显示两份独立条目。
+        let tree = if rev.eq_ignore_ascii_case("INDEX") {
+            let mut index = repo.index().map_err(|e| {
+                error!("Failed to get index for file content: {}", e);
+                format!("Failed to get index: {}", e)
+            })?;
+            let tree_id = index.write_tree().map_err(|e| {
+                error!("Failed to write index tree for file content: {}", e);
+                format!("Failed to write index tree: {}", e)
+            })?;
+            repo.find_tree(tree_id).map_err(|e| {
+                error!("Failed to find index tree for file content: {}", e);
+                format!("Failed to find index tree: {}", e)
+            })?
+        } else {
+            // 获取指定版本的文件内容
+            let object = repo.revparse_single(&rev).map_err(|e| {
+                error!("Failed to find revision {}: {}", rev, e);
+                format!("Failed to find revision {}: {}", rev, e)
+            })?;
 
-        let tree = object.peel_to_tree().map_err(|e| {
-            error!("Failed to peel to tree: {}", e);
-            format!("Failed to peel to tree: {}", e)
-        })?;
+            object.peel_to_tree().map_err(|e| {
+                error!("Failed to peel to tree: {}", e);
+                format!("Failed to peel to tree: {}", e)
+            })?
+        };
 
         let entry = match tree.get_path(file_path) {
             Ok(entry) => entry,
@@ -1945,6 +2649,78 @@ pub fn get_file_diff(path: String, file_path: String) -> Result<String, String> 
     })?;
 
     Ok(output)
+}
+
+#[tauri::command]
+pub fn get_file_diff_hunks(
+    path: String,
+    file_path: String,
+    staged: bool,
+) -> Result<Vec<GitDiffHunk>, String> {
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("Failed to discover repository for diff hunks: {}", e);
+        e.to_string()
+    })?;
+    let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
+    let normalized_path = file_path.replace('\\', "/");
+
+    let mut command = std::process::Command::new("git");
+    command
+        .current_dir(repo_dir)
+        .arg("diff")
+        .arg("--unified=0");
+    if staged {
+        command.arg("--cached");
+    }
+    let output = command
+        .arg("--")
+        .arg(&normalized_path)
+        .output()
+        .map_err(|e| format!("无法执行 git diff 获取差异块：{}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!(
+            "git diff --unified=0 failed for hunks: file={}, staged={}, stderr={}",
+            normalized_path,
+            staged,
+            stderr.trim()
+        );
+        return Err(format!("获取差异块失败：{}", stderr.trim()));
+    }
+
+    let diff_text = String::from_utf8_lossy(&output.stdout);
+    let mut hunks = Vec::<GitDiffHunk>::new();
+    for raw_line in diff_text.lines() {
+        if !raw_line.starts_with("@@ ") {
+            continue;
+        }
+        if let Some(ranges) = parse_unified_hunk_ranges(raw_line) {
+            hunks.push(GitDiffHunk {
+                index: hunks.len() as u32,
+                header: raw_line.to_string(),
+                old_start: ranges.old_start,
+                old_count: ranges.old_count,
+                new_start: ranges.new_start,
+                new_count: ranges.new_count,
+            });
+        } else {
+            warn!(
+                "Failed to parse git diff hunk header: file={}, staged={}, header={}",
+                normalized_path,
+                staged,
+                raw_line
+            );
+        }
+    }
+
+    info!(
+        "Loaded git diff hunks: file={}, staged={}, count={}",
+        normalized_path,
+        staged,
+        hunks.len()
+    );
+    Ok(hunks)
 }
 
 #[tauri::command]
