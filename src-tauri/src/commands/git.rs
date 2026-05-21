@@ -2130,6 +2130,18 @@ pub fn unstage_hunk(
     })?;
     let repo_dir = repo.workdir().unwrap_or_else(|| Path::new(&path));
     let normalized_path = file_path.replace('\\', "/");
+    if hunk_index.is_none() {
+        warn!(
+            "Refusing to unstage hunk without precise hunk index: file={}, line={}, original_range={:?}-{:?}, modified_range={:?}-{:?}",
+            normalized_path,
+            line,
+            original_start_line,
+            original_end_line,
+            modified_start_line,
+            modified_end_line
+        );
+        return Err("取消暂存差异块失败：缺少精确的差异块索引，请重新点击目标块".to_string());
+    }
 
     let diff_output = std::process::Command::new("git")
         .current_dir(repo_dir)
