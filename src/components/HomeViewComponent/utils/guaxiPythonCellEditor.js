@@ -28,6 +28,101 @@ const escapeHtml = (value) => String(value == null ? '' : value)
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;')
 
+const extractHighlightedCodeHtml = (html = '') => {
+  const template = document.createElement('template')
+  template.innerHTML = String(html || '')
+  return template.content.querySelector('code')?.innerHTML || escapeHtml(html)
+}
+
+const syncHighlightScroll = (textarea, highlightLayer) => {
+  if (!textarea || !highlightLayer) return
+  highlightLayer.scrollTop = textarea.scrollTop
+  highlightLayer.scrollLeft = textarea.scrollLeft
+}
+
+const createPythonCellHighlightController = ({
+  textarea,
+  highlightLayer,
+  invoke,
+  logger,
+  getCode,
+} = {}) => {
+  // 设计说明：
+  // 1. 探索者模式的 Python Cell 仍保留 textarea 作为真实输入控件，避免重写现有执行、保存和焦点逻辑。
+  // 2. tree-sitter 高亮放在底层 pre/code 中，textarea 文字透明但光标可见，从而只替换“源码高亮”这一层。
+  // 3. 请求做防抖和序号校验，用户快速输入时只应用最后一次结果，避免旧高亮闪回。
+  let disposed = false
+  let timer = null
+  let requestSeq = 0
+  let lastCode = ''
+
+  const renderPlain = (code) => {
+    if (!highlightLayer) return
+    highlightLayer.innerHTML = `<code>${escapeHtml(code || '')}</code>`
+  }
+
+  const schedule = (reason = 'input') => {
+    if (disposed) return
+    const code = String(getCode?.() || '')
+    if (code === lastCode && reason !== 'init') return
+    lastCode = code
+    renderPlain(code)
+    clearTimeout(timer)
+    timer = setTimeout(async () => {
+      if (disposed) return
+      const seq = ++requestSeq
+      const startedAt = performance.now()
+      logger?.debug?.('[PyCellEditor][TreeSitterHighlight] request start', {
+        frontendRequestId: seq,
+        reason,
+        codeLen: code.length,
+      })
+      try {
+        const response = await invoke?.('syntax_highlight_code', {
+          request: {
+            code,
+            language: 'python',
+            theme: 'guaxi',
+          },
+        })
+        if (disposed || seq !== requestSeq) return
+        highlightLayer.innerHTML = `<code>${extractHighlightedCodeHtml(response?.html || '')}</code>`
+        syncHighlightScroll(textarea, highlightLayer)
+        logger?.debug?.('[PyCellEditor] tree-sitter highlight applied', {
+          frontendRequestId: seq,
+          backendDebugId: response?.debug_id,
+          reason,
+          codeLen: code.length,
+          cached: !!response?.cached,
+          supported: !!response?.supported,
+          engine: response?.engine || '',
+          backendElapsedMs: response?.elapsed_ms,
+          frontendElapsedMs: Math.round(performance.now() - startedAt),
+        })
+      } catch (error) {
+        if (seq === requestSeq) {
+          logger?.warn?.('[PyCellEditor][TreeSitterHighlight] request failed, fallback to plain text', {
+            frontendRequestId: seq,
+            reason,
+            codeLen: code.length,
+            frontendElapsedMs: Math.round(performance.now() - startedAt),
+            error,
+          })
+          renderPlain(code)
+        }
+      }
+    }, reason === 'init' ? 0 : 180)
+  }
+
+  return {
+    schedule,
+    dispose() {
+      disposed = true
+      clearTimeout(timer)
+    },
+  }
+}
+
 const sanitizePythonIdentifier = (value, fallback = 'df') => {
   const normalized = String(value || '')
     .replace(/\.[^.]+$/, '')
@@ -278,6 +373,7 @@ export const createGuaxiPythonCellEditorManager = ({
   let overlayRoot = null
   const cellStates = new Map()
   const managerDisposables = []
+  const highlightControllers = []
   let refreshScheduled = false
   let refreshInFlight = false
   let lastRefreshSignature = ''
@@ -337,6 +433,13 @@ export const createGuaxiPythonCellEditorManager = ({
   }
 
   const clearOverlayCards = () => {
+    highlightControllers.forEach((item) => {
+      try {
+        item?.dispose?.()
+      } catch {
+      }
+    })
+    highlightControllers.length = 0
     if (overlayRoot) {
       overlayRoot.innerHTML = ''
     }
@@ -879,6 +982,7 @@ export const createGuaxiPythonCellEditorManager = ({
       </div>
       <div class="guaxi-pycell-card__body">
         <div class="guaxi-pycell-card__code-shell">
+          <pre class="guaxi-pycell-card__highlight" aria-hidden="true"><code></code></pre>
           <textarea class="guaxi-pycell-card__editor" spellcheck="false"></textarea>
         </div>
         <div class="guaxi-pycell-card__panel guaxi-pycell-card__panel--output ${state.meta.outputCollapsed ? 'is-collapsed' : ''}" data-panel="output"></div>
@@ -887,11 +991,20 @@ export const createGuaxiPythonCellEditorManager = ({
     `
 
     const textarea = card.querySelector('.guaxi-pycell-card__editor')
+    const highlightLayer = card.querySelector('.guaxi-pycell-card__highlight')
     const outputContainer = card.querySelector('[data-panel="output"]')
     const sessionContainer = card.querySelector('[data-panel="session"]')
     const metaEl = card.querySelector('.guaxi-pycell-card__meta')
     textarea.value = state.draftCode
     textarea.style.pointerEvents = 'auto'
+    const highlightController = createPythonCellHighlightController({
+      textarea,
+      highlightLayer,
+      invoke,
+      logger,
+      getCode: () => textarea.value,
+    })
+    highlightControllers.push(highlightController)
 
     const isInteractiveTarget = (target) => {
       if (!(target instanceof HTMLElement)) return false
@@ -917,8 +1030,10 @@ export const createGuaxiPythonCellEditorManager = ({
     textarea.addEventListener('input', () => {
       state.draftCode = textarea.value
       syncSnapshot(cellId, state)
+      highlightController.schedule('input')
       resizeTextarea()
     })
+    textarea.addEventListener('scroll', () => syncHighlightScroll(textarea, highlightLayer))
 
     textarea.addEventListener('keydown', (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
@@ -1044,6 +1159,7 @@ export const createGuaxiPythonCellEditorManager = ({
 
     renderCellOutput(state, outputContainer, block)
     renderSessionVars(state, sessionContainer)
+    highlightController.schedule('init')
     resizeTextarea()
     if (pendingFocusCellId && pendingFocusCellId === cellId) {
       pendingFocusCellId = ''

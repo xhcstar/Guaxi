@@ -5748,6 +5748,22 @@ const markdownSuggestModeStates = new WeakMap();
 const embeddedSuggestTriggerStates = new WeakMap();
 const markdownFenceBlocksCache = new WeakMap();
 const markdownFenceTokenizeSkippedLanguages = new Set(['python']);
+const TREE_SITTER_FENCE_HIGHLIGHT_LANGUAGES = new Set([
+  'markdown',
+  'javascript',
+  'typescript',
+  'tsx',
+  'python',
+  'rust',
+  'shell',
+  'bash',
+  'lua',
+  'java',
+  'html',
+  'c',
+  'cpp',
+  'latex',
+]);
 const EMBEDDED_SEMANTIC_MAX_LINES = 240;
 const EMBEDDED_VISIBLE_BLOCK_LIMIT = 6;
 
@@ -5876,6 +5892,176 @@ const resolveFenceTokenClass = (tokenType) => {
   if (type.includes('operator')) return 'md-fence-token-operator';
   if (type.includes('delimiter') || type.includes('punctuation') || type.includes('bracket')) return 'md-fence-token-delimiter';
   return '';
+};
+
+const normalizeTreeSitterFenceHighlightLanguage = (languageId) => {
+  const lang = String(languageId || '').trim().toLowerCase();
+  if (lang === 'shell' || lang === 'sh' || lang === 'zsh' || lang === 'powershell' || lang === 'ps1') return 'bash';
+  if (lang === 'tex') return 'latex';
+  return lang;
+};
+
+const shouldUseTreeSitterFenceHighlight = (languageId) => {
+  const lang = normalizeTreeSitterFenceHighlightLanguage(languageId);
+  return !!lang && TREE_SITTER_FENCE_HIGHLIGHT_LANGUAGES.has(lang);
+};
+
+const buildFenceUtf8LineIndex = (text) => {
+  const encoder = new TextEncoder();
+  const lineStartBytes = [0];
+  const lineStartOffsets = [0];
+  let byteOffset = 0;
+  for (let offset = 0; offset < text.length;) {
+    const codePoint = text.codePointAt(offset) || 0;
+    const char = String.fromCodePoint(codePoint);
+    byteOffset += encoder.encode(char).length;
+    offset += char.length;
+    if (char === '\n') {
+      lineStartBytes.push(byteOffset);
+      lineStartOffsets.push(offset);
+    }
+  }
+  return { encoder, lineStartBytes, lineStartOffsets };
+};
+
+const findFenceLineForByte = (lineStartBytes, byteOffset) => {
+  let low = 0;
+  let high = lineStartBytes.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (lineStartBytes[mid] <= byteOffset) low = mid + 1;
+    else high = mid - 1;
+  }
+  return Math.max(0, high);
+};
+
+const fencePositionFromByteOffset = (text, index, byteOffset) => {
+  const lineIndex = findFenceLineForByte(index.lineStartBytes, byteOffset);
+  const lineStartByte = index.lineStartBytes[lineIndex];
+  const lineStartOffset = index.lineStartOffsets[lineIndex];
+  const targetBytes = Math.max(0, byteOffset - lineStartByte);
+  let consumedBytes = 0;
+  let column = 0;
+
+  for (let offset = lineStartOffset; offset < text.length && consumedBytes < targetBytes;) {
+    const codePoint = text.codePointAt(offset) || 0;
+    const char = String.fromCodePoint(codePoint);
+    if (char === '\n') break;
+    const charBytes = index.encoder.encode(char).length;
+    if (consumedBytes + charBytes > targetBytes) break;
+    consumedBytes += charBytes;
+    column += char.length;
+    offset += char.length;
+  }
+
+  return { lineIndex, column: column + 1 };
+};
+
+const appendFenceBaseLineDecorations = (decorations, block, model, blockText) => {
+  if (!decorations || !block || !model) return;
+  const lineCount = Math.max(1, String(blockText || '').split('\n').length);
+  for (let i = 0; i < lineCount; i += 1) {
+    const lineNumber = Number(block.blockStartLine || 1) + i;
+    if (lineNumber < 1 || lineNumber > model.getLineCount()) continue;
+    const lineContent = model.getLineContent(lineNumber);
+    decorations.push({
+      range: new monaco.Range(lineNumber, 1, lineNumber, Math.max(1, lineContent.length + 1)),
+      options: { inlineClassName: 'md-fence-token-base' }
+    });
+  }
+};
+
+const appendTreeSitterFenceDecorations = (decorations, block, model, blockText, spans) => {
+  if (!decorations || !block || !model || !Array.isArray(spans) || !spans.length) return;
+  const lineRanges = getEmbeddedBlockLineRanges({ ...block, blockText }, model);
+  if (!lineRanges.length) return;
+
+  const index = buildFenceUtf8LineIndex(blockText);
+  for (const span of spans) {
+    const startByte = Number(span?.start_byte ?? span?.startByte ?? 0);
+    const endByte = Number(span?.end_byte ?? span?.endByte ?? 0);
+    if (!Number.isFinite(startByte) || !Number.isFinite(endByte) || endByte <= startByte) continue;
+
+    const className = resolveFenceTokenClass(span?.token_type ?? span?.tokenType ?? '');
+    if (!className) continue;
+
+    const start = fencePositionFromByteOffset(blockText, index, startByte);
+    const end = fencePositionFromByteOffset(blockText, index, endByte);
+    for (let lineIndex = start.lineIndex; lineIndex <= end.lineIndex; lineIndex += 1) {
+      const lineRange = lineRanges[lineIndex];
+      if (!lineRange) continue;
+
+      const lineWidth = Math.max(0, lineRange.endColumn - lineRange.startColumn);
+      const relativeStartColumn = lineIndex === start.lineIndex ? start.column : 1;
+      const relativeEndColumn = lineIndex === end.lineIndex ? end.column : lineWidth + 1;
+      const startColumn = Math.min(
+        Math.max(lineRange.startColumn, lineRange.startColumn + relativeStartColumn - 1),
+        lineRange.endColumn
+      );
+      const endColumn = Math.min(
+        Math.max(startColumn, lineRange.startColumn + relativeEndColumn - 1),
+        lineRange.endColumn
+      );
+      if (startColumn === endColumn) continue;
+
+      decorations.push({
+        range: new monaco.Range(lineRange.lineNumber, startColumn, lineRange.lineNumber, endColumn),
+        options: { inlineClassName: className }
+      });
+    }
+  }
+};
+
+const fetchTreeSitterFenceTokenSpans = async (languageId, code, context = {}) => {
+  const normalized = normalizeTreeSitterFenceHighlightLanguage(languageId);
+  if (!normalized) return null;
+
+  const startedAt = performance.now();
+  try {
+    const response = await invoke('syntax_highlight_tokens', {
+      request: {
+        code: String(code || ''),
+        language: normalized,
+      },
+    });
+
+    if (!response?.supported) {
+      logger.debug('[MarkdownFence][TreeSitter] backend returned unsupported language', {
+        languageId,
+        normalized,
+        reason: context.reason || '',
+        blockStartLine: context.blockStartLine || 0,
+        blockEndLine: context.blockEndLine || 0,
+        frontendElapsedMs: Math.round(performance.now() - startedAt),
+      });
+      return null;
+    }
+
+    const spans = Array.isArray(response?.spans) ? response.spans : [];
+    logger.debug('[MarkdownFence][TreeSitter] token spans received', {
+      languageId,
+      normalized,
+      backendDebugId: response?.debug_id,
+      spanCount: spans.length,
+      backendElapsedMs: response?.elapsed_ms,
+      frontendElapsedMs: Math.round(performance.now() - startedAt),
+      reason: context.reason || '',
+      blockStartLine: context.blockStartLine || 0,
+      blockEndLine: context.blockEndLine || 0,
+    });
+    return spans;
+  } catch (error) {
+    logger.warn('[MarkdownFence][TreeSitter] token request failed, fallback to Monaco tokenizer', {
+      languageId,
+      normalized,
+      reason: context.reason || '',
+      blockStartLine: context.blockStartLine || 0,
+      blockEndLine: context.blockEndLine || 0,
+      frontendElapsedMs: Math.round(performance.now() - startedAt),
+      error,
+    });
+    return null;
+  }
 };
 
 const getEmbeddedBlockLineRanges = (embeddedCtx, model) => {
@@ -6765,48 +6951,77 @@ const updateMarkdownFenceSyntaxHighlight = async (targetEditor, reason) => {
   for (const block of blocks) {
     warmupEmbeddedLspForContext(block);
     const blockText = block.blockText ?? buildMarkdownFenceBlockText(model, block.blockStartLine, block.blockEndLine);
+    let appliedTreeSitterTokens = false;
+
+    if (shouldUseTreeSitterFenceHighlight(block.languageId)) {
+      const spans = await fetchTreeSitterFenceTokenSpans(block.languageId, blockText, {
+        reason,
+        blockStartLine: block.blockStartLine,
+        blockEndLine: block.blockEndLine,
+      });
+      if (state.requestSeq !== requestSeq) return;
+      if (spans) {
+        appendFenceBaseLineDecorations(decorations, block, model, blockText);
+        appendTreeSitterFenceDecorations(decorations, block, model, blockText, spans);
+        appliedTreeSitterTokens = true;
+        logger.debug('[MarkdownFence][TreeSitter] decorations appended', {
+          languageId: block.languageId,
+          spanCount: spans.length,
+          blockStartLine: block.blockStartLine,
+          blockEndLine: block.blockEndLine,
+          reason,
+        });
+      }
+    }
+
     let tokenLines = [];
-    if (shouldSkipMarkdownFenceTokenize(block.languageId)) {
+    if (!appliedTreeSitterTokens && shouldSkipMarkdownFenceTokenize(block.languageId)) {
       logger.debug('[MarkdownFence] skip extra tokenize for compatibility', {
         languageId: block.languageId,
         reason,
       });
-      continue;
-    }
-    try {
-      tokenLines = monaco.editor.tokenize(blockText || '', block.languageId) || [];
-    } catch (error) {
-      logger.warn('[MarkdownFence] tokenize failed', { language: block.languageId }, error);
+      appendFenceBaseLineDecorations(decorations, block, model, blockText);
       continue;
     }
 
-    for (let i = 0; i < tokenLines.length; i += 1) {
-      const tokens = tokenLines[i] || [];
-      if (!tokens.length) continue;
-      const lineNumber = block.blockStartLine + i;
-      const lineContent = model.getLineContent(lineNumber);
-      const lineLen = lineContent.length;
+    if (!appliedTreeSitterTokens) {
+      try {
+        tokenLines = monaco.editor.tokenize(blockText || '', block.languageId) || [];
+      } catch (error) {
+        logger.warn('[MarkdownFence] tokenize failed', { language: block.languageId }, error);
+        appendFenceBaseLineDecorations(decorations, block, model, blockText);
+        continue;
+      }
 
-      decorations.push({
-        range: new monaco.Range(lineNumber, 1, lineNumber, Math.max(1, lineLen + 1)),
-        options: { inlineClassName: 'md-fence-token-base' }
-      });
+      // 设计思路：
+      // 1. tree-sitter 覆盖 Python/LaTeX/主流代码块，Monaco tokenizer 继续作为 css/json/yaml 等语言兜底。
+      // 2. 无论 token 细分是否可用，都先铺一层 base 装饰，保证围栏代码块在暗色/亮色主题下保持可读。
+      // 3. 后端失败时这里会留下日志并回退到原生 tokenizer，不影响用户继续编辑。
+      appendFenceBaseLineDecorations(decorations, block, model, blockText);
 
-      for (let j = 0; j < tokens.length; j += 1) {
-        const token = tokens[j];
-        const className = resolveFenceTokenClass(token?.type || '');
-        if (!className) continue;
+      for (let i = 0; i < tokenLines.length; i += 1) {
+        const tokens = tokenLines[i] || [];
+        if (!tokens.length) continue;
+        const lineNumber = block.blockStartLine + i;
+        const lineContent = model.getLineContent(lineNumber);
+        const lineLen = lineContent.length;
 
-        const startOffset = token?.offset || 0;
-        const nextOffset = tokens[j + 1] ? tokens[j + 1].offset : lineLen;
-        const startColumn = Math.min(Math.max(1, startOffset + 1), lineLen + 1);
-        const endColumn = Math.min(Math.max(startColumn, nextOffset + 1), lineLen + 1);
-        if (startColumn === endColumn) continue;
+        for (let j = 0; j < tokens.length; j += 1) {
+          const token = tokens[j];
+          const className = resolveFenceTokenClass(token?.type || '');
+          if (!className) continue;
 
-        decorations.push({
-          range: new monaco.Range(lineNumber, startColumn, lineNumber, endColumn),
-          options: { inlineClassName: className }
-        });
+          const startOffset = token?.offset || 0;
+          const nextOffset = tokens[j + 1] ? tokens[j + 1].offset : lineLen;
+          const startColumn = Math.min(Math.max(1, startOffset + 1), lineLen + 1);
+          const endColumn = Math.min(Math.max(startColumn, nextOffset + 1), lineLen + 1);
+          if (startColumn === endColumn) continue;
+
+          decorations.push({
+            range: new monaco.Range(lineNumber, startColumn, lineNumber, endColumn),
+            options: { inlineClassName: className }
+          });
+        }
       }
     }
 
@@ -22737,29 +22952,96 @@ onUnmounted(() => {
   background: transparent;
 }
 
+.guaxi-pycell-card__code-shell {
+  position: relative;
+  overflow: hidden;
+  background: var(--pycell-editor-bg);
+}
+
 .guaxi-pycell-card__panel.is-collapsed {
   display: none;
 }
 
 .guaxi-pycell-card__editor {
+  position: relative;
+  z-index: 2;
   width: 100%;
   min-height: 96px;
   resize: none;
   border: none;
   outline: none;
   padding: 12px 14px 14px;
-  background: var(--pycell-editor-bg);
-  color: var(--pycell-editor-text);
+  background: transparent;
+  color: transparent;
   font-size: 13px;
   line-height: 1.65;
   font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
   box-sizing: border-box;
   pointer-events: auto;
-  caret-color: #2563eb;
+  caret-color: var(--pycell-editor-text);
 }
 
 .guaxi-pycell-card__editor:focus {
+  background: transparent;
+}
+
+.guaxi-pycell-card__editor::selection {
+  color: transparent;
+  background: rgba(96, 165, 250, 0.28);
+}
+
+.guaxi-pycell-card__highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  margin: 0;
+  min-height: 96px;
+  overflow: hidden;
+  padding: 12px 14px 14px;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+  color: var(--pycell-editor-text);
+  background: var(--pycell-editor-bg);
+  font-size: 13px;
+  line-height: 1.65;
+  font-family: 'Maple Mono NF CN', 'JetBrainsMono Nerd Font Mono', Consolas, monospace;
+}
+
+.guaxi-pycell-card__code-shell:focus-within .guaxi-pycell-card__highlight {
   background: var(--pycell-editor-focus-bg);
+}
+
+.guaxi-pycell-card__highlight code {
+  font: inherit;
+}
+
+.guaxi-pycell-card__highlight .hljs-comment {
+  color: #6a737d;
+}
+
+.guaxi-pycell-card__highlight .hljs-keyword {
+  color: #a626a4;
+}
+
+.guaxi-pycell-card__highlight .hljs-string {
+  color: #50a14f;
+}
+
+.guaxi-pycell-card__highlight .hljs-number,
+.guaxi-pycell-card__highlight .hljs-literal {
+  color: #986801;
+}
+
+.guaxi-pycell-card__highlight .hljs-title,
+.guaxi-pycell-card__highlight .hljs-title.function_ {
+  color: #4078f2;
+}
+
+.guaxi-pycell-card__highlight .hljs-property,
+.guaxi-pycell-card__highlight .hljs-variable {
+  color: #e45649;
 }
 
 .guaxi-pycell-card__panel {
@@ -22940,6 +23222,33 @@ onUnmounted(() => {
 :global(:root[data-guaxi-theme='dark']) .python-console-panel__meta,
 :global(:root[data-guaxi-theme='dark']) .guaxi-inline-dataframe__meta {
   color: #c7d4e5;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-comment {
+  color: #5c6370;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-keyword {
+  color: #c678dd;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-string {
+  color: #98c379;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-number,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-literal {
+  color: #d19a66;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-title,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-title.function_ {
+  color: #61afef;
+}
+
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-property,
+:global(:root[data-guaxi-theme='dark']) .guaxi-pycell-card__highlight .hljs-variable {
+  color: #e06c75;
 }
 
 :global(:root[data-guaxi-theme='dark']) .python-console-panel__btn,

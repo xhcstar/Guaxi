@@ -40,3 +40,4 @@ pub mod flipboard_pipeline;
 pub mod site_category_discovery;
 pub mod language_learning;
 pub mod tts_book;
+pub mod syntax_highlight;
