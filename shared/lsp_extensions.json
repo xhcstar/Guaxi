@@ -97,8 +97,6 @@
       "id": "sumneko.lua",
       "display_name": "Lua Language Server",
       "description": "Lua language intelligence backed by LuaLS.",
-      "open_vsx": "sumneko.lua",
-      "vscode_marketplace": "sumneko.lua",
       "languages": ["lua"],
       "compatibility_level": "A",
       "recommended": true,

@@ -179,6 +179,14 @@ fn normalize_extension_id(raw: &str) -> String {
     raw.trim().to_lowercase()
 }
 
+fn catalog_language_accepts_initialize_only(language: &str) -> bool {
+    // 设计说明：
+    // 1. Mermaid LSP 主要提供语法检查/解析能力，当前运行时 initialize 能成功，但不会声明 completionProvider。
+    // 2. 安装校验的核心目标是确认运行时能被 Guaxi 启动并完成 LSP 握手，而不是强行要求每个语言都有补全。
+    // 3. 白名单只放已知能力模型不同的语言，其他语言仍按 completionProvider 严格校验，避免误装无效 server。
+    matches!(normalize_language(language).as_str(), "mermaid")
+}
+
 fn exe_dir() -> Result<PathBuf, String> {
     let current_exe =
         std::env::current_exe().map_err(|e| format!("failed to resolve current exe: {e}"))?;
@@ -2114,11 +2122,23 @@ async fn verify_catalog_extension_runtime(
         match lsp::probe_lsp_runtime_for_language(&language, None).await {
             Ok(probe) => {
                 if !probe.completion_provider {
-                    errors.push(format!(
-                        "{}: initialize succeeded but completionProvider is missing",
-                        language
-                    ));
-                    continue;
+                    if catalog_language_accepts_initialize_only(&language) {
+                        warn!(
+                            extension_id = state.id.as_str(),
+                            source = source_label,
+                            language = language.as_str(),
+                            hover_provider = probe.hover_provider,
+                            definition_provider = probe.definition_provider,
+                            semantic_tokens_provider = probe.semantic_tokens_provider,
+                            "catalog LSP extension has no completionProvider; accepting initialize-only runtime"
+                        );
+                    } else {
+                        errors.push(format!(
+                            "{}: initialize succeeded but completionProvider is missing",
+                            language
+                        ));
+                        continue;
+                    }
                 }
                 if probe.completion_item_count == 0 {
                     // 设计说明：
@@ -3168,7 +3188,7 @@ pub fn start_install_catalog_lsp_extension_task(
                         update_lsp_extension_task(
                             &task_id,
                             "success",
-                            "task completed after runtime probe returned completion items",
+                            "task completed after runtime capability probe succeeded",
                             None,
                             Some(state),
                         );

@@ -413,7 +413,11 @@ fn lsp_binary_spec(name: &str) -> Option<LspBinarySpec> {
             asset_regex: r"win32-x64\.zip$",
             bin_name: "lua-language-server.exe",
             asset_kind: LspAssetKind::Zip,
-            direct_url: None,
+            // 设计说明：
+            // 1. LuaLS 的发行包来自 GitHub release，但通过 API 查询 latest 很容易被匿名限流。
+            // 2. 固定到当前 catalog 验证过的 Windows x64 压缩包直链，下载时不再依赖 GitHub API。
+            // 3. 仍保留 repo/asset_regex，后续需要升级版本时只改直链即可，日志里也能看到明确来源。
+            direct_url: Some("https://github.com/LuaLS/lua-language-server/releases/download/3.18.2/lua-language-server-3.18.2-win32-x64.zip"),
         }),
         "marksman" => Some(LspBinarySpec {
             repo: "artempyanykh/marksman",

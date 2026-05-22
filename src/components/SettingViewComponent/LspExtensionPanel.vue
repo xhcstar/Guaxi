@@ -697,34 +697,35 @@ onUnmounted(() => {
 <style scoped>
 .lsp-extension-panel {
   /* 设计说明：
-   * 1. 这里统一抽出组件级颜色变量，亮暗两套主题只切变量，不改结构。
+   * 1. 颜色直接继承 Guaxi 全局主题变量，避免 LSP 设置页在暗色模式里出现另一套偏蓝/偏黑面板。
    * 2. 顶部操作区和卡片操作区都做成可换行布局，解决按钮在窄宽度下堆叠混乱的问题。
+   * 3. 少量 fallback 只用于主题变量尚未注入的极早期渲染。
    */
-  --lsp-panel-title: #1f2937;
-  --lsp-panel-text: #111827;
-  --lsp-panel-muted: #6b7280;
-  --lsp-panel-border: rgba(15, 23, 42, 0.08);
-  --lsp-panel-border-strong: rgba(148, 163, 184, 0.22);
-  --lsp-panel-surface: rgba(83, 94, 105, 0.92);
-  --lsp-panel-surface-elevated: rgba(255, 255, 255, 0.88);
+  --lsp-panel-title: var(--guaxi-text-primary, #1f2937);
+  --lsp-panel-text: var(--guaxi-text-primary, #111827);
+  --lsp-panel-muted: var(--guaxi-text-secondary, #6b7280);
+  --lsp-panel-border: var(--guaxi-border, rgba(15, 23, 42, 0.08));
+  --lsp-panel-border-strong: var(--guaxi-border, rgba(148, 163, 184, 0.22));
+  --lsp-panel-surface: var(--guaxi-panel-bg, #ffffff);
+  --lsp-panel-surface-elevated: var(--guaxi-content-bg, #f8fafc);
   --lsp-panel-chip-bg: rgba(59, 130, 246, 0.1);
-  --lsp-panel-chip-text: #475068;
+  --lsp-panel-chip-text: var(--guaxi-text-secondary, #475068);
   --lsp-panel-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
   display: grid;
   gap: 16px;
 }
 
 .lsp-extension-panel.is-dark {
-  --lsp-panel-title: #e5edf8;
-  --lsp-panel-text: #f8fbff;
-  --lsp-panel-muted: #a7b4c8;
-  --lsp-panel-border: rgba(148, 163, 184, 0.2);
-  --lsp-panel-border-strong: rgba(148, 163, 184, 0.28);
-  --lsp-panel-surface: rgba(15, 23, 42, 0.92);
-  --lsp-panel-surface-elevated: rgba(30, 41, 59, 0.88);
-  --lsp-panel-chip-bg: rgba(56, 189, 248, 0.18);
-  --lsp-panel-chip-text: #8bdcff;
-  --lsp-panel-shadow: 0 18px 34px rgba(2, 6, 23, 0.28);
+  --lsp-panel-title: var(--guaxi-text-primary, #abb2bf);
+  --lsp-panel-text: var(--guaxi-text-primary, #abb2bf);
+  --lsp-panel-muted: var(--guaxi-text-secondary, #9da5b4);
+  --lsp-panel-border: var(--guaxi-border, #3e4451);
+  --lsp-panel-border-strong: var(--guaxi-border, #3e4451);
+  --lsp-panel-surface: var(--guaxi-panel-bg, #21252b);
+  --lsp-panel-surface-elevated: var(--guaxi-content-bg, #282c34);
+  --lsp-panel-chip-bg: rgba(97, 175, 239, 0.14);
+  --lsp-panel-chip-text: #61afef;
+  --lsp-panel-shadow: none;
 }
 
 .lsp-extension-panel__header {
@@ -803,15 +804,24 @@ onUnmounted(() => {
 }
 
 .lsp-extension-panel__item {
+  /* 设计说明：
+   * 1. 扩展条目使用 Guaxi 面板背景，暗色时与 setting-card 的 #21252b 层级一致。
+   * 2. 只用细边框区分条目，不再使用额外渐变或偏黑卡片。
+   * 3. 路径和运行时状态保持等宽换行，方便定位下载/启动问题。
+   */
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--lsp-panel-border);
-  background: linear-gradient(135deg, var(--lsp-panel-surface-elevated), var(--lsp-panel-surface));
+  background: var(--lsp-panel-surface);
   box-shadow: var(--lsp-panel-shadow);
+}
+
+.lsp-extension-panel.is-dark .lsp-extension-panel__item {
+  background: var(--lsp-panel-surface);
 }
 
 .lsp-extension-panel__item-main {

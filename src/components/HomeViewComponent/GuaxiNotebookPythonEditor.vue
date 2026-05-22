@@ -233,6 +233,10 @@ const triggerNotebookPythonSuggest = (reason = 'manual') => {
 const warmupNotebookPythonCompletion = async (reason = 'unknown') => {
   const languageId = 'python'
   const lspStateBefore = getLspConnectionState(languageId)
+  // 设计说明：
+  // 1. 探索者模式点击 Python cell 时会触发 editor focus；这里以前在 LSP ready 后继续执行 triggerSuggest。
+  // 2. 这会把“鼠标点空行”变成一次显式补全请求，后端日志表现为 trigger_kind=1 且 trigger_character 为空。
+  // 3. warmup 现在只负责等待 LSP 连接、同步状态和记录日志，真正弹补全只保留给用户输入触发字符或手动命令。
   logger.info('[NotebookPythonEditor] warmup completion start', {
     cellKey: String(props.cellKey || ''),
     reason,
@@ -247,10 +251,15 @@ const warmupNotebookPythonCompletion = async (reason = 'unknown') => {
     lspState: getLspConnectionState(languageId)?.state || 'unknown',
   })
 
-  if (!ready || !editor?.hasTextFocus?.()) return
-  window.setTimeout(() => {
-    triggerNotebookPythonSuggest(`warmup-${reason}`)
-  }, 30)
+  if (ready && editor?.hasTextFocus?.()) {
+    logger.debug('[NotebookPythonEditor] warmup completed without opening suggest widget', {
+      cellKey: String(props.cellKey || ''),
+      reason,
+      position: editor.getPosition?.()
+        ? `${editor.getPosition().lineNumber}:${editor.getPosition().column}`
+        : '',
+    })
+  }
 }
 
 const getNotebookPythonModelOwner = () => {
@@ -398,14 +407,14 @@ const mountMonacoEditor = async () => {
       scrollBeyondLastLine: false,
       wordWrap: 'on',
       // 设计说明：
-      // 1. Notebook Python 单元格的补全统一来自 monaco-languageclient 注册的标准 LSP provider。
-      // 2. 默认 word suggestions 会把 `sys.007aff`、`sys..2f` 这类同文档碎片展示成候选，看起来像 LSP 返回了错误结果。
+      // 1. 探索者模式的 Python Cell 不按源码编辑器的强自动补全策略走，避免鼠标点选单元格时建议框抢焦点。
+      // 2. 仍保留 trigger character 和手动补全，输入 `.` 等符号时能像 VS Code 一样立即请求 LSP。
       // 3. 关闭 showWords 后，如果 LSP 尚未就绪，界面会宁可暂时无候选，也不显示误导性的伪语义补全。
       wordBasedSuggestions: 'off',
       quickSuggestions: {
-        other: true,
+        other: false,
         comments: false,
-        strings: true,
+        strings: false,
       },
       suggestOnTriggerCharacters: true,
       suggest: {

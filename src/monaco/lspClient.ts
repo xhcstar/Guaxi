@@ -80,6 +80,10 @@ const LSP_TO_MONACO_COMPLETION_KIND: Record<number, monaco.languages.CompletionI
 }
 
 const DIRECT_COMPLETION_TRIGGER_CHARACTERS = [
+  // 设计说明：
+  // 1. 与 VS Code 的 LSP 补全模型保持一致：普通输入由 quickSuggestions 触发，特殊符号由 triggerCharacters 立即触发。
+  // 2. 这里不响应鼠标/光标移动；真正导致探索者模式误弹窗的是上层主动 triggerSuggest，而不是 provider 注册本身。
+  // 3. 触发符保留常见成员访问、标签、注解、路径和字符串场景，避免编辑模式补全变钝。
   '.',
   ':',
   '>',
@@ -236,11 +240,13 @@ const convertMonacoCompletionTriggerKindToLsp = (triggerKind: unknown) => {
   return 1
 }
 
-const convertLspRangeToMonaco = (range: unknown) => {
-  const typedRange = range as {
-    start?: { line?: number; character?: number }
-    end?: { line?: number; character?: number }
-  } | null
+type LspTextRange = {
+  start?: { line?: number; character?: number }
+  end?: { line?: number; character?: number }
+}
+
+const convertLspRangeToMonaco = (range: unknown): monaco.IRange | null => {
+  const typedRange = range as LspTextRange | null
   if (
     typeof typedRange?.start?.line !== 'number'
     || typeof typedRange?.start?.character !== 'number'
@@ -250,12 +256,154 @@ const convertLspRangeToMonaco = (range: unknown) => {
     return null
   }
 
-  return new monaco.Range(
-    typedRange.start.line + 1,
-    typedRange.start.character + 1,
-    typedRange.end.line + 1,
-    typedRange.end.character + 1
-  )
+  return {
+    startLineNumber: typedRange.start.line + 1,
+    startColumn: typedRange.start.character + 1,
+    endLineNumber: typedRange.end.line + 1,
+    endColumn: typedRange.end.character + 1,
+  }
+}
+
+const getLspRangeSummary = (range: unknown) => {
+  const typedRange = range as LspTextRange | null
+  if (
+    typeof typedRange?.start?.line !== 'number'
+    || typeof typedRange?.start?.character !== 'number'
+    || typeof typedRange?.end?.line !== 'number'
+    || typeof typedRange?.end?.character !== 'number'
+  ) {
+    return null
+  }
+
+  return {
+    start: {
+      line: typedRange.start.line,
+      character: typedRange.start.character,
+    },
+    end: {
+      line: typedRange.end.line,
+      character: typedRange.end.character,
+    },
+  }
+}
+
+const getLspTextEditShape = (item: Record<string, unknown>) => {
+  const textEdit = item.textEdit as {
+    range?: unknown
+    insert?: unknown
+    replace?: unknown
+    newText?: unknown
+  } | undefined
+
+  if (!textEdit) return 'none'
+  if (textEdit.insert && textEdit.replace) return 'insert-replace'
+  if (textEdit.range) return 'range'
+  return 'unknown'
+}
+
+const getLspTextEditLogPayload = (item: Record<string, unknown> | undefined) => {
+  if (!item) return null
+
+  const textEdit = item.textEdit as {
+    range?: unknown
+    insert?: unknown
+    replace?: unknown
+    newText?: unknown
+  } | undefined
+
+  return {
+    label: String(item.label || ''),
+    textEditShape: getLspTextEditShape(item),
+    hasInsertText: typeof item.insertText === 'string',
+    hasTextEditNewText: typeof textEdit?.newText === 'string',
+    range: getLspRangeSummary(textEdit?.range),
+    insert: getLspRangeSummary(textEdit?.insert),
+    replace: getLspRangeSummary(textEdit?.replace),
+  }
+}
+
+const getIncludePathFallbackRange = (
+  model: monaco.editor.ITextModel,
+  position: monaco.Position,
+  insertText: string
+): monaco.IRange | null => {
+  const lineContent = model.getLineContent(position.lineNumber)
+  const beforeCursor = lineContent.slice(0, position.column - 1)
+  const includeMatch = /^\s*#\s*include\s*[<"]([^>"]*)$/.exec(beforeCursor)
+  if (!includeMatch) return null
+
+  const typedPath = includeMatch[1] || ''
+  if (!typedPath || !insertText.startsWith(typedPath.replace(/[./\\]+$/, ''))) return null
+
+  const startColumn = position.column - typedPath.length
+  // 设计说明：
+  // 1. clangd 的 include 补全有时不带 textEdit，光标位于 `stdio.` 之后时 Monaco 默认 word range 为空。
+  // 2. 此时如果只在光标处插入 `stdio.h`，用户正常输入会得到 `stdio.stdio.h`。
+  // 3. 回退范围按 include 分隔符后的整段路径替换，既保留子目录补全，也避免把 `<` / `"` 吃掉。
+  logger.debug('[LSP] include completion fallback range resolved', {
+    lineNumber: position.lineNumber,
+    column: position.column,
+    typedPath,
+    insertTextPreview: insertText.slice(0, 80),
+    startColumn,
+  })
+
+  return {
+    startLineNumber: position.lineNumber,
+    startColumn,
+    endLineNumber: position.lineNumber,
+    endColumn: position.column,
+  }
+}
+
+const resolveLspCompletionRangeFromTextEdit = (textEdit: {
+  range?: unknown
+  insert?: unknown
+  replace?: unknown
+} | undefined): monaco.IRange | monaco.languages.CompletionItemRanges | null => {
+  const range = convertLspRangeToMonaco(textEdit?.range)
+  if (range) return range
+
+  const insert = convertLspRangeToMonaco(textEdit?.insert)
+  const replace = convertLspRangeToMonaco(textEdit?.replace)
+  if (insert && replace) {
+    // 设计说明：
+    // 1. LSP 3.16 的 InsertReplaceEdit 需要完整传给 Monaco，不能压平成单个 range。
+    // 2. clangd 在 include 路径补全里会依赖 replace 覆盖已输入文本，insert 只描述继续输入时的插入区。
+    // 3. 保留双范围后，Monaco 可以根据当前接受方式选择正确替换范围，避免 `stdio.stdio.h` 这类重复文本。
+    return { insert, replace }
+  }
+  return replace || insert
+}
+
+const getCompletionRangeLogPayload = (
+  range: monaco.IRange | monaco.languages.CompletionItemRanges
+) => {
+  if ('insert' in range && 'replace' in range) {
+    return {
+      shape: 'insert-replace',
+      insert: range.insert,
+      replace: range.replace,
+    }
+  }
+
+  return {
+    shape: 'range',
+    range,
+  }
+}
+
+const getFallbackWordRange = (
+  model: monaco.editor.ITextModel,
+  position: monaco.Position
+) => {
+  const wordInfo = model.getWordUntilPosition(position)
+  return {
+    startLineNumber: position.lineNumber,
+    startColumn: wordInfo?.startColumn || position.column,
+    endLineNumber: position.lineNumber,
+    endColumn: wordInfo?.endColumn || position.column,
+  }
 }
 
 const resolveLspCompletionInsertText = (item: Record<string, unknown>) => {
@@ -274,25 +422,19 @@ const resolveLspCompletionInsertText = (item: Record<string, unknown>) => {
 const resolveLspCompletionRange = (
   item: Record<string, unknown>,
   model: monaco.editor.ITextModel,
-  position: monaco.Position
+  position: monaco.Position,
+  insertText: string
 ) => {
   const textEdit = item.textEdit as {
     range?: unknown
     insert?: unknown
     replace?: unknown
   } | undefined
-  const editRange = convertLspRangeToMonaco(textEdit?.range)
-    || convertLspRangeToMonaco(textEdit?.insert)
-    || convertLspRangeToMonaco(textEdit?.replace)
+  const editRange = resolveLspCompletionRangeFromTextEdit(textEdit)
   if (editRange) return editRange
 
-  const wordInfo = model.getWordUntilPosition(position)
-  return new monaco.Range(
-    position.lineNumber,
-    wordInfo?.startColumn || position.column,
-    position.lineNumber,
-    wordInfo?.endColumn || position.column
-  )
+  return getIncludePathFallbackRange(model, position, insertText)
+    || getFallbackWordRange(model, position)
 }
 
 const convertLspCompletionItemToMonaco = (
@@ -314,7 +456,8 @@ const convertLspCompletionItemToMonaco = (
     | { kind?: string; value?: string }
     | undefined
 
-  return {
+  const range = resolveLspCompletionRange(item, model, position, insertText)
+  const completionItem: monaco.languages.CompletionItem = {
     label,
     kind: LSP_TO_MONACO_COMPLETION_KIND[Number(item.kind || 1)] || monaco.languages.CompletionItemKind.Text,
     insertText,
@@ -329,12 +472,21 @@ const convertLspCompletionItemToMonaco = (
         : undefined,
     sortText,
     filterText,
-    range: resolveLspCompletionRange(item, model, position),
-    commitCharacters: Array.isArray(item.commitCharacters)
-      ? item.commitCharacters.map((value) => String(value)).filter(Boolean)
-      : undefined,
+    range,
     preselect: !!item.preselect,
   }
+
+  if (getLspTextEditShape(item) !== 'none' || /^(?:c|cpp)$/.test(model.getLanguageId())) {
+    logger.debug('[LSP] converted completion item', {
+      languageId: model.getLanguageId(),
+      label,
+      textEditShape: getLspTextEditShape(item),
+      range: getCompletionRangeLogPayload(range),
+      commitCharacterCount: Array.isArray(item.commitCharacters) ? item.commitCharacters.length : 0,
+    })
+  }
+
+  return completionItem
 }
 
 const synchronizeDirectLspTextDocument = async (

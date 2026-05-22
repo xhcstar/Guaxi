@@ -345,11 +345,15 @@ const mountMonacoEditor = async () => {
         scrollBeyondLastLine: false,
         wordWrap: 'on',
         // 设计说明：
-        // 1. Markdown Cell 的候选应来自 Marksman/VSCode completion provider，也就是 monaco-languageclient 注册的标准链路。
-        // 2. 关闭文档词兜底，避免 LSP 连接失败时 Monaco 用当前文档碎片伪装成“语义补全”。
-        // 3. 这样如果仍然没有候选，日志里的 provider/LSP 状态就是排查根因的单一入口。
+        // 1. 探索者模式的 Markdown Cell 更偏阅读/结构化编辑，鼠标点选不应频繁弹出补全框。
+        // 2. 因此这里关闭普通 quickSuggestions，只保留 trigger character 和手动补全，正文源码编辑器仍保持 VS Code 式自动建议。
+        // 3. 关闭文档词兜底，避免 LSP 连接失败时 Monaco 用当前文档碎片伪装成“语义补全”。
         wordBasedSuggestions: 'off',
-        quickSuggestions: true,
+        quickSuggestions: {
+          other: false,
+          comments: false,
+          strings: false,
+        },
         suggestOnTriggerCharacters: true,
         suggest: {
           showWords: false,

@@ -5682,18 +5682,22 @@ const markdownFenceTokenizeSkippedLanguages = new Set(['python']);
 const EMBEDDED_SEMANTIC_MAX_LINES = 240;
 const EMBEDDED_VISIBLE_BLOCK_LIMIT = 6;
 
+// 设计说明：
+// 1. 源码编辑模式按 VS Code 习惯保留输入时自动建议，用户输入标识符时能及时看到 LSP 候选。
+// 2. 鼠标点击、滚动、光标移动不直接调用 triggerSuggest，避免探索/阅读时被建议框打断。
+// 3. word suggestions 继续关闭，防止当前文档里的普通词汇混入 LSP 候选。
 const EMBEDDED_WORD_SUGGEST_OPTIONS = {
   wordBasedSuggestions: 'off',
   quickSuggestions: {
     // 设计说明：
     // 1. Markdown 围栏代码块仍然挂在 markdown 宿主 editor 上，真正的代码补全来自我们注册的 markdown completion provider。
-    // 2. 如果这里把 `other` 关掉，Monaco 会更偏向“只在显式命令下打开建议框”，
-    //    成员补全这种依赖 trigger character 的场景就容易出现“LSP 已经返回结果，但建议框没有真正弹出”。
-    // 3. 这里保留 `wordBasedSuggestions: off` 与 `showWords: false`，因此开启 quick suggestions 后只会放行 provider/LSP 建议，不会把普通 Markdown 单词噪音带回来。
+    // 2. 这里恢复 VS Code 式输入联想：键入标识符时自动出现候选，成员访问符仍走 trigger character。
+    // 3. 光标移动和 LSP 连接成功事件不再强制打开 suggest widget，因此不会因为鼠标点击单独弹窗。
     other: true,
     comments: false,
     strings: true
   },
+  suggestOnTriggerCharacters: true,
   suggest: {
     showWords: false,
     snippetsPreventQuickSuggestions: false
@@ -5713,17 +5717,19 @@ const DEFAULT_WORD_SUGGEST_OPTIONS = {
   }
 };
 
+// 直接编辑源码文件时贴近 VS Code：输入标识符会自动请求 LSP 候选，点击/光标移动不触发。
 const DIRECT_LSP_SUGGEST_OPTIONS = {
   wordBasedSuggestions: 'off',
   quickSuggestions: {
     // 设计说明：
     // 1. 直接编辑 Python/Lua/LaTeX/HTML 等 LSP 语言时，建议列表应优先来自语言服务器。
-    // 2. Monaco 的文档单词补全会把 `sys..2f` 这类源码碎片也作为候选，容易盖住真实语义补全。
-    // 3. 因此对受 LSP 管理的非 Markdown 文件关闭 word suggestions，只保留 provider/LSP 结果。
+    // 2. `other: true` 保留 VS Code 默认输入体验，键入普通标识符时也能及时看到 LSP 候选。
+    // 3. 同时关闭 word suggestions，避免文档碎片候选盖住真实语义补全。
     other: true,
     comments: false,
     strings: true
   },
+  suggestOnTriggerCharacters: true,
   suggest: {
     showWords: false,
     snippetsPreventQuickSuggestions: false
@@ -7082,13 +7088,23 @@ const getCompletionItemLabelText = (label) => {
   return ''
 }
 
+const getCompletionInsertTextKey = (item) => {
+  if (typeof item?.insertText === 'string') return item.insertText
+  if (typeof item?.insertText?.value === 'string') return item.insertText.value
+  if (typeof item?.textEdit?.newText === 'string') return item.textEdit.newText
+  if (typeof item?.textEdit?.text === 'string') return item.textEdit.text
+  return getCompletionItemLabelText(item?.label)
+}
+
 const buildCompletionDedupKey = (item) => {
   const label = getCompletionItemLabelText(item?.label).trim().toLowerCase()
-  const insertText = String(item?.insertText || item?.textEdit?.text || '').trim().toLowerCase()
-  const kind = String(item?.kind || '').trim()
-  const detail = String(item?.detail || '').trim().toLowerCase()
+  const insertText = String(getCompletionInsertTextKey(item) || '').trim().toLowerCase()
   const filterText = String(item?.filterText || '').trim().toLowerCase()
-  return [label, insertText, kind, detail, filterText].join('::')
+  // 设计说明：
+  // 1. Markdown fenced code block 的补全可能同时经过 VSCode command 和 Guaxi direct LSP provider。
+  // 2. clangd 对 `#include` / `#define` 这类候选会返回相同 label/insertText，但不同 detail、kind 或来源元信息。
+  // 3. 菜单展示层应该按“用户看到并会插入什么”去重，因此 key 只保留 label、insertText、filterText。
+  return [label, insertText, filterText].join('::')
 }
 
 const dedupeCompletionSuggestions = (items) => {
@@ -7097,11 +7113,27 @@ const dedupeCompletionSuggestions = (items) => {
 
   const seen = new Set()
   const suggestions = []
+  let duplicateCount = 0
+  let firstDuplicateLabel = ''
   for (const item of source) {
     const key = buildCompletionDedupKey(item)
-    if (!key || seen.has(key)) continue
+    if (!key || seen.has(key)) {
+      duplicateCount += 1
+      if (!firstDuplicateLabel) {
+        firstDuplicateLabel = getCompletionItemLabelText(item?.label)
+      }
+      continue
+    }
     seen.add(key)
     suggestions.push(item)
+  }
+  if (duplicateCount) {
+    logger.debug('[Completion] duplicate suggestions removed', {
+      sourceCount: source.length,
+      suggestionCount: suggestions.length,
+      duplicateCount,
+      firstDuplicateLabel,
+    })
   }
   return suggestions
 }
@@ -7192,24 +7224,39 @@ const resolveEmbeddedCompletionFilterContext = (model, position) => {
       typedWord: '',
       filterPrefix: '',
       isMemberAccessContext: false,
+      isIncludePathContext: false,
       shouldReplaceFullMemberAccessToken: false,
     }
   }
 
   const lineContent = String(model.getLineContent?.(position.lineNumber) || '')
   const beforeCursor = lineContent.slice(0, Math.max(0, Number(position.column || 1) - 1))
+  const includePathMatch = /^\s*#\s*include\s*([<"])([^>"]*)$/.exec(beforeCursor)
   const hostToken = String(beforeCursor.match(/[^\s]+$/)?.[0] || '').slice(-EMBEDDED_COMPLETION_FILTER_CONTEXT_MAX_CHARS)
   const typedWord = String(hostToken.match(/([A-Za-z0-9_$]*)$/)?.[1] || '')
   const filterPrefix = hostToken.slice(0, Math.max(0, hostToken.length - typedWord.length))
-  const isMemberAccessContext = /(\.|::|->)$/.test(filterPrefix)
+  const isIncludePathContext = !!includePathMatch
+  const isMemberAccessContext = !isIncludePathContext && /(\.|::|->)$/.test(filterPrefix)
   const shouldReplaceFullMemberAccessToken = isMemberAccessContext
     && /^(?:[A-Za-z_$][\w$]*)(?:(?:\.|::|->)[A-Za-z_$][\w$]*)*(?:\.|::|->)?[A-Za-z0-9_$]*$/.test(hostToken)
+
+  if (isIncludePathContext) {
+    logger.debug('[EmbeddedLsp] resolved include-path completion filter context', {
+      lineNumber: Number(position.lineNumber || 0),
+      column: Number(position.column || 0),
+      delimiter: includePathMatch?.[1] || '',
+      typedPath: includePathMatch?.[2] || '',
+      hostToken,
+      filterPrefix,
+    })
+  }
 
   return {
     hostToken,
     typedWord,
     filterPrefix,
     isMemberAccessContext,
+    isIncludePathContext,
     shouldReplaceFullMemberAccessToken,
   }
 }
@@ -7217,6 +7264,9 @@ const resolveEmbeddedCompletionFilterContext = (model, position) => {
 const buildEmbeddedCompletionFilterText = (rawFilterText, fallbackLabel, filterContext) => {
   const baseFilterText = String(rawFilterText || fallbackLabel || '').trim()
   if (!baseFilterText) return ''
+  if (filterContext?.isIncludePathContext) {
+    return baseFilterText
+  }
   if (filterContext?.isMemberAccessContext) {
     return baseFilterText
   }
@@ -7230,6 +7280,7 @@ const buildEmbeddedCompletionFilterText = (rawFilterText, fallbackLabel, filterC
 const buildEmbeddedCompletionInsertText = (rawInsertText, fallbackLabel, filterContext) => {
   const baseInsertText = String(rawInsertText ?? fallbackLabel ?? '')
   if (!baseInsertText) return ''
+  if (filterContext?.isIncludePathContext) return baseInsertText
   if (filterContext?.isMemberAccessContext) return baseInsertText
 
   const prefix = String(filterContext?.filterPrefix || '')
@@ -7282,6 +7333,9 @@ const buildEmbeddedCompletionDisplayLabel = (label, filterContext) => {
   const prefix = String(filterContext?.filterPrefix || '')
   const typedWord = String(filterContext?.typedWord || '')
   if (!prefix) return baseLabel
+  if (filterContext?.isIncludePathContext) {
+    return baseLabel
+  }
   if (filterContext?.isMemberAccessContext) {
     return baseLabel
   }
@@ -7501,12 +7555,55 @@ const resolveEmbeddedMemberAccessReplaceRange = (model, position) => {
   return range
 }
 
+const resolveEmbeddedIncludePathReplaceRange = (model, position) => {
+  const hostLineNumber = Number(position?.lineNumber || 1)
+  const hostColumn = Number(position?.column || 1)
+  const lineContent = String(model?.getLineContent?.(hostLineNumber) || '')
+  const beforeCursor = lineContent.slice(0, Math.max(0, hostColumn - 1))
+  const includePathMatch = /^\s*#\s*include\s*([<"])([^>"]*)$/.exec(beforeCursor)
+  if (!includePathMatch) return null
+
+  const delimiter = includePathMatch[1]
+  const typedPath = includePathMatch[2] || ''
+  const closeDelimiter = delimiter === '<' ? '>' : '"'
+  const nextChar = lineContent.charAt(Math.max(0, hostColumn - 1))
+  const startColumn = Math.max(1, hostColumn - typedPath.length)
+  const endColumn = nextChar === closeDelimiter ? hostColumn + 1 : hostColumn
+  const range = new monaco.Range(
+    hostLineNumber,
+    startColumn,
+    hostLineNumber,
+    Math.max(startColumn, endColumn)
+  )
+
+  // 设计思路：
+  // 1. `#include <stdio.` 里的点号是头文件路径的一部分，不能按成员访问补全处理。
+  // 2. Monaco 输入 `<` 后会自动生成右侧 `>`，clangd 的 include 候选又通常包含结尾 `>`。
+  // 3. 因此 range 需要覆盖 `<` 后的已输入路径，并在右侧存在自动闭合符时一并覆盖，避免插入成 `stdio.stdio.h>>`。
+  logger.debug('[EmbeddedLsp] resolved include-path replace range', {
+    hostLineNumber,
+    hostColumn,
+    delimiter,
+    typedPath,
+    nextChar,
+    startColumn: range.startColumn,
+    endColumn: range.endColumn,
+  })
+  return range
+}
+
 const buildEmbeddedReplaceRange = (model, position, embeddedCtx, virtualModel) => {
   // 设计思路：
   // 1. 这里不能直接照搬宿主 Markdown model 的 `getWordUntilPosition()`。
-  // 2. 对简单成员访问链（`obj.` / `pkg.mod.ex`）我们优先整段替换 host token，
+  // 2. `#include <...` 先按路径补全处理，避免头文件里的 `.` 被误判成成员访问。
+  // 3. 对简单成员访问链（`obj.` / `pkg.mod.ex`）我们优先整段替换 host token，
   //    让 Monaco 的过滤文本、显示标签、插入文本保持一致，避免出现“LSP 返回了，但 suggest model 判空”的情况。
-  // 3. 其他普通场景仍然基于 embedded 虚拟语言模型计算 replace range，再把列偏移映射回宿主 Markdown 行列。
+  // 4. 其他普通场景仍然基于 embedded 虚拟语言模型计算 replace range，再把列偏移映射回宿主 Markdown 行列。
+  const includePathRange = resolveEmbeddedIncludePathReplaceRange(model, position)
+  if (includePathRange) {
+    return includePathRange
+  }
+
   const memberAccessRange = resolveEmbeddedMemberAccessReplaceRange(model, position)
   if (memberAccessRange) {
     return memberAccessRange
@@ -18370,8 +18467,9 @@ onMounted(() => {
     scheduleMarkdownMathSyntaxHighlight(editor, 'lsp-state')
     scheduleMarkdownMathSyntaxHighlight(secondaryEditor, 'lsp-state')
     if (state !== 'connected') return
-    triggerEmbeddedSuggestIfActive(editor, normalizedLanguageId)
-    triggerEmbeddedSuggestIfActive(secondaryEditor, normalizedLanguageId)
+    logger.debug('[DirectLsp] connected without auto-opening suggest widget', {
+      languageId: normalizedLanguageId,
+    })
   })
 });
 
