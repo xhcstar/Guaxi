@@ -41,6 +41,7 @@ const classifyReadFileError = (error) => {
 
 const normalizeTabPath = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
 const normalizeEditorContent = (content) => String(content ?? "").replace(/\r\n?/g, "\n");
+const EVENT_CELLMETA_FILE_CLOSED = "guaxi_cellmeta_file_closed";
 
 export const useFileTreeStore = defineStore("fileTreeStore", {
   state: () => ({
@@ -125,6 +126,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
       const index = this.openTabs.findIndex((tab) => tab.path === path);
       if (index === -1) return;
 
+      const closingTab = this.openTabs[index];
       const beforeSplitIndex = this.splitIndex;
       const beforeLayoutMode = this.layoutMode;
       const inferredRegion =
@@ -135,6 +137,30 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
           : 'left';
 
       const closingRegion = region || inferredRegion;
+      const notifyFileClosed = () => {
+        const payload = {
+          path: closingTab?.path || path,
+          fileName: closingTab?.fileName || "",
+          dirty: !!closingTab?.dirty,
+          region: closingRegion,
+        };
+
+        // 设计说明：
+        // 1. `.cellmeta` 自动提交属于后台整理动作，不能拖慢标签关闭和编辑器状态切换。
+        // 2. 使用 setTimeout 把通知放到当前 UI 更新之后执行；提交失败由监听方记录日志，不打断用户关闭文件。
+        // 3. 事件只表达“文件关闭边界已到达”，真正的 Git 检查和提交仍集中在 GuaxiFileTree，避免 store 直接耦合 Git 命令。
+        setTimeout(() => {
+          try {
+            window.dispatchEvent(new CustomEvent(EVENT_CELLMETA_FILE_CLOSED, { detail: payload }));
+            console.info("[CellmetaAutoCommit] queued async commit after tab close", payload);
+          } catch (error) {
+            console.warn("[CellmetaAutoCommit] failed to queue tab-close commit event", {
+              ...payload,
+              error: String(error?.message || error || ""),
+            });
+          }
+        }, 0);
+      };
 
       this.openTabs.splice(index, 1);
 
@@ -146,6 +172,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
         this.layoutMode = 'single';
         this.splitIndex = null;
         this.activeRegion = 'left';
+        notifyFileClosed();
         return;
       }
 
@@ -202,6 +229,7 @@ export const useFileTreeStore = defineStore("fileTreeStore", {
           this.activeTabLeft = this.activeTab;
         }
       }
+      notifyFileClosed();
     },
 
     // 生成预览内容

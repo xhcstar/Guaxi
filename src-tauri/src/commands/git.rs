@@ -17,7 +17,23 @@ const HUNK_LINE_MATCH_TOLERANCE: u32 = 1;
 
 fn is_ignored_git_path(path: &str) -> bool {
     let p = path.replace('\\', "/");
-    p == ".meta" || p.starts_with(".meta/") || p.contains("/.meta/")
+    p == ".meta" || p.starts_with(".meta/") || p.contains("/.meta/") || is_cellmeta_git_path(&p)
+}
+
+fn is_cellmeta_git_path(path: &str) -> bool {
+    path.replace('\\', "/").to_ascii_lowercase().ends_with(".cellmeta")
+}
+
+fn git_output_message(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stdout.trim().is_empty() {
+        stderr.trim().to_string()
+    } else if stderr.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        format!("{}\n{}", stdout.trim_end(), stderr.trim_start())
+    }
 }
 
 fn flush_pending_deletes(pending_deletes: &mut u32, deleted: &mut BTreeSet<u32>, anchor: u32) {
@@ -546,6 +562,171 @@ pub fn git_commit(path: String, message: String) -> Result<(), String> {
 
     info!("Commit successful");
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct AutoCellmetaCommitResult {
+    committed: bool,
+    path_count: usize,
+    message: String,
+}
+
+#[tauri::command]
+pub fn auto_commit_cellmeta_changes(path: String) -> Result<AutoCellmetaCommitResult, String> {
+    info!("[CellmetaAutoCommit] checking repository: {}", path);
+    let repo = Repository::discover(&path).map_err(|e| {
+        error!("[CellmetaAutoCommit] failed to discover repository: {}", e);
+        e.to_string()
+    })?;
+
+    // 设计说明：
+    // 1. `.cellmeta` 是 Notebook/探索者模式的侧车元数据文件，需要被 Git 记录，但不应该打扰用户的普通文件树和 Git 面板。
+    // 2. 这里先只收集 `.cellmeta` 路径，再用带 pathspec 的 `git commit --only` 提交，避免把用户已经暂存的普通文件一起提交。
+    // 3. 在修改索引前先校验签名配置，降低自动提交失败后留下内部暂存项的概率。
+    repo.signature().map_err(|e| {
+        error!("[CellmetaAutoCommit] git signature is not configured: {}", e);
+        format!("Git signature is not configured: {}", e)
+    })?;
+
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true);
+    opts.recurse_untracked_dirs(true);
+    opts.show(StatusShow::IndexAndWorkdir);
+
+    let statuses = repo.statuses(Some(&mut opts)).map_err(|e| {
+        error!("[CellmetaAutoCommit] failed to get statuses: {}", e);
+        e.to_string()
+    })?;
+
+    let mut paths = BTreeSet::<String>::new();
+    for entry in statuses.iter() {
+        let Some(rel_path) = entry.path() else {
+            continue;
+        };
+        if is_cellmeta_git_path(rel_path) {
+            paths.insert(rel_path.replace('\\', "/"));
+        }
+    }
+
+    let paths: Vec<String> = paths.into_iter().collect();
+    if paths.is_empty() {
+        debug!("[CellmetaAutoCommit] no .cellmeta changes found");
+        return Ok(AutoCellmetaCommitResult {
+            committed: false,
+            path_count: 0,
+            message: "no .cellmeta changes".to_string(),
+        });
+    }
+
+    let repo_dir = repo
+        .workdir()
+        .ok_or_else(|| "Bare repository has no working directory".to_string())?;
+
+    info!(
+        "[CellmetaAutoCommit] staging .cellmeta paths before commit: count={}",
+        paths.len()
+    );
+    let add_output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .arg("add")
+        .arg("--")
+        .args(&paths)
+        .output()
+        .map_err(|e| format!("无法执行 git add 自动暂存 .cellmeta：{}", e))?;
+
+    if !add_output.status.success() {
+        let msg = git_output_message(&add_output);
+        error!("[CellmetaAutoCommit] git add failed: {}", msg);
+        return Err(format!("自动暂存 .cellmeta 失败：{}", msg));
+    }
+
+    let diff_output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .arg("diff")
+        .arg("--cached")
+        .arg("--quiet")
+        .arg("--")
+        .args(&paths)
+        .output()
+        .map_err(|e| format!("无法检查 .cellmeta 暂存差异：{}", e))?;
+
+    if diff_output.status.success() {
+        debug!(
+            "[CellmetaAutoCommit] .cellmeta paths had no staged diff after git add: count={}",
+            paths.len()
+        );
+        return Ok(AutoCellmetaCommitResult {
+            committed: false,
+            path_count: paths.len(),
+            message: "no staged .cellmeta diff".to_string(),
+        });
+    }
+
+    if diff_output.status.code() != Some(1) {
+        let msg = git_output_message(&diff_output);
+        error!("[CellmetaAutoCommit] git diff --cached failed: {}", msg);
+        return Err(format!("检查 .cellmeta 暂存差异失败：{}", msg));
+    }
+
+    let commit_message = "chore(cellmeta): auto-save notebook metadata";
+    info!(
+        "[CellmetaAutoCommit] committing .cellmeta paths: count={}, message={}",
+        paths.len(),
+        commit_message
+    );
+    let commit_output = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .arg("commit")
+        .arg("--quiet")
+        .arg("--only")
+        .arg("-m")
+        .arg(commit_message)
+        .arg("--")
+        .args(&paths)
+        .output()
+        .map_err(|e| format!("无法执行 git commit 自动提交 .cellmeta：{}", e))?;
+
+    if !commit_output.status.success() {
+        let msg = git_output_message(&commit_output);
+        error!("[CellmetaAutoCommit] git commit failed: {}", msg);
+        // 提交失败时把 `.cellmeta` 从索引里撤回，避免用户在 Git 面板里看不到的内部文件
+        // 长时间停留在 staged 状态；工作区文件本身会保留，下一次定时检查仍可重试。
+        let reset_output = std::process::Command::new("git")
+            .current_dir(repo_dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .arg("reset")
+            .arg("-q")
+            .arg("HEAD")
+            .arg("--")
+            .args(&paths)
+            .output();
+        if let Ok(output) = reset_output {
+            if !output.status.success() {
+                warn!(
+                    "[CellmetaAutoCommit] failed to unstage .cellmeta after commit failure: {}",
+                    git_output_message(&output)
+                );
+            }
+        }
+        return Err(format!("自动提交 .cellmeta 失败：{}", msg));
+    }
+
+    info!(
+        "[CellmetaAutoCommit] committed .cellmeta changes successfully: count={}",
+        paths.len()
+    );
+    Ok(AutoCellmetaCommitResult {
+        committed: true,
+        path_count: paths.len(),
+        message: commit_message.to_string(),
+    })
 }
 
 #[tauri::command]

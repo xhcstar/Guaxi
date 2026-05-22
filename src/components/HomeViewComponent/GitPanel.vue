@@ -2490,7 +2490,10 @@ const toggleSectionVisibility = (section, headerHeight) => {
 
 const isIgnoredGitPath = (p) => {
   const s = String(p || '').replace(/\\/g, '/')
-  return s === '.meta' || s.startsWith('.meta/') || s.includes('/.meta/')
+  const lower = s.toLowerCase()
+  // 设计说明：`.cellmeta` 是探索者模式的内部侧车文件，由后台自动提交，
+  // Git 面板只展示用户需要手动处理的正文/资源文件，避免元数据项污染工作区视图。
+  return s === '.meta' || s.startsWith('.meta/') || s.includes('/.meta/') || lower.endsWith('.cellmeta')
 }
 
 const refreshGitStatus = async ({ resetSelection = true, includeCommits = true } = {}) => {

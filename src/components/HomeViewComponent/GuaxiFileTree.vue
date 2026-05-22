@@ -223,6 +223,19 @@ const treeRef = ref(null)
 
 const BROWSER_PREVIEW_URL = 'http://localhost:8888/browser/knowledge-bases'
 const browserPreviewEnabled = ref(false)
+// 设计说明：
+// 1. `.cellmeta` 会跟随 Notebook/探索者模式频繁落盘，不能按文件变化实时提交，否则会污染 Git 日志并影响编辑体验。
+// 2. 文件关闭是更自然的保存边界：用户完成一轮编辑后再合并提交一次，能收集更多内部元数据变化。
+// 3. 仍保留低频兜底检查，避免异常关闭或事件丢失时 `.cellmeta` 长时间停留在未提交状态。
+const EVENT_CELLMETA_FILE_CLOSED = 'guaxi_cellmeta_file_closed'
+const CELLMETA_AUTO_COMMIT_INTERVAL_MS = 60 * 60 * 1000
+const CELLMETA_AUTO_COMMIT_CLOSE_DELAY_MS = 1500
+
+let cellmetaAutoCommitIntervalId = null
+let cellmetaAutoCommitTimerId = null
+let cellmetaAutoCommitRunning = false
+let cellmetaAutoCommitPending = false
+let cellmetaFileClosedHandler = null
 
 const toggleBrowserPreview = async () => {
   const next = !browserPreviewEnabled.value
@@ -537,8 +550,109 @@ const contextMenuOptions = ref([
 const isHiddenPath = (path) => {
   if (!path) return false;
   const normalized = normalizePath(path);
-  return normalized.split('/').some(part => part.startsWith('.'));
+  // 设计说明：
+  // 1. 点目录仍然作为内部目录隐藏，维持原有文件树洁净度。
+  // 2. `.cellmeta` 是 Notebook/探索者模式的侧车元数据文件，需要保留在磁盘和 Git 中，
+  //    但不应作为普通文档出现在左侧文件树里。
+  return isCellmetaPath(normalized) || normalized.split('/').some(part => part.startsWith('.'));
 };
+
+const isCellmetaPath = (path) => normalizePath(path).toLowerCase().endsWith('.cellmeta')
+
+const getCellmetaAutoCommitRepos = () => {
+  const repos = Array.isArray(fileTreeStore.repopathlist) ? fileTreeStore.repopathlist : []
+  const active = fileTreeStore.activeRepoPath ? [fileTreeStore.activeRepoPath] : []
+  return Array.from(new Set([...active, ...repos].map(p => normalizePath(p)).filter(Boolean)))
+}
+
+const autoCommitCellmetaChanges = async (reason = 'manual') => {
+  if (cellmetaAutoCommitRunning) {
+    logger.debug('[CellmetaAutoCommit] skip overlapping check', { reason })
+    return
+  }
+
+  const repos = getCellmetaAutoCommitRepos()
+  if (!repos.length) {
+    logger.debug('[CellmetaAutoCommit] no repository available', { reason })
+    return
+  }
+
+  cellmetaAutoCommitRunning = true
+  logger.info('[CellmetaAutoCommit] start checking metadata sidecars', { reason, repoCount: repos.length })
+  let hasError = false
+  try {
+    for (const repoPath of repos) {
+      try {
+        const result = await invoke('auto_commit_cellmeta_changes', { path: repoPath })
+        if (result?.committed) {
+          logger.info('[CellmetaAutoCommit] committed metadata sidecars', {
+            repoPath,
+            pathCount: result.path_count,
+            reason
+          })
+        } else {
+          logger.debug('[CellmetaAutoCommit] no metadata commit needed', {
+            repoPath,
+            pathCount: result?.path_count ?? 0,
+            reason
+          })
+        }
+      } catch (error) {
+        logger.warn('[CellmetaAutoCommit] failed to auto commit metadata sidecars', {
+          repoPath,
+          reason,
+          error: String(error?.message || error || '')
+        })
+        hasError = true
+      }
+    }
+  } finally {
+    cellmetaAutoCommitRunning = false
+    if (!hasError) {
+      cellmetaAutoCommitPending = false
+    }
+  }
+}
+
+const scheduleCellmetaAutoCommit = (reason = 'scheduled', delay = CELLMETA_AUTO_COMMIT_CLOSE_DELAY_MS) => {
+  if (cellmetaAutoCommitTimerId) {
+    clearTimeout(cellmetaAutoCommitTimerId)
+    cellmetaAutoCommitTimerId = null
+  }
+
+  logger.debug('[CellmetaAutoCommit] scheduled metadata check', { reason, delay })
+  cellmetaAutoCommitTimerId = setTimeout(() => {
+    cellmetaAutoCommitTimerId = null
+    autoCommitCellmetaChanges(reason).catch((error) => {
+      logger.warn('[CellmetaAutoCommit] scheduled check failed', {
+        reason,
+        error: String(error?.message || error || '')
+      })
+    })
+  }, delay)
+}
+
+const scheduleCellmetaAutoCommitAfterFileClose = (payload = {}) => {
+  cellmetaAutoCommitPending = true
+  logger.info('[CellmetaAutoCommit] file closed; queue async metadata commit', {
+    path: payload?.path || '',
+    fileName: payload?.fileName || '',
+    dirty: !!payload?.dirty,
+    delay: CELLMETA_AUTO_COMMIT_CLOSE_DELAY_MS
+  })
+  scheduleCellmetaAutoCommit('file-close', CELLMETA_AUTO_COMMIT_CLOSE_DELAY_MS)
+}
+
+const startCellmetaAutoCommitScheduler = () => {
+  if (cellmetaAutoCommitIntervalId) clearInterval(cellmetaAutoCommitIntervalId)
+  logger.info('[CellmetaAutoCommit] start periodic metadata checker', {
+    intervalMs: CELLMETA_AUTO_COMMIT_INTERVAL_MS,
+    closeDelayMs: CELLMETA_AUTO_COMMIT_CLOSE_DELAY_MS
+  })
+  cellmetaAutoCommitIntervalId = setInterval(() => {
+    scheduleCellmetaAutoCommit('periodic-check', 0)
+  }, CELLMETA_AUTO_COMMIT_INTERVAL_MS)
+}
 
 const normalizeNewMarkdownFileName = (rawName) => {
   const name = String(rawName || '').trim();
@@ -1766,6 +1880,20 @@ const setupFileWatcher = async () => {
       const payload = event.payload
       logger.info('文件系统变化事件:', payload)
 
+      const changedPath = normalizePath(payload?.path)
+      const oldChangedPath = normalizePath(payload?.old_path)
+
+      if (isCellmetaPath(changedPath) || isCellmetaPath(oldChangedPath)) {
+        cellmetaAutoCommitPending = true
+        logger.info('[CellmetaAutoCommit] metadata sidecar changed; skip tree refresh and wait for file-close commit', {
+          kind: payload?.kind,
+          path: changedPath,
+          oldPath: oldChangedPath,
+          pending: cellmetaAutoCommitPending
+        })
+        return
+      }
+
       switch (payload.kind) {
         case 'Create':
           // logger.info('文件创建事件:', payload.path)
@@ -1966,6 +2094,15 @@ onMounted(async () => {
 
   // 添加文件监控
   // setupFileWatcher()
+  cellmetaFileClosedHandler = (event) => {
+    // 关闭文件只是触发后台提交边界，不等待 Git 命令完成，避免影响编辑器关闭标签的手感。
+    scheduleCellmetaAutoCommitAfterFileClose(event?.detail || {})
+  }
+  window.addEventListener(EVENT_CELLMETA_FILE_CLOSED, cellmetaFileClosedHandler)
+  logger.info('[CellmetaAutoCommit] listen file-close commit boundary', {
+    event: EVENT_CELLMETA_FILE_CLOSED
+  })
+  startCellmetaAutoCommitScheduler()
 })
 
 
@@ -1973,6 +2110,18 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateActiveRepoMaxHeight)
   activeRepoResizeObserver.value?.disconnect?.()
   activeRepoResizeObserver.value = null
+  if (cellmetaAutoCommitTimerId) {
+    clearTimeout(cellmetaAutoCommitTimerId)
+    cellmetaAutoCommitTimerId = null
+  }
+  if (cellmetaAutoCommitIntervalId) {
+    clearInterval(cellmetaAutoCommitIntervalId)
+    cellmetaAutoCommitIntervalId = null
+  }
+  if (cellmetaFileClosedHandler) {
+    window.removeEventListener(EVENT_CELLMETA_FILE_CLOSED, cellmetaFileClosedHandler)
+    cellmetaFileClosedHandler = null
+  }
 
   // 清理编辑器面包屑联动监听
   try {

@@ -422,6 +422,7 @@ async fn main() {
             commands::git::get_git_head_markers,
             commands::git::list_branches,
             commands::git::git_commit,
+            commands::git::auto_commit_cellmeta_changes,
             commands::git::git_push,
             commands::git::git_pull,
             commands::git::checkout_branch,
